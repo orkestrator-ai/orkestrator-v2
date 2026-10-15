@@ -4,8 +4,13 @@ Status: In progress. Step 1 (`TurnState`, in
 `session-manager-prompt-turn.ts`) landed 2026-10-15. Step 2 has started: `init`
 and the leaf branches (`prompt_suggestion`, `rate_limit_event`, `auth_status`,
 `stream_event`, `tool_progress`, `tool_use_summary`, `conversation_reset`) are
-in `session-manager-prompt-handlers/`; `system`, `assistant`, `user` and
-`result` are still inline. Priority: third. Read
+in `session-manager-prompt-handlers/`, and handlers take `(turn, message)`;
+`system`, `assistant`, `user` and `result` are still inline. Step 3 is done: the
+ownership, continuation and input closures are functions of `turn` in
+`session-manager-prompt-turn-lifecycle.ts`, the hooks are in
+`session-manager-prompt-hooks.ts`, `turnCanUseTool` is in
+`session-manager-prompt-can-use-tool.ts`, and `thisTurn` comes from
+`createClaudeRuntimeTurn`. Priority: third. Read
 [`bridges/AGENTS.md`](../../bridges/AGENTS.md) and
 [`bridges/claude-bridge/AGENTS.md`](../../bridges/claude-bridge/AGENTS.md)
 before starting.

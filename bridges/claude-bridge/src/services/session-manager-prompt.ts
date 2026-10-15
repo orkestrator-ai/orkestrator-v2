@@ -25,14 +25,10 @@ import type {
   NormalizedMessage,
   NormalizedPart,
   SSEEvent,
-  QuestionInfo,
-  QuestionRequest,
-  PlanApprovalRequest,
   PromptOptions,
   SdkMessageBase,
   SdkResultMessage,
   SdkSystemMessage,
-  SessionTurnActivity,
   SessionUsageSnapshot,
   BackgroundTaskSnapshot,
 } from "../types/index.js";
@@ -43,7 +39,6 @@ import {
   sessionHealth,
   systemSubtypeDisposition,
 } from "../types/index.js";
-import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { structuredOutputFailure } from "@orkestrator/protocol/structured-output";
@@ -75,9 +70,8 @@ import {
   readLiveCommandInventory,
   recordCommandsChanged,
 } from "./session-manager-commands.js";
-import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { claudePlanWindowFromKind } from "@orkestrator/protocol/plan-usage";
-import { commandChangeHooks, commandChangeProbe } from "./command-changes.js";
+import { commandChangeProbe } from "./command-changes.js";
 
 export function claudeStartupFailureMessage(reason: SDKStartupFailureReason): string {
   switch (reason) {
@@ -177,29 +171,37 @@ export function applyClaudeUsageReport(
   session.usage = snapshot;
   return snapshot;
 }
-import * as core from "./session-manager-core.js";
 import { createPromptStreamState } from "./session-manager-prompt-stream.js";
 import { captureTurnStartup, createTurnState } from "./session-manager-prompt-turn.js";
-import type { PromptMessageContext } from "./session-manager-prompt-handlers/context.js";
+import { commandChangeHookFor } from "./session-manager-prompt-hooks.js";
+import { createClaudeRuntimeTurn } from "./session-manager-prompt-runtime-turn.js";
+import {
+  armContinuationWatchdog,
+  clearThinkingTokens,
+  closeTurnInput,
+  diagnosticErrorClass,
+  finishTurnInputIfSettled,
+  ownsActiveTurn,
+  reclaimReleasedTurnForAssistant,
+  reconcilePlanModeFromStatus,
+  setTurnActivity,
+  settleResultWithoutOwnership,
+  waitForContinuationAfterNotification,
+} from "./session-manager-prompt-turn-lifecycle.js";
+export { RETAINED_CONTINUATION_TIMEOUT_MS } from "./session-manager-prompt-turn-lifecycle.js";
 import { handleInitMessage } from "./session-manager-prompt-handlers/init.js";
 import { leafMessageHandler } from "./session-manager-prompt-handlers/leaf.js";
 import { appendTranscriptNotice } from "./session-manager-prompt-handlers/transcript-notice.js";
-import { inProgressClaudeUsage, reconcileClaudeUsage } from "./session-manager-usage.js";
+import { reconcileClaudeUsage } from "./session-manager-usage.js";
 import { nextTurnGeneration } from "./session-manager-core.js";
 import {
   ClaudeStructuredOutputError,
-  PLAN_APPROVAL_TIMEOUT_MS,
-  QUESTION_TIMEOUT_MS,
   applySessionPlanMode,
   buildClaudeUsageSnapshot,
   claimedPromptDispatches,
   claudeExecutableOptions,
   createStructuredUsageRefreshCoordinator,
   generateMessageId,
-  pendingPlanApprovals,
-  pendingQuestions,
-  planApprovalResolvers,
-  questionResolvers,
   recordStructuredOutput,
   sdkSessionIdFromBridgeId,
   sessionOperationError,
@@ -225,7 +227,6 @@ import {
   provisionalBackgroundTaskLaunchesFromAssistantMessage,
   refreshSettledToolRows,
   resultAnswersOtherInput,
-  MAX_RESULT_INPUT_UUIDS,
   resultInputUuids,
   resultSupersededBySteer,
   taskNotificationNoticePart,
@@ -249,7 +250,6 @@ import {
   claudeLaunchedProfile,
   claudeLiveSettings,
   createClaudeRuntime,
-  drainClaudeRuntime,
   openClaudeRuntime,
   recordClaudeToolOwner,
   retireDrainingClaudeRuntime,
@@ -271,26 +271,13 @@ import {
   recordBackgroundTaskLaunch,
   registerBackgroundTaskCandidate,
   removeBackgroundTaskCandidatesOwnedBy,
-  retainQueryControl,
   settleBackgroundTask,
   settleTasksOwnedByClosedControl,
   takeBackgroundTaskCandidate,
   takeProvisionalBackgroundTask,
   takeSettlingBackgroundTask,
 } from "./session-manager-background-tasks.js";
-type PlanApprovalResponse = core.PlanApprovalResponse;
 export const STREAM_EVENT_COALESCE_MS = 100;
-/**
- * How long a released turn waits in silence for the continuation that a
- * terminal background-task notification is expected to trigger.
- *
- * Any frame from the query disarms this, so it only expires when the provider
- * answered the notification with nothing at all. Generous on purpose: cutting a
- * legitimate continuation short is the corruption this retention exists to
- * avoid, while never expiring would strand the CLI child for the lifetime of
- * the bridge.
- */
-export const RETAINED_CONTINUATION_TIMEOUT_MS = 5 * 60 * 1000;
 /**
  * Highest content-block index accepted from a streamed SDK event.
  *
@@ -300,23 +287,6 @@ export const RETAINED_CONTINUATION_TIMEOUT_MS = 5 * 60 * 1000;
  * keeps iteration proportional to the number of blocks actually received.
  */
 export const MAX_STREAM_CONTENT_BLOCK_INDEX = 4_095;
-
-/**
- * Keep failure logs useful without copying provider messages, prompts, or tool
- * output into the process log. Constructor names are code-owned metadata, but
- * still bounded and validated in case a foreign error object overrides them.
- */
-function diagnosticErrorClass(error: unknown): string {
-  try {
-    if (!(error instanceof Error)) return "NonError";
-    const name = error.constructor?.name;
-    return typeof name === "string" && /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/.test(name)
-      ? name
-      : "Error";
-  } catch {
-    return "Error";
-  }
-}
 
 export const PLAN_MODE_INSTRUCTIONS = `The user has enabled planning mode. Use this phase to:
 1. Thoroughly explore the codebase and its existing patterns.
@@ -428,16 +398,6 @@ function recordSystemMessageNotice(session: SessionState, message: SdkSystemMess
  * times a second reads as live; one frame per delta is only load.
  */
 export const THINKING_TOKENS_EMIT_INTERVAL_MS = 500;
-
-function boundedPlan(content: unknown): Pick<PlanApprovalRequest, "plan" | "planTruncated"> {
-  if (typeof content !== "string" || content.trim().length === 0) return {};
-  const maximumLength = AGENT_INTERACTION_LIMITS.maxTextLength;
-  if (content.length <= maximumLength) return { plan: content };
-  return {
-    plan: `${content.slice(0, Math.max(0, maximumLength - 1))}…`,
-    planTruncated: true,
-  };
-}
 
 /** Ids of the tool calls an assistant message makes. */
 function toolUseIdsFromAssistantMessage(message: unknown): string[] {
@@ -757,6 +717,8 @@ export async function sendPrompt(
       : {}),
   });
   const turn = createTurnState(session, sessionId, {
+    dispatchRequestId,
+    retainedContinuationTimeoutMs: testHooks?.retainedContinuationTimeoutMs,
     beforeStartup,
     abortController,
     turnGeneration,
@@ -859,6 +821,7 @@ export async function sendPrompt(
           ? "dontAsk"
           : "bypassPermissions";
     const permissionMode = options?.permissionMode ?? policyPermissionMode;
+    turn.permissionMode = permissionMode;
     const defaultAllowedTools = [
       "Read",
       "Edit",
@@ -918,714 +881,12 @@ export async function sendPrompt(
     // Names this prompt on every result that answers it; see
     // `resultAnswersOtherInput`.
     const promptUuid = crypto.randomUUID();
-    // Client uuids of the steers pushed into this turn: every one, and those no
-    // result has named yet. See `resultSupersededBySteer`.
-    const steerUuids = new Set<string>();
-    const unansweredSteerUuids = new Set<string>();
-    const pushSteerInput = (message: SDKUserMessage): boolean | "capacity-exceeded" => {
-      // Only the turn that owns the root conversation can be steered.
-      if (!turn.runtime || turn.runtime.latestTurn !== turn.thisTurn) return false;
-      // Bound all steers for this query, not just the unacknowledged ones:
-      // merged prompt batches and tool-round fold-ins share the result cap.
-      if (steerUuids.size >= MAX_RESULT_INPUT_UUIDS - 1) return "capacity-exceeded";
-      const pushed = turn.runtime.input.push(message);
-      if (pushed && typeof message.uuid === "string" && message.uuid) {
-        turn.latestSteerUuid = message.uuid;
-        steerUuids.add(message.uuid);
-        unansweredSteerUuids.add(message.uuid);
-      }
-      return pushed;
-    };
-    /**
-     * Closing stdin starts the CLI's exit. `session.queryControl` stays set
-     * until this turn's `finally`, so without this marker a read-only control
-     * request issued in between races the exit and comes back as
-     * "Query closed before response received". Wrapping the close in one place
-     * means a future close site cannot forget to mark it.
-     *
-     * The input belongs to the session's CLI, not to this turn: a superseded
-     * turn never closes it, because a newer turn is using it.
-     */
-    const closeTurnInput = () => {
-      if (
-        !turn.runtime ||
-        turn.runtime.latestTurn !== turn.thisTurn ||
-        session.latestTurnGeneration !== turnGeneration
-      )
-        return;
-      if (turn.queryIteratorControl) session.queryControlDraining = turn.queryIteratorControl;
-      drainClaudeRuntime(turn.runtime);
-    };
-    turn.closeSdkInput = closeTurnInput;
-    const ownsActiveTurn = () =>
-      !abortController.signal.aborted &&
-      sessions.get(sessionId) === session &&
-      session.abortController === abortController;
-    const publishStreamUsage = (message: unknown) => {
-      const usage = streamUsage.apply(message);
-      if (!usage || !ownsActiveTurn()) return;
-      session.inProgressUsage = inProgressClaudeUsage(session, usage);
-      session.inProgressUsageGeneration = turnGeneration;
-      eventEmitter.emit({
-        type: "session.updated",
-        sessionId,
-        data: { contextUsage: session.inProgressUsage },
-      });
-    };
+    turn.closeSdkInput = () => closeTurnInput(turn);
     const recordUnknownContentBlock = (blockType: string) =>
       sessionHealth(session).recordUnknown(`block:${blockType}`);
-    /** Informational rows by the tool use they report on, so a repeat updates in place. */
-    const informationalRowsByToolUse = new Map<string, string>();
-    /**
-     * What the provider says it is doing, when that is not visible from the
-     * transcript itself. Session state rather than a row, so a tab mounted
-     * mid-compaction learns it from `GET /session/:id`.
-     */
-    const setTurnActivity = (activity: SessionTurnActivity | undefined) => {
-      if (!ownsActiveTurn() || session.activity === activity) return;
-      session.activity = activity;
-      eventEmitter.emit({
-        type: "session.updated",
-        sessionId,
-        data: { activity: activity ?? null },
-      });
-    };
-    /** Drop the thinking estimate once the thinking it measured is over. */
-    const clearThinkingTokens = () => {
-      if (session.thinkingTokens === undefined || !ownsActiveTurn()) return;
-      session.thinkingTokens = undefined;
-      turn.lastThinkingTokensEmitAt = 0;
-      eventEmitter.emit({ type: "session.updated", sessionId, data: { thinkingTokens: null } });
-    };
-    /**
-     * Follow the CLI out of plan mode when a status frame reports it left.
-     * The ExitPlanMode handler covers the tool path; this covers exits that
-     * never reach `canUseTool`. Only a turn that itself started in plan mode
-     * may leave it this way: a turn started in another mode says nothing about
-     * the user's toggle.
-     *
-     * Deliberately one-way. Entering is the EnterPlanMode handler's job, and a
-     * status frame still saying `plan` just after an approved exit (the CLI
-     * reports its mode lazily) would otherwise turn the toggle back on.
-     */
-    const reconcilePlanModeFromStatus = async (reported: unknown) => {
-      if (typeof reported !== "string" || reported === "plan" || !ownsActiveTurn()) return;
-      if (session.planMode !== true || permissionMode !== "plan") return;
-      try {
-        await applySessionPlanMode(session, false);
-      } catch (error) {
-        console.warn("[session-manager] Could not record plan mode from a status frame", {
-          sessionId,
-          errorClass: diagnosticErrorClass(error),
-        });
-      }
-    };
-    const setCompletionBlockedByBackgroundTasks = (blocked: boolean) => {
-      if (!ownsActiveTurn()) return;
-      if (session.completionBlockedByBackgroundTasks === blocked) return;
-      session.completionBlockedByBackgroundTasks = blocked;
-      eventEmitter.emit({
-        type: "session.updated",
-        sessionId,
-        data: { completionBlockedByBackgroundTasks: blocked },
-      });
-    };
-    const hasLiveTaskOwnedByThisQuery = () =>
-      (Object.values(session.backgroundTasks ?? {}) as BackgroundTaskSnapshot[]).some(
-        (task) =>
-          LIVE_BACKGROUND_TASK_STATUSES.has(task.status) &&
-          session.backgroundTaskControls?.get(task.id) === turn.queryIteratorControl,
-      );
-    const hasBackgroundTaskCandidateOwnedByThisQuery = () =>
-      Array.from(session.backgroundTaskCandidates?.values() ?? []).includes(
-        turn.queryIteratorControl!,
-      );
-    const releaseCompletedTurnToBackgroundTasks = (backgroundTasksRunning: boolean) => {
-      if (turn.turnReleasedToBackgroundTasks || !ownsActiveTurn()) return;
-      turn.turnReleasedToBackgroundTasks = true;
-      turn.releasedTurnStartedAt = session.turnStartedAt;
-      session.status = "idle";
-      session.turnStartedAt = undefined;
-      session.abortController = undefined;
-      session.completionBlockedByBackgroundTasks = false;
-      if (session.queryControl === turn.queryIteratorControl) {
-        session.queryControl = undefined;
-      }
-      if (session.queryControlDraining === turn.queryIteratorControl) {
-        session.queryControlDraining = undefined;
-      }
-      if (dispatchRequestId) {
-        recordPromptDispatch(sessionId, dispatchRequestId, "already-processed");
-      }
-      eventEmitter.emit({
-        type: "session.idle",
-        sessionId,
-        data: {
-          success: true,
-          backgroundTasksRunning,
-          completionBlockedByBackgroundTasks: false,
-        },
-      });
-    };
-    // The retained control is closed only by the paths that legitimately end
-    // the turn — a continuation result, session teardown, or the watchdog
-    // below. Everything else must find it, so retention is a tracked reference
-    // rather than an absent one.
-    const stopWaitingForContinuation = () => {
-      if (turn.retainedContinuationTimer) {
-        clearTimeout(turn.retainedContinuationTimer);
-        turn.retainedContinuationTimer = null;
-      }
-      if (turn.queryIteratorControl) {
-        forgetRetainedQueryControl(session, turn.queryIteratorControl);
-      }
-      if (dispatchRequestId) {
-        session.retainedContinuationRequestIds?.delete(dispatchRequestId);
-        if (session.retainedContinuationRequestIds?.size === 0) {
-          session.retainedContinuationRequestIds = undefined;
-        }
-      }
-    };
-    // A silence watchdog, not a turn deadline: every frame received while it is
-    // armed pushes it out again, so a slow continuation is never cut off.
-    // Without a bound, a provider that answers the notification with nothing
-    // would hold this query's stdin — and its CLI child — open forever.
-    const armContinuationWatchdog = () => {
-      if (turn.retainedContinuationTimer) clearTimeout(turn.retainedContinuationTimer);
-      turn.retainedContinuationTimer = setTimeout(() => {
-        turn.retainedContinuationTimer = null;
-        if (session.latestTurnGeneration !== turnGeneration) {
-          armContinuationWatchdog();
-          return;
-        }
-        if (hasLiveTaskOwnedByThisQuery() || hasBackgroundTaskCandidateOwnedByThisQuery()) {
-          // Another task this query owns is still running, which is its own
-          // reason to hold stdin open — closing it here would kill that task.
-          // The control is reachable through `backgroundTaskControls` while
-          // that is true, so only the bound needs re-arming.
-          armContinuationWatchdog();
-          return;
-        }
-        console.warn(
-          "[session-manager] No continuation after a background task notification; releasing the retained query",
-          { sessionId },
-        );
-        stopWaitingForContinuation();
-        // No edge can arrive on a query that has gone silent this long. The
-        // parked snapshots are already absent from the live set, so dropping
-        // them only releases metadata that now has nothing to attach to.
-        forgetSettlingBackgroundTasksOwnedBy(session, turn.queryIteratorControl);
-        closeTurnInput();
-        closeQueryControlIfUnused(session, turn.queryIteratorControl);
-      }, testHooks?.retainedContinuationTimeoutMs ?? RETAINED_CONTINUATION_TIMEOUT_MS);
-    };
-    const waitForContinuationAfterNotification = () => {
-      if (!turn.queryIteratorControl) return;
-      retainQueryControl(session, turn.queryIteratorControl);
-      if (dispatchRequestId) {
-        (session.retainedContinuationRequestIds ??= new Set()).add(dispatchRequestId);
-      }
-      armContinuationWatchdog();
-    };
-    const reclaimReleasedTurnForAssistant = (message: SdkMessageBase) => {
-      if (!turn.turnReleasedToBackgroundTasks || ownsActiveTurn()) return;
-      const parentToolUseId = (message as { parent_tool_use_id?: unknown }).parent_tool_use_id;
-      if (
-        !isRootAssistantRecord(
-          parentToolUseId,
-          (message as { isSidechain?: unknown }).isSidechain,
-        ) ||
-        sessions.get(sessionId) !== session ||
-        session.deleting ||
-        // Releasing lets a follow-up turn join this CLI, and the newest turn
-        // owns the root conversation. Only it may publish `running` and take
-        // abort ownership; an older one doing so would point stop at a turn
-        // the user has moved on from and lock the newer turn out of its own
-        // reclaim.
-        session.latestTurnGeneration !== turnGeneration ||
-        session.status !== "idle" ||
-        session.abortController !== undefined
-      ) {
-        return;
-      }
-
-      // A terminal background-task notification is injected back into the
-      // same streaming Claude session and can start another root model turn.
-      // The preceding result released the UI while the task ran, but it is no
-      // longer the final result once Claude resumes. Reclaim ownership so the
-      // resumed response is shown as running and its later result can publish
-      // the real idle edge.
-      session.status = "running";
-      session.turnStartedAt = turn.releasedTurnStartedAt ?? new Date().toISOString();
-      session.abortController = abortController;
-      session.queryControl = turn.queryIteratorControl;
-      // The continuation arrived, so `queryControl` references this handle
-      // again and the standalone retention would only outlive its purpose.
-      stopWaitingForContinuation();
-      // This query can cross more than one result boundary: the resumed root
-      // loop may launch another background task and need to release ownership
-      // again. Treat each reclaim as the start of a fresh release cycle.
-      turn.turnReleasedToBackgroundTasks = false;
-      eventEmitter.emit({
-        type: "session.updated",
-        sessionId,
-        data: {
-          status: "running",
-          turnStartedAt: session.turnStartedAt,
-          completionBlockedByBackgroundTasks: false,
-        },
-      });
-    };
-    const finishTurnInputIfSettled = () => {
-      // Input, retention and the continuation watchdog belong to the newest
-      // turn once this one is superseded. Its subagents' frames still reach it,
-      // but releasing the process's retention from here would let it be closed
-      // under a newer turn that is waiting for a continuation.
-      if (turn.superseded || session.latestTurnGeneration !== turnGeneration) return;
-      if (!turn.receivedResult || turn.settlingResult) return;
-      if (turn.inheritedContinuation) {
-        // The turn this one replaced was waiting for the continuation a task
-        // notification owes, and nothing has answered it yet. Closing input now
-        // lands EOF before the CLI runs it; release instead and wait for it
-        // under the same bounded watchdog the replaced turn was using.
-        turn.inheritedContinuation = false;
-        turn.receivedResult = false;
-        setCompletionBlockedByBackgroundTasks(false);
-        releaseCompletedTurnToBackgroundTasks(hasLiveTaskOwnedByThisQuery());
-        waitForContinuationAfterNotification();
-        return;
-      }
-      const hasLiveTask = hasLiveTaskOwnedByThisQuery();
-      if (hasLiveTask || hasBackgroundTaskCandidateOwnedByThisQuery()) {
-        // The model turn is complete, but its CLI process owns work that must
-        // survive the response boundary. Publish idle so a follow-up turn can
-        // start — written into this same process — retain this query through
-        // backgroundTaskControls, and keep its input open until the last task
-        // owned by this process settles.
-        setCompletionBlockedByBackgroundTasks(false);
-        releaseCompletedTurnToBackgroundTasks(hasLiveTask);
-        return;
-      }
-      setCompletionBlockedByBackgroundTasks(false);
-      // Nothing is owed to this query any more, so it must stop being retained
-      // or `closeQueryControlIfUnused` would keep treating it as referenced.
-      stopWaitingForContinuation();
-      closeTurnInput();
-    };
-    /**
-     * A result reached this turn after it lost the foreground without being
-     * stopped: it was released to background work and the continuation
-     * produced no root assistant record to reclaim it. The CLI behind it may
-     * still be running agents, so the consumer keeps draining and task state
-     * decides whether input closes. Ending the consumer instead closes the
-     * query — the iterator's `return()` is the SDK's `transport.close()` — and
-     * kills those agents.
-     */
-    const settleResultWithoutOwnership = () => {
-      // A later notification then waits for its continuation under the bounded
-      // watchdog, exactly as for a turn released at its own result.
-      turn.turnReleasedToBackgroundTasks = true;
-      finishTurnInputIfSettled();
-    };
-    turn.finishTurnInputForThisTurn = finishTurnInputIfSettled;
+    turn.finishTurnInputForThisTurn = () => finishTurnInputIfSettled(turn);
 
     const queryEnvironment = await runtimeEnvironmentForAgentQuery();
-    // Hook callbacks run on the SDK's hook path, not on the JSONL message
-    // consumer. Keep them synchronous apart from the required Promise return:
-    // state is updated and the event is queued without delaying either stream.
-    const recordPreCompact: HookCallback = async (hookInput) => {
-      if (
-        hookInput.hook_event_name !== "PreCompact" ||
-        session.latestTurnGeneration !== turnGeneration
-      ) {
-        return {};
-      }
-      turn.compactedTokensBefore = (session.inProgressUsage ?? session.usage)?.usedTokens;
-      return {};
-    };
-    const recordPostCompact: HookCallback = async (hookInput) => {
-      if (
-        hookInput.hook_event_name !== "PostCompact" ||
-        session.latestTurnGeneration !== turnGeneration
-      ) {
-        return {};
-      }
-      // Publish only once PostCompact confirms success. PreCompact captures the
-      // before-value, but an attempted compaction that fails must not leave a
-      // durable boundary claiming the model's context changed.
-      appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
-        type: "compaction",
-        content: "",
-        createdAt: new Date().toISOString(),
-        ...(typeof turn.compactedTokensBefore === "number"
-          ? { compactedTokensBefore: turn.compactedTokensBefore }
-          : {}),
-        tokenCountText: `${hookInput.trigger} compaction`,
-      });
-      eventEmitter.emit({
-        type: "system.compact",
-        sessionId,
-        data: {
-          preTokens: turn.compactedTokensBefore,
-          trigger: hookInput.trigger,
-        },
-      });
-      return {};
-    };
-    const recordBackgroundTaskHook: HookCallback = async (hookInput) => {
-      if (
-        // Not gated on the turn generation: the session's CLI keeps running
-        // agents an earlier turn started after a follow-up takes the
-        // foreground, and their lifecycle is recorded against the CLI's
-        // control, exactly as its stream-side task messages are.
-        sessions.get(sessionId) !== session ||
-        session.deleting ||
-        abortController.signal.aborted ||
-        turn.queryEnded ||
-        !turn.queryIteratorControl ||
-        (hookInput.hook_event_name !== "TaskCreated" &&
-          hookInput.hook_event_name !== "TaskCompleted" &&
-          hookInput.hook_event_name !== "SubagentStart" &&
-          hookInput.hook_event_name !== "SubagentStop")
-      ) {
-        return {};
-      }
-      const hookTaskId =
-        hookInput.hook_event_name === "TaskCreated" || hookInput.hook_event_name === "TaskCompleted"
-          ? hookInput.task_id
-          : hookInput.agent_id;
-      const owner = session.backgroundTaskControls?.get(hookTaskId);
-      if (owner && owner !== turn.queryIteratorControl) return {};
-      if (
-        hookInput.hook_event_name === "TaskCreated" ||
-        hookInput.hook_event_name === "SubagentStart"
-      ) {
-        recordBackgroundTaskLaunch(
-          session,
-          hookInput.hook_event_name === "TaskCreated"
-            ? {
-                id: hookInput.task_id,
-                description: hookInput.task_subject || hookInput.task_description,
-              }
-            : {
-                id: hookInput.agent_id,
-                description: hookInput.agent_type,
-                subagentType: hookInput.agent_type || undefined,
-              },
-          turn.queryIteratorControl,
-          // The hook fires as a run starts, so a terminal record under this id
-          // belongs to an earlier run: a SendMessage resume, or a subagent
-          // waking from a pause under the same tool-use id.
-          { newRun: hookInput.hook_event_name === "SubagentStart" },
-        );
-      } else {
-        const taskId =
-          hookInput.hook_event_name === "TaskCompleted" ? hookInput.task_id : hookInput.agent_id;
-        // A subagent's `agent_id` *is* the id its `task_notification` reports,
-        // and this hook is delivered on the control channel — so for a
-        // backgrounded subagent it normally arrives before the notification
-        // the SDK injects back into the root loop. Settling first hands the
-        // last reference to this query to `closeQueryControlIfUnused`, whose
-        // `Query.close()` is destructive, and then closes held stdin: the CLI
-        // dies in the gap, having written the notification to its rollout with
-        // nothing left to answer it. Retain exactly as the `task_notification`
-        // and `background_tasks_changed` branches do — the edge that follows
-        // still writes the authoritative terminal status over this one. A stop
-        // landing while the result is still settling follows that result too,
-        // so it owes the same continuation.
-        const settlesReleasedTurn =
-          (turn.turnReleasedToBackgroundTasks || turn.settlingResult) &&
-          session.backgroundTaskControls?.get(taskId) === turn.queryIteratorControl &&
-          LIVE_BACKGROUND_TASK_STATUSES.has(
-            session.backgroundTasks?.[taskId]?.status ?? "completed",
-          );
-        if (settlesReleasedTurn) {
-          turn.receivedResult = false;
-          waitForContinuationAfterNotification();
-        }
-        if (settleBackgroundTask(session, taskId, "completed")) {
-          emitBackgroundTaskSnapshot(session);
-        }
-      }
-      finishTurnInputIfSettled();
-      return {};
-    };
-    // A measurement usually lands on a call the tracker already holds; one that
-    // outruns the assistant message carrying the call waits here for its
-    // tool result, which cannot precede it.
-    const pendingCommandChanges = new Map<string, MeasuredWorkspaceChange>();
-    const applyCommandChanges = (toolUseId: string, change: MeasuredWorkspaceChange) => {
-      if (!toolTracker.setCommandChanges(toolUseId, change)) {
-        pendingCommandChanges.set(toolUseId, change);
-        return;
-      }
-      if (session.latestTurnGeneration !== turnGeneration) return;
-      const refreshed = stream.refreshToolRows([toolUseId]);
-      refreshSettledToolRows(session, sessionId, toolTracker, [toolUseId], refreshed);
-    };
-    const commandChangeHookFor = (route: (toolUseId: string) => ClaudeRuntimeTurn) =>
-      commandChangeHooks((toolUseId, change) =>
-        route(toolUseId).applyCommandChanges(toolUseId, change),
-      );
-    const turnCanUseTool = (async (
-      toolName: string,
-      input: Record<string, unknown>,
-      permissionContext: Parameters<CanUseTool>[2],
-    ) => {
-      if (toolName === "AskUserQuestion") {
-        const questions: QuestionInfo[] = Array.isArray(input.questions) ? input.questions : [];
-        const questionTexts = questions.map((question) => question.question);
-        if (new Set(questionTexts).size !== questionTexts.length) {
-          // The Agent SDK answer contract is Record<questionText, string>.
-          // Duplicate text cannot be represented without silently
-          // overwriting one answer, so fail closed and let Claude ask again
-          // with distinct wording.
-          return {
-            behavior: "deny" as const,
-            message:
-              "AskUserQuestion contains duplicate question text. Ask the questions again with distinct wording.",
-          };
-        }
-        // Create a question request and wait for user answer
-        // The SDK request id survives transport reinitialization. Reusing it
-        // keeps a redelivered question attached to the same UI interaction.
-        const questionId = permissionContext?.requestId || generateMessageId();
-        const questionRequest: QuestionRequest = {
-          id: questionId,
-          sessionId,
-          questions,
-          toolUseId: permissionContext?.toolUseID ?? questionId,
-          expiresAt: Date.now() + QUESTION_TIMEOUT_MS,
-        };
-
-        // Store the question
-        pendingQuestions.set(questionId, questionRequest);
-
-        // Emit event so frontend knows to show the question
-        eventEmitter.emit({
-          type: "question.asked",
-          sessionId,
-          data: questionRequest,
-        });
-
-        // Wait for answer with a Promise that can be resolved externally
-        const answerPromise = new Promise<Record<string, string>>((resolve, reject) => {
-          questionResolvers.set(questionId, { resolve, reject });
-        });
-
-        let questionTimeoutId: ReturnType<typeof setTimeout> | undefined;
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          questionTimeoutId = setTimeout(() => {
-            reject(new Error("Question timed out after 5 minutes"));
-          }, QUESTION_TIMEOUT_MS);
-        });
-
-        try {
-          const answers = await Promise.race([answerPromise, timeoutPromise]);
-          console.log("[session-manager] Received question answers", {
-            questionId,
-            answerCount: Object.keys(answers).length,
-          });
-
-          // Return the answers to the SDK
-          return {
-            behavior: "allow" as const,
-            updatedInput: {
-              questions: input.questions,
-              answers,
-            },
-          };
-        } catch (error) {
-          console.error("[session-manager] Error waiting for answer:", error);
-          const message = error instanceof Error ? error.message : "Question was cancelled";
-          if (pendingQuestions.has(questionId)) {
-            eventEmitter.emit({
-              type: "question.answered",
-              sessionId,
-              data: { requestId: questionId, cancelled: true },
-            });
-          }
-          return { behavior: "deny" as const, message };
-        } finally {
-          // Cleanup
-          if (questionTimeoutId) clearTimeout(questionTimeoutId);
-          pendingQuestions.delete(questionId);
-          questionResolvers.delete(questionId);
-        }
-      }
-
-      // Handle EnterPlanMode - emit event so frontend can update plan mode state
-      if (toolName === "EnterPlanMode") {
-        debugLog("[session-manager] EnterPlanMode requested", { sessionId });
-
-        // The agent itself switched the session into plan mode; record it
-        // like a user toggle so the preference survives a restart.
-        try {
-          await applySessionPlanMode(session, true);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "Failed to persist plan mode";
-          return {
-            behavior: "deny" as const,
-            message: `Plan mode could not be persisted safely: ${message}`,
-          };
-        }
-
-        // Emit event so frontend knows to enter plan mode
-        eventEmitter.emit({
-          type: "plan.enter-requested",
-          sessionId,
-          data: { sessionId },
-        });
-
-        // Allow the tool to proceed
-        return {
-          behavior: "allow" as const,
-          updatedInput: input,
-        };
-      }
-
-      // Handle ExitPlanMode - wait for user approval before allowing
-      if (toolName === "ExitPlanMode") {
-        debugLog("[session-manager] ExitPlanMode requested, waiting for user approval", {
-          sessionId,
-        });
-
-        // Create a plan approval request and wait for user decision
-        // Keep the provider's stable identity so a transport replay cannot
-        // manufacture a second approval card for the same request.
-        const approvalId = permissionContext?.requestId || generateMessageId();
-        // The SDK's ExitPlanMode request is the authoritative plan. Reading
-        // and replaying the preceding plan-file edits duplicated Edit
-        // semantics and could drift from the bytes Claude actually asks
-        // the user to approve.
-        const directPlan = boundedPlan(input?.plan);
-        const approvalRequest: PlanApprovalRequest = {
-          id: approvalId,
-          sessionId,
-          toolUseId: permissionContext?.toolUseID ?? approvalId,
-          ...directPlan,
-          expiresAt: Date.now() + PLAN_APPROVAL_TIMEOUT_MS,
-        };
-
-        // Store the approval request and set up the resolver BEFORE emitting,
-        // so an instant response from the UI can never find a missing resolver.
-        pendingPlanApprovals.set(approvalId, approvalRequest);
-
-        const approvalPromise = new Promise<PlanApprovalResponse>((resolve, reject) => {
-          planApprovalResolvers.set(approvalId, { resolve, reject });
-        });
-
-        // Emit event so frontend knows to show the approval UI
-        eventEmitter.emit({
-          type: "plan.approval-requested",
-          sessionId,
-          data: approvalRequest,
-        });
-
-        let approvalTimeoutId: ReturnType<typeof setTimeout> | undefined;
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          approvalTimeoutId = setTimeout(() => {
-            reject(new Error("Plan approval timed out after 5 minutes"));
-          }, PLAN_APPROVAL_TIMEOUT_MS);
-        });
-
-        try {
-          const response = await Promise.race([approvalPromise, timeoutPromise]);
-          console.log("[session-manager] Plan approval result", {
-            approvalId,
-            approved: response.approved,
-            hasFeedback: typeof response.feedback === "string" && response.feedback.length > 0,
-          });
-
-          if (response.approved) {
-            // User approved - emit exit event and allow the tool.
-            // Mark `stream.planApprovedThisTurn` so the fallback below can detect
-            // the case where the SDK still fails the ExitPlanMode tool
-            // (override the failure + re-prompt Claude to continue).
-            // Approval ends plan mode; record it so the preference the
-            // next prompt rehydrates from matches what the UI shows.
-            try {
-              await applySessionPlanMode(session, false);
-            } catch (error) {
-              const message =
-                error instanceof Error ? error.message : "Failed to persist plan mode";
-              return {
-                behavior: "deny" as const,
-                message: `Plan mode could not be exited safely: ${message}`,
-              };
-            }
-            stream.planApprovedThisTurn = true;
-            eventEmitter.emit({
-              type: "plan.exit-requested",
-              sessionId,
-              data: { sessionId },
-            });
-
-            return {
-              behavior: "allow" as const,
-              updatedInput: input,
-            };
-          } else {
-            // User rejected - deny the tool and include feedback if provided.
-            // Also capture the feedback so we can re-prompt Claude if the SDK
-            // ends the turn after the denial (ExitPlanMode denial may terminate
-            // the agent loop without Claude generating a revision).
-            const feedbackMessage = response.feedback
-              ? `User feedback: "${response.feedback}"`
-              : "No specific feedback was provided.";
-            const denyMessage = `User rejected the plan. ${feedbackMessage} Please revise your approach based on this feedback.`;
-
-            // Store the raw feedback for potential re-prompt
-            stream.pendingPlanRejectionFeedback = response.feedback
-              ? `I've reviewed the plan and I'd like changes: ${response.feedback}\n\nPlease revise the plan based on this feedback.`
-              : `I've reviewed the plan and I don't approve it as-is. Please revise your approach.`;
-
-            return {
-              behavior: "deny" as const,
-              message: denyMessage,
-            };
-          }
-        } catch (error) {
-          console.error("[session-manager] Error waiting for plan approval:", error);
-          const errorMessage =
-            error instanceof Error ? error.message : "Plan approval was cancelled";
-          if (pendingPlanApprovals.has(approvalId)) {
-            eventEmitter.emit({
-              type: "plan.approval-responded",
-              sessionId,
-              data: {
-                requestId: approvalId,
-                approved: false,
-                cancelled: true,
-              },
-            });
-          }
-          // If error (e.g., timeout or dismissed), deny the tool use
-          return { behavior: "deny" as const, message: errorMessage };
-        } finally {
-          // Cleanup
-          if (approvalTimeoutId) clearTimeout(approvalTimeoutId);
-          pendingPlanApprovals.delete(approvalId);
-          planApprovalResolvers.delete(approvalId);
-        }
-      }
-
-      // Allow this invocation only. SDK permission suggestions are durable
-      // policy updates and belong behind an explicit "always allow" choice;
-      // this host does not currently present one, so returning suggestions
-      // here would silently widen permissions after an allow-once decision.
-      return {
-        behavior: "allow" as const,
-        updatedInput: input,
-      };
-    }) as CanUseTool;
-    const context: PromptMessageContext = {
-      session,
-      sessionId,
-      turn,
-      reclaimReleasedTurnForAssistant,
-      publishStreamUsage,
-    };
     // One SDK frame routed to this turn by the runtime's single consumer.
     const handleMessage = async (message: SDKMessage): Promise<void> => {
       if (abortController.signal.aborted) {
@@ -1640,7 +901,7 @@ export async function sendPrompt(
       // so the watchdog is pushed out rather than allowed to expire mid-stream.
       // Retention itself is dropped by the reclaim, the result, or the watchdog
       // firing — never by liveness alone.
-      if (turn.retainedContinuationTimer) armContinuationWatchdog();
+      if (turn.retainedContinuationTimer) armContinuationWatchdog(turn);
       // Fires once per streamed delta — i.e. per token. Both the object
       // literal and the write are guarded, not just the write.
       if (isDebugLoggingEnabled) {
@@ -1668,9 +929,9 @@ export async function sendPrompt(
       // Handle different message types from SDK
       const leafHandler = leafMessageHandler(message.type);
       if (leafHandler) {
-        leafHandler(context, message);
+        leafHandler(turn, message);
       } else if (message.type === "system" && message.subtype === "init") {
-        await handleInitMessage(context, message);
+        await handleInitMessage(turn, message);
       } else if (message.type === "system") {
         // Handle other system messages (log for debugging)
         const sysMsg = message as SdkSystemMessage;
@@ -1828,7 +1089,7 @@ export async function sendPrompt(
               LIVE_BACKGROUND_TASK_STATUSES.has(previous.status)
             ) {
               turn.receivedResult = false;
-              waitForContinuationAfterNotification();
+              waitForContinuationAfterNotification(turn);
             }
             closeQueryControlIfUnused(session, owner);
           }
@@ -1897,7 +1158,7 @@ export async function sendPrompt(
           // A later result closes held input, while abort/delete still closes
           // the control explicitly.
           if (owner === turn.queryIteratorControl && turn.turnReleasedToBackgroundTasks) {
-            waitForContinuationAfterNotification();
+            waitForContinuationAfterNotification(turn);
           } else {
             closeQueryControlIfUnused(session, owner);
           }
@@ -2003,7 +1264,7 @@ export async function sendPrompt(
             // the model's final tool result and its final assistant message,
             // which the rollout records as `[Request interrupted by user]`.
             turn.receivedResult = false;
-            waitForContinuationAfterNotification();
+            waitForContinuationAfterNotification(turn);
           }
           // Retention above is what keeps this query out of the close below:
           // `closeQueryControlIfUnused` treats a retained control as still in
@@ -2018,7 +1279,7 @@ export async function sendPrompt(
           // session keeps every value but publishes at most one per interval.
           const estimate = (message as SDKThinkingTokensMessage).estimated_tokens;
           if (
-            ownsActiveTurn() &&
+            ownsActiveTurn(turn) &&
             typeof estimate === "number" &&
             Number.isFinite(estimate) &&
             estimate >= 0
@@ -2036,7 +1297,7 @@ export async function sendPrompt(
           }
         } else if (sysMsg.subtype === "status") {
           const status = message as SDKStatusMessage;
-          setTurnActivity(status.status === "compacting" ? "compacting" : undefined);
+          setTurnActivity(turn, status.status === "compacting" ? "compacting" : undefined);
           // The compaction row is written by the PostCompact hook, which only
           // runs on success. A failed compaction left nothing in the tab while
           // the context stayed exactly as full as before.
@@ -2049,7 +1310,7 @@ export async function sendPrompt(
               createdAt: new Date().toISOString(),
             });
           }
-          await reconcilePlanModeFromStatus(status.permissionMode);
+          await reconcilePlanModeFromStatus(turn, status.permissionMode);
         } else if (sysMsg.subtype === "hook_response") {
           // Most of these are this bridge's own compaction and background-task
           // hooks. Only a failed or cancelled hook says something is broken.
@@ -2077,7 +1338,7 @@ export async function sendPrompt(
             };
             // The SDK repeats a progress line for one tool use; keep one row.
             const existingId = info.tool_use_id
-              ? informationalRowsByToolUse.get(info.tool_use_id)
+              ? turn.informationalRowsByToolUse.get(info.tool_use_id)
               : undefined;
             const existing = existingId
               ? session.messages.find((candidate) => candidate.id === existingId)
@@ -2098,7 +1359,7 @@ export async function sendPrompt(
                 (event) => eventEmitter.emit(event),
                 part,
               );
-              if (info.tool_use_id) informationalRowsByToolUse.set(info.tool_use_id, row.id);
+              if (info.tool_use_id) turn.informationalRowsByToolUse.set(info.tool_use_id, row.id);
             }
           } else {
             recordSystemMessageNotice(session, sysMsg);
@@ -2154,7 +1415,7 @@ export async function sendPrompt(
             );
           }
         }
-        finishTurnInputIfSettled();
+        finishTurnInputIfSettled(turn);
 
         // System subtypes with no branch above are diagnostics, not transcript
         // content. They used to be re-emitted as an untyped `system.message`
@@ -2214,13 +1475,13 @@ export async function sendPrompt(
           });
         }
         // The thinking this estimate measured has produced its block.
-        clearThinkingTokens();
+        clearThinkingTokens(turn);
         // The retry above worked: the model answered. Settle the row rather
         // than leaving a spinner on a request that has already succeeded.
         settlePendingApiRetry(session, sessionId, (event) => eventEmitter.emit(event), stream, {
           state: "success",
         });
-        reclaimReleasedTurnForAssistant(message as SdkMessageBase);
+        reclaimReleasedTurnForAssistant(turn, message as SdkMessageBase);
 
         // If we receive a new assistant message after a plan denial, it means
         // the SDK continued the agent loop and Claude did see the feedback.
@@ -2322,9 +1583,9 @@ export async function sendPrompt(
           // only drops one no hook will close: a call refused by `canUseTool`,
           // or one cut off by an interrupt.
           commandChangeProbe.discard(toolUseId);
-          const pending = pendingCommandChanges.get(toolUseId);
+          const pending = turn.pendingCommandChanges.get(toolUseId);
           if (pending) {
-            pendingCommandChanges.delete(toolUseId);
+            turn.pendingCommandChanges.delete(toolUseId);
             toolTracker.setCommandChanges(toolUseId, pending);
           }
         }
@@ -2353,7 +1614,7 @@ export async function sendPrompt(
           }
         }
         if (settledProvisionalTask) emitBackgroundTaskSnapshot(session);
-        finishTurnInputIfSettled();
+        finishTurnInputIfSettled(turn);
 
         // Update active Task tracking - remove completed Tasks
         for (const taskId of completedTaskIds) {
@@ -2441,7 +1702,7 @@ export async function sendPrompt(
         // legitimate end of the retained turn.
         if (
           !turn.receivedPromptResult &&
-          resultAnswersOtherInput(resultMsg, promptUuid, steerUuids)
+          resultAnswersOtherInput(resultMsg, promptUuid, turn.steerUuids)
         ) {
           // Whatever the CLI ran first, it was not this prompt: an inherited
           // continuation has now been answered.
@@ -2464,7 +1725,7 @@ export async function sendPrompt(
             ? promptUuid
             : userMessage.sdkUuid
               ? undefined
-              : uuids.find((uuid) => !steerUuids.has(uuid));
+              : uuids.find((uuid) => !turn.steerUuids.has(uuid));
           if (sdkUuid && userMessage.sdkUuid !== sdkUuid) {
             userMessage.sdkUuid = sdkUuid;
             markTranscriptChanged(session);
@@ -2475,7 +1736,7 @@ export async function sendPrompt(
             });
           }
         };
-        if (resultSupersededBySteer(resultMsg, unansweredSteerUuids, turn.latestSteerUuid)) {
+        if (resultSupersededBySteer(resultMsg, turn.unansweredSteerUuids, turn.latestSteerUuid)) {
           // The prompt was answered, if only by the interruption, so what
           // follows is no longer filtered as another input's result.
           if (resultInputUuids(resultMsg).includes(promptUuid)) turn.receivedPromptResult = true;
@@ -2491,7 +1752,9 @@ export async function sendPrompt(
         // the inherited continuation together with this prompt.
         if (
           turn.inheritedContinuation &&
-          resultInputUuids(resultMsg).some((uuid) => uuid !== promptUuid && !steerUuids.has(uuid))
+          resultInputUuids(resultMsg).some(
+            (uuid) => uuid !== promptUuid && !turn.steerUuids.has(uuid),
+          )
         ) {
           turn.inheritedContinuation = false;
         }
@@ -2509,13 +1772,13 @@ export async function sendPrompt(
         // Account allocation can advance during the last model request. Queue
         // one final coalesced refresh before publishing the completed token
         // snapshot, preserving the previous end-of-turn exactness.
-        if (!ownsActiveTurn()) {
+        if (!ownsActiveTurn(turn)) {
           if (!abortController.signal.aborted) {
-            settleResultWithoutOwnership();
+            settleResultWithoutOwnership(turn);
             return;
           }
           recordInterruptedStructuredOutputIfCurrent();
-          closeTurnInput();
+          closeTurnInput(turn);
           return;
         }
         // Both round trips can take seconds. Lifecycle hooks and task stops
@@ -2534,15 +1797,15 @@ export async function sendPrompt(
               ...(turn.bootstrapClaudeUsage
                 ? { bootstrapTurnTokens: streamUsage.completedTotals() }
                 : {}),
-              stillOwnsTurn: ownsActiveTurn,
+              stillOwnsTurn: () => ownsActiveTurn(turn),
             },
           );
         } finally {
           turn.settlingResult = false;
         }
-        if (!ownsActiveTurn()) {
+        if (!ownsActiveTurn(turn)) {
           if (!abortController.signal.aborted) {
-            settleResultWithoutOwnership();
+            settleResultWithoutOwnership(turn);
             return;
           }
           // The provider accepted this request, so the caller needs a
@@ -2550,7 +1813,7 @@ export async function sendPrompt(
           // usage snapshot. A newer structured turn replaces the request id
           // before taking ownership; never let this old turn overwrite it.
           recordInterruptedStructuredOutputIfCurrent();
-          closeTurnInput();
+          closeTurnInput(turn);
           return;
         }
         turn.bootstrapClaudeUsage = false;
@@ -2621,7 +1884,7 @@ export async function sendPrompt(
             );
           }
           debugLog("[session-manager] Query completed successfully", { sessionId });
-          finishTurnInputIfSettled();
+          finishTurnInputIfSettled(turn);
         } else {
           console.error("[session-manager] Query error:", resultMsg.subtype, {
             sessionId,
@@ -2688,30 +1951,7 @@ export async function sendPrompt(
       }
       // Note: AskUserQuestion tool handling is done in the canUseTool callback above
     };
-    turn.thisTurn = {
-      handleMessage,
-      pushSteerInput,
-      canUseTool: turnCanUseTool,
-      recordBackgroundTaskHook,
-      recordPreCompact,
-      recordPostCompact,
-      applyCommandChanges,
-      supersede: () => {
-        // The newer turn owns the root conversation, its continuations and the
-        // input from here; this turn only draws the rows of tools it started.
-        turn.superseded = true;
-        stopWaitingForContinuation();
-        turn.resolveTurnEnded();
-      },
-      runtimeEnded: (failure) => {
-        if (failure) turn.rejectTurnEnded(failure.error);
-        else turn.resolveTurnEnded();
-      },
-      isAwaitingContinuation: () => turn.retainedContinuationTimer !== null,
-      inheritContinuation: () => {
-        turn.inheritedContinuation = true;
-      },
-    };
+    turn.thisTurn = createClaudeRuntimeTurn(turn, handleMessage);
     const liveSettings = claudeLiveSettings({
       model: options?.model,
       permissionMode,
@@ -3109,7 +2349,7 @@ export async function sendPrompt(
       },
       { once: true },
     );
-    session.finishTurnInputIfSettled = finishTurnInputIfSettled;
+    session.finishTurnInputIfSettled = turn.finishTurnInputForThisTurn;
     turn.queryStarted = true;
     testHooks?.onQueryStarted?.();
     // One control read per turn, off the message path, so the inventory a
@@ -3235,7 +2475,7 @@ export async function sendPrompt(
     // An abort or immediate restart can take ownership while an awaited control
     // request above is still resolving. The old turn must not publish a second
     // idle edge or clear the new turn's controller.
-    if (!ownsActiveTurn()) return;
+    if (!ownsActiveTurn(turn)) return;
 
     session.status = "idle";
     session.turnStartedAt = undefined;

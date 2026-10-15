@@ -9,7 +9,12 @@ import { sessionHealth } from "../../types/index.js";
 import { eventEmitter } from "../event-emitter.js";
 import { type RateLimitEventInfo, rateLimitsFromEventInfo } from "../session-manager-core.js";
 import { markTranscriptChanged, resetTranscriptEpoch } from "../transcript-revision.js";
-import type { PromptMessageContext, PromptMessageHandler } from "./context.js";
+import type { TurnState } from "../session-manager-prompt-turn.js";
+import type { PromptMessageHandler } from "./context.js";
+import {
+  publishStreamUsage,
+  reclaimReleasedTurnForAssistant,
+} from "../session-manager-prompt-turn-lifecycle.js";
 import { appendTranscriptNotice } from "./transcript-notice.js";
 
 /** Notice wording per `conversation_reset.trigger`; an open set upstream. */
@@ -21,10 +26,8 @@ const CONVERSATION_RESET_CAUSES: Record<string, string> = {
 };
 
 /** `prompt_suggestion`: the follow-up the CLI offers once a turn ends. */
-function handlePromptSuggestion(
-  { session, sessionId }: PromptMessageContext,
-  message: SDKMessage,
-): void {
+function handlePromptSuggestion(turn: TurnState, message: SDKMessage): void {
+  const { session, sessionId } = turn;
   const suggestion =
     typeof (message as { suggestion?: unknown }).suggestion === "string"
       ? (message as { suggestion: string }).suggestion.trim()
@@ -40,10 +43,8 @@ function handlePromptSuggestion(
 }
 
 /** `rate_limit_event`: plan-window utilization, merged by window label. */
-function handleRateLimitEvent(
-  { session, sessionId, turn }: PromptMessageContext,
-  message: SDKMessage,
-): void {
+function handleRateLimitEvent(turn: TurnState, message: SDKMessage): void {
+  const { session, sessionId } = turn;
   const info = (message as { rate_limit_info?: RateLimitEventInfo }).rate_limit_info;
   if (info) {
     const nextWindows = rateLimitsFromEventInfo(info);
@@ -92,7 +93,8 @@ function handleRateLimitEvent(
 }
 
 /** `auth_status`: sign-in state changing mid-session. */
-function handleAuthStatus({ session, sessionId }: PromptMessageContext, message: SDKMessage): void {
+function handleAuthStatus(turn: TurnState, message: SDKMessage): void {
+  const { session, sessionId } = turn;
   const auth = message as SDKAuthStatusMessage;
   const content = auth.error
     ? `Claude authentication failed: ${auth.error}`
@@ -114,24 +116,22 @@ function handleAuthStatus({ session, sessionId }: PromptMessageContext, message:
 }
 
 /** `stream_event`: one streamed delta. Runs once per token, so it stays cheap. */
-function handleStreamEvent(
-  { turn, reclaimReleasedTurnForAssistant, publishStreamUsage }: PromptMessageContext,
-  message: SDKMessage,
-): void {
+function handleStreamEvent(turn: TurnState, message: SDKMessage): void {
   // A resumed root turn can think for minutes before its first complete
   // assistant record, streaming only partials meanwhile. Waiting for that
   // record left the session idle — and the environment marked done —
   // while Claude was still working, so the first root partial reclaims.
   // Pings carry no content and are not evidence of a new model request.
   if ((message as { event?: { type?: unknown } }).event?.type !== "ping") {
-    reclaimReleasedTurnForAssistant(message as SdkMessageBase);
+    reclaimReleasedTurnForAssistant(turn, message as SdkMessageBase);
   }
-  publishStreamUsage(message);
+  publishStreamUsage(turn, message);
   turn.stream.applyPartialAssistantMessage(message);
 }
 
 /** `tool_progress`: how long a running call has been going. */
-function handleToolProgress({ session, turn }: PromptMessageContext, message: SDKMessage): void {
+function handleToolProgress(turn: TurnState, message: SDKMessage): void {
+  const { session } = turn;
   // A live sub-line on the tool row it names, not a row of its own. It is
   // pushed into the assistant message holding the call so the backend's
   // projection can fold it onto that call — a progress part in its own
@@ -168,10 +168,8 @@ function handleToolProgress({ session, turn }: PromptMessageContext, message: SD
 }
 
 /** `tool_use_summary`: a one-line summary of a completed tool call. */
-function handleToolUseSummary(
-  { session, sessionId }: PromptMessageContext,
-  message: SDKMessage,
-): void {
+function handleToolUseSummary(turn: TurnState, message: SDKMessage): void {
+  const { session, sessionId } = turn;
   const summary = (message as SDKToolUseSummaryMessage).summary?.trim();
   if (summary) {
     appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
@@ -184,10 +182,8 @@ function handleToolUseSummary(
 }
 
 /** `conversation_reset`: the conversation the transcript describes is gone. */
-function handleConversationReset(
-  { session, sessionId }: PromptMessageContext,
-  message: SDKMessage,
-): void {
+function handleConversationReset(turn: TurnState, message: SDKMessage): void {
+  const { session, sessionId } = turn;
   // The conversation this transcript describes no longer exists. Leaving
   // the old messages would show history the model has no memory of and
   // will not answer questions about.

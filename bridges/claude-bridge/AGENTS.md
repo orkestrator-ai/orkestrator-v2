@@ -61,7 +61,7 @@ When touching the session catalogue (`session-manager-catalog.ts`):
   window races the process exit and is rejected with
   `Query closed before response received`. Reads go through `readableControl`,
   which skips a control marked `queryControlDraining`. `closeTurnInput()` in
-  `session-manager-prompt.ts` is the one place that sets the marker, so a new
+  `session-manager-prompt-turn-lifecycle.ts` is the one place that sets the marker, so a new
   stdin-close site cannot forget it.
 - **Reads fall back, writes conflict.** `isClosedTransportError` maps a dead
   transport onto the cached answer for `/commands` and `/mcp`, and onto 409 for

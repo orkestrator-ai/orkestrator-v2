@@ -2,9 +2,13 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import type { SessionState, SSEEvent } from "../../types/index.js";
 import { eventEmitter } from "../event-emitter.js";
+import { sessions } from "../session-manager-core.js";
 import { createPromptStreamState } from "../session-manager-prompt-stream.js";
-import { captureTurnStartup, createTurnState } from "../session-manager-prompt-turn.js";
-import type { PromptMessageContext } from "./context.js";
+import {
+  captureTurnStartup,
+  createTurnState,
+  type TurnState,
+} from "../session-manager-prompt-turn.js";
 import { leafMessageHandler } from "./leaf.js";
 
 const cleanups: Array<() => void> = [];
@@ -26,6 +30,8 @@ function fixture() {
   });
   cleanups.push(() => stream.clearFlushTimer());
   const turn = createTurnState(session, session.id, {
+    dispatchRequestId: undefined,
+    retainedContinuationTimeoutMs: undefined,
     beforeStartup: captureTurnStartup(session),
     abortController: new AbortController(),
     turnGeneration: 1,
@@ -33,25 +39,16 @@ function fixture() {
     bootstrapClaudeUsage: false,
     transcriptHydrationFailed: false,
   });
-  const reclaimed: unknown[] = [];
-  const published: unknown[] = [];
-  const context: PromptMessageContext = {
-    session,
-    sessionId: session.id,
-    turn,
-    reclaimReleasedTurnForAssistant: (message) => reclaimed.push(message),
-    publishStreamUsage: (message) => published.push(message),
-  };
-  return { session, turn, context, reclaimed, published };
+  return { session, turn };
 }
 
-function dispatch(context: PromptMessageContext, message: Record<string, unknown>): SSEEvent[] {
+function dispatch(turn: TurnState, message: Record<string, unknown>): SSEEvent[] {
   const handler = leafMessageHandler(message.type);
   if (!handler) throw new Error(`no leaf handler for ${String(message.type)}`);
   const events: SSEEvent[] = [];
   const stop = eventEmitter.subscribe((event) => events.push(event));
   try {
-    void handler(context, message as unknown as SDKMessage);
+    void handler(turn, message as unknown as SDKMessage);
   } finally {
     stop();
   }
@@ -76,8 +73,8 @@ describe("leaf message handlers", () => {
     ["  try the tests  ", "try the tests"],
     ["   ", undefined],
   ])("prompt_suggestion %p records %p", (suggestion, expected) => {
-    const { session, context } = fixture();
-    const events = dispatch(context, { type: "prompt_suggestion", suggestion });
+    const { session, turn } = fixture();
+    const events = dispatch(turn, { type: "prompt_suggestion", suggestion });
     expect(session.promptSuggestion).toBe(expected);
     expect(events).toEqual(
       expected
@@ -110,7 +107,7 @@ describe("leaf message handlers", () => {
       "warning",
     ],
   ])("%p appends one status row", (message, content, severity) => {
-    const { session, context } = fixture();
+    const { session, turn } = fixture();
     session.messages.push({
       id: "earlier",
       role: "user",
@@ -118,7 +115,7 @@ describe("leaf message handlers", () => {
       parts: [{ type: "text", content: "hi" }],
       createdAt: new Date().toISOString(),
     });
-    const events = dispatch(context, message);
+    const events = dispatch(turn, message);
     const rows =
       message.type === "conversation_reset" ? session.messages : session.messages.slice(1);
     expect(rows).toHaveLength(1);
@@ -130,10 +127,10 @@ describe("leaf message handlers", () => {
   });
 
   test("rate_limit_event merges the window and asks for a structured refresh", () => {
-    const { session, turn, context } = fixture();
+    const { session, turn } = fixture();
     const trigger = mock(async () => {});
     turn.structuredUsageRefresh = { trigger } as unknown as typeof turn.structuredUsageRefresh;
-    const events = dispatch(context, {
+    const events = dispatch(turn, {
       type: "rate_limit_event",
       rate_limit_info: { rateLimitType: "five_hour", utilization: 0.5 },
     });
@@ -145,19 +142,23 @@ describe("leaf message handlers", () => {
   });
 
   test.each([
-    ["message_start", 1],
-    ["ping", 0],
-  ])("stream_event %p reclaims %p times and always publishes usage", (eventType, reclaims) => {
-    const { context, reclaimed, published } = fixture();
-    const message = { type: "stream_event", event: { type: eventType }, parent_tool_use_id: null };
-    dispatch(context, message);
-    expect(reclaimed).toHaveLength(reclaims);
-    expect(published).toEqual([message]);
+    ["message_start", "running"],
+    ["ping", "idle"],
+  ])("stream_event %p on a released turn leaves the session %p", (eventType, status) => {
+    const { session, turn } = fixture();
+    sessions.set(session.id, session);
+    cleanups.push(() => sessions.delete(session.id));
+    session.status = "idle";
+    session.latestTurnGeneration = turn.turnGeneration;
+    turn.turnReleasedToBackgroundTasks = true;
+    dispatch(turn, { type: "stream_event", event: { type: eventType }, parent_tool_use_id: null });
+    expect(session.status as string).toBe(status);
+    expect(session.abortController).toBe(status === "running" ? turn.abortController : undefined);
   });
 
   test("tool_progress for a call no row holds changes nothing", () => {
-    const { session, context } = fixture();
-    const events = dispatch(context, {
+    const { session, turn } = fixture();
+    const events = dispatch(turn, {
       type: "tool_progress",
       tool_use_id: "toolu_unknown",
       tool_name: "Bash",

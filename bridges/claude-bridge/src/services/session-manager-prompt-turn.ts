@@ -1,5 +1,6 @@
 import { createBridgeDiagnostics } from "@orkestrator/protocol/node/bridge-diagnostics";
-import type { SessionState } from "../types/index.js";
+import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
+import type { PermissionMode, SessionState } from "../types/index.js";
 import type { StructuredUsageRefreshCoordinator } from "./session-manager-core.js";
 import type { PromptStreamState } from "./session-manager-prompt-stream.js";
 import type { ClaudeRuntime, ClaudeRuntimeTurn } from "./session-manager-runtime.js";
@@ -51,6 +52,12 @@ export function captureTurnStartup(session: SessionState): TurnStartupSnapshot {
  * that read them exist, and the flags change while frames are handled.
  */
 export interface TurnState {
+  readonly session: SessionState;
+  readonly sessionId: string;
+  /** The caller's idempotency key, when it sent one. */
+  readonly dispatchRequestId: string | undefined;
+  /** Overrides `RETAINED_CONTINUATION_TIMEOUT_MS`; tests only. */
+  readonly retainedContinuationTimeoutMs: number | undefined;
   readonly beforeStartup: TurnStartupSnapshot;
   readonly abortController: AbortController;
   readonly turnGeneration: number;
@@ -70,8 +77,24 @@ export interface TurnState {
    * the hydration claim so the next transcript request retries.
    */
   readonly transcriptHydrationFailed: boolean;
+  /**
+   * Client uuids of the steers pushed into this turn: every one, and those no
+   * result has named yet. See `resultSupersededBySteer`.
+   */
+  readonly steerUuids: Set<string>;
+  readonly unansweredSteerUuids: Set<string>;
+  /** Informational rows by the tool use they report on, so a repeat updates in place. */
+  readonly informationalRowsByToolUse: Map<string, string>;
+  /**
+   * A measurement usually lands on a call the tracker already holds; one that
+   * outruns the assistant message carrying the call waits here for its tool
+   * result, which cannot precede it.
+   */
+  readonly pendingCommandChanges: Map<string, MeasuredWorkspaceChange>;
 
   sdkMessageCount: number;
+  /** The mode this turn asked the CLI for. Set once the query policy is resolved. */
+  permissionMode: PermissionMode | undefined;
   /**
    * A bridge that attaches after the transcript already exists has no
    * in-memory cumulative origin. Its first result must be bootstrapped from
@@ -130,6 +153,8 @@ export function createTurnState(
   session: SessionState,
   sessionId: string,
   init: {
+    dispatchRequestId: string | undefined;
+    retainedContinuationTimeoutMs: number | undefined;
     beforeStartup: TurnStartupSnapshot;
     abortController: AbortController;
     turnGeneration: number;
@@ -150,12 +175,19 @@ export function createTurnState(
   turnEnded.catch(() => {});
   const state: Omit<TurnState, "diagnostics"> = {
     ...init,
+    session,
+    sessionId,
     startedAt: Date.now(),
     streamUsage: new ClaudeStreamUsageAccumulator(),
     turnEnded,
     resolveTurnEnded,
     rejectTurnEnded,
+    steerUuids: new Set(),
+    unansweredSteerUuids: new Set(),
+    informationalRowsByToolUse: new Map(),
+    pendingCommandChanges: new Map(),
     sdkMessageCount: 0,
+    permissionMode: undefined,
     queryIteratorControl: undefined,
     runtime: undefined,
     thisTurn: undefined,

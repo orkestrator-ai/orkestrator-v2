@@ -10,16 +10,14 @@ import {
   claudeCliContinuesResumedUsage,
   persistSessionMetadata,
 } from "../session-manager-core.js";
-import type { PromptMessageContext } from "./context.js";
+import type { TurnState } from "../session-manager-prompt-turn.js";
 
 /** Bound on the open capability set, which the CLI, not this bridge, sizes. */
 const MAX_SDK_CAPABILITIES = 64;
 
 /** `system`/`init`: the CLI's identity, inventory and capabilities for this query. */
-export async function handleInitMessage(
-  { session, sessionId, turn }: PromptMessageContext,
-  message: SDKMessage,
-): Promise<void> {
+export async function handleInitMessage(turn: TurnState, message: SDKMessage): Promise<void> {
+  const { session, sessionId } = turn;
   // Store the SDK session ID for resume functionality
   const initMsg = message as SDKSystemMessage & Record<string, unknown>;
   beginClaudeUsageQuery(session, initMsg.claude_code_version);

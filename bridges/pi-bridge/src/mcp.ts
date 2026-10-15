@@ -6,6 +6,8 @@
  * `extensionFactories` path as the approval gate, and forgets every client
  * on detach. Agent MCP down is a notice, not a failed attach.
  */
+import { COORDINATOR_CONTROL_TOOL_NAMES } from "@orkestrator/protocol/coordinator";
+import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join, resolve as resolvePath } from "node:path";
@@ -53,16 +55,16 @@ const MAX_MCP_SCHEMA_BYTES = 20_000;
  * named after a Pi built-in place that name in the exempt set and unblock it
  * under `coordinator-read-only`. Namespacing is not an option here: the model
  * is told these tools by name, so the allowlist is the boundary.
+ *
+ * A coordinator holds a Control MCP credential, so the list is the Control MCP
+ * coordinator tool set (shared with the backend, which tests it against what
+ * it serves). The Agent Tools mail names stay for a tab-scoped credential.
  */
-const COORDINATOR_MAIL_TOOLS = new Set([
+const COORDINATOR_MAIL_TOOLS = new Set<string>([
+  ...COORDINATOR_CONTROL_TOOL_NAMES,
   "check_inbox",
   "read_message",
-  "send_message",
   "reply_message",
-  "ack_message",
-  "get_message_status",
-  "list_mailboxes",
-  "launch_environment",
 ]);
 
 /** Per-process timing budgets, overridable so a test need not wait them out. */
@@ -132,6 +134,18 @@ export function setPiMcpTransportForTests(transport?: PiMcpTransport): void {
 
 export function publicPiMcpServers(state: SessionState): NativeAgentMcpServer[] {
   return runtimes.get(state)?.inventory ?? [];
+}
+
+/**
+ * A worker's Orkestrator mail tool. Always allowed, whatever the session's
+ * approval policy: it writes only to Orkestrator's own message store, and it is
+ * how a worker reports back.
+ */
+export function isOrkestratorMailTool(state: SessionState, toolName: string): boolean {
+  return (
+    runtimes.get(state)?.orkestratorToolNames.has(toolName) === true &&
+    (AGENT_MAIL_TOOL_NAMES as readonly string[]).includes(toolName)
+  );
 }
 
 export function isOrkestratorMcpTool(state: SessionState, toolName: string): boolean {

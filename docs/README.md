@@ -24,7 +24,9 @@ Refreshed 2026-09-17 against the current tree.
 | Document | Status | Notes |
 | --- | --- | --- |
 | [agent-engines.md](architecture/agent-engines.md) | Living | Six-engine architecture. Coordinator tiers match `coordinator-providers.ts`. |
-| [coordinator.md](architecture/coordinator.md) | Living | Current Coordinator: ownership, tiers, async delegation, MCP actions. Remaining work is `todo/coordinator-to-implement.md`. |
+| [agent-messaging.md](architecture/agent-messaging.md) | Living | Durable mailbox, routes (coordinator / peer / isolated), budgets, automatic retry, idle injection. |
+| [agent-registry.md](architecture/agent-registry.md) | Living | Every agent tab and what it is doing: `get_agent_registry`, Control MCP `list_agents`, sidebar hover counts. |
+| [coordinator.md](architecture/coordinator.md) | Living | Current Coordinator: ownership, one main plus side agents, tiers, async delegation, MCP actions. Remaining work is `todo/coordinator-to-implement.md`. |
 | [design-canvas.md](architecture/design-canvas.md) | Living | HTML/CSS canvas, recoverable operations, private records, history, sync, safe export, design MCP and .orkdes files. |
 | [control-mcp.md](architecture/control-mcp.md) | Living | Control MCP operator guide. |
 | [mcp-management.md](architecture/mcp-management.md) | Living | Per-provider MCP server management: sources, precedence, safe writes, secrets, apply states, evidence. |
@@ -100,6 +102,7 @@ Steer probe scripts live in [`scripts/steer-probes/`](../scripts/steer-probes/),
 | [recurring-processes/plan/00-index.md](improvements/recurring-processes/plan/00-index.md) | Active | Recurring-process efficiency plan. Steps 01–11 implemented; step 12 qualified on Linux with a live isolated-profile A/B. Open: live-provider/GitHub/macOS/iOS evidence and the deferred data-saving preference. Findings: [recurring-processes.md](imrovements/recurring-processes.md); baseline artifacts in [baseline/](improvements/recurring-processes/baseline/README.md). |
 | [2026-10-14/core-domain-folders.md](2026-10-14/core-domain-folders.md) | Active | Not started. Move `apps/backend/src/core/` prefix groups into domain folders with an explicit `index.ts`, one domain per PR, leaves first and `commands` last; lint-enforced. Domain metrics, slice procedure, branch-conflict handling. |
 | [2026-10-14/runtime-state-ownership.md](2026-10-14/runtime-state-ownership.md) | Active | Not started. Replace the 49 module-level bindings in `commands-runtime-state.ts` with a `BackendRuntime` owned through `CommandContext`, in four cluster steps; removes the test setter seams. Lands before the `commands` domain move. |
+| [coordinator-worker-mail.md](plans/coordinator-worker-mail.md) | Done | Agent mail that wakes without a person: routes, budgets, automatic retry, one main coordinator plus side agents, agent registry, always-allowed mail tools, multi-actor scenario suite. Live provider runs outstanding. |
 | [codex-duplicate-agent-cards.md](plans/codex-duplicate-agent-cards.md) | Done | Automated verification landed; isolated browser QA still pending. |
 | [sdk-coverage-2026-09-06.md](plans/sdk-coverage-2026-09-06.md) | Historical | Source review for the SDK plans. Do not pick work from this file. |
 

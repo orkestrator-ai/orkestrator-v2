@@ -1320,15 +1320,20 @@ export async function startLocalServerUnlocked(
       coordinatorId,
       conversationId: selectedConversation.id,
       mailboxIncarnationId: selectedConversation.mailboxIncarnationId,
-      capabilities: [
-        "discovery",
-        "tickets",
-        "environments",
-        "jobs",
-        "build-pipelines",
-        "multi-review",
-        "mail",
-      ],
+      // A side agent reads the project and talks to the main coordinator; it
+      // launches nothing, so every worker reports to one place.
+      capabilities:
+        selectedConversation.role === "side"
+          ? ["discovery", "mail"]
+          : [
+              "discovery",
+              "tickets",
+              "environments",
+              "jobs",
+              "build-pipelines",
+              "multi-review",
+              "mail",
+            ],
     });
     env[ORKESTRATOR_AGENT_MCP_URL_ENV] = agentToolConnection.url;
     env[ORKESTRATOR_AGENT_MCP_TOKEN_ENV] = agentToolConnection.token;

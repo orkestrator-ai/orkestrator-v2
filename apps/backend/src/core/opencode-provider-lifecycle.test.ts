@@ -1,3 +1,4 @@
+import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { describe, expect, test } from "bun:test";
 import {
   AGENT_INTERACTION_LIMITS,
@@ -36,6 +37,12 @@ describe("OpenCode provider", () => {
           sessionID: "owned-session",
           permission: [
             { permission: "*", pattern: "*", action: "deny" },
+            // A worker's mail tools are allowed whatever the default.
+            ...AGENT_MAIL_TOOL_NAMES.map((name) => ({
+              permission: `orkestrator_${name}`,
+              pattern: "*",
+              action: "allow",
+            })),
             { permission: "read", pattern: "*", action: "allow" },
             { permission: "shell", pattern: "*", action: "deny" },
           ],

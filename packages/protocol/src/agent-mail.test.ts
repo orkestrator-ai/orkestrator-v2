@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { AGENT_PLATFORMS } from "./agent-platforms.js";
 import {
+  agentMailRouteWakes,
+  classifyAgentMailRoute,
   agentMailCapabilities,
   agentMailboxId,
   renderAgentMailCarrier,
@@ -141,5 +143,64 @@ describe("agent mail protocol", () => {
     });
     expect(carrier).toContain("reply_message");
     expect(carrier).toContain("ack_message");
+  });
+
+  test("classifies coordinator, peer and isolated routes", () => {
+    const origin = "coordinator:c:one";
+    const worker = { environmentId: "w", coordinatorOrigin: origin };
+    const peer = { environmentId: "p" };
+    const own = { environmentId: origin, ownerKind: "coordinator" as const };
+    const other = { environmentId: "coordinator:c:two", ownerKind: "coordinator" as const };
+    const trust = "same-project" as const;
+    const fromWorker = { kind: "tab" as const, coordinatorOrigin: origin };
+    const fromPeer = { kind: "tab" as const };
+
+    expect(classifyAgentMailRoute({ trust, sender: fromWorker, recipient: own })).toBe(
+      "coordinator",
+    );
+    expect(
+      classifyAgentMailRoute({
+        trust,
+        sender: { kind: "coordinator", environmentId: origin },
+        recipient: worker,
+      }),
+    ).toBe("coordinator");
+    expect(classifyAgentMailRoute({ trust, sender: fromWorker, recipient: other })).toBe(
+      "isolated",
+    );
+    expect(classifyAgentMailRoute({ trust, sender: fromWorker, recipient: peer })).toBe("isolated");
+    expect(classifyAgentMailRoute({ trust, sender: fromPeer, recipient: worker })).toBe("isolated");
+    expect(
+      classifyAgentMailRoute({
+        trust,
+        sender: { kind: "coordinator", environmentId: "coordinator:c:two" },
+        recipient: worker,
+      }),
+    ).toBe("isolated");
+    expect(classifyAgentMailRoute({ trust, sender: fromPeer, recipient: other })).toBe(
+      "coordinator",
+    );
+    expect(
+      classifyAgentMailRoute({ trust: "same-environment", sender: fromPeer, recipient: peer }),
+    ).toBe("peer");
+    expect(classifyAgentMailRoute({ trust, sender: { kind: "system" }, recipient: worker })).toBe(
+      "coordinator",
+    );
+    for (const untrusted of ["cross-project", "external", "user"] as const) {
+      expect(classifyAgentMailRoute({ trust: untrusted, sender: fromPeer, recipient: peer })).toBe(
+        null,
+      );
+    }
+    expect(classifyAgentMailRoute({ trust, sender: { kind: "user" }, recipient: peer })).toBe(null);
+  });
+
+  test("routes wake unless the recipient is explicitly off", () => {
+    expect(agentMailRouteWakes("coordinator", "inherit", { wakePeers: false })).toBe(true);
+    expect(agentMailRouteWakes("coordinator", "idle", { wakePeers: false })).toBe(true);
+    expect(agentMailRouteWakes("coordinator", "off", { wakePeers: true })).toBe(false);
+    expect(agentMailRouteWakes("peer", "inherit", { wakePeers: true })).toBe(true);
+    expect(agentMailRouteWakes("peer", "inherit", { wakePeers: false })).toBe(false);
+    expect(agentMailRouteWakes("isolated", "idle", { wakePeers: true })).toBe(false);
+    expect(agentMailRouteWakes(undefined, "inherit", { wakePeers: true })).toBe(false);
   });
 });

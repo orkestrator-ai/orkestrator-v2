@@ -3225,6 +3225,34 @@ describe("prompt queue commands", () => {
     );
   });
 
+  test("a queued prompt and a direct prompt start a new agent mail budget", async () => {
+    const dispatchIntent = mock(async () => ({ outcome: "accepted" }));
+    await withCommands(
+      async (invoke, storage) => {
+        const reset = mock(async (_environmentId: string, _logicalSessionKey: string) => true);
+        storage.resetAgentMailBudgetForSession = reset;
+        await invoke("enqueue_prompt_queue_message", {
+          queueKey: "claude\u0000env-e1:tab-1",
+          environmentId: "e1",
+          message: { id: "queued-1", text: "Next" },
+        });
+        expect(reset).toHaveBeenCalledWith("e1", "env-e1:tab-1");
+
+        reset.mockClear();
+        await invoke("dispatch_native_agent_intent", {
+          environmentId: "e1",
+          agent: "claude",
+          logicalSessionKey: "env-e1:tab-2",
+          prompt: "Go",
+          requestId: "request-1",
+        });
+        expect(reset).toHaveBeenCalledWith("e1", "env-e1:tab-2");
+        expect(dispatchIntent).toHaveBeenCalledTimes(1);
+      },
+      { nativeAgents: { dispatchIntent, notifyPromptQueueChanged: () => undefined } as never },
+    );
+  });
+
   test("mutates and reads back a backend-owned queue", async () => {
     await withCommands(async (invoke) => {
       await expect(

@@ -1,4 +1,5 @@
 import { invoke } from "@/lib/native/backend";
+import type { AgentRegistrySnapshot } from "@orkestrator/protocol/agent-registry";
 import type {
   AgentMailMailboxSnapshot,
   AgentMailMailboxBatchSnapshot,
@@ -122,4 +123,12 @@ export function updateAgentMessagingSettings(settings: AgentMessagingSettings): 
 
 export function setAgentMessagingPaused(paused: boolean): Promise<{ paused: boolean }> {
   return invoke("set_agent_messaging_paused", { paused });
+}
+
+/** Every agent tab and what it is doing, optionally for one project or environment. */
+export function getAgentRegistry(filter: {
+  projectId?: string;
+  environmentId?: string;
+}): Promise<AgentRegistrySnapshot> {
+  return invoke<AgentRegistrySnapshot>("get_agent_registry", filter);
 }

@@ -161,13 +161,13 @@ export function registerAgentMessagingTools(
       title: "Send an agent message",
       description: mailToolDescription(
         scope,
-        "Durably send bounded Markdown text to one other tab. Idle delivery can start a turn that edits files; use a stable requestId when retrying. Subagents share their parent tab's mailbox, so this cannot reach the session that launched you.",
+        'Durably send bounded Markdown text to one other tab. Idle delivery can start a turn that edits files; use a stable requestId when retrying. To reach your project coordinator set toEnvironmentId to "coordinator" and omit toTabId. For an environment with one agent tab, toTabId may be omitted. Subagents share their parent tab\'s mailbox, so this cannot reach the session that launched you.',
       ),
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),
         fromTabId: z.string().trim().min(1).max(256).optional(),
         toEnvironmentId: z.string().trim().min(1).max(256),
-        toTabId: z.string().trim().min(1).max(256),
+        toTabId: z.string().trim().min(1).max(256).optional(),
         subject: z.string().trim().max(200).optional(),
         body: z
           .string()
@@ -196,11 +196,13 @@ export function registerAgentMessagingTools(
             projectId: scope.projectId,
             tabId: identity.tabId,
           },
-          input,
+          { ...input, toTabId: input.toTabId ?? "" },
         );
-        const recipient = await storage.getAgentMailMailbox(input.toEnvironmentId, input.toTabId, {
-          limit: 1,
-        });
+        const recipient = await storage.getAgentMailMailbox(
+          message.toEnvironmentId,
+          message.toTabId,
+          { limit: 1 },
+        );
         return result({
           identity,
           message: { ...message, body: undefined },

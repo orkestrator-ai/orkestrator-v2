@@ -2,6 +2,7 @@ import type { CommandRegistrar, RegistryDependencies } from "./commands-registry
 import { webAnnotationQueueOrigin } from "@orkestrator/protocol/web-annotations";
 import { asString, asNumber } from "./commands-helpers.js";
 import { isFrozenPromptQueueMessage } from "./storage-prompts.js";
+import { resetAgentMailBudget } from "./commands-registry-mail.js";
 
 export function registerPromptCommands(
   register: CommandRegistrar,
@@ -30,6 +31,15 @@ export function registerPromptCommands(
         asString(environmentId, "environmentId"),
         message,
       );
+      // A queued prompt is a person typing into this tab, just not yet sent.
+      const separator = key.indexOf("\0");
+      if (separator > 0) {
+        await resetAgentMailBudget(
+          { storage },
+          asString(environmentId, "environmentId"),
+          key.slice(separator + 1),
+        );
+      }
       // Persistence is the hand-off edge. From here the backend owns dispatch,
       // even if the renderer changes environment or the destination tab never
       // mounts. Optional chaining keeps lightweight command harnesses working.

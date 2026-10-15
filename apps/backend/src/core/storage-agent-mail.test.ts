@@ -3,9 +3,9 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  DEFAULT_AGENT_MESSAGING_SETTINGS,
   AGENT_MAIL_MAX_IDEMPOTENCY_ROWS,
   AGENT_MAIL_MAX_STORE_BYTES,
-  AGENT_MAIL_MAX_THREAD_HOPS,
 } from "@orkestrator/protocol/agent-mail";
 import {
   COORDINATOR_EXECUTION_POLICY,
@@ -861,7 +861,7 @@ describe("StorageService agent mail", () => {
     }
   });
 
-  test("keeps injection lineage after ack so agents cannot auto-inject ping-pong", async () => {
+  test("keeps injection lineage after ack so non-peer mail cannot auto-inject ping-pong", async () => {
     const { storage, dataDir } = await fixture();
     try {
       const config = await storage.loadConfig();
@@ -869,7 +869,11 @@ describe("StorageService agent mail", () => {
         ...config,
         global: {
           ...config.global,
-          agentMessaging: { ...config.global.agentMessaging!, defaultInjectPolicy: "idle" },
+          agentMessaging: {
+            ...config.global.agentMessaging!,
+            defaultInjectPolicy: "idle",
+            wakePeers: false,
+          },
         },
       });
       const inbound = await storage.sendAgentMail(
@@ -887,13 +891,17 @@ describe("StorageService agent mail", () => {
         { kind: "tab", environmentId: "e2", projectId: "p1", tabId: "agent" },
         { requestId: "lineage-out", toEnvironmentId: "e1", toTabId: "agent", body: "fresh" },
       );
-      expect(outbound).toMatchObject({ injectDepth: 1, placement: "stored" });
+      expect(outbound).toMatchObject({
+        injectDepth: 1,
+        placement: "stored",
+        placementReason: "reply-to-injected-turn",
+      });
     } finally {
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });
 
-  test("holds coordinator exchange at the loop budget until the user resumes it", async () => {
+  test("holds coordinator exchange at the loop budget until a new request or Resume", async () => {
     const { storage, dataDir } = await fixture();
     try {
       const now = new Date(0).toISOString();
@@ -929,6 +937,7 @@ describe("StorageService agent mail", () => {
         environmentId: coordinatorEnvironmentId,
         tabId: "coordinator-tab",
       };
+      const worker = { kind: "tab" as const, environmentId: "e1", projectId: "p1", tabId: "agent" };
       await expect(
         storage.sendAgentMail(
           { ...coordinator, coordinatorId: "forged-coordinator" },
@@ -949,69 +958,72 @@ describe("StorageService agent mail", () => {
       });
       expect(explicitlyOff.placement).toBe("stored");
       await storage.updateAgentMailboxPolicy("e1", "agent", { inject: "inherit" });
-      let message = await storage.sendAgentMail(coordinator, {
-        requestId: "loop-0",
+
+      const request = await storage.sendAgentMail(coordinator, {
+        requestId: "request-0",
         toEnvironmentId: "e1",
         toTabId: "agent",
         body: "start",
       });
-      const firstMessageId = message.id;
-      for (let depth = 1; depth <= AGENT_MAIL_MAX_THREAD_HOPS; depth += 1) {
-        message =
-          depth % 2 === 1
-            ? await storage.replyAgentMail(
-                { kind: "tab", environmentId: "e1", projectId: "p1", tabId: "agent" },
-                firstMessageId,
-                `loop-${depth}`,
-                `reply ${depth}`,
-              )
-            : await storage.sendAgentMail(coordinator, {
-                requestId: `loop-${depth}`,
-                toEnvironmentId: "e1",
-                toTabId: "agent",
-                replyToMessageId: firstMessageId,
-                body: `reply ${depth}`,
-              });
+      expect(request).toMatchObject({ placement: "pending-inject", threadDepth: 0 });
+      const budget = DEFAULT_AGENT_MESSAGING_SETTINGS.autonomousWakeBudget;
+      const sendFromWorker = (index: number) =>
+        storage.sendAgentMail(worker, {
+          requestId: `worker-${index}`,
+          toEnvironmentId: coordinatorEnvironmentId,
+          toTabId: "coordinator-tab",
+          subject: `Subject ${index}`,
+          body: `report ${index}`,
+        });
+      // Unsolicited worker mail spends the budget whatever its subject.
+      let last = request;
+      for (let index = 1; index < budget; index += 1) {
+        last = await sendFromWorker(index);
+        expect(last.placement).toBe("pending-inject");
       }
-
-      expect(message).toMatchObject({
+      const held = await sendFromWorker(budget);
+      expect(held).toMatchObject({
         placement: "inject-held",
         placementReason: "loop-budget-exhausted",
-        threadDepth: AGENT_MAIL_MAX_THREAD_HOPS,
+        threadDepth: budget,
       });
-      const resumed = await storage.retryAgentMailInject("e1", "agent", message.id);
+      const another = await sendFromWorker(budget + 1);
+      expect(another.placementReason).toBe("loop-budget-exhausted");
+      // The coordinator is told once per budget, not once per held message.
+      const notices = (
+        await storage.getAgentMailMailbox(coordinatorEnvironmentId, "coordinator-tab")
+      ).messages.filter((message) => message.from.kind === "system");
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toMatchObject({ route: "coordinator", placement: "pending-inject" });
+
+      // A new coordinator request is a new delegation and a new budget.
+      const followUp = await storage.sendAgentMail(coordinator, {
+        requestId: "request-1",
+        toEnvironmentId: "e1",
+        toTabId: "agent",
+        body: "next question",
+      });
+      expect(followUp).toMatchObject({ placement: "pending-inject", threadDepth: 0 });
+      expect(await sendFromWorker(budget + 2)).toMatchObject({
+        placement: "pending-inject",
+        threadDepth: 1,
+      });
+
+      // Resume releases everything held for the tab in one action.
+      const resumed = await storage.retryAgentMailInject(
+        coordinatorEnvironmentId,
+        "coordinator-tab",
+        held.id,
+      );
       expect(resumed).toMatchObject({ placement: "pending-inject", threadDepth: 0 });
       expect(
-        (await storage.listPendingAgentMailInjects()).map(({ message: pending }) => pending.id),
-      ).toContain(message.id);
-
-      let newSubject = resumed;
-      for (let depth = 1; depth <= AGENT_MAIL_MAX_THREAD_HOPS; depth += 1) {
-        newSubject =
-          depth % 2 === 1
-            ? await storage.sendAgentMail(
-                { kind: "tab", environmentId: "e1", projectId: "p1", tabId: "agent" },
-                {
-                  requestId: `new-subject-${depth}`,
-                  toEnvironmentId: coordinatorEnvironmentId,
-                  toTabId: "coordinator-tab",
-                  subject: `New subject ${depth}`,
-                  body: `continue ${depth}`,
-                },
-              )
-            : await storage.sendAgentMail(coordinator, {
-                requestId: `new-subject-${depth}`,
-                toEnvironmentId: "e1",
-                toTabId: "agent",
-                subject: `New subject ${depth}`,
-                body: `continue ${depth}`,
-              });
-      }
-      expect(newSubject).toMatchObject({
-        placement: "inject-held",
-        placementReason: "loop-budget-exhausted",
-        threadDepth: AGENT_MAIL_MAX_THREAD_HOPS,
-      });
+        await storage.getAgentMailMessage(coordinatorEnvironmentId, "coordinator-tab", another.id),
+      ).toMatchObject({ placement: "pending-inject", threadDepth: 0 });
+      const pending = (await storage.listPendingAgentMailInjects()).map(
+        ({ message: entry }) => entry.id,
+      );
+      expect(pending).toContain(held.id);
+      expect(pending).toContain(another.id);
     } finally {
       await fs.rm(dataDir, { recursive: true, force: true });
     }
@@ -1280,9 +1292,17 @@ describe("StorageService agent mail", () => {
     }
   });
 
-  test("enforces the thread hop bound", async () => {
+  test("enforces the thread hop bound on unrouted mail", async () => {
     const { storage, dataDir } = await fixture();
     try {
+      const config = await storage.loadConfig();
+      await storage.saveConfig({
+        ...config,
+        global: {
+          ...config.global,
+          agentMessaging: { ...config.global.agentMessaging!, wakePeers: false },
+        },
+      });
       let parent = await storage.sendAgentMail(
         { kind: "tab", environmentId: "e1", projectId: "p1", tabId: "agent" },
         { requestId: "hop-0", toEnvironmentId: "e2", toTabId: "agent", body: "zero" },
@@ -1565,6 +1585,423 @@ describe("StorageService agent mail", () => {
       // A mailbox that does not exist is a no-op, not a throw: assignment is
       // best-effort and must not strand the conversation.
       expect(await storage.promoteStoredAgentMailForMailbox("missing", "coordinator-tab")).toBe(0);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("StorageService agent mail routes", () => {
+  const tab = (environmentId: string) =>
+    ({ kind: "tab", environmentId, projectId: "p1", tabId: "agent" }) as const;
+  const coordinatorSender = (conversationId: string) =>
+    ({
+      kind: "coordinator",
+      projectId: "p1",
+      coordinatorId: "coordinator-1",
+      conversationId,
+      environmentId: coordinatorRuntimeId("coordinator-1", conversationId),
+      tabId: `tab-${conversationId}`,
+    }) as const;
+
+  /** Two coordinator conversations; conversation-1 launched e1, conversation-2 only messaged e2. */
+  async function coordinatorFixture(options: { closeCreator?: boolean } = {}) {
+    const { storage, dataDir } = await fixture();
+    const now = new Date(0).toISOString();
+    await storage.mutateCoordinatorWorkspace("p1", () => ({
+      version: COORDINATOR_WORKSPACE_VERSION,
+      id: "coordinator-1",
+      projectId: "p1",
+      executionPolicy: COORDINATOR_EXECUTION_POLICY,
+      lifecycleState: "ready",
+      conversations: ["conversation-1", "conversation-2"].map((id) => ({
+        id,
+        tabId: `tab-${id}`,
+        logicalSessionKey: `coordinator-coordinator-1:${id}`,
+        agent: "claude" as const,
+        title: id,
+        createdAt: now,
+        mailboxIncarnationId: `incarnation-${id}`,
+        ...(options.closeCreator && id === "conversation-1" ? { closedAt: now } : {}),
+      })),
+      selectedConversationId: "conversation-1",
+      repositoryContextRevision: 0,
+      createdAt: now,
+      updatedAt: now,
+    }));
+    await storage.saveCoordinatorWorkflowAssociation({
+      id: "launch-e1",
+      projectId: "p1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      kind: "environment",
+      resourceId: "e1",
+      requestId: "launch-e1",
+      baseBranch: "main",
+      baseCommit: "a".repeat(40),
+      createdAt: now,
+    });
+    // A delegation to an existing environment does not make it a worker.
+    await storage.saveCoordinatorWorkflowAssociation({
+      id: "delegate-e2",
+      projectId: "p1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-2",
+      kind: "environment",
+      resourceId: "e2",
+      requestId: "delegation:ask-e2",
+      createdAt: now,
+    });
+    await storage.synchronizeAgentMailboxes();
+    return { storage, dataDir };
+  }
+
+  async function inject(storage: StorageService, environmentId: string, tabId: string, id: string) {
+    const recipient = (await storage.getAgentMailMailbox(environmentId, tabId)).descriptor;
+    await storage.beginAgentMailInject(recipient.mailboxId, id, recipient.incarnationId);
+    await storage.finishAgentMailInject(recipient.mailboxId, id, { outcome: "accepted" });
+  }
+
+  test("peers wake each other, including a reply from an injected turn", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      const first = await storage.sendAgentMail(tab("e1"), {
+        requestId: "peer-1",
+        toEnvironmentId: "e2",
+        toTabId: "agent",
+        body: "question",
+      });
+      expect(first).toMatchObject({ route: "peer", placement: "pending-inject" });
+      await inject(storage, "e2", "agent", first.id);
+      const reply = await storage.replyAgentMail(tab("e2"), first.id, "peer-2", "answer");
+      expect(reply).toMatchObject({ route: "peer", placement: "pending-inject", injectDepth: 1 });
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("Wake peers off stores peer mail under the default policy", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      const config = await storage.loadConfig();
+      await storage.saveConfig({
+        ...config,
+        global: {
+          ...config.global,
+          agentMessaging: { ...config.global.agentMessaging!, wakePeers: false },
+        },
+      });
+      const message = await storage.sendAgentMail(tab("e1"), {
+        requestId: "peer-off",
+        toEnvironmentId: "e2",
+        toTabId: "agent",
+        body: "question",
+      });
+      expect(message).toMatchObject({
+        route: "peer",
+        placement: "stored",
+        placementReason: "inject-policy-off",
+      });
+      const released = await storage.retryAgentMailInject("e2", "agent", message.id);
+      expect(released.placement).toBe("pending-inject");
+      expect(released.userReleasedAt).toBeString();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a coordinator-created worker wakes only its own coordinator", async () => {
+    const { storage, dataDir } = await coordinatorFixture();
+    try {
+      const main = coordinatorRuntimeId("coordinator-1", "conversation-1");
+      const side = coordinatorRuntimeId("coordinator-1", "conversation-2");
+      // The selected legacy conversation became the main; the other a side agent.
+      expect(
+        (await storage.getAgentMailMailbox(main, "tab-conversation-1")).descriptor
+          .coordinatorOrigin,
+      ).toBeUndefined();
+      expect((await storage.getAgentMailMailbox("e1", "agent")).descriptor.coordinatorOrigin).toBe(
+        main,
+      );
+      expect(
+        (await storage.getAgentMailMailbox("e2", "agent")).descriptor.coordinatorOrigin,
+      ).toBeUndefined();
+
+      // The "coordinator" address needs no tab id and reaches the main.
+      const report = await storage.sendAgentMail(tab("e1"), {
+        requestId: "report",
+        toEnvironmentId: "coordinator",
+        toTabId: "",
+        body: "done",
+      });
+      expect(report).toMatchObject({
+        route: "coordinator",
+        placement: "pending-inject",
+        toEnvironmentId: main,
+        toTabId: "tab-conversation-1",
+      });
+
+      for (const [sender, environmentId] of [
+        [tab("e1"), "e2"],
+        [tab("e2"), "e1"],
+      ] as const) {
+        const message = await storage.sendAgentMail(sender, {
+          requestId: `isolated-${sender.environmentId}-${environmentId}`,
+          toEnvironmentId: environmentId,
+          toTabId: "",
+          body: "sideways",
+        });
+        expect(message).toMatchObject({
+          route: "isolated",
+          placement: "stored",
+          placementReason: "isolated-route",
+          toTabId: "agent",
+        });
+      }
+
+      // A coordinator that only messaged an environment can still wake it.
+      const delegated = await storage.sendAgentMail(coordinatorSender("conversation-1"), {
+        requestId: "delegated",
+        toEnvironmentId: "e2",
+        toTabId: "agent",
+        body: "please look",
+      });
+      expect(delegated).toMatchObject({ route: "coordinator", placement: "pending-inject" });
+
+      // Side agents talk to the main coordinator and nobody else.
+      await expect(
+        storage.sendAgentMail(tab("e1"), {
+          requestId: "worker-to-side",
+          toEnvironmentId: side,
+          toTabId: "",
+          body: "wrong door",
+        }),
+      ).rejects.toMatchObject({ code: "policy-denied" });
+      await expect(
+        storage.sendAgentMail(coordinatorSender("conversation-2"), {
+          requestId: "side-to-worker",
+          toEnvironmentId: "e1",
+          toTabId: "agent",
+          body: "not mine",
+        }),
+      ).rejects.toMatchObject({ code: "policy-denied" });
+      const sideToMain = await storage.sendAgentMail(coordinatorSender("conversation-2"), {
+        requestId: "side-to-main",
+        toEnvironmentId: "coordinator",
+        toTabId: "",
+        body: "a thought",
+      });
+      expect(sideToMain).toMatchObject({ toEnvironmentId: main, placement: "pending-inject" });
+      const mainToSide = await storage.sendAgentMail(coordinatorSender("conversation-1"), {
+        requestId: "main-to-side",
+        toEnvironmentId: side,
+        toTabId: "",
+        body: "look into this",
+      });
+      expect(mainToSide).toMatchObject({
+        toTabId: "tab-conversation-2",
+        placement: "pending-inject",
+      });
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a worker launched by a closed conversation reports to the current main", async () => {
+    const { storage, dataDir } = await coordinatorFixture({ closeCreator: true });
+    try {
+      // conversation-1 launched e1 and closed; the remaining one is the main.
+      const main = coordinatorRuntimeId("coordinator-1", "conversation-2");
+      expect((await storage.getAgentMailMailbox("e1", "agent")).descriptor.coordinatorOrigin).toBe(
+        main,
+      );
+      // Its stale address is redirected rather than refused.
+      const message = await storage.sendAgentMail(tab("e1"), {
+        requestId: "stale-address",
+        toEnvironmentId: coordinatorRuntimeId("coordinator-1", "conversation-1"),
+        toTabId: "tab-conversation-1",
+        body: "done",
+      });
+      expect(message).toMatchObject({
+        toEnvironmentId: main,
+        route: "coordinator",
+        placement: "pending-inject",
+      });
+      expect(
+        (
+          await storage.sendAgentMail(tab("e1"), {
+            requestId: "still-isolated",
+            toEnvironmentId: "e2",
+            toTabId: "agent",
+            body: "hello",
+          })
+        ).route,
+      ).toBe("isolated");
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("with no main open, coordinator mail waits for the resolver to start one", async () => {
+    const { storage, dataDir } = await coordinatorFixture();
+    try {
+      await storage.mutateCoordinatorWorkspace("p1", (current) => ({
+        ...current!,
+        conversations: current!.conversations.map((item) => ({
+          ...item,
+          closedAt: new Date(0).toISOString(),
+        })),
+      }));
+      await storage.synchronizeAgentMailboxes();
+      // The worker stays attached to its coordinator, not loose as a peer.
+      expect((await storage.getAgentMailMailbox("e1", "agent")).descriptor.coordinatorOrigin).toBe(
+        coordinatorRuntimeId("coordinator-1"),
+      );
+      await expect(
+        storage.sendAgentMail(tab("e1"), {
+          requestId: "nobody-home",
+          toEnvironmentId: "coordinator",
+          toTabId: "",
+          body: "done",
+        }),
+      ).rejects.toMatchObject({ code: "recipient-not-found" });
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a per-tab idle override no longer stops coordinator replies", async () => {
+    const { storage, dataDir } = await coordinatorFixture();
+    try {
+      const coordinatorEnvironmentId = coordinatorRuntimeId("coordinator-1", "conversation-1");
+      const request = await storage.sendAgentMail(coordinatorSender("conversation-1"), {
+        requestId: "request",
+        toEnvironmentId: "e1",
+        toTabId: "agent",
+        body: "do the thing",
+      });
+      await inject(storage, "e1", "agent", request.id);
+      // What the banner's "Deliver now" used to write as a side effect.
+      await storage.updateAgentMailboxPolicy(coordinatorEnvironmentId, "tab-conversation-1", {
+        inject: "idle",
+      });
+      const report = await storage.replyAgentMail(tab("e1"), request.id, "report", "done");
+      expect(report).toMatchObject({ placement: "pending-inject", injectDepth: 1 });
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("an explicit Off holds routed mail and turning it back on promotes it", async () => {
+    const { storage, dataDir } = await coordinatorFixture();
+    try {
+      const coordinatorEnvironmentId = coordinatorRuntimeId("coordinator-1", "conversation-1");
+      const request = await storage.sendAgentMail(coordinatorSender("conversation-1"), {
+        requestId: "request",
+        toEnvironmentId: "e1",
+        toTabId: "agent",
+        body: "do the thing",
+      });
+      await inject(storage, "e1", "agent", request.id);
+      await storage.updateAgentMailboxPolicy(coordinatorEnvironmentId, "tab-conversation-1", {
+        inject: "off",
+      });
+      const report = await storage.replyAgentMail(tab("e1"), request.id, "report", "done");
+      expect(report).toMatchObject({
+        placement: "stored",
+        injectDepth: 1,
+        placementReason: "inject-policy-off",
+      });
+      // The default policy is still off: only the routed report is promoted.
+      await storage.updateAgentMailboxPolicy(coordinatorEnvironmentId, "tab-conversation-1", {
+        inject: "inherit",
+      });
+      expect(
+        await storage.getAgentMailMessage(
+          coordinatorEnvironmentId,
+          "tab-conversation-1",
+          report.id,
+        ),
+      ).toMatchObject({ placement: "pending-inject" });
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a peer budget pauses unattended exchange until a user prompt resets it", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      const budget = DEFAULT_AGENT_MESSAGING_SETTINGS.autonomousWakeBudget;
+      const send = (index: number) =>
+        storage.sendAgentMail(tab(index % 2 === 0 ? "e1" : "e2"), {
+          requestId: `peer-${index}`,
+          toEnvironmentId: index % 2 === 0 ? "e2" : "e1",
+          toTabId: "agent",
+          body: `message ${index}`,
+        });
+      for (let index = 0; index < budget; index += 1) {
+        expect((await send(index)).placement).toBe("pending-inject");
+      }
+      const held = await send(budget);
+      expect(held).toMatchObject({
+        placement: "inject-held",
+        placementReason: "loop-budget-exhausted",
+      });
+      // Peers have no coordinator to tell.
+      for (const environmentId of ["e1", "e2"]) {
+        const inbox = await storage.getAgentMailMailbox(environmentId, "agent");
+        expect(inbox.messages.some((message) => message.from.kind === "system")).toBe(false);
+      }
+
+      expect(await storage.resetAgentMailBudgetForSession("e2", "env-e2:agent")).toBe(true);
+      // Nothing routed since the reset: a second prompt writes nothing.
+      expect(await storage.resetAgentMailBudgetForSession("e2", "env-e2:agent")).toBe(false);
+      expect(await send(budget + 1)).toMatchObject({ placement: "pending-inject", threadDepth: 0 });
+      // The prompt resets the budget; it does not deliver what was already held.
+      expect(await storage.getAgentMailMessage("e2", "agent", held.id)).toMatchObject({
+        placement: "inject-held",
+      });
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("the hourly limit holds mail and releases it as the hour passes", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      const config = await storage.loadConfig();
+      await storage.saveConfig({
+        ...config,
+        global: {
+          ...config.global,
+          agentMessaging: { ...config.global.agentMessaging!, hourlyWakeLimit: 2 },
+        },
+      });
+      const send = (index: number) =>
+        storage.sendAgentMail(tab("e1"), {
+          requestId: `hourly-${index}`,
+          toEnvironmentId: "e2",
+          toTabId: "agent",
+          body: `message ${index}`,
+        });
+      await send(0);
+      await send(1);
+      const held = await send(2);
+      expect(held).toMatchObject({ placement: "inject-held", placementReason: "hourly-limit" });
+      expect(await storage.releaseHourlyHeldAgentMail()).toBe(0);
+
+      const persisted = readStoredValue<StoredMail>(dataDir, "agent-mail.json")!;
+      for (const stored of persisted.mailboxes["e2\0agent"]!.messages) {
+        if ((stored as { id?: string }).id !== held.id)
+          stored.createdAt = new Date(Date.now() - 2 * 3_600_000).toISOString();
+      }
+      seedStore(dataDir, "agent-mail.json", persisted);
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      expect(await restarted.releaseHourlyHeldAgentMail()).toBe(1);
+      expect(await restarted.getAgentMailMessage("e2", "agent", held.id)).toMatchObject({
+        placement: "pending-inject",
+      });
     } finally {
       await fs.rm(dataDir, { recursive: true, force: true });
     }

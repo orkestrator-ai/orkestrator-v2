@@ -481,7 +481,7 @@ describe("coordinator command registry", () => {
     ).rejects.toThrow("must stay within their project");
   });
 
-  test("opens delegations only for scheduled mail and refuses same-tab overlap", async () => {
+  test("opens delegations only for scheduled mail; a follow-up joins the open one", async () => {
     const project = await storage.addProject(createProject("remote", checkout));
     const snapshot = await coordinator.ensure(project.id);
     const conversation = snapshot.workspace.conversations[0]!;
@@ -567,18 +567,23 @@ describe("coordinator command registry", () => {
       placement: "pending-inject",
       coordinatorDelegationOpened: true,
     });
+    // A follow-up while the worker is still on the first request joins that
+    // delegation: delivered, and one wake for both — never a second delegation.
     await expect(
       send(
         {
           ...scope,
           requestId: "overlapping-request",
           toEnvironmentId: worker.id,
-          toTabId: "agent",
           body: "Second request.",
         },
         context,
       ),
-    ).rejects.toThrow("already has an outstanding");
+    ).resolves.toMatchObject({
+      placement: "pending-inject",
+      toTabId: "agent",
+      coordinatorDelegationOpened: true,
+    });
     expect(await storage.listOpenCoordinatorDelegations()).toHaveLength(1);
   });
 

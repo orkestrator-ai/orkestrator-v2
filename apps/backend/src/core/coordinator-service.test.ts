@@ -68,6 +68,47 @@ describe("project coordinator", () => {
     expect((await service.ensure(project.id)).workspace.selectedConversationId).toBeNull();
   });
 
+  test("one main coordinator; new conversations are numbered side agents", async () => {
+    const project = await storage.addProject(
+      createProject("https://example.invalid/repo.git", checkout),
+    );
+    const service = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    const initial = await service.ensure(project.id);
+    const main = initial.workspace.conversations[0]!;
+    expect(main).toMatchObject({ role: "main", title: "Coordinator" });
+
+    await service.createConversation(project.id);
+    const two = await service.createConversation(project.id);
+    const sides = two.workspace.conversations.filter((item) => item.role === "side");
+    expect(sides.map((item) => [item.title, item.sideOrdinal])).toEqual([
+      ["Side 1", 1],
+      ["Side 2", 2],
+    ]);
+    // A closed side's number is reused.
+    await service.closeConversation(project.id, sides[0]!.id);
+    const reused = await service.createConversation(project.id);
+    expect(
+      reused.workspace.conversations
+        .filter((item) => item.role === "side" && !item.closedAt)
+        .map((item) => item.title)
+        .toSorted(),
+    ).toEqual(["Side 1", "Side 2"]);
+
+    // Closing the main is how its provider is changed: the next new
+    // conversation is the main again, never a second one alongside it.
+    await service.closeConversation(project.id, main.id);
+    const replaced = await service.createConversation(project.id);
+    const mains = replaced.workspace.conversations.filter(
+      (item) => item.role === "main" && !item.closedAt,
+    );
+    expect(mains).toHaveLength(1);
+    expect(mains[0]!.id).not.toBe(main.id);
+  });
+
   test("retention never removes an open conversation", async () => {
     const project = await storage.addProject(
       createProject("https://example.invalid/repo.git", checkout),
@@ -1544,17 +1585,13 @@ describe("project coordinator", () => {
       ).toBe(true);
     });
 
-    test("a delegation only holds mail for the conversation that opened it", async () => {
+    test("mail after the main was closed starts a new main that takes over the delegation", async () => {
       const fixture = await delegationFixture();
-      const second = await fixture.coordinator.createConversation(fixture.projectId, "Second");
-      const other = second.workspace.conversations.find((item) => item.title === "Second")!;
-      await fixture.coordinator.assignConversationAgent(fixture.projectId, other.id, "codex");
+      await fixture.coordinator.closeConversation(fixture.projectId, fixture.conversation.id);
       await storage.synchronizeAgentMailboxes();
 
-      // The same worker writes to a conversation that never delegated to it.
-      // That conversation is not waiting, so nothing would ever release the
-      // message — holding it would silence it permanently.
-      const message = await storage.sendAgentMail(
+      // The worker still holds the old conversation's address.
+      const report = await storage.sendAgentMail(
         {
           kind: "tab",
           environmentId: fixture.workerId,
@@ -1562,13 +1599,99 @@ describe("project coordinator", () => {
           tabId: "startup-agent",
         },
         {
-          requestId: "to-other-conversation",
-          toEnvironmentId: coordinatorRuntimeId(fixture.coordinatorId, other.id),
-          toTabId: other.tabId,
-          body: "Unrelated.",
+          requestId: "report-after-close",
+          toEnvironmentId: fixture.runtimeId,
+          toTabId: fixture.conversation.tabId,
+          body: "Finished.",
         },
       );
-      expect(message.placement).toBe("pending-inject");
+      const workspace = (await storage.getCoordinatorWorkspace(fixture.projectId))!;
+      const main = workspace.conversations.find((item) => item.role === "main" && !item.closedAt)!;
+      expect(main.id).not.toBe(fixture.conversation.id);
+      // Started with the project's default agent, nobody at the composer.
+      expect(main.agent).toBe("codex");
+      expect(report.toEnvironmentId).toBe(coordinatorRuntimeId(fixture.coordinatorId, main.id));
+      // The delegation moved with it, so the report is held for one wake.
+      expect(report).toMatchObject({
+        placement: "inject-held",
+        placementReason: "delegation-running",
+      });
+      expect(
+        (await storage.listCoordinatorWorkflowAssociations(fixture.projectId)).find(
+          (item) => item.id === fixture.associationId,
+        )?.conversationId,
+      ).toBe(main.id);
+
+      await fixture.coordinator.settleWorkerDelegations({
+        environmentId: fixture.workerId,
+        tabId: "startup-agent",
+        state: "completed",
+      });
+      expect(
+        (await storage.getAgentMailMessage(report.toEnvironmentId, main.tabId, report.id))
+          .placement,
+      ).toBe("pending-inject");
+    });
+
+    test("a report held as its delegation was settled by a notice is still delivered", async () => {
+      const fixture = await delegationFixture();
+      const report = await storage.sendAgentMail(
+        {
+          kind: "tab",
+          environmentId: fixture.workerId,
+          projectId: fixture.projectId,
+          tabId: "startup-agent",
+        },
+        {
+          requestId: "late-report",
+          toEnvironmentId: fixture.runtimeId,
+          toTabId: fixture.conversation.tabId,
+          body: "Done after all.",
+        },
+      );
+      expect(report.placementReason).toBe("delegation-running");
+      // The race: the delegation closes and its wake is settled as a notice
+      // without ever seeing the report.
+      await storage.closeCoordinatorDelegation(fixture.associationId, "completed");
+      await storage.prepareCoordinatorDelegationWake(fixture.associationId, "notice");
+      await storage.markCoordinatorDelegationWoken(fixture.associationId);
+
+      await fixture.coordinator.reconcileWorkerDelegations();
+      expect(
+        (
+          await storage.getAgentMailMessage(
+            fixture.runtimeId,
+            fixture.conversation.tabId,
+            report.id,
+          )
+        ).placement,
+      ).toBe("pending-inject");
+    });
+
+    test("a worker cannot reach a side agent; only the main coordinator can", async () => {
+      const fixture = await delegationFixture();
+      const second = await fixture.coordinator.createConversation(fixture.projectId);
+      const side = second.workspace.conversations.find((item) => item.role === "side")!;
+      expect(side.title).toBe("Side 1");
+      await fixture.coordinator.assignConversationAgent(fixture.projectId, side.id, "codex");
+      await storage.synchronizeAgentMailboxes();
+
+      await expect(
+        storage.sendAgentMail(
+          {
+            kind: "tab",
+            environmentId: fixture.workerId,
+            projectId: fixture.projectId,
+            tabId: "startup-agent",
+          },
+          {
+            requestId: "to-side",
+            toEnvironmentId: coordinatorRuntimeId(fixture.coordinatorId, side.id),
+            toTabId: side.tabId,
+            body: "Unrelated.",
+          },
+        ),
+      ).rejects.toMatchObject({ code: "policy-denied" });
     });
 
     test("a turn that ended before the request arrived does not report finished", async () => {

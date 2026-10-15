@@ -3,6 +3,7 @@ import {
   COORDINATOR_ASYNC_CONTRACT,
   COORDINATOR_CONTEXT_CLOSE_TAG,
   COORDINATOR_CONTEXT_OPEN_TAG,
+  COORDINATOR_MAIL_ADDRESS,
   COORDINATOR_EXECUTION_POLICY,
 } from "@orkestrator/protocol/coordinator";
 import {
@@ -779,14 +780,16 @@ export abstract class NativeAgentServiceBase {
       const launchBaseLine = hasLaunchBase
         ? `Launch base: every launch_environment call must include baseBranch and baseCommit exactly as shown in the repository context below. get_launch_options repeats these required values.\n`
         : `Launch base: the current checkout has no launchable branch and commit, so launch_environment is blocked until the repository is on a named branch with a HEAD commit. Report this blocked state instead of guessing values.\n`;
-      const delegation = this.options.coordinatorDelegationAvailable?.(
-        coordinator.conversation.agent,
-      )
-        ? `Delegation: create workers with the Orkestrator launch_environment tool. Provider sub-agents remain inside this coordinator session and are not worker environments. Report a worker as created only after launch_environment returns its environment id.\n` +
-          `Actions: prefer launch_multi_review for the complete environment Multi Review button action; start_multi_review starts backend work only and does not open a tab. Use open_multi_review and open_multi_review_fix to present saved work. Reuse requestId on retry, and inspect outcome, ui and recovery before reporting completion.\n` +
-          launchBaseLine +
-          `${COORDINATOR_ASYNC_CONTRACT}\n`
-        : `Delegation: Orkestrator worker controls are unavailable in this session. Provider sub-agents remain inside this coordinator session and are not worker environments; do not report them as workers.\n`;
+      const side = coordinator.conversation.role === "side";
+      const delegation = side
+        ? `Side agent: you are ${coordinator.conversation.title}, a side agent of this project's coordinator. You can read the project and Orkestrator state, but you cannot launch environments or jobs. Exchange mail only with the main coordinator: send_message to toEnvironmentId "${COORDINATOR_MAIL_ADDRESS}". Workers and other agents cannot reach you.\n`
+        : this.options.coordinatorDelegationAvailable?.(coordinator.conversation.agent)
+          ? `Main coordinator: every worker in this project reports to you. Side agents (Side 1, Side 2…) may mail you; reach one with send_message to its environment id from list_mailboxes. Message a worker by its environment id; toTabId is optional.\n` +
+            `Delegation: create workers with the Orkestrator launch_environment tool. Provider sub-agents remain inside this coordinator session and are not worker environments. Report a worker as created only after launch_environment returns its environment id.\n` +
+            `Actions: prefer launch_multi_review for the complete environment Multi Review button action; start_multi_review starts backend work only and does not open a tab. Use open_multi_review and open_multi_review_fix to present saved work. Reuse requestId on retry, and inspect outcome, ui and recovery before reporting completion.\n` +
+            launchBaseLine +
+            `${COORDINATOR_ASYNC_CONTRACT}\n`
+          : `Delegation: Orkestrator worker controls are unavailable in this session. Provider sub-agents remain inside this coordinator session and are not worker environments; do not report them as workers.\n`;
       return {
         ...trusted,
         [COORDINATOR_CONTEXT_APPLIED]: true,

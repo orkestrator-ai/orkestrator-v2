@@ -137,10 +137,18 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     [projectId, refreshView, setGit],
   );
 
+  // The main coordinator first, then side agents in number order.
   const conversations = useMemo(
-    () => snapshot?.workspace.conversations.filter((item) => !item.closedAt) ?? [],
+    () =>
+      (snapshot?.workspace.conversations.filter((item) => !item.closedAt) ?? []).toSorted(
+        (a, b) =>
+          (a.role === "main" ? 0 : 1) - (b.role === "main" ? 0 : 1) ||
+          (a.sideOrdinal ?? 0) - (b.sideOrdinal ?? 0),
+      ),
     [snapshot],
   );
+  const hasMain = conversations.some((item) => item.role === "main");
+  const newConversationLabel = hasMain ? "New side agent" : "Start coordinator";
   const availablePlatforms = useMemo(
     () =>
       AGENT_PLATFORMS.filter(
@@ -542,7 +550,11 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                   ),
                 );
             }}
-            closeLabel={`Close ${item.title}`}
+            closeLabel={
+              item.role === "main"
+                ? `Close ${item.title}. The next message for the coordinator starts a new one with the default agent.`
+                : `Close ${item.title}`
+            }
             onClose={() => {
               setOperation("conversation");
               void backend
@@ -598,7 +610,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
           }}
         >
           <Plus className="size-3.5" />
-          New conversation
+          {newConversationLabel}
         </Button>
         <div className="flex-1" />
         <Button
@@ -661,7 +673,10 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         {!selected ? (
           <div className="grid h-full place-items-center text-center">
             <div>
-              <p className="text-sm text-muted-foreground">No open coordinator conversation.</p>
+              <p className="text-sm text-muted-foreground">
+                No coordinator is open. Mail for the coordinator will start one with the default
+                agent.
+              </p>
               <Button
                 className="mt-3"
                 variant="outline"
@@ -681,7 +696,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                 }}
               >
                 <Plus className="size-4" />
-                New conversation
+                {newConversationLabel}
               </Button>
             </div>
           </div>

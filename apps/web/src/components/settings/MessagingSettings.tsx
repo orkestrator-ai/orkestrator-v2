@@ -6,6 +6,8 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import * as backend from "@/lib/backend";
 import {
+  AGENT_MAIL_MAX_AUTONOMOUS_WAKE_BUDGET,
+  AGENT_MAIL_MAX_HOURLY_WAKE_LIMIT,
   DEFAULT_AGENT_MESSAGING_SETTINGS,
   type AgentMessagingSettings,
 } from "@orkestrator/protocol/agent-mail";
@@ -131,6 +133,68 @@ export function MessagingSettings() {
             checked={settings.allowCrossProject}
             onCheckedChange={(allowCrossProject) => setSettings({ ...settings, allowCrossProject })}
           />
+        </SettingRow>
+        <SettingRow
+          label="Wake peers"
+          description="Mail between agents in environments you created starts the recipient's next turn when it is idle. Coordinators and the workers they create always wake each other."
+        >
+          <Switch
+            checked={settings.wakePeers}
+            onCheckedChange={(wakePeers) => setSettings({ ...settings, wakePeers })}
+          />
+        </SettingRow>
+        <SettingRow
+          label="Unattended exchange budget"
+          description="Messages two agents may trade automatically before delivery pauses. A coordinator request, your prompt to either agent, or Resume starts a new budget."
+        >
+          <div className="flex items-center gap-2">
+            <Input
+              aria-label="Unattended exchange budget"
+              type="number"
+              min={1}
+              max={AGENT_MAIL_MAX_AUTONOMOUS_WAKE_BUDGET}
+              value={settings.autonomousWakeBudget}
+              onChange={(event) =>
+                setSettings({
+                  ...settings,
+                  autonomousWakeBudget: Math.max(
+                    1,
+                    Math.min(
+                      AGENT_MAIL_MAX_AUTONOMOUS_WAKE_BUDGET,
+                      Number(event.target.value) || 1,
+                    ),
+                  ),
+                })
+              }
+              className="w-20"
+            />
+            <span className="text-xs text-muted-foreground">messages</span>
+          </div>
+        </SettingRow>
+        <SettingRow
+          label="Hourly limit per pair"
+          description="Most automatic messages two agents may exchange in an hour. Mail over the limit waits and is delivered as the hour passes."
+        >
+          <div className="flex items-center gap-2">
+            <Input
+              aria-label="Hourly limit per pair"
+              type="number"
+              min={1}
+              max={AGENT_MAIL_MAX_HOURLY_WAKE_LIMIT}
+              value={settings.hourlyWakeLimit}
+              onChange={(event) =>
+                setSettings({
+                  ...settings,
+                  hourlyWakeLimit: Math.max(
+                    1,
+                    Math.min(AGENT_MAIL_MAX_HOURLY_WAKE_LIMIT, Number(event.target.value) || 1),
+                  ),
+                })
+              }
+              className="w-20"
+            />
+            <span className="text-xs text-muted-foreground">per hour</span>
+          </div>
         </SettingRow>
         <SettingRow
           label="Default automatic delivery"

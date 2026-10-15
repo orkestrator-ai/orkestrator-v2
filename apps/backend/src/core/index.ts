@@ -88,6 +88,9 @@ import {
 import { MultiReviewService } from "./multi-review-service.js";
 import { FeaturePlanningService } from "./feature-planning.js";
 import { PromptQueueDrainer } from "./prompt-queue-drainer.js";
+import { AgentRegistry } from "./agent-registry.js";
+import { COORDINATOR_MAIL_ADDRESS } from "@orkestrator/protocol/coordinator";
+import { tmuxManager } from "./tmux-session-manager.js";
 import { AgentMailService } from "./agent-mail-service.js";
 import { CoordinatorService } from "./coordinator-service.js";
 import { coordinatorProviderQualification } from "./coordinator-providers.js";
@@ -347,7 +350,11 @@ export class OrkestratorBackend {
             candidate.logicalSessionKey === logicalSessionKey,
         );
         if (!session) return "unknown";
-        return this.nativeAgents.sessionActivitySnapshot(
+        // The turn view: a worker whose turn ended but whose background tasks
+        // still run has answered, and its report must not wait for them. The
+        // raw state stays `working` until every task finishes, which held a
+        // report indefinitely when the turn-end edge itself was missed.
+        return this.nativeAgents.sessionTurnActivitySnapshot(
           environmentId,
           session.agent,
           logicalSessionKey,
@@ -486,6 +493,11 @@ export class OrkestratorBackend {
       },
     );
     context.nativeAgents = this.nativeAgents;
+    context.agentRegistry = new AgentRegistry(storage, {
+      native: (environmentId, agent, logicalSessionKey) =>
+        this.nativeAgents.sessionTurnActivitySnapshot(environmentId, agent, logicalSessionKey),
+      tmux: (environmentId, tabId) => tmuxManager.get(environmentId, tabId)?.activityState(),
+    });
     context.mcpManagement = new McpManagementService({
       dataDir: options.dataDir,
       storage,
@@ -659,7 +671,44 @@ export class OrkestratorBackend {
         return (await handler(args, context)) as T;
       },
     );
-    this.agentMail = new AgentMailService(storage, this.nativeAgents, this.promptQueues);
+    // Last start attempt per environment, so a stopped worker with a backlog
+    // is started once, not on every drain pass.
+    const workerStartAttempts = new Map<string, number>();
+    this.agentMail = new AgentMailService(storage, this.nativeAgents, this.promptQueues, {
+      coordinatorMailForStoppedEnvironment: async (environmentId, message) => {
+        const environment = await storage.getEnvironment(environmentId);
+        if (!environment || environment.deletionRequestedAt) return;
+        if (environment.environmentType === "local") {
+          // A local worker is cheap to start and its coordinator asked it
+          // something; the mail is delivered once it is running.
+          const last = workerStartAttempts.get(environmentId) ?? 0;
+          if (Date.now() - last < 5 * 60_000) return;
+          workerStartAttempts.set(environmentId, Date.now());
+          const handler = this.commands.get("start_environment_background");
+          if (handler) await handler({ environmentId }, context);
+          return;
+        }
+        // A container is not started behind the user's back. Tell the
+        // coordinator once an hour per worker, so it can start it or ask.
+        await storage.sendAgentMail(
+          {
+            kind: "system",
+            projectId: environment.projectId,
+            source: "workflow",
+            resourceId: environmentId,
+          },
+          {
+            requestId: `worker-stopped:${environmentId}:${Math.floor(Date.now() / 3_600_000)}`,
+            toEnvironmentId: COORDINATOR_MAIL_ADDRESS,
+            toTabId: "",
+            subject: `Worker ${environment.name} is stopped`,
+            body:
+              `Mail for worker environment ${environmentId} (${environment.name}) is waiting, but its container is stopped. ` +
+              `Start it with start_environment to deliver the mail, or ask the user. Message ${message.id} stays queued until then.`,
+          },
+        );
+      },
+    });
     context.drainAgentMail = () => this.agentMail.drainInjects();
     // Scoped workflow wakeups (step 08), subscribed before any owner's first
     // discovery so nothing that commits during startup is missed. Each wake

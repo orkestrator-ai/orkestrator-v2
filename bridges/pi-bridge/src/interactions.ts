@@ -25,7 +25,7 @@ import {
   MAX_TOOL_ARGUMENT_BYTES,
   workingDirectory,
 } from "./config.js";
-import { isOrkestratorMcpTool } from "./mcp.js";
+import { isOrkestratorMailTool, isOrkestratorMcpTool } from "./mcp.js";
 import { schedulePersist } from "./persistence.js";
 import {
   isObject,
@@ -75,6 +75,8 @@ export async function requestToolApproval(
   const approvals = state.policy?.approvals ?? (approvalsEnabled() ? "ask" : "auto-approve");
   if (approvals === "auto-approve") return { block: false };
   if (READ_ONLY_TOOLS.has(toolName) || coordinatorMail) return { block: false };
+  // A worker can always report back: its mail tools never wait on a person.
+  if (isOrkestratorMailTool(state, toolName)) return { block: false };
   if (approvals === "deny") {
     return { block: true, reason: "The execution policy denies this tool call." };
   }

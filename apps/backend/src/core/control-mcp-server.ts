@@ -6,7 +6,7 @@ import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import {
   COORDINATOR_ASYNC_CONTRACT,
-  coordinatorRuntimeId,
+  COORDINATOR_MAIL_ADDRESS,
 } from "@orkestrator/protocol/coordinator";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
@@ -54,6 +54,7 @@ const TERMINAL_TAB_TYPES = new Set([
 
 const COORDINATOR_TOOL_CAPABILITY = new Map<string, string>([
   ["list_projects", "discovery"],
+  ["list_agents", "discovery"],
   ["get_launch_options", "discovery"],
   ["get_repository_context", "discovery"],
   ["list_workflows", "discovery"],
@@ -346,9 +347,9 @@ function mailboxFingerprint(page: JsonRecord): string {
 }
 
 /** The worker's half of the contract: one report, at the end, then stop. */
-function workerAsyncContract(scope: CoordinatorControlScope): string {
+function workerAsyncContract(): string {
   return (
-    `The coordinator is idle while you work and is woken once, when your turn ends. Send exactly one report — use reply_message for the message that assigned this work, or send_message to environment ${coordinatorRuntimeId(scope.coordinatorId, scope.conversationId)} — and then end your turn. ` +
+    `The coordinator is idle while you work and is woken once, when your turn ends. Send exactly one report — use reply_message for the message that assigned this work, or send_message to toEnvironmentId "${COORDINATOR_MAIL_ADDRESS}" (no toTabId needed) — and then end your turn. ` +
     `Do not send progress updates: any message you send before your turn ends is held and delivered together with your final report.`
   );
 }
@@ -513,6 +514,32 @@ async function createControlMcp(
       const layout = await invoke<unknown>("get_pane_layout", { environmentId });
       const tabs = paneTabs(layout);
       return toolResult({ environmentId, tabs, total: tabs.length });
+    },
+  );
+
+  server.registerTool(
+    "list_agents",
+    {
+      title: "List agents",
+      description:
+        "Every agent tab in the project's environments, and its coordinator conversations, with what each is doing now: working, waiting (on a person), idle, stopped (its environment is not running) or unknown. Includes per-environment counts. Read this instead of polling tabs one by one.",
+      inputSchema: z.object({
+        projectId: z.string().trim().min(1).max(200).optional(),
+        environmentId: z.string().trim().min(1).max(200).optional(),
+      }),
+      annotations: readAnnotations(),
+    },
+    async ({ projectId, environmentId }) => {
+      const snapshot = await invoke<unknown>("get_agent_registry", {
+        ...(coordinatorScope
+          ? { projectId: coordinatorScope.projectId }
+          : projectId
+            ? { projectId }
+            : {}),
+        ...(environmentId ? { environmentId } : {}),
+      });
+      if (!isRecord(snapshot)) throw new Error("Agent registry returned no result");
+      return toolResult(snapshot);
     },
   );
 
@@ -949,9 +976,7 @@ async function createControlMcp(
               projectId: coordinatorScope.projectId,
               coordinatorId: coordinatorScope.coordinatorId,
               conversationId: coordinatorScope.conversationId,
-              instruction:
-                `${COORDINATOR_JOB_DELEGATION_INSTRUCTION}\n` +
-                workerAsyncContract(coordinatorScope),
+              instruction: `${COORDINATOR_JOB_DELEGATION_INSTRUCTION}\n` + workerAsyncContract(),
             },
             input.prompt,
           )
@@ -1383,12 +1408,14 @@ async function createControlMcp(
       {
         title: coordinatorScope ? "Send a coordinator message" : "Send an external agent message",
         description: coordinatorScope
-          ? "Durably send an authenticated same-project delegation or reply from this coordinator conversation."
+          ? 'Durably send an authenticated same-project delegation or reply from this coordinator conversation. toTabId may be omitted: an environment resolves to the tab you are waiting on or its only agent tab. Side agents and the main coordinator reach each other through toEnvironmentId "coordinator" (to the main) or the side agent\'s environment id from list_mailboxes.'
           : "Durably place text in one Orkestrator tab inbox. External messages are never auto-injected into an agent turn.",
         inputSchema: z.object({
           requestId: z.string().trim().min(1).max(256),
           toEnvironmentId: z.string().trim().min(1).max(200),
-          toTabId: z.string().trim().min(1).max(200),
+          toTabId: coordinatorScope
+            ? z.string().trim().min(1).max(200).optional()
+            : z.string().trim().min(1).max(200),
           subject: z.string().trim().max(200).optional(),
           body: z
             .string()

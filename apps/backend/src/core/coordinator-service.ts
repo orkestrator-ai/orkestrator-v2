@@ -2,9 +2,12 @@ import { randomUUID } from "node:crypto";
 import {
   COORDINATOR_EXECUTION_POLICY,
   COORDINATOR_WORKSPACE_VERSION,
+  coordinatorMainConversation,
   coordinatorRuntimeId,
   type CoordinatorConversation,
+  type CoordinatorConversationRole,
   type CoordinatorSnapshot,
+  type CoordinatorWorkflowAssociation,
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
 import { resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
@@ -37,16 +40,54 @@ export function sanitizeCoordinatorError(value: unknown): string {
   return text.slice(0, MAX_STARTUP_ERROR_CHARS) || "Coordinator startup failed";
 }
 
-function conversation(workspaceId: string, title = "Coordinator"): CoordinatorConversation {
+/** At most this many conversations are open: the main coordinator and its side agents. */
+const MAX_OPEN_COORDINATOR_CONVERSATIONS = 16;
+
+function conversation(
+  workspaceId: string,
+  role: CoordinatorConversationRole,
+  sideOrdinal?: number,
+  agent?: AgentPlatform,
+): CoordinatorConversation {
   const id = randomUUID();
   return {
     id,
     tabId: `coordinator-${id}`,
     logicalSessionKey: `coordinator-${workspaceId}:${id}`,
-    title,
+    title: role === "main" ? "Coordinator" : `Side ${sideOrdinal}`,
     createdAt: new Date().toISOString(),
     mailboxIncarnationId: randomUUID(),
+    role,
+    ...(role === "side" ? { sideOrdinal } : {}),
+    ...(agent ? { agent } : {}),
   };
+}
+
+function nextSideOrdinal(workspace: CoordinatorWorkspace): number {
+  const used = new Set(
+    workspace.conversations
+      .filter((item) => !item.closedAt && item.role === "side")
+      .map((item) => item.sideOrdinal),
+  );
+  let ordinal = 1;
+  while (used.has(ordinal)) ordinal += 1;
+  return ordinal;
+}
+
+/**
+ * Work the main coordinator should own but a different conversation still
+ * holds: delegations not yet woken, and workflows not yet reported. Finished
+ * history is left where it is, because adopting re-arms its notification.
+ */
+function liveWork(association: CoordinatorWorkflowAssociation): boolean {
+  if (association.pending) return false;
+  if (association.kind === "environment") {
+    return Boolean(
+      association.delegation &&
+      (association.delegation.state === "running" || !association.delegation.wokenAt),
+    );
+  }
+  return !association.terminalNotifiedAt;
 }
 
 function retainCoordinatorConversations(
@@ -78,7 +119,125 @@ export class CoordinatorService {
       environmentId: string,
       tabId: string,
     ) => Promise<AgentActivityState | "unknown">,
-  ) {}
+  ) {
+    // Mail to "coordinator", or to a conversation that has since closed, finds
+    // the current main through here, which starts one if there is none.
+    this.storage.setCoordinatorMailResolver?.((projectId) => this.mainMailAddress(projectId));
+  }
+
+  /**
+   * The current main conversation's mail address, starting one if the user
+   * closed it. Null when the project has never had a coordinator: an address
+   * nobody asked for is not a reason to create one.
+   */
+  async mainMailAddress(
+    projectId: string,
+  ): Promise<{ environmentId: string; tabId: string } | null> {
+    if (!(await this.storage.getCoordinatorWorkspace(projectId))) return null;
+    const { workspace, main } = await this.ensureMainConversation(projectId);
+    return { environmentId: coordinatorRuntimeId(workspace.id, main.id), tabId: main.tabId };
+  }
+
+  /**
+   * The project's main coordinator, started with the default agent when there
+   * is none open. Closing the main tab is how a user changes its provider; the
+   * next mail that needs a coordinator starts a fresh one rather than being
+   * lost. Work the closed conversation still owed a report to moves with it.
+   */
+  async ensureMainConversation(
+    projectId: string,
+  ): Promise<{ workspace: CoordinatorWorkspace; main: CoordinatorConversation }> {
+    const result = await this.serialize(projectId, async () => {
+      const existing = await this.storage.getCoordinatorWorkspace(projectId);
+      if (!existing) throw new Error("Coordinator workspace was not found");
+      const open = coordinatorMainConversation(existing);
+      if (open) return { workspace: existing, main: open, created: false };
+      if (
+        existing.conversations.filter((item) => !item.closedAt).length >=
+        MAX_OPEN_COORDINATOR_CONVERSATIONS
+      ) {
+        throw new Error("Coordinator conversation limit reached");
+      }
+      const created = conversation(
+        existing.id,
+        "main",
+        undefined,
+        await this.preferredAgent(projectId).catch(() => undefined),
+      );
+      const workspace = await this.storage.mutateCoordinatorWorkspace(projectId, (current) => {
+        if (!current) throw new Error("Coordinator workspace disappeared");
+        return {
+          ...current,
+          conversations: retainCoordinatorConversations([...current.conversations, created]),
+          selectedConversationId: current.selectedConversationId ?? created.id,
+          updatedAt: new Date().toISOString(),
+        };
+      });
+      if (!workspace) throw new Error("Coordinator workspace disappeared");
+      const main = coordinatorMainConversation(workspace) ?? created;
+      return { workspace, main, created: true };
+    });
+    await this.adoptLiveWork(result.workspace, result.main);
+    if (result.created) {
+      await this.storage.synchronizeAgentMailboxes();
+      // What was waiting in the closed main's inbox — a held report above
+      // all — belongs to the new one.
+      const owed = new Set(
+        [
+          ...(await this.storage.listOpenCoordinatorDelegations()),
+          ...(await this.storage.listUnwokenCoordinatorDelegations()),
+        ].map((association) => association.id),
+      );
+      await this.storage
+        .moveClosedCoordinatorMail(
+          result.workspace.id,
+          {
+            environmentId: coordinatorRuntimeId(result.workspace.id, result.main.id),
+            tabId: result.main.tabId,
+          },
+          owed,
+        )
+        .catch((error) => {
+          console.warn(
+            "[coordinator] Could not move mail to the new main coordinator:",
+            error instanceof Error ? error.message : error,
+          );
+        });
+    }
+    return { workspace: result.workspace, main: result.main };
+  }
+
+  /** Move delegations and workflows other conversations still owe onto the main. */
+  private async adoptLiveWork(
+    workspace: CoordinatorWorkspace,
+    main: CoordinatorConversation,
+  ): Promise<void> {
+    for (const association of await this.storage.listCoordinatorWorkflowAssociations(
+      workspace.projectId,
+    )) {
+      if (
+        association.coordinatorId !== workspace.id ||
+        association.conversationId === main.id ||
+        !liveWork(association)
+      ) {
+        continue;
+      }
+      await this.storage
+        .adoptCoordinatorWorkflowAssociation(
+          workspace.projectId,
+          workspace.id,
+          association.id,
+          main.id,
+          { force: true },
+        )
+        .catch((error) => {
+          console.warn(
+            "[coordinator] Could not move work to the main coordinator:",
+            error instanceof Error ? error.message : error,
+          );
+        });
+    }
+  }
 
   /**
    * The qualification inputs, read fresh.
@@ -179,7 +338,7 @@ export class CoordinatorService {
           };
         }
         const id = randomUUID();
-        const initial = conversation(id);
+        const initial = conversation(id, "main");
         const now = new Date().toISOString();
         return {
           version: COORDINATOR_WORKSPACE_VERSION,
@@ -231,11 +390,23 @@ export class CoordinatorService {
       // Deliberately unassigned. Inheriting the selected conversation's
       // provider is what made a new conversation look locked: the composer had
       // one platform before the user had said anything.
-      const created = conversation(existing.id, title?.trim() || "Coordinator");
+      //
+      // With no main open this starts the main coordinator; otherwise it adds
+      // the next side agent. There is never a second main.
+      const created = coordinatorMainConversation(existing)
+        ? conversation(existing.id, "side", nextSideOrdinal(existing))
+        : conversation(existing.id, "main");
+      if (title?.trim() && created.role === "main") created.title = title.trim();
       const workspace = await this.storage.mutateCoordinatorWorkspace(projectId, (current) => {
         if (!current) throw new Error("Coordinator workspace disappeared");
-        if (current.conversations.filter((item) => !item.closedAt).length >= 16) {
+        if (
+          current.conversations.filter((item) => !item.closedAt).length >=
+          MAX_OPEN_COORDINATOR_CONVERSATIONS
+        ) {
           throw new Error("Coordinator conversation limit reached");
+        }
+        if (created.role === "main" && coordinatorMainConversation(current)) {
+          throw new Error("This project already has a main coordinator");
         }
         return {
           ...current,
@@ -426,10 +597,6 @@ export class CoordinatorService {
           !association.terminalNotifiedAt,
       );
       for (const association of associations) {
-        const conversation = workspace.conversations.find(
-          (item) => item.id === association.conversationId && !item.closedAt,
-        );
-        if (!conversation) continue;
         const record =
           association.kind === "build-pipeline"
             ? await this.storage.getBuildPipeline(association.resourceId)
@@ -454,6 +621,14 @@ export class CoordinatorService {
           await this.storage.markCoordinatorWorkflowNotified(association.id, revision);
           continue;
         }
+        // Reported to the main coordinator, whichever conversation started it.
+        // A notice does not start a main on its own: workflows that finished
+        // under long-closed conversations were never reported, and waking a
+        // fresh coordinator with them would be a surprise turn. It waits for
+        // the next main instead.
+        const current = workspace;
+        const conversation = coordinatorMainConversation(workspace);
+        if (!conversation) continue;
         await this.storage.sendAgentMail(
           {
             kind: "system",
@@ -463,7 +638,7 @@ export class CoordinatorService {
           },
           {
             requestId: `workflow-${association.id}-${conversation.id}-${revision}`,
-            toEnvironmentId: coordinatorRuntimeId(workspace.id, conversation.id),
+            toEnvironmentId: coordinatorRuntimeId(current.id, conversation.id),
             toTabId: conversation.tabId,
             subject: `${association.kind === "build-pipeline" ? "Build pipeline" : "Multi-review"} ${phase}`,
             body: `Authoritative workflow ${association.resourceId} reached ${phase}. Inspect the workflow through Orkestrator controls before deciding what to do next.`,
@@ -570,6 +745,13 @@ export class CoordinatorService {
       await this.storage.closeCoordinatorDelegation(association.id, state);
     }
     await this.deliverDelegationWakes();
+    const owed = new Set(
+      [
+        ...(await this.storage.listOpenCoordinatorDelegations()),
+        ...(await this.storage.listUnwokenCoordinatorDelegations()),
+      ].map((association) => association.id),
+    );
+    await this.storage.releaseOrphanedDelegationHolds(owed);
   }
 
   /**
@@ -595,17 +777,17 @@ export class CoordinatorService {
     for (const association of unwoken) {
       const delegation = association.delegation;
       if (!delegation || !association.conversationId) continue;
-      const workspace = await this.storage.getCoordinatorWorkspaceById(association.coordinatorId);
-      const conversation = workspace?.conversations.find(
-        (item) => item.id === association.conversationId && !item.closedAt,
-      );
-      if (!workspace || !conversation) {
-        // The conversation that delegated is gone. Retiring the delegation is
-        // the only honest outcome: there is nobody left to wake, and leaving it
+      const owner = await this.storage.getCoordinatorWorkspaceById(association.coordinatorId);
+      if (!owner) {
+        // The coordinator itself is gone. Retiring the delegation is the only
+        // honest outcome: there is nobody left to wake, and leaving it
         // unstamped would retry this lookup on every sweep forever.
         await this.storage.markCoordinatorDelegationWoken(association.id);
         continue;
       }
+      // The wake goes to the main coordinator. If the user closed it, a new
+      // main starts with the default agent and takes this delegation over.
+      const { workspace, main: conversation } = await this.ensureMainConversation(owner.projectId);
       const runtimeId = coordinatorRuntimeId(workspace.id, conversation.id);
       let wakeKind = delegation.wakeKind;
       if (!wakeKind) {

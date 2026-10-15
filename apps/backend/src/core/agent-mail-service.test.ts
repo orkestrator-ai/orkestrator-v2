@@ -9,7 +9,9 @@ import {
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
 import { AgentMailService } from "./agent-mail-service.js";
+import { AGENT_MAIL_MAX_VERIFY_ATTEMPTS } from "./storage-agent-mail.js";
 import { openBackendDatabase } from "./storage-stores.js";
+import { readStoredValue, seedStore } from "./storage-test-support.js";
 import { StorageService } from "./storage.js";
 
 /** Committed revision of the agent-mail store: any rewrite of the mail bumps it. */
@@ -1079,7 +1081,7 @@ describe("AgentMailService", () => {
     }
   });
 
-  test("records a thrown native dispatch as an ambiguous failure", async () => {
+  test("confirms a thrown native dispatch against the journal instead of failing it", async () => {
     const { storage, dataDir } = await fixture();
     try {
       const message = await storage.sendAgentMail(
@@ -1091,12 +1093,15 @@ describe("AgentMailService", () => {
           body: "Dispatch may have reached the provider.",
         },
       );
+      let journal: "dispatched" | "not-dispatched" | "unknown" = "unknown";
+      const dispatches: string[] = [];
       const service = new AgentMailService(
         storage,
         {
-          reconcileMailInject: async () => "unknown",
+          reconcileMailInject: async () => journal,
           sessionActivitySnapshot: () => "idle",
-          dispatchMailInject: async () => {
+          dispatchMailInject: async (input) => {
+            dispatches.push(input.requestId);
             throw new Error("connection lost");
           },
         },
@@ -1105,7 +1110,57 @@ describe("AgentMailService", () => {
 
       await service.init();
       await service.drainInjects();
+      expect(await storage.getAgentMailMessage("recipient", "agent", message.id)).toMatchObject({
+        placement: "pending-inject",
+        placementReason: "verifying",
+      });
+      // Waiting out the delay is a person's call; skip it as Retry would.
+      await storage.retryAgentMailInject("recipient", "agent", message.id);
+      await service.drainInjects();
+      // Still unknown: asked again, never resent.
+      expect(dispatches).toHaveLength(1);
+      expect(
+        (await storage.getAgentMailMessage("recipient", "agent", message.id)).placementReason,
+      ).toBe("verifying");
 
+      journal = "dispatched";
+      await storage.retryAgentMailInject("recipient", "agent", message.id);
+      await service.drainInjects();
+      expect(dispatches).toHaveLength(1);
+      expect(await storage.getAgentMailMessage("recipient", "agent", message.id)).toMatchObject({
+        placement: "injected",
+      });
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("an ambiguous dispatch the journal cannot settle eventually fails closed", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      const message = await storage.sendAgentMail(
+        { kind: "tab", environmentId: "sender", projectId: "project", tabId: "agent" },
+        { requestId: "never-known", toEnvironmentId: "recipient", toTabId: "agent", body: "?" },
+      );
+      const service = new AgentMailService(
+        storage,
+        {
+          reconcileMailInject: async () => "unknown",
+          sessionActivitySnapshot: () => "idle",
+          dispatchMailInject: async (input) => ({
+            outcome: "unknown",
+            requestId: input.requestId,
+            error: "lost",
+          }),
+        },
+        { dispatchMailInject: async () => ({ outcome: "accepted" }) },
+      );
+      await service.init();
+      await service.drainInjects();
+      for (let attempt = 0; attempt < AGENT_MAIL_MAX_VERIFY_ATTEMPTS; attempt += 1) {
+        await storage.retryAgentMailInject("recipient", "agent", message.id);
+        await service.drainInjects();
+      }
       expect(await storage.getAgentMailMessage("recipient", "agent", message.id)).toMatchObject({
         placement: "inject_failed",
         placementReason: "ambiguous",
@@ -1114,6 +1169,78 @@ describe("AgentMailService", () => {
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });
+
+  test("a refused dispatch waits and retries on its own", async () => {
+    const { storage, dataDir } = await fixture();
+    const outcomes: Array<"rejected" | "accepted"> = ["rejected", "accepted"];
+    const prompts: string[] = [];
+    try {
+      const message = await storage.sendAgentMail(
+        { kind: "tab", environmentId: "sender", projectId: "project", tabId: "agent" },
+        { requestId: "refused", toEnvironmentId: "recipient", toTabId: "agent", body: "Later." },
+      );
+      const service = new AgentMailService(
+        storage,
+        {
+          reconcileMailInject: async () => "unknown",
+          sessionActivitySnapshot: () => "idle",
+          mailInjectPresence: async () => "idle",
+          dispatchMailInject: async (input) => {
+            prompts.push(input.prompt);
+            return outcomes.shift() === "rejected"
+              ? { outcome: "rejected", error: "The project checkout is changing" }
+              : { outcome: "accepted", requestId: input.requestId };
+          },
+        },
+        { dispatchMailInject: async () => ({ outcome: "accepted" }) },
+      );
+      await service.init();
+      await service.drainInjects();
+      expect(await storage.getAgentMailMessage("recipient", "agent", message.id)).toMatchObject({
+        placement: "pending-inject",
+        placementReason: "retrying",
+      });
+      // Not before its retry time, even though the recipient is idle.
+      await service.drainInjects();
+      expect(prompts).toHaveLength(1);
+      expect(
+        (await storage.listPendingAgentMailInjects()).map((entry) => entry.message.id),
+      ).not.toContain(message.id);
+
+      // Time passing is what releases it; stand in for that by editing the store.
+      const persisted = readStoredValue<{
+        pendingInject: Array<{ messageId: string; retryAt?: string }>;
+      }>(dataDir, "agent-mail.json")!;
+      for (const entry of persisted.pendingInject) {
+        if (entry.messageId === message.id) entry.retryAt = new Date(0).toISOString();
+      }
+      seedStore(dataDir, "agent-mail.json", persisted);
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      const later = new AgentMailService(
+        restarted,
+        {
+          reconcileMailInject: async () => "unknown",
+          sessionActivitySnapshot: () => "idle",
+          mailInjectPresence: async () => "idle",
+          dispatchMailInject: async (input) => {
+            prompts.push(input.prompt);
+            return { outcome: "accepted", requestId: input.requestId };
+          },
+        },
+        { dispatchMailInject: async () => ({ outcome: "accepted" }) },
+      );
+      await later.init();
+      await later.drainInjects();
+      expect(prompts).toHaveLength(2);
+      expect(await restarted.getAgentMailMessage("recipient", "agent", message.id)).toMatchObject({
+        placement: "injected",
+      });
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   test("delivers everything one mailbox is waiting for as a single turn", async () => {
     const { storage, dataDir } = await fixture();
     const prompts: string[] = [];
@@ -1196,6 +1323,8 @@ describe("AgentMailService", () => {
       config.global.agentMessaging = {
         ...config.global.agentMessaging!,
         defaultInjectPolicy: "off",
+        // Peer mail would otherwise wake the recipient through its route.
+        wakePeers: false,
       };
       await storage.saveConfig(config);
       await storage.synchronizeAgentMailboxes();
@@ -1261,6 +1390,50 @@ describe("AgentMailService", () => {
         expect(stored.placement).toBe("pending-inject");
         expect(stored.placementReason).toBe("queue");
       }
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("delivers a message the user released without changing the mailbox policy", async () => {
+    const { storage, dataDir } = await fixture();
+    const prompts: string[] = [];
+    try {
+      const config = await storage.loadConfig();
+      config.global.agentMessaging = {
+        ...config.global.agentMessaging!,
+        defaultInjectPolicy: "off",
+        wakePeers: false,
+      };
+      await storage.saveConfig(config);
+      const stored = await storage.sendAgentMail(
+        { kind: "tab", environmentId: "sender", projectId: "project", tabId: "agent" },
+        { requestId: "released", toEnvironmentId: "recipient", toTabId: "agent", body: "Now." },
+      );
+      expect(stored.placement).toBe("stored");
+      await storage.retryAgentMailInject("recipient", "agent", stored.id);
+
+      const service = new AgentMailService(
+        storage,
+        {
+          reconcileMailInject: async () => "unknown",
+          sessionActivitySnapshot: () => "idle",
+          mailInjectPresence: async () => "idle",
+          dispatchMailInject: async (input) => {
+            prompts.push(input.prompt);
+            return { outcome: "accepted", requestId: input.requestId };
+          },
+        },
+        { dispatchMailInject: async () => ({ outcome: "accepted" }) },
+      );
+      await service.init();
+      await service.drainInjects();
+
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0]).toContain("Now.");
+      const descriptor = (await storage.getAgentMailMailbox("recipient", "agent")).descriptor;
+      expect(descriptor.injectOverride).toBe("inherit");
+      expect(descriptor.injectPolicy).toBe("off");
     } finally {
       await fs.rm(dataDir, { recursive: true, force: true });
     }

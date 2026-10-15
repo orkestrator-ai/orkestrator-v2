@@ -78,6 +78,8 @@ export type CommandContext = {
   notifyAgentTurnCompleted?: (environmentId: string) => Promise<void>;
   probeAgentCreatedPullRequest?: (environmentId: string) => Promise<void>;
   drainAgentMail?: () => Promise<void>;
+  /** Every agent tab in the app and what it is doing; see agent-registry.ts. */
+  agentRegistry?: import("./agent-registry.js").AgentRegistry;
 };
 
 export type CommandHandler = (

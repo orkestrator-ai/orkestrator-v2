@@ -1,3 +1,4 @@
+import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { isAbsolute } from "node:path";
 
 export const CODEX_MAX_CONCURRENT_THREADS_ENV = "CODEX_MAX_CONCURRENT_THREADS_PER_SESSION";
@@ -197,6 +198,14 @@ export function codexAppServerConfigOverrides(
           // control tools the coordinator can invoke.
           overrides["mcp_servers.orkestrator.default_tools_approval_mode"] =
             JSON.stringify("approve");
+        } else {
+          // A worker's mail tools are always approved, whatever its ask/deny
+          // policy: they are how it reports back. Its other Orkestrator tools
+          // keep Codex's defaults.
+          for (const name of AGENT_MAIL_TOOL_NAMES) {
+            overrides[`mcp_servers.orkestrator.tools.${name}.approval_mode`] =
+              JSON.stringify("approve");
+          }
         }
       }
     } catch {

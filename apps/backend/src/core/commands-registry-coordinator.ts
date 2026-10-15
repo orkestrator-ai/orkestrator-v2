@@ -1,4 +1,5 @@
 import {
+  COORDINATOR_MAIL_ADDRESS,
   coordinatorConversationIdFromRuntimeId,
   coordinatorIdFromRuntimeId,
   coordinatorRuntimeId,
@@ -324,45 +325,73 @@ export function registerCoordinatorCommands(
         (item) => item.id === conversation && !item.closedAt,
       );
       if (!tab) throw new Error("Coordinator conversation is unavailable");
-      const destination = await context.storage.getEnvironment(
-        asNonBlankString(toEnvironmentId, "toEnvironmentId"),
-      );
-      if (!destination || destination.projectId !== project) {
-        throw new Error("Coordinator messages must stay within their project");
-      }
-      const destinationTabId = asNonBlankString(toTabId, "toTabId");
+      const sender = {
+        kind: "coordinator" as const,
+        projectId: project,
+        coordinatorId: coordinator,
+        conversationId: conversation,
+        environmentId: coordinatorRuntimeId(coordinator, conversation),
+        tabId: tab.tabId,
+      };
       const stableRequestId = asNonBlankString(requestId, "requestId");
-      await assertWorkerDelegationAvailable(
-        context,
-        { projectId: project, coordinatorId: coordinator, conversationId: conversation },
-        destination.id,
-        destinationTabId,
-        stableRequestId,
-      );
-      const message = await context.storage.sendAgentMail(
-        {
-          kind: "coordinator",
-          projectId: project,
-          coordinatorId: coordinator,
-          conversationId: conversation,
-          environmentId: coordinatorRuntimeId(coordinator, conversation),
-          tabId: tab.tabId,
-        },
-        {
+      const target = asNonBlankString(toEnvironmentId, "toEnvironmentId");
+      // Main ↔ side agent mail. Not a delegation: nothing to wait on, and the
+      // mail store decides which of the two may talk to which.
+      if (
+        target === COORDINATOR_MAIL_ADDRESS ||
+        coordinatorIdFromRuntimeId(target) === coordinator
+      ) {
+        const message = await context.storage.sendAgentMail(sender, {
           requestId: stableRequestId,
-          toEnvironmentId: destination.id,
-          toTabId: destinationTabId,
+          toEnvironmentId: target,
+          toTabId: typeof toTabId === "string" ? toTabId : "",
           body: asNonBlankString(body, "body"),
           ...(typeof subject === "string" ? { subject } : {}),
           ...(typeof replyToMessageId === "string" ? { replyToMessageId } : {}),
-        },
+        });
+        return { ...message, coordinatorDelegationOpened: false };
+      }
+      if (tab.role === "side") {
+        throw new Error(
+          'A side agent can only message the main coordinator. Send to "coordinator".',
+        );
+      }
+      const destination = await context.storage.getEnvironment(target);
+      if (!destination || destination.projectId !== project) {
+        throw new Error("Coordinator messages must stay within their project");
+      }
+      const destinationTabId =
+        typeof toTabId === "string" && toTabId.trim()
+          ? toTabId.trim()
+          : await context.storage.resolveAgentMailRecipientTab(sender, destination.id);
+      // A follow-up to a worker that is still on an earlier request joins
+      // that delegation rather than opening a second one. The open delegation
+      // does not close while this message is undelivered, so the worker reads
+      // it in its next turn and the coordinator is woken once, after both.
+      const joining = (await context.storage.listOpenCoordinatorDelegations()).find(
+        (association) =>
+          association.coordinatorId === coordinator &&
+          association.kind === "environment" &&
+          association.resourceId === destination.id &&
+          association.delegation?.workerTabId === destinationTabId &&
+          association.requestId !== `delegation:${stableRequestId}`,
       );
+      const message = await context.storage.sendAgentMail(sender, {
+        requestId: stableRequestId,
+        toEnvironmentId: destination.id,
+        toTabId: destinationTabId,
+        body: asNonBlankString(body, "body"),
+        ...(typeof subject === "string" ? { subject } : {}),
+        ...(typeof replyToMessageId === "string" ? { replyToMessageId } : {}),
+      });
       // Asking a worker something is a delegation, so the coordinator is woken
       // once when that worker's turn ends rather than on whatever it says
       // along the way. A message the recipient bounced or that was never
       // scheduled for delivery has asked nothing and opens nothing.
       let coordinatorDelegationOpened = false;
-      if (message.placement === "pending-inject") {
+      if (message.placement === "pending-inject" && joining) {
+        coordinatorDelegationOpened = true;
+      } else if (message.placement === "pending-inject") {
         try {
           coordinatorDelegationOpened = await openWorkerDelegation(
             context,
@@ -378,7 +407,19 @@ export function registerCoordinatorCommands(
           );
         }
       }
-      return { ...message, coordinatorDelegationOpened };
+      // Say plainly when the worker cannot read it yet: "pending" alone reads
+      // as delivered to a coordinator deciding whether to wait.
+      const deliveryNote =
+        destination.status !== "stopped"
+          ? undefined
+          : destination.environmentType === "local"
+            ? "The worker's environment is stopped. Orkestrator is starting it; the message is delivered once it is running."
+            : "The worker's container is stopped and is not started automatically. Call start_environment to deliver this message, or ask the user.";
+      return {
+        ...message,
+        coordinatorDelegationOpened,
+        ...(deliveryNote ? { deliveryNote } : {}),
+      };
     },
   );
   register(
@@ -490,7 +531,7 @@ export function registerCoordinatorCommands(
                 baseCommit: delegationBaseCommit,
                 instruction:
                   `${COORDINATOR_ENVIRONMENT_DELEGATION_INSTRUCTION}\n` +
-                  `The coordinator is idle while you work and is woken once, when your turn ends. Send exactly one report with send_message to environment ${coordinatorRuntimeId(coordinatorId, conversationId)}, then end your turn. Do not send progress updates: any message you send before your turn ends is held and delivered together with your final report.`,
+                  `The coordinator is idle while you work and is woken once, when your turn ends. Send exactly one report with send_message to toEnvironmentId "${COORDINATOR_MAIL_ADDRESS}" (no toTabId needed), then end your turn. Do not send progress updates: any message you send before your turn ends is held and delivered together with your final report.`,
               },
               input.initialPrompt,
             )

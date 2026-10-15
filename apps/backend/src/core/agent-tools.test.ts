@@ -1,3 +1,4 @@
+import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
@@ -34,14 +35,9 @@ type RpcCall = {
   rawText: string;
 };
 
+// The bridges always allow exactly these mail tools, so the server must offer them.
 const ALL_AGENT_TOOL_NAMES = [
-  "list_mailboxes",
-  "send_message",
-  "check_inbox",
-  "read_message",
-  "ack_message",
-  "reply_message",
-  "get_message_status",
+  ...AGENT_MAIL_TOOL_NAMES,
   "list_tickets",
   "get_ticket",
   "create_ticket",

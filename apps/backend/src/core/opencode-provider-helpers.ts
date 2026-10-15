@@ -36,6 +36,9 @@ import {
   openCodeSessionModelRef,
 } from "./opencode-model-catalog.js";
 import type { OpenCodeCommandChangeOptions } from "./opencode-command-changes.js";
+import { COORDINATOR_CONTROL_TOOL_NAMES } from "@orkestrator/protocol/coordinator";
+import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import { ORKESTRATOR_AGENT_MCP_SERVER_NAME } from "./agent-tools.js";
 import { MAX_OPENCODE_EXISTENCE_SNAPSHOT_SESSIONS } from "./opencode-snapshots.js";
 import {
   mimeTypeForFilename,
@@ -272,6 +275,23 @@ const OPENCODE_READ_ONLY_PERMISSIONS = Object.freeze([
   "task",
 ]);
 
+/**
+ * The coordinator's own Orkestrator tools, as OpenCode names MCP tools
+ * (`<server>_<tool>`). Without these the `{"*": deny}` base refuses the
+ * coordinator its mail and delegation tools, so it could neither read a
+ * worker's report nor launch one. Listed by name, not `orkestrator_*`, so a
+ * project `opencode.json` server whose name merely starts with "orkestrator"
+ * gains nothing.
+ */
+const OPENCODE_COORDINATOR_TOOL_PERMISSIONS = Object.freeze(
+  COORDINATOR_CONTROL_TOOL_NAMES.map((name) => `${ORKESTRATOR_AGENT_MCP_SERVER_NAME}_${name}`),
+);
+
+/** A worker's Orkestrator mail tools, in OpenCode's `<server>_<tool>` naming. */
+const OPENCODE_AGENT_MAIL_PERMISSIONS = Object.freeze(
+  AGENT_MAIL_TOOL_NAMES.map((name) => `${ORKESTRATOR_AGENT_MCP_SERVER_NAME}_${name}`),
+);
+
 /** Per-message tool mask for a structured report turn that must not mutate state. */
 export const OPENCODE_READ_ONLY_TURN_TOOLS: Readonly<Record<string, boolean>> = Object.freeze({
   write: false,
@@ -368,15 +388,23 @@ export function openCodePermissionRules(policy: NativeAgentExecutionPolicy) {
         : ("ask" as const);
   const coordinatorAllow =
     policy.id === "coordinator-read-only" && !policy.toolPolicy?.allow
-      ? OPENCODE_READ_ONLY_PERMISSIONS
+      ? [...OPENCODE_READ_ONLY_PERMISSIONS, ...OPENCODE_COORDINATOR_TOOL_PERMISSIONS]
       : [];
+  // A worker can always report back: its mail tools are allowed whatever the
+  // ask/deny default. An explicit deny below still wins.
+  const mailAllow =
+    action === "allow" || policy.id === "coordinator-read-only"
+      ? []
+      : OPENCODE_AGENT_MAIL_PERMISSIONS;
   return [
     { permission: "*", pattern: "*", action },
-    ...[...coordinatorAllow, ...(policy.toolPolicy?.allow ?? [])].map((permission) => ({
-      permission,
-      pattern: "*",
-      action: "allow" as const,
-    })),
+    ...[...coordinatorAllow, ...mailAllow, ...(policy.toolPolicy?.allow ?? [])].map(
+      (permission) => ({
+        permission,
+        pattern: "*",
+        action: "allow" as const,
+      }),
+    ),
     // Last, so a deny always wins a collision with the read allowances above.
     ...(policy.toolPolicy?.deny ?? []).map((permission) => ({
       permission,

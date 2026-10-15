@@ -8,6 +8,7 @@ import {
   type ControlMcpInvoker,
 } from "./control-mcp-server.js";
 import { coordinatorDelegationPresentationFrom } from "./coordinator-delegation-authority.js";
+import { COORDINATOR_CONTROL_TOOL_NAMES } from "@orkestrator/protocol/coordinator";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
   parseCoordinatorDelegatedPrompt,
@@ -232,6 +233,10 @@ describe("Orkestrator control MCP server", () => {
     });
     const metadata = await rpc(credential.url, credential.token, "tools/list");
     const definitions = metadata.body.result!.tools!;
+    // Bridges gate a coordinator's tools by this list (Pi); it must not drift.
+    expect(definitions.map((tool) => tool.name).toSorted()).toEqual(
+      [...COORDINATOR_CONTROL_TOOL_NAMES].toSorted(),
+    );
     expect(definitions.find((tool) => tool.name === "launch_multi_review")?.description).toContain(
       "Preferred complete Multi Review button action",
     );
@@ -601,6 +606,7 @@ describe("Orkestrator control MCP server", () => {
       "list_environments",
       "get_environment",
       "list_tabs",
+      "list_agents",
       "get_tab_state",
       "get_tab_transcript",
       "list_tickets",

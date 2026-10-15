@@ -69,3 +69,21 @@ The aggregate and browser workload delayed the real Git/worktree operations beyo
 - **Isolated rerun:** `bun test --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1`
   from `apps/backend` passed unchanged (55 tests, 32.14 s).
 - **Evidence:** `/tmp/orkestrator-test-run.9os4UH/`.
+
+## Recurrence 2026-10-15 (design-host review fixes)
+
+- **Original command:** `mise run test:logged -- --name complete-tests-final -- mise run test`
+  on branch `fix-host-dependent-test-suites-d453802ec96e` (base `dd86fc8c`).
+- **Worker configuration:** four workspace slots, one root slot, two bridge
+  slots and one protocol slot; workspace package tests used two Bun workers.
+- **Failure:** the same artifact-excludes test exceeded its five-second deadline
+  at 5,008.29 ms. A pending Git command then rejected after timeout cleanup
+  removed its worktree, producing one unhandled error between tests.
+- **Suite counts:** backend 7,705 passed, 39 skipped, one failed and one
+  additional error across 423 files (235.64 s). All other full-suite groups
+  passed. The workspace group had passed the preceding full run.
+- **Isolated rerun:** `mise run test:logged -- --name backend-integration-alone -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`
+  passed unchanged in 25.9 seconds.
+- **Evidence:** `/tmp/orkestrator-test-run.gyVhpj/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Hypothesis:** the timeout and late cleanup rejection match the existing
+  aggregate-load symptom. No backend code, assertion, deadline or skip was changed.

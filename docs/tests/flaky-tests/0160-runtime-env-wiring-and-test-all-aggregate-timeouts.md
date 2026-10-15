@@ -56,3 +56,15 @@ the cause.
   single case and repeatedly on a four-vCPU runner. The Claude block runs many
   short shell commands, so it is the most exposed to process-spawn contention.
   No test or production code was changed.
+
+## Recurrence on pull request #999 and an explicit budget (2026-10-15)
+
+The same case failed again at 5,007.22 ms on pull request #999's first CI run
+(run 38764110814), the only failure in a run where every other group passed,
+which makes 5 of 16 CI runs. It is always this one case, always killed exactly
+at Bun's five-second default, and it passes in the other runs, so it is a slow
+case under load rather than a hang. The block evaluates the whole copy-helper
+set and runs dozens of short processes, like the Codex copy-helper case in the
+same file that already carries a 15-second budget. It now carries the same
+budget. The assertions are unchanged. Keep this entry open until CI shows the
+case passing consistently.

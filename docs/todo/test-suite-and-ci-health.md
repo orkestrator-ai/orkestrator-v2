@@ -43,8 +43,9 @@ untracked skipped test, and two desktop test gaps. More urgently, CI is red on
   - **Bundled Bun (macos-arm64)** failed on every `main` push with `EMFILE`
     while ad-hoc signing the app; pull requests skip signing and passed. The
     job now raises the descriptor limit and signs pull requests too.
-  - **Load flakes** recorded in the registry: 0160 (runtime-env-wiring, 4 of
-    15 runs), 0176 (InitializationLogs), 0232 (ACP close fixture) and the new
+  - **Load flakes** recorded in the registry: 0160 (runtime-env-wiring, 5 of
+    16 runs; its Claude setup block case now has the 15-second budget its
+    Codex sibling already had), 0176 (InitializationLogs), 0232 (ACP close fixture) and the new
     0239 (Cursor steering at capacity).
 
   A full backend run under CI emulation (one worker, `CI` and

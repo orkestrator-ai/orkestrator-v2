@@ -9,12 +9,18 @@ import { sessions, type JsonObject } from "./acp-context.js";
  * this process does not hold is answered in band as `missing`; neither route
  * ever 404s for an unknown session, because a 404 from them means "this bridge
  * predates the route".
+ *
+ * Active work that holds a permission, question or plan approval is `waiting`,
+ * as the Codex bridge answers for parked input: the agent cannot continue
+ * until someone answers, and only `waiting` makes the backend surface it.
  */
 export function sessionActivityObservation(sessionId: string): JsonObject {
   const state = sessions.get(sessionId);
   if (!state) return { activity: "missing" };
+  if (state.status !== "running" && state.activeSubagentToolIds.size === 0) {
+    return { activity: "idle" };
+  }
   return {
-    activity:
-      state.status === "running" || state.activeSubagentToolIds.size > 0 ? "working" : "idle",
+    activity: state.approvals.size > 0 || state.interactions.size > 0 ? "waiting" : "working",
   };
 }

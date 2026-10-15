@@ -636,6 +636,44 @@ export function handlePromptCursor(
     write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
     return true;
   }
+  if (prompt.startsWith("GROK_USE_TOOL")) {
+    // Grok 1.0.52 runs MCP tools through its `use_tool` wrapper. The call
+    // carries the wrapped tool in `rawInput`; the permission request that
+    // follows names only the wrapper.
+    const toolName = prompt.slice("GROK_USE_TOOL".length).trim() || "orkestrator__check_inbox";
+    const meta = { "x.ai/tool": { name: "use_tool" } };
+    state.promptRequestId = message.id as number;
+    write({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "fake-session",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "tool-1",
+          title: toolName,
+          kind: "other",
+          status: "pending",
+          rawInput: { variant: "UseTool", tool_name: toolName, tool_input: {} },
+          _meta: meta,
+        },
+      },
+    });
+    write({
+      jsonrpc: "2.0",
+      id: 900,
+      method: "session/request_permission",
+      params: {
+        sessionId: "fake-session",
+        toolCall: { toolCallId: "tool-1", title: toolName, _meta: meta },
+        options: [
+          { optionId: "once", name: "Allow once", kind: "allow_once" },
+          { optionId: "deny", name: "Deny", kind: "reject_once" },
+        ],
+      },
+    });
+    return true;
+  }
   state.promptRequestId = message.id as number;
   write({
     jsonrpc: "2.0",

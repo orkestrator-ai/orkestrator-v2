@@ -21,7 +21,33 @@ import {
   RETRIABLE_PROVIDER_ERROR,
   retriableProviderError,
   structuredPromptInstruction,
+  turnTerminalError,
 } from "./acp-prompt.js";
+
+describe("turnTerminalError", () => {
+  test("an expired request fails the turn whatever the agent then answered", () => {
+    for (const stopReason of ["end_turn", "cancelled"] as const) {
+      expect(turnTerminalError({ expiredRequestPromptSequence: 3 }, stopReason, 3)).toMatch(
+        /went unanswered for 5 minutes$/,
+      );
+    }
+    // An expiry in an earlier turn says nothing about this one.
+    expect(turnTerminalError({ expiredRequestPromptSequence: 2 }, "end_turn", 3)).toBeUndefined();
+  });
+
+  test("the user's own cancel is never a failure", () => {
+    expect(
+      turnTerminalError(
+        { retryCancelledPromptSequence: 3, expiredRequestPromptSequence: 3 },
+        "cancelled",
+        3,
+      ),
+    ).toBeUndefined();
+    expect(turnTerminalError({ retryCancelledPromptSequence: 2 }, "cancelled", 3)).toMatch(
+      / cancelled the turn$/,
+    );
+  });
+});
 
 describe("structuredPromptInstruction", () => {
   const instruction = structuredPromptInstruction({
@@ -240,15 +266,19 @@ describe("ACP bridge", () => {
         nativeFetch(`${base}/session/${created.id}/approvals`, { headers }).then((response) =>
           response.json(),
         ) as Promise<{
-          approvals: Array<{ id: string; approvalId: string; title: string; kind: string }>;
+          approvals: Array<{ id: string; title: string; options: unknown[] }>;
         }>,
       (value) => value.approvals.length === 1,
     );
     expect(approval.approvals[0]?.title).toBe("Run safe command");
-    expect(approval.approvals[0]).toMatchObject({
-      approvalId: approval.approvals[0]!.id,
-      kind: "permissions",
-    });
+    // ACP's own shape: the agent's options are the choices, and no Codex
+    // envelope claims a file-system grant the request never named.
+    expect(approval.approvals[0]?.options).toEqual([
+      { optionId: "once", name: "Allow once", kind: "allow_once" },
+      { optionId: "deny", name: "Deny", kind: "reject_once" },
+    ]);
+    expect(approval.approvals[0]).not.toHaveProperty("approvalId");
+    expect(approval.approvals[0]).not.toHaveProperty("permissions");
 
     const resolveResponse = await nativeFetch(
       `${base}/session/${created.id}/approvals/${approval.approvals[0]!.id}`,
@@ -634,7 +664,7 @@ describe("ACP bridge", () => {
     ).toBe(202);
     // True while the turn runs and after it finishes: both mean the bridge took
     // the prompt, which is the whole question.
-    expect(await dispatchStatus("sent-1")).toEqual({ dispatch: "dispatched" });
+    expect(await dispatchStatus("sent-1")).toMatchObject({ dispatch: "dispatched" });
     await waitFor(
       async () =>
         nativeFetch(`${bridge.base}/session/${created.id}`, { headers: bridge.headers }).then(
@@ -642,7 +672,11 @@ describe("ACP bridge", () => {
         ) as Promise<{ status: string }>,
       (session) => session.status === "idle",
     );
-    expect(await dispatchStatus("sent-1")).toEqual({ dispatch: "dispatched" });
+    // A turn the agent ended itself carries no failure.
+    expect(await dispatchStatus("sent-1")).toEqual({
+      dispatch: "dispatched",
+      turn: { state: "completed" },
+    });
   });
 
   test("attaches the agent process without dispatching a turn", async () => {
@@ -891,6 +925,169 @@ describe("ACP bridge", () => {
       ok: false,
       error: { code: "malformed_output" },
     });
+  });
+
+  test("answers Grok's use_tool permission for an Orkestrator tool without a person", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
+      (response) => response.json(),
+    )) as { id: string };
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        prompt: "GROK_USE_TOOL orkestrator__check_inbox",
+        requestId: "use-tool-1",
+      }),
+    });
+    // The request names only `use_tool`; the recorded call names the tool.
+    const session = await waitFor(
+      async () =>
+        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<{ status: string; messages: Array<{ content: string }> }>,
+      (value) => value.status === "idle",
+    );
+    expect(session.messages.at(-1)?.content).toBe("approved:once");
+  });
+
+  test("answers the agent's own permission requests under an auto-approve policy", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = (await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        policy: {
+          id: "interactive-host",
+          sandbox: "none",
+          approvals: "auto-approve",
+          projectResources: false,
+          networkAccess: "full",
+        },
+      }),
+    }).then((response) => response.json())) as { id: string };
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "needs permission", requestId: "auto-approve-1" }),
+    });
+    const session = await waitFor(
+      async () =>
+        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<{ status: string; messages: Array<{ content: string }> }>,
+      (value) => value.status === "idle",
+    );
+    expect(session.messages.at(-1)?.content).toBe("approved:once");
+  });
+
+  test("holds use_tool for any other tool, reports waiting, and denies with the reject option", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
+      (response) => response.json(),
+    )) as { id: string };
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        prompt: "GROK_USE_TOOL orkestrator__create_ticket",
+        requestId: "use-tool-2",
+      }),
+    });
+    const parked = await waitFor(
+      async () =>
+        nativeFetch(`${base}/session/${created.id}/approvals`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<{ approvals: Array<{ id: string; title: string }> }>,
+      (value) => value.approvals.length === 1,
+    );
+    expect(parked.approvals[0]?.title).toBe("orkestrator__create_ticket");
+    const activity = () =>
+      nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
+        response.json(),
+      ) as Promise<{ activity: string }>;
+    expect(await activity()).toEqual({ activity: "waiting" });
+
+    await nativeFetch(`${base}/session/${created.id}/approvals/${parked.approvals[0]!.id}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ decision: "deny" }),
+    });
+    const session = await waitFor(
+      async () =>
+        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<{ status: string; messages: Array<{ content: string }> }>,
+      (value) => value.status === "idle",
+    );
+    expect(session.messages.at(-1)?.content).toBe("approved:deny");
+    expect(await activity()).toEqual({ activity: "idle" });
+  });
+
+  test("records why a turn the agent cut short did not complete", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
+      (response) => response.json(),
+    )) as { id: string };
+    const turn = async (prompt: string, requestId: string) => {
+      await nativeFetch(`${base}/session/${created.id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt, requestId }),
+      });
+      return waitFor(
+        () =>
+          nativeFetch(`${base}/session/${created.id}/dispatch?requestId=${requestId}`, {
+            headers,
+          }).then((response) => response.json()) as Promise<{
+            turn?: { state: string; error?: string };
+          }>,
+        (value) => value.turn !== undefined,
+      );
+    };
+    // An agent that cancels a turn nobody stopped has abandoned it.
+    expect((await turn("STOP:cancelled", "stop-1")).turn).toEqual({
+      state: "completed",
+      error: expect.stringMatching(/ cancelled the turn$/),
+    });
+    for (const [stopReason, requestId] of [
+      ["refusal", "stop-2"],
+      ["max_tokens", "stop-3"],
+      ["max_turn_requests", "stop-4"],
+    ]) {
+      expect((await turn(`STOP:${stopReason}`, requestId!)).turn?.error).toMatch(
+        new RegExp(` stopped the turn early \\(${stopReason}\\)$`),
+      );
+    }
+    expect((await turn("STOP:end_turn", "stop-5")).turn).toEqual({ state: "completed" });
+  });
+
+  test("a turn the user cancelled is not recorded as a failure", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = (await nativeFetch(`${base}/session/create`, { method: "POST", headers }).then(
+      (response) => response.json(),
+    )) as { id: string };
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "needs permission", requestId: "user-cancel-1" }),
+    });
+    await waitFor(
+      async () =>
+        nativeFetch(`${base}/session/${created.id}/approvals`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<{ approvals: unknown[] }>,
+      (value) => value.approvals.length === 1,
+    );
+    await nativeFetch(`${base}/session/${created.id}/cancel`, { method: "POST", headers });
+    const answer = await waitFor(
+      () =>
+        nativeFetch(`${base}/session/${created.id}/dispatch?requestId=user-cancel-1`, {
+          headers,
+        }).then((response) => response.json()) as Promise<{ turn?: unknown }>,
+      (value) => value.turn !== undefined,
+    );
+    expect(answer.turn).toEqual({ state: "completed" });
   });
 
   test("denies pending permission when cancelled", async () => {

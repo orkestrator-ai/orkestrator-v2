@@ -17,6 +17,7 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import {
   WEB_ANNOTATION_CONFLICT,
   WEB_ANNOTATION_LIMITS,
+  WEB_ANNOTATION_TOOL_NAMES,
   isWebAnnotationRequestActive,
   type WebAnnotationRequest,
   type WebAnnotationRequestState,
@@ -26,11 +27,7 @@ import { validateWebAnnotationResultReport } from "@orkestrator/protocol/web-ann
 import { z } from "zod";
 import type { WebAnnotationToolHost, WebAnnotationToolScope } from "./web-annotation-contracts.js";
 
-export const WEB_ANNOTATION_TOOL_NAMES = Object.freeze([
-  "get_annotation_request",
-  "get_annotation_evidence",
-  "report_annotation_result",
-] as const);
+export { WEB_ANNOTATION_TOOL_NAMES };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_CONCURRENT_PER_SCOPE = 2;

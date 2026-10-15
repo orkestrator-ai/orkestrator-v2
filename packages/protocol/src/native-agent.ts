@@ -801,8 +801,10 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
       },
       actions: { compact: true, rewindFiles: true, steer: true },
       // Questions through `AskUserQuestion`, plan approvals through
-      // `ExitPlanMode`, tool approvals through `canUseTool`, and MCP
-      // elicitations and host dialogs through the SDK's own callbacks.
+      // `ExitPlanMode`, tool approvals through `canUseTool` (raised only
+      // under an `ask` execution policy), and MCP elicitations through
+      // `onElicitation`. Host dialogs are not offered: the bridge declares no
+      // `supportedDialogKinds`, so the CLI never sends one.
       interactions: {
         kinds: [
           "question",
@@ -812,7 +814,6 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
           "permission",
           "mcp-form",
           "mcp-url",
-          "elicitation",
         ],
       },
     };

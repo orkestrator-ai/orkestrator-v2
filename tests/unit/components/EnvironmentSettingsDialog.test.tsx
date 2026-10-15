@@ -107,6 +107,7 @@ const mockReadEnvironmentAgentSkill = mock(
     truncated: false,
   }),
 );
+const mockUpdateAllowedDomains = mock(async (_id: string, _domains: string[]) => makeEnvironment());
 const mockUpdatePortMappings = mock(async () => makeEnvironment());
 const mockSyncEnvironmentStatus = mock(async () => makeEnvironment());
 const actualBackend = await import("../../../apps/web/src/lib/backend");
@@ -118,7 +119,7 @@ mock.module("@/lib/backend", () => ({
   readEnvironmentAgentSkill: mockReadEnvironmentAgentSkill,
   updateEnvironmentAgentSettings: mockUpdateEnvironmentAgentSettings,
   renameEnvironment: mock(async (_id: string, name: string) => ({ ...makeEnvironment(), name })),
-  updateEnvironmentAllowedDomains: mock(async () => makeEnvironment()),
+  updateEnvironmentAllowedDomains: mockUpdateAllowedDomains,
   updatePortMappings: mockUpdatePortMappings,
   syncEnvironmentStatus: mockSyncEnvironmentStatus,
   testDomainResolution: mock(async () => []),
@@ -182,6 +183,7 @@ describe("EnvironmentSettingsDialog", () => {
     mockListEnvironmentAgentSkills.mockClear();
     mockReadEnvironmentAgentSkill.mockClear();
     mockUpdatePortMappings.mockClear();
+    mockUpdateAllowedDomains.mockClear();
     mockSyncEnvironmentStatus.mockClear();
     extensionHandler = async () => defaultExtensionCatalogs();
     capturedMenuItems = [];
@@ -220,6 +222,46 @@ describe("EnvironmentSettingsDialog", () => {
 
   afterEach(() => {
     cleanup();
+  });
+
+  test("network settings accept TCP and UDP entries, reject invalid ports and save entries intact", async () => {
+    mockSection = "network";
+    render(
+      <EnvironmentSettingsDialog
+        open={true}
+        onOpenChange={() => {}}
+        environment={makeEnvironment({
+          networkAccessMode: "restricted",
+          allowedDomains: ["initial.example"],
+        })}
+        onUpdate={() => {}}
+      />,
+    );
+    const editor = screen.getByRole("textbox");
+    for (const invalid of ["service.example:0", "service.example:65536"]) {
+      fireEvent.change(editor, { target: { value: invalid } });
+      expect(screen.getByText(`Invalid domain or port: ${invalid}`)).toBeTruthy();
+      expect(
+        (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled,
+      ).toBe(true);
+      expect(
+        (screen.getByRole("button", { name: "Test DNS Resolution" }) as HTMLButtonElement).disabled,
+      ).toBe(true);
+    }
+    fireEvent.change(editor, {
+      target: { value: "service.example:5432\nservice.example:443/udp" },
+    });
+    expect(screen.queryByText(/Invalid domain or port/) === null).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Test DNS Resolution" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() =>
+      expect(mockUpdateAllowedDomains).toHaveBeenCalledWith("env-1", [
+        "service.example:5432",
+        "service.example:443/udp",
+      ]),
+    );
   });
 
   test("saves a Codex mode override from the Codex tab", async () => {

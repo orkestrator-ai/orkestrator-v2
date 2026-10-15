@@ -429,6 +429,11 @@ export async function loadPersistedState(): Promise<void> {
           state:
             journalState === "prepared" || journalState === "accepted" ? "ambiguous" : journalState,
           acceptedAt: Number.isSafeInteger(rawEntry.acceptedAt) ? Number(rawEntry.acceptedAt) : 0,
+          ...((journalState === "completed" || journalState === "failed") &&
+          typeof rawEntry.terminalError === "string" &&
+          rawEntry.terminalError
+            ? { terminalError: rawEntry.terminalError.slice(0, 500) }
+            : {}),
         };
         state.promptJournal.set(entry.requestId, entry);
       }

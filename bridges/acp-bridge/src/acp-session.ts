@@ -2,6 +2,8 @@ import {
   AGENT_MAIL_TOOL_NAMES,
   ORKESTRATOR_MCP_SERVER_NAME,
 } from "@orkestrator/protocol/agent-mail";
+import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import { WEB_ANNOTATION_TOOL_NAMES } from "@orkestrator/protocol/web-annotations";
 import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import {
@@ -36,6 +38,7 @@ import {
   HttpError,
   SESSION_CLOSING_ERROR,
   activeSessionReservations,
+  acpToolSourceStates,
   adjustAnonymousSessionCreations,
   clientSessionKeys,
   configuredAcpMcpServers,
@@ -86,7 +89,14 @@ import {
   applyToolCallUpdate,
   restoreCursorTodosFromMessages,
 } from "./acp-tools.js";
-import { boundedModelId, endsWithToolCall, noteMessageMutation, rowIsFull } from "./acp-rows.js";
+import {
+  boundedModelId,
+  endsWithToolCall,
+  findToolPart,
+  noteMessageMutation,
+  rowIsFull,
+  turnStartIndex,
+} from "./acp-rows.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import { emptySessionConfig } from "./acp-persistence.js";
 import { persistState, schedulePersist } from "./acp-persist-writer.js";
@@ -627,8 +637,14 @@ async function startDeferredSession(state: SessionState): Promise<AcpProcess> {
   }
 }
 
-const ORKESTRATOR_MAIL_TOOL_IDS = new Set(
-  AGENT_MAIL_TOOL_NAMES.flatMap((name) => [
+/** Orkestrator tools a person is never asked about (see each list's doc). */
+const ORKESTRATOR_AUTO_ALLOWED_TOOL_NAMES: readonly string[] = [
+  ...AGENT_MAIL_TOOL_NAMES,
+  ...WEB_ANNOTATION_TOOL_NAMES,
+];
+
+const ORKESTRATOR_AUTO_ALLOWED_TOOL_IDS = new Set(
+  ORKESTRATOR_AUTO_ALLOWED_TOOL_NAMES.flatMap((name) => [
     `${ORKESTRATOR_MCP_SERVER_NAME}__${name}`,
     `mcp__${ORKESTRATOR_MCP_SERVER_NAME}__${name}`,
     `${ORKESTRATOR_MCP_SERVER_NAME}_${name}`,
@@ -637,17 +653,29 @@ const ORKESTRATOR_MAIL_TOOL_IDS = new Set(
   ]),
 );
 
+/** Grok's deferred-tool wrapper: the MCP tool it runs is in `tool_name`. */
+const GROK_USE_TOOL = "use_tool";
+
+function wrappedToolName(input: unknown): string | undefined {
+  return isObject(input) && typeof input.tool_name === "string" ? input.tool_name : undefined;
+}
+
 /**
- * The allow option of a permission request for an Orkestrator mail tool, if it
- * is one.
+ * The allow option of a permission request for an Orkestrator mail or
+ * annotation tool, if it is one.
  *
  * Only a server-qualified name counts: a bare `send_message` could belong to
  * any server. Grok names tools in `_meta["x.ai/tool"].name`; other agents in
- * the tool call's own name. Display titles never identify tools.
+ * the tool call's own name. Display titles never identify tools. Grok 1.0.52
+ * runs every MCP tool through `use_tool`, whose own permission request names
+ * only the wrapper; the wrapped tool is then read from the call's `rawInput`,
+ * or from `recordedInput` (the input the bridge already recorded for the same
+ * tool call) when the request carries none.
  */
-export function orkestratorMailPermissionOption(
+export function orkestratorToolPermissionOption(
   params: JsonObject,
   approvals?: string,
+  recordedInput?: unknown,
 ): string | undefined {
   if (approvals === "deny") return undefined;
   const toolCall = isObject(params.toolCall) ? params.toolCall : undefined;
@@ -655,23 +683,148 @@ export function orkestratorMailPermissionOption(
   const meta = isObject(toolCall._meta) ? toolCall._meta : undefined;
   const xaiTool = meta && isObject(meta["x.ai/tool"]) ? meta["x.ai/tool"] : undefined;
   if (toolCall.kind === "execute" || toolCall.kind === "edit") return undefined;
-  const names = [xaiTool ? xaiTool.name : toolCall.name].filter(
-    (value): value is string => typeof value === "string",
-  );
+  const vendorName = xaiTool ? xaiTool.name : toolCall.name;
+  const names = [
+    typeof vendorName === "string" && vendorName.trim() === GROK_USE_TOOL
+      ? wrappedToolName(toolCall.rawInput === undefined ? recordedInput : toolCall.rawInput)
+      : vendorName,
+  ].filter((value): value is string => typeof value === "string");
   // Grok 1.0.46 names MCP tools `server__tool`, and its tool metadata also
   // carries the server as `namespace` next to a bare `name`.
   const namespaced =
     xaiTool?.namespace === ORKESTRATOR_MCP_SERVER_NAME &&
     typeof xaiTool.name === "string" &&
-    (AGENT_MAIL_TOOL_NAMES as readonly string[]).includes(xaiTool.name.trim());
-  if (!namespaced && !names.some((name) => ORKESTRATOR_MAIL_TOOL_IDS.has(name.trim()))) {
+    ORKESTRATOR_AUTO_ALLOWED_TOOL_NAMES.includes(xaiTool.name.trim());
+  if (!namespaced && !names.some((name) => ORKESTRATOR_AUTO_ALLOWED_TOOL_IDS.has(name.trim()))) {
     return undefined;
   }
+  return allowOptionId(params);
+}
+
+function allowOptionId(params: JsonObject): string | undefined {
   const options = Array.isArray(params.options) ? params.options.filter(isObject) : [];
   const allow =
     options.find((option) => option.kind === "allow_once") ??
     options.find((option) => option.kind === "allow_always");
   return typeof allow?.optionId === "string" ? allow.optionId : undefined;
+}
+
+interface RecordedPermissionTool {
+  name?: string | null;
+  input?: unknown;
+}
+
+/** Provider identities only: display titles never authorize a tool. */
+function permissionToolNames(params: JsonObject, recorded?: RecordedPermissionTool): string[] {
+  const call = isObject(params.toolCall) ? params.toolCall : undefined;
+  if (!call) return [];
+  const meta = isObject(call._meta) ? call._meta : undefined;
+  const vendor = meta && isObject(meta["x.ai/tool"]) ? meta["x.ai/tool"] : undefined;
+  const input = call.rawInput === undefined ? recorded?.input : call.rawInput;
+  const names = [vendor?.name, call.name, isObject(input) ? input._toolName : undefined]
+    .filter((name): name is string => typeof name === "string" && name.trim().length > 0)
+    .map((name) => name.trim());
+  if (names.length === 0 && recorded?.name) names.push(recorded.name.trim());
+  if (typeof vendor?.namespace === "string" && typeof vendor.name === "string") {
+    names.push(
+      `${vendor.namespace}__${vendor.name.trim()}`,
+      `mcp__${vendor.namespace}__${vendor.name.trim()}`,
+    );
+  }
+  if (names.includes(GROK_USE_TOOL)) {
+    const wrapped = wrappedToolName(input);
+    if (wrapped) names.push(wrapped.trim());
+  }
+  return names;
+}
+
+function explicitlyDeniedPermissionTool(
+  params: JsonObject,
+  policy: NativeAgentExecutionPolicy | undefined,
+  recorded?: RecordedPermissionTool,
+): boolean {
+  return permissionToolNames(params, recorded).some((name) =>
+    policy?.toolPolicy?.deny?.includes(name),
+  );
+}
+
+const FILE_MUTATION_DENIALS = ["file.write", "file.patch", "write", "edit", "apply_patch"];
+
+/**
+ * Policy denials (`capabilityPolicy`, or a Codex-named `toolPolicy` override)
+ * that rule out auto-approving an ACP tool kind.
+ */
+const AUTO_APPROVE_DENIALS_BY_KIND: Readonly<Record<string, readonly string[]>> = {
+  read: [],
+  search: [],
+  think: [],
+  edit: FILE_MUTATION_DENIALS,
+  delete: FILE_MUTATION_DENIALS,
+  move: FILE_MUTATION_DENIALS,
+  execute: ["shell", "shell.mutate"],
+  fetch: ["network"],
+};
+
+const PERMISSION_KIND_BY_TOOL: Readonly<Record<string, string>> = {
+  bash: "execute",
+  shell: "execute",
+  terminal: "execute",
+  run_command: "execute",
+  run_terminal_cmd: "execute",
+  run_terminal_command: "execute",
+  execute_command: "execute",
+  write_file: "edit",
+  search_replace: "edit",
+  delete_file: "delete",
+  apply_patch: "edit",
+};
+
+/**
+ * The allow option of a permission request under an `auto-approve` policy.
+ *
+ * Grok runs with `--always-approve` under that policy, but 1.0.52 still asks
+ * over ACP before every edit, command, fetch and MCP call, so a session set to
+ * auto-approve would wait on a person at every step. Answering here keeps that
+ * setting's promise. A request of a kind the policy denies is never granted
+ * this way and is left for a person. The kind is the request's own, or
+ * `recordedKind` (the one the bridge recorded for the same tool call).
+ * Provider tool names and wrapped identities also enforce denials. An
+ * unclassified request is granted only while the policy has no denials.
+ */
+export function autoApprovedPermissionOption(
+  params: JsonObject,
+  policy: NativeAgentExecutionPolicy | undefined,
+  recordedKind?: string,
+  recorded?: RecordedPermissionTool,
+): string | undefined {
+  if (policy?.approvals !== "auto-approve") return undefined;
+  if (explicitlyDeniedPermissionTool(params, policy, recorded)) return undefined;
+  const toolCall = isObject(params.toolCall) ? params.toolCall : undefined;
+  const kind = typeof toolCall?.kind === "string" ? toolCall.kind : recordedKind;
+  const denied = new Set<string>([
+    ...(policy.capabilityPolicy?.deny ?? []),
+    ...(policy.toolPolicy?.deny ?? []),
+  ]);
+  const kinds = [
+    kind,
+    ...permissionToolNames(params, recorded).map(
+      (name) => PERMISSION_KIND_BY_TOOL[name.toLowerCase()],
+    ),
+  ];
+  const classified = kinds.filter(
+    (value): value is string =>
+      typeof value === "string" && Object.hasOwn(AUTO_APPROVE_DENIALS_BY_KIND, value),
+  );
+  // A generic/unknown kind supplies no evidence that a denial is irrelevant.
+  if (classified.length === 0 && denied.size > 0) return undefined;
+  if (
+    classified.some((value) =>
+      AUTO_APPROVE_DENIALS_BY_KIND[value]!.some((name) => denied.has(name)),
+    )
+  ) {
+    return undefined;
+  }
+  return allowOptionId(params);
 }
 
 export function attachChild(state: SessionState, child: AcpProcess): void {
@@ -699,16 +852,35 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
       child.respond(requestId, { outcome: { outcome: "cancelled" } });
       return;
     }
-    const mailAllow = orkestratorMailPermissionOption(
-      params,
-      effectiveTurnExecutionPolicy(state)?.approvals,
-    );
-    if (mailAllow) {
-      child.respond(requestId, { outcome: { outcome: "selected", optionId: mailAllow } });
+    const policy = effectiveTurnExecutionPolicy(state);
+    const toolCallId = isObject(params.toolCall) ? params.toolCall.toolCallId : undefined;
+    const recorded =
+      typeof toolCallId === "string"
+        ? findToolPart(state, toolCallId, turnStartIndex(state))?.part
+        : undefined;
+    const recordedTool = recorded
+      ? { name: recorded.toolName, input: recorded.toolArgs }
+      : undefined;
+    const toolDenied = explicitlyDeniedPermissionTool(params, policy, recordedTool);
+    const orkestratorAllow = toolDenied
+      ? undefined
+      : orkestratorToolPermissionOption(params, policy?.approvals, recorded?.toolArgs);
+    if (orkestratorAllow) {
+      child.respond(requestId, { outcome: { outcome: "selected", optionId: orkestratorAllow } });
       return;
     }
-    if (effectiveTurnExecutionPolicy(state)?.approvals === "deny") {
+    if (policy?.approvals === "deny") {
       child.respond(requestId, { outcome: { outcome: "cancelled" } });
+      return;
+    }
+    const autoAllow = autoApprovedPermissionOption(
+      params,
+      policy,
+      recorded ? acpToolSourceStates.get(recorded)?.kind : undefined,
+      recordedTool,
+    );
+    if (autoAllow) {
+      child.respond(requestId, { outcome: { outcome: "selected", optionId: autoAllow } });
       return;
     }
     parkPermission(state, child, requestId, params);
@@ -918,6 +1090,7 @@ export function parkGrokInteraction(
   if (existing) existing.respond({ outcome: "cancelled" });
   const requestedAt = Date.now();
   const expiresAt = requestedAt + 5 * 60_000;
+  const promptSequence = state.promptSequence;
   const finish = (result: JsonObject) => {
     const interaction = state.interactions.get(toolCallId);
     if (!interaction) return;
@@ -927,7 +1100,14 @@ export function parkGrokInteraction(
     state.revision += 1;
     schedulePersist();
   };
-  const timer = setTimeout(() => finish({ outcome: "cancelled" }), expiresAt - requestedAt);
+  const timer = setTimeout(() => {
+    // An older request may outlive its turn. It cannot fail a newer turn or
+    // overwrite evidence of a request that expired in that newer turn.
+    if (state.promptSequence === promptSequence) {
+      state.expiredRequestPromptSequence = promptSequence;
+    }
+    finish({ outcome: "cancelled" });
+  }, expiresAt - requestedAt);
   timer.unref();
 
   if (method.endsWith("exit_plan_mode")) {
@@ -1038,6 +1218,7 @@ export function parkPermission(
   const id = randomBytes(12).toString("hex");
   const requestedAt = Date.now();
   const expiresAt = requestedAt + 5 * 60_000;
+  const promptSequence = state.promptSequence;
   const finish = (optionId?: string) => {
     const approval = state.approvals.get(id);
     if (!approval) return;
@@ -1051,7 +1232,14 @@ export function parkPermission(
     state.revision += 1;
     schedulePersist();
   };
-  const timer = setTimeout(() => finish(), expiresAt - requestedAt);
+  const timer = setTimeout(() => {
+    // An older request may outlive its turn. It cannot fail a newer turn or
+    // overwrite evidence of a request that expired in that newer turn.
+    if (state.promptSequence === promptSequence) {
+      state.expiredRequestPromptSequence = promptSequence;
+    }
+    finish();
+  }, expiresAt - requestedAt);
   timer.unref();
   state.approvals.set(id, {
     id,

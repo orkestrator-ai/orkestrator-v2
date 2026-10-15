@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { ProviderUnavailableError } from "./agent-provider-contract.js";
+import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 import type { BridgeConnection } from "./native-agent-provider.js";
 import {
   ACP_BRIDGE_MAX_BODY_BYTES,
+  answerResolution,
+  grokConnection,
   httpProvider,
   declineResolution,
 } from "./agent-provider-test-support.js";
@@ -273,6 +277,126 @@ describe("HTTP bridge provider (ACP)", () => {
 
     await expect(provider.createSession("build", "Cursor")).rejects.toThrow(
       "cursor session creation is temporarily unavailable (HTTP 500): Authentication required",
+    );
+  });
+
+  test("offers a Grok permission's own options and answers with the one chosen", async () => {
+    const requestedAt = Date.now();
+    const bodies: unknown[] = [];
+    let pending = true;
+    const { provider } = httpProvider((url, init) => {
+      if (url.endsWith("/approvals/approval-2")) {
+        bodies.push(JSON.parse(String(init.body)));
+        pending = false;
+        return Response.json({ resolved: true });
+      }
+      if (url.endsWith("/approvals")) {
+        return Response.json({
+          approvals: pending
+            ? [
+                {
+                  id: "approval-2",
+                  title: "orkestrator__create_ticket",
+                  options: [
+                    { optionId: "allow", name: "Allow once", kind: "allow_once" },
+                    { optionId: "reject", name: "Reject", kind: "reject_once" },
+                  ],
+                  requestedAt,
+                  expiresAt: requestedAt + 300_000,
+                },
+              ]
+            : [],
+        });
+      }
+      if (url.endsWith("/interactions")) return Response.json({ interactions: [] });
+      return Response.json({ sessionId: "grok-1" });
+    }, grokConnection);
+
+    await provider.createSession("build", "Grok");
+    const list = () => provider.interactions!.listPendingInteractions("grok-1");
+    const [request] = (await list()).requests;
+    expect(request).toMatchObject({
+      provider: "grok",
+      kind: "permission",
+      presentation: { title: "orkestrator__create_ticket" },
+    });
+    expect(request!.presentation.questions[0]?.options.map((option) => option.label)).toEqual([
+      "Allow once",
+      "Reject",
+    ]);
+    const approved = await provider.interactions!.resolveInteraction(
+      "grok-1",
+      request!.id,
+      answerResolution(request!),
+    );
+    expect(approved.result).toBe("applied");
+    expect(bodies).toEqual([{ optionId: "allow" }]);
+
+    // Deny selects the agent's reject option rather than cancelling its turn.
+    pending = true;
+    const [again] = (await list()).requests;
+    await provider.interactions!.resolveInteraction("grok-1", again!.id, declineResolution(again!));
+    expect(bodies.at(-1)).toEqual({ decision: "deny" });
+  });
+
+  test("unreadable successful dispatch bodies remain retryable", async () => {
+    const bodies = [
+      "{",
+      "null",
+      "[]",
+      '"completed"',
+      "123",
+      "true",
+      JSON.stringify({ padding: "x".repeat(AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes) }),
+    ];
+    for (const body of bodies) {
+      let attempts = 0;
+      const { provider } = httpProvider(
+        () =>
+          ++attempts === 1
+            ? new Response(body, { status: 200 })
+            : Response.json({
+                dispatch: "dispatched",
+                turn: { state: "completed", error: "expired" },
+              }),
+        grokConnection,
+      );
+      await expect(provider.turnTerminalError!("grok-1", "same-request")).rejects.toBeInstanceOf(
+        ProviderUnavailableError,
+      );
+      expect(await provider.turnTerminalError!("grok-1", "same-request")).toBe("expired");
+      expect(attempts).toBe(2);
+    }
+  });
+
+  test("reads a Grok turn's failure from the bridge's dispatch journal", async () => {
+    const answers: Record<string, Response | (() => Response)> = {
+      expired: Response.json({
+        dispatch: "dispatched",
+        turn: { state: "completed", error: "grok cancelled the turn" },
+      }),
+      finished: Response.json({ dispatch: "dispatched", turn: { state: "completed" } }),
+      // A bridge from before `turn`, or one with no record, proves no failure.
+      legacy: Response.json({ dispatch: "dispatched" }),
+      broken: () => new Response("unavailable", { status: 503 }),
+    };
+    const { provider, requests } = httpProvider((url) => {
+      const requestId = new URL(url).searchParams.get("requestId") ?? "";
+      const answer = answers[requestId];
+      return typeof answer === "function" ? answer() : (answer ?? Response.json({}));
+    }, grokConnection);
+
+    expect(await provider.turnTerminalError!("grok-1", "expired")).toBe("grok cancelled the turn");
+    expect(await provider.turnTerminalError!("grok-1", "finished")).toBeNull();
+    expect(await provider.turnTerminalError!("grok-1", "legacy")).toBeNull();
+    await expect(provider.turnTerminalError!("grok-1", "broken")).rejects.toThrow(
+      "grok turn outcome is unavailable",
+    );
+    expect(requests[0]?.url).toBe("http://grok.test/session/grok-1/dispatch?requestId=expired");
+
+    // Only the ACP bridge keeps this journal.
+    expect(httpProvider(() => Response.json({}), cursorConnection).provider.turnTerminalError).toBe(
+      undefined,
     );
   });
 });

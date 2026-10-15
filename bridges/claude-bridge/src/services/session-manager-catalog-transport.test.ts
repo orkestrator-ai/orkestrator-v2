@@ -167,6 +167,23 @@ describe("catalog writes against a closed transport", () => {
     await finish();
   });
 
+  test("leaving plan mode on an ask session switches the CLI to default", async () => {
+    const { session, finish } = await inspectDuringTurn([], (s) => Boolean(s.queryControl));
+    session.executionPolicy = {
+      id: "interactive-host",
+      sandbox: "none",
+      approvals: "ask",
+      projectResources: true,
+      networkAccess: "full",
+    };
+    const setPermissionMode = mock(async (_mode: string) => {});
+    session.queryControl!.setPermissionMode = setPermissionMode;
+    // The backend's "build" mode is bypassPermissions; the policy caps it.
+    await configureClaudeSession(session, { permissionMode: "bypassPermissions" });
+    expect(setPermissionMode).toHaveBeenCalledWith("default");
+    await finish();
+  });
+
   test("configuring a session with no live control is a no-op", async () => {
     const session = createSession("no control");
     track(session.id);

@@ -108,6 +108,8 @@ export const {
   getPendingQuestions,
   respondToPlanApproval,
   getPendingPlanApprovals,
+  respondToInteraction,
+  getPendingInteractions,
   getSessionActivity,
   resetSessionActivityProbeCacheForTesting,
   getSessionInitData,

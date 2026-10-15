@@ -21,6 +21,7 @@ import {
   sessions,
 } from "./session-manager-core.js";
 import { resetClaudeSignInForTesting } from "./claude-sign-in.js";
+import { claudePermissionMode, claudeTurnPolicy } from "./claude-query-config.js";
 import { eventEmitter } from "./event-emitter.js";
 import { markTranscriptChanged } from "./transcript-revision.js";
 import { MAX_STEER_JOURNAL_ENTRIES, updateSessionPreferences } from "./session-preferences.js";
@@ -488,7 +489,16 @@ export async function configureClaudeSession(
   if (!control) return;
   try {
     if (input.model !== undefined) await control.setModel?.(input.model);
-    if (input.permissionMode !== undefined) await control.setPermissionMode?.(input.permissionMode);
+    // Capped like a turn's mode: leaving plan mode must not lift an `ask` or
+    // `deny` session into `bypassPermissions`.
+    if (input.permissionMode !== undefined) {
+      await control.setPermissionMode?.(
+        claudePermissionMode(
+          claudeTurnPolicy(session.executionPolicy, undefined),
+          input.permissionMode,
+        ),
+      );
+    }
     const settings: Record<string, unknown> = {
       ...ultracodeFlagSetting({
         parameterValues: input.parameterValues,

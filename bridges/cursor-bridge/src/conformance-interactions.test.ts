@@ -7,7 +7,7 @@
  * Recovery is always proved from the published file, never from a drain.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { loadPersistedState } from "./persistence.js";
+import { loadPersistedState, usePersistenceFsForTests } from "./persistence.js";
 import { clientSessionKeys, sessions, type SessionState } from "./state.js";
 import { attachFake } from "./testing/fake-agent.js";
 import {
@@ -112,6 +112,20 @@ describe("dispatch at the aggregate limit", () => {
 });
 
 describe("steering at capacity across a restart", () => {
+  // Filling the steer journal publishes the state file about 500 times, each
+  // with a file and a directory fsync. Those flushes are cheap on macOS but
+  // took this case past Bun's 5 s timeout on a loaded Linux runner (flake
+  // 0240). Writes, renames and the restart from the published file stay real;
+  // persistence-durability.test.ts owns the flush ordering.
+  let restoreFs: () => void = () => {};
+  beforeEach(() => {
+    restoreFs = usePersistenceFsForTests({
+      fsyncFile: async () => {},
+      fsyncDirectory: async () => {},
+    });
+  });
+  afterEach(() => restoreFs());
+
   test("a lost refusal and a recovered run never produce a duplicate or a fabricated absent", async () => {
     const state = await harness.createSession();
     const delivered: string[] = [];

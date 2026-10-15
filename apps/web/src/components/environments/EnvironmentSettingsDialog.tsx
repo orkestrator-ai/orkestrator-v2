@@ -76,9 +76,7 @@ import {
   LEGACY_CONTAINER_DISCARD_WARNING,
   parseContainerLifecycleError,
 } from "@orkestrator/protocol/container-lifecycle";
-
-// Domain validation regex
-const DOMAIN_REGEX = /^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
+import { ALLOWLIST_ENTRY_HINT, parseAllowlistEntry } from "@orkestrator/protocol/network-allowlist";
 
 interface EnvironmentSettingsDialogProps {
   open: boolean;
@@ -547,8 +545,8 @@ export function EnvironmentSettingsDialog({
 
     const errors: string[] = [];
     for (const domain of domains) {
-      if (!DOMAIN_REGEX.test(domain)) {
-        errors.push(`Invalid domain format: ${domain}`);
+      if (!parseAllowlistEntry(domain)) {
+        errors.push(`Invalid domain or port: ${domain}`);
       }
     }
     setDomainErrors(errors);
@@ -1023,6 +1021,7 @@ export function EnvironmentSettingsDialog({
                 </div>
                 <div className="space-y-2">
                   <Label>Allowed Domains</Label>
+                  <p className="text-xs text-muted-foreground">{ALLOWLIST_ENTRY_HINT}</p>
                   <Textarea
                     value={customDomains}
                     onChange={handleDomainsChange}

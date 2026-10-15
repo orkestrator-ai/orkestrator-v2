@@ -1,7 +1,7 @@
 # OpenCode compatibility probe deadline sees no exit code under aggregate load
 
 - **ID:** 0166
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-09-26
 - **Test:** `runOpenCodeLiveCompatibility > kills the server when the overall deadline expires`
 - **File:** `scripts/opencode-live-compatibility-probe.test.ts`
@@ -92,3 +92,29 @@ mise run test:logged -- --name opencode-probe-repro -- bun test ./scripts/openco
 Evidence is retained in
 `/tmp/orkestrator-test-run.GWGZM4/root-and-agent-support-tests.log.gz`. This matches the existing setup-deadline assumption;
 no probe implementation, assertion, timeout or skip was changed.
+
+## Resolution (2026-10-15, second)
+
+The recurrences matched the setup-deadline assumption noted above. The case
+started a real 10 ms deadline and expected the server it spawns to be stopped.
+Under load, `mkdtemp`, the four `mkdir` calls and port allocation can outlast
+10 ms. The deadline then aborts the probe before `spawnServer`, so the fake
+server is never started and its `exitCode` stays `null`. That is the correct
+behaviour from the 2026-09-30 fix, and the two setup-deadline regression cases
+already cover it.
+
+The case now installs `installControlledTimeout(10)` from
+`tests/helpers/controlled-timeout.ts` before starting the probe. Its
+`listSessions` fake signals when the probe reaches the hung session list, and
+only then does the case advance the captured deadline timer. It still asserts
+the deadline error, the stopped server (`exitCode` 0), the drained timer and
+no leftover temporary root. Wall-clock time is no longer involved. No probe
+code, timeout or other assertion changed.
+
+Evidence: a temporary copy of each version with a 40 ms `allocatePort` delay,
+which models slow setup. The old case failed with `Expected: 0, Received: null`
+(45.6 ms), the same signature as every recurrence. The new case passed. The
+owning file passed three consecutive runs with
+`mise run test:logged -- --name oc-probe-N -- bun test ./scripts/opencode-live-compatibility-probe.test.ts --parallel=1`.
+Case 0242 (a shared temporary-root prefix across worktrees) is separate and
+stays open.

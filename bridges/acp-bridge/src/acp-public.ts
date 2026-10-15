@@ -156,15 +156,18 @@ export { parseTranscriptFromIndex as parseFromIndex } from "@orkestrator/protoco
  */
 export { parseTranscriptTailLimit as parseTailLimit } from "@orkestrator/protocol/node/transcript-window";
 
+/**
+ * Held permission requests in ACP's own shape: the agent's title and its
+ * options (allow once, always allow, reject...), which the backend offers as
+ * the choices (`mapAcpApproval`). The Codex envelope this route used to add
+ * (`approvalId`, a file-system `permissions` grant) named no tool and offered
+ * no option a client could select.
+ */
 export function publicApprovals(state: SessionState): unknown[] {
   return [...state.approvals.values()].map(({ id, title, options, requestedAt, expiresAt }) => ({
     id,
     title,
     options,
-    approvalId: id,
-    kind: "permissions",
-    permissions: { fileSystem: true },
-    actionable: true,
     requestedAt,
     expiresAt,
   }));

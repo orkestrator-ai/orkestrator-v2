@@ -1,7 +1,7 @@
 # Multi Review admission benchmark exceeds its limit under aggregate load
 
 - **ID:** 0171
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-09-28
 - **Test:** `Multi Review control-plane benchmark > one slow reviewer does not serialize the rest of the panel`
 - **File:** `apps/backend/src/core/multi-review-efficiency.bench.test.ts:444`
@@ -69,3 +69,32 @@ or backend behavior was changed.
 - **Evidence:** `/tmp/orkestrator-test-run.yeOzQY/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Isolated rerun:** `mise run test:logged -- --name merge-review-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/multi-review-efficiency.bench.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 2.1 seconds.
 - **Assessment:** consistent with the existing host-contention hypothesis; no timing assertion or backend code was changed during conflict resolution.
+
+## Recurrence on GitHub Actions (2026-10-15)
+
+`main` run 38784461548 (`7ccb193e`, four-vCPU runner, one Bun worker per
+package) failed the assertion with 630 ms against the 310 ms bound.
+
+## Resolution (2026-10-15)
+
+The wall-clock bound `admissionMs < 250 + 3 * setupDelayMs` only had 60 ms of
+headroom over the slow setup, so any scheduling delay on a loaded host
+failed it. It also proved less than its comment claimed. If the peers'
+sessions were created concurrently but their dispatch waited for the slow
+setup, admission would still have been about 252 ms and passed.
+
+The benchmark now asserts the ordering directly. With `slowSetupAwaitsPeers`,
+the slow reviewer's `createSession` also waits until every other reviewer's
+turn has been dispatched (`send` returned). A five-second limit
+(`PEER_DISPATCH_LIMIT_MS`) applies, so a regression fails instead of hanging.
+The provider records how many turns were dispatched when that setup returned
+(`dispatchedDuringSlowSetup`), and the case asserts it is 3. Report-only runs
+(`MULTI_REVIEW_BENCH_REPORT_ONLY=1`) keep the plain 250 ms setup, so tables
+from older builds stay comparable. No production code or budget changed.
+
+Evidence: the owning file passed in 2.1 seconds with
+`mise run test:logged -- --name review-bench -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/multi-review-efficiency.bench.test.ts --parallel=1`.
+A temporary copy that forced serial admission
+(`reviewFanoutConcurrency: { admission: 1, provider: 1 }`) failed with
+`Expected: 3, Received: 0` after the 5 s limit, so the case still catches the
+regression it guards.

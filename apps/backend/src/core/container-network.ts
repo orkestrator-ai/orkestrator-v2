@@ -3,6 +3,7 @@ import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { runCommand } from "./shell.js";
 import type { CommandContext } from "./commands-context.js";
 import type { EnvironmentNetworkPolicy } from "@orkestrator/protocol/container-recovery";
+import { allowlistForNetworkPolicy } from "@orkestrator/protocol/network-allowlist";
 import { ContainerLifecycleError } from "./container-lifecycle-service.js";
 import {
   requiredAgentNetworkDomains,
@@ -17,7 +18,7 @@ import { imageCapabilities } from "./docker-image.js";
 import type { AppConfig, Environment } from "./models.js";
 
 /**
- * One Docker bridge network per environment (network policy 2).
+ * One Docker bridge network per environment (network policy 2 and later).
  *
  * The network holds only the environment's own runtime (and, during a
  * replacement, its candidate — never both running), so the in-container
@@ -29,6 +30,22 @@ import type { AppConfig, Environment } from "./models.js";
  */
 
 export const NETWORK_ROLE = "network";
+
+export type NetworkPolicyVersion = 1 | 2 | 3;
+
+/**
+ * The network policy a new container gets: the newest its image implements.
+ * `ORKESTRATOR_NETWORK_POLICY=1` keeps the legacy shared bridge and `=2`
+ * keeps every port of an allowed address open.
+ */
+export function containerNetworkPolicy(
+  imagePolicy: number,
+  override: string | undefined,
+): NetworkPolicyVersion {
+  if (override === "1" || imagePolicy < 2) return 1;
+  if (override === "2" || imagePolicy < 3) return 2;
+  return 3;
+}
 
 export function environmentNetworkName(owner: string, environmentId: string): string {
   // Environment ids are not bounded to Docker's name alphabet; a digest keeps
@@ -180,10 +197,9 @@ function boundedTimestamp(value: unknown): string | null {
 }
 
 /**
- * The allowlist a restricted container receives: the environment's own list
- * or the global one, plus the hosts the enabled agent platforms require. The
- * same list goes into `ALLOWED_DOMAINS` at creation and into a live update,
- * so its revision identifies it on both sides.
+ * The allowlist a restricted container is configured with: the environment's
+ * own list or the global one, plus the hosts the enabled agent platforms
+ * require.
  */
 export function configuredAllowedDomains(
   environment: Pick<Environment, "allowedDomains">,
@@ -195,6 +211,20 @@ export function configuredAllowedDomains(
       ...requiredAgentNetworkDomains(config.global.enabledAgentPlatforms),
     ]),
   ];
+}
+
+/**
+ * The configured list as a container on `policyVersion` receives it: policy 3
+ * takes `host:port` entries, earlier policies each domain once. The same list
+ * goes into `ALLOWED_DOMAINS` at creation and into a live update, so its
+ * revision identifies it on both sides.
+ */
+export function containerAllowedDomains(
+  environment: Pick<Environment, "allowedDomains">,
+  config: Pick<AppConfig, "global">,
+  policyVersion: NetworkPolicyVersion,
+): string[] {
+  return allowlistForNetworkPolicy(configuredAllowedDomains(environment, config), policyVersion);
 }
 
 /**
@@ -307,7 +337,7 @@ async function networkIdentity(
 }
 
 interface ContainerNetworkFacts {
-  policyVersion: 1 | 2;
+  policyVersion: NetworkPolicyVersion;
   liveUpdates: boolean;
   running: boolean;
 }
@@ -330,7 +360,7 @@ async function containerNetworkFacts(
     const [policy = "", imageId = "", running = ""] = stdout.trim().split("\t");
     const capabilities = await imageCapabilities(imageId || undefined, context).catch(() => null);
     return {
-      policyVersion: policy === "2" ? 2 : 1,
+      policyVersion: policy === "3" ? 3 : policy === "2" ? 2 : 1,
       liveUpdates: (capabilities?.["network-refresh"] ?? 0) >= 1,
       running: running === "true",
     };
@@ -364,7 +394,7 @@ export async function environmentNetworkPolicy(
     configured: {
       mode: environment.networkAccessMode === "full" ? "full" : "restricted",
       domains: domains.length,
-      domainsRevision: allowedDomainsRevision(configuredAllowedDomains(environment, config)),
+      domainsRevision: allowedDomainsRevision(containerAllowedDomains(environment, config, 3)),
     },
     policyVersion: null,
     domains: null,
@@ -374,7 +404,10 @@ export async function environmentNetworkPolicy(
   const facts = await containerNetworkFacts(environment.containerId, context);
   if (!facts) return result;
   result.policyVersion = facts.policyVersion;
-  if (facts.policyVersion === 2) {
+  result.configured.domainsRevision = allowedDomainsRevision(
+    containerAllowedDomains(environment, config, facts.policyVersion),
+  );
+  if (facts.policyVersion >= 2) {
     result.network = await networkIdentity(
       environmentNetworkName(dockerOwnerNamespace(context.storage.getDataDir()), environmentId),
     );
@@ -446,7 +479,7 @@ async function applyAllowedDomainsNow(
   if (!facts.liveUpdates) return { kind: "rebuild-required", policy: before };
   if (before.configured.mode !== "restricted") return { kind: "rebuild-required", policy: before };
   const config = await context.storage.loadConfig();
-  const domains = configuredAllowedDomains(environment, config);
+  const domains = containerAllowedDomains(environment, config, facts.policyVersion);
   try {
     await runCommand(
       "docker",

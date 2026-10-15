@@ -129,8 +129,13 @@ describe("container firewall policy", () => {
     expect(script).toContain(`${policyPath}/allowed-domains`);
     expect(script).toContain("dig +short A api.github.com");
     expect(script).toContain("ork_create_set allowed-domains");
-    expect(read("docker/firewall-domains.sh")).toContain(
-      'ipset create "$1" hash:net timeout 0 maxelem "$ORK_MAX_ENTRIES"',
+    const library = read("docker/firewall-domains.sh");
+    expect(library).toContain("local type=hash:net\n");
+    expect(library).toContain("type=hash:net,port");
+    expect(library).toContain('ipset create "$1" "$type" timeout 0 maxelem "$ORK_MAX_ENTRIES"');
+    // Policy 3 matches address and port; earlier policies the address alone.
+    expect(script).toContain(
+      "iptables -A OUTPUT -m set --match-set allowed-domains dst,dst -j ACCEPT",
     );
     expect(script).toContain("iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT");
   });
@@ -350,6 +355,13 @@ esac`,
       );
       expect(calls).not.toMatch(/iptables -A INPUT -s /);
       expect(calls).toContain("ip6tables -P OUTPUT DROP");
+      // Policy 2 still allows whole addresses, open on every port.
+      expect(calls).toContain("ipset create allowed-domains hash:net timeout 0 maxelem 32768");
+      expect(calls).toContain(
+        "iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT",
+      );
+      expect(calls).toContain("ipset add -exist allowed-domains 192.0.2.11 timeout 21600");
+      expect(calls).not.toContain(",tcp:");
       const status = JSON.parse(readFileSync(statusFile(dir), "utf8"));
       expect(status).toMatchObject({
         policy: 2,
@@ -364,8 +376,8 @@ esac`,
     }
   });
 
-  test("an allowlist that names example.com does not fail the blocked-host check", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ork-firewall-probe-"));
+  test("policy 3 allows address, protocol and port tuples", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ork-firewall-v3-"));
     try {
       const script = fixtureScript(dir, "init-firewall.sh");
       const policy = join(dir, "policy");
@@ -373,21 +385,30 @@ esac`,
       mkdirSync(policy);
       mkdirSync(bin);
       writeFileSync(join(policy, "network-mode"), "restricted\n");
-      writeFileSync(join(policy, "allowed-domains"), "example.org,example.com\n");
+      writeFileSync(
+        join(policy, "allowed-domains"),
+        "example.org,example.org:5432,example.org:443/udp,example.org:0,bad.example:99999\n",
+      );
+      writeFileSync(join(policy, "network-policy"), "3\n");
+      writeFileSync(join(policy, "host-service-ports"), "41234\n");
+      writeFileSync(join(policy, "ingress-ports"), "4096\n");
       writeStub(bin, "iptables", 'printf "iptables %s\\n" "$*" >> "$CALL_LOG"');
-      writeStub(bin, "ip6tables", "exit 0");
+      writeStub(bin, "ip6tables", 'printf "ip6tables %s\\n" "$*" >> "$CALL_LOG"');
       writeStub(bin, "iptables-save", "exit 0");
-      writeStub(bin, "ipset", "exit 0");
+      writeStub(
+        bin,
+        "ipset",
+        'printf "ipset %s\\n" "$*" >> "$CALL_LOG"; [ "$1" = list ] && printf "Members:\\n192.0.2.10,tcp:443\\n"; exit 0',
+      );
       writeStub(
         bin,
         "dig",
-        "if [ \"$1\" = +short ]; then printf '192.0.2.10\\n'; exit; fi\nprintf 'x. 60 IN A 192.0.2.11\\n'",
+        "printf 'dig %s\\n' \"$*\" >> \"$CALL_LOG\"\nif [ \"$1\" = +short ]; then printf '192.0.2.10\\n'; exit; fi\nprintf 'example.org. 60 IN A 192.0.2.11\\n'",
       );
-      // example.com and example.org are allowed and reachable; example.net is not.
       writeStub(
         bin,
         "curl",
-        `printf 'curl %s\\n' "$*" >> "$CALL_LOG"; case "$*" in *api.github.com/meta*) printf '{}\\n' ;; *example.net*) exit 7 ;; *) exit 0 ;; esac`,
+        `case "$*" in *api.github.com/meta*) printf '{}\\n' ;; *example.com*) exit 22 ;; *) exit 0 ;; esac`,
       );
       writeStub(
         bin,
@@ -405,8 +426,103 @@ esac`,
       });
       expect(result.exitCode).toBe(0);
       const calls = readFileSync(join(dir, "calls"), "utf8");
-      expect(calls).toContain("curl --connect-timeout 5 https://example.net");
-      expect(calls).not.toContain("curl --connect-timeout 5 https://example.com");
+      expect(calls).toContain("ipset create allowed-domains hash:net,port timeout 0 maxelem 32768");
+      expect(calls).toContain(
+        "iptables -A OUTPUT -m set --match-set allowed-domains dst,dst -j ACCEPT",
+      );
+      expect(calls).not.toContain("--match-set allowed-domains dst -j ACCEPT");
+      // The metadata bootstrap is HTTPS only; GitHub's ranges are HTTPS and SSH.
+      expect(calls).toContain("ipset add -exist allowed-domains 192.0.2.10,tcp:443 timeout 0");
+      expect(calls).toContain("ipset add -exist allowed-domains 192.0.2.10/32,tcp:443 timeout 0");
+      expect(calls).toContain("ipset add -exist allowed-domains 192.0.2.10/32,tcp:22 timeout 0");
+      // A bare domain is TCP 443; an entry with a port opens exactly that tuple.
+      for (const tuple of ["tcp:443", "tcp:5432", "udp:443"]) {
+        expect(calls).toContain(
+          `ipset add -exist allowed-domains 192.0.2.11,${tuple} timeout 21600`,
+        );
+      }
+      expect(calls).not.toMatch(/allowed-domains 192\.0\.2\.11 timeout/);
+      expect(calls).not.toContain("tcp:0");
+      expect(calls).not.toContain("99999");
+      // One lookup per domain, however many ports its entries name.
+      expect(calls.split("\n").filter((line) => line.endsWith(" A example.org"))).toHaveLength(1);
+      // There is still no SSH rule outside the allowlist.
+      expect(calls).not.toContain("--dport 22");
+      // Host services and ingress keep their policy 2 rules.
+      expect(calls).toContain(
+        "iptables -A ORK_HOST_SERVICES -p tcp -d 172.20.0.1 --dport 41234 -j ACCEPT",
+      );
+      expect(calls).toContain(
+        "iptables -A INPUT -p tcp --dport 4096 -m state --state NEW -j ACCEPT",
+      );
+      expect(JSON.parse(readFileSync(statusFile(dir), "utf8"))).toMatchObject({
+        policy: 3,
+        state: "applied",
+        resolvedDomains: 1,
+        invalidDomains: 2,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    [2, "example.org,example.com", "example.net"],
+    [3, "example.org,example.com", "example.net"],
+    [3, "example.com:443", "example.net"],
+    [3, "example.com:443/tcp", "example.net"],
+    [3, " EXAMPLE.COM:443/tcp ", "example.net"],
+    [3, "example.com:80", "example.com"],
+    [3, "example.com:443/udp", "example.com"],
+    [3, "example.com,example.net:443,example.org:443/tcp", ""],
+  ])("policy %i allowlist %s chooses blocked HTTPS probe %s", (version, domains, probe) => {
+    const dir = mkdtempSync(join(tmpdir(), "ork-firewall-probe-"));
+    try {
+      const script = fixtureScript(dir, "init-firewall.sh");
+      const policy = join(dir, "policy");
+      const bin = join(dir, "bin");
+      mkdirSync(policy);
+      mkdirSync(bin);
+      writeFileSync(join(policy, "network-mode"), "restricted\n");
+      writeFileSync(join(policy, "allowed-domains"), `${domains}\n`);
+      writeFileSync(join(policy, "network-policy"), `${version}\n`);
+      writeStub(bin, "iptables", 'printf "iptables %s\\n" "$*" >> "$CALL_LOG"');
+      writeStub(bin, "ip6tables", "exit 0");
+      writeStub(bin, "iptables-save", "exit 0");
+      writeStub(bin, "ipset", "exit 0");
+      writeStub(
+        bin,
+        "dig",
+        "if [ \"$1\" = +short ]; then printf '192.0.2.10\\n'; exit; fi\nprintf 'x. 60 IN A 192.0.2.11\\n'",
+      );
+      // Only the expected blocked probe fails; allowed HTTPS probes succeed.
+      writeStub(
+        bin,
+        "curl",
+        `printf 'curl %s\\n' "$*" >> "$CALL_LOG"; case "$*" in *api.github.com/meta*) printf '{}\\n' ;; *https://${probe || "unused.invalid"}*) exit 7 ;; *) exit 0 ;; esac`,
+      );
+      writeStub(
+        bin,
+        "jq",
+        "cat >/dev/null; case \"$*\" in *'.web and'*) exit 0 ;; *) printf '192.0.2.10/32\\n' ;; esac",
+      );
+      writeStub(bin, "aggregate", "cat");
+      writeStub(bin, "ip", "printf 'default via 172.20.0.1 dev eth0\\n'");
+      writeStub(bin, "getent", "exit 2");
+      const result = Bun.spawnSync({
+        cmd: ["bash", script],
+        env: { ...process.env, PATH: `${bin}:${gnuToolPath}`, CALL_LOG: join(dir, "calls") },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(result.exitCode).toBe(0);
+      const calls = readFileSync(join(dir, "calls"), "utf8");
+      for (const candidate of ["example.com", "example.net", "example.org"]) {
+        expect(calls.includes(`curl --connect-timeout 5 https://${candidate}`)).toBe(
+          candidate === probe,
+        );
+      }
+      if (!probe) expect(calls).toContain("iptables -C OUTPUT -j REJECT");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -511,6 +627,46 @@ esac`,
       }
     },
   );
+
+  test("policy capture records policy 3 and refuses an unknown version", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ork-policy-version-"));
+    try {
+      const bin = join(dir, "bin");
+      mkdirSync(bin);
+      const script = join(dir, "network-policy-entrypoint.sh");
+      writeFileSync(
+        script,
+        read("docker/network-policy-entrypoint.sh")
+          .replaceAll(policyPath, join(dir, "policy"))
+          .replaceAll("/usr/local/bin/entrypoint.sh", join(dir, "node-entrypoint.sh")),
+      );
+      writeStub(bin, "install", 'mkdir -p "${@: -1}"');
+      writeStub(bin, "chown", "exit 0");
+      writeStub(bin, "stat", "printf '0:644\\n'");
+      writeStub(bin, "setpriv", 'shift 3; exec "$@"');
+      writeFileSync(join(dir, "node-entrypoint.sh"), "#!/bin/bash\nexit 0\n");
+      chmodSync(join(dir, "node-entrypoint.sh"), 0o755);
+      const run = (version: string) =>
+        Bun.spawnSync({
+          cmd: ["bash", script],
+          env: {
+            ...process.env,
+            PATH: `${bin}:${gnuToolPath}`,
+            NETWORK_MODE: "restricted",
+            ALLOWED_DOMAINS: "example.org:5432",
+            ORKESTRATOR_NETWORK_POLICY: version,
+          },
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+      expect(run("4").exitCode).toBe(1);
+      expect(run("3").exitCode).toBe(0);
+      expect(readFileSync(join(dir, "policy/network-policy"), "utf8")).toBe("3\n");
+      expect(readFileSync(join(dir, "policy/allowed-domains"), "utf8")).toBe("example.org:5432\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   test("policy capture validates port lists and keeps the legacy two-file policy readable", () => {
     const bootstrap = read("docker/network-policy-entrypoint.sh");

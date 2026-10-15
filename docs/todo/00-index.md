@@ -79,7 +79,7 @@ it reaches. Some rules of thumb:
 
 ### Cross-cutting (very high)
 
-- [ ] Get the unit test job green on `main` and require lint, typecheck and tests via branch protection ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
+- [ ] Apply the approved `main` ruleset (lint, typecheck and tests required) once `main` passes three CI runs in a row; the CI-only failures are fixed or registered ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 
 ## High
 
@@ -91,7 +91,7 @@ it reaches. Some rules of thumb:
 - [ ] Re-run the annotation Electron and isolated browser suites on current main and record a sign-off ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
 - [ ] Run the live annotation implement test once per provider and record skips explicitly ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
 - [ ] Qualify the annotation native window: Notes column bounds, focus, keyboard, narrow switch, zoom and DPR ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
-- [ ] Decide whether annotations stay enabled by default or hold dispatch for providers without a live run ([web-annotation-qualification.md](web-annotation-qualification.md), decision)
+- [x] Decide whether annotations stay enabled by default or hold dispatch for providers without a live run ([web-annotation-qualification.md](web-annotation-qualification.md), decision)
 
 ### CLI and slash commands (high)
 
@@ -106,7 +106,7 @@ it reaches. Some rules of thumb:
 - [ ] Qualify the container live set and real-stack Docker run on Docker Desktop for Apple Silicon ([container-platform-qualification.md](container-platform-qualification.md), qualification)
 - [ ] Qualify stop with a pending approval (C11) on a real provider: the approval is denied, never approved ([container-platform-qualification.md](container-platform-qualification.md), qualification)
 - [ ] Re-trace `PROVIDER_STATE_LAYOUT` paths at current pins and add the step to the agent-upgrade guide ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md))
-- [ ] Allow firewall traffic as address, protocol and port tuples (TCP 443, GitHub SSH) under a new policy version ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
+- [x] Allow firewall traffic as address, protocol and port tuples (TCP 443, GitHub SSH) under a new policy version ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
 - [ ] Replace the 1 s Claude state `docker exec` poll with a pushed change signal and a slow safety read ([container-state-observation.md](container-state-observation.md))
 - [ ] Record a non-skipped run of the deletion-during-setup real-stack spec on current `main` ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), qualification)
 - [ ] Run a seeded real-stack pass of the pre-ledger startup sweeps in an isolated dev profile ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), qualification)
@@ -126,7 +126,7 @@ it reaches. Some rules of thumb:
 
 ### Agent engines and provider SDKs (high)
 
-- [ ] Park Claude `onElicitation` and `onUserDialog` requests as interactions instead of declining them ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
+- [x] Park Claude `onElicitation` and `onUserDialog` requests as interactions instead of declining them ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
 - [ ] Check on each platform that the Agent Info policy summary matches the options the adapter received ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
 - [ ] Keep the Claude CLI open across idle turns with an idle detach instead of draining at turn end ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md))
 - [x] Report `authentication-required` readiness on Claude, Pi, ACP and OpenCode; drop the Cursor-only 401 branch ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
@@ -149,7 +149,7 @@ it reaches. Some rules of thumb:
 
 ### Multi Review (high)
 
-- [ ] Make the slow-reviewer admission benchmark deterministic with deferred fakes or a controllable clock ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
+- [x] Make the slow-reviewer admission benchmark deterministic with deferred fakes or a controllable clock ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
 - [ ] Run the real-stack Multi Review inactive-environment cycle with restart, reload and bridge interruption ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), qualification)
 - [ ] Run the Multi Review browser and agent-browser suites for the #833 launcher and reviewer tab ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), qualification)
 - [ ] Compare full and compact consolidation on real providers over the corpus for recall and provenance ([multi-review-panel-value.md](multi-review-panel-value.md), qualification)
@@ -163,7 +163,7 @@ it reaches. Some rules of thumb:
 
 ### Backend structure (high)
 
-- [ ] Stop non-deleting sensitive saves rewriting the retired JSON archive with current values ([storage-service-repositories.md](storage-service-repositories.md))
+- [x] Stop non-deleting sensitive saves rewriting the retired JSON archive with current values ([storage-service-repositories.md](storage-service-repositories.md))
 - [ ] Add storage guard tests: `saveJson` only under a lease, and no mixed `updateStore`/`saveJson` writers ([storage-service-repositories.md](storage-service-repositories.md))
 - [ ] Verify no store is written by both `updateStore` and a leased `saveJson` ([storage-service-repositories.md](storage-service-repositories.md), verify)
 
@@ -171,7 +171,7 @@ it reaches. Some rules of thumb:
 
 - [ ] Qualify Codex sub-agent cards on a fixture profile: one card per child, recovery after reload and restart ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
 - [ ] Decide and implement a renderer-backend skew guard for raw OpenCode envelopes from older backends ([mixed-version-compatibility.md](mixed-version-compatibility.md))
-- [ ] Fix flake 0166 (OpenCode probe deadline), which recurred on 2026-10-15 ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
+- [x] Fix flake 0166 (OpenCode probe deadline), which recurred on 2026-10-15 ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [ ] Keep split panes mounted across the mobile breakpoint through stable per-pane hosts ([mobile-layout-gaps.md](mobile-layout-gaps.md))
 - [ ] Move the environment settings dialog out of the drawer row so it is usable on mobile ([mobile-layout-gaps.md](mobile-layout-gaps.md))
 

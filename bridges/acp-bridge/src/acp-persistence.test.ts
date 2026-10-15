@@ -13,33 +13,6 @@ import {
 } from "./acp-test-harness.js";
 
 describe("ACP bridge", () => {
-  // The fake agent records its own argv, so these assert the exact command line
-  // the bridge builds. They cannot prove the real CLIs accept those flags —
-  // `docs/development/upgrade-agents.md` carries that as a manual step for version bumps.
-  async function readAgentArgs(env: NodeJS.ProcessEnv): Promise<string[]> {
-    const argsFile = resolve(await temporaryDirectory(), "args.log");
-    const { base, headers } = await spawnBridge({
-      env: { ...env, FAKE_ACP_ARGS_FILE: argsFile },
-    });
-
-    const created = await nativeFetch(`${base}/session/create`, {
-      method: "POST",
-      headers,
-    });
-    expect(created.status).toBe(201);
-
-    const recorded = await waitFor(
-      async () => fs.readFile(argsFile, "utf8").catch(() => ""),
-      (value) => value.trim().length > 0,
-    );
-    // One session spawns one agent. A second line would mean the child was
-    // restarted, which should fail as itself rather than as a JSON parse error
-    // on two concatenated records.
-    const lines = recorded.trim().split("\n");
-    expect(lines).toHaveLength(1);
-    return JSON.parse(lines[0]!) as string[];
-  }
-
   test("preserves restrictive execution policy across a bridge restart", async () => {
     const stateDirectory = await temporaryDirectory();
     const argsFile = resolve(await temporaryDirectory(), "args.log");
@@ -134,6 +107,64 @@ describe("ACP bridge", () => {
     expect(JSON.parse(invocations.trim().split("\n").at(-1)!) as string[]).not.toContain(
       "--always-approve",
     );
+  });
+
+  test("restores completed and failed journal terminal errors through dispatch after restart", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const first = await spawnBridge({ stateDirectory });
+    const created = (await nativeFetch(`${first.base}/session/create`, {
+      method: "POST",
+      headers: first.headers,
+    }).then((response) => response.json())) as { id: string };
+    await stopChild(first.child);
+    const path = resolve(stateDirectory, "state.json");
+    const saved = JSON.parse(await fs.readFile(path, "utf8"));
+    const session = saved.sessions.find((entry: { id: string }) => entry.id === created.id);
+    session.promptJournal = [
+      {
+        requestId: "completed-error",
+        state: "completed",
+        acceptedAt: 1,
+        terminalError: "grok request went unanswered for 5 minutes",
+      },
+      {
+        requestId: "failed-error",
+        state: "failed",
+        acceptedAt: 2,
+        terminalError: "provider failed",
+      },
+      { requestId: "completed-ok", state: "completed", acceptedAt: 3 },
+      {
+        requestId: "accepted",
+        state: "accepted",
+        acceptedAt: 4,
+        terminalError: "untrusted incomplete outcome",
+      },
+    ];
+    await fs.writeFile(path, JSON.stringify(saved));
+    const second = await spawnBridge({ stateDirectory });
+    for (const [requestId, expected] of [
+      [
+        "completed-error",
+        {
+          dispatch: "dispatched",
+          turn: { state: "completed", error: "grok request went unanswered for 5 minutes" },
+        },
+      ],
+      [
+        "failed-error",
+        { dispatch: "dispatched", turn: { state: "failed", error: "provider failed" } },
+      ],
+      ["completed-ok", { dispatch: "dispatched", turn: { state: "completed" } }],
+      ["accepted", { dispatch: "unknown" }],
+    ] as const) {
+      const response = await nativeFetch(
+        `${second.base}/session/${created.id}/dispatch?requestId=${requestId}`,
+        { headers: second.headers },
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual(expected);
+    }
   });
 
   test("restores legacy ACP state with a fail-closed policy", async () => {

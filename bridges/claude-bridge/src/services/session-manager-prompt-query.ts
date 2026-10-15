@@ -3,13 +3,15 @@ import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { createHash } from "node:crypto";
 import type { SessionState } from "../types/index.js";
+import { claudeWorkflowResultTools } from "./claude-workflow-result-tools.js";
 import { backgroundCommandInstruction } from "./background-commands.js";
 import {
+  claudePermissionMode,
+  claudePolicyPermissionMode,
   claudeSettingSources,
   claudeTurnPolicy,
   claudeWorkspaceCwd,
 } from "./claude-query-config.js";
-import { eventEmitter } from "./event-emitter.js";
 import { debugLog } from "./logger.js";
 import {
   AGENT_MCP_SERVER_NAME,
@@ -26,8 +28,8 @@ import {
 } from "./read-only-policy.js";
 import { runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
 import { claudeExecutableOptions, sdkSessionIdFromBridgeId } from "./session-manager-core.js";
+import { answerClaudeElicitation } from "./session-manager-parked-interactions.js";
 import { buildSdkPrompt } from "./session-manager-persistence.js";
-import { appendTranscriptNotice } from "./session-manager-prompt-handlers/transcript-notice.js";
 import { commandChangeHookFor, shellTaskHooks } from "./session-manager-prompt-hooks.js";
 import {
   type ClaudeRuntimeMcp,
@@ -101,36 +103,36 @@ export async function resolveQueryPlan(
 
   const mcpServerCount = Object.keys(mcpServers).length;
   const pluginCount = plugins.length;
-  // Determine permission mode: use provided option or default to "bypassPermissions".
+  // Determine permission mode: the prompt's, capped by the policy.
   // Why: when the user requests "plan" mode we forward it as the SDK's actual
   // `"plan"` permissionMode. The SDK enforces read-only and runs its built-in
   // ExitPlanMode tool natively — without this, ExitPlanMode fails because the
   // CLI has no plan-mode state to exit.
-  const policyPermissionMode =
-    policy?.approvals === "ask"
-      ? "default"
-      : policy?.approvals === "deny"
-        ? "dontAsk"
-        : "bypassPermissions";
-  const permissionMode = options?.permissionMode ?? policyPermissionMode;
+  const policyPermissionMode = claudePolicyPermissionMode(policy);
+  const permissionMode = claudePermissionMode(policy, options?.permissionMode);
   turn.permissionMode = permissionMode;
-  const defaultAllowedTools = [
-    "Read",
-    "Edit",
-    "Write",
-    "Bash",
-    "Glob",
-    "Grep",
-    "WebSearch",
-    "WebFetch",
-    "AskUserQuestion",
-    "Task",
-    "Agent",
-  ];
+  // Under `ask` only tools that read are approved up front. The CLI asks for
+  // the rest through `canUseTool`, which parks each one as an approval.
+  const defaultAllowedTools =
+    policy?.approvals === "ask"
+      ? ["Read", "Glob", "Grep", "AskUserQuestion", "Task", "Agent"]
+      : [
+          "Read",
+          "Edit",
+          "Write",
+          "Bash",
+          "Glob",
+          "Grep",
+          "WebSearch",
+          "WebFetch",
+          "AskUserQuestion",
+          "Task",
+          "Agent",
+        ];
   const coordinatorReadOnly = isCoordinatorReadOnlyPolicy(policy);
   // A worker can always report back, whatever its approval setting: under
-  // "deny" (`dontAsk`) only allowed tools run, and the mail tools must be
-  // among them. An explicit toolPolicy deny still wins.
+  // "deny" only allowed tools run, and the mail tools must be among them. An
+  // explicit toolPolicy deny still wins.
   const agentMailTools = mcpServerNames.has(AGENT_MCP_SERVER_NAME)
     ? AGENT_MAIL_TOOL_NAMES.map((name) => `mcp__${AGENT_MCP_SERVER_NAME}__${name}`)
     : [];
@@ -140,7 +142,11 @@ export async function resolveQueryPlan(
           ? [AGENT_MCP_SERVER_NAME]
           : [],
       })
-    : [...(policy?.toolPolicy?.allow ?? defaultAllowedTools), ...agentMailTools];
+    : [
+        ...(policy?.toolPolicy?.allow ?? defaultAllowedTools),
+        ...agentMailTools,
+        ...claudeWorkflowResultTools(mcpServerNames),
+      ];
   // Provider tool names, not the policy's own: `toolPolicy.deny` carries
   // Codex's vocabulary, and passing it to `disallowedTools` matches nothing.
   const disallowedTools = coordinatorReadOnly
@@ -426,12 +432,9 @@ export function claudeQueryOptions(
     // SDK warns that bypassPermissions shadows canUseTool for ordinary
     // tool permission checks, AskUserQuestion is a special case. A live
     // contract probe confirmed it still reaches this callback and the SDK
-    // waits for the returned promise. This is therefore the future input-
-    // request enforcement hook, but it is NOT sufficient for unattended
-    // command/file/permission approvals; those need a PreToolUse hook or an
-    // equivalent provider-authoritative policy path.
-    // Handle AskUserQuestion tool to get user input.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // waits for the returned promise. Ordinary tools reach it only in a mode
+    // that asks: an `ask` policy runs `default`, and every tool outside the
+    // allow list is parked here as a command, file or permission approval.
     // The SDK's own type, rather than a hand-written subset. The third
     // argument carries `suggestions`, `blockedPath`, `decisionReason` and
     // `title` — the last of which is the prompt sentence the CLI already
@@ -444,40 +447,27 @@ export function claudeQueryOptions(
         permissionContext,
       )) as CanUseTool,
     /**
-     * An MCP server asking the user for input.
-     *
-     * Answered rather than left to the CLI's park deadline. Unset, these
-     * requests sat unanswered until the deadline expired, which the user
+     * An MCP server asking the user for input: parked as an `mcp-form` or
+     * `mcp-url` interaction until the user answers it on the interaction
+     * card, its deadline cancels it, or the CLI withdraws it. Unset, these
+     * requests sat unanswered until the CLI's own deadline, which the user
      * saw as the tab freezing for minutes with nothing to explain it.
-     *
-     * Declined, not accepted: this host has no form to render an arbitrary
-     * JSON Schema into and no browser to complete a `url` flow in, and MCP
-     * defines `decline` as an outcome the server is expected to handle. The
-     * status row is what turns a silent refusal into something the user can
-     * act on — the elicitation names its server, so they know where to go.
      */
-    onElicitation: async (request) => {
-      appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
-        type: "status",
-        severity: "warning",
-        content:
-          request.mode === "url"
-            ? `${request.serverName} asked you to sign in through a link, which this tab cannot open. Complete it in a terminal and try again.`
-            : `${request.serverName} asked for input this tab cannot collect, so it was declined.`,
-        createdAt: new Date().toISOString(),
-      });
-      return { action: "decline" };
-    },
+    onElicitation: (request, elicitationOptions) =>
+      answerClaudeElicitation(session, sessionId, request, elicitationOptions),
     /**
      * The CLI asking the host to render a blocking dialog.
      *
      * `supportedDialogKinds` is deliberately not declared: this host can
-     * render none of them. The SDK documents that a kind is only *sent* to
-     * clients that declared it, so in practice this callback should not
-     * fire — but a multi-client transport delivers the request to every
-     * attached client, so it can. `cancelled` is the correct answer for a
-     * kind this host cannot render: the CLI then applies the dialog's own
-     * default rather than waiting out its deadline.
+     * render none of them. The only documented kind,
+     * `refusal_fallback_prompt`, carries a payload and result the SDK leaves
+     * opaque, and the interaction card has nothing to show for it. The SDK
+     * documents that a kind is only *sent* to clients that declared it, so
+     * in practice this callback should not fire — but a multi-client
+     * transport delivers the request to every attached client, so it can.
+     * `cancelled` is the correct answer for a kind this host cannot render:
+     * the CLI then applies the dialog's own default rather than waiting out
+     * its deadline.
      */
     onUserDialog: async () => ({ behavior: "cancelled" as const }),
   };

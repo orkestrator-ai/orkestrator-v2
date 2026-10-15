@@ -309,6 +309,12 @@ export function handlePromptStart(message: JsonObject): boolean {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return true;
     }
+    if (prompt.startsWith("STOP:")) {
+      // The agent ends the turn on its own with this ACP stop reason.
+      const stopReason = prompt.slice("STOP:".length).trim();
+      write({ jsonrpc: "2.0", id: message.id, result: { stopReason } });
+      return true;
+    }
     if (prompt.startsWith("JSON_THEN_THOUGHT:")) {
       const text = prompt
         .slice("JSON_THEN_THOUGHT:".length)

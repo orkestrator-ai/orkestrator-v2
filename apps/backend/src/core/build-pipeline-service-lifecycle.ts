@@ -1,15 +1,15 @@
+/**
+ * Public build pipeline operations: init and shutdown, admission, and every
+ * user control (pause, resume, messages, retries, restarts, cancel, remove).
+ * Each control records its intent under the pipeline lock and leaves the work to
+ * the stage supervisor.
+ */
 import { randomUUID } from "node:crypto";
-import type { ReviewFanoutConcurrency } from "./review-fanout-scheduler.js";
-import type { MultiReviewEfficiencyObserver } from "./multi-review-efficiency.js";
-import type {
-  BuildPipeline,
-  BuildPipelineAgent,
-  PipelineSession,
-  PipelineSessionPhase,
-  ResumableBuildPhase,
-  StartBuildPipelineInput,
-} from "@orkestrator/protocol/build-pipeline";
 import {
+  type BuildPipeline,
+  type PipelineSession,
+  type PipelineSessionPhase,
+  type StartBuildPipelineInput,
   isBuildPipeline,
   isActiveBuildPhase,
   isStartBuildPipelineInput,
@@ -21,26 +21,8 @@ import {
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
 } from "@orkestrator/protocol/build-pipeline";
 import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
-import type { ReviewContractValidationError } from "@orkestrator/protocol/structured-review";
-import type {
-  StructuredOutputProvider,
-  StructuredOutputResult,
-} from "@orkestrator/protocol/structured-output";
-import type { Environment, PersistedBuildPipeline } from "./models.js";
-import type { StorageService } from "./storage.js";
-import type { AgentToolConnection } from "./agent-tools.js";
-import type { WorkflowResultService } from "./workflow-result-service.js";
-import { WorkflowResultRollout } from "./workflow-result-rollout.js";
-import { BuildPipelineTranscriptCheckpoints } from "./build-pipeline-transcript-checkpoints.js";
-import type { WorkflowResultKind } from "@orkestrator/protocol/workflow-results";
-import {
-  type BridgeConnection,
-  type BuildPipelineProvider,
-  type ProviderDependencies,
-  type ProviderInteractionObservationEvent,
-  ProviderUnavailableError,
-  PromptRejectedError,
-} from "./build-pipeline-provider.js";
+import type { Environment } from "./models.js";
+import { type BuildPipelineProvider, PromptRejectedError } from "./build-pipeline-provider.js";
 import {
   errorMessage,
   buildAdmissionKey,
@@ -55,37 +37,24 @@ import {
   sessionPhaseFor,
   resumePromptFor,
   discardSessionReviewReports,
-  DEFAULT_RECONNECT_DEADLINE_MS,
-  DEFAULT_STRUCTURED_RESULT_DEADLINE_MS,
-  DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS,
   withUnattendedPolicy,
 } from "./build-pipeline-service-helpers.js";
-import type { BuildStepSelection, CommandInvoker } from "./build-pipeline-service-helpers.js";
-import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
   DEFAULT_WORKFLOW_DISCOVERY_MS,
   KeyedWorkflowSupervisor,
-  keyedSchedulingEnabled,
-  type KeyedWorkflowOwner,
-  type KeyedWorkflowServiceOptions,
   type WorkflowReconcileReport,
   type WorkflowSupervisorStatus,
   type WorkflowWakeReason,
 } from "./workflow-supervisor.js";
-import { ElapsedPollGate, type PollTrigger } from "./workflow-poll-gate.js";
 import {
-  buildPipelineObligation,
-  buildPipelineTarget,
   discoverBuildPipelines,
   type BuildPipelineObligation,
 } from "./build-pipeline-scheduling.js";
-
-/** The previous supervisor interval; the keyed driver's per-pipeline fallback cadence. */
-export const BUILD_PIPELINE_PROGRESS_MS = 1_500;
-import {
-  nativeAgentSteerRejectionMessage,
-  type NativeAgentExecutionPolicy,
-} from "@orkestrator/protocol/native-agent";
+import { nativeAgentSteerRejectionMessage } from "@orkestrator/protocol/native-agent";
+import { type BuildPipelineContext, BUILD_PIPELINE_PROGRESS_MS } from "./build-pipeline-context.js";
+import type { BuildPipelineAgents } from "./build-pipeline-service-agents.js";
+import type { BuildPipelineRecovery } from "./build-pipeline-service-recovery.js";
+import type { BuildPipelineSupervisor } from "./build-pipeline-service-supervisor.js";
 
 function validatedUserMessage(text: string): string {
   const trimmed = text.trim();
@@ -129,167 +98,13 @@ function enqueueUserMessage(pipeline: BuildPipeline, text: string): Error | unde
   return undefined;
 }
 
-export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
-  protected timer: ReturnType<typeof setInterval> | null = null;
-  /** The keyed driver (step 08); `null` on the rollback tick or before init. */
-  protected supervisor: KeyedWorkflowSupervisor<BuildPipelineObligation> | null = null;
-  private unsubscribeStorage: (() => void) | null = null;
-  /**
-   * How the pass now running for each pipeline was triggered, so
-   * attempt-counted deadlines can tell a wakeup burst from a cadence poll.
-   */
-  protected readonly passTriggers = new Map<string, PollTrigger>();
-  /** Elapsed-time gate for reviewer idle/final-usage poll counts. */
-  protected readonly reviewerPollGate = new ElapsedPollGate(BUILD_PIPELINE_PROGRESS_MS);
-  protected readonly locks = new Map<string, Promise<void>>();
-  protected readonly providers = new Map<string, BuildPipelineProvider>();
-  /** In-flight creations by provider key, so concurrent callers share one instance. */
-  protected readonly providerCreations = new Map<string, Promise<BuildPipelineProvider>>();
-  /**
-   * The harness whose provider each pipeline last resolved.
-   *
-   * A stage transition resolves and caches the *next* step's provider before it
-   * records that step's session, so a failure there cannot be attributed by
-   * reading the stored snapshot — it still describes the previous stage. Passes
-   * are serialised per pipeline by {@link runLocked}, so the last agent handed
-   * to {@link provider} is the one that failed.
-   */
-  protected readonly lastProviderAgent = new Map<string, BuildPipelineAgent>();
-  protected readonly provisioningPrompts = new Map<string, string | undefined>();
-  /** Fences provider responses across backend processes sharing one journal. */
-  protected readonly interactionOwnerId = randomUUID();
-  protected tickPromise: Promise<void> | null = null;
-  protected tickRequested = false;
-  protected stopped = false;
-
-  protected abstract save(
-    pipeline: BuildPipeline,
-    expectedRevision: number,
-  ): Promise<PersistedBuildPipeline>;
-  protected abstract bridgeConnection(
-    agent: BuildPipelineAgent,
-    environment: Environment,
-  ): Promise<BridgeConnection>;
-  protected abstract recordReconnect(
-    pipelineId: string,
-    error: ProviderUnavailableError,
-  ): Promise<void>;
-  protected abstract fail(pipelineId: string, error: unknown): Promise<void>;
-  protected abstract configureEnvironment(pipeline: BuildPipeline): Promise<void>;
-  protected abstract enforcePendingInteraction(
-    pipeline: BuildPipeline,
-    provider: BuildPipelineProvider,
-    session: PipelineSession,
-  ): Promise<boolean>;
-  protected abstract finishVerification(
-    pipeline: BuildPipeline,
-    provider: BuildPipelineProvider,
-    session: PipelineSession,
-  ): Promise<void>;
-  protected abstract finishPullRequest(pipeline: BuildPipeline): Promise<void>;
-  protected abstract finishConflictResolution(pipeline: BuildPipeline): Promise<void>;
-  protected abstract updateKanbanLifecycle(
-    pipeline: BuildPipeline,
-    updates: {
-      status?: "backlog" | "in-progress" | "review";
-      comment?: string;
-      prUrl?: string;
-      prState?: "open" | "merged" | "closed";
-    },
-  ): Promise<void>;
-  protected abstract stepSettings(
-    pipeline: BuildPipeline,
-    sessionPhase: PipelineSessionPhase,
-  ): Promise<BuildStepSelection>;
-  protected abstract settingsForSelection(
-    pipeline: BuildPipeline,
-    selection: BuildStepSelection,
-  ): Promise<BuildStepSelection>;
-  protected abstract settingsForSelections(
-    pipeline: BuildPipeline,
-    selections: readonly BuildStepSelection[],
-  ): Promise<BuildStepSelection[]>;
-  protected abstract awaitStructuredResult(
-    pipeline: BuildPipeline,
-    session: PipelineSession,
-    label: string,
-  ): Promise<void>;
-  protected abstract repairStructuredReport(
-    pipeline: BuildPipeline,
-    provider: BuildPipelineProvider,
-    session: PipelineSession,
-    error: ReviewContractValidationError,
-  ): Promise<void>;
-
+export class BuildPipelineLifecycle {
   constructor(
-    protected readonly storage: StorageService,
-    protected readonly invoke: CommandInvoker,
-    protected readonly options: {
-      autoAdvance?: boolean;
-      provider?: (
-        pipeline: BuildPipeline,
-        agent: BuildPipelineAgent,
-      ) => Promise<BuildPipelineProvider>;
-      reconnectDeadlineMs?: number;
-      structuredResultDeadlineMs?: number;
-      transcriptPersistIntervalMs?: number;
-      onInteractionObservation?: (
-        event: ProviderInteractionObservationEvent & {
-          environmentId: string;
-          provider: BuildPipelineAgent;
-        },
-      ) => void | Promise<void>;
-      /** Narrow production-provider seam used by deterministic backend tests. */
-      providerDependencies?: Pick<ProviderDependencies, "openCodeClient" | "monitorRetryMs">;
-      workflowResults?: WorkflowResultService;
-      workflowResultRollout?: WorkflowResultRollout;
-      resolveAgentToolConnection?: (
-        environmentId: string,
-        projectId: string,
-        target: "host" | "container",
-        resultKey: string,
-        provider?: StructuredOutputProvider,
-      ) => AgentToolConnection;
-      /** Rejects when the environment's container cannot reach the agent tools server. */
-      assertAgentToolsReachable?: (environmentId: string, stage: string) => Promise<void>;
-      /** Multi-reviewer stage concurrency; clamped by the shared fan-out runner. */
-      reviewFanoutConcurrency?: Partial<ReviewFanoutConcurrency>;
-      /** Content-free fan-out measurements (tests and benchmarks). */
-      efficiency?: MultiReviewEfficiencyObserver;
-    } & KeyedWorkflowServiceOptions = {},
-  ) {
-    this.keyed = options.keyedScheduling ?? keyedSchedulingEnabled("build-pipeline");
-  }
-
-  /** Selected once at construction: the keyed driver or the whole-store tick, never both. */
-  protected readonly keyed: boolean;
-
-  protected get reconnectDeadlineMs(): number {
-    return this.options.reconnectDeadlineMs ?? DEFAULT_RECONNECT_DEADLINE_MS;
-  }
-
-  protected get structuredResultDeadlineMs(): number {
-    return this.options.structuredResultDeadlineMs ?? DEFAULT_STRUCTURED_RESULT_DEADLINE_MS;
-  }
-
-  protected get transcriptPersistIntervalMs(): number {
-    return this.options.transcriptPersistIntervalMs ?? DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS;
-  }
-
-  private cachedTranscriptCheckpoints: BuildPipelineTranscriptCheckpoints | null = null;
-
-  /**
-   * Newest observed transcripts and their checkpointing into the transcript
-   * store ahead of each control-record save. Lazy for the same reason as the
-   * rollout below: parameter properties are assigned after field initializers.
-   */
-  protected get transcriptCheckpoints(): BuildPipelineTranscriptCheckpoints {
-    this.cachedTranscriptCheckpoints ??= new BuildPipelineTranscriptCheckpoints(this.storage);
-    return this.cachedTranscriptCheckpoints;
-  }
-
-  /** Background legacy-transcript migration and orphan sweep started by {@link init}. */
-  protected transcriptMaintenance: Promise<void> | null = null;
+    private readonly ctx: BuildPipelineContext,
+    private readonly agents: BuildPipelineAgents,
+    private readonly recovery: BuildPipelineRecovery,
+    private readonly stageSupervisor: BuildPipelineSupervisor,
+  ) {}
 
   /**
    * Moves legacy inline transcripts out of the control file and collects
@@ -297,158 +112,30 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
    * large legacy file must not delay re-arming the supervisors, and every
    * unmigrated record stays readable through the legacy adapter meanwhile.
    */
-  protected startTranscriptMaintenance(): void {
-    if (this.transcriptMaintenance) return;
-    this.transcriptMaintenance = (async () => {
+  startTranscriptMaintenance(): void {
+    if (this.ctx.transcriptMaintenance) return;
+    this.ctx.transcriptMaintenance = (async () => {
       try {
-        const report = await this.storage.migrateBuildPipelineTranscripts({
-          shouldContinue: () => !this.stopped,
+        const report = await this.ctx.storage.migrateBuildPipelineTranscripts({
+          shouldContinue: () => !this.ctx.stopped,
         });
         if (report.migrated || report.deferred || report.orphaned) {
           console.info(
             `[build-pipeline] Transcript migration: ${report.migrated} migrated, ${report.deferred} deferred, ${report.orphaned} orphaned, ${report.remaining} remaining`,
           );
         }
-        if (this.stopped) return;
-        await this.storage.sweepBuildPipelineTranscripts();
+        if (this.ctx.stopped) return;
+        await this.ctx.storage.sweepBuildPipelineTranscripts();
       } catch (error) {
         console.warn("[build-pipeline] Transcript maintenance failed:", errorMessage(error));
       }
     })();
   }
 
-  private cachedWorkflowRollout: WorkflowResultRollout | null = null;
-
-  /**
-   * Falls back to the qualified defaults when no rollout is injected, so a
-   * directly constructed service behaves like the shipped configuration.
-   * Resolved lazily because parameter properties are assigned after class
-   * field initializers run.
-   */
-  protected get workflowRollout(): WorkflowResultRollout {
-    this.cachedWorkflowRollout ??=
-      this.options.workflowResultRollout ?? new WorkflowResultRollout(async () => undefined);
-    return this.cachedWorkflowRollout;
-  }
-
-  protected workflowResultKind(
-    phase: ResumableBuildPhase,
-    validationPlan = false,
-  ): WorkflowResultKind | undefined {
-    if (phase === "building" || phase === "fixing")
-      return validationPlan ? "validation-plan" : "review-preparation";
-    if (phase === "reviewing") return "review-report";
-    if (phase === "verifying") return "verification-result";
-    return undefined;
-  }
-
-  protected async workflowAgentMcp(
-    pipeline: BuildPipeline,
-    resultKey: string,
-    provider: StructuredOutputProvider | undefined,
-    stage: string,
-  ): Promise<AgentToolConnection | undefined> {
-    if (!this.options.resolveAgentToolConnection) return undefined;
-    if (pipeline.environmentType !== "local") {
-      await this.options.assertAgentToolsReachable?.(pipeline.environmentId, stage);
-    }
-    return this.options.resolveAgentToolConnection(
-      pipeline.environmentId,
-      pipeline.projectId,
-      pipeline.environmentType === "local" ? "host" : "container",
-      resultKey,
-      provider,
-    );
-  }
-
-  /**
-   * Admission gate, evaluated once per attempt. The rollout snapshot is read
-   * synchronously because several admission points sit inside storage mutation
-   * callbacks; {@link refreshWorkflowRollout} refreshes it just before those.
-   */
-  protected workflowToolEnabled(agent: BuildPipelineAgent, kind: WorkflowResultKind): boolean {
-    return (
-      this.options.workflowResults !== undefined &&
-      this.options.resolveAgentToolConnection !== undefined &&
-      this.workflowRollout.allows(agent, kind)
-    );
-  }
-
-  protected async refreshWorkflowRollout(): Promise<void> {
-    await this.workflowRollout.refresh();
-  }
-
-  /** Background sessions receive the same trusted environment policy as native tabs. */
-  protected async executionPolicy(
-    pipeline: BuildPipeline,
-    origin: "build-pipeline" | "looped-review" = "build-pipeline",
-  ): Promise<NativeAgentExecutionPolicy> {
-    const environment = await this.storage.getEnvironment(pipeline.environmentId);
-    if (!environment) throw new Error("Build environment no longer exists");
-    return resolveEnvironmentExecutionPolicy(environment, origin);
-  }
-
-  protected async consumeWorkflowResult(
-    pipeline: BuildPipeline,
-    session: PipelineSession,
-    resultKey: string,
-  ): Promise<void> {
-    if (session.resultTransport === "tool-v1") {
-      try {
-        await this.options.workflowResults?.consume(resultKey);
-        // Consumption ends the submission's own lifecycle. Completion is a
-        // separate stage transition the supervisor still owns.
-        delete session.resultSubmission;
-        const pending = (pipeline.pendingResultConsumptions ?? []).filter(
-          (candidate) => candidate !== resultKey,
-        );
-        if (pending.length > 0) pipeline.pendingResultConsumptions = pending;
-        else delete pipeline.pendingResultConsumptions;
-        await this.save(pipeline, pipeline.backendRevision);
-      } catch (error) {
-        // The already-saved outbox marker is authoritative. A later supervisor
-        // pass retries cleanup without turning an applied domain transition
-        // into a workflow failure.
-        this.stageWorkflowResultConsumption(pipeline, session, resultKey);
-        console.warn(
-          `[build-pipeline] Deferred result consumption for ${pipeline.id}:`,
-          errorMessage(error),
-        );
-      }
-    }
-  }
-
-  protected stageWorkflowResultConsumption(
-    pipeline: BuildPipeline,
-    session: PipelineSession,
-    resultKey: string,
-  ): void {
-    if (session.resultTransport !== "tool-v1") return;
-    pipeline.pendingResultConsumptions = Array.from(
-      new Set([...(pipeline.pendingResultConsumptions ?? []), resultKey]),
-    );
-  }
-
-  protected async readWorkflowResult<T>(
-    provider: BuildPipelineProvider,
-    session: PipelineSession,
-    resultKey: string,
-  ): Promise<StructuredOutputResult<T> | null> {
-    if (session.resultTransport === "tool-v1") {
-      if (!this.options.workflowResults) throw new Error("Workflow result store is unavailable");
-      // Refreshed on the same poll that reads the result, so the projected
-      // status a renderer rehydrates from is written by the authoritative
-      // controller rather than derived in the renderer.
-      session.resultSubmission = await this.options.workflowResults.projection(resultKey);
-      return this.options.workflowResults.structured<T>(resultKey);
-    }
-    return provider.structured<T>(session.sdkSessionId, resultKey);
-  }
-
   async init(): Promise<void> {
-    this.stopped = false;
+    this.ctx.stopped = false;
     const terminalReconciliations: Promise<void>[] = [];
-    for (const record of await this.storage.listAllBuildPipelines()) {
+    for (const record of await this.ctx.storage.listAllBuildPipelines()) {
       if (!record.snapshot || typeof record.snapshot !== "object") continue;
       const normalized = {
         ...record.snapshot,
@@ -457,13 +144,13 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
       };
       if (!isBuildPipeline(normalized)) continue;
       const pipeline = normalized;
-      if (pipeline.pendingResultConsumptions?.length && this.options.workflowResults) {
+      if (pipeline.pendingResultConsumptions?.length && this.ctx.options.workflowResults) {
         try {
           for (const resultKey of pipeline.pendingResultConsumptions) {
-            await this.options.workflowResults.consume(resultKey);
+            await this.ctx.options.workflowResults.consume(resultKey);
           }
           delete pipeline.pendingResultConsumptions;
-          await this.save(pipeline, record.revision);
+          await this.ctx.save(pipeline, record.revision);
         } catch (error) {
           console.warn(
             `[build-pipeline] Deferred result consumption for ${pipeline.id}:`,
@@ -481,7 +168,7 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
         // is rejected on purpose, and re-arming the rest of the pipelines still
         // matters far more than adopting this one.
         try {
-          await this.save(pipeline, record.revision);
+          await this.ctx.save(pipeline, record.revision);
         } catch (error) {
           console.warn(
             `[build-pipeline] Skipped restoring pipeline ${pipeline.id}:`,
@@ -490,50 +177,50 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
           continue;
         }
       }
-      if (this.needsTerminalReconciliation(pipeline)) {
-        terminalReconciliations.push(this.runLocked(pipeline.id));
+      if (this.recovery.needsTerminalReconciliation(pipeline)) {
+        terminalReconciliations.push(this.stageSupervisor.runLocked(pipeline.id));
       }
     }
     await this.finishDurablyRecordedInteractionJournalEntries();
-    if (this.options.autoAdvance !== false) {
+    if (this.ctx.options.autoAdvance !== false) {
       // Supervised services own storage maintenance; manually driven services
       // (tests) still migrate each legacy record on its next save.
       this.startTranscriptMaintenance();
-      if (this.keyed) {
+      if (this.ctx.keyed) {
         // Non-blocking: the first discovery runs on the scheduler and joins the
         // terminal reconciliations above through the same per-pipeline lock.
-        if (!this.supervisor) {
-          this.supervisor = this.createSupervisor();
+        if (!this.ctx.supervisor) {
+          this.ctx.supervisor = this.createSupervisor();
           // Deletions by other paths (environment removal) retire their keys
           // at once; everything else is noted where it is written.
-          this.unsubscribeStorage = this.storage.addResourceChangeListener((change) => {
+          this.ctx.unsubscribeStorage = this.ctx.storage.addResourceChangeListener((change) => {
             if (change.resource === "build-pipeline" && change.deleted) {
-              this.supervisor?.forget(change.id);
+              this.ctx.supervisor?.forget(change.id);
             }
           });
-          this.supervisor.start();
+          this.ctx.supervisor.start();
         }
       } else {
-        this.timer ??= setInterval(() => {
-          void this.requestTick();
+        this.ctx.timer ??= setInterval(() => {
+          void this.stageSupervisor.requestTick();
         }, BUILD_PIPELINE_PROGRESS_MS);
-        this.timer.unref?.();
-        void this.requestTick();
+        this.ctx.timer.unref?.();
+        void this.stageSupervisor.requestTick();
       }
     }
     await Promise.all(terminalReconciliations);
   }
 
   wakeEnvironment(environmentId: string, reason: WorkflowWakeReason): void {
-    this.supervisor?.wakeTarget(environmentId, reason);
+    this.ctx.supervisor?.wakeTarget(environmentId, reason);
   }
 
   schedulingStatus(): WorkflowSupervisorStatus | null {
-    return this.supervisor?.status() ?? null;
+    return this.ctx.supervisor?.status() ?? null;
   }
 
   async reconcileScheduling(): Promise<WorkflowReconcileReport | null> {
-    return this.supervisor ? this.supervisor.reconcileNow() : null;
+    return this.ctx.supervisor ? this.ctx.supervisor.reconcileNow() : null;
   }
 
   /**
@@ -546,50 +233,39 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
       domain: "build-pipeline",
       kind: "build-supervisor-tick",
       progressIntervalMs: BUILD_PIPELINE_PROGRESS_MS,
-      discoveryIntervalMs: this.options.discoveryIntervalMs ?? DEFAULT_WORKFLOW_DISCOVERY_MS,
-      discover: () => discoverBuildPipelines(this.storage),
+      discoveryIntervalMs: this.ctx.options.discoveryIntervalMs ?? DEFAULT_WORKFLOW_DISCOVERY_MS,
+      discover: () => discoverBuildPipelines(this.ctx.storage),
       advance: async (pass) => {
-        this.passTriggers.set(pass.key, pass.trigger);
+        this.ctx.passTriggers.set(pass.key, pass.trigger);
         try {
-          await this.runLocked(pass.key);
+          await this.stageSupervisor.runLocked(pass.key);
         } finally {
-          this.passTriggers.delete(pass.key);
+          this.ctx.passTriggers.delete(pass.key);
         }
       },
-      admission: this.options.workflowAdmission ?? null,
+      admission: this.ctx.options.workflowAdmission ?? null,
       withoutAdmission: (obligation) => obligation === "provision",
-      ...(this.options.schedulerClock
-        ? { now: this.options.schedulerClock.now, timers: this.options.schedulerClock.timers }
+      ...(this.ctx.options.schedulerClock
+        ? {
+            now: this.ctx.options.schedulerClock.now,
+            timers: this.ctx.options.schedulerClock.timers,
+          }
         : {}),
     });
-  }
-
-  /** Keeps the keyed index current after an authoritative read or durable write. */
-  protected noteRecord(pipelineId: string, snapshot: unknown): void {
-    this.supervisor?.note(
-      pipelineId,
-      buildPipelineObligation(snapshot),
-      buildPipelineTarget(snapshot),
-    );
-  }
-
-  /** Trigger of the pass now running for a pipeline; explicit when not keyed. */
-  protected passTrigger(pipelineId: string): PollTrigger {
-    return this.passTriggers.get(pipelineId) ?? "explicit";
   }
 
   /**
    * Close the narrow crash window after the workflow snapshot committed but
    * before its journal entry advanced to `workflow-recorded`.
    */
-  protected async finishDurablyRecordedInteractionJournalEntries(): Promise<void> {
-    const records = await this.storage.listAllBuildPipelines();
+  async finishDurablyRecordedInteractionJournalEntries(): Promise<void> {
+    const records = await this.ctx.storage.listAllBuildPipelines();
     const pipelines = new Map(
       records
         .filter((record) => isBuildPipeline(record.snapshot))
         .map((record) => [record.id, record.snapshot as BuildPipeline]),
     );
-    await this.storage.updateAgentInteractionResolutionJournal((journal) => ({
+    await this.ctx.storage.updateAgentInteractionResolutionJournal((journal) => ({
       ...journal,
       entries: journal.entries.map((entry) => {
         if (
@@ -618,36 +294,36 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
   }
 
   async shutdown(): Promise<void> {
-    this.stopped = true;
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
-    this.supervisor?.stop();
-    this.supervisor = null;
-    this.unsubscribeStorage?.();
-    this.unsubscribeStorage = null;
-    this.tickRequested = false;
-    if (this.tickPromise) {
-      await this.tickPromise;
+    this.ctx.stopped = true;
+    if (this.ctx.timer) clearInterval(this.ctx.timer);
+    this.ctx.timer = null;
+    this.ctx.supervisor?.stop();
+    this.ctx.supervisor = null;
+    this.ctx.unsubscribeStorage?.();
+    this.ctx.unsubscribeStorage = null;
+    this.ctx.tickRequested = false;
+    if (this.ctx.tickPromise) {
+      await this.ctx.tickPromise;
     }
-    await this.transcriptMaintenance;
-    this.transcriptMaintenance = null;
-    while (this.locks.size > 0) {
-      await Promise.allSettled(this.locks.values());
+    await this.ctx.transcriptMaintenance;
+    this.ctx.transcriptMaintenance = null;
+    while (this.ctx.locks.size > 0) {
+      await Promise.allSettled(this.ctx.locks.values());
     }
     // A creation still in flight caches its provider when it settles; wait for
     // it so the disposal below reaches that instance too.
-    await Promise.allSettled(this.providerCreations.values());
+    await Promise.allSettled(this.ctx.providerCreations.values());
     await Promise.allSettled(
-      [...this.providers.values()].map(async (provider) => {
+      [...this.ctx.providers.values()].map(async (provider) => {
         const disposable = provider as BuildPipelineProvider & {
           dispose?: () => void | Promise<void>;
         };
         await disposable.dispose?.();
       }),
     );
-    this.providers.clear();
-    this.provisioningPrompts.clear();
-    this.lastProviderAgent.clear();
+    this.ctx.providers.clear();
+    this.ctx.provisioningPrompts.clear();
+    this.ctx.lastProviderAgent.clear();
   }
 
   async start(input: StartBuildPipelineInput): Promise<BuildPipeline> {
@@ -657,7 +333,7 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
     let existingEnvironment: Environment | null = null;
     const existingEnvironmentId = input.existingEnvironmentId?.trim() ?? "";
     if (existingEnvironmentId) {
-      existingEnvironment = await this.storage.getEnvironment(existingEnvironmentId);
+      existingEnvironment = await this.ctx.storage.getEnvironment(existingEnvironmentId);
       if (
         !existingEnvironment ||
         existingEnvironment.projectId !== input.projectId ||
@@ -701,12 +377,12 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
     };
     if (!existingEnvironment) {
       // Installed before the reservation becomes visible to timer ticks.
-      this.provisioningPrompts.set(pipeline.id, input.namingPrompt);
+      this.ctx.provisioningPrompts.set(pipeline.id, input.namingPrompt);
     }
     try {
-      const admitted = await this.save(pipeline, 0);
+      const admitted = await this.ctx.save(pipeline, 0);
       if (admitted.id !== pipeline.id) {
-        this.provisioningPrompts.delete(pipeline.id);
+        this.ctx.provisioningPrompts.delete(pipeline.id);
         const existing = admitted.snapshot;
         if (!isBuildPipeline(existing)) {
           throw new Error("Existing build pipeline admission is invalid");
@@ -718,18 +394,19 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
         // does not have an environment to attach yet; that winner still owns
         // the provisioning pass and will materialize the tab before it returns.
         if (existing.environmentId && existing.sourceLinkedAt) {
-          await this.storage.ensureBuildPipelineTab({
+          await this.ctx.storage.ensureBuildPipelineTab({
             pipelineId: existing.id,
             taskId: existing.taskId,
             environmentId: existing.environmentId,
             isLocal: existing.environmentType === "local",
           });
-          if (this.options.autoAdvance !== false) void this.runLocked(existing.id);
+          if (this.ctx.options.autoAdvance !== false)
+            void this.stageSupervisor.runLocked(existing.id);
         }
         return existing;
       }
     } catch (error) {
-      this.provisioningPrompts.delete(pipeline.id);
+      this.ctx.provisioningPrompts.delete(pipeline.id);
       throw error;
     }
     // Provisioning is performed by the same per-pipeline supervisor lock used
@@ -738,8 +415,8 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
     // For an existing environment the first pass only commits source linkage;
     // for a new environment it provisions exactly once. In both cases a timer
     // tick joins this same lock, so it cannot race the start response's write.
-    await this.runLocked(pipeline.id, input.namingPrompt);
-    let startedRecord = await this.requireRecord(pipeline.id);
+    await this.stageSupervisor.runLocked(pipeline.id, input.namingPrompt);
+    let startedRecord = await this.ctx.requireRecord(pipeline.id);
     let started = startedRecord.snapshot as BuildPipeline;
     if (started.phase === "failed") {
       throw new Error(started.error ?? "Failed to start build pipeline");
@@ -749,20 +426,20 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
       // source-linked in this second pass. It must also use runLocked: a timer
       // can observe the association save before start() resumes, and both
       // callers must join one CAS write rather than racing ensureSourceLink.
-      await this.runLocked(pipeline.id);
-      startedRecord = await this.requireRecord(pipeline.id);
+      await this.stageSupervisor.runLocked(pipeline.id);
+      startedRecord = await this.ctx.requireRecord(pipeline.id);
       started = startedRecord.snapshot as BuildPipeline;
       if (started.phase === "failed") {
         throw new Error(started.error ?? "Failed to link build pipeline source");
       }
     }
-    await this.storage.ensureBuildPipelineTab({
+    await this.ctx.storage.ensureBuildPipelineTab({
       pipelineId: started.id,
       taskId: started.taskId,
       environmentId: started.environmentId,
       isLocal: started.environmentType === "local",
     });
-    if (this.options.autoAdvance !== false) void this.runLocked(pipeline.id);
+    if (this.ctx.options.autoAdvance !== false) void this.stageSupervisor.runLocked(pipeline.id);
     return started;
   }
 
@@ -789,12 +466,12 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
         skipped += 1;
         continue;
       }
-      if (await this.storage.getBuildPipeline(normalized.id)) {
+      if (await this.ctx.storage.getBuildPipeline(normalized.id)) {
         skipped += 1;
         continue;
       }
       if (normalized.environmentId) {
-        const environment = await this.storage.getEnvironment(normalized.environmentId);
+        const environment = await this.ctx.storage.getEnvironment(normalized.environmentId);
         if (
           !environment ||
           environment.projectId !== projectId ||
@@ -810,14 +487,14 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
       // admission key and returns that record instead. Treating the returned id
       // as imported would report a pipeline that was never persisted and then
       // schedule a supervisor pass for it.
-      const admitted = await this.save(normalized, 0);
+      const admitted = await this.ctx.save(normalized, 0);
       if (admitted.id !== normalized.id) {
         skipped += 1;
         continue;
       }
       importedIds.push(normalized.id);
-      if (isActiveBuildPhase(normalized.phase) && this.options.autoAdvance !== false) {
-        void this.runLocked(normalized.id);
+      if (isActiveBuildPhase(normalized.phase) && this.ctx.options.autoAdvance !== false) {
+        void this.stageSupervisor.runLocked(normalized.id);
       }
     }
     return { importedIds, skipped };
@@ -825,19 +502,19 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
 
   /** Immediate supervisor pass, also useful for deterministic backend tests. */
   advanceNow(pipelineId: string): Promise<void> {
-    return this.runLocked(pipelineId);
+    return this.stageSupervisor.runLocked(pipelineId);
   }
 
   async pause(pipelineId: string): Promise<BuildPipeline> {
     let abortErrors: unknown[] = [];
-    const pipeline = await this.mutate(pipelineId, async (pipeline) => {
+    const pipeline = await this.ctx.mutate(pipelineId, async (pipeline) => {
       const previous = resumablePhase(pipeline.phase);
       if (!previous) return;
       if (
         pipeline.validationRun &&
         ["planned", "running"].includes(pipeline.validationRun.status)
       ) {
-        pipeline.validationRun = await this.invoke("cancel_review_validation", {
+        pipeline.validationRun = await this.ctx.invoke("cancel_review_validation", {
           environmentId: pipeline.environmentId,
           run: pipeline.validationRun,
         });
@@ -850,12 +527,12 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
       // else would ever clear it.
       delete pipeline.stallWarning;
       if (pipeline.reviewFanout) {
-        abortErrors = await this.abandonReviewFanout(pipeline, "idle");
+        abortErrors = await this.agents.abandonReviewFanout(pipeline, "idle");
       } else {
         const session = sessionForCurrentPhase(pipeline);
         if (session?.status !== "running") return;
         try {
-          const provider = await this.provider(pipeline, sessionAgent(pipeline, session));
+          const provider = await this.agents.provider(pipeline, sessionAgent(pipeline, session));
           await provider.abort(session.sdkSessionId);
           session.status = "idle";
         } catch (error) {
@@ -872,10 +549,10 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
   }
 
   async resume(pipelineId: string): Promise<BuildPipeline> {
-    await this.refreshWorkflowRollout();
-    const paused = (await this.requireRecord(pipelineId)).snapshot as BuildPipeline;
+    await this.ctx.refreshWorkflowRollout();
+    const paused = (await this.ctx.requireRecord(pipelineId)).snapshot as BuildPipeline;
     if (paused.phase === "paused") await this.closeWorkflowResults(paused, "superseded");
-    const pipeline = await this.mutate(pipelineId, (candidate) => {
+    const pipeline = await this.ctx.mutate(pipelineId, (candidate) => {
       if (candidate.phase !== "paused") return;
       const phase = candidate.pausedFromPhase ?? "building";
       candidate.phase = phase;
@@ -904,10 +581,10 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
           phase === "fixing" ||
           phase === "reviewing" ||
           phase === "verifying";
-        const resumeResultKind = this.workflowResultKind(phase);
+        const resumeResultKind = this.ctx.workflowResultKind(phase);
         const resultTransport =
           structuredReview && resumeResultKind
-            ? this.workflowToolEnabled(sessionAgent(candidate, session), resumeResultKind)
+            ? this.ctx.workflowToolEnabled(sessionAgent(candidate, session), resumeResultKind)
               ? ("tool-v1" as const)
               : ("structured-output-v1" as const)
             : structuredReview
@@ -946,7 +623,7 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
         }
       }
     });
-    void this.runLocked(pipelineId);
+    void this.stageSupervisor.runLocked(pipelineId);
     return pipeline;
   }
 
@@ -962,13 +639,13 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
   async sendMessage(pipelineId: string, text: string): Promise<BuildPipeline> {
     const trimmed = validatedUserMessage(text);
     let rejection: Error | undefined;
-    const pipeline = await this.mutate(pipelineId, (candidate) => {
+    const pipeline = await this.ctx.mutate(pipelineId, (candidate) => {
       rejection = userMessageRejection(candidate);
       if (rejection) return;
       rejection = enqueueUserMessage(candidate, trimmed);
     });
     if (rejection) throw rejection;
-    void this.runLocked(pipelineId);
+    void this.stageSupervisor.runLocked(pipelineId);
     return pipeline;
   }
 
@@ -996,7 +673,7 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
     const trimmed = validatedUserMessage(text);
     let rejection: Error | undefined;
     let delivery: "steered" | "queued" = "queued";
-    const pipeline = await this.mutate(pipelineId, async (candidate) => {
+    const pipeline = await this.ctx.mutate(pipelineId, async (candidate) => {
       rejection = userMessageRejection(candidate);
       if (rejection) return;
       try {
@@ -1013,7 +690,7 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
     if (rejection) throw rejection;
     // A queued fallback needs the supervisor to notice it; a steer is already
     // in the turn and the next pass observes the turn as it always does.
-    if (delivery === "queued") void this.runLocked(pipelineId);
+    if (delivery === "queued") void this.stageSupervisor.runLocked(pipelineId);
     return { pipeline, delivery };
   }
 
@@ -1030,7 +707,7 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
     // A prompt whose dispatch is unconfirmed has not started its turn; steering
     // now would target the previous one.
     if (pipeline.pendingPromptAttempt) return false;
-    const provider = await this.provider(pipeline, sessionAgent(pipeline, session));
+    const provider = await this.agents.provider(pipeline, sessionAgent(pipeline, session));
     if (!provider.steerSupported || !provider.activeSteerRun || !provider.performSessionAction) {
       return false;
     }
@@ -1085,7 +762,7 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
    */
   async retryReview(pipelineId: string): Promise<BuildPipeline> {
     let rejection: Error | undefined;
-    await this.mutate(pipelineId, (candidate) => {
+    await this.ctx.mutate(pipelineId, (candidate) => {
       if (candidate.phase === "complete") {
         rejection = new Error("This build has already completed");
         return;
@@ -1117,9 +794,9 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
       }
     });
     if (rejection) throw rejection;
-    this.reviewerPollGate.clearPrefix(`${pipelineId}\0`);
-    await this.runLocked(pipelineId);
-    return (await this.requireRecord(pipelineId)).snapshot as BuildPipeline;
+    this.ctx.reviewerPollGate.clearPrefix(`${pipelineId}\0`);
+    await this.stageSupervisor.runLocked(pipelineId);
+    return (await this.ctx.requireRecord(pipelineId)).snapshot as BuildPipeline;
   }
 
   /**
@@ -1190,7 +867,7 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
       | Error,
   ): Promise<BuildPipeline> {
     let rejection: Error | undefined;
-    await this.mutate(pipelineId, async (candidate) => {
+    await this.ctx.mutate(pipelineId, async (candidate) => {
       const target = locate(candidate);
       if (target instanceof Error) {
         rejection = target;
@@ -1211,7 +888,7 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
           candidate.validationRun.status === "running")
       ) {
         try {
-          candidate.validationRun = await this.invoke("cancel_review_validation", {
+          candidate.validationRun = await this.ctx.invoke("cancel_review_validation", {
             environmentId: candidate.environmentId,
             run: candidate.validationRun,
           });
@@ -1221,13 +898,13 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
         }
       }
       if (candidate.reviewFanout) {
-        await this.abandonReviewFanout(candidate, "idle");
+        await this.agents.abandonReviewFanout(candidate, "idle");
       } else {
         const current = sessionForCurrentPhase(candidate);
         if (current?.status === "running") {
           try {
             await (
-              await this.provider(candidate, sessionAgent(candidate, current))
+              await this.agents.provider(candidate, sessionAgent(candidate, current))
             ).abort(current.sdkSessionId);
           } catch {
             // Restart rotates to a new session; a failed best-effort abort must
@@ -1347,14 +1024,14 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
       delete candidate.completionCommentError;
     });
     if (rejection) throw rejection;
-    await this.runLocked(pipelineId);
-    return (await this.requireRecord(pipelineId)).snapshot as BuildPipeline;
+    await this.stageSupervisor.runLocked(pipelineId);
+    return (await this.ctx.requireRecord(pipelineId)).snapshot as BuildPipeline;
   }
 
   /** Starts a fresh attempt for the non-interactive stage that failed. */
   async retryStage(pipelineId: string): Promise<BuildPipeline> {
     let rejection: Error | undefined;
-    await this.mutate(pipelineId, (candidate) => {
+    await this.ctx.mutate(pipelineId, (candidate) => {
       if (
         candidate.phase !== "failed" ||
         !candidate.failureContext ||
@@ -1386,13 +1063,13 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
       delete candidate.completionCommentError;
     });
     if (rejection) throw rejection;
-    await this.runLocked(pipelineId);
-    return (await this.requireRecord(pipelineId)).snapshot as BuildPipeline;
+    await this.stageSupervisor.runLocked(pipelineId);
+    return (await this.ctx.requireRecord(pipelineId)).snapshot as BuildPipeline;
   }
 
   async retryInteractionFailure(pipelineId: string): Promise<BuildPipeline> {
     let rejection: Error | undefined;
-    await this.mutate(pipelineId, (candidate) => {
+    await this.ctx.mutate(pipelineId, (candidate) => {
       if (
         candidate.phase !== "failed" ||
         candidate.failureContext?.kind !== "interactive-request"
@@ -1417,31 +1094,31 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
       delete candidate.completionCommentError;
     });
     if (rejection) throw rejection;
-    await this.runLocked(pipelineId);
-    return (await this.requireRecord(pipelineId)).snapshot as BuildPipeline;
+    await this.stageSupervisor.runLocked(pipelineId);
+    return (await this.ctx.requireRecord(pipelineId)).snapshot as BuildPipeline;
   }
 
   async cancel(pipelineId: string): Promise<BuildPipeline> {
     let abortErrors: unknown[] = [];
-    const pipeline = await this.mutate(pipelineId, async (pipeline) => {
+    const pipeline = await this.ctx.mutate(pipelineId, async (pipeline) => {
       if (
         pipeline.validationRun &&
         ["planned", "running"].includes(pipeline.validationRun.status)
       ) {
-        pipeline.validationRun = await this.invoke("cancel_review_validation", {
+        pipeline.validationRun = await this.ctx.invoke("cancel_review_validation", {
           environmentId: pipeline.environmentId,
           run: pipeline.validationRun,
         });
       }
 
       if (pipeline.reviewFanout) {
-        abortErrors = await this.abandonReviewFanout(pipeline, "idle");
+        abortErrors = await this.agents.abandonReviewFanout(pipeline, "idle");
       } else {
         const session = sessionForCurrentPhase(pipeline);
         if (session?.status === "running" && pipeline.environmentId) {
           try {
             await (
-              await this.provider(pipeline, sessionAgent(pipeline, session))
+              await this.agents.provider(pipeline, sessionAgent(pipeline, session))
             ).abort(session.sdkSessionId);
             session.status = "idle";
           } catch (error) {
@@ -1465,9 +1142,9 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
     // `provider()` records attribution for reconnect handling while a pipeline
     // is active. Cancellation is a terminal transition, so retaining the id
     // here would grow the map for every cancelled build until shutdown.
-    this.lastProviderAgent.delete(pipelineId);
+    this.ctx.lastProviderAgent.delete(pipelineId);
     await this.closeWorkflowResults(pipeline, "cancelled");
-    await this.reconcileTerminalState(pipeline);
+    await this.recovery.reconcileTerminalState(pipeline);
     if (abortErrors.length > 0) throw abortErrors[0];
     return pipeline;
   }
@@ -1511,88 +1188,13 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
       Array.from(this.workflowResultKeys(pipeline), (resultKey) =>
         excluded.has(resultKey)
           ? Promise.resolve()
-          : this.options.workflowResults?.close(resultKey, lifecycle),
+          : this.ctx.options.workflowResults?.close(resultKey, lifecycle),
       ),
     );
-  }
-
-  /** Stops every provider turn owned by a live multi-model review. */
-  protected async abandonReviewFanout(
-    pipeline: BuildPipeline,
-    sessionStatus: "idle" | "error",
-  ): Promise<unknown[]> {
-    const fanout = pipeline.reviewFanout;
-    if (!fanout) return [];
-    const now = new Date().toISOString();
-    const targets: Array<{ agent: BuildPipelineAgent; sessionId: string }> = [];
-    for (const reviewer of fanout.reviewers) {
-      if (
-        reviewer.status !== "pending" &&
-        reviewer.status !== "running" &&
-        reviewer.status !== "cancelled"
-      ) {
-        continue;
-      }
-      reviewer.status = "cancelled";
-      reviewer.completedAt = now;
-      delete reviewer.stalledSince;
-      delete reviewer.idleResultPolls;
-      if (reviewer.providerSessionId) {
-        const session = pipeline.sessions.find(
-          (candidate) => candidate.sdkSessionId === reviewer.providerSessionId,
-        );
-        if (session) {
-          session.completedAt = now;
-          if (reviewer.tokenCount !== undefined) session.tokenCount = reviewer.tokenCount;
-          if (!reviewer.modelUnpinned) session.model = reviewer.model;
-          if (reviewer.reasoningEffort) session.reasoningEffort = reviewer.reasoningEffort;
-        }
-        targets.push({
-          agent: reviewer.agent as BuildPipelineAgent,
-          sessionId: reviewer.providerSessionId,
-        });
-      }
-    }
-    if (fanout.consolidation && !fanout.report) {
-      targets.push({
-        agent: fanout.consolidation.agent as BuildPipelineAgent,
-        sessionId: fanout.consolidation.providerSessionId,
-      });
-    }
-    const fanoutOwnsCurrentSession =
-      pipeline.phase === "reviewing" ||
-      (pipeline.phase === "paused" && pipeline.pausedFromPhase === "reviewing");
-    const currentSession = sessionForCurrentPhase(pipeline);
-    if (!fanoutOwnsCurrentSession && currentSession?.status === "running") {
-      targets.push({
-        agent: sessionAgent(pipeline, currentSession),
-        sessionId: currentSession.sdkSessionId,
-      });
-    }
-    const uniqueTargets = Array.from(
-      new Map(targets.map((target) => [target.sessionId, target])).values(),
-    );
-    const mirroredSessionIds = new Set(
-      fanout.reviewers.flatMap((reviewer) =>
-        reviewer.providerSessionId ? [reviewer.providerSessionId] : [],
-      ),
-    );
-    if (fanout.consolidation) mirroredSessionIds.add(fanout.consolidation.providerSessionId);
-    for (const target of uniqueTargets) mirroredSessionIds.add(target.sessionId);
-    for (const sessionId of mirroredSessionIds) {
-      const session = pipeline.sessions.find((candidate) => candidate.sdkSessionId === sessionId);
-      if (session?.status === "running") session.status = sessionStatus;
-    }
-    const results = await Promise.allSettled(
-      uniqueTargets.map(async ({ agent, sessionId }) => {
-        await (await this.provider(pipeline, agent)).abort(sessionId);
-      }),
-    );
-    return results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
   }
 
   async remove(pipelineId: string): Promise<void> {
-    const record = await this.storage.getBuildPipeline(pipelineId);
+    const record = await this.ctx.storage.getBuildPipeline(pipelineId);
     if (
       record &&
       isBuildPipeline(record.snapshot) &&
@@ -1600,13 +1202,13 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
     ) {
       await this.cancel(pipelineId);
     }
-    await this.storage.deleteBuildPipeline(pipelineId);
+    await this.ctx.storage.deleteBuildPipeline(pipelineId);
     if (record && isBuildPipeline(record.snapshot)) {
-      this.transcriptCheckpoints.forget(record.snapshot.sessions);
+      this.ctx.transcriptCheckpoints.forget(record.snapshot.sessions);
     }
-    this.supervisor?.forget(pipelineId);
-    this.reviewerPollGate.clearPrefix(`${pipelineId}\0`);
-    this.lastProviderAgent.delete(pipelineId);
+    this.ctx.supervisor?.forget(pipelineId);
+    this.ctx.reviewerPollGate.clearPrefix(`${pipelineId}\0`);
+    this.ctx.lastProviderAgent.delete(pipelineId);
     if (!record || !isBuildPipeline(record.snapshot)) return;
     const removed = record.snapshot;
     // Providers are keyed by environment and agent, so a sibling pipeline in
@@ -1617,7 +1219,7 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
     const providerKeys = new Set(
       [...pipelineAgents(removed)].map((agent) => `${removed.environmentId}:${agent}`),
     );
-    for (const candidate of await this.storage.listAllBuildPipelines()) {
+    for (const candidate of await this.ctx.storage.listAllBuildPipelines()) {
       if (candidate.id === pipelineId || !isBuildPipeline(candidate.snapshot)) {
         continue;
       }
@@ -1626,37 +1228,23 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
       }
     }
     for (const providerKey of providerKeys) {
-      const provider = this.providers.get(providerKey);
-      this.providers.delete(providerKey);
+      const provider = this.ctx.providers.get(providerKey);
+      this.ctx.providers.delete(providerKey);
       await provider?.dispose?.();
     }
   }
 
   async retryCompletionComment(pipelineId: string): Promise<BuildPipeline> {
-    await this.mutate(pipelineId, (candidate) => {
+    await this.ctx.mutate(pipelineId, (candidate) => {
       delete candidate.completionCommentStatus;
       delete candidate.completionCommentError;
     });
-    await this.runLocked(pipelineId);
-    const record = await this.requireRecord(pipelineId);
+    await this.stageSupervisor.runLocked(pipelineId);
+    const record = await this.ctx.requireRecord(pipelineId);
     const pipeline = record.snapshot as BuildPipeline;
     if (pipeline.completionCommentStatus === "failed") {
       throw new Error(pipeline.completionCommentError ?? "Failed to post completion comment");
     }
     return pipeline;
   }
-
-  protected abstract requestTick(): Promise<void>;
-  protected abstract runLocked(pipelineId: string, namingPrompt?: string): Promise<void>;
-  protected abstract mutate(
-    pipelineId: string,
-    mutation: (pipeline: BuildPipeline) => void | Promise<void>,
-  ): Promise<BuildPipeline>;
-  protected abstract requireRecord(pipelineId: string): Promise<PersistedBuildPipeline>;
-  protected abstract provider(
-    pipeline: BuildPipeline,
-    agent: BuildPipelineAgent,
-  ): Promise<BuildPipelineProvider>;
-  protected abstract needsTerminalReconciliation(pipeline: BuildPipeline): boolean;
-  protected abstract reconcileTerminalState(pipeline: BuildPipeline): Promise<void>;
 }

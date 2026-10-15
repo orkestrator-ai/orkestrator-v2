@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   COORDINATOR_EXECUTION_POLICY,
   COORDINATOR_WORKSPACE_VERSION,
+  coordinatorConversationSessionKey,
   coordinatorMainConversation,
   coordinatorRuntimeId,
   type CoordinatorConversation,
@@ -50,10 +51,11 @@ function conversation(
   agent?: AgentPlatform,
 ): CoordinatorConversation {
   const id = randomUUID();
+  const tabId = `coordinator-${id}`;
   return {
     id,
-    tabId: `coordinator-${id}`,
-    logicalSessionKey: `coordinator-${workspaceId}:${id}`,
+    tabId,
+    logicalSessionKey: coordinatorConversationSessionKey(workspaceId, { id, tabId }),
     title: role === "main" ? "Coordinator" : `Side ${sideOrdinal}`,
     createdAt: new Date().toISOString(),
     mailboxIncarnationId: randomUUID(),

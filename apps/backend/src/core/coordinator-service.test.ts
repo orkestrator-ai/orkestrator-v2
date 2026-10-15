@@ -435,6 +435,9 @@ describe("project coordinator", () => {
       agent: "codex",
       bridgePort: 4123,
       bridgePid: 9911,
+      // The renderer's tab key, so mail lands in the transcript the tab shows.
+      logicalSessionKey:
+        "env-coordinator:workspace-legacy:conversation-legacy:coordinator-conversation-legacy",
     });
     expect(workspace.conversations[0]).not.toHaveProperty("codexBridgePort");
   });

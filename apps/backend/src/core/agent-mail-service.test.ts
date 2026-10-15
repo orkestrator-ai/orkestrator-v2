@@ -299,7 +299,8 @@ describe("AgentMailService", () => {
       expect(dispatches[0]).toMatchObject({
         environmentId: runtimeId,
         agent: "codex",
-        logicalSessionKey: "coordinator-coordinator-1:conversation-1",
+        // The coordinator tab's own session, so the turn shows in its transcript.
+        logicalSessionKey: `env-${runtimeId}:coordinator-tab`,
         requestId: `mail-inject-${report.id}`,
         origin: "coordinator",
       });

@@ -3,11 +3,13 @@ import {
   COORDINATOR_CONTEXT_CLOSE_TAG,
   COORDINATOR_CONTEXT_OPEN_TAG,
   coordinatorConversationIdFromRuntimeId,
+  coordinatorConversationSessionKey,
   coordinatorIdFromRuntimeId,
   coordinatorRuntimeId,
   isCoordinatorWorkspace,
   stripCoordinatorContext,
   normalizeCoordinatorRoles,
+  normalizeCoordinatorSessionKeys,
   type CoordinatorWorkspace,
 } from "./coordinator.js";
 
@@ -174,5 +176,21 @@ describe("coordinator conversation roles", () => {
       null,
     );
     expect(normalizeCoordinatorRoles(sidesOnly)).toBe(sidesOnly);
+  });
+
+  test("every conversation uses the renderer's tab session key", () => {
+    // Mail injected under any other key runs in a second provider session the
+    // coordinator tab never shows.
+    expect(coordinatorConversationSessionKey("w", { id: "a", tabId: "coordinator-a" })).toBe(
+      "env-coordinator:w:a:coordinator-a",
+    );
+    const migrated = normalizeCoordinatorSessionKeys(
+      workspaceOf([conversationOf("a"), conversationOf("b")], "a"),
+    );
+    expect(migrated.conversations.map((item) => item.logicalSessionKey)).toEqual([
+      "env-coordinator:w:a:coordinator-a",
+      "env-coordinator:w:b:coordinator-b",
+    ]);
+    expect(normalizeCoordinatorSessionKeys(migrated)).toBe(migrated);
   });
 });

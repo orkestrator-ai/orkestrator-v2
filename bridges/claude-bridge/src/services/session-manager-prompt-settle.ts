@@ -1,5 +1,6 @@
 import { structuredOutputFailure } from "@orkestrator/protocol/structured-output";
 import type { PromptOptions } from "../types/index.js";
+import { claudePermissionMode, claudeTurnPolicy } from "./claude-query-config.js";
 import { eventEmitter } from "./event-emitter.js";
 import { debugLog, flushDebugLogs } from "./logger.js";
 import { recordStructuredOutput, sessions } from "./session-manager-core.js";
@@ -82,6 +83,8 @@ export function settleTurnEnd(turn: TurnState): PromptFollowUp | undefined {
       model: options?.model,
       effort: options?.effort,
       fastMode: options?.fastMode,
+      approvalMode: options?.approvalMode,
+      readOnly: options?.readOnly,
       parameterValues: options?.parameterValues,
       permissionMode: "plan",
       _isReprompt: true,
@@ -126,7 +129,13 @@ export function settleTurnEnd(turn: TurnState): PromptFollowUp | undefined {
       model: options?.model,
       effort: options?.effort,
       fastMode: options?.fastMode,
+      approvalMode: options?.approvalMode,
+      readOnly: options?.readOnly,
       parameterValues: options?.parameterValues,
+      permissionMode: claudePermissionMode(
+        claudeTurnPolicy(session.executionPolicy, options?.readOnly),
+        options?.approvalMode,
+      ),
       _isReprompt: true,
     };
 

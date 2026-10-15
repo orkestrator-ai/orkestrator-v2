@@ -378,6 +378,34 @@ describe("session routes", () => {
     expect(rejected.status).toBe(400);
   });
 
+  test.each(["default", "acceptEdits", "auto", "bypassPermissions"] as const)(
+    "config applies %s and ignores stale permission parameters while preserving plan preference",
+    async (approvalMode) => {
+      const sessionData = { ...defaultGetSession("s-1")!, planMode: false };
+      mockGetSession.mockImplementation(() => sessionData);
+      for (const mode of ["build", "plan"] as const) {
+        const response = await jsonRequest("POST", "/session/s-1/config", {
+          mode,
+          approvalMode,
+          parameterValues: { permissionMode: "bypassPermissions" },
+        });
+        expect(response.status).toBe(200);
+        expect(mockConfigureClaudeSession).toHaveBeenLastCalledWith(
+          sessionData,
+          expect.objectContaining({ permissionMode: mode === "plan" ? "plan" : approvalMode }),
+        );
+        expect(mockSetSessionPreferences).toHaveBeenLastCalledWith("s-1", {
+          planMode: mode === "plan",
+        });
+      }
+      sessionData.planMode = true;
+      mockSetSessionPreferences.mockClear();
+      await jsonRequest("POST", "/session/s-1/config", { approvalMode });
+      expect(mockConfigureClaudeSession).toHaveBeenLastCalledWith(sessionData, {});
+      expect(mockSetSessionPreferences).not.toHaveBeenCalled();
+    },
+  );
+
   test("applies Ultracode on and off through the live config route", async () => {
     const applyFlagSettings = mock(async (_settings: Record<string, unknown>) => undefined);
     const session = {

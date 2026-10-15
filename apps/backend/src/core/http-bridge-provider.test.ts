@@ -1782,6 +1782,7 @@ describe("HTTP bridge provider", () => {
       requestId: "request-build",
       mode: "build",
       approvalMode: "default",
+      parameterValues: { permissionMode: "bypassPermissions" },
     });
     await provider.send("session-1", "Plan it", {
       requestId: "request-plan",
@@ -1798,6 +1799,17 @@ describe("HTTP bridge provider", () => {
       permissionMode: "plan",
       approvalMode: "acceptEdits",
     });
+  });
+
+  test("approval-only Codex updates do not reset plan, fast mode or model configuration", async () => {
+    const { provider, requests } = httpProvider(() => Response.json({ ok: true }), codexConnection);
+    await provider.updateInteractiveControls!("codex-1", { approvalMode: "untrusted" });
+    expect(requests).toHaveLength(0);
+    await provider.updateInteractiveControls!("codex-1", {
+      fastMode: false,
+      approvalMode: "on-request",
+    });
+    expect(JSON.parse(String(requests[0]!.init.body))).toEqual({ fastMode: false });
   });
 
   test("forwards the Codex approval mode with each prompt", async () => {

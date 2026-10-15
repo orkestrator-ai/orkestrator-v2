@@ -149,6 +149,8 @@ describe("settleTurnEnd plan rejection", () => {
       model: "claude-sonnet-test",
       effort: "high",
       fastMode: true,
+      approvalMode: "default",
+      readOnly: false,
       parameterValues: { thinking: "adaptive" },
       attachments: [{ type: "file", path: "/tmp/already-seen.txt", filename: "already-seen.txt" }],
       requestId: "original",
@@ -162,6 +164,8 @@ describe("settleTurnEnd plan rejection", () => {
         model: "claude-sonnet-test",
         effort: "high",
         fastMode: true,
+        approvalMode: "default",
+        readOnly: false,
         parameterValues: { thinking: "adaptive" },
         permissionMode: "plan",
         _isReprompt: true,
@@ -186,4 +190,34 @@ describe("settleTurnEnd plan rejection", () => {
       finalizeTurn(turn);
     }
   });
+});
+
+describe("synthetic approval-mode retention", () => {
+  test.each(["default", "acceptEdits", "auto"] as const)(
+    "approved-plan continuation preserves %s and caps implementation permissions",
+    (approvalMode) => {
+      const turn = preparedTurn({ permissionMode: "plan", approvalMode });
+      turn.stream.pendingPlanApprovalContinuation = "Implement the approved plan";
+      try {
+        expect(settleTurnEnd(turn)?.options).toMatchObject({
+          approvalMode,
+          permissionMode: approvalMode,
+        });
+        turn.session.executionPolicy = {
+          id: "interactive-host",
+          sandbox: "provider",
+          approvals: "ask",
+          projectResources: true,
+          networkAccess: "full",
+        };
+        turn.stream.pendingPlanApprovalContinuation = "Implement safely";
+        expect(settleTurnEnd(turn)?.options).toMatchObject({
+          approvalMode,
+          permissionMode: "default",
+        });
+      } finally {
+        finalizeTurn(turn);
+      }
+    },
+  );
 });

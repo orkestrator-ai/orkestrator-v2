@@ -442,20 +442,16 @@ session.post("/:id/config", async (c) => {
       ? (body.parameterValues as Record<string, string | boolean>)
       : undefined,
   );
-  const rawPermissionMode = parameterValues?.permissionMode;
   const approvalMode = claudeApprovalMode(body.approvalMode);
   const permissionMode =
-    typeof rawPermissionMode === "string" &&
-    ["acceptEdits", "bypassPermissions", "plan"].includes(rawPermissionMode)
-      ? (rawPermissionMode as "acceptEdits" | "bypassPermissions" | "plan")
-      : body.mode === "plan"
-        ? "plan"
-        : body.mode === "build"
-          ? (approvalMode ?? "bypassPermissions")
-          : // A session in plan mode stays there; the approval mode applies on leaving.
-            approvalMode !== undefined && sessionData.planMode !== true
-            ? approvalMode
-            : undefined;
+    body.mode === "plan"
+      ? "plan"
+      : body.mode === "build"
+        ? (approvalMode ?? "bypassPermissions")
+        : // Approval changes do not leave plan mode.
+          approvalMode !== undefined && sessionData.planMode !== true
+          ? approvalMode
+          : undefined;
   try {
     await configureClaudeSession(sessionData, {
       ...(typeof body.model === "string" ? { model: body.model } : {}),

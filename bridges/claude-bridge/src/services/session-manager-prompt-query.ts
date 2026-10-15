@@ -342,7 +342,8 @@ export function claudeQueryOptions(
         ? {
             sandbox: {
               enabled: true,
-              autoAllowBashIfSandboxed: policy.approvals === "auto-approve",
+              autoAllowBashIfSandboxed:
+                policy.approvals === "auto-approve" && !claudeAsksForApproval(policy, options),
               network: { allowLocalBinding: policy.networkAccess === "full" },
             },
           }

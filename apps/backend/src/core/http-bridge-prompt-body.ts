@@ -42,9 +42,7 @@ export function bridgePromptBody(
             ? "dontAsk"
             : options.mode === "plan"
               ? "plan"
-              : typeof options.parameterValues?.permissionMode === "string"
-                ? options.parameterValues.permissionMode
-                : (options.approvalMode ?? "bypassPermissions"),
+              : (options.approvalMode ?? "bypassPermissions"),
           // Also sent on plan turns: it decides who approves tools once the
           // plan is accepted.
           ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),

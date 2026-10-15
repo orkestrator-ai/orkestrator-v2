@@ -12,6 +12,8 @@ import {
   deleteSession,
   dismissQuestion,
   getPendingPlanApprovals,
+  getPendingInteractions,
+  respondToInteraction,
   getPendingQuestions,
   getSession,
   nextQueryCall,
@@ -299,7 +301,10 @@ describe("plan approval flow", () => {
 
     const { events, stop } = captureEvents();
     try {
-      const promptPromise = sendPrompt(session.id, "make a plan", { permissionMode: "plan" });
+      const promptPromise = sendPrompt(session.id, "make a plan", {
+        permissionMode: "plan",
+        approvalMode: "default",
+      });
       const call = await nextQueryCall();
 
       const requestedAt = Date.now();
@@ -337,7 +342,10 @@ describe("plan approval flow", () => {
     const session = createSession("plan-exit-payload");
     track(session.id);
 
-    const promptPromise = sendPrompt(session.id, "make a plan", { permissionMode: "plan" });
+    const promptPromise = sendPrompt(session.id, "make a plan", {
+      permissionMode: "plan",
+      approvalMode: "default",
+    });
     const call = await nextQueryCall();
     const canUseToolPromise = call.options.canUseTool!("ExitPlanMode", {
       plan: "# Plan\n\n1. Inspect the flow.\n2. Show this plan before approval.",
@@ -362,6 +370,18 @@ describe("plan approval flow", () => {
     );
     expect(respondToPlanApproval(revisedApproval!.id, true)).toBe(true);
     await expect(revisedToolPromise).resolves.toMatchObject({ behavior: "allow" });
+    const command = repromptCall.options.canUseTool!(
+      "Bash",
+      { command: "touch reviewed" },
+      {
+        signal: new AbortController().signal,
+        requestId: "feedback-bash",
+        toolUseID: "feedback-bash",
+      },
+    );
+    await waitFor(() => getPendingInteractions(session.id).length === 1);
+    respondToInteraction("feedback-bash", { action: "decline" });
+    expect(await command).toMatchObject({ behavior: "deny" });
     repromptCall.push({ type: "result", subtype: "success" });
     repromptCall.finish();
     await promptPromise;
@@ -619,6 +639,7 @@ describe("plan approval flow", () => {
 
     const promptPromise = sendPrompt(session.id, "make a plan", {
       permissionMode: "plan",
+      approvalMode: "acceptEdits",
       parameterValues: { ultracode: true, context1m: true, thinking: "budget-8192" },
     });
     const call = await nextQueryCall();
@@ -673,7 +694,19 @@ describe("plan approval flow", () => {
     // Bridge should have queued a continuation re-prompt — serve it.
     const repromptCall = await nextQueryCall();
     // The re-prompt should NOT be in plan mode (user has approved; Claude needs full tools)
-    expect(repromptCall.options.permissionMode).not.toBe("plan");
+    expect(repromptCall.options.permissionMode).toBe("acceptEdits");
+    const command = repromptCall.options.canUseTool!(
+      "Bash",
+      { command: "touch reviewed" },
+      {
+        signal: new AbortController().signal,
+        requestId: "continuation-bash",
+        toolUseID: "continuation-bash",
+      },
+    );
+    await waitFor(() => getPendingInteractions(session.id).length === 1);
+    respondToInteraction("continuation-bash", { action: "decline" });
+    expect(await command).toMatchObject({ behavior: "deny" });
     expect(repromptCall.options.settings).toMatchObject({ ultracode: true });
     expect(repromptCall.options.betas).toContain("context-1m-2025-08-07");
     expect(repromptCall.options.thinking).toMatchObject({ budgetTokens: 8192 });

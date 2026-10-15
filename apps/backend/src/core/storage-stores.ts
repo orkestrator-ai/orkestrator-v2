@@ -265,23 +265,17 @@ export function retireLegacyJsonStores(dataDir: string, now = Date.now()): numbe
   return moved;
 }
 
-/** Apply privacy deletion to every retired generation, including interrupted writer temps.
- * Unknown or oversized shapes are removed because they cannot be attributed safely.
- * Other stores in the archive are left intact.
- */
-export function scrubLegacyJsonStore(
-  dataDir: string,
-  store: string,
-  transform?: (value: unknown) => unknown,
-): void {
+/** Every retired generation's copies of `store`: primary, backups, lock and temp files. */
+function legacyJsonCopies(dataDir: string, store: string): string[] {
   const root = path.join(dataDir, LEGACY_JSON_DIRECTORY);
   let stamps: fs.Dirent[];
   try {
     stamps = fs.readdirSync(root, { withFileTypes: true });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
   }
+  const copies: string[] = [];
   for (const stamp of stamps) {
     if (!stamp.isDirectory()) continue;
     const directory = path.join(root, stamp.name, path.dirname(store));
@@ -293,27 +287,126 @@ export function scrubLegacyJsonStore(
       throw error;
     }
     for (const name of legacyArtifacts(entries, `${path.basename(store)}.json`)) {
-      const file = path.join(directory, name);
-      if (transform && fs.statSync(file).isFile() && fs.statSync(file).size <= 64 * 1024 * 1024) {
-        let sanitized: unknown;
-        try {
-          sanitized = transform(JSON.parse(fs.readFileSync(file, "utf8")));
-        } catch {
-          fs.rmSync(file, { recursive: true, force: true });
-          continue;
-        }
-        const temp = `${file}.${process.pid}.scrub.tmp`;
-        try {
-          fs.writeFileSync(temp, JSON.stringify(sanitized), { mode: 0o600 });
-          fs.renameSync(temp, file);
-        } finally {
-          fs.rmSync(temp, { force: true });
-        }
-      } else {
-        fs.rmSync(file, { recursive: true, force: true });
-      }
+      copies.push(path.join(directory, name));
     }
   }
+  return copies;
+}
+
+/** Whether any retired generation still holds a copy of `store`. */
+export function hasLegacyJsonStore(dataDir: string, store: string): boolean {
+  return legacyJsonCopies(dataDir, store).length > 0;
+}
+
+/** Apply privacy deletion to every retired generation, including interrupted writer temps.
+ * Unknown or oversized shapes are removed because they cannot be attributed safely.
+ * A copy the transform leaves unchanged is not rewritten, so it stays byte-identical.
+ * Without a transform every copy is removed. Other stores in the archive are left intact.
+ */
+export function scrubLegacyJsonStore(
+  dataDir: string,
+  store: string,
+  transform?: (value: unknown) => unknown,
+): void {
+  for (const file of legacyJsonCopies(dataDir, store)) {
+    if (transform && fs.statSync(file).isFile() && fs.statSync(file).size <= 64 * 1024 * 1024) {
+      let sanitized: string;
+      try {
+        const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+        // Serialized before the transform runs, in case it edits in place.
+        const original = JSON.stringify(parsed);
+        sanitized = JSON.stringify(transform(parsed));
+        if (sanitized === original) continue;
+      } catch {
+        fs.rmSync(file, { recursive: true, force: true });
+        continue;
+      }
+      const temp = `${file}.${process.pid}.scrub.tmp`;
+      try {
+        fs.writeFileSync(temp, sanitized, { mode: 0o600 });
+        fs.renameSync(temp, file);
+      } finally {
+        fs.rmSync(temp, { force: true });
+      }
+    } else {
+      fs.rmSync(file, { recursive: true, force: true });
+    }
+  }
+}
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** JSON with object keys sorted, so equal content compares equal whatever its key order. */
+function canonicalJson(value: unknown): string | undefined {
+  return JSON.stringify(value, (_key, item: unknown) =>
+    isJsonRecord(item)
+      ? Object.fromEntries(
+          Object.keys(item)
+            .sort()
+            .map((key) => [key, item[key]]),
+        )
+      : item,
+  );
+}
+
+/** An array item's identity for {@link pruneRemovedContent}: its `id`, else its content. */
+function itemIdentity(item: unknown): string {
+  if (isJsonRecord(item) && (typeof item.id === "string" || typeof item.id === "number")) {
+    return `id:${typeof item.id}:${item.id}`;
+  }
+  return `content:${canonicalJson(item)}`;
+}
+
+/**
+ * `archived` without the content that `next` no longer holds, everything else
+ * left exactly as archived:
+ *
+ * - a record key `next` lacks (or holds as `undefined`) is dropped;
+ * - an array item with no counterpart in `next` is dropped. Items are matched
+ *   by `id`, else by equal content, so an item that cannot be matched is
+ *   treated as removed;
+ * - a value `next` cleared to `null` becomes `null`.
+ *
+ * Matched records and items recurse; other values (changed scalars, changed
+ * types) keep their archived value. When nothing is removed the result is
+ * `archived` itself, so `pruneRemovedContent(previous, next) !== previous`
+ * tells whether a write from `previous` to `next` deleted anything.
+ */
+export function pruneRemovedContent(archived: unknown, next: unknown): unknown {
+  if (next === null) return null;
+  if (isJsonRecord(archived) && isJsonRecord(next)) {
+    let changed = false;
+    const kept: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(archived)) {
+      if (!Object.hasOwn(next, key) || next[key] === undefined) {
+        changed = true;
+        continue;
+      }
+      const pruned = pruneRemovedContent(value, next[key]);
+      if (pruned !== value) changed = true;
+      kept[key] = pruned;
+    }
+    return changed ? kept : archived;
+  }
+  if (Array.isArray(archived) && Array.isArray(next)) {
+    const counterparts = new Map(next.map((item: unknown) => [itemIdentity(item), item]));
+    let changed = false;
+    const kept: unknown[] = [];
+    for (const item of archived) {
+      const identity = itemIdentity(item);
+      if (!counterparts.has(identity)) {
+        changed = true;
+        continue;
+      }
+      const pruned = pruneRemovedContent(item, counterparts.get(identity));
+      if (pruned !== item) changed = true;
+      kept.push(pruned);
+    }
+    return changed ? kept : archived;
+  }
+  return archived;
 }
 
 function purgeExpiredLegacyJson(archiveRoot: string, now: number): void {

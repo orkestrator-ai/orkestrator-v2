@@ -19,7 +19,9 @@ import { BACKUP_CHECK_INTERVAL_MS, takeHourlySnapshotIfDue } from "./storage-bac
 import { StoreCorruptError, type RowUpdate, type StorageDatabase } from "./storage-database.js";
 import {
   databaseStoreForPath,
+  hasLegacyJsonStore,
   openBackendDatabase,
+  pruneRemovedContent,
   scrubLegacyJsonStore,
   storeLayout,
 } from "./storage-stores.js";
@@ -1338,20 +1340,22 @@ export abstract class StorageBase {
     value: unknown,
     options: { backup?: boolean } = {},
   ): Promise<void> {
-    // The database file itself is private (0600).
-    if (this.saveStore(filePath, value)) {
-      const store = this.storeForFile(filePath)!;
-      // Environment copies have an attributable scrub at the deleting boundary.
-      if (store !== "environments") {
-        scrubLegacyJsonStore(this.dataDir, store, (archived) => {
-          if (!isRecord(archived) || !isRecord(value))
-            throw new Error("Unattributable sensitive archive");
-          return Object.fromEntries(
-            Object.keys(archived)
-              .filter((key) => key in value)
-              .map((key) => [key, value[key]]),
-          );
-        });
+    const store = this.storeForFile(filePath);
+    if (store !== null) {
+      // The retired JSON archive stays the pre-migration copy a downgrade
+      // restores from. A save that removes content prunes only that content
+      // from every archived copy; one that removes nothing leaves the archive
+      // untouched. Environment copies have an attributable scrub at the
+      // deleting boundary.
+      const archived = store !== "environments" && hasLegacyJsonStore(this.dataDir, store);
+      const previous = archived ? this.loadStore<unknown>(store, () => UNKNOWN_PREVIOUS) : null;
+      // The database file itself is private (0600).
+      this.saveStore(filePath, value);
+      if (
+        archived &&
+        (previous === UNKNOWN_PREVIOUS || pruneRemovedContent(previous, value) !== previous)
+      ) {
+        scrubLegacyJsonStore(this.dataDir, store, (copy) => pruneRemovedContent(copy, value));
       }
       return;
     }
@@ -1378,7 +1382,10 @@ export abstract class StorageBase {
     return true;
   }
 
-  /** Removes a database store entirely, or the file that holds a file store. */
+  /**
+   * Removes a database store entirely, with every retired JSON copy of it, or
+   * the file that holds a file store.
+   */
   protected async deleteStore(filePath: string): Promise<void> {
     const store = this.storeForFile(filePath);
     if (store === null) {
@@ -1389,10 +1396,11 @@ export abstract class StorageBase {
     const scope = this.openAtomicScope();
     if (scope) {
       scope.writes.set(store, DELETED_STORE);
-      return;
+    } else {
+      this.database.deleteStore(store);
+      this.database.scrubDeletedContent();
     }
-    this.database.deleteStore(store);
-    this.database.scrubDeletedContent();
+    scrubLegacyJsonStore(this.dataDir, store);
   }
 
   /**
@@ -1497,6 +1505,9 @@ export abstract class StorageBase {
 }
 
 const DELETED_STORE: unique symbol = Symbol("deleted store");
+
+/** A store with no readable value before a save: nothing shows what the save kept. */
+const UNKNOWN_PREVIOUS: unique symbol = Symbol("unknown previous value");
 
 type AtomicStorageScope = {
   /** Buffered new value per store, or {@link DELETED_STORE}. */

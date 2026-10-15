@@ -27,6 +27,12 @@ import { type NativeBackgroundTask } from "@/lib/chat/native-message-types";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 import { formatSettledToolDuration } from "@/lib/chat/native-agent-duration";
 import {
+  parseQuestionToolArgs,
+  questionToolPreview,
+  resolveQuestionToolAnswers,
+} from "@/lib/question-tool";
+import { QuestionToolDetails } from "./QuestionToolDetails";
+import {
   markdownComponents,
   TASK_LIST_SYNTAX_PATTERN,
   stringToolArg,
@@ -227,6 +233,17 @@ export function ToolPart({
     backgroundTask?.description ??
     (isBackgroundLaunch ? stringToolArg(toolArgs, "description") : undefined);
 
+  const questions = useMemo(() => parseQuestionToolArgs(toolArgs), [toolArgs]);
+  const answeredQuestions = useMemo(
+    () => (questions ? resolveQuestionToolAnswers(questions, toolArgs, toolOutput) : null),
+    [questions, toolArgs, toolOutput],
+  );
+  // The answers are already marked on the questions, so the result text that
+  // restates them adds nothing. Anything unparsed stays visible.
+  const showToolOutput =
+    Boolean(toolOutput) &&
+    !(answeredQuestions && answeredQuestions.every((question) => question.answered));
+
   const stateColors = {
     success: "text-success",
     failure: "text-failure",
@@ -370,6 +387,14 @@ export function ToolPart({
         text: toSingleLinePreview(query),
         generic: false,
         monospace: true,
+      };
+    }
+
+    if (questions) {
+      return {
+        text: toSingleLinePreview(questionToolPreview(questions)),
+        generic: false,
+        monospace: false,
       };
     }
 
@@ -525,12 +550,16 @@ export function ToolPart({
         <CollapsibleContent className="mt-1">
           <div className="overflow-hidden border-l border-border/40 pl-3">
             {/* Input/Command section */}
-            {formattedInput && (
-              <div className="px-3 py-2 border-b border-border/30">
-                <pre className="text-xs font-mono text-muted-foreground whitespace-pre-wrap break-all">
-                  {formattedInput}
-                </pre>
-              </div>
+            {answeredQuestions ? (
+              <QuestionToolDetails questions={answeredQuestions} />
+            ) : (
+              formattedInput && (
+                <div className="px-3 py-2 border-b border-border/30">
+                  <pre className="text-xs font-mono text-muted-foreground whitespace-pre-wrap break-all">
+                    {formattedInput}
+                  </pre>
+                </div>
+              )
             )}
 
             {commandChanges && commandChanges.files.length > 0 && (
@@ -538,7 +567,7 @@ export function ToolPart({
             )}
 
             {/* Output section */}
-            {toolOutput && (
+            {showToolOutput && (
               <div className="px-3 py-2 max-h-64 overflow-auto">
                 <pre className="text-xs font-mono text-foreground/80 whitespace-pre-wrap break-all">
                   {toolOutput}

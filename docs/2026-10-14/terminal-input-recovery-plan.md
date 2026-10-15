@@ -1,21 +1,20 @@
 # Terminal input recovery: one strict rule plus an explicit resume
 
-Status: Proposed (2026-10-14). Not started.
-Depends on: the shared transport core branch
-(`investigate-architecture-92cc4a4b9d96-r1`), which introduced
-`TerminalInputSequencer` and the transport contract fixtures. Land that first;
+Status: Implemented (2026-10-15) on `feat-terminal-input-resume-strict-fence`.
+Current review validation, including the real-browser recovery scenario, is
+recorded in [Review follow-up verification](#review-follow-up-verification-2026-10-15).
+Depends on: the shared transport core (#968), which introduced
+`TerminalInputSequencer` and the transport contract fixtures. It is on main;
 this is a separate, deliberately behaviour-changing PR.
 
-## Problem
+## Previous behavior
 
-After the shared-core refactor, the browser gateway and the desktop client run
-the same terminal input queue. The one remaining difference is what makes input
-work again after a write's outcome was lost (timeout, dropped response, network
-error, in-band refusal). It is a single option today,
-`TerminalInputRecovery` in
+Before this change, the browser gateway and desktop client shared the terminal
+input queue but differed on recovery after a write outcome was lost (timeout,
+dropped response, network error, in-band refusal). A now-removed recovery option in
 [`terminal-input-sequencer.ts`](../../packages/protocol/src/terminal-input-sequencer.ts):
 
-| Event after a failed write | Browser (`rearm-on-lifecycle`) | Desktop (`fence-until-start`) |
+| Event after a failed write | Previous browser policy | Previous desktop policy |
 | --- | --- | --- |
 | Successful resize | Re-arms input | Stays fenced |
 | A write the WebSocket accepts | Re-arms input | n/a (no socket) |
@@ -54,7 +53,7 @@ non-destructive resume.**
    was requested; only a start does that.
 5. "Reconnect" stays as the second toast action for when the terminal really
    is broken.
-6. `TerminalInputRecovery` is removed; there is no per-client policy left.
+6. There is no per-client recovery policy.
 
 Failed close and failed start keep the strict outcomes above. A failed close
 almost always belongs to a terminal the UI is tearing down, and after a failed
@@ -66,8 +65,8 @@ in-band refusal and fences again. That is harmless and needs no special case.
 ### Shared core (`packages/protocol`)
 
 - `TerminalInputSequencer`:
-  - Remove `recovery`, `TerminalInputRecovery`, and the `rearms` branches. Keep
-    today's `fence-until-start` behaviour throughout, including the pipelined
+  - Remove the per-client recovery option and automatic re-arming branches. Keep
+    the strict fence-until-start behaviour throughout, including the pipelined
     path (a latched failure vetoes socket writes; an accepted socket write does
     not clear it).
   - Add a client-side command, `terminal_input_resume`
@@ -147,7 +146,7 @@ These pin the old browser rule and must change:
 "leaves a failed queue closed when the recovering resize also fails" is
 unchanged.
 
-### Desktop (`tests/unit/electron/backend-terminal-input.test.ts`)
+### Desktop (`apps/desktop/tests/backend-terminal-input.test.ts`)
 
 - The existing strict tests stay as they are.
 - Add one test that resume crosses `BackendHttpClient.invoke` without an HTTP
@@ -175,6 +174,76 @@ unchanged.
   Confirm Resume does not kill the PTY (same process id before and after).
 - Inactive-environment path: fail a write, switch environments, return. The
   terminal is still fenced and Resume still works.
+
+All three are automated, so they run with the agent suites:
+
+- `e2e/agent-testing/terminal-input-resume.spec.ts` (browser suite) drives
+  vim in a plain terminal tab. A page route forwards one `local_terminal_write`
+  to the backend and then drops its response, so the keystroke lands but the
+  client sees a failure. The spec checks the toast copy and both actions, that
+  a resize goes through without re-arming input, that Resume sends nothing to
+  the backend, that vim's saved buffer matches the echo, that the shell PID is
+  unchanged, and the environment-switch path.
+- `e2e/agent-testing/terminal-input-resume-electron.spec.ts` (Electron suite)
+  runs the same flow through IPC and `BackendHttpClient`, injecting the lost
+  response by wrapping `fetch` in the main process, and resizing the native
+  window.
+
+Both specs fail at the post-resize write when the old resize re-arm is put
+back, so they guard this behaviour rather than just passing alongside it.
+
+On hosts affected by the startup Claude login dialog
+(`03-startup-claude-login-dialog.md`), `mise run test:agent:browser:isolated`
+times out before it reaches the browser spec. Run it against a manual profile
+instead: start `mise run dev:test --profile <name> --fixture
+--no-agent-credentials --agent-platforms codex`, then run Playwright on the spec
+with `ORKESTRATOR_AGENT_TEST_PROFILE=<name>`. The spec stubs the dialog itself.
+
+## Review follow-up verification (2026-10-15)
+
+The follow-up covers socket send and acknowledgement rejection, HTTP fallback
+with and without an active socket, late failures across restart and resume,
+and post-resume writes behind pending lifecycle work after overflow. Hook
+regressions cover both input families and definitive dead/closed refusals,
+including Electron's IPC error prefix. The real Sonner Toaster is exercised
+with failed asynchronous Resume actions (false and rejection), retaining the
+Reconnect control.
+
+Focused sequencer, desktop HTTP transport, browser gateway, hook and Toaster
+tests pass. Format, lint and repository typecheck pass; touched files have no
+lint warnings. The renderer was typechecked again after the IPC refusal case.
+
+The complete `mise run test` ran through `test:logged` using the GNU tool PATH
+from the testing guide. Root/agent-support, bridges, protocol regeneration,
+protocol, desktop, web, web-public, CLI and toolchain pass. Backend reports
+7,705 passed, 39 skipped and one failure:
+`apps/backend/src/core/index.test.ts` — "shutdown applies one deadline across
+lifecycle and local-operation drains". Its unchanged owner also fails alone
+(27 passed, one failed); it is the pre-existing shutdown limitation recorded
+before this follow-up. Full-run evidence is
+`/tmp/orkestrator-test-run.qfzBf2/summary.json`; isolated-owner evidence is
+`/tmp/orkestrator-test-run.LLphzk/summary.json`. The first run's shell-fixture
+failures disappeared with the documented GNU tool PATH. The web package was
+also rerun after the last renderer edit and passes.
+
+The real-browser scenario ran directly, avoiding the unrelated startup dialog
+that can prevent the aggregate browser suite reaching it:
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-terminal-fence-final-20261015 \
+ORKESTRATOR_AGENT_TEST_RUN_ID=qa-terminal-fence-final-20261015 \
+  mise run test:logged -- --name terminal-browser-final -- \
+  mise run test:agent:browser -- e2e/agent-testing/terminal-input-resume.spec.ts
+```
+
+Result: **1 passed, 0 skipped**, in 12.5 seconds. This verifies partial delivery
+in vim, the strict fence after resize and an environment switch, explicit
+resume without replay, and shell PID retention. The run used the disposable
+local fixture profile above, and its launcher was stopped and state reset.
+Evidence: `output/agent-testing/qa-terminal-fence-final-20261015/browser/results.json`.
+Electron, Docker and iOS scenario suites were not rerun: main/preload/IPC,
+container lifecycle and platform code are unchanged; the shared desktop input
+transport is covered by its owning tests.
 
 ## Rollout and risk
 

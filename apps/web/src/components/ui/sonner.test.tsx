@@ -128,7 +128,7 @@ describe("Toaster", () => {
     expect(mockToastDismiss).toHaveBeenCalledWith("persistent-toast");
   });
 
-  test("runs a toast action and still dismisses the toast", async () => {
+  test("lets Sonner dismiss a successful toast action", async () => {
     const onAction = mock(() => {});
     render(<Toaster />);
     showToast("action-toast", "Connection failed", {
@@ -138,8 +138,47 @@ describe("Toaster", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
 
     await waitFor(() => expect(onAction).toHaveBeenCalledTimes(1));
-    expect(mockToastDismiss).toHaveBeenCalledWith("action-toast");
+    await waitFor(async () =>
+      expect((await getToastElement("Connection failed")).dataset.removed).toBe("true"),
+    );
   });
+
+  for (const failure of ["false", "reject"] as const) {
+    test(`keeps Resume and Reconnect available when async resume returns ${failure}`, async () => {
+      const resume = mock(async () => {
+        if (failure === "reject") throw new Error("resume failed");
+        return false;
+      });
+      const reconnect = mock(() => {});
+      render(<Toaster />);
+      showToast("resume-toast", "Terminal input failed", {
+        action: {
+          label: "Resume input",
+          onClick: (event) => {
+            event.preventDefault();
+            void resume()
+              .then((resumed) => {
+                if (resumed) realSonner.toast.dismiss("resume-toast");
+              })
+              .catch(() => undefined);
+          },
+        },
+        cancel: { label: "Reconnect", onClick: reconnect },
+      });
+      mockToastDismiss.mockImplementation((id) => {
+        realSonner.toast.dismiss(id as ToastId);
+      });
+      fireEvent.click(await screen.findByRole("button", { name: "Resume input" }));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(resume).toHaveBeenCalledTimes(1);
+      expect(activeToastIds()).toContain("resume-toast");
+      expect((await getToastElement("Terminal input failed")).dataset.removed).not.toBe("true");
+      fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+      expect(reconnect).toHaveBeenCalledTimes(1);
+    });
+  }
 
   test("supports Enter and Space without hijacking nested controls", async () => {
     const onAction = mock(() => {});

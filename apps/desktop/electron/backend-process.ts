@@ -291,9 +291,9 @@ export class BackendHttpClient {
   private abortEvents: AbortController | null = null;
   private readonly eventReconnectDelayMs: number;
   /**
-   * Shared ordering contract for terminal input. Desktop keeps the stricter
-   * recovery rule: after an ambiguous loss only a successful start re-arms.
-   * There is no batching delay, because a loopback backend answers faster than
+   * Shared ordering contract for terminal input. After an ambiguous loss only
+   * a successful start or an explicit resume re-arms; the sequencer answers
+   * resume itself, so it never becomes an HTTP request. There is no batching delay, because a loopback backend answers faster than
    * a typing timer would; input typed during a round trip still coalesces.
    */
   private readonly terminalInput: TerminalInputSequencer;
@@ -310,7 +310,6 @@ export class BackendHttpClient {
     }
     this.eventReconnectDelayMs = options.eventReconnectDelayMs ?? EVENT_RECONNECT_DELAY_MS;
     this.terminalInput = new TerminalInputSequencer({
-      recovery: "fence-until-start",
       batchDelayMs: 0,
       sendTimeoutMs: terminalSendTimeoutMs,
       sendInput: (request, signal) =>

@@ -43,6 +43,15 @@ path, Bun treats arguments as discovery filters and can collect Playwright
 specifications, package tests, and intentionally malformed fixtures. Use
 `mise run test` for the default suite or prefix a focused path with `./`.
 
+Playwright loads every spec under Node, so a spec must not import Bun-only
+code. Backend storage needs `bun:sqlite`, and one such import aborts the whole
+suite. Reach the backend through a Bun child process instead:
+`e2e/design-service-client.ts` hosts a real design service for the component
+design specs, and `e2e/agent-testing/backend-store.ts` reads and writes stores
+behind a running profile. `tests/unit/playwright-spec-loading.test.ts` lists
+every Playwright config under Node in `mise run test`, so such an import fails
+there first.
+
 ### macOS shell-test prerequisites
 
 The default root suite executes Linux container scripts in isolated host
@@ -54,7 +63,11 @@ those requirements. Install the tools with Homebrew:
 brew install bash coreutils findutils gnu-tar grep gnu-sed flock
 ```
 
-Prefer those tools for the validation command without changing the global shell
+The fixtures that need GNU `tar` or `date` put Homebrew's GNU tool directories
+(under `/opt/homebrew/opt` or `/usr/local/opt`) ahead of the inherited PATH
+themselves (`tests/unit/gnu-shell-tools.ts`), and skip with the install command
+in the test name when those tools are missing. For everything else, prefer the
+tools for the validation command without changing the global shell
 configuration (use `/usr/local` in place of `/opt/homebrew` on Intel Macs):
 
 ```bash

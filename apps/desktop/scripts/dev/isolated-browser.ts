@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveRuntimeProfile } from "../../electron/runtime-profile.js";
+import { parseAgentTestArguments } from "./arguments.js";
 
 const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
 const MAX_STATUS_BYTES = 64 * 1024;
@@ -79,8 +80,42 @@ function launch(
   };
 }
 
+/** `dev:test` flags a caller may pass through; the runner owns the profile and fixture. */
+const PROFILE_FLAGS = new Set(["--no-agent-credentials", "--use-dev-worktree-folder"]);
+const PROFILE_OPTIONS = new Set(["--credential-source", "--agent-platforms"]);
+
+/**
+ * The disposable profile's `dev:test` arguments: a credential-free Codex
+ * fixture unless the caller chooses credential sources or platforms, for
+ * example to provision a provider that a host's startup checks require.
+ */
+export function isolatedProfileArguments(extra: readonly string[] = []): string[] {
+  for (let index = 0; index < extra.length; index += 1) {
+    const argument = extra[index]!;
+    if (PROFILE_OPTIONS.has(argument)) index += 1;
+    else if (!PROFILE_FLAGS.has(argument)) {
+      throw new Error(
+        `Unsupported isolated profile option ${argument}; accepted: ${[...PROFILE_OPTIONS, ...PROFILE_FLAGS].join(", ")}`,
+      );
+    }
+  }
+  const credentials = extra.some(
+    (argument) => argument === "--credential-source" || argument === "--no-agent-credentials",
+  );
+  const args = [
+    "--fixture",
+    ...(credentials ? [] : ["--no-agent-credentials"]),
+    ...(extra.includes("--agent-platforms") ? [] : ["--agent-platforms", "codex"]),
+    ...extra,
+  ];
+  parseAgentTestArguments(args);
+  return args;
+}
+
 export interface IsolatedBrowserOptions {
   design?: boolean;
+  /** Extra `dev:test` flags; see {@link isolatedProfileArguments}. */
+  profileArgs?: readonly string[];
   signal?: AbortSignal;
   root?: string;
   env?: NodeJS.ProcessEnv;
@@ -91,6 +126,7 @@ export interface IsolatedBrowserOptions {
 
 /** A foreground launcher is started concurrently, never awaited as a setup command. */
 export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): Promise<number> {
+  const profileArgs = isolatedProfileArguments(options.profileArgs);
   const profile = `qa-browser-${randomUUID().slice(0, 12)}`;
   const root = options.root ?? repositoryRoot;
   const runtimeProfile = resolveRuntimeProfile({
@@ -141,7 +177,7 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
     console.log(`Starting isolated browser profile ${profile}`);
     launcher = launchTask(
       "dev:test",
-      ["--fixture", "--no-agent-credentials", "--agent-platforms", "codex"],
+      profileArgs,
       startupTimeout + testTimeout,
       false,
       options.signal,

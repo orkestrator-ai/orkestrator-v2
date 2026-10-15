@@ -3,6 +3,10 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fixtureScript, policyPath, read, statusFile, writeStub } from "./firewall-test-support";
+import { gnuToolPath, missingGnuTools, titleWithSkip } from "./gnu-shell-tools";
+
+// Expiry stamps go through GNU `date -d`.
+const NO_GNU_DATE = missingGnuTools("date");
 
 describe("container firewall policy", () => {
   test("installs fail-closed policies before mutating firewall state", () => {
@@ -98,7 +102,7 @@ describe("container firewall policy", () => {
           cmd: ["bash", script],
           env: {
             ...process.env,
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}:${gnuToolPath}`,
             NETWORK_MODE: mode,
             ALLOWED_DOMAINS: domains,
           },
@@ -257,7 +261,7 @@ esac`,
         cmd: ["bash", script],
         env: {
           ...process.env,
-          PATH: `${bin}:${process.env.PATH}`,
+          PATH: `${bin}:${gnuToolPath}`,
           NETWORK_MODE: "full",
           ALLOWED_DOMAINS: "forged.example",
           CALL_LOG: join(dir, "calls"),
@@ -323,7 +327,7 @@ esac`,
         cmd: ["bash", script],
         env: {
           ...process.env,
-          PATH: `${bin}:${process.env.PATH}`,
+          PATH: `${bin}:${gnuToolPath}`,
           CALL_LOG: join(dir, "calls"),
         },
         stdout: "pipe",
@@ -395,7 +399,7 @@ esac`,
       writeStub(bin, "getent", "exit 2");
       const result = Bun.spawnSync({
         cmd: ["bash", script],
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CALL_LOG: join(dir, "calls") },
+        env: { ...process.env, PATH: `${bin}:${gnuToolPath}`, CALL_LOG: join(dir, "calls") },
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -408,97 +412,105 @@ esac`,
     }
   });
 
-  test("GitHub ranges come from a fresh backend seed, else live, else this container's cache", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ork-firewall-gh-"));
-    try {
-      const script = fixtureScript(dir, "init-firewall.sh");
-      const policy = join(dir, "policy");
-      const bin = join(dir, "bin");
-      mkdirSync(policy);
-      mkdirSync(bin);
-      mkdirSync(join(dir, "seed"));
-      mkdirSync(join(dir, "var"));
-      writeFileSync(join(policy, "network-mode"), "restricted\n");
-      writeFileSync(join(policy, "allowed-domains"), "example.org\n");
-      writeStub(bin, "iptables", 'printf "iptables %s\\n" "$*" >> "$CALL_LOG"');
-      writeStub(bin, "ip6tables", "exit 0");
-      writeStub(bin, "iptables-save", "exit 0");
-      writeStub(bin, "ipset", 'printf "ipset %s\\n" "$*" >> "$CALL_LOG"; exit 0');
-      writeStub(
-        bin,
-        "dig",
-        "if [ \"$1\" = +short ]; then printf '192.0.2.10\\n'; exit; fi\nprintf 'example.org. 60 IN A 192.0.2.11\\n'",
-      );
-      writeStub(
-        bin,
-        "curl",
-        `printf 'curl %s\\n' "$*" >> "$CALL_LOG"; case "$*" in *api.github.com/meta*) [ -n "$GITHUB_DOWN" ] && exit 22; printf '{}\\n' ;; *example.com*) exit 22 ;; *) exit 0 ;; esac`,
-      );
-      writeStub(
-        bin,
-        "jq",
-        "cat >/dev/null; case \"$*\" in *'.web and'*) exit 0 ;; *) printf '198.51.100.0/24\\n' ;; esac",
-      );
-      writeStub(bin, "aggregate", "cat");
-      writeStub(bin, "ip", "printf 'default via 172.20.0.1 dev eth0\\n'");
-      writeStub(bin, "getent", "exit 2");
-      const run = (env: Record<string, string> = {}) => {
-        writeFileSync(join(dir, "calls"), "");
-        const result = Bun.spawnSync({
-          cmd: ["bash", script],
-          env: {
-            ...process.env,
-            PATH: `${bin}:${process.env.PATH}`,
-            CALL_LOG: join(dir, "calls"),
-            ...env,
-          },
-          stdout: "pipe",
-          stderr: "pipe",
-        });
-        return { result, calls: readFileSync(join(dir, "calls"), "utf8") };
-      };
-      const stamp = (ageSeconds: number) =>
-        new Date(Date.now() - ageSeconds * 1000).toISOString().replace(/\.\d+Z$/, "Z");
+  test.skipIf(NO_GNU_DATE !== undefined)(
+    titleWithSkip(
+      "GitHub ranges come from a fresh backend seed, else live, else this container's cache",
+      NO_GNU_DATE,
+    ),
+    () => {
+      const dir = mkdtempSync(join(tmpdir(), "ork-firewall-gh-"));
+      try {
+        const script = fixtureScript(dir, "init-firewall.sh");
+        const policy = join(dir, "policy");
+        const bin = join(dir, "bin");
+        mkdirSync(policy);
+        mkdirSync(bin);
+        mkdirSync(join(dir, "seed"));
+        mkdirSync(join(dir, "var"));
+        writeFileSync(join(policy, "network-mode"), "restricted\n");
+        writeFileSync(join(policy, "allowed-domains"), "example.org\n");
+        writeStub(bin, "iptables", 'printf "iptables %s\\n" "$*" >> "$CALL_LOG"');
+        writeStub(bin, "ip6tables", "exit 0");
+        writeStub(bin, "iptables-save", "exit 0");
+        writeStub(bin, "ipset", 'printf "ipset %s\\n" "$*" >> "$CALL_LOG"; exit 0');
+        writeStub(
+          bin,
+          "dig",
+          "if [ \"$1\" = +short ]; then printf '192.0.2.10\\n'; exit; fi\nprintf 'example.org. 60 IN A 192.0.2.11\\n'",
+        );
+        writeStub(
+          bin,
+          "curl",
+          `printf 'curl %s\\n' "$*" >> "$CALL_LOG"; case "$*" in *api.github.com/meta*) [ -n "$GITHUB_DOWN" ] && exit 22; printf '{}\\n' ;; *example.com*) exit 22 ;; *) exit 0 ;; esac`,
+        );
+        writeStub(
+          bin,
+          "jq",
+          "cat >/dev/null; case \"$*\" in *'.web and'*) exit 0 ;; *) printf '198.51.100.0/24\\n' ;; esac",
+        );
+        writeStub(bin, "aggregate", "cat");
+        writeStub(bin, "ip", "printf 'default via 172.20.0.1 dev eth0\\n'");
+        writeStub(bin, "getent", "exit 2");
+        const run = (env: Record<string, string> = {}) => {
+          writeFileSync(join(dir, "calls"), "");
+          const result = Bun.spawnSync({
+            cmd: ["bash", script],
+            env: {
+              ...process.env,
+              PATH: `${bin}:${gnuToolPath}`,
+              CALL_LOG: join(dir, "calls"),
+              ...env,
+            },
+            stdout: "pipe",
+            stderr: "pipe",
+          });
+          return { result, calls: readFileSync(join(dir, "calls"), "utf8") };
+        };
+        const stamp = (ageSeconds: number) =>
+          new Date(Date.now() - ageSeconds * 1000).toISOString().replace(/\.\d+Z$/, "Z");
 
-      // A fresh seed: no call to GitHub at all.
-      writeFileSync(
-        join(dir, "seed", "github-ranges"),
-        `# github-ranges ${stamp(60)}\n203.0.113.0/24\n`,
-      );
-      let run1 = run();
-      expect(run1.result.exitCode).toBe(0);
-      expect(run1.calls).not.toContain("api.github.com/meta");
-      expect(run1.calls).toContain("ipset add -exist allowed-domains 203.0.113.0/24 timeout 0");
-      expect(JSON.parse(readFileSync(statusFile(dir), "utf8")).githubRanges).toBe("seed");
+        // A fresh seed: no call to GitHub at all.
+        writeFileSync(
+          join(dir, "seed", "github-ranges"),
+          `# github-ranges ${stamp(60)}\n203.0.113.0/24\n`,
+        );
+        let run1 = run();
+        expect(run1.result.exitCode).toBe(0);
+        expect(run1.calls).not.toContain("api.github.com/meta");
+        expect(run1.calls).toContain("ipset add -exist allowed-domains 203.0.113.0/24 timeout 0");
+        expect(JSON.parse(readFileSync(statusFile(dir), "utf8")).githubRanges).toBe("seed");
 
-      // A day-old seed: fetch live and cache it in the container.
-      writeFileSync(
-        join(dir, "seed", "github-ranges"),
-        `# github-ranges ${stamp(2 * 86400)}\n203.0.113.0/24\n`,
-      );
-      run1 = run();
-      expect(run1.result.exitCode).toBe(0);
-      expect(run1.calls).toContain("api.github.com/meta");
-      expect(readFileSync(join(dir, "var", "github-ranges"), "utf8")).toContain("198.51.100.0/24");
+        // A day-old seed: fetch live and cache it in the container.
+        writeFileSync(
+          join(dir, "seed", "github-ranges"),
+          `# github-ranges ${stamp(2 * 86400)}\n203.0.113.0/24\n`,
+        );
+        run1 = run();
+        expect(run1.result.exitCode).toBe(0);
+        expect(run1.calls).toContain("api.github.com/meta");
+        expect(readFileSync(join(dir, "var", "github-ranges"), "utf8")).toContain(
+          "198.51.100.0/24",
+        );
 
-      // GitHub unreachable: the stale-but-usable seed still applies.
-      run1 = run({ GITHUB_DOWN: "1" });
-      expect(run1.result.exitCode).toBe(0);
-      expect(JSON.parse(readFileSync(statusFile(dir), "utf8")).githubRanges).toBe("seed-stale");
+        // GitHub unreachable: the stale-but-usable seed still applies.
+        run1 = run({ GITHUB_DOWN: "1" });
+        expect(run1.result.exitCode).toBe(0);
+        expect(JSON.parse(readFileSync(statusFile(dir), "utf8")).githubRanges).toBe("seed-stale");
 
-      // Nothing usable: fail closed.
-      rmSync(join(dir, "seed", "github-ranges"));
-      writeFileSync(
-        join(dir, "var", "github-ranges"),
-        `# github-ranges ${stamp(8 * 86400)}\n198.51.100.0/24\n`,
-      );
-      run1 = run({ GITHUB_DOWN: "1" });
-      expect(run1.result.exitCode).not.toBe(0);
-      expect(run1.calls).toContain("iptables -P OUTPUT DROP");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+        // Nothing usable: fail closed.
+        rmSync(join(dir, "seed", "github-ranges"));
+        writeFileSync(
+          join(dir, "var", "github-ranges"),
+          `# github-ranges ${stamp(8 * 86400)}\n198.51.100.0/24\n`,
+        );
+        run1 = run({ GITHUB_DOWN: "1" });
+        expect(run1.result.exitCode).not.toBe(0);
+        expect(run1.calls).toContain("iptables -P OUTPUT DROP");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("policy capture validates port lists and keeps the legacy two-file policy readable", () => {
     const bootstrap = read("docker/network-policy-entrypoint.sh");

@@ -1,7 +1,7 @@
 # OpenCode compatibility probe deadline sees no exit code under aggregate load
 
 - **ID:** 0166
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-09-26
 - **Test:** `runOpenCodeLiveCompatibility > kills the server when the overall deadline expires`
 - **File:** `scripts/opencode-live-compatibility-probe.test.ts`
@@ -47,3 +47,29 @@ so it never runs ahead of a server that is about to be spawned.
 Two regression tests pin both windows: a deadline during port allocation, and
 a deadline during the CLI version read. Both failed on the previous
 implementation and pass on the new one. The file passed five consecutive runs.
+
+## Recurrence (2026-10-15)
+
+During `mise run test:logged -- --name complete-tests -- mise run test` on
+`fix-host-dependent-test-suites-d453802ec96e` (base `dd86fc8c`), the assertion at
+line 380 again received `null` instead of `0`, after 16.16 ms. The root group
+used one worker alongside four workspace slots, two bridge slots and one
+protocol slot. The root result was 2,947 passed, one skipped and two failed;
+the other failure was a deterministic DOM-diagnostics contract violation in
+new assertions, corrected separately.
+
+The unchanged owning file passed with `mise run test:logged -- --name
+opencode-probe-alone -- bun test ./scripts/opencode-live-compatibility-probe.test.ts
+--parallel=1 --only-failures` in 0.4 seconds. Evidence is in
+`/tmp/orkestrator-test-run.1UFRFF/root-and-agent-support-tests.log.gz`.
+
+Reopened for the recurring symptom, not as proof that the previous leak has
+returned. The existing abort-before-spawn fix can legitimately prevent a
+server from being created when a 10 ms deadline expires during setup. This
+test still assumes setup reaches `spawnServer` before its deadline; aggregate
+load may invalidate that assumption. No probe implementation or assertion was
+changed in this task.
+
+The root group passed the subsequent `complete-tests-final` full-suite run in
+144.4 seconds with the same worker plan. That run's only failure was the
+existing backend Git/worktree timeout tracked as 0187.

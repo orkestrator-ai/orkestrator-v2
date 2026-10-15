@@ -150,14 +150,18 @@ export async function configuredDevWorktreeRoot(
 
 /**
  * A profile keeps the worktree folder it was created with: its environments
- * record worktree paths there, so the setting only places new profiles.
+ * record worktree paths there, so the setting only places new profiles. A new
+ * agent-test profile ignores the setting unless asked (`--use-dev-worktree-folder`):
+ * its suites assume the profile-local layout, whatever the host has configured.
  */
 export async function profileWorktreeLocation(
   existing: RuntimeProfile,
   roots: RuntimeProfileRoots | undefined,
+  useDevWorktreeFolder = true,
 ): Promise<{ worktreeDir?: string; worktreeRoot?: string }> {
   const stored = await stat(path.join(existing.profileRoot, "profile.json")).catch(() => null);
   if (stored) return { worktreeDir: existing.worktreeDir };
+  if (!useDevWorktreeFolder) return {};
   return { worktreeRoot: await configuredDevWorktreeRoot(roots) };
 }
 
@@ -500,7 +504,11 @@ export async function startDevelopment(
     credentialSources: args.credentialSources,
     agentPlatforms: args.agentPlatforms,
     roots: dependencies.roots,
-    ...(await profileWorktreeLocation(existingProfile, dependencies.roots)),
+    ...(await profileWorktreeLocation(
+      existingProfile,
+      dependencies.roots,
+      flavor === "development" || args.useDevWorktreeFolder === true,
+    )),
   });
   const profilePath = await initializeProfile(profile);
   await seedAgentTestProfileState(profile, flavor);

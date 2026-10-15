@@ -250,7 +250,8 @@ describe("Codex session titles", () => {
     const codexPath = resolvePinnedCodexCli();
     expect(
       existsSync(codexPath),
-      `Pinned Codex CLI not found at ${codexPath}. Run \`bun install\` at the repo root.`,
+      `Pinned Codex CLI not found at ${codexPath}. Run \`mise run toolchain:install --tool codex\` ` +
+        `(or \`mise run download:codex\` for binaries/codex), or set CODEX_PROTOCOL_BINARY.`,
     ).toBe(true);
 
     const directory = createTemporaryDirectory();

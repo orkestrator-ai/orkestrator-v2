@@ -1,6 +1,6 @@
 # Test suites that depend on the host
 
-Status: Active — found 2026-10-14, not fixed.
+Status: Resolved 2026-10-15, except the environment move case, which waits on doc 02 (verified to pass with its fix). See "Follow-ups finished the same day" for the related fixes, including `mise run test:browser`. The findings below are the original 2026-10-14 report; see "Resolution (2026-10-15)" at the end.
 
 **Severity: medium.** These failures are not product regressions, but they
 make the validation suites fail on an ordinary developer machine. That hides
@@ -69,3 +69,97 @@ skip with that reason when the pinned binary is absent.
 
 `environment-move.test.ts` fails 22 of 34 cases on tmux 3.8 hosts. That is a
 product bug, not a test problem; see `02-tmux-3-8-no-server-detection.md`.
+
+## Resolution (2026-10-15)
+
+Each item was rechecked on `523eb0da` on the same host (macOS, bsdtar 3.5.3,
+tmux 3.8, a dev worktree folder set to `/Volumes/Lexar/workspaces-dev`, and an
+unauthenticated `claude`).
+
+| Item | Still failing on 2026-10-15? | Outcome |
+| --- | --- | --- |
+| `browser-gateway.spec.ts` worktree assertion ("authoritative local environment") | Yes, from the configured root | Fixed. A new `dev:test` profile ignores the dev worktree folder unless `--use-dev-worktree-folder` is passed (`apps/desktop/scripts/dev/lifecycle.ts` `profileWorktreeLocation`, `arguments.ts`). `mise run dev` still uses the folder. |
+| Environment move worktree path | Path cause fixed; the move itself still fails | The source worktree is now under `<profile>/worktrees/`, but the move never happens. The backend logs `claude-tmux cleanup incomplete`, the tmux 3.8 bug in doc 02. Left to that fix. |
+| Review validation queueing | Yes on a manual profile | The spec skips with a reason unless `ORKESTRATOR_TEST_SCHEDULER_DIR` is set and `ORKESTRATOR_TEST_HOST_WORKERS=2`. Exporting the variables from `test:agent:browser` cannot work: the backend reads them when `dev:test` starts. It passes under the one-shot runner. |
+| `design-canvas.spec.ts:9` export dialog at 390px | Yes (`TypeError: Cannot read properties of null (reading 'x')`) | Fixed in the product. Root cause: below 768px `AppShell` swapped to `MobileAppShellLayout` and remounted every pane, which dropped the dialog's state, so measuring after the resize was a race. `AppShell` now keeps its content mounted across the swap (see below). The spec keeps the dialog open, waits for the phone layout and then measures. Flake 0209 resolved. |
+| One-shot runner profile flags | Not supported | Fixed. `mise run test:agent:browser:isolated` and `test:agent:design:isolated` accept `--credential-source`, `--agent-platforms`, `--no-agent-credentials` and `--use-dev-worktree-folder`. A credential or platform flag replaces the matching default, and unknown flags fail before a profile is created. |
+| `verified copy helper` ×3 | Yes | Host tools, not a product bug. bsdtar has no `--no-wildcards-match-slash` and lists archives in a different format; the helper runs on GNU tar inside the image. |
+| Firewall "GitHub ranges…" and "domain that does not resolve…" | Yes | Host tools, not a product bug. `docker/firewall-domains.sh` uses GNU `date -d` (`ork_iso`, `ork_ranges_fresh_within`). On macOS `date` the seed always looked stale, so the script fetched live, and `ork_iso` failed. |
+| Codex bridge `session-titles.test.ts` message | No on this host (the pinned toolchain copy exists); reproduced with `HOME` pointed elsewhere | Fixed. The message now names `mise run toolchain:install --tool codex`, `mise run download:codex` and `CODEX_PROTOCOL_BINARY`. It still fails loudly, as the test's comment intends. |
+
+Root-suite fixtures: `tests/unit/gnu-shell-tools.ts` puts Homebrew's GNU tool
+directories ahead of the inherited PATH for the shell fixtures in
+`migrate-copy.test.ts`, `firewall-policy.test.ts` and
+`firewall-refresh.test.ts`. On Linux nothing changes. When GNU `tar` or `date`
+is missing, the dependent cases skip, and the install command appears in the
+test name. Flakes 0192 and 0199 stay open: they are aggregate-load timeouts
+with the GNU PATH already set, which is a different failure.
+
+The browser runs turned up two more host problems, and both are fixed:
+
+- `cli-ui.spec.ts:169` failed in a fresh worktree with "orkestrator project
+  list printed no envelope (1)" because `packages/cli/dist` had not been built.
+  `test:agent:browser` and `test:agent:browser:isolated` now depend on
+  `build:cli`.
+- `browser-gateway.spec.ts:386` (project Home) used an `isVisible()` probe
+  that raced the same mobile-shell swap. The drawer stayed open and blocked
+  "Open tools". Recorded and resolved as flake 0223.
+
+### Follow-ups finished the same day
+
+- **Breakpoint remount (product).** Crossing 768px used to remount every pane,
+  losing open dialogs and pane state, for example when a phone rotated.
+  `AppShell` now renders its content once through a portal into a stable host
+  node, and each layout only moves that node into its slot
+  (`apps/web/src/components/layout/AppShell.tsx`). The mobile projects drawer
+  opens on its own only on a phone-sized first load; a window that narrows
+  keeps showing the user's work (`initialSidebarOpen` on
+  `MobileAppShellLayout`). The two specs that crossed the breakpoint
+  (`design-canvas.spec.ts`, and project Home in `browser-gateway.spec.ts`) now
+  wait for the phone layout and only then close a drawer if one is open.
+  Remaining limit: on phones, a pane split still shows one pane at a time
+  (`PaneTree` → `MobilePaneSwitcher`), so the hidden panes of a split still
+  remount when the window crosses the breakpoint.
+- **Backend shutdown test.** `apps/backend/src/core/index.test.ts` "shutdown
+  applies one deadline across lifecycle and local-operation drains" failed on
+  every run after #969. A deletion that outlives the shutdown deadline now
+  reaches a closed design store and rejects with "Design service is
+  stopping". That is safe: the environment keeps its `deleting` tombstone and
+  the next startup re-runs the deletion. Making design cleanup best-effort
+  instead would leak canvases, because nothing else collects them. The test
+  now asserts that invariant: the deletion either finishes or is finished by a
+  restarted backend.
+  After merging main, shutdown defers closing design coordination and storage
+  until admitted lifecycle tasks drain. The test now requires the original
+  deletion to finish and verifies that design closes afterwards.
+- **Environment move.** Confirmed as doc 02. With that worker's
+  `2ca0b952` applied (not merged here), the real-stack move spec passed on
+  this host, which has no tmux socket at all.
+- **`mise run test:browser` could not start (fixed).**
+  `e2e/DesignCanvas.spec.ts` and `e2e/DesignHistoryLayout.spec.ts` imported the
+  backend `DesignService`, which since #969 loads `bun:sqlite`. Playwright runs
+  specs under Node, so loading aborted the whole component suite ("Only URLs
+  with a scheme in: file, data, and node are supported by the default ESM
+  loader. Received protocol 'bun:'"). The service now runs in a Bun child
+  process (`e2e/design-service-host.ts`), which the specs drive over a
+  JSON-lines pipe (`e2e/design-service-client.ts`); the browser side is
+  unchanged. The suite passes again (189 passed, 57 skipped). No default CI
+  job runs it, so `tests/unit/playwright-spec-loading.test.ts` now lists all
+  three Playwright configs under Node inside `mise run test`.
+- **Flake 0224 (open).** The narrow host-picker case failed once with the
+  tools popover closed and passed seven times afterwards.
+- **Flake 0225 (open).** The first `mise run test` after these changes hit
+  three backend load failures in files this change does not touch (two design
+  timeouts and an annotation benchmark bound). All three files pass alone.
+- **Flake 0226 (open).** The second `mise run test` passed the 0214 cases
+  and every group except one backend timeout in
+  `commands-registry-environments.test.ts`, whose file passes alone.
+
+The startup dialog (doc 03) still blocks a Codex-only profile on this host: a
+manual `--agent-platforms codex` run had 9 failures behind "Claude Code Login
+Required". The suite was validated with the new pass-through instead:
+
+- `mise run test:agent:browser:isolated --agent-platforms codex,opencode,cursor,grok`:
+  **21 passed, 12 skipped, 1 failed**, both before and after the `AppShell`
+  change. The failure is the environment move (doc 02).
+- The doc's original run had 17 passed, 12 skipped and 5 failed.

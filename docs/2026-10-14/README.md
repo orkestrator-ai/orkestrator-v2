@@ -1,6 +1,6 @@
 # Pre-existing problems found on 2026-10-14
 
-Status: Active — 02, 03, 04 and 06 fixed; 07 partly done (items 1–3 and 7) on 2026-10-15; 01 and 05 open.
+Status: Active — 01–06 resolved on 2026-10-15; 07 partly done (items 1–3 and 7).
 
 These came out of validating the OpenCode boundary cleanup branch
 (`opencode-bridge-a8c2ab5c85b9-r1`): live OpenCode QA in a `dev:test` profile,
@@ -14,7 +14,7 @@ not touch, so none of them is a regression from that work.
 | [02](02-tmux-3-8-no-server-detection.md) | **Fixed 2026-10-15.** tmux's absent-socket "no server" message (first seen on 3.8, not new in it) is read as failed cleanup; environment move fails, deletion leaves files | High | Backend tmux cleanup |
 | [03](03-startup-claude-login-dialog.md) | **Fixed 2026-10-15.** "Claude Code Login Required" blocks the whole app when `claude` is unauthenticated and OpenCode is absent, ignoring Codex, Cursor, Grok and Pi; it also breaks the isolated browser suite | High | Renderer startup gate, host tool checks |
 | [04](04-opencode-fork-loses-model.md) | A forked OpenCode session switches to the first catalogue model (fixed 2026-10-15) | Medium | Fork flow, composer inference |
-| [05](05-real-stack-suite-host-dependencies.md) | Browser, root and bridge suites fail on an ordinary developer machine for host reasons | Medium | Test infrastructure |
+| [05](05-real-stack-suite-host-dependencies.md) | Resolved 2026-10-15: browser, root, bridge and component suites no longer fail for host reasons or Bun-only imports, and panes survive the mobile breakpoint; main also includes the environment move fix from 02 | Medium | Test infrastructure, renderer shell |
 | [06](06-opencode-auth-status-truncation.md) | **Fixed 2026-10-15.** OpenCode shows "needs auth" while a provider is connected | Low–medium | OpenCode capabilities |
 | [07](07-cleanup-follow-ups.md) | Leftover dead renderer helpers, store consolidation, doc drift, a decision to confirm, a known version-skew limitation, the day's flakes (0207, 0208), a live OpenCode spec to commit, and a fault-isolation watch item. 1–3 and 7 done, 4 decided (kept); 5 partly done (update reminder on version mismatch) | Low | Cleanup and follow-ups |
 
@@ -36,9 +36,9 @@ item:
   see 03's Resolution.
 - 04: that "MiMo-V2.6-Pro" is simply the first catalogue row (inferred from
   the label, not checked against OpenCode's provider order).
-- 05: the cause of the narrow-viewport export dialog failure in
-  `design-canvas.spec.ts:9`, and whether the `verified copy helper` failures
-  come from bsdtar versus GNU tar.
+- 05: confirmed 2026-10-15. The dialog failure is the 768px mobile-shell
+  remount; the copy helper and firewall failures come from bsdtar and BSD
+  `date`.
 - 06: that the connected provider really sits beyond index 127 of
   `provider.list().all` (the provider count in a live response was not
   measured).

@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseCopyOutput } from "../../apps/backend/src/core/container-replacement";
+import { gnuToolPath, missingGnuTools, titleWithSkip } from "./gnu-shell-tools";
 
 /**
  * The verified copy helper (`docker/orkestrator-migrate.sh`), run with the
@@ -20,6 +21,8 @@ import { parseCopyOutput } from "../../apps/backend/src/core/container-replaceme
  * that root restores it.
  */
 const SCRIPT = resolve(import.meta.dir, "../../docker/orkestrator-migrate.sh");
+const SHELL_ENV = { ...process.env, PATH: gnuToolPath };
+const NO_GNU_TAR = missingGnuTools("tar");
 const dirs: string[] = [];
 afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -37,17 +40,26 @@ function workspace(): { root: string; src: string } {
   return { root, src };
 }
 
-function copyStream(input: Buffer, destination: string, strip: number, ...wildcards: string[]) {
-  const run = spawnSync("bash", [SCRIPT, "copy-stream", destination, String(strip), ...wildcards], {
-    input,
-  });
-  return parseCopyOutput(run.stdout.toString());
+function archiveOf(root: string): Buffer {
+  return execFileSync("tar", ["-C", join(root, "src"), "-cf", "-", "ws"], { env: SHELL_ENV });
 }
 
-describe("verified copy helper", () => {
+function runCopy(input: Buffer, destination: string, strip: number, ...wildcards: string[]) {
+  const run = spawnSync("bash", [SCRIPT, "copy-stream", destination, String(strip), ...wildcards], {
+    input,
+    env: SHELL_ENV,
+  });
+  return run.stdout.toString();
+}
+
+function copyStream(input: Buffer, destination: string, strip: number, ...wildcards: string[]) {
+  return parseCopyOutput(runCopy(input, destination, strip, ...wildcards));
+}
+
+describe.skipIf(NO_GNU_TAR !== undefined)(titleWithSkip("verified copy helper", NO_GNU_TAR), () => {
   test("copies files, hard links, symlinks and empty directories and verifies them", () => {
     const { root } = workspace();
-    const archive = execFileSync("tar", ["-C", join(root, "src"), "-cf", "-", "ws"]);
+    const archive = archiveOf(root);
     const destination = join(root, "dst");
     const result = copyStream(archive, destination, 1);
     expect(result).toMatchObject({ ok: true, files: 3 });
@@ -60,20 +72,19 @@ describe("verified copy helper", () => {
 
   test("a destination that differs from the stream is a mismatch, not a copy", () => {
     const { root } = workspace();
-    const archive = execFileSync("tar", ["-C", join(root, "src"), "-cf", "-", "ws"]);
+    const archive = archiveOf(root);
     const extraFile = join(root, "extra-file");
     mkdirSync(extraFile);
     writeFileSync(join(extraFile, "stale.txt"), "left over");
     expect(copyStream(archive, extraFile, 1)).toEqual({ ok: false, reason: "mismatch:files" });
     const extraDir = join(root, "extra-dir");
     mkdirSync(join(extraDir, "stale-dir"), { recursive: true });
-    const output = spawnSync("bash", [SCRIPT, "copy-stream", extraDir, "1"], { input: archive });
-    expect(output.stdout.toString()).toContain("status=mismatch kind=dirs");
+    expect(runCopy(archive, extraDir, 1)).toContain("status=mismatch kind=dirs");
   });
 
   test("a selective copy does not count the parent directories it creates", () => {
     const { root } = workspace();
-    const archive = execFileSync("tar", ["-C", join(root, "src"), "-cf", "-", "ws"]);
+    const archive = archiveOf(root);
     expect(copyStream(archive, join(root, "selected"), 1, "ws/sub/b.bin")).toMatchObject({
       ok: true,
       files: 1,
@@ -95,11 +106,9 @@ describe("verified copy helper", () => {
       ].join("\n"),
     ]);
     if (craft.status !== 0) throw new Error("python3 is needed to craft the archive");
-    const output = spawnSync("bash", [SCRIPT, "copy-stream", join(root, "dev"), "1"], {
-      input: craft.stdout,
-    });
-    expect(output.stdout.toString()).toContain("status=unsupported kind=device");
-    expect(parseCopyOutput(output.stdout.toString())).toEqual({
+    const output = runCopy(craft.stdout, join(root, "dev"), 1);
+    expect(output).toContain("status=unsupported kind=device");
+    expect(parseCopyOutput(output)).toEqual({
       ok: false,
       reason: "unsupported:device",
     });
@@ -114,7 +123,7 @@ describe("verified copy helper", () => {
 
   test("a truncated archive fails extraction instead of reporting a partial copy", () => {
     const { root } = workspace();
-    const archive = execFileSync("tar", ["-C", join(root, "src"), "-cf", "-", "ws"]);
+    const archive = archiveOf(root);
     const truncated = archive.subarray(0, Math.floor(archive.length / 3));
     const result = copyStream(truncated, join(root, "truncated"), 1);
     expect(result.ok).toBe(false);

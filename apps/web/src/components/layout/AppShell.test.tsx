@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { useEffect, useState } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as realResizable from "@/components/ui/resizable";
 import * as realFilesPanelComponents from "@/components/files-panel";
@@ -8,7 +9,6 @@ import * as realNativeWindow from "@/lib/native/window";
 import * as realActionBar from "./ActionBar";
 import * as realSidebar from "./Sidebar";
 import * as realOpenFileDialog from "./OpenFileDialog";
-import * as realMobileAppShellLayout from "./MobileAppShellLayout";
 import * as realAgentInfoButton from "./AgentInfoButton";
 import * as realSystemUsageIndicator from "./SystemUsageIndicator";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
@@ -24,7 +24,6 @@ const realNativeWindowSnapshot = { ...realNativeWindow };
 const realActionBarSnapshot = { ...realActionBar };
 const realSidebarSnapshot = { ...realSidebar };
 const realOpenFileDialogSnapshot = { ...realOpenFileDialog };
-const realMobileAppShellLayoutSnapshot = { ...realMobileAppShellLayout };
 
 let isMobile = true;
 let selectedProjectId: string | null = "project-1";
@@ -58,28 +57,6 @@ mock.module("./ActionBar", () => ({
 
 mock.module("./Sidebar", () => ({ Sidebar: () => <div>Sidebar</div> }));
 mock.module("./OpenFileDialog", () => ({ OpenFileDialog: () => null }));
-// The stub has to render `agentInfoButton`: silently dropping the slot made the
-// whole agent-info wiring — including which tab it is handed — untestable.
-mock.module("./MobileAppShellLayout", () => ({
-  MobileAppShellLayout: ({
-    title,
-    actionBar,
-    agentInfoButton,
-    children,
-  }: {
-    title: string;
-    actionBar: React.ReactNode;
-    agentInfoButton: React.ReactNode;
-    children?: React.ReactNode;
-  }) => (
-    <div data-testid="mobile-layout" data-title={title}>
-      {actionBar}
-      <div data-testid="mobile-agent-info-slot">{agentInfoButton}</div>
-      {children}
-    </div>
-  ),
-}));
-
 // Stubbed (with restore) so the tab AppShell derives is observable as a prop
 // rather than through the real popover's rendering.
 mock.module("./AgentInfoButton", () => ({
@@ -141,7 +118,6 @@ afterAll(() => {
   mock.module("./ActionBar", () => realActionBarSnapshot);
   mock.module("./Sidebar", () => realSidebarSnapshot);
   mock.module("./OpenFileDialog", () => realOpenFileDialogSnapshot);
-  mock.module("./MobileAppShellLayout", () => realMobileAppShellLayoutSnapshot);
   mock.module("./AgentInfoButton", () => realAgentInfoButtonSnapshot);
   mock.module("./SystemUsageIndicator", () => realSystemUsageIndicatorSnapshot);
 });
@@ -207,9 +183,9 @@ describe("AppShell", () => {
   test("derives the mobile title and uses the grid action presentation", () => {
     const { container } = render(<AppShell>Workspace</AppShell>);
 
-    expect(screen.getByTestId("mobile-layout").getAttribute("data-title")).toBe(
-      "pgstack1 - feature-auth",
-    );
+    expect(
+      screen.getByRole("button", { name: "pgstack1 - feature-auth", hidden: true }),
+    ).toBeTruthy();
     expect(screen.getByTestId("action-bar").getAttribute("data-presentation")).toBe("grid");
     expect(document.title).toBe("pgstack1 - feature-auth");
     expect(screen.getByText("Workspace")).toBeTruthy();
@@ -378,7 +354,62 @@ describe("AppShell", () => {
     selectedEnvironmentId = "missing-environment";
     render(<AppShell />);
 
-    expect(screen.getByTestId("mobile-layout").getAttribute("data-title")).toBe("Orkestrator AI");
+    expect(screen.getByRole("button", { name: "Orkestrator AI", hidden: true })).toBeTruthy();
     expect(document.title).toBe("Orkestrator AI");
+  });
+
+  test("keeps its content mounted when the layout crosses the mobile breakpoint", () => {
+    let mounts = 0;
+    function Counter() {
+      const [count, setCount] = useState(0);
+      useEffect(() => {
+        mounts += 1;
+      }, []);
+      return <button onClick={() => setCount(count + 1)}>Count {count}</button>;
+    }
+    isMobile = false;
+    const { rerender } = render(
+      <AppShell>
+        <Counter />
+      </AppShell>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Count 0" }));
+
+    isMobile = true;
+    rerender(
+      <AppShell>
+        <Counter />
+      </AppShell>,
+    );
+    expect(screen.getByRole("main").contains(screen.getByText("Count 1"))).toBe(true);
+    expect(screen.queryByRole("dialog", { name: "Projects and environments" }) === null).toBe(true);
+
+    isMobile = false;
+    rerender(
+      <AppShell>
+        <Counter />
+      </AppShell>,
+    );
+    expect(screen.queryByRole("button", { name: "Open projects and environments" }) === null).toBe(
+      true,
+    );
+    expect(screen.getByRole("main").contains(screen.getByText("Count 1"))).toBe(true);
+    expect(mounts).toBe(1);
+  });
+
+  test("opens the mobile drawer only on a phone-sized first load", () => {
+    render(<AppShell>Workspace</AppShell>);
+    expect(screen.getByRole("dialog", { name: "Projects and environments" })).toBeTruthy();
+    cleanup();
+
+    isMobile = false;
+    const { rerender } = render(<AppShell>Workspace</AppShell>);
+    isMobile = true;
+    rerender(<AppShell>Workspace</AppShell>);
+    expect(screen.queryByRole("dialog", { name: "Projects and environments" }) === null).toBe(true);
+    const trigger = screen.getByRole("button", { name: "Open projects and environments" });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(trigger);
+    expect(screen.getByRole("dialog", { name: "Projects and environments" })).toBeTruthy();
   });
 });

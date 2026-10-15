@@ -227,6 +227,50 @@ describe("AddProjectDialog", () => {
     expect(listedNames("repositories")).toEqual(["billing"]);
   });
 
+  test("preserves long repository text in titles and constrains every picker step", async () => {
+    const name = "a-very-long-repository-name-".repeat(4).slice(0, 100);
+    const description = "A very long repository description ".repeat(10).trim();
+    renderDialog({
+      loadGitHubRepositories: mock(async () => ({
+        repositories: [{ ...githubRepository(name, "2026-09-01T00:00:00Z"), description }],
+        truncated: false,
+      })),
+    });
+    // Each picker step is a direct grid item of DialogContent. Locate that
+    // boundary by ancestry rather than an unrelated spacing class.
+    const pickerRootFor = (element: HTMLElement) => {
+      const root = Array.from(screen.getByRole("dialog").children).find((child) =>
+        child.contains(element),
+      );
+      expect(root).toBeTruthy();
+      return root!;
+    };
+    fireEvent.click(screen.getByRole("button", { name: "From GitHub" }));
+    await screen.findByRole("list", { name: "organizations" });
+    expect(
+      pickerRootFor(screen.getByLabelText("Search organizations")).classList.contains("min-w-0"),
+    ).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: /^acme/ }));
+    await screen.findByRole("list", { name: "repositories" });
+
+    const nameText = screen.getByText(name);
+    expect(nameText.classList.contains("truncate")).toBe(true);
+    expect(nameText.getAttribute("title")).toBe(name);
+    const descriptionText = screen.getByText(description);
+    expect(descriptionText.className).toContain("truncate");
+    expect(descriptionText.getAttribute("title")).toBe(description);
+    // The picker sits in the dialog's grid; without min-w-0 the unwrapped
+    // description widens the grid column past the dialog edge.
+    expect(
+      pickerRootFor(screen.getByLabelText("Search repositories")).classList.contains("min-w-0"),
+    ).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: /^a-very-long-repository-name/ }));
+    expect(pickerRootFor(screen.getByLabelText(/Local path/)).classList.contains("min-w-0")).toBe(
+      true,
+    );
+  });
+
   test("clones the chosen repository into the chosen local path", async () => {
     const { onAdd, onOpenChange } = renderDialog({
       defaultCloneDirectory: "/Users/dev/Projects/",

@@ -1,6 +1,7 @@
 import { OpenCodePipelineTranscriptFixture } from "./OpenCodePipelineTranscriptFixture";
 import { TmuxComposeFocusFixture } from "./TmuxComposeFocusFixture";
 import { AgentUsageFixture } from "./AgentUsageFixture";
+import { AddProjectDialogFixture } from "./AddProjectDialogFixture";
 import { BackgroundTaskOutcomeFixture } from "./BackgroundTaskOutcomeFixture";
 import { ConnectionsSettingsFixture } from "./ConnectionsSettingsFixture";
 import { DesignCanvasFixture } from "./DesignCanvasFixture";
@@ -1605,6 +1606,7 @@ function PullRequestCheckStatusFixture() {
 }
 
 function fixtureForPath() {
+  if (window.location.pathname === "/add-project") return <AddProjectDialogFixture />;
   if (window.location.pathname === "/project-navigation") {
     return (
       <Suspense fallback={null}>

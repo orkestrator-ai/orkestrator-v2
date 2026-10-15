@@ -16,6 +16,17 @@ Observed: 2026-10-14
 
 Hypothesis: responsive layout switching can temporarily remount or redirect the active pane around the resize, losing the dialog. The snapshot supports a pane change, but the cause is not established. This change touches backend persistence only; no renderer code or browser assertions were changed or skipped.
 
+## Recurrence: 2026-10-15
+
+- Original command: `mise run test:logged -- --name isolated-browser -- mise run test:agent:browser:isolated`.
+- Worker configuration: one Playwright worker; the complete non-iOS repository suite was also active on the host.
+- Failure: the same `locator.boundingBox` timeout after 15000ms at line 127, waiting for the export dialog after resizing to 390 × 844.
+- Suite result: 21 passed, 12 skipped, 1 failed; Playwright duration 5.7 minutes, wrapper duration 346.2 seconds.
+- Evidence: `output/agent-testing/qa-browser-a84af326-ba4/browser/artifacts/design-canvas-real-gateway-ef5b9-ates-another-client-s-edits/`; bounded log `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.fpevdT/`.
+- Owning-spec rerun: `mise run test:logged -- --name design-browser-rerun -- mise run test:agent:design:isolated` also failed at the same assertion: 1 passed, 1 failed, one worker; Playwright duration 36.5 seconds, wrapper duration 39.6 seconds. The aggregate had finished before this rerun.
+- Rerun evidence: `output/agent-testing/qa-browser-20ab5799-6e4/browser/artifacts/design-canvas-real-gateway-ef5b9-ates-another-client-s-edits/`; bounded log `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.bOw5IB/`.
+- Both invocations stopped and reset their disposable profiles. The owning spec was unchanged. This recurrence also fails alone, so it is not additional evidence of aggregate-only flakiness; the earlier passing-rerun history remains above. The cause is still unconfirmed. The current production change only wraps the GitHub clone helper in the Add Project dialog.
+
 ## Resolution (2026-10-15)
 
 - **Root cause:** not load. Below 768px `AppShell` (`apps/web/src/components/layout/AppShell.tsx`)

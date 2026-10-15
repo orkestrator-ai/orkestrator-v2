@@ -377,7 +377,7 @@ describe("AgentNativeTab progressive controller", () => {
       const composer = screen.getByRole("textbox");
       fireEvent.input(composer, { target: { textContent: "too early" } });
       fireEvent.keyDown(composer, { key: "Enter" });
-      await waitFor(() => expect(screen.getByText(/Still reading the .* session/)).toBeTruthy());
+      await waitFor(() => expect(screen.getByText(/Connecting to Claude…/)).toBeTruthy());
       expect(dispatched).toEqual([]);
       expect(backgroundTaskStops).toEqual([]);
     } finally {
@@ -518,7 +518,7 @@ describe("AgentNativeTab progressive controller", () => {
     },
   );
 
-  test("shows the transcript but withholds actions until session state lands", async () => {
+  test("holds a send made before session state lands and sends it once it does", async () => {
     let releaseState!: () => void;
     const heldState = new Promise<NativeAgentSessionStateUpdate>((resolve) => {
       releaseState = () => resolve(stateSnapshot("state-1"));
@@ -531,18 +531,78 @@ describe("AgentNativeTab progressive controller", () => {
     renderTab();
     await waitFor(() => expect(screen.getByText("Readable")).toBeTruthy());
 
-    // The composer is editable so a draft survives the wait, but a send
-    // attempted now must say so rather than vanish.
+    // The composer is editable so a draft survives the wait. A send attempted
+    // now is held, visibly, rather than dispatched or dropped.
     const composer = screen.getByRole("textbox");
     expect(composer.hasAttribute("disabled")).toBe(false);
     expect(composer.getAttribute("aria-disabled")).not.toBe("true");
     fireEvent.input(composer, { target: { textContent: "too early" } });
     fireEvent.keyDown(composer, { key: "Enter" });
-    await waitFor(() => expect(screen.getByText(/Still reading the .* session/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Connecting to Codex…/)).toBeTruthy());
     expect(dispatched).toEqual([]);
 
-    releaseState();
-    await waitFor(() => expect(screen.getByTestId("progressive-transcript-list")).toBeTruthy());
+    await act(async () => {
+      releaseState();
+      await heldState;
+    });
+    await waitFor(() => expect(dispatched).toEqual(["too early"]));
+    expect(screen.queryByText(/Connecting to Codex…/) === null).toBe(true);
+  });
+
+  test("editing the draft withdraws a held send", async () => {
+    let releaseState!: () => void;
+    const heldState = new Promise<NativeAgentSessionStateUpdate>((resolve) => {
+      releaseState = () => resolve(stateSnapshot("state-1"));
+    });
+    transcriptUpdates = [
+      async () => transcriptSnapshot("transcript-1", [message("m1", "Readable")]),
+    ];
+    stateUpdates = [() => heldState];
+
+    renderTab();
+    await waitFor(() => expect(screen.getByText("Readable")).toBeTruthy());
+
+    const composer = screen.getByRole("textbox");
+    fireEvent.input(composer, { target: { textContent: "first thought" } });
+    fireEvent.keyDown(composer, { key: "Enter" });
+    await waitFor(() => expect(screen.getByText(/Connecting to Codex…/)).toBeTruthy());
+    fireEvent.input(composer, { target: { textContent: "second thought" } });
+    await waitFor(() => expect(screen.queryByText(/Connecting to Codex…/) === null).toBe(true));
+
+    await act(async () => {
+      releaseState();
+      await heldState;
+    });
+    expect(dispatched).toEqual([]);
+  });
+
+  test("a failed session-state read releases a held send unsent", async () => {
+    let failState!: () => void;
+    const heldState = new Promise<NativeAgentSessionStateUpdate>((_resolve, reject) => {
+      failState = () => reject(new Error("status endpoint timed out"));
+    });
+    transcriptUpdates = [
+      async () => transcriptSnapshot("transcript-1", [message("m1", "Readable")]),
+    ];
+    stateUpdates = [() => heldState];
+
+    renderTab();
+    await waitFor(() => expect(screen.getByText("Readable")).toBeTruthy());
+
+    const composer = screen.getByRole("textbox");
+    fireEvent.input(composer, { target: { textContent: "never sent" } });
+    fireEvent.keyDown(composer, { key: "Enter" });
+    await waitFor(() => expect(screen.getByText(/Connecting to Codex…/)).toBeTruthy());
+
+    await act(async () => {
+      failState();
+      await heldState.catch(() => undefined);
+    });
+    await waitFor(() =>
+      expect(screen.getByText(/Couldn't read the Codex session, so nothing was sent/)).toBeTruthy(),
+    );
+    expect(screen.queryByText(/Connecting to Codex…/) === null).toBe(true);
+    expect(dispatched).toEqual([]);
   });
 
   test("dispatches once session state is authoritative", async () => {
@@ -564,7 +624,7 @@ describe("AgentNativeTab progressive controller", () => {
       },
       { timeout: 5_000 },
     );
-    expect(screen.queryByText(/Still reading the .* session/) === null).toBe(true);
+    expect(screen.queryByText(/Connecting to Codex…/) === null).toBe(true);
   });
 
   test("hides a pending approval that is not authoritative yet", async () => {

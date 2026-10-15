@@ -164,6 +164,8 @@ import { isClaudeNotLoggedInNotice } from "@/lib/claude-auth";
 /** Stable identity so the transcript decoration memo cannot churn. */
 const EMPTY_BACKGROUND_TASKS: Record<string, never> = {};
 const EMPTY_DISMISSED_NOTICE_IDS: string[] = [];
+/** How long a send made before the first session-state read may wait for it. */
+const HELD_SUBMIT_TIMEOUT_MS = 15_000;
 
 function nativeNoticeDismissalId(notice: NativeAgentNotice): string {
   const severity = notice.kind === "advisory" ? notice.severity : notice.kind;
@@ -320,6 +322,20 @@ export function SharedNativeAgentController({
     priorDisplayIds?: readonly string[];
   } | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
+  /**
+   * A send made before the first session-state read answered. It is replayed
+   * through `submit` once that read lands, so the user is not left pressing
+   * Enter until the read happens to have finished.
+   */
+  const [heldSubmit, setHeldSubmit] = useState<{
+    text: string;
+    requestId?: string;
+    modeOverride?: "build" | "plan";
+    literal: boolean;
+    /** The composer text at hold time; editing it withdraws the send. */
+    draftText: string;
+    heldAt: number;
+  } | null>(null);
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(initialResumeOpen === true);
   const [forkInFlight, setForkInFlight] = useState(false);
@@ -1256,6 +1272,9 @@ export function SharedNativeAgentController({
         .filter((annotation) => annotation.source === "browser")
         .map((annotation) => annotation.id);
       if (submitInFlightRef.current) return false;
+      // Every attempt supersedes a held one; the authority gate below holds
+      // this attempt again if the read it needs has still not landed.
+      setHeldSubmit(null);
       const literal = submitOptions?.literal === true;
       if (literal && draft.commandSelection) {
         updateDraft(sessionKey, { commandSelection: undefined });
@@ -1426,12 +1445,23 @@ export function SharedNativeAgentController({
       /*
        * The composer stays editable while a cached transcript is on screen, so
        * a draft can be written before the session state that authorizes
-       * sending has arrived. Dropping the keystroke silently there would be
-       * indistinguishable from a broken Enter key; the draft is preserved and
-       * the user is told to retry.
+       * sending has arrived. Nothing may be dispatched until that read lands,
+       * but making the user retry by hand turned a sub-second wait into a
+       * guessing game. The send is held instead and replayed through this same
+       * function once the read is authoritative; the draft stays in the
+       * composer until then. Prepared prompts own their own retry.
        */
       if (prompt && !sessionStateAuthoritative) {
-        setSendError(`Still reading the ${label} session. Nothing was sent — try again shortly.`);
+        if (preparedPrompt) return false;
+        setSendError(null);
+        setHeldSubmit({
+          text,
+          ...(requestId ? { requestId } : {}),
+          ...(modeOverride ? { modeOverride } : {}),
+          literal,
+          draftText: draft.text,
+          heldAt: Date.now(),
+        });
         return false;
       }
       if (!prompt || sendLocked || isDispatching) return false;
@@ -1581,6 +1611,7 @@ export function SharedNativeAgentController({
       draft.commandSelection,
       draft.mentions,
       draft.requestId,
+      draft.text,
       enqueue,
       handoff.pendingHistory,
       isDispatching,
@@ -2001,6 +2032,40 @@ export function SharedNativeAgentController({
           : runtimeError || hasCompletedRead
             ? ("error" as const)
             : ("connecting" as const)));
+  /*
+   * Release a held send. Editing the draft withdraws it, and a failed read
+   * reports that nothing was sent; both are settled during render so the held
+   * message never outlives the condition that cancels it. A read that lands
+   * replays it through `submit`, which re-runs every other gate, and a read
+   * that never answers gives up rather than firing the message much later.
+   */
+  const sessionStateFailure = sessionStateError ?? runtimeError;
+  if (heldSubmit && draft.text !== heldSubmit.draftText) {
+    setHeldSubmit(null);
+  } else if (heldSubmit && !sessionStateAuthoritative && sessionStateFailure) {
+    setHeldSubmit(null);
+    setSendError(`Couldn't read the ${label} session, so nothing was sent. Try again.`);
+  }
+  useEffect(() => {
+    if (!heldSubmit) return;
+    if (sessionStateAuthoritative) {
+      // The replay is a dispatch answering a backend read, not derived state;
+      // the renders `submit` starts are the same ones pressing Enter would.
+      // oxlint-disable-next-line react/set-state-in-effect
+      void submit(heldSubmit.text, heldSubmit.requestId, false, heldSubmit.modeOverride, {
+        literal: heldSubmit.literal,
+      });
+      return;
+    }
+    const timeout = window.setTimeout(
+      () => {
+        setHeldSubmit(null);
+        setSendError(`${label} did not respond in time, so nothing was sent. Try again.`);
+      },
+      Math.max(0, heldSubmit.heldAt + HELD_SUBMIT_TIMEOUT_MS - Date.now()),
+    );
+    return () => window.clearTimeout(timeout);
+  }, [heldSubmit, label, sessionStateAuthoritative, submit]);
   useEffect(() => {
     const notices = (isActive ? (projection?.notices ?? []) : []).filter(
       (notice) =>
@@ -2307,6 +2372,15 @@ export function SharedNativeAgentController({
       >
         <Loader2 className="size-3.5 animate-spin" />
         <span>Confirming delivery with {label}…</span>
+      </div>
+    ) : heldSubmit ? (
+      <div
+        key="held-submit"
+        role="status"
+        className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+      >
+        <Loader2 className="size-3.5 animate-spin" />
+        <span>Connecting to {label}… your message sends as soon as the session is ready.</span>
       </div>
     ) : null,
     sendError && !authenticationRequired ? (

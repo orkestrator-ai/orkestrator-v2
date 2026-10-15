@@ -221,6 +221,29 @@ export function promptStopReason(result: unknown): StopReason {
   return stopReason;
 }
 
+/**
+ * Why a finished turn was cut short, or undefined when it ended normally.
+ *
+ * The backend records an idle session's turn as completed unless this says
+ * otherwise, so a turn the agent abandoned (a held request expired, or it
+ * cancelled on its own) or one it stopped early must say so here. A cancel
+ * the user asked for (`/cancel`, close) is the user's choice, not a failure.
+ * Fixed, content-free text: it reaches request cards and run results.
+ */
+export function turnTerminalError(
+  state: Pick<SessionState, "expiredRequestPromptSequence" | "retryCancelledPromptSequence">,
+  stopReason: StopReason,
+  promptSequence: number,
+): string | undefined {
+  if (state.retryCancelledPromptSequence === promptSequence) return undefined;
+  if (state.expiredRequestPromptSequence === promptSequence) {
+    return `${provider} stopped after a permission request or question went unanswered for 5 minutes`;
+  }
+  if (stopReason === "end_turn") return undefined;
+  if (stopReason === "cancelled") return `${provider} cancelled the turn`;
+  return `${provider} stopped the turn early (${stopReason})`;
+}
+
 export async function dispatchAcpPrompt(
   state: SessionState,
   child: AcpProcess,

@@ -25,7 +25,8 @@ that names what was actually tested.
   `read-only` blocks every `author` command but keeps reads, resolution, drafts
   and recovery. `disabled` keeps only capabilities, rollout and metrics. In
   every mode the reconciler keeps settling requests already sent. The feature
-  is therefore on by default without a gate sign-off.
+  is therefore on by default without a gate sign-off. That is deliberate; see
+  the default decision under "Constraints and rationale".
 - `e2e/agent-testing/web-annotations-electron.spec.ts` (7 tests, run by
   `mise run test:agent:electron`) drives the production preload API with fixed
   bounds. It covers capture without an agent tab across a renderer reload and a
@@ -152,6 +153,71 @@ Migration and rollback verification:
 Reviewer / date:
 ```
 
+### Runs on 2026-10-15 (macOS)
+
+Partial evidence only; no milestone was signed off. macOS on Apple Silicon,
+`main` at `7ccb193e`, one isolated `mise run dev:test --fixture` profile with
+the default credential sources.
+
+| Command | Result |
+| --- | --- |
+| `mise run test:agent:electron`, before the dialog fix | 1 passed, 4 failed, 1 skipped, 6 did not run. All four failures are the GitHub CLI dialog covering the window (below), not annotation behaviour |
+| `mise run test:agent:electron`, with `electron-startup-dialogs.ts` | 9 passed (all 7 annotation tests and the terminal resume test), 2 failed, 1 skipped. Both failures are `electron-main` on macOS and reproduce alone: the Window-menu switch never gives the target window native focus, and the remote connection fails in `safeStorage.encryptStringAsync` |
+| `mise run test:agent:browser -- e2e/agent-testing/web-annotations-gateway.spec.ts`, live, agent `codex` | 3 passed (46 s) |
+
+Live implement test (`--grep 'live agent'`), one run per provider unless
+stated:
+
+| Provider | Result |
+| --- | --- |
+| codex | Pass: `awaiting-review` in 42 s, `verify-change.ts` 8/8 |
+| claude | Pass: `awaiting-review` in 26 s, 8/8 |
+| opencode | Pass (32 s) |
+| grok | Before the bridge fixes below: fail, twice. The turn ended `completed` after about five minutes and the request moved to `awaiting-review`, but no file changed (only the three unchanged-checks passed). After the first three: the request reached `needs-input` within 30 s, because Grok asked before every edit, command and fetch; with those five approvals answered from `session interactions resolve` it reached `awaiting-review` with `verify-change.ts` 8/8, and left unanswered it moved to `failed` with the expiry reason. After the auto-approve answer (below): pass with no approvals, `awaiting-review` in 437 s, 8/8 |
+| cursor | Skipped, no credential: "Cursor is not signed in" (HTTP 401). The request stayed `queued` with that reason |
+| pi | Skipped, no credential: "Pi has no authenticated model provider" (HTTP 401). The request stayed `queued` with that reason |
+
+- Since #982 a profile provisions `gh` only for a non-empty platform
+  selection, and agent-test host tool checks never fall back to PATH
+  (`apps/backend/src/core/host-tools.ts`). The Electron specs launch with an
+  empty selection, so "GitHub CLI Not Found" opened over every window. They
+  now close it through `e2e/agent-testing/electron-startup-dialogs.ts`, as the
+  browser specs already did.
+- Grok cause, reproduced with a one-line `check_inbox` prompt: Grok 1.0.52
+  calls every MCP tool through `use_tool` (`tool_name:
+  "orkestrator__check_inbox"`). The bridge's auto-allow matched only the
+  call's own name or `_meta["x.ai/tool"]`, so even a mail tool was held by
+  `parkPermission`. While it was held the session read `working`, and the
+  approval was a generic "Permissions: file system" with no options, which the
+  CLI could not grant. After the 300 s hold the bridge answered `cancelled`;
+  Grok reported "User cancelled the execution for tool `use_tool`" and ended
+  the turn, which the backend recorded as `completed`. Fixed in three parts,
+  each checked live the same day:
+  - `orkestratorToolPermissionOption` (`acp-session.ts`) reads the wrapped
+    `tool_name`, from the request or the call already recorded, and also
+    allows the annotation result tools. The `check_inbox` probe now takes 45 s
+    end to end instead of 5 min 20 s.
+  - `/activity` answers `waiting` while a request is held, and approvals carry
+    ACP's own shape (the tool title and Grok's options), which the backend
+    offers as a choice. Deny selects the reject option.
+  - The prompt journal records why a turn was cut short (`turnTerminalError`
+    in `acp-prompt.ts`: an expired request, a cancel nobody asked for, or
+    `refusal`/`max_tokens`/`max_turn_requests`). The backend reads it as the
+    turn's failure (`HttpBridgeProvider.turnTerminalError`, Grok only).
+- Grok 1.0.52 still asks before every edit, command and fetch over ACP,
+  although the bridge launches it with `--always-approve` under the default
+  `auto-approve` policy. The bridge now answers those requests itself under
+  that policy (`autoApprovedPermissionOption`), except for a kind the policy
+  denies, so Grok no longer waits in `needs-input` at each step. Revisiting
+  how approvals should work for Grok was left for later (2026-10-15).
+- The spec waits up to 14 minutes for a live request but prints nothing while
+  it polls, so `test:logged` kills a run after five quiet minutes. Set
+  `ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS` above 840000 for slow providers.
+- An implement request moves to `awaiting-review` whenever the turn ends
+  without a recorded failure, even when nothing changed. A request to a
+  signed-out provider waits in `queued` with the sign-in reason rather than
+  failing.
+
 ### Last evidence (2026-09-25)
 
 Partial evidence only; no milestone was signed off. Linux (Wayland, display
@@ -191,6 +257,14 @@ Partial evidence only; no milestone was signed off. Linux (Wayland, display
   is not evidence for six.
 - Keep unverified capabilities disabled where the missing evidence affects
   safety or correctness.
+- The default stays `enabled` (decided 2026-10-15). Dispatch publishes into the
+  same per-tab prompt queue as chat sends (`web-annotation-dispatch.ts`).
+  Annotation-specific failures show on the request card (`unknown`, Answer in
+  chat, a sign-in reason, an empty change) rather than losing data. Settings ›
+  Web annotations or `ORKESTRATOR_WEB_ANNOTATIONS_MODE` rolls it back. Holding
+  dispatch for providers without a live run was rejected: before 2026-10-15
+  that meant all six. Revisit if a live run shows duplicate execution, lost
+  data or a write outside the workspace.
 - Rollback must stop new operations while keeping reads, spool recovery and
   reconciliation of requests already sent. `web-annotation-rollout.ts` already
   behaves this way; any rollout test must keep it.
@@ -209,8 +283,6 @@ Partial evidence only; no milestone was signed off. Linux (Wayland, display
   matrix?
 - Do the unit-level fault and race tests count for gate A, or does gate A need
   real-stack runs of the acceptance race and migration restart too?
-- Should the default stay `enabled` before gate A is signed off, or should
-  dispatch be held back for providers with no live run?
 
 ## Needs verification
 

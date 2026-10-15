@@ -507,7 +507,7 @@ are unattended. The coordinator always uses the immutable
 | Claude | `permissionMode` and the approval callback; `allowedTools`/`disallowedTools`; `settingSources`; SDK sandbox options |
 | Codex | `approvalPolicy`, thread sandbox and sandbox network; the coordinator's verified permission profile |
 | Cursor | local SDK sandbox/auto-review; `settingSources`; `tools`/`disallowedTools`, re-applied on resume |
-| Grok | `--always-approve` only for auto-approval; ACP permission requests otherwise; project MCP trust at the launcher boundary |
+| Grok | `--always-approve` only for auto-approval, and under auto-approval the bridge also answers the ACP permission requests Grok still sends (allow option), except for a kind the policy denies (`autoApprovedPermissionOption`); ACP permission requests otherwise; project MCP trust at the launcher boundary |
 | Pi | approval extension; resource-loader exclusions and project trust; active SDK tool selection |
 | OpenCode | session permission rules; project resources remain enabled because OpenCode owns config discovery, which is stated in the effective policy note |
 
@@ -571,6 +571,12 @@ stdio. One bridge process serves the environment and spawns one CLI child per
 session, lazily re-attaching through `ensureSessionProcess` when needed. It
 launches Grok as `agent [--model M] [--reasoning-effort E] stdio`, adding
 `--always-approve` only when the execution policy selects automatic approval.
+Grok 1.0.52 still sends `session/request_permission` over ACP before every
+edit, command, fetch and MCP call under that flag, so the bridge answers those
+with the allow option while the policy is `auto-approve`. It never does so for
+a kind the policy denies (`edit`/`delete`/`move` against a file-write denial,
+`execute` against a shell denial, `fetch` against a network denial); those
+still wait for a person.
 
 Because these are command-line flags rather than a typed SDK, **the argv is a
 versioned contract that nothing in CI can check** — the bridge's own tests run

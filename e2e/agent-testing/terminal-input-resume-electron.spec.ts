@@ -10,6 +10,7 @@ import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 import { prepareFixtureRepository } from "../../apps/desktop/scripts/dev/fixture";
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
+import { dismissStartupDialogs } from "./electron-startup-dialogs";
 
 /**
  * The desktop half of terminal input recovery
@@ -141,6 +142,7 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
       },
     });
     const electronApp = app;
+    dismissStartupDialogs(electronApp);
     await installFetchFault(electronApp);
     const window = await electronApp.firstWindow();
     window.setDefaultTimeout(20_000);

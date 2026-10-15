@@ -1112,10 +1112,16 @@ export class HttpBridgeInteractionAdapter {
       if (resolution.action === "answer" && !providerValue) {
         throw new ProviderUnavailableError("ACP approval option is missing");
       }
+      // Deny selects the agent's own reject option; an empty body would answer
+      // `cancelled`, which ACP agents take as "stop the turn".
       return {
         path: `${base}/approvals/${encodeURIComponent(providerRequestId)}`,
         method: "POST",
-        body: JSON.stringify(providerValue ? { optionId: providerValue } : {}),
+        body: JSON.stringify(
+          providerValue
+            ? { optionId: providerValue }
+            : { decision: resolution.action === "cancel" ? "cancel" : "deny" },
+        ),
       };
     }
 

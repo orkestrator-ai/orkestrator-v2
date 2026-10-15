@@ -1063,6 +1063,19 @@ export interface WebAnnotationCapabilities {
   limits: WebAnnotationLimits;
 }
 
+/**
+ * The optional result tools the agent tools MCP server offers an annotation
+ * destination (`apps/backend/src/core/web-annotation-tools.ts`). Like the mail
+ * tools, a bridge answers their permission requests without a person: they
+ * read the request assigned to the calling tab and report a result, and none
+ * of them can resolve, retarget or dispatch anything.
+ */
+export const WEB_ANNOTATION_TOOL_NAMES = Object.freeze([
+  "get_annotation_request",
+  "get_annotation_evidence",
+  "report_annotation_result",
+] as const);
+
 // ---------------------------------------------------------------------------
 // Command surface. Every mutation names its operation id, environment, and
 // the expected revision it protects.

@@ -55,6 +55,7 @@ import {
   startFixtureServer,
   type FixtureServer,
 } from "./web-annotations-support";
+import { dismissStartupDialogs } from "./electron-startup-dialogs";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const packageRoot = path.join(repositoryRoot, "apps", "desktop");
@@ -113,6 +114,7 @@ async function launchElectron(current: Pick<Stack, "profile" | "profilePath" | "
       ORKESTRATOR_CONTROL_MCP_PORT: "0",
     },
   });
+  dismissStartupDialogs(app);
   // Keep a bounded tail of main-process output for startup diagnostics only.
   let tail = "";
   const keep = (chunk: Buffer) => {

@@ -75,11 +75,12 @@ per-bridge environment overrides that predate the execution policy.
     (`handlePermissionDenied`, `session-manager-prompt-handlers/system.ts`).
     `NativeAgentContextUsage` carries `permissionDenials` and
     `permissionDenialDetails`.
-- Grok: `publicApprovals` (`bridges/acp-bridge/src/acp-public.ts`) reports every
-  ACP permission request as `kind: "permissions"` with
-  `permissions: { fileSystem: true }`. Titles already come from
-  `permissionTitle` (`acp-session.ts`). Plan approvals and questions use the
-  separate `x.ai/exit_plan_mode` and `x.ai/ask_user_question` reverse requests.
+- Grok: `publicApprovals` (`bridges/acp-bridge/src/acp-public.ts`) reports each
+  ACP permission request in ACP's own shape (title from `permissionTitle`,
+  plus the agent's options), which the native branch of `mapAcpApproval`
+  offers as a required choice. While any request is held, `/activity` answers
+  `waiting`. Plan approvals and questions use the separate
+  `x.ai/exit_plan_mode` and `x.ai/ask_user_question` reverse requests.
 - OpenCode: every production owner creates the provider with
   `autoAnswerRequests: false`, so OpenCode interactions go through the same
   journaled path as everyone else. The `OpenCodeProvider` auto-reject branch
@@ -119,20 +120,19 @@ per-bridge environment overrides that predate the execution policy.
    - `listPermissionRules?` / `removePermissionRule?` on `NativeAgentRuntimeProvider`.
 
    Bridges with no saved rules answer an empty list, not 404.
-3. **Grok approval kind.** Every Grok approval reaches the card as a generic
-   file-system `permission`. `publicApprovals` emits the Codex-shaped envelope
-   (`approvalId`, `kind: "permissions"`), which `mapAcpApproval`
-   (`apps/backend/src/core/http-bridge-interactions.ts`) hands to
-   `mapCodexApproval`. The native ACP branch of `mapAcpApproval` hard-codes
-   `kind: "permission"` too. Derive the kind from the ACP `toolCall.kind` in the
-   bridge: report `execute` as `command` and `edit` as `file-change`, with the
-   fields those kinds carry, and keep `permissions` for everything else. The
-   backend then maps them onto `command-approval` and `file-approval`. Carry the
-   request's blocking hint if ACP supplies one.
-4. **Claude question previews.** Set `toolConfig.askUserQuestion.previewFormat`
+2. **Grok approval kind.** Every Grok approval reaches the card as a
+   `permission` titled by the tool call, with the agent's own options. The
+   native ACP branch of `mapAcpApproval`
+   (`apps/backend/src/core/http-bridge-interactions.ts`) hard-codes
+   `kind: "permission"`. Derive the kind from the ACP `toolCall.kind` in the
+   bridge: report `execute` as a command approval and `edit` as a file change,
+   with the fields those kinds carry, and keep `permission` for everything
+   else. The backend then maps them onto `command-approval` and
+   `file-approval`. Carry the request's blocking hint if ACP supplies one.
+3. **Claude question previews.** Set `toolConfig.askUserQuestion.previewFormat`
    once the question card's rendering mode (plain or html) is decided. Nothing
    sets it today.
-5. **Retire the deprecated policy env overrides.**
+4. **Retire the deprecated policy env overrides.**
    - Remove the reads and the deprecation warnings in the Cursor and Pi bridges,
      along with `sandboxEnabled`, `resolveCursorSettingSources`,
      `approvalsEnabled` and `projectResourcesEnabled`. Today
@@ -163,7 +163,7 @@ per-bridge environment overrides that predate the execution policy.
      still say Pi approvals and project resources are env-gated; update them in
      the same change.
    - Done when no source file outside tests names any of the five variables.
-6. **Delete the unused OpenCode auto-answer branch.** No production caller sets
+5. **Delete the unused OpenCode auto-answer branch.** No production caller sets
    `autoAnswerRequests: true`. Remove the branch in `OpenCodeProvider`
    (`registerSession`, the reconcile hook and the `permission.asked` /
    `question.asked` replies) and move the tests that use it onto the journaled

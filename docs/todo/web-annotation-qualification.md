@@ -114,7 +114,11 @@ Test code the runs below depend on.
   - create, send and resolve work by keyboard alone;
   - the narrow (under 720 px) Preview/Notes switch works;
   - screenshot and highlight alignment holds at the zoom and DPR values
-    above.
+    above;
+  - pins and Show on page stay on the right target, or become explicit, for
+    an offscreen target, a target inside a modal, and a layout shift from a
+    late-loading font (code item 5's font route). Only reorder, hot reload and
+    duplication have real-stack evidence so far.
 - Web and iOS review: on a gateway browser client and in the iOS wrapper
   (`apps/ios`, `WKWebView`), review a capture made on the desktop while no
   desktop is connected. Capture must show as unavailable.
@@ -222,16 +226,10 @@ Partial evidence only; no milestone was signed off. Linux (Wayland, display
   run uses the same Electron harness, and annotations run inside service tabs.
 - [container-platform-qualification.md](container-platform-qualification.md)
   for Docker fixtures.
-- [web-page-annotations.md](../architecture/web-page-annotations.md), the
-  [request state machine rationale](../improvements/web-page-annotations/plan/01-domain-model-and-contracts.md)
-  and the [anchor resolution rules](../improvements/web-page-annotations/plan/10-anchors-navigation-and-stale-targets.md).
-- Living-doc drift to fix:
-  - The status line of `web-page-annotations.md` links the deleted plan index.
-    Point it here.
-  - The last "Known limitations" bullet of `web-page-annotations.md` says "See
-    the gate records in step 14". Point it to "Last evidence" above.
-  - The `docs/README.md` catalogue row points here for the real-stack gates;
-    drop that pointer after sign-off.
+- [web-page-annotations.md](../architecture/web-page-annotations.md),
+  including §"Request states" and §"Anchors and pins".
+- Living-doc drift to fix: the `docs/README.md` catalogue row points here for
+  the real-stack gates; drop that pointer after sign-off.
 
 ## Replaces
 
@@ -239,6 +237,8 @@ Partial evidence only; no milestone was signed off. Linux (Wayland, display
   helped", validation scenarios)
 - `docs/improvements/web-page-annotations/plan/00-index.md` (milestones and
   gates)
+- `docs/improvements/web-page-annotations/plan/01-domain-model-and-contracts.md`
+  (done; state machine and limits moved to `architecture/web-page-annotations.md`)
 - `docs/improvements/web-page-annotations/plan/02-storage-assets-and-retention.md`
   (superseded by SQLite; remote upload proof)
 - `docs/improvements/web-page-annotations/plan/03-commands-synchronization-and-capabilities.md`
@@ -253,6 +253,9 @@ Partial evidence only; no milestone was signed off. Linux (Wayland, display
   (approvals across switch and restart)
 - `docs/improvements/web-page-annotations/plan/09-migration-and-first-release.md`
   (release sign-off)
+- `docs/improvements/web-page-annotations/plan/10-anchors-navigation-and-stale-targets.md`
+  (real-window pin cases; resolution rules moved to
+  `architecture/web-page-annotations.md`)
 - `docs/improvements/web-page-annotations/plan/12-results-and-visual-verification.md`
   (comparison fixtures)
 - `docs/improvements/web-page-annotations/plan/13-capture-modes-and-client-support.md`

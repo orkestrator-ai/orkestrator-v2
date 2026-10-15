@@ -17,11 +17,12 @@ Refreshed 2026-10-15 against `main` at `2459b05c`.
 | [`development/`](#development) | Living contributor guides: testing, upgrades, releases, disk usage. |
 | [`tests/`](#tests) | The flaky-test registry. |
 | [`todo/`](#todo) | All outstanding work, one file per concept, with a scored checklist in [`todo/00-index.md`](todo/00-index.md). Pick work from here. |
-| [Reference awaiting a home](#reference-awaiting-a-home) | A few older plan and investigation files kept for their durable content until it moves into `architecture/` or `development/`. Do not pick work from them. |
 
-There are no other plan, review or dated-note folders. Completed plans are
+There are no other plan, review or dated-note folders, and nothing else
+belongs at the top of `docs/`. Durable content goes into `architecture/` or
+`development/`; anything still to do goes into `todo/`. Completed plans are
 deleted once their behaviour is in a living doc; git history keeps them. The
-2026-10-15 consolidation removed everything else under `docs/improvements/`,
+2026-10-15 consolidation removed everything under `docs/improvements/`,
 `docs/imrovements/`, `docs/plans/`, `docs/2026-10-14/`, `docs/2026-10-15/` and
 `docs/reviews/`. Read those files at commit `2459b05c` if you need the history.
 
@@ -41,11 +42,15 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [event-snapshot-recovery.md](architecture/event-snapshot-recovery.md) | Which sequence each consumer may compare, revisioned view snapshots/outcomes, bounded client hydration, best-effort PR notifications, terminal input recovery. |
 | [web-page-annotations.md](architecture/web-page-annotations.md) | Preview notes, capture spool, backend threads, native dispatch, review, migration. Real-stack gates: [web-annotation-qualification.md](todo/web-annotation-qualification.md). |
 | [browser-previews.md](architecture/browser-previews.md) | Service previews: registry, desktop tunnel, private HTTPS origins, relay, kill switch, rollback. Rollout: [service-preview-rollout.md](todo/service-preview-rollout.md). |
-| [review-preparation.md](architecture/review-preparation.md) | Multi-review pipeline; queue wait is 30 minutes. |
-| [native-agent-commands.md](architecture/native-agent-commands.md) | Slash-command descriptors, bridge wire contract, intent resolution, collisions, catalogue lifecycle. |
+| [review-preparation.md](architecture/review-preparation.md) | Multi-review pipeline; queue wait is 30 minutes. Fan-out budgets and the efficiency benchmark. |
+| [native-agent-commands.md](architecture/native-agent-commands.md) | Slash-command descriptors, bridge wire contract, intent resolution, collisions, catalogue lifecycle, per-provider support tables. |
 | [bridge-diagnostics.md](architecture/bridge-diagnostics.md) | Shared bridge debug logging. |
 | [storage.md](architecture/storage.md) | Backend SQLite database: stores and layouts, `updateStore`/leases/`atomically`, durability and deletion, migrations and the one-time JSON import. |
 | [container-lifecycle.md](architecture/container-lifecycle.md) | Container authority: durable operations, ownership, writer lease, schema floor, recovery; images and readiness; persistent storage, preserving rebuilds, recovery copies and reviewed cleanup; staged inputs, networks, budgets and bounded logs. |
+| [environment-deletion.md](architecture/environment-deletion.md) | What deleting an environment removes and in what order, the cleanup ledger and its retries, the branch rules, and the sweeps that remove leftovers. |
+| [agent-accounts.md](architecture/agent-accounts.md) | Multiple Claude/Codex logins: account directories and shared links, global switching, backend-driven login and signing in again, plan usage, containers, coordinators, terminals, and Claude Keychain naming. |
+| [github-cli.md](architecture/github-cli.md) | Which `gh` the backend runs (managed copy, then PATH), the status command, device-flow sign-in through the account login driver, the startup reminder and its opt-out, and the container GitHub credential source. |
+| [recurring-work.md](architecture/recurring-work.md) | Recurring background work: job catalogue and diagnostics, scheduler/admission/read-coordinator primitives, rollback switches, B/C/L inventory with current cadences, latency budgets. |
 | [cursor-usage.md](architecture/cursor-usage.md) | Cursor usage mapping. |
 | [cursor-diagnostics.md](architecture/cursor-diagnostics.md) | Historical: September 9 and 14 stall investigations. Current logging is in `bridge-diagnostics.md`. |
 | [platform-inconsistencies.md](architecture/platform-inconsistencies.md) | Historical: 2026-08-16 inventory plus later current-state notes. Not a backlog. |
@@ -57,13 +62,14 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [testing-guide.md](development/testing-guide.md) | How to choose and run tests. Commands live here. |
 | [agent-testing.md](development/agent-testing.md) | Isolated profiles and real-stack QA. |
 | [cli-testing.md](development/cli-testing.md) | Driving a `dev:test` profile with the `orkestrator` CLI: setup from a worktree, scripting output, recipes, UI rehydration checks. Contract stays in `public-cli.md`. |
-| [upgrade-agents.md](development/upgrade-agents.md) | SDK/CLI bump runbook. Pins are test-enforced. |
+| [upgrade-agents.md](development/upgrade-agents.md) | SDK/CLI bump runbook. Pins are test-enforced. "Other dependencies" covers non-agent packages, runtimes and image tools. |
 | [credentials-and-models.md](development/credentials-and-models.md) | Credential and catalogue inventory. |
 | [test-logs.md](development/test-logs.md) | Diagnostic-bounds rationale. Operator commands stay in `testing-guide.md`. |
 | [disk-usage.md](development/disk-usage.md) | Where Orkestrator work leaves disk state, who prunes each location, `disk:report`, `dev:prune`, Docker build-cache limit. |
 | [linting.md](development/linting.md) | oxfmt/oxlint configuration, exclusions, severity policy and disable-directive rules. |
 | [releasing.md](development/releasing.md) | Cutting a desktop release, CI secrets, artifact names, how the in-app updater decides to run, Linux/Omarchy notes. |
-| [dependency-upgrade-schedule-2026-10-13.md](development/dependency-upgrade-schedule-2026-10-13.md) | Active: phased upgrade plan for every non-agent dependency, runtime and image tool. Agent SDKs stay in `upgrade-agents.md`. |
+| [container-qualification.md](development/container-qualification.md) | Real-Docker qualification: C01–C30 scenario matrix, live suites and how to run them, platform dimensions, benchmark harness and regression targets. |
+| [efficiency-harness.md](development/efficiency-harness.md) | Running `efficiency:baseline`: options, workloads a–j, counting method and limitations. |
 | [flaky-tests.md](development/flaky-tests.md) | Pointer to the flake registry in `tests/`. |
 
 ## Tests
@@ -198,31 +204,4 @@ iOS, two machines) are the most common open gate. They are batched in
 | [mixed-version-compatibility.md](todo/mixed-version-compatibility.md) | Support-window policy for old clients, bridges and backends; renderer–backend skew; dead prompt-queue claim commands; index of compatibility paths awaiting retirement. |
 | [test-suite-and-ci-health.md](todo/test-suite-and-ci-health.md) | Slow test owners, a skipped settings test, red CI on `main` and missing branch protection, deferred test-structure candidates. |
 | [mobile-layout-gaps.md](todo/mobile-layout-gaps.md) | Narrow-viewport defects: split panes remount at the mobile breakpoint; environment settings blocked by the projects drawer. |
-
-## Reference awaiting a home
-
-These files were kept because they hold durable reference content that no
-living doc covers yet. Several are cited by code comments or by living docs.
-Their status lines, checklists and links to sibling plan files are stale, and
-any outstanding work they mention now lives in `todo/`. The suggested home is
-where the durable part should go; then delete the file.
-
-| File | Durable content | Suggested home |
-| --- | --- | --- |
-| [2026-10-15/github-cli-setup.md](2026-10-15/github-cli-setup.md) | Managed `gh` design: startup dialog, status command, sign-in through the account login driver, token stripping, agent-test refusal. | New `architecture/github-cli.md` |
-| [plans/multi-account.md](plans/multi-account.md) | Agent accounts design: switching, login, reauthentication, containers, Keychain service naming. Cited by `agent-accounts*.ts`. | New `architecture/agent-accounts.md` |
-| [plans/environment-deletion-cleanup.md](plans/environment-deletion-cleanup.md) | Deletion scope, cleanup ledger, branch policy, reconciler backoff, sweep ownership. Linked from `development/disk-usage.md`. Its Docker section and store paths predate #877 and #969. | New `architecture/environment-deletion.md`, or a section of `development/disk-usage.md` |
-| [improvements/browser/plan/01-decision-record.md](improvements/browser/plan/01-decision-record.md) | Preview threat boundaries, credential and data-path diagram, resource ownership and cleanup table. | `architecture/browser-previews.md` |
-| [improvements/web-page-annotations/plan/01-domain-model-and-contracts.md](improvements/web-page-annotations/plan/01-domain-model-and-contracts.md) | Request state machine and the justification for each transition. Cited by `web-annotations.ts`. | `architecture/web-page-annotations.md` |
-| [improvements/web-page-annotations/plan/10-anchors-navigation-and-stale-targets.md](improvements/web-page-annotations/plan/10-anchors-navigation-and-stale-targets.md) | Deterministic anchor resolution rules. Cited by `browser-preview-anchor-script.ts`. | `architecture/web-page-annotations.md` |
-| [improvements/containers/benchmarks.md](improvements/containers/benchmarks.md) | Container benchmark baselines and the regression targets used as a merge gate. | `architecture/container-lifecycle.md` or a new `development/container-benchmarks.md` |
-| [improvements/containers/plan/05-persistent-workspace-and-agent-state.md](improvements/containers/plan/05-persistent-workspace-and-agent-state.md) | Provider-state inventory (what each provider preserves and excludes). Cited by `container-state-layout.ts`. | `architecture/container-lifecycle.md` ("Persistent storage") |
-| [improvements/containers/plan/14-integrated-qualification-and-rollout.md](improvements/containers/plan/14-integrated-qualification-and-rollout.md) | C01–C30 scenario matrix. Cited by `container-live-*.test.ts`. | A new `development/container-qualification.md` |
-| [improvements/efficiency/baseline/README.md](improvements/efficiency/baseline/README.md) | How to run `efficiency:baseline`, its method and limitations. Cited by `mise.toml` and `scripts/efficiency/`. The summary JSON it lists was removed. | A new `development/efficiency-harness.md` |
-| [imrovements/recurring-processes.md](imrovements/recurring-processes.md) | Inventory of recurring work: the B/C/L IDs used by `RECURRING_JOB_CATALOGUE`. Cadences predate #852. Cited by `recurring-work.ts`. | A new `architecture/recurring-work.md`, with the cadences updated |
-| [improvements/recurring-processes/baseline/README.md](improvements/recurring-processes/baseline/README.md) | Latency budgets per view, recurring harness method and scenario matrix. The step JSON artefacts it lists were removed. | The same `architecture/recurring-work.md`, plus a `development/testing-guide.md` section |
-| [improvements/multi-review/plan/baseline.md](improvements/multi-review/plan/baseline.md) | Budget values and why they were chosen; benchmark reproduce command. Cited by `multi-review-efficiency.bench.test.ts`. | A new `architecture/multi-review.md`, or a section of `architecture/review-preparation.md` |
-| [improvements/slash-commands/qualification.md](improvements/slash-commands/qualification.md) | Per-provider support, disabled-command and literal-suppression tables. Linked from `architecture/native-agent-commands.md`. Pins are stale. | `architecture/native-agent-commands.md` |
-| [improvements/cli-commands/plan/14-targeted-testing-and-qualification.md](improvements/cli-commands/plan/14-targeted-testing-and-qualification.md) | CLI scenario-by-layer coverage table. Linked from `development/testing-guide.md`. | `development/testing-guide.md` ("CLI scenarios") or `architecture/public-cli.md` |
-| [improvements/inconsistencies/plan/01-contract-baseline-and-regression-fixtures.md](improvements/inconsistencies/plan/01-contract-baseline-and-regression-fixtures.md) | Which records survive a bridge or backend restart, by owner. Store names predate #969. | `architecture/agent-engines.md` |
-| [improvements/inconsistencies/plan/09-conversation-retention-and-close-semantics.md](improvements/inconsistencies/plan/09-conversation-retention-and-close-semantics.md) | Close and retention caller inventory. Linked from `architecture/agent-engines.md`. The retention decision is made (see `AGENTS.md`). | `architecture/agent-engines.md` |
+| [dependency-upgrades.md](todo/dependency-upgrades.md) | Non-agent dependency upgrades still pending: Electron 46, React Compiler lint warnings, update-signing decision, and upgrades blocked upstream or deferred. |

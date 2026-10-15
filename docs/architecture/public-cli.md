@@ -3,8 +3,9 @@
 Status: Living — operator and architecture guide for the client command
 surface of the published `orkestrator` package.
 
-Implementation plan and evidence:
-[CLI commands plan](../improvements/cli-commands/plan/00-cli-commands-index.md).
+Testing workflow and coverage by layer: [cli-testing.md](../development/cli-testing.md).
+Outstanding work: [cli-command-surface.md](../todo/cli-command-surface.md) and
+[cli-qualification.md](../todo/cli-qualification.md) (with the evidence log).
 Contract source: [`packages/protocol/src/public-api.ts`](../../packages/protocol/src/public-api.ts)
 and [`public-api-resources.ts`](../../packages/protocol/src/public-api-resources.ts).
 
@@ -389,10 +390,16 @@ credentialed `live-session` scenario (`ORKESTRATOR_SCENARIO_MODEL` pins a
 model). Fixture origins sit at `<scenario root>/fixtures/origin.git`, the one
 remote the agent-test runtime mounts into containers. Container live runs for
 providers other than Claude use `--network full`, because the default
-restricted allowlist reaches only Anthropic's API. Live runs use host credentials
+restricted allowlist reaches only Anthropic's API. Codex in a container also
+needs the explicit `CODEX_HOME` credential opt-in (for example
+`CODEX_HOME=$HOME/.codex`): the agent-test runtime stages a Codex home into
+containers only from that variable. Live runs use host credentials
 (`--credential-source`) and cost real tokens; keep them opt-in. The published
 package ships only the Claude and Codex bridges (OpenCode runs its own server),
-so Pi, Cursor and Grok need a full development profile.
+and the runner cannot target an existing profile, so Pi, Cursor and Grok cannot
+run `live-session` yet (see [cli-qualification.md](../todo/cli-qualification.md)).
+Which test proves each scenario class is listed in
+[cli-testing.md](../development/cli-testing.md#coverage-by-layer).
 
 ## Limitations and rollout
 

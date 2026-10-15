@@ -8,7 +8,7 @@
  * never become a dimension, because the recording API has nowhere to put one.
  *
  * The catalogue records what the inventory in
- * `docs/imrovements/recurring-processes.md` established about each family:
+ * `docs/architecture/recurring-work.md` describes for each family:
  * which process owns it, what triggers it, its default priority class, its
  * nominal cadence, what happens when it is requested while already running,
  * and how a missed run is recovered. It describes the system as it is, so a
@@ -155,7 +155,7 @@ export const RECURRING_RECOVERY_CONTRACTS = [
 export type RecurringRecoveryContract = (typeof RECURRING_RECOVERY_CONTRACTS)[number];
 
 export interface RecurringJobDescriptor {
-  /** Inventory row(s) in the investigation, e.g. `B03`. */
+  /** Inventory row(s) in `docs/architecture/recurring-work.md`, e.g. `B03`. */
   inventory: string;
   owner: RecurringWorkOwner;
   trigger: RecurringTrigger;
@@ -209,7 +209,8 @@ const external = (
 /**
  * Current behavior, one entry per kind. Cadences are the dominant nominal
  * period; conditional variants (pending PR modes, container vs watched diff
- * scans, active vs idle native views) are described in the investigation.
+ * scans, active vs idle native views) are described in
+ * `docs/architecture/recurring-work.md`.
  */
 export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, RecurringJobDescriptor>> = {
   // Completion-scheduled 20 s normal / 5 s create / 1 s merge; 5 min error backoff.

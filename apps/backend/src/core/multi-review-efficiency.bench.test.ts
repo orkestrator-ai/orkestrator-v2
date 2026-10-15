@@ -7,9 +7,11 @@
  * temporary store, synthetic reports and no real source or transcript content.
  *
  * Counting happens only through the fake provider, the command invoker and
- * storage spies. The harness therefore runs unchanged against the code before
- * the efficiency work, which is how `docs/improvements/multi-review/plan/
- * baseline.md` was produced. Reproduce with:
+ * storage spies. The harness therefore runs unchanged against older code, which
+ * is how the efficiency work's before/after baseline was produced. The budgets
+ * it checks, and why they were chosen, are in
+ * `docs/architecture/review-preparation.md` ("Fan-out budgets and benchmark").
+ * Reproduce with:
  *
  *   MULTI_REVIEW_BENCH_OUT=/tmp/multi-review-bench.json \
  *     mise run test:logged -- --name multi-review-bench -- \

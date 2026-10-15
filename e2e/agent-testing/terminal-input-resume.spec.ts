@@ -282,3 +282,282 @@ test("a lost terminal write stays fenced until the user resumes, and the shell s
     }
   }
 });
+
+// Fault only the terminal transport. The authoritative EventSource stays open,
+// and the actual gateway/hook/PersistentTerminal recovery code owns reconnects.
+type RecoveryTransport = "http-sse" | "websocket";
+declare global {
+  interface Window {
+    terminalRecoveryTest: {
+      interrupt(): void;
+      resume(): void;
+      stats(): { mainOpens: number; terminalOpens: number; socketSnapshots: number };
+    };
+  }
+}
+
+for (const transport of ["http-sse", "websocket"] as const) {
+  test(`a stopped shell is automatically replaced after terminal-only ${transport} recovery`, async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const status = profileStatus();
+    expect(status.status).toBe("ready");
+    const invoke = await signIn(page, status);
+    const fixture = (await invoke<Project[]>("get_projects")).find(
+      (project) => project.localPath === status.testProject,
+    )!;
+    expect(fixture).toBeTruthy();
+    await page.addInitScript((transport: RecoveryTransport) => {
+      localStorage.setItem("orkestrator-terminal-transport", transport);
+      const sources: EventSource[] = [];
+      const sockets: WebSocket[] = [];
+      let mainOpens = 0;
+      let terminalOpens = 0;
+      let socketSnapshots = 0;
+      let heldSocket: WebSocket | undefined;
+      let heldSource: EventSource | undefined;
+      let requireSnapshot = false;
+      const NativeEventSource = window.EventSource;
+      window.EventSource = class extends NativeEventSource {
+        constructor(url: string | URL, options?: EventSourceInit) {
+          super(url, options);
+          const terminal = new URL(String(url), location.href).searchParams.has("includeEvents");
+          if (terminal) sources.push(this);
+          this.addEventListener("open", () => {
+            if (terminal) terminalOpens += 1;
+            else mainOpens += 1;
+          });
+        }
+      };
+      const NativeWebSocket = window.WebSocket;
+      window.WebSocket = class extends NativeWebSocket {
+        constructor(url: string | URL, protocols?: string | string[]) {
+          super(url, protocols);
+          if (!String(url).includes("/__orkestrator/terminal")) return;
+          sockets.push(this);
+          this.addEventListener("close", (event) => {
+            if (heldSocket === this) event.stopImmediatePropagation();
+          });
+          this.addEventListener("message", (event) => {
+            if (typeof event.data !== "string") return;
+            const frame = JSON.parse(event.data);
+            if (frame.type === "subscribed" && frame.recovery === "snapshot-required") {
+              socketSnapshots += 1;
+            }
+          });
+        }
+        override send(data: Parameters<WebSocket["send"]>[0]) {
+          // Model an expired terminal replay cursor on the reopened socket.
+          // The real server answers snapshot-required from its current state.
+          if (requireSnapshot && typeof data === "string") {
+            const frame = JSON.parse(data);
+            if (frame.type === "subscribe") {
+              delete frame.knownGeneration;
+              delete frame.knownRevision;
+              requireSnapshot = false;
+              data = JSON.stringify(frame);
+            }
+          }
+          super.send(data);
+        }
+      };
+      window.terminalRecoveryTest = {
+        interrupt() {
+          if (transport === "http-sse") {
+            heldSource = sources.findLast((source) => source.readyState === NativeEventSource.OPEN);
+            if (!heldSource) throw new Error("No open terminal EventSource");
+            heldSource.close();
+          } else {
+            heldSocket = sockets.findLast((socket) => socket.readyState === NativeWebSocket.OPEN);
+            if (!heldSocket) throw new Error("No open terminal WebSocket");
+            heldSocket.close();
+          }
+        },
+        resume() {
+          if (heldSource) {
+            heldSource.dispatchEvent(new Event("error"));
+            heldSource = undefined;
+          }
+          if (heldSocket) {
+            const socket = heldSocket;
+            heldSocket = undefined;
+            requireSnapshot = true;
+            socket.dispatchEvent(new CloseEvent("close"));
+          }
+        },
+        stats: () => ({ mainOpens, terminalOpens, socketSnapshots }),
+      };
+    }, transport);
+
+    const created: Environment[] = [];
+    try {
+      for (const suffix of ["recovery", "other"]) {
+        const environment = await invoke<Environment>("create_environment", {
+          projectId: fixture.id,
+          name: `${transport}-${suffix}-${Date.now()}`,
+          networkAccessMode: "restricted",
+          environmentType: "local",
+        });
+        created.push(environment);
+        await invoke("start_environment", { environmentId: environment.id });
+        const layout = await invoke<{ revision?: number } | null>("get_pane_layout", {
+          environmentId: environment.id,
+        });
+        await invoke("save_pane_layout", {
+          environmentId: environment.id,
+          expectedRevision: layout?.revision ?? 0,
+          layout: {
+            version: PANE_LAYOUT_VERSION,
+            containerId: null,
+            activePaneId: "pane-shell",
+            root: {
+              kind: "leaf",
+              id: "pane-shell",
+              activeTabId: "tab-shell",
+              tabs: [{ id: "tab-shell", type: "plain" }],
+            },
+          },
+        });
+      }
+      const [target, other] = created as [Environment, Environment];
+      const sent: Array<{ command: string; args: Record<string, unknown> }> = [];
+      const targetSessions: string[] = [];
+      page.on("response", async (response) => {
+        const { command, args } = commandOf(response.request());
+        if (
+          command === "create_local_terminal_session" &&
+          args?.environmentId === target.id &&
+          response.ok()
+        ) {
+          const body = (await response.json()) as { result: { sessionId: string } };
+          targetSessions.push(body.result.sessionId);
+        }
+      });
+      page.on("request", (request) => {
+        const { command, args } = commandOf(request);
+        if (command) sent.push({ command, args: args ?? {} });
+      });
+      await page.route("**/__orkestrator/invoke", async (route) => {
+        if (commandOf(route.request()).command === "check_claude_cli") {
+          return route.fulfill({ json: { result: false } });
+        }
+        return route.fallback();
+      });
+      await page.goto(status.browserUrl!);
+      const openEnvironment = async (name: string) => {
+        const expand = page.getByRole("button", { name: `Expand project ${fixture.name}` });
+        const entry = page.getByText(name, { exact: true }).first();
+        await expect(expand.or(entry)).toBeVisible({ timeout: 30_000 });
+        if (await expand.isVisible()) await expand.click();
+        await page.mouse.move(0, 0);
+        await page.keyboard.press("Escape");
+        await entry.click();
+        await expect(page.locator(".xterm:visible").first()).toBeVisible({ timeout: 60_000 });
+      };
+      await openEnvironment(target.name);
+      const terminal = page.locator(".xterm:visible").first();
+      await terminal.click();
+      await page.keyboard.type("echo READY_PID=$$");
+      await page.keyboard.press("Enter");
+      const creates = () =>
+        sent.filter(
+          (entry) =>
+            entry.command === "create_local_terminal_session" &&
+            entry.args.environmentId === target.id,
+        );
+      // StrictMode can repeat idempotent create requests for the same PTY.
+      await expect.poll(() => new Set(targetSessions).size).toBe(1);
+      const oldSession = targetSessions[0]!;
+      const output = async (sessionId: string) =>
+        visibleText(
+          (await invoke<{ output: string }>("get_terminal_output_snapshot", { sessionId })).output,
+        );
+      await expect.poll(() => output(oldSession)).toMatch(/READY_PID=\d+/);
+      const pidBefore = (await output(oldSession)).match(/READY_PID=(\d+)/)![1];
+      const createsBefore = creates().length;
+      const responsesBefore = targetSessions.length;
+      const before = await page.evaluate(() => window.terminalRecoveryTest.stats());
+      expect(before.mainOpens).toBeGreaterThan(0);
+      if (transport === "websocket") {
+        // Keep SSE fallback unavailable during this case so replacement must
+        // be triggered by the WebSocket's snapshot-required notification.
+        await page.route("**/__orkestrator/events?*", (route) => {
+          if (new URL(route.request().url()).searchParams.has("includeEvents"))
+            return route.abort();
+          return route.fallback();
+        });
+      }
+      await page.evaluate(() => window.terminalRecoveryTest.interrupt());
+      // Stop the actual PTY during the transport gap, retaining its history.
+      await invoke(TERMINAL_WRITE, { sessionId: oldSession, data: "exit\n" });
+      await expect
+        .poll(
+          async () =>
+            (await invoke<{ running: boolean }>("get_terminal_session", { sessionId: oldSession }))
+              .running,
+        )
+        .toBe(false);
+      await page.evaluate(() => window.terminalRecoveryTest.resume());
+      // No manual connect call or reconnect button: PersistentTerminal's effect
+      // must notice the hook's released attachment and start a new shell.
+      await expect.poll(() => creates().length, { timeout: 30_000 }).toBeGreaterThan(createsBefore);
+      await expect.poll(() => targetSessions.length).toBeGreaterThan(responsesBefore);
+      const replacement = targetSessions.at(-1)!;
+      await expect
+        .poll(
+          async () =>
+            (await invoke<{ running: boolean }>("get_terminal_session", { sessionId: replacement }))
+              .running,
+        )
+        .toBe(true);
+      // Stable terminal keys can reuse an id; compare actual shell PIDs.
+      await terminal.click();
+      await page.keyboard.type("echo RECOVERY_PID=$$");
+      await page.keyboard.press("Enter");
+      await expect.poll(() => output(replacement)).toMatch(/RECOVERY_PID=\d+/);
+      expect((await output(replacement)).match(/RECOVERY_PID=(\d+)/)![1]).not.toBe(pidBefore);
+      const after = await page.evaluate(() => window.terminalRecoveryTest.stats());
+      expect(after.mainOpens).toBe(before.mainOpens);
+      if (transport === "http-sse")
+        expect(after.terminalOpens).toBeGreaterThan(before.terminalOpens);
+      else expect(after.socketSnapshots).toBeGreaterThan(before.socketSnapshots);
+      expect(sent.filter((entry) => entry.command === "close_local_terminal_session")).toEqual([]);
+
+      const renderedOutput = () =>
+        page.evaluate(async (environmentId) => {
+          const modulePath = "/src/stores/terminalPortalStore.ts";
+          const { useTerminalPortalStore } = await import(modulePath);
+          const buffer = useTerminalPortalStore.getState().getTerminal(environmentId, "tab-shell")
+            ?.terminal.buffer.active;
+          if (!buffer) return "";
+          const lines: string[] = [];
+          for (let index = 0; index < buffer.length; index += 1) {
+            lines.push(buffer.getLine(index)?.translateToString(true) ?? "");
+          }
+          return lines.join("\n");
+        }, target.id);
+      // Background output and a reload both rehydrate the surviving replacement.
+      await openEnvironment(other.name);
+      await invoke(TERMINAL_WRITE, { sessionId: replacement, data: "echo recovered-background\n" });
+      await expect.poll(() => output(replacement!)).toMatch(/recovered-background\r?\n/);
+      await openEnvironment(target.name);
+      await expect.poll(renderedOutput).toContain("recovered-background");
+      await page.reload();
+      await openEnvironment(target.name);
+      await expect.poll(renderedOutput).toContain("recovered-background");
+      await terminal.click();
+      await page.keyboard.type("echo after-reload");
+      await page.keyboard.press("Enter");
+      await expect.poll(() => output(replacement)).toMatch(/after-reload\r?\n/);
+      expect(new Set(targetSessions)).toEqual(new Set([oldSession, replacement]));
+    } finally {
+      for (const environment of created) {
+        await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
+        await invoke("delete_environment", { environmentId: environment.id }).catch(
+          () => undefined,
+        );
+      }
+    }
+  });
+}

@@ -1,8 +1,10 @@
 # Container lifecycle
 
-Living guide to how the backend owns environment containers. The rollout plan
-and its implementation records are in
-[`docs/improvements/containers/plan/`](../improvements/containers/plan/00-index.md).
+Living guide to how the backend owns environment containers. Qualifying a
+change against a real daemon is in
+[container-qualification.md](../development/container-qualification.md);
+outstanding work is in the `docs/todo/container-*.md` files, starting with
+[container-platform-qualification.md](../todo/container-platform-qualification.md).
 
 ## Authority
 
@@ -20,9 +22,9 @@ environment's `containerLifecycle` record
 | `revision` | Monotonic; bumped by every persisted lifecycle change. |
 | `runtime` | Committed container: id, `runtimeGeneration`, owner, image reference/id. |
 | `lastRuntimeGeneration` | Highest generation ever assigned; a replacement always gets a new one. |
-| `storage` | Storage identity (`legacy-layer` until persistent volumes). |
+| `storage` | Storage format (`legacy-layer` or `volume-v1`), `workspaceGeneration` and, for volumes, the `storageSetId` and volume references. |
 | `operation` | The single unresolved operation: kind, phase, status, source/candidate. |
-| `outcomes` | Last 32 terminal outcomes, for request deduplication. |
+| `outcomes` | Last 32 terminal outcomes, for request deduplication; each carries `durationMs` and per-phase `phases` timings when it ran in one process. |
 | `outcomeHorizon` | Operation ids at or before it have aged out and are refused. |
 
 The record is capped at 64 KiB. Clients receive `ContainerLifecycleSnapshot`,
@@ -277,11 +279,39 @@ Rules:
   remove stays referenced as a retained copy. Deleting an environment removes
   its volumes after its container, through the cleanup ledger.
 
-Per-provider preservation (`PROVIDER_PRESERVATION`): Claude, Pi and Cursor are
-full; Codex (thread-name index not preserved, relocated databases pending
-qualification), OpenCode (revert snapshots not preserved) and Grok (root-level
-registries not preserved) are partial and say so. Named volumes are
-persistence, not backup: a Docker administrator can still remove them.
+### Provider state
+
+`PROVIDER_STATE_LAYOUT` (`container-state-layout.ts`) lists every
+resume-critical path; each is mounted from its own `state` sub-directory at
+exactly that path, so the rest of a provider home stays in the container
+layer. The container user is `node` (`HOME=/home/node`) and no launcher sets a
+vendor-home variable. Bridge journals and session maps are preserved with
+their provider's transcripts, because the host's provider session id cannot
+be resolved without them, and an ambiguous dispatch survives reconstruction
+as unknown rather than unsent.
+
+| Provider | Preserved (`state` sub-directory → mount) | Not preserved |
+| --- | --- | --- |
+| Claude | `claude/projects` → `~/.claude/projects` (SDK transcripts); `claude/file-history` → `~/.claude/file-history` (rewind); `claude/orkestrator` → `~/.claude/orkestrator` (bridge dispatch and steer journals, preferences) | `.credentials.json`, settings, `commands`/`agents`/`plugins`, caches, `~/.claude.json` |
+| Codex | `codex/sessions`, `codex/archived_sessions` (rollouts, fork lineage); `codex/orkestrator-bridge` (session map, dispatch journal); `codex/sqlite` at `CODEX_SQLITE_HOME` (runtime databases) | `session_index.jsonl` (thread names, at the home root), `auth.json`, `config.toml`, caches, logs |
+| OpenCode | `opencode/db` via `OPENCODE_DB` (session database) | `snapshot/` (revert and diff history, seeded from the host by the entrypoint), `auth.json`, configuration, plugins, mise installs under `~/.local/share` |
+| Pi | `pi/sessions` → `~/.pi/agent/sessions` (`PI_SESSION_DIR`); `pi/bridge-state` → `/tmp/orkestrator-pi-state` | `auth.json`, `models.json`, settings, extensions, themes |
+| Cursor | `cursor/bridge-state` → `/tmp/orkestrator-cursor-sdk-state` (SDK agent store and bridge journals) | `/tmp/orkestrator-ai/cursor-sdk-auth.json`, API-key files, `~/.cursor` auxiliaries |
+| Grok | `grok/sessions` → `~/.grok/sessions` (histories and search index); `grok/bridge-state` → `/tmp/orkestrator-acp-state` | `active_sessions.json`, `worktrees.db`, `auth.json`, configuration |
+
+SQLite stores (Codex runtime databases, OpenCode's database, Grok's search
+index) keep their `-wal` and `-shm` files beside them on the volume, and are
+copied only with their writer stopped. Packages installed outside the
+preserved paths (`/usr`, `/opt`, the rest of the home) do not survive a new
+runtime; they must come from the image or project setup.
+
+`PROVIDER_PRESERVATION` is what the product may claim, and its limitation
+text reaches the user through the rebuild preview: Claude, Pi and Cursor are
+`full`; Codex, OpenCode and Grok are `partial` because of the paths above
+(Codex's relocated databases and Grok's index are also pending
+qualification). Resume after a rebuild is qualified only for the providers in
+`RESUME_QUALIFIED_PROVIDERS`. Named volumes are persistence, not backup: a
+Docker administrator can still remove them.
 
 ## Preserving rebuild (`migrate` / `rebuild`)
 
@@ -576,8 +606,8 @@ probe URL carries no credential. Commands: `get_container_host_reachability`,
 
 Budgets are opt-in. `global.containerResourceLimits` (Settings → Container)
 sets a default for new runtimes and `environment.containerResourceLimits`
-overrides it; with neither, a runtime is unrestricted as before, because
-defaults must come from measurements (step 13), not guesses. The older
+overrides it; with neither, a runtime is unrestricted, because a default
+must come from measured workloads, not guesses. The older
 `global.containerResources` slider value was never applied and is no longer
 shown or read.
 

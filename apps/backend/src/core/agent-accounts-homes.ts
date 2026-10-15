@@ -13,7 +13,7 @@ import { HOST_CLAUDE_KEYCHAIN_SERVICE } from "./commands-runtime-state.js";
 /**
  * Filesystem side of an added account: its configuration directory, the links
  * that share everything but the login with the host directory, and reading the
- * login back. See docs/plans/multi-account.md.
+ * login back. See docs/architecture/agent-accounts.md.
  */
 
 /**

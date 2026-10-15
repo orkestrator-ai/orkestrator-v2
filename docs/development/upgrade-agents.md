@@ -1127,3 +1127,53 @@ rerun the provider's drift/contract tests, and rebuild the container. Cached
 newer toolchains and provider-created session data are not themselves rolled
 back; verify that a session created by the newer release can still be resumed if
 downgrade compatibility matters.
+
+## Other dependencies
+
+Everything that is not an agent SDK or CLI (renderer and backend libraries,
+Electron, Bun, Docker image tools, CI actions) follows the same lockfile rules
+(AGENTS.md, *Updating Bun and lockfiles*) plus these. Outstanding upgrades are
+tracked in [`docs/todo/dependency-upgrades.md`](../todo/dependency-upgrades.md).
+
+Finding what is outdated: `mise exec -- bun outdated --filter='*'` and
+`mise exec -- bun audit` (both read-only), then `npm view <pkg> dist-tags`.
+`bun outdated` follows the `latest` tag only, so it misses a release
+published under a line tag (electron-builder 26 publishes under `v26`).
+
+- **Bun alone.** Bump Bun in its own change, never inside a dependency batch:
+  every later change regenerates lockfiles with the Bun `mise.toml` pins. Bun is
+  pinned in `mise.toml`, root `packageManager`, `packages/cli` `engines`,
+  `scripts/download-bun.sh` (version and four SHA-256s; this Bun ships inside
+  the desktop app), both `oven/bun` base images and version checks in
+  `docker/Dockerfile`, and the `@types/bun` ranges. `version-drift.test.ts`
+  enforces them, `mise run docker:check-base` resolves the new base digest,
+  and `.github/workflows/validate-bun-runtime.yml` runs on the change.
+- **Pins that move together.** The `@tiptap/*` exact pins; the
+  `@modelcontextprotocol/client` pins in backend, cursor-bridge and pi-bridge
+  (and `node`/`server`, which peer on each other); `@playwright/test`,
+  `playwright`, both `playwright-core` pins and Dockerfile `PLAYWRIGHT_VERSION`
+  (drift-tested); `sharp` in backend and CLI; every `@radix-ui/react-*`
+  (they must dedupe to one copy of their shared layers); `vite` with
+  `@vitejs/plugin-react`; mise in `config/mise-version.json` and the
+  Dockerfile (drift-tested, with SHA-256s).
+- **`@types/node` follows the runtime.** Bridges, backend, toolchain and root
+  tests run under Bun, so they use the Node major Bun reports. `apps/desktop`
+  runs on Electron's Node and matches the `@types/node` Electron depends on.
+- **Intentional holds.** `test-fixtures/preview-vite` stands in for a user's app
+  and stays on its pinned Vite. `marked` stays on the major `@tiptap/markdown`
+  depends on, so the lexer in `components/markdown/tiptap-extensions.ts` and
+  Tiptap's parser share one copy.
+- **Overrides and patches.** `patches/` holds only agent-SDK patches. Root
+  `overrides.dompurify` lifts the copy `monaco-editor` declares; Monaco bundles
+  its own DOMPurify, so the override only affects `bun audit`.
+
+Validation beyond `format:check`, `lint`, `typecheck` and `test` (one suite per
+`test:logged` command):
+
+| Change touches | Also run |
+| --- | --- |
+| Lockfiles | Both frozen installs and `bun test tests/unit/version-drift.test.ts` |
+| Renderer behaviour (Radix, Monaco, Tiptap, icons, Vite) | `test:browser`, `test:agent:browser:isolated`; design canvas: `test:agent:design:isolated` |
+| Electron, electron-builder | `build:electron`, `test:agent:electron`, `package:linux` / `package:mac`, `verify:packaged-backend`; see [releasing.md](releasing.md) for the macOS floor |
+| Native or bundled backend deps (`sharp`, `playwright-core`) | `verify:packaged-backend`, `smoke:cli`, `test:cli:scenarios` |
+| Dockerfile (Bun, mise, delta, Playwright) | `docker:check-base`, `docker:build`, `test:agent:docker` |

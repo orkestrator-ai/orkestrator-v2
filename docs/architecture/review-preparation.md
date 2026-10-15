@@ -138,3 +138,71 @@ cover manual and pipeline handoff and controller replacement. Service tests
 exercise the backend command path, sealing, integrity, and environment cleanup.
 The browser gateway suite includes a real-worker test that switches environments,
 lets validation finish, reloads, and reads the same completed snapshot.
+
+## Fan-out budgets and benchmark
+
+After sealing, `ReviewFanoutRunner`
+([`review-fanout.ts`](../../apps/backend/src/core/review-fanout.ts)) hands the
+package to every reviewer, for standalone Multi Review and Build Pipeline review
+stages alike. The cost of that control plane (admission, observation,
+persistence, evidence verification, consolidation input) is bounded
+independently of panel size, up to the 32-reviewer maximum:
+
+| Dimension | Budget | Owner |
+| --- | --- | --- |
+| Concurrent session setups | 4 (`DEFAULT_REVIEW_ADMISSION_CONCURRENCY`) | `review-fanout-scheduler.ts` |
+| Concurrent observations | 8 (`DEFAULT_REVIEW_OBSERVATION_CONCURRENCY`) | `review-fanout-scheduler.ts` |
+| Concurrent work per provider | 4 (`DEFAULT_REVIEW_PROVIDER_CONCURRENCY`) | `review-fanout-scheduler.ts` |
+| Any configured cap | Clamped to 16 (`MAX_REVIEW_FANOUT_CONCURRENCY`) | `review-fanout-scheduler.ts` |
+| Evidence verifications | 2 per evidence generation: before admission and before consolidation | `review-evidence-permits.ts` |
+| Provider transcript reads | At most one progress read per live reviewer per 60 s; none on other passes | `multi-review-progress.ts`, `review-fanout-transcript.ts` |
+| Observational writes | At most one workflow write per pass, for any panel size | `ReviewFanoutRunner.stageObservation` |
+| Running-reviewer observation | Next pass 3 s after the previous one finishes, plus up to 1 s stable per-workflow jitter; admission, dispatch and consolidation work runs at 1 s | `multi-review-service.ts` |
+| Accepted report | 1 MiB, 100 issues, 16 KiB per prose field | `packages/protocol/src/structured-review/budgets.ts` |
+| Consolidation input | 640 KiB with every source ID kept; overflow fails before dispatch | `review-consolidation-evidence.ts` |
+| Reviewer-tab transcript snapshot | 500 messages and 2 MiB; unchanged polls carry no messages | `multi-review-reviewer-transcript.ts` |
+
+Why these values:
+
+- **640 KiB consolidation input** is roughly 160k tokens at four bytes per
+  token, leaving room for instructions and output inside a 200k-token context.
+  A synthetic 32-reviewer panel with six issues per report uses about 82% of it.
+- **1 MiB per report, 16 KiB per prose field, 100 issues** sit far above a
+  typical report (about 18 KiB with six issues), so they reject only runaway
+  output. They apply only to answers accepted in the fan-out, never to stored
+  reports or other review features; violations go through the bounded repair
+  path.
+- **Caps of 4/8/4/16.** Four overlapping setups remove most of the serial cost
+  for the common two- to eight-reviewer panels without a 32-process burst.
+  Admission therefore takes ceil(reviewers / 4) setup waves, and one slow
+  reviewer does not delay its peers.
+- **3 s running cadence.** Reviews take minutes; 3 s keeps the tab fresh while
+  cutting provider status traffic by at least two thirds compared with 1 s.
+
+[`multi-review-efficiency.bench.test.ts`](../../apps/backend/src/core/multi-review-efficiency.bench.test.ts)
+measures this with fake providers, a temporary store and synthetic reports
+(`multi-review-efficiency-fixtures.ts`) for 1, 2, 4, 8 and 32 reviewers, a
+two-provider panel and one slow reviewer. It counts only through the fake
+provider, the command invoker and storage spies, so the same file can run
+against an older build. Its numbers are control-plane work, not model latency,
+tokens or cost. The default run asserts two verifications per generation,
+transcript reads bounded by reviewer count, at most one save per running pass,
+`min(reviewers, 4)` concurrent setups, and that a slow setup does not
+serialise the panel. To record the result table:
+
+```bash
+MULTI_REVIEW_BENCH_OUT=/tmp/multi-review-bench.json \
+  mise run test:logged -- --name multi-review-bench -- \
+  bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
+  ./src/core/multi-review-efficiency.bench.test.ts --parallel=1
+```
+
+Add `MULTI_REVIEW_BENCH_REPORT_ONLY=1` to measure an older build without the
+assertions. The remaining budgets are asserted by focused tests:
+`review-fanout-efficiency.test.ts` (transcript reads, writes per pass,
+admission, isolation), `multi-review-service-efficiency.test.ts` and
+`multi-review-reviewer-transcript.test.ts` (reviewer-tab snapshots),
+`structured-review/budgets.test.ts` (reports) and
+`review-consolidation-evidence.test.ts` (consolidation input). Open
+scale and cost work is in
+[multi-review-scale-and-cost.md](../todo/multi-review-scale-and-cost.md).

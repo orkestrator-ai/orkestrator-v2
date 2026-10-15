@@ -673,7 +673,8 @@ export function isWebAnnotationRequestActive(state: WebAnnotationRequestState): 
  * Native state is observed by polling, so a request can move forward past
  * states that were never observed (a turn can be claimed, dispatched, and
  * finished between two passes). Forward skips out of `queued`/`dispatching`
- * are therefore allowed; the step 01 plan justifies each one. A `prepared`
+ * are therefore allowed; docs/architecture/web-page-annotations.md
+ * ("Request states") justifies each one. A `prepared`
  * request only ever leaves through its own publication (`queued`) or a
  * pre-publication cancel/failure.
  */

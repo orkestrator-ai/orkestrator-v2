@@ -135,8 +135,9 @@ results above:
 
 - [multi-review-scale-and-cost.md](multi-review-scale-and-cost.md): control-plane
   cost, rollback gates and hierarchical consolidation.
-- Kept [baseline](../improvements/multi-review/plan/baseline.md): consolidation
-  sizes and the reasoning behind the 640 KiB and per-report budgets.
+- [`review-preparation.md`](../architecture/review-preparation.md#fan-out-budgets-and-benchmark):
+  consolidation sizes and the reasoning behind the 640 KiB and per-report
+  budgets.
 
 ## Replaces
 

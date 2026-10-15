@@ -16,20 +16,21 @@ candidates need a decision.
 - Recorder: `recurringWorkMetrics` (`apps/backend/src/core/recurring-work-metrics.ts`)
   labels work only by the kinds in `RECURRING_JOB_CATALOGUE`
   (`packages/protocol/src/recurring-work.ts`), whose `inventory` field carries
-  the B, C and L IDs from the
-  [recurring-work inventory](../imrovements/recurring-processes.md).
+  the B, C and L IDs of the inventory in
+  [recurring-work.md](../architecture/recurring-work.md).
 - Read through `get_recurring_work_diagnostics` (`commands-registry-system.ts`)
   and the `recurringWork` block of the gateway's `/__orkestrator/metrics`.
 - Harness: `apps/backend/scripts/recurring-baseline.ts` with its `-harness`,
   `-native` and `-workflows` modules; flags `--out`, `--compare`,
   `--fail-on-change` and `--overhead`. It drives real owners on a manual clock
   and counts calls; `apps/backend/tests/recurring-baseline.test.ts` keeps it
-  deterministic. Method, scenario matrix and latency budgets are in the
-  [recurring baseline](../improvements/recurring-processes/baseline/README.md).
-  The stored baseline JSON artifacts no longer reproduce at HEAD (the efficiency
-  file-tree cache changed container and watched-tree walk counts, plus the
-  storage counter regression below), so regenerate a reference before any
-  comparison.
+  deterministic. Method and scenario matrix:
+  [testing-guide.md](../development/testing-guide.md#recurring-work-harness);
+  latency budgets:
+  [recurring-work.md](../architecture/recurring-work.md#latency-budgets).
+  No reference artifact is committed (the stored step artifacts stopped
+  reproducing after the efficiency file-tree cache and the storage counter
+  regression below, and were deleted), so generate one before any comparison.
 - Rollback switches, each read once at startup and let through the desktop
   environment allowlist in `apps/desktop/electron/backend-process.ts`:
   - `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` (`KEYED_SCHEDULING_ROLLBACK_ENV`,
@@ -75,6 +76,20 @@ candidates need a decision.
 5. Commit the live idle A/B procedure as a script or as documented commands;
    the qualifying run used an uncommitted wrapper. Generate a fresh reference
    artifact only when a cadence change needs one; a run takes seconds.
+6. Bring `RECURRING_JOB_CATALOGUE` and the harness text back in line with the
+   code:
+   - `acp-disconnect-poll` (L07) still lists a 50 ms poll, but ACP disconnect
+     detection is event-only (`bridges/acp-bridge/src/acp-client-disconnect.ts`).
+     Remove the kind or mark it historical.
+   - `client-browser-annotation` (C13) lists a 150 ms poll that no longer
+     exists; annotation capture now polls `SELECTION_POLL_MS` (400 ms) while
+     selecting, in `useAnnotationCapture.ts`.
+   - `coordinator-repair` is catalogued `recovery` but registered as
+     `maintenance` in `core/index.ts`; pick one.
+   - `BASELINE_LIMITATIONS` in `recurring-baseline-harness.ts` still says
+     multi review uses the adaptive due scheduler by default (it is keyed)
+     and that each store is one JSON file (stores are SQLite rows since
+     the storage move).
 
 ### Qualification
 
@@ -263,18 +278,12 @@ Qualification and rollout:
 - [web-annotation-known-limitations.md](web-annotation-known-limitations.md):
   annotation capture polling (`SELECTION_POLL_MS` in `useAnnotationCapture.ts`)
   belongs there, not here.
-- [Recurring baseline](../improvements/recurring-processes/baseline/README.md)
-  for the latency budget table, scenario matrix and harness method, and the
-  [inventory](../imrovements/recurring-processes.md) for the B, C and L legend.
-- Living-doc drift to fix:
-  - No architecture doc covers recurring-work scheduling. The decisions and
-    obligations above, the scheduler and pool defaults and the rollback
-    switches live only in this file, module comments and the kept baseline
-    README. Candidate: `docs/architecture/recurring-work.md`.
-  - The `packages/protocol/src/recurring-work.ts` header defers conditional
-    cadences to "the investigation", and several modules carry
-    "recurring-processes step NN" provenance comments; harmless, but they
-    point at plans being deleted.
+- [recurring-work.md](../architecture/recurring-work.md) for the inventory
+  (B, C and L IDs), scheduling primitives and latency budgets, and
+  [testing-guide.md](../development/testing-guide.md#recurring-work-harness)
+  for the harness method and scenario matrix.
+- Living-doc drift to fix: several modules carry "recurring-processes step
+  NN" provenance comments that point at deleted plans; harmless.
 
 ## Replaces
 
@@ -301,13 +310,17 @@ Qualification and rollout:
   (Docker availability, design canvas, display clock, validation reader)
 - `docs/improvements/recurring-processes/plan/12-qualification-and-rollout.md`
   (gaps, rollback switches, soak)
-- `docs/improvements/recurring-processes/baseline/README.md` (kept; its live
-  isolated profile procedure and limitations)
+- `docs/improvements/recurring-processes/baseline/README.md` (latency budgets
+  and trial limits moved to `../architecture/recurring-work.md`, harness
+  method to `../development/testing-guide.md`; the live isolated profile
+  procedure is above)
 - `docs/improvements/recurring-processes/baseline/step-01-baseline.json`
 - `docs/improvements/recurring-processes/baseline/step-03-snapshots.json`
 - `docs/improvements/recurring-processes/baseline/step-04-container-fetch.json`
 - `docs/improvements/recurring-processes/baseline/step-05-pr-monitoring.json`
 - `docs/improvements/recurring-processes/baseline/step-07-baseline.json`
 - `docs/improvements/recurring-processes/baseline/step-12-final.json`
-- `docs/imrovements/recurring-processes.md` (kept; findings F01 to F10 shipped,
-  B19 and B20 candidates; B18 is in `container-state-observation.md`)
+- `docs/imrovements/recurring-processes.md` (inventory moved to
+  `../architecture/recurring-work.md` with current cadences; findings F01 to
+  F10 shipped; B19 and B20 are measured candidates above; B18 is in
+  `container-state-observation.md`)

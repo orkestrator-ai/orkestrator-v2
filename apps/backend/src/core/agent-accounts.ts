@@ -53,7 +53,7 @@ import { terminalAccountHomes } from "./terminal-account-usage.js";
 
 /**
  * Added Claude and Codex logins: registry, switching, sign-in and per-account
- * usage. See docs/plans/multi-account.md.
+ * usage. See docs/architecture/agent-accounts.md.
  */
 
 const HOST_ACCOUNT_LABEL = "Host login";

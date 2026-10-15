@@ -231,9 +231,9 @@ baseline.
 ## Constraints and rationale
 
 - The threat boundaries, the credential and data path, and the resource-owner
-  table are in the
-  [decision record](../improvements/browser/plan/01-decision-record.md).
-  Every change must keep them. In short: application code is untrusted
+  table are in
+  [browser-previews.md](../architecture/browser-previews.md) §"Security
+  boundaries". Every change must keep them. In short: application code is untrusted
   relative to control and to other services; local ingress is credentialed
   (port secrecy is not authentication); the tunnel cannot choose
   destinations; gateway credentials never travel inside application bytes;
@@ -297,24 +297,6 @@ baseline.
   window), [environment-and-disk-cleanup.md](environment-and-disk-cleanup.md)
   (deletion-time cleanup), [test-suite-and-ci-health.md](test-suite-and-ci-health.md)
   (gated runs).
-- Living-doc drift to fix:
-  - `browser-previews.md` status line: says "Implemented on branch …" and
-    links the deleted plan index. It shipped as #831; outstanding work is here.
-  - `browser-previews.md` §Identity, §"Operator controls" and §"Schema
-    downgrade" name `backend-identity.json`, `preview-services.json` and
-    `preview-settings.json`, and say older backends ignore `preview-*.json`.
-    Since #969 they are SQLite stores, so the downgrade note needs rewriting.
-    `docs/plans/environment-deletion-cleanup.md` repeats the
-    `preview-services.json` name.
-  - `browser-previews.md` §"Framework configuration" says Vite HMR in a real
-    browser "has not been validated". The Chromium spec passed it on
-    2026-09-23; only the tunnel in a real Electron window is unvalidated.
-  - `browser-previews.md` opening ("With everything off, the product behaves
-    as before") is only partly true: service tabs, terminal intents and
-    registry seeding are always on, and only the transport is legacy.
-  - `browser-previews.md` §"Known limitations" and `testing-guide.md`
-    ("Record results in `docs/improvements/browser/plan/evidence.md`") should
-    point to the evidence log here.
 
 ## Replaces
 
@@ -324,6 +306,9 @@ baseline.
   (storage retention)
 - `docs/improvements/browser/validation.md` (acceptance matrix)
 - `docs/improvements/browser/plan/00-index.md` (decisions, invariants)
+- `docs/improvements/browser/plan/01-decision-record.md` (prototype blockers;
+  threat boundaries, data path and resource ownership moved to
+  `architecture/browser-previews.md`)
 - `docs/improvements/browser/plan/01-architecture-and-fixtures.md` (second
   framework, second machine)
 - `docs/improvements/browser/plan/02-contracts-and-capabilities.md` (done)

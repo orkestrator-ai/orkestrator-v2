@@ -216,7 +216,8 @@ ORKESTRATOR_PREVIEW_BENCH=1 mise run test:logged -- --name preview-bench -- \
   bun test --cwd apps/backend ./src/preview-bench.test.ts --parallel=1
 ```
 
-Record results in `docs/improvements/browser/plan/evidence.md`.
+Record results in the evidence log of
+[service-preview-rollout.md](../todo/service-preview-rollout.md#evidence-log).
 
 ### CLI scenarios
 
@@ -258,8 +259,9 @@ mise run dev:stop --profile qa-cli-live && mise run dev:reset --profile qa-cli-l
 ```
 
 The run manifest (IDs, exit codes, stages — no prompts or tokens) is written to
-`output/cli-scenarios/<run>/manifest.json`. Record live results in
-`docs/improvements/cli-commands/plan/14-targeted-testing-and-qualification.md`.
+`output/cli-scenarios/<run>/manifest.json`. Record live results in the
+[evidence log](../todo/cli-qualification.md#evidence-log), against the coverage
+table in [cli-testing.md](cli-testing.md#coverage-by-layer).
 See [public-cli.md](../architecture/public-cli.md#targeted-scenarios).
 
 To drive a running `dev:test` profile with the CLI during manual or agent QA,
@@ -283,6 +285,74 @@ intentionally spawn helpers that outlive their immediate parent long enough to
 exercise supervision and cleanup. The repository runner instead places each
 group in its own process group and terminates that whole tree if a watchdog
 fires.
+
+### Recurring-work harness
+
+`apps/backend/scripts/recurring-baseline.ts` counts how often the backend's
+recurring owners attempt work and the physical work that implies. Run it when
+a change touches a cadence, a cache or join, admission, or a workflow or
+observation driver (see [recurring-work.md](../architecture/recurring-work.md)).
+It takes seconds and needs no Docker, Git remote, GitHub or provider.
+
+```bash
+# Print a fresh artifact; --out writes it, --overhead adds a real-time
+# recorder cost measurement that comparisons ignore
+mise exec -- bun apps/backend/scripts/recurring-baseline.ts \
+  --out output/benchmarks/recurring-before.json
+
+# After the change: list every counter that moved, or exit 1 on any difference
+# to prove a change is observation-only
+mise exec -- bun apps/backend/scripts/recurring-baseline.ts \
+  --compare output/benchmarks/recurring-before.json --fail-on-change
+
+# The harness's own determinism test
+mise run test:logged -- --name recurring-baseline -- \
+  bun test --cwd apps/backend \
+  --preload ../../tests/setup-node.ts ./tests/recurring-baseline.test.ts \
+  --parallel=1 --only-failures
+```
+
+Generate the reference before making the change; no artifact is committed
+(`output/benchmarks/` is ignored by Git).
+
+- **Driven owners.** The real `DiffStatsService` (diff scans and Files-panel
+  list and tree reads behind the `git-docker-scan` pool), `GitFetchScheduler`,
+  `ContainerGitFetchPolicy`, `PrMonitorService` (with a seeded jitter source)
+  and `ClaudeStatePollManager` run on a manual monotonic clock with a fresh
+  content-free recorder per scenario. Fake Git, `gh` and Docker seams charge
+  the work units the production scanners perform per call (`PHYSICAL_COST` in
+  `recurring-baseline-harness.ts`; update it alongside a scanner change).
+- **Phases.** A 30 s startup phase and a separate 10 min warm-idle phase,
+  longer than the 5 min fetch cooldowns. Each client models the Files panel
+  open on the first environment, refreshing list and tree every 5 s.
+- **Scenarios** (`DEFAULT_SCENARIOS`) vary environment count (1, 10, 50),
+  local and container mix, 0 to 2 clients, PR mix (none, or cycled none,
+  open, terminal) and 0 or 200 completed workflow records per store; ids such
+  as `env10-mixed-c2-pr-wf200` encode those choices.
+- **Modelled, not driven.** The activity jobs (native sweep, launch and queue
+  scans, Claude state, tmux queues, mail, renames, coordinator repair,
+  retention, lease expiry, tab cleanup) are reported under `modelledIdle` as
+  nominal attempts from their catalogue cadence, never mixed with driven
+  counters.
+- **Driven blocks.** `nativeObservation` (`recurring-baseline-native.ts`)
+  runs the real native activity sweep and queue scan against fake providers,
+  in rollback and shared modes. `workflows` (`recurring-baseline-workflows.ts`)
+  runs the real feature-planning, build-pipeline and looped-review
+  supervisors over a temporary store, in whole-store rollback and keyed modes.
+  Multi review is not driven.
+
+It is a call-count model, not a profile. It does not measure durations, CPU,
+RSS or I/O bytes; provider, transcript and storage cost behind the modelled
+jobs; change-to-visible freshness against the
+[latency budgets](../architecture/recurring-work.md#latency-budgets); renderer
+polling other than the Files panel; or bridge-side recurrence. Those need the
+live isolated profile tracked in
+[recurring-work-qualification.md](../todo/recurring-work-qualification.md).
+Live counters for a running backend come from `get_recurring_work_diagnostics`
+or the `recurringWork` block of `/__orkestrator/metrics`.
+
+For transcript, projection and storage cost, use the
+[efficiency harness](efficiency-harness.md) (`mise run efficiency:baseline`).
 
 ## Logged commands and failure artifacts
 

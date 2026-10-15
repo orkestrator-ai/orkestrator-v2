@@ -10,8 +10,8 @@ bridge routes, the per-session account card and multi-account switching all
 exist. Still missing: the turn-time `auth` notice, actionable needs-auth on
 four platforms, a session-free settings card, OpenCode sign-in and Codex
 sign-in cancel. A handful of account-switching gaps remain, mostly inside
-containers. The design reference for accounts is
-[multi-account.md](../plans/multi-account.md).
+containers. How accounts work is in
+[agent-accounts.md](../architecture/agent-accounts.md).
 
 ## Current state
 
@@ -167,9 +167,9 @@ Each was checked against the current code.
 
 ## Needs verification
 
-- **Usage windows after a switch.** `multi-account.md` lists "usage windows
-  reported by a bridge still finishing a turn on the previous account are
-  folded into the new account's card". The code now gates folding on the
+- **Usage windows after a switch.** The old multi-account plan listed "usage
+  windows reported by a bridge still finishing a turn on the previous account
+  are folded into the new account's card". The code now gates folding on the
   reporting bridge's account: `contextUsageWithPlanUsage`
   (`plan-usage-cache.ts`) folds only when the connection's `accountId`
   (`localAgentAccountIds`, set at launch) matches the active account. Container
@@ -178,9 +178,11 @@ Each was checked against the current code.
 
 ## Related
 
-- [multi-account.md](../plans/multi-account.md) (design: account directories,
+- [agent-accounts.md](../architecture/agent-accounts.md) (account directories,
   switching, login, reauthentication, containers, coordinator token hand-off,
-  terminal tabs, Phase 0 findings).
+  terminal tabs, provider behaviour relied on).
+- [github-cli.md](../architecture/github-cli.md) (GitHub CLI sign-in through the
+  same login driver).
 - [mcp-management.md](mcp-management.md) (MCP OAuth).
 - [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md)
   for the Codex round trip and agent-test credential isolation.
@@ -189,8 +191,8 @@ Each was checked against the current code.
 ## Replaces
 
 - `docs/plans/sdk-coverage/08-auth-and-account-status.md`
-- `docs/plans/multi-account.md` "Known gaps" (the rest of that file stays as the
-  design reference)
+- `docs/plans/multi-account.md` (known gaps here; the design is now
+  `docs/architecture/agent-accounts.md`)
 - `docs/plans/sdk-coverage-2026-09-06.md` (§1 theme 2, Claude §3.4 `auth_status`,
   Codex §4.3 auth recovery, OpenCode §5.4, Grok §7.4, Pi §8.13, Tier 3 row 32's
   sign-in half)

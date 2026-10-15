@@ -22,7 +22,8 @@ Status: Done (2026-10-15). All five steps landed:
 
 One done-when item is outside this plan: `createPromptStreamState` in
 `session-manager-prompt-stream.ts` (about 630 lines) predates it and is still
-one closure scope.
+one closure scope. It has its own plan:
+[2026-10-15/01](../2026-10-15/01-claude-bridge-prompt-stream-state.md).
 
 Priority: third. Read
 [`bridges/AGENTS.md`](../../bridges/AGENTS.md) and

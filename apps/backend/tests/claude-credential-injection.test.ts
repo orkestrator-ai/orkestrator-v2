@@ -52,11 +52,12 @@ async function withTempDirAsync<T>(fn: (dir: string) => Promise<T>): Promise<T> 
 function runSync(
   credentialFile: string,
   stdin: string,
+  env: NodeJS.ProcessEnv = {},
 ): { stdout: string; stderr: string; status: number | null } {
   const result = spawnSync(
     "bash",
     ["-lc", buildSyncContainerClaudeCredentialCommand(credentialFile)],
-    { input: stdin, encoding: "utf8" },
+    { input: stdin, encoding: "utf8", env: { ...process.env, ...env } },
   );
   return { stdout: result.stdout, stderr: result.stderr, status: result.status };
 }
@@ -100,6 +101,24 @@ describe("in-container Claude credential write", () => {
 
       // The host having nothing to offer must not log the container out of a
       // session the user established with `claude /login` inside it.
+      expect(result.status).toBe(0);
+      expect(readFileSync(credentialFile, "utf8")).toBe(CREDENTIAL);
+    });
+  });
+
+  test("an empty payload still succeeds when the login shell's logout script fails", () => {
+    withTempDir((dir) => {
+      // `bash -lc` sources ~/.bash_logout on `exit`. Debian's default one fails
+      // without a terminal, which turned an early `exit 0` into status 1 under
+      // `set -e`. A logout script that always fails reproduces it on any host.
+      const home = join(dir, "home");
+      mkdirSync(home);
+      writeFileSync(join(home, ".bash_logout"), "false\n");
+      const credentialFile = join(dir, ".credentials.json");
+      writeFileSync(credentialFile, CREDENTIAL, { mode: 0o600 });
+
+      const result = runSync(credentialFile, "", { HOME: home });
+
       expect(result.status).toBe(0);
       expect(readFileSync(credentialFile, "utf8")).toBe(CREDENTIAL);
     });

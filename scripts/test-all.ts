@@ -95,9 +95,9 @@ export const INCLUDE_IOS_TESTS_ENV = "ORKESTRATOR_INCLUDE_IOS";
 export const MAX_GROUP_OUTPUT_BYTES = 64 * 1024 * 1024;
 export const MAX_GROUP_OUTPUT_TAIL_BYTES = 256 * 1024;
 /**
- * Watchdog budgets. Groups stream their child output live (`--output-logs` is
- * never `errors-only`, which would buffer a whole Turbo run into one silent
- * window), so a five-minute gap really does mean the group stopped working.
+ * Watchdog budgets. Groups stream their child output live (see
+ * `TURBO_GROUP_OUTPUT_FLAGS`), so a five-minute gap really does mean the group
+ * stopped working.
  * The absolute deadline is deliberately several times the slowest group ever
  * recorded — around four minutes for the workspace group on a cold cache — so
  * it only catches a wedged run, never a slow one.
@@ -630,6 +630,26 @@ export const MIN_AGGREGATE_TEST_WORKERS = 1 + MIN_BRIDGE_WORKERS + 1 + 1;
 export const WORKSPACE_WORKERS_ENV = "ORKESTRATOR_TEST_WORKERS";
 export const ALLOW_MISSING_PROTOCOL_BINARY_ENV = "CODEX_PROTOCOL_CHECK_ALLOW_MISSING_BINARY";
 
+/**
+ * Output and failure handling shared by the Turbo groups.
+ *
+ * Both output flags keep task output streaming, which the no-progress watchdog
+ * depends on. An `errors-only` output mode would buffer a whole run, and Turbo's
+ * default `--log-order=auto` becomes `grouped` whenever it detects CI, holding
+ * each task's output until the task exits. On a four-core CI runner the backend
+ * package runs on one worker for far longer than the watchdog budget, so
+ * grouped output got a healthy run killed on every push.
+ *
+ * `--continue=dependencies-successful` stops one failing package from
+ * cancelling its siblings, so a single run reports every failure. A task whose
+ * own dependency failed still does not start.
+ */
+export const TURBO_GROUP_OUTPUT_FLAGS = [
+  "--output-logs=new-only",
+  "--log-order=stream",
+  "--continue=dependencies-successful",
+];
+
 export function planWorkers(cores: number): WorkerPlan {
   // Never plan more Bun workers than logical cores across root + bridges +
   // active workspace package tasks, and never fewer than one per group.
@@ -684,7 +704,7 @@ export function buildConcurrentGroups(
         "--filter=@orkestrator/protocol",
         "--filter=@orkestrator/toolchain",
         `--concurrency=${workers.workspaceConcurrency}`,
-        "--output-logs=new-only",
+        ...TURBO_GROUP_OUTPUT_FLAGS,
         "--summarize",
         ...(affected ? ["--affected"] : []),
       ],
@@ -730,7 +750,7 @@ export function buildConcurrentGroups(
         ".",
         "--filter=./bridges/*",
         `--concurrency=${workers.bridges}`,
-        "--output-logs=new-only",
+        ...TURBO_GROUP_OUTPUT_FLAGS,
         "--summarize",
         ...(affected ? ["--affected"] : []),
       ],

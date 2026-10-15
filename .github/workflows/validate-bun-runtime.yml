@@ -83,8 +83,25 @@ jobs:
       - name: Exercise the standalone packaged-backend layout
         run: cd apps/backend && bun test --preload ../../tests/setup-node.ts tests/standalone.test.ts
 
+      # The app's `mac.identity` is "-", so electron-builder ad-hoc signs it,
+      # opening every bundled file at once (over 20,000). That exceeds the macOS
+      # runner's kernel descriptor cap (EMFILE), and a shell `ulimit` cannot go
+      # above the cap, so raise the kernel limits first. electron-builder skips
+      # signing for pull requests unless told otherwise, so only pushes to main
+      # failed; signing pull requests too makes them prove the same thing. This
+      # job has no signing identity or secrets, so any signature is ad hoc.
       - name: Build an unpacked Electron application
-        run: bunx electron-builder --dir
+        shell: bash
+        env:
+          CSC_FOR_PULL_REQUEST: "true"
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            echo "Descriptor limits before: kern.maxfiles=$(sysctl -n kern.maxfiles) kern.maxfilesperproc=$(sysctl -n kern.maxfilesperproc) ulimit=$(ulimit -Sn)/$(ulimit -Hn)"
+            sudo sysctl -w kern.maxfiles=262144 kern.maxfilesperproc=131072
+            ulimit -Sn 131072
+            echo "Descriptor limits after: ulimit=$(ulimit -Sn)/$(ulimit -Hn)"
+          fi
+          bunx electron-builder --dir --publish never
 
       - name: Install and validate the unpacked Linux application
         if: runner.os == 'Linux'

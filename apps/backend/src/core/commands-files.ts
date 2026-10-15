@@ -2134,17 +2134,19 @@ export function buildSyncContainerClaudeCredentialCommand(
   mkdir -p "$credential_dir"
   payload="$(cat)"
   # An empty payload means the host had nothing to offer. Leave any credential
-  # already inside the container alone rather than logging the agent out.
-  if [ -z "$payload" ]; then
-    exit 0
+  # already inside the container alone rather than logging the agent out. The
+  # write is guarded instead of skipped with an early \`exit\`: this runs under
+  # \`bash -lc\`, where \`exit\` sources ~/.bash_logout with \`set -e\` still on,
+  # and Debian's default logout script fails without a terminal.
+  if [ -n "$payload" ]; then
+    credential_tmp="$(mktemp "$credential_dir/.credentials.XXXXXX")"
+    trap 'rm -f "$credential_tmp"' EXIT
+    printf '%s' "$payload" > "$credential_tmp"
+    chmod 600 "$credential_tmp"
+    mv -f "$credential_tmp" "$credential_file"
+    credential_tmp=
+    trap - EXIT
   fi
-  credential_tmp="$(mktemp "$credential_dir/.credentials.XXXXXX")"
-  trap 'rm -f "$credential_tmp"' EXIT
-  printf '%s' "$payload" > "$credential_tmp"
-  chmod 600 "$credential_tmp"
-  mv -f "$credential_tmp" "$credential_file"
-  credential_tmp=
-  trap - EXIT
   unset payload
 `;
 }

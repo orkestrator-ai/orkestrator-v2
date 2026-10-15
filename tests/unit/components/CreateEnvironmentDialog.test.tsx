@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, jest, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useConfigStore } from "@/stores/configStore";
-import { useClaudeStore } from "@/stores/claudeStore";
-import { useCodexStore } from "@/stores/codexStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { invoke } from "@/lib/native/backend";
 import { mockReadImage } from "../../mocks/clipboard";
@@ -25,8 +23,8 @@ const {
   resolveAgentDefaults,
 } = await import("../../../apps/web/src/components/environments/CreateEnvironmentDialog");
 const defaultConfig = structuredClone(useConfigStore.getInitialState().config);
-const defaultClaudeModels = useClaudeStore.getInitialState().models;
-const defaultCodexModels = useCodexStore.getInitialState().models;
+const defaultClaudeModels = useAgentModelCatalogStore.getInitialState().claudeModels;
+const defaultCodexModels = useAgentModelCatalogStore.getInitialState().codexModels;
 const invokeMock = invoke as ReturnType<typeof mock>;
 
 if (typeof globalThis.ImageData === "undefined") {
@@ -139,9 +137,13 @@ describe("resolveAgentDefaults", () => {
       isLoading: false,
       error: null,
     });
-    useClaudeStore.setState({ models: defaultClaudeModels });
-    useCodexStore.setState({ models: defaultCodexModels });
-    useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
+    useAgentModelCatalogStore.setState({
+      claudeModels: defaultClaudeModels,
+      codexModels: defaultCodexModels,
+      cursorModels: [],
+      grokModels: [],
+      piModels: [],
+    });
     invokeMock.mockReset();
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_preferences") {
@@ -826,8 +828,8 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("starts a new project's environment on the configured New projects default", async () => {
-    useCodexStore.setState({
-      models: [
+    useAgentModelCatalogStore.setState({
+      codexModels: [
         {
           id: "codex-a",
           name: "Codex A",
@@ -887,8 +889,8 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("takes agent, model, and reasoning from New projects defaults, not the last agent used", async () => {
-    useCodexStore.setState({
-      models: [
+    useAgentModelCatalogStore.setState({
+      codexModels: [
         {
           id: "codex-a",
           name: "Codex A",
@@ -990,8 +992,8 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("uses a repository New projects action default before the app default", async () => {
-    useCodexStore.setState({
-      models: [{ id: "repo-codex", name: "Repo Codex", reasoningEfforts: ["high"] }],
+    useAgentModelCatalogStore.setState({
+      codexModels: [{ id: "repo-codex", name: "Repo Codex", reasoningEfforts: ["high"] }],
     });
     const config = structuredClone(defaultConfig);
     config.global.enabledAgentPlatforms = ["claude", "codex"];
@@ -1246,8 +1248,8 @@ describe("resolveAgentDefaults", () => {
     // The cross-agent branch re-derives the effort from the target agent's
     // defaults. The same-agent branch must instead keep what the user chose,
     // which only shows up when the new model still supports it.
-    useCodexStore.setState({
-      models: [
+    useAgentModelCatalogStore.setState({
+      codexModels: [
         {
           id: "codex-a",
           name: "Codex A",
@@ -1315,8 +1317,8 @@ describe("resolveAgentDefaults", () => {
     // Selecting a platform resets that agent's model to its configured default.
     // Re-selecting the agent already in use is not a change and must not throw
     // away a model the user picked after opening the dialog.
-    useCodexStore.setState({
-      models: [
+    useAgentModelCatalogStore.setState({
+      codexModels: [
         {
           id: "codex-a",
           name: "Codex A",
@@ -1393,7 +1395,7 @@ describe("resolveAgentDefaults", () => {
   test("keeps Claude's real 'default' model id, which is not a placeholder", async () => {
     // The mirror of the test above: `CLAUDE_FALLBACK_MODELS` genuinely contains
     // an id of "default", so it must keep flowing through untouched.
-    useClaudeStore.setState({ models: [] });
+    useAgentModelCatalogStore.setState({ claudeModels: [] });
     const onCreate = mock(async () => {});
     render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
 
@@ -1473,8 +1475,8 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("falls back to the global Codex effort when the project has no override", async () => {
-    useCodexStore.setState({
-      models: [
+    useAgentModelCatalogStore.setState({
+      codexModels: [
         {
           id: "codex-preferred",
           name: "Codex Preferred",
@@ -1530,8 +1532,8 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("prefers a project effort and drops an unsupported configured effort", async () => {
-    useCodexStore.setState({
-      models: [
+    useAgentModelCatalogStore.setState({
+      codexModels: [
         {
           id: "codex-medium-only",
           name: "Codex Medium",
@@ -1813,8 +1815,8 @@ describe("resolveAgentDefaults", () => {
         variants: ["deep"],
       },
     ]);
-    useCodexStore.setState({
-      models: [
+    useAgentModelCatalogStore.setState({
+      codexModels: [
         {
           id: "codex-favorite",
           name: "Codex Favorite",
@@ -2384,8 +2386,8 @@ describe("resolveAgentDefaults", () => {
   });
 
   test("resets effort for an incompatible model and reconciles a refreshed catalog", async () => {
-    useCodexStore.setState({
-      models: [
+    useAgentModelCatalogStore.setState({
+      codexModels: [
         {
           id: "codex-high",
           name: "Codex High",
@@ -2426,8 +2428,8 @@ describe("resolveAgentDefaults", () => {
     expect(getAgentModelPicker().textContent).toContain("Default");
 
     await act(async () => {
-      useCodexStore.setState({
-        models: [
+      useAgentModelCatalogStore.setState({
+        codexModels: [
           {
             id: "codex-refreshed",
             name: "Codex Refreshed",
@@ -3608,9 +3610,13 @@ describe("CreateEnvironmentDialog feature builds", () => {
       isLoading: false,
       error: null,
     });
-    useClaudeStore.setState({ models: defaultClaudeModels });
-    useCodexStore.setState({ models: defaultCodexModels });
-    useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
+    useAgentModelCatalogStore.setState({
+      claudeModels: defaultClaudeModels,
+      codexModels: defaultCodexModels,
+      cursorModels: [],
+      grokModels: [],
+      piModels: [],
+    });
     mockReadImage.mockReset();
     mockReadImage.mockImplementation(() => Promise.reject(new Error("no image")));
     toastSuccessMock.mockReset();
@@ -4378,8 +4384,8 @@ describe("CreateEnvironmentDialog feature builds", () => {
     await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(1));
 
     act(() => {
-      useClaudeStore.setState({
-        models: [
+      useAgentModelCatalogStore.setState({
+        claudeModels: [
           {
             id: "late-catalog-model",
             name: "Late catalog model",

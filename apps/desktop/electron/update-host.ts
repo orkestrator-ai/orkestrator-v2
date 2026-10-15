@@ -46,6 +46,8 @@ export type DesktopUpdateHostOptions = {
    * the install cannot be replaced in place.
    */
   keepRollbackCopy?: () => Promise<string>;
+  /** Deletes that copy once the installed version has reported its first start. */
+  discardRollbackCopy?: () => Promise<void>;
 };
 
 export type DesktopUpdateHost = {
@@ -483,6 +485,11 @@ export function createDesktopUpdateHost(options: DesktopUpdateHostOptions): Desk
         log.warn("[Updater] Could not report the update outcome:", error);
       }
       await rm(options.markerFile, { force: true }).catch(() => undefined);
+      // Only the first launch after an update may roll it back, and that
+      // launch got this far: the copy of the previous version is no use now.
+      await options.discardRollbackCopy?.().catch((error: unknown) => {
+        log.warn("[Updater] Could not delete the rollback copy:", error);
+      });
     },
   };
 }

@@ -80,6 +80,7 @@ function setup(
     failFinalReports?: number;
     markerFile?: string;
     keepRollbackCopy?: () => Promise<string>;
+    discardRollbackCopy?: () => Promise<void>;
   } = {},
 ) {
   let failFinalReports = options.failFinalReports ?? 0;
@@ -115,6 +116,7 @@ function setup(
     log: { info: () => undefined, warn: () => undefined },
     progressIntervalMs: 1_000,
     keepRollbackCopy: options.keepRollbackCopy,
+    discardRollbackCopy: options.discardRollbackCopy,
     now: () => (clock += 600),
   });
   const reports = () =>
@@ -425,8 +427,9 @@ describe("after a restart", () => {
     );
   }
 
-  test("the new version reports success and clears the marker", async () => {
-    const h = setup({ appVersion: "2.22.0" });
+  test("the new version reports success, clears the marker and deletes the rollback copy", async () => {
+    const discardRollbackCopy = mock(async () => undefined);
+    const h = setup({ appVersion: "2.22.0", discardRollbackCopy });
     writeMarker(h.markerFile, "2.22.0");
     await h.host.register();
     await h.host.reportStartupOutcome();
@@ -435,6 +438,10 @@ describe("after a restart", () => {
       args: { hostSessionId: "session-1", jobId: "job-1", outcome: "succeeded" },
     });
     expect(existsSync(h.markerFile)).toBe(false);
+    expect(discardRollbackCopy).toHaveBeenCalledTimes(1);
+    // Without a pending install there is nothing to report or delete.
+    await h.host.reportStartupOutcome();
+    expect(discardRollbackCopy).toHaveBeenCalledTimes(1);
   });
 
   test("still the old version means the install did not apply", async () => {

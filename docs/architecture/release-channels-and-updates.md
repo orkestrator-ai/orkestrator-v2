@@ -549,6 +549,13 @@ Remote updates default to `restartPolicy: "immediate"`, because nobody may be
 at the remote to click Restart. The consent dialog shows the remote's running
 agent sessions, which the restart will interrupt.
 
+Nobody at the remote can veto the update (connecting already grants agent
+execution), but they are told. A remote desktop app shows a warning toast,
+"Updating to X", naming who asked (the Tailscale login when Tailscale Serve
+vouched for it, otherwise the client's declared name marked unverified) and
+from which address, and its update panel shows the same "Requested by" line.
+A headless backend logs it.
+
 **Progress.** The remote backend emits `update-status` on its own event
 stream, which the client already subscribes to for the active connection. For
 a connection that is not active, the panel polls `update_get_status` every 2 s
@@ -788,8 +795,9 @@ writable, because the swap renames the new file next to the old one.
   only ever starts from an approved job.
 - **After the restart** (early in `startApplication`):
   - If `app.getVersion() === to`: once the backend is ready and the first
-    window has loaded, register and report `succeeded`. Delete the rollback
-    copy after the next successful start.
+    window has loaded, register and report `succeeded`. Then delete the
+    rollback copy: only this first launch may roll back, so the copy is no
+    use once it got this far. The same goes for the other outcomes below.
   - If `app.getVersion() === from`, the install did not apply: report
     `failed`, with code `install-not-applied`.
   - If the backend fails to start during the first launch of the new version

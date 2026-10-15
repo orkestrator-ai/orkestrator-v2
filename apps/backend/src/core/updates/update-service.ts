@@ -555,6 +555,11 @@ export class UpdateService {
       requirementsSha256: this.job.target.requirementsSha256,
       detail: downgrade ? "downgrade" : undefined,
     });
+    // A headless machine has no screen to show this on; its log is the notice.
+    const who = requester.tailscaleUser ?? requester.client?.name ?? requester.listener;
+    this.log.info(
+      `[Updates] Updating to ${this.job.target.version}, requested by ${who}${requester.remoteAddress ? ` from ${requester.remoteAddress}` : ""}`,
+    );
     this.changed(true);
     void this.runJob(this.job.id);
     return this.snapshot();

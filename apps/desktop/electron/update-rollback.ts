@@ -78,9 +78,7 @@ export async function keepRollbackCopy(options: {
 }): Promise<string> {
   const ops = options.ops ?? defaultRollbackFileOps;
   await ops.mkdir(options.rollbackRoot);
-  for (const entry of await ops.list(options.rollbackRoot)) {
-    await ops.remove(path.join(options.rollbackRoot, entry));
-  }
+  await discardRollbackCopies(options.rollbackRoot, ops);
   const directory = path.join(options.rollbackRoot, options.version);
   await ops.mkdir(directory);
   const destination = path.join(directory, path.basename(options.app.path));
@@ -103,6 +101,20 @@ export async function claimFirstLaunchAfterUpdate(
   }
   await writePendingInstallMarker(markerFile, { ...marker, launched: true });
   return true;
+}
+
+/**
+ * Deletes the kept copies. Called once the version an update installed has
+ * reported its first start: a rollback is only possible during that launch,
+ * so the copy is no use afterwards.
+ */
+export async function discardRollbackCopies(
+  rollbackRoot: string,
+  ops: RollbackFileOps = defaultRollbackFileOps,
+): Promise<void> {
+  for (const entry of await ops.list(rollbackRoot)) {
+    await ops.remove(path.join(rollbackRoot, entry));
+  }
 }
 
 export type RollbackResult =

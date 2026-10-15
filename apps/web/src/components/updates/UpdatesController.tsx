@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { ArrowUpCircle, Loader2, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
-import { OPEN_UPDATE_PANEL_EVENT } from "@orkestrator/protocol/updates";
+import { isTerminalUpdatePhase, OPEN_UPDATE_PANEL_EVENT } from "@orkestrator/protocol/updates";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -14,10 +14,11 @@ import { listen } from "@/lib/native/events";
 import { localUpdateTransport } from "@/lib/updates/update-client";
 import { selectUpdateTarget, useUpdateStore } from "@/stores/updateStore";
 import { UpdateDetails } from "./UpdateDetails";
-import { indicatorState } from "./update-text";
+import { indicatorState, remoteRequesterLabel } from "./update-text";
 import { useUpdateTarget } from "./useUpdateTarget";
 
 export const UPDATE_AVAILABLE_TOAST_ID = "orkestrator-update-available";
+export const REMOTE_UPDATE_TOAST_ID = "orkestrator-remote-update";
 
 /**
  * Keeps this app's update state fresh and owns its dialog: the title-bar
@@ -30,7 +31,11 @@ export function UpdatesController() {
   const open = useUpdateStore((state) => state.dialogOpen);
   const setOpen = useUpdateStore((state) => state.setDialogOpen);
   const announced = useRef<string | null>(null);
+  const noticedJob = useRef<string | null>(null);
   const available = target.snapshot?.available;
+  const job = target.snapshot?.job ?? null;
+  const requestedBy =
+    job && !isTerminalUpdatePhase(job.phase) ? remoteRequesterLabel(job.requester) : null;
   const canInstall = target.snapshot?.host.canInstall ?? false;
   const desktop = typeof window !== "undefined" && Boolean(window.orkestrator?.updates);
 
@@ -59,6 +64,22 @@ export function UpdatesController() {
       action: { label: "Update", onClick: () => setOpen(true) },
     });
   }, [available, canInstall, setOpen]);
+
+  // Someone elsewhere is updating this machine: whoever sits at it should know
+  // why the app is about to restart.
+  useEffect(() => {
+    if (!job || !requestedBy || noticedJob.current === job.id) return;
+    noticedJob.current = job.id;
+    toast.warning(`Updating to ${job.target.version}`, {
+      id: REMOTE_UPDATE_TOAST_ID,
+      description:
+        job.restartPolicy === "immediate"
+          ? `Requested by ${requestedBy}. The app restarts as soon as the update is ready, which interrupts running agents.`
+          : `Requested by ${requestedBy}. It installs the next time the app restarts.`,
+      duration: 30_000,
+      action: { label: "View", onClick: () => setOpen(true) },
+    });
+  }, [job, requestedBy, setOpen]);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>

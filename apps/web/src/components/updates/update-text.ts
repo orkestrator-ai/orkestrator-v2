@@ -2,6 +2,7 @@ import type { ReleaseChannel } from "@orkestrator/protocol/release-channels";
 import type {
   UpdateJobPhase,
   UpdateNotice,
+  UpdateRequester,
   UpdateStatusSnapshot,
 } from "@orkestrator/protocol/updates";
 
@@ -22,6 +23,20 @@ export const CHANNEL_OPTIONS: Array<{ value: ReleaseChannel; label: string; desc
 
 export function channelLabel(channel: ReleaseChannel | null | undefined): string {
   return CHANNEL_OPTIONS.find((option) => option.value === channel)?.label ?? "Development";
+}
+
+/**
+ * Who asked for an update that did not come from this app's own window: the
+ * Tailscale login when Tailscale Serve vouched for it, otherwise the name
+ * the client declared (marked unverified), and the address it came from.
+ * Null for this app's own requests.
+ */
+export function remoteRequesterLabel(requester: UpdateRequester): string | null {
+  if (requester.listener !== "browser") return null;
+  const who =
+    requester.tailscaleUser ??
+    (requester.client?.name ? `${requester.client.name} (unverified)` : "a remote client");
+  return requester.remoteAddress ? `${who} from ${requester.remoteAddress}` : who;
 }
 
 export const PHASE_LABELS: Record<UpdateJobPhase, string> = {

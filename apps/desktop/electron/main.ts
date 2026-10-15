@@ -84,6 +84,7 @@ import {
 import {
   claimFirstLaunchAfterUpdate,
   installedApp,
+  discardRollbackCopies,
   keepRollbackCopy,
   rollBackFailedUpdate,
 } from "./update-rollback.js";
@@ -420,8 +421,9 @@ async function startUpdateHost(): Promise<void> {
             keepRollbackCopy({
               app: runningApp,
               version: app.getVersion(),
-              rollbackRoot: path.join(app.getPath("userData"), "updates", "rollback"),
+              rollbackRoot: rollbackRootDir(),
             }),
+          discardRollbackCopy: () => discardRollbackCopies(rollbackRootDir()),
         }
       : {}),
   });
@@ -433,6 +435,10 @@ async function startUpdateHost(): Promise<void> {
     console.error("[Updater] Could not register with the backend:", error);
   }
   createMenu();
+}
+
+function rollbackRootDir(): string {
+  return path.join(app.getPath("userData"), "updates", "rollback");
 }
 
 function pendingInstallMarkerFile(): string {

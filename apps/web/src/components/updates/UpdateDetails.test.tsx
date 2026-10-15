@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReleaseRequirementItem } from "@orkestrator/protocol/release-requirements";
 import type { UpdateJob, UpdateOffer, UpdateStatusSnapshot } from "@orkestrator/protocol/updates";
 import type { UpdatesApi } from "@/lib/updates/update-client";
+import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { UpdateDetails } from "./UpdateDetails";
 import { indicatorState } from "./update-text";
 import type { UpdateTargetHandle } from "./useUpdateTarget";
@@ -270,6 +271,27 @@ describe("a running update", () => {
     expect(screen.getByTestId("update-job").textContent).toContain("Downloading the update 2.22.0");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(api.cancel).toHaveBeenCalledWith("job-1");
+  });
+
+  test("names who asked for an update that came from elsewhere", () => {
+    const remote = job({
+      requester: {
+        listener: "browser",
+        remoteAddress: "100.64.0.7",
+        tailscaleUser: "alice@example.com",
+        identitySource: "tailscale-serve",
+        client: { kind: "desktop", version: "2.22.0", name: "alice-mbp" },
+      },
+    });
+    const { handle } = target(snapshot({ job: remote }));
+    render(<UpdateDetails target={handle} scope="local" />);
+    expect(screen.getByTestId("update-requester").textContent).toBe(
+      "Requested by alice@example.com from 100.64.0.7",
+    );
+    cleanup();
+    // This app's own request names nobody.
+    render(<UpdateDetails target={target(snapshot({ job: job() })).handle} scope="local" />);
+    expectDomAbsent(screen.queryByTestId("update-requester"));
   });
 
   test("a ready update restarts now or installs on quit", () => {

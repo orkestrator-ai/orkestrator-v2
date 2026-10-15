@@ -17,6 +17,7 @@ import {
 } from "./update-host.js";
 import {
   claimFirstLaunchAfterUpdate,
+  discardRollbackCopies,
   installedApp,
   keepRollbackCopy,
   rollBackFailedUpdate,
@@ -242,6 +243,21 @@ describe("rolling back a failed update", () => {
       rolledBack: false,
       reason: "only the first launch after an update rolls it back",
     });
+  });
+
+  test("deletes the kept copy once it is no longer needed", async () => {
+    const { app, dataDir } = setup();
+    const rollbackRoot = path.join(dataDir, "updates", "rollback");
+    await keepRollbackCopy({
+      app: { kind: "mac-app", path: app },
+      version: "2.21.0",
+      rollbackRoot,
+      ops,
+    });
+    await discardRollbackCopies(rollbackRoot, ops);
+    expect(readdirSync(rollbackRoot)).toEqual([]);
+    // Nothing kept, or no folder at all, is fine.
+    await discardRollbackCopies(path.join(dataDir, "missing"), ops);
   });
 
   test("claims the first launch of the installed version once", async () => {

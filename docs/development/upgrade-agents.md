@@ -408,7 +408,7 @@ under `bypassPermissions`.
    procedure.
 6. Review `session-manager.ts` for option, event, and message-union changes. Pay
    particular attention to the version-pinned `canUseTool` comment in
-   `session-manager-prompt.ts` and re-prove that `AskUserQuestion` remains parked
+   `session-manager-prompt-query.ts` and re-prove that `AskUserQuestion` remains parked
    until the callback resolves. The `routes AskUserQuestion through canUseTool
    under bypassPermissions` case in `sdk-compatibility.test.ts` is that proof —
    it drives the real installed SDK — so move the comment's version only once it

@@ -62,7 +62,8 @@ export const HANDLED_SDK_MESSAGE_TYPES: Record<SDKMessage["type"], boolean> = {
 };
 
 export function isHandledSdkMessageType(type: unknown): boolean {
-  return typeof type === "string" && type in HANDLED_SDK_MESSAGE_TYPES;
+  // Own keys only: `in` also finds `constructor` and the rest of the prototype.
+  return typeof type === "string" && Object.hasOwn(HANDLED_SDK_MESSAGE_TYPES, type);
 }
 
 /**

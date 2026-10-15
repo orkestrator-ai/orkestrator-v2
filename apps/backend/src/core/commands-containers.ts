@@ -94,7 +94,8 @@ import {
 import { storageMountArguments } from "./container-storage.js";
 import {
   allowedDomainsArgument,
-  configuredAllowedDomains,
+  containerAllowedDomains,
+  containerNetworkPolicy,
   ensureEnvironmentNetwork,
   ingressPorts,
 } from "./container-network.js";
@@ -335,13 +336,19 @@ export async function createDockerContainer(
   }
   const opencodeModel = config.global.agentSettings?.platforms?.opencode?.model;
   if (opencodeModel) args.push("-e", `OPENCODE_MODEL=${opencodeModel}`);
+  const networkPolicy = identity.imageId
+    ? containerNetworkPolicy(
+        (await imageCapabilities(identity.imageId, context))?.["network-policy"] ?? 0,
+        process.env.ORKESTRATOR_NETWORK_POLICY,
+      )
+    : 1;
   if (environment.networkAccessMode === "full") {
     args.push("-e", "NETWORK_MODE=full");
   } else {
     // Only re-add hosts for platforms this install actually enabled. An
     // environment that runs neither Cursor nor Grok keeps exactly the allowlist
     // the user configured; widening it would quietly undo their isolation.
-    const domains = configuredAllowedDomains(environment, config);
+    const domains = containerAllowedDomains(environment, config, networkPolicy);
     const explicitNone = Boolean(
       identity.imageId && (await imageCapabilities(identity.imageId, context))?.["network-refresh"],
     );
@@ -475,12 +482,9 @@ export async function createDockerContainer(
   // Network policy 2: the environment's own network, IPv6 disabled, and a
   // firewall that allows the host only on the backend's service port and
   // inbound connections only on the published ports. Never the shared
-  // default bridge when the environment network cannot be created.
-  if (
-    identity.imageId &&
-    process.env.ORKESTRATOR_NETWORK_POLICY !== "1" &&
-    ((await imageCapabilities(identity.imageId, context))?.["network-policy"] ?? 0) >= 2
-  ) {
+  // default bridge when the environment network cannot be created. Policy 3
+  // also narrows allowed domains to address, protocol and port tuples.
+  if (networkPolicy >= 2) {
     const network = await ensureEnvironmentNetwork(context, environment.id);
     const servicePort = context.agentTools?.servicePort?.() ?? null;
     // GitHub's ranges, fetched at most hourly by the backend, so restricted
@@ -501,9 +505,9 @@ export async function createDockerContainer(
       "--sysctl",
       "net.ipv6.conf.all.disable_ipv6=1",
       "--label",
-      `${DOCKER_LABEL_NETWORK_POLICY}=2`,
+      `${DOCKER_LABEL_NETWORK_POLICY}=${networkPolicy}`,
       "-e",
-      "ORKESTRATOR_NETWORK_POLICY=2",
+      `ORKESTRATOR_NETWORK_POLICY=${networkPolicy}`,
       "-e",
       `ORKESTRATOR_HOST_SERVICE_PORTS=${servicePort ? String(servicePort) : ""}`,
       "-e",

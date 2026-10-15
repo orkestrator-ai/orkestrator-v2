@@ -42,6 +42,17 @@ function DomainsState({
           change it in place. It applies when the container is rebuilt.
         </div>
       ) : null}
+      {policy.policyVersion === 3 ? (
+        <div>
+          Allowed domains are reachable on HTTPS (port 443) and on the ports their entries name;
+          GitHub also on SSH.
+        </div>
+      ) : (
+        <div>
+          This container&apos;s firewall predates per-port rules: an allowed domain is reachable on
+          every port.
+        </div>
+      )}
       {effective.refreshedAt ? (
         <div>
           Addresses resolved {new Date(effective.refreshedAt).toLocaleString()}

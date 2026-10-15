@@ -2427,7 +2427,7 @@ export async function resolveContainerAgentToolConnection(
 }
 
 /**
- * A policy-2 container allows exactly the backend's service port toward the
+ * A policy 2 or 3 container allows exactly the backend's service port toward the
  * host. The port is fixed at creation, but a backend restart may listen on a
  * different one; the durable in-container policy is updated to match before
  * a tools URL is handed out. Legacy (policy 1) containers are left alone.
@@ -2450,7 +2450,7 @@ export async function ensureContainerHostServicePorts(
   ).catch(() => null);
   if (!current) return;
   const [policy, ports = ""] = current.stdout.trim().split("\n");
-  if (policy?.trim() !== "2") return;
+  if (policy?.trim() !== "2" && policy?.trim() !== "3") return;
   if (ports.split(",").includes(String(servicePort))) return;
   await runCommand(
     "docker",

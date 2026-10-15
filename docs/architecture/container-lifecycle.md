@@ -495,7 +495,7 @@ three policy inputs the root bootstrap captures once, root-owned:
 
 | File | Meaning |
 | --- | --- |
-| `/etc/orkestrator/network-policy` | `2` (absent means the legacy policy) |
+| `/etc/orkestrator/network-policy` | `2` or `3` (absent means the legacy policy) |
 | `/etc/orkestrator/host-service-ports` | Host TCP ports the workload may call (the agent-tools port) |
 | `/etc/orkestrator/ingress-ports` | Container ports Docker publishes (bridges, entry and mapped ports) |
 
@@ -518,6 +518,27 @@ root can create, on images with `network-refresh=1` (earlier images wrote it
 to node's `/run/orkestrator/`); `get_environment_network_policy` reports it
 beside the configured mode, and the settings dialog shows both.
 
+### Port and protocol tuples (`network-policy=3`)
+
+A policy 3 container (the backend sends the newest policy the image declares;
+`ORKESTRATOR_NETWORK_POLICY=2` caps it) keeps everything above and stores
+address, protocol and port tuples in `allowed-domains` (`hash:net,port`,
+matched `dst,dst`) instead of addresses:
+
+- A bare domain is TCP 443. An entry naming a port, `host:port` (TCP) or
+  `host:port/udp`, allows exactly that tuple; a domain is resolved once
+  however many ports its entries name. The syntax is shared by the settings
+  editors and the backend (`@orkestrator/protocol/network-allowlist`) and the
+  container (`firewall-domains.sh`), which counts a malformed port with
+  `invalidDomains`.
+- GitHub's ranges are TCP 443 and 22; the metadata bootstrap is TCP 443.
+- Host services, ingress and IPv6 are as in policy 2.
+- A container on policy 1 or 2 is sent each entry's domain without its port,
+  and the backend computes the configured `domainsRevision` over that list, so
+  an old image never sees a port and keeps its every-port behaviour.
+
+The environment's network status states which behaviour the container has.
+
 ### Allowlist refresh and edits (`network-refresh=1`)
 
 The shared library `firewall-domains.sh` builds the `allowed-domains` set for
@@ -539,11 +560,13 @@ both the boot and every later change:
   swapped in with `ipset swap`; there is never an empty or allow-all set.
 - **Revocation.** Entries that leave the set have their tracked connections
   deleted (`conntrack -D`), so an open connection to a removed domain is
-  re-checked against the new set and rejected rather than continuing.
+  re-checked against the new set and rejected rather than continuing. A
+  removed policy 3 tuple revokes only its own protocol and port.
 - **Edits.** `update-firewall.sh --set-domains <list>` (root, via `docker
   exec`) applies a list and then stores it in `/etc/orkestrator/allowed-domains`,
   so a restart boots with it; `--add`/`--remove` edit the stored list the same
-  way. A list with characters outside a domain name is refused unchanged.
+  way. A list with characters outside a domain name (and, under policy 3, a
+  port) is refused unchanged.
 
 The backend identifies a list by `allowedDomainsRevision` — the first 16 hex
 digits of SHA-256 over the comma-separated list it configures

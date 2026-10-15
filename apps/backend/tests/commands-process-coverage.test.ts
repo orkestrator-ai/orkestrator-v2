@@ -666,6 +666,15 @@ describe("process and platform command behavior", () => {
     expect(allowed).toEqual(["github.com", "registry.npmjs.org"]);
   });
 
+  test("an image without per-port rules receives each domain once, without its port", async () => {
+    fixture.environment.allowedDomains = ["github.com", "db.example.com:5432", "db.example.com"];
+    fixture.globalConfig.enabledAgentPlatforms = ["claude"];
+    fixture.environment.containerId = null;
+    await invoke("provision_environment", { environmentId: "environment-1" });
+
+    expect(lastAllowedDomains(await readCommandLog())).toEqual(["github.com", "db.example.com"]);
+  });
+
   test("adds ChatGPT's hosts when Codex is enabled", async () => {
     fixture.environment.allowedDomains = ["github.com"];
     fixture.globalConfig.enabledAgentPlatforms = ["claude", "codex"];

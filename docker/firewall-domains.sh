@@ -14,6 +14,12 @@
 # runs at all. An address that leaves the set is revoked: its tracked
 # connections are deleted, so established flows are re-checked against the new
 # set rather than continuing on an old conntrack entry.
+#
+# Network policy 3 stores address, protocol and port tuples rather than
+# addresses: an allowed domain is reachable on TCP 443, or on exactly the port
+# its entry names (`host:port` over TCP, `host:port/udp` over UDP), and
+# GitHub's ranges on TCP 443 and 22. Earlier policies store addresses, open on
+# every port, and are unchanged.
 
 ORK_SET=allowed-domains
 ORK_NEXT_SET=allowed-domains-next
@@ -50,8 +56,31 @@ ORK_RETRY_FIRST=60
 ORK_IPV4='^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'
 ORK_CIDR='^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$'
 ORK_DOMAIN='^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$'
+# Policy 3 entry: domain, then an optional port and protocol.
+ORK_ENTRY='^([^:/]+)(:([1-9][0-9]{0,4})(/(tcp|udp))?)?$'
+ORK_TUPLE='^([^,]+),(tcp|udp):([0-9]+)$'
+
+# Set by ork_use_policy: 1 when the set holds policy 3 tuples.
+ORK_TUPLES=0
+ORK_DEFAULT_PORT=tcp:443
+ORK_GITHUB_PORTS=(tcp:443 tcp:22)
 
 ork_now() { date +%s; }
+
+# The recorded network policy version; a container captured before policy 2
+# has no file and runs policy 1.
+ork_recorded_policy() {
+    local version=""
+    if [ -f "$ORK_POLICY_DIR/network-policy" ]; then
+        IFS= read -r version < "$ORK_POLICY_DIR/network-policy" || true
+    fi
+    printf '%s' "${version:-1}"
+}
+
+# Selects the set layout for a network policy version.
+ork_use_policy() {
+    if [ "$1" = 3 ]; then ORK_TUPLES=1; else ORK_TUPLES=0; fi
+}
 
 ork_iso() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; }
 
@@ -78,7 +107,9 @@ ork_effective_domains() {
 }
 
 ork_create_set() {
-    ipset create "$1" hash:net timeout 0 maxelem "$ORK_MAX_ENTRIES"
+    local type=hash:net
+    if [ "$ORK_TUPLES" = 1 ]; then type=hash:net,port; fi
+    ipset create "$1" "$type" timeout 0 maxelem "$ORK_MAX_ENTRIES"
 }
 
 # Members of a set, one per line, without their timeouts.
@@ -99,7 +130,7 @@ ork_ranges_fresh_within() {
 
 # Adds a GitHub ranges file to a set (permanently, until the next build).
 ork_load_github_ranges() {
-    local set="$1" file="$2" cidr count=0
+    local set="$1" file="$2" cidr spec count=0
     while IFS= read -r cidr; do
         case "$cidr" in '#'*|'') continue ;; esac
         if [[ ! "$cidr" =~ $ORK_CIDR ]]; then
@@ -108,7 +139,13 @@ ork_load_github_ranges() {
         fi
         # The bootstrap already added api.github.com's own /32, which the
         # published ranges usually repeat verbatim.
-        ipset add -exist "$set" "$cidr" timeout 0 || return 1
+        if [ "$ORK_TUPLES" = 1 ]; then
+            for spec in "${ORK_GITHUB_PORTS[@]}"; do
+                ipset add -exist "$set" "$cidr,$spec" timeout 0 || return 1
+            done
+        else
+            ipset add -exist "$set" "$cidr" timeout 0 || return 1
+        fi
         count=$((count + 1))
     done < "$file"
     [ "$count" -gt 0 ]
@@ -132,6 +169,45 @@ ork_split_domains() {
         entry="${entry//[[:space:]]/}"
         [ -n "$entry" ] && ORK_DOMAIN_LIST+=("$entry")
     done
+}
+
+# Policy 3: groups ORK_DOMAIN_LIST's entries by domain, leaving each domain
+# once in ORK_DOMAIN_LIST and its protocol:port specs, one per line, in
+# ORK_DOMAIN_PORTS. An entry without a port is TCP 443. An entry whose port
+# or protocol is malformed is dropped and counted in ORK_INVALID_PORTS.
+ork_group_entries() {
+    local entry domain port
+    local -a domains=()
+    declare -gA ORK_DOMAIN_PORTS=()
+    ORK_INVALID_PORTS=0
+    for entry in "${ORK_DOMAIN_LIST[@]}"; do
+        if [[ ! "$entry" =~ $ORK_ENTRY ]] || [ "${BASH_REMATCH[3]:-443}" -gt 65535 ]; then
+            ORK_INVALID_PORTS=$((ORK_INVALID_PORTS + 1))
+            continue
+        fi
+        domain="${BASH_REMATCH[1]}"
+        port="${BASH_REMATCH[5]:-tcp}:${BASH_REMATCH[3]:-443}"
+        if [ -z "${ORK_DOMAIN_PORTS[$domain]+set}" ]; then
+            domains+=("$domain")
+            ORK_DOMAIN_PORTS[$domain]=""
+        fi
+        ORK_DOMAIN_PORTS[$domain]+="$port"$'\n'
+    done
+    ORK_DOMAIN_LIST=("${domains[@]}")
+}
+
+# Adds one address of a domain: the address itself, or under policy 3 one
+# tuple per protocol and port the domain's entries name.
+ork_add_address() {
+    local set="$1" domain="$2" address="$3" timeout="$4" spec
+    if [ "$ORK_TUPLES" != 1 ]; then
+        ipset add -exist "$set" "$address" timeout "$timeout"
+        return
+    fi
+    while IFS= read -r spec; do
+        [ -n "$spec" ] || continue
+        ipset add -exist "$set" "$address,$spec" timeout "$timeout" || return 1
+    done <<< "${ORK_DOMAIN_PORTS[$domain]}"
 }
 
 # Resolves ORK_DOMAIN_LIST with bounded concurrency. Each domain's answer
@@ -182,8 +258,11 @@ ork_add_domains() {
         echo "ERROR: ${#ORK_DOMAIN_LIST[@]} allowed domains exceed the limit of $ORK_MAX_DOMAINS"
         return 1
     fi
+    ORK_INVALID_PORTS=0
+    if [ "$ORK_TUPLES" = 1 ]; then ork_group_entries; fi
     dir=$(mktemp -d) || return 1
     ork_resolve_all "$dir"
+    ORK_INVALID_DOMAINS=$((ORK_INVALID_DOMAINS + ORK_INVALID_PORTS))
     mkdir -p "$ORK_STATE_DIR" || return 1
     : > "$ORK_ADDRESSES.next" || return 1
     ORK_RESOLVED_DOMAINS=0
@@ -203,7 +282,7 @@ ork_add_domains() {
             expires=$((now + ORK_ADDRESS_LIFETIME))
             while IFS=' ' read -r address ttl; do
                 [[ "$address" =~ $ORK_IPV4 ]] || continue
-                ipset add -exist "$set" "$address" timeout "$ORK_ADDRESS_LIFETIME" || return 1
+                ork_add_address "$set" "$domain" "$address" "$ORK_ADDRESS_LIFETIME" || return 1
                 printf '%s %s %s\n' "$domain" "$address" "$expires" >> "$ORK_ADDRESSES.next"
                 resolved="$resolved $address "
                 if [[ "$ttl" =~ ^[0-9]+$ ]] && { [ "$ORK_MIN_TTL" -eq 0 ] || [ "$ttl" -lt "$ORK_MIN_TTL" ]; }; then
@@ -224,7 +303,7 @@ ork_add_domains() {
                 case "$resolved" in *" $address "*) continue ;; esac
                 remaining=$((expires - now))
                 [ "$remaining" -gt 0 ] || continue
-                ipset add -exist "$set" "$address" timeout "$remaining" || return 1
+                ork_add_address "$set" "$domain" "$address" "$remaining" || return 1
                 printf '%s %s %s\n' "$domain" "$address" "$expires" >> "$ORK_ADDRESSES.next"
                 kept=$((kept + 1))
                 if [ -z "$resolved" ] && { [ "$ORK_EARLIEST_EXPIRY" -eq 0 ] || [ "$expires" -lt "$ORK_EARLIEST_EXPIRY" ]; }; then
@@ -265,10 +344,12 @@ ork_prefix_mask() {
     printf '%d.%d.%d.%d' $((mask >> 24 & 255)) $((mask >> 16 & 255)) $((mask >> 8 & 255)) $((mask & 255))
 }
 
-# Deletes tracked connections to entries that left the set. Sets
-# ORK_REVOKED_ENTRIES and ORK_REVOCATION ("conntrack" or "unavailable").
+# Deletes tracked connections to entries that left the set; a policy 3 tuple
+# revokes only its own protocol and port. Sets ORK_REVOKED_ENTRIES and
+# ORK_REVOCATION ("conntrack" or "unavailable").
 ork_revoke() {
-    local old="$1" new="$2" entry count=0
+    local old="$1" new="$2" entry address count=0
+    local -a port=()
     ORK_REVOKED_ENTRIES=0
     if ! command -v conntrack >/dev/null 2>&1; then
         ORK_REVOCATION=unavailable
@@ -279,10 +360,16 @@ ork_revoke() {
     while IFS= read -r entry; do
         [ -n "$entry" ] || continue
         [ "$count" -lt "$ORK_MAX_REVOCATIONS" ] || break
-        if [[ "$entry" =~ $ORK_CIDR ]]; then
-            conntrack -D -d "${entry%/*}" --mask-dst "$(ork_prefix_mask "${entry#*/}")" >/dev/null 2>&1 || true
-        elif [[ "$entry" =~ $ORK_IPV4 ]]; then
-            conntrack -D -d "$entry" >/dev/null 2>&1 || true
+        address="$entry"
+        port=()
+        if [[ "$entry" =~ $ORK_TUPLE ]]; then
+            address="${BASH_REMATCH[1]}"
+            port=(-p "${BASH_REMATCH[2]}" --dport "${BASH_REMATCH[3]}")
+        fi
+        if [[ "$address" =~ $ORK_CIDR ]]; then
+            conntrack -D "${port[@]}" -d "${address%/*}" --mask-dst "$(ork_prefix_mask "${address#*/}")" >/dev/null 2>&1 || true
+        elif [[ "$address" =~ $ORK_IPV4 ]]; then
+            conntrack -D "${port[@]}" -d "$address" >/dev/null 2>&1 || true
         else
             continue
         fi

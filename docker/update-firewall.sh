@@ -7,7 +7,10 @@
 #   update-firewall.sh --remove domain1,domain2,...
 #   update-firewall.sh --refresh
 #   update-firewall.sh --list
-#   update-firewall.sh --host-ports 41234,41235   (network policy 2 only)
+#   update-firewall.sh --host-ports 41234,41235   (network policy 2 and 3)
+#
+# Under network policy 3 a domain entry may name one port: `host:port` (TCP)
+# or `host:port/udp`; a bare domain is TCP 443 (firewall-domains.sh).
 #
 # Must be run as root via `docker exec --user root`. The node sudoers file
 # does not grant this script; runtime allowlist edits are an operator action,
@@ -25,6 +28,7 @@ IFS=$'\n\t'
 
 # shellcheck source=firewall-domains.sh
 source /usr/local/lib/orkestrator/firewall-domains.sh
+ork_use_policy "$(ork_recorded_policy)"
 
 # Colors for output
 RED='\033[0;31m'
@@ -89,9 +93,15 @@ refresh_status() {
 set_domains() {
     local csv="$1"
     [ "${#csv}" -le "$MAX_DOMAINS_BYTES" ] || fail "domain list is too large" 2
-    case "$csv" in
-        *[!A-Za-z0-9.,*_-]*) fail "domain list contains characters outside a domain name" 2 ;;
-    esac
+    if [ "$ORK_TUPLES" = 1 ]; then
+        case "$csv" in
+            *[!A-Za-z0-9.,*_:/-]*) fail "domain list contains characters outside a domain name and port" 2 ;;
+        esac
+    else
+        case "$csv" in
+            *[!A-Za-z0-9.,*_-]*) fail "domain list contains characters outside a domain name" 2 ;;
+        esac
+    fi
     take_lock 60
     if ! firewall_restricted; then
         store_domains "$csv"
@@ -197,7 +207,7 @@ list_entries() {
     ipset list allowed-domains
 }
 
-# Replace the host service ports of a policy-2 firewall. The new chain is
+# Replace the host service ports of a policy 2 or 3 firewall. The new chain is
 # built beside the old one and swapped in before the old one is removed, so
 # there is no moment with neither; the policy file is updated too, so a
 # restart applies the same ports.
@@ -206,10 +216,13 @@ set_host_ports() {
     case "$ports_csv" in
         *[!0-9,]*) echo -e "${RED}ERROR: host ports must be comma-separated numbers${NC}" >&2; exit 1 ;;
     esac
-    if [ ! -f /etc/orkestrator/network-policy ] || [ "$(cat /etc/orkestrator/network-policy)" != "2" ]; then
-        echo -e "${RED}ERROR: host service ports apply only to network policy 2${NC}" >&2
-        exit 1
-    fi
+    case "$(ork_recorded_policy)" in
+        2|3) ;;
+        *)
+            echo -e "${RED}ERROR: host service ports apply only to network policy 2 and later${NC}" >&2
+            exit 1
+            ;;
+    esac
     take_lock 60
     if [ "$(cat /etc/orkestrator/network-mode)" = "full" ]; then
         printf '%s\n' "$ports_csv" > /etc/orkestrator/host-service-ports

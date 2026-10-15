@@ -15,9 +15,11 @@ import { Loader2, Shield, Globe, CheckCircle2, XCircle, AlertCircle } from "luci
 import * as backend from "@/lib/backend";
 import { useConfigStore } from "@/stores";
 import type { Environment, DomainTestResult } from "@/types";
+import {
+  ALLOWLIST_ENTRY_HINT,
+  parseAllowlistEntry,
+} from "@orkestrator/protocol/network-allowlist";
 
-// Domain validation regex
-const DOMAIN_REGEX = /^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
 
 interface NetworkWhitelistDialogProps {
   open: boolean;
@@ -83,8 +85,8 @@ export function NetworkWhitelistDialog({
 
     const errors: string[] = [];
     for (const domain of domains) {
-      if (!DOMAIN_REGEX.test(domain)) {
-        errors.push(`Invalid domain format: ${domain}`);
+      if (!parseAllowlistEntry(domain)) {
+        errors.push(`Invalid domain or port: ${domain}`);
       }
     }
     setDomainErrors(errors);
@@ -215,6 +217,7 @@ export function NetworkWhitelistDialog({
               {/* Custom domains textarea */}
               <div className="space-y-2">
                 <Label htmlFor="network-allowed-domains">Allowed Domains</Label>
+                <p className="text-xs text-muted-foreground">{ALLOWLIST_ENTRY_HINT}</p>
                 <Textarea
                   id="network-allowed-domains"
                   value={customDomains}

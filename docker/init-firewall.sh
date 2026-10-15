@@ -4,7 +4,7 @@ set -E            # Failures inside functions reach the fail-closed trap too
 IFS=$'\n\t'       # Stricter word splitting
 
 # Network policy contract (docker/image-manifest.ts):
-# ORKESTRATOR_CAPABILITY network-policy=2
+# ORKESTRATOR_CAPABILITY network-policy=3
 #
 # Policy 2 runs on the environment's own Docker network. Host access is not
 # the gateway's /24 but exactly the host service ports the backend named, on
@@ -12,6 +12,11 @@ IFS=$'\n\t'       # Stricter word splitting
 # accepted only on the container ports Docker publishes; IPv6 is disabled for
 # the container and dropped here as well. Policy 1 (no policy file) keeps the
 # earlier behaviour for containers created before it.
+#
+# Policy 3 is policy 2 with address, protocol and port tuples in place of
+# addresses (firewall-domains.sh): an allowed domain answers on TCP 443 or on
+# the port its entry names, and GitHub's ranges on TCP 443 and 22. Policies 1
+# and 2 still open every port of an allowed address.
 #
 # This limits destinations. It does not stop data leaving through an allowed
 # service, and a workload running as root in full mode can change it.
@@ -35,6 +40,7 @@ if [ -f /etc/orkestrator/network-policy ]; then
     IFS= read -r HOST_SERVICE_PORTS < /etc/orkestrator/host-service-ports || true
     IFS= read -r INGRESS_PORTS < /etc/orkestrator/ingress-ports || true
 fi
+ork_use_policy "$NETWORK_POLICY"
 
 STATUS_DIR="$ORK_STATUS_DIR"
 STATUS_FILE="$ORK_STATUS_FILE"
@@ -151,10 +157,16 @@ ork_create_set allowed-domains
 # Bootstrap only the GitHub metadata endpoint needed to discover the complete
 # published git/web/API ranges. The ordinary allowlist rule is already active,
 # so no temporary ACCEPT policy is required.
+BOOTSTRAP_PORT=""
+if [ "$ORK_TUPLES" = 1 ]; then BOOTSTRAP_PORT=",$ORK_DEFAULT_PORT"; fi
 while read -r ip; do
-    [ -n "$ip" ] && ipset add -exist allowed-domains "$ip" timeout 0
+    [ -n "$ip" ] && ipset add -exist allowed-domains "$ip$BOOTSTRAP_PORT" timeout 0
 done < <(dig +short A api.github.com | awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/')
-iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT
+if [ "$ORK_TUPLES" = 1 ]; then
+    iptables -A OUTPUT -m set --match-set allowed-domains dst,dst -j ACCEPT
+else
+    iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT
+fi
 
 # GitHub's published web/api/git ranges. In order: the backend's hourly seed
 # when it is under a day old (no call to GitHub at all), a live fetch of
@@ -301,7 +313,7 @@ if [ -z "$HOST_IP" ]; then
     exit 1
 fi
 
-if [ "$NETWORK_POLICY" = "2" ]; then
+if [ "$NETWORK_POLICY" = "2" ] || [ "$NETWORK_POLICY" = "3" ]; then
     # Host services: exactly the named ports, on the gateway and on whatever
     # host.docker.internal resolves to (Docker Desktop answers with its own
     # address). Kept in their own chain so update-firewall.sh can replace

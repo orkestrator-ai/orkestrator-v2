@@ -165,8 +165,12 @@ export interface EnvironmentNetworkPolicy {
     /** Digest of the allowlist the backend would hand this container. */
     domainsRevision: string;
   };
-  /** 1: shared bridge with the gateway /24 open; 2: own network, narrow host access. */
-  policyVersion: 1 | 2 | null;
+  /**
+   * 1: shared bridge with the gateway /24 open; 2: own network, narrow host
+   * access, every port of an allowed address open; 3: as 2, with allowed
+   * domains open only on TCP 443 or the port their entry names.
+   */
+  policyVersion: 1 | 2 | 3 | null;
   /** The environment's own network as Docker reports it (policy 2). */
   network?: { name: string; subnet: string | null; gateway: string | null } | null;
   /**

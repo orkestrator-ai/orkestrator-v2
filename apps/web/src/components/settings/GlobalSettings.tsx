@@ -52,14 +52,13 @@ import {
   MAX_SSH_AGENT_SOCKET_PATH_CHARS,
   SSH_AGENT_SOCKET_PATH_ERROR_MESSAGES,
 } from "@orkestrator/protocol/ssh-agent-socket";
+import { parseAllowlistEntry } from "@orkestrator/protocol/network-allowlist";
 import { GlobalSettingsSections } from "./GlobalSettings.sections";
 
 // Long enough that a slider drag or a fast typist produces one write, short
 // enough that releasing a control feels like it saved immediately.
 const AUTO_SAVE_DEBOUNCE_MS = 400;
 
-// Domain validation regex
-const DOMAIN_REGEX = /^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
 
 const DEFAULT_CODEX_MAX_CONCURRENT_THREADS = 5;
 
@@ -620,8 +619,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
 
     const errors: string[] = [];
     for (const domain of domains) {
-      if (!DOMAIN_REGEX.test(domain)) {
-        errors.push(`Invalid domain format: ${domain}`);
+      if (!parseAllowlistEntry(domain)) {
+        errors.push(`Invalid domain or port: ${domain}`);
       }
     }
     setDomainErrors(errors);

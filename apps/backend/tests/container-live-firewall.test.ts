@@ -188,10 +188,10 @@ describe("C23 allowlist edits, refresh and revocation", () => {
       expect(policy.effective?.domainsRevision).toBe(policy.configured.domainsRevision);
       expect(policy.effective?.refreshedAt).toBeTruthy();
       expect(await probe(containerId, "https://example.com/")).not.toBe(0);
-      // Resolved addresses carry kernel expiry.
+      // Resolved addresses carry kernel expiry, as HTTPS tuples (policy 3).
       expect(
         await docker(["exec", "--user", "root", containerId, "ipset", "list", "allowed-domains"]),
-      ).toMatch(/^\d+\.\d+\.\d+\.\d+ timeout \d+$/m);
+      ).toMatch(/^\d+\.\d+\.\d+\.\d+,tcp:443 timeout \d+$/m);
 
       // One root refresher, which node can neither signal nor duplicate.
       const [refresher] = await refresherPids(containerId);
@@ -214,7 +214,8 @@ describe("C23 allowlist edits, refresh and revocation", () => {
         ]),
       ).toBe(1);
 
-      // Saved but not yet applied is reported as pending, then applied in place.
+      // Saved but not yet applied is reported as pending, then applied in
+      // place. A bare domain is HTTPS only; port 80 needs its own entry.
       await context.storage.updateEnvironment(environment.id, {
         allowedDomains: ["registry.npmjs.org", "example.com"],
       });
@@ -223,28 +224,43 @@ describe("C23 allowlist edits, refresh and revocation", () => {
       const applied = await applyEnvironmentAllowedDomains(environment.id, context);
       expect(applied.kind).toBe("applied");
       expect(await probe(containerId, "https://example.com/")).toBe(0);
+      expect(await probe(containerId, "http://example.com/")).not.toBe(0);
+      await context.storage.updateEnvironment(environment.id, {
+        allowedDomains: ["registry.npmjs.org", "example.com", "example.com:80"],
+      });
+      expect((await applyEnvironmentAllowedDomains(environment.id, context)).kind).toBe("applied");
+      expect(await probe(containerId, "http://example.com/")).toBe(0);
       expect(await docker(["exec", containerId, "cat", "/etc/orkestrator/allowed-domains"])).toBe(
-        "registry.npmjs.org,example.com",
+        "registry.npmjs.org,example.com,example.com:80",
       );
 
-      // Control: an edit that keeps example.com leaves an open connection alone.
+      // Control: an edit that keeps example.com:80 leaves an open connection alone.
       await openHeldConnection(containerId, "kept");
       await context.storage.updateEnvironment(environment.id, {
-        allowedDomains: ["registry.npmjs.org", "example.com", "bun.sh"],
+        allowedDomains: ["registry.npmjs.org", "example.com", "example.com:80", "bun.sh"],
       });
       expect((await applyEnvironmentAllowedDomains(environment.id, context)).kind).toBe("applied");
       expect(await secondRequest(containerId, "kept")).toStartWith("HTTP/1.1 ");
 
-      // Removing example.com revokes the connection that was already open.
+      // Removing only example.com:80 revokes the connection already open on
+      // that port and leaves HTTPS to the same address allowed.
       await openHeldConnection(containerId, "revoked");
       await context.storage.updateEnvironment(environment.id, {
-        allowedDomains: ["registry.npmjs.org"],
+        allowedDomains: ["registry.npmjs.org", "example.com"],
       });
       const removed = await applyEnvironmentAllowedDomains(environment.id, context);
       expect(removed.kind).toBe("applied");
       expect(removed.policy.effective?.revocation).toBe("conntrack");
       expect(removed.policy.effective?.revokedEntries ?? 0).toBeGreaterThan(0);
       expect(await secondRequest(containerId, "revoked")).not.toStartWith("HTTP/1.1 ");
+      expect(await probe(containerId, "http://example.com/")).not.toBe(0);
+      expect(await probe(containerId, "https://example.com/")).toBe(0);
+
+      // Removing example.com closes HTTPS to it as well.
+      await context.storage.updateEnvironment(environment.id, {
+        allowedDomains: ["registry.npmjs.org"],
+      });
+      expect((await applyEnvironmentAllowedDomains(environment.id, context)).kind).toBe("applied");
       expect(await probe(containerId, "https://example.com/")).not.toBe(0);
 
       // A refresh re-resolves in place and keeps the same list.

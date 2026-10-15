@@ -37,8 +37,12 @@ export const IMAGE_CAPABILITIES = {
   "persistent-workspace": 1,
   /** Portable inputs staged by the backend instead of whole-home mounts (step 08). */
   "staged-inputs": 1,
-  /** Per-environment network with explicit host service rules and IPv6 policy (step 09). */
-  "network-policy": 2,
+  /**
+   * Per-environment network with explicit host service rules and IPv6 policy
+   * (step 09, version 2); allowed traffic as address, protocol and port tuples
+   * (version 3).
+   */
+  "network-policy": 3,
   /** Expiring, refreshed allowlist with durable in-place edits and revocation (step 09). */
   "network-refresh": 1,
   /** Bridge diagnostic files rotated by a launch wrapper (step 11). */

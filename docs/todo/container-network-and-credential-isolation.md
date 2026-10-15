@@ -4,28 +4,31 @@ Checked against `main` at `2459b05c` (2026-10-15).
 
 Restricted mode limits where a container can connect with an in-container
 IPv4 ipset firewall. Root sets it up through narrow sudo grants, and the
-workload needs `NET_ADMIN` to have it. The remaining work narrows what an
-allowed destination opens, makes one default allowlist canonical, and
-evaluates enforcement outside the workload. Only once restricted containers
-no longer need `NET_ADMIN` can the sudo grants shrink or `no-new-privileges`
-be considered.
+workload needs `NET_ADMIN` to have it. The remaining work makes one default
+allowlist canonical and evaluates enforcement outside the workload. Only once
+restricted containers no longer need `NET_ADMIN` can the sudo grants shrink or
+`no-new-privileges` be considered.
 
 ## Current state
 
-- Firewall: `docker/init-firewall.sh` (boot, policy 2), `docker/firewall-domains.sh`
+- Firewall: `docker/init-firewall.sh` (boot, policy 3), `docker/firewall-domains.sh`
   (shared library: per-address expiry, TTL refresh, atomic `ipset swap`,
   conntrack revocation), `docker/update-firewall.sh` (`--set-domains`,
   `--add`, `--remove`, `--host-ports`, `--refresh-loop`) and
   `docker/network-policy-entrypoint.sh` (records the policy once, root-owned).
-- Allowed addresses sit in one ipset, `allowed-domains`, matched by an
-  `OUTPUT` rule with no port or protocol. An allowed address is open on every
-  port and protocol, and a domain on a shared CDN address opens every other
-  site on it. There is no general SSH exception: SSH reaches only allowlisted
-  addresses such as GitHub's published ranges. `AGENTS.md` "Network
-  Isolation" states both.
+- Allowed traffic sits in one ipset, `allowed-domains`. Under policy 3 it
+  holds address, protocol and port tuples (`hash:net,port`): a bare domain is
+  TCP 443, `host:port` or `host:port/udp` opens exactly that port, and
+  GitHub's ranges are TCP 443 and 22. Policies 1 and 2 hold addresses, open
+  on every port; the backend sends their containers each entry's domain
+  without its port. A domain on a shared CDN address still opens the same
+  ports to every other site on it. `AGENTS.md` "Network Isolation" and
+  [Container lifecycle](../architecture/container-lifecycle.md) "Port and
+  protocol tuples" describe it.
 - Backend: `apps/backend/src/core/container-network.ts`.
   - `ensureEnvironmentNetwork` creates one labelled bridge per environment.
-  - `configuredAllowedDomains` is the saved list plus `requiredAgentNetworkDomains`.
+  - `configuredAllowedDomains` is the saved list plus `requiredAgentNetworkDomains`;
+    `containerAllowedDomains` is that list as the container's policy takes it.
   - `applyEnvironmentAllowedDomains` applies a saved list in place.
   - `environmentNetworkPolicy` reports `applied`, `pending` or
     `rebuild-required`. A mode change (restricted to full or back) is
@@ -70,16 +73,6 @@ be considered.
 
 ### Code
 
-1. Port and protocol tuples. Allow traffic as address, protocol and port: TCP
-   443 by default, explicit Git over SSH (TCP 22) for GitHub's ranges, and
-   per-domain overrides for anything else. Old images must keep policy 2
-   unchanged, so this needs a new `network-policy` capability version, plus
-   updates to the swap and revocation paths in `firewall-domains.sh`, the
-   `firewall.json` report, `tests/unit/firewall-policy.test.ts`,
-   `tests/unit/firewall-refresh.test.ts` and the live C22/C23 suites. Done
-   when an allowed domain answers on 443, another port on the same address is
-   rejected, Git over SSH to GitHub still works, and `AGENTS.md` no longer
-   says "every port and protocol".
 2. One canonical default allowlist. Generate the shell and renderer fallbacks
    from the backend list (at image build and from the protocol package), or
    have the renderer read the backend's list, rather than keeping three
@@ -100,12 +93,25 @@ be considered.
 
 - The Desktop and arm64 packet matrix and live credential rotation are
   tracked in [container-platform-qualification.md](container-platform-qualification.md).
-  Items 1 and 3 each need live packet tests on Linux Engine and Desktop:
-  allowed provider access, blocked destinations, host callbacks, sibling
-  isolation, DNS rotation, IPv6 and firewall initialisation failure.
+  Item 3 needs live packet tests on Linux Engine and Desktop: allowed provider
+  access, blocked destinations, host callbacks, sibling isolation, DNS
+  rotation, IPv6 and firewall initialisation failure.
+- Policy 3 (port tuples, done 2026-10-15) has unit coverage only. C22 now
+  checks that an allowed domain answers on 443, another port on the same
+  address is rejected and Git over SSH reaches GitHub; C23 checks per-port
+  edits and revocation. Neither has run on a real daemon (Docker Desktop
+  would not start containers that day), and `hash:net,port` support on the
+  Desktop and rootless kernels is unconfirmed (init fails closed without
+  it). The live re-run in container-platform-qualification.md covers both.
 
 ## Constraints and rationale
 
+- Default ports (decided 2026-10-15): TCP 443 for allowed domains, TCP 443 and
+  22 for GitHub's ranges. Everything on the default lists is HTTPS on 443, so
+  anything else needs a `host:port` (or `host:port/udp`) entry; plain HTTP
+  (80) and SSH to other Git hosts are not defaults. Lists that relied on
+  another port are not rewritten; the network status and settings help say
+  what applies.
 - Never claim that IP allowlisting prevents exfiltration. Shared CDN
   addresses, allowed services and DNS remain channels.
 - Never fall back to the shared default bridge when the environment network
@@ -135,8 +141,6 @@ be considered.
 - How far to narrow root-terminal `NET_ADMIN` in restricted mode. Today it is
   a documented product choice, and the capability cannot be removed from one
   `docker exec` while the container keeps it.
-- Is TCP 443 plus GitHub SSH a sufficient default port set, or do common
-  package registries and provider endpoints need more?
 
 ## Related
 

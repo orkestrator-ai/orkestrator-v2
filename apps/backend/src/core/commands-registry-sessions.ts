@@ -1,4 +1,5 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import { allowlistEntryDomain } from "@orkestrator/protocol/network-allowlist";
 import { paneLayoutUnsupportedVersionMessage } from "@orkestrator/protocol/pane-layout";
 import { PANE_LAYOUT_VERSION } from "./models.js";
 import { runCommand } from "./shell.js";
@@ -52,7 +53,9 @@ export function registerSessionCommands(
       asStringArray(domains).map(async (domain) => {
         try {
           const dns = await import("node:dns/promises");
-          const ips = (await dns.lookup(domain, { all: true })).map(({ address }) => address);
+          const ips = (await dns.lookup(allowlistEntryDomain(domain), { all: true })).map(
+            ({ address }) => address,
+          );
           return { domain, valid: true, resolvable: true, ips, error: null };
         } catch (error) {
           return {

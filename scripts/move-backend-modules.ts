@@ -223,11 +223,14 @@ async function main() {
     const formatTargets = changed.map((file) =>
       path.relative(root, moves.get(path.join(root, file)) ?? path.join(root, file)),
     );
-    const format = Bun.spawnSync(["bunx", "oxfmt", ...formatTargets], {
-      cwd: root,
-      stderr: "pipe",
-    });
-    if (format.exitCode !== 0) throw new Error(`oxfmt failed: ${format.stderr.toString()}`);
+    // With no paths oxfmt formats the entire working directory in place.
+    if (formatTargets.length > 0) {
+      const format = Bun.spawnSync(["bunx", "oxfmt", ...formatTargets], {
+        cwd: root,
+        stderr: "pipe",
+      });
+      if (format.exitCode !== 0) throw new Error(`oxfmt failed: ${format.stderr.toString()}`);
+    }
     await stageMoves(moves);
   }
   for (const file of changed) console.log(`rewrite ${file}`);

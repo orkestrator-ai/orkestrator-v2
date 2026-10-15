@@ -41,7 +41,14 @@ behaviour has never had.
 - Since #950 the Claude bridge keeps one CLI runtime per session. Each turn's
   query plan re-resolves the inline MCP set, and `prepareJoin`
   (`bridges/claude-bridge/src/services/session-manager-prompt-launch.ts`)
-  calls `setMcpServers` on the running CLI when it changed.
+  brings a running CLI to it through `syncClaudeRuntimeMcp`
+  (`session-manager-prompt-mcp-sync.ts`). The CLI only unloads servers an
+  earlier `setMcpServers` gave it, so the first update that drops a launch
+  server restates the launch set first. A server it still runs after that is
+  refused by a PreToolUse hook and reported as `staleServers`, and apply shows
+  `restart-required` until a new CLI proves it gone.
+  `mise run verify:claude:mcp-live` proves this on the real CLI without
+  credentials.
 - Current pins: Claude Agent SDK 0.3.296 / CLI 2.1.296, Codex 0.162.1,
   OpenCode 1.19.0, Cursor SDK 1.0.37, Grok 1.0.52, Pi 1.2.0. The one recorded
   live probe used Claude 0.3.280 / 2.1.280.
@@ -93,41 +100,33 @@ behaviour has never had.
    `TERMINAL.pi` (`readsNativeConfig` and its guidance, which says Pi
    terminals have no MCP client) and the `SIGN_IN.pi` reason accordingly, and
    label bare-map files.
-3. **Claude removals on a retained runtime.** The CLI also loads
-   `~/.claude.json`, `.mcp.json` and `projects[cwd]` itself at launch
-   (`settingSources`), and the pinned SDK documents that `setMcpServers` does
-   not affect servers configured through settings files. A server removed or
-   renamed in a file may therefore stay loaded until the runtime ends while
-   evidence reports `applied`. Confirm with the live probe below; if it holds,
-   report removal and rename as `restart-required` for Claude or retire the
-   runtime at the next idle boundary.
-4. **Apply-path gaps** (`service.ts`, `apply.ts`). No runtime or session
+3. **Apply-path gaps** (`service.ts`, `apply.ts`). No runtime or session
    generation is recorded with an applied revision. Older Pi and Cursor
    bridges cannot be told apart (no bridge version is recorded), so their
    `pending-next-turn` never resolves. An external edit made after apply was
    scheduled is not flagged. `pageRuntimes` keeps at most
    `MCP_MANAGEMENT_LIMITS.runtimesPerOperation` (64), so a plan with more than
    64 Codex environments drops the rest.
-5. **OpenCode application.** Choose a directory-scoped reconcile or an
+4. **OpenCode application.** Choose a directory-scoped reconcile or an
    idle-gated server restart that keeps sessions, pending questions and the
    runtime-only `orkestrator` injection; add evidence so OpenCode can report
    `applied`. Trace how OAuth completes after `mcp.auth.start`
    (`apps/backend/src/core/opencode-capabilities.ts`); nothing calls
    `mcp.auth.callback`. Until then show external-authentication guidance.
-6. **Codex.** Prove that a reload reaches an existing thread at its next
+5. **Codex.** Prove that a reload reaches an existing thread at its next
    turn, then add thread-level `applied` evidence. `listMcpServers` in
    `bridges/codex-bridge/src/engine/app-server-engine.ts` reads one page
    (`limit: 100`) of `mcpServerStatus/list` and never follows `nextCursor`.
-7. **Grok.** Per-session ACP application is not implemented: user servers are
+6. **Grok.** Per-session ACP application is not implemented: user servers are
    not passed at session load, and the collision rules are undocumented.
    Inventory stays process-level; Grok 1.0.52's `server_status` carries
    `sessionId` (see `vendorMcpServerStatus` in
    `bridges/acp-bridge/src/acp-mcp-inventory.ts`), which may allow per-session
    correlation.
-8. **Saved-to-live row join.** Join saved entries to live runtime rows by
+7. **Saved-to-live row join.** Join saved entries to live runtime rows by
    exact native name plus target and runtime identity. `AgentInfoMcpSection`
    links by server name only (`manage(server.name)`).
-9. **Live-inventory polish.**
+8. **Live-inventory polish.**
    - Claude's no-control fallback in `readSessionMcpServers`
      (`bridges/claude-bridge/src/services/session-manager-catalog.ts`) uses
      `initData`, which `session-manager-prompt-handlers/init.ts` collapses to
@@ -136,10 +135,17 @@ behaviour has never had.
      `apps/web/src/components/layout/AgentInfoButton.tsx`.
    - Runtime `error` strings are length-bounded (2,000 characters) but not
      redacted (`normalizeMcp` in `session-manager-catalog.ts`).
-10. **Unmodelled layers.** Claude plugins, Cursor plugins and team settings,
+9. **Unmodelled layers.** Claude plugins, Cursor plugins and team settings,
     OpenCode remote or organisation configuration and Codex profiles are
     visible only in the live panel. Model one only where a passive reader
     exists.
+10. **Replaced Claude server processes linger (blocked upstream).** On CLI
+    2.1.296, a `setMcpServers` call that changes a server's configuration
+    connects the new one but leaves the old process running, with its old
+    environment, until the CLI exits; a server loaded from a settings file and
+    then replaced the same way does too. Neither is offered to the model.
+    Report it to Anthropic, then add the old process's exit to
+    `session-manager-prompt-mcp-sync.live-probe.ts` once fixed.
 
 ### Qualification
 
@@ -151,11 +157,14 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   and precedence tables came from older binaries' embedded docs.
 - **Live probes.** A Codex reload changes an existing thread's tools at its
   next turn; OpenCode and Grok pick up edits on restart; the Cursor SDK
-  re-reads `~/.cursor/mcp.json` on resume; Claude removal and rename on a
-  retained runtime (item 3); Grok saved `enabled` and SSE; whether Claude SSE
-  entries the bridge drops still run through the CLI's own load. For every
-  provider, after a removal a harmless call to the removed tool must fail; a
-  vanished status row is not proof.
+  re-reads `~/.cursor/mcp.json` on resume; Grok saved `enabled` and SSE. For
+  Claude, `verify:claude:mcp-live` already proves the in-place unload on the
+  real CLI (status, the model's tool registry and the server process); what
+  still needs a credentialed run is a model turn on a CLI kept alive by
+  background work, where a call to a removed server that could not be
+  unloaded (an SSE entry) is refused by the hook. For every provider, after a
+  removal a harmless call to the removed tool must fail; a vanished status row
+  is not proof.
 - **Provider completion matrix.** For each provider and each advertised
   writable scope record: durable add, edit, rename and remove; actual tools
   after apply; two sessions or a busy session; restart and restore; the auth
@@ -194,7 +203,7 @@ Use temporary homes and harmless fixture servers; never the operator's files.
 - `orkestrator`, `orkestrator-design` and `orkestrator_workflow_result` are
   protected in every provider.
 - `strictMcpConfig` stays off for Claude: it would also drop plugin MCP
-  servers. A fix for item 3 cannot rely on it.
+  servers, so the running-CLI sync cannot rely on it either.
 - Mirrored merge and acceptance rules must be re-traced on every pin upgrade.
   The Pi drift is what happens otherwise.
 - Terminal sessions get guidance only; no command is injected.
@@ -223,8 +232,6 @@ Use temporary homes and harmless fixture servers; never the operator's files.
 
 - Which Pi disable spelling should the editor write, and should existing
   `disabled: true` entries be migrated (only through an explicit edit)?
-- Claude removal on a retained runtime: report `restart-required`, or retire
-  the runtime when idle?
 - OpenCode and Grok: offer an explicit, idle-gated "restart to apply", or
   keep guidance only? Is per-session Grok application worth it when
   restart-based evidence works?
@@ -238,7 +245,9 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   Codex account homes link `config.toml` (`CODEX_SHARED_ENTRIES`). Check when
   a running Claude account session sees an editor write now that the runtime
   outlives turns, and say in the UI that servers added inside an account home
-  are overwritten.
+  are overwritten. The running-CLI sync only knows the names the bridge reads
+  from `homedir()/.claude.json`, so a server the CLI loaded from the account's
+  own `.claude.json` and nowhere else is never reported stale when removed.
 
 ## Related
 
@@ -268,8 +277,7 @@ Use temporary homes and harmless fixture servers; never the operator's files.
     disabled and skipped entries" and "Pi normalized-name collisions" rules
     and Pi's `cwd` and saved-enable cells in the capabilities table predate
     Pi 1.x, and the sources table should say a bare map works only in the
-    bridge. The Claude row in "Runtime application" still says "per-query
-    reload (bridge re-reads files every query)", which is stale since #950.
+    bridge.
   - The Pi notes in `AGENTS.md` and the Pi section of
     [`agent-engines.md`](../architecture/agent-engines.md) say "Pi's vendor
     SDK has no MCP client". Pi 1.2.0 ships one in its CLI; only the bridge's

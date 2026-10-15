@@ -17,6 +17,7 @@ import {
   sessions,
 } from "./session-manager-core.js";
 import { holdSdkPromptOpen, sdkPromptMessages } from "./session-manager-persistence.js";
+import { createClaudeRuntimeMcp, syncClaudeRuntimeMcp } from "./session-manager-prompt-mcp-sync.js";
 import {
   claudeQueryOptions,
   type QueryPlan,
@@ -133,6 +134,9 @@ function abandonJoin(turn: TurnState, running: ClaudeRuntime): void {
 async function prepareJoin(turn: TurnState, plan: QueryPlan, running: ClaudeRuntime) {
   const { session, options } = turn;
   const { mcpServers, plugins, sdkPrompt, queryEnvironment, liveSettings, mcpServersKey } = plan;
+  const required = mcpServers[AGENT_MCP_SERVER_NAME]
+    ? [AGENT_MCP_SERVER_NAME, ...(options?.agentMcp?.design ? ["orkestrator-design"] : [])]
+    : [];
   // Launch-only settings may have changed while this turn was preparing.
   await assertClaudeRuntimeAccepts(
     session,
@@ -145,64 +149,13 @@ async function prepareJoin(turn: TurnState, plan: QueryPlan, running: ClaudeRunt
   turn.queryIteratorControl = running.control;
   try {
     await applyClaudeLiveSettings(running, liveSettings);
-    if (running.mcpServers !== mcpServersKey) {
-      if (!running.control.setMcpServers) {
-        throw sessionOperationError(
-          "conflict",
-          "Claude MCP configuration cannot be updated on this runtime",
-        );
-      }
-      // A partial update invalidates the previous identity too. Retrying
-      // either configuration must actually restate it on the CLI.
-      running.mcpServers = "";
-      const result = await running.control.setMcpServers(mcpServers).catch(() => {
-        throw sessionOperationError(
-          "conflict",
-          "Claude MCP configuration could not be applied; retry the prompt",
-        );
-      });
-      if (
-        !result ||
-        typeof result !== "object" ||
-        !("errors" in result) ||
-        !result.errors ||
-        typeof result.errors !== "object" ||
-        Array.isArray(result.errors) ||
-        Object.keys(result.errors).length > 0
-      ) {
-        throw sessionOperationError(
-          "conflict",
-          "Claude MCP configuration could not be applied; retry the prompt",
-        );
-      }
-    }
-    // Required injected servers can disconnect even without a config change.
-    if (mcpServers[AGENT_MCP_SERVER_NAME]) {
-      const statuses = await running.control.mcpServerStatus?.().catch(() => {
-        running.mcpServers = "";
-        throw sessionOperationError(
-          "conflict",
-          "Claude required MCP server could not be confirmed; retry the prompt",
-        );
-      });
-      const required = [
-        AGENT_MCP_SERVER_NAME,
-        ...(options?.agentMcp?.design ? ["orkestrator-design"] : []),
-      ];
-      if (
-        !required.every((name) =>
-          statuses?.some((server) => server.name === name && server.status === "connected"),
-        )
-      ) {
-        running.mcpServers = "";
-        throw sessionOperationError(
-          "conflict",
-          "Claude required MCP server is not connected; retry the prompt",
-        );
-      }
-    }
-    running.mcpServers = mcpServersKey;
-    recordMcpConfigRevision(session, plan);
+    await syncClaudeRuntimeMcp(running, {
+      servers: mcpServers,
+      key: mcpServersKey,
+      names: plan.mcpServerNames,
+      required,
+    });
+    recordMcpConfigRevision(session, plan, running.mcp);
     return await sdkPromptMessages(sdkPrompt, turn.promptUuid);
   } catch (error) {
     abandonJoin(turn, running);
@@ -252,8 +205,10 @@ async function prepareLaunch(turn: TurnState): Promise<boolean> {
 /** Launch the session's CLI with this turn as its first. */
 function launchClaudeRuntime(turn: TurnState, plan: QueryPlan) {
   const { session, options, abortController, stream } = turn;
-  const { plugins, sdkPrompt, queryEnvironment, mcpServersKey } = plan;
+  const { plugins, sdkPrompt, queryEnvironment, mcpServers, mcpServerNames, mcpServersKey } = plan;
   const heldSdkPrompt = holdSdkPromptOpen(sdkPrompt, abortController.signal, turn.promptUuid);
+  // Created before the query so the hooks it launches with read this state.
+  const mcp = createClaudeRuntimeMcp(mcpServers, mcpServerNames);
   // Hooks and callbacks fire on the runtime's behalf for whichever turn
   // they concern: the one whose row holds the tool, else the latest turn.
   const turnFor = (toolUseId?: string): ClaudeRuntimeTurn =>
@@ -262,7 +217,7 @@ function launchClaudeRuntime(turn: TurnState, plan: QueryPlan) {
     turn.thisTurn!;
   const queryIterator = query({
     prompt: heldSdkPrompt.prompt,
-    options: claudeQueryOptions(turn, plan, turnFor),
+    options: claudeQueryOptions(turn, plan, turnFor, mcp),
   });
   const liveQuery = Object.assign(queryIterator, {
     pushInput: (message: SDKUserMessage) => turnFor().pushSteerInput(message),
@@ -279,6 +234,7 @@ function launchClaudeRuntime(turn: TurnState, plan: QueryPlan) {
       ...claudeLaunchResourceProfile(plugins, queryEnvironment),
     },
     mcpServers: mcpServersKey,
+    mcp,
     firstTurn: turn.thisTurn!,
   });
   const launched = created.runtime;
@@ -286,7 +242,7 @@ function launchClaudeRuntime(turn: TurnState, plan: QueryPlan) {
   session.claudeRuntime = launched;
   session.queryControl = liveQuery;
   turn.queryIteratorControl = liveQuery;
-  recordMcpConfigRevision(session, plan);
+  recordMcpConfigRevision(session, plan, mcp);
   return { launched, queryIterator, markEnded: created.markEnded };
 }
 

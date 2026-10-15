@@ -91,13 +91,22 @@ is not permission to execute. The editor never changes an execution policy.
   (and `project` / `local` when project resources are on), the CLI child also
   loads `~/.claude.json` `mcpServers`, `.mcp.json` and `projects[cwd]` itself.
   A same-name inline server wins and only one copy starts. Consequences: SSE
-  entries the bridge drops from its inline set probably still run (inferred, not
-  probed with an SSE server), and with `CLAUDE_CONFIG_DIR` set the CLI reads
-  `$CLAUDE_CONFIG_DIR/.claude.json` while the bridge (and this editor) read
-  `homedir()/.claude.json`. `strictMcpConfig` would remove the CLI's own load
-  but also stops plugin MCP servers (confirmed), so it is deliberately not set.
+  entries the bridge drops from its inline set still run (probed on CLI
+  2.1.296: an SSE entry in the user file shows up with source `user`), and with
+  `CLAUDE_CONFIG_DIR` set the CLI reads `$CLAUDE_CONFIG_DIR/.claude.json` while
+  the bridge (and this editor) read `homedir()/.claude.json`. `strictMcpConfig`
+  would remove the CLI's own load but also stops plugin MCP servers
+  (confirmed), so it is deliberately not set.
   Coordinators use `settingSources: []`, under which the CLI loads no MCP file,
   and the bridge passes them only the injected servers.
+- **A running Claude CLI unloads only what `setMcpServers` gave it.** Probed on
+  CLI 2.1.296: servers passed at launch are not part of the set
+  `setMcpServers` replaces, so an update that omits one reports nothing removed
+  and its tools stay offered to the model. Naming a server in an update takes
+  it over, and restating it unchanged does not reconnect it. The bridge
+  therefore restates the launch set before the first update that drops a
+  server (`session-manager-prompt-mcp-sync.ts`). `mise run
+  verify:claude:mcp-live` re-proves this on the real CLI without credentials.
 - **OpenCode and Codex merge.** OpenCode deep-merges same-name entries and
   Codex merges them field by field; a higher entry that omits a field inherits
   it. Rows say so rather than claiming replacement.
@@ -211,7 +220,7 @@ already knows (persisted native sessions) and never creates a session.
 
 | Provider | Strategy | What the backend reports |
 | --- | --- | --- |
-| Claude | per-query reload (bridge re-reads files every query) | `pending-next-turn`, then `applied` on evidence (below) |
+| Claude | the bridge re-reads files every query; a CLI kept alive by background work is updated in place | `pending-next-turn`, then `applied` on evidence (below); `restart-required` while that CLI still runs a removed or renamed server |
 | Codex | `config/mcpServer/reload` on the environment's app-server | `queued` until **every** Codex session in the environment is idle (unknown activity and pending dispatches count as busy), then one reload; `pending-next-turn` after it succeeds, `failed` on error or after 30 minutes busy |
 | OpenCode | server restart | `restart-required`; nothing is restarted |
 | Cursor | bridge reattaches at the next message | `pending-next-turn` (see below), then `applied` on evidence |
@@ -274,6 +283,13 @@ A runtime becomes `applied` when all of these hold:
 3. Grok only: the bridge process id differs from the one recorded when apply
    was planned. Grok's evidence is whichever child reported last, so only a
    replaced bridge guarantees no session still holds a pre-save child.
+4. for a removal or rename, the runtime no longer runs the old server. Claude
+   reports `staleServers`: names the configuration dropped that its running
+   CLI could not unload (in practice an SSE entry the CLI loaded from a file
+   itself). The bridge refuses their tools with a PreToolUse hook, and the
+   runtime is `restart-required` until a query on a new CLI reports the name
+   gone; the CLI ends once its background work does, or when the session is
+   stopped.
 
 An older bridge without the field, a failed or timed-out read, `absent` /
 `excluded`, or a read that predates the save all leave the planned state

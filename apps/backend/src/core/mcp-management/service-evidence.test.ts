@@ -13,6 +13,7 @@ import {
   EVIDENCE_READS_PER_TICK,
   EVIDENCE_RECHECK_MS,
   EVIDENCE_WINDOW_MS,
+  STILL_LOADED_REASON,
   type RuntimeEvidenceRead,
 } from "./evidence.js";
 import {
@@ -61,7 +62,7 @@ function report(
   agent: AgentPlatform,
   sources: { user?: string; project?: string; local?: string },
   observedAt: number,
-  options: { key?: string; scope?: "session" | "process" } = {},
+  options: { key?: string; scope?: "session" | "process"; staleServers?: string[] } = {},
 ): void {
   const answer: RuntimeEvidenceRead = {
     state: "evidence",
@@ -69,6 +70,7 @@ function report(
       sources,
       observedAt: new Date(observedAt).toISOString(),
       scope: options.scope ?? (agent === "grok" ? "process" : "session"),
+      ...(options.staleServers ? { staleServers: options.staleServers } : {}),
     },
   };
   fixture.evidence.set(`env-1:${agent}:${options.key ?? KEY}`, answer);
@@ -288,6 +290,61 @@ describe("Claude evidence", () => {
     report("claude", { user: digestOf(USER_FILE.claude) }, fixture.now.value);
     await fixture.service.tick();
     expect(await stateOf(removal.operation.operationId)).toEqual(["applied"]);
+  });
+
+  async function changeSaved(kind: "remove" | "rename") {
+    const add = await saveAndApply("claude", "claude:user");
+    const snapshot = await fixture.service.snapshot({ targetId: add.targetId });
+    const target = {
+      entryId: entry(snapshot, "claude:user", "fixture").entryId,
+      expectedRevision: revision(snapshot, "claude:user")!,
+    };
+    return fixture.service.mutate(
+      mutation(
+        add.targetId,
+        kind === "remove"
+          ? { kind: "remove", ...target }
+          : { kind: "rename", ...target, newName: "renamed" },
+        "save-and-apply",
+      ),
+    );
+  }
+
+  test.each(["remove", "rename"] as const)(
+    "a %s the running CLI could not unload waits for a new CLI",
+    async (kind) => {
+      session("claude");
+      const change = await changeSaved(kind);
+      fixture.now.value += 1_000;
+      // The query read the saved bytes, but its CLI still runs the old server.
+      report("claude", { user: digestOf(USER_FILE.claude) }, fixture.now.value, {
+        staleServers: ["fixture"],
+      });
+      await fixture.service.tick();
+      const held = await fixture.service.getOperation({
+        operationId: change.operation.operationId,
+      });
+      expect(held.apply.runtimes[0]).toMatchObject({
+        state: "restart-required",
+        reason: STILL_LOADED_REASON,
+      });
+      // The background work ended and the next message started a new CLI.
+      fixture.now.value += EVIDENCE_RECHECK_MS;
+      report("claude", { user: digestOf(USER_FILE.claude) }, fixture.now.value);
+      await fixture.service.tick();
+      expect(await stateOf(change.operation.operationId)).toEqual(["applied"]);
+    },
+  );
+
+  test("a stale server the change did not touch does not hold it back", async () => {
+    session("claude");
+    const add = await saveAndApply("claude", "claude:user");
+    fixture.now.value += 1_000;
+    report("claude", { user: digestOf(USER_FILE.claude) }, fixture.now.value, {
+      staleServers: ["something-else"],
+    });
+    await fixture.service.tick();
+    expect(await stateOf(add.operationId)).toEqual(["applied"]);
   });
 });
 

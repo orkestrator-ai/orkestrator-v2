@@ -504,9 +504,12 @@ export interface SessionState {
    * Which saved MCP configuration the most recent query started with, and
    * when. Runtime-only: after a restart no query has started yet, and the
    * next one records its own. Served by `/session/:id/runtime-health`.
+   * `staleServers` names servers the configuration dropped that the running
+   * CLI could not unload; their tools are refused until it ends.
    */
   mcpConfigRevision?: import("../services/mcp-config.js").McpConfigRevision & {
     queryStartedAt: string;
+    staleServers?: string[];
   };
   /** Skill names the last explicit `reloadSkills()` reported. */
   commandSkillNames?: string[];

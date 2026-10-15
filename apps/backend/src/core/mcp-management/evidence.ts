@@ -26,6 +26,11 @@
  *    last), so it is accepted only after the bridge process itself was
  *    replaced since apply was planned. Every child of a newer bridge was
  *    spawned after the save, so no session can still hold a pre-save child.
+ * 5. A removal or rename is not applied while the runtime still runs the old
+ *    server. A Claude CLI kept alive by background work reports the servers
+ *    it could not unload (`staleServers`); its bridge refuses their tools, and
+ *    the runtime is `restart-required` until a later query (a new CLI) shows
+ *    the server gone.
  *
  * Polling is bounded: at most {@link EVIDENCE_READS_PER_TICK} reads per tick,
  * each runtime at most once per {@link EVIDENCE_RECHECK_MS}, each read capped
@@ -61,6 +66,8 @@ export interface RuntimeConfigEvidence {
   observedAt: string;
   /** `process` when the bridge cannot attribute the load to one session (Grok). */
   scope: "session" | "process";
+  /** Servers the configuration dropped that the runtime still runs. */
+  staleServers?: readonly string[];
 }
 
 export type RuntimeEvidenceRead =
@@ -99,10 +106,10 @@ export function evidenceRole(provider: AgentPlatform, sourceId: string): Evidenc
 /** Whether a planned runtime in `state` is waiting for evidence at all. */
 export function awaitsEvidenceIn(provider: AgentPlatform, state: McpApplyState): boolean {
   switch (provider) {
-    case "claude":
     case "cursor":
     case "pi":
       return state === "pending-next-turn";
+    case "claude":
     case "grok":
       return state === "pending-next-turn" || state === "restart-required";
     default:
@@ -146,6 +153,15 @@ export async function evidenceShowsSave(
   if (digest === savedDigest) return true;
   const now = await current();
   return !!now && now.landed && now.digest === digest;
+}
+
+export const STILL_LOADED_REASON =
+  "This session's Claude process is still running background work, so the removed server stays loaded and its tools are refused. Stop the session, or let that work finish, to unload it.";
+
+/** The server a removal or rename takes away, which must not still be loaded. */
+function removedServer(stored: StoredOperation): string | undefined {
+  const { kind } = stored.snapshot;
+  return kind === "remove" || kind === "rename" ? stored.recovery.name : undefined;
 }
 
 export function appliedReason(provider: AgentPlatform): string {
@@ -308,6 +324,17 @@ export class EvidenceScheduler {
       // A request may have cancelled or replanned while this read awaited.
       if (stored.snapshot.apply.runtimes !== candidate.runtimes) continue;
       if (!awaitsEvidenceIn(agent, runtime.state)) continue;
+      const removed = removedServer(stored);
+      if (removed && answer.evidence.staleServers?.includes(removed)) {
+        // Rule 5: keep polling; a query on a new runtime proves it.
+        if (runtime.state !== "restart-required" || runtime.reason !== STILL_LOADED_REASON) {
+          runtime.state = "restart-required";
+          runtime.reason = STILL_LOADED_REASON;
+          runtime.updatedAt = new Date(this.deps.now()).toISOString();
+          changed.add(stored);
+        }
+        continue;
+      }
       runtime.state = "applied";
       runtime.reason = appliedReason(agent);
       runtime.updatedAt = new Date(this.deps.now()).toISOString();

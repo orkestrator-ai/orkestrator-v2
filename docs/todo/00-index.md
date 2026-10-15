@@ -59,15 +59,15 @@ it reaches. Some rules of thumb:
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 5 |
 | High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 58 |
 | Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 235 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 242 |
-| **Total** | | **540** |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 243 |
+| **Total** | | **541** |
 
 ## Very high
 
 ### MCP (very high)
 
 - [ ] Bring the Pi MCP catalogue, codecs and capabilities in line with Pi 1.x bridge rules, plus a parity test ([mcp-management.md](mcp-management.md))
-- [ ] Report Claude MCP removal and rename on a retained runtime as restart-required, or retire the runtime ([mcp-management.md](mcp-management.md))
+- [x] Report Claude MCP removal and rename on a retained runtime as restart-required, or retire the runtime ([mcp-management.md](mcp-management.md))
 
 ### Transcripts, observation and bandwidth (very high)
 
@@ -552,6 +552,7 @@ it reaches. Some rules of thumb:
 - [ ] Replace the count-only MCP metric tiles for Claude and OpenCode in `AgentInfoButton` ([mcp-management.md](mcp-management.md))
 - [ ] Model plugin, team, remote and profile MCP layers only where a passive reader exists ([mcp-management.md](mcp-management.md))
 - [ ] Verify how OpenCode MCP OAuth completes after `mcp.auth.start` ([mcp-management.md](mcp-management.md), verify)
+- [ ] Get the Claude CLI to stop a server's old process when `setMcpServers` replaces its configuration ([mcp-management.md](mcp-management.md), blocked)
 - [ ] Consider bounded project-file MCP writes inside `volume-v1` containers without an overlay ([mcp-environment-delivery.md](mcp-environment-delivery.md))
 - [ ] Point the recreate copy at rebuild once confirmed, and add a host-defaults re-import operation ([mcp-environment-delivery.md](mcp-environment-delivery.md))
 - [ ] Audit staged Claude, Grok and OpenCode MCP configs for host-absolute `command` and `cwd` paths ([mcp-environment-delivery.md](mcp-environment-delivery.md))
@@ -749,7 +750,7 @@ it reaches. Some rules of thumb:
 | [design-operation-recovery-edges.md](design-operation-recovery-edges.md) |  | 1 | 1 | 2 | 4 |
 | [design-agent-conversation-links.md](design-agent-conversation-links.md) |  |  | 5 | 3 | 8 |
 | **MCP** | | | | | |
-| [mcp-management.md](mcp-management.md) | 2 | 4 | 11 | 5 | 22 |
+| [mcp-management.md](mcp-management.md) | 2 | 4 | 11 | 6 | 23 |
 | [mcp-environment-delivery.md](mcp-environment-delivery.md) |  |  | 4 | 10 | 14 |
 | **Agent engines and provider SDKs** | | | | | |
 | [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md) |  | 2 | 8 | 2 | 12 |

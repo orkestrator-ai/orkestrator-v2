@@ -4,8 +4,9 @@ Status: Implemented (2026-10-15) on `feat-terminal-input-resume-strict-fence`.
 Format, lint and typecheck pass, as do the protocol, web, desktop, web-public,
 CLI and toolchain test suites. The only full-suite failures are unrelated and
 also fail on main: host-dependency tests (firewall, `migrate-copy`, the Pi
-vendoring timeout) and one backend shutdown test. The manual real-browser and
-Electron checks under Verification are still pending.
+vendoring timeout) and one backend shutdown test. The real-browser, Electron
+and inactive-environment checks under Verification are automated as agent
+specs and pass.
 Depends on: the shared transport core (#968), which introduced
 `TerminalInputSequencer` and the transport contract fixtures. It is on main;
 this is a separate, deliberately behaviour-changing PR.
@@ -179,6 +180,30 @@ unchanged.
   Confirm Resume does not kill the PTY (same process id before and after).
 - Inactive-environment path: fail a write, switch environments, return. The
   terminal is still fenced and Resume still works.
+
+All three are automated, so they run with the agent suites:
+
+- `e2e/agent-testing/terminal-input-resume.spec.ts` (browser suite) drives
+  vim in a plain terminal tab. A page route forwards one `local_terminal_write`
+  to the backend and then drops its response, so the keystroke lands but the
+  client sees a failure. The spec checks the toast copy and both actions, that
+  a resize goes through without re-arming input, that Resume sends nothing to
+  the backend, that vim's saved buffer matches the echo, that the shell PID is
+  unchanged, and the environment-switch path.
+- `e2e/agent-testing/terminal-input-resume-electron.spec.ts` (Electron suite)
+  runs the same flow through IPC and `BackendHttpClient`, injecting the lost
+  response by wrapping `fetch` in the main process, and resizing the native
+  window.
+
+Both specs fail at the post-resize write when the old resize re-arm is put
+back, so they guard this behaviour rather than just passing alongside it.
+
+On hosts affected by the startup Claude login dialog
+(`03-startup-claude-login-dialog.md`), `mise run test:agent:browser:isolated`
+times out before it reaches the browser spec. Run it against a manual profile
+instead: start `mise run dev:test --profile <name> --fixture
+--no-agent-credentials --agent-platforms codex`, then run Playwright on the spec
+with `ORKESTRATOR_AGENT_TEST_PROFILE=<name>`. The spec stubs the dialog itself.
 
 ## Rollout and risk
 

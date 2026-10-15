@@ -17,6 +17,7 @@ export default defineConfig({
     "cli-ui.spec.ts",
     "container-settings.spec.ts",
     "container-rebuild-cycle.spec.ts",
+    "terminal-input-resume.spec.ts",
   ],
   fullyParallel: false,
   workers: 1,

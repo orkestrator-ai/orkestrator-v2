@@ -73,7 +73,13 @@ export function BackendVersionReminder() {
         return;
       }
       const pair = `${BUNDLED_APP_VERSION}\u0000${reported}`;
-      if (readDismissed() === pair || shownPairRef.current === pair) return;
+      if (readDismissed() === pair) {
+        // Withdraw another pair's reminder without recording its dismissal.
+        shownPairRef.current = null;
+        toast.dismiss(VERSION_REMINDER_TOAST_ID);
+        return;
+      }
+      if (shownPairRef.current === pair) return;
       shownPairRef.current = pair;
       toast.warning(reminder.title, {
         id: VERSION_REMINDER_TOAST_ID,

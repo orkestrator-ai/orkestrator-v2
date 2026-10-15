@@ -391,11 +391,29 @@ test.describe("live OpenCode", () => {
           timeout: 60_000,
         });
         await waitForIdle(sessionKey);
+        await expect
+          .poll(
+            async () => {
+              const text = assistantText((await projection(sessionKey))?.messages ?? []);
+              return text.includes(first.expected) && !text.includes(second.expected);
+            },
+            {
+              timeout: 30_000,
+              message: "Undo must remove the latest reply and retain earlier history",
+            },
+          )
+          .toBe(true);
+        await closeAgentInfo();
+        await expect(page.getByText(second.expected).first()).toBeHidden({ timeout: 30_000 });
+        await expect(page.getByText(first.expected).first()).toBeVisible();
         await agentInfoAction("Redo turn");
         await expect(page.getByText("OpenCode revert undone", { exact: true })).toBeVisible({
           timeout: 60_000,
         });
         await waitForReply(sessionKey, second.expected);
+        expect(assistantText((await projection(sessionKey))?.messages ?? [])).toContain(
+          first.expected,
+        );
         await closeAgentInfo();
         await expect(page.getByText(second.expected).first()).toBeVisible({ timeout: 30_000 });
         await expect(page.getByText(first.expected).first()).toBeVisible();

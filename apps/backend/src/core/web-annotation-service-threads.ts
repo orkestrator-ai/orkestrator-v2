@@ -2,10 +2,10 @@
  * Web annotation service: threads.
  *
  * Owns annotation threads, captures, entries, listing, resolution, and
- * archive/continuation. Lifecycle, capabilities, receipts, drafts, assets,
- * and GC live in `web-annotation-service-base.ts`. Request orchestration and
- * migration extend this class in `web-annotation-service-requests.ts` and
- * `web-annotation-migration.ts`.
+ * archive/continuation. Shared state, receipts and asset storage live in
+ * `web-annotation-context.ts`; capabilities, drafts, assets and GC in
+ * `web-annotation-service-store.ts`. Results, requests and migration call the
+ * helpers here through `WebAnnotationThreads`.
  *
  * Provenance is assigned here and nowhere else: bodies received from commands
  * are `host-user`; lifecycle markers are `system`; imported legacy comments
@@ -50,7 +50,6 @@ import {
 } from "@orkestrator/protocol/web-annotations-validation";
 import { liveAnnotationCount } from "./web-annotation-assets.js";
 import {
-  WebAnnotationServiceBase,
   WebAnnotationServiceError,
   archivedError,
   capacityError,
@@ -60,7 +59,8 @@ import {
   newId,
   notFound,
   stableStringify,
-} from "./web-annotation-service-base.js";
+  type WebAnnotationContext,
+} from "./web-annotation-context.js";
 import type {
   ManifestCapture,
   ManifestEntry,
@@ -81,7 +81,7 @@ export {
   type WebAnnotationHostEnvironment,
   type WebAnnotationHostStorage,
   type WebAnnotationServiceOptions,
-} from "./web-annotation-service-base.js";
+} from "./web-annotation-context.js";
 
 const INTENT_EXCERPT_CHARS = 280;
 const MAX_GET_RESULTS = 20;
@@ -161,14 +161,13 @@ export interface AppendEntryInput {
   force?: boolean;
 }
 
-export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase {
+export class WebAnnotationThreads {
+  constructor(private readonly ctx: WebAnnotationContext) {}
+
   // -------------------------------------------------------------------------
   // Helpers used by every mutation
 
-  protected requireAnnotation(
-    manifest: WebAnnotationManifest,
-    annotationId: string,
-  ): WebAnnotation {
+  requireAnnotation(manifest: WebAnnotationManifest, annotationId: string): WebAnnotation {
     const annotation = isWebAnnotationId(annotationId)
       ? manifest.annotations[annotationId]
       : undefined;
@@ -176,7 +175,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
     return annotation;
   }
 
-  protected requireMutable(
+  requireMutable(
     store: WebAnnotationEnvironmentStore,
     manifest: WebAnnotationManifest,
     annotationId: string,
@@ -190,7 +189,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
     return annotation;
   }
 
-  protected expectContentRevision(annotation: WebAnnotation, expected: number): void {
+  expectContentRevision(annotation: WebAnnotation, expected: number): void {
     if (annotation.contentRevision !== expected) {
       throw conflictError(
         `content revision ${expected} is stale (current ${annotation.contentRevision}); refresh and retry`,
@@ -198,7 +197,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
     }
   }
 
-  protected expectMetadataRevision(annotation: WebAnnotation, expected: number): void {
+  expectMetadataRevision(annotation: WebAnnotation, expected: number): void {
     if (annotation.metadataRevision !== expected) {
       throw conflictError(
         `metadata revision ${expected} is stale (current ${annotation.metadataRevision}); refresh and retry`,
@@ -206,20 +205,20 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
     }
   }
 
-  protected bumpMetadata(tx: WebAnnotationTransaction, annotation: WebAnnotation): void {
+  bumpMetadata(tx: WebAnnotationTransaction, annotation: WebAnnotation): void {
     annotation.metadataRevision++;
     annotation.updatedAt = tx.now;
     tx.touch({ annotationIds: [annotation.id] });
   }
 
-  protected bumpContent(tx: WebAnnotationTransaction, annotation: WebAnnotation): void {
+  bumpContent(tx: WebAnnotationTransaction, annotation: WebAnnotation): void {
     annotation.contentRevision++;
     annotation.lastActivityAt = tx.now;
     this.bumpMetadata(tx, annotation);
   }
 
   /** Append one immutable entry. Callers bump revisions as appropriate. */
-  protected appendEntry(
+  appendEntry(
     tx: WebAnnotationTransaction,
     annotation: WebAnnotation,
     input: AppendEntryInput,
@@ -288,7 +287,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
   }
 
   /** New substantive human feedback reopens a resolved annotation. */
-  protected reopenIfResolved(tx: WebAnnotationTransaction, annotation: WebAnnotation): void {
+  reopenIfResolved(tx: WebAnnotationTransaction, annotation: WebAnnotation): void {
     if (annotation.state !== "resolved") return;
     annotation.state = "open";
     annotation.resolution = null;
@@ -301,7 +300,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
     });
   }
 
-  protected referenceAssets(tx: WebAnnotationTransaction, assetIds: readonly string[]) {
+  referenceAssets(tx: WebAnnotationTransaction, assetIds: readonly string[]) {
     const assets = [];
     for (const id of assetIds) {
       const asset = tx.manifest.assets[id];
@@ -312,7 +311,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
     return assets;
   }
 
-  protected nextCaptureRevision(manifest: WebAnnotationManifest, annotationId: string): number {
+  nextCaptureRevision(manifest: WebAnnotationManifest, annotationId: string): number {
     let max = 0;
     for (const capture of Object.values(manifest.captures)) {
       if (capture.annotationId === annotationId && capture.revision > max) max = capture.revision;
@@ -321,7 +320,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
   }
 
   /** Write an immutable capture record and its index entry. */
-  protected writeCapture(
+  writeCapture(
     tx: WebAnnotationTransaction,
     input: {
       annotationId: string;
@@ -377,7 +376,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
     return capture;
   }
 
-  protected captureFromInput(
+  captureFromInput(
     tx: WebAnnotationTransaction,
     annotationId: string,
     revision: number,
@@ -405,13 +404,13 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
     });
   }
 
-  protected validateCapture(value: unknown): WebAnnotationCaptureInput {
+  validateCapture(value: unknown): WebAnnotationCaptureInput {
     const result = validateWebAnnotationCaptureInput(value);
     if (!result.ok) throw new WebAnnotationServiceError(result.error);
     return result.value;
   }
 
-  protected validateBody(value: unknown): string {
+  validateBody(value: unknown): string {
     const result = validateWebAnnotationBody(value);
     if (!result.ok) throw new WebAnnotationServiceError(result.error);
     return result.value;
@@ -420,15 +419,12 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
   // -------------------------------------------------------------------------
   // Reads
 
-  protected project(
-    store: WebAnnotationEnvironmentStore,
-    annotation: WebAnnotation,
-  ): WebAnnotation {
+  project(store: WebAnnotationEnvironmentStore, annotation: WebAnnotation): WebAnnotation {
     const unavailable = store.unavailableReason(annotation.id);
     return unavailable ? { ...annotation, unavailable } : { ...annotation };
   }
 
-  protected summary(
+  summary(
     store: WebAnnotationEnvironmentStore,
     manifest: WebAnnotationManifest,
     annotation: WebAnnotation,
@@ -450,7 +446,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
     };
   }
 
-  protected async readCapture(
+  async readCapture(
     store: WebAnnotationEnvironmentStore,
     manifest: WebAnnotationManifest,
     captureId: string,
@@ -465,7 +461,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
     }
   }
 
-  protected async readEntry(
+  async readEntry(
     store: WebAnnotationEnvironmentStore,
     index: ManifestEntry,
   ): Promise<WebAnnotationEntry> {
@@ -509,7 +505,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
     return entries;
   }
 
-  protected async readEntryPage(
+  async readEntryPage(
     store: WebAnnotationEnvironmentStore,
     manifest: WebAnnotationManifest,
     annotationId: string,
@@ -525,7 +521,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
   }
 
   /** The newest bounded page before `beforeSequence`, oldest first. */
-  protected async readEntryPageBefore(
+  async readEntryPageBefore(
     store: WebAnnotationEnvironmentStore,
     manifest: WebAnnotationManifest,
     annotationId: string,
@@ -542,7 +538,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
   }
 
   async list(input: WebAnnotationListInput): Promise<WebAnnotationListResult> {
-    const store = await this.env(input.environmentId);
+    const store = await this.ctx.env(input.environmentId);
     const manifest = store.manifest;
     const filter = {
       pageKey: input.filter?.pageKey ?? null,
@@ -634,7 +630,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
       }
     }
     return {
-      generation: this.generation,
+      generation: this.ctx.generation,
       revision: manifest.revision,
       items,
       nextCursor,
@@ -643,7 +639,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
     };
   }
 
-  protected async readResult(
+  async readResult(
     store: WebAnnotationEnvironmentStore,
     resultId: string,
   ): Promise<WebAnnotationResult | null> {
@@ -660,7 +656,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
     entryLimit: number = WEB_ANNOTATION_LIMITS.entryPageItems,
     entryWindow: "oldest" | "latest" = "oldest",
   ): Promise<WebAnnotationGetResult> {
-    const store = await this.env(environmentId);
+    const store = await this.ctx.env(environmentId);
     const manifest = store.manifest;
     const stored = this.requireAnnotation(manifest, annotationId);
     const capture = await this.readCapture(store, manifest, stored.currentCaptureId);
@@ -693,7 +689,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
       if (result) results.push(result);
     }
     return {
-      generation: this.generation,
+      generation: this.ctx.generation,
       revision: manifest.revision,
       annotation: this.project(store, stored),
       capture,
@@ -712,7 +708,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
     limit: number = WEB_ANNOTATION_LIMITS.entryPageItems,
     beforeSequence?: number,
   ): Promise<WebAnnotationEntriesResult> {
-    const store = await this.env(environmentId);
+    const store = await this.ctx.env(environmentId);
     const manifest = store.manifest;
     const annotation = this.requireAnnotation(manifest, annotationId);
     if (beforeSequence !== undefined) {
@@ -750,7 +746,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
   }
 
   async capture(environmentId: string, captureId: string): Promise<WebAnnotationCapture> {
-    const store = await this.env(environmentId);
+    const store = await this.ctx.env(environmentId);
     const manifest = store.manifest;
     if (!isWebAnnotationId(captureId) || !manifest.captures[captureId]) throw notFound("Capture");
     const capture = await this.readCapture(store, manifest, captureId);
@@ -771,7 +767,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
     if (input.draftId !== undefined && !isWebAnnotationId(input.draftId)) {
       throw new WebAnnotationServiceError("draftId is invalid");
     }
-    return this.annotationMutation(
+    return this.ctx.annotationMutation(
       input.environmentId,
       input.operationId,
       "create",
@@ -815,13 +811,13 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
           body,
           captureId: record.id,
         });
-        if (input.draftId) this.removeDraftInTx(tx, (draft) => draft.id === input.draftId);
+        if (input.draftId) this.ctx.removeDraftInTx(tx, (draft) => draft.id === input.draftId);
         return { annotation, captureId: record.id, entryId: entry.id };
       },
     );
   }
 
-  protected assertAnnotationCapacity(manifest: WebAnnotationManifest): void {
+  assertAnnotationCapacity(manifest: WebAnnotationManifest): void {
     const count = liveAnnotationCount(manifest);
     const limit = WEB_ANNOTATION_LIMITS.environmentAnnotations;
     if (count >= limit) {
@@ -842,7 +838,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
 
   async appendEntryCommand(input: WebAnnotationCommandArgs["web_annotation_entry_append"]) {
     const body = this.validateBody(input.body);
-    return this.annotationMutation(
+    return this.ctx.annotationMutation(
       input.environmentId,
       input.operationId,
       "entry-append",
@@ -863,7 +859,8 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
         });
         annotation.latestIntent = excerpt(body, INTENT_EXCERPT_CHARS);
         this.reopenIfResolved(tx, annotation);
-        if (input.editorId) this.removeDraftInTx(tx, (draft) => draft.editorId === input.editorId);
+        if (input.editorId)
+          this.ctx.removeDraftInTx(tx, (draft) => draft.editorId === input.editorId);
         return { annotation, entryId: entry.id };
       },
     );
@@ -871,7 +868,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
 
   async editEntry(input: WebAnnotationCommandArgs["web_annotation_entry_edit"]) {
     const body = this.validateBody(input.body);
-    return this.annotationMutation(
+    return this.ctx.annotationMutation(
       input.environmentId,
       input.operationId,
       "entry-edit",
@@ -932,7 +929,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
     ) {
       throw new WebAnnotationServiceError("Nothing to update");
     }
-    return this.annotationMutation(
+    return this.ctx.annotationMutation(
       input.environmentId,
       input.operationId,
       "update",
@@ -959,7 +956,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
   async replaceCapture(input: WebAnnotationCommandArgs["web_annotation_capture_replace"]) {
     const capture = this.validateCapture(input.capture);
     const body = input.body === undefined ? null : this.validateBody(input.body);
-    return this.annotationMutation(
+    return this.ctx.annotationMutation(
       input.environmentId,
       input.operationId,
       "capture-replace",
@@ -1011,7 +1008,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
     ) {
       throw new WebAnnotationServiceError("note is invalid");
     }
-    return this.annotationMutation(
+    return this.ctx.annotationMutation(
       input.environmentId,
       input.operationId,
       "resolve",
@@ -1081,7 +1078,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
 
   async reopen(input: WebAnnotationCommandArgs["web_annotation_reopen"]) {
     const body = input.body === undefined ? null : this.validateBody(input.body);
-    return this.annotationMutation(
+    return this.ctx.annotationMutation(
       input.environmentId,
       input.operationId,
       "reopen",
@@ -1113,7 +1110,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
   }
 
   async delete(input: WebAnnotationCommandArgs["web_annotation_delete"]) {
-    return this.annotationMutation(
+    return this.ctx.annotationMutation(
       input.environmentId,
       input.operationId,
       "delete",
@@ -1156,10 +1153,10 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
    * still active for the thread, so no in-flight review is stranded.
    */
   async archive(input: WebAnnotationArchiveInput): Promise<WebAnnotationArchiveResult> {
-    this.assertOperationId(input.operationId);
+    this.ctx.assertOperationId(input.operationId);
     const body = input.body === undefined ? null : this.validateBody(input.body);
     const title = input.title === undefined ? undefined : this.requireTitle(input.title);
-    const store = await this.env(input.environmentId);
+    const store = await this.ctx.env(input.environmentId);
     const kind = "archive";
     const bodyHash = hashBody(kind, {
       annotationId: input.annotationId,
@@ -1171,7 +1168,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
     // Read the capture being carried outside the write queue; revalidated below.
     const carried = await this.readCapture(store, store.manifest, source.currentCaptureId);
     const committed = await store.mutate((tx) => {
-      const existing = this.lookupReceipt(tx.manifest, input.operationId, kind, bodyHash);
+      const existing = this.ctx.lookupReceipt(tx.manifest, input.operationId, kind, bodyHash);
       if (existing?.receipt && existing.value) {
         return {
           continuation: existing.receipt,
@@ -1276,7 +1273,7 @@ export abstract class WebAnnotationServiceCore extends WebAnnotationServiceBase 
         captureRevision: continuation.captureRevision,
         environmentRevision: tx.manifest.revision + 1,
       };
-      this.pushReceipt(tx, {
+      this.ctx.pushReceipt(tx, {
         operationId: input.operationId,
         kind,
         bodyHash,

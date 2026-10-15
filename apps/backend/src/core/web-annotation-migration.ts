@@ -23,6 +23,12 @@
  * and dirty in-memory drafts are reconciled through the same import
  * (`reconcileDraft`). Nothing here manufactures completion or resolution,
  * and logs never contain draft text or paths.
+ *
+ * `WebAnnotationMigration` is a collaborator of `WebAnnotationService`, not a
+ * layer of it. It runs on demand per environment (`web_annotation_migrate`,
+ * one page per call, with `migrationStatus` polled by the client and gated by
+ * the `migration` capability), and `mapMigratedComposeDraft` runs on every
+ * compose-draft save, so it cannot be a one-shot startup step.
  */
 import { mkdir, readFile, realpath, rm, stat } from "node:fs/promises";
 import { isAbsolute, join, resolve, sep } from "node:path";
@@ -52,10 +58,11 @@ import {
   WebAnnotationServiceError,
   errorOutcome,
   stableStringify,
+  type WebAnnotationContext,
   type WebAnnotationHostComposeDraft,
   type WebAnnotationHostEnvironment,
-} from "./web-annotation-service-base.js";
-import { WebAnnotationServiceRequests } from "./web-annotation-service-requests.js";
+} from "./web-annotation-context.js";
+import type { WebAnnotationThreads } from "./web-annotation-service-threads.js";
 import {
   writeDurable,
   type ManifestMigrationOwnership,
@@ -81,11 +88,16 @@ const MAX_SCREENSHOT_RECORDS = 50;
 
 type NativeOwnership = Map<string, unknown> | null;
 
-export abstract class WebAnnotationServiceMigration extends WebAnnotationServiceRequests {
+export class WebAnnotationMigration {
   private readonly migrations = new Map<string, Promise<WebAnnotationMigrationStatus>>();
 
+  constructor(
+    private readonly ctx: WebAnnotationContext,
+    private readonly threads: WebAnnotationThreads,
+  ) {}
+
   private migrationHost() {
-    const host = this.options.storage;
+    const host = this.ctx.options.storage;
     if (!host?.listComposeDrafts || !host.getComposeDraft || !host.saveComposeDraft) {
       throw new WebAnnotationServiceError("Web annotation migration is unavailable");
     }
@@ -98,8 +110,8 @@ export abstract class WebAnnotationServiceMigration extends WebAnnotationService
   }
 
   async migrationStatus(environmentId: string): Promise<WebAnnotationMigrationStatus> {
-    const store = await this.env(environmentId);
-    const host = this.options.storage;
+    const store = await this.ctx.env(environmentId);
+    const host = this.ctx.options.storage;
     const drafts = host?.listComposeDrafts
       ? await host.listComposeDrafts("environment", environmentId).catch(() => null)
       : null;
@@ -158,7 +170,7 @@ export abstract class WebAnnotationServiceMigration extends WebAnnotationService
 
   /** Session key → pending dispatch, or null when sessions cannot be read. */
   private async nativeOwnership(
-    host: ReturnType<WebAnnotationServiceMigration["migrationHost"]>,
+    host: ReturnType<WebAnnotationMigration["migrationHost"]>,
     environmentId: string,
   ): Promise<NativeOwnership> {
     try {
@@ -194,8 +206,8 @@ export abstract class WebAnnotationServiceMigration extends WebAnnotationService
 
   private async runMigration(environmentId: string): Promise<WebAnnotationMigrationStatus> {
     const host = this.migrationHost();
-    const store = await this.env(environmentId);
-    const environment = await this.hostEnvironment(environmentId);
+    const store = await this.ctx.env(environmentId);
+    const environment = await this.ctx.hostEnvironment(environmentId);
     if (!environment) throw new WebAnnotationServiceError("Environment not found");
     const drafts = (await host.listComposeDrafts("environment", environmentId))
       .filter((draft) => draft.ownerType === "environment" && draft.ownerId === environmentId)
@@ -218,7 +230,7 @@ export abstract class WebAnnotationServiceMigration extends WebAnnotationService
       } catch (error) {
         const reason = errorOutcome(error);
         console.warn(`[web-annotations] Migration of one draft failed (code=${reason})`);
-        this.metrics.recordMigration("failed");
+        this.ctx.metrics.recordMigration("failed");
         await store
           .mutate((tx) => {
             tx.markEssential();
@@ -285,10 +297,10 @@ export abstract class WebAnnotationServiceMigration extends WebAnnotationService
             () => null,
           );
           if (png) {
-            const stored = await this.storeAssetBytes(store, png).catch(() => null);
+            const stored = await this.ctx.storeAssetBytes(store, png).catch(() => null);
             if (stored) {
               assetId = stored.asset.id;
-              this.holdAssets([assetId]);
+              this.ctx.holdAssets([assetId]);
               held.push(assetId);
             }
           }
@@ -313,10 +325,10 @@ export abstract class WebAnnotationServiceMigration extends WebAnnotationService
         tx.markDirty();
       });
       const imported = legacy.filter((item) => !before.has(item.id)).length;
-      if (imported > 0) this.metrics.recordMigrationItems(imported);
+      if (imported > 0) this.ctx.metrics.recordMigrationItems(imported);
       return imported;
     } finally {
-      this.releaseAssets(held);
+      this.ctx.releaseAssets(held);
     }
   }
 
@@ -326,7 +338,7 @@ export abstract class WebAnnotationServiceMigration extends WebAnnotationService
     draft: WebAnnotationHostComposeDraft,
     legacy: LegacyBrowserAnnotation[],
     ownership: ManifestMigrationOwnership,
-    host: ReturnType<WebAnnotationServiceMigration["migrationHost"]>,
+    host: ReturnType<WebAnnotationMigration["migrationHost"]>,
   ): Promise<void> {
     const environmentId = store.environmentId;
     const deferred = ownership.pendingDispatch !== false;
@@ -345,7 +357,7 @@ export abstract class WebAnnotationServiceMigration extends WebAnnotationService
       };
       tx.manifest.migration.completedAt = null;
     });
-    this.metrics.recordMigration(deferred ? "deferred" : "imported");
+    this.ctx.metrics.recordMigration(deferred ? "deferred" : "imported");
     if (deferred) return;
 
     // Private, environment-scoped backup of the exact source before cleanup.
@@ -356,7 +368,7 @@ export abstract class WebAnnotationServiceMigration extends WebAnnotationService
 
     const current = await host.getComposeDraft(draft.draftKey);
     if (!current || current.revision !== draft.revision || current.ownerId !== environmentId) {
-      this.metrics.recordMigration("conflict");
+      this.ctx.metrics.recordMigration("conflict");
       return; // Changed concurrently: leave it; the next pass retries.
     }
     const mapping = new Map<string, string>();
@@ -374,7 +386,7 @@ export abstract class WebAnnotationServiceMigration extends WebAnnotationService
         current.revision,
       );
     } catch {
-      this.metrics.recordMigration("conflict");
+      this.ctx.metrics.recordMigration("conflict");
       return; // Revision conflict or write failure: the import receipt stays.
     }
     await store.mutate((tx) => {
@@ -390,7 +402,7 @@ export abstract class WebAnnotationServiceMigration extends WebAnnotationService
       };
       tx.markDirty();
     });
-    this.metrics.recordMigration("cleaned");
+    this.ctx.metrics.recordMigration("cleaned");
   }
 
   /** Commit one legacy note: new thread, or new variant in an existing one. */
@@ -404,7 +416,7 @@ export abstract class WebAnnotationServiceMigration extends WebAnnotationService
     const captureVariant = sha(item.text);
     const comment = item.comment.replace(/\r\n?/g, "\n").trim();
     const writeLegacyCapture = (annotationId: string, revision: number) =>
-      this.writeCapture(tx, {
+      this.threads.writeCapture(tx, {
         annotationId,
         revision,
         producer: "legacy-import",
@@ -437,7 +449,7 @@ export abstract class WebAnnotationServiceMigration extends WebAnnotationService
       });
     const imported = tx.manifest.migration.imports[item.id];
     if (!imported) {
-      this.assertAnnotationCapacity(tx.manifest);
+      this.threads.assertAnnotationCapacity(tx.manifest);
       const annotationId = legacyAnnotationId(environmentId, item.id);
       const capture = writeLegacyCapture(annotationId, 1);
       const annotation: WebAnnotation = {
@@ -470,7 +482,7 @@ export abstract class WebAnnotationServiceMigration extends WebAnnotationService
         imported: true,
       };
       tx.manifest.annotations[annotationId] = annotation;
-      this.appendEntry(tx, annotation, {
+      this.threads.appendEntry(tx, annotation, {
         provenance: "system",
         kind: "lifecycle",
         body: null,
@@ -479,7 +491,7 @@ export abstract class WebAnnotationServiceMigration extends WebAnnotationService
         force: true,
       });
       if (comment) {
-        this.appendEntry(tx, annotation, {
+        this.threads.appendEntry(tx, annotation, {
           provenance: "legacy-page-comment",
           kind: "legacy-comment",
           body: comment,
@@ -513,11 +525,11 @@ export abstract class WebAnnotationServiceMigration extends WebAnnotationService
       // Divergent evidence: retain it as a historical capture in the thread.
       const capture = writeLegacyCapture(
         annotation.id,
-        this.nextCaptureRevision(tx.manifest, annotation.id),
+        this.threads.nextCaptureRevision(tx.manifest, annotation.id),
       );
       captureId = capture.id;
       imported.captureVariants.push(captureVariant);
-      this.appendEntry(tx, annotation, {
+      this.threads.appendEntry(tx, annotation, {
         provenance: "system",
         kind: "lifecycle",
         body: null,
@@ -525,12 +537,12 @@ export abstract class WebAnnotationServiceMigration extends WebAnnotationService
         captureId,
         force: true,
       });
-      this.bumpMetadata(tx, annotation);
+      this.threads.bumpMetadata(tx, annotation);
     }
     if (!imported.variants.includes(variant)) {
       imported.variants.push(variant);
       if (comment) {
-        this.appendEntry(tx, annotation, {
+        this.threads.appendEntry(tx, annotation, {
           provenance: "legacy-page-comment",
           kind: "legacy-comment",
           body: comment,
@@ -539,7 +551,7 @@ export abstract class WebAnnotationServiceMigration extends WebAnnotationService
           force: true,
         });
       }
-      this.bumpMetadata(tx, annotation);
+      this.threads.bumpMetadata(tx, annotation);
     }
   }
 
@@ -558,7 +570,7 @@ export abstract class WebAnnotationServiceMigration extends WebAnnotationService
     const unchanged = { value, references: [] as WebAnnotationMigratedReference[] };
     if (ownerType !== "environment" || !hasUnmigratedBrowserAnnotations(value)) return unchanged;
     try {
-      const store = await this.env(ownerId);
+      const store = await this.ctx.env(ownerId);
       if (store.status === "unavailable") return unchanged;
       const manifest = store.manifest;
       const mapping = new Map<string, string>();
@@ -569,7 +581,7 @@ export abstract class WebAnnotationServiceMigration extends WebAnnotationService
         }
       }
       if (mapping.size === 0) return unchanged;
-      this.metrics.increment("migration_mapped_on_save", mapping.size);
+      this.ctx.metrics.increment("migration_mapped_on_save", mapping.size);
       return {
         value: replaceLegacyBrowserAnnotations(value, mapping),
         references: Array.from(mapping, ([legacyId, annotationId]) => ({ legacyId, annotationId })),
@@ -590,10 +602,10 @@ export abstract class WebAnnotationServiceMigration extends WebAnnotationService
     environmentId: string,
     value: unknown,
   ): Promise<WebAnnotationDraftReconciliation> {
-    const store = await this.env(environmentId);
+    const store = await this.ctx.env(environmentId);
     const legacy = extractLegacyBrowserAnnotations(value);
     if (legacy.length === 0) return { value, references: [], imported: 0, failed: [] };
-    const environment = await this.hostEnvironment(environmentId);
+    const environment = await this.ctx.hostEnvironment(environmentId);
     if (!environment) throw new WebAnnotationServiceError("Environment not found");
     const batch = legacy.slice(0, RECONCILE_ITEMS);
     const failed = new Set(legacy.slice(RECONCILE_ITEMS).map((item) => item.id));
@@ -624,7 +636,7 @@ export abstract class WebAnnotationServiceMigration extends WebAnnotationService
    * local worktree (symlinks resolved and re-checked for containment) or the
    * container workspace via the existing bounded container reader.
    */
-  protected async readLegacyScreenshot(
+  async readLegacyScreenshot(
     environment: WebAnnotationHostEnvironment,
     path: string,
   ): Promise<ValidatedPng | null> {
@@ -641,10 +653,10 @@ export abstract class WebAnnotationServiceMigration extends WebAnnotationService
       if (!info.isFile() || info.size > WEB_ANNOTATION_LIMITS.imageBytes) return null;
       return validatePngBytes(await readFile(real));
     }
-    if (!environment.containerId || !this.options.invoke) return null;
+    if (!environment.containerId || !this.ctx.options.invoke) return null;
     const relative = path.startsWith("/workspace/") ? path.slice("/workspace/".length) : path;
     if (!isSafeRelativePath(relative)) return null;
-    const data = await this.options.invoke("read_container_file_base64", {
+    const data = await this.ctx.options.invoke("read_container_file_base64", {
       containerId: environment.containerId,
       filePath: relative,
     });

@@ -1,7 +1,8 @@
 # 04 — Gateway, Codex runtime, build pipeline and web annotation chains, plus a regression guard
 
-Status: Proposed (2026-10-14). Priority: last, except the guard, which should
-land first.
+Status: In progress (2026-10-15). Step 0 (the guard) and the web annotation
+chain are done; the build pipeline, gateway and Codex runtime chains remain,
+pinned in `tests/unit/inheritance-chains.test.ts`. Priority: last.
 
 ## Problem
 
@@ -99,9 +100,21 @@ Read `bridges/codex-bridge/AGENTS.md` first.
 
 ### Web annotation
 
+Done (2026-10-15). `WebAnnotationService` is a facade over a
+`WebAnnotationContext` (`web-annotation-context.ts`) and five collaborators:
+`WebAnnotationStoreOperations` (`-service-store.ts`), `WebAnnotationThreads`
+(`-service-threads.ts`, formerly `-core`), `WebAnnotationResults`,
+`WebAnnotationRequests` and `WebAnnotationMigration`. Each takes the context
+and the collaborators it calls. All calls between layers already ran one way
+(base ← core ← results ← requests, and migration → core), so no callbacks were
+needed.
+
 - Only one abstract declaration, so this is the cheapest chain.
-- `web-annotation-migration.ts` is a one-time data migration and should become
-  a standalone function called at startup, not a layer.
+- `web-annotation-migration.ts` is not a one-time startup migration, as this
+  plan assumed. It runs on demand per environment (`web_annotation_migrate`,
+  paged, polled through `migrationStatus`), and `mapMigratedComposeDraft` runs
+  on every compose-draft save. It became a collaborator instead of a startup
+  function, so behaviour did not change.
 
 ## Order
 

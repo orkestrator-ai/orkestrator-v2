@@ -34,11 +34,12 @@ const PLAN_04 = "docs/2026-10-14/04-remaining-inheritance-chains-and-guard.md";
  * new; a chain that loses one fails as stale, so whoever shortens it updates the
  * entry in the same change.
  *
- * Coordination: plans 01 (storage) and 02 (native agent service) are being done
- * in parallel with plan 04. Each removes its own entry below; whichever of them
- * merges second rebases onto the other and resolves the conflict in this list.
- * Plan 03 (claude-bridge `sendPrompt`) splits one function, not a class chain,
- * so it has no entry here.
+ * Coordination: plans 01 (storage), 02 (native agent service) and 04 are being
+ * done in parallel, and each removes its own entry below. Whichever merges
+ * second rebases onto the first and updates this list (drop the merged entry,
+ * keep the rest) rather than restoring it. Plan 03 (claude-bridge
+ * `sendPrompt`) splits one function, not a class chain, so it has no entry.
+ * The web annotation chain was removed by plan 04 step 2.
  */
 const PINNED_CHAINS: ReadonlyArray<{ classes: readonly string[]; plan: string; reason: string }> = [
   {
@@ -112,19 +113,6 @@ const PINNED_CHAINS: ReadonlyArray<{ classes: readonly string[]; plan: string; r
     plan: PLAN_04,
     reason:
       "Codex AppServerRuntime split into lifecycle, sessions, prompt and tail layers; plan 04 moves them onto a CodexRuntimeContext.",
-  },
-  {
-    classes: [
-      "WebAnnotationServiceBase",
-      "WebAnnotationServiceCore",
-      "WebAnnotationServiceResults",
-      "WebAnnotationServiceRequests",
-      "WebAnnotationServiceMigration",
-      "WebAnnotationService",
-    ],
-    plan: PLAN_04,
-    reason:
-      "WebAnnotationService split into core, results, requests and migration layers; plan 04 moves them onto a WebAnnotationContext.",
   },
 ];
 

@@ -125,6 +125,9 @@ const Toaster = ({ ...props }: ToasterProps) => {
 
     const dismissClickedToast = (event: MouseEvent) => {
       if (!(event.target instanceof Element)) return;
+      // Let interactive content own its dismissal. In particular, an async
+      // action may preventDefault until it knows whether recovery succeeded.
+      if (event.target.closest("button, a, input, select, textarea, [role=button]")) return;
 
       const toastElement = event.target.closest<HTMLElement>(TOAST_SELECTOR);
       if (!toastElement || !toaster.contains(toastElement)) return;
@@ -141,8 +144,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
       dismissToastElement(event.target);
     };
 
-    // Capture the click so custom toast content cannot accidentally prevent the
-    // tap-to-dismiss behavior. Nested actions still receive and handle the click.
+    // Capture body clicks for tap-to-dismiss; nested controls own their clicks.
     synchronizeToastIds();
     const observer = new MutationObserver(synchronizeToastIds);
     observer.observe(toaster, {

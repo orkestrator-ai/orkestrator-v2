@@ -13,7 +13,8 @@ import {
   TERMINAL_CLOSED_SESSION_MEMORY,
   TERMINAL_INPUT_CLOSED_MESSAGE,
   TERMINAL_INPUT_NOT_DELIVERED_MESSAGE,
-  type TerminalInputRecovery,
+  LOCAL_TERMINAL_INPUT_RESUME_COMMAND,
+  TERMINAL_INPUT_RESUME_COMMAND,
 } from "./terminal-input-sequencer.js";
 
 export interface TerminalContractRequest {
@@ -35,7 +36,6 @@ export interface TerminalContractClient {
 }
 
 export interface TerminalContractAdapter {
-  recovery: TerminalInputRecovery;
   /** Uses default limits unless an option overrides one. */
   create(
     backend: TerminalContractBackend,
@@ -127,6 +127,31 @@ const hang = (signal: AbortSignal | null) =>
   });
 
 const isWrite = (request: TerminalContractRequest) => request.command === "terminal_write";
+
+/** Resolves with the raw result, or the rejection message. */
+const resume = (
+  client: TerminalContractClient,
+  sessionId: string,
+  command = TERMINAL_INPUT_RESUME_COMMAND,
+) =>
+  client.invoke(command, { sessionId }).then(
+    (value) => value,
+    (error: unknown) => `rejected: ${error instanceof Error ? error.message : String(error)}`,
+  );
+
+/** A backend whose writes fail until `heal` is called. */
+function failingWrites() {
+  let failWrites = true;
+  const recorded = recorder(async (request) =>
+    request.command.endsWith("_write") ? (failWrites ? unavailable : delivered) : ok,
+  );
+  return {
+    ...recorded,
+    heal: () => {
+      failWrites = false;
+    },
+  };
+}
 
 export const terminalInputContractScenarios: readonly TerminalContractScenario[] = [
   {
@@ -402,25 +427,21 @@ export const terminalInputContractScenarios: readonly TerminalContractScenario[]
     },
   },
   {
-    name: "recovery: whether a successful resize re-arms a failed terminal",
+    name: "a successful resize does not re-arm a failed terminal",
     async run(adapter) {
-      let failWrites = true;
-      const { backend } = recorder(async (request) =>
-        isWrite(request) && failWrites ? unavailable : isWrite(request) ? delivered : ok,
-      );
+      const { backend, heal } = failingWrites();
       const client = adapter.create(backend);
       await outcome(write(client, "t", "a"));
-      failWrites = false;
+      heal();
       await client.invoke("terminal_resize", { sessionId: "t", cols: 100, rows: 30 });
       return {
         actual: await outcome(write(client, "t", "b")),
-        expected:
-          adapter.recovery === "rearm-on-lifecycle" ? "delivered" : "rejected: gateway unavailable",
+        expected: "rejected: gateway unavailable",
       };
     },
   },
   {
-    name: "recovery: whether a close that never landed keeps the terminal writable",
+    name: "a close that never landed keeps the terminal closed",
     async run(adapter) {
       const { backend } = recorder(async (request) =>
         request.command === "detach_terminal" ? unavailable : delivered,
@@ -431,16 +452,13 @@ export const terminalInputContractScenarios: readonly TerminalContractScenario[]
         actual: { close, after: await outcome(write(client, "t", "ls\r")) },
         expected: {
           close: "rejected: gateway unavailable",
-          after:
-            adapter.recovery === "rearm-on-lifecycle"
-              ? "delivered"
-              : `rejected: ${TERMINAL_INPUT_CLOSED_MESSAGE}`,
+          after: `rejected: ${TERMINAL_INPUT_CLOSED_MESSAGE}`,
         },
       };
     },
   },
   {
-    name: "recovery: whether a failed start leaves the terminal writable",
+    name: "a failed start fences input with the start error",
     async run(adapter) {
       let failStart = true;
       const { backend } = recorder(async (request) => {
@@ -454,10 +472,133 @@ export const terminalInputContractScenarios: readonly TerminalContractScenario[]
       const start = await outcome(client.invoke("start_terminal_session", { sessionId: "t" }));
       return {
         actual: { start, after: await outcome(write(client, "t", "ok\r")) },
+        expected: { start: "rejected: container gone", after: "rejected: container gone" },
+      };
+    },
+  },
+  {
+    name: "resume after a failed write re-arms, and the next write is delivered",
+    async run(adapter) {
+      const { log, backend, heal } = failingWrites();
+      const client = adapter.create(backend);
+      const failed = await outcome(write(client, "t", "a"));
+      heal();
+      const resumed = await resume(client, "t");
+      return {
+        actual: { failed, resumed, after: await outcome(write(client, "t", "b")), wire: wire(log) },
         expected: {
-          start: "rejected: container gone",
-          after:
-            adapter.recovery === "rearm-on-lifecycle" ? "delivered" : "rejected: container gone",
+          failed: "rejected: gateway unavailable",
+          resumed: { resumed: true },
+          after: "delivered",
+          // The rejected write was sent; resume lets the next one follow it.
+          wire: ["terminal_write:t=ab"],
+        },
+      };
+    },
+  },
+  {
+    name: "resume does not reopen a closed terminal",
+    async run(adapter) {
+      const { log, backend } = recorder(async (request) => (isWrite(request) ? delivered : ok));
+      const client = adapter.create(backend);
+      await client.invoke("detach_terminal", { sessionId: "t" });
+      const resumed = await resume(client, "t");
+      return {
+        actual: { resumed, after: await outcome(write(client, "t", "x")), wire: wire(log) },
+        expected: {
+          resumed: { resumed: false },
+          after: `rejected: ${TERMINAL_INPUT_CLOSED_MESSAGE}`,
+          wire: ["detach_terminal:t"],
+        },
+      };
+    },
+  },
+  {
+    name: "resume on a healthy terminal reports nothing to resume and sends nothing",
+    async run(adapter) {
+      const { log, backend } = recorder(async () => delivered);
+      const client = adapter.create(backend);
+      const resumed = await resume(client, "t");
+      return {
+        actual: { resumed, after: await outcome(write(client, "t", "x")), wire: wire(log) },
+        expected: { resumed: { resumed: false }, after: "delivered", wire: ["terminal_write:t=x"] },
+      };
+    },
+  },
+  {
+    name: "resume issued after a close waits for that close and leaves the terminal closed",
+    async run(adapter) {
+      const held = deferred<TerminalContractReply>();
+      const { log, backend } = recorder(async (request) =>
+        request.command === "detach_terminal" ? held.promise : delivered,
+      );
+      const client = adapter.create(backend);
+      const close = outcome(client.invoke("detach_terminal", { sessionId: "t" }));
+      let resumeSettled = false;
+      const resumed = resume(client, "t").finally(() => {
+        resumeSettled = true;
+      });
+      await settle();
+      const settledBeforeClose = resumeSettled;
+      held.resolve(ok);
+      return {
+        actual: {
+          settledBeforeClose,
+          close: await close,
+          resumed: await resumed,
+          after: await outcome(write(client, "t", "x")),
+          wire: wire(log),
+        },
+        expected: {
+          settledBeforeClose: false,
+          close: "resolved",
+          resumed: { resumed: false },
+          after: `rejected: ${TERMINAL_INPUT_CLOSED_MESSAGE}`,
+          wire: ["detach_terminal:t"],
+        },
+      };
+    },
+  },
+  {
+    name: "resume never reaches the backend",
+    async run(adapter) {
+      const { log, backend } = recorder(async () => ok);
+      const client = adapter.create(backend);
+      const results = [
+        await resume(client, "t"),
+        await resume(client, "t", LOCAL_TERMINAL_INPUT_RESUME_COMMAND),
+        // Malformed, but still refused locally rather than sent on.
+        String(await resume(client, 1 as unknown as string)).startsWith("rejected: "),
+      ];
+      return {
+        actual: { results, wire: wire(log) },
+        expected: { results: [{ resumed: false }, { resumed: false }, true], wire: [] },
+      };
+    },
+  },
+  {
+    name: "resume re-arms only its own command family",
+    async run(adapter) {
+      const { log, backend, heal } = failingWrites();
+      const client = adapter.create(backend);
+      await outcome(write(client, "t", "a"));
+      await outcome(client.invoke("local_terminal_write", { sessionId: "t", data: "b" }));
+      heal();
+      const resumed = await resume(client, "t", LOCAL_TERMINAL_INPUT_RESUME_COMMAND);
+      return {
+        actual: {
+          resumed,
+          local: await outcome(
+            client.invoke("local_terminal_write", { sessionId: "t", data: "c" }),
+          ),
+          remote: await outcome(write(client, "t", "d")),
+          wire: wire(log),
+        },
+        expected: {
+          resumed: { resumed: true },
+          local: "delivered",
+          remote: "rejected: gateway unavailable",
+          wire: ["terminal_write:t=a", "local_terminal_write:t=bc"],
         },
       };
     },

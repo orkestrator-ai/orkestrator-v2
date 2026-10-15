@@ -970,11 +970,10 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   };
 
   /**
-   * The shared terminal input ordering contract. The browser keeps the
-   * re-arming recovery rule; see `TerminalInputRecovery` before changing it.
+   * The shared terminal input ordering contract. It also answers the
+   * client-side resume commands, so they never reach the gateway.
    */
   const terminalInput = new TerminalInputSequencer({
-    recovery: "rearm-on-lifecycle",
     batchDelayMs: options.terminalInputBatchDelayMs,
     maxBatchBytes: options.terminalInputMaxBatchBytes,
     maxQueuedBytes: options.terminalInputMaxQueuedBytes,

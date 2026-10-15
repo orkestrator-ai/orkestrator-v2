@@ -55,10 +55,12 @@ which registers the refetch alongside the event so it cannot be forgotten.
 
 Terminal input has the matching shared core, `TerminalInputSequencer`
 (`packages/protocol/src/terminal-input-sequencer.ts`), with its contract in
-`terminal-input-contract-fixtures.ts`. Its one deliberate divergence is the
-recovery rule after an ambiguous loss: the browser re-arms input on a
-successful resize, the desktop client only on a successful start
-(`TerminalInputRecovery`).
+`terminal-input-contract-fixtures.ts`. Both browser and desktop fence input
+after an ambiguous send or lifecycle failure. A successful start re-arms it;
+resize and incidental transport recovery do not. The explicit client-side
+`terminal_input_resume` / `local_terminal_input_resume` commands clear a failure
+fence without restarting the shell, after the user checks whether partial input
+landed. Resume never reopens a closed terminal or replays discarded input.
 
 Terminal output (generation/revision snapshot protocol with explicit desync)
 and native-agent transcript windows keep their own existing contracts and are

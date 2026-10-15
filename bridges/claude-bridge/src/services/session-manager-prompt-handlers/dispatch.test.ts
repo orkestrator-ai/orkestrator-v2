@@ -27,6 +27,7 @@ describe("prompt message dispatch", () => {
 
   test.each([
     ["invented_later", ["invented_later"]],
+    ["constructor", ["constructor"]],
     [undefined, ["(untyped)"]],
     ["command_lifecycle", undefined],
   ])("an unclaimed %p frame is recorded as %p", (type, unknownKinds) => {

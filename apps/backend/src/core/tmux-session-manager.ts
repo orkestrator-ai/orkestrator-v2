@@ -23,8 +23,7 @@ import {
   agentToolConnectionTarget,
   delay,
   existsSync,
-  isMissingTmuxSessionError,
-  isTmuxNoServerMessage,
+  confirmTmuxSessionGone,
   parseTmuxAgentObservation,
   parseTmuxSelectionPrompt,
   parseTmuxSessionNames,
@@ -1252,7 +1251,9 @@ export class TmuxSession {
       .exec([this.tmuxCommand, "kill-session", "-t", this.tmuxSession])
       .catch(() => null);
     const stopped = Boolean(
-      result && (result.status === 0 || isMissingTmuxSessionError(result.stderr)),
+      result &&
+      (result.status === 0 ||
+        (await confirmTmuxSessionGone(result.stderr, (args) => this.backend.exec(args)))),
     );
     if (!stopped) return false;
     terminalAccountHomes.delete(`tmux:${this.environmentId}:${this.tabId}`);
@@ -1408,6 +1409,13 @@ export class TmuxSessionManager {
       if (session.environmentId === environmentId) count += 1;
     }
     return count;
+  }
+
+  /** Snapshot for teardown: failed stops must remain registered for retry. */
+  environmentSessions(environmentId: string): TmuxSession[] {
+    return Array.from(this.sessions.values()).filter(
+      (session) => session.environmentId === environmentId,
+    );
   }
 
   findByTmuxName(environmentId: string, name: string): TmuxSession | undefined {
@@ -1588,7 +1596,10 @@ export async function killEnvironmentTmuxSessions(
     .catch(() => null);
   if (!listed) return { killed: [], complete: false };
   if (listed.status !== 0) {
-    return { killed: [], complete: isTmuxNoServerMessage(listed.stderr) };
+    return {
+      killed: [],
+      complete: await confirmTmuxSessionGone(listed.stderr, (args) => backend.exec(args)),
+    };
   }
   const targets = selectReapableTmuxSessions({
     names: parseTmuxSessionNames(listed.stdout),
@@ -1600,12 +1611,10 @@ export async function killEnvironmentTmuxSessions(
   for (const name of targets) {
     const result = await backend
       .exec(["tmux", "kill-session", "-t", name])
-      .catch((error) =>
-        isMissingTmuxSessionError(error) ? { status: 1, stdout: "", stderr: String(error) } : null,
-      );
+      .catch((error: unknown) => ({ status: 1, stdout: "", stderr: String(error) }));
     if (result?.status === 0) {
       killed.push(name);
-    } else if (result && isMissingTmuxSessionError(result.stderr)) {
+    } else if (await confirmTmuxSessionGone(result.stderr, (args) => backend.exec(args))) {
       // The one-time session listing raced a normal exit. The desired state is
       // already reached, so retaining the runtime root would create a
       // permanent retry loop.

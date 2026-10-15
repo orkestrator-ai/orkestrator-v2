@@ -547,7 +547,8 @@ describe("reapOrphanedClaudeTmuxRuntimes", () => {
   });
 
   test("host session listing treats only tmux's no-server diagnostics as empty", async () => {
-    const failingWith = (error: Error) => async () => {
+    const failingWith = (error: Error) => async (command: string) => {
+      if (command === "ps") return { stdout: "1 /sbin/init\n", stderr: "" };
       throw error;
     };
     for (const message of [

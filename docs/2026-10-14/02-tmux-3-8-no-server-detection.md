@@ -1,10 +1,11 @@
 # tmux 3.8 "no server" is treated as failed cleanup
 
-Status: Fixed — 2026-10-15. All three sites now use `isTmuxNoServerMessage`
-in `tmux-shared.ts`. Since #967, `environment-move.test.ts` stubs
-`list-sessions`, which hid this failure; the stub now returns the
-absent-socket message. Run against real host tmux 3.8, the suite fails 23 of
-35 cases without the fix and passes all of them with it.
+Status: Fixed — 2026-10-15. Cleanup, session stop, reconciliation and startup
+reaping use `confirmTmuxSessionGone` in `tmux-shared.ts`. A missing socket
+alone is not evidence that sessions exited. On connection failures, a successful
+process census must also show no tmux processes before attribution is removed.
+Real private-socket lifecycle tests cover a never-started server and a live
+server with its socket unlinked, including move refusal and retry after exit.
 
 **Correction to the root cause below.** tmux did not change its wording.
 Checked on tmux 3.8 with a private socket, and in `client.c` (unchanged
@@ -22,13 +23,15 @@ affects any tmux version until tmux is first started after a reboot, not
 only 3.8. (`Connection refused` is never printed in the `error connecting
 to` form; it is matched anyway.)
 
-The fix reverses #967's choice to fail closed on the absent-socket message,
-because that choice refused every move after a reboot. The remaining risk
-is the third row. Orkestrator cannot reach or kill those sessions anyway,
-but a move then goes ahead while they still run in the old worktree, and
-their runtime roots are removed, so a later reaper cannot attribute them if
-the socket is restored (`pkill -USR1 tmux`). A process check before trusting
-the message would close that gap if it ever matters.
+The initial diagnostic-only fix allowed moves while an unreachable live server
+still ran in the old worktree and deleted the roots needed for later cleanup.
+The process check closes that gap. Without a saved server identity, any tmux
+process in the host/container process namespace makes absence ambiguous,
+including an unrelated server or transient client. Cleanup then remains
+incomplete, moves fail, and runtime roots and failed managed sessions remain
+available for retry. No process is signalled by this check. A never-started
+server or reboot with no tmux processes still permits cleanup. An unreadable,
+failed or malformed process census fails closed.
 
 **Severity: high.** On a host with tmux 3.8 and no tmux server running,
 moving a local environment fails, and deleting one leaves Claude Tmux runtime
@@ -83,17 +86,18 @@ Three matchers recognise only the old wording:
 
 ## Fix
 
-1. Put one shared predicate in `tmux-shared.ts`, for example
-   `isTmuxNoServerMessage(text)`. It should match the old wordings and the 3.8
-   form: `error connecting to <socket> (No such file or directory)`, and
-   probably `(Connection refused)` for a stale socket. Use it from all three
-   sites.
-2. Keep the existing rule that a timeout, missing executable or any other
-   unexpected failure is **not** "no server". Only ENOENT or ECONNREFUSED on
-   the socket counts as no server.
-3. Tests: add the tmux 3.8 stderr string to the unit tests for each site.
-   `environment-move.test.ts` should then pass on tmux 3.8 hosts. Today it can
-   only pass where tmux prints the old wording or a server is running.
+1. `isTmuxNoServerMessage` classifies connection diagnostics only.
+   `isMissingTmuxSessionError` accepts explicit missing-session replies;
+   `confirmTmuxSessionGone` additionally checks process absence for unavailable
+   servers. All destructive connection-error paths use the asynchronous check.
+2. Timeouts, missing executables, permission errors and failed process probes
+   remain incomplete. Process probes read only PID and executable names, never
+   user command arguments.
+3. Unit tests cover diagnostics and census failures. Lifecycle tests use real
+   tmux servers on private sockets and scope their injected process census to
+   the fixture's PID so parallel tests and developer servers cannot interfere.
+   They check stop, cleanup, move, reconciliation and startup root retention,
+   followed by successful cleanup after proven exit.
 
 The flake index has no entry for this, correctly: it fails deterministically.
 The only `environment-move.test.ts` entry, 0201, is an unrelated, resolved

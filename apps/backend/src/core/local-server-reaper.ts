@@ -34,7 +34,7 @@ import { runCommand } from "./shell.js";
 import { terminateProcessTree } from "./process-tree.js";
 import {
   isMissingTmuxSessionError,
-  isTmuxNoServerMessage,
+  confirmTmuxSessionGone,
   parseTmuxSessionNames,
   RUNTIME_ROOT_PREFIX,
   selectReapableTmuxSessions,
@@ -110,12 +110,17 @@ export async function readHostTmuxSessions(run: typeof runCommand = runCommand):
     });
     return parseTmuxSessionNames(stdout);
   } catch (error) {
-    if (isTmuxNoServerMessage(error)) return [];
+    if (await confirmTmuxSessionGone(error, (args) => runHostTmuxProbe(args, run))) return [];
     // A timeout, missing executable, or other unexpected failure says nothing
     // about whether a detached tmux server still owns sessions. Preserve the
     // runtime roots so a later startup can retry with the same attribution.
     throw error;
   }
+}
+
+async function runHostTmuxProbe(args: string[], run: typeof runCommand = runCommand) {
+  const result = await run(args[0]!, args.slice(1), { timeoutMs: 5_000 });
+  return { status: 0, stdout: result.stdout, stderr: result.stderr };
 }
 
 /**
@@ -138,7 +143,7 @@ export async function reapOrphanedClaudeTmuxRuntimes(
       try {
         await runCommand("tmux", ["kill-session", "-t", sessionName], { timeoutMs: 5_000 });
       } catch (error) {
-        if (!isMissingTmuxSessionError(error)) throw error;
+        if (!(await confirmTmuxSessionGone(error, (args) => runHostTmuxProbe(args)))) throw error;
       }
     });
   const removeRuntimeRoot =

@@ -113,14 +113,14 @@ export function runtimeRootPrefixForContext(context: CommandContext): string {
 }
 
 /**
- * True when tmux reports that no server (or no session) is there to talk to.
+ * Recognizes an unavailable tmux server, not proof that its sessions exited.
  *
  * tmux prints `no server running on <socket>` when a socket file is left over
  * from a server that exited, and `error connecting to <socket> (No such file
  * or directory)` when no server has used the socket since `/tmp` was last
  * cleared, as after a reboot. The second also appears when a live server's
- * socket file was deleted, but no tmux client can reach such a server, so it
- * counts as no server too. Any other connection error, a timeout or a
+ * socket file was deleted. Destructive callers must confirm process absence
+ * with `confirmTmuxSessionGone` before discarding attribution. Any other connection error, a timeout or a
  * missing tmux executable says nothing about a detached server and must not
  * match.
  */
@@ -138,7 +138,37 @@ export function isTmuxNoServerMessage(value: unknown): boolean {
 
 /** True when tmux confirms that a target disappeared before cleanup reached it. */
 export function isMissingTmuxSessionError(value: unknown): boolean {
-  return /can't find session/i.test(String(value)) || isTmuxNoServerMessage(value);
+  return /can't find session|no sessions/i.test(String(value));
+}
+
+/**
+ * An unreachable socket cannot distinguish reboot from unlinking a live
+ * server's socket. Without a saved server identity, any tmux process in the
+ * backend's process namespace makes absence ambiguous. Never signal it: the
+ * shared server may host unrelated work. Keep the runtime roots for a retry
+ * after the socket is restored or the server exits.
+ *
+ * `comm` excludes command arguments (which may contain user content). Both
+ * macOS and Linux expose tmux servers as `tmux: server` or a tmux executable
+ * path. A failed, empty or malformed census is not evidence of absence.
+ */
+export async function confirmTmuxSessionGone(
+  value: unknown,
+  exec: (args: string[]) => Promise<ExecOutput>,
+): Promise<boolean> {
+  if (isMissingTmuxSessionError(value)) return true;
+  if (!isTmuxNoServerMessage(value)) return false;
+  try {
+    const result = await exec(["ps", "-A", "-o", "pid=,comm="]);
+    if (result.status !== 0 || !result.stdout.trim()) return false;
+    for (const line of result.stdout.trim().split("\n")) {
+      const match = /^\s*\d+\s+(\S.*)$/.exec(line);
+      if (!match || /(?:^|\/)tmux(?:$|[\s:])/.test(match[1]!)) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

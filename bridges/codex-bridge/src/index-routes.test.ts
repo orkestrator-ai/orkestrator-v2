@@ -625,6 +625,33 @@ describe("session detail route outcomes", () => {
     );
   });
 
+  test("a limited incomplete transcript reports both eviction and omitted tail rows", async () => {
+    const messages = Array.from({ length: 4 }, (_, index) => ({
+      id: `message-${index}`,
+      role: "assistant",
+      content: String(index),
+      parts: [],
+      createdAt: "2026-07-25T12:00:00.000Z",
+    }));
+    await withRuntimeMethod(
+      "getMessages",
+      async () => messages,
+      async () =>
+        withRuntimeMethod(
+          "transcriptComplete",
+          () => false,
+          async () => {
+            const response = await app.request("/session/session-1/messages?limit=2");
+            expect(response.status).toBe(200);
+            expect(await response.json()).toEqual({
+              messages: messages.slice(-2),
+              messageWindow: { truncated: true, omittedMessages: 2 },
+            });
+          },
+        ),
+    );
+  });
+
   test("reports missing message and status snapshots as missing sessions", async () => {
     await withRuntimeMethod(
       "getMessages",

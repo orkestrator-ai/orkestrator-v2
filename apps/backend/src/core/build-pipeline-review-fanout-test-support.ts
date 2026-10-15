@@ -147,6 +147,7 @@ export class FanoutProvider implements BuildPipelineProvider {
   changingMessages = false;
   /** Every session's transcript content while `changingMessages` is off. */
   contentVersion = 1;
+  readonly transcriptOverrides = new Map<string, unknown[]>();
   readonly snapshotReads: Array<{ sessionId: string; knownSourceToken?: string }> = [];
   /**
    * The bounded conditional snapshot surface the progress probe prefers.
@@ -214,7 +215,10 @@ export class FanoutProvider implements BuildPipelineProvider {
   async messages(sessionId: string, options: { limit?: number } = {}): Promise<unknown[]> {
     this.messageReads.push({ sessionId, ...options });
     const version = this.changingMessages ? ++this.messageVersion : this.contentVersion;
-    return [transcriptMessage(sessionId, version)];
+    const messages = this.transcriptOverrides.get(sessionId) ?? [
+      transcriptMessage(sessionId, version),
+    ];
+    return options.limit === undefined ? messages : messages.slice(-options.limit);
   }
 
   /** Answers `unchanged` for the token of the current `contentVersion`. */
@@ -226,11 +230,17 @@ export class FanoutProvider implements BuildPipelineProvider {
       });
       const sourceToken = `${sessionId}:${this.contentVersion}`;
       if (options.knownSourceToken === sourceToken) return { unchanged: true, sourceToken };
+      const all = this.transcriptOverrides.get(sessionId) ?? [
+        transcriptMessage(sessionId, this.contentVersion),
+      ];
+      const messages = all.slice(-options.limit);
       return {
-        messages: [transcriptMessage(sessionId, this.contentVersion)],
+        messages,
+        representation: "summary",
+        revisedMessages: [],
         sourceToken,
-        historyStartIndex: 0,
-        complete: true,
+        historyStartIndex: all.length - messages.length,
+        complete: all.length === messages.length,
         freshness: "current",
       };
     };

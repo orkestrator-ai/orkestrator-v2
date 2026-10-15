@@ -462,7 +462,9 @@ export class BuildPipelineReviewFanout {
     // write this pipeline's control row once per reviewer per tick.
     const tokenCountChanged =
       reviewer.tokenCount !== undefined && session.tokenCount !== reviewer.tokenCount;
-    const status = reviewer.status === "running" ? "running" : "idle";
+    // The runner mirrors before it changes reviewer.status. Project the observed
+    // terminal transition now so it forces exactly one final read.
+    const status = reviewer.status === "running" && !settling ? "running" : "idle";
     const statusChanged = session.status !== status;
     const persistDue = this.deps.shouldPersistTranscript(session);
     // A status change reads the whole transcript unconditionally, so a reviewer
@@ -499,10 +501,12 @@ export class BuildPipelineReviewFanout {
         (candidate) => candidate.sessionKey === reviewer.sessionKey,
       );
       if (!session) continue;
-      const status =
-        reviewer.status === "pending" || reviewer.status === "running" ? "running" : "idle";
-      if (session.status !== status) {
-        session.status = status;
+      const settled = reviewer.status !== "pending" && reviewer.status !== "running";
+      // A running reviewer record may be waiting for its final usage/result
+      // after its provider turn ended. Keep the status mirroring observed, or
+      // every idle poll would look like another terminal transition.
+      if (settled && session.status !== "idle") {
+        session.status = "idle";
         changed = true;
       }
       if (reviewer.report && !session.reviewReport) {
@@ -515,7 +519,6 @@ export class BuildPipelineReviewFanout {
         session.completedAt = reviewer.completedAt;
         changed = true;
       }
-      const settled = reviewer.status !== "pending" && reviewer.status !== "running";
       if (
         settled &&
         reviewer.tokenCount !== undefined &&
@@ -800,11 +803,19 @@ export class BuildPipelineReviewFanout {
     // A running session's transcript is looked at only at the persist
     // boundary, and its whole body is read only when the bounded probe shows
     // it moved since the committed copy; an unchanged one costs no body and no
-    // save. A settling session is probed every pass for the same reason. The
-    // progress observation below reads its own bounded tail on its own cadence.
+    // save. The first terminal observation forces a final read; later idle
+    // polls stay conditional. Progress observation reads its own bounded tail
+    // on its own cadence.
     const persistDue = this.deps.shouldPersistTranscript(session);
-    if (status !== "running" || persistDue) {
-      if (await this.deps.refreshMovedTranscript(session, provider)) {
+    const observedStatus = status === "running" || backgroundWorkLive ? "running" : "idle";
+    const statusChanged = session.status !== observedStatus;
+    const turnEnded = statusChanged && observedStatus === "idle";
+    if (status !== "running" || persistDue || statusChanged) {
+      const changed = await this.deps.refreshMovedTranscript(session, provider, {
+        force: turnEnded,
+      });
+      if (changed || statusChanged) {
+        session.status = observedStatus;
         session.messagesPersistedAt = reviewFanoutNowIso();
         await this.save(pipeline);
       }

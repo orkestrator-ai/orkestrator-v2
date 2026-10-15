@@ -101,7 +101,19 @@ describe("build pipeline multi-model review transcript reads", () => {
         await service.advanceNow(started.id);
         await service.advanceNow(started.id);
 
-        provider.contentVersion += 1;
+        const baseline = await read(started.id);
+        const id = baseline.reviewFanout!.reviewers[0]!.providerSessionId!;
+        const reads = provider.wholeReads(id);
+        const final = [{ id: "final", role: "assistant", text: "terminal reviewer output" }];
+        expect(
+          (
+            await storage.readBuildPipelineTranscript(
+              started.id,
+              baseline.sessions.find((s) => s.sdkSessionId === id)!,
+            )
+          ).status,
+        ).toBe("found");
+        provider.transcriptOverrides.set(id, final);
         provider.runningModels.delete("opus");
         await service.advanceNow(started.id);
 
@@ -110,11 +122,145 @@ describe("build pipeline multi-model review transcript reads", () => {
         expect(reviewer.status).toBe("completed");
         const session = after.sessions.find((entry) => entry.sessionKey === reviewer.sessionKey)!;
         const stored = await storage.readBuildPipelineTranscript(started.id, session);
-        expect(stored.status === "found" ? stored.messages : []).toEqual([
-          await provider.messages(session.sdkSessionId, { limit: 1 }).then((tail) => tail[0]),
-        ]);
+        expect(provider.wholeReads(id)).toBe(reads + 1);
+        expect(stored.status === "found" ? stored.messages : []).toEqual(final);
       },
       { transcriptPersistIntervalMs: 60_000 },
     );
   });
+
+  test("reviewer idle polls stay conditional while final usage is pending", async () => {
+    await withPipeline(
+      async ({ service, read, provider }) => {
+        provider.enableTranscriptSnapshot();
+        provider.runningModels.add("opus");
+        provider.runningModels.add("sonnet");
+        const started = await service.start(startInput(TWO_REVIEWERS));
+        await advanceUntil(service, read, started.id, "reviewing");
+        await service.advanceNow(started.id);
+        const id = (await read(started.id)).reviewFanout!.reviewers[0]!.providerSessionId!;
+        const reads = provider.wholeReads(id);
+        provider.usagePending = true;
+        provider.runningModels.delete("opus");
+        await service.advanceNow(started.id);
+        expect(provider.wholeReads(id)).toBe(reads + 1);
+        expect((await read(started.id)).reviewFanout!.reviewers[0]!.status).toBe("running");
+        await service.advanceNow(started.id);
+        expect(provider.wholeReads(id)).toBe(reads + 1);
+      },
+      { transcriptPersistIntervalMs: 0 },
+    );
+  });
+
+  test("consolidation completion forces a final read when its probe is unchanged", async () => {
+    await withPipeline(
+      async ({ service, storage, read, provider }) => {
+        provider.enableTranscriptSnapshot();
+        provider.runningConsolidation = true;
+        const started = await service.start(startInput(TWO_REVIEWERS));
+        await untilConsolidation(service, read, started.id);
+        await service.advanceNow(started.id);
+        const baseline = await read(started.id);
+        const id = baseline.reviewFanout!.consolidation!.providerSessionId;
+        const session = baseline.sessions.find((entry) => entry.sdkSessionId === id)!;
+        expect((await storage.readBuildPipelineTranscript(started.id, session)).status).toBe(
+          "found",
+        );
+        const reads = provider.wholeReads(id);
+        const final = [{ id: "final", role: "assistant", text: "terminal consolidation output" }];
+        provider.transcriptOverrides.set(id, final);
+        provider.runningConsolidation = false;
+        await service.advanceNow(started.id);
+        const after = await read(started.id);
+        const stored = await storage.readBuildPipelineTranscript(
+          started.id,
+          after.sessions.find((entry) => entry.sdkSessionId === id)!,
+        );
+        expect(provider.wholeReads(id)).toBe(reads + 1);
+        expect(stored.status === "found" ? stored.messages : []).toEqual(final);
+        expect(
+          after.sessions.find((entry) => entry.sdkSessionId === id)!.structuredResultStatus,
+        ).toBe("accepted");
+      },
+      { transcriptPersistIntervalMs: 60_000 },
+    );
+  });
+
+  test("idle consolidation polls stay conditional after the final read", async () => {
+    await withPipeline(
+      async ({ service, read, provider }) => {
+        provider.enableTranscriptSnapshot();
+        provider.runningConsolidation = true;
+        provider.missingConsolidationResult = true;
+        const started = await service.start(startInput(TWO_REVIEWERS));
+        await untilConsolidation(service, read, started.id);
+        await service.advanceNow(started.id);
+        const id = (await read(started.id)).reviewFanout!.consolidation!.providerSessionId;
+        const reads = provider.wholeReads(id);
+        provider.runningConsolidation = false;
+        await service.advanceNow(started.id);
+        expect(provider.wholeReads(id)).toBe(reads + 1);
+        await service.advanceNow(started.id);
+        expect(provider.wholeReads(id)).toBe(reads + 1);
+      },
+      { transcriptPersistIntervalMs: 0 },
+    );
+  });
+
+  for (const kind of ["reviewer", "consolidation"] as const) {
+    test(`${kind} checkpoints retain pre-window changes from a legacy snapshot`, async () => {
+      await withPipeline(
+        async ({ service, storage, read, provider }) => {
+          provider.enableTranscriptSnapshot();
+          const snapshot = provider.transcriptSnapshot!;
+          provider.transcriptSnapshot = async (id, options) => {
+            const result = await snapshot(id, options);
+            if ("unchanged" in result) return result;
+            const {
+              representation: _representation,
+              revisedMessages: _revised,
+              sourceToken: _token,
+              ...legacy
+            } = result;
+            return legacy;
+          };
+          provider.runningConsolidation = true;
+          if (kind === "reviewer") {
+            provider.runningModels.add("opus");
+            provider.runningModels.add("sonnet");
+          }
+          const started = await service.start(startInput(TWO_REVIEWERS));
+          await advanceUntil(service, read, started.id, "reviewing");
+          if (kind === "consolidation") await untilConsolidation(service, read, started.id);
+          else await service.advanceNow(started.id);
+          const baseline = await read(started.id);
+          const id =
+            kind === "reviewer"
+              ? baseline.reviewFanout!.reviewers[0]!.providerSessionId!
+              : baseline.reviewFanout!.consolidation!.providerSessionId;
+          const messages = Array.from({ length: 12 }, (_, index) => ({
+            id: `row-${index}`,
+            role: "assistant",
+            text: `row ${index}`,
+          }));
+          provider.transcriptOverrides.set(id, messages);
+          await service.advanceNow(started.id);
+          const reads = provider.wholeReads(id);
+          const final = messages.map((row, index) =>
+            index === 0 ? { ...row, text: "late tool result" } : row,
+          );
+          provider.transcriptOverrides.set(id, final);
+          await service.advanceNow(started.id);
+          expect(provider.wholeReads(id)).toBe(reads + 1);
+          const after = await read(started.id);
+          const stored = await storage.readBuildPipelineTranscript(
+            started.id,
+            after.sessions.find((entry) => entry.sdkSessionId === id)!,
+          );
+          expect(stored.status === "found" ? stored.messages : []).toEqual(final);
+        },
+        { transcriptPersistIntervalMs: 0 },
+      );
+    });
+  }
 });

@@ -12,6 +12,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { BuildPipeline, PipelineSessionPhase } from "@orkestrator/protocol/build-pipeline";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
+import { bridgeTranscriptSummaryUpdate } from "@orkestrator/protocol/node/bridge-transcript-summary";
+import { bridgeTranscriptUpdate } from "@orkestrator/protocol/node/progressive-transcript";
+import { codexConnection, httpProvider } from "./agent-provider-test-support.js";
 import { StorageService } from "./storage.js";
 import { BuildPipelineService } from "./build-pipeline-service.js";
 import type {
@@ -67,6 +70,8 @@ class ProbingProvider implements BuildPipelineProvider {
     const messages = all.slice(-options.limit);
     return {
       messages,
+      representation: "summary",
+      revisedMessages: [],
       sourceToken,
       historyStartIndex: all.length - messages.length,
       complete: messages.length === all.length,
@@ -472,6 +477,79 @@ describe("build stage transcript reads while a turn runs", () => {
       { transcriptPersistIntervalMs: 0 },
     );
   });
+
+  for (const mode of ["v2", "v1", "legacy"] as const) {
+    test(`${mode} HTTP checkpoints retain revisions before the probe window`, async () => {
+      await withService(
+        async (context) => {
+          const { service, storage, provider } = context;
+          let messages = Array.from({ length: 12 }, (_, index) => ({
+            id: `row-${index}`,
+            role: "assistant",
+            content: `row ${index}`,
+            parts: [],
+            createdAt: "2026-09-27T00:00:00Z",
+          }));
+          let revision = 1;
+          const wire = httpProvider((url) => {
+            const parsed = new URL(url);
+            if (parsed.pathname.endsWith("/messages")) return Response.json({ messages });
+            if (parsed.pathname.endsWith("/transcript") && mode !== "legacy") {
+              const options = {
+                sessionIdentity: "build",
+                generation: "g",
+                contentEpoch: 1,
+                revision,
+                complete: true,
+                limit: Number(parsed.searchParams.get("limit")),
+                targetBytes: Number(parsed.searchParams.get("targetBytes")),
+                knownToken: parsed.searchParams.get("knownToken") ?? undefined,
+              };
+              return Response.json(
+                mode === "v2"
+                  ? bridgeTranscriptSummaryUpdate(messages, {
+                      ...options,
+                      revisedMessageIds: revision > 1 ? ["row-0"] : [],
+                    })
+                  : bridgeTranscriptUpdate(messages, options),
+              );
+            }
+            return new Response("", { status: 404 });
+          }, codexConnection);
+          provider.transcriptSnapshot = wire.provider.transcriptSnapshot!.bind(wire.provider);
+          const countRead = provider.messages.bind(provider);
+          provider.messages = async (id, options) => {
+            await countRead(id, options);
+            return wire.provider.messages(id, options);
+          };
+          const { pipelineId, sessionId } = await startRunning(context);
+          expect(await committedTranscript(storage, pipelineId, sessionId)).toEqual(messages);
+          // Summary probes can skip quiet checkpoints; older windows cannot.
+          await service.advanceNow(pipelineId);
+          expect(provider.wholeReadsOf(sessionId)).toBe(mode === "v2" ? 1 : 2);
+          messages = messages.map((row, index) =>
+            index === 0 ? { ...row, content: "late tool result" } : row,
+          );
+          revision += 1;
+          await service.advanceNow(pipelineId);
+          expect(provider.wholeReadsOf(sessionId)).toBe(mode === "v2" ? 2 : 3);
+          expect(await committedTranscript(storage, pipelineId, sessionId)).toEqual(messages);
+          const snapshot = await provider.transcriptSnapshot(sessionId, {
+            limit: 8,
+            targetBytes: 65536,
+            representation: "summary",
+          });
+          expect("unchanged" in snapshot).toBe(false);
+          if ("unchanged" in snapshot) throw new Error("Expected legacy snapshot body");
+          expect(snapshot.messages).toHaveLength(8);
+          if (mode === "v2") expect(snapshot.revisedMessages).toEqual([messages[0]]);
+          else expect(snapshot.revisedMessages).toBeUndefined();
+          expect(snapshot.sourceToken === undefined).toBe(mode === "legacy");
+        },
+        { transcriptPersistIntervalMs: 0 },
+      );
+    });
+  }
 });
 
 describe("build stage stall warnings under gated reads", () => {

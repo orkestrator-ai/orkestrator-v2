@@ -138,13 +138,16 @@ export class BuildPipelineTranscriptCheckpoints {
   knownProbe(session: PipelineSession): KnownProgressSource | undefined {
     const baseline = this.probes.get(this.key(session));
     const sourceToken = baseline?.sample.sourceToken;
-    return baseline && sourceToken ? { sourceToken, digest: baseline.sample.digest } : undefined;
+    return baseline && sourceToken && baseline.sample.historyRevisionsTracked
+      ? { sourceToken, digest: baseline.sample.digest, historyRevisionsTracked: true }
+      : undefined;
   }
 
   /**
    * Whether `sample` shows the provider has not moved since the committed copy.
    *
-   * True only when the sample's digest equals the baseline probe's and the
+   * True only for a representation that tracks pre-window revisions, when
+   * the sample's digest equals the baseline probe's and the
    * committed transcript is still the whole read that probe gated. A read that
    * was observed but never committed (a throttled or failed save) leaves the
    * committed fingerprint behind, so the next probe re-reads instead of
@@ -157,6 +160,8 @@ export class BuildPipelineTranscriptCheckpoints {
     const baseline = this.probes.get(key);
     if (
       !baseline ||
+      !baseline.sample.historyRevisionsTracked ||
+      !sample.historyRevisionsTracked ||
       baseline.sample.digest !== sample.digest ||
       baseline.fingerprint !== this.committedFingerprint(session)
     ) {

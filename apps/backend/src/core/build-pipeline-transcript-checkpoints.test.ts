@@ -314,21 +314,29 @@ describe("build pipeline transcript probe baselines", () => {
       const checkpoints = new BuildPipelineTranscriptCheckpoints(storage);
       const live = session("probe");
       const value = pipeline("p-probe", [live]);
-      const probe = { digest: "digest-1", sourceToken: "token-1" };
+      const probe = { historyRevisionsTracked: true, digest: "digest-1", sourceToken: "token-1" };
 
       expect(checkpoints.matchesProbe(live, probe)).toBe(false);
       expect(checkpoints.knownProbe(live)).toBeUndefined();
 
       expect(checkpoints.observe(live, messages(2, "probe"), probe)).toBe(true);
-      expect(checkpoints.knownProbe(live)).toEqual({ sourceToken: "token-1", digest: "digest-1" });
+      expect(checkpoints.knownProbe(live)).toEqual({
+        historyRevisionsTracked: true,
+        sourceToken: "token-1",
+        digest: "digest-1",
+      });
       // Observed but not yet committed: readers do not have this copy.
       expect(checkpoints.matchesProbe(live, probe)).toBe(false);
 
       await save(storage, checkpoints, value);
       expect(checkpoints.matchesProbe(live, probe)).toBe(true);
-      expect(checkpoints.matchesProbe(live, { digest: "digest-2", sourceToken: "token-1" })).toBe(
-        false,
-      );
+      expect(
+        checkpoints.matchesProbe(live, {
+          historyRevisionsTracked: true,
+          digest: "digest-2",
+          sourceToken: "token-1",
+        }),
+      ).toBe(false);
     });
   });
 
@@ -337,11 +345,37 @@ describe("build pipeline transcript probe baselines", () => {
       const checkpoints = new BuildPipelineTranscriptCheckpoints(storage);
       const live = session("token");
       await save(storage, checkpoints, pipeline("p-token", [live]));
-      checkpoints.observe(live, messages(1, "token"), { digest: "digest", sourceToken: "old" });
+      checkpoints.observe(live, messages(1, "token"), {
+        historyRevisionsTracked: true,
+        digest: "digest",
+        sourceToken: "old",
+      });
       await save(storage, checkpoints, pipeline("p-token", [live]), 1);
 
-      expect(checkpoints.matchesProbe(live, { digest: "digest", sourceToken: "new" })).toBe(true);
-      expect(checkpoints.knownProbe(live)).toEqual({ sourceToken: "new", digest: "digest" });
+      expect(
+        checkpoints.matchesProbe(live, {
+          historyRevisionsTracked: true,
+          digest: "digest",
+          sourceToken: "new",
+        }),
+      ).toBe(true);
+      expect(checkpoints.knownProbe(live)).toEqual({
+        historyRevisionsTracked: true,
+        sourceToken: "new",
+        digest: "digest",
+      });
+    });
+  });
+
+  test("a matching tail-only probe cannot certify a committed whole transcript", async () => {
+    await withStorage(async (storage) => {
+      const checkpoints = new BuildPipelineTranscriptCheckpoints(storage);
+      const live = session("legacy-probe");
+      const probe = { digest: "digest", sourceToken: "legacy-token" };
+      checkpoints.observe(live, messages(1, "legacy-probe"), probe);
+      await save(storage, checkpoints, pipeline("p-legacy-probe", [live]));
+      expect(checkpoints.matchesProbe(live, probe)).toBe(false);
+      expect(checkpoints.knownProbe(live)).toBeUndefined();
     });
   });
 
@@ -349,13 +383,20 @@ describe("build pipeline transcript probe baselines", () => {
     await withStorage(async (storage) => {
       const checkpoints = new BuildPipelineTranscriptCheckpoints(storage);
       const live = session("tokenless");
-      checkpoints.observe(live, messages(1, "tokenless"), { digest: "digest" });
+      checkpoints.observe(live, messages(1, "tokenless"), {
+        historyRevisionsTracked: true,
+        digest: "digest",
+      });
       await save(storage, checkpoints, pipeline("p-tokenless", [live]));
       expect(checkpoints.knownProbe(live)).toBeUndefined();
-      expect(checkpoints.matchesProbe(live, { digest: "digest" })).toBe(true);
+      expect(
+        checkpoints.matchesProbe(live, { historyRevisionsTracked: true, digest: "digest" }),
+      ).toBe(true);
 
       checkpoints.forget([live]);
-      expect(checkpoints.matchesProbe(live, { digest: "digest" })).toBe(false);
+      expect(
+        checkpoints.matchesProbe(live, { historyRevisionsTracked: true, digest: "digest" }),
+      ).toBe(false);
     });
   });
 });

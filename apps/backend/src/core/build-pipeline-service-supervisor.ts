@@ -1034,7 +1034,9 @@ export class BuildPipelineSupervisor {
    *
    * A bounded progress probe goes first: a conditional read of the newest
    * messages, answered `unchanged` from the provider's source token without a
-   * body. When it matches the probe the committed copy was read under, nothing
+   * body. Only summary probes track revisions outside the tail; legacy probes
+   * cannot skip a checkpoint read. When a summary matches the probe the
+   * committed copy was read under, nothing
    * else is read and the answer is "unchanged". Otherwise — a moved probe, no
    * baseline yet (a new session, a backend restart), or a probe that failed
    * and so taught nothing — the whole transcript is read as before, and the

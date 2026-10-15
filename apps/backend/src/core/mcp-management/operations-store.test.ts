@@ -17,7 +17,12 @@ import {
   type McpOperationSnapshot,
 } from "@orkestrator/protocol/mcp-management";
 
-import { McpOperationStore, type StoredOperation } from "./operations-store.js";
+import { EVIDENCE_WINDOW_MS } from "./evidence.js";
+import {
+  isFinishedOperation,
+  McpOperationStore,
+  type StoredOperation,
+} from "./operations-store.js";
 
 const NOW = Date.parse("2026-09-23T12:00:00Z");
 const RUNNING_AS_ROOT = process.getuid?.() === 0;
@@ -198,6 +203,37 @@ describe("McpOperationStore retention", () => {
       },
     );
     await target.put(queued);
+    const restart = operation(
+      {},
+      {
+        state: "restart-required",
+        runtimes: [
+          {
+            runtimeId: "retained",
+            environmentId: "e",
+            label: "l",
+            state: "restart-required",
+            updatedAt: new Date(NOW).toISOString(),
+          },
+        ],
+      },
+    );
+    Object.assign(restart.recovery, {
+      savedDigest: `sha256:${"a".repeat(43)}`,
+      writeStartedAt: new Date(NOW).toISOString(),
+      applyQueuedAt: new Date(NOW).toISOString(),
+      evidenceRole: "user",
+      runtimes: [
+        {
+          runtimeId: "retained",
+          environmentId: "e",
+          agent: "claude",
+          logicalSessionKey: "session",
+          awaitsEvidence: true,
+        },
+      ],
+    });
+    await target.put(restart);
     for (let index = 0; index < 30; index += 1) {
       await target.put(operation({ message: "m".repeat(200 * 1024) }));
     }
@@ -206,6 +242,12 @@ describe("McpOperationStore retention", () => {
     const kept = ids(target);
     expect(kept).toContain(pending.snapshot.operationId);
     expect(kept).toContain(queued.snapshot.operationId);
-    expect(kept.length).toBeLessThan(32);
+    expect(kept).toContain(restart.snapshot.operationId);
+    expect(kept.length).toBeLessThan(33);
+    // The protection is bounded by the same deadline as evidence polling.
+    expect(isFinishedOperation(restart, NOW + EVIDENCE_WINDOW_MS)).toBe(false);
+    expect(isFinishedOperation(restart, NOW + EVIDENCE_WINDOW_MS + 1)).toBe(true);
+    restart.snapshot.apply.runtimes[0]!.state = "applied";
+    expect(isFinishedOperation(restart, NOW)).toBe(true);
   });
 });

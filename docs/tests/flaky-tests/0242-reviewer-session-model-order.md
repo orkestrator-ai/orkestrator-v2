@@ -1,6 +1,6 @@
 # Reviewer session models arrive in a different order
 
-- **ID:** 0239
+- **ID:** 0242
 - **Status:** open
 - **Date observed:** 2026-10-15
 - **Test:** `build pipeline multi-model review > fans out to every reviewer, consolidates, then addresses the merged report`

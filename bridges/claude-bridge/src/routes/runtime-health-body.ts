@@ -12,8 +12,9 @@ export function sessionRuntimeHealthBody(
   session: SessionState | undefined,
 ): Record<string, unknown> {
   // Which saved MCP configuration the last query started with. Content-free
-  // digests only, so it is safe beside notices; absent until a query starts,
-  // which is how a caller tells "not yet applied" from "applied".
+  // digests, plus the names of servers the runtime could not unload, so it is
+  // safe beside notices; absent until a query starts, which is how a caller
+  // tells "not yet applied" from "applied".
   const mcpConfig = session?.mcpConfigRevision
     ? { mcpConfig: structuredClone(session.mcpConfigRevision) }
     : {};

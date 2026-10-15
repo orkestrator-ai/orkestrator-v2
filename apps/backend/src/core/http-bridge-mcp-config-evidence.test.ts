@@ -47,6 +47,19 @@ describe("bridgeMcpConfigEvidence", () => {
     ).toEqual({ sources: { user: USER, project: "excluded" }, observedAt: AT, scope: "session" });
   });
 
+  test("reads the servers Claude's runtime could not unload", () => {
+    const stale = (staleServers: unknown) =>
+      bridgeMcpConfigEvidence({ mcpConfig: { ...claudeBody.mcpConfig, staleServers } });
+    expect(stale(["alpha", "my.server"])).toMatchObject({ staleServers: ["alpha", "my.server"] });
+    // Only non-empty, bounded names survive; nothing at all is the same as none.
+    expect(stale(["alpha", "", 7, "x".repeat(513)])).toMatchObject({ staleServers: ["alpha"] });
+    expect(stale([])).not.toHaveProperty("staleServers");
+    expect(stale("alpha")).not.toHaveProperty("staleServers");
+    expect(
+      stale(Array.from({ length: 300 }, (_, index) => `s${index}`))?.staleServers,
+    ).toHaveLength(256);
+  });
+
   test("reads the generation Cursor and Pi built", () => {
     expect(
       bridgeMcpConfigEvidence({

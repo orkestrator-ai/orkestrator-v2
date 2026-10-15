@@ -48,7 +48,7 @@ describe("local opencode serve environment", () => {
       resourceRoot: root,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
-      runtime: new BackendRuntime(),
+      runtime: new BackendRuntime({ emit: () => undefined }),
     } as CommandContext;
 
     let spawned: { args: string[]; env: NodeJS.ProcessEnv | undefined } | undefined;

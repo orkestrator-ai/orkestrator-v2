@@ -4542,7 +4542,7 @@ test("MultiReviewService publishes a PR tab through the backend job command", as
       appRoot: "",
       resourceRoot: "",
       environmentLifecycleTasks: {},
-      runtime: new BackendRuntime(),
+      runtime: new BackendRuntime({ emit: () => undefined }),
       nativeAgents: {
         ensureSession: async () => ({ providerSessionId: "provider-pr-tab" }),
         dispatchIntent: async (input: Record<string, unknown>) => {

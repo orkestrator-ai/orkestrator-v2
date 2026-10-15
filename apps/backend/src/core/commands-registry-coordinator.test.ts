@@ -54,7 +54,7 @@ describe("coordinator command registry", () => {
       resourceRoot: root,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
-      runtime: new BackendRuntime(),
+      runtime: new BackendRuntime({ emit: () => undefined }),
     };
   });
 

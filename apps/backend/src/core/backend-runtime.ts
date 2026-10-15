@@ -1,3 +1,11 @@
+import { DiffStatsTracking } from "./diff-stats-tracking.js";
+import type { BackendEmit } from "./commands-context.js";
+
+export type BackendRuntimeOptions = {
+  /** Read at emit time, so a caller may pass a closure over a gateway that does not exist yet. */
+  emit: BackendEmit;
+};
+
 /**
  * Process state owned by one backend instance.
  *
@@ -11,6 +19,14 @@
  * load would freeze one instance's state into every later caller.
  */
 export class BackendRuntime {
+  readonly diffStats: DiffStatsTracking;
+
+  constructor(options: BackendRuntimeOptions) {
+    this.diffStats = new DiffStatsTracking({ emit: options.emit });
+  }
+
   /** Releases everything the runtime owns; called once on backend shutdown. */
-  shutdown(): void {}
+  shutdown(): void {
+    this.diffStats.shutdown();
+  }
 }

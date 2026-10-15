@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { __testing as commandTesting } from "../src/core/commands";
 import { OrkestratorBackend } from "../src/core/index";
+import { BackendRuntime } from "../src/core/backend-runtime";
 
 const tempDirs: string[] = [];
 
@@ -49,27 +50,29 @@ describe("OrkestratorBackend", () => {
 
   test("shuts down idempotently and rejects later command invocations", async () => {
     const root = await createTempDir("ork-backend-core-shutdown-");
+    const runtime = new BackendRuntime({ emit: () => undefined });
     const backend = new OrkestratorBackend({
       dataDir: path.join(root, "data"),
       toolchainBinDir: path.join(root, "toolchains", "bin"),
       appRoot: root,
       resourceRoot: root,
       emit: () => undefined,
+      runtime,
     });
     await backend.init();
-    commandTesting.trackDiffStats({
+    runtime.diffStats.service.track({
       environmentId: "active-during-shutdown",
       kind: "local",
       worktreePath: root,
       comparisonRef: "main",
     });
-    expect(commandTesting.trackedDiffStatsIds()).toContain("active-during-shutdown");
+    expect(runtime.diffStats.service.trackedIds()).toContain("active-during-shutdown");
 
     await expect(Promise.all([backend.shutdown(), backend.shutdown()])).resolves.toEqual([
       undefined,
       undefined,
     ]);
-    expect(commandTesting.trackedDiffStatsIds()).toEqual([]);
+    expect(runtime.diffStats.service.trackedIds()).toEqual([]);
     await expect(backend.invoke("greet", { name: "late" })).rejects.toThrow(
       "Backend is shutting down",
     );

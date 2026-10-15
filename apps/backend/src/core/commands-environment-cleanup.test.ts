@@ -66,7 +66,7 @@ async function withDeleteCommand<T>(
     toolchainBinDir: "",
     worktreeDir,
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
-    runtime: new BackendRuntime(),
+    runtime: new BackendRuntime({ emit: () => undefined }),
     emit: () => undefined,
   } as CommandContext;
   const invokeDelete = async () => {

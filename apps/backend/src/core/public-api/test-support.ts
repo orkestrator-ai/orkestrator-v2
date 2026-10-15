@@ -75,7 +75,7 @@ export async function createPublicApiHarness(
     appRoot: root,
     resourceRoot: root,
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
-    runtime: new BackendRuntime(),
+    runtime: new BackendRuntime({ emit: (event, payload) => context.emit(event, payload) }),
     worktreeDir: path.join(root, "worktrees"),
     ...options.context,
   } as CommandContext;

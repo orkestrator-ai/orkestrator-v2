@@ -242,7 +242,7 @@ function createContext(initialEnvironment = environment()): {
     appRoot: root,
     resourceRoot: root,
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
-    runtime: new BackendRuntime(),
+    runtime: new BackendRuntime({ emit: (event, payload) => context.emit(event, payload) }),
     emit: mock((event: string, payload: unknown) => events.push({ event, payload })),
     storage: {
       getDataDir: () => root,

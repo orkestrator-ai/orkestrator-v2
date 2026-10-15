@@ -70,7 +70,7 @@ describe("launch_control_job command", () => {
       appRoot: "",
       resourceRoot: "",
       environmentLifecycleTasks: {},
-      runtime: new BackendRuntime(),
+      runtime: new BackendRuntime({ emit: () => undefined }),
       nativeAgents: {
         ensureSession: async (input: Record<string, unknown>) => {
           ensured.push(input);
@@ -187,7 +187,7 @@ describe("launch_control_job command", () => {
       appRoot: "",
       resourceRoot: "",
       environmentLifecycleTasks: {},
-      runtime: new BackendRuntime(),
+      runtime: new BackendRuntime({ emit: () => undefined }),
       nativeAgents: {
         ensureSession: async (input: Record<string, unknown>) => {
           ensured.push(input);
@@ -258,7 +258,7 @@ describe("launch_control_job command", () => {
       appRoot: "",
       resourceRoot: "",
       environmentLifecycleTasks: {},
-      runtime: new BackendRuntime(),
+      runtime: new BackendRuntime({ emit: () => undefined }),
       nativeAgents: {
         ensureSession: async (input: Record<string, unknown>) => {
           ensured.push(input);
@@ -345,7 +345,7 @@ describe("launch_control_job command", () => {
       appRoot: "",
       resourceRoot: "",
       environmentLifecycleTasks: {},
-      runtime: new BackendRuntime(),
+      runtime: new BackendRuntime({ emit: () => undefined }),
       nativeAgents: {
         ensureSession: async () => ({ providerSessionId: "provider-session-1" }),
         dispatchIntent: async () => {

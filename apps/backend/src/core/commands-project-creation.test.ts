@@ -47,7 +47,7 @@ async function withProjectCreation<T>(
     resourceRoot: "",
     emit: () => undefined,
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
-    runtime: new BackendRuntime(),
+    runtime: new BackendRuntime({ emit: () => undefined }),
   } as CommandContext;
   const handler = commands.get("create_project_from_scratch");
   if (!handler) throw new Error("create_project_from_scratch is not registered");

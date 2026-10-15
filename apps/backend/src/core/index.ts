@@ -43,7 +43,6 @@ import { McpManagementService } from "./mcp-management/service.js";
 import {
   closeLocalServerAdmission,
   createCommandRegistry,
-  shutdownDiffStatsTracking,
   shutdownLocalServers,
   shutdownPrMonitorTracking,
   type BackendEmit,
@@ -290,7 +289,9 @@ export class OrkestratorBackend {
       });
     this.environmentLifecycleTasks =
       options.environmentLifecycleTasks ?? new EnvironmentLifecycleTaskTracker();
-    this.runtime = options.runtime ?? new BackendRuntime();
+    this.runtime =
+      options.runtime ??
+      new BackendRuntime({ emit: (event, payload) => options.emit(event, payload) });
     this.environmentLifecycleDrainTimeoutMs =
       options.environmentLifecycleDrainTimeoutMs ?? ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS;
     // Every committed mutation fans out to all connected clients, so a second
@@ -1412,7 +1413,7 @@ export class OrkestratorBackend {
     this.activityJobs = null;
     // Synchronous and cannot fail, so it runs before the awaited drain rather
     // than racing it: every watcher holds a file descriptor and a debounce timer.
-    shutdownDiffStatsTracking();
+    this.runtime.shutdown();
     shutdownPrMonitorTracking();
     cancelScheduledEnvironmentCleanup(this.context.storage.getDataDir());
     const attempt = (async () => {

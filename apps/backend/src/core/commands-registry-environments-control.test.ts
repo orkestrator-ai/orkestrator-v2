@@ -20,7 +20,7 @@ describe("create_environment control request idempotency", () => {
       storage,
       emit: () => undefined,
       environmentLifecycleTasks: {},
-      runtime: new BackendRuntime(),
+      runtime: new BackendRuntime({ emit: () => undefined }),
     } as unknown as CommandContext;
     const secondContext = {
       ...context,

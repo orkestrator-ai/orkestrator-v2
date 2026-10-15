@@ -78,7 +78,7 @@ async function reconcileContext(): Promise<{
     worktreeDir,
     strictDockerOwner: false,
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
-    runtime: new BackendRuntime(),
+    runtime: new BackendRuntime({ emit: () => undefined }),
   } as CommandContext;
   return { context, storage, dataDir, worktreeDir };
 }

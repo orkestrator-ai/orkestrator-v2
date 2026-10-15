@@ -58,7 +58,6 @@ import {
   resolveDockerImage,
 } from "./docker-image.js";
 import { createDockerContainer } from "./commands-containers.js";
-import { containerGitFetchPolicy } from "./commands-runtime-state.js";
 import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import { parseDockerPsSize } from "./docker-cleanup-inventory.js";
@@ -864,7 +863,7 @@ async function replaceRuntimePreservingStateUnfenced(
           error instanceof Error ? error.name : "unknown",
         );
       });
-    containerGitFetchPolicy.forgetContainer(sourceContainerId);
+    context.runtime.diffStats.containerGitFetchPolicy.forgetContainer(sourceContainerId);
     cancellationRequests.delete(operationId);
     return { kind, containerId: candidateId, runtimeGeneration, files, bytes };
   } catch (error) {

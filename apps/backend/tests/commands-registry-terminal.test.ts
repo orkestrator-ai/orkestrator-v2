@@ -1378,7 +1378,6 @@ exit 1
   });
 
   test("container status reads follow the fetch policy, not the read cadence", async () => {
-    const { containerGitFetchPolicy } = await import("../src/core/commands-runtime-state");
     const { formatContainerFetchResponse } = await import("../src/core/container-git-fetch");
     const environment = createEnvironment({
       id: "env-container-fetch-policy",
@@ -1388,6 +1387,7 @@ exit 1
       status: "running",
     });
     const { context } = createContext(environment);
+    const { containerGitFetchPolicy } = context.runtime.diffStats;
     const commands = createCommandRegistry();
     const framedStatus = framedContainerGitStatus("M\0tracked.txt\0", "1\t0\ttracked.txt\0");
     const fetchResponse = formatContainerFetchResponse({ repo: "/workspace" });

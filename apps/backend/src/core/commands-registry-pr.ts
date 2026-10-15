@@ -41,7 +41,6 @@ import {
   verifyEnvironmentReviewPackage,
   generateLoopedReviewPackage,
   mergePullRequestInContainer,
-  containerGitFetchPolicy,
   runStoredEnvironmentMerge,
   validatePrDetectionBranch,
   detectEnvironmentPullRequest,
@@ -211,7 +210,10 @@ export function registerPullRequestCommands(
       );
       // Stored environments invalidate inside `runStoredEnvironmentMerge`.
       if (result.outcome !== "pending") {
-        containerGitFetchPolicy.invalidate({ containerId: resolvedContainerId }, "mutation");
+        context.runtime.diffStats.containerGitFetchPolicy.invalidate(
+          { containerId: resolvedContainerId },
+          "mutation",
+        );
       }
       return result;
     }

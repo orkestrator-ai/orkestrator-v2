@@ -152,7 +152,7 @@ describe("GitHub picker to project registration", () => {
         resourceRoot: "",
         emit: () => undefined,
         environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
-        runtime: new BackendRuntime(),
+        runtime: new BackendRuntime({ emit: () => undefined }),
       } as CommandContext;
       const transport = spyOn(native, "invoke").mockImplementation(async (name, args) => {
         const handler = commands.get(name);

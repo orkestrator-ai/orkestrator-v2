@@ -84,7 +84,7 @@ export function memoryLifecycleContext(
     appRoot: dataDir,
     resourceRoot: dataDir,
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
-    runtime: new BackendRuntime(),
+    runtime: new BackendRuntime({ emit: (event, payload) => context.emit(event, payload) }),
   } as unknown as CommandContext;
   return { context, events, writes, environments: store };
 }

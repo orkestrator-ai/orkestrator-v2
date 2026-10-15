@@ -98,6 +98,7 @@ async function withCommands<T>(
     loopedReviews: options.loopedReviews,
     multiReviews: options.multiReviews,
     nativeAgents: options.nativeAgents ?? options.nativeAgentsFactory?.(storage),
+    runtime: new BackendRuntime({ emit: () => undefined }),
   } as unknown as CommandContext;
 
   const invoke = async (command: string, args: Record<string, unknown>) => {
@@ -109,6 +110,7 @@ async function withCommands<T>(
   try {
     return await run(invoke, storage, dataDir, commands);
   } finally {
+    context.runtime.shutdown();
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 }
@@ -4280,7 +4282,7 @@ describe("native agent and looped-review controller commands", () => {
           appRoot: "",
           resourceRoot: "",
           environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
-          runtime: new BackendRuntime(),
+          runtime: new BackendRuntime({ emit: () => undefined }),
           nativeAgents,
         });
 
@@ -4368,7 +4370,7 @@ describe("native agent and looped-review controller commands", () => {
             appRoot: "",
             resourceRoot: "",
             environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
-            runtime: new BackendRuntime(),
+            runtime: new BackendRuntime({ emit: () => undefined }),
             nativeAgents,
           }),
         ).resolves.toMatchObject({

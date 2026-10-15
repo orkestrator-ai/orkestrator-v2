@@ -238,11 +238,9 @@ export function ToolPart({
     () => (questions ? resolveQuestionToolAnswers(questions, toolArgs, toolOutput) : null),
     [questions, toolArgs, toolOutput],
   );
-  // The answers are already marked on the questions, so the result text that
-  // restates them adds nothing. Anything unparsed stays visible.
-  const showToolOutput =
-    Boolean(toolOutput) &&
-    !(answeredQuestions && answeredQuestions.every((question) => question.answered));
+  // Answer recovery is lossy: results may also contain notes, previews, or
+  // provider-specific context. Keep the original result below the questions.
+  const showToolOutput = Boolean(toolOutput);
 
   const stateColors = {
     success: "text-success",

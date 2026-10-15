@@ -74,14 +74,17 @@ describe("parseQuestionToolOutput", () => {
     expect([...answers.values()]).toEqual(["Keep it on top and push", "Into #1003"]);
   });
 
-  test("drops Claude's preview and note annotations from the answer", () => {
-    const questions = parseQuestionToolArgs({ questions: [{ question: "Q?", options: [] }] })!;
-    const answers = parseQuestionToolOutput(
-      questions,
-      'User has answered your questions: "Q?"="Yes" user notes: be careful. You can now continue with the user\'s answers in mind.',
-    );
-    expect(answers.get("Q?")).toBe("Yes");
-  });
+  test.each(["user notes: be careful", "selected preview: proposed changes"])(
+    "excludes %s from the recovered answer",
+    (annotation) => {
+      const questions = parseQuestionToolArgs({ questions: [{ question: "Q?", options: [] }] })!;
+      const answers = parseQuestionToolOutput(
+        questions,
+        `User has answered your questions: "Q?"="Yes" ${annotation}. You can now continue with the user's answers in mind.`,
+      );
+      expect(answers.get("Q?")).toBe("Yes");
+    },
+  );
 
   test("returns nothing for output that names no question", () => {
     const answers = parseQuestionToolOutput(parseQuestionToolArgs(ARGS)!, "User declined");
@@ -126,6 +129,20 @@ describe("resolveQuestionToolAnswers", () => {
     );
     expect(resolved!.selectedLabels).toEqual(["A, with comma"]);
     expect(resolved!.customAnswers).toEqual(["Something else"]);
+  });
+
+  test("splits comma-joined multi-select output in option order", () => {
+    const args = {
+      questions: [{ question: "Which?", multiSelect: true, options: ["A", "B", "C"] }],
+    };
+    const [resolved] = resolveQuestionToolAnswers(
+      parseQuestionToolArgs(args)!,
+      args,
+      'Your questions have been answered: "Which?"="C, A". You can now continue.',
+    );
+    expect(resolved!.selectedLabels).toEqual(["A", "C"]);
+    expect(resolved!.customAnswers).toEqual([]);
+    expect(resolved!.answered).toBe(true);
   });
 
   test("leaves questions unanswered while the call is pending", () => {

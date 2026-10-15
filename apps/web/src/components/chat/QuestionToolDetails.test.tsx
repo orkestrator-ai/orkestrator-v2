@@ -72,7 +72,7 @@ describe("question tool row", () => {
 
     const details = screen.getByTestId("question-tool");
     expect(container.textContent).not.toContain('"questions"');
-    expect(container.textContent).not.toContain("Your questions have been answered");
+    expect(container.textContent).toContain(ANSWERED_OUTPUT);
 
     const first = within(details).getByRole("region", { name: "0795fb29" });
     expect(within(first).getByText("How should I treat the commit?")).toBeTruthy();
@@ -102,6 +102,101 @@ describe("question tool row", () => {
 
     expect(screen.getByTestId("question-tool")).toBeTruthy();
     expect(screen.getByText("The user dismissed the questions.")).toBeTruthy();
-    expect(screen.getByTestId("question-tool").querySelector("[data-selected]")).toBeNull();
+    expect(screen.getByTestId("question-tool").querySelectorAll("[data-selected]").length).toBe(0);
+  });
+
+  test.each(["user notes: be careful", "selected preview: proposed changes"])(
+    "keeps %s visible when all questions are answered",
+    (annotation) => {
+      const output = ANSWERED_OUTPUT.replace(
+        '"Keep it on top and push",',
+        `"Keep it on top and push" ${annotation},`,
+      );
+      const { container } = renderParts([questionPart({ toolOutput: output })]);
+      fireEvent.click(screen.getByText("AskUserQuestion"));
+
+      const details = screen.getByTestId("question-tool");
+      expect(details.querySelectorAll("[data-selected]").length).toBe(2);
+      expect(details.textContent).not.toContain(annotation);
+      expect(container.textContent).toContain(output);
+    },
+  );
+
+  test("renders argument-provided answers and preserves supplemental result text", () => {
+    const { container } = renderParts([
+      questionPart({
+        toolArgs: {
+          ...QUESTION_ARGS,
+          answers: {
+            "How should I treat the commit?": "Leave it alone",
+            "Where should the two public keys go?": "Discuss with the author",
+          },
+        },
+        toolOutput: "Additional context: wait for the author's confirmation.",
+      }),
+    ]);
+    fireEvent.click(screen.getByText("AskUserQuestion"));
+
+    const details = screen.getByTestId("question-tool");
+    const selected = Array.from(details.querySelectorAll("[data-selected]")).map((row) =>
+      row.textContent?.trim(),
+    );
+    expect(selected).toEqual(["Leave it aloneSomeone else is still working on it."]);
+    expect(within(details).getByText("Discuss with the author")).toBeTruthy();
+    expect(container.textContent).toContain(
+      "Additional context: wait for the author's confirmation.",
+    );
+  });
+
+  test("shows the multi-select badge and every selected option", () => {
+    renderParts([
+      questionPart({
+        toolArgs: {
+          questions: [
+            {
+              question: "Which checks?",
+              multiSelect: true,
+              options: [{ label: "Lint" }, { label: "Types" }, { label: "Tests" }],
+            },
+          ],
+        },
+        toolOutput:
+          'Your questions have been answered: "Which checks?"="Tests, Lint". You can now continue.',
+      }),
+    ]);
+    fireEvent.click(screen.getByText("AskUserQuestion"));
+
+    const details = screen.getByTestId("question-tool");
+    expect(within(details).getByText("multi-select")).toBeTruthy();
+    const selected = Array.from(details.querySelectorAll("[data-selected]")).map((row) =>
+      row.textContent?.trim(),
+    );
+    expect(selected).toEqual(["Lint", "Tests"]);
+  });
+
+  test("shows pending questions without selected answers or result text", () => {
+    const { container } = renderParts([
+      questionPart({ toolState: "pending", toolOutput: undefined }),
+    ]);
+    fireEvent.click(screen.getByText("AskUserQuestion"));
+
+    const details = screen.getByTestId("question-tool");
+    expect(within(details).getAllByRole("region").length).toBe(2);
+    expect(details.querySelectorAll("[data-selected]").length).toBe(0);
+    expect(container.textContent).not.toContain("Your questions have been answered");
+  });
+
+  test("keeps partial result text while marking only the answered question", () => {
+    const output =
+      'Your questions have been answered: "How should I treat the commit?"="Leave it alone". You can now continue.';
+    const { container } = renderParts([questionPart({ toolOutput: output })]);
+    fireEvent.click(screen.getByText("AskUserQuestion"));
+
+    const details = screen.getByTestId("question-tool");
+    const first = within(details).getByRole("region", { name: "0795fb29" });
+    const second = within(details).getByRole("region", { name: "Keys go in" });
+    expect(first.querySelectorAll("[data-selected]").length).toBe(1);
+    expect(second.querySelectorAll("[data-selected]").length).toBe(0);
+    expect(container.textContent).toContain(output);
   });
 });

@@ -47,11 +47,12 @@ overrides that predate the execution policy.
   - `onElicitation` declines with a status row that names the MCP server.
     `onUserDialog` answers `cancelled`, and `supportedDialogKinds` is
     deliberately left undeclared (`session-manager-prompt-query.ts`).
-- Grok: `publicApprovals` (`bridges/acp-bridge/src/acp-public.ts`) reports every
-  ACP permission request as `kind: "permissions"` with
-  `permissions: { fileSystem: true }`. Titles already come from
-  `permissionTitle` (`acp-session.ts`). Plan approvals and questions use the
-  separate `x.ai/exit_plan_mode` and `x.ai/ask_user_question` reverse requests.
+- Grok: `publicApprovals` (`bridges/acp-bridge/src/acp-public.ts`) reports each
+  ACP permission request in ACP's own shape (title from `permissionTitle`,
+  plus the agent's options), which the native branch of `mapAcpApproval`
+  offers as a required choice. While any request is held, `/activity` answers
+  `waiting`. Plan approvals and questions use the separate
+  `x.ai/exit_plan_mode` and `x.ai/ask_user_question` reverse requests.
 - OpenCode: every production owner creates the provider with
   `autoAnswerRequests: false`, so OpenCode interactions go through the same
   journaled path as everyone else. The `OpenCodeProvider` auto-reject branch
@@ -98,16 +99,15 @@ overrides that predate the execution policy.
    render. Until this lands, `nativeAgentCapabilities("claude").interactions.kinds`
    over-claims `mcp-form`, `mcp-url` and `elicitation`. Either park them or drop
    the three kinds from the table.
-3. **Grok approval kind.** Every Grok approval reaches the card as a generic
-   file-system `permission`. `publicApprovals` emits the Codex-shaped envelope
-   (`approvalId`, `kind: "permissions"`), which `mapAcpApproval`
-   (`apps/backend/src/core/http-bridge-interactions.ts`) hands to
-   `mapCodexApproval`. The native ACP branch of `mapAcpApproval` hard-codes
-   `kind: "permission"` too. Derive the kind from the ACP `toolCall.kind` in the
-   bridge: report `execute` as `command` and `edit` as `file-change`, with the
-   fields those kinds carry, and keep `permissions` for everything else. The
-   backend then maps them onto `command-approval` and `file-approval`. Carry the
-   request's blocking hint if ACP supplies one.
+3. **Grok approval kind.** Every Grok approval reaches the card as a
+   `permission` titled by the tool call, with the agent's own options. The
+   native ACP branch of `mapAcpApproval`
+   (`apps/backend/src/core/http-bridge-interactions.ts`) hard-codes
+   `kind: "permission"`. Derive the kind from the ACP `toolCall.kind` in the
+   bridge: report `execute` as a command approval and `edit` as a file change,
+   with the fields those kinds carry, and keep `permission` for everything
+   else. The backend then maps them onto `command-approval` and
+   `file-approval`. Carry the request's blocking hint if ACP supplies one.
 4. **Claude question previews.** Set `toolConfig.askUserQuestion.previewFormat`
    once the question card's rendering mode (plain or html) is decided. Nothing
    sets it today.

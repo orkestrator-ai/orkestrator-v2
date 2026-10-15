@@ -1014,7 +1014,13 @@ ACP was reshaped; `subagent_update`, `session_message` and state updates were
 added); `session/close`, `session/resume`, `session/list`, `promptCapabilities`
 and `StopReason` are unchanged.
 
-The bridge launches Grok with `--always-approve agent stdio`.
+The bridge launches Grok with `--always-approve agent stdio`. Grok 1.0.52 still
+asks over ACP for every edit, command, fetch and MCP call (MCP calls arrive as
+its `use_tool` wrapper), and the bridge answers them itself under the
+`auto-approve` policy (`autoApprovedPermissionOption` and
+`orkestratorToolPermissionOption` in `acp-session.ts`). After a bump, check
+that a live Grok edit still completes without an approval card, and that an
+Orkestrator tool called through `use_tool` is still matched.
 
 `bridges/acp-bridge/src/acp-server.test.ts` asserts these vectors against
 `bridges/acp-bridge/src/testing/fake-agent.ts`, which records its own argv and

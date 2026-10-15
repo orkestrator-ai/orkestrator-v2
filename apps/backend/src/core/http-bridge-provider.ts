@@ -87,6 +87,7 @@ import {
 import { closeBridgeSessionRetaining } from "./bridge-session-close.js";
 import { HttpBridgeTranscriptReader } from "./http-bridge-transcript-reader.js";
 import { HttpBridgeActivityBatchReader } from "./http-bridge-activity-batch.js";
+import { readAcpTurnTerminalError } from "./http-bridge-turn-outcome.js";
 
 export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   readonly agent: HttpBridgeAgent;
@@ -112,6 +113,8 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   private readonly transcripts: HttpBridgeTranscriptReader;
   /** Scoped to this connection, so a restarted bridge re-detects the batch route. */
   private readonly activityBatchReader: HttpBridgeActivityBatchReader;
+  /** Grok only: see {@link readAcpTurnTerminalError}. */
+  readonly turnTerminalError?: (sessionId: string, requestId: string) => Promise<string | null>;
 
   constructor(
     private readonly connection: BridgeConnection,
@@ -130,6 +133,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       resolveInteraction: (sessionId, interactionId, resolution) =>
         this.interactionAdapter.resolveInteraction(sessionId, interactionId, resolution),
     };
+    if (this.agent === "grok") {
+      this.turnTerminalError = (sessionId, requestId) =>
+        readAcpTurnTerminalError(connection, fetchImpl, sessionId, requestId);
+    }
   }
 
   private contextUsage(value: unknown) {

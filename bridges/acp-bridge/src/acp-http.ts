@@ -88,7 +88,7 @@ import {
   scheduleCursorToolMetadataReconcile,
 } from "./acp-tools.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
-import { dispatchAcpPrompt, promptStopReason } from "./acp-prompt.js";
+import { dispatchAcpPrompt, promptStopReason, turnTerminalError } from "./acp-prompt.js";
 import { sessionActivityObservation } from "./acp-activity.js";
 import {
   answerSessionActivityBatch,
@@ -392,6 +392,15 @@ export async function route(
         (entry.state === "accepted" || entry.state === "completed" || entry.state === "failed")
           ? "dispatched"
           : "unknown",
+      // How the turn ended, once it has: the backend's `turnTerminalError`.
+      ...(entry && (entry.state === "completed" || entry.state === "failed")
+        ? {
+            turn: {
+              state: entry.state,
+              ...(entry.terminalError ? { error: entry.terminalError } : {}),
+            },
+          }
+        : {}),
     });
   }
   /**
@@ -789,11 +798,13 @@ export async function route(
             }
           }
         }
+        const terminalError = turnTerminalError(state, stopReason, promptSequence);
         if (requestId)
           setPromptJournal(state, {
             requestId,
             state: state.outputTruncated ? "failed" : "completed",
             acceptedAt: state.promptJournal.get(requestId)?.acceptedAt ?? Date.now(),
+            ...(terminalError ? { terminalError } : {}),
           });
         // The turn is over. A tool still in flight here was cancelled or abandoned
         // by the agent — ACP has no status for that, so settle it explicitly.

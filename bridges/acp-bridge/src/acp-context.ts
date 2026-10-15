@@ -230,6 +230,12 @@ export interface PromptJournalEntry {
   requestId: string;
   state: "prepared" | "accepted" | "completed" | "failed" | "ambiguous";
   acceptedAt: number;
+  /**
+   * Why a finished turn was cut short (see `turnTerminalError`), served by
+   * `/dispatch` as the turn's failure. Absent when the agent ended the turn
+   * itself or the user stopped it.
+   */
+  terminalError?: string;
 }
 
 export interface ActiveSubagentDescriptor {
@@ -443,6 +449,8 @@ export interface SessionState {
   turnStartedAt?: number;
   /** A user cancellation suppresses any retriable-provider retry still in backoff. */
   retryCancelledPromptSequence?: number;
+  /** `promptSequence` of the turn in which a held request expired unanswered. */
+  expiredRequestPromptSequence?: number;
   /**
    * Bounded ACP command inventory (see `acp-commands.ts`); persisted so a
    * restart does not empty the picker. Undefined until anything is known.

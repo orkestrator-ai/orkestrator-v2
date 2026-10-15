@@ -10,6 +10,7 @@ import { pathToFileURL } from "node:url";
 
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
+import { dismissStartupDialogs } from "./electron-startup-dialogs";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const packageRoot = path.join(repositoryRoot, "apps", "desktop");
@@ -174,6 +175,7 @@ async function testIndependentWindows(nicknamesOnly = false): Promise<void> {
       },
     });
     launchedApp = app;
+    dismissStartupDialogs(app);
     const window = await app.firstWindow();
     await expect(window).toHaveTitle(profile.electronTitle);
     await expect

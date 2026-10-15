@@ -82,11 +82,25 @@ describe("POST /sessions/activity", () => {
     const subagent = observedSession("acp-subagent", {
       activeSubagentToolIds: new Set(["tool-1"]),
     } as Partial<SessionState>);
-    for (const { state } of [idle, running, subagent]) sessions.set(state.id, state);
+    // A held permission or Grok question stops the agent until someone answers.
+    const permission = observedSession("acp-permission", {
+      status: "running",
+      approvals: new Map([["approval-1", {}]]),
+    } as Partial<SessionState>);
+    const question = observedSession("acp-question", {
+      status: "running",
+      interactions: new Map([["tool-2", {}]]),
+    } as Partial<SessionState>);
+    // A request left over from a finished turn is not a reason to wait.
+    const settled = observedSession("acp-settled", {
+      approvals: new Map([["approval-2", {}]]),
+    } as Partial<SessionState>);
+    const observed = [idle, running, subagent, permission, question, settled];
+    for (const { state } of observed) sessions.set(state.id, state);
     try {
       const response = await batch({
         version: 1,
-        sessionIds: ["acp-idle", "acp-running", "acp-subagent", "acp-unknown"],
+        sessionIds: [...observed.map(({ state }) => state.id), "acp-unknown"],
       });
       expect(response.status).toBe(200);
       const body = (await response.json()) as { observations: Record<string, unknown> };
@@ -96,18 +110,21 @@ describe("POST /sessions/activity", () => {
           "acp-idle": { activity: "idle" },
           "acp-running": { activity: "working" },
           "acp-subagent": { activity: "working" },
+          "acp-permission": { activity: "waiting" },
+          "acp-question": { activity: "waiting" },
+          "acp-settled": { activity: "idle" },
           "acp-unknown": { activity: "missing" },
         },
       });
       for (const id of Object.keys(body.observations)) {
         expect(body.observations[id]).toEqual(await single(id));
       }
-      for (const { state, writes } of [idle, running, subagent]) {
+      for (const { state, writes } of observed) {
         expect(writes).toEqual([]);
         expect(state.child).toBeNull();
       }
     } finally {
-      for (const id of ["acp-idle", "acp-running", "acp-subagent"]) sessions.delete(id);
+      for (const { state } of observed) sessions.delete(state.id);
     }
   });
 

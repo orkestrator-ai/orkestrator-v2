@@ -18,6 +18,9 @@ release/
 # Packaged Bun bootstrap (downloaded only for desktop packaging)
 binaries/
 
+# Release requirements manifest generated into the CLI package (scripts/build.ts)
+/packages/cli/resources/release-requirements.json
+
 # Package outputs
 *.dmg
 *.exe

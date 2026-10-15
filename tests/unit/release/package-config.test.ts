@@ -79,6 +79,16 @@ describe("Electron packaging configuration", () => {
     expect(taskCommands("package:release")).toContain(
       "electron-builder.release.config.ts --publish never",
     );
+    // Every packaged app embeds its own requirements manifest, which the update
+    // service diffs a target release against.
+    for (const task of ["package:mac", "package:linux", "package:release"]) {
+      expect(taskCommands(task)).toContain("mise run release:requirements");
+    }
+    expect(taskCommands("release:requirements")).toBe(
+      "bun scripts/release-requirements.ts generate --out build/release-requirements.json",
+    );
+    expect(taskCommands("publish:cli")).toContain("bun scripts/release-cli.ts publish");
+    expect(taskCommands("publish:cli")).not.toContain("bun publish");
     expect(taskCommands("setup")).not.toContain("download:binaries");
     expect(taskCommands("build:all")).not.toContain("download:binaries");
     expect(taskCommands("docker:build")).not.toContain("--no-cache");
@@ -117,6 +127,7 @@ describe("Electron packaging configuration", () => {
     );
     expect(packageJson.build.extraResources).toEqual(
       expect.arrayContaining([
+        { from: "build/release-requirements.json", to: "release-requirements.json" },
         expect.objectContaining({ from: "apps/web/dist", to: "web" }),
         expect.objectContaining({ from: "apps/backend/dist", to: "backend" }),
         expect.objectContaining({

@@ -12,6 +12,10 @@ import {
   pinnedToolchainArtifacts,
   selectPinnedToolchainArtifacts,
 } from "@orkestrator/toolchain/manifest";
+import {
+  compareReleaseVersions,
+  releaseChannelOfVersion,
+} from "../../packages/protocol/src/release-channels";
 
 const repoRoot = join(import.meta.dir, "..", "..");
 
@@ -613,6 +617,30 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
         lock.workspaces?.[workspacePath]?.version,
         `bun.lock workspace ${workspacePath} disagrees with ${manifestPath}`,
       ).toBe(manifest.version);
+    }
+  });
+
+  test("release requirements: hand-declared floors and hosts are valid for this version", () => {
+    // config/release-requirements.json feeds every release's requirements
+    // manifest. A floor above the release would block every client; a host
+    // that is not a lowercase DNS name would fail the manifest parser in
+    // every installed app.
+    const rootVersion = (JSON.parse(read("package.json")) as { version: string }).version;
+    const config = JSON.parse(read("config/release-requirements.json")) as {
+      compatibility: { minClientVersion: string; minBackendVersion: string };
+      egressHosts: Array<{ host: string; purposes: string[] }>;
+    };
+    for (const floor of Object.values(config.compatibility)) {
+      expect(releaseChannelOfVersion(floor), `${floor} is not a release version`).not.toBeNull();
+      expect(compareReleaseVersions(floor, rootVersion)).toBeLessThanOrEqual(0);
+    }
+    expect(
+      releaseChannelOfVersion(rootVersion),
+      "the root version is on no channel",
+    ).not.toBeNull();
+    for (const { host, purposes } of config.egressHosts) {
+      expect(host).toMatch(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/);
+      expect(purposes.length).toBeGreaterThan(0);
     }
   });
 

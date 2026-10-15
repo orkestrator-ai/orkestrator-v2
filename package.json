@@ -59,6 +59,10 @@
     ],
     "extraResources": [
       {
+        "from": "build/release-requirements.json",
+        "to": "release-requirements.json"
+      },
+      {
         "from": "apps/web/dist",
         "to": "web",
         "filter": [

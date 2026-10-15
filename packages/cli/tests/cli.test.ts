@@ -200,6 +200,16 @@ describe("orkestrator CLI package", () => {
     await expect(
       Bun.file(path.join(packageRoot, "resources/codex-bridge/dist/index.js")).exists(),
     ).resolves.toBe(true);
+    // The update service diffs a target release against this, and a supervised
+    // install checks the staged package against the approved manifest.
+    const requirements = (await Bun.file(
+      path.join(packageRoot, "resources/release-requirements.json"),
+    ).json()) as { schema: string; version: string };
+    const manifest = (await Bun.file(path.join(packageRoot, "package.json")).json()) as {
+      version: string;
+    };
+    expect(requirements.schema).toBe("orkestrator-release-requirements");
+    expect(requirements.version).toBe(manifest.version);
   });
 
   test("declares exactly the packages its bundles resolve at runtime", async () => {
@@ -276,6 +286,7 @@ describe("orkestrator CLI package", () => {
       "package.json",
       "resources/claude-bridge/dist/index.js",
       "resources/codex-bridge/dist/index.js",
+      "resources/release-requirements.json",
     ]);
   });
 

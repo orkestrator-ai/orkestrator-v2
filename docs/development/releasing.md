@@ -1,16 +1,24 @@
 # Releasing the desktop app
 
-Releases are built on maintainer machines, not in CI: the macOS build on a Mac
-and the Linux build on a Linux (Arch/Omarchy) machine. Both upload to one GitHub
-release on `orkestrator-ai/orkestrator-v2`, which serves the website download
-links and the in-app updater.
+Orkestrator ships on three channels: **stable** (`vX.Y.Z`), **beta**
+(`vX.Y.Z-beta.N`) and **unstable** (`vX.Y.Z-unstable.<yyyymmdd>.<run>.g<sha>`).
+Stable and beta are built on maintainer machines: the macOS build on a Mac and
+the Linux build on a Linux (Arch/Omarchy) machine. Unstable is built nightly
+from `main` by CI (`.github/workflows/release-unstable.yml`). Every release
+uploads to one GitHub release on `orkestrator-ai/orkestrator-v2`, which serves
+the website download links and the in-app updater. The channel model, feeds
+and requirements manifest are described in
+[release-channels-and-updates.md](../architecture/release-channels-and-updates.md).
 
-## Cutting a release
+## Cutting a stable or beta release
 
-1. Bump the version in every manifest listed in `AGENTS.md`, regenerate the
-   lockfiles, and merge the change through a pull request.
+1. Bump the version in every manifest listed in `AGENTS.md` (`2.21.0`, or
+   `2.21.0-beta.1` for a beta), regenerate the lockfiles, and merge the change
+   through a pull request. A version on no channel (`-rc.1`, `-alpha.1`, build
+   metadata) is refused by every release command.
 2. On `main`, tag the merge commit `v<version>` (it must equal `package.json`'s
-   version) and push the tag: `git tag v2.20.0 && git push origin v2.20.0`.
+   version) and push the tag: `git tag v2.21.0 && git push origin v2.21.0`.
+   The tag also publishes the container image with that channel's tags.
 3. **On the Mac** (Apple Silicon), at the tagged commit:
 
    ```bash
@@ -23,22 +31,93 @@ links and the in-app updater.
    mise run release:desktop
    ```
 
-5. From either machine, once both have finished:
+5. Publish the npm package on the channel's dist-tag (`latest`, `beta`):
+
+   ```bash
+   mise run publish:cli
+   ```
+
+6. From either build machine, still at the tagged commit, once all of that
+   has finished:
 
    ```bash
    mise run release:publish
    ```
 
 Each `release:desktop` run refuses to continue unless the working tree is clean
-and `HEAD` is the pushed `v<version>` tag. It installs dependencies, builds, and
-uploads to a **draft** release, so nothing is visible until `release:publish`,
-which also refuses to publish unless macOS and Linux artifacts and their updater
-feeds are present (Linux uses `latest-linux.yml` for x64 or
-`latest-linux-arm64.yml` for arm64).
-macOS builds replace every generated macOS channel feed in the draft with a
-Darwin 22 minimum; publication downloads those feeds and verifies the floor
-before making the draft public.
-Tags with a `-suffix` publish as prereleases, which the updater ignores.
+and `HEAD` is the pushed `v<version>` tag. It installs dependencies, builds,
+generates the release requirements manifest (`build/release-requirements.json`,
+also embedded in the app), and uploads everything to a **draft** release, so
+nothing is visible until `release:publish`. Publication refuses unless:
+
+- macOS and Linux artifacts and their updater feeds are present (Linux uses
+  `latest-linux.yml` for x64 or `latest-linux-arm64.yml` for arm64);
+- the uploaded macOS feeds carry the Darwin 22 floor (macOS builds replace every
+  generated macOS feed in the draft with it);
+- the uploaded `release-requirements.json` is byte-identical to the one this
+  tagged checkout generates (and, once signing keys are embedded, carries a
+  valid `release-requirements.json.sig`);
+- `orkestrator@<version>` is on npm, so the channel index never points a
+  headless backend at a version it cannot install.
+
+It then publishes stable releases as **latest** and beta and unstable ones as
+prereleases (never latest), and rebuilds the channel index (`channels.json` on
+the `update-channels` release) with `scripts/release-channel-index.ts`. Clients
+from before channels follow `/releases/latest` and so only ever see stable.
+`mise run release:channels` rebuilds the index on its own; it is derived from
+the published releases, so running it again is always safe.
+
+## Unstable builds
+
+`release-unstable.yml` runs nightly at 03:17 UTC and on `workflow_dispatch`.
+It skips a `main` commit that already has an unstable release unless
+dispatched with **force**. For a new build it:
+
+1. computes the version (`scripts/release-channel.ts unstable-version`): the
+   next patch after `main`'s stable version, or `main`'s own core when `main`
+   is a prerelease, plus the date, the run number and the short commit;
+2. writes it into every manifest, regenerates the lockfiles, commits that on
+   top of `main` **without** touching `main`, and pushes only the tag;
+3. builds macOS arm64 (signed and notarized from secrets) and Linux x64 and
+   arm64 with `release:desktop`, publishes npm on the `unstable` dist-tag,
+   runs `release:publish`, and prunes all but the newest ten unstable releases;
+4. calls `publish-container.yml` for the `unstable` image tag;
+5. deletes the draft and tag again if any step before publication failed.
+
+## One-time setup
+
+1. Create the channel index release. It must stay a prerelease so it can never
+   become `/releases/latest`:
+
+   ```bash
+   gh release create update-channels --repo orkestrator-ai/orkestrator-v2 --prerelease \
+     --title "Update channels" --notes "Channel index for in-app updates. Do not delete."
+   ```
+
+2. Add these repository secrets (Settings › Secrets and variables › Actions):
+
+   | Secret | Value |
+   | --- | --- |
+   | `MAC_CERTIFICATE_P12_BASE64` | Base64 of the Developer ID Application certificate exported as `.p12` |
+   | `MAC_CERTIFICATE_PASSWORD` | That export's password |
+   | `APPLE_API_KEY_P8` | Contents of the App Store Connect API key (`AuthKey_XXXX.p8`) used for notarization |
+   | `APPLE_API_KEY_ID` | The key's id |
+   | `APPLE_API_ISSUER` | The issuer id |
+   | `NPM_TOKEN` | A granular npm token that can publish `orkestrator` |
+   | `ORKESTRATOR_RELEASE_SIGNING_KEY` | Optional until manifest signing is enabled: an Ed25519 PKCS#8 PEM |
+
+3. If a tag ruleset protects `v*`, let GitHub Actions create and delete
+   `v*-unstable.*` tags.
+4. Enable the **Release unstable** workflow (scheduled workflows in a fork or a
+   repository without recent activity start disabled).
+
+To turn manifest signing on later, generate a key
+(`openssl genpkey -algorithm ed25519`), store it as the secret and on the
+maintainer machines, add the output of
+`ORKESTRATOR_RELEASE_SIGNING_KEY=… bun scripts/release-requirements.ts public-key`
+(and a standby key) to `packages/protocol/src/release-signing-keys.ts`, and
+release that change. From then on every release must be signed; see
+"Integrity" in the architecture doc before doing this.
 
 To rehearse a build without uploading or needing the tag, run
 `mise run release:desktop -- --no-publish`. Artifacts land in `release/`.
@@ -51,7 +130,8 @@ when a GitHub token is available.
 | --- | --- |
 | Mac | Apple Silicon; a Developer ID Application certificate in the login keychain; notarization credentials in the environment (`APPLE_API_KEY`/`APPLE_API_KEY_ID`/`APPLE_API_ISSUER`, `APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID`, or `APPLE_KEYCHAIN_PROFILE`). |
 | Linux | `mise`, `git`, and `bsdtar` (`sudo pacman -S libarchive`). |
-| Both | `gh auth login` (or `GH_TOKEN`) with write access to the repository. |
+| Both | `gh auth login` (or `GH_TOKEN`) with write access to the repository; `curl` (the npm check); `ORKESTRATOR_RELEASE_SIGNING_KEY` once signing is enabled. |
+| Whoever runs `publish:cli` | An npm login (or `NPM_CONFIG_TOKEN`) that can publish `orkestrator`. |
 
 macOS auto-update only works for builds signed with a Developer ID, which is why
 the base config's ad-hoc signing (`mise run package:mac`) is local-only.
@@ -125,5 +205,8 @@ accept it. Update both the plist floor and feed floor when support changes.
   unverified. Windows releases are not yet covered.
 - A real update has not been exercised end to end. Before announcing, ship a
   release, install it from the download, ship the next version, and confirm the
-  prompt and restart on both platforms. Prereleases do not count: the updater
-  ignores them.
+  prompt and restart on both platforms. Prereleases do not count for clients
+  older than the channel-aware updater: they follow stable only.
+- The unstable workflow has not run yet: the CI macOS signing and notarization
+  path, the Linux arm64 `fpm` setup and the tag push from Actions are
+  unqualified until its first green run.

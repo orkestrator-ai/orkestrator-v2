@@ -18,7 +18,9 @@ const assets = [
   "app.AppImage",
   "app.pacman",
   "latest-linux.yml",
+  "release-requirements.json",
 ];
+const REPO = "orkestrator-ai/orkestrator-v2";
 
 function harness(overrides: Partial<ReleaseRuntime> = {}) {
   const run = mock((_command: string[], _env?: NodeJS.ProcessEnv) => {});
@@ -41,8 +43,21 @@ function harness(overrides: Partial<ReleaseRuntime> = {}) {
     releaseTag: () => tag,
     artifacts: () => ["app.dmg", "mac-arm64-unpacked"],
     prepareMacUpdateFeeds: () => ["release/latest-mac.yml"],
+    tempDir: () => ({ path: "/tmp/release-test", cleanup: () => {} }),
+    npmVersionExists: () => true,
     ...overrides,
   };
+  return { runtime, run, capture };
+}
+
+function publishHarness(overrides: Partial<ReleaseRuntime> = {}, releaseAssets = assets) {
+  const { runtime, run, capture } = harness(overrides);
+  const original = capture.getMockImplementation()!;
+  capture.mockImplementation((command) =>
+    command[0] === "gh" && command[2] === "view"
+      ? JSON.stringify({ isDraft: true, assets: releaseAssets.map((name) => ({ name })) })
+      : original(command),
+  );
   return { runtime, run, capture };
 }
 
@@ -166,6 +181,13 @@ describe("desktop release commands", () => {
         ["bun", "install", "--frozen-lockfile"],
         ["mise", "run", "download:bun"],
         ["mise", "run", "build:all"],
+        [
+          "bun",
+          "scripts/release-requirements.ts",
+          "generate",
+          "--out",
+          "build/release-requirements.json",
+        ],
         ["bunx", "electron-builder", flag, `--${arch}`, "--config", config, "--publish", "always"],
         ...(platform === "darwin"
           ? [
@@ -175,12 +197,22 @@ describe("desktop release commands", () => {
                 "upload",
                 tag,
                 "--repo",
-                "orkestrator-ai/orkestrator-v2",
+                REPO,
                 "--clobber",
                 "release/latest-mac.yml",
               ],
             ]
           : []),
+        [
+          "gh",
+          "release",
+          "upload",
+          tag,
+          "--repo",
+          REPO,
+          "--clobber",
+          "build/release-requirements.json",
+        ],
       ]);
       expect(run.mock.calls[2]?.[1]).toMatchObject({
         GH_TOKEN: "test-only",
@@ -193,8 +225,43 @@ describe("desktop release commands", () => {
     const { runtime, run, capture } = harness();
     runDesktopRelease(["build", "--no-publish"], runtime);
     expect(capture).not.toHaveBeenCalled();
-    expect(run.mock.calls[3]?.[0].slice(-2)).toEqual(["--publish", "never"]);
+    expect(run.mock.calls[4]?.[0].slice(-2)).toEqual(["--publish", "never"]);
+    expect(run.mock.calls.some(([command]) => command[2] === "upload")).toBe(false);
   });
+
+  test("signs the manifest and uploads the signature when a signing key is configured", () => {
+    const { runtime, run } = harness({
+      env: { GH_TOKEN: "test-only", ORKESTRATOR_RELEASE_SIGNING_KEY: "pem" },
+    });
+    runDesktopRelease(["build"], runtime);
+    const commands = run.mock.calls.map(([command]) => command);
+    expect(commands).toContainEqual([
+      "bun",
+      "scripts/release-requirements.ts",
+      "sign",
+      "--file",
+      "build/release-requirements.json",
+      "--out",
+      "build/release-requirements.json.sig",
+    ]);
+    expect(commands.at(-1)?.slice(-2)).toEqual([
+      "build/release-requirements.json",
+      "build/release-requirements.json.sig",
+    ]);
+  });
+
+  test.each(["2.21.0-rc.1", "2.21.0-alpha.1", "2.21.0+build"])(
+    "refuses to build or publish %s, which is on no channel, before side effects",
+    (version) => {
+      const { runtime, run, capture } = harness({ releaseTag: () => `v${version}` });
+      expect(() => runDesktopRelease(["build"], runtime)).toThrow("not a release channel version");
+      expect(() => runDesktopRelease(["publish"], runtime)).toThrow(
+        "not a release channel version",
+      );
+      expect(run).not.toHaveBeenCalled();
+      expect(capture).not.toHaveBeenCalled();
+    },
+  );
 
   test.each([
     ["darwin", "x64", "Apple Silicon"],
@@ -229,56 +296,117 @@ describe("desktop release commands", () => {
   });
 
   test.each(assets)("refuses to publish a draft missing required %s", (missing) => {
-    const { runtime, run } = harness({
-      capture: () =>
-        JSON.stringify({
-          isDraft: true,
-          assets: assets.filter((name) => name !== missing).map((name) => ({ name })),
-        }),
-    });
+    const { runtime, run } = publishHarness(
+      {},
+      assets.filter((name) => name !== missing),
+    );
     expect(() => runDesktopRelease(["publish"], runtime)).toThrow("is missing");
     expect(run).not.toHaveBeenCalled();
+  });
+
+  test("refuses to publish from a checkout that is not the pushed tag", () => {
+    const { runtime, run, capture } = publishHarness();
+    const original = capture.getMockImplementation()!;
+    capture.mockImplementation((command) =>
+      command[1] === "ls-remote" ? `${other}\trefs/tags/${tag}` : original(command),
+    );
+    expect(() => runDesktopRelease(["publish"], runtime)).toThrow(
+      "on origin does not point at HEAD",
+    );
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  test("verifies the uploaded requirements manifest against this checkout before publishing", () => {
+    const { runtime, run } = publishHarness();
+    runDesktopRelease(["publish"], runtime);
+    const commands = run.mock.calls.map(([command]) => command);
+    expect(commands.slice(0, 2)).toEqual([
+      [
+        "gh",
+        "release",
+        "download",
+        tag,
+        "--repo",
+        REPO,
+        "--pattern",
+        "release-requirements.json",
+        "--dir",
+        "/tmp/release-test",
+        "--clobber",
+      ],
+      [
+        "bun",
+        "scripts/release-requirements.ts",
+        "verify",
+        "--file",
+        "/tmp/release-test/release-requirements.json",
+      ],
+    ]);
+  });
+
+  test("downloads and checks the signature when the draft carries one", () => {
+    const { runtime, run } = publishHarness({}, [...assets, "release-requirements.json.sig"]);
+    runDesktopRelease(["publish"], runtime);
+    const commands = run.mock.calls.map(([command]) => command);
+    expect(commands[1]?.[7]).toBe("release-requirements.json.sig");
+    expect(commands[2]?.slice(-2)).toEqual([
+      "--signature",
+      "/tmp/release-test/release-requirements.json.sig",
+    ]);
+  });
+
+  test("refuses to publish before the npm package exists", () => {
+    const { runtime, run } = publishHarness({ npmVersionExists: () => false });
+    expect(() => runDesktopRelease(["publish"], runtime)).toThrow("publish:cli");
+    expect(run.mock.calls.some(([command]) => command[2] === "edit")).toBe(false);
   });
 
   test.each([
     ["v2.19.9", false],
     ["v2.20.0-beta.1", true],
-  ] as const)("derives prerelease/latest flags from %s", (releaseTag, prerelease) => {
-    const { runtime, run } = harness({ releaseTag: () => releaseTag });
-    runDesktopRelease(["publish"], runtime);
-    expect(run).toHaveBeenCalledWith([
-      "gh",
-      "release",
-      "edit",
-      releaseTag,
-      "--repo",
-      "orkestrator-ai/orkestrator-v2",
-      "--draft=false",
-      `--prerelease=${prerelease}`,
-      `--latest=${!prerelease}`,
-    ]);
-  });
+    ["v2.20.1-unstable.20261015.12.g3f2a9c1", true],
+  ] as const)(
+    "derives prerelease/latest flags from %s and republishes the channel index",
+    (releaseTag, prerelease) => {
+      const { runtime, run, capture } = publishHarness({ releaseTag: () => releaseTag });
+      const original = capture.getMockImplementation()!;
+      capture.mockImplementation((command) =>
+        command[1] === "ls-remote" ? `${head}\trefs/tags/${releaseTag}` : original(command),
+      );
+      runDesktopRelease(["publish"], runtime);
+      const commands = run.mock.calls.map(([command]) => command);
+      expect(commands.at(-2)).toEqual([
+        "gh",
+        "release",
+        "edit",
+        releaseTag,
+        "--repo",
+        REPO,
+        "--draft=false",
+        `--prerelease=${prerelease}`,
+        `--latest=${!prerelease}`,
+      ]);
+      expect(commands.at(-1)).toEqual(["bun", "scripts/release-channel-index.ts", "publish"]);
+    },
+  );
 
   test("accepts the architecture-specific arm64 Linux updater feed", () => {
-    const { runtime, run } = harness({
-      capture: (command) =>
-        command[2] === "download"
-          ? "minimumSystemVersion: '22.0.0'\n"
-          : JSON.stringify({
-              isDraft: true,
-              assets: assets.map((name) => ({
-                name: name === "latest-linux.yml" ? "latest-linux-arm64.yml" : name,
-              })),
-            }),
-    });
+    const { runtime, run } = publishHarness(
+      {},
+      assets.map((name) => (name === "latest-linux.yml" ? "latest-linux-arm64.yml" : name)),
+    );
     runDesktopRelease(["publish"], runtime);
-    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls.some(([command]) => command[2] === "edit")).toBe(true);
   });
 
   test("refuses an already-public release", () => {
-    const { runtime, run } = harness({
-      capture: () => JSON.stringify({ isDraft: false, assets: [] }),
-    });
+    const { runtime, run, capture } = harness();
+    const original = capture.getMockImplementation()!;
+    capture.mockImplementation((command) =>
+      command[0] === "gh" && command[2] === "view"
+        ? JSON.stringify({ isDraft: false, assets: [] })
+        : original(command),
+    );
     expect(() => runDesktopRelease(["publish"], runtime)).toThrow("already published");
     expect(run).not.toHaveBeenCalled();
   });

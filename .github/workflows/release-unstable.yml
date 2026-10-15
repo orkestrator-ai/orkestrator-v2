@@ -1,0 +1,284 @@
+name: Release unstable
+
+# Nightly (and on demand) unstable build of main, published as a GitHub
+# prerelease, the npm `unstable` dist-tag and the GHCR `unstable` tag.
+# Versions are X.Y.Z-unstable.<yyyymmdd>.<run>.g<sha>
+# (docs/architecture/release-channels-and-updates.md). The version bump lives
+# only in a release commit on top of main that the tag points at; main itself
+# is never written.
+#
+# Secrets (referenced by name; see docs/development/releasing.md):
+#   MAC_CERTIFICATE_P12_BASE64, MAC_CERTIFICATE_PASSWORD  Developer ID Application
+#   APPLE_API_KEY_P8, APPLE_API_KEY_ID, APPLE_API_ISSUER   notarization
+#   NPM_TOKEN                                               npm publish (unstable tag)
+#   ORKESTRATOR_RELEASE_SIGNING_KEY (optional)              manifest signature
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Build even if this commit already has an unstable release
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-unstable
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare the release commit and tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up mise toolchain
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+
+      - name: Skip a commit that already has an unstable release
+        id: check
+        env:
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          short="$(git rev-parse --short=7 HEAD)"
+          existing="$(git tag --list "v*-unstable.*.g${short}" | head -n 1)"
+          if [[ -n "$existing" && "$FORCE" != "true" ]]; then
+            echo "main (${short}) is already released as ${existing}."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compute the unstable version
+        id: version
+        if: steps.check.outputs.skip != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(mise exec -- bun scripts/release-channel.ts unstable-version \
+            --run "${GITHUB_RUN_NUMBER}" --sha "$(git rev-parse HEAD)")"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Create the release commit and push its tag
+        if: steps.check.outputs.skip != 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mise exec -- bun install --frozen-lockfile
+          mise exec -- bun scripts/release-channel.ts set-version "$VERSION"
+          # A version-only bump still changes workspace metadata in the lockfiles.
+          mise exec -- bun install
+          mise exec -- bun install --cwd bridges/claude-bridge
+          mise exec -- bun install --frozen-lockfile
+          mise exec -- bun install --cwd bridges/claude-bridge --frozen-lockfile
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --all --message "chore: unstable release ${VERSION}"
+          git tag "$TAG"
+          # Only the tag is pushed; the release commit is not on any branch.
+          git push origin "refs/tags/${TAG}"
+
+  build-macos:
+    name: Build macOS arm64
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: macos-15
+    timeout-minutes: 150
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Set up mise toolchain
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+
+      - name: Write the notarization key outside the checkout
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          key="${RUNNER_TEMP}/AuthKey.p8"
+          umask 077
+          printf '%s' "$APPLE_API_KEY_P8" > "$key"
+          echo "APPLE_API_KEY=${key}" >> "$GITHUB_ENV"
+
+      # electron-builder imports CSC_LINK into a temporary keychain; the release
+      # config enables hardened runtime and notarization and refuses to build
+      # without notarization credentials.
+      - name: Build, sign, notarize and upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.MAC_CERTIFICATE_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          ORKESTRATOR_RELEASE_SIGNING_KEY: ${{ secrets.ORKESTRATOR_RELEASE_SIGNING_KEY }}
+        run: mise run release:desktop
+
+      - name: Remove the notarization key
+        if: always()
+        run: rm -f "${RUNNER_TEMP}/AuthKey.p8"
+
+  build-linux:
+    name: Build Linux ${{ matrix.arch }}
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Set up mise toolchain
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+
+      # bsdtar builds the pacman package. electron-builder's bundled fpm is
+      # x64-only, so arm64 uses the system one.
+      - name: Install packaging tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+          if [[ "${{ matrix.arch }}" == "arm64" ]]; then
+            sudo apt-get install -y ruby ruby-dev build-essential
+            sudo gem install --no-document fpm
+            echo "USE_SYSTEM_FPM=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build and upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ORKESTRATOR_RELEASE_SIGNING_KEY: ${{ secrets.ORKESTRATOR_RELEASE_SIGNING_KEY }}
+        run: mise run release:desktop
+
+  publish-npm:
+    name: Publish npm (unstable)
+    needs: [prepare, build-macos, build-linux]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Set up mise toolchain
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Smoke-test and publish on the unstable dist-tag
+        env:
+          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: mise run publish:cli
+
+  publish-release:
+    name: Publish the prerelease and the channel index
+    needs: [prepare, publish-npm]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Set up mise toolchain
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Verifies every platform's assets and the requirements manifest, checks
+      # npm, publishes the draft as a prerelease (never latest) and rebuilds
+      # channels.json.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: mise run release:publish
+
+      - name: Prune old unstable releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bun scripts/release-channel-index.ts prune-unstable --keep 10
+
+  container:
+    name: Container image
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    uses: ./.github/workflows/publish-container.yml
+    with:
+      tag: ${{ needs.prepare.outputs.tag }}
+
+  # A failed run leaves a draft and a tag no channel will ever point at.
+  clean-up:
+    name: Remove an unpublished release
+    needs: [prepare, build-macos, build-linux, publish-npm, publish-release]
+    if: failure() && needs.prepare.outputs.tag != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Delete the draft release and its tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          draft="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || echo missing)"
+          if [[ "$draft" == "true" ]]; then
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
+          elif [[ "$draft" == "missing" ]]; then
+            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}" || true
+          else
+            echo "${TAG} is already public; leaving it."
+          fi

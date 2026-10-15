@@ -167,8 +167,16 @@ describe("monorepo orchestration scripts", () => {
     const tasks = miseTasks();
 
     expect(tasks["smoke:cli"]?.run).toBe("bun run --cwd packages/cli smoke:pack");
-    expect(tasks["publish:cli"]?.run).toContain("mise run smoke:cli");
-    expect(tasks["publish:cli"]?.run).toContain("bun publish --cwd packages/cli --access public");
+    expect(tasks["publish:cli"]?.run).toEqual([
+      "mise run smoke:cli",
+      "bun scripts/release-cli.ts publish",
+    ]);
+    // The release script publishes publicly and always names the channel's
+    // dist-tag, so a prerelease can never move `latest`.
+    const releaseCli = read("scripts/release-cli.ts");
+    expect(releaseCli).toContain(
+      '"publish",\n    "--cwd",\n    "packages/cli",\n    "--access",\n    "public",\n    "--tag",',
+    );
     // The smoke script must verify the runtime dependencies actually resolve
     // from the installed layout, not just that the backend boots.
     expect(read("packages/cli/scripts/smoke-packed.ts")).toContain(

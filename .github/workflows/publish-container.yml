@@ -1,18 +1,29 @@
 name: Publish container image
 
+# Stable and beta tags are pushed by hand and trigger this directly. The
+# unstable workflow calls it instead: a tag pushed with GITHUB_TOKEN does not
+# trigger other workflows. Tags per channel come from
+# scripts/release-channel.ts (only stable moves latest, X.Y and X).
 on:
   push:
     tags:
       - "[0-9]*.[0-9]*.[0-9]*"
       - "v[0-9]*.[0-9]*.[0-9]*"
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag to build (v<version>)
+        required: true
+        type: string
 
 concurrency:
-  group: publish-container-${{ github.ref }}
+  group: publish-container-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   validate-release:
@@ -22,27 +33,37 @@ jobs:
     permissions:
       contents: read
 
+    outputs:
+      commit: ${{ steps.version.outputs.commit }}
+      version: ${{ steps.version.outputs.version }}
+
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up mise
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
 
       - name: Validate release version
+        id: version
         shell: bash
         run: |
           set -euo pipefail
 
-          tag_version="${GITHUB_REF_NAME#v}"
+          tag_version="${RELEASE_TAG#v}"
           package_version="$(node -p "require('./package.json').version")"
-
-          if [[ ! "$tag_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
-            echo "Tag '${GITHUB_REF_NAME}' is not a semantic version." >&2
-            exit 1
-          fi
 
           if [[ "$tag_version" != "$package_version" ]]; then
             echo "Tag version '${tag_version}' does not match package.json version '${package_version}'." >&2
             exit 1
           fi
+
+          # Refuses anything that is not a stable, beta or unstable version.
+          mise exec -- bun scripts/release-channel.ts classify "$tag_version"
+          echo "version=${tag_version}" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.name }}
@@ -66,6 +87,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -110,7 +133,7 @@ jobs:
           labels: ${{ steps.metadata.outputs.labels }}
           build-args: |
             ORKESTRATOR_IMAGE_CAPABILITIES=${{ steps.contract.outputs.capabilities }}
-            ORKESTRATOR_SOURCE_REVISION=${{ github.sha }}
+            ORKESTRATOR_SOURCE_REVISION=${{ needs.validate-release.outputs.commit }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=orkestrator-container-${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=orkestrator-container-${{ matrix.name }}
@@ -134,7 +157,7 @@ jobs:
 
   publish:
     name: Publish multi-architecture manifest
-    needs: build
+    needs: [validate-release, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -161,18 +184,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Generate image metadata
-        id: metadata
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          flavor: |
-            latest=auto
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=sha,prefix=sha-,format=long
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up mise
+        uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
+
+      # Explicit per-channel tags instead of metadata-action's latest=auto, so
+      # the rule is unit-tested and does not depend on the triggering event.
+      - name: Compute channel tags
+        id: metadata
+        env:
+          RELEASE_VERSION: ${{ needs.validate-release.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.validate-release.outputs.commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "tags<<EOF"
+            mise exec -- bun scripts/release-channel.ts container-tags "$RELEASE_VERSION" \
+              --image "${REGISTRY}/${IMAGE_NAME}" --sha "$RELEASE_COMMIT"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create and verify multi-architecture manifest
         id: manifest
@@ -213,12 +248,13 @@ jobs:
       - name: Record release digest
         env:
           IMAGE_DIGEST: ${{ steps.manifest.outputs.digest }}
+          RELEASE_COMMIT: ${{ needs.validate-release.outputs.commit }}
         run: |
           jq -n \
             --arg image "${REGISTRY}/${IMAGE_NAME}" \
             --arg digest "$IMAGE_DIGEST" \
-            --arg ref "$GITHUB_REF_NAME" \
-            --arg commit "$GITHUB_SHA" \
+            --arg ref "$RELEASE_TAG" \
+            --arg commit "$RELEASE_COMMIT" \
             '{image: $image, digest: $digest, ref: $ref, commit: $commit, platforms: ["linux/amd64", "linux/arm64"]}' \
             > "${RUNNER_TEMP}/image-release.json"
           {

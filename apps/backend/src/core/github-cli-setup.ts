@@ -32,6 +32,8 @@ export interface GitHubCliStatus {
   authenticated: boolean;
   /** This runtime may sign `gh` in. False in isolated test profiles. */
   canSignIn: boolean;
+  /** The user turned off the startup reminder to set `gh` up. */
+  reminderDismissed: boolean;
 }
 
 export type GitHubCliOperationState = "idle" | "pending" | "succeeded" | "failed";
@@ -56,10 +58,15 @@ function assertSignInAllowed(context: CommandContext): void {
 
 export async function getGitHubCliStatus(context: CommandContext): Promise<GitHubCliStatus> {
   const installed = await checkHostTool(context, "gh");
+  const [authenticated, config] = await Promise.all([
+    installed ? getHostGitHubToken().then(Boolean) : false,
+    context.storage.loadConfig(),
+  ]);
   return {
     installed,
-    authenticated: installed && Boolean(await getHostGitHubToken()),
+    authenticated,
     canSignIn: installed && context.runtimeFlavor !== "agent-test",
+    reminderDismissed: config.global.githubCliReminderDismissed === true,
   };
 }
 

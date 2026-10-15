@@ -491,6 +491,8 @@ export interface GitHubCliStatus {
   authenticated: boolean;
   /** This backend may sign `gh` in. False in isolated test profiles. */
   canSignIn: boolean;
+  /** The user turned off the startup reminder to set `gh` up. */
+  reminderDismissed: boolean;
 }
 
 export type GitHubCliOperationState = "idle" | "pending" | "succeeded" | "failed";

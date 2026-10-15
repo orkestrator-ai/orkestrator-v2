@@ -519,6 +519,9 @@ export abstract class StorageConfig extends StorageProjects {
       if (config.global.worktreeLocations !== undefined)
         validated.worktreeLocations = config.global.worktreeLocations;
       else delete validated.worktreeLocations;
+      // Written only by `setGitHubCliReminderDismissed`, likewise.
+      if (config.global.githubCliReminderDismissed) validated.githubCliReminderDismissed = true;
+      else delete validated.githubCliReminderDismissed;
       config.global = options.preserveCredentials
         ? {
             ...validated,
@@ -578,6 +581,18 @@ export abstract class StorageConfig extends StorageProjects {
         ...config.global,
         notificationSounds,
       };
+      await this.saveSensitiveJson(this.configFile(), config);
+      this.announce("config", "app");
+      return config;
+    });
+  }
+
+  /** Turn the startup GitHub CLI reminder off, or back on. */
+  async setGitHubCliReminderDismissed(dismissed: boolean): Promise<AppConfig> {
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadConfig();
+      if (dismissed) config.global.githubCliReminderDismissed = true;
+      else delete config.global.githubCliReminderDismissed;
       await this.saveSensitiveJson(this.configFile(), config);
       this.announce("config", "app");
       return config;

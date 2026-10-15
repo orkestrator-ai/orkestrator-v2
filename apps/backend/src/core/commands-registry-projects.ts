@@ -855,6 +855,12 @@ export function registerProjectCommands(
   register("update_notification_sound_settings", async ({ settings }, { storage }) =>
     redactAppConfig(await storage.updateNotificationSoundSettings(settings)),
   );
+  register("set_github_cli_reminder_dismissed", async (args, { storage }) => {
+    assertOnlyKeys(args, ["dismissed"], "set_github_cli_reminder_dismissed argument");
+    return redactAppConfig(
+      await storage.setGitHubCliReminderDismissed(asRequiredBoolean(args.dismissed, "dismissed")),
+    );
+  });
   register("set_github_token", async ({ token }, { storage }) => {
     const nextToken = token === null ? null : asString(token, "token").trim();
     if (nextToken !== null && !nextToken) {

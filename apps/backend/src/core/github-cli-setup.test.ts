@@ -70,10 +70,12 @@ async function waitForSpawn(calls: unknown[]): Promise<void> {
 describe("GitHub CLI setup", () => {
   let root: string;
   let previousPath: string | undefined;
+  let reminderDismissed: boolean | undefined;
 
   beforeEach(() => {
     root = mkdtempSync(path.join(os.tmpdir(), "ork-github-cli-setup-"));
     previousPath = process.env.PATH;
+    reminderDismissed = undefined;
     resetGitHubCliSetupForTests();
   });
 
@@ -95,7 +97,10 @@ describe("GitHub CLI setup", () => {
       toolchainBinDir,
       appRoot,
       resourceRoot: appRoot,
-      storage: { agentAccountsDirectory: () => path.join(root, "accounts") },
+      storage: {
+        agentAccountsDirectory: () => path.join(root, "accounts"),
+        loadConfig: async () => ({ global: { githubCliReminderDismissed: reminderDismissed } }),
+      },
     } as unknown as CommandContext;
   }
 
@@ -214,6 +219,7 @@ describe("GitHub CLI setup", () => {
         installed: true,
         authenticated: true,
         canSignIn: true,
+        reminderDismissed: false,
       });
     },
   );
@@ -226,7 +232,10 @@ describe("GitHub CLI setup", () => {
       installed: true,
       authenticated: false,
       canSignIn: true,
+      reminderDismissed: false,
     });
+    reminderDismissed = true;
+    expect((await getGitHubCliStatus(context)).reminderDismissed).toBe(true);
     // An isolated profile may not sign in, so it is never offered there.
     expect((await getGitHubCliStatus(contextFor("agent-test"))).canSignIn).toBe(false);
   });
@@ -238,6 +247,7 @@ describe("GitHub CLI setup", () => {
       installed: false,
       authenticated: false,
       canSignIn: false,
+      reminderDismissed: false,
     });
   });
 });

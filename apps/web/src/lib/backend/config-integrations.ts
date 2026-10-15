@@ -157,6 +157,11 @@ export async function updateGlobalConfig(global: GlobalConfig): Promise<AppConfi
   return invoke<AppConfig>("update_global_config", { global });
 }
 
+/** Turn the startup reminder to set up the GitHub CLI off, or back on. */
+export async function setGitHubCliReminderDismissed(dismissed: boolean): Promise<AppConfig> {
+  return invoke<AppConfig>("set_github_cli_reminder_dismissed", { dismissed });
+}
+
 export async function updateNotificationSoundSettings(
   settings: import("@orkestrator/protocol/notification-sounds").NotificationSoundSettings,
 ): Promise<AppConfig> {

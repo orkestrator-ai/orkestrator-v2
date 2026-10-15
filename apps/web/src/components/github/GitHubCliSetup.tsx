@@ -7,6 +7,7 @@ import {
   getGitHubCliLogin,
   getGitHubCliStatus,
   openInBrowser,
+  setGitHubCliReminderDismissed,
   startGitHubCliLogin,
   type GitHubCliLoginProgress,
   type GitHubCliStatus,
@@ -107,6 +108,12 @@ export function GitHubCliSetup({
     run(async () => {
       setCopied(false);
       setLogin(await startGitHubCliLogin());
+    });
+
+  const restoreReminder = () =>
+    run(async () => {
+      await setGitHubCliReminderDismissed(false);
+      await refresh();
     });
 
   const cancelLogin = () =>
@@ -242,6 +249,20 @@ export function GitHubCliSetup({
   return (
     <div className={cn("space-y-2", className)}>
       {body}
+      {status?.reminderDismissed && !status.authenticated ? (
+        <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          You won&apos;t be reminded about this at startup.
+          <Button
+            type="button"
+            size="sm"
+            variant="link"
+            className="h-auto p-0 text-xs"
+            onClick={() => void restoreReminder()}
+          >
+            Remind me at startup
+          </Button>
+        </p>
+      ) : null}
       {error ? (
         <p role="alert" className="flex items-start gap-2 text-xs text-destructive">
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />

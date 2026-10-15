@@ -245,8 +245,10 @@ const defaultGitHubCliStatus = async () => ({
   installed: lastGithubCliCheck !== false,
   authenticated: true,
   canSignIn: lastGithubCliCheck !== false,
+  reminderDismissed: false,
 });
 const mockGetGitHubCliStatus = mock(defaultGitHubCliStatus);
+const mockSetGitHubCliReminderDismissed = mock(async (_dismissed: boolean) => mockConfig);
 const mockGetConfig = mock(async () => mockConfig);
 const mockGetResourceRevisionManifest = mock(async () => ({
   generation: "a".repeat(32),
@@ -359,6 +361,7 @@ mock.module("@/lib/backend", () => ({
   },
   getAvailableAiCli: mockGetAvailableAiCli,
   getGitHubCliStatus: mockGetGitHubCliStatus,
+  setGitHubCliReminderDismissed: mockSetGitHubCliReminderDismissed,
   getGitHubCliLogin: async () => ({ state: "idle" }),
   getConfig: mockGetConfig,
   getResourceRevisionManifest: mockGetResourceRevisionManifest,
@@ -574,6 +577,7 @@ function resetAppMocks() {
   lastGithubCliCheck = undefined;
   mockGetGitHubCliStatus.mockClear();
   mockGetGitHubCliStatus.mockImplementation(defaultGitHubCliStatus);
+  mockSetGitHubCliReminderDismissed.mockClear();
   mockGetConfig.mockClear();
   mockGetConfig.mockImplementation(async () => mockConfig);
   mockGetResourceRevisionManifest.mockClear();
@@ -3048,6 +3052,7 @@ describe("App startup checks and global events", () => {
       installed: true,
       authenticated: false,
       canSignIn: true,
+      reminderDismissed: false,
     }));
     resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
 
@@ -3065,12 +3070,67 @@ describe("App startup checks and global events", () => {
       installed: true,
       authenticated: false,
       canSignIn: false,
+      reminderDismissed: false,
     }));
     resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
 
     render(<App />);
 
     await waitFor(() => expect(mockGetGitHubCliStatus).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("Sign In to GitHub") === null).toBe(true);
+  });
+
+  test("remembers 'Don't remind me again' for the GitHub sign-in", async () => {
+    mockGetGitHubCliStatus.mockImplementation(async () => ({
+      installed: true,
+      authenticated: false,
+      canSignIn: true,
+      reminderDismissed: false,
+    }));
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    render(<App />);
+
+    expect(await screen.findByText("Sign In to GitHub")).toBeTruthy();
+    act(() => screen.getByRole("checkbox", { name: "Don't remind me again" }).click());
+    act(() => screen.getByRole("button", { name: "Not Now" }).click());
+
+    await waitFor(() => expect(mockSetGitHubCliReminderDismissed).toHaveBeenCalledWith(true));
+    expect(screen.queryByText("Sign In to GitHub") === null).toBe(true);
+  });
+
+  test("does not save a reminder preference when the box is left unticked", async () => {
+    mockGetGitHubCliStatus.mockImplementation(async () => ({
+      installed: true,
+      authenticated: false,
+      canSignIn: true,
+      reminderDismissed: false,
+    }));
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    render(<App />);
+
+    expect(await screen.findByText("Sign In to GitHub")).toBeTruthy();
+    act(() => screen.getByRole("button", { name: "Not Now" }).click());
+
+    await waitFor(() => expect(screen.queryByText("Sign In to GitHub") === null).toBe(true));
+    expect(mockSetGitHubCliReminderDismissed).not.toHaveBeenCalled();
+  });
+
+  test("skips the GitHub setup reminder once the user turned it off", async () => {
+    mockCheckGithubCli.mockImplementation(async () => false);
+    mockGetGitHubCliStatus.mockImplementation(async () => ({
+      installed: false,
+      authenticated: false,
+      canSignIn: false,
+      reminderDismissed: true,
+    }));
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    render(<App />);
+
+    await waitFor(() => expect(mockGetGitHubCliStatus).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("GitHub CLI Not Found") === null).toBe(true);
     expect(screen.queryByText("Sign In to GitHub") === null).toBe(true);
   });
 

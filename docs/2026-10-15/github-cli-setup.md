@@ -14,6 +14,11 @@ Status: Implemented 2026-10-15 on `fix-startup-claude-login-dialog-blocks-app-6b
   - Once you approve, the dialog shows the signed-in state and its button
     reads **Done**. Before that it reads **Not Now**.
   - Dismissing it lasts for the session, like the other startup notices.
+  - Ticking **Don't remind me again** before closing turns the reminder off
+    for good, for both the sign-in and the missing-`gh` dialog. The choice is
+    stored in the global config (`githubCliReminderDismissed`), so it applies
+    to every window and browser client. Settings → GitHub authentication then
+    says so and offers **Remind me at startup** to turn it back on.
 - **No `gh` at all.** This is rare: Windows, or a failed toolchain download.
   The old "GitHub CLI Not Found" dialog appears with install commands, an
   **Install instructions** link and **Check again**.
@@ -49,9 +54,13 @@ Status: Implemented 2026-10-15 on `fix-startup-claude-login-dialog-blocks-app-6b
   - `check_github_cli` uses the same `checkHostTool` as the agents (moved to
     `host-tools.ts`). Agent-test profiles therefore see only their provisioned
     copy.
+  - `set_github_cli_reminder_dismissed` writes the reminder flag through its
+    own queued config mutation. Like `worktreeLocations`, every settings save
+    carries the stored value forward, so the settings form can neither clear
+    nor overwrite it.
   - `github-cli-setup.ts` provides:
     - `get_github_cli_status`, returning `{installed, authenticated,
-      canSignIn}`;
+      canSignIn, reminderDismissed}`;
     - start, poll and cancel commands for `gh auth login --web --hostname
       github.com`, through the agent-account login driver (kind `"github"`).
     The sign-in removes `GH_TOKEN` and `GITHUB_TOKEN` from the login's

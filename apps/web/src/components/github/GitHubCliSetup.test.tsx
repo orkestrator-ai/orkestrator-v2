@@ -24,6 +24,9 @@ mock.module("@/lib/native/backend", () => ({
       case "start_github_cli_login":
         login = loginResult;
         return Promise.resolve(login);
+      case "set_github_cli_reminder_dismissed":
+        status = { ...status, reminderDismissed: false };
+        return Promise.resolve({ global: {} });
       case "cancel_github_cli_login":
         login = { state: "idle" };
         return Promise.resolve(login);
@@ -41,7 +44,12 @@ afterAll(() => {
 
 const { GitHubCliSetup } = await import("./GitHubCliSetup");
 
-const SIGNED_OUT: GitHubCliStatus = { installed: true, authenticated: false, canSignIn: true };
+const SIGNED_OUT: GitHubCliStatus = {
+  installed: true,
+  authenticated: false,
+  canSignIn: true,
+  reminderDismissed: false,
+};
 
 function renderSetup(onStatusChange?: (status: GitHubCliStatus) => void) {
   return render(<GitHubCliSetup pollIntervalMs={5} onStatusChange={onStatusChange} />);
@@ -79,7 +87,7 @@ describe("GitHubCliSetup", () => {
 
     onNextPoll = () => {
       login = { state: "succeeded", operationId: "login-1" };
-      status = { installed: true, authenticated: true, canSignIn: true };
+      status = { installed: true, authenticated: true, canSignIn: true, reminderDismissed: false };
     };
     expect(await screen.findByText("The GitHub CLI is installed and signed in.")).toBeTruthy();
     expect(statuses.at(-1)).toEqual(status);
@@ -122,7 +130,7 @@ describe("GitHubCliSetup", () => {
   });
 
   test("shows install commands when no gh is available, then finds one", async () => {
-    status = { installed: false, authenticated: false, canSignIn: false };
+    status = { installed: false, authenticated: false, canSignIn: false, reminderDismissed: false };
     renderSetup();
 
     expect(await screen.findByText("winget install GitHub.cli")).toBeTruthy();
@@ -132,8 +140,21 @@ describe("GitHubCliSetup", () => {
     expect(await screen.findByRole("button", { name: "Sign in to GitHub" })).toBeTruthy();
   });
 
+  test("turns a dismissed startup reminder back on", async () => {
+    status = { ...SIGNED_OUT, reminderDismissed: true };
+    renderSetup();
+
+    const restore = await screen.findByRole("button", { name: "Remind me at startup" });
+    act(() => restore.click());
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Remind me at startup" }) === null).toBe(true),
+    );
+    expect(calls).toContain("set_github_cli_reminder_dismissed");
+  });
+
   test("does not offer sign-in where the backend refuses it", async () => {
-    status = { installed: true, authenticated: false, canSignIn: false };
+    status = { installed: true, authenticated: false, canSignIn: false, reminderDismissed: false };
     renderSetup();
 
     expect(await screen.findByText(/this profile cannot sign it in/)).toBeTruthy();

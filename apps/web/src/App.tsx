@@ -32,6 +32,7 @@ import { ErrorDetailsDialog } from "@/components/errors";
 import { HostPathPickerDialog } from "@/components/host-path/HostPathPickerDialog";
 import { ContainerHostReachabilityNotice } from "@/components/docker/ContainerHostReachabilityNotice";
 import { GitHubCliSetup } from "@/components/github/GitHubCliSetup";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   checkDocker,
   checkClaudeCli,
@@ -39,6 +40,7 @@ import {
   checkGithubCli,
   getAvailableAiCli,
   getGitHubCliStatus,
+  setGitHubCliReminderDismissed,
   getConfig,
   getEnvironment,
   getResourceRevisionManifest,
@@ -353,6 +355,7 @@ function App() {
   // Latched so the dialog stays open, showing the result, once the sign-in it
   // offered has finished.
   const [githubSignInOffered, setGithubSignInOffered] = useState(false);
+  const [githubReminderOptOut, setGithubReminderOptOut] = useState(false);
   const [claudeLoginNoticeDismissed, setClaudeLoginNoticeDismissed] = useState(false);
   const [localBackendUnavailableMessage, setLocalBackendUnavailableMessage] = useState<
     string | null
@@ -767,11 +770,20 @@ function App() {
     }
   };
 
-  // The dialog stays open after an install so the user can sign in; closing it
-  // publishes what the setup found.
+  // The dialog stays open after a sign-in so the user sees it worked; closing it
+  // publishes what the setup found, and remembers a "don't remind me again".
   const handleCloseGithubCliSetup = () => {
     setGithubCliWarningDismissed(true);
     if (githubCliSetupStatus?.installed) setGithubCliAvailable(true);
+    if (githubReminderOptOut && !githubCliSetupStatus?.authenticated) {
+      void setGitHubCliReminderDismissed(true)
+        .then(setConfig)
+        .catch((error) => {
+          toast.error("Could not save your reminder preference", {
+            description: error instanceof Error ? error.message : String(error),
+          });
+        });
+    }
   };
 
   // Prefer Chromium's real page zoom in Electron. Unlike CSS `zoom`, native page
@@ -916,17 +928,17 @@ function App() {
 
   // Orkestrator installs its own gh with the agent CLIs, so a missing one is
   // rare; a signed-out one is the usual reason GitHub features do not work.
+  // Either is offered at startup unless the user asked not to be reminded.
   useEffect(() => {
-    if (hostToolCheckStatus !== "complete" || githubCliAvailable !== true) return;
+    if (hostToolCheckStatus !== "complete" || githubCliAvailable === null) return;
     if (githubCliSetupStatus) return;
     let active = true;
     void getGitHubCliStatus()
       .then((status) => {
         if (!active) return;
         setGithubCliSetupStatus(status);
-        if (status.installed && !status.authenticated && status.canSignIn) {
-          setGithubSignInOffered(true);
-        }
+        const needsSetup = !status.installed || (!status.authenticated && status.canSignIn);
+        if (needsSetup && !status.reminderDismissed) setGithubSignInOffered(true);
       })
       .catch((error) => console.warn("[App] Could not read GitHub CLI status:", error));
     return () => {
@@ -939,9 +951,11 @@ function App() {
     hostToolCheckStatus === "complete" &&
     typeof availableAiCli === "string" &&
     !showClaudeLoginNotice &&
-    (githubCliAvailable === false || githubSignInOffered) &&
+    githubSignInOffered &&
     !githubCliWarningDismissed;
-  const githubCliMissing = githubCliAvailable === false && !githubCliSetupStatus?.installed;
+  const githubCliMissing = githubCliSetupStatus
+    ? !githubCliSetupStatus.installed
+    : githubCliAvailable === false;
 
   const handleStartEnvironmentFromOverlay = useCallback(
     async (environmentId: string, initialPrompt?: string): Promise<boolean> => {
@@ -1591,6 +1605,15 @@ function App() {
             </AlertDialogHeader>
             <GitHubCliSetup onStatusChange={setGithubCliSetupStatus} />
             <AlertDialogFooter>
+              {githubCliSetupStatus?.authenticated ? null : (
+                <label className="mr-auto flex items-center gap-2 text-sm text-muted-foreground">
+                  <Checkbox
+                    checked={githubReminderOptOut}
+                    onCheckedChange={(checked) => setGithubReminderOptOut(checked === true)}
+                  />
+                  Don&apos;t remind me again
+                </label>
+              )}
               <AlertDialogAction onClick={handleCloseGithubCliSetup}>
                 {githubCliMissing
                   ? "Continue Without GitHub CLI"

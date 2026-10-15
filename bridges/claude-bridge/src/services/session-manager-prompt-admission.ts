@@ -14,7 +14,10 @@ import {
   recordPromptDispatch,
 } from "./session-manager-lifecycle.js";
 import { attachmentTag, readPersistedSessionMessagesOnce } from "./session-manager-persistence.js";
-import { createPromptStreamState } from "./session-manager-prompt-stream.js";
+import {
+  createPromptStreamState,
+  MAX_STREAM_CONTENT_BLOCK_INDEX,
+} from "./session-manager-prompt-stream.js";
 import {
   captureTurnStartup,
   createTurnState,
@@ -25,22 +28,14 @@ import {
 import { assertClaudeRuntimeStaticAccepts, openClaudeRuntime } from "./session-manager-runtime.js";
 import { markTranscriptChanged, resetTranscriptEpoch } from "./transcript-revision.js";
 
+export { MAX_STREAM_CONTENT_BLOCK_INDEX } from "./session-manager-prompt-stream.js";
+
 // Everything a turn does before it touches the SDK: admission, the claims it
 // makes on the session, the plan-mode toggle, the transcript read, the prompt
 // row and the TurnState itself. Each async step ends at an await the turn
 // always made, so splitting it out adds no new point where other work can run.
 
 export const STREAM_EVENT_COALESCE_MS = 100;
-/**
- * Highest content-block index accepted from a streamed SDK event.
- *
- * Real assistant responses use a small, dense sequence of content blocks.
- * Treat a larger index as malformed instead of retaining attacker-controlled
- * sparse state for the rest of the turn. The map-based storage below also
- * keeps iteration proportional to the number of blocks actually received.
- */
-export const MAX_STREAM_CONTENT_BLOCK_INDEX = 4_095;
-
 /** What `admitPrompt` claimed for this turn, before its first await. */
 export interface PromptAdmission {
   readonly session: SessionState;

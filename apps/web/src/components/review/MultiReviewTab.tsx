@@ -1,13 +1,10 @@
 import { ReviewValidationStatus } from "./ReviewValidationStatus";
 import { WorkflowResultStatus } from "./WorkflowResultStatus";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   AlertCircle,
   AlertTriangle,
-  CheckCircle2,
-  Circle,
-  CircleAlert,
-  FileWarning,
+  ExternalLink,
   Loader2,
   Pause,
   Play,
@@ -25,13 +22,7 @@ import {
 } from "@orkestrator/protocol/multi-review";
 import type { MultiReviewTabData } from "@/types/paneLayout";
 import { Button } from "@/components/ui/button";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { ContextMenuItem } from "@/components/ui/context-menu";
 import { StructuredReviewReportView } from "./StructuredReviewReportView";
 import { StackedEyes } from "./MultiReviewLaunchDialog";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
@@ -42,8 +33,36 @@ import * as backend from "@/lib/backend";
 import { MultiReviewFixPromptDialog } from "./MultiReviewFixPromptDialog";
 import { MultiReviewRestartDialog } from "./MultiReviewRestartDialog";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
-import { formatElapsed } from "@/lib/format-elapsed";
-import { runtimeSummary } from "@/lib/review/runtime-summary";
+import { formatElapsed, formatElapsedWithHours } from "@/lib/format-elapsed";
+import { formatTokenCount } from "@/lib/context-usage";
+import {
+  formatRuntimeParts,
+  runtimeParts,
+  runtimeSummary,
+  type RuntimeParts,
+} from "@/lib/review/runtime-summary";
+import {
+  flowNodeElementId,
+  MultiReviewFlowGraph,
+  type MultiReviewFlowNodeModel,
+} from "./MultiReviewFlowGraph";
+import {
+  MultiReviewFindingsPane,
+  MultiReviewInspectorHeader,
+  ReviewerTranscriptTail,
+} from "./MultiReviewInspector";
+import {
+  defaultFlowSelection,
+  flowPendingLabel,
+  latestActivityAt,
+  mergeReviewerFindings,
+  multiReviewElapsedSeconds,
+  multiReviewFlowEdges,
+  multiReviewTotalTokens,
+  reviewerFlowState,
+  severityCounts,
+  type MultiReviewFlowState,
+} from "./multi-review-flow";
 
 interface MultiReviewCommands {
   address: (workflowId: string) => Promise<MultiReviewWorkflow>;
@@ -88,6 +107,8 @@ interface MultiReviewTabProps {
   hydrateWorkflow?: typeof hydrateMultiReviewWorkflow;
   commands?: MultiReviewCommands;
   openReviewer?: (reviewerId: string, index: number) => void;
+  /** Reads the selected reviewer's transcript tail for the inspector. */
+  loadReviewerTranscript?: typeof backend.getMultiReviewReviewerTranscript;
 }
 
 function phaseCopy(workflow: MultiReviewWorkflow): string {
@@ -120,6 +141,17 @@ function phaseCopy(workflow: MultiReviewWorkflow): string {
     return workflow.fixSession.error ?? "The fix session stopped with an error";
   }
   return labels[workflow.phase];
+}
+
+/** Phases in which the backend is doing work rather than waiting for the user. */
+function isBusyPhase(phase: MultiReviewPhase): boolean {
+  return (
+    phase === "preparing" ||
+    phase === "reviewing" ||
+    phase === "consolidating" ||
+    phase === "fixing" ||
+    phase === "cancelling"
+  );
 }
 
 /**
@@ -193,17 +225,12 @@ export function multiReviewReviewSessionTabOptions(
 
 /**
  * The supervisor drives preparation and consolidation in one coordinator
- * session, then performs fixing in a separate session. Each card needs both a
- * label and the state that decides its icon and whether its session can open.
+ * session, then performs fixing in a separate session. Each node needs both a
+ * label and the state that decides its look and whether its session can open.
+ * Steps share the graph's state vocabulary, so a step and a reviewer in the
+ * same state look the same.
  */
-export type MultiReviewStepState =
-  | "not-started"
-  | "running"
-  | "paused"
-  | "complete"
-  | "failed"
-  | "cancelling"
-  | "cancelled";
+export type MultiReviewStepState = MultiReviewFlowState;
 
 export interface MultiReviewStepStatus {
   label: string;
@@ -497,26 +524,64 @@ const STEP_REQUEST_KIND: Record<MultiReviewStepKey, MultiReviewStepKind> = {
  * predate those records still have only the shared session, which can be read
  * for whichever step is using it now.
  */
+export function multiReviewStepRuntimeParts(
+  workflow: MultiReviewWorkflow,
+  step: MultiReviewStepKey,
+  running: boolean,
+  now = Date.now(),
+): RuntimeParts | null {
+  if (workflow.stepRuntimes) {
+    // A step this workflow has records for but no record of has not run yet,
+    // and must not borrow the shared session's clock from the step that has.
+    const runtime = workflow.stepRuntimes[STEP_REQUEST_KIND[step]];
+    return runtime ? runtimeParts(runtime, running, now) : null;
+  }
+  if (fixSessionRuntimeStep(workflow) !== step) return null;
+  const session =
+    step === "fix"
+      ? workflow.fixSession
+      : (workflow.reviewSession ??
+        (workflow.reviewModel || workflow.consolidationModel ? undefined : workflow.fixSession));
+  if (!session) return null;
+  const elapsed = fixSessionRuntimeSummary(session, now);
+  return elapsed
+    ? { elapsed, tokens: null, tokensPending: false, live: session.status === "running" }
+    : null;
+}
+
 export function multiReviewStepRuntimeSummary(
   workflow: MultiReviewWorkflow,
   step: MultiReviewStepKey,
   running: boolean,
   now = Date.now(),
 ): string | null {
-  if (workflow.stepRuntimes) {
-    // A step this workflow has records for but no record of has not run yet,
-    // and must not borrow the shared session's clock from the step that has.
-    const runtime = workflow.stepRuntimes[STEP_REQUEST_KIND[step]];
-    return runtime ? runtimeSummary(runtime, running, now) : null;
+  const parts = multiReviewStepRuntimeParts(workflow, step, running, now);
+  return parts ? formatRuntimeParts(parts) : null;
+}
+
+/** Column heading for the reviewer panel: finished over the reviewers still counted. */
+export function reviewerColumnLabel(reviewers: MultiReviewWorkflow["reviewers"]): string {
+  const completed = reviewers.filter((reviewer) => reviewer.status === "completed").length;
+  const stopped = reviewers.filter((reviewer) => reviewer.status === "cancelled").length;
+  const activePanelSize = reviewers.length - stopped;
+  const progress = activePanelSize === 0 ? `${completed}` : `${completed}/${activePanelSize}`;
+  return stopped === 0 ? `Review · ${progress}` : `Review · ${progress} · ${stopped} stopped`;
+}
+
+/** The pill text for a reviewer, matching the step labels' register. */
+export function reviewerStatusLabel(reviewer: MultiReviewWorkflow["reviewers"][number]): string {
+  switch (reviewer.status) {
+    case "pending":
+      return "Queued";
+    case "running":
+      return reviewer.stalledSince ? "Stalled" : "Reviewing";
+    case "completed":
+      return "Complete";
+    case "failed":
+      return "Failed";
+    default:
+      return "Stopped";
   }
-  if (fixSessionRuntimeStep(workflow) !== step) return null;
-  if (step === "fix") {
-    return workflow.fixSession ? fixSessionRuntimeSummary(workflow.fixSession, now) : null;
-  }
-  const session =
-    workflow.reviewSession ??
-    (workflow.reviewModel || workflow.consolidationModel ? undefined : workflow.fixSession);
-  return session ? fixSessionRuntimeSummary(session, now) : null;
 }
 
 const NOTE_TONE_CLASS = {
@@ -538,31 +603,63 @@ function reviewerTranscriptLabel(
   return `${action}, ${findingCountLabel(reviewer.report.issues.length, "issue")}, ${findingCountLabel(reviewer.report.testCoverageGaps.length, "coverage gap")}`;
 }
 
-const STEP_ICON_CLASS = "size-4 shrink-0";
+function modelDetail(model: MultiReviewWorkflow["fixModel"], withAgent: boolean): string {
+  return [withAgent ? model.agent : null, model.model, model.reasoningEffort]
+    .filter(Boolean)
+    .join(" · ");
+}
 
-function MultiReviewStepIcon({
-  state,
-  stalled,
-}: {
-  state: MultiReviewStepState;
-  stalled: boolean;
-}) {
-  if (stalled) return <AlertTriangle className={`${STEP_ICON_CLASS} text-amber-500`} />;
-  switch (state) {
+/** The second-row word for a step that is doing, or did, something notable. */
+function stepStatusWord(
+  status: MultiReviewStepStatus,
+  stalled: boolean,
+): MultiReviewFlowNodeModel["statusWord"] {
+  if (stalled && status.state === "running") return { text: "stalled", tone: "warning" };
+  switch (status.state) {
     case "running":
-      return <Loader2 className={`${STEP_ICON_CLASS} animate-spin text-primary`} />;
+      return { text: status.label.toLowerCase(), tone: "running" };
     case "paused":
-      return <Pause className={`${STEP_ICON_CLASS} text-amber-400`} />;
+      return { text: "paused", tone: "warning" };
     case "failed":
-      return <AlertCircle className={`${STEP_ICON_CLASS} text-destructive`} />;
+      return { text: "failed", tone: "destructive" };
     case "cancelling":
     case "cancelled":
-      return <Square className={`${STEP_ICON_CLASS} text-muted-foreground`} />;
-    case "complete":
-      return <CheckCircle2 className={`${STEP_ICON_CLASS} text-emerald-500`} />;
+      return { text: status.label.toLowerCase(), tone: "muted" };
     default:
-      return <Circle className={`${STEP_ICON_CLASS} text-muted-foreground`} />;
+      return undefined;
   }
+}
+
+function reviewerStatusWord(
+  reviewer: MultiReviewWorkflow["reviewers"][number],
+): MultiReviewFlowNodeModel["statusWord"] {
+  switch (reviewer.status) {
+    case "running":
+      if (reviewer.stalledSince) return { text: "stalled", tone: "warning" };
+      if (reviewer.resultSubmission === "needs-attention") {
+        return { text: "report needs attention", tone: "warning" };
+      }
+      if (reviewer.resultSubmission === "correcting") {
+        return { text: "correcting report", tone: "running" };
+      }
+      if (reviewer.resultSubmission === "received") {
+        return { text: "report received", tone: "running" };
+      }
+      return { text: "reviewing", tone: "running" };
+    case "failed":
+      return { text: "failed", tone: "destructive" };
+    case "cancelled":
+      return { text: "stopped", tone: "muted" };
+    default:
+      return undefined;
+  }
+}
+
+function validationChips(
+  run: MultiReviewWorkflow["validationRun"],
+): MultiReviewFlowNodeModel["validation"] {
+  if (!run?.results.length) return undefined;
+  return run.results.map((result) => ({ id: result.id, label: result.id, status: result.status }));
 }
 
 /**
@@ -598,55 +695,27 @@ export function allowsReviewTileActivation(
   return !requireDirectActivation || hasDirectActivation || (clickDetail === 0 && isTrusted);
 }
 
-function MultiReviewStepSection({
-  heading,
-  name,
-  status,
-  stalled,
-  model,
-  runtime,
-  runtimeLabel,
-  openLabel,
-  openTitle,
-  canOpen,
+const INSPECTOR_BUTTON_CLASS = "h-7 gap-1.5 px-2.5 text-xs";
+
+/**
+ * Open session for the selected node.
+ *
+ * Preparation and consolidation are backend-owned sessions: with
+ * `requireDirectActivation` their tab opens only for a pointer or keyboard
+ * input that began on this button, so a gesture that mounted the review (and
+ * whose click lands here) cannot pull the session into the pane layout.
+ */
+function SessionOpenButton({
+  label,
+  title,
+  enabled,
   onOpen,
-  canRestart,
-  restarting,
-  onRestart,
-  onRestartIn,
-  canPause,
-  canResume,
-  showPauseAction = true,
-  lifecyclePending,
-  onPause,
-  onResume,
   requireDirectActivation = false,
 }: {
-  heading: string;
-  name: string;
-  status: MultiReviewStepStatus;
-  stalled: boolean;
-  model: MultiReviewWorkflow["fixModel"];
-  runtime: string | null;
-  runtimeLabel: string;
-  openLabel: string;
-  openTitle: string;
-  canOpen: boolean;
+  label: string;
+  title?: string;
+  enabled: boolean;
   onOpen: () => void;
-  canRestart: boolean;
-  restarting: boolean;
-  onRestart: () => void;
-  onRestartIn: () => void;
-  canPause: boolean;
-  canResume: boolean;
-  showPauseAction?: boolean;
-  lifecyclePending: boolean;
-  onPause: () => void;
-  onResume: () => void;
-  /**
-   * Preparation and consolidation are backend-owned sessions. Keep them out of
-   * the pane layout until an input actually begins on their card.
-   */
   requireDirectActivation?: boolean;
 }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -680,116 +749,88 @@ function MultiReviewStepSection({
   }, [requireDirectActivation]);
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <section className="rounded-xl border border-border/60 bg-card/35 p-4">
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold">{heading}</h2>
-            <span className="text-xs text-muted-foreground">{status.label}</span>
-          </div>
-          <div className="flex items-center rounded-lg border border-border/45 bg-background/40 transition-colors has-[button:enabled:hover]:border-cyan-400/35">
-            <button
-              ref={buttonRef}
-              type="button"
-              disabled={!canOpen}
-              aria-label={openLabel}
-              title={openTitle}
-              className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-3 py-2.5 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-cyan-500/5 disabled:cursor-default"
-              onPointerDown={(event) => {
-                if (event.isPrimary === false || event.button !== 0) return;
-                directActivationRef.current = {
-                  kind: "pointer",
-                  pointerId: event.pointerId,
-                };
-              }}
-              onPointerCancel={(event) => {
-                const activation = directActivationRef.current;
-                if (activation?.kind === "pointer" && activation.pointerId === event.pointerId) {
-                  directActivationRef.current = null;
-                }
-              }}
-              onBlur={() => {
-                if (directActivationRef.current?.kind === "keyboard") {
-                  directActivationRef.current = null;
-                }
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  directActivationRef.current = { kind: "keyboard" };
-                }
-              }}
-              onClick={(event) => {
-                const hasDirectActivation = directActivationRef.current !== null;
-                directActivationRef.current = null;
-                // A trusted detail-zero click is an assistive-technology
-                // activation. Pointer and keyboard activation are armed above;
-                // synthetic/carry-over clicks are deliberately ignored.
-                if (
-                  !allowsReviewTileActivation(
-                    requireDirectActivation,
-                    hasDirectActivation,
-                    event.detail,
-                    event.nativeEvent.isTrusted,
-                  )
-                ) {
-                  return;
-                }
-                onOpen();
-              }}
-            >
-              <MultiReviewStepIcon state={status.state} stalled={stalled} />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-xs font-medium">
-                  {name} · {model.agent}
-                </p>
-                <p className="truncate text-[11px] text-muted-foreground">
-                  {model.model}
-                  {model.reasoningEffort ? ` · ${model.reasoningEffort}` : ""}
-                </p>
-                {runtime ? (
-                  <p
-                    className="mt-0.5 truncate font-mono text-[10px] tabular-nums text-muted-foreground"
-                    aria-label={runtimeLabel}
-                  >
-                    {runtime}
-                  </p>
-                ) : null}
-              </div>
-            </button>
-          </div>
-        </section>
-      </ContextMenuTrigger>
-      <ContextMenuContent className="w-44">
-        <ContextMenuItem
-          disabled={!canRestart || restarting || lifecyclePending}
-          onSelect={onRestart}
-        >
-          {restarting ? <Loader2 className="animate-spin" /> : <RotateCcw />}
-          Restart
-        </ContextMenuItem>
-        <ContextMenuItem
-          disabled={!canRestart || restarting || lifecyclePending}
-          onSelect={onRestartIn}
-        >
-          <RotateCcw />
-          Restart in…
-        </ContextMenuItem>
-        {canResume ? (
-          <ContextMenuItem disabled={lifecyclePending || restarting} onSelect={onResume}>
-            {lifecyclePending ? <Loader2 className="animate-spin" /> : <Play />}
-            Resume
-          </ContextMenuItem>
-        ) : showPauseAction ? (
-          <ContextMenuItem
-            disabled={!canPause || lifecyclePending || restarting}
-            onSelect={onPause}
-          >
-            {lifecyclePending ? <Loader2 className="animate-spin" /> : <Pause />}
-            Pause
-          </ContextMenuItem>
-        ) : null}
-      </ContextMenuContent>
-    </ContextMenu>
+    <Button
+      ref={buttonRef}
+      type="button"
+      variant="outline"
+      size="sm"
+      className={INSPECTOR_BUTTON_CLASS}
+      disabled={!enabled}
+      aria-label={label}
+      title={title}
+      onPointerDown={(event) => {
+        if (event.isPrimary === false || event.button !== 0) return;
+        directActivationRef.current = { kind: "pointer", pointerId: event.pointerId };
+      }}
+      onPointerCancel={(event) => {
+        const activation = directActivationRef.current;
+        if (activation?.kind === "pointer" && activation.pointerId === event.pointerId) {
+          directActivationRef.current = null;
+        }
+      }}
+      onBlur={() => {
+        if (directActivationRef.current?.kind === "keyboard") directActivationRef.current = null;
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          directActivationRef.current = { kind: "keyboard" };
+        }
+      }}
+      onClick={(event) => {
+        const hasDirectActivation = directActivationRef.current !== null;
+        directActivationRef.current = null;
+        // A trusted detail-zero click is an assistive-technology activation.
+        // Pointer and keyboard activation are armed above; synthetic and
+        // carry-over clicks are deliberately ignored.
+        if (
+          !allowsReviewTileActivation(
+            requireDirectActivation,
+            hasDirectActivation,
+            event.detail,
+            event.nativeEvent.isTrusted,
+          )
+        ) {
+          return;
+        }
+        onOpen();
+      }}
+    >
+      <ExternalLink className="size-3.5" />
+      Open session
+    </Button>
+  );
+}
+
+/** A node in the graph, plus what the inspector shows when it is selected. */
+interface MultiReviewFlowNodeView {
+  node: MultiReviewFlowNodeModel;
+  actions: ReactNode;
+  body: ReactNode;
+  activityAt?: number;
+}
+
+function StepFacts({
+  model,
+  runtime,
+  status,
+}: {
+  model: MultiReviewWorkflow["fixModel"];
+  runtime: RuntimeParts | null;
+  status: MultiReviewStepStatus;
+}) {
+  return (
+    <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-xs">
+      <dt className="text-muted-foreground">Model</dt>
+      <dd className="truncate">{modelDetail(model, true)}</dd>
+      <dt className="text-muted-foreground">Runtime</dt>
+      <dd className="font-mono tabular-nums">
+        {runtime
+          ? formatRuntimeParts(runtime)
+          : status.state === "not-started"
+            ? "Not started yet"
+            : "Not recorded"}
+      </dd>
+    </dl>
   );
 }
 
@@ -799,6 +840,7 @@ function MultiReviewOverviewTab({
   hydrateWorkflow = hydrateMultiReviewWorkflow,
   commands = defaultCommands,
   openReviewer,
+  loadReviewerTranscript,
 }: MultiReviewTabProps) {
   const createTab = useOptionalTerminalContext()?.createTab;
   const workflow = useMultiReviewStore((state) => state.workflows.get(data.workflowId));
@@ -828,6 +870,9 @@ function MultiReviewOverviewTab({
     customFixPromptOpen || restartDialogStep !== null,
   );
   const [reviewPanelNow, setReviewPanelNow] = useState(() => Date.now());
+  /** The node the user picked; null follows the running node. */
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const panelId = useId();
   const mountedRef = useRef(false);
   const isActiveRef = useRef(isActive);
 
@@ -842,7 +887,13 @@ function MultiReviewOverviewTab({
       workflow.stepRuntimes.fix.completedAt === undefined);
   const hasRunningValidation =
     workflow?.validationRun?.status === "planned" || workflow?.validationRun?.status === "running";
-  const hasLiveClock = Boolean(hasRunningReviewer || hasRunningFixSession || hasRunningValidation);
+  // The header's workflow clock counts while any stage is at work.
+  const hasLiveClock = Boolean(
+    hasRunningReviewer ||
+    hasRunningFixSession ||
+    hasRunningValidation ||
+    (workflow && isBusyPhase(workflow.phase)),
+  );
 
   useEffect(() => {
     if (!isActive || !hasLiveClock) return;
@@ -1142,12 +1193,7 @@ function MultiReviewOverviewTab({
     );
   }
 
-  const busy =
-    workflow.phase === "preparing" ||
-    workflow.phase === "reviewing" ||
-    workflow.phase === "consolidating" ||
-    workflow.phase === "fixing" ||
-    workflow.phase === "cancelling";
+  const busy = isBusyPhase(workflow.phase);
   const reviewSessionStalled =
     (workflow.phase === "preparing" || workflow.phase === "consolidating") &&
     (
@@ -1159,8 +1205,6 @@ function MultiReviewOverviewTab({
   const packageStatus = reviewPackageGenerationStep(workflow);
   const consolidationStatus = consolidationStep(workflow);
   const fixStatus = fixStep(workflow);
-  const stepRuntime = (step: MultiReviewStepKey, status: MultiReviewStepStatus): string | null =>
-    multiReviewStepRuntimeSummary(workflow, step, status.state === "running", reviewPanelNow);
   const reviewSelection = workflow.reviewModel ?? workflow.fixModel;
   const consolidationSelection = workflow.consolidationModel ?? reviewSelection;
   const hasReviewSession = Boolean(multiReviewReviewSession(workflow)?.providerSessionId);
@@ -1168,21 +1212,607 @@ function MultiReviewOverviewTab({
     multiReviewReviewSession(workflow, "prepare")?.providerSessionId,
   );
   const hasFixSession = Boolean(workflow.fixSession?.providerSessionId);
-  const canOpenReviewStep = (status: MultiReviewStepStatus): boolean =>
-    status.state !== "not-started" && hasReviewSession && Boolean(createTab);
-  const canOpenPreparationStep = (status: MultiReviewStepStatus): boolean =>
-    status.state !== "not-started" && hasPreparationSession && Boolean(createTab);
-  const canOpenFixStep = (status: MultiReviewStepStatus): boolean =>
-    status.state !== "not-started" && hasFixSession && Boolean(createTab);
   const canCancel =
     workflow.phase !== "completed" &&
     workflow.phase !== "cancelled" &&
     workflow.phase !== "cancelling" &&
     workflow.phase !== "interactive";
+  const lifecyclePending = stepLifecycleAction !== null;
+
+  const stepView = ({
+    key,
+    kind,
+    title,
+    status,
+    stalled,
+    model,
+    runtimeLabel,
+    openLabel,
+    openTitle,
+    canOpen,
+    onOpen,
+    requireDirectActivation = false,
+    canPause,
+    canResume,
+    showPauseAction = true,
+    activityAt,
+    details,
+  }: {
+    key: MultiReviewStepKey;
+    kind: MultiReviewStepKind;
+    title: string;
+    status: MultiReviewStepStatus;
+    stalled: boolean;
+    model: MultiReviewWorkflow["fixModel"];
+    runtimeLabel: string;
+    openLabel: string;
+    openTitle: string;
+    canOpen: boolean;
+    onOpen: () => void;
+    requireDirectActivation?: boolean;
+    canPause: boolean;
+    canResume: boolean;
+    showPauseAction?: boolean;
+    activityAt?: number;
+    details?: ReactNode;
+  }): MultiReviewFlowNodeView => {
+    const runtime = multiReviewStepRuntimeParts(
+      workflow,
+      key,
+      status.state === "running",
+      reviewPanelNow,
+    );
+    const canRestart = status.state !== "not-started" && Boolean(commands.restartStep);
+    const restarting = restartingStep === kind;
+    const restart = () => void restartStep(kind);
+    const restartIn = () => {
+      setRestartDialogError(null);
+      setRestartDialogStep(kind);
+    };
+    const pause = () => void runStepLifecycle(kind, "pause", commands.pauseStep);
+    const resume = () => void runStepLifecycle(kind, "resume", commands.resumeStep);
+    return {
+      node: {
+        id: key,
+        kind: key,
+        title,
+        state: status.state,
+        stalled,
+        statusLabel: status.label,
+        detail: modelDetail(model, true),
+        runtime,
+        runtimeLabel,
+        pendingLabel:
+          status.state === "not-started" ? flowPendingLabel("step", status.label) : undefined,
+        statusWord: stepStatusWord(status, stalled),
+        validation: key === "package" ? validationChips(workflow.validationRun) : undefined,
+        canOpen,
+        onOpen,
+        contextMenu: (
+          <>
+            <ContextMenuItem
+              disabled={!canRestart || restarting || lifecyclePending}
+              onSelect={restart}
+            >
+              {restarting ? <Loader2 className="animate-spin" /> : <RotateCcw />}
+              Restart
+            </ContextMenuItem>
+            <ContextMenuItem
+              disabled={!canRestart || restarting || lifecyclePending}
+              onSelect={restartIn}
+            >
+              <RotateCcw />
+              Restart in…
+            </ContextMenuItem>
+            {canResume ? (
+              <ContextMenuItem disabled={lifecyclePending || restarting} onSelect={resume}>
+                {lifecyclePending ? <Loader2 className="animate-spin" /> : <Play />}
+                Resume
+              </ContextMenuItem>
+            ) : showPauseAction ? (
+              <ContextMenuItem
+                disabled={!canPause || lifecyclePending || restarting}
+                onSelect={pause}
+              >
+                {lifecyclePending ? <Loader2 className="animate-spin" /> : <Pause />}
+                Pause
+              </ContextMenuItem>
+            ) : null}
+          </>
+        ),
+      },
+      actions: (
+        <>
+          <SessionOpenButton
+            label={openLabel}
+            title={openTitle}
+            enabled={canOpen}
+            onOpen={onOpen}
+            requireDirectActivation={requireDirectActivation}
+          />
+          {canRestart ? (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                className={INSPECTOR_BUTTON_CLASS}
+                disabled={restarting || lifecyclePending}
+                onClick={restart}
+              >
+                {restarting ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <RotateCcw className="size-3.5" />
+                )}
+                Restart
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className={INSPECTOR_BUTTON_CLASS}
+                disabled={restarting || lifecyclePending}
+                onClick={restartIn}
+              >
+                Restart in…
+              </Button>
+            </>
+          ) : null}
+          {canResume ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className={INSPECTOR_BUTTON_CLASS}
+              disabled={lifecyclePending || restarting}
+              onClick={resume}
+            >
+              <Play className="size-3.5" />
+              Resume
+            </Button>
+          ) : showPauseAction && canPause ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className={INSPECTOR_BUTTON_CLASS}
+              disabled={lifecyclePending || restarting}
+              onClick={pause}
+            >
+              <Pause className="size-3.5" />
+              Pause
+            </Button>
+          ) : null}
+        </>
+      ),
+      body: (
+        <div className="space-y-4">
+          <StepFacts model={model} runtime={runtime} status={status} />
+          {details}
+          <p className="text-xs text-muted-foreground">
+            This step runs in a backend-owned session. Open session to read its transcript.
+          </p>
+        </div>
+      ),
+      activityAt,
+    };
+  };
+
+  const packageView = stepView({
+    key: "package",
+    kind: "prepare",
+    title: "Review package",
+    status: packageStatus,
+    stalled: workflow.phase === "preparing" && reviewSessionStalled,
+    model: reviewSelection,
+    runtimeLabel: "Review package generation runtime",
+    openLabel: "Open review package generation session",
+    openTitle: stepOpenTitle(
+      packageStatus,
+      hasPreparationSession,
+      "review package generation",
+      "Review package generation has not started yet",
+    ),
+    canOpen: packageStatus.state !== "not-started" && hasPreparationSession && Boolean(createTab),
+    onOpen: () => presentReviewSession(workflow, "prepare"),
+    requireDirectActivation: true,
+    canPause: workflow.phase === "preparing" && Boolean(commands.pauseStep),
+    canResume:
+      workflow.phase === "paused" &&
+      workflow.pausedStep === "prepare" &&
+      Boolean(commands.resumeStep),
+    activityAt: latestActivityAt(workflow.stepRuntimes?.prepare, workflow.validationRun),
+    details: workflow.validationRun ? (
+      <ReviewValidationStatus
+        environmentId={data.environmentId}
+        run={workflow.validationRun}
+        now={reviewPanelNow}
+        onStop={
+          commands.stopValidation &&
+          workflow.phase === "preparing" &&
+          (workflow.validationRun.status === "planned" ||
+            workflow.validationRun.status === "running")
+            ? () => void stopValidation()
+            : undefined
+        }
+        stopping={
+          stoppingValidation ||
+          (workflow.phase === "preparing" &&
+            (workflow.validationRun.status === "planned" ||
+              workflow.validationRun.status === "running") &&
+            workflow.validationStopRequested === true)
+        }
+      />
+    ) : null,
+  });
+
+  const consolidationView = stepView({
+    key: "consolidation",
+    kind: "consolidate",
+    title: "Consolidation",
+    status: consolidationStatus,
+    stalled: workflow.phase === "consolidating" && reviewSessionStalled,
+    model: consolidationSelection,
+    runtimeLabel: "Consolidation runtime",
+    openLabel: "Open consolidation session",
+    openTitle: stepOpenTitle(
+      consolidationStatus,
+      hasReviewSession,
+      "consolidation",
+      "Consolidation starts after the independent reviews finish",
+    ),
+    canOpen: consolidationStatus.state !== "not-started" && hasReviewSession && Boolean(createTab),
+    onOpen: () => presentReviewSession(workflow, "consolidate"),
+    requireDirectActivation: true,
+    canPause: workflow.phase === "consolidating" && Boolean(commands.pauseStep),
+    canResume:
+      workflow.phase === "paused" &&
+      workflow.pausedStep === "consolidate" &&
+      Boolean(commands.resumeStep),
+    activityAt: latestActivityAt(workflow.stepRuntimes?.consolidate),
+    details: workflow.consolidatedReport ? (
+      <p className="text-xs text-foreground/85">
+        {findingCountLabel(workflow.consolidatedReport.issues.length, "issue")} ·{" "}
+        {findingCountLabel(workflow.consolidatedReport.testCoverageGaps.length, "coverage gap")}.
+        The consolidated report is below.
+      </p>
+    ) : null,
+  });
+
+  const fixView = stepView({
+    key: "fix",
+    kind: "fix",
+    title: "Fix",
+    status: fixStatus,
+    stalled: workflow.phase === "fixing" && fixSessionStalled,
+    model: workflow.fixModel,
+    runtimeLabel: "Fix runtime",
+    openLabel: "Open fix model session",
+    openTitle: stepOpenTitle(
+      fixStatus,
+      hasFixSession,
+      "fix",
+      "The fix session starts once the consolidated findings are sent to the fix model",
+    ),
+    canOpen: fixStatus.state !== "not-started" && hasFixSession && Boolean(createTab),
+    onOpen: () => presentFixSession(workflow, "manual"),
+    canPause: workflow.phase === "fixing" && Boolean(commands.pauseStep),
+    canResume:
+      workflow.phase === "paused" && workflow.pausedStep === "fix" && Boolean(commands.resumeStep),
+    showPauseAction: false,
+    activityAt: latestActivityAt(workflow.stepRuntimes?.fix),
+    details: workflow.fixResult ? (
+      <p className="text-xs text-foreground/85">{workflow.fixResult.summary}</p>
+    ) : null,
+  });
+
+  const reviewerRestartable =
+    (workflow.phase === "reviewing" ||
+      workflow.phase === "consolidating" ||
+      workflow.phase === "ready" ||
+      workflow.phase === "fixing" ||
+      workflow.phase === "interactive" ||
+      workflow.phase === "completed" ||
+      workflow.phase === "failed") &&
+    workflow.activeRequest?.kind !== "prepare" &&
+    !(workflow.reviewSnapshotStale === true && workflow.reviewPackage);
+  const reviewerActionsBlocked = reviewerAction !== null || stoppingReviewerId !== null || pending;
+
+  const reviewerViews = workflow.reviewers.map((reviewer, index): MultiReviewFlowNodeView => {
+    const name = `Reviewer ${index + 1}`;
+    const note = reviewerStatusNote(reviewer);
+    const stalled = reviewer.status === "running" && Boolean(reviewer.stalledSince);
+    const runtime = runtimeParts(reviewer, reviewer.status === "running", reviewPanelNow);
+    const stoppable =
+      workflow.phase === "reviewing" &&
+      (reviewer.status === "pending" || reviewer.status === "running");
+    const canUnstick =
+      workflow.phase === "reviewing" &&
+      reviewer.status === "running" &&
+      Boolean(reviewer.providerSessionId) &&
+      reviewer.dispatchState === "sent";
+    const pendingAction = reviewerAction?.reviewerId === reviewer.id ? reviewerAction.kind : null;
+    const canOpen = Boolean(reviewer.providerSessionId) && Boolean(openReviewer || createTab);
+    const open = () => {
+      if (openReviewer) {
+        openReviewer(reviewer.id, index);
+        return;
+      }
+      createTab?.("multi-review", {
+        multiReviewId: workflow.id,
+        multiReviewReviewerId: reviewer.id,
+        displayTitle: name,
+      });
+    };
+    const restart = () => void runReviewerAction(reviewer.id, "restart", commands.restartReviewer);
+    const unstick = () => void runReviewerAction(reviewer.id, "unstick", commands.unstickReviewer);
+    const stop = () => void stopReviewer(reviewer.id);
+    const findings = reviewer.report
+      ? `${findingCountLabel(reviewer.report.issues.length, "issue")}, ${findingCountLabel(reviewer.report.testCoverageGaps.length, "coverage gap")}`
+      : undefined;
+    return {
+      node: {
+        id: `reviewer:${reviewer.id}`,
+        kind: "reviewer",
+        title: `${name} · ${reviewer.agent}`,
+        state: reviewerFlowState(reviewer.status),
+        stalled,
+        statusLabel: reviewerStatusLabel(reviewer),
+        detail: modelDetail(reviewer, false),
+        runtime,
+        runtimeLabel: `${name} runtime and token usage`,
+        pendingLabel:
+          reviewer.status === "pending" ? flowPendingLabel("reviewer", "Queued") : undefined,
+        statusWord: reviewerStatusWord(reviewer),
+        // A failed or stopped reviewer can still have filed a partial report.
+        severity: reviewer.report ? severityCounts(reviewer.report.issues) : undefined,
+        findingsLabel: findings,
+        canOpen,
+        onOpen: open,
+        contextMenu: (
+          <>
+            <ContextMenuItem
+              disabled={!reviewerRestartable || reviewerActionsBlocked || !commands.restartReviewer}
+              onSelect={restart}
+            >
+              {pendingAction === "restart" ? <Loader2 className="animate-spin" /> : <RotateCcw />}
+              Restart
+            </ContextMenuItem>
+            <ContextMenuItem
+              disabled={!canUnstick || reviewerActionsBlocked || !commands.unstickReviewer}
+              onSelect={unstick}
+            >
+              {pendingAction === "unstick" ? <Loader2 className="animate-spin" /> : <Play />}
+              Unstick
+            </ContextMenuItem>
+            <ContextMenuItem disabled={!stoppable || reviewerActionsBlocked} onSelect={stop}>
+              {stoppingReviewerId === reviewer.id ? (
+                <Loader2 className="animate-spin" />
+              ) : (
+                <Square />
+              )}
+              Stop
+            </ContextMenuItem>
+          </>
+        ),
+      },
+      actions: (
+        <>
+          <SessionOpenButton
+            label={reviewerTranscriptLabel(reviewer, index)}
+            title={canOpen ? "Open this reviewer's read-only transcript in a new tab" : undefined}
+            enabled={canOpen}
+            onOpen={open}
+          />
+          {reviewerRestartable && commands.restartReviewer ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className={INSPECTOR_BUTTON_CLASS}
+              aria-label={`Restart ${name}`}
+              title="Restart this reviewer from the beginning in a fresh session"
+              disabled={reviewerActionsBlocked}
+              onClick={restart}
+            >
+              {pendingAction === "restart" ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <RotateCcw className="size-3.5" />
+              )}
+              Restart
+            </Button>
+          ) : null}
+          {canUnstick && commands.unstickReviewer ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className={INSPECTOR_BUTTON_CLASS}
+              aria-label={`Unstick ${name}`}
+              title='Stop the current turn, then send "Please continue"'
+              disabled={reviewerActionsBlocked}
+              onClick={unstick}
+            >
+              {pendingAction === "unstick" ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Play className="size-3.5" />
+              )}
+              Unstick
+            </Button>
+          ) : null}
+          {stoppable ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className={`${INSPECTOR_BUTTON_CLASS} hover:text-destructive`}
+              aria-label={`Stop ${name}`}
+              title="Stop this reviewer; the review continues without it"
+              disabled={reviewerActionsBlocked}
+              onClick={stop}
+            >
+              {stoppingReviewerId === reviewer.id ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Square className="size-3.5" />
+              )}
+              Stop
+            </Button>
+          ) : null}
+        </>
+      ),
+      body: (
+        <div className="space-y-3">
+          <p className="truncate text-xs text-muted-foreground">
+            {modelDetail(reviewer, true)} · Read only
+            {runtime ? ` · ${formatRuntimeParts(runtime)}` : ""}
+          </p>
+          {reviewer.resultSubmission && reviewer.resultSubmission !== "preparing" ? (
+            <WorkflowResultStatus state={reviewer.resultSubmission} kind="review-report" />
+          ) : null}
+          {/* The workflow error generalizes a shared cause; this is the only
+          place the reviewer's own outcome is legible. */}
+          {note ? (
+            <p
+              className={`max-h-16 overflow-x-hidden overflow-y-auto overscroll-contain break-words whitespace-normal pr-1 text-xs [overflow-wrap:anywhere] ${NOTE_TONE_CLASS[note.tone]}`}
+              data-testid={`multi-reviewer-note-${reviewer.id}`}
+              title={note.text}
+            >
+              {note.text}
+            </p>
+          ) : null}
+          <ReviewerTranscriptTail
+            key={reviewer.id}
+            workflowId={workflow.id}
+            reviewerId={reviewer.id}
+            hasSession={Boolean(reviewer.providerSessionId)}
+            live={reviewer.status === "running" || reviewer.status === "pending"}
+            isActive={isActive}
+            loadTranscript={loadReviewerTranscript}
+          />
+          {findings ? <p className="text-xs text-muted-foreground">{findings}</p> : null}
+        </div>
+      ),
+      activityAt: latestActivityAt(reviewer),
+    };
+  });
+
+  const views = [packageView, ...reviewerViews, consolidationView, fixView];
+  const stage = { package: 0, reviewer: 1, consolidation: 2, fix: 3 } as const;
+  const defaultSelectionId = defaultFlowSelection(
+    views.map((view) => ({
+      id: view.node.id,
+      state: view.node.state,
+      stage: stage[view.node.kind],
+      activityAt: view.activityAt,
+    })),
+  );
+  // A reviewer that left the panel (or a stale pick) falls back to the default.
+  const selected =
+    views.find((view) => view.node.id === selectedNodeId) ??
+    views.find((view) => view.node.id === defaultSelectionId) ??
+    packageView;
+  const edges = multiReviewFlowEdges({
+    package: packageView.node.state,
+    reviewers: reviewerViews.map((view) => view.node.state),
+    consolidation: consolidationView.node.state,
+    fix: fixView.node.state,
+  });
+  const { findings, reviewerCount } = mergeReviewerFindings(workflow.reviewers);
+  const elapsedSeconds = multiReviewElapsedSeconds(
+    workflow,
+    busy || views.some((view) => view.node.state === "running"),
+    reviewPanelNow,
+  );
+  const totalTokens = multiReviewTotalTokens(workflow);
+  const headerStalled = reviewSessionStalled || fixSessionStalled;
+
+  const notices: ReactNode[] = [];
+  if (headerStalled) {
+    notices.push(
+      <section
+        key="stalled"
+        role="status"
+        aria-live="polite"
+        className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/8 p-4"
+      >
+        <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-amber-500/12 text-amber-500">
+          <AlertTriangle className="size-4" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold text-amber-500">
+            {reviewSessionStalled
+              ? "Review preparation model appears stalled"
+              : "Fix model appears stalled"}
+          </h2>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            No new activity has arrived. Cancel now, or wait for the workflow to stop automatically
+            and then retry.
+          </p>
+        </div>
+      </section>,
+    );
+  }
+  if (workflow.reviewSnapshotStale === true && !workflow.reviewPackage) {
+    notices.push(
+      <div
+        key="snapshot-stale"
+        className="rounded-lg border border-amber-500/30 bg-amber-500/8 p-3 text-sm text-amber-500"
+      >
+        The repository worktree changed after this Multi Review started. The review continued, so
+        reviewer reports may reflect different worktree states.
+      </div>,
+    );
+  }
+  if (error || workflow.error) {
+    notices.push(
+      <div
+        key="error"
+        className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+      >
+        {error ?? workflow.error}
+      </div>,
+    );
+  }
+  if (presentationNotice || workflow.presentationError) {
+    notices.push(
+      <div
+        key="presentation"
+        className="rounded-lg border border-amber-500/30 bg-amber-500/8 p-3 text-sm text-amber-500"
+      >
+        {presentationNotice ?? workflow.presentationError}
+      </div>,
+    );
+  }
+  if (
+    workflow.phase === "interactive" &&
+    workflow.addressPromptPending !== true &&
+    workflow.fixSession?.providerSessionId &&
+    !presentationNotice &&
+    !workflow.presentationError
+  ) {
+    notices.push(
+      <div
+        key="fix-ready"
+        className="rounded-lg border border-border/60 bg-muted/30 p-3 text-sm text-muted-foreground"
+      >
+        The fix request was delivered. The fix session is ready to open.
+      </div>,
+    );
+  }
+  if (workflow.addressPromptPending === true && !workflow.error) {
+    notices.push(
+      <div
+        key="address-pending"
+        className="rounded-lg border border-border/60 bg-muted/30 p-3 text-sm text-muted-foreground"
+      >
+        The fix request was recorded and is being delivered in the background.
+      </div>,
+    );
+  }
+  if (workflow.autoPrLaunch) {
+    notices.push(<AutoPrLaunchNotice key="auto-pr" launch={workflow.autoPrLaunch} />);
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <header className="flex shrink-0 items-center justify-between gap-4 border-b border-border/60 px-4 py-3 sm:px-5">
+      <header className="flex shrink-0 items-center justify-between gap-4 border-b border-divider px-4 py-3 sm:px-6">
         <div className="flex min-w-0 items-center gap-3">
           <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-cyan-400/25 bg-cyan-500/10 text-cyan-300">
             <StackedEyes className="size-5" />
@@ -1190,13 +1820,32 @@ function MultiReviewOverviewTab({
           <div className="min-w-0">
             <h1 className="truncate text-sm font-semibold">Multi Review</h1>
             <p
-              className={`truncate text-xs ${reviewSessionStalled || fixSessionStalled ? "text-amber-500" : "text-muted-foreground"}`}
+              className={`truncate text-xs ${headerStalled ? "text-amber-500" : "text-muted-foreground"}`}
             >
-              {reviewSessionStalled
-                ? "No activity from the review preparation model"
-                : fixSessionStalled
-                  ? "No activity from the fix model"
-                  : phaseCopy(workflow)}
+              <span>
+                {reviewSessionStalled
+                  ? "No activity from the review preparation model"
+                  : fixSessionStalled
+                    ? "No activity from the fix model"
+                    : phaseCopy(workflow)}
+              </span>
+              {elapsedSeconds !== null ? (
+                <span data-testid="multi-review-elapsed">
+                  {" · "}
+                  <span className="font-mono tabular-nums">
+                    {formatElapsedWithHours(elapsedSeconds)}
+                  </span>
+                </span>
+              ) : null}
+              {totalTokens !== null ? (
+                <span data-testid="multi-review-total-tokens">
+                  {" · "}
+                  <span className="font-mono tabular-nums">
+                    {formatTokenCount(totalTokens)}
+                  </span>{" "}
+                  tokens
+                </span>
+              ) : null}
             </p>
             {workflow.activeRequest?.resultSubmission && (
               <WorkflowResultStatus
@@ -1216,401 +1865,58 @@ function MultiReviewOverviewTab({
         {busy && <Loader2 className="size-4 shrink-0 animate-spin text-primary" />}
       </header>
 
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="mx-auto w-full max-w-5xl space-y-4 p-4 sm:p-6">
-          {(reviewSessionStalled || fixSessionStalled) && (
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="@container flex min-h-full flex-col">
+          {notices.length > 0 ? (
+            <div className="space-y-2 border-b border-divider px-4 py-3 sm:px-6">{notices}</div>
+          ) : null}
+          <MultiReviewFlowGraph
+            packageNode={packageView.node}
+            reviewerNodes={reviewerViews.map((view) => view.node)}
+            consolidationNode={consolidationView.node}
+            fixNode={fixView.node}
+            edges={edges}
+            reviewLabel={reviewerColumnLabel(workflow.reviewers)}
+            reviewTitle={reviewerProgressSummary(workflow.reviewers)}
+            selectedId={selected.node.id}
+            onSelect={setSelectedNodeId}
+            panelId={panelId}
+          />
+          <div className="grid min-h-80 flex-1 grid-cols-1 @min-[900px]:grid-cols-[1.3fr_1fr]">
             <section
-              role="status"
-              aria-live="polite"
-              className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/8 p-4"
+              role="tabpanel"
+              id={panelId}
+              aria-labelledby={flowNodeElementId(panelId, selected.node.id)}
+              data-testid="multi-review-inspector"
+              className="min-w-0 px-4 py-4 sm:px-6"
             >
-              <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-amber-500/12 text-amber-500">
-                <AlertTriangle className="size-4" />
-              </span>
-              <div className="min-w-0">
-                <h2 className="text-sm font-semibold text-amber-500">
-                  {reviewSessionStalled
-                    ? "Review preparation model appears stalled"
-                    : "Fix model appears stalled"}
-                </h2>
-                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                  No new activity has arrived. Cancel now, or wait for the workflow to stop
-                  automatically and then retry.
-                </p>
-              </div>
+              <MultiReviewInspectorHeader node={selected.node} actions={selected.actions} />
+              {selected.body}
             </section>
-          )}
-          <MultiReviewStepSection
-            heading="Review package generation"
-            name="Preparation"
-            status={packageStatus}
-            stalled={workflow.phase === "preparing" && reviewSessionStalled}
-            model={reviewSelection}
-            runtime={stepRuntime("package", packageStatus)}
-            runtimeLabel="Review package generation runtime"
-            openLabel="Open review package generation session"
-            openTitle={stepOpenTitle(
-              packageStatus,
-              hasPreparationSession,
-              "review package generation",
-              "Review package generation has not started yet",
-            )}
-            canOpen={canOpenPreparationStep(packageStatus)}
-            onOpen={() => presentReviewSession(workflow, "prepare")}
-            canRestart={packageStatus.state !== "not-started" && Boolean(commands.restartStep)}
-            restarting={restartingStep === "prepare"}
-            onRestart={() => void restartStep("prepare")}
-            onRestartIn={() => {
-              setRestartDialogError(null);
-              setRestartDialogStep("prepare");
-            }}
-            canPause={workflow.phase === "preparing" && Boolean(commands.pauseStep)}
-            canResume={
-              workflow.phase === "paused" &&
-              workflow.pausedStep === "prepare" &&
-              Boolean(commands.resumeStep)
-            }
-            lifecyclePending={stepLifecycleAction !== null}
-            onPause={() => void runStepLifecycle("prepare", "pause", commands.pauseStep)}
-            onResume={() => void runStepLifecycle("prepare", "resume", commands.resumeStep)}
-            requireDirectActivation
-          />
-          {workflow.validationRun && (
-            <ReviewValidationStatus
-              environmentId={data.environmentId}
-              run={workflow.validationRun}
-              now={reviewPanelNow}
-              onStop={
-                commands.stopValidation &&
-                workflow.phase === "preparing" &&
-                (workflow.validationRun.status === "planned" ||
-                  workflow.validationRun.status === "running")
-                  ? () => void stopValidation()
-                  : undefined
-              }
-              stopping={
-                stoppingValidation ||
-                (workflow.phase === "preparing" &&
-                  (workflow.validationRun.status === "planned" ||
-                    workflow.validationRun.status === "running") &&
-                  workflow.validationStopRequested === true)
-              }
-            />
-          )}
-          <section className="rounded-xl border border-border/60 bg-card/35 p-4">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <h2 className="text-sm font-semibold">Review panel</h2>
-              <span className="text-xs text-muted-foreground">
-                {reviewerProgressSummary(workflow.reviewers)}
-              </span>
+            <div className="min-w-0 border-t border-divider px-4 py-4 sm:px-6 @min-[900px]:border-t-0 @min-[900px]:border-l">
+              <MultiReviewFindingsPane findings={findings} reviewerCount={reviewerCount} />
             </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {workflow.reviewers.map((reviewer, index) => {
-                const note = reviewerStatusNote(reviewer);
-                const runtimeSummary = reviewerRuntimeSummary(reviewer, reviewPanelNow);
-                const stoppable =
-                  workflow.phase === "reviewing" &&
-                  (reviewer.status === "pending" || reviewer.status === "running");
-                const canRestart =
-                  (workflow.phase === "reviewing" ||
-                    workflow.phase === "consolidating" ||
-                    workflow.phase === "ready" ||
-                    workflow.phase === "fixing" ||
-                    workflow.phase === "interactive" ||
-                    workflow.phase === "completed" ||
-                    workflow.phase === "failed") &&
-                  workflow.activeRequest?.kind !== "prepare" &&
-                  !(workflow.reviewSnapshotStale === true && workflow.reviewPackage);
-                const canUnstick =
-                  workflow.phase === "reviewing" &&
-                  reviewer.status === "running" &&
-                  Boolean(reviewer.providerSessionId) &&
-                  reviewer.dispatchState === "sent";
-                const actionPending = reviewerAction?.reviewerId === reviewer.id;
-                const reviewerActionsBlocked =
-                  reviewerAction !== null || stoppingReviewerId !== null || pending;
-                return (
-                  <ContextMenu key={reviewer.id}>
-                    <ContextMenuTrigger asChild>
-                      <div className="flex items-center rounded-lg border border-border/45 bg-background/40 transition-colors has-[button:enabled:hover]:border-cyan-400/35">
-                        <button
-                          type="button"
-                          disabled={!reviewer.providerSessionId || (!openReviewer && !createTab)}
-                          aria-label={reviewerTranscriptLabel(reviewer, index)}
-                          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-l-lg px-3 py-2.5 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-cyan-500/5 disabled:cursor-default"
-                          onClick={() => {
-                            if (openReviewer) {
-                              openReviewer(reviewer.id, index);
-                              return;
-                            }
-                            createTab?.("multi-review", {
-                              multiReviewId: workflow.id,
-                              multiReviewReviewerId: reviewer.id,
-                              displayTitle: `Reviewer ${index + 1}`,
-                            });
-                          }}
-                        >
-                          {reviewer.status === "completed" ? (
-                            <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />
-                          ) : reviewer.status === "failed" ? (
-                            <AlertCircle className="size-4 shrink-0 text-destructive" />
-                          ) : reviewer.status === "cancelled" ? (
-                            <Square className="size-4 shrink-0 text-muted-foreground" />
-                          ) : reviewer.status === "running" ? (
-                            <Loader2 className="size-4 shrink-0 animate-spin text-primary" />
-                          ) : (
-                            <Circle className="size-4 shrink-0 text-muted-foreground" />
-                          )}
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-xs font-medium">
-                              Reviewer {index + 1} · {reviewer.agent}
-                            </p>
-                            <p className="truncate text-[11px] text-muted-foreground">
-                              {reviewer.model}
-                              {reviewer.reasoningEffort ? ` · ${reviewer.reasoningEffort}` : ""}
-                            </p>
-                            {runtimeSummary ? (
-                              <p
-                                className="mt-0.5 truncate font-mono text-[10px] tabular-nums text-muted-foreground"
-                                aria-label={`Reviewer ${index + 1} runtime and token usage`}
-                              >
-                                {runtimeSummary}
-                              </p>
-                            ) : null}
-                            {reviewer.resultSubmission &&
-                            reviewer.resultSubmission !== "preparing" ? (
-                              <WorkflowResultStatus
-                                state={reviewer.resultSubmission}
-                                kind="review-report"
-                                className="mt-0.5 text-[11px]"
-                              />
-                            ) : null}
-                            {/* The workflow error generalizes a shared cause; this is
-                            the only place the reviewer's own outcome is legible. */}
-                            {note ? (
-                              <p
-                                className={`max-h-16 overflow-x-hidden overflow-y-auto overscroll-contain break-words whitespace-normal pr-1 text-[11px] [overflow-wrap:anywhere] ${NOTE_TONE_CLASS[note.tone]}`}
-                                data-testid={`multi-reviewer-note-${reviewer.id}`}
-                                title={note.text}
-                              >
-                                {note.text}
-                              </p>
-                            ) : null}
-                          </div>
-                          {reviewer.report ? (
-                            <div
-                              className="ml-auto flex shrink-0 flex-col items-end gap-1 pl-2"
-                              aria-hidden="true"
-                            >
-                              <span
-                                className="flex items-center gap-1 text-amber-400"
-                                title={findingCountLabel(reviewer.report.issues.length, "issue")}
-                              >
-                                <CircleAlert className="size-3.5" aria-hidden="true" />
-                                <span className="font-mono text-xs tabular-nums">
-                                  {reviewer.report.issues.length}
-                                </span>
-                              </span>
-                              <span
-                                className="flex items-center gap-1 text-orange-400"
-                                title={findingCountLabel(
-                                  reviewer.report.testCoverageGaps.length,
-                                  "coverage gap",
-                                )}
-                              >
-                                <FileWarning className="size-3.5" aria-hidden="true" />
-                                <span className="font-mono text-xs tabular-nums">
-                                  {reviewer.report.testCoverageGaps.length}
-                                </span>
-                              </span>
-                            </div>
-                          ) : null}
-                        </button>
-                        {stoppable && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="mr-1.5 size-7 shrink-0 text-muted-foreground hover:text-destructive"
-                            aria-label={`Stop Reviewer ${index + 1}`}
-                            title="Stop this reviewer; the review continues without it"
-                            disabled={reviewerActionsBlocked}
-                            onClick={() => void stopReviewer(reviewer.id)}
-                          >
-                            {stoppingReviewerId === reviewer.id ? (
-                              <Loader2 className="size-3.5 animate-spin" />
-                            ) : (
-                              <Square className="size-3.5" />
-                            )}
-                          </Button>
-                        )}
-                      </div>
-                    </ContextMenuTrigger>
-                    <ContextMenuContent className="w-44">
-                      <ContextMenuItem
-                        disabled={
-                          !canRestart || reviewerActionsBlocked || !commands.restartReviewer
-                        }
-                        onSelect={() =>
-                          void runReviewerAction(reviewer.id, "restart", commands.restartReviewer)
-                        }
-                      >
-                        {actionPending && reviewerAction.kind === "restart" ? (
-                          <Loader2 className="animate-spin" />
-                        ) : (
-                          <RotateCcw />
-                        )}
-                        Restart
-                      </ContextMenuItem>
-                      <ContextMenuItem
-                        disabled={
-                          !canUnstick || reviewerActionsBlocked || !commands.unstickReviewer
-                        }
-                        onSelect={() =>
-                          void runReviewerAction(reviewer.id, "unstick", commands.unstickReviewer)
-                        }
-                      >
-                        {actionPending && reviewerAction.kind === "unstick" ? (
-                          <Loader2 className="animate-spin" />
-                        ) : (
-                          <Play />
-                        )}
-                        Unstick
-                      </ContextMenuItem>
-                    </ContextMenuContent>
-                  </ContextMenu>
-                );
-              })}
+          </div>
+          {workflow.consolidatedReport || workflow.fixResult ? (
+            <div className="space-y-4 border-t border-divider px-4 py-4 sm:px-6">
+              {workflow.consolidatedReport && (
+                <StructuredReviewReportView
+                  report={workflow.consolidatedReport}
+                  heading="Consolidated Multi Review"
+                  collapsibleSections
+                  sectionExpansionKey={`multi-review/${workflow.id}/consolidated-report-section`}
+                />
+              )}
+              {workflow.fixResult && (
+                <section className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-4">
+                  <h2 className="text-sm font-semibold">Fix result</h2>
+                  <p className="mt-2 text-sm text-foreground/85">{workflow.fixResult.summary}</p>
+                </section>
+              )}
             </div>
-          </section>
-
-          <MultiReviewStepSection
-            heading="Consolidation"
-            name="Consolidation"
-            status={consolidationStatus}
-            stalled={workflow.phase === "consolidating" && reviewSessionStalled}
-            model={consolidationSelection}
-            runtime={stepRuntime("consolidation", consolidationStatus)}
-            runtimeLabel="Consolidation runtime"
-            openLabel="Open consolidation session"
-            openTitle={stepOpenTitle(
-              consolidationStatus,
-              hasReviewSession,
-              "consolidation",
-              "Consolidation starts after the independent reviews finish",
-            )}
-            canOpen={canOpenReviewStep(consolidationStatus)}
-            onOpen={() => presentReviewSession(workflow, "consolidate")}
-            canRestart={
-              consolidationStatus.state !== "not-started" && Boolean(commands.restartStep)
-            }
-            restarting={restartingStep === "consolidate"}
-            onRestart={() => void restartStep("consolidate")}
-            onRestartIn={() => {
-              setRestartDialogError(null);
-              setRestartDialogStep("consolidate");
-            }}
-            canPause={workflow.phase === "consolidating" && Boolean(commands.pauseStep)}
-            canResume={
-              workflow.phase === "paused" &&
-              workflow.pausedStep === "consolidate" &&
-              Boolean(commands.resumeStep)
-            }
-            lifecyclePending={stepLifecycleAction !== null}
-            onPause={() => void runStepLifecycle("consolidate", "pause", commands.pauseStep)}
-            onResume={() => void runStepLifecycle("consolidate", "resume", commands.resumeStep)}
-            requireDirectActivation
-          />
-
-          <MultiReviewStepSection
-            heading="Fix"
-            name="Fix"
-            status={fixStatus}
-            stalled={workflow.phase === "fixing" && fixSessionStalled}
-            model={workflow.fixModel}
-            runtime={stepRuntime("fix", fixStatus)}
-            runtimeLabel="Fix runtime"
-            openLabel="Open fix model session"
-            openTitle={stepOpenTitle(
-              fixStatus,
-              hasFixSession,
-              "fix",
-              "The fix session starts once the consolidated findings are sent to the fix model",
-            )}
-            canOpen={canOpenFixStep(fixStatus)}
-            onOpen={() => presentFixSession(workflow, "manual")}
-            canRestart={fixStatus.state !== "not-started" && Boolean(commands.restartStep)}
-            restarting={restartingStep === "fix"}
-            onRestart={() => void restartStep("fix")}
-            onRestartIn={() => {
-              setRestartDialogError(null);
-              setRestartDialogStep("fix");
-            }}
-            canPause={workflow.phase === "fixing" && Boolean(commands.pauseStep)}
-            canResume={
-              workflow.phase === "paused" &&
-              workflow.pausedStep === "fix" &&
-              Boolean(commands.resumeStep)
-            }
-            lifecyclePending={stepLifecycleAction !== null}
-            onPause={() => void runStepLifecycle("fix", "pause", commands.pauseStep)}
-            onResume={() => void runStepLifecycle("fix", "resume", commands.resumeStep)}
-            showPauseAction={false}
-          />
-
-          {workflow.consolidatedReport && (
-            <StructuredReviewReportView
-              report={workflow.consolidatedReport}
-              heading="Consolidated Multi Review"
-              collapsibleSections
-              sectionExpansionKey={`multi-review/${workflow.id}/consolidated-report-section`}
-            />
-          )}
-
-          {workflow.fixResult && (
-            <section className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-4">
-              <h2 className="text-sm font-semibold">Fix result</h2>
-              <p className="mt-2 text-sm text-foreground/85">{workflow.fixResult.summary}</p>
-            </section>
-          )}
-
-          {workflow.reviewSnapshotStale === true && !workflow.reviewPackage && (
-            <div className="rounded-lg border border-amber-500/30 bg-amber-500/8 p-3 text-sm text-amber-500">
-              The repository worktree changed after this Multi Review started. The review continued,
-              so reviewer reports may reflect different worktree states.
-            </div>
-          )}
-
-          {(error || workflow.error) && (
-            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-              {error ?? workflow.error}
-            </div>
-          )}
-
-          {(presentationNotice || workflow.presentationError) && (
-            <div className="rounded-lg border border-amber-500/30 bg-amber-500/8 p-3 text-sm text-amber-500">
-              {presentationNotice ?? workflow.presentationError}
-            </div>
-          )}
-
-          {workflow.phase === "interactive" &&
-            workflow.addressPromptPending !== true &&
-            workflow.fixSession?.providerSessionId &&
-            !presentationNotice &&
-            !workflow.presentationError && (
-              <div className="rounded-lg border border-border/60 bg-muted/30 p-3 text-sm text-muted-foreground">
-                The fix request was delivered. The fix session is ready to open.
-              </div>
-            )}
-
-          {workflow.addressPromptPending === true && !workflow.error && (
-            <div className="rounded-lg border border-border/60 bg-muted/30 p-3 text-sm text-muted-foreground">
-              The fix request was recorded and is being delivered in the background.
-            </div>
-          )}
-
-          {workflow.autoPrLaunch && <AutoPrLaunchNotice launch={workflow.autoPrLaunch} />}
+          ) : null}
         </div>
-      </ScrollArea>
+      </div>
 
       <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-border/60 bg-background/90 px-4 py-3 sm:px-5">
         {workflow.phase === "failed" && (

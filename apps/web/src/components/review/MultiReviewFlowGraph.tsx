@@ -1,0 +1,659 @@
+import {
+  Fragment,
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
+import {
+  AlertCircle,
+  AlertTriangle,
+  CheckCircle2,
+  Circle,
+  Clock3,
+  GitMerge,
+  Loader2,
+  Pause,
+  Square,
+  Wrench,
+} from "lucide-react";
+import type { ReviewSeverity } from "@orkestrator/protocol/structured-review";
+import type { ReviewValidationResult } from "@orkestrator/protocol/review-workflow";
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { formatRuntimeParts, type RuntimeParts } from "@/lib/review/runtime-summary";
+import { cn } from "@/lib/utils";
+import { reviewSeverityStyles } from "./StructuredReviewReportView";
+import {
+  FLOW_GRAPH_STACK_BELOW,
+  MULTI_REVIEW_SEVERITIES,
+  flowEdgePath,
+  multiReviewFlowLayout,
+  summarizeFlowEdges,
+  type FlowRect,
+  type MultiReviewFlowEdgeState,
+  type MultiReviewFlowEdges,
+  type MultiReviewFlowState,
+} from "./multi-review-flow";
+
+export type MultiReviewFlowNodeKind = "package" | "reviewer" | "consolidation" | "fix";
+
+/** Everything one node shows, plus how it opens and what its context menu holds. */
+export interface MultiReviewFlowNodeModel {
+  id: string;
+  kind: MultiReviewFlowNodeKind;
+  title: string;
+  state: MultiReviewFlowState;
+  stalled: boolean;
+  /** The full status, for the inspector pill and the node's accessible name. */
+  statusLabel: string;
+  /** `{agent} · {model} · {effort}` for steps, `{model} · {effort}` for reviewers. */
+  detail: string;
+  runtime: RuntimeParts | null;
+  runtimeLabel: string;
+  /** Shown where the runtime would be, for a node that has not run. */
+  pendingLabel?: string;
+  /** Short state word on the second row of a node that is neither queued nor clean. */
+  statusWord?: { text: string; tone: "muted" | "running" | "warning" | "destructive" };
+  severity?: Record<ReviewSeverity, number>;
+  /** Finding totals in words, so the chips are not the only place they exist. */
+  findingsLabel?: string;
+  validation?: { id: string; label: string; status: ReviewValidationResult["status"] }[];
+  canOpen: boolean;
+  onOpen: () => void;
+  contextMenu: ReactNode;
+}
+
+const NODE_STATE_CLASS: Record<MultiReviewFlowState, string> = {
+  "not-started": "border-dashed border-border bg-sidebar text-muted-foreground",
+  running:
+    "border-cyan-400 bg-flow-node ring-4 ring-cyan-400/10 shadow-[0_8px_30px_rgb(0_0_0/0.65)]",
+  paused: "border-amber-400/60 bg-flow-node",
+  complete: "border-success/55 bg-flow-node",
+  failed: "border-failure/70 bg-flow-node",
+  cancelling: "border-border bg-sidebar text-muted-foreground",
+  cancelled: "border-border bg-sidebar text-muted-foreground",
+};
+
+const ICON_CLASS = "size-3.5 shrink-0";
+
+export function MultiReviewFlowStateIcon({
+  kind,
+  state,
+  stalled,
+  className,
+}: {
+  kind: MultiReviewFlowNodeKind;
+  state: MultiReviewFlowState;
+  stalled: boolean;
+  className?: string;
+}) {
+  const iconClass = cn(ICON_CLASS, className);
+  if (stalled && state === "running") {
+    return <AlertTriangle className={cn(iconClass, "text-amber-500")} />;
+  }
+  switch (state) {
+    case "running":
+      return <Loader2 className={cn(iconClass, "animate-spin text-cyan-300")} />;
+    case "paused":
+      return <Pause className={cn(iconClass, "text-amber-400")} />;
+    case "failed":
+      return <AlertCircle className={cn(iconClass, "text-failure")} />;
+    case "cancelling":
+    case "cancelled":
+      return <Square className={cn(iconClass, "text-muted-foreground")} />;
+    case "complete":
+      return <CheckCircle2 className={cn(iconClass, "text-success")} />;
+    default: {
+      const Idle =
+        kind === "reviewer"
+          ? Clock3
+          : kind === "consolidation"
+            ? GitMerge
+            : kind === "fix"
+              ? Wrench
+              : Circle;
+      return <Idle className={cn(iconClass, "text-muted-foreground/70")} />;
+    }
+  }
+}
+
+/**
+ * `{elapsed} · {tokens}`. The word "tokens" is screen-reader text only: the node
+ * has room for the count beside the clock, and the inspector spells it out.
+ */
+export function FlowRuntime({
+  runtime,
+  label,
+  className,
+}: {
+  runtime: RuntimeParts;
+  label?: string;
+  className?: string;
+}) {
+  const tokens = runtime.tokens ? (
+    <>
+      {runtime.tokens}
+      <span className="sr-only"> tokens</span>
+    </>
+  ) : runtime.tokensPending ? (
+    "Tokens pending"
+  ) : null;
+  return (
+    <span
+      aria-label={label}
+      className={cn(
+        "shrink-0 font-mono text-[11px] font-normal tabular-nums",
+        runtime.live ? "text-cyan-300" : "text-muted-foreground",
+        className,
+      )}
+    >
+      {runtime.elapsed}
+      {runtime.elapsed && tokens ? <span className="text-flow-edge"> · </span> : null}
+      {tokens}
+    </span>
+  );
+}
+
+const STATUS_WORD_TONE = {
+  muted: "text-muted-foreground",
+  running: "text-cyan-300/80",
+  warning: "text-amber-500",
+  destructive: "text-failure",
+} as const;
+
+export function SeverityChips({
+  counts,
+  className,
+}: {
+  counts: Record<ReviewSeverity, number>;
+  className?: string;
+}) {
+  const present = MULTI_REVIEW_SEVERITIES.filter((severity) => counts[severity] > 0);
+  if (present.length === 0) {
+    return <span className={cn("text-[11px] text-muted-foreground", className)}>no issues</span>;
+  }
+  return (
+    <span className={cn("flex shrink-0 items-center gap-1", className)}>
+      {present.map((severity) => (
+        <span
+          key={severity}
+          title={`${counts[severity]} ${severity} ${counts[severity] === 1 ? "issue" : "issues"}`}
+          data-severity={severity}
+          className={cn(
+            "min-w-[18px] rounded-[5px] border px-1 text-center font-mono text-[10.5px] leading-4 tabular-nums",
+            reviewSeverityStyles[severity],
+          )}
+        >
+          {counts[severity]}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+const VALIDATION_CHIP_CLASS: Record<ReviewValidationResult["status"], string> = {
+  passed: "bg-success/10 text-green-300",
+  skipped: "bg-elevated text-muted-foreground",
+  failed: "bg-failure/12 text-failure",
+  incomplete: "bg-failure/12 text-failure",
+  running: "bg-cyan-400/10 text-cyan-300",
+  queued: "border border-dashed border-border text-muted-foreground",
+  pending: "border border-dashed border-border text-muted-foreground",
+};
+
+const MAX_VALIDATION_CHIPS = 4;
+
+function ValidationChips({
+  checks,
+}: {
+  checks: NonNullable<MultiReviewFlowNodeModel["validation"]>;
+}) {
+  const shown = checks.slice(0, MAX_VALIDATION_CHIPS);
+  const hidden = checks.length - shown.length;
+  return (
+    <div className="mt-2 flex min-w-0 gap-1 overflow-hidden" aria-label="Validation checks">
+      {shown.map((check) => (
+        <span
+          key={check.id}
+          title={`${check.label}: ${check.status}`}
+          data-validation-status={check.status}
+          className={cn(
+            "max-w-32 shrink-0 truncate rounded-[5px] px-1 text-[10.5px] leading-4",
+            VALIDATION_CHIP_CLASS[check.status],
+          )}
+        >
+          {check.label}
+          {check.status === "skipped" ? " skipped" : ""}
+        </span>
+      ))}
+      {hidden > 0 ? (
+        <span className="shrink-0 px-1 text-[10.5px] leading-4 text-muted-foreground">
+          +{hidden}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function FlowNode({
+  node,
+  selected,
+  focusable,
+  panelId,
+  style,
+  className,
+  registerRef,
+  onSelect,
+  onKeyDown,
+}: {
+  node: MultiReviewFlowNodeModel;
+  selected: boolean;
+  focusable: boolean;
+  panelId: string;
+  style?: CSSProperties;
+  className?: string;
+  registerRef: (id: string, element: HTMLButtonElement | null) => void;
+  onSelect: (id: string) => void;
+  onKeyDown: (event: KeyboardEvent<HTMLButtonElement>, node: MultiReviewFlowNodeModel) => void;
+}) {
+  const muted = node.state === "not-started" || node.state === "cancelled";
+  const accessibleName = [
+    node.title,
+    node.statusLabel,
+    node.runtime ? formatRuntimeParts(node.runtime) : null,
+    node.findingsLabel,
+  ]
+    .filter(Boolean)
+    .join(", ");
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <button
+          ref={(element) => registerRef(node.id, element)}
+          type="button"
+          role="tab"
+          id={flowNodeElementId(panelId, node.id)}
+          aria-selected={selected}
+          aria-controls={panelId}
+          aria-label={accessibleName}
+          title={node.canOpen ? "Double-click or press Enter to open the session" : undefined}
+          tabIndex={focusable ? 0 : -1}
+          data-flow-node={node.kind}
+          data-flow-state={node.state}
+          style={style}
+          className={cn(
+            "flex min-w-0 flex-col justify-center rounded-xl border px-3 py-3 text-left transition-[border-color,box-shadow,outline-color] outline-2 outline-offset-[3px] outline-transparent focus-visible:outline-primary",
+            NODE_STATE_CLASS[node.state],
+            selected && "outline-primary/60",
+            className,
+          )}
+          onClick={() => onSelect(node.id)}
+          onDoubleClick={() => {
+            if (node.canOpen) node.onOpen();
+          }}
+          onKeyDown={(event) => onKeyDown(event, node)}
+        >
+          <span className="flex min-w-0 items-center gap-2">
+            <MultiReviewFlowStateIcon kind={node.kind} state={node.state} stalled={node.stalled} />
+            <span
+              className={cn(
+                "min-w-0 flex-1 truncate text-[13px] font-semibold",
+                muted ? "text-zinc-400" : "text-foreground",
+              )}
+            >
+              {node.title}
+            </span>
+            {node.runtime ? (
+              <FlowRuntime runtime={node.runtime} label={node.runtimeLabel} />
+            ) : node.pendingLabel ? (
+              <span className="shrink-0 text-[11px] text-muted-foreground">
+                {node.pendingLabel}
+              </span>
+            ) : null}
+          </span>
+          <span className="mt-0.5 flex min-w-0 items-center gap-2">
+            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+              {node.detail}
+            </span>
+            {node.severity ? (
+              <SeverityChips counts={node.severity} />
+            ) : node.statusWord ? (
+              <span className={cn("shrink-0 text-[11px]", STATUS_WORD_TONE[node.statusWord.tone])}>
+                {node.statusWord.text}
+              </span>
+            ) : null}
+          </span>
+          {node.validation?.length ? <ValidationChips checks={node.validation} /> : null}
+        </button>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-44">{node.contextMenu}</ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+export function flowNodeElementId(panelId: string, nodeId: string): string {
+  return `${panelId}-node-${nodeId.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+}
+
+const EDGE_CLASS: Record<MultiReviewFlowEdgeState, string> = {
+  complete: "stroke-success opacity-55",
+  active: "stroke-cyan-400",
+  ready: "stroke-success opacity-55",
+  pending: "stroke-flow-edge",
+  failed: "stroke-failure opacity-55",
+};
+
+const CONNECTOR_CLASS: Record<MultiReviewFlowEdgeState, string> = {
+  complete: "border-success/55",
+  active: "border-cyan-400",
+  ready: "border-dashed border-success/55",
+  pending: "border-dashed border-flow-edge",
+  failed: "border-failure/55",
+};
+
+const PORT_CLASS: Record<MultiReviewFlowState, string> = {
+  "not-started": "fill-flow-edge",
+  running: "fill-cyan-400",
+  paused: "fill-amber-400",
+  complete: "fill-success",
+  failed: "fill-failure",
+  cancelling: "fill-flow-edge",
+  cancelled: "fill-flow-edge",
+};
+
+function isDashed(state: MultiReviewFlowEdgeState): boolean {
+  return state === "pending" || state === "ready";
+}
+
+function FlowEdge({ id, d, state }: { id: string; d: string; state: MultiReviewFlowEdgeState }) {
+  return (
+    <>
+      <path
+        d={d}
+        data-flow-edge={id}
+        data-edge-state={state}
+        className={EDGE_CLASS[state]}
+        strokeWidth={2}
+        fill="none"
+        strokeDasharray={isDashed(state) ? "4 5" : undefined}
+      />
+      {state === "active" ? (
+        <circle r={3} className="fill-cyan-200 motion-reduce:hidden">
+          <animateMotion dur="1.8s" repeatCount="indefinite" path={d} />
+        </circle>
+      ) : null}
+    </>
+  );
+}
+
+function Port({
+  rect,
+  side,
+  state,
+}: {
+  rect: FlowRect;
+  side: "in" | "out";
+  state: MultiReviewFlowState;
+}) {
+  return (
+    <circle
+      cx={side === "out" ? rect.x + rect.width : rect.x}
+      cy={rect.y + rect.height / 2}
+      r={4}
+      className={PORT_CLASS[state]}
+    />
+  );
+}
+
+function ColumnLabel({
+  children,
+  style,
+  title,
+}: {
+  children: ReactNode;
+  style?: CSSProperties;
+  title?: string;
+}) {
+  return (
+    <span
+      style={style}
+      title={title}
+      className="text-[10.5px] font-medium tracking-[0.14em] whitespace-nowrap text-muted-foreground/70 uppercase"
+    >
+      {children}
+    </span>
+  );
+}
+
+/** The canvas width, or null until it has been measured (and in DOM tests). */
+function useMeasuredWidth(): [(element: HTMLDivElement | null) => void, number | null] {
+  const [element, setElement] = useState<HTMLDivElement | null>(null);
+  const [width, setWidth] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    if (!element) return;
+    const measure = () => {
+      const next = element.clientWidth;
+      setWidth(next > 0 ? next : null);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", measure);
+      return () => window.removeEventListener("resize", measure);
+    }
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [element]);
+  return [setElement, width];
+}
+
+export interface MultiReviewFlowGraphProps {
+  packageNode: MultiReviewFlowNodeModel;
+  reviewerNodes: MultiReviewFlowNodeModel[];
+  consolidationNode: MultiReviewFlowNodeModel;
+  fixNode: MultiReviewFlowNodeModel;
+  edges: MultiReviewFlowEdges;
+  reviewLabel: string;
+  /** The reviewer progress in full, for the review column's tooltip. */
+  reviewTitle?: string;
+  selectedId: string;
+  onSelect: (id: string) => void;
+  /** The inspector panel the nodes control. */
+  panelId: string;
+  /** Forces a layout; otherwise the measured width decides. */
+  layout?: "graph" | "stacked";
+}
+
+/**
+ * The pipeline as a left-to-right graph: package, the reviewer panel stacked
+ * in one column, consolidation, then Fix. Below {@link FLOW_GRAPH_STACK_BELOW}
+ * pixels it becomes a single column with straight connectors.
+ *
+ * Nodes are tabs controlling the inspector: one tab stop for the graph, arrow
+ * keys walk the pipeline in order, and Enter opens the node's session.
+ */
+export function MultiReviewFlowGraph({
+  packageNode,
+  reviewerNodes,
+  consolidationNode,
+  fixNode,
+  edges,
+  reviewLabel,
+  reviewTitle,
+  selectedId,
+  onSelect,
+  panelId,
+  layout,
+}: MultiReviewFlowGraphProps) {
+  const [measureRef, measuredWidth] = useMeasuredWidth();
+  const nodeRefs = useRef(new Map<string, HTMLButtonElement>());
+  const order = [packageNode, ...reviewerNodes, consolidationNode, fixNode];
+  const stacked =
+    layout === "stacked" ||
+    (layout === undefined && measuredWidth !== null && measuredWidth < FLOW_GRAPH_STACK_BELOW);
+
+  const registerRef = useCallback((id: string, element: HTMLButtonElement | null) => {
+    if (element) nodeRefs.current.set(id, element);
+    else nodeRefs.current.delete(id);
+  }, []);
+
+  const handleKeyDown = (
+    event: KeyboardEvent<HTMLButtonElement>,
+    node: MultiReviewFlowNodeModel,
+  ) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      onSelect(node.id);
+      if (node.canOpen) node.onOpen();
+      return;
+    }
+    const index = order.findIndex((candidate) => candidate.id === node.id);
+    let target: number | null = null;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") target = index + 1;
+    else if (event.key === "ArrowLeft" || event.key === "ArrowUp") target = index - 1;
+    else if (event.key === "Home") target = 0;
+    else if (event.key === "End") target = order.length - 1;
+    if (target === null) return;
+    event.preventDefault();
+    const next = order[Math.max(0, Math.min(order.length - 1, target))]!;
+    onSelect(next.id);
+    nodeRefs.current.get(next.id)?.focus();
+  };
+
+  const renderNode = (
+    node: MultiReviewFlowNodeModel,
+    style?: CSSProperties,
+    className?: string,
+  ) => (
+    <FlowNode
+      key={node.id}
+      node={node}
+      selected={node.id === selectedId}
+      focusable={node.id === selectedId}
+      panelId={panelId}
+      style={style}
+      className={className}
+      registerRef={registerRef}
+      onSelect={onSelect}
+      onKeyDown={handleKeyDown}
+    />
+  );
+
+  const canvasClass =
+    "bg-flow-canvas bg-[radial-gradient(var(--color-divider)_1px,transparent_1px)] bg-size-[20px_20px]";
+
+  if (stacked) {
+    const connector = (state: MultiReviewFlowEdgeState, id: string) => (
+      <div
+        aria-hidden="true"
+        data-flow-edge={id}
+        data-edge-state={state}
+        className={cn("mx-auto h-5 w-0 border-l-2", CONNECTOR_CLASS[state])}
+      />
+    );
+    return (
+      <div
+        ref={measureRef}
+        role="tablist"
+        aria-label="Multi Review pipeline"
+        aria-orientation="vertical"
+        data-flow-layout="stacked"
+        className={cn("flex flex-col gap-1.5 border-b border-divider px-4 py-4", canvasClass)}
+      >
+        <ColumnLabel>Prepare</ColumnLabel>
+        {renderNode(packageNode, undefined, "w-full")}
+        {connector(summarizeFlowEdges(edges.intoReviewers), "into-reviewers")}
+        <ColumnLabel title={reviewTitle}>{reviewLabel}</ColumnLabel>
+        {reviewerNodes.map((node) => renderNode(node, undefined, "w-full"))}
+        {connector(summarizeFlowEdges(edges.intoConsolidation), "into-consolidation")}
+        <ColumnLabel>Consolidate</ColumnLabel>
+        {renderNode(consolidationNode, undefined, "w-full")}
+        {connector(edges.intoFix, "into-fix")}
+        <ColumnLabel>Fix</ColumnLabel>
+        {renderNode(fixNode, undefined, "w-full")}
+      </div>
+    );
+  }
+
+  const geometry = multiReviewFlowLayout({
+    width: measuredWidth ?? 1440,
+    reviewerCount: reviewerNodes.length,
+    packageHasChips: Boolean(packageNode.validation?.length),
+  });
+  const place = (rect: FlowRect): CSSProperties => ({
+    position: "absolute",
+    left: rect.x,
+    top: rect.y,
+    width: rect.width,
+    height: rect.height,
+  });
+
+  return (
+    <div
+      ref={measureRef}
+      data-flow-layout="graph"
+      className={cn("relative shrink-0 overflow-x-auto border-b border-divider", canvasClass)}
+    >
+      <div
+        role="tablist"
+        aria-label="Multi Review pipeline"
+        className="relative"
+        style={{ width: geometry.width, height: geometry.height }}
+      >
+        <svg
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0"
+          width={geometry.width}
+          height={geometry.height}
+          viewBox={`0 0 ${geometry.width} ${geometry.height}`}
+          fill="none"
+        >
+          {reviewerNodes.map((node, index) => (
+            <Fragment key={node.id}>
+              <FlowEdge
+                id={`into-reviewer-${index}`}
+                d={flowEdgePath(geometry.package, geometry.reviewers[index]!)}
+                state={edges.intoReviewers[index] ?? "pending"}
+              />
+              <FlowEdge
+                id={`into-consolidation-${index}`}
+                d={flowEdgePath(geometry.reviewers[index]!, geometry.consolidation)}
+                state={edges.intoConsolidation[index] ?? "pending"}
+              />
+            </Fragment>
+          ))}
+          <FlowEdge
+            id="into-fix"
+            d={flowEdgePath(geometry.consolidation, geometry.fix)}
+            state={edges.intoFix}
+          />
+          <Port rect={geometry.package} side="out" state={packageNode.state} />
+          <Port rect={geometry.consolidation} side="in" state={consolidationNode.state} />
+          <Port rect={geometry.fix} side="in" state={fixNode.state} />
+        </svg>
+        <ColumnLabel style={{ position: "absolute", left: geometry.columns.prepare, top: 16 }}>
+          Prepare
+        </ColumnLabel>
+        <ColumnLabel
+          title={reviewTitle}
+          style={{ position: "absolute", left: geometry.columns.review, top: 16 }}
+        >
+          {reviewLabel}
+        </ColumnLabel>
+        <ColumnLabel style={{ position: "absolute", left: geometry.columns.consolidate, top: 16 }}>
+          Consolidate
+        </ColumnLabel>
+        <ColumnLabel style={{ position: "absolute", left: geometry.columns.fix, top: 16 }}>
+          Fix
+        </ColumnLabel>
+        {renderNode(packageNode, place(geometry.package))}
+        {reviewerNodes.map((node, index) => renderNode(node, place(geometry.reviewers[index]!)))}
+        {renderNode(consolidationNode, place(geometry.consolidation))}
+        {renderNode(fixNode, place(geometry.fix))}
+      </div>
+    </div>
+  );
+}

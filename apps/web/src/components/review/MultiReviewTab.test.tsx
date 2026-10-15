@@ -28,10 +28,44 @@ import {
   multiReviewFixSessionTabOptions,
   multiReviewReviewSessionTabOptions,
   reviewPackageGenerationStep,
+  reviewerColumnLabel,
   reviewerProgressSummary,
   reviewerRuntimeSummary,
   reviewerStatusNote,
 } from "./MultiReviewTab";
+
+/**
+ * A node of the flow graph. Nodes are tabs controlling the inspector, named
+ * `{title}, {status}…`: "Review package", "Reviewer 1 ·", "Consolidation" and
+ * "Fix," pick the four kinds.
+ */
+function flowNode(prefix: string): HTMLElement {
+  const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return screen.getByRole("tab", { name: new RegExp(`^${escaped}`) });
+}
+
+/** Selects a node so the inspector shows it, and returns the node. */
+function selectFlowNode(prefix: string): HTMLElement {
+  const node = flowNode(prefix);
+  fireEvent.click(node);
+  return node;
+}
+
+function inspector() {
+  return within(screen.getByTestId("multi-review-inspector"));
+}
+
+const STEP_OPEN_LABEL = {
+  "Review package": "Open review package generation session",
+  Consolidation: "Open consolidation session",
+  "Fix,": "Open fix model session",
+} as const;
+
+/** Selects a step node and returns the inspector's Open session button for it. */
+function stepOpenButton(node: keyof typeof STEP_OPEN_LABEL): HTMLElement {
+  selectFlowNode(node);
+  return inspector().getByRole("button", { name: STEP_OPEN_LABEL[node] });
+}
 
 function activateReviewTile(button: HTMLElement): void {
   fireEvent.pointerDown(button, {
@@ -367,7 +401,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(runtime.className).not.toContain("text-cyan");
   });
 
-  test("shows issue and coverage-gap counts on completed reviewer cards", () => {
+  test("shows severity counts on completed reviewer nodes and totals in their names", () => {
     const ready = readyWorkflow();
     ready.reviewers[1]!.report = {
       ...report,
@@ -384,24 +418,28 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
-    const firstReviewer = screen.getByRole("button", {
-      name: "Open Reviewer 1 transcript, 1 issue found, 1 coverage gap found",
+    const firstReviewer = screen.getByRole("tab", {
+      name: "Reviewer 1 · claude, Complete, 1 issue found, 1 coverage gap found",
     });
-    const firstIssueCount = within(firstReviewer).getByTitle("1 issue found");
-    const firstGapCount = within(firstReviewer).getByTitle("1 coverage gap found");
-    expect(firstIssueCount.textContent).toBe("1");
-    expect(firstIssueCount.className).toContain("text-amber-400");
-    expect(firstGapCount.textContent).toBe("1");
-    expect(firstGapCount.className).toContain("text-orange-400");
-    expect(firstIssueCount.parentElement).toBe(firstGapCount.parentElement);
-    expect(firstIssueCount.parentElement?.className).toContain("flex-col");
-    expect(firstIssueCount.parentElement?.className).toContain("items-end");
+    const firstP1 = within(firstReviewer).getByTitle("1 P1 issue");
+    expect(firstP1.textContent).toBe("1");
+    // The chips use the report's own severity colours.
+    expect(firstP1.className).toContain("text-amber-300");
+    expect(firstReviewer.querySelectorAll("[data-severity]")).toHaveLength(1);
 
-    const secondReviewer = screen.getByRole("button", {
-      name: "Open Reviewer 2 transcript, 2 issues found, 0 coverage gaps found",
+    const secondReviewer = screen.getByRole("tab", {
+      name: "Reviewer 2 · codex, Complete, 2 issues found, 0 coverage gaps found",
     });
-    expect(within(secondReviewer).getByTitle("2 issues found").textContent).toBe("2");
-    expect(within(secondReviewer).getByTitle("0 coverage gaps found").textContent).toBe("0");
+    expect(within(secondReviewer).getByTitle("2 P1 issues").textContent).toBe("2");
+
+    // The inspector's Open session keeps the counts in its accessible name.
+    fireEvent.click(secondReviewer);
+    expect(
+      inspector().getByRole("button", {
+        name: "Open Reviewer 2 transcript, 2 issues found, 0 coverage gaps found",
+      }),
+    ).toBeTruthy();
+    expect(inspector().getByText("2 issues found, 0 coverage gaps found")).toBeTruthy();
   });
 
   test("does not show finding counts before a reviewer has produced a report", () => {
@@ -416,8 +454,9 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
+    expect(screen.queryByRole("tab", { name: /issues? found/ }) === null).toBe(true);
     expect(screen.queryByRole("button", { name: /issues? found/ }) === null).toBe(true);
-    expect(screen.queryByRole("button", { name: /coverage gaps? found/ }) === null).toBe(true);
+    expect(document.querySelectorAll("[data-severity]")).toHaveLength(0);
   });
 
   test("does not stack a preparing-report spinner on a running reviewer tile", () => {
@@ -436,18 +475,22 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
-    const preparingTile = screen.getByRole("button", { name: /^Open Reviewer 1 transcript/ });
-    const correctingTile = screen.getByRole("button", { name: /^Open Reviewer 2 transcript/ });
+    const preparingNode = flowNode("Reviewer 1 ·");
+    const correctingNode = flowNode("Reviewer 2 ·");
 
+    // Each node keeps exactly one status spinner; the slot state never adds one.
     expect(screen.queryByText("Preparing report") === null).toBe(true);
-    expect(within(preparingTile).queryByTestId("workflow-result-status") === null).toBe(true);
-    expect(preparingTile.querySelectorAll(":scope > svg.animate-spin")).toHaveLength(1);
-    expect(preparingTile.querySelectorAll("svg.animate-spin")).toHaveLength(1);
+    expect(preparingNode.querySelectorAll("svg.animate-spin")).toHaveLength(1);
+    expect(within(preparingNode).getByText("reviewing")).toBeTruthy();
+    expect(correctingNode.querySelectorAll("svg.animate-spin")).toHaveLength(1);
+    expect(within(correctingNode).getByText("correcting report")).toBeTruthy();
 
-    expect(screen.getByText("Correcting report format")).toBeTruthy();
+    // The first running reviewer is inspected by default; its preparing slot
+    // is not reported as a separate status.
+    expect(inspector().queryByTestId("workflow-result-status") === null).toBe(true);
+    fireEvent.click(correctingNode);
+    expect(inspector().getByText("Correcting report format")).toBeTruthy();
     expect(screen.getAllByTestId("workflow-result-status")).toHaveLength(1);
-    expect(correctingTile.querySelectorAll(":scope > svg.animate-spin")).toHaveLength(1);
-    expect(correctingTile.querySelectorAll("svg.animate-spin")).toHaveLength(2);
   });
 
   test("keeps received and needs-attention report status on reviewer tiles", () => {
@@ -466,18 +509,19 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
-    const received = within(
-      screen.getByRole("button", { name: /^Open Reviewer 1 transcript/ }),
-    ).getByTestId("workflow-result-status");
-    const needsAttention = within(
-      screen.getByRole("button", { name: /^Open Reviewer 2 transcript/ }),
-    ).getByTestId("workflow-result-status");
+    expect(within(flowNode("Reviewer 1 ·")).getByText("report received")).toBeTruthy();
+    const attentionWord = within(flowNode("Reviewer 2 ·")).getByText("report needs attention");
+    expect(attentionWord.className).toContain("text-amber-500");
 
+    const received = inspector().getByTestId("workflow-result-status");
     expect(received.dataset.state).toBe("received");
     expect(received.textContent).toBe("Report received; finishing checks");
+
+    selectFlowNode("Reviewer 2 ·");
+    const needsAttention = inspector().getByTestId("workflow-result-status");
     expect(needsAttention.dataset.state).toBe("needs-attention");
     expect(needsAttention.textContent).toBe("Report needs attention");
-    expect(screen.getAllByTestId("workflow-result-status")).toHaveLength(2);
+    expect(screen.getAllByTestId("workflow-result-status")).toHaveLength(1);
   });
 
   test("hides a stale preparing-report status on failed and cancelled reviewer tiles", () => {
@@ -508,8 +552,11 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
-    expect(screen.queryByText("Preparing report") === null).toBe(true);
-    expect(screen.queryByTestId("workflow-result-status") === null).toBe(true);
+    for (const reviewer of ["Reviewer 1 ·", "Reviewer 2 ·"]) {
+      selectFlowNode(reviewer);
+      expect(screen.queryByText("Preparing report") === null).toBe(true);
+      expect(screen.queryByTestId("workflow-result-status") === null).toBe(true);
+    }
   });
 
   test("keeps partial-report counts visible for failed and cancelled reviewers", () => {
@@ -529,16 +576,18 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
-    expect(
-      screen.getByRole("button", {
-        name: "Open Reviewer 1 transcript, 1 issue found, 1 coverage gap found",
-      }),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("button", {
-        name: "Open Reviewer 2 transcript, 1 issue found, 1 coverage gap found",
-      }),
-    ).toBeTruthy();
+    const failed = screen.getByRole("tab", {
+      name: "Reviewer 1 · claude, Failed, 1 issue found, 1 coverage gap found",
+    });
+    const stopped = screen.getByRole("tab", {
+      name: "Reviewer 2 · codex, Stopped, 1 issue found, 1 coverage gap found",
+    });
+    expect(within(failed).getByTitle("1 P1 issue")).toBeTruthy();
+    expect(within(stopped).getByTitle("1 P1 issue")).toBeTruthy();
+    // Partial reports are not findings so far: only completed reviewers count.
+    expect(screen.getByTestId("multi-review-findings-count").textContent).toBe(
+      "0 · from 0 reviewers",
+    );
   });
 
   test("freezes the clock while inactive, reanchors on activation, and clears its timer", async () => {
@@ -811,8 +860,11 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
+    // Validation belongs to the package node; the running reviewers are
+    // inspected by default.
+    selectFlowNode("Review package");
     expect(screen.queryByText("Stopping") === null).toBe(true);
-    expect(screen.getByText("cancelled")).toBeTruthy();
+    expect(inspector().getByText("cancelled")).toBeTruthy();
   });
 
   test("keeps a running validation clock live while the workflow is cancelling", () => {
@@ -875,6 +927,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
     try {
+      selectFlowNode("Review package");
       expect(screen.getByText(/Validation: 6\.0s\./)).toBeTruthy();
       now = Date.parse("2026-09-08T20:00:13.000Z");
       act(() => tick?.());
@@ -901,8 +954,16 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /^Open Reviewer 1 transcript/ }));
+    selectFlowNode("Reviewer 1 ·");
+    fireEvent.click(inspector().getByRole("button", { name: /^Open Reviewer 1 transcript/ }));
     expect(openReviewer).toHaveBeenCalledWith("reviewer-1", 0);
+
+    // Double-clicking a node opens its session as well.
+    fireEvent.doubleClick(flowNode("Reviewer 2 ·"));
+    expect(openReviewer).toHaveBeenLastCalledWith("reviewer-2", 1);
+    // Enter on a focused node does the same.
+    fireEvent.keyDown(flowNode("Reviewer 1 ·"), { key: "Enter" });
+    expect(openReviewer).toHaveBeenCalledTimes(3);
   });
 
   test("cannot open a reviewer that never opened a provider session", () => {
@@ -920,14 +981,21 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
-    const withoutSession = screen.getByRole("button", { name: /^Open Reviewer 1 transcript/ });
+    selectFlowNode("Reviewer 1 ·");
+    const withoutSession = inspector().getByRole("button", {
+      name: /^Open Reviewer 1 transcript/,
+    });
     expect(withoutSession.hasAttribute("disabled")).toBe(true);
     fireEvent.click(withoutSession);
+    fireEvent.doubleClick(flowNode("Reviewer 1 ·"));
     expect(openReviewer).not.toHaveBeenCalled();
 
     // The sibling reviewer still has a session and stays reachable.
+    selectFlowNode("Reviewer 2 ·");
     expect(
-      screen.getByRole("button", { name: /^Open Reviewer 2 transcript/ }).hasAttribute("disabled"),
+      inspector()
+        .getByRole("button", { name: /^Open Reviewer 2 transcript/ })
+        .hasAttribute("disabled"),
     ).toBe(false);
   });
 
@@ -943,8 +1011,11 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
+    selectFlowNode("Reviewer 1 ·");
     expect(
-      screen.getByRole("button", { name: /^Open Reviewer 1 transcript/ }).hasAttribute("disabled"),
+      inspector()
+        .getByRole("button", { name: /^Open Reviewer 1 transcript/ })
+        .hasAttribute("disabled"),
     ).toBe(true);
   });
 
@@ -972,9 +1043,10 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
+    selectFlowNode("Reviewer 2 ·");
+    const reviewerError = await screen.findByText("The reviewer session no longer exists");
+    selectFlowNode("Reviewer 1 ·");
     expect(await screen.findByText("The reviewer session failed")).toBeTruthy();
-    expect(screen.getByText("The reviewer session no longer exists")).toBeTruthy();
-    const reviewerError = screen.getByText("The reviewer session no longer exists");
     expect(reviewerError.className).toContain("whitespace-normal");
     expect(reviewerError.className).toContain("break-words");
     expect(reviewerError.className).toContain("[overflow-wrap:anywhere]");
@@ -1001,6 +1073,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
+    selectFlowNode("Reviewer 1 ·");
     const reviewerError = await screen.findByTestId("multi-reviewer-note-reviewer-1");
     expect(reviewerError.textContent).toBe(longReviewerError);
     expect(reviewerError.getAttribute("title")).toBe(longReviewerError);
@@ -1895,17 +1968,26 @@ describe("MultiReviewTab backend snapshot viewer", () => {
 
     // Every running reviewer is independently stoppable; the workflow-wide
     // Cancel remains the control that stops all of them.
-    expect(screen.getByRole("button", { name: "Stop Reviewer 2" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Stop Reviewer 1" }));
+    fireEvent.contextMenu(flowNode("Reviewer 2 ·"));
+    expect(
+      (await screen.findByRole("menuitem", { name: "Stop" })).hasAttribute("data-disabled"),
+    ).toBe(false);
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    selectFlowNode("Reviewer 1 ·");
+    fireEvent.click(inspector().getByRole("button", { name: "Stop Reviewer 1" }));
     await waitFor(() => expect(stopReviewer).toHaveBeenCalledWith(reviewing.id, "reviewer-1"));
 
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: "Stop Reviewer 1" }) === null).toBe(true),
     );
     expect(screen.getByText(/Stopped · excluded from the consolidated report/)).toBeTruthy();
-    expect(screen.getByText("0/1 complete · 1 stopped")).toBeTruthy();
+    expect(screen.getByText("Review · 0/1 · 1 stopped").getAttribute("title")).toBe(
+      "0/1 complete · 1 stopped",
+    );
     // The other reviewer keeps working: stopping one is not cancelling the run.
-    expect(screen.getByRole("button", { name: "Stop Reviewer 2" })).toBeTruthy();
+    selectFlowNode("Reviewer 2 ·");
+    expect(inspector().getByRole("button", { name: "Stop Reviewer 2" })).toBeTruthy();
     expect(useMultiReviewStore.getState().workflows.get(reviewing.id)?.reviewers[0]?.status).toBe(
       "cancelled",
     );
@@ -1938,9 +2020,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
-    const firstCard = screen.getByRole("button", {
-      name: /^Open Reviewer 1 transcript/,
-    }).parentElement!;
+    const firstCard = flowNode("Reviewer 1 ·");
     fireEvent.contextMenu(firstCard);
     fireEvent.click(await screen.findByRole("menuitem", { name: "Restart" }));
     await waitFor(() => expect(restartReviewer).toHaveBeenCalledWith(reviewing.id, "reviewer-1"));
@@ -1979,12 +2059,12 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
-    for (const [buttonName, kind] of [
-      ["Open review package generation session", "prepare"],
-      ["Open consolidation session", "consolidate"],
-      ["Open fix model session", "fix"],
+    for (const [nodeName, kind] of [
+      ["Review package", "prepare"],
+      ["Consolidation", "consolidate"],
+      ["Fix,", "fix"],
     ] as const) {
-      fireEvent.contextMenu(screen.getByRole("button", { name: buttonName }).closest("section")!);
+      fireEvent.contextMenu(flowNode(nodeName));
       fireEvent.click(await screen.findByRole("menuitem", { name: "Restart" }));
       await waitFor(() => expect(restartStep).toHaveBeenLastCalledWith(completed.id, kind));
     }
@@ -2018,9 +2098,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
-    fireEvent.contextMenu(
-      screen.getByRole("button", { name: "Open consolidation session" }).closest("section")!,
-    );
+    fireEvent.contextMenu(flowNode("Consolidation"));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Restart in…" }));
     expect(await screen.findByRole("heading", { name: "Restart Consolidation" })).toBeTruthy();
 
@@ -2038,13 +2116,13 @@ describe("MultiReviewTab backend snapshot viewer", () => {
   test.each([
     {
       kind: "prepare" as const,
-      tile: "Open review package generation session",
+      node: "Review package",
       heading: "Restart Preparation",
       selection: { agent: "claude" as const, model: "sonnet", reasoningEffort: "high" },
     },
     {
       kind: "fix" as const,
-      tile: "Open fix model session",
+      node: "Fix,",
       heading: "Restart Fix",
       selection: { agent: "codex" as const, model: "gpt-5.4", reasoningEffort: "high" },
     },
@@ -2087,7 +2165,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: fixture.tile }).closest("section")!);
+    fireEvent.contextMenu(flowNode(fixture.node));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Restart in…" }));
     fireEvent.click(await screen.findByRole("button", { name: fixture.heading }));
     await waitFor(() => expect(restartStep).toHaveBeenCalledTimes(1));
@@ -2121,16 +2199,8 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
-    expect(
-      within(
-        screen.getByRole("button", { name: "Open review package generation session" }),
-      ).getByText("Preparation · claude"),
-    ).toBeTruthy();
-    expect(
-      within(screen.getByRole("button", { name: "Open consolidation session" })).getByText(
-        "Consolidation · codex",
-      ),
-    ).toBeTruthy();
+    expect(within(flowNode("Review package")).getByText("claude · sonnet · high")).toBeTruthy();
+    expect(within(flowNode("Consolidation")).getByText("codex · gpt-5.4 · medium")).toBeTruthy();
   });
 
   test("pauses and resumes the active workflow step from its context menu", async () => {
@@ -2187,10 +2257,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
-    const preparationTile = () =>
-      screen
-        .getByRole("button", { name: "Open review package generation session" })
-        .closest("section")!;
+    const preparationTile = () => flowNode("Review package");
     fireEvent.contextMenu(preparationTile());
     fireEvent.click(await screen.findByRole("menuitem", { name: "Pause" }));
     await waitFor(() => expect(pauseStep).toHaveBeenCalledWith(preparing.id, "prepare"));
@@ -2229,9 +2296,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
-    fireEvent.contextMenu(
-      screen.getByRole("button", { name: "Open fix model session" }).closest("section")!,
-    );
+    fireEvent.contextMenu(flowNode("Fix,"));
     expect(await screen.findByRole("menuitem", { name: "Restart" })).toBeTruthy();
     expect(screen.queryByRole("menuitem", { name: "Pause" }) === null).toBe(true);
     expect(screen.queryByRole("menuitem", { name: "Resume" }) === null).toBe(true);
@@ -2256,9 +2321,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
-    const tile = screen
-      .getByRole("button", { name: "Open consolidation session" })
-      .closest("section")!;
+    const tile = flowNode("Consolidation");
     fireEvent.pointerDown(tile, {
       pointerType: "touch",
       pointerId: 72,
@@ -2302,9 +2365,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       ),
     ).toBeTruthy();
 
-    fireEvent.contextMenu(
-      screen.getByRole("button", { name: /^Open Reviewer 1 transcript/ }).parentElement!,
-    );
+    fireEvent.contextMenu(flowNode("Reviewer 1 ·"));
     const restart = await screen.findByRole("menuitem", { name: "Restart" });
     expect(restart.hasAttribute("data-disabled")).toBe(false);
     fireEvent.click(restart);
@@ -2349,9 +2410,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
-    fireEvent.contextMenu(
-      screen.getByRole("button", { name: /^Open Reviewer 1 transcript/ }).parentElement!,
-    );
+    fireEvent.contextMenu(flowNode("Reviewer 1 ·"));
     const restart = await screen.findByRole("menuitem", { name: "Restart" });
     expect(restart.hasAttribute("data-disabled")).toBe(true);
     fireEvent.click(restart);
@@ -2386,17 +2445,13 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
-    fireEvent.contextMenu(
-      screen.getByRole("button", { name: /^Open Reviewer 1 transcript/ }).parentElement!,
-    );
+    fireEvent.contextMenu(flowNode("Reviewer 1 ·"));
     expect(
       (await screen.findByRole("menuitem", { name: "Unstick" })).hasAttribute("data-disabled"),
     ).toBe(true);
     fireEvent.keyDown(document, { key: "Escape" });
 
-    fireEvent.contextMenu(
-      screen.getByRole("button", { name: /^Open Reviewer 2 transcript/ }).parentElement!,
-    );
+    fireEvent.contextMenu(flowNode("Reviewer 2 ·"));
     expect(
       (await screen.findByRole("menuitem", { name: "Unstick" })).hasAttribute("data-disabled"),
     ).toBe(true);
@@ -2425,9 +2480,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
-    fireEvent.contextMenu(
-      screen.getByRole("button", { name: /^Open Reviewer 1 transcript/ }).parentElement!,
-    );
+    fireEvent.contextMenu(flowNode("Reviewer 1 ·"));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Restart" }));
     await waitFor(() => expect(restartReviewer).toHaveBeenCalledWith(ready.id, "reviewer-1"));
     expect(useMultiReviewStore.getState().workflows.get(ready.id)?.phase).toBe("reviewing");
@@ -2454,6 +2507,10 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(screen.getByText(/No activity for a while/)).toBeTruthy();
     // A stall is a prompt to intervene, not a verdict: the reviewer is still
     // running and may still produce a report.
+    const node = flowNode("Reviewer 1 ·");
+    expect(node.dataset.flowState).toBe("running");
+    expect(within(node).getByText("stalled")).toBeTruthy();
+    expect(inspector().getByTestId("multi-review-inspector-status").textContent).toBe("Stalled");
     expect(screen.getByRole("button", { name: "Stop Reviewer 1" })).toBeTruthy();
   });
 
@@ -2506,6 +2563,20 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         })),
       ),
     ).toBe("0 complete · 2 stopped");
+
+    // The graph's column heading says the same in fewer words.
+    expect(reviewerColumnLabel(ready.reviewers)).toBe("Review · 2/2");
+    expect(
+      reviewerColumnLabel([
+        ready.reviewers[0]!,
+        { ...ready.reviewers[1]!, status: "cancelled", report: undefined },
+      ]),
+    ).toBe("Review · 1/1 · 1 stopped");
+    expect(
+      reviewerColumnLabel(
+        ready.reviewers.map((reviewer) => ({ ...reviewer, status: "pending" as const })),
+      ),
+    ).toBe("Review · 0/2");
   });
 
   test("surfaces a stalled consolidation or fix session with recovery guidance", () => {
@@ -2650,7 +2721,7 @@ describe("MultiReviewTab pipeline step cards", () => {
 
     expect(screen.getByText("Generating package")).toBeTruthy();
     expect(screen.getByLabelText("Review package generation runtime")).toBeTruthy();
-    const card = screen.getByRole("button", { name: "Open review package generation session" });
+    const card = stepOpenButton("Review package");
     expect(card.hasAttribute("disabled")).toBe(false);
     // A presentation click without a matching tile interaction must not
     // materialize the backend-owned coordinator session as another pane tab.
@@ -2692,9 +2763,7 @@ describe("MultiReviewTab pipeline step cards", () => {
         </TerminalProvider>,
       );
 
-      const card = screen.getByRole("button", {
-        name: "Open review package generation session",
-      });
+      const card = stepOpenButton("Review package");
       const pointer = { pointerType, pointerId: 11, isPrimary: true, button: 0 };
       fireEvent.pointerDown(card, pointer);
       fireEvent.pointerUp(card, pointer);
@@ -2722,9 +2791,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       </TerminalProvider>,
     );
 
-    const card = screen.getByRole("button", {
-      name: "Open review package generation session",
-    });
+    const card = stepOpenButton("Review package");
     const pointer = { pointerType: "mouse", pointerId: 12, isPrimary: true, button: 0 };
     fireEvent.pointerDown(card, pointer);
     fireEvent.pointerLeave(card, pointer);
@@ -2751,9 +2818,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       </TerminalProvider>,
     );
 
-    const card = screen.getByRole("button", {
-      name: "Open review package generation session",
-    });
+    const card = stepOpenButton("Review package");
     fireEvent.pointerDown(card, {
       pointerType: "touch",
       pointerId: 13,
@@ -2797,9 +2862,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       </TerminalProvider>,
     );
 
-    const card = screen.getByRole("button", {
-      name: "Open review package generation session",
-    });
+    const card = stepOpenButton("Review package");
     fireEvent.keyDown(card, { key: "Enter" });
     fireEvent.blur(card);
     fireEvent.click(card, { detail: 1 });
@@ -2834,9 +2897,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       isPrimary: true,
       button: 0,
     });
-    const card = screen.getByRole("button", {
-      name: "Open review package generation session",
-    });
+    const card = stepOpenButton("Review package");
     fireEvent.pointerUp(card, {
       pointerType: "touch",
       pointerId: 16,
@@ -2888,11 +2949,9 @@ describe("MultiReviewTab pipeline step cards", () => {
       </TerminalProvider>,
     );
 
-    activateReviewTile(
-      screen.getByRole("button", { name: "Open review package generation session" }),
-    );
-    activateReviewTile(screen.getByRole("button", { name: "Open consolidation session" }));
-    fireEvent.click(screen.getByRole("button", { name: "Open fix model session" }));
+    activateReviewTile(stepOpenButton("Review package"));
+    activateReviewTile(stepOpenButton("Consolidation"));
+    fireEvent.click(stepOpenButton("Fix,"));
 
     // Both coordinator cards resolve to the same dedicated tab identity, while
     // Fix uses another tab backed by its own provider session.
@@ -2955,7 +3014,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       </TerminalProvider>,
     );
 
-    activateReviewTile(screen.getByRole("button", { name: "Open consolidation session" }));
+    activateReviewTile(stepOpenButton("Consolidation"));
 
     // The preparation provider's tab for the abandoned session must not be
     // refocused or reused for the restarted consolidation.
@@ -3015,10 +3074,8 @@ describe("MultiReviewTab pipeline step cards", () => {
       </TerminalProvider>,
     );
 
-    activateReviewTile(
-      screen.getByRole("button", { name: "Open review package generation session" }),
-    );
-    activateReviewTile(screen.getByRole("button", { name: "Open consolidation session" }));
+    activateReviewTile(stepOpenButton("Review package"));
+    activateReviewTile(stepOpenButton("Consolidation"));
 
     expect(createTab.mock.calls.map((call) => call[1]?.resumeSessionId)).toEqual([
       "provider-prepare",
@@ -3047,7 +3104,7 @@ describe("MultiReviewTab pipeline step cards", () => {
       </TerminalProvider>,
     );
 
-    const card = screen.getByRole("button", { name: "Open review package generation session" });
+    const card = stepOpenButton("Review package");
     expect(card.hasAttribute("disabled")).toBe(true);
     activateReviewTile(card);
     expect(createTab).not.toHaveBeenCalled();
@@ -3368,19 +3425,27 @@ describe("MultiReviewTab pipeline step cards", () => {
       />,
     );
 
-    const workflowHeadings = screen
-      .getAllByRole("heading", { level: 2 })
-      .map((heading) => heading.textContent);
-    expect(workflowHeadings.slice(0, 4)).toEqual([
-      "Review package generation",
-      "Review panel",
-      "Consolidation",
-      "Fix",
+    const pipeline = screen.getByRole("tablist", { name: "Multi Review pipeline" });
+    expect(
+      within(pipeline)
+        .getAllByRole("tab")
+        .map((node) => node.getAttribute("aria-label")),
+    ).toEqual([
+      "Review package, Package ready",
+      "Reviewer 1 · claude, Complete, 1 issue found, 1 coverage gap found",
+      "Reviewer 2 · codex, Complete, 1 issue found, 1 coverage gap found",
+      expect.stringMatching(/^Consolidation, Consolidating findings, \d+/),
+      "Fix, Not started",
     ]);
-    expect(screen.queryByRole("heading", { name: "Fix model" }) === null).toBe(true);
-    expect(screen.getByText("Package ready")).toBeTruthy();
-    expect(screen.getByText("Consolidating findings")).toBeTruthy();
-    expect(screen.getByText("Not started")).toBeTruthy();
+    for (const label of ["Prepare", "Review · 2/2", "Consolidate"]) {
+      expect(within(pipeline).getByText(label)).toBeTruthy();
+    }
+    // The running step is the one inspected until the user picks another.
+    expect(flowNode("Consolidation").getAttribute("aria-selected")).toBe("true");
+    expect(inspector().getByTestId("multi-review-inspector-status").textContent).toBe(
+      "Consolidating findings",
+    );
+    expect(within(flowNode("Fix,")).getByText("not started")).toBeTruthy();
   });
 
   test("keeps a failed preparation session openable so its transcript can be read", () => {
@@ -3405,8 +3470,9 @@ describe("MultiReviewTab pipeline step cards", () => {
       </TerminalProvider>,
     );
 
-    expect(screen.getByText("Failed")).toBeTruthy();
-    const card = screen.getByRole("button", { name: "Open review package generation session" });
+    expect(inspector().getByTestId("multi-review-inspector-status").textContent).toBe("Failed");
+    expect(flowNode("Review package").dataset.flowState).toBe("failed");
+    const card = stepOpenButton("Review package");
     expect(card.hasAttribute("disabled")).toBe(false);
     expect(card.getAttribute("title")).toBe(
       "Open the failed review package generation session in a new tab",
@@ -3415,7 +3481,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     expect(createTab).toHaveBeenCalledTimes(1);
     // Consolidation never ran, so it stays unopenable and does not claim to have
     // failed alongside preparation.
-    const consolidation = screen.getByRole("button", { name: "Open consolidation session" });
+    const consolidation = stepOpenButton("Consolidation");
     expect(consolidation.hasAttribute("disabled")).toBe(true);
   });
 
@@ -3447,15 +3513,13 @@ describe("MultiReviewTab pipeline step cards", () => {
       </TerminalProvider>,
     );
 
-    const card = screen.getByRole("button", { name: "Open consolidation session" });
+    const card = stepOpenButton("Consolidation");
     expect(card.hasAttribute("disabled")).toBe(false);
     expect(card.getAttribute("title")).toBe("Open the failed consolidation session in a new tab");
     activateReviewTile(card);
     expect(createTab).toHaveBeenCalledTimes(1);
     // Preparation finished, so it stays openable and keeps reading as finished.
-    const preparation = screen.getByRole("button", {
-      name: "Open review package generation session",
-    });
+    const preparation = stepOpenButton("Review package");
     expect(preparation.hasAttribute("disabled")).toBe(false);
     expect(screen.getByText("Package ready")).toBeTruthy();
   });
@@ -3492,7 +3556,7 @@ describe("MultiReviewTab pipeline step cards", () => {
     // The finished steps must not show the fix turn's clock as their own.
     expect(screen.queryByLabelText("Consolidation runtime") === null).toBe(true);
     expect(screen.queryByLabelText("Review package generation runtime") === null).toBe(true);
-    const card = screen.getByRole("button", { name: "Open fix model session" });
+    const card = stepOpenButton("Fix,");
     expect(card.hasAttribute("disabled")).toBe(false);
     fireEvent.click(card);
     expect(createTab).toHaveBeenCalledTimes(1);
@@ -3529,10 +3593,10 @@ describe("MultiReviewTab pipeline step cards", () => {
     );
 
     expect(screen.getByText("The fix session finished and is ready for follow-up")).toBeTruthy();
-    const card = screen.getByRole("button", { name: "Open fix model session" });
-    expect(card.closest("section")?.textContent).toContain("Complete");
+    const node = flowNode("Fix,");
+    expect(node.getAttribute("aria-label")).toStartWith("Fix, Complete");
     expect(screen.getByLabelText("Fix runtime").textContent).toBe("4m 0s · 23k tokens");
-    expect(card.querySelector(".animate-spin") === null).toBe(true);
+    expect(node.querySelector(".animate-spin") === null).toBe(true);
   });
 
   test("keeps a legacy idle interactive Fix running until its runtime is settled", () => {
@@ -3560,9 +3624,9 @@ describe("MultiReviewTab pipeline step cards", () => {
     );
 
     expect(screen.getByText("The fix model is working interactively")).toBeTruthy();
-    const card = screen.getByRole("button", { name: "Open fix model session" });
-    expect(card.closest("section")?.textContent).toContain("Interactive fix session");
-    expect(card.querySelector(".animate-spin")).toBeTruthy();
+    const node = flowNode("Fix,");
+    expect(node.getAttribute("aria-label")).toStartWith("Fix, Interactive fix session");
+    expect(node.querySelector(".animate-spin")).toBeTruthy();
   });
 
   test.each([
@@ -3590,8 +3654,9 @@ describe("MultiReviewTab pipeline step cards", () => {
     );
 
     if (error) expect(screen.getByText(error)).toBeTruthy();
-    const card = screen.getByRole("button", { name: "Open fix model session" });
-    expect(card.closest("section")?.textContent).toContain(label);
+    expect(flowNode("Fix,").getAttribute("aria-label")).toStartWith(`Fix, ${label}`);
+    selectFlowNode("Fix,");
+    expect(inspector().getByTestId("multi-review-inspector-status").textContent).toBe(label);
   });
 
   test("warns on the card owning the stalled turn", () => {
@@ -3616,12 +3681,10 @@ describe("MultiReviewTab pipeline step cards", () => {
     );
 
     expect(screen.getByRole("status").textContent).toContain("Fix model appears stalled");
-    const fixCard = screen.getByRole("button", { name: "Open fix model session" });
-    expect(fixCard.querySelector(".text-amber-500")).toBeTruthy();
-    const preparation = screen.getByRole("button", {
-      name: "Open review package generation session",
-    });
-    expect(preparation.querySelector(".text-amber-500") === null).toBe(true);
+    const fixNode = flowNode("Fix,");
+    expect(fixNode.querySelector(".text-amber-500")).toBeTruthy();
+    expect(within(fixNode).getByText("stalled")).toBeTruthy();
+    expect(flowNode("Review package").querySelector(".text-amber-500") === null).toBe(true);
   });
 
   test("reports each step's own runtime and token count", () => {

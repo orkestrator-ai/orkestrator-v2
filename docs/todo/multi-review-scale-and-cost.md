@@ -135,7 +135,10 @@ was never collected.
   source ID, and final provenance validation must still reject missing or
   invented IDs.
 - **`admissionState` / `queuedAt` reviewer fields**, only if queue time becomes
-  user-visible. At the default caps it is one setup wave.
+  user-visible. At the default caps it is one setup wave. The flow graph now
+  labels queued reviewers, and its queue-position follow-up in
+  [multi-review-flow-graph.md](multi-review-flow-graph.md) would consume these
+  fields.
 - **Skip identical renderer refetches.** `store-resource-sync.ts` refetches the
   whole workflow on every `multi-review` announcement. `resource-sync.ts`
   already coalesces per key. A real skip needs a per-workflow revision in

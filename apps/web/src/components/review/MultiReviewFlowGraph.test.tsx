@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { useEffect } from "react";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { useEffect, useState } from "react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  within,
+} from "@testing-library/react";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import {
@@ -10,10 +18,21 @@ import {
   type CreateTabOptions,
 } from "@/contexts";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
+import { useMultiReviewFlowViewStore } from "@/stores/multiReviewFlowViewStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { MultiReviewTab } from "./MultiReviewTab";
-import { MultiReviewFlowGraph, type MultiReviewFlowNodeModel } from "./MultiReviewFlowGraph";
-import type { MultiReviewFlowEdgeState, MultiReviewFlowState } from "./multi-review-flow";
+import {
+  MultiReviewFlowGraph,
+  type MultiReviewFlowGraphProps,
+  type MultiReviewFlowNodeModel,
+} from "./MultiReviewFlowGraph";
+import { useFlowViewport } from "./MultiReviewFlowViewport";
+import {
+  multiReviewFlowLayout,
+  type MultiReviewFlowEdgeState,
+  type MultiReviewFlowState,
+} from "./multi-review-flow";
+import { fitFlowZoom, flowViewportHeight } from "./multi-review-flow-viewport";
 
 const STARTED = "2026-08-14T00:00:00.000Z";
 
@@ -339,6 +358,7 @@ function edgeState(id: string): string | null {
 
 beforeEach(() => {
   useMultiReviewStore.setState({ workflows: new Map() });
+  useMultiReviewFlowViewStore.setState({ views: new Map() });
   useMessagePartExpansionStore.getState().reset();
 });
 afterEach(cleanup);
@@ -634,6 +654,7 @@ describe("stacked layout", () => {
     selectedId: "reviewer:2",
     onSelect: () => undefined,
     panelId: "panel",
+    viewKey: "workflow-stacked",
   };
 
   test("stacks the nodes in pipeline order with one straight connector per hop", () => {
@@ -692,5 +713,305 @@ describe("stacked layout", () => {
       if (descriptor) Object.defineProperty(HTMLElement.prototype, "clientWidth", descriptor);
       else delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
     }
+  });
+});
+
+describe("failed nodes", () => {
+  const error =
+    "The reviewer session ended before it filed a report.\nProvider said: rate limited after 3 retries";
+
+  test("shows a one-line excerpt of a failed reviewer's error and keeps the whole text", () => {
+    renderTab(workflow({ reviewers: [{ ...failed(0), error }, running(1)] }));
+    const node = screen.getByRole("tab", { name: /^Reviewer 1 ·/ });
+    const excerpt = node.querySelector<HTMLElement>("[data-flow-node-error]")!;
+    expect(excerpt.textContent).toBe(
+      "The reviewer session ended before it filed a report. Provider said: rate limited after 3 retries",
+    );
+    expect(excerpt.className).toContain("truncate");
+    expect(excerpt.className).toContain("text-failure");
+    // The whole error is the node's accessible description.
+    expect(node.getAttribute("aria-describedby")).toBe(excerpt.id);
+    // The error takes the model's place and replaces the bare "failed" word.
+    expect(within(node).queryByText("opus") === null).toBe(true);
+    expect(within(node).queryByText("failed") === null).toBe(true);
+    expect(node.getAttribute("title")).toBeNull();
+    expect(screen.queryByRole("tooltip") === null).toBe(true);
+  });
+
+  test("opens the full error in a tooltip when the node is reached from the keyboard", async () => {
+    renderTab(workflow({ reviewers: [{ ...failed(0), error }, running(1)] }));
+    const running2 = screen.getByRole("tab", { name: /^Reviewer 2 ·/ });
+    fireEvent.click(running2);
+    running2.focus();
+    fireEvent.keyDown(running2, { key: "ArrowUp" });
+    const failedNode = screen.getByRole("tab", { name: /^Reviewer 1 ·/ });
+    expect(document.activeElement).toBe(failedNode);
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toContain("The reviewer session ended before it filed a report.");
+    expect(tooltip.textContent).toContain("Provider said: rate limited after 3 retries");
+    fireEvent.keyDown(failedNode, { key: "Escape" });
+    expect(screen.queryByRole("tooltip") === null).toBe(true);
+  });
+
+  test("keeps a partial report's severity beside the error", () => {
+    renderTab(workflow({ reviewers: [{ ...failed(0), error, report }, running(1)] }));
+    const node = screen.getByRole("tab", { name: /^Reviewer 1 ·/ });
+    expect(node.querySelector("[data-flow-node-error]")).toBeTruthy();
+    expect(node.querySelector('[data-severity="P0"]')?.textContent).toBe("1");
+  });
+
+  test("shows why a failed consolidation stopped, and nothing on steps that did not fail", () => {
+    renderTab(
+      workflow({
+        phase: "failed",
+        reviewers: allDone(),
+        error: "Consolidation returned an invalid report twice",
+        activeRequest: { kind: "consolidate", requestId: "c-1", state: "sent", createdAt: STARTED },
+      }),
+    );
+    const consolidation = screen.getByRole("tab", { name: /^Consolidation/ });
+    expect(consolidation.querySelector("[data-flow-node-error]")?.textContent).toBe(
+      "Consolidation returned an invalid report twice",
+    );
+    for (const name of [/^Review package/, /^Fix,/, /^Reviewer 1 ·/]) {
+      expect(
+        screen.getByRole("tab", { name }).querySelector("[data-flow-node-error]") === null,
+      ).toBe(true);
+    }
+  });
+
+  test("shows the error an interactive fix session stopped with", () => {
+    renderTab(
+      workflow({
+        phase: "interactive",
+        reviewers: allDone(),
+        consolidatedReport: report,
+        fixSession: { ...fixSession("idle")!, status: "failed", error: "Codex exited with code 1" },
+      }),
+    );
+    const fix = screen.getByRole("tab", { name: /^Fix,/ });
+    expect(fix.dataset.flowState).toBe("failed");
+    expect(fix.querySelector("[data-flow-node-error]")?.textContent).toBe(
+      "Codex exited with code 1",
+    );
+  });
+
+  test("a failed node with no recorded error keeps its model and the failed word", () => {
+    renderTab(workflow({ reviewers: [{ ...failed(0), error: undefined }, running(1)] }));
+    const node = screen.getByRole("tab", { name: /^Reviewer 1 ·/ });
+    expect(node.querySelector("[data-flow-node-error]") === null).toBe(true);
+    expect(within(node).getByText("opus")).toBeTruthy();
+    expect(within(node).getByText("failed")).toBeTruthy();
+    expect(node.getAttribute("aria-describedby")).toBeNull();
+  });
+});
+
+describe("zoom and pan", () => {
+  const panel = (count: number): MultiReviewFlowGraphProps => ({
+    packageNode: node("package", "package", "complete"),
+    reviewerNodes: Array.from({ length: count }, (_, index) =>
+      node(`reviewer:${index + 1}`, "reviewer", "running"),
+    ),
+    consolidationNode: node("consolidation", "consolidation", "not-started"),
+    fixNode: node("fix", "fix", "not-started"),
+    edges: {
+      intoReviewers: Array.from({ length: count }, () => "active" as const),
+      intoConsolidation: Array.from({ length: count }, () => "pending" as const),
+      intoFix: "pending",
+    },
+    reviewLabel: `Review · 0/${count}`,
+    selectedId: "reviewer:1",
+    onSelect: () => undefined,
+    panelId: "panel",
+    viewKey: "workflow-zoom",
+    layout: "graph",
+  });
+
+  function SelectableGraph(props: MultiReviewFlowGraphProps) {
+    const [selectedId, setSelectedId] = useState(props.selectedId);
+    return <MultiReviewFlowGraph {...props} selectedId={selectedId} onSelect={setSelectedId} />;
+  }
+
+  const zoomLevel = () => screen.getByTestId("multi-review-zoom-level").textContent;
+  const viewport = () => document.querySelector<HTMLElement>("[data-flow-viewport]")!;
+  const geometry = (count: number) =>
+    multiReviewFlowLayout({ width: 1440, reviewerCount: count, packageHasChips: false });
+
+  test("zooms in and out within bounds and resets to 100%", () => {
+    render(<MultiReviewFlowGraph {...panel(4)} />);
+    const zoomIn = screen.getByRole("button", { name: "Zoom in" });
+    const zoomOut = screen.getByRole("button", { name: "Zoom out" });
+    expect(zoomLevel()).toBe("100%");
+    for (let click = 0; click < 10; click += 1) fireEvent.click(zoomIn);
+    expect(zoomLevel()).toBe("200%");
+    expect((zoomIn as HTMLButtonElement).disabled).toBe(true);
+    for (let click = 0; click < 20; click += 1) fireEvent.click(zoomOut);
+    expect(zoomLevel()).toBe("20%");
+    expect((zoomOut as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Zoom 20%, reset to 100%" }));
+    expect(zoomLevel()).toBe("100%");
+  });
+
+  test("scales the canvas rather than relaying it out", () => {
+    render(<MultiReviewFlowGraph {...panel(2)} />);
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    const canvas = screen.getByRole("tablist", { name: "Multi Review pipeline" });
+    expect(canvas.style.transform).toBe("scale(1.25)");
+    expect(screen.getByRole("tab", { name: "reviewer:1, running" }).style.width).toBe("270px");
+    const sizer = canvas.parentElement!;
+    expect(sizer.style.width).toBe(`${geometry(2).width * 1.25}px`);
+  });
+
+  test("fits the 32-reviewer maximum inside the viewport", () => {
+    render(<MultiReviewFlowGraph {...panel(32)} />);
+    const layout = geometry(32);
+    const height = flowViewportHeight(layout.height);
+    expect(viewport().style.height).toBe(`${height}px`);
+    fireEvent.click(screen.getByRole("button", { name: "Fit the whole pipeline" }));
+    const fit = fitFlowZoom(
+      { width: layout.width, height: layout.height },
+      { width: 1440, height },
+    );
+    expect(fit).toBeLessThan(0.33);
+    expect(zoomLevel()).toBe(`${Math.round(fit * 100)}%`);
+    const sizer = screen.getByRole("tablist", { name: "Multi Review pipeline" }).parentElement!;
+    expect(Number.parseFloat(sizer.style.height)).toBeLessThanOrEqual(height);
+    expect(Number.parseFloat(sizer.style.width)).toBeLessThanOrEqual(1440);
+  });
+
+  test("keeps a node reached from the keyboard in view", () => {
+    render(<SelectableGraph {...panel(32)} />);
+    const layout = geometry(32);
+    const height = flowViewportHeight(layout.height);
+    screen.getByRole("tab", { name: "reviewer:1, running" }).focus();
+    for (let step = 1; step < 20; step += 1) {
+      fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+    }
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("reviewer:20, running");
+    const rect = layout.reviewers[19]!;
+    const { scrollTop } = viewport();
+    expect(scrollTop).toBeGreaterThan(0);
+    expect(rect.y - scrollTop).toBeGreaterThanOrEqual(0);
+    expect(rect.y + rect.height - scrollTop).toBeLessThanOrEqual(height);
+
+    // At another zoom the scaled position is what has to be visible.
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    fireEvent.keyDown(document.activeElement!, { key: "End" });
+    const fix = layout.fix;
+    const zoomed = viewport();
+    expect(fix.y * 1.25 - zoomed.scrollTop).toBeGreaterThanOrEqual(0);
+    expect((fix.y + fix.height) * 1.25 - zoomed.scrollTop).toBeLessThanOrEqual(height);
+    expect((fix.x + fix.width) * 1.25 - zoomed.scrollLeft).toBeLessThanOrEqual(1440);
+  });
+
+  test("zooms with Ctrl + wheel or a pinch, and leaves a plain wheel to scrolling", () => {
+    render(<MultiReviewFlowGraph {...panel(4)} />);
+    // happy-dom's WheelEvent drops modifier keys from its init dictionary.
+    const wheel = (deltaY: number, ctrlKey: boolean) => {
+      const event = new WheelEvent("wheel", { deltaY, bubbles: true, cancelable: true });
+      Object.defineProperty(event, "ctrlKey", { value: ctrlKey });
+      act(() => {
+        viewport().dispatchEvent(event);
+      });
+      return event;
+    };
+    expect(wheel(-100, false).defaultPrevented).toBe(false);
+    expect(zoomLevel()).toBe("100%");
+    // A pinch arrives as Ctrl + wheel, which must not zoom the whole window.
+    expect(wheel(-100, true).defaultPrevented).toBe(true);
+    expect(zoomLevel()).toBe("141%");
+    wheel(100, true);
+    expect(zoomLevel()).toBe("100%");
+    for (let notch = 0; notch < 20; notch += 1) wheel(100, true);
+    expect(zoomLevel()).toBe("20%");
+  });
+
+  test("pans by dragging the canvas, but not from a node", () => {
+    render(<MultiReviewFlowGraph {...panel(32)} />);
+    const element = viewport();
+    fireEvent.pointerDown(screen.getByRole("tab", { name: "reviewer:1, running" }), {
+      button: 0,
+      pointerId: 1,
+      pointerType: "mouse",
+      clientX: 400,
+      clientY: 400,
+    });
+    fireEvent.pointerMove(element, { pointerId: 1, clientX: 300, clientY: 100 });
+    expect(element.scrollTop).toBe(0);
+    fireEvent.pointerDown(element, {
+      button: 0,
+      pointerId: 2,
+      pointerType: "mouse",
+      clientX: 400,
+      clientY: 400,
+    });
+    fireEvent.pointerMove(element, { pointerId: 2, clientX: 400, clientY: 100 });
+    expect(element.scrollTop).toBe(300);
+    fireEvent.pointerUp(element, { pointerId: 2 });
+    fireEvent.pointerMove(element, { pointerId: 2, clientX: 400, clientY: 0 });
+    expect(element.scrollTop).toBe(300);
+  });
+
+  test("shows no zoom controls in the stacked layout", () => {
+    render(<MultiReviewFlowGraph {...panel(4)} layout="stacked" />);
+    expect(screen.queryByRole("group", { name: "Zoom" }) === null).toBe(true);
+  });
+
+  test("remembers zoom per workflow between visits", () => {
+    const first = workflow({ id: "multi-flow-a" });
+    const view = renderTab(first);
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(zoomLevel()).toBe("150%");
+    view.unmount();
+
+    const other = renderTab(workflow({ id: "multi-flow-b" }));
+    expect(zoomLevel()).toBe("100%");
+    other.unmount();
+
+    renderTab(first);
+    expect(zoomLevel()).toBe("150%");
+    // Nothing about the view reaches the workflow record.
+    expect(useMultiReviewStore.getState().workflows.get(first.id)).toEqual(first);
+  });
+
+  test("resets zoom and pan when the panel width changes", () => {
+    const content = { width: 1440, height: 2_400 };
+    const hook = renderHook(
+      ({ width }: { width: number | null }) =>
+        useFlowViewport({ viewKey: "workflow-resize", measuredWidth: width, content }),
+      { initialProps: { width: 1200 as number | null } },
+    );
+    act(() => hook.result.current.zoomBy(1));
+    expect(hook.result.current.zoom).toBe(1.25);
+    expect(useMultiReviewFlowViewStore.getState().views.get("workflow-resize")?.width).toBe(1200);
+
+    hook.rerender({ width: 1000 });
+    expect(hook.result.current.zoom).toBe(1);
+    expect(useMultiReviewFlowViewStore.getState().views.has("workflow-resize")).toBe(false);
+
+    // Going back to the old width does not bring the old view back.
+    hook.rerender({ width: 1200 });
+    expect(hook.result.current.zoom).toBe(1);
+  });
+
+  test("restores a remembered view only at the width it was taken at", () => {
+    useMultiReviewFlowViewStore
+      .getState()
+      .saveView("workflow-restore", { zoom: 0.5, scrollLeft: 0, scrollTop: 40, width: 1200 });
+    const content = { width: 1440, height: 2_400 };
+    const before = renderHook(
+      ({ width }: { width: number | null }) =>
+        useFlowViewport({ viewKey: "workflow-restore", measuredWidth: width, content }),
+      { initialProps: { width: null as number | null } },
+    );
+    // Until the width is measured nothing is restored, and nothing is lost.
+    expect(before.result.current.zoom).toBe(1);
+    before.rerender({ width: 1200 });
+    expect(before.result.current.zoom).toBe(0.5);
+    before.unmount();
+
+    renderHook(() => useFlowViewport({ viewKey: "workflow-restore", measuredWidth: 900, content }));
+    expect(useMultiReviewFlowViewStore.getState().views.has("workflow-restore")).toBe(false);
   });
 });

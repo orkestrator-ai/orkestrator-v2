@@ -64,6 +64,7 @@ import {
   multiReviewFixSessionTabOptions,
   multiReviewReviewSession,
   multiReviewReviewSessionTabOptions,
+  multiReviewStepError,
   multiReviewStepRuntimeParts,
   openFixSessionError,
   reviewerColumnLabel,
@@ -805,6 +806,7 @@ function MultiReviewOverviewTab({
           status.state === "not-started" ? flowPendingLabel("step", status.label) : undefined,
         statusWord: stepStatusWord(status, stalled),
         validation: key === "package" ? validationChips(workflow.validationRun) : undefined,
+        error: multiReviewStepError(workflow, key, status),
         canOpen,
         onOpen,
         contextMenu: (
@@ -1080,6 +1082,7 @@ function MultiReviewOverviewTab({
         pendingLabel:
           reviewer.status === "pending" ? flowPendingLabel("reviewer", "Queued") : undefined,
         statusWord: reviewerStatusWord(reviewer),
+        error: reviewer.status === "failed" ? reviewer.error : undefined,
         // A failed or stopped reviewer can still have filed a partial report.
         severity: reviewer.report ? severityCounts(reviewer.report.issues) : undefined,
         findingsLabel: findings,
@@ -1384,7 +1387,9 @@ function MultiReviewOverviewTab({
         {busy && <Loader2 className="size-4 shrink-0 animate-spin text-primary" />}
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      {/* A stable gutter keeps the graph's width, and so its zoom, from
+          changing when the inspector grows enough to need a scrollbar. */}
+      <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
         <div className="@container flex min-h-full flex-col">
           {notices.length > 0 ? (
             <div className="space-y-2 border-b border-divider px-4 py-3 sm:px-6">{notices}</div>
@@ -1400,6 +1405,7 @@ function MultiReviewOverviewTab({
             selectedId={selected.node.id}
             onSelect={setSelectedNodeId}
             panelId={panelId}
+            viewKey={workflow.id}
           />
           <div className="grid min-h-80 flex-1 grid-cols-1 @min-[900px]:grid-cols-[1.3fr_1fr]">
             <section

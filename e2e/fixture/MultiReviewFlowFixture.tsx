@@ -147,7 +147,9 @@ export function multiReviewFlowWorkflow(
     return order.indexOf(step) <= position;
   };
   const reviewersDone = reached("consolidate") || phase === "failed";
-  const reviewers = PANEL.slice(0, reviewerCount).map((selection, index) => {
+  // Panels larger than the eight models repeat them, up to the 32-reviewer maximum.
+  const panel = Array.from({ length: reviewerCount }, (_, index) => PANEL[index % PANEL.length]!);
+  const reviewers = panel.map((selection, index) => {
     const id = `reviewer-${index + 1}`;
     const base = { id, ...selection };
     if (!reached("review")) return { ...base, status: "pending" as const };
@@ -160,7 +162,8 @@ export function multiReviewFlowWorkflow(
         startedAt,
         completedAt: minutesAgo(now, 2),
         tokenCount: 41_200,
-        error: "The reviewer session ended before it filed a report",
+        error:
+          "The reviewer session ended before it filed a report: the provider closed the stream after 3 retries (HTTP 529, overloaded)",
       };
     }
     if (reviewersDone || index === 0 || index === 2) {

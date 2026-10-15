@@ -1,6 +1,7 @@
 import {
   Fragment,
   useCallback,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -23,6 +24,7 @@ import {
 import type { ReviewSeverity } from "@orkestrator/protocol/structured-review";
 import type { ReviewValidationResult } from "@orkestrator/protocol/review-workflow";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatRuntimeParts, type RuntimeParts } from "@/lib/review/runtime-summary";
 import { cn } from "@/lib/utils";
 import { reviewSeverityStyles } from "./StructuredReviewReportView";
@@ -37,6 +39,7 @@ import {
   type MultiReviewFlowEdges,
   type MultiReviewFlowState,
 } from "./multi-review-flow";
+import { FlowZoomControls, useFlowViewport } from "./MultiReviewFlowViewport";
 
 export type MultiReviewFlowNodeKind = "package" | "reviewer" | "consolidation" | "fix";
 
@@ -61,6 +64,11 @@ export interface MultiReviewFlowNodeModel {
   /** Finding totals in words, so the chips are not the only place they exist. */
   findingsLabel?: string;
   validation?: { id: string; label: string; status: ReviewValidationResult["status"] }[];
+  /**
+   * Why a failed node failed. The node shows it on one line in place of the
+   * model, and its tooltip and accessible description carry the whole text.
+   */
+  error?: string;
   canOpen: boolean;
   onOpen: () => void;
   contextMenu: ReactNode;
@@ -259,6 +267,9 @@ function FlowNode({
   onSelect: (id: string) => void;
   onKeyDown: (event: KeyboardEvent<HTMLButtonElement>, node: MultiReviewFlowNodeModel) => void;
 }) {
+  const errorId = useId();
+  const failure = node.state === "failed" && node.error?.trim() ? node.error : undefined;
+  const openHint = node.canOpen ? "Double-click or press Enter to open the session" : undefined;
   const muted = node.state === "not-started" || node.state === "cancelled";
   const accessibleName = [
     node.title,
@@ -268,70 +279,108 @@ function FlowNode({
   ]
     .filter(Boolean)
     .join(", ");
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <button
-          ref={(element) => registerRef(node.id, element)}
-          type="button"
-          role="tab"
-          id={flowNodeElementId(panelId, node.id)}
-          aria-selected={selected}
-          aria-controls={panelId}
-          aria-label={accessibleName}
-          title={node.canOpen ? "Double-click or press Enter to open the session" : undefined}
-          tabIndex={focusable ? 0 : -1}
-          data-flow-node={node.kind}
-          data-flow-state={node.state}
-          style={style}
-          className={cn(
-            "flex min-w-0 flex-col justify-center rounded-xl border px-3 py-3 text-left transition-[border-color,box-shadow,outline-color] outline-2 outline-offset-[3px] outline-transparent focus-visible:outline-primary",
-            NODE_STATE_CLASS[node.state],
-            selected && "outline-primary/60",
-            className,
-          )}
-          onClick={() => onSelect(node.id)}
-          onDoubleClick={() => {
-            if (node.canOpen) node.onOpen();
-          }}
-          onKeyDown={(event) => onKeyDown(event, node)}
-        >
-          <span className="flex min-w-0 items-center gap-2">
-            <MultiReviewFlowStateIcon kind={node.kind} state={node.state} stalled={node.stalled} />
-            <span
-              className={cn(
-                "min-w-0 flex-1 truncate text-[13px] font-semibold",
-                muted ? "text-zinc-400" : "text-foreground",
-              )}
-            >
-              {node.title}
-            </span>
-            {node.runtime ? (
-              <FlowRuntime runtime={node.runtime} label={node.runtimeLabel} />
-            ) : node.pendingLabel ? (
-              <span className="shrink-0 text-[11px] text-muted-foreground">
-                {node.pendingLabel}
-              </span>
-            ) : null}
+  const trigger = (
+    <ContextMenuTrigger asChild>
+      <button
+        ref={(element) => registerRef(node.id, element)}
+        type="button"
+        role="tab"
+        id={flowNodeElementId(panelId, node.id)}
+        aria-selected={selected}
+        aria-controls={panelId}
+        aria-label={accessibleName}
+        {...(failure ? { "aria-describedby": errorId } : {})}
+        // A failed node's tooltip carries the hint with the error.
+        title={failure ? undefined : openHint}
+        tabIndex={focusable ? 0 : -1}
+        data-flow-node={node.kind}
+        data-flow-state={node.state}
+        style={style}
+        className={cn(
+          "flex min-w-0 flex-col justify-center rounded-xl border px-3 py-3 text-left transition-[border-color,box-shadow,outline-color] outline-2 outline-offset-[3px] outline-transparent focus-visible:outline-primary",
+          NODE_STATE_CLASS[node.state],
+          selected && "outline-primary/60",
+          className,
+        )}
+        onClick={() => onSelect(node.id)}
+        onDoubleClick={() => {
+          if (node.canOpen) node.onOpen();
+        }}
+        onKeyDown={(event) => onKeyDown(event, node)}
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          <MultiReviewFlowStateIcon kind={node.kind} state={node.state} stalled={node.stalled} />
+          <span
+            className={cn(
+              "min-w-0 flex-1 truncate text-[13px] font-semibold",
+              muted ? "text-zinc-400" : "text-foreground",
+            )}
+          >
+            {node.title}
           </span>
-          <span className="mt-0.5 flex min-w-0 items-center gap-2">
+          {node.runtime ? (
+            <FlowRuntime runtime={node.runtime} label={node.runtimeLabel} />
+          ) : node.pendingLabel ? (
+            <span className="shrink-0 text-[11px] text-muted-foreground">{node.pendingLabel}</span>
+          ) : null}
+        </span>
+        <span className="mt-0.5 flex min-w-0 items-center gap-2">
+          {failure ? (
+            <span
+              id={errorId}
+              data-flow-node-error=""
+              className="min-w-0 flex-1 truncate text-xs text-failure"
+            >
+              {errorExcerpt(failure)}
+            </span>
+          ) : (
             <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
               {node.detail}
             </span>
-            {node.severity ? (
-              <SeverityChips counts={node.severity} />
-            ) : node.statusWord ? (
-              <span className={cn("shrink-0 text-[11px]", STATUS_WORD_TONE[node.statusWord.tone])}>
-                {node.statusWord.text}
-              </span>
-            ) : null}
-          </span>
-          {node.validation?.length ? <ValidationChips checks={node.validation} /> : null}
-        </button>
-      </ContextMenuTrigger>
+          )}
+          {node.severity ? (
+            <SeverityChips counts={node.severity} />
+          ) : node.statusWord && !failure ? (
+            <span className={cn("shrink-0 text-[11px]", STATUS_WORD_TONE[node.statusWord.tone])}>
+              {node.statusWord.text}
+            </span>
+          ) : null}
+        </span>
+        {node.validation?.length ? <ValidationChips checks={node.validation} /> : null}
+      </button>
+    </ContextMenuTrigger>
+  );
+  return (
+    <ContextMenu>
+      {failure ? (
+        // Radix opens a tooltip on keyboard focus as well as on hover, so the
+        // arrow keys that walk the graph show the whole error too.
+        <Tooltip>
+          <TooltipTrigger asChild>{trigger}</TooltipTrigger>
+          <TooltipContent
+            side="bottom"
+            align="start"
+            data-testid="multi-review-node-error-tooltip"
+            className="max-h-72 max-w-sm overflow-y-auto text-left"
+          >
+            <p className="break-words whitespace-pre-wrap text-failure">{failure}</p>
+            {openHint ? <p className="mt-1.5 text-muted-foreground">{openHint}</p> : null}
+          </TooltipContent>
+        </Tooltip>
+      ) : (
+        trigger
+      )}
       <ContextMenuContent className="w-44">{node.contextMenu}</ContextMenuContent>
     </ContextMenu>
   );
+}
+
+/**
+ * The error on one line. The node truncates it to its width; the whole text
+ * stays in the element, which is the node's accessible description.
+ */
+export function errorExcerpt(error: string): string {
+  return error.replace(/\s+/g, " ").trim();
 }
 
 export function flowNodeElementId(panelId: string, nodeId: string): string {
@@ -463,6 +512,8 @@ export interface MultiReviewFlowGraphProps {
   onSelect: (id: string) => void;
   /** The inspector panel the nodes control. */
   panelId: string;
+  /** Keys the remembered zoom and pan: the workflow id. */
+  viewKey: string;
   /** Forces a layout; otherwise the measured width decides. */
   layout?: "graph" | "stacked";
 }
@@ -473,7 +524,9 @@ export interface MultiReviewFlowGraphProps {
  * pixels it becomes a single column with straight connectors.
  *
  * Nodes are tabs controlling the inspector: one tab stop for the graph, arrow
- * keys walk the pipeline in order, and Enter opens the node's session.
+ * keys walk the pipeline in order, and Enter opens the node's session. The
+ * graph zooms and pans inside its viewport (see `useFlowViewport`), and a node
+ * reached from the keyboard is scrolled into view first.
  */
 export function MultiReviewFlowGraph({
   packageNode,
@@ -486,6 +539,7 @@ export function MultiReviewFlowGraph({
   selectedId,
   onSelect,
   panelId,
+  viewKey,
   layout,
 }: MultiReviewFlowGraphProps) {
   const [measureRef, measuredWidth] = useMeasuredWidth();
@@ -494,11 +548,37 @@ export function MultiReviewFlowGraph({
   const stacked =
     layout === "stacked" ||
     (layout === undefined && measuredWidth !== null && measuredWidth < FLOW_GRAPH_STACK_BELOW);
+  const geometry = multiReviewFlowLayout({
+    width: measuredWidth ?? 1440,
+    reviewerCount: reviewerNodes.length,
+    packageHasChips: Boolean(packageNode.validation?.length),
+  });
+  const flowViewport = useFlowViewport({
+    viewKey,
+    measuredWidth,
+    content: { width: geometry.width, height: geometry.height },
+  });
+  const { attachViewport } = flowViewport;
+  const viewportRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      measureRef(element);
+      attachViewport(element);
+    },
+    [attachViewport, measureRef],
+  );
 
   const registerRef = useCallback((id: string, element: HTMLButtonElement | null) => {
     if (element) nodeRefs.current.set(id, element);
     else nodeRefs.current.delete(id);
   }, []);
+
+  const nodeRect = (id: string): FlowRect | undefined => {
+    if (id === packageNode.id) return geometry.package;
+    if (id === consolidationNode.id) return geometry.consolidation;
+    if (id === fixNode.id) return geometry.fix;
+    const index = reviewerNodes.findIndex((node) => node.id === id);
+    return index >= 0 ? geometry.reviewers[index] : undefined;
+  };
 
   const handleKeyDown = (
     event: KeyboardEvent<HTMLButtonElement>,
@@ -520,6 +600,10 @@ export function MultiReviewFlowGraph({
     event.preventDefault();
     const next = order[Math.max(0, Math.min(order.length - 1, target))]!;
     onSelect(next.id);
+    // Scroll the zoomed canvas first, so the browser's own focus scrolling
+    // only has the page left to adjust.
+    const rect = stacked ? undefined : nodeRect(next.id);
+    if (rect) flowViewport.reveal(rect);
     nodeRefs.current.get(next.id)?.focus();
   };
 
@@ -578,11 +662,6 @@ export function MultiReviewFlowGraph({
     );
   }
 
-  const geometry = multiReviewFlowLayout({
-    width: measuredWidth ?? 1440,
-    reviewerCount: reviewerNodes.length,
-    packageHasChips: Boolean(packageNode.validation?.length),
-  });
   const place = (rect: FlowRect): CSSProperties => ({
     position: "absolute",
     left: rect.x,
@@ -590,70 +669,109 @@ export function MultiReviewFlowGraph({
     width: rect.width,
     height: rect.height,
   });
+  const { zoom, viewport, offset, panning, viewportHandlers } = flowViewport;
 
   return (
     <div
-      ref={measureRef}
       data-flow-layout="graph"
-      className={cn("relative shrink-0 overflow-x-auto border-b border-divider", canvasClass)}
+      className={cn("relative shrink-0 border-b border-divider", canvasClass)}
     >
       <div
-        role="tablist"
-        aria-label="Multi Review pipeline"
-        className="relative"
-        style={{ width: geometry.width, height: geometry.height }}
+        ref={viewportRef}
+        data-flow-viewport=""
+        style={{ height: viewport.height }}
+        className={cn(
+          // A stable gutter keeps the measured width, and so the layout, from
+          // changing when zooming adds a scrollbar.
+          "overflow-auto overscroll-contain [scrollbar-gutter:stable]",
+          panning ? "cursor-grabbing select-none" : "cursor-grab",
+        )}
+        {...viewportHandlers}
       >
-        <svg
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0"
-          width={geometry.width}
-          height={geometry.height}
-          viewBox={`0 0 ${geometry.width} ${geometry.height}`}
-          fill="none"
+        <div
+          className="relative"
+          style={{
+            width: geometry.width * zoom,
+            height: geometry.height * zoom,
+            marginLeft: offset.x,
+            marginTop: offset.y,
+          }}
         >
-          {reviewerNodes.map((node, index) => (
-            <Fragment key={node.id}>
+          <div
+            role="tablist"
+            aria-label="Multi Review pipeline"
+            className="absolute top-0 left-0 cursor-default"
+            style={{
+              width: geometry.width,
+              height: geometry.height,
+              transform: zoom === 1 ? undefined : `scale(${zoom})`,
+              transformOrigin: "0 0",
+            }}
+          >
+            <svg
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0"
+              width={geometry.width}
+              height={geometry.height}
+              viewBox={`0 0 ${geometry.width} ${geometry.height}`}
+              fill="none"
+            >
+              {reviewerNodes.map((node, index) => (
+                <Fragment key={node.id}>
+                  <FlowEdge
+                    id={`into-reviewer-${index}`}
+                    d={flowEdgePath(geometry.package, geometry.reviewers[index]!)}
+                    state={edges.intoReviewers[index] ?? "pending"}
+                  />
+                  <FlowEdge
+                    id={`into-consolidation-${index}`}
+                    d={flowEdgePath(geometry.reviewers[index]!, geometry.consolidation)}
+                    state={edges.intoConsolidation[index] ?? "pending"}
+                  />
+                </Fragment>
+              ))}
               <FlowEdge
-                id={`into-reviewer-${index}`}
-                d={flowEdgePath(geometry.package, geometry.reviewers[index]!)}
-                state={edges.intoReviewers[index] ?? "pending"}
+                id="into-fix"
+                d={flowEdgePath(geometry.consolidation, geometry.fix)}
+                state={edges.intoFix}
               />
-              <FlowEdge
-                id={`into-consolidation-${index}`}
-                d={flowEdgePath(geometry.reviewers[index]!, geometry.consolidation)}
-                state={edges.intoConsolidation[index] ?? "pending"}
-              />
-            </Fragment>
-          ))}
-          <FlowEdge
-            id="into-fix"
-            d={flowEdgePath(geometry.consolidation, geometry.fix)}
-            state={edges.intoFix}
-          />
-          <Port rect={geometry.package} side="out" state={packageNode.state} />
-          <Port rect={geometry.consolidation} side="in" state={consolidationNode.state} />
-          <Port rect={geometry.fix} side="in" state={fixNode.state} />
-        </svg>
-        <ColumnLabel style={{ position: "absolute", left: geometry.columns.prepare, top: 16 }}>
-          Prepare
-        </ColumnLabel>
-        <ColumnLabel
-          title={reviewTitle}
-          style={{ position: "absolute", left: geometry.columns.review, top: 16 }}
-        >
-          {reviewLabel}
-        </ColumnLabel>
-        <ColumnLabel style={{ position: "absolute", left: geometry.columns.consolidate, top: 16 }}>
-          Consolidate
-        </ColumnLabel>
-        <ColumnLabel style={{ position: "absolute", left: geometry.columns.fix, top: 16 }}>
-          Fix
-        </ColumnLabel>
-        {renderNode(packageNode, place(geometry.package))}
-        {reviewerNodes.map((node, index) => renderNode(node, place(geometry.reviewers[index]!)))}
-        {renderNode(consolidationNode, place(geometry.consolidation))}
-        {renderNode(fixNode, place(geometry.fix))}
+              <Port rect={geometry.package} side="out" state={packageNode.state} />
+              <Port rect={geometry.consolidation} side="in" state={consolidationNode.state} />
+              <Port rect={geometry.fix} side="in" state={fixNode.state} />
+            </svg>
+            <ColumnLabel style={{ position: "absolute", left: geometry.columns.prepare, top: 16 }}>
+              Prepare
+            </ColumnLabel>
+            <ColumnLabel
+              title={reviewTitle}
+              style={{ position: "absolute", left: geometry.columns.review, top: 16 }}
+            >
+              {reviewLabel}
+            </ColumnLabel>
+            <ColumnLabel
+              style={{ position: "absolute", left: geometry.columns.consolidate, top: 16 }}
+            >
+              Consolidate
+            </ColumnLabel>
+            <ColumnLabel style={{ position: "absolute", left: geometry.columns.fix, top: 16 }}>
+              Fix
+            </ColumnLabel>
+            {renderNode(packageNode, place(geometry.package))}
+            {reviewerNodes.map((node, index) =>
+              renderNode(node, place(geometry.reviewers[index]!)),
+            )}
+            {renderNode(consolidationNode, place(geometry.consolidation))}
+            {renderNode(fixNode, place(geometry.fix))}
+          </div>
+        </div>
       </div>
+      <FlowZoomControls
+        zoom={zoom}
+        onZoomOut={() => flowViewport.zoomBy(-1)}
+        onZoomIn={() => flowViewport.zoomBy(1)}
+        onReset={flowViewport.resetZoom}
+        onFit={flowViewport.fit}
+      />
     </div>
   );
 }

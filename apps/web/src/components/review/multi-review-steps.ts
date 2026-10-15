@@ -220,6 +220,23 @@ export function fixStep(workflow: MultiReviewWorkflow): MultiReviewStepStatus {
 export type MultiReviewStepKey = "package" | "consolidation" | "fix";
 
 /**
+ * Why a failed step failed, for its node. A step is only shown failed when the
+ * workflow's failure belongs to it, so the workflow error is that step's; an
+ * interactive Fix session that stopped records its own.
+ */
+export function multiReviewStepError(
+  workflow: MultiReviewWorkflow,
+  key: MultiReviewStepKey,
+  status: MultiReviewStepStatus,
+): string | undefined {
+  if (status.state !== "failed") return undefined;
+  if (key === "fix" && workflow.phase === "interactive") {
+    return workflow.fixSession?.error ?? workflow.error;
+  }
+  return workflow.error;
+}
+
+/**
  * Which step owns the fix session's clock. The three steps share one provider
  * session and every dispatch resets `startedAt`, so a runtime shown against the
  * wrong card would be the next step's elapsed time under a settled step's name.

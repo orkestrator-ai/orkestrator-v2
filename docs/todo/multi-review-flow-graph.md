@@ -19,6 +19,21 @@ keep yet.
   `active`, `complete`, `ready` (output waiting for the next step), `failed`,
   or `pending` when nothing has flowed. Below 960 px the graph stacks into one
   column with straight connectors.
+- **Zoom and pan.** The graph sits in a scrolling viewport up to 720 px tall
+  (`MultiReviewFlowViewport.tsx`, maths in `multi-review-flow-viewport.ts`).
+  −, the zoom level (which resets to 100%), + and Fit sit in its bottom-right
+  corner; zoom runs from 20% to 200%. Dragging the canvas, wheel and trackpad
+  scrolling pan it; Ctrl/⌘ + wheel and pinch zoom around the pointer, while a
+  plain wheel is left to scrolling so the page still scrolls past the graph.
+  A node reached from the keyboard is scrolled into view first. Zoom and pan
+  are kept per workflow in `multiReviewFlowViewStore` (renderer only, at most
+  50 workflows) and reset when the panel width changes. The stacked layout has
+  no zoom.
+- **Failed nodes.** A failed reviewer or step shows the first line of its
+  error in place of its model, truncated to the node. The whole text is the
+  node's accessible description and its tooltip, which also opens on keyboard
+  focus. Steps take the workflow error, or the Fix session's own once the fix
+  is interactive.
 - **Inspector.** `MultiReviewInspector.tsx`. For a reviewer, the transcript tail
   reads `getMultiReviewReviewerTranscript`, echoing `knownSourceToken`. It reads
   once on each selection and on each workflow checkpoint. It polls through the
@@ -29,7 +44,6 @@ keep yet.
   reviewers. An issue that several reviewers raised at the same file, line and
   title is listed once. Partial reports from failed or stopped reviewers are not
   included.
-- **Not built.** The design's zoom controls (−, 100%, +, fit).
 
 ## Outstanding work
 
@@ -57,15 +71,12 @@ keep yet.
    session. A step-session read with the same contract (bounded tail,
    `knownSourceToken`, `unchanged` answers) would let the inspector show what
    the step is doing without opening a tab.
-4. **Zoom controls, with zoom and pan kept between visits.** The layout already
-   fits 1 to 8 reviewers. Zoom matters only for the 32-reviewer maximum and for
-   narrow panes. Keep zoom and pan per workflow in renderer UI state, not in
-   the workflow record. Reset them when the panel size changes.
 
 ## Constraints and rationale
 
-- The graph is a projection of the workflow snapshot. Selection and scroll are
-  view state. Nothing about a node's state may come from the transcript tail.
+- The graph is a projection of the workflow snapshot. Selection, zoom and pan
+  are view state and never reach the workflow record. Nothing about a node's
+  state may come from the transcript tail.
 - Every new read needs explicit byte and count bounds, and must poll only for a
   visible, live node (AGENTS.md transport invariants 3 and 11).
 

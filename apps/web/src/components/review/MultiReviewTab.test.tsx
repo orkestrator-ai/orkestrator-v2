@@ -1042,10 +1042,14 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
+    // Each node carries a one-line excerpt; the inspector shows the whole note.
+    expect(flowNode("Reviewer 2 ·").querySelector("[data-flow-node-error]")?.textContent).toBe(
+      "The reviewer session no longer exists",
+    );
     selectFlowNode("Reviewer 2 ·");
-    const reviewerError = await screen.findByText("The reviewer session no longer exists");
+    const reviewerError = await inspector().findByText("The reviewer session no longer exists");
     selectFlowNode("Reviewer 1 ·");
-    expect(await screen.findByText("The reviewer session failed")).toBeTruthy();
+    expect(await inspector().findByText("The reviewer session failed")).toBeTruthy();
     expect(reviewerError.className).toContain("whitespace-normal");
     expect(reviewerError.className).toContain("break-words");
     expect(reviewerError.className).toContain("[overflow-wrap:anywhere]");
@@ -3652,7 +3656,10 @@ describe("MultiReviewTab pipeline step cards", () => {
       />,
     );
 
-    if (error) expect(screen.getByText(error)).toBeTruthy();
+    if (error) {
+      expect(document.querySelector("header")?.textContent).toContain(error);
+      expect(flowNode("Fix,").querySelector("[data-flow-node-error]")?.textContent).toBe(error);
+    }
     expect(flowNode("Fix,").getAttribute("aria-label")).toStartWith(`Fix, ${label}`);
     selectFlowNode("Fix,");
     expect(inspector().getByTestId("multi-review-inspector-status").textContent).toBe(label);

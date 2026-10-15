@@ -112,3 +112,115 @@ test("walks the pipeline from the keyboard", async ({ page }) => {
     page.getByTestId("multi-review-inspector").getByRole("heading", { level: 2 }).first(),
   ).toHaveText("Fix");
 });
+
+async function viewportBox(page: Page): Promise<Box> {
+  return page.locator("[data-flow-viewport]").evaluate((element) => {
+    const { x, y, width, height } = element.getBoundingClientRect();
+    return { x, y, width, height };
+  });
+}
+
+function inside(box: Box, frame: Box): boolean {
+  return (
+    box.x >= frame.x - 1 &&
+    box.y >= frame.y - 1 &&
+    box.x + box.width <= frame.x + frame.width + 1 &&
+    box.y + box.height <= frame.y + frame.height + 1
+  );
+}
+
+test("fits the 32-reviewer maximum and zooms within bounds", async ({ page }) => {
+  await page.goto("/multi-review-flow?phase=reviewing&reviewers=32");
+  const viewport = page.viewportSize()!;
+  test.skip(viewport.width < 960, "The stacked layout has no zoom");
+  await expect(page.getByRole("tab", { name: /^Reviewer \d+ ·/ })).toHaveCount(32);
+  const level = page.getByTestId("multi-review-zoom-level");
+  await expect(level).toHaveText("100%");
+
+  await page.getByRole("button", { name: "Fit the whole pipeline" }).click();
+  await expect(level).not.toHaveText("100%");
+  const frame = await viewportBox(page);
+  const boxes = await nodeBoxes(page);
+  expect(boxes).toHaveLength(35);
+  for (const box of boxes) expect(inside(box, frame)).toBe(true);
+  expect(overlapping(boxes)).toEqual([]);
+
+  const zoomIn = page.getByRole("button", { name: "Zoom in" });
+  while (await zoomIn.isEnabled()) await zoomIn.click();
+  await expect(level).toHaveText("200%");
+  const zoomOut = page.getByRole("button", { name: "Zoom out" });
+  while (await zoomOut.isEnabled()) await zoomOut.click();
+  await expect(level).toHaveText("20%");
+  await level.click();
+  await expect(level).toHaveText("100%");
+});
+
+test("keeps the node reached from the keyboard in view at the 32-reviewer maximum", async ({
+  page,
+}) => {
+  await page.goto("/multi-review-flow?phase=reviewing&reviewers=32");
+  test.skip(page.viewportSize()!.width < 960, "The stacked layout scrolls the page instead");
+  const selected = page.locator('[role="tab"][aria-selected="true"]');
+  await selected.focus();
+  await page.keyboard.press("Home");
+  for (let step = 0; step < 30; step += 1) await page.keyboard.press("ArrowDown");
+  await expect(selected).toHaveAttribute("aria-label", /^Reviewer 30 ·/);
+  await expect(selected).toBeFocused();
+  const box = await selected.evaluate((element) => {
+    const { x, y, width, height } = element.getBoundingClientRect();
+    return { x, y, width, height };
+  });
+  expect(inside(box, await viewportBox(page))).toBe(true);
+});
+
+test("pans the zoomed graph by dragging the canvas and with Ctrl + wheel zoom", async ({
+  page,
+}) => {
+  await page.goto("/multi-review-flow?phase=reviewing&reviewers=32");
+  test.skip(page.viewportSize()!.width < 960, "The stacked layout has no zoom");
+  const frame = await viewportBox(page);
+  const scrollTop = () =>
+    page.locator("[data-flow-viewport]").evaluate((element) => element.scrollTop);
+  // Drag from empty canvas below the Fix column's label.
+  const start = { x: frame.x + frame.width - 60, y: frame.y + frame.height - 80 };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x, start.y - 300, { steps: 5 });
+  await page.mouse.up();
+  expect(await scrollTop()).toBeGreaterThan(250);
+
+  const level = page.getByTestId("multi-review-zoom-level");
+  await page.mouse.move(frame.x + frame.width / 2, frame.y + frame.height / 2);
+  await page.keyboard.down("Control");
+  await page.mouse.wheel(0, 200);
+  await page.keyboard.up("Control");
+  await expect(level).not.toHaveText("100%");
+});
+
+test("shows a failed reviewer's error on its node, with the whole text in a tooltip", async ({
+  page,
+}) => {
+  await page.goto("/multi-review-flow?phase=failed&reviewers=4");
+  const node = page.getByRole("tab", { name: /^Reviewer 1 ·/ });
+  const excerpt = node.locator("[data-flow-node-error]");
+  await expect(excerpt).toContainText("The reviewer session ended before it filed a report");
+  // One line, cut to the node's width.
+  expect(
+    await excerpt.evaluate(
+      (element) =>
+        element.scrollWidth > element.clientWidth && element.getBoundingClientRect().height < 20,
+    ),
+  ).toBe(true);
+
+  // From the keyboard: select the next reviewer, then arrow back onto the failed one.
+  const next = page.getByRole("tab", { name: /^Reviewer 2 ·/ });
+  await next.click();
+  await next.focus();
+  await page.keyboard.press("ArrowUp");
+  await expect(node).toBeFocused();
+  const tooltip = page.getByTestId("multi-review-node-error-tooltip");
+  await expect(tooltip).toBeVisible();
+  await expect(tooltip).toContainText("(HTTP 529, overloaded)");
+  await page.keyboard.press("Escape");
+  await expect(tooltip).toBeHidden();
+});

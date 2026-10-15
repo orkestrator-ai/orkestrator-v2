@@ -89,6 +89,8 @@ describe("/session/:id/interactions", () => {
       { action: "approve" },
       { action: "accept" },
       { action: "accept", content: { team: { nested: true } } },
+      { action: "accept", content: { team: 42 } },
+      { action: "accept", content: { unknown: "value" } },
       { action: "decline", content: { team: "core" } },
     ]) {
       expect((await respond(session.id, interactionId, body)).status).toBe(400);
@@ -129,4 +131,97 @@ describe("/session/:id/interactions", () => {
     expect(unknown.status).toBe(409);
     expect((await app.request("/session/no-such-session/interactions")).status).toBe(404);
   });
+});
+
+for (const mode of ["form", "url"] as const) {
+  test(`Cancel turn on an MCP ${mode} stops the runtime and settles sibling cards`, async () => {
+    const { session, call, result, interactionId, finish } = await parkedForm(`cancel-${mode}`);
+    const sibling = call.options.onElicitation!(
+      { serverName: "linear", message: "Authorize", mode: "url", url: "https://example.com/auth" },
+      { signal: new AbortController().signal, requestId: `sibling-${mode}` },
+    );
+    await waitFor(() => getPendingInteractions(session.id).length === 2);
+    const runtime = session.claudeRuntime!;
+    const id = mode === "form" ? interactionId : `sibling-${mode}`;
+    expect((await respond(session.id, id, { action: "cancel" })).status).toBe(200);
+    expect(await result).toEqual({ action: "cancel" });
+    expect(await sibling).toEqual({ action: "cancel" });
+    expect(runtime.abortController.signal.aborted).toBe(true);
+    expect(call.isClosed()).toBe(true);
+    expect(getPendingInteractions(session.id)).toHaveLength(0);
+    await finish();
+  });
+}
+
+test("concurrent large forms stay readable and answerable through backend normalization", async () => {
+  const { HttpBridgeInteractionAdapter } =
+    await import("../../../../apps/backend/src/core/http-bridge-interactions.js");
+  const session = createSession("route-saturation");
+  track(session.id);
+  const prompt = sendPrompt(session.id, "go");
+  const call = await nextQueryCall();
+  const results = new Map<string, unknown>();
+  const waits = Array.from({ length: 18 }, (_, i) => {
+    const id = `large-${i}`;
+    const pending = call.options.onElicitation!(
+      {
+        serverName: "linear",
+        message: "Input",
+        mode: "form",
+        requestedSchema: {
+          type: "object",
+          properties: { team: { type: "string", description: "界".repeat(5000) } },
+          required: ["team"],
+        },
+      },
+      { signal: new AbortController().signal, requestId: id },
+    );
+    return Promise.resolve(pending).then((value) => {
+      results.set(id, value);
+      return value;
+    });
+  });
+  const admitted = getPendingInteractions(session.id);
+  expect(admitted.length).toBeGreaterThan(0);
+  expect(admitted.length).toBeLessThan(18);
+  await waitFor(() => results.size === 18 - admitted.length);
+  expect(
+    Array.from(results.values()).every(
+      (value) => (value as { action: string }).action === "decline",
+    ),
+  ).toBe(true);
+  const adapter = new HttpBridgeInteractionAdapter(
+    "claude",
+    { agent: "claude", baseUrl: "http://fixture", authToken: "fixture" },
+    ((input, init) => app.request(String(input), init)) as typeof fetch,
+  );
+  const snapshot = await adapter.listPendingInteractions(session.id);
+  expect(snapshot.requests).toHaveLength(admitted.length);
+  for (const card of snapshot.requests) {
+    expect(
+      await adapter.resolveInteraction(session.id, card.id, {
+        version: 1,
+        interactionId: card.id,
+        sessionId: session.id,
+        action: "answer",
+        resolvedAt: Date.now(),
+        answer: {
+          version: 1,
+          interactionId: card.id,
+          sessionId: session.id,
+          answers: [
+            {
+              questionId: card.presentation.questions[0]!.id,
+              freeText: JSON.stringify({ team: "core" }),
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({ result: "applied" });
+  }
+  expect((await adapter.listPendingInteractions(session.id)).requests).toHaveLength(0);
+  await Promise.all(waits);
+  call.push({ type: "result", subtype: "success" });
+  call.finish();
+  await prompt;
 });

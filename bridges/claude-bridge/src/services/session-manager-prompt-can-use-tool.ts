@@ -15,6 +15,8 @@ import {
   planApprovalResolvers,
   questionResolvers,
 } from "./session-manager-core.js";
+import { canAdmitInteraction } from "./session-manager-interaction-budget.js";
+import { claudeWorkflowResultTools } from "./claude-workflow-result-tools.js";
 import { requestClaudeToolApproval } from "./session-manager-parked-interactions.js";
 import type { TurnState } from "./session-manager-prompt-turn.js";
 
@@ -61,6 +63,12 @@ export async function turnCanUseTool(
       expiresAt: Date.now() + QUESTION_TIMEOUT_MS,
     };
 
+    if (!canAdmitInteraction(questionRequest, "questions")) {
+      return {
+        behavior: "deny",
+        message: "Too many pending interactions. Answer an existing request first.",
+      };
+    }
     // Store the question
     pendingQuestions.set(questionId, questionRequest);
 
@@ -170,6 +178,12 @@ export async function turnCanUseTool(
       expiresAt: Date.now() + PLAN_APPROVAL_TIMEOUT_MS,
     };
 
+    if (!canAdmitInteraction(approvalRequest, "approvals")) {
+      return {
+        behavior: "deny",
+        message: "Too many pending interactions. Answer an existing request first.",
+      };
+    }
     // Store the approval request and set up the resolver BEFORE emitting,
     // so an instant response from the UI can never find a missing resolver.
     pendingPlanApprovals.set(approvalId, approvalRequest);
@@ -275,6 +289,12 @@ export async function turnCanUseTool(
   // anything outside its allow list. Questions and plan approvals are handled
   // above, so a denying session can still ask the user. Under `auto-approve`
   // the mode already chose not to ask, so a tool that still reaches here runs.
+  if (
+    claudeWorkflowResultTools(turn.mcpServerNames).includes(toolName) &&
+    !session.executionPolicy?.toolPolicy?.deny?.includes(toolName)
+  ) {
+    return { behavior: "allow", updatedInput: input };
+  }
   const approvals = claudeTurnPolicy(session.executionPolicy, turn.options?.readOnly)?.approvals;
   if (approvals === "ask") {
     return requestClaudeToolApproval(sessionId, toolName, input, permissionContext);

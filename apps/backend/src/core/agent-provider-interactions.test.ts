@@ -373,7 +373,7 @@ describe("provider-neutral interaction adapters", () => {
       ),
     ).resolves.toMatchObject({ result: "applied" });
     await expect(
-      provider.interactions!.resolveInteraction("session-1", link.id, declineResolution(link)),
+      provider.interactions!.resolveInteraction("session-1", link.id, answerResolution(link)),
     ).resolves.toMatchObject({ result: "applied" });
     // Allow-once only: nothing could honour "for the session".
     await expect(
@@ -400,7 +400,7 @@ describe("provider-neutral interaction adapters", () => {
       },
       {
         url: expect.stringContaining("/interactions/url-1"),
-        body: { action: "decline" },
+        body: { action: "accept" },
       },
       {
         url: expect.stringContaining("/interactions/command-1"),

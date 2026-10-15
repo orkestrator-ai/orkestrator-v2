@@ -12,6 +12,8 @@ import type {
   ClaudeToolApprovalRequest,
   SessionState,
 } from "../types/index.js";
+import { canAdmitInteraction, interactionKey } from "./session-manager-interaction-budget.js";
+import { isSupportedClaudeForm } from "./claude-elicitation-schema.js";
 import { eventEmitter } from "./event-emitter.js";
 import {
   INTERACTION_TIMEOUT_MS,
@@ -46,6 +48,8 @@ export async function parkInteraction(
   signal?: AbortSignal,
 ): Promise<ClaudeInteractionOutcome> {
   if (signal?.aborted) return { action: "withdrawn" };
+  if (!canAdmitInteraction(request, "interactions")) return { action: "decline" };
+  const key = interactionKey(request.sessionId, request.id);
   let resolveOutcome!: (outcome: ClaudeInteractionOutcome) => void;
   const outcome = new Promise<ClaudeInteractionOutcome>((resolve) => {
     resolveOutcome = resolve;
@@ -55,17 +59,18 @@ export async function parkInteraction(
   signal?.addEventListener("abort", withdraw, { once: true });
   // Store and register the resolver before announcing the request, so an
   // instant answer can never find it missing.
-  interactionResolvers.get(request.id)?.({ action: "withdrawn" });
-  pendingInteractions.set(request.id, request);
-  interactionResolvers.set(request.id, resolveOutcome);
+  interactionResolvers.get(key)?.({ action: "withdrawn" });
+  pendingInteractions.set(key, request);
+  interactionResolvers.set(key, resolveOutcome);
   eventEmitter.emit({ type: "interaction.requested", sessionId: request.sessionId, data: request });
   const settled = await outcome;
   clearTimeout(timeout);
   signal?.removeEventListener("abort", withdraw);
-  if (pendingInteractions.get(request.id) === request) pendingInteractions.delete(request.id);
-  if (interactionResolvers.get(request.id) === resolveOutcome) {
-    interactionResolvers.delete(request.id);
+  if (pendingInteractions.get(key) === request) pendingInteractions.delete(key);
+  if (interactionResolvers.get(key) === resolveOutcome) {
+    interactionResolvers.delete(key);
   }
+  if (pendingInteractions.has(key)) return settled;
   eventEmitter.emit({
     type: "interaction.resolved",
     sessionId: request.sessionId,
@@ -78,7 +83,7 @@ export async function parkInteraction(
  * Answer an MCP server's elicitation by parking it for the user.
  *
  * A request the card cannot render (a `url` request without a URL, or a form
- * schema too large to carry) is declined on the spot, with a status row
+ * schema too large or unsupported by the scalar form controls) is declined on the spot, with a status row
  * naming the server so the user knows where to go. MCP defines `decline` as
  * an outcome the server handles; anything other than an answer is `cancel`.
  */
@@ -96,7 +101,8 @@ export async function answerClaudeElicitation(
   const schemaText = schema === undefined ? "" : JSON.stringify(schema);
   if (
     (request.mode === "url" && (!url || url !== request.url)) ||
-    new TextEncoder().encode(schemaText).byteLength > AGENT_INTERACTION_LIMITS.maxTextLength
+    new TextEncoder().encode(schemaText).byteLength > AGENT_INTERACTION_LIMITS.maxTextLength ||
+    (schema !== undefined && !isSupportedClaudeForm(schema))
   ) {
     appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
       type: "status",

@@ -12,6 +12,8 @@ import {
   getSession,
   getSessionActivity,
   nextQueryCall,
+  mockGetMcpServerNames,
+  mockGetMcpServersForSdk,
   respondToInteraction,
   sendPrompt,
   track,
@@ -121,6 +123,7 @@ describe("MCP elicitations", () => {
 
       jest.advanceTimersByTime(5 * 60 * 1000);
       expect(await result).toEqual({ action: "cancel" });
+      expect(call.options.abortController!.signal.aborted).toBe(false);
       expect(getPendingInteractions(session.id)).toEqual([]);
     } finally {
       jest.useRealTimers();
@@ -153,6 +156,7 @@ describe("MCP elicitations", () => {
     await waitFor(() => getPendingInteractions(session.id).length === 1);
     controller.abort();
     expect(await result).toEqual({ action: "cancel" });
+    expect(call.options.abortController!.signal.aborted).toBe(false);
     expect(getPendingInteractions(session.id)).toEqual([]);
 
     call.push({ type: "result", subtype: "success" });
@@ -430,6 +434,13 @@ describe("a deny policy", () => {
       message: "mcp__linear__create_issue is not allowed: this session's policy denies approvals.",
     });
     expect(getPendingInteractions(session.id)).toEqual([]);
+    expect(
+      await call.options.canUseTool!(
+        "mcp__orkestrator__submit_fix_result",
+        {},
+        context("no-server"),
+      ),
+    ).toMatchObject({ behavior: "deny" });
 
     const question = call.options.canUseTool!(
       "AskUserQuestion",
@@ -486,4 +497,104 @@ describe("a deny policy", () => {
     call.finish();
     await promptPromise;
   });
+});
+
+for (const policy of [ASK_POLICY, DENY_POLICY]) {
+  test(`${policy.approvals} allows injected workflow results without parking`, async () => {
+    mockGetMcpServerNames.mockImplementationOnce(async () => new Set(["orkestrator"]));
+    mockGetMcpServersForSdk.mockImplementationOnce(async () => ({
+      orkestrator: { type: "http", url: "http://localhost/mcp" },
+    }));
+    const session = createSession(`workflow-${policy.approvals}`);
+    track(session.id);
+    session.executionPolicy = policy;
+    const prompt = sendPrompt(session.id, "build", { permissionMode: "bypassPermissions" });
+    const call = await nextQueryCall();
+    for (const name of [
+      "submit_review_report",
+      "submit_fix_result",
+      "validate_workflow_result",
+      "get_workflow_result_status",
+    ]) {
+      const tool = `mcp__orkestrator__${name}`;
+      expect(call.options.allowedTools).toContain(tool);
+      expect(
+        await call.options.canUseTool!(tool, { resultKey: "key" }, context(name)),
+      ).toMatchObject({ behavior: "allow" });
+    }
+    expect(getPendingInteractions(session.id)).toHaveLength(0);
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await prompt;
+  });
+}
+
+test("declines unsupported arrays and oversized UTF-8 schemas with a visible notice", async () => {
+  const session = createSession("unsupported-schema");
+  track(session.id);
+  const prompt = sendPrompt(session.id, "go");
+  const call = await nextQueryCall();
+  for (const schema of [
+    {
+      type: "object",
+      properties: { tags: { type: "array", items: { type: "string" } } },
+      required: ["tags"],
+    },
+    { type: "object", properties: { team: { type: "string", description: "界".repeat(6000) } } },
+  ]) {
+    expect(
+      await call.options.onElicitation!(
+        { serverName: "linear", message: "Input", mode: "form", requestedSchema: schema } as never,
+        { signal: new AbortController().signal, requestId: "invalid" },
+      ),
+    ).toEqual({ action: "decline" });
+    expect(getPendingInteractions(session.id)).toHaveLength(0);
+    expect(getSession(session.id)!.messages.at(-1)!.parts[0]).toMatchObject({
+      type: "status",
+      severity: "warning",
+      content: expect.stringContaining("linear"),
+    });
+  }
+  call.push({ type: "result", subtype: "success" });
+  call.finish();
+  await prompt;
+});
+
+test("retained background approvals and elicitations report waiting with a free composer", async () => {
+  const session = createSession("background-interaction");
+  track(session.id);
+  session.executionPolicy = ASK_POLICY;
+  const prompt = sendPrompt(session.id, "go");
+  const call = await nextQueryCall();
+  call.push({
+    type: "system",
+    subtype: "task_started",
+    task_id: "bg",
+    description: "Background task",
+    is_backgrounded: true,
+  });
+  call.push({ type: "result", subtype: "success" });
+  await waitFor(
+    () => session.status === "idle" && session.backgroundTasks?.bg?.status === "running",
+  );
+  expect(await getSessionActivity(session.id)).toBe("working");
+  for (const kind of ["tool", "form"]) {
+    const result =
+      kind === "tool"
+        ? call.options.canUseTool!("Bash", { command: "ls" }, context(kind))
+        : call.options.onElicitation!(
+            { serverName: "linear", message: "Input", mode: "form" },
+            { signal: new AbortController().signal, requestId: kind },
+          );
+    await waitFor(() => getPendingInteractions(session.id).length === 1);
+    expect(session.status).toBe("idle");
+    expect(await getSessionActivity(session.id)).toBe("waiting");
+    // Authoritative reads remain available with no mounted subscriber.
+    expect(getPendingInteractions(session.id)[0]!.id).toBe(kind);
+    respondToInteraction(kind, { action: "decline" });
+    await result;
+    expect(await getSessionActivity(session.id)).toBe("working");
+  }
+  call.finish();
+  await prompt;
 });

@@ -1,4 +1,5 @@
 // Session management routes
+import { isValidClaudeFormContent } from "../services/claude-elicitation-schema.js";
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
@@ -1401,9 +1402,16 @@ session.post("/:id/interactions/:interactionId", interactionBodyLimit, async (c)
   } else if (action === "accept" && pending.kind === "mcp-form") {
     return c.json({ error: "An MCP form answer requires 'content'" }, 400);
   }
+  if (
+    action === "accept" &&
+    pending.kind === "mcp-form" &&
+    !isValidClaudeFormContent(pending.schema, content)
+  ) {
+    return c.json({ error: "The answer does not match the MCP form schema" }, 400);
+  }
   const response: ClaudeInteractionResponse =
     action === "accept" ? (content ? { action, content } : { action }) : { action };
-  if (!respondToInteraction(interactionId, response)) {
+  if (!respondToInteraction(interactionId, response, sessionId)) {
     return c.json(stalePrompt("Interaction is no longer pending"), STALE_PROMPT_STATUS);
   }
   return c.json({ status: "resolved" });

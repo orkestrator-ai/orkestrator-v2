@@ -3,6 +3,7 @@ import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { createHash } from "node:crypto";
 import type { SessionState } from "../types/index.js";
+import { claudeWorkflowResultTools } from "./claude-workflow-result-tools.js";
 import { backgroundCommandInstruction } from "./background-commands.js";
 import {
   claudePermissionMode,
@@ -141,7 +142,11 @@ export async function resolveQueryPlan(
           ? [AGENT_MCP_SERVER_NAME]
           : [],
       })
-    : [...(policy?.toolPolicy?.allow ?? defaultAllowedTools), ...agentMailTools];
+    : [
+        ...(policy?.toolPolicy?.allow ?? defaultAllowedTools),
+        ...agentMailTools,
+        ...claudeWorkflowResultTools(mcpServerNames),
+      ];
   // Provider tool names, not the policy's own: `toolPolicy.deny` carries
   // Codex's vocabulary, and passing it to `disallowedTools` matches nothing.
   const disallowedTools = coordinatorReadOnly

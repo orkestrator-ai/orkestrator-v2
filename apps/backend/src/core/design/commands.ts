@@ -2,20 +2,20 @@ import { extname, isAbsolute } from "node:path";
 import { z } from "zod";
 import { DESIGN_MAX_DOCUMENT_BYTES } from "@orkestrator/protocol/design-canvas";
 import type { DesignCommandResult } from "@orkestrator/protocol/design-operations";
-import { DesignError, toDesignFailure } from "./design-errors.js";
+import { DesignError, toDesignFailure } from "./errors.js";
 import {
   exportPreview,
   exportSave,
   openDesignFile,
   reconcileExport,
   resolveDesignDestination,
-} from "./design-exports.js";
-import { readDesignHostFile } from "./design-host-file.js";
-import { designId, revision } from "./design-schemas.js";
-import { purge } from "./design-service-lifecycle.js";
-import type { DesignService } from "./design-service.js";
-import { runDesignAction } from "./design-tools.js";
-import { validate as validateFrame } from "./design-validation.js";
+} from "./exports.js";
+import { readDesignHostFile } from "./host-file.js";
+import { designId, revision } from "./schemas.js";
+import { purge } from "./service-lifecycle.js";
+import type { DesignService } from "./service.js";
+import { runDesignAction } from "./tools.js";
+import { validate as validateFrame } from "./validation.js";
 
 const environmentIdSchema = z.string().min(1).max(256);
 const tokenSchema = z.string().min(1).max(100);

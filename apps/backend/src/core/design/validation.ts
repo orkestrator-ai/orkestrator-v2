@@ -3,10 +3,10 @@ import {
   type DesignValidationReport,
 } from "@orkestrator/protocol/design-canvas";
 import type { DesignFrameValidation } from "@orkestrator/protocol/design-operations";
-import { DesignError, isDesignError } from "./design-errors.js";
-import { unavailableValidation, validationFromReport } from "./design-execute.js";
-import { cloneRecord, type DesignPrivateRecord } from "./design-records.js";
-import type { DesignService } from "./design-service.js";
+import { DesignError, isDesignError } from "./errors.js";
+import { unavailableValidation, validationFromReport } from "./execute.js";
+import { cloneRecord, type DesignPrivateRecord } from "./records.js";
+import type { DesignService } from "./service.js";
 
 const inFlight = new WeakMap<
   DesignService,

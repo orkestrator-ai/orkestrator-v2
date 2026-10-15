@@ -9,7 +9,7 @@ import {
   type DesignPendingExport,
 } from "@orkestrator/protocol/design-operations";
 import { DESIGN_MAX_DOCUMENT_BYTES } from "@orkestrator/protocol/design-canvas";
-import { DesignError, designConflict, toDesignFailure } from "./design-errors.js";
+import { DesignError, designConflict, toDesignFailure } from "./errors.js";
 import {
   designExportDigest,
   inspectDesignExportTarget,
@@ -21,10 +21,10 @@ import {
   type DesignExportExpectation,
   type DesignExportTargetState,
   type DesignExportWriteOptions,
-} from "./design-export-writer.js";
-import { purge } from "./design-service-lifecycle.js";
-import { cloneRecord, portableBytes, writeAtomically } from "./design-records.js";
-import type { DesignService } from "./design-service.js";
+} from "./export-writer.js";
+import { purge } from "./service-lifecycle.js";
+import { cloneRecord, portableBytes, writeAtomically } from "./records.js";
+import type { DesignService } from "./service.js";
 
 /** Resolves an authorized environment's repository; never trusts client paths. */
 export async function resolveDesignDestination(

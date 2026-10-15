@@ -21,8 +21,8 @@ import {
   type DesignPendingExport,
   type DesignSessionLink,
 } from "@orkestrator/protocol/design-operations";
-import { DesignError } from "./design-errors.js";
-import { canvasSchema, designId } from "./design-schemas.js";
+import { DesignError } from "./errors.js";
+import { canvasSchema, designId } from "./schemas.js";
 
 export const RECORD_KIND = "orkestrator-design-record";
 export const RECORD_VERSION = 1;

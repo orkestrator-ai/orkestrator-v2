@@ -22,7 +22,7 @@ localized correction before introducing storage or UX redesigns.
   selection, preview, resize callbacks.
 - `e2e/DesignCanvas.spec.ts` and its fixture: real runtime and backend conflict
   coverage; extend with deterministic race barriers rather than fixed sleeps.
-- `apps/backend/src/core/design-service.test.ts`: existing backend CAS behavior
+- `apps/backend/src/core/design/service.test.ts`: existing backend CAS behavior
   is a constraint to preserve, not a workaround target.
 
 ## Implementation work

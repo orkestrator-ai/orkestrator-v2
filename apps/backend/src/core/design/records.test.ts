@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DESIGN_MAX_DOCUMENT_BYTES, type DesignCanvas } from "@orkestrator/protocol/design-canvas";
-import { isDesignError } from "./design-errors.js";
+import { isDesignError } from "./errors.js";
 import {
   cloneRecord,
   DesignRecordStore,
@@ -11,13 +11,13 @@ import {
   portableBytes,
   RECORD_KIND,
   type DesignPrivateRecord,
-} from "./design-records.js";
-import { canvasSchema } from "./design-schemas.js";
+} from "./records.js";
+import { canvasSchema } from "./schemas.js";
 import {
   createDesignHarness,
   trackUnhandledRejections,
   type DesignHarness,
-} from "./design-test-support.js";
+} from "./test-support.js";
 
 function legacyCanvas(environmentId = "env-1"): DesignCanvas {
   return {

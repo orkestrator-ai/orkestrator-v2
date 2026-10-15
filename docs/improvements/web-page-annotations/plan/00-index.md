@@ -158,7 +158,7 @@ Paths in this table exist today; new modules are identified within each step.
 | Durable queue operations | `apps/backend/src/core/storage-prompts.ts`, `storage-native.ts` |
 | Native prompt construction/projection | `apps/backend/src/core/native-agent-service-prompt.ts`, `native-agent-service-projection.ts` |
 | Agent credentials/tools | `apps/backend/src/core/agent-tools.ts`, `workflow-result-service.ts`, `workflow-result-tools.ts` |
-| Existing storage/sync precedent | `apps/backend/src/core/design-service.ts`, `commands-registry-design.ts`; `docs/architecture/design-canvas.md` |
+| Existing storage/sync precedent | `apps/backend/src/core/design/service.ts`, `commands-registry-design.ts`; `docs/architecture/design-canvas.md` |
 | Native chat and interactions | `apps/web/src/components/native-agent/AgentNativeTab.controller.tsx`, `apps/web/src/hooks/useNativeAgentSession.ts` |
 
 `prompt-queue-drainer.ts` is the **tmux** drainer. Native queues are drained in

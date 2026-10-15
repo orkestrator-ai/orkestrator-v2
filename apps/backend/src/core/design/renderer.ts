@@ -8,16 +8,16 @@ import {
   type DesignRendererHealth,
   type DesignRendererState,
 } from "@orkestrator/protocol/design-operations";
-import { DesignError } from "./design-errors.js";
+import { DesignError } from "./errors.js";
 import {
   DesignRenderQueue,
   asError,
   attempt,
   within,
   type DesignRenderPriority,
-} from "./design-render-queue.js";
+} from "./render-queue.js";
 
-export type { DesignRenderPriority } from "./design-render-queue.js";
+export type { DesignRenderPriority } from "./render-queue.js";
 
 export interface DesignRenderJob {
   environmentId: string;

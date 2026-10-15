@@ -6,15 +6,15 @@ import {
   type DesignOperationDescriptor,
   type DesignOperationStatus,
 } from "@orkestrator/protocol/design-operations";
-import { isDesignError } from "./design-errors.js";
-import { validate as validateFrame } from "./design-validation.js";
-import type { DesignService } from "./design-service.js";
+import { isDesignError } from "./errors.js";
+import { validate as validateFrame } from "./validation.js";
+import type { DesignService } from "./service.js";
 import {
   createDesignHarness,
   deferred,
   trackUnhandledRejections,
   type DesignHarness,
-} from "./design-test-support.js";
+} from "./test-support.js";
 
 const frameInput = { name: "Home", x: 0, y: 0, width: 400, height: 300, html: "<h1>Hello</h1>" };
 

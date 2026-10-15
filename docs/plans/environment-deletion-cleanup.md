@@ -106,8 +106,8 @@ still marked `deleting`. It cannot help once the record is gone.
   (`workflow-result-service.ts:213`). They are only size-pruned (`:917`).
 - `agent-interaction-resolution-journal.json` entries are only time/size-pruned
   (`storage-native.ts:197-221`).
-- Design `legacy-backups/<id>.orkdes` (`design-records.ts:352`) is not removed by
-  `remove()` (`design-records.ts:488`).
+- Design `legacy-backups/<id>.orkdes` (`design/records.ts:352`) is not removed by
+  `remove()` (`design/records.ts:488`).
 - `native-agent-display-tails.json` is cleared only when sessions were removed
   in the same call (`storage-native.ts:817`), so a retry after partial failure
   skips it.

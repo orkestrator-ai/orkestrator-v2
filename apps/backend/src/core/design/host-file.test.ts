@@ -3,7 +3,7 @@ import { appendFile, mkdtemp, open, rename, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DESIGN_MAX_DOCUMENT_BYTES } from "@orkestrator/protocol/design-canvas";
-import { readDesignHostFile } from "./design-host-file.js";
+import { readDesignHostFile } from "./host-file.js";
 
 let dir: string;
 beforeEach(async () => {

@@ -7,14 +7,14 @@ import {
   DESIGN_MAX_HTML_BYTES,
 } from "@orkestrator/protocol/design-canvas";
 import { DESIGN_LIMITS } from "@orkestrator/protocol/design-operations";
-import { isDesignError } from "./design-errors.js";
+import { isDesignError } from "./errors.js";
 import {
   createDesignHarness,
   deferred,
   trackUnhandledRejections,
   type DesignHarness,
-} from "./design-test-support.js";
-import { designActions, runDesignAction } from "./design-tools.js";
+} from "./test-support.js";
+import { designActions, runDesignAction } from "./tools.js";
 
 const frame = { name: "Home", x: 0, y: 0, width: 800, height: 600, html: "<h1>Hello</h1>" };
 

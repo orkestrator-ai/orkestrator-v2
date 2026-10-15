@@ -14,9 +14,9 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { DesignService } from "../apps/backend/src/core/design-service";
-import { resolveDesignChromiumPath } from "../apps/backend/src/core/design-renderer";
-import { runDesignAction } from "../apps/backend/src/core/design-tools";
+import { DesignService } from "../apps/backend/src/core/design/service";
+import { resolveDesignChromiumPath } from "../apps/backend/src/core/design/renderer";
+import { runDesignAction } from "../apps/backend/src/core/design/tools";
 
 type Fixture = { frames: number; htmlBytes: number; label: string };
 

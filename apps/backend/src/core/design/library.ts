@@ -7,7 +7,7 @@ import {
   type DesignLibraryQuery,
 } from "@orkestrator/protocol/design-operations";
 import { DESIGN_MAX_CANVASES } from "@orkestrator/protocol/design-canvas";
-import { readBounded, writeAtomically, type DesignPrivateRecord } from "./design-records.js";
+import { readBounded, writeAtomically, type DesignPrivateRecord } from "./records.js";
 
 export interface DesignSummary {
   id: string;

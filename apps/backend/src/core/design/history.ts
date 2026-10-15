@@ -14,15 +14,15 @@ import {
   type DesignHistoryEntrySummary,
   type DesignHistoryPage,
 } from "@orkestrator/protocol/design-operations";
-import { DesignError } from "./design-errors.js";
+import { DesignError } from "./errors.js";
 import {
   readBounded,
   writeAtomically,
   type DesignHistoryEntryRecord,
   type DesignPrivateRecord,
   type DesignRecordStore,
-} from "./design-records.js";
-import { frameSchema } from "./design-schemas.js";
+} from "./records.js";
+import { frameSchema } from "./schemas.js";
 
 /** The newest entries per canvas that global pruning must never remove. */
 export const PROTECTED_HISTORY_ENTRIES = 3;

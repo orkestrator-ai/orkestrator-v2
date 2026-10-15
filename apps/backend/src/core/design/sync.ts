@@ -7,8 +7,8 @@ import {
   type DesignTombstone,
   type DesignWorkspaceMeta,
 } from "@orkestrator/protocol/design-operations";
-import { historyStatus } from "./design-history.js";
-import type { DesignPrivateRecord } from "./design-records.js";
+import { historyStatus } from "./history.js";
+import type { DesignPrivateRecord } from "./records.js";
 
 export function workspaceMeta(record: DesignPrivateRecord): DesignWorkspaceMeta {
   return {

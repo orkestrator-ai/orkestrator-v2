@@ -6,14 +6,14 @@ import {
   DESIGN_LIMITS,
   type DesignOperationDescriptor,
 } from "@orkestrator/protocol/design-operations";
-import { isDesignError } from "./design-errors.js";
-import { PROTECTED_HISTORY_ENTRIES } from "./design-history.js";
-import type { DesignPrivateRecord } from "./design-records.js";
+import { isDesignError } from "./errors.js";
+import { PROTECTED_HISTORY_ENTRIES } from "./history.js";
+import type { DesignPrivateRecord } from "./records.js";
 import {
   createDesignHarness,
   trackUnhandledRejections,
   type DesignHarness,
-} from "./design-test-support.js";
+} from "./test-support.js";
 
 const frameInput = { name: "Card", x: 0, y: 0, width: 400, height: 300, html: "<h1>Title</h1>" };
 

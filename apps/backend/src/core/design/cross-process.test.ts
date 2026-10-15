@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { readdir, readFile, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import type { DesignOperationDescriptor } from "@orkestrator/protocol/design-operations";
-import { DESIGN_LIBRARY_SIGNAL_STORE } from "./design-coordination.js";
-import { isDesignError } from "./design-errors.js";
-import { executeLifecycle, purge } from "./design-service-lifecycle.js";
-import type { DesignPendingOperation, DesignPrivateRecord } from "./design-records.js";
-import { DesignService } from "./design-service.js";
+import { DESIGN_LIBRARY_SIGNAL_STORE } from "./coordination.js";
+import { isDesignError } from "./errors.js";
+import { executeLifecycle, purge } from "./service-lifecycle.js";
+import type { DesignPendingOperation, DesignPrivateRecord } from "./records.js";
+import { DesignService } from "./service.js";
 import {
   deferred,
   createDesignHarness,
@@ -14,10 +14,10 @@ import {
   trackUnhandledRejections,
   type DesignHarness,
   type TestRenderer,
-} from "./design-test-support.js";
-import { StorageDatabase } from "./storage-database.js";
-import { openBackendDatabase } from "./storage-stores.js";
-import { storageFilesContain } from "./storage-test-support.js";
+} from "./test-support.js";
+import { StorageDatabase } from "../storage-database.js";
+import { openBackendDatabase } from "../storage-stores.js";
+import { storageFilesContain } from "../storage-test-support.js";
 
 const frameInput = { name: "Home", x: 0, y: 0, width: 400, height: 300, html: "<h1>Hello</h1>" };
 

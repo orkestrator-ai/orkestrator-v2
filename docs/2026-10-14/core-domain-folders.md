@@ -1,6 +1,8 @@
 # Backend `core/` domain folders — plan
 
-Status: Active — not started. Follow-up to the module-boundary guardrails added
+Status: Active — Wave 1 in progress. Slice 1 (`design`) moved on 2026-10-15;
+see the [slice log](#slice-log) for what each slice did and the procedure
+lessons. Next slice: `keyed-records`. Follow-up to the module-boundary guardrails added
 on branch `architecture-boundaries-01141669b04a-r1` (2026-10-14). The rules
 those added are described in
 [linting.md § Module boundaries](../development/linting.md#module-boundaries).
@@ -221,3 +223,46 @@ whatever is in flight in that domain.
 - The type-level cycle across `core/` is re-measured and recorded here. It is
   not expected to reach zero, but cross-domain type cycles should go through
   `index.ts` files, where they are visible.
+
+## Slice log
+
+### 1. `design` (2026-10-15)
+
+- **Measured.** 21 source files (including `test-support.ts`) and 12 tests
+  moved to `core/design/`. Production importers outside the folder:
+  `agent-tools.ts`, `commands-context.ts` (type only),
+  `commands-registry-design.ts` and `index.ts`. `index.ts` exports 4 symbols:
+  `DesignService`, `createDesignMcp`, `registerDesignCommandHandlers` and
+  `resolveDesignDestination`. The domain map above is stale for `design`: since
+  the SQLite migration (#969) `design/coordination.ts` depends on `storage`
+  (`storage-stores`, `storage-deletion-fences`, `storage-database`).
+- **Codemod.** `bun scripts/move-backend-modules.ts --prefix design- --into design`
+  (add `--dry-run` first). It rewrote 47 files. Hand edits on top: the four
+  production importers now use `design/index.js`, and bare file names in prose
+  (`design-service.ts`) in living docs and two source comments. Historical plan
+  docs under `docs/improvements/design-space/plan/` keep their bare names.
+- **Tests stay white-box.** Tests outside the folder
+  (`commands-registry-design.test.ts`, `mcp-tool-schema-portability.test.ts`),
+  the e2e specs and `scripts/benchmark-design.ts` keep deep imports: they use
+  `test-support.ts` or internals (`runDesignAction`,
+  `resolveDesignChromiumPath`, `planDefaultDesignExportPath`) that no other
+  domain needs, so `index.ts` does not export them.
+- **Lint rule.** Two overrides, not the single one sketched in
+  [Enforcement](#enforcement). The `apps/backend/src/**` override sits *before*
+  the tests override, so any `*.test.ts` and test-support file may reach
+  internals. A `tests/unit/**` override *after* it restricts deep imports again.
+  That one uses `**/backend/src/core/design/*`, because `**/design/*` would also
+  catch web imports such as `@/components/design/*`, and it leaves out the
+  `@orkestrator/protocol/testing/*` pattern, which tests may use. Each later
+  slice adds its pattern to both overrides.
+
+Procedure lessons:
+
+- Re-measure dependencies: the map's `0` for `design` was a day old and wrong.
+- Per-file `git mv` failed midway on an `index.lock` held by another process,
+  leaving a half-moved tree. The codemod now renames on disk and stages all
+  moves with one retried `git add -A`. Start from a clean tree. If a run still
+  fails, reset with `git reset -q && git checkout -- . && rm -rf <new folder>`
+  and run it again.
+- Shorter specifiers let wrapped import lists fit on one line, which fails
+  `format:check`. The codemod now runs `oxfmt` on every file it touched.

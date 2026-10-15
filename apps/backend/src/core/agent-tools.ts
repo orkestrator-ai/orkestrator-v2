@@ -1,6 +1,4 @@
-import { createDesignMcp } from "./design-tools.js";
-import { resolveDesignDestination } from "./design-exports.js";
-import type { DesignService } from "./design-service.js";
+import { createDesignMcp, resolveDesignDestination, type DesignService } from "./design/index.js";
 import { createHash, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { toNodeHandler } from "@modelcontextprotocol/node";

@@ -1,7 +1,7 @@
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { DESIGN_MAX_DOCUMENT_BYTES } from "@orkestrator/protocol/design-canvas";
-import { DesignError } from "./design-errors.js";
+import { DesignError } from "./errors.js";
 
 /** One handle pins the selected file; no read or allocation exceeds the limit plus one sentinel byte. */
 export async function readDesignHostFile(filePath: string, openFile = open): Promise<string> {

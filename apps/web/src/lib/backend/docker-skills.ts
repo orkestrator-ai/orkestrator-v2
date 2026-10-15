@@ -388,11 +388,6 @@ export async function checkClaudeConfig(): Promise<boolean> {
   return invoke<boolean>("check_claude_config");
 }
 
-/** Check if the OpenCode CLI binary is installed and available */
-export async function checkOpencodeCli(): Promise<boolean> {
-  return invoke<boolean>("check_opencode_cli");
-}
-
 // --- Agent Skills ---
 
 export const AGENT_SKILL_PROVIDERS = [
@@ -483,11 +478,6 @@ export async function readEnvironmentAgentSkill(
     provider,
     filePath,
   });
-}
-
-/** Check if the Codex CLI binary is installed and available */
-export async function checkCodexCli(): Promise<boolean> {
-  return invoke<boolean>("check_codex_cli");
 }
 
 /** Check if the GitHub CLI (gh) binary is installed and available */

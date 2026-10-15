@@ -47,6 +47,42 @@ function models(): FeatureBuildModelState {
 }
 
 describe("resolveFeatureBuildStep", () => {
+  test("create-environment build requests never pin a disconnected implicit default", () => {
+    const disconnected = "opencode/claude-sonnet-5";
+    const connected = "opencode-go/deepseek-v4.1-flash";
+    const cached: AgentModelCatalog = {
+      ...catalog,
+      opencode: [
+        { id: disconnected, name: "Sonnet", reasoningEfforts: [], connected: false },
+        { id: connected, name: "DeepSeek", reasoningEfforts: [], connected: true },
+      ],
+    };
+    const step = { agent: "opencode" as const, model: disconnected };
+    const selection = defaultFeatureBuildModels({
+      catalog: cached,
+      build: step,
+      review: step,
+      review2: step,
+      address: step,
+      pr: step,
+      resolve: step,
+    });
+    const request = featureBuildRequest({
+      projectId: "project-1",
+      title: "Connected build",
+      description: "",
+      acceptanceCriteria: "",
+      environmentType: "local",
+      environmentName: "feature",
+      networkAccessMode: "restricted",
+      portMappings: [],
+      models: selection,
+      requestId: "connected-build-1",
+    });
+    expect(JSON.stringify(request)).not.toContain(disconnected);
+    expect(JSON.stringify(request)).toContain(connected);
+  });
+
   test("matches a configured model through its resolved id", () => {
     // Configuration stores Claude models in resolved space while the catalogue
     // is keyed by alias; only the shared resolver matches the two.

@@ -1322,6 +1322,7 @@ describe("per-step stage coverage", () => {
       const session = running.sessions[0]!;
 
       delete session.model;
+      delete session.modelSelectionResolved;
       delete session.reasoningEffort;
       running.pendingPromptAttempt = {
         id: "attempt-pre-upgrade",

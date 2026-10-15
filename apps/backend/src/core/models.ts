@@ -193,6 +193,16 @@ export interface OpenCodeModelCatalogSnapshot {
   catalogVersion: string;
   updatedAt: string;
   models: OpenCodeModelCatalogEntry[];
+  /**
+   * Providers OpenCode last reported as connected, so a read made before any
+   * bridge is running can tell a model this login can serve from one it
+   * cannot. Absent when OpenCode never reported connectivity for this project.
+   * `models` deliberately stays unfiltered by it: a provider connected later
+   * must still be known once the next bridge reports it.
+   */
+  connectedProviderIds?: string[];
+  /** When {@link connectedProviderIds} was last observed to change. */
+  connectedProvidersCheckedAt?: string;
 }
 
 export interface InitialPromptImageAttachment {

@@ -14,10 +14,21 @@ import {
   openCodeActivityProvider,
 } from "./agent-provider-test-support.js";
 import { withService, waitForCondition } from "./native-agent-service-projection-test-support.js";
-import { normalizeOpenCodeComposerCatalog } from "./opencode-model-catalog.js";
+import {
+  normalizeOpenCodeComposerCatalog,
+  openCodeModelSubstitution,
+  resolveOpenCodeDefaultModel,
+} from "./opencode-model-catalog.js";
+import {
+  OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE,
+  OPENCODE_PROVIDER_LIST_RESPONSE,
+} from "./opencode-provider-list-test-fixtures.js";
 import { openCodeHistoryServer } from "./opencode-history-test-support.js";
 import { nativeCapabilities, nativeComposerControls } from "./native-agent-service-shared.js";
-import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
+import {
+  DEFAULT_OPENCODE_MODEL_PROVIDERS,
+  EMPTY_NATIVE_AGENT_COMPOSER_STATE,
+} from "@orkestrator/protocol/native-agent";
 
 describe("OpenCode provider runtime", () => {
   test.each([["permission"], ["question"]] as const)(
@@ -688,11 +699,7 @@ describe("OpenCode provider runtime", () => {
             },
           },
         ],
-        default: {
-          providerID: "opencode",
-          modelID: "claude-sonnet",
-          variant: "high",
-        },
+        default: { opencode: "claude-sonnet" },
       },
     }));
     Object.assign(fake.client as object, { provider: { list: providerList } });
@@ -730,7 +737,6 @@ describe("OpenCode provider runtime", () => {
         shareUrl: "https://share.opencode.test/live",
         composer: {
           selectedModelId: "opencode/claude-sonnet",
-          selectedReasoningId: "high",
           models: [
             {
               id: "opencode/claude-sonnet",
@@ -759,7 +765,7 @@ describe("OpenCode provider runtime", () => {
                 models: { "nemotron-ultra-free": { name: "Nemotron Ultra Free" } },
               },
             ],
-            default: { providerID: "opencode", modelID: "nemotron-ultra-free" },
+            default: { opencode: "nemotron-ultra-free" },
           },
         })),
       },
@@ -796,7 +802,7 @@ describe("OpenCode provider runtime", () => {
             models: { "claude-sonnet": { name: "Claude Sonnet", variants: { high: {} } } },
           },
         ],
-        default: { providerID: "opencode", modelID: "claude-sonnet", variant: "high" },
+        default: { opencode: "claude-sonnet" },
       },
       [],
     );
@@ -804,7 +810,7 @@ describe("OpenCode provider runtime", () => {
       ...EMPTY_NATIVE_AGENT_COMPOSER_STATE,
       models: catalog.models,
       selectedModelId: catalog.selectedModelId,
-      selectedReasoningId: catalog.selectedReasoningId,
+      selectedReasoningId: "high",
     };
     const controls = nativeComposerControls(
       composer,
@@ -824,6 +830,152 @@ describe("OpenCode provider runtime", () => {
         { id: "high", label: "High" },
       ],
     });
+  });
+
+  // `default` is a map of provider id to model id with an entry for every
+  // provider OpenCode knows. Parsed as anything else it yielded no default at
+  // all, so selection always fell through to the first catalogue row.
+  test("reads OpenCode's default from a real provider list response", () => {
+    const catalog = normalizeOpenCodeComposerCatalog(
+      OPENCODE_PROVIDER_LIST_RESPONSE,
+      DEFAULT_OPENCODE_MODEL_PROVIDERS,
+      { requireConnected: true },
+    );
+
+    // `anthropic` lists first but is outside the allowlist; `opencode-go`
+    // precedes `opencode` in OpenCode's own order.
+    expect(catalog.selectedModelId).toBe("opencode-go/gpt-5.6-luna");
+    expect(catalog.connectedProviderIds).toEqual(["opencode-go", "opencode"]);
+    expect(catalog.models.map((model) => model.id)).toEqual([
+      "opencode-go/mimo-v2.6-pro",
+      "opencode-go/deepseek-v4.1-flash",
+      "opencode-go/gpt-5.6-luna",
+      "opencode/longcat-2.5-preview-free",
+      "opencode/big-pickle",
+    ]);
+    expect(
+      normalizeOpenCodeComposerCatalog(OPENCODE_PROVIDER_LIST_RESPONSE, ["opencode"], {
+        requireConnected: true,
+      }).selectedModelId,
+    ).toBe("opencode/big-pickle");
+  });
+
+  test("skips a default whose provider is not connected", () => {
+    const catalog = normalizeOpenCodeComposerCatalog(
+      { ...OPENCODE_PROVIDER_LIST_RESPONSE, connected: ["opencode"] },
+      DEFAULT_OPENCODE_MODEL_PROVIDERS,
+    );
+
+    // Unfiltered models still include `opencode-go`, but its default is not
+    // one OpenCode can serve.
+    expect(catalog.models.some((model) => model.id.startsWith("opencode-go/"))).toBe(true);
+    expect(catalog.selectedModelId).toBe("opencode/big-pickle");
+  });
+
+  describe("openCodeModelSubstitution", () => {
+    const goOnly = normalizeOpenCodeComposerCatalog(
+      OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE,
+      DEFAULT_OPENCODE_MODEL_PROVIDERS,
+      { requireConnected: true },
+    );
+
+    test("replaces a configured model whose provider is not connected", () => {
+      expect(openCodeModelSubstitution("opencode/claude-sonnet-5", goOnly)).toEqual({
+        requestedModelId: "opencode/claude-sonnet-5",
+        modelId: "opencode-go/gpt-5.6-luna",
+        message: "claude-sonnet-5 isn't available with your OpenCode login; using GPT-5.6 Luna.",
+      });
+    });
+
+    test("falls back to the first connected model without an OpenCode default", () => {
+      expect(
+        openCodeModelSubstitution("opencode/claude-sonnet-5", {
+          ...goOnly,
+          selectedModelId: undefined,
+        })?.modelId,
+      ).toBe("opencode-go/mimo-v2.6-pro");
+    });
+
+    test.each([
+      ["a connected provider", "opencode-go/deepseek-v4.1-flash", goOnly],
+      [
+        "a catalogue without connectivity",
+        "opencode/claude-sonnet-5",
+        { ...goOnly, connectedProviderIds: undefined },
+      ],
+      [
+        "nothing connected to substitute",
+        "opencode/claude-sonnet-5",
+        { models: [], connectedProviderIds: [] },
+      ],
+      ["a placeholder that names no provider", "default", goOnly],
+    ] as const)("keeps the configured model for %s", (_label, modelId, catalog) => {
+      expect(openCodeModelSubstitution(modelId, catalog)).toBeUndefined();
+    });
+  });
+
+  describe("resolveOpenCodeDefaultModel", () => {
+    const goOnly = normalizeOpenCodeComposerCatalog(
+      OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE,
+      DEFAULT_OPENCODE_MODEL_PROVIDERS,
+      { requireConnected: true },
+    );
+
+    test.each([undefined, "", "default"])(
+      "resolves an unset model (%p) to the effective default",
+      (modelId) => {
+        expect(resolveOpenCodeDefaultModel(modelId, goOnly)).toEqual({
+          modelId: "opencode-go/gpt-5.6-luna",
+        });
+      },
+    );
+
+    test("keeps a connected model and substitutes a disconnected one", () => {
+      expect(resolveOpenCodeDefaultModel("opencode-go/deepseek-v4.1-flash", goOnly)).toEqual({
+        modelId: "opencode-go/deepseek-v4.1-flash",
+      });
+      expect(resolveOpenCodeDefaultModel("opencode/claude-sonnet-5", goOnly)).toMatchObject({
+        modelId: "opencode-go/gpt-5.6-luna",
+        substitution: { requestedModelId: "opencode/claude-sonnet-5" },
+      });
+    });
+
+    test("leaves an unset model to OpenCode when the catalogue is empty", () => {
+      expect(resolveOpenCodeDefaultModel(undefined, { models: [] })).toEqual({});
+    });
+  });
+
+  test("preselects the connected default and substitutes for a login with only opencode-go", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: { list: mock(async () => ({ data: OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE })) },
+    });
+    fake.setSessionGetResponse("owned-session", {
+      data: { id: "owned-session", directory: "/workspace" },
+    });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      const snapshot = await provider.interactiveSnapshot?.("owned-session");
+      expect(snapshot?.composer?.selectedModelId).toBe("opencode-go/gpt-5.6-luna");
+      expect(snapshot?.composer?.models.map((model) => model.id)).toEqual([
+        "opencode-go/mimo-v2.6-pro",
+        "opencode-go/deepseek-v4.1-flash",
+        "opencode-go/gpt-5.6-luna",
+      ]);
+      await expect(provider.connectedModelProviders?.()).resolves.toEqual(["opencode-go"]);
+      await expect(provider.resolveDefaultModel?.("opencode/claude-sonnet-5")).resolves.toEqual({
+        modelId: "opencode-go/gpt-5.6-luna",
+        substitution: expect.objectContaining({ requestedModelId: "opencode/claude-sonnet-5" }),
+      });
+      await expect(
+        provider.resolveDefaultModel?.("opencode-go/deepseek-v4.1-flash"),
+      ).resolves.toEqual({ modelId: "opencode-go/deepseek-v4.1-flash" });
+      await expect(provider.resolveDefaultModel?.(undefined)).resolves.toEqual({
+        modelId: "opencode-go/gpt-5.6-luna",
+      });
+    } finally {
+      await provider.dispose?.();
+    }
   });
 
   test("only exposes providers OpenCode reports as connected", async () => {
@@ -847,10 +999,7 @@ describe("OpenCode provider runtime", () => {
               },
             ],
             connected: ["opencode"],
-            default: {
-              providerID: "hpc-ai",
-              modelID: "deepseek/deepseek-v4-flash",
-            },
+            default: { "hpc-ai": "deepseek/deepseek-v4-flash" },
           },
         })),
       },
@@ -1072,7 +1221,7 @@ describe("OpenCode provider runtime", () => {
           models: { "grok-code": { name: "Grok Code" } },
         },
       ],
-      default: { providerID: "hpc-ai", modelID: "flood-0" },
+      default: { "hpc-ai": "flood-0" },
     },
   });
 
@@ -1165,7 +1314,7 @@ describe("OpenCode provider runtime", () => {
                 ),
               },
             ],
-            default: { providerID: "opencode", modelID: "model-500" },
+            default: { opencode: "model-500" },
           },
         })),
       },
@@ -1233,7 +1382,7 @@ describe("OpenCode provider runtime", () => {
             })),
           },
         ],
-        default: { providerID: "openrouter", modelID: "model-690" },
+        default: { openrouter: "model-690" },
       },
       [],
     );
@@ -1265,7 +1414,7 @@ describe("OpenCode provider runtime", () => {
             })),
           },
         ],
-        default: { providerID: "openrouter", modelID: "other-3" },
+        default: { openrouter: "other-3" },
       },
       [],
       { priorityProviders: ["opencode"] },
@@ -2397,7 +2546,7 @@ describe("OpenCode provider forkSession", () => {
                   },
                 },
               ],
-              default: { providerID: "opencode", modelID: "mimo-v2.6-pro" },
+              default: { opencode: "mimo-v2.6-pro" },
             },
           }),
         },

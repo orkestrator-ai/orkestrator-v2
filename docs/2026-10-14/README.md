@@ -10,7 +10,7 @@ not touch, so none of them is a regression from that work.
 
 | # | Problem | Severity | Area |
 | --- | --- | --- | --- |
-| [01](01-opencode-default-model-not-connected.md) | OpenCode defaults to `opencode/claude-sonnet-5` even when its provider is not connected; the first prompt and every model-less OpenCode build are rejected | High | Backend model defaults, pipelines, renderer composer |
+| [01](01-opencode-default-model-not-connected.md) | **Fixed 2026-10-15.** OpenCode defaults to `opencode/claude-sonnet-5` even when its provider is not connected; the first prompt and every model-less OpenCode build are rejected | High | Backend model defaults, pipelines, renderer composer |
 | [02](02-tmux-3-8-no-server-detection.md) | **Fixed 2026-10-15.** tmux's absent-socket "no server" message (first seen on 3.8, not new in it) is read as failed cleanup; environment move fails, deletion leaves files | High | Backend tmux cleanup |
 | [03](03-startup-claude-login-dialog.md) | "Claude Code Login Required" blocks the whole app when `claude` is unauthenticated and OpenCode is absent, ignoring Codex, Cursor, Grok and Pi; it also breaks the isolated browser suite | High | Renderer startup gate, host tool checks |
 | [04](04-opencode-fork-loses-model.md) | A forked OpenCode session switches to the first catalogue model (fixed 2026-10-15) | Medium | Fork flow, composer inference |

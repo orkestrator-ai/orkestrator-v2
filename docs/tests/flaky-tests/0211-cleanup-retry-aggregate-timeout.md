@@ -16,6 +16,22 @@ Observed: 2026-10-14
 
 Hypothesis: process cleanup, worktree inspection and fixture I/O were delayed by concurrent host load. Warnings about intentionally injected cleanup failures are expected in this test. No assertions or deadlines were loosened.
 
+## Recurrence on 2026-10-15
+
+The OpenCode model-selection validation aggregate reproduced this unchanged
+test's timeout after 7450.55 ms against the default 5000 ms deadline. The same
+owning file also timed out in `deletes an environment only after all three local
+server kinds exit` after 5559.99 ms.
+
+The unchanged owning file passed alone in 38.1 seconds:
+
+```bash
+mise run test:logged -- --name command-integration-alone -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures
+```
+
+Aggregate evidence: `/tmp/orkestrator-test-run.lhp1N0/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+No assertions or deadlines were changed.
+
 ## Recurrence during main merge validation — 2026-10-15
 
 - **Test:** `persists safe cleanup failure details and permits a backend

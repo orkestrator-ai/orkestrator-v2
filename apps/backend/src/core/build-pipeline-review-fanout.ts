@@ -51,7 +51,10 @@ import {
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
-import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentExecutionPolicy,
+  NativeAgentModelSubstitution,
+} from "@orkestrator/protocol/native-agent";
 import {
   workflowResultInstruction,
   workflowResultToolName,
@@ -432,6 +435,7 @@ export class BuildPipelineReviewFanout {
       agent: reviewer.agent as BuildPipelineAgent,
       label: pipelineIndependentReviewLabel(index),
       model: reviewer.modelUnpinned ? undefined : reviewer.model,
+      modelSubstitution: reviewer.modelSubstitution,
       reasoningEffort: reviewer.reasoningEffort,
       startedAt: reviewer.startedAt,
       tokenCount: reviewer.tokenCount,
@@ -522,6 +526,7 @@ export class BuildPipelineReviewFanout {
       agent: BuildPipelineAgent;
       label: string;
       model?: string;
+      modelSubstitution?: NativeAgentModelSubstitution;
       reasoningEffort?: string;
       startedAt?: string;
       tokenCount?: number;
@@ -544,6 +549,7 @@ export class BuildPipelineReviewFanout {
       startedAt: fields.startedAt ?? reviewFanoutNowIso(),
       label: fields.label,
       ...(fields.model ? { model: fields.model } : {}),
+      ...(fields.modelSubstitution ? { modelSubstitution: fields.modelSubstitution } : {}),
       ...(fields.reasoningEffort ? { reasoningEffort: fields.reasoningEffort } : {}),
       ...(fields.tokenCount === undefined ? {} : { tokenCount: fields.tokenCount }),
       ...(typeof fields.fastMode === "boolean" ? { fastMode: fields.fastMode } : {}),
@@ -642,6 +648,7 @@ export class BuildPipelineReviewFanout {
           ? { resultSubmission: "preparing" as const }
           : {}),
         ...(step.model ? { model: step.model } : {}),
+        ...(step.modelSubstitution ? { modelSubstitution: step.modelSubstitution } : {}),
         ...(step.effort ? { reasoningEffort: step.effort } : {}),
         ...(typeof step.fastMode === "boolean" ? { fastMode: step.fastMode } : {}),
       };
@@ -656,6 +663,7 @@ export class BuildPipelineReviewFanout {
       agent: consolidation.agent as BuildPipelineAgent,
       label: "Consolidation",
       fastMode: consolidation.fastMode,
+      modelSubstitution: consolidation.modelSubstitution,
     });
     provider.registerSession?.(consolidation.providerSessionId, {
       origin: "build-pipeline",
@@ -1018,6 +1026,9 @@ function reviewerFromConfig(config: BuildStepSelection): ReviewerRecord {
     // ran it on the repository default.
     model: model || "default",
     ...(model ? {} : { modelUnpinned: true }),
+    ...(model && config.modelSubstitution?.modelId === model
+      ? { modelSubstitution: config.modelSubstitution }
+      : {}),
     ...(config.effort ? { reasoningEffort: config.effort } : {}),
     ...(typeof config.fastMode === "boolean" ? { fastMode: config.fastMode } : {}),
     status: "pending",

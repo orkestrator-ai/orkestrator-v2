@@ -428,6 +428,7 @@ export function CreateEnvironmentDialog({
               providerLabel: candidate.provider,
               description: candidate.provider,
               reasoningEfforts: [...(candidate.variants ?? [])],
+              ...(candidate.connected === false ? { connected: false } : {}),
             })),
           }
         : baseCatalog;

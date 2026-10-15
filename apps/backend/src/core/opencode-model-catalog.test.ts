@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { openCodeSessionModelRef } from "./opencode-model-catalog.js";
+import {
+  normalizeOpenCodeComposerCatalog,
+  resolveOpenCodeDefaultModel,
+  openCodeSessionModelRef,
+} from "./opencode-model-catalog.js";
 import { openCodeSessionCreateModel } from "./opencode-provider-helpers.js";
 
 describe("openCodeSessionModelRef", () => {
@@ -49,5 +53,52 @@ describe("openCodeSessionCreateModel", () => {
     expect(openCodeSessionCreateModel("gpt-5", "high")).toBeUndefined();
     expect(openCodeSessionCreateModel("", "high")).toBeUndefined();
     expect(openCodeSessionCreateModel(undefined, "high")).toBeUndefined();
+  });
+});
+
+describe("OpenCode configured default", () => {
+  test("reserves a connected configured model beyond the catalogue cap", () => {
+    const models = Object.fromEntries(
+      Array.from({ length: 600 }, (_, index) => [`model-${index}`, { id: `model-${index}` }]),
+    );
+    const catalog = normalizeOpenCodeComposerCatalog(
+      {
+        all: [{ id: "opencode-go", models }],
+        connected: ["opencode-go"],
+        default: { "opencode-go": "model-0" },
+      },
+      ["opencode-go"],
+      { requireConnected: true, configuredModelId: "opencode-go/model-599" },
+    );
+    expect(catalog.models).toHaveLength(512);
+    expect(resolveOpenCodeDefaultModel(undefined, catalog)).toEqual({
+      modelId: "opencode-go/model-599",
+    });
+  });
+
+  test("does not prefer a configured model from a disconnected or excluded provider", () => {
+    const value = {
+      all: [
+        { id: "opencode", models: { sonnet: { id: "sonnet" } } },
+        { id: "opencode-go", models: { deepseek: { id: "deepseek" } } },
+      ],
+      connected: ["opencode-go"],
+      default: { opencode: "sonnet", "opencode-go": "deepseek" },
+    };
+    const catalog = normalizeOpenCodeComposerCatalog(value, ["opencode", "opencode-go"], {
+      requireConnected: true,
+      configuredModelId: "opencode/sonnet",
+    });
+    expect(resolveOpenCodeDefaultModel(undefined, catalog)).toEqual({
+      modelId: "opencode-go/deepseek",
+    });
+    const excluded = normalizeOpenCodeComposerCatalog(
+      { ...value, connected: ["opencode", "opencode-go"] },
+      ["opencode-go"],
+      { requireConnected: true, configuredModelId: "opencode/sonnet" },
+    );
+    expect(resolveOpenCodeDefaultModel(undefined, excluded)).toEqual({
+      modelId: "opencode-go/deepseek",
+    });
   });
 });

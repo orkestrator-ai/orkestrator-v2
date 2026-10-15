@@ -1220,7 +1220,7 @@ export class BuildPipelineSupervisor {
             ? originalFix.fixWorktreeFingerprintAtStart
             : await this.worktreeFingerprint(pipeline)
           : undefined;
-      const { agent, model, effort, fastMode } = override?.settings
+      const { agent, model, effort, fastMode, modelSubstitution } = override?.settings
         ? await this.agents.settingsForSelection(pipeline, override.settings)
         : await this.agents.stepSettings(pipeline, sessionPhase);
       const provider = await this.agents.provider(pipeline, agent);
@@ -1278,7 +1278,9 @@ export class BuildPipelineSupervisor {
       const session: PipelineSession = {
         phase: sessionPhase,
         agent,
+        modelSelectionResolved: true,
         ...(model ? { model } : {}),
+        ...(modelSubstitution ? { modelSubstitution } : {}),
         ...(effort ? { reasoningEffort: effort } : {}),
         ...(typeof fastMode === "boolean" ? { fastMode } : {}),
         origin: "build-pipeline",
@@ -1482,7 +1484,7 @@ export class BuildPipelineSupervisor {
     const fallbackStep =
       sessionPhase &&
       (!session ||
-        session.model === undefined ||
+        (session.model === undefined && !session.modelSelectionResolved) ||
         session.reasoningEffort === undefined ||
         session.fastMode === undefined)
         ? await this.agents.stepSettings(pipeline, sessionPhase)
@@ -1492,7 +1494,9 @@ export class BuildPipelineSupervisor {
       : session
         ? {
             agent: sessionAgent(pipeline, session),
-            model: session.model ?? fallbackStep?.model,
+            model: session.modelSelectionResolved
+              ? session.model
+              : (session.model ?? fallbackStep?.model),
             effort: session.reasoningEffort ?? fallbackStep?.effort,
             fastMode: session.fastMode ?? fallbackStep?.fastMode,
           }

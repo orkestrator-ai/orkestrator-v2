@@ -255,6 +255,23 @@ describe("build pipeline protocol", () => {
       ),
     ).toBe(true);
 
+    // A substituted default records what was configured and why.
+    const modelSubstitution = {
+      requestedModelId: "opencode/claude-sonnet-5",
+      modelId: "opencode-go/gpt-5.6-luna",
+      message: "claude-sonnet-5 isn't available with your OpenCode login; using GPT-5.6 Luna.",
+    };
+    expect(isBuildPipeline(withSession({ modelSubstitution }))).toBe(true);
+    for (const invalid of [
+      null,
+      "opencode/claude-sonnet-5",
+      { ...modelSubstitution, requestedModelId: "" },
+      { ...modelSubstitution, modelId: undefined },
+      { ...modelSubstitution, message: "x".repeat(2049) },
+    ]) {
+      expect(isBuildPipeline(withSession({ modelSubstitution: invalid }))).toBe(false);
+    }
+
     // A fix turn's content fingerprint is a SHA-256 digest or nothing.
     expect(isBuildPipeline(withSession({ fixWorktreeFingerprintAtStart: "a".repeat(64) }))).toBe(
       true,

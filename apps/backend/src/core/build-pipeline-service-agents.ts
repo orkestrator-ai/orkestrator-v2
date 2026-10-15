@@ -27,7 +27,10 @@ import {
   type AgentModelCatalogReader,
 } from "./build-pipeline-service-helpers.js";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
-import type { AgentModel } from "@orkestrator/protocol/native-agent";
+import type {
+  AgentModel,
+  NativeAgentDefaultModelResolution,
+} from "@orkestrator/protocol/native-agent";
 import { stagePromptImages } from "./prompt-attachments.js";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { BuildPipelineContext } from "./build-pipeline-context.js";
@@ -38,6 +41,11 @@ interface BuildSelectionContext {
   config: Pick<AppConfig, "global">;
   repository: { agentSettings?: AgentSettingsTier };
   readCatalog: AgentModelCatalogReader;
+  /** The model the runtime will use for a configured default, set or unset. */
+  resolveDefaultModel: (
+    agent: BuildPipelineAgent,
+    modelId: string | undefined,
+  ) => Promise<NativeAgentDefaultModelResolution | undefined>;
 }
 
 export class BuildPipelineAgents {
@@ -218,7 +226,11 @@ export class BuildPipelineAgents {
       config,
       repository,
     );
-    return this.settingsForSelection(pipeline, { agent: pipeline.agentType, ...defaults });
+    return this.settingsForSelection(
+      pipeline,
+      { agent: pipeline.agentType, ...defaults },
+      { modelFromDefaults: true },
+    );
   }
 
   /**
@@ -242,14 +254,26 @@ export class BuildPipelineAgents {
           environmentId: pipeline.environmentId,
         }),
       ),
+      // Asks the harness the stage is about to run on anyway, so connectivity
+      // comes from the same live report its dispatch preflight reads. Advisory:
+      // a provider that cannot be reached here fails in its own setup instead.
+      resolveDefaultModel: async (agent, modelId) => {
+        try {
+          const provider = await this.provider(pipeline, agent);
+          return await provider.resolveDefaultModel?.(modelId);
+        } catch {
+          return undefined;
+        }
+      },
     };
   }
 
   async settingsForSelection(
     pipeline: BuildPipeline,
     selection: BuildStepSelection,
+    options: { modelFromDefaults?: boolean } = {},
   ): Promise<BuildStepSelection> {
-    return this.resolveSelection(selection, await this.selectionContext(pipeline));
+    return this.resolveSelection(selection, await this.selectionContext(pipeline), options);
   }
 
   /** Resolve a whole fan-out's selections against one shared context. */
@@ -262,9 +286,14 @@ export class BuildPipelineAgents {
     return Promise.all(selections.map((selection) => this.resolveSelection(selection, context)));
   }
 
+  /**
+   * `modelFromDefaults` marks a selection whose model was filled in from the
+   * configured defaults rather than pinned by the step.
+   */
   private async resolveSelection(
     selection: BuildStepSelection,
     context: BuildSelectionContext,
+    options: { modelFromDefaults?: boolean } = {},
   ): Promise<BuildStepSelection> {
     const defaults = connectionDefaultsFor(
       selection.agent,
@@ -272,21 +301,46 @@ export class BuildPipelineAgents {
       context.repository,
       context.environment,
     );
+    // A configured default whose OpenCode provider this login has not
+    // connected would fail the stage at its first turn, and an unset one would
+    // leave the choice to OpenCode's server, which ignores the provider
+    // allowlist. Both resolve to OpenCode's effective default for this stage
+    // only: the configuration keeps the user's choice for when the provider
+    // reconnects. A model the step pinned is left alone, so an explicit choice
+    // still fails loudly.
+    const usesDefault = options.modelFromDefaults || !selection.model;
+    const configuredDefault = selection.model ?? defaults.model;
+    const resolution =
+      selection.agent === "opencode" && usesDefault
+        ? await context.resolveDefaultModel(selection.agent, configuredDefault)
+        : undefined;
+    const modelSubstitution = resolution?.substitution;
+    // Pinned only when the resolution differs from what the provider would
+    // have used anyway, so an unpinned step that resolves to its own default
+    // keeps its established unpinned shape.
+    const model =
+      resolution?.modelId && resolution.modelId !== configuredDefault
+        ? resolution.modelId
+        : selection.model;
     // A deliberately unpinned step keeps its established model/effort
     // semantics. The provider may still have a connection default, so use that
     // effective model for the speed capability check without pinning it here.
-    const capabilityModel = selection.model ?? defaults.model;
+    const capabilityModel = model ?? defaults.model;
     const fastMode = await resolveFastMode(
       selection.agent,
       selection.fastMode ?? defaults.fastMode,
       capabilityModel,
       context.readCatalog,
     );
+    const substitution = modelSubstitution ?? selection.modelSubstitution;
     return {
       agent: selection.agent,
-      ...(selection.model ? { model: selection.model } : {}),
+      ...(model ? { model } : {}),
       ...(selection.effort ? { effort: selection.effort } : {}),
       ...(typeof fastMode === "boolean" ? { fastMode } : {}),
+      ...(substitution && substitution.modelId === model
+        ? { modelSubstitution: substitution }
+        : {}),
     };
   }
 

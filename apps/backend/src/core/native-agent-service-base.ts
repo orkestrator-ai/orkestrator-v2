@@ -9,7 +9,11 @@ import {
   NativeAgentCommandCatalogueCache,
   commandCatalogueKey,
 } from "./native-agent-command-catalogue.js";
-import type { NativeAgentCommandRefreshOutcome } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentCommandRefreshOutcome,
+  NativeAgentDefaultModelResolution,
+  NativeAgentModelSubstitution,
+} from "@orkestrator/protocol/native-agent";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
   coordinatorRuntimeUnavailableMessage,
@@ -67,6 +71,13 @@ type JsonSchema = shared.JsonSchema;
 type Environment = shared.Environment;
 type IncompleteTurnNotice = shared.IncompleteTurnNotice;
 type PersistedNativeAgentSession = shared.PersistedNativeAgentSession;
+/**
+ * An ensured session, plus the model substitution its creation made. The
+ * substitution is reported to the caller only and is never persisted.
+ */
+export type EnsuredNativeAgentSession = PersistedNativeAgentSession & {
+  modelSubstitution?: NativeAgentModelSubstitution;
+};
 type PersistedNativeAgentPendingDispatch = shared.PersistedNativeAgentPendingDispatch;
 type StorageService = shared.StorageService;
 type BridgeConnection = shared.BridgeConnection;
@@ -926,7 +937,7 @@ export abstract class NativeAgentServiceBase {
     }
   }
 
-  async ensureSession(input: EnsureNativeAgentSessionInput): Promise<PersistedNativeAgentSession> {
+  async ensureSession(input: EnsureNativeAgentSessionInput): Promise<EnsuredNativeAgentSession> {
     input = await this.trustedSessionInput(input);
     this.assertAcceptingWork();
     if (
@@ -1004,6 +1015,21 @@ export abstract class NativeAgentServiceBase {
      * session-create attempts with backoff, and every second of that stalled
      * activity, unread and deletion bookkeeping for *every* environment.
      */
+    /*
+     * Only an inherited default is resolved; an explicit model stays pinned
+     * and lets dispatch report its availability. A configured
+     * default can name a provider this login has not connected, and storing it
+     * as the session's controls would outrank the runtime's own default and
+     * reject the first prompt. An unset one resolves to the runtime's effective
+     * default. Either answer is stored on this session only; the configuration
+     * keeps the user's choice.
+     */
+    const resolution =
+      !input.model || input.model === "default" || input.modelSource === "default"
+        ? await this.resolveDefaultModel(provider, input.model)
+        : undefined;
+    const modelSubstitution = resolution?.substitution;
+    if (resolution?.modelId) input = { ...input, model: resolution.modelId };
     const session = await this.storage.getOrCreateNativeAgentSession(
       {
         key,
@@ -1021,7 +1047,25 @@ export abstract class NativeAgentServiceBase {
       () => this.createProviderSession(provider, input),
     );
     void this.reconcileAgentInteractions().catch(() => undefined);
-    return session;
+    // A concurrent ensure may have created the session first, with its own
+    // controls; only report a substitution this session actually carries.
+    return modelSubstitution && session.controls?.modelId === modelSubstitution.modelId
+      ? { ...session, modelSubstitution }
+      : session;
+  }
+
+  private async resolveDefaultModel(
+    provider: NativeAgentRuntimeProvider,
+    modelId: string | undefined,
+  ): Promise<NativeAgentDefaultModelResolution | undefined> {
+    if (!provider.resolveDefaultModel) return undefined;
+    try {
+      return await provider.resolveDefaultModel(modelId);
+    } catch {
+      // Connectivity is advisory here. Dispatch preflight still reports a
+      // model the runtime cannot serve.
+      return undefined;
+    }
   }
 
   async adoptSession(input: AdoptNativeAgentSessionInput): Promise<PersistedNativeAgentSession> {
@@ -1286,6 +1330,16 @@ export abstract class NativeAgentServiceBase {
       return (await provider.rawModelCatalog()).slice(0, 512);
     }
     return provider.modelCatalog ? (await provider.modelCatalog()).slice(0, 512) : [];
+  }
+
+  /**
+   * Providers the runtime reports as connected, for the durable catalogue
+   * snapshot. Undefined when the runtime does not report connectivity.
+   */
+  async connectedModelProviders(input: NativeAgentProjectionInput): Promise<string[] | undefined> {
+    this.assertProjectionInput(input);
+    const provider = await this.provider(input);
+    return provider.connectedModelProviders?.();
   }
 
   async dispatchIntent(input: DispatchNativeAgentPromptInput): Promise<NativeAgentDispatchOutcome> {

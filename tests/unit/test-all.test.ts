@@ -10,11 +10,15 @@ import {
   DEFAULT_TEST_GROUP_TIMEOUT_MS,
   DEFAULT_TEST_NO_PROGRESS_TIMEOUT_MS,
   defaultRunGroup,
+  FAILURE_REPORT_CONTEXT_LINES,
+  FailureReportCollector,
   finalizeTestLogs,
   INCLUDE_IOS_TESTS_ENV,
   IOS_GROUP_TIMEOUT_MS,
   main,
   MAX_AGGREGATE_TEST_WORKERS,
+  MAX_FAILURE_REPORTS,
+  MAX_GROUP_OUTPUT_TAIL_BYTES,
   MIN_AGGREGATE_TEST_WORKERS,
   MIN_BRIDGE_WORKERS,
   planWorkers,
@@ -50,6 +54,7 @@ function createDependencies(
     /** Per-group exit status, keyed by group name. */
     statusByName?: Record<string, number | null>;
     outputByName?: Record<string, string>;
+    failureReportsByName?: Record<string, { reports: string[]; omitted?: number }>;
     environment?: NodeJS.ProcessEnv;
     cores?: number;
     /** Blocks the named group until released, to observe concurrency. */
@@ -98,6 +103,8 @@ function createDependencies(
               ? options.statusByName[group.name]!
               : 0,
           output: options.outputByName?.[group.name],
+          failureReports: options.failureReportsByName?.[group.name]?.reports,
+          omittedFailureReports: options.failureReportsByName?.[group.name]?.omitted,
         };
       },
     },
@@ -458,6 +465,26 @@ describe("scripts/test-all.ts", () => {
     expect(await runAllTests(dependencies)).toBe(1);
   });
 
+  test("lists every failure report of a failing group after its tail", async () => {
+    const { dependencies, logs } = createDependencies({
+      statusByName: { [ROOT]: 1 },
+      outputByName: { [ROOT]: "only the tail" },
+      failureReportsByName: {
+        [ROOT]: { reports: ["error: lost\n(fail) suite > lost case [1.00ms]"], omitted: 2 },
+        [BRIDGES]: { reports: ["(fail) never printed for a passing group"] },
+      },
+    });
+
+    await runAllTests(dependencies);
+    const report = logs.join("\n");
+    const tailAt = report.indexOf("only the tail");
+    const listAt = report.indexOf(`--- Failing tests in ${ROOT}: 3 (first 1 shown) ---`);
+    expect(tailAt).toBeGreaterThan(-1);
+    expect(listAt).toBeGreaterThan(tailAt);
+    expect(report.indexOf("(fail) suite > lost case [1.00ms]")).toBeGreaterThan(listAt);
+    expect(report).not.toContain("never printed for a passing group");
+  });
+
   test("prints only failing output under its group banner", async () => {
     const { dependencies, logs } = createDependencies({
       statusByName: { [ROOT]: 1 },
@@ -653,6 +680,28 @@ describe("scripts/test-all.ts", () => {
     expect(result.status).toBe(0);
     expect(result.output).toContain("out");
     expect(result.output).toContain("err");
+    if (result.logPath) await rm(path.dirname(result.logPath), { recursive: true, force: true });
+  });
+
+  test("default runner keeps failure reports the output tail has dropped", async () => {
+    const noiseLines = Math.ceil(MAX_GROUP_OUTPUT_TAIL_BYTES / "noise\n".length) + 1_000;
+    const result = await defaultRunGroup(
+      {
+        name: "noisy failure fixture",
+        command: process.execPath,
+        args: [
+          "-e",
+          `process.stdout.write("error: expect(received).toBe(expected)\\n(fail) suite > lost case [1.00ms]\\n" + "noise\\n".repeat(${noiseLines})); process.exitCode = 1;`,
+        ],
+      },
+      isolatedRunnerEnvironment(),
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.output).not.toContain("(fail)");
+    expect(result.failureReports).toEqual([
+      "error: expect(received).toBe(expected)\n(fail) suite > lost case [1.00ms]",
+    ]);
     if (result.logPath) await rm(path.dirname(result.logPath), { recursive: true, force: true });
   });
 
@@ -1036,5 +1085,71 @@ describe("scripts/test-all.ts", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe("FailureReportCollector", () => {
+  const web = "@orkestrator/web:test:workspace: ";
+  const backend = "@orkestrator/backend:test:workspace: ";
+
+  test("keeps each failing task's own preceding lines across interleaved, split chunks", () => {
+    const collector = new FailureReportCollector();
+    const output = Buffer.from(
+      [
+        `${web}error: expect(received).toBe(expected)`,
+        `${backend}[backend] unrelated noise`,
+        `${web}Expected: 1`,
+        `${web}Received: 2`,
+        `${web}(fail) Widget > renders [12.00ms]`,
+        `${backend}(fail) Store > saves [5001.00ms]`,
+        `${backend}  ^ this test timed out after 5000ms.`,
+        "\u001b[31m(fail)\u001b[0m root > colored [1.00ms]",
+        "",
+      ].join("\n"),
+    );
+    for (let at = 0; at < output.byteLength; at += 7) collector.push(output.subarray(at, at + 7));
+    collector.finish();
+
+    expect(collector.reports).toEqual([
+      [
+        `${web}error: expect(received).toBe(expected)`,
+        `${web}Expected: 1`,
+        `${web}Received: 2`,
+        `${web}(fail) Widget > renders [12.00ms]`,
+      ].join("\n"),
+      [
+        `${backend}[backend] unrelated noise`,
+        `${backend}(fail) Store > saves [5001.00ms]`,
+        `${backend}  ^ this test timed out after 5000ms.`,
+      ].join("\n"),
+      "(fail) root > colored [1.00ms]",
+    ]);
+  });
+
+  test("bounds each report's context and counts failures past the report limit", () => {
+    const collector = new FailureReportCollector();
+    const lines = Array.from(
+      { length: FAILURE_REPORT_CONTEXT_LINES + 10 },
+      (_, index) => `noise ${index}`,
+    );
+    lines.push("(fail) first [1.00ms]");
+    for (let index = 0; index < MAX_FAILURE_REPORTS + 2; index++) {
+      lines.push(`(fail) extra ${index} [1.00ms]`);
+    }
+    collector.push(Buffer.from(`${lines.join("\n")}\n`));
+    collector.finish();
+
+    const first = collector.reports[0]!.split("\n");
+    expect(first).toHaveLength(FAILURE_REPORT_CONTEXT_LINES + 1);
+    expect(first[0]).toBe("noise 10");
+    expect(collector.reports).toHaveLength(MAX_FAILURE_REPORTS);
+    expect(collector.omitted).toBe(3);
+  });
+
+  test("ignores a mention of (fail) that is not Bun's failure line", () => {
+    const collector = new FailureReportCollector();
+    collector.push(Buffer.from(`${web}a log line that quotes "(fail) something"\n`));
+    collector.finish();
+    expect(collector.reports).toEqual([]);
   });
 });

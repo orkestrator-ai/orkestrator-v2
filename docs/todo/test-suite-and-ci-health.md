@@ -15,7 +15,11 @@ reliably green on `main`, and nothing requires it to be.
 - **CI.** `.github/workflows/lint.yml` runs on pushes to `main` and on pull
   requests, with three jobs: "oxfmt and oxlint", "Typecheck", and "Unit and
   integration tests". `validate-bun-runtime.yml` builds the bundled Bun per
-  platform and runs the container smoke.
+  platform and runs the container smoke. A failing group prints its output
+  tail and then Bun's report for every failing test. Since 2026-10-15 that
+  includes failures the 256 KiB tail lost: PR #1008's first run failed one web
+  test whose name never reached the log. The test job also uploads the
+  compressed logs (`test-logs-<run>-<attempt>`) when it fails.
 - **`main` is unprotected.** `gh api repos/{owner}/{repo}/branches/main/protection`
   answers 404 "Branch not protected", and the repository has no rulesets
   (checked at `7ccb193e`). The maintainer approved the ruleset in item 1 on

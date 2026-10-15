@@ -898,8 +898,7 @@ Decided with the user on 2026-10-15, after the review fixes.
 
 1. **Manifest signing key:** an active Ed25519 key (the CI secret
    `ORKESTRATOR_RELEASE_SIGNING_KEY`, plus a maintainer copy) and a standby
-   key kept offline, both embedded; signatures are mandatory once they are.
-   The keys still have to be generated and embedded
+   key kept offline, both embedded on 2026-10-16, so signatures are mandatory
    ([releasing.md](../development/releasing.md#manifest-signing-keys)).
    electron-builder 27's update key should follow the same policy.
 2. **No veto on the remote.** Connecting already grants agent execution. The

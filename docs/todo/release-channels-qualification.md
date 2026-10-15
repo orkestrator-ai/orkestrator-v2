@@ -46,10 +46,9 @@ are on by default for packaged production builds.
   `tailscale serve`.
 - **Container image.** The pull, verify and retag path has been tested only
   with a fake Docker runtime.
-- **Signing.** The decision is made (an active CI key and an offline
-  standby), but the keys have not been generated, so
-  `RELEASE_SIGNING_PUBLIC_KEYS` is empty and updates run in checksum-only
-  mode.
+- **Signing.** The active and standby keys were generated on 2026-10-16 and
+  are embedded, so every release must be signed. No release has been signed
+  with them yet.
 
 ## Review regression validation (2026-10-15)
 
@@ -75,12 +74,12 @@ are on by default for packaged production builds.
 
 ### Setup
 
-- **Generate the manifest signing keys.** Follow
-  [releasing.md](../development/releasing.md#manifest-signing-keys): generate
-  the active and standby keys, add the active one as the
-  `ORKESTRATOR_RELEASE_SIGNING_KEY` secret, keep the standby offline, and
-  embed both public keys. From the next release on, every release must be
-  signed.
+- **Store the manifest signing keys.** Both were generated and embedded on
+  2026-10-16 (#1003). Before #1003 merges, add the active key as the
+  `ORKESTRATOR_RELEASE_SIGNING_KEY` Actions secret, put both PEMs in the
+  password manager and the standby in an offline backup, then delete the
+  local files ([releasing.md](../development/releasing.md#manifest-signing-keys)).
+  Without the secret, every release fails at `release:desktop`.
 
 ### Qualification
 
@@ -193,7 +192,7 @@ are on by default for packaged production builds.
 
 The open questions were decided on 2026-10-15; see "Decisions" in the
 [design doc](../architecture/release-channels-and-updates.md#decisions). Only
-the signing keys remain to do (see Setup).
+storing the signing keys remains (see Setup).
 
 ## Related
 

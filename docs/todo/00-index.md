@@ -174,7 +174,7 @@ it reaches. Some rules of thumb:
 - [ ] Qualify the desktop rollback: a release whose backend fails to start restores the database snapshot and the previous app ([release-channels-qualification.md](release-channels-qualification.md), qualification)
 - [ ] Qualify `serve --supervised` under systemd and launchd: update, health check, rollback, interrupted cutover ([release-channels-qualification.md](release-channels-qualification.md), qualification)
 - [ ] Update a headless backend and a remote desktop app from another machine over Tailscale and check the remote's audit entry ([release-channels-qualification.md](release-channels-qualification.md), qualification)
-- [ ] Generate the release signing keys (active and offline standby), add the CI secret and embed both public keys ([release-channels-qualification.md](release-channels-qualification.md), setup)
+- [ ] Add the active release signing key as the `ORKESTRATOR_RELEASE_SIGNING_KEY` secret and store both keys before #1003 merges; the public keys are embedded ([release-channels-qualification.md](release-channels-qualification.md), setup)
 
 ### Cross-cutting (high)
 

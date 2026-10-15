@@ -161,9 +161,10 @@ How the keys were made, and how to make replacements:
 
 From the first release that embeds the keys, every later release must be signed:
 installs reject a manifest without a valid signature from a listed key.
-`release:desktop` refuses to start a publishing build without
-`ORKESTRATOR_RELEASE_SIGNING_KEY`, and checks that the key is one the build
-lists before it packages anything.
+The macOS `release:desktop` build, which uploads the shared manifest and its
+signature, refuses to start publishing without `ORKESTRATOR_RELEASE_SIGNING_KEY`
+and checks that the key is one the build lists before it packages anything.
+Linux builds never need the private key.
 
 Rotating, or replacing a leaked or lost active key:
 
@@ -188,9 +189,9 @@ when a GitHub token is available.
 
 | Machine | Needs |
 | --- | --- |
-| Mac | Apple Silicon; a Developer ID Application certificate in the login keychain; notarization credentials in the environment (`APPLE_API_KEY`/`APPLE_API_KEY_ID`/`APPLE_API_ISSUER`, `APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID`, or `APPLE_KEYCHAIN_PROFILE`). |
+| Mac | Apple Silicon; a Developer ID Application certificate in the login keychain; notarization credentials in the environment (`APPLE_API_KEY`/`APPLE_API_KEY_ID`/`APPLE_API_ISSUER`, `APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID`, or `APPLE_KEYCHAIN_PROFILE`); `ORKESTRATOR_RELEASE_SIGNING_KEY` (the active signing key). |
 | Linux | `mise`, `git`, and `bsdtar` (`sudo pacman -S libarchive`). |
-| Both | `gh auth login` (or `GH_TOKEN`) with write access to the repository; `curl` (the npm check); `ORKESTRATOR_RELEASE_SIGNING_KEY` once signing is enabled. |
+| Both | `gh auth login` (or `GH_TOKEN`) with write access to the repository; `curl` (the npm check). |
 | Whoever runs `publish:cli` | An npm login (or `NPM_CONFIG_TOKEN`) that can publish `orkestrator`. |
 
 macOS auto-update only works for builds signed with a Developer ID, which is why

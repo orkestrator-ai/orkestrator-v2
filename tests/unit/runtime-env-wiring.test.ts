@@ -1956,7 +1956,10 @@ eval "$claude_setup"
       // The per-entry skip is surfaced in the consolidated summary.
       expect(result.stdout).toContain("commands/linked.md");
     });
-  });
+    // The block runs the whole copy-helper set, dozens of short processes, as
+    // the Codex copy-helper case above does. On a four-core CI runner under
+    // aggregate load that passed the default five seconds (flake 0160).
+  }, 15_000);
 
   test("OpenCode setup block merges user config, skips the database, and copies data per-entry", () => {
     withTempDir((dir) => {

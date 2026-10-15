@@ -39,11 +39,7 @@ import {
   AcpProcess,
   ACP_TOKEN_HEADER,
   MAX_BODY_BYTES,
-  MAX_MESSAGE_TEXT_BYTES,
-  MAX_STATE_FILE_BYTES,
   MAX_STRUCTURED_RESULT_BYTES,
-  MAX_STRUCTURED_RESULTS,
-  PROMPT_TIMEOUT_MS,
   SESSION_CLOSING_ERROR,
   HttpError,
   authToken,
@@ -74,6 +70,7 @@ import {
   boundTranscriptForRead,
   messageWindow,
   parseFromIndex,
+  parseTailLimit,
   publicApprovals,
   publicInteractions,
   publicCommandRevision,
@@ -286,7 +283,11 @@ export async function route(
     return json(
       response,
       200,
-      messageWindow(state, parseFromIndex(url.searchParams.get("fromIndex"))),
+      messageWindow(
+        state,
+        parseFromIndex(url.searchParams.get("fromIndex")),
+        parseTailLimit(url.searchParams.get("limit")),
+      ),
     );
   }
   if ((action === "transcript" || transcriptSubRead) && request.method === "GET") {

@@ -56,11 +56,11 @@ it reaches. Some rules of thumb:
 
 | Score | Meaning | Items |
 | --- | --- | --- |
-| Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 2 |
+| Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
 | High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 59 |
 | Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 232 |
 | Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 243 |
-| **Total** | | **536** |
+| **Total** | | **535** |
 
 ## Very high
 
@@ -71,7 +71,7 @@ it reaches. Some rules of thumb:
 
 ### Transcripts, observation and bandwidth (very high)
 
-- [ ] Stop the build-stage supervisor reading the whole transcript every 1.5 s; probe between persist boundaries ([transcript-history-efficiency.md](transcript-history-efficiency.md))
+- [x] Stop the build-stage supervisor reading the whole transcript every 1.5 s; probe between persist boundaries ([transcript-history-efficiency.md](transcript-history-efficiency.md))
 
 ### Multi Review (very high)
 
@@ -764,7 +764,7 @@ it reaches. Some rules of thumb:
 | [provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md) |  |  | 2 | 15 | 17 |
 | [session-lifecycle-consistency.md](session-lifecycle-consistency.md) |  | 1 | 7 | 5 | 13 |
 | **Transcripts, observation and bandwidth** | | | | | |
-| [transcript-history-efficiency.md](transcript-history-efficiency.md) | 1 | 4 | 11 | 5 | 21 |
+| [transcript-history-efficiency.md](transcript-history-efficiency.md) |  | 4 | 11 | 5 | 20 |
 | [remote-client-bandwidth.md](remote-client-bandwidth.md) |  |  | 4 | 9 | 13 |
 | [native-agent-idle-observation.md](native-agent-idle-observation.md) |  | 1 | 3 | 2 | 6 |
 | [client-reconnect-and-freshness.md](client-reconnect-and-freshness.md) |  | 1 | 6 | 2 | 9 |

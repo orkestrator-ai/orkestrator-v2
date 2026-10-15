@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -117,7 +117,11 @@ describe("GitHub CLI setup", () => {
     return file;
   }
 
-  /** A PATH holding only the named fake tools and the system basics. */
+  /**
+   * A PATH holding only the named fake tools and the `which` used to find them.
+   * System directories stay off it: CI images ship `gh` in /usr/bin, and the
+   * host's own tools must not decide what these tests see.
+   */
   function pathWith(...names: string[]): void {
     const bin = path.join(root, "bin");
     rmSync(bin, { recursive: true, force: true });
@@ -126,7 +130,13 @@ describe("GitHub CLI setup", () => {
       writeFileSync(path.join(bin, name), "#!/bin/sh\nexit 0\n");
       chmodSync(path.join(bin, name), 0o755);
     }
-    process.env.PATH = [bin, "/usr/bin", "/bin"].join(path.delimiter);
+    const lookup = path.join(root, "lookup");
+    rmSync(lookup, { recursive: true, force: true });
+    mkdirSync(lookup, { recursive: true });
+    const which = Bun.which("which", { PATH: previousPath ?? "/usr/bin:/bin" });
+    if (!which) throw new Error("`which` is required to resolve tools on PATH");
+    symlinkSync(which, path.join(lookup, "which"));
+    process.env.PATH = [bin, lookup].join(path.delimiter);
   }
 
   test("parses gh's device code and URL", () => {

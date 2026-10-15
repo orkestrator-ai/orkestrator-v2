@@ -512,10 +512,13 @@ export const MAX_STRUCTURED_REPORT_REPAIR_ATTEMPTS = 3;
 /**
  * Minimum spacing between transcript-only snapshot writes for a running turn.
  *
- * Persisting the pipeline rewrites the whole build-pipelines file, so following
- * a streaming transcript at the tick rate turns every active build into a
- * continuous full-file rewrite. Status changes and phase transitions still
- * persist immediately; only a pure transcript delta is throttled.
+ * Each checkpoint writes the transcript's new chunks and this pipeline's
+ * control row, and the supervisor reads a session's whole transcript only at
+ * these boundaries (and only when a bounded probe shows it moved), so
+ * following a streaming transcript at the tick rate would turn every active
+ * build into continuous whole-transcript reads and writes. Status changes and
+ * phase transitions still persist immediately; only a pure transcript delta is
+ * throttled.
  */
 export const DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS = 5_000;
 export const DEFAULT_STALL_WARNING_MS = 2 * 5 * 60_000;
@@ -533,13 +536,9 @@ export function withUnattendedPolicy(prompt: string): string {
  * The content-bearing change key a transcript snapshot used to persist:
  * `<length>:<serialized tail entry>`.
  *
- * Serializing both sides in full on every tick costs O(transcript) twice per
- * pass, per pipeline, and transcripts reach megabytes. Provider transcripts
- * grow by appending and by rewriting the entry currently streaming, so the
- * length plus the tail entry captures every change they actually make.
- *
- * Kept as the input to the fixed-size forms below, and for progress digests
- * that were persisted from it; never store this string itself.
+ * Retained only for progress digests persisted by older workflows. It cannot
+ * certify a checkpoint: late tool and subagent updates rewrite earlier rows.
+ * Never store this content-bearing string itself.
  */
 export function legacyTranscriptFingerprint(messages: readonly unknown[]): string {
   if (messages.length === 0) return "0:";
@@ -554,35 +553,29 @@ export function legacyTranscriptFingerprint(messages: readonly unknown[]): strin
   return `${messages.length}:${tail}`;
 }
 
-const TRANSCRIPT_FINGERPRINT_PREFIX = "tf2:";
-
-function digestLegacyFingerprint(legacy: string): string {
-  const count = legacy.slice(0, Math.max(0, legacy.indexOf(":")));
-  const digest = createHash("sha256").update(legacy).digest("hex").slice(0, 32);
-  return `${TRANSCRIPT_FINGERPRINT_PREFIX}${count}:${digest}`;
-}
+const TRANSCRIPT_FINGERPRINT_PREFIX = "tf3:";
 
 /**
- * Fixed-size change detector for a transcript snapshot.
- *
- * The persisted pipeline used to carry the raw legacy key, which is a second
- * full copy of the newest transcript entry — often the largest one, holding a
- * whole tool result — in every snapshot write. This keeps the same change
- * semantics (it is a digest of exactly that key) in a few dozen bytes.
+ * Fixed-size change detector covering every row in a whole transcript read.
+ * Hash rows individually to avoid a second whole-transcript serialization.
+ * Bounded probes gate these reads; once paid for, every retained row matters.
  */
 export function transcriptFingerprint(messages: readonly unknown[]): string {
-  return digestLegacyFingerprint(legacyTranscriptFingerprint(messages));
+  const digest = createHash("sha256").update(String(messages.length));
+  for (const message of messages) {
+    digest.update("\0");
+    digest.update(JSON.stringify(message) ?? "");
+  }
+  return `${TRANSCRIPT_FINGERPRINT_PREFIX}${messages.length}:${digest.digest("hex").slice(0, 32)}`;
 }
 
 /**
- * A stored fingerprint in the current form. Snapshots written before the
- * digest carry the raw key; digesting it yields exactly what
- * {@link transcriptFingerprint} computes for the same transcript, so an
- * upgrade does not register a spurious change or rewrite.
+ * Older raw and tf2 keys covered only the newest row. They cannot certify a
+ * whole transcript unchanged: rebaseline from inline messages or the next
+ * provider read instead of adopting their incomplete comparison.
  */
 export function normalizeTranscriptFingerprint(stored: string | undefined): string | undefined {
-  if (stored === undefined || stored.startsWith(TRANSCRIPT_FINGERPRINT_PREFIX)) return stored;
-  return digestLegacyFingerprint(stored);
+  return stored?.startsWith(TRANSCRIPT_FINGERPRINT_PREFIX) ? stored : undefined;
 }
 
 /**

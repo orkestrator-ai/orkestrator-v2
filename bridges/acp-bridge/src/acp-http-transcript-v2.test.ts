@@ -138,6 +138,23 @@ const detail = (id: string, locator: string) =>
 const page = (id: string, params: Record<string, string>) =>
   `/session/${id}/transcript/page?${new URLSearchParams(params)}`;
 
+describe("ACP exact transcript tail limits", () => {
+  test("the messages route serves the requested tail and preserves whole-read compatibility", async () => {
+    const messages = Array.from({ length: 12 }, (_, index) => textMessage(`m${index}`));
+    const state = sessionWith(messages);
+    expect(await read(`/session/${state.id}/messages?limit=3`)).toMatchObject({
+      messages: messages.slice(-3),
+      messageWindow: { truncated: true, omittedMessages: 9 },
+    });
+    for (const suffix of ["", "?limit=0"]) {
+      expect(await read(`/session/${state.id}/messages${suffix}`)).toMatchObject({
+        messages,
+        messageWindow: { truncated: false },
+      });
+    }
+  });
+});
+
 describe("ACP v2 transcript summaries", () => {
   test("summarizes a large output so an earlier message keeps its place", async () => {
     const state = sessionWith([textMessage("earlier"), toolMessage("tool", bigOutput)]);

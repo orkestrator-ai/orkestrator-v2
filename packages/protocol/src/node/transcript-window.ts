@@ -60,6 +60,12 @@ export interface BoundTranscriptOptions {
    * Must return exactly the UTF-8 length of `JSON.stringify(message)`.
    */
   measure?: (message: unknown) => number;
+  /**
+   * Newest messages to consider at all. Older ones are omitted before any
+   * message is measured and are counted in `omittedMessages`, so a bounded
+   * tail read never pays to measure or encode the history it drops.
+   */
+  tailMessages?: number;
 }
 
 interface BoundableMessage {
@@ -95,6 +101,28 @@ export function parseTranscriptFromIndex(value: string | null): number | null {
 }
 
 /**
+ * Parse the `limit` query parameter of a tail `/messages` read: the newest
+ * messages wanted, in the `fromIndex` grammar and at least 1.
+ *
+ * `null` — missing or unusable — means "send the retained authoritative
+ * window", exactly as a bridge that predates the parameter answers. A reader
+ * must therefore keep the newest `limit` itself rather than trust the bridge to
+ * have applied it.
+ */
+export function parseTranscriptTailLimit(value: string | null): number | null {
+  const parsed = parseTranscriptFromIndex(value);
+  return parsed !== null && parsed > 0 ? parsed : null;
+}
+
+/**
+ * First retained index a tail read serves: the newest `tailMessages` of
+ * `retained`, or all of them when no tail was asked for.
+ */
+export function transcriptTailStart(retained: number, tailMessages: number | null): number {
+  return tailMessages === null ? 0 : Math.max(retained - tailMessages, 0);
+}
+
+/**
  * The last `maximumBytes` bytes of `value`, starting on a code-point boundary.
  *
  * Cutting mid-sequence would make the decoder substitute U+FFFD, which is three
@@ -120,7 +148,9 @@ export function boundTranscriptResponse<TMessage extends BoundableMessage>(
       ? DEFAULT_CONTENT_FALLBACK_BYTES
       : options.contentFallbackBytes;
 
-  const selected = [...messages];
+  const tail = options.tailMessages;
+  const selected =
+    tail !== undefined && messages.length > tail ? messages.slice(-tail) : [...messages];
   const measure =
     options.measure ?? ((message: unknown) => Buffer.byteLength(JSON.stringify(message)));
   const sizes = selected.map((message) => measure(message));

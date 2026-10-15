@@ -122,10 +122,15 @@ export interface BuildPipelineReviewFanoutDeps {
     pipeline: BuildPipeline,
     selections: readonly BuildStepSelection[],
   ): Promise<BuildStepSelection[]>;
-  refreshTranscript(
+  /**
+   * Observes a session's transcript for the next checkpoint, reading the whole
+   * body only when a bounded probe shows it moved since the committed copy (or
+   * when `force` asks for it). Answers whether it changed since that copy.
+   */
+  refreshMovedTranscript(
     session: PipelineSession,
     provider: BuildPipelineProvider,
-    messages?: readonly unknown[],
+    options?: { force?: boolean; read?: () => Promise<readonly unknown[]> },
   ): Promise<boolean>;
   shouldPersistTranscript(session: PipelineSession): boolean;
   /** The branch the diff is reviewed against, as the review prompt states it. */
@@ -454,15 +459,22 @@ export class BuildPipelineReviewFanout {
     }
     // Token counts change on essentially every poll. Treat them as a
     // transcript-class delta so they cannot bypass the persist throttle and
-    // rewrite the whole build-pipelines file once per reviewer per tick.
+    // write this pipeline's control row once per reviewer per tick.
     const tokenCountChanged =
       reviewer.tokenCount !== undefined && session.tokenCount !== reviewer.tokenCount;
-    const status = reviewer.status === "running" ? "running" : "idle";
+    // The runner mirrors before it changes reviewer.status. Project the observed
+    // terminal transition now so it forces exactly one final read.
+    const status = reviewer.status === "running" && !settling ? "running" : "idle";
     const statusChanged = session.status !== status;
     const persistDue = this.deps.shouldPersistTranscript(session);
+    // A status change reads the whole transcript unconditionally, so a reviewer
+    // that just finished keeps its final copy; otherwise only a moved probe does.
     const changed =
       persistDue || statusChanged || settling
-        ? await this.deps.refreshTranscript(session, provider, await readTranscript())
+        ? await this.deps.refreshMovedTranscript(session, provider, {
+            force: statusChanged,
+            read: readTranscript,
+          })
         : false;
     if (
       metadataChanged ||
@@ -489,10 +501,12 @@ export class BuildPipelineReviewFanout {
         (candidate) => candidate.sessionKey === reviewer.sessionKey,
       );
       if (!session) continue;
-      const status =
-        reviewer.status === "pending" || reviewer.status === "running" ? "running" : "idle";
-      if (session.status !== status) {
-        session.status = status;
+      const settled = reviewer.status !== "pending" && reviewer.status !== "running";
+      // A running reviewer record may be waiting for its final usage/result
+      // after its provider turn ended. Keep the status mirroring observed, or
+      // every idle poll would look like another terminal transition.
+      if (settled && session.status !== "idle") {
+        session.status = "idle";
         changed = true;
       }
       if (reviewer.report && !session.reviewReport) {
@@ -505,7 +519,6 @@ export class BuildPipelineReviewFanout {
         session.completedAt = reviewer.completedAt;
         changed = true;
       }
-      const settled = reviewer.status !== "pending" && reviewer.status !== "running";
       if (
         settled &&
         reviewer.tokenCount !== undefined &&
@@ -787,12 +800,22 @@ export class BuildPipelineReviewFanout {
       consolidation.requestId,
     );
     if (status === "idle" && turnSettled === false) return { kind: "working" };
-    // Running sessions need a full snapshot only at the persist boundary.
-    // The progress probe below reads a bounded tail on its own cadence.
+    // A running session's transcript is looked at only at the persist
+    // boundary, and its whole body is read only when the bounded probe shows
+    // it moved since the committed copy; an unchanged one costs no body and no
+    // save. The first terminal observation forces a final read; later idle
+    // polls stay conditional. Progress observation reads its own bounded tail
+    // on its own cadence.
     const persistDue = this.deps.shouldPersistTranscript(session);
-    if (status !== "running" || persistDue) {
-      const transcriptChanged = await this.deps.refreshTranscript(session, provider);
-      if (transcriptChanged || (status === "running" && persistDue)) {
+    const observedStatus = status === "running" || backgroundWorkLive ? "running" : "idle";
+    const statusChanged = session.status !== observedStatus;
+    const turnEnded = statusChanged && observedStatus === "idle";
+    if (status !== "running" || persistDue || statusChanged) {
+      const changed = await this.deps.refreshMovedTranscript(session, provider, {
+        force: turnEnded,
+      });
+      if (changed || statusChanged) {
+        session.status = observedStatus;
         session.messagesPersistedAt = reviewFanoutNowIso();
         await this.save(pipeline);
       }

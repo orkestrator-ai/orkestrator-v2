@@ -28,3 +28,23 @@ mise run test:logged -- --name design-operations-alone -- bun test --cwd apps/ba
 Aggregate evidence: `/tmp/orkestrator-test-run.lhp1N0/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 The extra event's source is not established. No assertions, timeouts, or
 production behavior were changed to hide this failure.
+
+## CI health validation — 2026-10-15
+
+The test now lives in `apps/backend/src/core/design/operations.test.ts:268`.
+`mise run test:logged -- --name full-tests -- mise run test` on macOS arm64
+(18 cores; workspace two package tasks with two Bun workers each, root three,
+bridges two) failed it with an event count of 4 instead of 3, after 51.17 ms.
+Backend reported 7,904 passed, 39 skipped and 1 failed across 433 files
+(297.62 s); the root, bridge and protocol groups passed. The change under
+validation touched the aggregate runner's Turbo flags and unrelated backend
+tests, not design operations.
+
+The unchanged owning file passed alone (20 tests) in 4.2 seconds with:
+
+```bash
+mise run test:logged -- --name rerun-design-operations -- bun --cwd=apps/backend test src/core/design/operations.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+```
+
+Aggregate evidence: `/tmp/orkestrator-test-run.D7RbFz/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+No assertions, timeouts, or production behavior were changed.

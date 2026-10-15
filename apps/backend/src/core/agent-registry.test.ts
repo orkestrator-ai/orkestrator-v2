@@ -113,12 +113,16 @@ describe("AgentRegistry", () => {
       });
       const context = { agentRegistry: registry } as CommandContext;
       const command = commands.get("get_agent_registry")!;
+      // Two snapshots taken in turn can straddle a millisecond, so their clock
+      // stamps may differ; everything else must match.
+      const anyStamp = { generatedAt: expect.any(String) };
       const viaCommand = await command({ projectId: "p1", environmentId: "stopped-env" }, context);
-      expect(viaCommand).toEqual(
-        await registry.snapshot({ projectId: "p1", environmentId: "stopped-env" }),
-      );
+      expect(viaCommand).toEqual({
+        ...(await registry.snapshot({ projectId: "p1", environmentId: "stopped-env" })),
+        ...anyStamp,
+      });
       const unfiltered = await command({ projectId: 1, environmentId: null }, context);
-      expect(unfiltered).toEqual(await registry.snapshot({}));
+      expect(unfiltered).toEqual({ ...(await registry.snapshot({})), ...anyStamp });
       await expect(command({}, {} as CommandContext)).rejects.toThrow(
         "Agent registry is unavailable",
       );

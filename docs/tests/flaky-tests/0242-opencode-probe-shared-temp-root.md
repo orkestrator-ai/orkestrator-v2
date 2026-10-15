@@ -1,6 +1,6 @@
 # OpenCode probe cleanup observes another temporary root
 
-- **ID:** 0241
+- **ID:** 0242
 - **Status:** open
 - **Date observed:** 2026-10-15
 - **Test:** `runOpenCodeLiveCompatibility > a deadline while the CLI version is read leaves nothing to create later`

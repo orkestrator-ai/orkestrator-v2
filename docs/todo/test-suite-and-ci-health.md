@@ -1,6 +1,6 @@
 # Test suite and CI health
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `830c3abb` (2026-10-15).
 
 `mise run test` should be fast and green, and stay that way, without weakening
 what it proves. Every test file has exactly one owner, waits are controlled
@@ -18,23 +18,41 @@ untracked skipped test, and two desktop test gaps. More urgently, CI is red on
   platform and runs the container smoke.
 - **`main` is unprotected.** `gh api repos/{owner}/{repo}/branches/main/protection`
   answers 404 "Branch not protected", and the repository has no rulesets.
-- **`main` is red.** The five most recent `main` runs all failed or were
-  cancelled. Among the last 300 `lint.yml` runs on `main`, the newest success is
-  from 2026-09-30. At `2459b05c` (run 38727237741), lint and typecheck pass and
-  the test job fails three tests:
-  - `in-container Claude credential write > an empty payload leaves an existing
-    in-container credential intact` (`apps/backend/tests/claude-credential-injection.test.ts`);
-  - `GitHub CLI setup > reports a missing gh` (`apps/backend/src/core/github-cli-setup.test.ts`),
-    which finds the runner's installed `gh` and reports it as installed;
-  - `independent commands overlap, output stays in artifacts, and reconnect
-    does not redispatch` (`apps/backend/src/core/review-validation-worker.test.ts`).
+- **`main` is red.** The newest green `lint.yml` run on `main` is from
+  2026-09-30 (run 36746796730). Lint and typecheck pass on every run; the test
+  job failed on every completed run since. An investigation of the 15 completed
+  runs on 2026-10-14 and 2026-10-15 found these causes; the first five are
+  fixed:
+  - **The backend suite never finished on CI.** Turbo's default log order is
+    `grouped` in CI, so a package task prints nothing until it exits. The
+    four-core runner gives each package one Bun worker, and the backend
+    package needs at least eight minutes (481 s locally on one worker), so the
+    runner's five-minute no-progress watchdog killed the workspace group on
+    every run. Failures after the kill point were never seen. The aggregate
+    now pins `--log-order=stream` and `--continue=dependencies-successful`.
+  - **Credential write** (`claude-credential-injection.test.ts`): Turbo drops
+    `SHLVL`, so `bash -lc` ran Debian's default `~/.bash_logout` on the
+    script's early `exit 0`, and `clear_console` failing under `set -e` turned
+    it into status 1. The script now guards the write instead of exiting.
+  - **`GitHub CLI setup > reports a missing gh`**: the fixture's PATH included
+    `/usr/bin`, where the runner has `gh`. The PATH is now hermetic.
+  - **Two `review-validation-worker.test.ts` cases**: an unmeasured command
+    asks for four host slots and the budget defaults to the core count, so on
+    four cores commands the tests expect to overlap ran one after another. The
+    fixture now pins an eight-slot host.
+  - **Bundled Bun (macos-arm64)** failed on every `main` push with `EMFILE`
+    while ad-hoc signing the app; pull requests skip signing and passed. The
+    job now raises the descriptor limit and signs pull requests too.
+  - **Load flakes** recorded in the registry: 0160 (runtime-env-wiring, 5 of
+    16 runs; its Claude setup block case now has the 15-second budget its
+    Codex sibling already had), 0176 (InitializationLogs), 0232 (ACP close fixture) and the new
+    0240 (Cursor steering at capacity).
 
-  The first two also failed in run 38719540712, and both pass locally on
-  macOS, so they depend on the host. That run also failed
-  `tests/unit/runtime-env-wiring.test.ts` (Claude setup block) and
-  `bridges/cursor-bridge/src/conformance-interactions.test.ts` (steering at
-  capacity across a restart). The macOS arm64 job of `validate-bun-runtime.yml`
-  failed with `EMFILE` while building the unpacked Electron app.
+  A full backend run under CI emulation (one worker, `CI` and
+  `GITHUB_ACTIONS` set) then exposed one more: `AgentRegistry > lists every
+  agent tab and coordinator with live state and counts` compared two
+  snapshots whose `generatedAt` stamps could differ by a millisecond (23 of
+  300 reruns failed). It now ignores only the stamp.
 - **Ownership guard.** `tests/unit/test-suite-ownership.test.ts` derives owners
   from `buildConcurrentGroups` (`scripts/test-all.ts`) and the package test
   selectors. It also rejects root tests that import backend or desktop
@@ -72,11 +90,23 @@ untracked skipped test, and two desktop test gaps. More urgently, CI is red on
 
 ### Code
 
-1. **Get the test job green on `main`, then protect it.** Fix or register the
-   failures above. The two host-dependent ones need their fixtures to stop
-   reading the runner's environment. Then require "oxfmt and oxlint",
-   "Typecheck" and "Unit and integration tests" as branch-protection checks on
-   `main`. Decide whether the bundled-Bun matrix should be required too.
+1. **Get the test job green on `main`, then protect it.** With the backend
+   suite now completing on CI, fix or register whatever it reveals; the
+   watchdog had hidden its later files since 2026-09-30. Once `main` passes
+   three runs in a row, protect it. The recommendation, which is the
+   maintainer's decision:
+   - A repository ruleset on `~DEFAULT_BRANCH` requiring "oxfmt and oxlint",
+     "Typecheck" and "Unit and integration tests" from GitHub Actions
+     (integration 15368), plus the deletion and non-fast-forward rules.
+   - Strict up-to-date checks off at first: about 226 pull requests a month
+     and a 12-minute test job would serialise merges. Revisit with a merge
+     queue, which needs a `merge_group:` trigger in `lint.yml`.
+   - Repository admins may bypass, because version bumps are pushed to `main`
+     directly (44 such pushes since 2026-09-15). Moving them to pull requests
+     would allow pull-request-only bypass.
+   - Do not require the Bundled Bun or Container checks: that workflow is
+     path-filtered, so a required check would stay pending on unrelated pull
+     requests.
 2. **`AddProjectDialog.test.tsx`**, which is new since the review and the root
    group's long pole. It runs about 47 tests (including `test.each` rows) in
    55 s, with real 1.2 s, 2.15 s and 2.3 s sleeps and 3 s `waitFor` timeouts.

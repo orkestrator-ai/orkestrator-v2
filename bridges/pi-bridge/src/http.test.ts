@@ -1211,6 +1211,18 @@ describe("session routes", () => {
     const beyond = await (await call(`/session/${state.id}/messages?fromIndex=99`)).json();
     expect(beyond.messages).toHaveLength(0);
     expect(beyond).toMatchObject({ baseIndex: 4 });
+
+    // A tail read keeps only the newest messages; an unusable limit is ignored.
+    const newest = await (await call(`/session/${state.id}/messages?limit=1`)).json();
+    expect(newest).toMatchObject({
+      baseIndex: 3,
+      totalMessages: 4,
+      messageWindow: { truncated: true, omittedMessages: 3 },
+    });
+    expect(newest.messages.map((message: { id: string }) => message.id)).toEqual(["m4"]);
+    const ignored = await (await call(`/session/${state.id}/messages?limit=0`)).json();
+    expect(ignored).toMatchObject({ baseIndex: 2 });
+    expect(ignored.messages).toHaveLength(2);
   });
 
   test("serves the failure text and truncation flag the backend parses", async () => {

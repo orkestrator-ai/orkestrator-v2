@@ -420,7 +420,8 @@ Every aggregate group and `test:logged` child has two watchdogs:
   meaningful signal because every group streams its child output as it happens.
   Turbo's `--output-logs=errors-only` would buffer a whole run into one silent
   window and get a healthy slow group killed, so the aggregate groups do not
-  use it.
+  use it. Turbo's default log order does the same per task in CI, so the groups
+  also pin `--log-order=stream`.
 - Thirty minutes of total group time is treated as a runaway command even if it
   continues to print output. The iOS group builds and boots a simulator and
   carries its own sixty-minute budget instead.
@@ -657,7 +658,15 @@ fresh checkout has no local cache to share.
 The aggregate groups pass `--output-logs=new-only`, which streams the output of
 every executing task and hides only replayed build logs. Streaming is what keeps
 the no-progress watchdog meaningful, and it is why a passing group's log still
-shows real per-package test counts.
+shows real per-package test counts. They also pass `--log-order=stream`: Turbo's
+default `auto` order becomes `grouped` whenever it detects CI, which holds a
+task's output until the task exits. On a four-core GitHub runner the backend
+package runs on one Bun worker for longer than the five-minute watchdog, so
+grouped output got it killed on every CI run.
+
+`--continue=dependencies-successful` keeps a failing package from cancelling
+the rest of its group, so one run reports every failing package. A task whose
+own dependency failed still does not start.
 
 Turbo runs each package script from that package's directory, and Bun reads
 `bunfig.toml` from the invocation directory without walking up to the repository

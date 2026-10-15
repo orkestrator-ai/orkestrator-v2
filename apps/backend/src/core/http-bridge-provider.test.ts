@@ -637,7 +637,8 @@ describe("HTTP bridge provider", () => {
 
   test("returns only the newest messages a bounded read asked for", async () => {
     const { provider, requests } = httpProvider((url) => {
-      if (url.endsWith("/messages")) {
+      if (new URL(url).pathname.endsWith("/messages")) {
+        // A bridge that predates `?limit=` ignores it and answers everything.
         return Response.json({
           messages: [{ id: "a" }, { id: "b" }, { id: "c" }],
         });
@@ -645,11 +646,10 @@ describe("HTTP bridge provider", () => {
       return Response.json({});
     });
 
-    // The bridge route has no tail parameter, so a caller that asked for the
-    // newest entry must not be handed the whole transcript to compare or retain.
+    // The bound travels to the bridge, and the answer is still cut locally, so
+    // a caller that asked for the newest entry never retains the whole body.
     await expect(provider.messages("session-1", { limit: 1 })).resolves.toEqual([{ id: "c" }]);
-    expect(requests[0]!.url).toBe("http://claude.test/session/session-1/messages");
-    expect(requests[0]!.url.includes("limit")).toBe(false);
+    expect(requests[0]!.url).toBe("http://claude.test/session/session-1/messages?limit=1");
     await expect(provider.messages("session-1", { limit: 2 })).resolves.toEqual([
       { id: "b" },
       { id: "c" },
@@ -665,10 +665,36 @@ describe("HTTP bridge provider", () => {
       { id: "b" },
       { id: "c" },
     ]);
-    // A nonsensical bound fails loudly rather than silently reading everything.
+    expect(requests.at(-1)!.url).toBe("http://claude.test/session/session-1/messages");
+    // A nonsensical bound fails loudly, before any request, rather than
+    // silently reading everything.
+    const sent = requests.length;
     await expect(provider.messages("session-1", { limit: 0 })).rejects.toThrow(RangeError);
     await expect(provider.messages("session-1", { limit: -1 })).rejects.toThrow(RangeError);
     await expect(provider.messages("session-1", { limit: 1.5 })).rejects.toThrow(RangeError);
+    expect(requests).toHaveLength(sent);
+  });
+
+  test("a bounded messages read takes the tail a current bridge serves", async () => {
+    const { provider, requests } = httpProvider((url) => {
+      const parsed = new URL(url);
+      if (parsed.pathname.endsWith("/messages")) {
+        const all = [{ id: "a" }, { id: "b" }, { id: "c" }];
+        const limit = Number(parsed.searchParams.get("limit") ?? all.length);
+        return Response.json({
+          messages: all.slice(-limit),
+          messageWindow: { truncated: limit < all.length },
+        });
+      }
+      return Response.json({});
+    });
+
+    await expect(provider.messages("session-1", { limit: 2 })).resolves.toEqual([
+      { id: "b" },
+      { id: "c" },
+    ]);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.url).toBe("http://claude.test/session/session-1/messages?limit=2");
   });
 
   test("a bounded messages read still fails when the full wire body is oversized", async () => {

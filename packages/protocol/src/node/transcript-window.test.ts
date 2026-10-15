@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import {
   boundTranscriptResponse,
   parseTranscriptFromIndex,
+  parseTranscriptTailLimit,
   retainUtf8Tail,
+  transcriptTailStart,
 } from "./transcript-window.js";
 
 function message(id: string, parts: unknown[], content = id) {
@@ -132,6 +134,63 @@ describe("boundTranscriptResponse", () => {
     // Linear costs a few passes; quadratic costs thousands and blows past this
     // by orders of magnitude on any machine.
     expect(elapsedMs).toBeLessThan(5_000);
+  });
+});
+
+describe("boundTranscriptResponse tail reads", () => {
+  test("keeps only the newest messages and counts the rest as omitted", () => {
+    const messages = ["a", "b", "c", "d"].map((id) => message(id, [textPart(8)]));
+    const bounded = boundTranscriptResponse(messages, 1024 * 1024, { tailMessages: 2 });
+    expect(bounded.messages.map((entry) => entry.id)).toEqual(["c", "d"]);
+    expect(bounded.messageWindow).toEqual({ truncated: true, omittedMessages: 2 });
+  });
+
+  test("never measures a message older than the tail", () => {
+    const measured: unknown[] = [];
+    const messages = ["a", "b", "c"].map((id) => message(id, [textPart(8)]));
+    boundTranscriptResponse(messages, 1024 * 1024, {
+      tailMessages: 1,
+      measure: (entry) => {
+        measured.push(entry);
+        return Buffer.byteLength(JSON.stringify(entry));
+      },
+    });
+    expect(measured).toEqual([messages[2]]);
+  });
+
+  test("still applies the byte bound inside the tail", () => {
+    const messages = ["a", "b", "c"].map((id) => message(id, [textPart(600)]));
+    const bounded = boundTranscriptResponse(messages, 1024, { tailMessages: 2 });
+    expect(bounded.messages.map((entry) => entry.id)).toEqual(["c"]);
+    expect(bounded.messageWindow).toEqual({ truncated: true, omittedMessages: 2 });
+  });
+
+  test("treats a tail longer than the transcript as the whole transcript", () => {
+    const messages = [message("a", [textPart(8)])];
+    const bounded = boundTranscriptResponse(messages, 1024 * 1024, { tailMessages: 5 });
+    expect(bounded.messages).toEqual(messages);
+    expect(bounded.messageWindow).toEqual({ truncated: false });
+  });
+});
+
+describe("parseTranscriptTailLimit", () => {
+  test("accepts a positive canonical count", () => {
+    expect(parseTranscriptTailLimit("1")).toBe(1);
+    expect(parseTranscriptTailLimit("64")).toBe(64);
+  });
+
+  test("answers null for anything that is not a positive canonical count", () => {
+    for (const input of [null, "", "0", "-1", "01", "1.5", "1e3", " 1", "0x10", "١"]) {
+      expect(parseTranscriptTailLimit(input)).toBeNull();
+    }
+  });
+});
+
+describe("transcriptTailStart", () => {
+  test("starts at the newest messages, or at the first retained one", () => {
+    expect(transcriptTailStart(10, null)).toBe(0);
+    expect(transcriptTailStart(10, 3)).toBe(7);
+    expect(transcriptTailStart(2, 3)).toBe(0);
   });
 });
 

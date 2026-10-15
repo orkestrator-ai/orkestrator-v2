@@ -4,9 +4,8 @@ import {
 } from "@orkestrator/protocol/node/bridge-diagnostics";
 import { execFile as execFileCallback } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
-import { basename, isAbsolute, join, relative, sep } from "node:path";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
@@ -19,6 +18,7 @@ import {
 } from "@orkestrator/protocol/workflow-results";
 import {
   boundTranscriptResponse,
+  parseTranscriptTailLimit,
   type TranscriptWindowMetadata,
 } from "@orkestrator/protocol/node/transcript-window";
 import { streamSSE } from "hono/streaming";
@@ -27,21 +27,8 @@ import { registerSessionCloseRoute } from "./session-close-route.js";
 import { registerSessionActivityBatchRoute } from "./session-activity-batch-route.js";
 import { registerCodexTranscriptRoutes } from "./transcript-routes.js";
 import {
-  applyCodexCollabStateToSubagentParts,
-  CODEX_TIMELINE_ITEM_PREFIX,
-  CODEX_TIMELINE_SUBAGENT_PREFIX,
-  getCodexSpawnedAgentIdsInOrder,
-  normalizeCodexCollabToolCallItem,
-  reconcileCodexSubagentTimeline,
-  type CodexCollabToolCallItem,
-} from "./codex-collaboration.js";
-import {
-  buildFallbackSessionTitle,
   generateSessionTitleWithCodexExec,
-  persistSessionTitle,
-  readPersistedSessionTitleEntries,
   shutdownSessionTitleGeneration,
-  type PersistedSessionTitleSource,
 } from "./session-titles.js";
 import { AppServerRuntime, SESSION_CLOSING_ERROR } from "./app-server-runtime.js";
 import { AppServerEngine, type AppServerEngineOptions } from "./engine/app-server-engine.js";
@@ -60,7 +47,6 @@ import {
 } from "@orkestrator/protocol/parent-watchdog";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
 import {
-  buildTranscriptCatalog,
   createSharedTranscriptMetaLoader,
   extractPersistedMessageText,
   getCodexHomeDir,
@@ -69,31 +55,19 @@ import {
   hydrateMessagesFromPersistedSession,
   listPersistedSessionsForCwd,
   mergePersistedSessionMeta,
-  type PersistedSessionMeta,
 } from "./history/rollout.js";
 import {
-  itemToParts as renderItemToParts,
   readTextFileIfPresent,
   stringifyUnknown as stringifyUnknownValue,
 } from "./messages/normalization.js";
-import type {
-  FileChangeDiffContext,
-  MessageRole,
-  NormalizedMessage,
-  NormalizedPart,
-  ToolDiffMetadata,
-} from "./messages/types.js";
+import type { NormalizedMessage } from "./messages/types.js";
 
 import {
-  DEFAULT_REASONING_EFFORT,
-  MODEL_REASONING_EFFORTS,
   ModelCatalogCache,
   REASONING_DESCRIPTIONS,
   REASONING_LABELS,
-  normalizeReasoningOptions,
   parseModelCatalog,
   type BridgeModel,
-  type BridgeReasoningEffort,
 } from "./models-cache.js";
 import { applyRuntimeEnvironmentOutput, refreshRuntimeEnvironment } from "./runtime-env.js";
 
@@ -167,13 +141,17 @@ interface PromptAttachmentInput {
 export const app = new Hono();
 export const MAX_CODEX_TRANSCRIPT_RESPONSE_BYTES = 16 * 1024 * 1024;
 
-export function boundCodexTranscriptResponse(messages: NormalizedMessage[]): {
+export function boundCodexTranscriptResponse(
+  messages: NormalizedMessage[],
+  tailMessages?: number,
+): {
   messages: NormalizedMessage[];
   messageWindow: TranscriptWindowMetadata;
 } {
   const { messages: bounded, messageWindow } = boundTranscriptResponse(
     messages,
     MAX_CODEX_TRANSCRIPT_RESPONSE_BYTES,
+    tailMessages === undefined ? {} : { tailMessages },
   );
   return { messages: bounded, messageWindow };
 }
@@ -315,7 +293,6 @@ scheduleReplayRetentionDrop();
 /** Interval for the idle-thread sweep. */
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const codexRawLogDir = normalizeOptionalEnvPath("ORKESTRATOR_CODEX_RAW_LOG_DIR");
-const RECOVERY_TRANSCRIPT_CHAR_LIMIT = 40_000;
 
 function normalizeOptionalEnvPath(name: string): string | null {
   const value = process.env[name]?.trim();
@@ -518,7 +495,7 @@ function serializeSseEventData(
       sessionId: event.sessionId,
       ...event.data,
     });
-  } catch (error) {
+  } catch {
     // A payload that cannot be encoded (a cycle, a throwing getter, a BigInt)
     // must not propagate back into the reducer — and through it the app-server
     // read loop — that emitted it, and must not break the revision sequence every
@@ -652,14 +629,6 @@ function emit(event: SseEvent): void {
       console.error("[codex-bridge] Failed to notify SSE subscriber:", error);
     }
   }
-}
-
-function createSessionId(): string {
-  return `session-${crypto.randomUUID()}`;
-}
-
-function createMessageId(): string {
-  return `msg-${crypto.randomUUID()}`;
 }
 
 function bridgeCacheDir(): string {
@@ -1285,7 +1254,10 @@ app.get("/session/:id/messages", async (c) => {
   const sessionId = c.req.param("id");
   const messages = await appServerRuntime.getMessages(sessionId);
   if (!messages) return c.json({ error: "Session not found" }, 404);
-  const bounded = boundCodexTranscriptResponse(messages);
+  // `?limit=` asks for the newest messages only; unusable values send the
+  // whole window, as before the parameter existed.
+  const limit = parseTranscriptTailLimit(c.req.query("limit") ?? null);
+  const bounded = boundCodexTranscriptResponse(messages, limit ?? undefined);
   // This is the exact recovery surface, so it must not present a transcript the
   // local ring buffer already evicted from as the whole conversation.
   if (appServerRuntime.transcriptComplete(sessionId)) return c.json(bounded);

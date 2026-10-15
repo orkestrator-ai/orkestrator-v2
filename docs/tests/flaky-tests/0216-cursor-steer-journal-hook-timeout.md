@@ -1,7 +1,7 @@
 # Cursor bridge 300-steer bound test hook times out under aggregate load
 
 - **ID:** 0216
-- **Status:** open
+- **Status:** resolved
 
 Observed: 2026-10-15
 
@@ -19,3 +19,17 @@ work for 300 steers that it overruns the hook deadline when the host is
 saturated by the concurrent groups. The test source was neither changed nor
 skipped. The branch under test (`chore-2026-10-14-cleanup-follow-ups`) does not
 touch `bridges/`.
+
+## Resolution (2026-10-15)
+
+The hypothesis held, and the cost is the flushes. Each of the roughly 600
+publications fsyncs the temporary file and its directory. That is cheap on
+macOS and slow on a loaded Linux disk; case 0240 has the measurement (1,026
+fsyncs in its 256-steer case). A temporary copy of the unchanged case with a
+simulated 10 ms fsync failed with the same signature (`[10003.42ms]`, "a
+beforeEach/afterEach hook timed out").
+
+The case now replaces `fsyncFile` and `fsyncDirectory` with no-ops through
+`usePersistenceFsForTests` for its own body. Writes, renames and the published
+file it reads back stay real. `persistence-durability.test.ts` owns the flush
+ordering. Under the simulated 10 ms fsync it passes.

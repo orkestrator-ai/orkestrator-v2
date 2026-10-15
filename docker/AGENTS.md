@@ -139,7 +139,12 @@ else is rejected outright. `full` mode skips the firewall entirely.
   to match, but `tests/unit/version-drift.test.ts` does require the hosts the
   image itself depends on to appear in all three, so a new one cannot be added to
   only one list.
-- DNS, localhost, outbound SSH, and the host network are always allowed.
+- DNS and localhost are always allowed. There is no general SSH exception,
+  and under network policy 3 an allowed domain is reachable on TCP 443 only
+  unless its entry names a port (`host:port`, `host:port/udp`); GitHub's
+  ranges also allow TCP 22. Earlier policies open every port of an allowed
+  address. Host access and the rest of the policy are in the root
+  `AGENTS.md` "Network Isolation".
 
 ## Building
 

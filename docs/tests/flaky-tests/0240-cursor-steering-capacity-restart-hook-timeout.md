@@ -1,7 +1,7 @@
 # Cursor steering-at-capacity restart case hits a hook timeout
 
 - **ID:** 0240
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-15
 - **Test:** `steering at capacity across a restart > a lost refusal and a
   recovered run never produce a duplicate or a fabricated absent`
@@ -24,3 +24,29 @@
 - **Hypothesis:** none yet. Other Cursor hook timeouts under aggregate load are
   0182 and 0216. It has not recurred in the other 14 completed `main` runs on
   2026-10-14 and 2026-10-15. No test or production code was changed.
+
+## Recurrences on GitHub Actions (2026-10-15)
+
+`main` run 38799461227 (`e02db72f`) and PR #1008 run 38806044648
+(`11c813bd`) both failed this case. The second named it through the new
+failure-report section: `Test ... timed out after 5000ms`, at 10,004.54 ms
+including teardown.
+
+## Resolution (2026-10-15)
+
+Filling the 256-entry steer journal publishes the state file for each claim
+and each delivery. Every publication flushes the temporary file and its
+directory. An instrumented local run counted 1,026 fsync calls in this case,
+taking 190 ms in total. macOS `fsync` does not flush the drive cache, so it is
+cheap there. On the runner's Linux disk, shared with three other test groups,
+a few milliseconds per flush is enough to pass Bun's 5 s timeout. A temporary
+copy of the unchanged case with a simulated 10 ms fsync failed exactly as on
+CI (`[10006.39ms]`, "a beforeEach/afterEach hook timed out").
+
+The case now replaces `fsyncFile` and `fsyncDirectory` with no-ops through
+`usePersistenceFsForTests`, scoped to its `describe`. Writes and renames stay
+real, and the restart still loads the published file.
+`persistence-durability.test.ts` owns the flush ordering. Under the same
+simulated 10 ms fsync the case passes in 285 ms, and the owning file passed
+three consecutive runs. Case 0216, the 300-steer bound, had the same cause and
+the same fix.

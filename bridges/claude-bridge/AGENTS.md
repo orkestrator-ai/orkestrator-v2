@@ -48,6 +48,22 @@ writers on one `.jsonl`. When touching the prompt path:
   `staleServers`. Re-prove the CLI behaviour with
   `mise run verify:claude:mcp-live` on every Claude bump.
 
+## The policy caps the permission mode
+
+The backend sends `bypassPermissions` with every build prompt, so the prompt's
+mode is never taken as given. Under an `ask` or `deny` policy
+`claudePermissionMode` (`claude-query-config.ts`) lowers anything wider than
+`default`; a prompt may still narrow it to `plan` or `dontAsk`.
+
+- **`ask`** pre-approves only reading tools; `canUseTool` parks the rest as
+  approval cards (`session-manager-parked-interactions.ts`).
+- **`deny`** runs in `default` too, and `canUseTool` refuses what reaches it.
+  Do not move it to `dontAsk`: the pinned CLI refuses AskUserQuestion there
+  without consulting `canUseTool`, so a coordinator could no longer ask the
+  user anything.
+- **An allow never returns the SDK's `suggestions`.** They are durable rules,
+  and nothing lists or revokes them yet.
+
 ## One row per model response
 
 The live loop (`session-manager-prompt-stream.ts`) writes each root model

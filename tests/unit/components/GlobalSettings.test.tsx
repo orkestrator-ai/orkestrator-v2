@@ -2158,7 +2158,7 @@ describe("GlobalSettings", () => {
     fireEvent.change(screen.getByPlaceholderText(/github\.com/), {
       target: { value: "not a domain" },
     });
-    expect(screen.getByText("Invalid domain format: not a domain")).toBeTruthy();
+    expect(screen.getByText("Invalid domain or port: not a domain")).toBeTruthy();
 
     rerender(<GlobalSettings activeSection="terminal" />);
     fireEvent.change(screen.getByPlaceholderText("#0e1014"), { target: { value: "invalid" } });
@@ -2336,7 +2336,7 @@ describe("GlobalSettings", () => {
     const domains = screen.getByPlaceholderText(/github\.com/) as HTMLTextAreaElement;
 
     fireEvent.change(domains, { target: { value: "not a domain" } });
-    expect(screen.getByText("Invalid domain format: not a domain")).toBeTruthy();
+    expect(screen.getByText("Invalid domain or port: not a domain")).toBeTruthy();
     expect((screen.getByRole("button", { name: "Test DNS" }) as HTMLButtonElement).disabled).toBe(
       true,
     );
@@ -2349,7 +2349,7 @@ describe("GlobalSettings", () => {
 
     fireEvent.change(domains, { target: { value: "" } });
     expect(domains.value).toBe("");
-    expect(screen.queryByText(/Invalid domain format/) === null).toBe(true);
+    expect(screen.queryByText(/Invalid domain or port/) === null).toBe(true);
   });
 
   test("renders every DNS result state and recovers from a test failure", async () => {

@@ -9,7 +9,7 @@ namespace), their per-file lock files and five-deep backup ladders.
 | File | Purpose |
 | --- | --- |
 | `apps/backend/src/core/storage-database.ts` | `StorageDatabase`: connection, migrations, stores, leases |
-| `apps/backend/src/core/storage-stores.ts` | Store registry and layouts, migrations, the legacy JSON import, archive retention |
+| `apps/backend/src/core/storage-stores.ts` | Store registry and layouts, migrations, the legacy JSON import, archive retention and scrubbing |
 | `apps/backend/src/core/storage-record-upgrades.ts` | One-shot upgrades of record shapes only older builds wrote |
 | `apps/backend/src/core/storage-backups.ts` | Pre-migration and daily snapshots, rotation |
 | `apps/backend/src/core/storage-base.ts` | `StorageService` primitives: `loadJson`/`saveJson` routing, `updateStore`, `serializeMutation`, `atomically` |
@@ -233,6 +233,23 @@ warning.
 
 Downgrading after the import leaves the older build without its JSON files.
 Restore them from `legacy-json/` within the retention window if needed.
+
+The archive stays that pre-migration copy, except that deletes reach it:
+
+- A sensitive save (`saveSensitiveJson`) that removes nothing leaves
+  `legacy-json/` byte-identical.
+- A save that removes content prunes only that content from every archived
+  copy and keeps the rest as archived (`pruneRemovedContent` in
+  `storage-stores.ts`). Removed content means a record key that is gone, an
+  array item with no counterpart, or a value cleared to `null`. Array items
+  are matched by `id`, else by equal content, so an item without an `id` that
+  was edited in place counts as removed.
+- `deleteStore` removes every archived copy of the store.
+- Deleting boundaries that know exactly what they removed (environments,
+  drafts, handoffs, prompt queues, reviews, build pipelines) scrub with an
+  attributable predicate through `scrubSensitiveJsonBackups` or
+  `scrubLegacyJsonStore`. Writes through `updateStore` or `updateStoreRow`
+  never touch the archive, so a delete made that way must scrub explicitly.
 
 ## Testing
 

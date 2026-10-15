@@ -2,7 +2,8 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { StorageService, type ResourceChange } from "./storage.js";
+import { createEnvironment, StorageService, type ResourceChange } from "./storage.js";
+import { LEGACY_JSON_DIRECTORY } from "./storage-stores.js";
 import type { StorageDatabase } from "./storage-database.js";
 import { readStoredValue, seedStore, storageFilesContain } from "./storage-test-support.js";
 
@@ -15,6 +16,9 @@ class ProbeStorage extends StorageService {
   }
   save(file: string, value: unknown): Promise<void> {
     return this.saveJson(this.file(file), value);
+  }
+  sensitive(file: string, value: unknown): Promise<void> {
+    return this.saveSensitiveJson(this.file(file), value);
   }
   load<T>(file: string, fallback: () => T): Promise<T> {
     return this.loadJson(this.file(file), fallback);
@@ -123,6 +127,140 @@ describe("atomically", () => {
     expect(readStoredValue(dataDir, "project-notes.json")).toBeUndefined();
     // The cache did not keep the rolled-back value either.
     expect(await probe.load("kanban.json", (): unknown[] => [])).toEqual([{ id: "before" }]);
+  });
+
+  test.each(["rollback", "commit failure", "intent failure", "commit"])(
+    "archive deletes and prunes follow the database %s",
+    async (outcome) => {
+      const { storage: probe, dataDir } = await storage();
+      const drafts = { gone: { text: "PRIVATE-DRAFT" }, kept: { text: "kept" } };
+      await probe.save("compose-drafts.json", drafts);
+      await probe.save("linear-auth.json", { apiKey: "PRIVATE-KEY" });
+      const archive = path.join(dataDir, LEGACY_JSON_DIRECTORY, "generation");
+      await fs.mkdir(archive, { recursive: true });
+      for (const suffix of ["", ".bak.1"]) {
+        await fs.writeFile(
+          path.join(archive, `compose-drafts.json${suffix}`),
+          JSON.stringify(drafts),
+        );
+        await fs.writeFile(
+          path.join(archive, `linear-auth.json${suffix}`),
+          '{"apiKey":"PRIVATE-KEY"}',
+        );
+      }
+      const realWrite = probe.db().writeStoreInTransaction.bind(probe.db());
+      const write =
+        outcome === "commit failure" || outcome === "intent failure"
+          ? spyOn(probe.db(), "writeStoreInTransaction").mockImplementation((...args) => {
+              if (outcome === "commit failure" || args[0] === "storage-legacy-json-cleanups") {
+                throw new Error("disk full");
+              }
+              return realWrite(...args);
+            })
+          : undefined;
+      try {
+        const result = probe.atomic(async () => {
+          await probe.remove("linear-auth.json");
+          await probe.sensitive("compose-drafts.json", { kept: drafts.kept });
+          for (const suffix of ["", ".bak.1"]) {
+            expect(
+              await fs.readFile(path.join(archive, `compose-drafts.json${suffix}`), "utf8"),
+            ).toContain("PRIVATE-DRAFT");
+            expect(
+              await fs.readFile(path.join(archive, `linear-auth.json${suffix}`), "utf8"),
+            ).toContain("PRIVATE-KEY");
+          }
+          if (outcome === "rollback") throw new Error("refused");
+        });
+        if (outcome === "commit") await result;
+        else await expect(result).rejects.toThrow(outcome === "rollback" ? "refused" : "disk full");
+      } finally {
+        write?.mockRestore();
+      }
+      for (const suffix of ["", ".bak.1"]) {
+        const contents = await fs.readFile(
+          path.join(archive, `compose-drafts.json${suffix}`),
+          "utf8",
+        );
+        expect(contents.includes("PRIVATE-DRAFT")).toBe(outcome !== "commit");
+        expect(
+          await fs.access(path.join(archive, `linear-auth.json${suffix}`)).then(
+            () => true,
+            () => false,
+          ),
+        ).toBe(outcome !== "commit");
+      }
+      expect(readStoredValue(dataDir, "compose-drafts.json")).toEqual(
+        outcome === "commit" ? { kept: drafts.kept } : drafts,
+      );
+      expect(readStoredValue(dataDir, "linear-auth.json") !== undefined).toBe(outcome !== "commit");
+      // A later write cannot accidentally replay intents from a rolled-back scope.
+      await probe.save("project-notes.json", []);
+      expect(
+        (await fs.readFile(path.join(archive, "compose-drafts.json"), "utf8")).includes(
+          "PRIVATE-DRAFT",
+        ),
+      ).toBe(outcome !== "commit");
+    },
+  );
+
+  test.each([false, true])(
+    "environment attachment archive cleanup follows commit (rollback=%s)",
+    async (rollback) => {
+      const { storage: probe, dataDir } = await storage();
+      const environment = createEnvironment("project-1");
+      environment.initialPromptAttachments = [
+        { id: "a", name: "private.png", base64Data: "ATOMIC-ATTACHMENT" },
+      ];
+      await probe.addEnvironment(environment);
+      const archive = path.join(dataDir, LEGACY_JSON_DIRECTORY, "generation");
+      await fs.mkdir(archive, { recursive: true });
+      for (const suffix of ["", ".bak.1"]) {
+        await fs.writeFile(
+          path.join(archive, `environments.json${suffix}`),
+          JSON.stringify([environment]),
+        );
+      }
+      const mutation = probe.atomic(async () => {
+        await probe.updateEnvironment(environment.id, { initialPromptAttachments: null });
+        expect(await fs.readFile(path.join(archive, "environments.json"), "utf8")).toContain(
+          "ATOMIC-ATTACHMENT",
+        );
+        if (rollback) throw new Error("refused");
+      });
+      if (rollback) await expect(mutation).rejects.toThrow("refused");
+      else await mutation;
+      for (const suffix of ["", ".bak.1"]) {
+        expect(
+          (await fs.readFile(path.join(archive, `environments.json${suffix}`), "utf8")).includes(
+            "ATOMIC-ATTACHMENT",
+          ),
+        ).toBe(rollback);
+      }
+      expect(
+        (await probe.getEnvironment(environment.id))?.initialPromptAttachments !== undefined,
+      ).toBe(rollback);
+    },
+  );
+
+  test("successive pruning targets cannot restore content deleted earlier in the same scope", async () => {
+    const { storage: probe, dataDir } = await storage();
+    const drafts = { a: { text: "FIRST-SECRET" }, b: { text: "SECOND-SECRET" } };
+    await probe.save("compose-drafts.json", drafts);
+    const archive = path.join(dataDir, LEGACY_JSON_DIRECTORY, "generation");
+    await fs.mkdir(archive, { recursive: true });
+    await fs.writeFile(path.join(archive, "compose-drafts.json"), JSON.stringify(drafts));
+    await probe.atomic(async () => {
+      await probe.sensitive("compose-drafts.json", { b: drafts.b });
+      await probe.sensitive("compose-drafts.json", {});
+      // Reintroduce a record into the live store; the downgrade copy stays scrubbed.
+      await probe.sensitive("compose-drafts.json", { a: { text: "recreated" } });
+    });
+    expect(
+      JSON.parse(await fs.readFile(path.join(archive, "compose-drafts.json"), "utf8")),
+    ).toEqual({});
+    expect(storageFilesContain(dataDir, "FIRST-SECRET")).toBe(false);
+    expect(storageFilesContain(dataDir, "SECOND-SECRET")).toBe(false);
   });
 
   test("buffers deletes and synchronous updates, then scrubs deleted content", async () => {

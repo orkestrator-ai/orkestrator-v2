@@ -15,7 +15,8 @@
  *
  * Group output streams directly to a private per-group file while only a
  * bounded tail is retained in memory. Passing groups print a compact summary;
- * failing groups print that tail and retain a compressed artifact.
+ * failing groups print that tail, then every Bun failure report seen anywhere
+ * in their output, and retain a compressed artifact.
  *
  * Unlike the previous sequential runner this does **not** stop at the first
  * failing group: with concurrency the others have already run anyway, so
@@ -41,6 +42,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pipeline } from "node:stream/promises";
+import { StringDecoder } from "node:string_decoder";
 import { createGzip } from "node:zlib";
 import { createTestAdmission } from "./test-admission";
 
@@ -51,6 +53,10 @@ export interface CommandResult {
   infrastructureError?: boolean;
   /** Bounded tail of combined stdout/stderr for the console summary. */
   output?: string;
+  /** Bun's report for each failing test, wherever it appeared in the output. */
+  failureReports?: string[];
+  /** Failures beyond {@link MAX_FAILURE_REPORTS}, counted but not kept. */
+  omittedFailureReports?: number;
   /** Complete output up to the explicit safety limit. */
   logPath?: string;
   outputBytes?: number;
@@ -94,6 +100,74 @@ export const TEST_TIMINGS_DIRECTORY_ENV = "ORKESTRATOR_TEST_TIMINGS_DIR";
 export const INCLUDE_IOS_TESTS_ENV = "ORKESTRATOR_INCLUDE_IOS";
 export const MAX_GROUP_OUTPUT_BYTES = 64 * 1024 * 1024;
 export const MAX_GROUP_OUTPUT_TAIL_BYTES = 256 * 1024;
+export const MAX_FAILURE_REPORTS = 25;
+/** Lines of the failing task's own output kept before each `(fail)` line. */
+export const FAILURE_REPORT_CONTEXT_LINES = 40;
+const MAX_FAILURE_REPORT_LINE_CHARS = 2_000;
+/** Turbo's per-task prefix, such as `@orkestrator/web:test:workspace: `. */
+const TASK_PREFIX = /^(@?[\w./-]+:[\w:-]+: )/;
+const ANSI_ESCAPE = /\u001b\[[0-9;]*m/g;
+const MAX_TASK_PREFIXES = 64;
+
+/**
+ * Keeps Bun's report for each failing test, because a noisy group can push it
+ * out of the output tail long before the group exits. Bun prints the error,
+ * expectation and stack before the `(fail)` line, so each report is the
+ * failing task's preceding lines plus that line. Turbo interleaves streamed
+ * tasks, so context comes only from lines with the failing line's task prefix.
+ */
+export class FailureReportCollector {
+  readonly reports: string[] = [];
+  omitted = 0;
+  private readonly decoder = new StringDecoder("utf8");
+  private readonly recent = new Map<string, string[]>();
+  private lastReport: { prefix: string; index: number } | undefined;
+  private partial = "";
+
+  push(chunk: Buffer): void {
+    const lines = (this.partial + this.decoder.write(chunk)).split("\n");
+    this.partial = (lines.pop() ?? "").slice(-MAX_FAILURE_REPORT_LINE_CHARS);
+    for (const line of lines) this.line(line);
+  }
+
+  finish(): void {
+    const rest = this.partial + this.decoder.end();
+    this.partial = "";
+    if (rest) this.line(rest);
+  }
+
+  private line(raw: string): void {
+    const line = raw
+      .replace(ANSI_ESCAPE, "")
+      .replace(/\r$/, "")
+      .slice(0, MAX_FAILURE_REPORT_LINE_CHARS);
+    const prefix = TASK_PREFIX.exec(line)?.[1] ?? "";
+    const body = line.slice(prefix.length);
+    // Bun explains a timeout on the line after `(fail)`.
+    if (this.lastReport?.prefix === prefix && /^\s*\^ this test timed out/.test(body)) {
+      this.reports[this.lastReport.index] += `\n${line}`;
+      return;
+    }
+    this.lastReport = undefined;
+    // A line that only looks like a task prefix must not grow the map forever.
+    const bucket = this.recent.has(prefix) || this.recent.size < MAX_TASK_PREFIXES ? prefix : "";
+    const context = this.recent.get(bucket) ?? [];
+    if (body.startsWith("(fail) ")) {
+      if (this.reports.length < MAX_FAILURE_REPORTS) {
+        this.lastReport = { prefix, index: this.reports.length };
+        this.reports.push([...context, line].join("\n"));
+      } else {
+        this.omitted += 1;
+      }
+      context.length = 0;
+    } else {
+      context.push(line);
+      if (context.length > FAILURE_REPORT_CONTEXT_LINES) context.shift();
+    }
+    this.recent.set(bucket, context);
+  }
+}
+
 /**
  * Watchdog budgets. Groups stream their child output live (see
  * `TURBO_GROUP_OUTPUT_FLAGS`), so a five-minute gap really does mean the group
@@ -369,6 +443,7 @@ export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promi
     let persistedBytes = 0;
     let outputLimitExceeded = false;
     let outputTail: Buffer = Buffer.alloc(0);
+    const failures = new FailureReportCollector();
     let spawnError: Error | undefined;
     let logError: Error | undefined;
     let childStatus: number | null = 1;
@@ -416,6 +491,7 @@ export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promi
       const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
       outputBytes += chunk.byteLength;
       appendTail(chunk);
+      failures.push(chunk);
       armNoProgressTimer();
       if (outputLimitExceeded || logError) return;
       const remaining = maxOutputBytes - persistedBytes;
@@ -451,10 +527,13 @@ export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promi
       const errors = [spawnError, logError]
         .filter((error): error is Error => Boolean(error))
         .map((error) => error.message);
+      failures.finish();
       resolve({
         status: outputLimitExceeded || timeoutReason || errors.length > 0 ? 1 : childStatus,
         output:
           `${outputTail.toString("utf8")}${errors.length ? `\n${errors.join("\n")}` : ""}`.trim(),
+        failureReports: failures.reports,
+        omittedFailureReports: failures.omitted,
         logPath,
         outputBytes,
         outputLimitExceeded,
@@ -501,6 +580,22 @@ export type CompletedGroup = {
   result: CommandResult;
   elapsedMs: number;
 };
+
+/** Lists every failing test a group reported, including any the tail lost. */
+function logFailureReports(
+  dependencies: Pick<TestAllDependencies, "log">,
+  groupName: string,
+  result: CommandResult,
+): void {
+  const reports = result.failureReports ?? [];
+  const omitted = result.omittedFailureReports ?? 0;
+  if (reports.length === 0 && omitted === 0) return;
+  const count = reports.length + omitted;
+  dependencies.log(
+    `\n--- Failing tests in ${groupName}: ${count}${omitted ? ` (first ${reports.length} shown)` : ""} ---`,
+  );
+  for (const report of reports) dependencies.log(`${report}\n`);
+}
 
 export async function finalizeTestLogs(
   logDirectory: string | undefined,
@@ -910,6 +1005,7 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
         `\n${banner}\n${result.infrastructureError || result.timeoutReason || result.outputLimitExceeded ? "INCOMPLETE" : status === 0 ? "PASS" : "FAIL"}  ${group.name}  (${formatDuration(elapsedMs)})\n${banner}`,
       );
       if (status !== 0 && result.output) dependencies.log(result.output.trimEnd());
+      if (status !== 0) logFailureReports(dependencies, group.name, result);
       if (result.outputLimitExceeded) {
         dependencies.log(`Diagnostic output limit exceeded in ${group.name}.`);
       }

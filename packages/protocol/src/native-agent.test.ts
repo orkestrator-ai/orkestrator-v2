@@ -92,6 +92,20 @@ describe("native agent capability table", () => {
     }
   });
 
+  test("Claude claims only the interaction kinds its bridge parks", () => {
+    // Host dialogs are never offered: the bridge declares no
+    // `supportedDialogKinds`, so the CLI sends none to answer.
+    expect(nativeAgentCapabilities("claude").interactions?.kinds).toEqual([
+      "question",
+      "plan-approval",
+      "command-approval",
+      "file-approval",
+      "permission",
+      "mcp-form",
+      "mcp-url",
+    ]);
+  });
+
   test("publishes the provider differences the shared controller branches on", () => {
     expect(nativeAgentCapabilities("claude").backgroundTasks).toBe(true);
     expect(nativeAgentCapabilities("claude").composer.localSettings).toBe(true);

@@ -18,6 +18,7 @@
  * `afterAll`; see CLAUDE.md > "Bun `mock.module()` Rules".
  */
 import { mock } from "bun:test";
+import type { Options } from "@anthropic-ai/claude-agent-sdk";
 
 import * as realChildProcess from "node:child_process";
 
@@ -104,7 +105,10 @@ export interface QueryCall {
     canUseTool?: (
       toolName: string,
       input: unknown,
+      context?: unknown,
     ) => Promise<{ behavior: "allow" | "deny"; updatedInput?: unknown; message?: string }>;
+    onElicitation?: Options["onElicitation"];
+    onUserDialog?: Options["onUserDialog"];
     [key: string]: unknown;
   };
   push: (msg: unknown) => void;

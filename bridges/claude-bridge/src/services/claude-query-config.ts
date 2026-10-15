@@ -16,6 +16,7 @@
  */
 import type { SettingSource } from "@anthropic-ai/claude-agent-sdk";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import type { PermissionMode } from "../types/index.js";
 import { getPluginsForSdk, type SdkPluginConfig } from "./plugin-config.js";
 import { effectiveExecutionPolicy, isCoordinatorReadOnlyPolicy } from "./read-only-policy.js";
 
@@ -54,6 +55,50 @@ export function claudeTurnPolicy(
   return readOnly
     ? structuredClone(READ_ONLY_TURN_POLICY)
     : effectiveExecutionPolicy(sessionPolicy);
+}
+
+/**
+ * The permission mode a policy implies when the prompt names none.
+ *
+ * `deny` runs in `default` as `ask` does, not in `dontAsk`: the pinned CLI
+ * refuses AskUserQuestion outright in `dontAsk` without consulting
+ * `canUseTool`, so a denying session (every coordinator among them) could not
+ * ask the user anything. `canUseTool` refuses every other tool that reaches it
+ * instead, which is what `dontAsk` would have done.
+ */
+export function claudePolicyPermissionMode(
+  policy: NativeAgentExecutionPolicy | undefined,
+): PermissionMode {
+  return isRestrictivePolicy(policy) ? "default" : "bypassPermissions";
+}
+
+function isRestrictivePolicy(policy: NativeAgentExecutionPolicy | undefined): boolean {
+  return policy?.approvals === "ask" || policy?.approvals === "deny";
+}
+
+/** Modes that run nothing more without asking than `default` does. */
+const RESTRICTIVE_PERMISSION_MODES: ReadonlySet<PermissionMode> = new Set([
+  "default",
+  "plan",
+  "dontAsk",
+]);
+
+/**
+ * The permission mode a turn runs in: the prompt's, capped by the policy.
+ *
+ * The backend sends `bypassPermissions` with every build prompt, so taking
+ * the prompt's mode as given meant an `ask` policy never asked and a `deny`
+ * policy never refused. A prompt may still narrow the mode (plan mode, or a
+ * read-only turn's `dontAsk`); anything wider falls back to `default`.
+ */
+export function claudePermissionMode(
+  policy: NativeAgentExecutionPolicy | undefined,
+  requested: PermissionMode | undefined,
+): PermissionMode {
+  const policyMode = claudePolicyPermissionMode(policy);
+  if (requested === undefined) return policyMode;
+  if (!isRestrictivePolicy(policy)) return requested;
+  return RESTRICTIVE_PERMISSION_MODES.has(requested) ? requested : policyMode;
 }
 
 /**

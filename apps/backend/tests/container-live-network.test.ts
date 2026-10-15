@@ -180,7 +180,7 @@ describe("C22 environment networks and narrow host access", () => {
       expect(networks).toBe(environmentNetworkName(owner, restricted.id));
 
       const policy = await environmentNetworkPolicy(restricted.id, context);
-      expect(policy.policyVersion).toBe(2);
+      expect(policy.policyVersion).toBe(3);
       expect(policy.effective).toMatchObject({
         mode: "restricted",
         state: "applied",
@@ -217,6 +217,21 @@ describe("C22 environment networks and narrow host access", () => {
       expect(await probe(containerId, `http://host.docker.internal:${siblingPublished}/`)).toBe(7);
       // The internet beyond the allowlist.
       expect(await probe(containerId, "https://example.com/")).not.toBe(0);
+      // Policy 3 allows address, protocol and port tuples: the allowed
+      // registry answers on HTTPS, another port on the same address is
+      // rejected, and Git over SSH reaches GitHub's published ranges.
+      expect([0, 22]).toContain(await probe(containerId, "https://registry.npmjs.org/"));
+      expect(await probe(containerId, "http://registry.npmjs.org/")).toBe(7);
+      const ssh = await docker([
+        "exec",
+        "-u",
+        "node",
+        containerId,
+        "sh",
+        "-c",
+        "ssh -T -o BatchMode=yes -o ConnectTimeout=10 git@github.com 2>&1; true",
+      ]);
+      expect(ssh).toMatch(/Permission denied \(publickey\)|successfully authenticated/);
       // A full-access sibling proves the listener itself answers.
       expect(await probe(siblingId, "http://127.0.0.1:8080/")).toBe(0);
 

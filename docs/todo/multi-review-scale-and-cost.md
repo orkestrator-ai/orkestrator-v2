@@ -93,16 +93,10 @@ was never collected.
    lower down, in `readHttpBridgeTranscriptSnapshot`
    (`http-bridge-progressive.ts`), and never sets `fallback: true` (see
    [mixed-version-compatibility.md](mixed-version-compatibility.md)).
-3. **Make the slow-reviewer benchmark deterministic.** `Multi Review
-   control-plane benchmark > one slow reviewer does not serialize the rest of
-   the panel` asserts the wall-clock bound `admissionMs < 250 + 3 *
-   BASE.setupDelayMs`. Under host load it fails (flake 0171, open, recurring
-   through 2026-10-15). Assert overlap and ordering with deferred fakes or a
-   controllable clock instead.
-4. **Add seeded, CI-sized randomised interleaving tests** across concurrent
+3. **Add seeded, CI-sized randomised interleaving tests** across concurrent
    reviewers. They should interleave commit resolution, provider completion,
    cancellation, fence loss and restart. They were planned but never written.
-5. **Close the measurement gaps.**
+4. **Close the measurement gaps.**
    - Verification counts only the package's declared size. Referenced artifact
      bytes are not reported.
    - There is no opt-in large-evidence case (hundreds of MiB, real hashing).
@@ -255,7 +249,9 @@ was never collected.
 - [mixed-version-compatibility.md](mixed-version-compatibility.md): support
   window for the transcript fallbacks.
 - [test-suite-and-ci-health.md](test-suite-and-ci-health.md): CI gates.
-- Flake [0171](../tests/flaky-tests/0171-multi-review-admission-benchmark-load.md).
+- Flake [0171](../tests/flaky-tests/0171-multi-review-admission-benchmark-load.md),
+  resolved on 2026-10-15: the slow-reviewer benchmark now asserts dispatch
+  ordering instead of a wall-clock bound.
 - [`review-preparation.md`](../architecture/review-preparation.md) covers
   preparation, sealing and the fan-out budgets. No living doc covers fan-out
   supervision or consolidation; the rationale above is its only home.

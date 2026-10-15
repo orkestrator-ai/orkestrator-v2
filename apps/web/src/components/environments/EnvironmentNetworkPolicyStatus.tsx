@@ -42,6 +42,17 @@ function DomainsState({
           change it in place. It applies when the container is rebuilt.
         </div>
       ) : null}
+      {policy.policyVersion === 3 ? (
+        <div>
+          Allowed domains are reachable on HTTPS (port 443) and on the ports their entries name;
+          GitHub also on SSH.
+        </div>
+      ) : (
+        <div>
+          This container&apos;s firewall predates per-port rules: an allowed domain is reachable on
+          every port.
+        </div>
+      )}
       {effective.refreshedAt ? (
         <div>
           Addresses resolved {new Date(effective.refreshedAt).toLocaleString()}
@@ -138,7 +149,7 @@ export function EnvironmentNetworkPolicyStatus({ environmentId }: { environmentI
           Restricted
           {effective.appliedAt ? ` since ${new Date(effective.appliedAt).toLocaleString()}` : ""}
           {effective.allowedEntries !== null
-            ? ` · ${effective.allowedEntries} allowed address ranges`
+            ? ` · ${effective.allowedEntries} ${policy.policyVersion === 3 ? "allowed address and port rules" : "allowed address ranges"}`
             : ""}
           {effective.unresolvedDomains
             ? ` · ${effective.unresolvedDomains} domains did not resolve`

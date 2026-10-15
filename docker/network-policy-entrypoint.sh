@@ -8,6 +8,8 @@ set -euo pipefail
 # Network policy v2 (per-environment network) adds the policy version, the
 # host service ports the workload may call back to, and the container ports
 # Docker publishes. Each must be a comma-separated list of port numbers.
+# Policy v3 records the same files and narrows each allowed address to
+# protocol and port tuples (init-firewall.sh).
 policy_ports() {
     case "$1" in
         '') return 0 ;;
@@ -20,7 +22,7 @@ if [ ! -e /etc/orkestrator/network-mode ] && [ ! -e /etc/orkestrator/allowed-dom
         *) echo "Invalid network mode" >&2; exit 1 ;;
     esac
     case "${ORKESTRATOR_NETWORK_POLICY:-1}" in
-        1|2) network_policy="${ORKESTRATOR_NETWORK_POLICY:-1}" ;;
+        1|2|3) network_policy="${ORKESTRATOR_NETWORK_POLICY:-1}" ;;
         *) echo "Invalid network policy version" >&2; exit 1 ;;
     esac
     policy_ports "${ORKESTRATOR_HOST_SERVICE_PORTS:-}"

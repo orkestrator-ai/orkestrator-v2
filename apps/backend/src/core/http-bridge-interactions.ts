@@ -231,6 +231,105 @@ export class HttpBridgeInteractionAdapter {
     return mapped;
   }
 
+  /** An MCP elicitation or `ask`-policy tool approval from `/interactions`. */
+  private mapClaudeInteraction(sessionId: string, raw: unknown): AgentInteractionRequest {
+    const request = asRecord(raw);
+    const providerRequestId = nonEmptyString(request?.id);
+    const requestedAt = request?.requestedAt;
+    const expiresAt = request?.expiresAt;
+    if (
+      !request ||
+      !providerRequestId ||
+      !Number.isSafeInteger(requestedAt) ||
+      !Number.isSafeInteger(expiresAt)
+    ) {
+      throw new ProviderUnavailableError("Claude returned a malformed interaction request");
+    }
+    const timing = {
+      createdAt: requestedAt as number,
+      updatedAt: requestedAt as number,
+      expiresAt: expiresAt as number,
+      blocking: true,
+    };
+    const kind = request.kind;
+    if (kind === "mcp-form" || kind === "mcp-url") {
+      const server = truncatedText(request.serverName, "An MCP server", 256);
+      const url = kind === "mcp-url" ? nonEmptyString(request.url) : null;
+      if (kind === "mcp-url" && !url) {
+        throw new ProviderUnavailableError("Claude returned a malformed URL elicitation");
+      }
+      return this.interactionRequest(sessionId, providerRequestId, "interaction", {
+        kind,
+        presentation: {
+          title: nonEmptyString(request.title)
+            ? truncatedText(request.title, server, 256)
+            : kind === "mcp-form"
+              ? `${server} needs input`
+              : `Sign in to ${server}`,
+          body: nonEmptyString(request.message)
+            ? truncatedText(request.message, "MCP request")
+            : undefined,
+          questions: kind === "mcp-form" ? [this.mapMcpForm(request.schema)] : [],
+          url: url === null ? undefined : boundedText(url, "MCP URL"),
+          confirmLabel: "Continue",
+          declineLabel: "Decline",
+        },
+        ...timing,
+      });
+    }
+    if (kind !== "command-approval" && kind !== "file-approval" && kind !== "permission") {
+      throw new ProviderUnavailableError("Claude returned an unknown interaction kind");
+    }
+    const toolName = nonEmptyString(request.toolName);
+    const command = nonEmptyString(request.command);
+    const rawPaths = Array.isArray(request.paths) ? request.paths : [];
+    const paths = rawPaths
+      .slice(0, MAX_RENDERED_FILE_CHANGES)
+      .map((path) => truncatedText(path, "File", MAX_RENDERED_FILE_CHANGE_TEXT_LENGTH));
+    if (
+      !toolName ||
+      (kind === "command-approval" && !command) ||
+      (kind === "file-approval" && paths.length === 0)
+    ) {
+      throw new ProviderUnavailableError("Claude returned a malformed tool approval");
+    }
+    const tool = truncatedText(toolName, "tool", 256);
+    const optionalLine = (label: string, value: unknown): string[] =>
+      nonEmptyString(value) ? [`${label}: ${truncatedText(value, label)}`] : [];
+    const body = truncatedJoinedText([
+      ...(nonEmptyString(request.description) ? [truncatedText(request.description, tool)] : []),
+      ...(kind === "permission" ? [`Tool: ${tool}`] : []),
+      ...optionalLine("MCP server", request.mcpServer),
+      ...optionalLine("Command", command),
+      ...paths.map((path) => `File: ${path}`),
+      ...(rawPaths.length > paths.length
+        ? [`… and ${rawPaths.length - paths.length} more files`]
+        : []),
+      ...optionalLine("Reason", request.reason),
+      ...optionalLine("Blocked path", request.blockedPath),
+      ...optionalLine("Input", request.input),
+    ]);
+    return this.interactionRequest(sessionId, providerRequestId, "approval", {
+      kind,
+      presentation: {
+        // The sentence the CLI composed names the operation better than a
+        // title rebuilt from the tool name.
+        title: nonEmptyString(request.title)
+          ? truncatedText(request.title, tool, 512)
+          : kind === "command-approval"
+            ? "Approve command"
+            : kind === "file-approval"
+              ? "Approve file changes"
+              : `Allow ${tool}`,
+        body,
+        questions: [],
+        confirmLabel: "Approve",
+        declineLabel: "Deny",
+      },
+      ...timing,
+    });
+  }
+
   private mapCodexApproval(sessionId: string, raw: unknown): AgentInteractionRequest {
     const request = asRecord(raw);
     const providerRequestId = nonEmptyString(request?.approvalId);
@@ -565,7 +664,7 @@ export class HttpBridgeInteractionAdapter {
       kind === "question"
         ? this.mapCodexQuestions(request.questions)
         : kind === "mcp-form"
-          ? [this.mapCodexMcpForm(request.schema)]
+          ? [this.mapMcpForm(request.schema)]
           : [];
     const url = kind === "mcp-url" ? nonEmptyString(request.url) : null;
     if (kind === "mcp-url" && !url) {
@@ -594,14 +693,14 @@ export class HttpBridgeInteractionAdapter {
     });
   }
 
-  private mapCodexMcpForm(schemaValue: unknown): AgentInteractionQuestion {
+  private mapMcpForm(schemaValue: unknown): AgentInteractionQuestion {
     const schema = asRecord(schemaValue) ?? {};
     const serializedSchema = JSON.stringify(schema);
     if (
       !serializedSchema ||
       new TextEncoder().encode(serializedSchema).byteLength > AGENT_INTERACTION_LIMITS.maxTextLength
     ) {
-      throw new ProviderUnavailableError("Codex returned an oversized MCP form schema");
+      throw new ProviderUnavailableError(`${this.agent} returned an oversized MCP form schema`);
     }
     return {
       id: MCP_FORM_CONTENT_QUESTION_ID,
@@ -676,9 +775,9 @@ export class HttpBridgeInteractionAdapter {
   async listPendingInteractions(sessionId: string): Promise<AgentInteractionSnapshot> {
     const paths =
       this.agent === "claude"
-        ? (["questions", "plan-approvals"] as const)
+        ? (["questions", "plan-approvals", "interactions"] as const)
         : (["approvals", "interactions"] as const);
-    const responses = await Promise.all(
+    const fetched = await Promise.all(
       paths.map((path) =>
         bridgeFetch(
           this.connection,
@@ -688,9 +787,13 @@ export class HttpBridgeInteractionAdapter {
         ),
       ),
     );
-    if (responses.every((response) => response.status === 404)) {
+    if (fetched.every((response) => response.status === 404)) {
       return this.interactionTracker.snapshot(sessionId, []);
     }
+    // A Claude bridge that predates `/interactions` parks no elicitations or
+    // tool approvals; its questions and plan approvals still count.
+    const responses =
+      this.agent === "claude" && fetched[2]?.status === 404 ? fetched.slice(0, 2) : fetched;
     for (const response of responses) assertOk(response, `${this.agent} interaction snapshot`);
     const snapshotBudget = {
       remaining: AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes,
@@ -704,7 +807,12 @@ export class HttpBridgeInteractionAdapter {
     const second = asRecord(payloads[1]);
     const firstRequests = first?.[this.agent === "claude" ? "questions" : "approvals"];
     const secondRequests = second?.[this.agent === "claude" ? "approvals" : "interactions"];
-    if (!Array.isArray(firstRequests) || !Array.isArray(secondRequests)) {
+    const claudeInteractions = payloads[2] === undefined ? [] : asRecord(payloads[2])?.interactions;
+    if (
+      !Array.isArray(firstRequests) ||
+      !Array.isArray(secondRequests) ||
+      !Array.isArray(claudeInteractions)
+    ) {
       throw new ProviderUnavailableError(`${this.agent} returned a malformed interaction snapshot`);
     }
     const requests: AgentInteractionRequest[] = [];
@@ -730,6 +838,9 @@ export class HttpBridgeInteractionAdapter {
       }
       for (const request of secondRequests) {
         mapRequest(request, (raw) => this.mapClaudeApproval(sessionId, raw));
+      }
+      for (const request of claudeInteractions) {
+        mapRequest(request, (raw) => this.mapClaudeInteraction(sessionId, raw));
       }
     } else if (this.agent === "cursor" || this.agent === "grok") {
       for (const request of firstRequests) {
@@ -896,12 +1007,34 @@ export class HttpBridgeInteractionAdapter {
           body: JSON.stringify({ answers }),
         };
       }
+      if (request.kind === "plan-approval") {
+        return {
+          path: `${base}/plan-approvals/${encodeURIComponent(providerRequestId)}/respond`,
+          method: "POST",
+          body: JSON.stringify({
+            approved: resolution.action === "answer",
+            ...(resolution.feedback ? { feedback: resolution.feedback } : {}),
+          }),
+        };
+      }
+      // MCP elicitations and tool approvals. Claude's approvals are allow-once:
+      // nothing here could honour "for the session".
+      if (resolution.action === "approve-for-session") {
+        throw new ProviderUnavailableError("Claude approvals cannot be granted for the session");
+      }
       return {
-        path: `${base}/plan-approvals/${encodeURIComponent(providerRequestId)}/respond`,
+        path: `${base}/interactions/${encodeURIComponent(providerRequestId)}`,
         method: "POST",
         body: JSON.stringify({
-          approved: resolution.action === "answer",
-          ...(resolution.feedback ? { feedback: resolution.feedback } : {}),
+          action:
+            resolution.action === "answer"
+              ? "accept"
+              : resolution.action === "cancel"
+                ? "cancel"
+                : "decline",
+          ...(resolution.action === "answer" && request.kind === "mcp-form"
+            ? { content: mcpFormContent(resolution) }
+            : {}),
         }),
       };
     }
@@ -1038,19 +1171,7 @@ export class HttpBridgeInteractionAdapter {
             : "decline",
     };
     if (resolution.action === "answer" && request.kind === "mcp-form") {
-      const rawContent = resolution.answer!.answers.find(
-        (answer) => answer.questionId === MCP_FORM_CONTENT_QUESTION_ID,
-      )?.freeText;
-      let content: unknown;
-      try {
-        content = rawContent === undefined ? null : JSON.parse(rawContent);
-      } catch {
-        throw new ProviderUnavailableError("MCP form content must be valid JSON");
-      }
-      if (!asRecord(content)) {
-        throw new ProviderUnavailableError("MCP form content must be a JSON object");
-      }
-      answerBody.content = content;
+      answerBody.content = mcpFormContent(resolution);
     } else if (resolution.action === "answer" && request.kind === "question") {
       answerBody.answers = Object.fromEntries(
         request.presentation.questions.map((question) => {
@@ -1076,4 +1197,22 @@ export class HttpBridgeInteractionAdapter {
       body: JSON.stringify(answerBody),
     };
   }
+}
+
+/** The JSON object an answered MCP form carries in its one free-text answer. */
+function mcpFormContent(resolution: AgentInteractionResolution): Record<string, unknown> {
+  const rawContent = resolution.answer?.answers.find(
+    (answer) => answer.questionId === MCP_FORM_CONTENT_QUESTION_ID,
+  )?.freeText;
+  let content: unknown;
+  try {
+    content = rawContent === undefined ? null : JSON.parse(rawContent);
+  } catch {
+    throw new ProviderUnavailableError("MCP form content must be valid JSON");
+  }
+  const record = asRecord(content);
+  if (!record) {
+    throw new ProviderUnavailableError("MCP form content must be a JSON object");
+  }
+  return record;
 }

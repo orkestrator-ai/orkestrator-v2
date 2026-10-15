@@ -1031,15 +1031,26 @@ else is rejected outright. `full` mode skips the firewall entirely.
   only one list.
 - DNS (to Docker's resolvers and the upstreams its embedded resolver names)
   and localhost are always allowed. There is no general outbound SSH
-  exception: SSH reaches only hosts whose addresses are allowlisted (GitHub's
-  published ranges, allowed domains).
-- An allowed address is allowed on every port and protocol, and the list is
-  of addresses, not names: a domain on a shared CDN address also opens every
-  other site served from that address. An empty allowlist means nothing
-  beyond GitHub (`ALLOWED_DOMAINS=none`); an environment whose own list is
-  empty uses the global list.
+  exception: SSH reaches GitHub's published ranges and, under policy 3, only
+  hosts whose entry names port 22 (under earlier policies, any allowed
+  address).
+- A container created from an image with `network-policy=3` allows address,
+  protocol and port tuples (`@orkestrator/protocol/network-allowlist`,
+  `docker/firewall-domains.sh`): a bare domain is reachable on TCP 443 only,
+  an entry such as `db.example.com:5432` (TCP) or `example.com:443/udp`
+  opens exactly that port, and GitHub's ranges are open on TCP 443 and 22.
+  A container on an earlier policy receives each entry's domain without its
+  port and still accepts any traffic to an allowed address; it changes only
+  when rebuilt on a policy 3 image, after which a saved list that
+  relied on another port needs a `host:port` entry. The environment's network
+  status says which applies. `ORKESTRATOR_NETWORK_POLICY=2` keeps new
+  containers on policy 2.
+- The list is of addresses, not names: a domain on a shared CDN address also
+  opens the same ports to every other site served from that address. An empty
+  allowlist means nothing beyond GitHub (`ALLOWED_DOMAINS=none`); an
+  environment whose own list is empty uses the global list.
 - Host access depends on the container's network policy. A container created
-  from an image with `network-policy=2` runs on its own labelled Docker
+  from an image with `network-policy=2` or later runs on its own labelled Docker
   network with IPv6 disabled; it may reach the host only on the backend's
   agent-tools port (kept current by `update-firewall.sh --host-ports`) and
   accepts inbound connections only on its published ports. Older containers
@@ -1050,7 +1061,8 @@ else is rejected outright. `full` mode skips the firewall entirely.
   a root refresher re-resolves on the record TTL, and saving an environment's
   domains applies them to the running container (`update-firewall.sh
   --set-domains`), swapping the set atomically, revoking open connections to
-  removed addresses and storing the list for the next boot. Keep that state in
+  removed addresses (under policy 3, to removed ports) and storing the list
+  for the next boot. Keep that state in
   root-only `/run/orkestrator-firewall/`; node owns `/run/orkestrator`.
 - The firewall limits destinations. It does not stop data leaving through an
   allowed service. A root terminal (`orkroot`) has `NET_ADMIN` in restricted

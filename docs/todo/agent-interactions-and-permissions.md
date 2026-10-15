@@ -7,9 +7,8 @@ reach the user through the shared interaction contract and its one generic card,
 or be resolved by backend policy. The backend execution policy, not the bridges,
 decides what a session may do without asking. The contract, the capability bit,
 the unattended policy and the execution policy are in place. What is left is
-durable "always allow" rules, parking Claude's elicitations instead of declining
-them, honest Grok approval kinds, and retiring the per-bridge environment
-overrides that predate the execution policy.
+durable "always allow" rules, honest Grok approval kinds, and retiring the
+per-bridge environment overrides that predate the execution policy.
 
 ## Current state
 
@@ -36,17 +35,46 @@ overrides that predate the execution policy.
   - dynamic `item/tool/call` is answered as a failure, with a transcript
     explanation.
 - Claude (`bridges/claude-bridge/src/services/`):
-  - Tool approvals go through `canUseTool` (`session-manager-prompt-can-use-tool.ts`).
-    It deliberately does not return the SDK's permission `suggestions`, because
-    no revoke surface exists and returning them "would silently widen
-    permissions after an allow-once decision".
+  - MCP elicitations and tool approvals are parked in one store
+    (`session-manager-parked-interactions.ts`), served by
+    `GET /session/:id/interactions` and answered through
+    `POST /session/:id/interactions/:interactionId` (`accept`, `decline`,
+    `cancel`). The backend maps them in `mapClaudeInteraction`
+    (`http-bridge-interactions.ts`).
+    - `onElicitation` parks `mcp-form` and `mcp-url` requests. One the card
+      cannot render (a `url` request without a URL, or a schema over the text
+      limit) is still declined with a status row naming the server.
+    - `onUserDialog` answers `cancelled`, and `supportedDialogKinds` is
+      deliberately left undeclared: the only documented kind,
+      `refusal_fallback_prompt`, has an opaque payload and the card has nothing
+      to show for it. The capability table therefore no longer claims
+      `elicitation` for Claude.
+  - `ask` and `deny` policies both run in `default`. `claudePermissionMode`
+    (`claude-query-config.ts`) caps the prompt's mode there: the backend still
+    sends `bypassPermissions` with every build prompt, and the bridge lowers
+    it. A prompt may narrow the mode to `plan` or `dontAsk`; read-only turns
+    still arrive as `dontAsk`.
+  - Under `ask`, `canUseTool` (`session-manager-prompt-can-use-tool.ts`) parks
+    every tool that reaches it as `command-approval` (Bash), `file-approval`
+    (Edit, MultiEdit, Write, NotebookEdit) or `permission`. Only reading tools
+    are pre-approved.
+  - Under `deny`, `canUseTool` refuses every tool that reaches it, after
+    questions and plan approvals are handled. That is what `dontAsk` does,
+    except that the pinned CLI (SDK 0.3.296) refuses AskUserQuestion outright
+    in `dontAsk` without consulting `canUseTool`, so a coordinator could not
+    ask the user anything. A real-CLI probe with a loopback model showed a
+    coordinator in `default` running its whole allow list (Read, Glob, Grep,
+    read-only Bash, Agent, ToolSearch, `mcp__orkestrator__*`) with only
+    AskUserQuestion reaching the callback; Write, Edit, WebFetch and mutating
+    Bash stayed refused, in subagents too.
+  - Under `auto-approve` a tool that reaches `canUseTool` runs.
+  - An approval never returns the SDK's permission `suggestions`, because no
+    revoke surface exists and returning them "would silently widen permissions
+    after an allow-once decision". `approve-for-session` is refused.
   - Denials are recorded on the tool row or as a status row
     (`handlePermissionDenied`, `session-manager-prompt-handlers/system.ts`).
     `NativeAgentContextUsage` carries `permissionDenials` and
     `permissionDenialDetails`.
-  - `onElicitation` declines with a status row that names the MCP server.
-    `onUserDialog` answers `cancelled`, and `supportedDialogKinds` is
-    deliberately left undeclared (`session-manager-prompt-query.ts`).
 - Grok: `publicApprovals` (`bridges/acp-bridge/src/acp-public.ts`) reports every
   ACP permission request as `kind: "permissions"` with
   `permissions: { fileSystem: true }`. Titles already come from
@@ -91,13 +119,6 @@ overrides that predate the execution policy.
    - `listPermissionRules?` / `removePermissionRule?` on `NativeAgentRuntimeProvider`.
 
    Bridges with no saved rules answer an empty list, not 404.
-2. **Claude elicitation and dialog parking.** Park `onElicitation` requests as
-   `mcp-form` / `mcp-url` interactions and `onUserDialog` as `elicitation`.
-   This needs a pending-request map in the Claude bridge, its routes and a
-   backend mapping. Declare `supportedDialogKinds` only for kinds the card can
-   render. Until this lands, `nativeAgentCapabilities("claude").interactions.kinds`
-   over-claims `mcp-form`, `mcp-url` and `elicitation`. Either park them or drop
-   the three kinds from the table.
 3. **Grok approval kind.** Every Grok approval reaches the card as a generic
    file-system `permission`. `publicApprovals` emits the Codex-shaped envelope
    (`approvalId`, `kind: "permissions"`), which `mapAcpApproval`
@@ -151,9 +172,13 @@ overrides that predate the execution policy.
 
 ### Qualification
 
-- Browser: raise an MCP elicitation (Codex today, Claude once item 2 lands),
-  answer it, reload mid-question, and confirm it rehydrates from
-  `/session/:id/interactions`.
+- Browser: raise an MCP elicitation (Codex or Claude), answer it, reload
+  mid-question, and confirm it rehydrates from `/session/:id/interactions`. On
+  a Claude environment overridden to `approvals: "ask"`, confirm a Bash or Edit
+  call raises an approval card and that approve, deny and cancel turn reach the
+  CLI. On one set to `deny`, confirm a tool outside the allow list is refused
+  without a card while a question still appears. Run a real coordinator turn
+  that delegates and asks a question.
 - `mise run test:agent:docker` for the container cells on Cursor and Pi.
 - Host browser check that the Agent Info policy summary matches the options the
   adapter actually received, on each platform.
@@ -174,6 +199,10 @@ overrides that predate the execution policy.
   allow" option ships without a way to list and revoke what it saved.
 - Bridges translate the policy; they never decide trust. They cannot reliably
   tell a host from a container.
+- A prompt's permission mode may narrow an `ask` or `deny` policy (plan mode,
+  a read-only turn's `dontAsk`) but never widen it.
+- `deny` is enforced by `canUseTool` in `default`, not by `dontAsk`, so a
+  denying session can still ask the user questions.
 - The coordinator policy is not user-overridable.
 - Hosts default to no sandbox and auto-approve because every vendor sandbox
   holds `.git` read-only, which stalls ordinary Git work in a worktree (#613).
@@ -187,15 +216,19 @@ overrides that predate the execution policy.
 - `previewFormat`: plain or html?
 - Claude MCP OAuth: the bridge's `authenticate` MCP action reconnects the server
   and expects the sign-in URL through `onElicitation`
-  (`session-manager-catalog.ts`), which today declines `url` mode. Is parking
-  `mcp-url` the intended route for that sign-in, or should MCP management own a
-  separate flow? Decide with [mcp-management.md](mcp-management.md).
+  (`session-manager-catalog.ts`). With a live CLI that URL now arrives as a
+  parked `mcp-url` card. With no live CLI the action runs on a `createProbe()`
+  query that has no `onElicitation`, so the link never reaches anyone. Is the
+  parked `mcp-url` card the intended route for that sign-in, or should MCP
+  management own a separate flow? Decide with
+  [mcp-management.md](mcp-management.md).
 
 ## Needs verification
 
 - Whether every bridge has per-kind tests for park, render, resolve and
-  fail-closed timeout. Codex and Pi have `interactions.test.ts`; the full matrix
-  was not confirmed.
+  fail-closed timeout. Codex and Pi have `interactions.test.ts` and Claude has
+  `session-manager-parked-interactions.test.ts`; the full matrix was not
+  confirmed.
 - Whether a container Cursor session loads the repository's `.cursor/mcp.json`
   today. The SDK gets `settingSources` with `project` from the policy, which may
   load it on its own, independently of `cursorMcpServers`.

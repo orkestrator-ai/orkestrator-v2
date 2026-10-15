@@ -190,26 +190,40 @@ describe("retained launch configuration", () => {
     await firstPrompt;
   });
 
-  test("a runtime without bypass capability refuses that mode before dispatch", async () => {
-    const { session, call, firstPrompt } = await releaseWithBackgroundWork(
-      "permission capability",
-      "agent-bg",
-      { permissionMode: "plan" },
-      {
-        id: "ask",
-        approvals: "ask",
-        sandbox: "provider",
-        projectResources: true,
-        networkAccess: "full",
-      },
-    );
-    expect(call.options.allowDangerouslySkipPermissions).toBeUndefined();
-    await expect(
-      sendPrompt(session.id, "bypass", { permissionMode: "bypassPermissions" }),
-    ).rejects.toMatchObject({ code: "conflict" });
-    call.finish();
-    await firstPrompt;
-  });
+  test.each([
+    ["ask", "default"],
+    ["deny", "default"],
+  ] as const)(
+    "an %s runtime joins a bypassPermissions prompt in %s mode",
+    async (approvals, expectedMode) => {
+      // The backend sends bypassPermissions with every build prompt. The policy
+      // caps it, so leaving plan mode neither conflicts nor widens the session.
+      const setPermissionMode = mock(async (_mode: string) => {});
+      queryControlOverrides.setPermissionMode = setPermissionMode;
+      const { session, call, input, firstPrompt } = await releaseWithBackgroundWork(
+        `${approvals} capability`,
+        "agent-bg",
+        { permissionMode: "plan" },
+        {
+          id: "interactive-host",
+          approvals,
+          sandbox: "provider",
+          projectResources: true,
+          networkAccess: "full",
+        },
+      );
+      expect(call.options.allowDangerouslySkipPermissions).toBeUndefined();
+      const secondPrompt = sendPrompt(session.id, "build", {
+        permissionMode: "bypassPermissions",
+      });
+      await input.next();
+      await firstPrompt;
+      expect(setPermissionMode).toHaveBeenCalledWith(expectedMode);
+      expect(setPermissionMode).not.toHaveBeenCalledWith("bypassPermissions");
+      call.finish();
+      await secondPrompt.catch(() => undefined);
+    },
+  );
 
   test("a plugin change is refused by pre-dispatch validation and direct send", async () => {
     const { session, call, firstPrompt } = await releaseWithBackgroundWork("plugin change");

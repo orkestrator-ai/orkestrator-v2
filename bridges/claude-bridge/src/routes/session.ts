@@ -1,4 +1,5 @@
 // Session management routes
+import { isValidClaudeFormContent } from "../services/claude-elicitation-schema.js";
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
@@ -25,6 +26,8 @@ import {
   getPromptDispatchState,
   respondToPlanApproval,
   getPendingPlanApprovals,
+  respondToInteraction,
+  getPendingInteractions,
   reconcilePersistedSessions,
   ensurePersistedSession,
   hydratePersistedSessionMessages,
@@ -54,6 +57,8 @@ import {
   serializeClaudeQuestionAnswer,
 } from "@orkestrator/protocol/agent-interactions";
 import type {
+  ClaudeElicitationContent,
+  ClaudeInteractionResponse,
   CreateSessionResponse,
   SessionListResponse,
   MessagesResponse,
@@ -101,6 +106,22 @@ const planApprovalBodyLimit = bodyLimit({
   maxSize: MAX_QUESTION_ANSWER_REQUEST_BYTES,
   onError: (c) => c.json({ error: "Plan approval response is too large" }, 413),
 });
+const interactionBodyLimit = bodyLimit({
+  maxSize: MAX_QUESTION_ANSWER_REQUEST_BYTES,
+  onError: (c) => c.json({ error: "Interaction response is too large" }, 413),
+});
+
+/** An MCP form answer: a flat object of the value types MCP allows. */
+function isElicitationContent(value: unknown): value is ClaudeElicitationContent {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.values(value).every(
+    (entry) =>
+      typeof entry === "string" ||
+      typeof entry === "boolean" ||
+      (typeof entry === "number" && Number.isFinite(entry)) ||
+      (Array.isArray(entry) && entry.every((item) => typeof item === "string")),
+  );
+}
 
 /**
  * Map a session-manager refusal onto a status code.
@@ -1340,6 +1361,60 @@ session.post("/:id/plan-approvals/:approvalId/respond", planApprovalBodyLimit, a
       500,
     );
   }
+});
+
+// Get parked MCP elicitations and tool approvals for a session
+session.get("/:id/interactions", (c) => {
+  const id = c.req.param("id");
+  if (!getSession(id)) {
+    return c.json({ error: "Session not found" }, 404);
+  }
+  return c.json({ interactions: getPendingInteractions(id) });
+});
+
+// Answer a parked MCP elicitation or tool approval
+session.post("/:id/interactions/:interactionId", interactionBodyLimit, async (c) => {
+  const sessionId = c.req.param("id");
+  const interactionId = c.req.param("interactionId");
+  if (!getSession(sessionId)) {
+    return c.json({ error: "Session not found" }, 404);
+  }
+  const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+  const action = body?.action;
+  if (action !== "accept" && action !== "decline" && action !== "cancel") {
+    return c.json({ error: "'action' must be accept, decline or cancel" }, 400);
+  }
+  const pending = getPendingInteractions(sessionId).find(
+    (interaction) => interaction.id === interactionId,
+  );
+  if (!pending) {
+    return c.json(stalePrompt("Interaction is no longer pending"), STALE_PROMPT_STATUS);
+  }
+  const content = body?.content;
+  if (content !== undefined) {
+    // Only an accepted MCP request carries content; MCP defines none for the rest.
+    if (action !== "accept" || (pending.kind !== "mcp-form" && pending.kind !== "mcp-url")) {
+      return c.json({ error: "'content' is only accepted with an MCP answer" }, 400);
+    }
+    if (!isElicitationContent(content)) {
+      return c.json({ error: "'content' must be an object of MCP form values" }, 400);
+    }
+  } else if (action === "accept" && pending.kind === "mcp-form") {
+    return c.json({ error: "An MCP form answer requires 'content'" }, 400);
+  }
+  if (
+    action === "accept" &&
+    pending.kind === "mcp-form" &&
+    !isValidClaudeFormContent(pending.schema, content)
+  ) {
+    return c.json({ error: "The answer does not match the MCP form schema" }, 400);
+  }
+  const response: ClaudeInteractionResponse =
+    action === "accept" ? (content ? { action, content } : { action }) : { action };
+  if (!respondToInteraction(interactionId, response, sessionId)) {
+    return c.json(stalePrompt("Interaction is no longer pending"), STALE_PROMPT_STATUS);
+  }
+  return c.json({ status: "resolved" });
 });
 
 export default session;

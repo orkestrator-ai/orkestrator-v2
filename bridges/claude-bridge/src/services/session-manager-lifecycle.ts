@@ -1,70 +1,21 @@
 // Session Manager Service
 // Handles session state and interacts with Claude Agent SDK
 
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type {
-  ImageBlockParam,
-  TextBlockParam,
-  ContentBlockParam,
-} from "@anthropic-ai/sdk/resources/messages/messages";
-import type {
-  ModelInfo,
   SessionState,
   NormalizedMessage,
-  NormalizedPart,
-  ToolDiffMetadata,
-  QuestionInfo,
   QuestionRequest,
   PlanApprovalRequest,
-  PromptOptions,
-  SessionInitData,
-  McpServerRuntimeStatus,
-  PluginRuntimeStatus,
-  SdkMessageBase,
-  SdkCompactBoundaryMessage,
-  SdkResultMessage,
-  SdkSystemMessage,
-  TaskListSnapshot,
-  MessagePatchEventData,
-  SessionUsageSnapshot,
-  BackgroundTaskSnapshot,
-  SessionRateLimitWindow,
-  StopBackgroundTaskResult,
+  ClaudeInteractionRequest,
 } from "../types/index.js";
-import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
-import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
-import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
-import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
-import {
-  structuredOutputFailure,
-  type StructuredOutputResult,
-} from "@orkestrator/protocol/structured-output";
 import { eventEmitter } from "./event-emitter.js";
-import {
-  deleteSessionPreferences,
-  MAX_DISPATCHED_REQUEST_IDS,
-  readSessionPreferences,
-  sessionPreferencesUnavailable,
-  updateSessionPreferences,
-  type SessionPreferences,
-} from "./session-preferences.js";
-import { runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
-import { debugLog, isDebugLoggingEnabled } from "./logger.js";
-import { applyDiffBudget, applyToolResultBudget } from "./part-budget.js";
-import { getMcpRuntimeConfig } from "./mcp-config.js";
-import { getPluginsForSdk } from "./plugin-config.js";
-import type { McpToolMetadata } from "../types/mcp.js";
-import { execFile, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { constants, existsSync, type Stats } from "node:fs";
-import { lstat, open, readFile, realpath } from "node:fs/promises";
-import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { MAX_DISPATCHED_REQUEST_IDS, updateSessionPreferences } from "./session-preferences.js";
 
 import * as core from "./session-manager-core.js";
 import {
   claimedPromptDispatches,
+  interactionResolvers,
+  pendingInteractions,
   pendingPlanApprovals,
   pendingPromptDispatchClaims,
   pendingQuestions,
@@ -116,9 +67,9 @@ type PromptDispatchHandle = core.PromptDispatchHandle;
 export async function getSessionActivity(sessionId: string): Promise<SessionActivity> {
   const session = sessions.get(sessionId);
   if (session) {
-    // A running turn that has parked a question or a plan approval is blocked
-    // on the user, not on Claude. The backend renders those differently and
-    // must not treat them as progress it should wait out.
+    // A parked question, approval or MCP elicitation blocks on the user,
+    // including after the root turn releases to background work or idle auth. The backend renders
+    // those differently and must not treat them as progress it should wait out.
     //
     // This outranks the background-task sweep below. A backgrounded Bash
     // command started earlier in the same turn stays live while that turn asks
@@ -126,7 +77,7 @@ export async function getSessionActivity(sessionId: string): Promise<SessionActi
     // as progress: the sidebar would pulse blue instead of amber, and the
     // durable attention edge that hangs off `waiting` would never fire for a
     // question nobody is looking at.
-    if (session.status === "running" && sessionHasPendingInteractions(sessionId)) return "waiting";
+    if (sessionHasPendingInteractions(sessionId)) return "waiting";
     // A parent turn can finish and release the composer while tasks it launched
     // keep running in the same session. Those tasks are still environment work:
     // retiring the sidebar indicator here paints the environment green even
@@ -484,34 +435,54 @@ export function cleanupPendingQuestions(sessionId: string): void {
   }
 }
 
+/**
+ * Withdraw the session's parked MCP elicitations and tool approvals. Each
+ * waiting callback then answers the CLI itself: an elicitation is cancelled,
+ * a tool call denied.
+ */
+export function cleanupParkedInteractions(sessionId: string): void {
+  for (const [interactionId, interaction] of Array.from(pendingInteractions)) {
+    if (interaction.sessionId !== sessionId) continue;
+    const resolve = interactionResolvers.get(interactionId);
+    pendingInteractions.delete(interactionId);
+    interactionResolvers.delete(interactionId);
+    resolve?.({ action: "withdrawn" });
+  }
+}
+
 export function cleanupPendingInteractions(sessionId: string): void {
   cleanupPendingQuestions(sessionId);
   cleanupPendingPlanApprovals(sessionId);
+  cleanupParkedInteractions(sessionId);
 }
 
 /**
  * The single rule mapping a parked prompt to the session that raised it.
  *
- * `getPendingQuestions`, `getPendingPlanApprovals`, the eviction guard and
- * {@link getSessionActivity} all ask some form of "is anything of this
- * session's waiting on the user". Routing every one of them through this
- * predicate is what stops the `waiting` activity state from disagreeing with
- * the cards `/questions` and `/plan-approvals` actually serve.
+ * `getPendingQuestions`, `getPendingPlanApprovals`, `getPendingInteractions`,
+ * the eviction guard and {@link getSessionActivity} all ask some form of "is
+ * anything of this session's waiting on the user". Routing every one of them
+ * through this predicate is what stops the `waiting` activity state from
+ * disagreeing with the cards `/questions`, `/plan-approvals` and
+ * `/interactions` actually serve.
  */
 export function isPendingInteractionFor(
-  entry: QuestionRequest | PlanApprovalRequest,
+  entry: QuestionRequest | PlanApprovalRequest | ClaudeInteractionRequest,
   sessionId: string,
 ): boolean {
   return entry.sessionId === sessionId;
 }
 
-/** True while a question or plan approval is waiting on the user. */
+/** True while a question, approval or elicitation is waiting on the user. */
 export function sessionHasPendingInteractions(sessionId: string): boolean {
   for (const question of pendingQuestions.values()) {
     if (isPendingInteractionFor(question, sessionId)) return true;
   }
   for (const approval of pendingPlanApprovals.values()) {
     if (isPendingInteractionFor(approval, sessionId)) return true;
+  }
+  for (const interaction of pendingInteractions.values()) {
+    if (isPendingInteractionFor(interaction, sessionId)) return true;
   }
   return false;
 }
@@ -553,8 +524,11 @@ export function getSessionMessages(sessionId: string): NormalizedMessage[] {
  */
 export function abortSession(sessionId: string): boolean {
   const session = sessions.get(sessionId);
-  if (session && session.abortController) {
-    session.abortController.abort();
+  if (
+    session &&
+    (session.abortController || (session.claudeRuntime && session.claudeRuntime.state !== "ended"))
+  ) {
+    session.abortController?.abort();
     // Bank completed model calls synchronously. A replacement prompt may claim
     // the session before the aborted iterator reaches its finally block; if we
     // waited for that block, the new turn would clear this lower bound first.

@@ -17,6 +17,8 @@ import type {
   QuestionInfo,
   QuestionRequest,
   PlanApprovalRequest,
+  ClaudeInteractionOutcome,
+  ClaudeInteractionRequest,
   PromptOptions,
   SessionInitData,
   McpServerRuntimeStatus,
@@ -245,9 +247,15 @@ export const planApprovalResolvers = new Map<
   }
 >();
 
+// MCP elicitations and tool approvals waiting for the user, with the
+// callbacks that settle them (see `session-manager-parked-interactions.ts`).
+export const pendingInteractions = new Map<string, ClaudeInteractionRequest>();
+export const interactionResolvers = new Map<string, (outcome: ClaudeInteractionOutcome) => void>();
+
 // Timeouts for user interactions (5 minutes)
 export const QUESTION_TIMEOUT_MS = AGENT_INTERACTION_DEFAULT_TIMEOUT_MS;
 export const PLAN_APPROVAL_TIMEOUT_MS = AGENT_INTERACTION_DEFAULT_TIMEOUT_MS;
+export const INTERACTION_TIMEOUT_MS = AGENT_INTERACTION_DEFAULT_TIMEOUT_MS;
 
 /**
  * Reason a session operation refused, carried as a plain string property.

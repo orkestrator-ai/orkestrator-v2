@@ -57,3 +57,15 @@ The aggregate and browser workload delayed the real Git/worktree operations beyo
   group: 5,023 passed, 24 skipped, 0 failed across 254 files in 160.88 seconds.
 - **Hypothesis:** this matches the existing load-sensitive Git/worktree timeout.
   No assertions, deadlines or skips were changed.
+
+## Recurrence 2026-10-15 (host-dependent suite fixes)
+
+- **Original command:** `mise run test:logged -- --name full-suite-4 -- mise run test`
+  on the default PATH, with the standard group slots and other workers' suites
+  on the host.
+- **Failure:** five-second timeout at 5,012.27 ms.
+- **Suite counts:** backend 7,704 passed, 39 skipped, 2 failed (7,745 tests,
+  308.64 s). The other failure is 0216.
+- **Isolated rerun:** `bun test --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1`
+  from `apps/backend` passed unchanged (55 tests, 32.14 s).
+- **Evidence:** `/tmp/orkestrator-test-run.9os4UH/`.

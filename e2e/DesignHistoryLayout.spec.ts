@@ -2,30 +2,13 @@ import { expect, test } from "@playwright/test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import {
-  registerDesignCommandHandlers,
-  type DesignCommandContext,
-} from "../apps/backend/src/core/design-commands";
-import { DesignService } from "../apps/backend/src/core/design-service";
-
-type Handler = (args: Record<string, unknown>, context: DesignCommandContext) => unknown;
+import { startDesignServiceHost } from "./design-service-client";
 
 test("unbroken undo and redo labels wrap within the history pane", async ({ page }) => {
   const dir = await mkdtemp(join(tmpdir(), "ork-design-history-layout-"));
   const worktree = join(dir, "worktree");
   await mkdir(worktree);
-  const service = new DesignService(dir, () => {});
-  const handlers = new Map<string, Handler>();
-  registerDesignCommandHandlers((name, handler) => handlers.set(name, handler));
-  const context = {
-    design: service,
-    storage: {
-      getEnvironment: async (id: string) =>
-        id === "design-fixture"
-          ? { id, environmentType: "local", worktreePath: worktree }
-          : undefined,
-    },
-  } as unknown as DesignCommandContext;
+  const service = startDesignServiceHost(dir, worktree);
 
   try {
     const canvas = await service.create("design-fixture", "History layout");
@@ -37,13 +20,8 @@ test("unbroken undo and redo labels wrap within the history pane", async ({ page
       { name: frameName, x: 0, y: 0, width: 400, height: 300, html: "<main>Frame</main>" },
       "user",
     );
-    await page.exposeFunction(
-      "designInvoke",
-      async (command: string, args: Record<string, unknown>) => {
-        const handler = handlers.get(command);
-        if (!handler) throw new Error(`Unknown backend command: ${command}`);
-        return handler(args, context);
-      },
+    await page.exposeFunction("designInvoke", (command: string, args: Record<string, unknown>) =>
+      service.invoke(command, args),
     );
     await page.goto(`/design-canvas?canvasId=${canvas.id}`);
     await page.getByRole("button", { name: "Design history" }).click();
@@ -79,6 +57,7 @@ test("unbroken undo and redo labels wrap within the history pane", async ({ page
     await undo.click();
     await expectContainedWrap(redo);
   } finally {
+    await service.close();
     await rm(dir, { recursive: true, force: true });
   }
 });

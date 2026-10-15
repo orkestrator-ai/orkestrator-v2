@@ -1,6 +1,6 @@
 # Test suites that depend on the host
 
-Status: Resolved 2026-10-15, except the environment move case, which waits on doc 02 (verified to pass with its fix). `mise run test:browser` is blocked by a separate #969 regression; see "Follow-ups finished the same day". The findings below are the original 2026-10-14 report; see "Resolution (2026-10-15)" at the end.
+Status: Resolved 2026-10-15, except the environment move case, which waits on doc 02 (verified to pass with its fix). See "Follow-ups finished the same day" for the related fixes, including `mise run test:browser`. The findings below are the original 2026-10-14 report; see "Resolution (2026-10-15)" at the end.
 
 **Severity: medium.** These failures are not product regressions, but they
 make the validation suites fail on an ordinary developer machine. That hides
@@ -132,13 +132,17 @@ The browser runs turned up two more host problems, and both are fixed:
 - **Environment move.** Confirmed as doc 02. With that worker's
   `2ca0b952` applied (not merged here), the real-stack move spec passed on
   this host, which has no tmux socket at all.
-- **New, not fixed here:** `mise run test:browser` cannot start.
-  `e2e/DesignCanvas.spec.ts` and `e2e/DesignHistoryLayout.spec.ts` import the
+- **`mise run test:browser` could not start (fixed).**
+  `e2e/DesignCanvas.spec.ts` and `e2e/DesignHistoryLayout.spec.ts` imported the
   backend `DesignService`, which since #969 loads `bun:sqlite`. Playwright runs
-  specs under Node, so loading aborts the whole component suite ("Only URLs
+  specs under Node, so loading aborted the whole component suite ("Only URLs
   with a scheme in: file, data, and node are supported by the default ESM
-  loader. Received protocol 'bun:'"). Without those two files the suite passes
-  (185 passed, 57 skipped).
+  loader. Received protocol 'bun:'"). The service now runs in a Bun child
+  process (`e2e/design-service-host.ts`), which the specs drive over a
+  JSON-lines pipe (`e2e/design-service-client.ts`); the browser side is
+  unchanged. The suite passes again (189 passed, 57 skipped). No default CI
+  job runs it, so `tests/unit/playwright-spec-loading.test.ts` now lists all
+  three Playwright configs under Node inside `mise run test`.
 - **Flake 0213 (open).** The narrow host-picker case failed once with the
   tools popover closed and passed seven times afterwards.
 - **Flake 0214 (open).** The first `mise run test` after these changes hit

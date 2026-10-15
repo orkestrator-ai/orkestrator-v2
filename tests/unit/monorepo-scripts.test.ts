@@ -289,10 +289,13 @@ describe("monorepo orchestration scripts", () => {
   test("aggregate Turbo groups stream task output instead of buffering it", () => {
     // `--output-logs=errors-only` buffers a whole Turbo run into one silent
     // window, which starves the runner's no-progress watchdog and gets a
-    // healthy slow group killed.
+    // healthy slow group killed. Turbo's default log order does the same per
+    // task whenever it detects CI, so the order is pinned to `stream`.
     const source = read("scripts/test-all.ts");
     expect(source).not.toContain("--output-logs=errors-only");
     expect(source).toContain("--output-logs=new-only");
+    expect(source).toContain('"--log-order=stream"');
+    expect(source).not.toContain("--log-order=grouped");
   });
 
   test("Turbo uses its automatic worktree-shared cache", () => {

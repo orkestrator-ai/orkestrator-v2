@@ -83,8 +83,24 @@ jobs:
       - name: Exercise the standalone packaged-backend layout
         run: cd apps/backend && bun test --preload ../../tests/setup-node.ts tests/standalone.test.ts
 
+      # electron-builder ad-hoc signs the arm64 app, which opens every bundled
+      # file and exhausts the macOS runner's default descriptor limit (EMFILE).
+      # It skips signing for pull requests unless told otherwise, so only pushes
+      # to main failed; signing pull requests too makes them prove the same
+      # thing. This job has no signing identity or secrets, so any signature is
+      # ad hoc.
       - name: Build an unpacked Electron application
-        run: bunx electron-builder --dir
+        shell: bash
+        env:
+          CSC_FOR_PULL_REQUEST: "true"
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            limit="$(sysctl -n kern.maxfilesperproc)"
+            hard="$(ulimit -Hn)"
+            if [ "$hard" != unlimited ] && [ "$hard" -lt "$limit" ]; then limit="$hard"; fi
+            ulimit -Sn "$limit"
+          fi
+          bunx electron-builder --dir --publish never
 
       - name: Install and validate the unpacked Linux application
         if: runner.os == 'Linux'

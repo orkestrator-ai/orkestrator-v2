@@ -29,3 +29,15 @@
   and temp-directory isolation) but not credential code.
 - **Hypothesis:** none yet. The hang, rather than a slow pass, suggests a child
   process or filesystem wait that never resolves under aggregate load.
+
+## Separate deterministic failure on Linux CI (2026-10-15)
+
+`an empty payload leaves an existing in-container credential intact` failed
+with status 1 on every GitHub Actions `main` run after #966 moved this file into
+the backend Turbo task. That is not this hang and not a flake. Turbo's strict
+environment drops `SHLVL`, so `bash -lc` ran as a top-level login shell, and the
+script's early `exit 0` sourced Debian's default `~/.bash_logout`, whose
+`clear_console` fails without a terminal; under `set -e` the shell then exited 1.
+`buildSyncContainerClaudeCredentialCommand` now guards the write instead of
+exiting early, and a test with a failing `~/.bash_logout` reproduces the old
+behaviour on any host.

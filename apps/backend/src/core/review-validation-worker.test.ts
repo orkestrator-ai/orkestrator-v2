@@ -89,6 +89,11 @@ async function control(
       env: {
         ...process.env,
         ORKESTRATOR_TEST_SCHEDULER_DIR: path.join(root, ".orkestrator", "scheduler"),
+        // The host budget defaults to the logical core count, and an unmeasured
+        // command asks for four slots. On a four-core CI runner the first
+        // command took every slot, so commands these tests expect to overlap
+        // ran one after another. Tests that need a smaller host say so.
+        ORKESTRATOR_TEST_HOST_WORKERS: "8",
         ...extraEnv,
       },
     },

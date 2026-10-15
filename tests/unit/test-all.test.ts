@@ -28,6 +28,7 @@ import {
   TEST_NO_PROGRESS_TIMEOUT_MS_ENV,
   TEST_TIMINGS_DIRECTORY_ENV,
   terminateActiveGroups,
+  TURBO_GROUP_OUTPUT_FLAGS,
   WORKSPACE_WORKERS_ENV,
   type CommandResult,
   type TestAllDependencies,
@@ -379,6 +380,20 @@ describe("scripts/test-all.ts", () => {
     expect(workspaceGroup.env?.[WORKSPACE_WORKERS_ENV]).toMatch(/^\d+$/);
     expect(workspaceGroup.args).not.toContain("--cache-dir");
     expect(workspaceGroup.args).toContain("--summarize");
+  });
+
+  test("Turbo groups stream output and report every failing package", () => {
+    // A four-core CI runner plans one Bun worker per package, where grouped CI
+    // output starved the no-progress watchdog and a first failure hid the rest.
+    for (const cores of [4, 8]) {
+      const turboGroups = buildConcurrentGroups(cores).filter((group) => group.args[0] === "turbo");
+      expect(turboGroups.map((group) => group.name).sort()).toEqual([BRIDGES, WORKSPACE].sort());
+      for (const group of turboGroups) {
+        for (const flag of TURBO_GROUP_OUTPUT_FLAGS) expect(group.args).toContain(flag);
+      }
+    }
+    expect(TURBO_GROUP_OUTPUT_FLAGS).toContain("--log-order=stream");
+    expect(TURBO_GROUP_OUTPUT_FLAGS).toContain("--continue=dependencies-successful");
   });
 
   test("offers an affected fast path while keeping the default suite complete", () => {

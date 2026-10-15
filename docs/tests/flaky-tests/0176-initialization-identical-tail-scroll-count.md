@@ -18,3 +18,23 @@
 
 Observed while validating AddProjectDialog remote detection. No code in the
 owning area changed, and no test was skipped or loosened.
+
+## Recurrences on GitHub Actions `main` (2026-10-07 to 2026-10-15)
+
+- **Original command:** `mise run test` in the `Unit and integration tests` job
+  of `lint.yml` on `ubuntu-latest` (four vCPUs); the web package ran on one
+  Bun worker.
+- **Runs:** 37663187677 (`7685467f`, 2026-10-07), 38542981105 (`00d9e3d3`,
+  2026-10-14) and 38716084666 (`48a43ac0`, 2026-10-15).
+- **Failure:** the same assertion at line 146, expected 0 scroll calls and
+  received 1 (21.36 ms in run 38716084666).
+- **Suite counts (run 38716084666):** web 7,483 pass, 1 fail of 7,494 tests
+  across 424 files (295.08 s). Turbo then stopped the rest of the workspace
+  group, so backend and the other packages did not run; the aggregate now
+  passes `--continue=dependencies-successful` so one failing package no longer
+  hides the others.
+- **Isolated rerun (macOS arm64):** `mise run test:logged -- --name
+  rerun-initialization-logs -- bun --cwd=apps/web test
+  src/components/terminal/InitializationLogs.test.tsx --parallel=1
+  --only-failures` passed all 10 tests, wrapper duration 0.3 s.
+- No test or production code was changed.

@@ -29,3 +29,30 @@ passing alone and in the next aggregate run, points to host contention rather
 than a defect in the tests. Related history: 0078 (a single runtime-env-wiring
 timeout) and 0055 (test-all concurrency). Keep open until a recurrence narrows
 the cause.
+
+## Recurrence on GitHub Actions `main` (2026-10-15)
+
+- **Test:** `container runtime environment wiring > Claude setup block copies
+  the allowlist, skips history, and drops only the symlinked command`
+  (`tests/unit/runtime-env-wiring.test.ts:1928`).
+- **Original command:** `mise run test` in the `Unit and integration tests` job
+  of `lint.yml` on `ubuntu-latest` (four vCPUs). It failed in 4 of the 15
+  completed `main` runs on 2026-10-14 and 2026-10-15: runs 38709501165
+  (`404b1f3b`), 38713152559 (`0e48ad38`), 38719540712 (`1369ea7b`) and
+  38748749506 (`9fb4e6a8`).
+- **Worker configuration:** root group one Bun worker, bridges two, the
+  workspace group one package task at a time with one Bun worker.
+- **Failure:** `expect(result.exitCode).toBe(0)` received `null` after
+  5,007.21 ms; Bun reported `killed 1 dangling process`, the harness's `bash`.
+  It was the only case from this file to fail.
+- **Suite counts:** root group 2,958 pass, 1 skip, 1 fail across 135 files
+  (run 38709501165) up to 2,978 pass, 1 skip, 1 fail across 137 files
+  (run 38748749506).
+- **Isolated rerun (macOS arm64):** `mise run test:logged -- --name
+  rerun-runtime-env-wiring -- bun test ./tests/unit/runtime-env-wiring.test.ts
+  --parallel=1 --only-failures` passed all 63 tests, wrapper duration 5.6 s. The
+  case alone takes 0.3 s.
+- **Assessment:** the same five-second budget as the original entry, now on a
+  single case and repeatedly on a four-vCPU runner. The Claude block runs many
+  short shell commands, so it is the most exposed to process-spawn contention.
+  No test or production code was changed.

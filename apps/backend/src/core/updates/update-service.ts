@@ -42,6 +42,7 @@ import {
   type UpdateHostReport,
   type UpdateHostRequest,
   type UpdateJob,
+  type UpdateJobDependencies,
   type UpdateJobError,
   type UpdateJobStep,
   type UpdateNotice,
@@ -93,16 +94,21 @@ export class UpdateCommandError extends Error {
 }
 
 export type UpdateDependencies = {
-  /** The local default image, for the container-capability diff (phase 3). */
+  /** The local default image, for the container-capability diff. */
   inspectLocalImage?(): Promise<ReleaseRequirementsDiffContext["localImage"]>;
-  /** Fetches and verifies what the target needs before restarting (phase 3). */
+  /** Fetches and verifies what the target needs before restarting. */
   prefetch?(
     manifest: ReleaseRequirements,
     job: UpdateJob,
     report: (percent: number | null, message: string | null) => void,
-  ): Promise<void>;
+  ): Promise<UpdateJobDependencies>;
   /** Runs on the old version right before handing over to the host. */
   beforeInstall?(manifest: ReleaseRequirements, job: UpdateJob): Promise<void>;
+  /**
+   * Undoes `beforeInstall` when the job ends any way but success: a
+   * rollback, a failure, or a cancel of an install armed for quit.
+   */
+  undoBeforeInstall?(job: UpdateJob): Promise<void>;
 };
 
 export type UpdateServiceOptions = {
@@ -540,6 +546,8 @@ export class UpdateService {
       actionsOnHost: actionsOnHost(diff),
       storageSchemaVersion: this.options.storageSchemaVersion(),
       installWhen: null,
+      dependencies: null,
+      preparedInstall: false,
     };
     this.jobManifest = target.manifest;
     this.audit("start", requester, {
@@ -583,10 +591,16 @@ export class UpdateService {
     try {
       if (!manifest) throw new Error("The target manifest is missing");
       this.apply(jobId, { type: "fetch-dependencies" });
-      await this.options.dependencies?.prefetch?.(manifest, this.job!, (percent, message) =>
-        this.progress(jobId, "dependencies", percent, message),
+      const dependencies = await this.options.dependencies?.prefetch?.(
+        manifest,
+        this.job!,
+        (percent, message) => this.progress(jobId, "dependencies", percent, message),
       );
       if (!this.isCurrent(jobId)) return;
+      if (dependencies) {
+        this.job = { ...this.job!, dependencies, updatedAt: this.at() };
+        this.changed(true);
+      }
       this.apply(jobId, { type: "download" });
       await this.sendToHost(
         {
@@ -667,9 +681,16 @@ export class UpdateService {
       .catch(() => undefined);
   }
 
+  private undoBeforeInstall(job: UpdateJob): void {
+    void this.options.dependencies?.undoBeforeInstall?.(job).catch((error: unknown) => {
+      this.log.warn("[Updates] Could not undo the update's install step:", error);
+    });
+  }
+
   private finish(action: "succeeded" | "failed" | "rolled-back" | "cancelled", detail?: string) {
     const job = this.job!;
     this.audit(action, null, { detail });
+    if (action !== "succeeded" && job.preparedInstall) this.undoBeforeInstall(job);
     if (action === "cancelled") return;
     const notice = (
       kind: UpdateNotice["kind"],
@@ -756,18 +777,28 @@ export class UpdateService {
   ): Promise<void> {
     const manifest = this.jobManifest;
     if (!this.job || this.job.id !== jobId || !manifest) return;
+    const preparing = this.job;
     let prepared = true;
     this.installAdmitting = true;
     try {
-      await this.options.dependencies?.beforeInstall?.(manifest, this.job);
+      await this.options.dependencies?.beforeInstall?.(manifest, preparing);
     } catch (error) {
       prepared = false;
       this.fail(jobId, { step: "install", ...describe(error) });
     } finally {
       this.installAdmitting = false;
     }
-    // Cancelled, failed or replaced while preparing: there is nothing to install.
-    if (!prepared || !this.isCurrent(jobId) || this.job!.phase !== "ready") return;
+    if (!prepared) return;
+    if (!this.isCurrent(jobId) || this.job!.phase !== "ready") {
+      // Cancelled, failed or replaced while preparing: nothing to install,
+      // and what the install step changed goes back.
+      if (this.options.dependencies?.beforeInstall) this.undoBeforeInstall(preparing);
+      return;
+    }
+    if (this.options.dependencies?.beforeInstall && !this.job!.preparedInstall) {
+      this.job = { ...this.job!, preparedInstall: true, updatedAt: this.at() };
+      this.changed(true);
+    }
     const job = this.job!;
     const request: UpdateHostRequest = {
       kind: "install",
@@ -777,6 +808,7 @@ export class UpdateService {
       fromVersion: job.fromVersion,
       restart: when,
       storageSchemaVersion: job.storageSchemaVersion,
+      toolchainBinDir: job.dependencies?.toolchainBinDir ?? null,
     };
     this.audit("install", requester, { detail: when === "on-quit" ? "on quit" : undefined });
     if (when === "on-quit") {

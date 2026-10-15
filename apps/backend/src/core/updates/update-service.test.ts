@@ -425,6 +425,7 @@ describe("running a job", () => {
         prefetch: async (manifest, _job, progress) => {
           progress(50, "Downloading provider binaries");
           prefetched.push(manifest.version);
+          return { toolchainBinDir: "/data/toolchains/bin/target", image: null };
         },
       },
     });
@@ -455,6 +456,11 @@ describe("running a job", () => {
       restart: "now",
       fromVersion: "2.21.0",
       storageSchemaVersion: 3,
+      toolchainBinDir: "/data/toolchains/bin/target",
+    });
+    expect(h.service.snapshot().job?.dependencies).toEqual({
+      toolchainBinDir: "/data/toolchains/bin/target",
+      image: null,
     });
     expect(h.service.snapshot().job?.phase).toBe("installing");
     report(h, session, install, "progress", { progress: { percent: null, message: "restarting" } });
@@ -649,12 +655,16 @@ describe("running a job", () => {
 
   test("a job cancelled while its install step prepares is not installed", async () => {
     let release!: () => void;
+    let undone = 0;
     const h = await harness({
       dependencies: {
         beforeInstall: () =>
           new Promise<void>((resolve) => {
             release = resolve;
           }),
+        undoBeforeInstall: async () => {
+          undone += 1;
+        },
       },
     });
     const session = await hostSession(h);
@@ -672,6 +682,7 @@ describe("running a job", () => {
     await installing;
     expect(h.hostRequests().some((request) => request.kind === "install")).toBe(false);
     expect(h.service.snapshot().job?.phase).toBe("cancelled");
+    expect(undone).toBe(1);
   });
 
   test("cancelling an install armed for quit disarms the host; a macOS-staged one cannot be cancelled", async () => {
@@ -687,6 +698,70 @@ describe("running a job", () => {
       "UpdateError:not-cancellable: macOS has already staged",
     );
     expect(mac.service.snapshot().job).toMatchObject({ phase: "ready", installWhen: "on-quit" });
+  });
+
+  test("the install step is undone by a rollback", async () => {
+    const calls: string[] = [];
+    const h = await harness({
+      dependencies: {
+        prefetch: async () => ({
+          toolchainBinDir: null,
+          image: {
+            pulledRef: "ghcr.io/o/r:2.22.0",
+            imageId: "sha256:new",
+            previousImageId: "sha256:old",
+          },
+        }),
+        beforeInstall: async (_manifest, job) => {
+          calls.push(`tag ${job.dependencies?.image?.imageId}`);
+        },
+        undoBeforeInstall: async (job) => {
+          calls.push(`tag ${job.dependencies?.image?.previousImageId}`);
+        },
+      },
+    });
+    const session = await hostSession(h);
+    await h.service.startJob(startArgs(await availableUpdate(h)), REQUESTER);
+    await flush();
+    report(h, session, h.hostRequests()[0]!, "succeeded");
+    await flush();
+    expect(calls).toEqual(["tag sha256:new"]);
+    report(h, session, h.hostRequests()[1]!, "failed", {
+      error: { code: "staging-failed", message: "x" },
+    });
+    await flush();
+    expect(h.service.snapshot().job?.phase).toBe("rolled-back");
+    expect(calls).toEqual(["tag sha256:new", "tag sha256:old"]);
+  });
+
+  test("the install step is undone by any end but success", async () => {
+    const tracked = () => {
+      const calls: string[] = [];
+      const dependencies: UpdateDependencies = {
+        beforeInstall: async () => {
+          calls.push("swap");
+        },
+        undoBeforeInstall: async () => {
+          calls.push("undo");
+        },
+      };
+      return { calls, dependencies };
+    };
+    const cancelled = tracked();
+    const h = await harness({ dependencies: cancelled.dependencies });
+    const { job } = await armedOnQuit(h, APPIMAGE_HOST);
+    expect(h.service.snapshot().job?.preparedInstall).toBe(true);
+    await h.service.cancel(job.id, REQUESTER);
+    await flush();
+    expect(cancelled.calls).toEqual(["swap", "undo"]);
+
+    const succeeded = tracked();
+    const done = await harness({ dependencies: succeeded.dependencies });
+    const { session, jobId } = await acknowledgedRestart(done);
+    done.service.hostOutcome({ hostSessionId: session, jobId, outcome: "succeeded" });
+    await flush();
+    expect(done.service.snapshot().job?.phase).toBe("succeeded");
+    expect(succeeded.calls).toEqual(["swap"]);
   });
 
   test("manual restart waits in ready; install now and install on quit", async () => {

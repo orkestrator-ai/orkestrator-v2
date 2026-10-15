@@ -12,9 +12,46 @@ import {
 } from "@orkestrator/protocol/release-requirements";
 import { RELEASE_SIGNING_PUBLIC_KEYS } from "@orkestrator/protocol/release-signing-keys";
 import { DISABLE_AUTO_UPDATE_ENV } from "@orkestrator/protocol/updates";
+import { ensurePinnedToolchains } from "@orkestrator/toolchain/manager";
+import { loadAgentPlatformSelection } from "@orkestrator/toolchain/platform-selection";
+import { DOCKER_IMAGE } from "../constants.js";
+import { readImageManifest, resolveDockerImage } from "../docker-image.js";
+import { runCommand } from "../shell.js";
 import type { StorageService } from "../storage.js";
+import { createUpdateDependencies, type UpdateDockerRuntime } from "./update-dependencies.js";
 import { createUpdateFeed, resolveFeedBaseUrl, UpdateFeedError } from "./update-feed.js";
 import { UpdateService, type UpdateDependencies } from "./update-service.js";
+
+/** Docker as the dependency step uses it: inspect, pull by tag, retag. */
+export function dockerUpdateRuntime(
+  storage: Pick<StorageService, "getDataDir">,
+): UpdateDockerRuntime {
+  return {
+    resolve: resolveDockerImage,
+    async repoDigests(imageRef) {
+      try {
+        const { stdout } = await runCommand(
+          "docker",
+          ["image", "inspect", "--format", "{{json .RepoDigests}}", imageRef],
+          { timeoutMs: 15_000 },
+        );
+        const digests = JSON.parse(stdout.trim()) as unknown;
+        return Array.isArray(digests)
+          ? digests.filter((entry): entry is string => typeof entry === "string")
+          : [];
+      } catch {
+        return null;
+      }
+    },
+    manifest: (imageId) => readImageManifest(imageId, { storage: storage as StorageService }),
+    async pull(imageRef) {
+      await runCommand("docker", ["pull", imageRef], { timeoutMs: 30 * 60_000 });
+    },
+    async tag(imageId, imageRef) {
+      await runCommand("docker", ["tag", imageId, imageRef], { timeoutMs: 60_000 });
+    },
+  };
+}
 
 export { UpdateService } from "./update-service.js";
 
@@ -41,7 +78,12 @@ export function createBackendUpdateService(options: {
   resourceRoot: string;
   currentVersion: string;
   runtimeFlavor: "production" | "development" | "agent-test";
-  storage: Pick<StorageService, "getUpdateChannel" | "setUpdateChannel" | "storageSchemaVersion">;
+  storage: Pick<
+    StorageService,
+    "getUpdateChannel" | "setUpdateChannel" | "storageSchemaVersion" | "getDataDir"
+  >;
+  /** The image environments run; `orkestrator-v2:latest` unless configured. */
+  dockerImage?: string;
   emit(event: string, payload: unknown): void;
   env?: NodeJS.ProcessEnv;
   platform?: string;
@@ -62,11 +104,25 @@ export function createBackendUpdateService(options: {
     disabledReason = "Updates are off in agent-test profiles.";
   }
   let ownRequirements: ReleaseRequirements | null | undefined;
+  const platform = options.platform ?? process.platform;
+  const arch = options.arch ?? process.arch;
+  const dependencies =
+    options.dependencies ??
+    createUpdateDependencies({
+      dataDir: options.dataDir,
+      platform,
+      arch,
+      imageRef: () => options.dockerImage ?? DOCKER_IMAGE,
+      enabledAgentPlatforms: async () =>
+        (await loadAgentPlatformSelection(options.dataDir)).enabled,
+      ensure: ensurePinnedToolchains,
+      docker: dockerUpdateRuntime(options.storage),
+    });
   return new UpdateService({
     dataDir: options.dataDir,
     currentVersion: options.currentVersion,
-    platform: options.platform ?? process.platform,
-    arch: options.arch ?? process.arch,
+    platform,
+    arch,
     feed: createUpdateFeed({ baseUrl, signingKeys: RELEASE_SIGNING_PUBLIC_KEYS }),
     emit: options.emit,
     readOwnRequirements: () => {
@@ -87,6 +143,6 @@ export function createBackendUpdateService(options: {
     automaticChecks:
       disabledReason === null && options.runtimeFlavor === "production" && env.NODE_ENV !== "test",
     disabledReason,
-    dependencies: options.dependencies,
+    dependencies,
   });
 }

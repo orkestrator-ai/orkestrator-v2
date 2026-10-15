@@ -140,6 +140,7 @@ const install = (restart: "now" | "on-quit" = "now"): UpdateHostRequest => ({
   fromVersion: "2.21.0",
   restart,
   storageSchemaVersion: 3,
+  toolchainBinDir: null,
 });
 
 async function deliver(

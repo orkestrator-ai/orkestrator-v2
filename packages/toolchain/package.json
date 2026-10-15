@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./external": "./src/external.ts",
     "./install": "./src/install.ts",
     "./layout": "./src/layout.ts",
     "./manager": "./src/manager.ts",

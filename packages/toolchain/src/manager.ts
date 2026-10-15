@@ -93,6 +93,12 @@ export type EnsurePinnedToolchainsOptions = {
   beforeFinalVerificationForTests?: () => void | Promise<void>;
   /** Publish a verified activation while the install lock is still held. */
   onActivated?: (result: PinnedToolchainResult) => void | Promise<void>;
+  /**
+   * Remove superseded versions after activating (default). An update's
+   * pre-fetch of the next release's tools turns this off: it must never
+   * delete anything the running version, or a rollback, could need.
+   */
+  prune?: boolean;
 };
 
 export type PinnedToolchainResult = {
@@ -1957,13 +1963,14 @@ export async function ensurePinnedToolchains(
       );
     }
     await options.onActivated?.(result);
-    await pruneSupersededVersions(
-      rootDir,
-      artifacts,
-      timings.retainSupersededMs,
-      ownerProcessExists,
-      options.removeSupersededVersionForTests ?? rm,
-    );
+    if (options.prune !== false)
+      await pruneSupersededVersions(
+        rootDir,
+        artifacts,
+        timings.retainSupersededMs,
+        ownerProcessExists,
+        options.removeSupersededVersionForTests ?? rm,
+      );
     artifacts.forEach((artifact) => toolFractions.set(artifact.name, 1));
     progress({
       phase: "ready",

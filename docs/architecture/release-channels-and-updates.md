@@ -613,7 +613,8 @@ The target manifest's `toolchain.artifacts` is exactly the target version's
    to the target's tool names.
 2. Validates them strictly (`validateToolchainArtifacts`): every field the
    installer reads, lowercase 64-hex SHA-256s, HTTPS URLs whose host is in the
-   artefact's `allowedHosts`, and tool names matching `^[a-z][a-z0-9-]{0,31}$`.
+   artefact's `allowedHosts`, and tool names matching `^[a-z][a-z0-9-]{0,31}$`
+   other than the toolchain layout's own `bin` and `current`.
    A target may add a tool the running build does not know. Trust comes from
    the verified manifest, and the pinned SHA-256 still decides every byte.
 3. Calls `ensurePinnedToolchains({ artifacts, prune: false })`. It downloads
@@ -639,11 +640,14 @@ backend reads the local image's manifest:
 - **Published image.** If the image is missing a required capability and the
   local image came from GHCR (`RepoDigests` names
   `ghcr.io/orkestrator-ai/orkestrator-v2`), the backend pulls
-  `ghcr.io/orkestrator-ai/orkestrator-v2:<target version>`. Docker verifies
-  the content addresses. The backend then checks that the pulled image's own
-  manifest reports the target `appVersion` and the capabilities, and records
-  the new and old image ids. The old backend retags `orkestrator-v2:latest`
-  just before handing over to the host, and a rollback retags it back.
+  `ghcr.io/orkestrator-ai/orkestrator-v2:<target version>`, and only that: a
+  manifest that names any other image or tag is refused, because the pull
+  becomes the default image. Docker verifies the content addresses. The
+  backend then checks that the pulled image's own manifest reports the target
+  `appVersion` and the capabilities, and records the new and old image ids.
+  The old backend retags `orkestrator-v2:latest` just before handing over to
+  the host (the job records `preparedInstall`). Any end but success retags it
+  back: a rollback, a failure, or a cancelled install on quit.
 - **Locally built image.** If the image was built locally, the backend never
   replaces it. The diff gets a `container-capability` item with an
   action-needed notice (`mise run docker:build`).

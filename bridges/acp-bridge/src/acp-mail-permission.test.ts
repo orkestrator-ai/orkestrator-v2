@@ -1,3 +1,4 @@
+import "./testing/unit-test-env.js";
 import { describe, expect, test } from "bun:test";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { autoApprovedPermissionOption, orkestratorToolPermissionOption } from "./acp-session.js";
@@ -139,6 +140,12 @@ describe("Orkestrator tool permission requests", () => {
         orkestratorToolPermissionOption({ toolCall: useTool({ tool_name: toolName }), options }),
       ).toBeUndefined();
     }
+    // Current request input is authoritative even when it cannot identify a tool.
+    expect(
+      orkestratorToolPermissionOption({ toolCall: useTool({}), options }, "ask", {
+        tool_name: "orkestrator__check_inbox",
+      }),
+    ).toBeUndefined();
     // The display title never stands in for the wrapped name.
     expect(orkestratorToolPermissionOption({ toolCall: useTool(), options })).toBeUndefined();
     expect(
@@ -186,6 +193,54 @@ describe("auto-approve policy permission requests", () => {
     expect(
       autoApprovedPermissionOption({ ...request("edit"), options: [options[0]] }, policy()),
     ).toBeUndefined();
+  });
+
+  test("provider tool names and wrapped identities respect explicit denials", () => {
+    for (const name of ["write_file", "run_terminal_cmd"]) {
+      const denied = policy({ toolPolicy: { deny: [name] } });
+      for (const toolCall of [
+        { name, kind: "other" },
+        { name, _meta: { "x.ai/tool": { name: "generic_wrapper" } }, kind: "other" },
+        { name: "generic_wrapper", rawInput: { _toolName: name }, kind: "other" },
+        { _meta: { "x.ai/tool": { name } }, kind: "edit" },
+        { rawInput: { _toolName: name }, kind: "execute" },
+        { name: "use_tool", rawInput: { tool_name: name }, kind: "other" },
+      ]) {
+        expect(autoApprovedPermissionOption({ toolCall, options }, denied)).toBeUndefined();
+      }
+      expect(
+        autoApprovedPermissionOption({ toolCall: {}, options }, denied, "read", { name }),
+      ).toBeUndefined();
+      expect(
+        autoApprovedPermissionOption({ toolCall: { name: "use_tool" }, options }, denied, "other", {
+          input: { tool_name: name },
+        }),
+      ).toBeUndefined();
+    }
+  });
+
+  test("known dangerous names supplement generic or conflicting kinds", () => {
+    for (const kind of ["other", "vendor_kind", "read", undefined]) {
+      expect(
+        autoApprovedPermissionOption(
+          { toolCall: { name: "run_terminal_cmd", kind }, options },
+          policy({ capabilityPolicy: { deny: ["shell"] } }),
+        ),
+      ).toBeUndefined();
+      expect(
+        autoApprovedPermissionOption(
+          { toolCall: { name: "use_tool", rawInput: { tool_name: "write_file" }, kind }, options },
+          policy({ capabilityPolicy: { deny: ["file.write"] } }),
+        ),
+      ).toBeUndefined();
+    }
+    for (const kind of ["other", "vendor_kind", undefined]) {
+      for (const deny of [["shell"], ["some_provider_tool"]]) {
+        expect(
+          autoApprovedPermissionOption(request(kind), policy({ toolPolicy: { deny } })),
+        ).toBeUndefined();
+      }
+    }
   });
 
   test("a kind the policy denies is left for a person", () => {

@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { ProviderUnavailableError } from "./agent-provider-contract.js";
+import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 import type { BridgeConnection } from "./native-agent-provider.js";
 import {
   ACP_BRIDGE_MAX_BODY_BYTES,
@@ -335,6 +337,36 @@ describe("HTTP bridge provider (ACP)", () => {
     const [again] = (await list()).requests;
     await provider.interactions!.resolveInteraction("grok-1", again!.id, declineResolution(again!));
     expect(bodies.at(-1)).toEqual({ decision: "deny" });
+  });
+
+  test("unreadable successful dispatch bodies remain retryable", async () => {
+    const bodies = [
+      "{",
+      "null",
+      "[]",
+      '"completed"',
+      "123",
+      "true",
+      JSON.stringify({ padding: "x".repeat(AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes) }),
+    ];
+    for (const body of bodies) {
+      let attempts = 0;
+      const { provider } = httpProvider(
+        () =>
+          ++attempts === 1
+            ? new Response(body, { status: 200 })
+            : Response.json({
+                dispatch: "dispatched",
+                turn: { state: "completed", error: "expired" },
+              }),
+        grokConnection,
+      );
+      await expect(provider.turnTerminalError!("grok-1", "same-request")).rejects.toBeInstanceOf(
+        ProviderUnavailableError,
+      );
+      expect(await provider.turnTerminalError!("grok-1", "same-request")).toBe("expired");
+      expect(attempts).toBe(2);
+    }
   });
 
   test("reads a Grok turn's failure from the bridge's dispatch journal", async () => {

@@ -91,6 +91,7 @@ import {
   findToolPart,
   noteMessageMutation,
   rowIsFull,
+  turnStartIndex,
 } from "./acp-rows.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import { emptySessionConfig } from "./acp-persistence.js";
@@ -551,7 +552,7 @@ export function orkestratorToolPermissionOption(
   const vendorName = xaiTool ? xaiTool.name : toolCall.name;
   const names = [
     typeof vendorName === "string" && vendorName.trim() === GROK_USE_TOOL
-      ? (wrappedToolName(toolCall.rawInput) ?? wrappedToolName(recordedInput))
+      ? wrappedToolName(toolCall.rawInput === undefined ? recordedInput : toolCall.rawInput)
       : vendorName,
   ].filter((value): value is string => typeof value === "string");
   // Grok 1.0.46 names MCP tools `server__tool`, and its tool metadata also
@@ -574,6 +575,45 @@ function allowOptionId(params: JsonObject): string | undefined {
   return typeof allow?.optionId === "string" ? allow.optionId : undefined;
 }
 
+interface RecordedPermissionTool {
+  name?: string | null;
+  input?: unknown;
+}
+
+/** Provider identities only: display titles never authorize a tool. */
+function permissionToolNames(params: JsonObject, recorded?: RecordedPermissionTool): string[] {
+  const call = isObject(params.toolCall) ? params.toolCall : undefined;
+  if (!call) return [];
+  const meta = isObject(call._meta) ? call._meta : undefined;
+  const vendor = meta && isObject(meta["x.ai/tool"]) ? meta["x.ai/tool"] : undefined;
+  const input = call.rawInput === undefined ? recorded?.input : call.rawInput;
+  const names = [vendor?.name, call.name, isObject(input) ? input._toolName : undefined]
+    .filter((name): name is string => typeof name === "string" && name.trim().length > 0)
+    .map((name) => name.trim());
+  if (names.length === 0 && recorded?.name) names.push(recorded.name.trim());
+  if (typeof vendor?.namespace === "string" && typeof vendor.name === "string") {
+    names.push(
+      `${vendor.namespace}__${vendor.name.trim()}`,
+      `mcp__${vendor.namespace}__${vendor.name.trim()}`,
+    );
+  }
+  if (names.includes(GROK_USE_TOOL)) {
+    const wrapped = wrappedToolName(input);
+    if (wrapped) names.push(wrapped.trim());
+  }
+  return names;
+}
+
+function explicitlyDeniedPermissionTool(
+  params: JsonObject,
+  policy: NativeAgentExecutionPolicy | undefined,
+  recorded?: RecordedPermissionTool,
+): boolean {
+  return permissionToolNames(params, recorded).some((name) =>
+    policy?.toolPolicy?.deny?.includes(name),
+  );
+}
+
 const FILE_MUTATION_DENIALS = ["file.write", "file.patch", "write", "edit", "apply_patch"];
 
 /**
@@ -581,11 +621,28 @@ const FILE_MUTATION_DENIALS = ["file.write", "file.patch", "write", "edit", "app
  * that rule out auto-approving an ACP tool kind.
  */
 const AUTO_APPROVE_DENIALS_BY_KIND: Readonly<Record<string, readonly string[]>> = {
+  read: [],
+  search: [],
+  think: [],
   edit: FILE_MUTATION_DENIALS,
   delete: FILE_MUTATION_DENIALS,
   move: FILE_MUTATION_DENIALS,
   execute: ["shell", "shell.mutate"],
   fetch: ["network"],
+};
+
+const PERMISSION_KIND_BY_TOOL: Readonly<Record<string, string>> = {
+  bash: "execute",
+  shell: "execute",
+  terminal: "execute",
+  run_command: "execute",
+  run_terminal_cmd: "execute",
+  run_terminal_command: "execute",
+  execute_command: "execute",
+  write_file: "edit",
+  search_replace: "edit",
+  delete_file: "delete",
+  apply_patch: "edit",
 };
 
 /**
@@ -596,27 +653,40 @@ const AUTO_APPROVE_DENIALS_BY_KIND: Readonly<Record<string, readonly string[]>> 
  * auto-approve would wait on a person at every step. Answering here keeps that
  * setting's promise. A request of a kind the policy denies is never granted
  * this way and is left for a person. The kind is the request's own, or
- * `recordedKind` (the one the bridge recorded for the same tool call); a
- * request whose kind is unknown is granted only while the policy denies none
- * of them.
+ * `recordedKind` (the one the bridge recorded for the same tool call).
+ * Provider tool names and wrapped identities also enforce denials. An
+ * unclassified request is granted only while the policy has no denials.
  */
 export function autoApprovedPermissionOption(
   params: JsonObject,
   policy: NativeAgentExecutionPolicy | undefined,
   recordedKind?: string,
+  recorded?: RecordedPermissionTool,
 ): string | undefined {
   if (policy?.approvals !== "auto-approve") return undefined;
+  if (explicitlyDeniedPermissionTool(params, policy, recorded)) return undefined;
   const toolCall = isObject(params.toolCall) ? params.toolCall : undefined;
   const kind = typeof toolCall?.kind === "string" ? toolCall.kind : recordedKind;
   const denied = new Set<string>([
     ...(policy.capabilityPolicy?.deny ?? []),
     ...(policy.toolPolicy?.deny ?? []),
   ]);
-  const blocks = (names: readonly string[]) => names.some((name) => denied.has(name));
+  const kinds = [
+    kind,
+    ...permissionToolNames(params, recorded).map(
+      (name) => PERMISSION_KIND_BY_TOOL[name.toLowerCase()],
+    ),
+  ];
+  const classified = kinds.filter(
+    (value): value is string =>
+      typeof value === "string" && Object.hasOwn(AUTO_APPROVE_DENIALS_BY_KIND, value),
+  );
+  // A generic/unknown kind supplies no evidence that a denial is irrelevant.
+  if (classified.length === 0 && denied.size > 0) return undefined;
   if (
-    kind
-      ? blocks(AUTO_APPROVE_DENIALS_BY_KIND[kind] ?? [])
-      : Object.values(AUTO_APPROVE_DENIALS_BY_KIND).some(blocks)
+    classified.some((value) =>
+      AUTO_APPROVE_DENIALS_BY_KIND[value]!.some((name) => denied.has(name)),
+    )
   ) {
     return undefined;
   }
@@ -651,12 +721,16 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
     const policy = effectiveTurnExecutionPolicy(state);
     const toolCallId = isObject(params.toolCall) ? params.toolCall.toolCallId : undefined;
     const recorded =
-      typeof toolCallId === "string" ? findToolPart(state, toolCallId)?.part : undefined;
-    const orkestratorAllow = orkestratorToolPermissionOption(
-      params,
-      policy?.approvals,
-      recorded?.toolArgs,
-    );
+      typeof toolCallId === "string"
+        ? findToolPart(state, toolCallId, turnStartIndex(state))?.part
+        : undefined;
+    const recordedTool = recorded
+      ? { name: recorded.toolName, input: recorded.toolArgs }
+      : undefined;
+    const toolDenied = explicitlyDeniedPermissionTool(params, policy, recordedTool);
+    const orkestratorAllow = toolDenied
+      ? undefined
+      : orkestratorToolPermissionOption(params, policy?.approvals, recorded?.toolArgs);
     if (orkestratorAllow) {
       child.respond(requestId, { outcome: { outcome: "selected", optionId: orkestratorAllow } });
       return;
@@ -669,6 +743,7 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
       params,
       policy,
       recorded ? acpToolSourceStates.get(recorded)?.kind : undefined,
+      recordedTool,
     );
     if (autoAllow) {
       child.respond(requestId, { outcome: { outcome: "selected", optionId: autoAllow } });
@@ -880,6 +955,7 @@ export function parkGrokInteraction(
   if (existing) existing.respond({ outcome: "cancelled" });
   const requestedAt = Date.now();
   const expiresAt = requestedAt + 5 * 60_000;
+  const promptSequence = state.promptSequence;
   const finish = (result: JsonObject) => {
     const interaction = state.interactions.get(toolCallId);
     if (!interaction) return;
@@ -890,7 +966,11 @@ export function parkGrokInteraction(
     schedulePersist();
   };
   const timer = setTimeout(() => {
-    state.expiredRequestPromptSequence = state.promptSequence;
+    // An older request may outlive its turn. It cannot fail a newer turn or
+    // overwrite evidence of a request that expired in that newer turn.
+    if (state.promptSequence === promptSequence) {
+      state.expiredRequestPromptSequence = promptSequence;
+    }
     finish({ outcome: "cancelled" });
   }, expiresAt - requestedAt);
   timer.unref();
@@ -1003,6 +1083,7 @@ export function parkPermission(
   const id = randomBytes(12).toString("hex");
   const requestedAt = Date.now();
   const expiresAt = requestedAt + 5 * 60_000;
+  const promptSequence = state.promptSequence;
   const finish = (optionId?: string) => {
     const approval = state.approvals.get(id);
     if (!approval) return;
@@ -1017,7 +1098,11 @@ export function parkPermission(
     schedulePersist();
   };
   const timer = setTimeout(() => {
-    state.expiredRequestPromptSequence = state.promptSequence;
+    // An older request may outlive its turn. It cannot fail a newer turn or
+    // overwrite evidence of a request that expired in that newer turn.
+    if (state.promptSequence === promptSequence) {
+      state.expiredRequestPromptSequence = promptSequence;
+    }
     finish();
   }, expiresAt - requestedAt);
   timer.unref();

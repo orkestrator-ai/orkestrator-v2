@@ -3819,6 +3819,180 @@ describe("ActionBar workflow tabs", () => {
     );
   });
 
+  test.each([false, true])(
+    "resolves a PR created against a non-default base after remount (configured=%s)",
+    async (configured) => {
+      currentEnvironment = {
+        ...selectedEnvironment,
+        prUrl: null,
+        prState: null,
+        hasMergeConflicts: null,
+      };
+      let view = render(<ActionBar />);
+      fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+      fireEvent.change(screen.getByLabelText("Target branch"), {
+        target: { value: "release/2.0" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
+      await waitFor(() => expect(setModeCreatePendingMock).toHaveBeenCalledTimes(1));
+      expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          prompt: expect.stringContaining("gh pr create --base release/2.0 --fill"),
+        }),
+      );
+      view.unmount();
+
+      // The backend discovers the PR while this environment has no mounted toolbar.
+      currentEnvironment = {
+        ...currentEnvironment,
+        prUrl: selectedEnvironment.prUrl,
+        prState: "open",
+        hasMergeConflicts: true,
+        prBaseBranch: "release/2.0",
+      };
+      view = render(<ActionBar />);
+      const resolve = screen.getByRole("button", { name: "Resolve" });
+      if (configured) {
+        fireEvent.contextMenu(resolve);
+        expect(screen.getByText(/against release\/2\.0/)).toBeTruthy();
+        fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
+      } else {
+        fireEvent.click(resolve);
+      }
+      await waitFor(() =>
+        expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            title: "Resolve",
+            prompt: expect.stringContaining("git merge origin/release/2.0"),
+          }),
+        ),
+      );
+      const input = launchNativeAgentJobMock.mock.calls.at(-1)?.[0] as { prompt: string };
+      expect(input.prompt).not.toContain("git merge origin/main");
+    },
+  );
+
+  test("keeps the default suggestion and manual launch usable when branch discovery fails", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    getProjectGitStatusMock.mockRejectedValueOnce(new Error("Checkout unavailable"));
+    render(<ActionBar />);
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+    await waitFor(() => expect(getProjectGitStatusMock).toHaveBeenCalledWith("project-1"));
+    await act(async () => {});
+    expect(
+      Array.from(
+        document.querySelectorAll("datalist option"),
+        (option) => (option as HTMLOptionElement).value,
+      ),
+    ).toEqual(["main"]);
+    const confirm = screen.getByRole("button", {
+      name: "Create pull request",
+    }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(false);
+    fireEvent.change(screen.getByLabelText("Target branch"), { target: { value: "manual/base" } });
+    fireEvent.click(confirm);
+    await waitFor(() =>
+      expect(launchNativeAgentJobMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: expect.stringContaining("gh pr create --base manual/base --fill"),
+        }),
+      ),
+    );
+  });
+
+  test.each([false, true])(
+    "ignores stale branch suggestions after close/reopen (different project=%s)",
+    async (switchProject) => {
+      currentEnvironment = {
+        ...selectedEnvironment,
+        prUrl: null,
+        prState: null,
+        hasMergeConflicts: null,
+      };
+      type Status = Awaited<ReturnType<typeof getProjectGitStatusMock>>;
+      let resolveOld!: (status: Status) => void;
+      let resolveNew!: (status: Status) => void;
+      getProjectGitStatusMock.mockImplementationOnce(
+        () =>
+          new Promise<Status>((resolve) => {
+            resolveOld = resolve;
+          }),
+      );
+      getProjectGitStatusMock.mockImplementationOnce(
+        () =>
+          new Promise<Status>((resolve) => {
+            resolveNew = resolve;
+          }),
+      );
+      const view = render(<ActionBar />);
+      fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+      await waitFor(() => expect(getProjectGitStatusMock).toHaveBeenCalledTimes(1));
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      if (switchProject) {
+        currentSelectedProjectId = "project-2";
+        currentSelectedEnvironmentId = "env-2";
+        currentEnvironment = { ...currentEnvironment, id: "env-2", projectId: "project-2" };
+        currentRepositoryConfig = { "project-2": { prBaseBranch: "develop" } };
+        view.rerender(<ActionBar />);
+      }
+      fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+      await waitFor(() => expect(getProjectGitStatusMock).toHaveBeenCalledTimes(2));
+      const values = () =>
+        Array.from(
+          document.querySelectorAll("datalist option"),
+          (option) => (option as HTMLOptionElement).value,
+        );
+      const base = switchProject ? "develop" : "main";
+      expect(values()).toEqual([base]);
+      fireEvent.change(screen.getByLabelText("Target branch"), {
+        target: { value: "manual/base" },
+      });
+      await act(async () =>
+        resolveNew({
+          branches: [
+            {
+              ref: "refs/remotes/origin/new-base",
+              name: "origin/new-base",
+              kind: "remote",
+              remote: "origin",
+            },
+          ],
+        }),
+      );
+      expect(values()).toEqual([base, "new-base"]);
+      await act(async () =>
+        resolveOld({
+          branches: [
+            {
+              ref: "refs/remotes/origin/stale-base",
+              name: "origin/stale-base",
+              kind: "remote",
+              remote: "origin",
+            },
+          ],
+        }),
+      );
+      expect(values()).toEqual([base, "new-base"]);
+      expect((screen.getByLabelText("Target branch") as HTMLInputElement).value).toBe(
+        "manual/base",
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
+      await waitFor(() =>
+        expect(launchNativeAgentJobMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            environmentId: switchProject ? "env-2" : "env-1",
+            prompt: expect.stringContaining("gh pr create --base manual/base --fill"),
+          }),
+        ),
+      );
+    },
+  );
+
   test("keeps the PR modal pinned when the selected environment changes", () => {
     currentEnvironment = {
       ...selectedEnvironment,

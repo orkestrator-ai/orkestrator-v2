@@ -233,6 +233,30 @@ describe("AgentLaunchDialog", () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
+  test("blocks an unsafe configured default until it is edited", () => {
+    const { onConfirm } = renderDialog({
+      editableTargetBranch: true,
+      targetBranch: "main; unsafe",
+    });
+    const field = screen.getByLabelText("Target branch") as HTMLInputElement;
+    const confirm = screen.getByRole("button", {
+      name: "Create pull request",
+    }) as HTMLButtonElement;
+    expect(field.value).toBe("main; unsafe");
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+    expect(confirm.disabled).toBe(true);
+    fireEvent.submit(confirm.closest("form")!);
+    expect(onConfirm).not.toHaveBeenCalled();
+
+    fireEvent.change(field, { target: { value: "release/2.0" } });
+    expect(field.getAttribute("aria-invalid")).toBe("false");
+    expect(confirm.disabled).toBe(false);
+    submit();
+    expect(onConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({ targetBranch: "release/2.0" }),
+    );
+  });
+
   test("resets an edited target branch on reopen", () => {
     const { props, rerender } = renderDialog({ editableTargetBranch: true });
 

@@ -1983,7 +1983,11 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       setResolveLaunchEnvironmentId(operationEnvironmentId);
 
       const repoConfig = config.repositories[selectedProjectId];
-      const targetBranch = targetBranchOverride || repoConfig?.prBaseBranch || "main";
+      const targetBranch =
+        targetBranchOverride ||
+        selectedEnvironment?.prBaseBranch ||
+        repoConfig?.prBaseBranch ||
+        "main";
       const resolvePrompt = createResolveConflictsPrompt(targetBranch);
       const fail = (message: string): ResolveLaunchResult => {
         if (reportFailure === "toast") {
@@ -2059,6 +2063,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       preferredFastModesByPlatform,
       preferredModelsByPlatform,
       reviewModelCatalog,
+      selectedEnvironment?.prBaseBranch,
       selectedEnvironmentId,
       selectedProjectId,
       tabCount,
@@ -2084,9 +2089,18 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     setResolveDialogTarget({
       environmentId: selectedEnvironmentId,
       projectId: selectedProjectId,
-      targetBranch: config.repositories[selectedProjectId]?.prBaseBranch || "main",
+      targetBranch:
+        selectedEnvironment?.prBaseBranch ||
+        config.repositories[selectedProjectId]?.prBaseBranch ||
+        "main",
     });
-  }, [canConfigureResolve, config.repositories, selectedEnvironmentId, selectedProjectId]);
+  }, [
+    canConfigureResolve,
+    config.repositories,
+    selectedEnvironment?.prBaseBranch,
+    selectedEnvironmentId,
+    selectedProjectId,
+  ]);
 
   useEffect(() => {
     const handleConfigureShortcut = (event: KeyboardEvent) => {

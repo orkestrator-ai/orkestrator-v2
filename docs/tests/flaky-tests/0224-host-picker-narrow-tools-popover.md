@@ -49,3 +49,24 @@ The isolated owning-file failure means this recurrence is still reproducible;
 this validation does not establish a new flaky classification or resolve the
 existing hypothesis. The mail changes do not alter the tools popover or project
 selection. No assertions were skipped or weakened.
+
+## PR base review revalidation (2026-10-15)
+
+Reproduced the same hidden "Repository settings" button at line 238 while
+validating branch `pr-target-branch-277220bf3f57-r1`:
+
+- `mise run test:logged -- --name isolated-browser -- mise run test:agent:browser:isolated`
+  on profile `qa-browser-9b299d21-51a`: 22 passed, 14 skipped, 1 failed
+  (330.9 s including startup and cleanup). Evidence:
+  `/tmp/orkestrator-test-run.yH0RwJ/isolated-browser.log.gz` and
+  `output/agent-testing/qa-browser-9b299d21-51a/browser/`.
+- The entire owning file on a fresh, credential-free Codex fixture profile:
+  `ORKESTRATOR_AGENT_TEST_PROFILE=qa-pr-base-277220bf mise run test:logged -- --name gateway-rerun -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1`
+  reproduced the same 15000 ms timeout: 10 passed, 5 skipped, 1 failed
+  (90.7 s). Evidence: `/tmp/orkestrator-test-run.m5RjIB/gateway-rerun.log.gz`
+  and `output/agent-testing/qa-pr-base-277220bf/browser/`.
+
+This recurrence fails in isolation too. The PR-base change does not modify the
+tools popover or project selection; the existing issue remains open. No
+assertions were skipped or weakened. Both disposable profiles were stopped and
+reset after validation.

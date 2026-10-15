@@ -293,6 +293,8 @@ export interface Environment {
   containerId: string | null;
   status: EnvironmentStatus;
   prUrl: string | null;
+  /** Actual PR base observed by the backend, independent of repository defaults. */
+  prBaseBranch?: string | null;
   prState: PrState | null;
   hasMergeConflicts: boolean | null;
   /**

@@ -52,6 +52,21 @@ behind a running profile. `tests/unit/playwright-spec-loading.test.ts` lists
 every Playwright config under Node in `mise run test`, so such an import fails
 there first.
 
+### Native browser controls
+
+`e2e/AgentLaunchDialog.spec.ts` uses Google Chrome to exercise the native
+input/datalist popup with keyboard selection at desktop and phone widths.
+It requires a graphical session (or Xvfb on Linux). Install its browser channel
+before running the component browser suite:
+
+```bash
+mise exec -- bunx playwright install chrome
+```
+
+The bundled Chromium build does not expose this native popup through automation
+on macOS; use the Chrome channel for this spec rather than simulating a
+suggestion by assigning the input value.
+
 ### macOS shell-test prerequisites
 
 The default root suite executes Linux container scripts in isolated host

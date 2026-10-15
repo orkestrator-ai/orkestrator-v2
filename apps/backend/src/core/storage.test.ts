@@ -2679,6 +2679,29 @@ describe("durable tab teardown intents", () => {
   });
 });
 
+describe("PR base metadata", () => {
+  test("persists the actual base across reload and clears it when the PR changes", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const environment = { ...createEnvironment("project-1"), id: "env-pr-base" };
+      await storage.addEnvironment(environment);
+      const url = "https://github.com/acme/repo/pull/7";
+      await storage.updateEnvironment(environment.id, { prUrl: url, prBaseBranch: "release/2.0" });
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      expect((await restarted.getEnvironment(environment.id))?.prBaseBranch).toBe("release/2.0");
+      await restarted.updateEnvironment(environment.id, { prUrl: url });
+      expect((await restarted.getEnvironment(environment.id))?.prBaseBranch).toBe("release/2.0");
+      await restarted.updateEnvironment(environment.id, {
+        prUrl: "https://github.com/acme/repo/pull/8",
+      });
+      expect((await restarted.getEnvironment(environment.id))?.prBaseBranch).toBeNull();
+      await restarted.updateEnvironment(environment.id, { prBaseBranch: "develop" });
+      await restarted.updateEnvironment(environment.id, { prUrl: null });
+      expect((await restarted.getEnvironment(environment.id))?.prBaseBranch).toBeNull();
+    });
+  });
+});
+
 describe("PR completion refresh intent", () => {
   test("rejects missing environments and ignores every ineligible PR state", async () => {
     await withTemporaryStorage(async (storage) => {

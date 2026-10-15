@@ -1,3 +1,7 @@
+import {
+  AgentLaunchDialog,
+  type AgentLaunchSelection,
+} from "../../apps/web/src/components/launch/AgentLaunchDialog";
 import { OpenCodePipelineTranscriptFixture } from "./OpenCodePipelineTranscriptFixture";
 import { TmuxComposeFocusFixture } from "./TmuxComposeFocusFixture";
 import { AgentUsageFixture } from "./AgentUsageFixture";
@@ -457,6 +461,33 @@ const reviewModelCatalog = {
     },
   ],
 } satisfies ReviewModelCatalog;
+
+function AgentLaunchDialogFixture() {
+  const [open, setOpen] = useState(true);
+  const [selection, setSelection] = useState<AgentLaunchSelection | null>(null);
+  return (
+    <main className="min-h-screen bg-background p-4 text-foreground">
+      <button type="button" onClick={() => setOpen(true)}>
+        Reopen PR dialog
+      </button>
+      <output data-testid="pr-launch-selection">{selection?.targetBranch ?? ""}</output>
+      <AgentLaunchDialog
+        open={open}
+        onOpenChange={setOpen}
+        defaultAgent="claude"
+        catalog={reviewModelCatalog}
+        enabledAgents={["claude", "codex", "opencode"]}
+        targetBranch="main"
+        editableTargetBranch
+        targetBranchSuggestions={["main", "release/2.0", "develop"]}
+        onConfirm={(nextSelection) => {
+          setSelection(nextSelection);
+          setOpen(false);
+        }}
+      />
+    </main>
+  );
+}
 
 function ReviewLaunchDialogFixture() {
   const [open, setOpen] = useState(true);
@@ -1666,6 +1697,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/multi-review-running-tile") {
     return <MultiReviewRunningTileFixture />;
   }
+  if (window.location.pathname === "/agent-launch") return <AgentLaunchDialogFixture />;
   if (window.location.pathname === "/review-launch") return <ReviewLaunchDialogFixture />;
   if (window.location.pathname === "/review-validation-output") {
     return <ReviewValidationOutputFixture />;

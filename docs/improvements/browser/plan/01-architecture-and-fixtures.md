@@ -16,7 +16,7 @@ it does not enable production preview routes.
   [address routing](../../../../apps/web/src/lib/browser-address.ts), and
   [native manager](../../../../apps/desktop/electron/browser-preview-manager.ts).
 - [gateway proxy](../../../../apps/backend/src/gateway-proxy.ts),
-  [gateway listener](../../../../apps/backend/src/gateway-base.ts), and
+  [gateway listener](../../../../apps/backend/src/gateway-lifecycle.ts), and
   [Electron credential hooks](../../../../apps/desktop/electron/remote-gateway-request-auth.ts).
 - [window partitioning](../../../../apps/desktop/electron/desktop-window-lifecycle.ts),
   [Tailscale integration](../../../../apps/backend/src/tailscale-serve.ts), and

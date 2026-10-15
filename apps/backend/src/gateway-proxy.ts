@@ -1,4 +1,4 @@
-import { GatewayHandlers } from "./gateway-handlers.js";
+import type { GatewayContext } from "./gateway-context.js";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import http, {
@@ -113,8 +113,11 @@ export function startProxiedEventStreamGzip(options: {
   return compressor;
 }
 
-export class GatewayProxy extends GatewayHandlers {
-  protected async proxyToTarget(
+/** The reverse proxy to loopback targets and the static renderer. */
+export class GatewayProxy {
+  constructor(private readonly ctx: GatewayContext) {}
+
+  async proxyToTarget(
     request: IncomingMessage,
     response: ServerResponse,
     target: URL,
@@ -126,7 +129,7 @@ export class GatewayProxy extends GatewayHandlers {
     // concurrency explicitly (per port and overall) before connecting.
     let releaseLegacySlot = () => {};
     if (browserPreview) {
-      const slot = this.legacyPreviewAdmission.tryAcquire(target.port || "80");
+      const slot = this.ctx.legacyPreviewAdmission.tryAcquire(target.port || "80");
       if (!slot) {
         jsonResponse(response, 503, { error: "Browser preview is at capacity; retry shortly" });
         return;
@@ -275,7 +278,7 @@ export class GatewayProxy extends GatewayHandlers {
               if (rewriteIdle) clearTimeout(rewriteIdle);
               rewriteIdle = setTimeout(
                 () => abortBody(new Error("Browser preview response stalled")),
-                this.proxyBodyIdleTimeoutMs,
+                this.ctx.proxyBodyIdleTimeoutMs,
               );
               rewriteIdle.unref?.();
             };
@@ -411,7 +414,7 @@ export class GatewayProxy extends GatewayHandlers {
             if (
               negotiateEncoding(compressionContext.acceptEncoding, ["gzip", "identity"]) === "gzip"
             ) {
-              const releaseStreamingCompression = this.metrics.tryStartStreamingCompression();
+              const releaseStreamingCompression = this.ctx.metrics.tryStartStreamingCompression();
               if (!releaseStreamingCompression) {
                 // Compression is optional. Preserve a usable identity stream
                 // when every bounded zlib slot is occupied.
@@ -423,10 +426,10 @@ export class GatewayProxy extends GatewayHandlers {
                     responseStatus,
                     responseHeaders,
                     recordSourceBytes: (bytes) =>
-                      this.metrics.recordStreamingCompressionSourceBytes(bytes),
+                      this.ctx.metrics.recordStreamingCompressionSourceBytes(bytes),
                     recordEncodedBytes: (bytes) =>
-                      this.metrics.recordStreamingCompressionEncodedBytes(bytes),
-                    recordFailure: () => this.metrics.recordStreamingCompressionFailure(),
+                      this.ctx.metrics.recordStreamingCompressionEncodedBytes(bytes),
+                    recordFailure: () => this.ctx.metrics.recordStreamingCompressionFailure(),
                     releaseLease: releaseStreamingCompression,
                     onError: (error) => {
                       proxyRequest.destroy(error);
@@ -440,7 +443,7 @@ export class GatewayProxy extends GatewayHandlers {
                       ? error
                       : new Error("Unable to initialize SSE compression");
                   releaseStreamingCompression();
-                  this.metrics.recordStreamingCompressionFailure();
+                  this.ctx.metrics.recordStreamingCompressionFailure();
                   proxyRequest.destroy(streamError);
                   fail(streamError);
                   return;
@@ -512,7 +515,7 @@ export class GatewayProxy extends GatewayHandlers {
             // Reset on every chunk: a slow upstream is fine, a silent one is not.
             // Without this the reservation would be held until the downstream
             // client gave up, starving every other proxied response of a slot.
-            const idleTimeoutMs = this.proxyBodyIdleTimeoutMs;
+            const idleTimeoutMs = this.ctx.proxyBodyIdleTimeoutMs;
             const armIdleTimer = () => {
               clearIdleTimer();
               idleTimer = setTimeout(() => {
@@ -606,9 +609,9 @@ export class GatewayProxy extends GatewayHandlers {
           });
         },
       );
-      this.proxyRequests.add(proxyRequest);
+      this.ctx.proxyRequests.add(proxyRequest);
       proxyRequest.once("close", () => {
-        this.proxyRequests.delete(proxyRequest);
+        this.ctx.proxyRequests.delete(proxyRequest);
       });
 
       proxyRequest.once("error", fail);
@@ -617,14 +620,16 @@ export class GatewayProxy extends GatewayHandlers {
         // expose a separate connect phase.
         headersTimer = setTimeout(() => {
           proxyRequest.destroy(new Error("Browser preview upstream did not respond in time"));
-        }, this.browserPreviewHeadersTimeoutMs);
+        }, this.ctx.browserPreviewHeadersTimeoutMs);
         headersTimer.unref?.();
       }
 
       const cancelProxyForDisconnect = () => {
         if (!settled && !response.writableFinished) {
           const disconnectError = new Error("Proxy client disconnected");
-          this.logger.debug("[RemoteGateway] Proxy client disconnected; aborting upstream request");
+          this.ctx.logger.debug(
+            "[RemoteGateway] Proxy client disconnected; aborting upstream request",
+          );
           // Settle first: destroying the response re-enters this handler via
           // its own "close" event, and a throwing destroy must not leave the
           // proxy promise dangling.
@@ -658,7 +663,7 @@ export class GatewayProxy extends GatewayHandlers {
     });
   }
 
-  protected async serveStatic(
+  async serveStatic(
     request: IncomingMessage,
     url: URL,
     response: ServerResponse,
@@ -670,15 +675,15 @@ export class GatewayProxy extends GatewayHandlers {
       return;
     }
 
-    if (this.rendererDevServerUrl) {
-      const target = new URL(this.rendererDevServerUrl);
+    if (this.ctx.rendererDevServerUrl) {
+      const target = new URL(this.ctx.rendererDevServerUrl);
       target.pathname = url.pathname;
       target.search = url.search;
       await this.proxyToTarget(request, response, target);
       return;
     }
 
-    const root = path.resolve(this.rendererRoot);
+    const root = path.resolve(this.ctx.rendererRoot);
     let decodedPath: string;
     try {
       decodedPath = decodeURIComponent(url.pathname);

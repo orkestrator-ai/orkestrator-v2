@@ -14,7 +14,7 @@ request headers; machine-readable output identifies the target safely.
 
 - [Backend readiness](../../../../apps/backend/src/main.ts).
 - [Gateway auth](../../../../apps/backend/src/gateway-auth.ts) and
-  [base](../../../../apps/backend/src/gateway-base.ts).
+  [lifecycle](../../../../apps/backend/src/gateway-lifecycle.ts).
 - [Runtime profile contract](../../../../apps/desktop/electron/runtime-profile.ts)
   and [profile I/O](../../../../apps/desktop/scripts/dev/profile-io.ts).
 - [Fixture gateway client](../../../../apps/desktop/scripts/dev/fixture.ts).

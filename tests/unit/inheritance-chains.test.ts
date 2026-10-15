@@ -78,19 +78,6 @@ const PINNED_CHAINS: ReadonlyArray<{ classes: readonly string[]; plan: string; r
   },
   {
     classes: [
-      "GatewayBase",
-      "GatewayEvents",
-      "GatewayAuth",
-      "GatewayHandlers",
-      "GatewayProxy",
-      "OrkestratorGateway",
-    ],
-    plan: PLAN_04,
-    reason:
-      "OrkestratorGateway split into events, auth, handlers and proxy layers; plan 04 moves them onto a GatewayContext.",
-  },
-  {
-    classes: [
       "AppServerRuntimeBase",
       "AppServerRuntimeLifecycle",
       "AppServerRuntimeSessions",

@@ -78,18 +78,6 @@ const PINNED_CHAINS: ReadonlyArray<{ classes: readonly string[]; plan: string; r
   },
   {
     classes: [
-      "BuildPipelineServiceBase",
-      "BuildPipelineServiceSupervisor",
-      "BuildPipelineServiceRecovery",
-      "BuildPipelineServiceInteractions",
-      "BuildPipelineService",
-    ],
-    plan: PLAN_04,
-    reason:
-      "BuildPipelineService split into supervisor, recovery and interaction layers; plan 04 moves it to a BuildPipelineContext alongside plan 01's repository.",
-  },
-  {
-    classes: [
       "GatewayBase",
       "GatewayEvents",
       "GatewayAuth",

@@ -397,10 +397,20 @@ The limits are:
 | --- | --- |
 | Persisted output | 64 MiB per command group, then terminate the group |
 | Failure tail printed to the terminal | 256 KiB |
+| Failure reports printed after the tail | Every `(fail)` line with up to 40 preceding lines of its own task, at most 25 per group |
 | No-output watchdog | 5 minutes |
 | Absolute group deadline | 30 minutes, or 60 minutes for the iOS group |
 | Permissions | Directory `0700`, files `0600` |
 | Retention | Completed run directories expire after 7 days |
+
+A noisy group can push a failure out of the 256 KiB tail. The runner therefore
+also keeps Bun's report for every failing test it sees, wherever it appeared.
+That report is the `(fail)` line plus the preceding error, expectation and
+stack lines. Context comes only from lines with the same Turbo task prefix,
+because streamed tasks interleave. These reports print under `--- Failing tests
+in <group> ---` after the tail. On GitHub Actions, `lint.yml` points
+`ORKESTRATOR_TEST_LOG_DIR` at the runner's temporary directory and uploads the
+compressed logs as the `test-logs-<run>-<attempt>` artifact when the job fails.
 
 The process exit status and `summary.json` status are authoritative. Expected
 error text can appear in passing tests that exercise failure handling, so a
@@ -706,9 +716,9 @@ ports, drive happy-dom) rather than CPU, so it parallelizes well:
   two package tasks active; the root group takes the remainder. iOS is opt-in through `test:all` and runs
   last and alone because the simulator is a single shared resource.
 
-Group output streams to private bounded files while only a failure tail stays in
-memory. Passing groups print a summary; failing groups retain compressed
-artifacts. **Every** failing group is reported rather than stopping at the first.
+Group output streams to private bounded files while only a failure tail and the
+Bun failure reports stay in memory. Passing groups print a summary; failing
+groups print both and retain compressed artifacts. **Every** failing group is reported rather than stopping at the first.
 
 Always add `--parallel` when running a suite directly; a sequential run of
 `tests/` takes roughly three times as long.

@@ -54,6 +54,9 @@ function sleep(ms: number): Promise<void> {
   return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
 }
 
+/** Bounds a slow setup's wait for its peers, so a serial regression fails instead of hanging. */
+const PEER_DISPATCH_LIMIT_MS = 5_000;
+
 interface BenchOptions {
   reviewers: number;
   agents: Array<"claude" | "codex">;
@@ -63,11 +66,23 @@ interface BenchOptions {
   /** Reviewer index whose session creation is `slowSetupMs` instead. */
   slowReviewer?: number;
   slowSetupMs?: number;
+  /** The slow setup also waits until every other reviewer has been dispatched. */
+  slowSetupAwaitsPeers?: boolean;
   issuesPerReport: number;
   runningPasses: number;
   packageBytes: number;
   /** Finished workflows already in the store: the retained review history. */
   retainedWorkflows?: number;
+}
+
+interface SharedBenchState {
+  activeCreates: number;
+  maxActiveCreates: number;
+  /** Turns dispatched so far, across providers. */
+  dispatched: number;
+  onDispatch?: () => void;
+  /** Turns already dispatched when the slow reviewer's setup returned. */
+  dispatchedDuringSlowSetup?: number;
 }
 
 class BenchProvider implements BuildPipelineProvider {
@@ -88,7 +103,7 @@ class BenchProvider implements BuildPipelineProvider {
   constructor(
     readonly agent: "claude" | "codex",
     private readonly options: BenchOptions,
-    private readonly shared: { activeCreates: number; maxActiveCreates: number },
+    private readonly shared: SharedBenchState,
   ) {}
 
   async createSession(_phase: string, label: string, _options?: ProviderCreateSessionOptions) {
@@ -100,11 +115,15 @@ class BenchProvider implements BuildPipelineProvider {
     );
     const reviewerIndex = Number(/Reviewer (\d+)/.exec(label)?.[1] ?? "0") - 1;
     try {
-      await sleep(
-        reviewerIndex === this.options.slowReviewer
-          ? (this.options.slowSetupMs ?? this.options.setupDelayMs)
-          : this.options.setupDelayMs,
-      );
+      if (reviewerIndex === this.options.slowReviewer) {
+        await Promise.all([
+          sleep(this.options.slowSetupMs ?? this.options.setupDelayMs),
+          this.options.slowSetupAwaitsPeers ? this.peersDispatched() : undefined,
+        ]);
+        this.shared.dispatchedDuringSlowSetup = this.shared.dispatched;
+      } else {
+        await sleep(this.options.setupDelayMs);
+      }
     } finally {
       this.shared.activeCreates -= 1;
     }
@@ -114,6 +133,22 @@ class BenchProvider implements BuildPipelineProvider {
     return id;
   }
 
+  /** Resolves once every other reviewer has been dispatched, or at the limit. */
+  private peersDispatched(): Promise<void> {
+    const peers = this.options.reviewers - 1;
+    return new Promise((resolve) => {
+      const limit = setTimeout(resolve, PEER_DISPATCH_LIMIT_MS);
+      const check = () => {
+        if (this.shared.dispatched < peers) return;
+        clearTimeout(limit);
+        this.shared.onDispatch = undefined;
+        resolve();
+      };
+      this.shared.onDispatch = check;
+      check();
+    });
+  }
+
   async prepareDispatch() {}
 
   async send(_sessionId: string, prompt: string, options: ProviderSendOptions) {
@@ -121,6 +156,8 @@ class BenchProvider implements BuildPipelineProvider {
     await sleep(this.options.sendDelayMs);
     this.sentAt.push(performance.now());
     this.prompts.set(options.requestId, prompt);
+    this.shared.dispatched += 1;
+    this.shared.onDispatch?.();
   }
 
   async status(_sessionId?: string) {
@@ -174,6 +211,8 @@ interface BenchResult {
   admissionMs: number;
   dispatchSkewMs: number;
   maxConcurrentSetup: number;
+  /** Turns dispatched while the slow reviewer was still being created. */
+  dispatchedDuringSlowSetup: number | null;
   runningPasses: number;
   statusCalls: number;
   transcriptReads: number;
@@ -303,7 +342,7 @@ async function runBenchmark(options: BenchOptions): Promise<BenchResult> {
     throw new Error(`unexpected command ${command}`);
   };
 
-  const shared = { activeCreates: 0, maxActiveCreates: 0 };
+  const shared: SharedBenchState = { activeCreates: 0, maxActiveCreates: 0, dispatched: 0 };
   const providers = new Map(
     Array.from(new Set(options.agents)).map((agent) => [
       agent,
@@ -425,6 +464,7 @@ async function runBenchmark(options: BenchOptions): Promise<BenchResult> {
       admissionMs: Math.round(admissionMs),
       dispatchSkewMs: Math.round(dispatchSkewMs),
       maxConcurrentSetup: shared.maxActiveCreates,
+      dispatchedDuringSlowSetup: shared.dispatchedDuringSlowSetup ?? null,
       runningPasses: options.runningPasses,
       statusCalls: runningStatus,
       transcriptReads: runningReads,
@@ -521,12 +561,15 @@ describe("Multi Review control-plane benchmark", () => {
       agents: ["claude"],
       slowReviewer: 0,
       slowSetupMs: 250,
+      // Report-only runs keep the plain 250 ms setup so older builds stay comparable.
+      slowSetupAwaitsPeers: !REPORT_ONLY,
     });
     results.push(result);
     if (REPORT_ONLY) return;
-    // Serially the slow setup would delay every later reviewer by 250 ms.
-    // Concurrently the others are admitted while it is still being created.
-    expect(result.admissionMs).toBeLessThan(250 + 3 * BASE.setupDelayMs);
+    // Serially every later reviewer would wait for the slow setup. Concurrently
+    // the other three are dispatched while it is still being created, which the
+    // slow setup waits for instead of racing a wall-clock bound (flake 0171).
+    expect(result.dispatchedDuringSlowSetup).toBe(3);
   });
 
   test("records the benchmark table", async () => {

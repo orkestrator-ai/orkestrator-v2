@@ -372,46 +372,57 @@ describe("steer route", () => {
   }
 
   test("300 steers against one run stay bounded; the overflow is refused before delivery", async () => {
-    const { state, delivered } = runningSession();
-    for (let index = 0; index < 300; index += 1) {
-      const response = await steer(state, `steer-${index}`);
-      if (index < MAX_STEER_JOURNAL) {
-        expect(response.status).toBe(202);
-        await response.body?.cancel();
-        continue;
-      }
-      expect(response.status).toBe(429);
-      expect(await response.json()).toEqual({
-        outcome: "rejected",
-        reason: "steer-capacity-exceeded",
-        requestId: `steer-${index}`,
-        message: expect.any(String),
-      });
-      // Refused before the SDK was called.
-      expect(delivered).toHaveLength(MAX_STEER_JOURNAL);
-      expect(state.steerJournal.has(`steer-${index}`)).toBe(false);
-    }
-    expect(state.steerJournal.size).toBe(MAX_STEER_JOURNAL);
-    expect(state.steerJournalBytes).toBe(heldBytes(state));
-    expect(state.steerJournalBytes).toBeLessThanOrEqual(MAX_STEER_JOURNAL_BYTES);
-    const published = (await harness.readPublished()) as {
-      sessions: Array<{ steerJournal: unknown[] }>;
-    };
-    expect(published.sessions[0]!.steerJournal).toHaveLength(MAX_STEER_JOURNAL);
-
-    // The earliest request, retried at capacity, gets its original answer.
-    const retry = await steer(state, "steer-0");
-    expect(retry.status).toBe(202);
-    expect(await retry.json()).toEqual({
-      outcome: "applied",
-      requestId: "steer-0",
-      duplicate: true,
+    // About 600 publications, each with a file and a directory fsync: cheap on
+    // macOS, past the hook timeout on a loaded Linux runner (flake 0216). The
+    // writes stay real; persistence-durability.test.ts owns flush ordering.
+    const restoreFs = usePersistenceFsForTests({
+      fsyncFile: async () => {},
+      fsyncDirectory: async () => {},
     });
-    expect(delivered).toHaveLength(MAX_STEER_JOURNAL);
-    expect(delivered.filter((text) => text === "text-steer-0")).toHaveLength(1);
-    // A refused id was never recorded and stays unknown, not dispatched.
-    expect(await dispatchOf(state, "steer-299")).toBe("unknown");
-    expect(state.status).toBe("running");
+    try {
+      const { state, delivered } = runningSession();
+      for (let index = 0; index < 300; index += 1) {
+        const response = await steer(state, `steer-${index}`);
+        if (index < MAX_STEER_JOURNAL) {
+          expect(response.status).toBe(202);
+          await response.body?.cancel();
+          continue;
+        }
+        expect(response.status).toBe(429);
+        expect(await response.json()).toEqual({
+          outcome: "rejected",
+          reason: "steer-capacity-exceeded",
+          requestId: `steer-${index}`,
+          message: expect.any(String),
+        });
+        // Refused before the SDK was called.
+        expect(delivered).toHaveLength(MAX_STEER_JOURNAL);
+        expect(state.steerJournal.has(`steer-${index}`)).toBe(false);
+      }
+      expect(state.steerJournal.size).toBe(MAX_STEER_JOURNAL);
+      expect(state.steerJournalBytes).toBe(heldBytes(state));
+      expect(state.steerJournalBytes).toBeLessThanOrEqual(MAX_STEER_JOURNAL_BYTES);
+      const published = (await harness.readPublished()) as {
+        sessions: Array<{ steerJournal: unknown[] }>;
+      };
+      expect(published.sessions[0]!.steerJournal).toHaveLength(MAX_STEER_JOURNAL);
+
+      // The earliest request, retried at capacity, gets its original answer.
+      const retry = await steer(state, "steer-0");
+      expect(retry.status).toBe(202);
+      expect(await retry.json()).toEqual({
+        outcome: "applied",
+        requestId: "steer-0",
+        duplicate: true,
+      });
+      expect(delivered).toHaveLength(MAX_STEER_JOURNAL);
+      expect(delivered.filter((text) => text === "text-steer-0")).toHaveLength(1);
+      // A refused id was never recorded and stays unknown, not dispatched.
+      expect(await dispatchOf(state, "steer-299")).toBe("unknown");
+      expect(state.status).toBe("running");
+    } finally {
+      restoreFs();
+    }
   });
 
   test("the same id with different text or run is a conflict, never a delivery", async () => {

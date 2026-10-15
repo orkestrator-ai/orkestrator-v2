@@ -497,6 +497,10 @@ describe("environment cleanup steps", () => {
     expect((await fs.stat(outside)).isDirectory()).toBe(true);
   });
 
+  // These two drive `docker rm` through the injected runner. The ownership
+  // probe before it calls the host's real Docker, which answers differently
+  // when the daemon is unreachable or `c1` prefixes an existing object, so
+  // they start past it; container-lifecycle-service.test.ts owns its verdicts.
   test("treats a container the daemon no longer knows as removed", async () => {
     const { context } = await cleanupContext();
     const calls: string[][] = [];
@@ -509,7 +513,7 @@ describe("environment cleanup steps", () => {
         entry({ containerId: "c1", pending: ["container"] }),
         "container",
         context,
-        { run },
+        { run, containerOwnershipVerified: true },
       ),
     ).toBe(true);
     expect(calls).toEqual([["docker", "rm", "-f", "c1"]]);
@@ -522,7 +526,12 @@ describe("environment cleanup steps", () => {
     const run: CleanupCommandRunner = async () => {
       throw new Error("Cannot connect to the Docker daemon (exit 1)");
     };
-    expect(await runEnvironmentCleanupStep(cleanup, "container", context, { run })).toBe(false);
+    expect(
+      await runEnvironmentCleanupStep(cleanup, "container", context, {
+        run,
+        containerOwnershipVerified: true,
+      }),
+    ).toBe(false);
     expect(await environmentCleanupLedger(dataDir).get("e1")).toMatchObject({
       pending: ["container"],
       lastError: "container: exit 1",

@@ -16,7 +16,7 @@ Refreshed 2026-10-15 against `main` at `2459b05c`.
 | [`architecture/`](#architecture) | Living guides to how shipped features work. Keep them aligned with the tree. |
 | [`development/`](#development) | Living contributor guides: testing, upgrades, releases, disk usage. |
 | [`tests/`](#tests) | The flaky-test registry. |
-| [`todo/`](#todo) | All outstanding work, one file per concept. Pick work from here. |
+| [`todo/`](#todo) | All outstanding work, one file per concept, with a scored checklist in [`todo/00-index.md`](todo/00-index.md). Pick work from here. |
 | [Reference awaiting a home](#reference-awaiting-a-home) | A few older plan and investigation files kept for their durable content until it moves into `architecture/` or `development/`. Do not pick work from them. |
 
 There are no other plan, review or dated-note folders. Completed plans are
@@ -81,9 +81,14 @@ references, outstanding code and qualification work, constraints and
 rationale, open questions, items that need verification, and the old docs it
 replaced. Every file was checked against `main` at `2459b05c` on 2026-10-15.
 
+[`todo/00-index.md`](todo/00-index.md) lists every outstanding item across
+these files as a checklist, scored very high, high, medium or low and ordered
+most important first. Tick items there as they are done.
+
 To add work, extend the file that owns the concept, or create a new
-kebab-case file with the same headings. When a file's work is done, move any
-durable behaviour into `architecture/` or `development/` and delete the file.
+kebab-case file with the same headings, then add a scored line to the index.
+When a file's work is done, move any durable behaviour into `architecture/` or
+`development/`, delete the file and remove its lines from the index.
 Name only `mise` tasks that exist: `tests/unit/mise-tasks.test.ts` scans every
 Markdown file.
 

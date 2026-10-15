@@ -68,7 +68,6 @@ import {
   normalizeOpenCodeComposerCatalog,
   openCodeCatalogCacheKey,
   resolveOpenCodeDefaultModel,
-  selectOpenCodeComposerCatalog,
 } from "./opencode-model-catalog.js";
 import {
   collectNormalizedOpenCodeSubagentIds,
@@ -128,6 +127,8 @@ import {
   openCodeRequestOptions,
   optionalOpenCodeSdkCall,
   resolveAllowedOpenCodeModelProviders,
+  resolveOpenCodePromptModel,
+  readOpenCodeComposerCatalog,
   waitForOpenCodeRetry,
 } from "./opencode-provider-helpers.js";
 import { OpenCodeReviewSessionPermissions } from "./opencode-review-session-permissions.js";
@@ -362,15 +363,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     ) {
       return this.catalogMetadata.catalog;
     }
-    const [providerResult, fallbackResult] = await Promise.allSettled([
-      this.optionalSdkCall("provider", "list", {}),
-      this.optionalSdkCall("config", "providers", {}),
-    ]);
-    const payload = (result: PromiseSettledResult<unknown>): unknown =>
-      result.status === "fulfilled" ? (asRecord(result.value)?.data ?? {}) : {};
-    const catalog = selectOpenCodeComposerCatalog(
-      payload(providerResult),
-      () => payload(fallbackResult),
+    const catalog = await readOpenCodeComposerCatalog(
+      this.client,
+      this.requestOptions(),
       allowedProviders,
       { requireConnected, priorityProviders },
     );
@@ -389,9 +384,12 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       model,
       requestOptions: this.requestOptions(),
       allowedProviders: () => this.allowedModelProviders(),
+      // Keep the effective default reservable even beyond the catalogue cap.
+      defaultModelId: this.catalogMetadata?.catalog.selectedModelId,
       publishCatalog: (catalog, allowedProviders) => {
         this.catalogMetadata = {
-          expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
+          // Preflight must not keep extending a config read's lifetime.
+          expiresAt: this.catalogMetadata?.expiresAt ?? Date.now(),
           providersKey: openCodeCatalogCacheKey(allowedProviders, true),
           catalog,
         };
@@ -749,7 +747,13 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     });
     const shapedPrompt = options.schema ? openCodeStructuredPrompt(prompt, options.schema) : prompt;
     const parts = openCodePromptParts(shapedPrompt, options);
-    const selectedModel = options.model ?? this.connection.model;
+    const selectedModel = await resolveOpenCodePromptModel(
+      this.client,
+      sessionId,
+      options.model ?? this.connection.model,
+      this.requestOptions(),
+      () => this.resolveDefaultModel(undefined),
+    );
     const model = openCodeModelSelection(selectedModel);
     const variant = openCodeReasoningVariant(options, this.connection.effort);
     openCodeRequestMarker(options.requestId);

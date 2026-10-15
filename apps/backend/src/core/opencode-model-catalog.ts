@@ -152,13 +152,14 @@ function reserveOpenCodeDefaultSource(
 }
 
 /**
- * OpenCode's own default model, as `providerID/modelID`.
+ * A fallback from OpenCode's per-provider defaults, as `providerID/modelID`.
  *
  * Both `provider.list` and `config.providers` report `default` as a map of
  * provider id to that provider's default model id — one entry per provider
- * OpenCode knows, connected or not. The first entry the allowlist admits and,
+ * OpenCode knows, connected or not, not the model from config.get(). In the
+ * absence of that configured choice, the first entry the allowlist admits and,
  * when OpenCode reported connectivity, whose provider is connected is the one
- * OpenCode can actually serve.
+ * used as a fallback.
  */
 function openCodeCatalogDefault(
   value: unknown,
@@ -207,6 +208,8 @@ export function normalizeOpenCodeComposerCatalog(
   options: {
     requireConnected?: boolean;
     priorityProviders?: readonly string[];
+    /** Effective model from config.get(), rather than the per-provider default map. */
+    configuredModelId?: string;
   } = {},
 ): {
   models: AgentModel[];
@@ -252,11 +255,13 @@ export function normalizeOpenCodeComposerCatalog(
       ? accepted
       : [...accepted.filter(isPriority), ...accepted.filter((provider) => !isPriority(provider))]
   ).slice(0, MAX_OPENCODE_CATALOG_PROVIDERS);
-  const selectableDefaultModelId = openCodeCatalogDefault(
-    value,
-    allowedProviders,
-    connectedProviderIds,
-  );
+  const configuredModelId = options.configuredModelId?.trim();
+  const selectableDefaultModelId =
+    configuredModelId &&
+    isSelectableOpenCodeModelId(configuredModelId, allowedProviders) &&
+    openCodeModelDispatchability(value, configuredModelId) !== "unavailable"
+      ? configuredModelId
+      : openCodeCatalogDefault(value, allowedProviders, connectedProviderIds);
   const defaultProviderId = selectableDefaultModelId
     ? openCodeModelProviderId(selectableDefaultModelId)
     : "";
@@ -554,6 +559,8 @@ export function selectOpenCodeComposerCatalog(
   options: {
     requireConnected?: boolean;
     priorityProviders?: readonly string[];
+    /** Effective model from config.get(), rather than the per-provider default map. */
+    configuredModelId?: string;
   } = {},
 ): ReturnType<typeof normalizeOpenCodeComposerCatalog> {
   const catalog = normalizeOpenCodeComposerCatalog(live, allowedProviders, options);

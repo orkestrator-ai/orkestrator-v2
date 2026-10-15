@@ -23,6 +23,22 @@ const catalog: AgentModelCatalog = {
 };
 
 describe("firstModelFor", () => {
+  test("skips disconnected implicit defaults, including a stored preference", () => {
+    const cached = {
+      ...catalog,
+      opencode: [
+        { id: "opencode/sonnet", name: "Sonnet", reasoningEfforts: [], connected: false },
+        { id: "opencode-go/deepseek", name: "DeepSeek", reasoningEfforts: [], connected: true },
+      ],
+    };
+    for (const preference of [undefined, { opencode: "opencode/sonnet" }]) {
+      expect(firstModelFor("opencode", cached, preference)).toBe("opencode-go/deepseek");
+    }
+    expect(firstModelFor("opencode", { ...cached, opencode: cached.opencode.slice(0, 1) })).toBe(
+      "default",
+    );
+  });
+
   test("keeps a preferred model the catalog still offers", () => {
     expect(firstModelFor("claude", catalog, { claude: "claude-b" })).toBe("claude-b");
     expect(firstModelFor("codex", catalog, { codex: "codex-a" })).toBe("codex-a");

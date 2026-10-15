@@ -4483,6 +4483,27 @@ describe("AgentNativeTab", () => {
     });
   });
 
+  test("forwards an explicit disconnected OpenCode model without a fallback toast", async () => {
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["opencode"],
+      agentSettings: { platforms: { opencode: { model: "opencode-go/gpt-5.6-luna" } } },
+    });
+    render(
+      <AgentNativeTab
+        tabId="tab-opencode-explicit"
+        data={freshTab("opencode")}
+        isActive
+        initialAgentModel="opencode/claude-sonnet-5"
+      />,
+    );
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
+    expect(ensureNativeAgentSessionMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      model: "opencode/claude-sonnet-5",
+      modelSource: "explicit",
+    });
+    expect(mockToastInfo).not.toHaveBeenCalled();
+  });
+
   test("tells the user when a new OpenCode session starts on a substituted model", async () => {
     useConfigStore.getState().updateGlobalConfig({
       enabledAgentPlatforms: ["opencode"],
@@ -4508,6 +4529,7 @@ describe("AgentNativeTab", () => {
     expect(ensureNativeAgentSessionMock.mock.calls.at(-1)?.[0]).toMatchObject({
       agent: "opencode",
       model: "opencode/claude-sonnet-5",
+      modelSource: "default",
     });
   });
 

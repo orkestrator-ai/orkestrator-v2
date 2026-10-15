@@ -380,6 +380,8 @@ export interface PipelineSession {
    * before per-step harnesses existed, which fall back to `agentType`.
    */
   agent?: BuildPipelineAgent;
+  /** True when an absent model is deliberately unpinned, rather than legacy metadata. */
+  modelSelectionResolved?: boolean;
   /** Exact prompt-level selection, retained so ambiguous dispatch can retry faithfully. */
   model?: string;
   /**
@@ -1047,6 +1049,8 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     SESSION_PHASES.has(value.phase as PipelineSessionPhase) &&
     (value.agent === undefined || AGENTS.has(value.agent as BuildPipelineAgent)) &&
     (value.model === undefined || isNonBlankString(value.model)) &&
+    (value.modelSelectionResolved === undefined ||
+      typeof value.modelSelectionResolved === "boolean") &&
     (value.modelSubstitution === undefined ||
       isNativeAgentModelSubstitution(value.modelSubstitution)) &&
     (value.reasoningEffort === undefined || isNonBlankString(value.reasoningEffort)) &&

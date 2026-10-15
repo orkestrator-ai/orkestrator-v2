@@ -858,14 +858,18 @@ export abstract class NativeAgentServiceBase {
      * activity, unread and deletion bookkeeping for *every* environment.
      */
     /*
-     * A new session starts on a model the runtime can serve. A configured
+     * Only an inherited default is resolved; an explicit model stays pinned
+     * and lets dispatch report its availability. A configured
      * default can name a provider this login has not connected, and storing it
      * as the session's controls would outrank the runtime's own default and
      * reject the first prompt. An unset one resolves to the runtime's effective
      * default. Either answer is stored on this session only; the configuration
      * keeps the user's choice.
      */
-    const resolution = await this.resolveDefaultModel(provider, input.model);
+    const resolution =
+      !input.model || input.model === "default" || input.modelSource === "default"
+        ? await this.resolveDefaultModel(provider, input.model)
+        : undefined;
     const modelSubstitution = resolution?.substitution;
     if (resolution?.modelId) input = { ...input, model: resolution.modelId };
     const session = await this.storage.getOrCreateNativeAgentSession(

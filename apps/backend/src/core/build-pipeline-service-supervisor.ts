@@ -1264,6 +1264,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       const session: PipelineSession = {
         phase: sessionPhase,
         agent,
+        modelSelectionResolved: true,
         ...(model ? { model } : {}),
         ...(modelSubstitution ? { modelSubstitution } : {}),
         ...(effort ? { reasoningEffort: effort } : {}),
@@ -1467,7 +1468,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     const fallbackStep =
       sessionPhase &&
       (!session ||
-        session.model === undefined ||
+        (session.model === undefined && !session.modelSelectionResolved) ||
         session.reasoningEffort === undefined ||
         session.fastMode === undefined)
         ? await this.stepSettings(pipeline, sessionPhase)
@@ -1477,7 +1478,9 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       : session
         ? {
             agent: sessionAgent(pipeline, session),
-            model: session.model ?? fallbackStep?.model,
+            model: session.modelSelectionResolved
+              ? session.model
+              : (session.model ?? fallbackStep?.model),
             effort: session.reasoningEffort ?? fallbackStep?.effort,
             fastMode: session.fastMode ?? fallbackStep?.fastMode,
           }

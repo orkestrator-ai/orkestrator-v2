@@ -28,6 +28,9 @@ import {
   type ProviderSendOptions,
   type ProviderStatus,
 } from "./native-agent-provider.js";
+import { createCommandRegistry } from "./commands.js";
+import type { CommandContext } from "./commands-context.js";
+import { AmbiguousPromptDispatchError } from "./native-agent-provider.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
 import { openCodeFake } from "./agent-provider-test-support.js";
 import { OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE } from "./opencode-provider-list-test-fixtures.js";
@@ -523,10 +526,15 @@ describe("NativeAgentService", () => {
         };
         const config = await storage.loadConfig();
 
-        const session = await service.ensureSession({
-          ...identity,
-          model: LEGACY_OPENCODE_DEFAULT_MODEL_ID,
-        });
+        const ensure = createCommandRegistry().get("ensure_native_agent_session")!;
+        const session = (await ensure(
+          {
+            ...identity,
+            model: LEGACY_OPENCODE_DEFAULT_MODEL_ID,
+            modelSource: "default",
+          },
+          { storage, nativeAgents: service } as unknown as CommandContext,
+        )) as Awaited<ReturnType<NativeAgentService["ensureSession"]>>;
 
         expect(session.controls?.modelId).toBe("opencode-go/gpt-5.6-luna");
         expect(session.modelSubstitution).toEqual({
@@ -549,14 +557,20 @@ describe("NativeAgentService", () => {
           projection?.composer?.models.every((model) => model.id.startsWith("opencode-go/")),
         ).toBe(true);
 
-        // The first prompt carries the composer's model and dispatches.
+        // Dispatch the original inherited choice through the command boundary,
+        // without copying a model from the renderer projection first.
+        const dispatch = createCommandRegistry().get("dispatch_native_agent_intent")!;
         await expect(
-          service.dispatchIntent({
-            ...identity,
-            prompt: "Please continue",
-            requestId: "request-1",
-            model: projection?.composer?.selectedModelId,
-          }),
+          dispatch(
+            {
+              ...identity,
+              prompt: "Please continue",
+              requestId: "request-1",
+              model: LEGACY_OPENCODE_DEFAULT_MODEL_ID,
+              modelSource: "default",
+            },
+            { storage, nativeAgents: service } as unknown as CommandContext,
+          ),
         ).resolves.toEqual({ outcome: "accepted", requestId: "request-1" });
         expect(fake.promptCalls).toHaveLength(1);
         expect(fake.promptCalls[0]?.model).toMatchObject({
@@ -566,6 +580,130 @@ describe("NativeAgentService", () => {
       },
     ).finally(() => provider.dispose?.());
   });
+
+  test("keeps an explicit disconnected initial model without reporting a substitution", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: { list: async () => ({ data: OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE }) },
+    });
+    const provider = createNativeAgentProvider(
+      {
+        agent: "opencode",
+        baseUrl: "http://opencode.test",
+        authToken: "test-token",
+        directory: "/workspace",
+      },
+      {
+        openCodeClient: fake.client,
+        openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
+        autoAnswerRequests: false,
+      },
+    );
+    await withService(
+      { prefix: "ork-explicit-model-", provider: async () => provider },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "opencode" as const,
+          logicalSessionKey: "explicit-tab",
+        };
+        const session = await service.ensureSession({
+          ...identity,
+          model: LEGACY_OPENCODE_DEFAULT_MODEL_ID,
+          modelSource: "explicit",
+        });
+        expect(session.controls?.modelId).toBe(LEGACY_OPENCODE_DEFAULT_MODEL_ID);
+        expect(session.modelSubstitution).toBeUndefined();
+        expect(
+          await service.dispatchIntent({
+            ...identity,
+            model: LEGACY_OPENCODE_DEFAULT_MODEL_ID,
+            prompt: "Go",
+            requestId: "explicit-1",
+          }),
+        ).toMatchObject({ outcome: "rejected", error: expect.stringContaining("not connected") });
+        expect(fake.promptCalls).toHaveLength(0);
+      },
+    ).finally(() => provider.dispose?.());
+  });
+
+  for (const ambiguous of [false, true]) {
+    test(`native job dispatch retains its resolved inherited selection (ambiguous=${ambiguous})`, async () => {
+      const fake = openCodeFake();
+      Object.assign(fake.client as object, {
+        provider: { list: async () => ({ data: OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE }) },
+      });
+      const provider = createNativeAgentProvider(
+        {
+          agent: "opencode",
+          baseUrl: "http://opencode.test",
+          authToken: "test-token",
+          directory: "/workspace",
+        },
+        {
+          openCodeClient: fake.client,
+          openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
+          autoAnswerRequests: false,
+        },
+      );
+      const send = provider.send.bind(provider);
+      let loseResponse = ambiguous;
+      provider.send = async (id, prompt, options) => {
+        if (loseResponse) {
+          loseResponse = false;
+          throw new AmbiguousPromptDispatchError("response lost");
+        }
+        return send(id, prompt, options);
+      };
+      await withService(
+        { prefix: "ork-job-model-", provider: async () => provider },
+        async ({ storage, service }) => {
+          const config = await storage.loadConfig();
+          await storage.saveConfig({
+            ...config,
+            global: {
+              ...config.global,
+              enabledAgentPlatforms: ["opencode"],
+              agentSettings: {
+                platforms: { opencode: { model: LEGACY_OPENCODE_DEFAULT_MODEL_ID } },
+              },
+            },
+          });
+          const savedConfig = await storage.loadConfig();
+          const context = {
+            storage,
+            nativeAgents: service,
+            emit: () => undefined,
+          } as unknown as CommandContext;
+          const command = createCommandRegistry().get("launch_native_agent_job")!;
+          const result = (await command(
+            { environmentId: "env-1", agent: "opencode", requestId: "job-1", prompt: "Go" },
+            context,
+          )) as { status: string; logicalSessionKey: string };
+          const identity = {
+            environmentId: "env-1",
+            agent: "opencode" as const,
+            logicalSessionKey: result.logicalSessionKey,
+          };
+          if (ambiguous) {
+            expect(result.status).toBe("unknown");
+            const stored = await storage.getNativeAgentSession(
+              nativeAgentSessionStorageKey("env-1", "opencode", result.logicalSessionKey),
+            );
+            expect(stored?.pendingDispatch?.model).toBe("opencode-go/gpt-5.6-luna");
+            await expect(
+              service.retryRecoverableDispatch({ ...identity, requestId: "job-1" }),
+            ).resolves.toEqual({ outcome: "accepted", requestId: "job-1" });
+          } else expect(result.status).toBe("accepted");
+          expect(fake.promptCalls[0]?.model).toMatchObject({
+            providerID: "opencode-go",
+            modelID: "gpt-5.6-luna",
+          });
+          expect(await storage.loadConfig()).toEqual(savedConfig);
+        },
+      ).finally(() => provider.dispose?.());
+    });
+  }
 
   test("keeps a configured OpenCode model whose provider is connected", async () => {
     const fake = openCodeFake();

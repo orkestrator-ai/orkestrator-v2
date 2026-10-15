@@ -764,6 +764,11 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
         throw new Error("Native agent prompt or attachment and request ID must not be blank");
       }
       const session = await this.ensureSession(input);
+      // Freeze the effective inherited choice before preparing and journaling
+      // dispatch. Retries replay this concrete model, never a stale default.
+      if (input.modelSource === "default" || !input.model) {
+        input = { ...input, model: session.controls?.modelId ?? input.model };
+      }
       const provider = await this.provider(input);
       provider.registerSession?.(session.providerSessionId, {
         origin: session.origin,

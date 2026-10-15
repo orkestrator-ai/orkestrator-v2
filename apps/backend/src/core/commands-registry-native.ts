@@ -36,6 +36,7 @@ export function registerNativeAgentCommands(
       interactionPolicy: asOptionalAgentInteractionPolicy(args.interactionPolicy),
       title: typeof args.title === "string" ? args.title : undefined,
       model: typeof args.model === "string" ? args.model : undefined,
+      ...(args.modelSource === "default" ? { modelSource: "default" as const } : {}),
       reasoningEffort: typeof args.reasoningEffort === "string" ? args.reasoningEffort : undefined,
       phase:
         typeof args.phase === "string"

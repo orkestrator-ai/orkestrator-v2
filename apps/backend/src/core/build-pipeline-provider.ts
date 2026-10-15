@@ -11,10 +11,8 @@ import {
   type BridgeConnection,
   type ProviderCreateSessionOptions,
   type ProviderDependencies,
-  type ProviderSendOptions,
 } from "./native-agent-provider.js";
 import type { NativeAgentRuntimeProvider } from "./agent-provider-contract.js";
-import { MAX_TRACKED_INTERACTION_SESSIONS, setBoundedMapEntry } from "./agent-provider-runtime.js";
 import type { PipelineSessionPhase } from "@orkestrator/protocol/build-pipeline";
 
 export {
@@ -73,9 +71,9 @@ export function createBuildPipelineProvider(
  * review pass a launcher's "Default" choice straight through as no model. Left
  * alone, a runtime with `resolveDefaultModel` would fall back to its own
  * server-side choice, which for OpenCode ignores the provider allowlist. The
- * model resolved at creation is remembered so the session's model-less turns
- * name it as well. A connection with its own model already decides, so it is
- * left untouched.
+ * runtime retains the created session's model for model-less turns, including
+ * after provider recreation. A connection with its own model already decides,
+ * so it is left untouched.
  */
 function withResolvedDefaultModel(
   provider: BuildPipelineProvider,
@@ -84,8 +82,6 @@ function withResolvedDefaultModel(
   const resolve = provider.resolveDefaultModel?.bind(provider);
   if (!resolve || connection.model) return provider;
   const createSession = provider.createSession.bind(provider);
-  const send = provider.send.bind(provider);
-  const sessionModels = new Map<string, string>();
   return Object.assign(provider, {
     async createSession(
       phase: PipelineSessionPhase,
@@ -94,15 +90,7 @@ function withResolvedDefaultModel(
     ): Promise<string> {
       if (options.model) return createSession(phase, label, options);
       const model = (await resolve(undefined).catch(() => undefined))?.modelId;
-      const sessionId = await createSession(phase, label, model ? { ...options, model } : options);
-      if (model) {
-        setBoundedMapEntry(sessionModels, sessionId, model, MAX_TRACKED_INTERACTION_SESSIONS);
-      }
-      return sessionId;
-    },
-    send(sessionId: string, prompt: string, options: ProviderSendOptions): Promise<void> {
-      const model = options.model ? undefined : sessionModels.get(sessionId);
-      return send(sessionId, prompt, model ? { ...options, model } : options);
+      return createSession(phase, label, model ? { ...options, model } : options);
     },
   });
 }

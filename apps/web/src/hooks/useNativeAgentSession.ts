@@ -2580,6 +2580,7 @@ export function useNativeAgentSession<TMessage = unknown>({
                   ? "Grok Build"
                   : "Agent Session",
             model: initialAgentModel ?? defaultAgentModel,
+            modelSource: initialAgentModel ? "explicit" : "default",
             reasoningEffort: initialReasoningEffort ?? defaultReasoningEffort,
             sessionMode: initialConversationMode,
             fastMode: initialFastMode ?? defaultFastMode,
@@ -2607,6 +2608,7 @@ export function useNativeAgentSession<TMessage = unknown>({
                 ? "Grok Build"
                 : "Agent Session",
           model: initialAgentModel ?? defaultAgentModel,
+          modelSource: initialAgentModel ? "explicit" : "default",
           reasoningEffort: initialReasoningEffort ?? defaultReasoningEffort,
           sessionMode: initialConversationMode,
           fastMode: initialFastMode ?? defaultFastMode,

@@ -9,6 +9,7 @@ import {
   DEFAULT_OPENCODE_MODEL_PROVIDERS,
   normalizeOpenCodeModelProviders,
   type NativeAgentExecutionPolicy,
+  type NativeAgentDefaultModelResolution,
   type NativeAgentResumeEntry,
 } from "@orkestrator/protocol/native-agent";
 import {
@@ -30,7 +31,9 @@ import { PromptRejectedError } from "./agent-provider-contract.js";
 import { asRecord, assertSdkResponse, nonEmptyString } from "./agent-provider-runtime.js";
 import {
   normalizeOpenCodeComposerCatalog,
+  selectOpenCodeComposerCatalog,
   openCodeModelDispatchability,
+  openCodeSessionModelRef,
 } from "./opencode-model-catalog.js";
 import type { OpenCodeCommandChangeOptions } from "./opencode-command-changes.js";
 import { MAX_OPENCODE_EXISTENCE_SNAPSHOT_SESSIONS } from "./opencode-snapshots.js";
@@ -133,6 +136,7 @@ export async function resolveAllowedOpenCodeModelProviders(
 export async function preflightOpenCodeModel(input: {
   client: OpencodeClient;
   model: string | undefined;
+  defaultModelId?: string;
   requestOptions: { signal: AbortSignal };
   allowedProviders: () => Promise<readonly string[]>;
   publishCatalog: (
@@ -156,6 +160,7 @@ export async function preflightOpenCodeModel(input: {
   const allowedProviders = await input.allowedProviders();
   const catalog = normalizeOpenCodeComposerCatalog(envelope?.data ?? {}, allowedProviders, {
     requireConnected: true,
+    configuredModelId: input.defaultModelId,
   });
   if (catalog.connectedProviderIds !== undefined || catalog.models.length > 0) {
     input.publishCatalog(catalog, allowedProviders);
@@ -165,6 +170,44 @@ export async function preflightOpenCodeModel(input: {
       "The selected OpenCode model is not connected or is no longer available. Choose an available model and retry.",
     );
   }
+}
+
+/** Read the effective config alongside the provider catalogue, with legacy fallback. */
+export async function readOpenCodeComposerCatalog(
+  client: OpencodeClient,
+  requestOptions: { signal: AbortSignal },
+  allowedProviders: readonly string[],
+  options: { requireConnected: boolean; priorityProviders: readonly string[] },
+): Promise<ReturnType<typeof normalizeOpenCodeComposerCatalog>> {
+  const [providerResult, fallbackResult, configResult] = await Promise.allSettled([
+    optionalOpenCodeSdkCall(client, requestOptions, "provider", "list", {}),
+    optionalOpenCodeSdkCall(client, requestOptions, "config", "providers", {}),
+    optionalOpenCodeSdkCall(client, requestOptions, "config", "get", {}),
+  ]);
+  const payload = (result: PromiseSettledResult<unknown>): unknown =>
+    result.status === "fulfilled" ? (asRecord(result.value)?.data ?? {}) : {};
+  const configuredModelId = nonEmptyString(asRecord(payload(configResult))?.model) ?? undefined;
+  return selectOpenCodeComposerCatalog(
+    payload(providerResult),
+    () => payload(fallbackResult),
+    allowedProviders,
+    { ...options, configuredModelId },
+  );
+}
+
+/** Recover the durable selection before resolving a model-less send's default. */
+export async function resolveOpenCodePromptModel(
+  client: OpencodeClient,
+  sessionId: string,
+  selectedModel: string | undefined,
+  requestOptions: { signal: AbortSignal },
+  resolveDefaultModel: () => Promise<NativeAgentDefaultModelResolution>,
+): Promise<string | undefined> {
+  if (selectedModel) return selectedModel;
+  // Session.model survives provider recreation; an in-memory map does not.
+  const response = await client.session.get({ sessionID: sessionId }, requestOptions);
+  assertSdkResponse(response, "OpenCode session model read");
+  return openCodeSessionModelRef(response.data).modelId ?? (await resolveDefaultModel()).modelId;
 }
 
 export async function listOpenCodeResumableSessions(

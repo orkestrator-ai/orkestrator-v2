@@ -197,10 +197,12 @@ function build(publish: boolean, runtime: ReleaseRuntime): void {
   releaseChannel(tag);
   if (publish) assertTaggedCheckout(tag, runtime.capture);
   const env = publish ? { ...runtime.env, GH_TOKEN: githubToken(runtime) } : runtime.env;
-  const signed = Boolean(runtime.env.ORKESTRATOR_RELEASE_SIGNING_KEY?.trim());
+  const signed =
+    platform === "darwin" && Boolean(runtime.env.ORKESTRATOR_RELEASE_SIGNING_KEY?.trim());
   // Installs that ship these keys refuse an unsigned manifest, so find out
-  // before a 20-minute build rather than at publish.
-  if (publish && runtime.trustedSigningKeys.length > 0 && !signed) {
+  // before a 20-minute build rather than at publish. Only the macOS job
+  // publishes the shared manifest/signature; Linux builders need no private key.
+  if (publish && platform === "darwin" && runtime.trustedSigningKeys.length > 0 && !signed) {
     fail(
       "this build embeds release signing keys, so its release must be signed: set ORKESTRATOR_RELEASE_SIGNING_KEY",
     );

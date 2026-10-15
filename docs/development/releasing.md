@@ -67,6 +67,17 @@ from before channels follow `/releases/latest` and so only ever see stable.
 `mise run release:channels` rebuilds the index on its own; it is derived from
 the published releases, so running it again is always safe.
 
+## Headless backends
+
+A headless backend updates itself only when it runs supervised:
+`orkestrator serve --supervised`, or the unit `orkestrator service install`
+writes. The supervisor installs `orkestrator@<version>` from npm into
+`<data-dir>/runtime/versions/`, checks the package carries the approved
+requirements manifest, and cuts over with a health check and rollback. A plain
+`orkestrator serve` reports that it has no installer and is updated by hand
+(`bunx orkestrator@<dist-tag> serve`). See
+[release-channels-and-updates.md](../architecture/release-channels-and-updates.md#headless-supervisor).
+
 ## Unstable builds
 
 `release-unstable.yml` runs nightly at 03:17 UTC and on `workflow_dispatch`.
@@ -150,9 +161,10 @@ How the keys were made, and how to make replacements:
 
 From the first release that embeds the keys, every later release must be signed:
 installs reject a manifest without a valid signature from a listed key.
-`release:desktop` refuses to start a publishing build without
-`ORKESTRATOR_RELEASE_SIGNING_KEY`, and checks that the key is one the build
-lists before it packages anything.
+The macOS `release:desktop` build, which uploads the shared manifest and its
+signature, refuses to start publishing without `ORKESTRATOR_RELEASE_SIGNING_KEY`
+and checks that the key is one the build lists before it packages anything.
+Linux builds never need the private key.
 
 Rotating, or replacing a leaked or lost active key:
 
@@ -177,9 +189,9 @@ when a GitHub token is available.
 
 | Machine | Needs |
 | --- | --- |
-| Mac | Apple Silicon; a Developer ID Application certificate in the login keychain; notarization credentials in the environment (`APPLE_API_KEY`/`APPLE_API_KEY_ID`/`APPLE_API_ISSUER`, `APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID`, or `APPLE_KEYCHAIN_PROFILE`). |
+| Mac | Apple Silicon; a Developer ID Application certificate in the login keychain; notarization credentials in the environment (`APPLE_API_KEY`/`APPLE_API_KEY_ID`/`APPLE_API_ISSUER`, `APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID`, or `APPLE_KEYCHAIN_PROFILE`); `ORKESTRATOR_RELEASE_SIGNING_KEY` (the active signing key). |
 | Linux | `mise`, `git`, and `bsdtar` (`sudo pacman -S libarchive`). |
-| Both | `gh auth login` (or `GH_TOKEN`) with write access to the repository; `curl` (the npm check); `ORKESTRATOR_RELEASE_SIGNING_KEY` once signing is enabled. |
+| Both | `gh auth login` (or `GH_TOKEN`) with write access to the repository; `curl` (the npm check). |
 | Whoever runs `publish:cli` | An npm login (or `NPM_CONFIG_TOKEN`) that can publish `orkestrator`. |
 
 macOS auto-update only works for builds signed with a Developer ID, which is why
@@ -272,3 +284,7 @@ accept it. Update both the plist floor and feed floor when support changes.
 - The unstable workflow has not run yet: the CI macOS signing and notarization
   path, the Linux arm64 `fpm` setup and the tag push from Actions are
   unqualified until its first green run.
+- Updates themselves (consent, desktop install and rollback, the headless
+  supervisor, remote updates) are tested only with fakes. The real-run
+  checklist is
+  [release-channels-qualification.md](../todo/release-channels-qualification.md).

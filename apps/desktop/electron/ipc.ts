@@ -31,6 +31,7 @@ import { isTrustedRendererUrl } from "./window.js";
 import {
   isUpdateClientCommand,
   isUpdateHostCommand,
+  type GatewayStatusPayload,
   type UpdateClientCommand,
 } from "@orkestrator/protocol/updates";
 import { macOsPrivacySettingsUrl } from "./macos-permissions.js";
@@ -165,6 +166,14 @@ export type MainIpcDependencies = {
     command: UpdateClientCommand,
     args: Record<string, unknown>,
   ) => Promise<unknown>;
+  /** A saved connection's `/status` handshake (version, update host, update summary). */
+  remoteConnectionStatus?: (connectionId: string) => Promise<GatewayStatusPayload | null>;
+  /** Update commands on any saved connection, bound to a window or not. */
+  invokeConnectionUpdate?: (
+    connectionId: string,
+    command: UpdateClientCommand,
+    args: Record<string, unknown>,
+  ) => Promise<unknown>;
 };
 
 function browserPreviewTabId(value: unknown): string {
@@ -253,6 +262,8 @@ export function registerMainIpc({
   getBrowserPreviews,
   trustedRendererUrl,
   invokeLocalUpdate,
+  remoteConnectionStatus,
+  invokeConnectionUpdate,
 }: MainIpcDependencies): void {
   const isTrustedSender = (event: IpcEventLike): boolean =>
     isTrustedRendererUrl(event.senderFrame?.url ?? "", trustedRendererUrl);
@@ -346,6 +357,25 @@ export function registerMainIpc({
     if (typeof connectionId !== "string") throw new Error("Expected a connection ID");
     return probeConnection(connectionId, event);
   });
+  handle("orkestrator:connections:status", (_event, connectionId: unknown) => {
+    if (typeof connectionId !== "string") throw new Error("Expected a connection ID");
+    return remoteConnectionStatus ? remoteConnectionStatus(connectionId) : null;
+  });
+  handle(
+    "orkestrator:connections:invoke-update",
+    (_event, connectionId: unknown, command: unknown, args?: unknown) => {
+      if (typeof connectionId !== "string") throw new Error("Expected a connection ID");
+      // Only the client update commands, never a remote's installer commands
+      // or anything else: this path holds tokens for windows bound elsewhere.
+      if (!isUpdateClientCommand(command)) throw new Error("Expected an update command");
+      if (!invokeConnectionUpdate) throw new Error("Remote updates are not available");
+      const safeArgs =
+        args && typeof args === "object" && !Array.isArray(args)
+          ? (args as Record<string, unknown>)
+          : {};
+      return invokeConnectionUpdate(connectionId, command, safeArgs);
+    },
+  );
   on("orkestrator:connections:list-sync", (event) => {
     event.returnValue = listConnections(event);
   });

@@ -1,5 +1,10 @@
 import type { ReleaseChannel } from "@orkestrator/protocol/release-channels";
-import type { UpdateJobPhase, UpdateStatusSnapshot } from "@orkestrator/protocol/updates";
+import type {
+  UpdateJobPhase,
+  UpdateNotice,
+  UpdateRequester,
+  UpdateStatusSnapshot,
+} from "@orkestrator/protocol/updates";
 
 export const CHANNEL_OPTIONS: Array<{ value: ReleaseChannel; label: string; description: string }> =
   [
@@ -18,6 +23,20 @@ export const CHANNEL_OPTIONS: Array<{ value: ReleaseChannel; label: string; desc
 
 export function channelLabel(channel: ReleaseChannel | null | undefined): string {
   return CHANNEL_OPTIONS.find((option) => option.value === channel)?.label ?? "Development";
+}
+
+/**
+ * Who asked for an update that did not come from this app's own window: the
+ * Tailscale login when Tailscale Serve vouched for it, otherwise the name
+ * the client declared (marked unverified), and the address it came from.
+ * Null for this app's own requests.
+ */
+export function remoteRequesterLabel(requester: UpdateRequester): string | null {
+  if (requester.listener !== "browser") return null;
+  const who =
+    requester.tailscaleUser ??
+    (requester.client?.name ? `${requester.client.name} (unverified)` : "a remote client");
+  return requester.remoteAddress ? `${who} from ${requester.remoteAddress}` : who;
 }
 
 export const PHASE_LABELS: Record<UpdateJobPhase, string> = {
@@ -67,4 +86,20 @@ export function indicatorState(snapshot: UpdateStatusSnapshot | null): UpdateInd
     return { kind: "available", version: snapshot.available.version };
   }
   return { kind: "none" };
+}
+
+/** macOS permission ids an update asked someone at this machine to grant, by version. */
+export function macOsPermissionsAddedByUpdates(
+  notices: readonly UpdateNotice[],
+): Map<string, string> {
+  const added = new Map<string, string>();
+  for (const notice of notices) {
+    if (notice.kind !== "action-needed-on-host") continue;
+    for (const item of notice.items) {
+      if (item.category === "macos-permission") {
+        added.set(item.id.slice("macos-permission:".length), notice.version);
+      }
+    }
+  }
+  return added;
 }

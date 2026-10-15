@@ -17,6 +17,8 @@ import { COMMAND_TREE, runClient, runClientProcess } from "./client/main.js";
 
 export type Invocation =
   | { mode: "serve"; args: string[] }
+  /** `serve --supervised`: a parent that runs, restarts and updates the service. */
+  | { mode: "supervise"; args: string[] }
   | { mode: "client"; argv: string[] }
   | { mode: "error"; message: string };
 
@@ -48,8 +50,13 @@ export function classifyInvocation(argv: readonly string[]): Invocation {
     const rest = argv.slice(1);
     if (rest.includes("--help") || rest.includes("-h"))
       return { mode: "client", argv: ["help", "serve"] };
-    const error = validateServerArguments(rest);
-    return error ? { mode: "error", message: error } : { mode: "serve", args: rest };
+    // A launcher flag, not a service flag: the supervisor runs the service as
+    // its child and never passes it on.
+    const supervised = rest.includes("--supervised");
+    const args = rest.filter((arg) => arg !== "--supervised");
+    const error = validateServerArguments(args);
+    if (error) return { mode: "error", message: error };
+    return { mode: supervised ? "supervise" : "serve", args };
   }
   if (first.startsWith("-")) {
     // The first real word decides: option values (of service flags or of

@@ -35,6 +35,8 @@ import { GitHubCliSetup } from "@/components/github/GitHubCliSetup";
 import { Checkbox } from "@/components/ui/checkbox";
 import { BackendVersionReminder } from "@/components/BackendVersionReminder";
 import { UpdatesController } from "@/components/updates/UpdatesController";
+import { macOsPermissionsAddedByUpdates } from "@/components/updates/update-text";
+import { selectUpdateTarget, useUpdateStore } from "@/stores/updateStore";
 import {
   checkDocker,
   checkClaudeCli,
@@ -454,6 +456,13 @@ function App() {
     activeConnectionId !== null &&
     activeConnectionId !== LOCAL_CONNECTION_ID;
   const macOsProbeFailed = Boolean(macOsPermissions?.error);
+  // Permissions an update added here (possibly approved from another machine)
+  // are labelled, so whoever is at this Mac knows why macOS is asking.
+  const localUpdateNotices = useUpdateStore(selectUpdateTarget("local")).snapshot?.notices;
+  const permissionsAddedByUpdate = useMemo(
+    () => macOsPermissionsAddedByUpdates(localUpdateNotices ?? []),
+    [localUpdateNotices],
+  );
   const macOsHasBlockingMissing =
     macOsPermissions !== null && hasBlockingMacOsPermissions(macOsPermissions);
   const macOsHasAdvisoryMissing = Boolean(
@@ -1330,7 +1339,14 @@ function App() {
                       key={permission.id}
                       className="flex items-center justify-between gap-4 rounded-lg border border-zinc-800 bg-zinc-950/40 px-4 py-3"
                     >
-                      <span className="font-medium">{permission.label}</span>
+                      <span className="font-medium">
+                        {permission.label}
+                        {permissionsAddedByUpdate.get(permission.id) ? (
+                          <span className="ml-2 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 text-[11px] font-normal text-cyan-300">
+                            New in {permissionsAddedByUpdate.get(permission.id)}
+                          </span>
+                        ) : null}
+                      </span>
                       <span className="text-xs font-medium text-amber-600 dark:text-amber-400">
                         {permission.id === "full-disk-access" ? "Recommended" : "Required"}
                       </span>

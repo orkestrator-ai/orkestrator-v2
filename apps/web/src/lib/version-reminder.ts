@@ -27,8 +27,11 @@ export function versionClientKind(target: ClientWindow = window): VersionClientK
 export interface VersionReminder {
   title: string;
   description: string;
-  /** `reload` when reloading the page loads a matching renderer. */
-  action: "reload" | null;
+  /**
+   * `reload` when reloading the page loads a matching renderer;
+   * `update-backend` when the backend may be able to update itself from here.
+   */
+  action: "reload" | "update-backend" | null;
 }
 
 /** The reminder for a mismatch, or null when the versions match. */
@@ -54,8 +57,8 @@ export function describeVersionReminder({
   if (skew === "backend-older") {
     return {
       title: "The Orkestrator backend is out of date",
-      description: `The backend you're connected to runs Orkestrator ${backendVersion}, older than this app (${clientVersion}). Update Orkestrator on the computer running the backend; until then some views may not display correctly.`,
-      action: null,
+      description: `The backend you're connected to runs Orkestrator ${backendVersion}, older than this app (${clientVersion}). Update it from here if it can update itself, or update Orkestrator on the computer running the backend; until then some views may not display correctly.`,
+      action: "update-backend",
     };
   }
   if (skew === "client-older") {

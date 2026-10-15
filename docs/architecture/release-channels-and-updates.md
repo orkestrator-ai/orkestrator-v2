@@ -1,6 +1,7 @@
 # Release channels, in-app updates and remote updates
 
-Status: Design, being implemented in phases (see [Delivery](#delivery)).
+Status: Implemented in the stack #1003, #1004, #1005, #1007 and #1012
+(see [Delivery](#delivery)); not yet qualified on a real release.
 Outstanding qualification: [release-channels-qualification.md](../todo/release-channels-qualification.md).
 Release procedure: [releasing.md](../development/releasing.md).
 
@@ -170,9 +171,11 @@ prerelease, so it can never become latest.
   require committing to a branch or enabling Pages.
 - It is **derived, never edited**. `scripts/release-channel-index.ts` lists
   the published releases, keeps those with a channel version, checks that each
-  has its `release-requirements.json`, and rebuilds the whole file. Concurrent
-  writers (a maintainer's `release:publish` and the nightly) therefore
-  converge, because each one recomputes from the same source of truth.
+  has its `release-requirements.json`, and rebuilds the whole file. All writers
+  take the exclusive repository ref `tags/update-channels-publish-lock` before
+  reading releases and release it after uploading. Contenders fail and must retry
+  with a fresh snapshot. If a publisher crashes, a maintainer removes the lock
+  ref after confirming that no publisher remains active.
 - `--clobber` replaces the asset, which leaves a short window when it does not
   exist. Clients treat a 404 or a parse failure as a failed check (retried
   next time), never as "no update".
@@ -257,9 +260,9 @@ Schema (version 1, `packages/protocol/src/release-requirements.ts`):
   },
   "permissions": {
     "macos": [
-      { "id": "desktop", "kind": "files-and-folders", "infoPlistKey": "NSDesktopFolderUsageDescription",
-        "usage": "Orkestrator searches project directories …", "requirement": "required",
-        "grantedAtMachine": true }
+      { "id": "desktop", "label": "Desktop folder", "settingsPane": "files-and-folders",
+        "infoPlistKey": "NSDesktopFolderUsageDescription",
+        "usage": "Orkestrator searches project directories …", "requirement": "required" }
     ]
   },
   "network": {
@@ -318,8 +321,12 @@ manifest cannot drift from the code:
     Accepting an unsigned manifest would let anyone who can strip the file
     bypass the check.
   - Both keys were generated on 2026-10-16 and are listed. That is a one-way
-    door: from the first release that ships them, every release must be
-    signed, and `release:desktop` refuses to publish without the key.
+    door: from the first release that ships them, every new release must be
+    signed. Index generation omits unsigned legacy releases per channel until a
+    signed release exists (or the legacy release is signed with the trusted
+    key); it never accepts an invalid signature. The macOS `release:desktop`
+    job owns the shared signature and refuses to publish without the key.
+    Linux builds never need the private key.
   - Generation, custody, rotation and loss recovery are in
     [releasing.md](../development/releasing.md#manifest-signing-keys).
     electron-builder 27's mandatory signed update manifests
@@ -340,7 +347,7 @@ stable (`category:key`, for example `macos-permission:downloads`).
 | `provider-binary` | version change | informational | no |
 | `storage-migration` | `schemaVersion` raised | yes (one-way; rollback restores the pre-update snapshot) | no |
 | `container-capability` | required image capability the local image lacks | yes | when the image is locally built (rebuild needed) |
-| `compatibility` | requester older than `minClientVersion` | **blocking** (update this client first) | — |
+| `compatibility` | independent requester older than `minClientVersion` | **blocking** (update this client first) | — |
 
 If the running version has no embedded manifest (2.20.x and earlier), the
 current side is `null`. The dialog then lists everything the target requires
@@ -449,13 +456,20 @@ and from the CLI.
 | Command | Purpose |
 | --- | --- |
 | `update_get_status` | `UpdateStatusSnapshot` (revision, current version/channel/host kind/capabilities, last check, `available` + diff, job, notices) |
-| `update_check` `{ force? }` | Run or join a check; returns the snapshot |
+| `update_check` `{}` | Run or join a check; returns the snapshot |
 | `update_set_channel` `{ channel }` | Persist the channel; returns the snapshot (with `waiting-for-channel` when narrower) |
-| `update_start` `{ targetVersion, requirementsSha256, approvedConsentIds, restartPolicy, allowDowngrade?, requester }` | Admit a job (refused unless consent, compatibility, host and floor checks pass) |
-| `update_install_now` `{ jobId }` | For a `ready` job with `restartPolicy: "manual"` |
+| `update_start` `{ targetVersion, requirementsSha256, approvedConsentIds, restartPolicy, allowDowngrade?, client? }` | Admit a job (refused unless consent, compatibility, host and floor checks pass) |
+| `update_install_now` `{ jobId, client? }` | For a `ready` job with `restartPolicy: "manual"` |
+| `update_install_on_quit` `{ jobId, client? }` | Arm a ready desktop job to install when the app quits |
 | `update_cancel` `{ jobId }` | Cancel a job that has not reached `installing` |
 | `update_acknowledge_notice` `{ noticeId }` | Dismiss a post-update notice |
 | `update_get_audit` `{ limit ≤ 200 }` | Recent audit entries |
+
+The optional `client` is declared kind/version/name metadata. The backend derives
+requester identity from the trusted invocation origin. A local control invocation
+for a desktop host's bundled self-update checks the replacement client's version,
+because that install replaces the client and backend together. Independently
+versioned remote clients retain the target's `minClientVersion` floor.
 
 The `update-status` event carries `{ revision, snapshot }` and is pushed on
 every change. Following the transport invariants, the event is only an
@@ -479,7 +493,7 @@ listener**: Electron main through `BackendHttpClient`, and the supervisor by
 parsing the backend's `orkestrator-backend-ready` line exactly as Electron
 does. The host protocol reuses that client, with no new socket or IPC:
 
-- `update_host_register { hostKind, protocolVersion: 1, hostVersion, platform, arch, installKind, capabilities, armedJobId? }`
+- `update_host_register { registration: { hostKind, protocolVersion: 1, hostVersion, installKind, capabilities, unavailableReason?, armedJobId? } }`
   returns `{ hostSessionId, pending }`. The host registers after every backend
   start and after every event-stream reconnect. `armedJobId` names a job this
   host process has armed to install on quit: after a backend-only restart it
@@ -489,7 +503,7 @@ does. The host protocol reuses that client, with no new socket or IPC:
   the request is `prepare`, `install` or `cancel`, with `requestId` and
   `jobId`. `update_host_pending` returns the same list for reconciliation, so
   a missed event is never fatal.
-- `update_host_report { hostSessionId, requestId, jobId, status, progress?, error?, result? }`
+- `update_host_report { hostSessionId, requestId, jobId, status, progress?, error? }`
   covers progress, success and failure. A final report that does not arrive
   (a reconnect replaced the session) is kept and re-sent when the next
   registration still lists its request. After a restart the **new** (or
@@ -517,7 +531,7 @@ Detecting the remote kind. The authenticated `/__orkestrator/status` route
 
 ```json
 { "ok": true, "appVersion": "2.21.0", "updateProtocol": 1,
-  "host": { "kind": "desktop", "installKind": "dmg-app", "canInstall": true },
+  "host": { "kind": "desktop", "installKind": "mac-app", "canInstall": true },
   "updates": { "channel": "stable", "available": "2.22.0", "jobPhase": null } }
 ```
 
@@ -549,13 +563,21 @@ Remote updates default to `restartPolicy: "immediate"`, because nobody may be
 at the remote to click Restart. The consent dialog shows the remote's running
 agent sessions, which the restart will interrupt.
 
+Nobody at the remote can veto the update (connecting already grants agent
+execution), but they are told. A remote desktop app shows a warning toast,
+"Updating to X", naming who asked (the Tailscale login when Tailscale Serve
+vouched for it, otherwise the client's declared name marked unverified) and
+from which address, and its update panel shows the same "Requested by" line.
+A headless backend logs it.
+
 **Progress.** The remote backend emits `update-status` on its own event
 stream, which the client already subscribes to for the active connection. For
-a connection that is not active, the panel polls `update_get_status` every 2 s
-while a job is running. The poll is bounded and stops at a terminal phase.
+a connection that is not active, an open panel polls `update_get_status`
+every 15 s, and every 2 s while a job is running; polling stops when the
+panel closes. A poll never overlaps the one before it.
 While the remote restarts, the poll fails. The panel shows "restarting…" and
-keeps polling with backoff for up to 10 minutes, then reads the outcome from
-the new (or rolled-back) backend.
+keeps polling, backing off to every 30 s, for up to 10 minutes of failures,
+then reads the outcome from the new (or rolled-back) backend.
 
 **Audit.** Every `update_start`, cancel, install, outcome and channel change
 appends an entry on the **remote**:
@@ -683,11 +705,14 @@ supervisor.lock            one supervisor per data directory
 
 Normal operation:
 
-1. Run the backend from `current` if it exists and is at least the
-   supervisor's own version. Otherwise run the supervisor's own package (the
-   bootstrap).
+1. Run the backend from `current` whenever it points at an installed
+   package, even one older than the supervisor's own: a rollback and an
+   approved downgrade both point it back. Without a `current`, run the
+   supervisor's own package (the bootstrap). `orkestrator service install`
+   resets `current` to the package it runs from, with the supervisor stopped.
+   It takes the same lock, so it refuses to reset a running service.
 2. Spawn `bun <root>/bin/orkestrator.js serve <user flags> --control-host 127.0.0.1 --control-port 0`
-   as a child, with `ORKESTRATOR_UPDATE_HOST=supervisor`.
+   as a child with a loopback control listener.
 3. Parse the readiness line, then register as host.
 4. Restart on unexpected exit with exponential backoff (1 s to 60 s).
 5. On SIGTERM or SIGINT, forward the signal to the child, wait up to 60 s,
@@ -704,11 +729,17 @@ Normal operation:
    manifest.
 3. Rename the staging directory into `versions/<version>`.
 
+A bootstrap run stages its own version too, so a rollback has a copy that a
+cache clean cannot remove. Each `bun add` can take minutes, so the supervisor
+reports progress every minute while it stages.
+
 `install()`, the health-gated cutover:
 
-1. Record `previous` = the realpath of the running root, the realpath of
-   `toolchains/bin/current`, and the database's `PRAGMA user_version`, all in
-   `supervisor-state.json`.
+1. Record `previous` = the realpath of the running root (for the bootstrap,
+   its staged copy), the realpath of `toolchains/bin/current`, and the
+   database's `PRAGMA user_version`, all in `supervisor-state.json`. If the
+   target cannot be staged at this point, nothing has stopped: the old backend
+   keeps running and the job ends `rolled-back` (`install-failed`).
 2. SIGTERM the old backend and wait for it (60 s, then SIGKILL).
 3. Point `toolchains/bin/current` at the prefetched target set, and `current`
    at `versions/<target>`.
@@ -720,12 +751,21 @@ Normal operation:
 6. **Unhealthy:** kill the new backend. If `user_version` moved, restore the
    database from the `backups/pre-migration-v<old>-*.sqlite` snapshot the new
    backend took during this cutover (newer than the recorded start), and
-   delete `-wal` and `-shm`. Repoint both symlinks back, start the old version
+   move `-wal` and `-shm` aside, deleting them only after the swap so a crash
+   never pairs them with the snapshot. Repoint both symlinks back, start the old version
    with the same health check, and report `rolled-back` with the reason. If
    the old version is also unhealthy, keep retrying it with backoff and report
-   `failed` (`rollbackFailed`).
+   `failed` (`rollbackFailed`). Any error after the old backend stopped (a
+   full disk, a symlink that cannot be swapped) takes the same rollback path.
 7. **Crash-loop guard.** If a version installed less than 30 minutes ago
-   crashes 3 times in 10 minutes, roll back automatically.
+   crashes 3 times in 10 minutes, roll back automatically. After 30 minutes
+   the install record is dropped: later failures are not the update's, and
+   restoring its database snapshot then would discard newer data. Today
+   this rollback is only logged, not reported as a notice.
+8. A stop (SIGTERM) that arrives during a cutover lets it finish, then stops
+   whichever backend is running. A supervisor restarted mid-cutover rolls
+   back on start, best effort, and still starts a backend if part of the
+   restore fails (reported as `rollbackFailed`).
 
 The supervisor's own code is the version that launched it. A newer backend
 works with an older supervisor through `protocolVersion`. The supervisor
@@ -772,15 +812,19 @@ writable, because the swap renames the new file next to the old one.
   only ever starts from an approved job.
 - **After the restart** (early in `startApplication`):
   - If `app.getVersion() === to`: once the backend is ready and the first
-    window has loaded, register and report `succeeded`. Delete the rollback
-    copy after the next successful start.
+    window has loaded, register and report `succeeded`. Then delete the
+    rollback copy: only this first launch may roll back, so the copy is no
+    use once it got this far. The same goes for the other outcomes below.
   - If `app.getVersion() === from`, the install did not apply: report
     `failed`, with code `install-not-applied`.
-  - If the backend fails to start under the new version: restore the database
-    snapshot if `user_version` moved, then swap the bundle back. On macOS,
-    rename the running bundle aside and `ditto` the copy into place; on Linux,
-    copy the AppImage back. Then `app.relaunch()` the old version, which
-    reports `rolled-back`.
+  - If the backend fails to start during the first launch of the new version
+    (the marker records that launch, so a later failure never restores an
+    out-of-date snapshot): stop the new backend and wait for it to exit,
+    restore the database snapshot if `user_version` moved, then swap the
+    bundle back. On macOS, rename the running bundle aside and `ditto` the
+    copy into place; on Linux, copy the AppImage back. Then relaunch the old
+    version (for an AppImage, the restored file, not the failed version's
+    mount), which reports `rolled-back`.
   - If the new Electron main cannot run at all, nothing can roll back. That
     case is unqualified, and the bundle was signed and notarized, so it is
     expected to be rare.
@@ -799,7 +843,7 @@ when no window exists.
 | Settings → Updates | New `GLOBAL_SETTINGS_SECTIONS` entry | Channel select with descriptions, current version/channel, last check, **Check now**, job progress and errors, recent audit entries, and **Install latest stable now** when waiting for a narrower channel (disabled with the floor reason) |
 | Connections settings | `ConnectionsSettings.tsx` rows | Version/channel pill and host kind per remote; **Update available** and **Update remote**; job progress; post-update notices; "update by hand" for host `none` or old backends |
 | Version reminder | `BackendVersionReminder` | Adds an **Update backend** action when the backend can install |
-| Post-update notices | Update panel; per-connection rows; the macOS permissions blocker on the machine itself | `action-needed-on-host` items (for example "grant Downloads folder access at that Mac"). On the machine itself, the existing blocker in `App.tsx` already probes the new version's `MACOS_PERMISSION_IDS`, and now labels the ones the update added. A notice clears when acknowledged, or when the desktop host's next probe shows the grant. |
+| Post-update notices | Update panel; per-connection rows; the macOS permissions blocker on the machine itself | `action-needed-on-host` items (for example "grant Downloads folder access at that Mac"). On the machine itself, the existing blocker in `App.tsx` already probes the new version's `MACOS_PERMISSION_IDS`, and now labels the ones the update added ("New in X"). A notice clears when acknowledged. |
 
 ## Failure and rollback semantics
 
@@ -824,11 +868,11 @@ item for `storage-migration` says so.
 
 | Phase | PR | Scope |
 | --- | --- | --- |
-| 1 | Channel model and release tooling | `release-channels.ts`, `release-requirements.ts` (schema, diff, signature verify), manifest generator, channel index builder, channel-aware `release:desktop` / `release:publish` / `publish:cli`, GHCR channel tags, `release-unstable.yml`, drift tests, this document |
-| 2 | Local in-app update | Backend update service, state machine, files, commands, host protocol; desktop update host; renderer indicator, consent dialog, Settings → Updates; channel setting |
-| 3 | Dependency pre-fetch | Toolchain installer accepts a validated target artefact set without pruning; container capability check and GHCR pull; job step before restart |
-| 4 | Remote update | `/status` handshake, connection summaries, connection-scoped update IPC, invocation origin and audit, supervisor and service units, desktop post-restart rollback, Connections UI, mixed-version checks |
-| 5 | Docs | `releasing.md`, the qualification todo, `00-index.md` lines |
+| 1 | #1003 Channel model and release tooling | `release-channels.ts`, `release-requirements.ts` (schema, diff, signature verify), manifest generator, channel index builder, channel-aware `release:desktop` / `release:publish` / `publish:cli`, GHCR channel tags, `release-unstable.yml`, drift tests, this document |
+| 2 | #1004 Local in-app update | Backend update service, state machine, files, commands, host protocol; desktop update host; renderer indicator, consent dialog, Settings → Updates; channel setting |
+| 3 | #1005 Dependency pre-fetch | Toolchain installer accepts a validated target artefact set without pruning; container capability check and GHCR pull; job step before restart |
+| 4 | #1007 Remote update | `/status` handshake, connection summaries, connection-scoped update IPC, invocation origin and audit, supervisor and service units, desktop post-restart rollback, Connections UI, mixed-version checks |
+| 5 | #1012 Docs | `releasing.md`, the qualification todo, `00-index.md` lines |
 
 ## Secrets and one-time setup
 
@@ -848,18 +892,27 @@ One-time steps (documented in `releasing.md`):
 3. Add the secrets above.
 4. Enable the workflow's schedule.
 
-## Open decisions
+## Decisions
 
-1. **Manifest signing key** (security, one-way door). Recommendation: one
-   Ed25519 release key in CI secrets and maintainer custody, with two embedded
-   public keys (active + standby) for rotation, decided together with
-   electron-builder 27's update-manifest key. Until then the system runs in
-   checksum-only mode.
-2. **Extra confirmation on the remote.** Recommendation: none beyond the
-   consent dialog, because connecting already grants agent execution. The
-   remote's own UI shows a "restarting for an update requested by …" notice. A
-   grace period with a local veto is a possible follow-up.
-3. **Unstable version format.** Uses `.<run>.g<sha>` instead of `.<sha>`
+Decided with the user on 2026-10-15, after the review fixes.
+
+1. **Manifest signing key:** an active Ed25519 key (the CI secret
+   `ORKESTRATOR_RELEASE_SIGNING_KEY`, plus a maintainer copy) and a standby
+   key kept offline, both embedded on 2026-10-16, so signatures are mandatory
+   ([releasing.md](../development/releasing.md#manifest-signing-keys)).
+   electron-builder 27's update key should follow the same policy.
+2. **No veto on the remote.** Connecting already grants agent execution. The
+   remote is told instead: a desktop app shows who asked and from where, and a
+   headless backend logs it ([Remote protocol](#remote-protocol)).
+3. **Unstable version format:** `.<yyyymmdd>.<run>.g<sha7>`, not `.<sha>`
    ([why](#unstable-version-format)).
-4. **Rollback copy size on desktop.** Keeping one previous bundle costs
-   several hundred MB. Recommendation: keep it; atomicity was a requirement.
+4. **"Install when I quit" on macOS cannot be cancelled once armed.**
+   Squirrel.Mac stages the update when it is armed, so staging errors show up
+   at once, and a staged update installs on quit whatever electron-updater is
+   told afterwards. The UI hides Cancel for an armed install.
+5. **A headless supervisor always runs `current`,** even when its own package
+   is newer, so rollbacks and approved downgrades stick across restarts;
+   `orkestrator service install` resets it.
+6. **The desktop rollback copy lives only for the update.** It is kept before
+   install and deleted once the installed version reports its first start,
+   the only launch that may roll back.

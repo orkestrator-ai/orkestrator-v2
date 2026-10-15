@@ -9,8 +9,17 @@ import {
 import { listen } from "@/lib/native/events";
 import { useUpdateStore } from "@/stores/updateStore";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
-import { mockToastInfo, resetSonnerMocks } from "../../../../../tests/mocks/sonner";
-import { UpdateIndicator, UpdatesController, UPDATE_AVAILABLE_TOAST_ID } from "./UpdatesController";
+import {
+  mockToastInfo,
+  mockToastWarning,
+  resetSonnerMocks,
+} from "../../../../../tests/mocks/sonner";
+import {
+  REMOTE_UPDATE_TOAST_ID,
+  UpdateIndicator,
+  UpdatesController,
+  UPDATE_AVAILABLE_TOAST_ID,
+} from "./UpdatesController";
 
 const originalOrkestrator = window.orkestrator;
 // `@/lib/native/events` is mocked for every suite (tests/setup.ts); this file
@@ -147,6 +156,53 @@ describe("UpdatesController", () => {
     act(() => listeners.get(LOCAL_UPDATE_STATUS_EVENT)?.({ revision: 1, snapshot: restarted }));
     await waitFor(() => expect(screen.getByTestId("update-indicator")).toBeTruthy());
     expect(ipc).toHaveBeenCalledTimes(1);
+  });
+
+  test("tells whoever is at this machine that someone elsewhere is updating it", async () => {
+    const remoteJob = (revision: number, phase: "downloading" | "ready") =>
+      ({
+        ...snapshot(revision, null),
+        job: {
+          id: "job-7",
+          fromVersion: "2.21.0",
+          target: { version: "2.22.0", tag: "v2.22.0", channel: "stable", requirementsSha256: "a" },
+          approvedConsentIds: [],
+          restartPolicy: "immediate",
+          downgrade: false,
+          phase,
+          createdAt: "x",
+          updatedAt: "x",
+          requester: {
+            listener: "browser",
+            remoteAddress: "100.64.0.7",
+            tailscaleUser: "alice@example.com",
+            identitySource: "tailscale-serve",
+            client: null,
+          },
+          progress: null,
+          error: null,
+          rollbackFailed: false,
+          actionsOnHost: [],
+          storageSchemaVersion: 3,
+          installWhen: null,
+          dependencies: null,
+          preparedInstall: false,
+        },
+      }) as UpdateStatusSnapshot;
+    current = remoteJob(1, "downloading");
+    render(<UpdatesController />);
+    await waitFor(() => expect(mockToastWarning).toHaveBeenCalledTimes(1));
+    expect(mockToastWarning.mock.calls[0]?.[0]).toBe("Updating to 2.22.0");
+    const options = mockToastWarning.mock.calls[0]?.[1] as
+      | { id: string; description: string }
+      | undefined;
+    expect(options?.id).toBe(REMOTE_UPDATE_TOAST_ID);
+    expect(options?.description).toContain("Requested by alice@example.com from 100.64.0.7");
+    // Once per job, whatever it does next.
+    act(() =>
+      listeners.get(LOCAL_UPDATE_STATUS_EVENT)?.({ revision: 2, snapshot: remoteJob(2, "ready") }),
+    );
+    expect(mockToastWarning).toHaveBeenCalledTimes(1);
   });
 
   test("re-reads join the read in flight", async () => {

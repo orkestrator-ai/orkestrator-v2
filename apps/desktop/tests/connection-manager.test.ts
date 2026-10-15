@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, jest, mock, test } from "bun:test";
 import type { StoredDesktopConnections } from "@orkestrator/protocol/connections";
+import type { GatewayStatusPayload } from "@orkestrator/protocol/updates";
 import type { BackendHttpClient } from "../electron/backend-process";
 import { ConnectionManager, type SecureStorage } from "../electron/connection-manager";
 
@@ -1494,5 +1495,103 @@ describe("Electron connection manager", () => {
           connectionTimeoutMs: 0,
         }),
     ).toThrow("positive number");
+  });
+});
+
+describe("remote updates", () => {
+  const stored: StoredDesktopConnections = {
+    activeConnectionId: "local",
+    connections: [
+      {
+        id: "remote-a",
+        name: "build-box",
+        address: "https://build-box.tailnet.ts.net",
+        encryptedToken: encrypted(token),
+        lastConnectedAt: "2026-10-15T00:00:00Z",
+      },
+    ],
+  };
+
+  test("reads a remote's status handshake without binding a window to it", async () => {
+    const local = localBackendHarness(stored);
+    const status: GatewayStatusPayload = {
+      ok: true,
+      appVersion: "2.21.0",
+      updateProtocol: 1,
+      host: { kind: "supervisor", installKind: "npm-package", canInstall: true },
+      updates: { channel: "stable", available: "2.22.0", jobPhase: null },
+    };
+    const requests: Array<{ url: string; authorization: string | null }> = [];
+    globalThis.fetch = mock(async (input, init) => {
+      requests.push({
+        url: String(input),
+        authorization: new Headers(init?.headers).get("authorization"),
+      });
+      return new Response(JSON.stringify(status));
+    }) as unknown as typeof fetch;
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent: () => undefined,
+      platform: "darwin",
+    });
+    await manager.initialize();
+    expect(await manager.remoteStatus("remote-a")).toEqual(status);
+    expect(requests).toEqual([
+      {
+        url: "https://build-box.tailnet.ts.net/__orkestrator/status",
+        authorization: `Bearer ${token}`,
+      },
+    ]);
+    expect(await manager.remoteStatus("missing")).toBeNull();
+    globalThis.fetch = mock(async () => {
+      throw new TypeError("fetch failed");
+    }) as unknown as typeof fetch;
+    expect(await manager.remoteStatus("remote-a")).toBeNull();
+  });
+
+  test("sends update commands to the named connection with its own token", async () => {
+    const local = localBackendHarness(stored);
+    const bodies: unknown[] = [];
+    globalThis.fetch = mock(async (input, init) => {
+      bodies.push({ url: String(input), body: JSON.parse(String(init?.body)) });
+      return new Response(JSON.stringify({ result: { revision: 3 } }));
+    }) as unknown as typeof fetch;
+    const manager = new ConnectionManager({
+      localBackend: local.backend,
+      secureStorage: secureStorage(),
+      onEvent: () => undefined,
+      platform: "darwin",
+    });
+    await manager.initialize();
+    await expect(manager.invokeUpdate("remote-a", "update_check", {})).resolves.toEqual({
+      revision: 3,
+    });
+    expect(bodies).toEqual([
+      {
+        url: "https://build-box.tailnet.ts.net/__orkestrator/invoke",
+        body: { command: "update_check", args: {} },
+      },
+    ]);
+    await expect(manager.invokeUpdate("local", "update_get_status", {})).resolves.toEqual({
+      local: true,
+      command: "update_get_status",
+    });
+    globalThis.fetch = mock(
+      async () =>
+        new Response(JSON.stringify({ error: "UpdateError:no-host: x" }), { status: 500 }),
+    ) as unknown as typeof fetch;
+    await expect(manager.invokeUpdate("remote-a", "update_start", {})).rejects.toThrow(
+      "UpdateError:no-host",
+    );
+    globalThis.fetch = mock(
+      async () => new Response("{}", { status: 401 }),
+    ) as unknown as typeof fetch;
+    await expect(manager.invokeUpdate("remote-a", "update_check", {})).rejects.toThrow(
+      "token was rejected",
+    );
+    await expect(manager.invokeUpdate("gone", "update_check", {})).rejects.toThrow(
+      "no longer exists",
+    );
   });
 });

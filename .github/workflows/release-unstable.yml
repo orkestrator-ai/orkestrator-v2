@@ -54,13 +54,19 @@ jobs:
       - name: Skip a commit that already has an unstable release
         id: check
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force }}
         shell: bash
         run: |
           set -euo pipefail
           # Exactly seven characters, like the version's g<sha>; --short may add more.
           short="$(git rev-parse HEAD | cut -c1-7)"
-          existing="$(git tag --list "v*-unstable.*.g${short}" | head -n 1)"
+          existing=""
+          while read -r candidate; do
+            [[ -n "$candidate" ]] || continue
+            draft="$(gh release view "$candidate" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || echo missing)"
+            if [[ "$draft" == "false" ]]; then existing="$candidate"; break; fi
+          done <<< "$(git tag --list "v*-unstable.*.g${short}")"
           if [[ -n "$existing" && "$FORCE" != "true" ]]; then
             echo "main (${short}) is already released as ${existing}."
             echo "skip=true" >> "$GITHUB_OUTPUT"
@@ -187,14 +193,13 @@ jobs:
           sudo apt-get install -y libarchive-tools
           if [[ "${{ matrix.arch }}" == "arm64" ]]; then
             sudo apt-get install -y ruby ruby-dev build-essential
-            sudo gem install --no-document fpm
+            sudo gem install --no-document fpm --version 1.17.0
             echo "USE_SYSTEM_FPM=true" >> "$GITHUB_ENV"
           fi
 
       - name: Build and upload
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ORKESTRATOR_RELEASE_SIGNING_KEY: ${{ secrets.ORKESTRATOR_RELEASE_SIGNING_KEY }}
         run: mise run release:desktop
 
   publish-npm:
@@ -267,9 +272,10 @@ jobs:
         run: |
           set -euo pipefail
           image="ghcr.io/${GITHUB_REPOSITORY}"
+          moving_tags="$(bun scripts/release-channel.ts moving-tags "$VERSION" --image "$image")"
           while read -r tag; do
             [[ -n "$tag" ]] && docker buildx imagetools create --tag "$tag" "${image}:${VERSION}"
-          done < <(bun scripts/release-channel.ts moving-tags "$VERSION" --image "$image")
+          done <<< "$moving_tags"
 
       - name: Prune old unstable releases
         env:
@@ -295,7 +301,7 @@ jobs:
   clean-up:
     name: Remove an unpublished release
     needs: [prepare, build-macos, build-linux, publish-npm, container, publish-release]
-    if: failure() && needs.prepare.outputs.tag != ''
+    if: (failure() || cancelled()) && needs.prepare.outputs.tag != ''
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

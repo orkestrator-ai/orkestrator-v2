@@ -23,6 +23,7 @@ import {
   hostDockerConfigDir,
   removeAgentTestHostKeychainLink,
   seedAgentTestDockerConfig,
+  terminateChild,
 } from "../electron/backend-process";
 
 const directories: string[] = [];
@@ -1608,4 +1609,40 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
     },
     SPAWN_TIMEOUT_MS,
   );
+});
+
+describe("terminating a backend child", () => {
+  function fakeChild(options: { ignoresTerm?: boolean } = {}) {
+    const listeners: Array<() => void> = [];
+    const child = {
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      signals: [] as string[],
+      once(_event: "exit", listener: () => void) {
+        listeners.push(listener);
+        return child;
+      },
+      kill(signal: NodeJS.Signals) {
+        child.signals.push(signal);
+        if (signal === "SIGTERM" && options.ignoresTerm) return true;
+        child.signalCode = signal;
+        for (const listener of listeners.splice(0)) listener();
+        return true;
+      },
+    };
+    return child;
+  }
+
+  test("waits for the exit, and kills a child that ignores SIGTERM", async () => {
+    const polite = fakeChild();
+    await terminateChild(polite as never, 1_000, async () => undefined);
+    expect(polite.signals).toEqual(["SIGTERM"]);
+    const stubborn = fakeChild({ ignoresTerm: true });
+    await terminateChild(stubborn as never, 1_000, async () => undefined);
+    expect(stubborn.signals).toEqual(["SIGTERM", "SIGKILL"]);
+    const gone = fakeChild();
+    gone.exitCode = 0;
+    await terminateChild(gone as never);
+    expect(gone.signals).toEqual([]);
+  });
 });

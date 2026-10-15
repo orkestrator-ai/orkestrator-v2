@@ -57,6 +57,9 @@ function index(channels: Record<string, unknown>) {
 describe("feed base URL", () => {
   test("defaults to the GitHub release downloads and accepts safe overrides", () => {
     expect(resolveFeedBaseUrl({})).toBe(BASE);
+    expect(resolveFeedBaseUrl({ ORKESTRATOR_UPDATE_FEED_URL: "http://[::1]:8080/feed" })).toBe(
+      "http://[::1]:8080/feed",
+    );
     expect(
       resolveFeedBaseUrl({ ORKESTRATOR_UPDATE_FEED_URL: "https://staging.example/feed/" }),
     ).toBe("https://staging.example/feed");

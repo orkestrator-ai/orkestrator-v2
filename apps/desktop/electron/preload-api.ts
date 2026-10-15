@@ -1,3 +1,4 @@
+import type { GatewayStatusPayload } from "@orkestrator/protocol/updates";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 import type {
   BrowserPreviewCaptureApi,
@@ -173,6 +174,21 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
       },
       probe(connectionId: string): Promise<boolean> {
         return ipcRenderer.invoke("orkestrator:connections:probe", connectionId);
+      },
+      status(connectionId: string): Promise<GatewayStatusPayload | null> {
+        return ipcRenderer.invoke("orkestrator:connections:status", connectionId);
+      },
+      invokeUpdate<T>(
+        connectionId: string,
+        command: string,
+        args: Record<string, unknown> = {},
+      ): Promise<T> {
+        return ipcRenderer.invoke(
+          "orkestrator:connections:invoke-update",
+          connectionId,
+          command,
+          args,
+        );
       },
       connect(input: ConnectToRemoteInput): Promise<ConnectionList> {
         return ipcRenderer.invoke("orkestrator:connections:connect", input);

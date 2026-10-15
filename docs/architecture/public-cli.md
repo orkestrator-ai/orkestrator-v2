@@ -20,13 +20,26 @@ One executable has two modes. The launcher
 | --- | --- |
 | `orkestrator` (no arguments) | Foreground service, as before |
 | `orkestrator serve [service options]` | Foreground service (explicit form) |
+| `orkestrator serve --supervised [service options]` | Supervisor that runs the service as a child, restarts it, and installs updates in place |
 | `orkestrator --host … --port … …` (only service flags) | Foreground service (historical form) |
 | `orkestrator <group> <command> …`, `help`, `version`, `--help`, `--version` | Client |
 | Anything else (typos, stray words, service flags mixed with client options) | Refused, exit 2 |
 
 Service flags are inventoried in
 [`apps/backend/src/server-flags.ts`](../../apps/backend/src/server-flags.ts); a
-test fails if `options.ts` parses a flag the inventory lacks. Client commands,
+test fails if `options.ts` parses a flag the inventory lacks. `--supervised` is
+a launcher flag, not a service flag: the launcher removes it and runs
+`dist/supervisor.js` (no backend code). The supervisor serves the
+`<dataDir>/runtime/current` version, or its own package when that is older
+or absent, and always gives its child a loopback control listener. It is
+the backend's update host. See
+[release-channels-and-updates.md](release-channels-and-updates.md#headless-supervisor).
+
+`orkestrator service print|install [--manager systemd|launchd] [--data-dir DIR] -- [service flags]`
+renders a user unit that runs the supervisor from `<dataDir>/runtime/current`.
+`install` also installs the CLI's own version there (verified by Bun against
+the registry) when nothing is installed, writes the unit, and prints the
+command to start it. It never starts the service itself. Client commands,
 help and version never initialize a backend, create its data directory, or
 start a listener, bridge or child process. Client commands **never start a
 backend**: they attach to one that is already running.

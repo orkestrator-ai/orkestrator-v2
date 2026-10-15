@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
 import { compareAppVersions } from "@/lib/app-version";
-import { channelLabel, PHASE_LABELS } from "./update-text";
+import { channelLabel, PHASE_LABELS, remoteRequesterLabel } from "./update-text";
 import type { UpdateTargetHandle } from "./useUpdateTarget";
 
 export type UpdateDetailsProps = {
@@ -281,6 +281,11 @@ export function UpdateDetails(props: UpdateDetailsProps) {
             {PHASE_LABELS[job.phase]} {job.target.version}
             {job.installWhen === "on-quit" ? " (installs when the app quits)" : ""}
           </div>
+          {remoteRequesterLabel(job.requester) ? (
+            <div className="text-xs text-muted-foreground" data-testid="update-requester">
+              Requested by {remoteRequesterLabel(job.requester)}
+            </div>
+          ) : null}
           {job.progress ? (
             <div className="space-y-1">
               {job.progress.percent !== null ? <Progress value={job.progress.percent} /> : null}

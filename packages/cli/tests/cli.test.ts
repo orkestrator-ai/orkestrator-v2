@@ -21,6 +21,7 @@ jest.setTimeout(40_000);
 const ARTIFACTS = [
   "dist/client.js",
   "dist/main.js",
+  "dist/supervisor.js",
   "resources/claude-bridge/dist/index.js",
   "resources/codex-bridge/dist/index.js",
 ];
@@ -283,6 +284,7 @@ describe("orkestrator CLI package", () => {
       "bin/orkestrator.js",
       "dist/client.js",
       "dist/main.js",
+      "dist/supervisor.js",
       "package.json",
       "resources/claude-bridge/dist/index.js",
       "resources/codex-bridge/dist/index.js",

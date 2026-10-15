@@ -80,6 +80,7 @@ export type UpdateErrorCode =
   | "blocked"
   | "not-cancellable"
   | "not-ready"
+  | "persistence-failed"
   | "forbidden";
 
 /** Command errors carry a parseable code: `UpdateError:<code>: <message>`. */
@@ -290,12 +291,17 @@ export class UpdateService {
     };
   }
 
-  private changed(persist: boolean): void {
+  private changed(persist: boolean, required = false): void {
     this.revision += 1;
     if (persist) {
       try {
         this.files.writeState({ version: 1, job: this.job, notices: this.notices });
       } catch (error) {
+        if (required)
+          throw new UpdateCommandError(
+            "persistence-failed",
+            "Could not persist update state; installation was blocked",
+          );
         this.log.warn("[Updates] Could not persist update state:", error);
       }
     }
@@ -510,7 +516,13 @@ export class UpdateService {
     const diff = diffReleaseRequirements(
       this.options.readOwnRequirements(),
       target.manifest,
-      await this.diffContext(args.client?.version ?? null),
+      await this.diffContext(
+        this.host.currentRegistration()?.hostKind === "desktop" &&
+          (requester.listener === "control" || requester.listener === "internal") &&
+          args.client?.kind === "desktop"
+          ? target.manifest.version
+          : (args.client?.version ?? null),
+      ),
     );
     const consent = checkConsent(diff, args.approvedConsentIds);
     if (!consent.ok) {
@@ -524,6 +536,8 @@ export class UpdateService {
       );
     }
     const at = this.at();
+    const previousJob = this.job;
+    const previousManifest = this.jobManifest;
     this.job = {
       id: this.randomId(),
       fromVersion: this.options.currentVersion,
@@ -550,12 +564,23 @@ export class UpdateService {
       preparedInstall: false,
     };
     this.jobManifest = target.manifest;
+    try {
+      this.changed(true, true);
+    } catch (error) {
+      this.job = previousJob;
+      this.jobManifest = previousManifest;
+      throw error;
+    }
     this.audit("start", requester, {
       approvedConsentIds: this.job.approvedConsentIds,
       requirementsSha256: this.job.target.requirementsSha256,
       detail: downgrade ? "downgrade" : undefined,
     });
-    this.changed(true);
+    // A headless machine has no screen to show this on; its log is the notice.
+    const who = requester.tailscaleUser ?? requester.client?.name ?? requester.listener;
+    this.log.info(
+      `[Updates] Updating to ${this.job.target.version}, requested by ${who}${requester.remoteAddress ? ` from ${requester.remoteAddress}` : ""}`,
+    );
     void this.runJob(this.job.id);
     return this.snapshot();
   }
@@ -681,16 +706,18 @@ export class UpdateService {
       .catch(() => undefined);
   }
 
-  private undoBeforeInstall(job: UpdateJob): void {
-    void this.options.dependencies?.undoBeforeInstall?.(job).catch((error: unknown) => {
+  private async undoBeforeInstall(job: UpdateJob): Promise<void> {
+    try {
+      await this.options.dependencies?.undoBeforeInstall?.(job);
+    } catch (error) {
       this.log.warn("[Updates] Could not undo the update's install step:", error);
-    });
+    }
   }
 
   private finish(action: "succeeded" | "failed" | "rolled-back" | "cancelled", detail?: string) {
     const job = this.job!;
     this.audit(action, null, { detail });
-    if (action !== "succeeded" && job.preparedInstall) this.undoBeforeInstall(job);
+    if (action !== "succeeded" && job.preparedInstall) void this.undoBeforeInstall(job);
     if (action === "cancelled") return;
     const notice = (
       kind: UpdateNotice["kind"],
@@ -775,29 +802,49 @@ export class UpdateService {
     when: "now" | "on-quit",
     requester: UpdateRequester | null,
   ): Promise<void> {
+    if (this.installAdmitting)
+      throw new UpdateCommandError("not-ready", "An install request is pending");
+    this.installAdmitting = true;
+    try {
+      await this.performInstall(jobId, when, requester);
+    } finally {
+      this.installAdmitting = false;
+    }
+  }
+
+  private async performInstall(
+    jobId: string,
+    when: "now" | "on-quit",
+    requester: UpdateRequester | null,
+  ): Promise<void> {
     const manifest = this.jobManifest;
     if (!this.job || this.job.id !== jobId || !manifest) return;
     const preparing = this.job;
+    // Check durability before dependency activation can change host state.
+    this.changed(true, true);
     let prepared = true;
-    this.installAdmitting = true;
     try {
       await this.options.dependencies?.beforeInstall?.(manifest, preparing);
     } catch (error) {
       prepared = false;
       this.fail(jobId, { step: "install", ...describe(error) });
-    } finally {
-      this.installAdmitting = false;
     }
     if (!prepared) return;
     if (!this.isCurrent(jobId) || this.job!.phase !== "ready") {
       // Cancelled, failed or replaced while preparing: nothing to install,
       // and what the install step changed goes back.
-      if (this.options.dependencies?.beforeInstall) this.undoBeforeInstall(preparing);
+      if (this.options.dependencies?.beforeInstall) await this.undoBeforeInstall(preparing);
       return;
     }
     if (this.options.dependencies?.beforeInstall && !this.job!.preparedInstall) {
       this.job = { ...this.job!, preparedInstall: true, updatedAt: this.at() };
-      this.changed(true);
+      try {
+        this.changed(true, true);
+      } catch (error) {
+        this.job = preparing;
+        await this.undoBeforeInstall(preparing);
+        throw error;
+      }
     }
     const job = this.job!;
     const request: UpdateHostRequest = {
@@ -813,7 +860,13 @@ export class UpdateService {
     this.audit("install", requester, { detail: when === "on-quit" ? "on quit" : undefined });
     if (when === "on-quit") {
       this.job = { ...job, installWhen: "on-quit", updatedAt: this.at() };
-      this.changed(true);
+      try {
+        this.changed(true, true);
+      } catch (error) {
+        this.job = job;
+        if (job.preparedInstall && job.installWhen !== "on-quit") await this.undoBeforeInstall(job);
+        throw error;
+      }
       try {
         await this.sendToHost(request, INSTALL_START_MS, "install");
       } catch (error) {
@@ -821,8 +874,14 @@ export class UpdateService {
       }
       return;
     }
-    this.job = { ...job, installWhen: "now" };
-    this.apply(jobId, { type: "install" });
+    this.job = transitionUpdateJob({ ...job, installWhen: "now" }, { type: "install" }, this.at());
+    try {
+      this.changed(true, true);
+    } catch (error) {
+      this.job = job;
+      if (job.preparedInstall && job.installWhen !== "on-quit") await this.undoBeforeInstall(job);
+      throw error;
+    }
     try {
       // The host answers once the restart is under way; this process may be
       // gone before the promise settles, which is why the state is persisted.
@@ -830,7 +889,12 @@ export class UpdateService {
     } catch (error) {
       // Once the host said it is restarting, only the next process can tell
       // how that went.
-      if (!this.isCurrent(jobId) || this.job!.phase !== "installing") return;
+      if (!this.isCurrent(jobId)) return;
+      if (this.job!.phase === "restarting") {
+        this.armRestartTimer(jobId);
+        return;
+      }
+      if (this.job!.phase !== "installing") return;
       // Nothing was replaced: the host failed before restarting, so the old
       // version is what is running. That is a rollback with nothing to undo.
       this.apply(jobId, { type: "roll-back", error: { step: "install", ...describe(error) } });

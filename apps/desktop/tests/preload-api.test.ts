@@ -157,6 +157,16 @@ describe("preload API factory", () => {
       channel: "orkestrator:shell:open-external",
       args: ["https://example.com/docs"],
     });
+    await expect(api.connections.status("remote-a")).resolves.toEqual<IpcEcho>({
+      channel: "orkestrator:connections:status",
+      args: ["remote-a"],
+    });
+    await expect(
+      api.connections.invokeUpdate("remote-a", "update_check"),
+    ).resolves.toEqual<IpcEcho>({
+      channel: "orkestrator:connections:invoke-update",
+      args: ["remote-a", "update_check", {}],
+    });
     await expect(api.updates.invoke("update_check")).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:updates:invoke",
       args: ["update_check", {}],

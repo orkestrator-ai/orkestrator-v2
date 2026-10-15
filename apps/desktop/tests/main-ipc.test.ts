@@ -14,6 +14,8 @@ function createHarness(
     window?: unknown;
     browserPreviews?: boolean;
     invokeLocalUpdate?: ReturnType<typeof mock>;
+    remoteConnectionStatus?: ReturnType<typeof mock>;
+    invokeConnectionUpdate?: ReturnType<typeof mock>;
   } = {},
 ) {
   const trustedRendererUrl = "file:///app/web/index.html";
@@ -191,6 +193,8 @@ function createHarness(
     browserPreviews: options.browserPreviews === false ? undefined : browserPreviews,
     trustedRendererUrl,
     invokeLocalUpdate: options.invokeLocalUpdate,
+    remoteConnectionStatus: options.remoteConnectionStatus,
+    invokeConnectionUpdate: options.invokeConnectionUpdate,
   });
 
   const invokeFrom = (senderUrl: string, channel: string, ...args: unknown[]) => {
@@ -1138,5 +1142,41 @@ describe("main IPC registration", () => {
     await expect(harness.invoke("orkestrator:updates:invoke", "update_check")).rejects.toThrow(
       "not available yet",
     );
+  });
+
+  test("reads a connection's status and sends it only client update commands", async () => {
+    const remoteConnectionStatus = mock(async (id: string) => ({
+      ok: true,
+      appVersion: `v-${id}`,
+    }));
+    const invokeConnectionUpdate = mock(
+      async (id: string, command: string, args: Record<string, unknown>) => ({ id, command, args }),
+    );
+    const harness = createHarness({ remoteConnectionStatus, invokeConnectionUpdate });
+    await expect(harness.invoke("orkestrator:connections:status", "remote-a")).resolves.toEqual({
+      ok: true,
+      appVersion: "v-remote-a",
+    });
+    await expect(
+      harness.invoke("orkestrator:connections:invoke-update", "remote-a", "update_start", { a: 1 }),
+    ).resolves.toEqual({ id: "remote-a", command: "update_start", args: { a: 1 } });
+    await expect(
+      harness.invoke("orkestrator:connections:invoke-update", "remote-a", "update_host_report", {}),
+    ).rejects.toThrow("Expected an update command");
+    await expect(
+      harness.invoke("orkestrator:connections:invoke-update", "remote-a", "get_projects", {}),
+    ).rejects.toThrow("Expected an update command");
+    await expect(harness.invoke("orkestrator:connections:status", 7)).rejects.toThrow(
+      "connection ID",
+    );
+    await expect(
+      harness.invokeFrom(
+        "https://evil.example",
+        "orkestrator:connections:invoke-update",
+        "remote-a",
+        "update_check",
+      ),
+    ).rejects.toThrow("untrusted renderer");
+    expect(invokeConnectionUpdate).toHaveBeenCalledTimes(1);
   });
 });

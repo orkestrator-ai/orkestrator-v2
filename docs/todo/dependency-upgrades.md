@@ -104,7 +104,11 @@ a support deadline, or a decision.
 
 - **Update-manifest key management** for electron-builder 27: where the key
   lives, who can sign, rotation and loss recovery, or whether to publish with
-  `updateManifest: false`. Needed before item 4.
+  `updateManifest: false`. Needed before item 4. The release requirements
+  manifest's Ed25519 key policy is decided (an active CI key and an offline
+  standby, rotated through the standby; see
+  [releasing.md](../development/releasing.md#manifest-signing-keys)); the
+  recommendation is the same policy for this key.
 
 ## Related
 

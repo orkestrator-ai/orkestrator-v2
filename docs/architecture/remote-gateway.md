@@ -139,10 +139,34 @@ blocks that, but the renderer compares its bundled version with the backend's
 (`apps/web/src/components/BackendVersionReminder.tsx`). On a mismatch it shows
 a warning toast saying which side is older and how to update: reload a page
 the backend served, update the desktop app (**Check for Updates…**), or update
-Orkestrator on the backend's machine. Dismissing it hides it for the session
-until either version changes. The Settings **Debug** section shows the same
-note. The public CLI has its own schema handshake instead
-([public-cli.md](public-cli.md)).
+Orkestrator on the backend's machine. When the backend is the older side, the
+toast's **Update backend** action opens that backend's update dialog: in the
+desktop app, Settings › Connections, where every remote has **Update
+remote**. Dismissing it hides it for the session until either version changes.
+The Settings **Debug** section shows the same note. The public CLI has its own
+schema handshake instead ([public-cli.md](public-cli.md)).
+
+## Status handshake and remote updates
+
+The authenticated `/__orkestrator/status` route answers `{ ok, appVersion,
+updateProtocol, host, updates }`. Here `host` says whether the backend is
+installed by a desktop app, the headless supervisor, or nothing, and whether
+it can install updates; `updates` gives the channel, an available version and
+a running job's phase. Older backends answer `{ ok: true }` only. Clients
+treat that as "version unknown" and offer the manual route.
+
+A client drives a remote's update through the same `update_*` commands the
+local renderer uses. The desktop app sends them to a saved connection with
+that connection's token through `connections.invokeUpdate`, whether or not a
+window is bound to it. The remote decides everything itself: consent bound to
+the manifest bytes, the client floor (`client-too-old`), and its own installer.
+
+Every update action is appended to `<dataDir>/updates/audit.jsonl` on the
+updated machine, with the trusted invocation origin: the listener, the socket
+address, and the Tailscale login when `tailscale serve` delivered the request
+on loopback, alongside the client's declared kind, name and version. Installer
+commands (`update_host_*`) are accepted only on the loopback control listener.
+See [release-channels-and-updates.md](release-channels-and-updates.md).
 
 ## Security notes
 

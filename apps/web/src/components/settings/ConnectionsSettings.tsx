@@ -20,6 +20,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
+import { RemoteUpdateSummary } from "@/components/updates/RemoteUpdateSummary";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -366,6 +367,9 @@ export function ConnectionsSettings() {
                       <p className="mt-1 text-[11px] text-zinc-600">
                         Last connected {lastConnected}
                       </p>
+                    )}
+                    {connection.kind === "remote" && !connection.requiresToken && (
+                      <RemoteUpdateSummary connection={connection} />
                     )}
                   </div>
 

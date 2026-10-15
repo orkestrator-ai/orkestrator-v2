@@ -79,6 +79,8 @@ function setup(
     /** Final reports to fail before delivering, as a replaced session would. */
     failFinalReports?: number;
     markerFile?: string;
+    keepRollbackCopy?: () => Promise<string>;
+    discardRollbackCopy?: () => Promise<void>;
   } = {},
 ) {
   let failFinalReports = options.failFinalReports ?? 0;
@@ -113,6 +115,8 @@ function setup(
     allowedFeedBaseUrls: [BASE],
     log: { info: () => undefined, warn: () => undefined },
     progressIntervalMs: 1_000,
+    keepRollbackCopy: options.keepRollbackCopy,
+    discardRollbackCopy: options.discardRollbackCopy,
     now: () => (clock += 600),
   });
   const reports = () =>
@@ -423,8 +427,9 @@ describe("after a restart", () => {
     );
   }
 
-  test("the new version reports success and clears the marker", async () => {
-    const h = setup({ appVersion: "2.22.0" });
+  test("the new version reports success, clears the marker and deletes the rollback copy", async () => {
+    const discardRollbackCopy = mock(async () => undefined);
+    const h = setup({ appVersion: "2.22.0", discardRollbackCopy });
     writeMarker(h.markerFile, "2.22.0");
     await h.host.register();
     await h.host.reportStartupOutcome();
@@ -433,6 +438,10 @@ describe("after a restart", () => {
       args: { hostSessionId: "session-1", jobId: "job-1", outcome: "succeeded" },
     });
     expect(existsSync(h.markerFile)).toBe(false);
+    expect(discardRollbackCopy).toHaveBeenCalledTimes(1);
+    // Without a pending install there is nothing to report or delete.
+    await h.host.reportStartupOutcome();
+    expect(discardRollbackCopy).toHaveBeenCalledTimes(1);
   });
 
   test("still the old version means the install did not apply", async () => {
@@ -458,3 +467,240 @@ describe("after a restart", () => {
     expect(readFileSync(h.markerFile, "utf8")).toBe("{not json");
   });
 });
+
+describe("rollback copies", () => {
+  test("keeps a copy before install and records it for a failed start to restore", async () => {
+    const keepRollbackCopy = mock(async () => "/data/updates/rollback/2.21.0/Orkestrator AI.app");
+    const h = setup({ keepRollbackCopy });
+    await h.host.register();
+    expect(h.calls[0]?.args).toMatchObject({ registration: { capabilities: { rollback: true } } });
+    await deliver(h, prepare());
+    expect(keepRollbackCopy).toHaveBeenCalledTimes(1);
+    expect(h.reports().at(-1)).toMatchObject({ status: "succeeded" });
+    await deliver(h, install("now"));
+    expect((await readPendingInstallMarker(h.markerFile))?.rollbackPath).toBe(
+      "/data/updates/rollback/2.21.0/Orkestrator AI.app",
+    );
+  });
+
+  test("a copy that cannot be made fails the download, before anything is installed", async () => {
+    const h = setup({
+      keepRollbackCopy: async () => {
+        throw new Error("ENOSPC: no space left on device");
+      },
+    });
+    await h.host.register();
+    await deliver(h, prepare());
+    expect(h.reports().at(-1)).toMatchObject({
+      status: "failed",
+      error: { code: "rollback-copy-failed" },
+    });
+  });
+
+  test("the restored version reports the rollback the failed one performed", async () => {
+    const h = setup({ appVersion: "2.21.0" });
+    mkdirSync(path.dirname(h.markerFile), { recursive: true });
+    writeFileSync(
+      h.markerFile,
+      JSON.stringify({
+        version: 1,
+        jobId: "job-1",
+        fromVersion: "2.21.0",
+        toVersion: "2.22.0",
+        mode: "now",
+        createdAt: "x",
+        rollbackPath: "/r",
+        rolledBack: { reason: "2.22.0 failed to start: Backend service exited during startup" },
+      }),
+    );
+    await h.host.register();
+    await h.host.reportStartupOutcome();
+    expect(h.calls.at(-1)?.args).toMatchObject({
+      outcome: "rolled-back",
+      error: { code: "health-check", message: expect.stringContaining("failed to start") },
+    });
+    expect(existsSync(h.markerFile)).toBe(false);
+  });
+});
+
+test("cancelled prepare drains before replacement changes the updater", async () => {
+  const updater = fakeUpdater();
+  let finishFirst!: (value: never[]) => void;
+  let finishSecond!: (value: never[]) => void;
+  updater.downloadUpdate.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finishFirst = resolve;
+      }),
+  );
+  updater.downloadUpdate.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finishSecond = resolve;
+      }),
+  );
+  const h = setup({ updater });
+  await h.host.register();
+  await deliver(h, prepare());
+  expect(updater.checkForUpdates).toHaveBeenCalledTimes(1);
+  await deliver(h, { kind: "cancel", requestId: "cancel-first", jobId: "job-1" });
+  await deliver(h, prepare({ jobId: "job-2", requestId: "prepare-second", allowDowngrade: true }));
+  expect(updater.checkForUpdates).toHaveBeenCalledTimes(1);
+  finishFirst([]);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  expect(updater.checkForUpdates).toHaveBeenCalledTimes(2);
+  expect(updater.allowDowngrade).toBe(true);
+  expect(updater.listenerCount("download-progress")).toBe(1);
+  expect(
+    h
+      .reports()
+      .some(
+        (entry) =>
+          entry.jobId === "job-1" &&
+          entry.status === "succeeded" &&
+          entry.requestId === "req-prepare",
+      ),
+  ).toBe(false);
+  finishSecond([]);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  expect(h.reports()).toContainEqual(
+    expect.objectContaining({ jobId: "job-2", status: "succeeded" }),
+  );
+  expect(updater.listenerCount("download-progress")).toBe(0);
+});
+
+test("real electron-updater generic feed verifies, stages, swaps and rolls back a disposable AppImage", async () => {
+  const { createRequire } = await import("node:module");
+  const { createHash } = await import("node:crypto");
+  const { keepRollbackCopy, rollBackFailedUpdate } = await import("./update-rollback.js");
+  const require = createRequire(import.meta.url);
+  const { AppImageUpdater } = require("electron-updater") as typeof import("electron-updater");
+  // Use the installed builder's Node transport; Electron's net transport is
+  // exercised by the Electron smoke suite. No updater logic is replaced.
+  const builderRequire = createRequire(require.resolve("electron-builder"));
+  const { NodeHttpExecutor } = builderRequire("builder-util/out/nodeHttpExecutor");
+  const updaterRequire = createRequire(require.resolve("electron-updater"));
+  const { ElectronHttpExecutor } = updaterRequire("./electronHttpExecutor");
+  const executor = new ElectronHttpExecutor();
+  const nodeExecutor = new NodeHttpExecutor();
+  executor.createRequest = nodeExecutor.createRequest.bind(nodeExecutor);
+  const directory = mkdtempSync(path.join(os.tmpdir(), "real-appimage-update-"));
+  directories.push(directory);
+  const appImage = path.join(directory, "Fixture.AppImage");
+  const oldBytes = "#!/bin/sh\n# previous version\nexit 0\n";
+  const newBytes = "#!/bin/sh\n# replacement version\nexit 0\n";
+  writeFileSync(appImage, oldBytes, { mode: 0o755 });
+  const sha512 = createHash("sha512").update(newBytes).digest("base64");
+  let artifactDownloads = 0;
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const url = new URL(request.url);
+      if (url.pathname.endsWith(".yml"))
+        return new Response(
+          `version: 2.22.0\nfiles:\n  - url: Fixture.AppImage\n    sha512: ${sha512}\n    size: ${Buffer.byteLength(newBytes)}\npath: Fixture.AppImage\nsha512: ${sha512}\nreleaseDate: '2026-10-15T12:00:00Z'\n`,
+        );
+      if (url.pathname.endsWith("Fixture.AppImage")) {
+        artifactDownloads += 1;
+        return new Response(newBytes);
+      }
+      return new Response("missing", { status: 404 });
+    },
+  });
+  const base = `http://127.0.0.1:${server.port}/feed`;
+  const config = path.join(directory, "app-update.yml");
+  writeFileSync(config, `provider: generic\nurl: ${base}\nupdaterCacheDirName: fixture-updater\n`);
+  const quitHandlers: Array<(code: number) => void> = [];
+  const updater = new AppImageUpdater(null, {
+    version: "2.21.0",
+    name: "fixture",
+    isPackaged: true,
+    appUpdateConfigPath: config,
+    userDataPath: directory,
+    baseCachePath: directory,
+    whenReady: async () => undefined,
+    quit: () => undefined,
+    relaunch: () => undefined,
+    onQuit: (handler: (code: number) => void) => quitHandlers.push(handler),
+  });
+  Object.assign(updater, { httpExecutor: executor, _testOnlyOptions: { platform: "linux" } });
+  updater.disableDifferentialDownload = true;
+  updater.logger = {
+    info: () => undefined,
+    warn: () => undefined,
+    error: () => undefined,
+    debug: () => undefined,
+  };
+  const previousAppImage = process.env.APPIMAGE;
+  process.env.APPIMAGE = appImage;
+  const reports: Array<Record<string, unknown>> = [];
+  const markerFile = path.join(directory, "updates", "pending-install.json");
+  const host = createDesktopUpdateHost({
+    updater: updater as unknown as UpdaterLike,
+    unavailableReason: null,
+    installKind: "appimage",
+    appVersion: "2.21.0",
+    markerFile,
+    allowedFeedBaseUrls: [base],
+    log: { info: () => undefined, warn: () => undefined },
+    keepRollbackCopy: () =>
+      keepRollbackCopy({
+        app: { kind: "appimage", path: appImage },
+        version: "2.21.0",
+        rollbackRoot: path.join(directory, "rollback"),
+      }),
+    async invoke<T>(command: string, args: Record<string, unknown>): Promise<T> {
+      if (command === "update_host_register")
+        return { hostSessionId: "real-updater", pending: [] } as T;
+      if (command === "update_host_report") reports.push(args);
+      return { ok: true } as T;
+    },
+  });
+  const waitForReport = async (requestId: string) => {
+    for (let attempt = 0; attempt < 300; attempt += 1) {
+      const report = reports.find(
+        (entry) => entry.requestId === requestId && entry.status !== "progress",
+      );
+      if (report) {
+        expect(report).toMatchObject({ status: "succeeded" });
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error("real updater did not settle");
+  };
+  try {
+    await host.register();
+    host.handleBackendEvent("update-host-request", {
+      hostSessionId: "real-updater",
+      request: prepare({ feedBaseUrl: base }),
+    });
+    await waitForReport("req-prepare");
+    expect(artifactDownloads).toBe(1);
+    expect(readFileSync(appImage, "utf8")).toBe(oldBytes);
+    host.handleBackendEvent("update-host-request", {
+      hostSessionId: "real-updater",
+      request: install("on-quit"),
+    });
+    await waitForReport("req-install-on-quit");
+    expect(artifactDownloads).toBe(1); // Cached download still arms the real quit handler.
+    expect(quitHandlers).toHaveLength(1);
+    quitHandlers[0]!(0);
+    expect(readFileSync(appImage, "utf8")).toBe(newBytes);
+    const result = await rollBackFailedUpdate({
+      marker: await readPendingInstallMarker(markerFile),
+      appVersion: "2.22.0",
+      firstLaunch: true,
+      app: { kind: "appimage", path: appImage },
+      dataDir: directory,
+      now: Date.now(),
+    });
+    expect(result.rolledBack).toBe(true);
+    expect(readFileSync(appImage, "utf8")).toBe(oldBytes);
+  } finally {
+    server.stop(true);
+    if (previousAppImage === undefined) delete process.env.APPIMAGE;
+    else process.env.APPIMAGE = previousAppImage;
+  }
+}, 10_000);

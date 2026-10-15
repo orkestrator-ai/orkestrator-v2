@@ -78,7 +78,8 @@ whole as a document; the row layout returns on the next keyable write.
 
 Rows carry an optional indexed `owner` (`projectId` for environments and
 Kanban, `environmentId` for sessions). `loadStoreRowsByOwner` reads one
-project's board or one environment's sessions without assembling the store.
+project's board or one environment's sessions without assembling the store,
+and `loadStoreRow` reads one row by key the same way.
 
 Each store row records its layout, so `assembleStoredValue` rebuilds the value
 without the registry. Scripts use `readStorageDatabaseStore`, which opens the
@@ -122,6 +123,17 @@ from that.
   their commit, so a create that overlaps the deletion cannot leave a record
   behind. Lease rows whose holder stopped heartbeating an hour ago are purged
   at start-up.
+
+  Looped and Multi Review workflows keep **one lease per store for writers**:
+  a save awaits its environment check, and launch and the environment sweep
+  scan every workflow. Each write is still a single-row `updateStoreRow` that
+  re-checks the controller fence and revision inside its own transaction.
+  Reads, including the controller fence check a supervisor runs around
+  nearly every provider call, read one row with `loadStoreRow` and take no
+  lease. A lease held for a read is released before the caller acts on the
+  answer, so it would cost two write transactions per check and protect
+  nothing; the commit's own check is what stops a controller that lost its
+  lease.
 - **`atomically(operation)`**: buffers every database-store write and delete
   made inside it and commits them in one transaction. Resource announcements
   made inside are published only after that commit. Reads inside see the

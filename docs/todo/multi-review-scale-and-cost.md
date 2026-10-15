@@ -6,10 +6,9 @@ Multi Review's control plane covers reviewer admission, observation,
 persistence, evidence verification and consolidation input. Its cost must stay
 bounded, and independent of retained review history, as a panel grows towards
 the 32-reviewer maximum. The mechanisms shipped in #833, and #852 made the keyed
-supervisor the default driver. What remains is a storage regression introduced
-by the SQLite move (#969), rollback gates that outlived their one-release
-window, a timing-sensitive benchmark, and scale evidence that was never
-collected.
+supervisor the default driver. What remains is rollback gates that outlived
+their one-release window, a timing-sensitive benchmark, and scale evidence that
+was never collected.
 
 ## Current state
 
@@ -51,50 +50,26 @@ collected.
   (640 KiB, `review-consolidation-evidence.ts`) bounds consolidation input, and
   overflow throws `ConsolidationBudgetError` before dispatch.
 - **Measurement.** `multi-review-efficiency.bench.test.ts` with
-  `multi-review-efficiency-fixtures.ts` covers 1, 2, 4, 8 and 32 reviewers, a
-  mixed-provider panel and a slow reviewer. Production passes no observer, so
+  `multi-review-efficiency-fixtures.ts` covers 1, 2, 4, 8, 16 and 32 reviewers,
+  an 8-reviewer panel over 50 retained workflows, a mixed-provider panel and a
+  slow reviewer. Production passes no observer, so
   `recordEfficiency` events go to `NOOP_EFFICIENCY_OBSERVER`.
 - **Storage.** `multi-reviews` is a SQLite `record` store (`STORE_LAYOUTS` in
-  `storage-stores.ts`). `StorageReviews` (`storage-reviews.ts`) still reads and
-  writes it as one whole value.
+  `storage-stores.ts`), one row per workflow. `StorageReviews`
+  (`storage-reviews.ts`) reads and writes one row at a time (`loadStoreRow`,
+  `updateStoreRow`); only launch, listing and the environment sweep read every
+  workflow. Writers serialize on the store's mutation lease, and each save
+  re-checks the controller fence and revision inside its own transaction.
+  `validateMultiReviewController`, the fence check, reads one row and takes no
+  lease. The benchmark asserts no whole-store read and two lease acquisitions
+  per running pass at any panel size or retained history. The looped-review
+  store follows the same rules.
 
 ## Outstanding work
 
 ### Code
 
-1. **Fence checks parse the whole store again (regression since #969).**
-   - `MultiReviewService.assertFence` (26 call sites in the service, and 11
-     more through the runner host in `review-fanout.ts`) calls
-     `StorageReviews.validateMultiReviewController`. That
-     takes the cross-process mutation lease (`enqueueMultiReviewMutation` →
-     `serializeMutation` → `acquireMutationLock`) and calls
-     `readMultiReviewLease`.
-   - `readMultiReviewLease` fingerprints `multi-reviews.json` with `fs.stat`.
-     After the one-time import that file is archived under `legacy-json/`, or
-     never existed. The stat fails, `multiReviewLeaseIndex` is never set, and
-     every check assembles and parses every retained workflow through
-     `loadJson`.
-   - The index is also wrong in principle now. If an older backend writes a
-     stray `multi-reviews.json` into the same data directory, the index caches
-     database leases against that file's stat. It then stops seeing lease
-     changes until the next start archives the file. Commits re-check the lease
-     against the database, so stale state cannot commit.
-   - `saveMultiReviewWorkflow`, `claimMultiReviewController` and
-     `releaseMultiReviewController` also load and rewrite the whole store. For
-     the 14-day archive window, every sensitive save also runs
-     `scrubLegacyJsonStore` over `legacy-json/`.
-   - Fix: use per-row `readStoreRow` / `updateStoreRow`, as
-     `storage-build-pipelines.ts` already does (`committedBuildPipeline`).
-     Delete `multiReviewLeaseIndex`. Drop the "~13 extra filesystem operations"
-     comment and the `{ backup: false }` arguments, which database stores
-     ignore.
-   - Benchmark: add a fence-check counter. Today it counts saves and lease
-     writes, not fence reads. Its backup-rotation and "lease writes with
-     backup" columns count the `backup` option rather than real rotations, so
-     they are now vacuous. Replace them with row-level read and write counts.
-   - Done when a fence check reads one row at any panel size, and the
-     benchmark asserts it.
-2. **Remove the Multi Review rollback gates.** They were kept "for one release"
+1. **Remove the Multi Review rollback gates.** They were kept "for one release"
    when they merged during 2.16.x and have shipped in every release since,
    up to 2.20.0.
    - `MultiReviewServiceOptions.evidencePermits`: remove both `=== false`
@@ -111,23 +86,23 @@ collected.
      `stableJitterMs` first if the keyed path still uses it.
    - Keep `reviewFanoutConcurrency` as ordinary configuration, but drop the
      rollback wording from its doc comment.
-3. **Retire the reviewer-transcript compatibility fallback** in
+2. **Retire the reviewer-transcript compatibility fallback** in
    `multi-review-reviewer-transcript.ts` once no reviewer platform reaches it.
    `HttpBridgeProvider` and `OpenCodeProvider` both implement
    `transcriptSnapshot` today. A bridge that predates `/transcript` is handled
    lower down, in `readHttpBridgeTranscriptSnapshot`
    (`http-bridge-progressive.ts`), and never sets `fallback: true` (see
    [mixed-version-compatibility.md](mixed-version-compatibility.md)).
-4. **Make the slow-reviewer benchmark deterministic.** `Multi Review
+3. **Make the slow-reviewer benchmark deterministic.** `Multi Review
    control-plane benchmark > one slow reviewer does not serialize the rest of
    the panel` asserts the wall-clock bound `admissionMs < 250 + 3 *
    BASE.setupDelayMs`. Under host load it fails (flake 0171, open, recurring
    through 2026-10-15). Assert overlap and ordering with deferred fakes or a
    controllable clock instead.
-5. **Add seeded, CI-sized randomised interleaving tests** across concurrent
+4. **Add seeded, CI-sized randomised interleaving tests** across concurrent
    reviewers. They should interleave commit resolution, provider completion,
    cancellation, fence loss and restart. They were planned but never written.
-6. **Close the measurement gaps.**
+5. **Close the measurement gaps.**
    - Verification counts only the package's declared size. Referenced artifact
      bytes are not reported.
    - There is no opt-in large-evidence case (hundreds of MiB, real hashing).
@@ -215,6 +190,15 @@ collected.
 - **Lease and state stay together.** Do not split the controller lease from
   workflow state unless both commit in one transaction. A per-row
   `updateStoreRow` keeps the atomic fence-and-state commit.
+- **Fence reads take no lease.** A fence check is only true at the instant it
+  reads, and a lease held for it would be released before the caller acts, so
+  it never protected the provider I/O that follows. Invariant 4 rests on the
+  commit: the only commit path (`saveNow` → `saveMultiReviewWorkflow`) re-checks
+  the fence and the expected revision inside its transaction. A SQLite read
+  sees only committed state, and a takeover needs an expired lease, which the
+  check already rejects, so a read racing a takeover answers as a serialized
+  one would. Writers must stay serialized: a save carries the stored lease
+  forward, so an unserialized claim racing it could lose a renewal.
 - **Evidence verification is a safety boundary, not a cache.** It must still
   catch a changed package or artifact, a worktree or snapshot mismatch,
   evidence regenerated under a new validation run, a restart that lost trust
@@ -249,8 +233,6 @@ collected.
 
 ## Open questions
 
-- Does a fence read need the cross-process mutation lease at all, given that
-  every commit re-checks the fence under the lock?
 - Should `WorkflowDueScheduler` survive as the keyed-scheduling rollback
   target, or go with the switch?
 - Is "rollout observation" still a gate? The deleted baseline's "Rollout
@@ -259,8 +241,6 @@ collected.
 
 ## Needs verification
 
-- The real cost of the fence path: count fence checks per pass at 8 to 32
-  reviewers, before and after item 1.
 - Whether any supported reviewer platform still reaches the reviewer-transcript
   fallback in production.
 - Whether the browser and agent suites were ever run for #833's launcher and

@@ -1,8 +1,9 @@
 # 04 — Gateway, Codex runtime, build pipeline and web annotation chains, plus a regression guard
 
-Status: In progress (2026-10-15). Step 0 (the guard) and the web annotation
-chain are done; the build pipeline, gateway and Codex runtime chains remain,
-pinned in `tests/unit/inheritance-chains.test.ts`. Priority: last.
+Status: Done (2026-10-15). The guard landed first, then all four chains were
+replaced by a context plus collaborators behind an unchanged facade. Only plan
+01's and plan 02's chains remain pinned in
+`tests/unit/inheritance-chains.test.ts`.
 
 ## Problem
 
@@ -65,6 +66,17 @@ mechanical:
 
 ### Gateway
 
+Done (2026-10-15). `OrkestratorGateway` is a facade over `GatewayContext`
+(`gateway-context.ts`) and `GatewayLifecycle` (`gateway-lifecycle.ts`, the
+listeners, token and shutdown that used to sit in `gateway-base.ts`),
+`GatewayEvents`, `GatewayAuth`, `GatewayHandlers` and `GatewayProxy`. Three
+calls run against the build order and are callbacks bound late by the facade:
+the terminal WebSocket's credential and origin checks (context → auth),
+request routing (lifecycle → auth), and the route handlers (auth → handlers).
+Await order, listener registration and the replay code are unchanged. The
+facade keeps the internals the gateway suites reach through casts as
+protected pass-throughs to the same instances.
+
 Read `bridges/AGENTS.md` and the transport invariants in the root
 `AGENTS.md` first.
 
@@ -77,6 +89,17 @@ Read `bridges/AGENTS.md` and the transport invariants in the root
 
 ### Codex runtime
 
+Done (2026-10-15). `AppServerRuntime` is a facade over `CodexRuntimeContext`
+(`app-server-runtime-context.ts`), `CodexRuntimeApprovals`
+(`app-server-runtime-approvals.ts`), and `CodexRuntimeLifecycle`, `-Sessions`,
+`-Prompt` and `-Tail` in the existing files. `app-server-runtime-base.ts` now
+holds only shared types, constants and helpers. Nine upward calls are
+callbacks on the context, wired by the facade. Eleven methods that tests patch
+on the runtime and that are also called internally go through the facade's
+own method, so patching still intercepts internal calls. The stdout reader
+(`jsonl-rpc-client.ts`) is untouched, and every callback on its path is a
+synchronous call, so invariant 9 holds.
+
 Read `bridges/codex-bridge/AGENTS.md` first.
 
 - Natural modules: process lifecycle and supervision (`-lifecycle`),
@@ -87,6 +110,21 @@ Read `bridges/codex-bridge/AGENTS.md` first.
   module that only enqueues.
 
 ### Build pipeline
+
+Done (2026-10-15). `BuildPipelineService` is a facade over
+`BuildPipelineContext` (`build-pipeline-context.ts`, which also holds `save`,
+`requireRecord` and `mutate`), `BuildPipelineAgents`
+(`build-pipeline-service-agents.ts`: providers, bridge connections, step
+settings), `BuildPipelineRecovery`, `BuildPipelineInteractions`,
+`BuildPipelineSupervisor` and `BuildPipelineLifecycle`
+(`build-pipeline-service-lifecycle.ts`, formerly `-base`). Every abstract
+declaration had one implementation, so after moving a few methods down the
+calls run one way. The one real cycle, recovery opening the next stage, goes
+through a `BuildPipelineStageDispatch` port the facade binds late to the
+supervisor. Storage calls are unchanged; plan 01's repository work still
+applies at those call sites. In practice the service called
+`storage.getBuildPipeline`/`saveBuildPipeline` directly, not
+`enqueueBuildPipelineMutation` as assumed below.
 
 - Natural modules: stage supervisor, crash and restart recovery, and
   user-interaction handling. The base's 23 `abstract` uses show most of the

@@ -538,7 +538,8 @@ export class DesignRecordStore {
     await syncDirectory(this.root);
   }
   async remove(id: string): Promise<void> {
-    for (const file of [this.recordFile(id), this.legacyFile(id), this.pendingFile(id)]) {
+    // Remove the root record last: ids() must keep finding interrupted cleanup.
+    for (const file of [this.pendingFile(id), this.legacyFile(id), this.recordFile(id)]) {
       await unlink(file).catch((error: NodeJS.ErrnoException) => {
         if (error.code !== "ENOENT") throw error;
       });

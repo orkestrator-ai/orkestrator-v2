@@ -198,13 +198,12 @@ export async function sweepOrphanedEnvironmentState(
 
 /**
  * Removes design canvases whose environment was deleted or no longer exists.
- * Like the state sweep, a failure to list environments aborts it.
+ * A missing, corrupt or incomplete owner store aborts it, even when ordinary
+ * environment reads would return an empty fallback.
  */
 export async function sweepOrphanedDesignCanvases(context: CommandContext): Promise<number> {
   if (!context.design) return 0;
-  const live = new Set(
-    (await context.storage.loadEnvironments()).map((environment) => environment.id),
-  );
+  const live = await context.storage.loadEnvironmentIdsForCleanup();
   return context.design.sweepOrphanedCanvases(live, ORPHANED_STATE_MIN_AGE_MS);
 }
 

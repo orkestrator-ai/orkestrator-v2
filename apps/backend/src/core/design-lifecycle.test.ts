@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,6 +9,7 @@ import {
 import { isDesignError } from "./design-errors.js";
 import { exportSave } from "./design-exports.js";
 import { enforceRecycleBin, purge } from "./design-service-lifecycle.js";
+import { DesignService } from "./design-service.js";
 import {
   createDesignHarness,
   deferred,
@@ -532,6 +533,143 @@ describe("design lifecycle: tombstones, restore, purge, duplicate and fencing", 
     (await readdir(join(harness.dir, "design-canvases"), { recursive: true })).filter((file) =>
       file.includes(canvasId),
     );
+
+  for (const problem of ["unparsable", "unreadable"] as const) {
+    test(`the orphan sweep keeps a canvas with an ${problem} owner`, async () => {
+      const { canvasId } = await setup("env-unknown");
+      const file = service().store.recordFile(canvasId);
+      if (problem === "unreadable") {
+        await rm(file);
+        await mkdir(file);
+      } else {
+        await writeFile(file, "{ torn record without an owner");
+      }
+      service().coordination.beginLibraryChange(canvasId);
+      clock = Date.now() + 2 * 60 * 60_000;
+      const before = await canvasFiles(canvasId);
+      expect(await service().sweepOrphanedCanvases(new Set(), 60 * 60_000)).toBe(0);
+      expect(service().library.entries.get(canvasId)).toMatchObject({
+        state: "problem",
+        environmentId: "",
+      });
+      expect(await canvasFiles(canvasId)).toEqual(before);
+    });
+  }
+
+  for (const change of ["owner", "fresh", "removed"] as const) {
+    test(`the orphan sweep rechecks a peer's ${change} record after waiting for its lane`, async () => {
+      const { canvasId } = await setup("env-gone");
+      const kept = await setup("env-keep", "Kept");
+      clock = Date.now();
+      const old = new Date(clock - 2 * 60 * 60_000);
+      await utimes(service().store.recordFile(canvasId), old, old);
+      service().coordination.beginLibraryChange(canvasId);
+      const peer = new DesignService(harness.dir, () => {}, harness.renderer, serviceOptions());
+      const selected = deferred<void>();
+      const release = deferred<void>();
+      const originalLane = service().lane.bind(service());
+      let pause = true;
+      service().lane = (id, work) => {
+        if (id === canvasId && pause) {
+          pause = false;
+          selected.resolve();
+          return release.promise.then(() => originalLane(id, work));
+        }
+        return originalLane(id, work);
+      };
+      let sweep: Promise<number> | undefined;
+      try {
+        await peer.initialize();
+        sweep = service().sweepOrphanedCanvases(new Set(["env-keep"]), 60 * 60_000);
+        await selected.promise;
+        await peer.lane(canvasId, async () => {
+          if (change === "removed") {
+            await peer.store.remove(canvasId);
+            peer.libraryRemoved(canvasId);
+          } else {
+            const loaded = await peer.store.read(canvasId);
+            if (loaded.kind !== "record") throw new Error("expected record");
+            if (change === "owner") loaded.record.environmentId = "env-keep";
+            await peer.commit(loaded.record, false);
+            // Keep the changed-owner case old, so ownership itself protects it.
+            if (change === "owner") {
+              await utimes(peer.store.recordFile(canvasId), old, old);
+              peer.coordination.beginLibraryChange(canvasId);
+            }
+          }
+        });
+        release.resolve();
+        expect(await sweep).toBe(0);
+        if (change !== "removed")
+          expect(await exists(service().store.recordFile(canvasId))).toBe(true);
+        // A vanished record must not make the stale candidate remove sidecars.
+        expect(await exists(service().store.historyDir(canvasId))).toBe(true);
+        expect((await service().get(kept.canvasId, "env-keep")).frames).toHaveLength(1);
+      } finally {
+        release.resolve();
+        await sweep;
+        service().lane = originalLane;
+        await peer.close();
+      }
+    });
+  }
+
+  for (const restart of [false, true]) {
+    test(`interrupted sidecar cleanup keeps its root for ${restart ? "a restarted service" : "the next sweep"}`, async () => {
+      const { canvasId } = await setup("env-gone");
+      const kept = await setup("env-keep", "Kept");
+      const store = service().store;
+      await mkdir(store.exportBackupDir(canvasId), { recursive: true });
+      await writeFile(join(store.exportBackupDir(canvasId), "backup"), "backup");
+      await mkdir(join(store.root, "legacy-backups"), { recursive: true });
+      await writeFile(store.legacyBackupFile(canvasId), "legacy backup");
+      // A one-time unlink failure on pending data occurs inside store.remove.
+      await mkdir(store.pendingFile(canvasId), { recursive: true });
+      clock = Date.now() + 2 * 60 * 60_000;
+      const live = new Set(["env-keep"]);
+      expect(await service().sweepOrphanedCanvases(live, 60 * 60_000)).toBe(0);
+      expect(await exists(store.recordFile(canvasId))).toBe(true);
+      expect(await exists(store.pendingFile(canvasId))).toBe(true);
+      expect(await exists(store.historyDir(canvasId))).toBe(false);
+      expect(await exists(store.exportBackupDir(canvasId))).toBe(false);
+      expect(await exists(store.legacyBackupFile(canvasId))).toBe(false);
+      await rm(store.pendingFile(canvasId), { recursive: true });
+      await writeFile(store.pendingFile(canvasId), "[]");
+      if (restart) {
+        await harness.restart(serviceOptions());
+        await service().initialize();
+      }
+      expect(await service().sweepOrphanedCanvases(live, 60 * 60_000)).toBe(1);
+      expect(await canvasFiles(canvasId)).toEqual([]);
+      expect((await service().get(kept.canvasId, "env-keep")).frames).toHaveLength(1);
+    });
+  }
+
+  test("a failure after root removal has no undiscoverable sidecars left", async () => {
+    const { canvasId } = await setup("env-gone");
+    const kept = await setup("env-keep", "Kept");
+    const store = service().store;
+    await mkdir(store.exportBackupDir(canvasId), { recursive: true });
+    await writeFile(join(store.exportBackupDir(canvasId), "backup"), "backup");
+    await mkdir(join(store.root, "legacy-backups"), { recursive: true });
+    await writeFile(store.legacyBackupFile(canvasId), "legacy backup");
+    await writeFile(store.pendingFile(canvasId), "[]");
+    const remove = store.remove.bind(store);
+    store.remove = async (id) => {
+      await remove(id);
+      throw new Error("interrupted after root unlink");
+    };
+    clock = Date.now() + 2 * 60 * 60_000;
+    const live = new Set(["env-keep"]);
+    expect(await service().sweepOrphanedCanvases(live, 60 * 60_000)).toBe(0);
+    expect(await canvasFiles(canvasId)).toEqual([]);
+    expect(await service().sweepOrphanedCanvases(live, 60 * 60_000)).toBe(0);
+    await harness.restart(serviceOptions());
+    await service().initialize();
+    expect(await service().sweepOrphanedCanvases(live, 60 * 60_000)).toBe(0);
+    expect(await canvasFiles(canvasId)).toEqual([]);
+    expect((await service().get(kept.canvasId, "env-keep")).frames).toHaveLength(1);
+  });
 
   test("the orphan sweep finishes a deletion that stopped after fencing", async () => {
     const { canvasId } = await setup("env-1");

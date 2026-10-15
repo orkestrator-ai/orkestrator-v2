@@ -12,6 +12,7 @@
 import { createHmac, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import path from "node:path";
+import { operationAwaitsEvidence } from "./evidence.js";
 import { McpSourceStore } from "./source-store.js";
 
 import {
@@ -71,11 +72,12 @@ interface StoreFile {
  * Whether a record may be dropped by retention: its save is settled and no
  * runtime is still waiting. Pending/reconciling saves are recovery evidence.
  */
-export function isFinishedOperation(entry: StoredOperation): boolean {
+export function isFinishedOperation(entry: StoredOperation, nowMs = Date.now()): boolean {
   return (
     entry.snapshot.phase !== "pending" &&
     entry.snapshot.phase !== "reconciling" &&
-    isTerminalApplyState(entry.snapshot.apply.state)
+    isTerminalApplyState(entry.snapshot.apply.state) &&
+    !operationAwaitsEvidence(entry, nowMs)
   );
 }
 
@@ -214,11 +216,12 @@ export class McpOperationStore {
   private prune(): void {
     const cutoff = this.now() - MCP_MANAGEMENT_LIMITS.operationRetentionMs;
     this.operations = this.operations.filter(
-      (entry) => !isFinishedOperation(entry) || Date.parse(entry.snapshot.updatedAt) >= cutoff,
+      (entry) =>
+        !isFinishedOperation(entry, this.now()) || Date.parse(entry.snapshot.updatedAt) >= cutoff,
     );
     // Oldest finished records go first; unfinished work is never dropped.
     while (this.operations.length > MCP_MANAGEMENT_LIMITS.retainedOperations) {
-      const index = this.operations.findIndex(isFinishedOperation);
+      const index = this.operations.findIndex((entry) => isFinishedOperation(entry, this.now()));
       if (index < 0) break;
       this.operations.splice(index, 1);
     }
@@ -256,7 +259,9 @@ export class McpOperationStore {
       let body = JSON.stringify({ version: 1, operations: this.operations } satisfies StoreFile);
       // Shed the oldest finished history until the file fits; never unfinished work.
       while (utf8ByteLength(body) > MCP_MANAGEMENT_LIMITS.operationStoreMaxBytes) {
-        const finishedIndex = this.operations.findIndex(isFinishedOperation);
+        const finishedIndex = this.operations.findIndex((entry) =>
+          isFinishedOperation(entry, this.now()),
+        );
         if (finishedIndex < 0) break;
         this.operations.splice(finishedIndex, 1);
         body = JSON.stringify({ version: 1, operations: this.operations } satisfies StoreFile);

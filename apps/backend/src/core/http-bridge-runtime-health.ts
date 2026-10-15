@@ -200,6 +200,21 @@ function mcpObservedAt(value: unknown): string | undefined {
   return Number.isFinite(Date.parse(value)) ? value : undefined;
 }
 
+/** Far beyond any real configuration; a longer list is cut, not rejected. */
+const MAX_STALE_SERVERS = 256;
+const MAX_SERVER_NAME_LENGTH = 512;
+
+function mcpStaleServers(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const names = value
+    .slice(0, MAX_STALE_SERVERS)
+    .filter(
+      (name): name is string =>
+        typeof name === "string" && name.length > 0 && name.length <= MAX_SERVER_NAME_LENGTH,
+    );
+  return names.length ? names : undefined;
+}
+
 function mcpSources(value: unknown): ProviderMcpConfigEvidence["sources"] | undefined {
   const sources = asRecord(value);
   if (!sources) return undefined;
@@ -213,7 +228,8 @@ function mcpSources(value: unknown): ProviderMcpConfigEvidence["sources"] | unde
  * Read the `mcpConfig` a bridge reports beside its runtime health, or
  * undefined when there is none or it is malformed. Three shapes arrive:
  *
- * - Claude: `{ sources, queryStartedAt, ... }` — the most recent query.
+ * - Claude: `{ sources, queryStartedAt, staleServers?, ... }` — the most
+ *   recent query, and the servers its CLI could not unload.
  * - Cursor and Pi: `{ sources, builtAt, ... }` — the live MCP generation.
  * - Grok (ACP): `{ inventoryScope: "process", loaded?: { sources, observedAt } }`
  *   — whichever child reported last, not attributable to one session.
@@ -236,5 +252,6 @@ export function bridgeMcpConfigEvidence(payload: unknown): ProviderMcpConfigEvid
   // Claude keeps user and private-local entries in one file, but a query whose
   // source scope is narrower than `all` read only the user map from it.
   if (config.scope === "all" && sources.user) sources.local = sources.user;
-  return { sources, observedAt, scope: "session" };
+  const staleServers = mcpStaleServers(config.staleServers);
+  return { sources, observedAt, scope: "session", ...(staleServers ? { staleServers } : {}) };
 }

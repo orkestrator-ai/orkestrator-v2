@@ -751,6 +751,12 @@ export interface ProviderMcpConfigEvidence {
   observedAt: string;
   /** `process` when the bridge reports one load for every session (Grok). */
   scope: "session" | "process";
+  /**
+   * Servers the configuration dropped that the runtime still runs (Claude: a
+   * CLI kept alive by background work that could not unload them). Absent
+   * when there are none or the bridge predates the field.
+   */
+  staleServers?: string[];
 }
 
 export type ProviderMcpConfigEvidenceRead =

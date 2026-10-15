@@ -57,7 +57,7 @@ test("long GitHub repository text ellipsizes inside the add-project dialog", asy
   const row = list.getByRole("button");
   await expectContainedInDialog(list);
   await expectContainedInDialog(row);
-  const name = row.getByText(/^a-very-long-repository-name/);
+  const name = row.getByText(/^a_very_long_repository_name/);
   const description = row.getByText(/^A very long repository description/);
   for (const text of [name, description]) {
     await expectEllipsis(text);
@@ -69,9 +69,23 @@ test("long GitHub repository text ellipsizes inside the add-project dialog", asy
     await expect(row.getByLabel(label)).toBeVisible();
   }
 
+  const fullName = `acme/${await name.textContent()}`;
   await row.click();
   await expectContainedInDialog(page.getByLabel(/Local path/));
   await expectEllipsis(
-    page.locator("span").filter({ hasText: /^acme\/a-very-long-repository-name/ }),
+    page.locator("span").filter({ hasText: /^acme\/a_very_long_repository_name/ }),
   );
+  const helper = page.locator("p").filter({ hasText: /^acme\/a_very_long_repository_name/ });
+  await expectContainedInDialog(helper);
+  await expect(helper).toHaveText(
+    `${fullName} is cloned into this folder, then added as a project.`,
+  );
+  await expect
+    .poll(() =>
+      helper.evaluate((node) => ({
+        overflowWrap: getComputedStyle(node).overflowWrap,
+        contained: node.scrollWidth <= node.clientWidth + 1,
+      })),
+    )
+    .toEqual({ overflowWrap: "anywhere", contained: true });
 });

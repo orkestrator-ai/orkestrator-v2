@@ -1,9 +1,11 @@
 import { AddProjectDialog } from "../../apps/web/src/components/projects/AddProjectDialog";
 import type { GitHubCloneRepository } from "@orkestrator/protocol/github-clone";
 
+// No spaces or hyphens: the clone helper must wrap inside an unbroken name.
+const repositoryName = "a_very_long_repository_name_".repeat(4).slice(0, 100);
 const repository: GitHubCloneRepository = {
-  name: "a-very-long-repository-name-".repeat(4).slice(0, 100),
-  fullName: `acme/${"a-very-long-repository-name-".repeat(4).slice(0, 100)}`,
+  name: repositoryName,
+  fullName: `acme/${repositoryName}`,
   description: "A very long repository description ".repeat(10).trim(),
   isPrivate: true,
   isFork: true,

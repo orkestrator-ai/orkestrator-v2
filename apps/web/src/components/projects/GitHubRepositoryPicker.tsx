@@ -572,7 +572,7 @@ export function GitHubRepositoryPicker({
             <FolderOpen className="h-4 w-4" />
           </Button>
         </div>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
           {repository.fullName} is cloned into this folder, then added as a project.
         </p>
       </div>

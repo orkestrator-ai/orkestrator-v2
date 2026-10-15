@@ -27,3 +27,15 @@ its server. An intervening attempt had reused a server that disappeared during
 the run (`ERR_CONNECTION_REFUSED` in
 `/tmp/orkestrator-test-run.q7aeoz/browser-final.log.gz`); that infrastructure
 failure is separate from the original navigation visibility timeout.
+
+
+## Merge-validation recurrence — 2026-10-15
+
+- **Original command:** `CI=1 mise run test:logged -- --name merge-browser -- mise run test:browser`, nine Playwright workers alongside the complete non-iOS suite.
+- **Failure:** the same mobile Chromium case at `e2e/WorkspaceBarHeight.spec.ts:54` could not find `project-navigation-bar` within 5,000 ms at line 61.
+- **Suite counts:** 228 passed, 61 skipped, one failed out of 290 cases in 3.0 minutes.
+- **Isolated rerun:** `CI=1 mise run test:logged -- --name merge-browser-navigation-rerun -- mise run test:browser -- e2e/WorkspaceBarHeight.spec.ts --project mobile-chromium --workers=1` passed unchanged, exit 0, in 7.3 seconds.
+- **Evidence:** `/tmp/orkestrator-test-run.bNPq63/merge-browser.log.gz`.
+- **Hypothesis:** the unchanged isolated pass is consistent with the existing fixture-startup timing hypothesis under aggregate load; the cause remains unproven. No test or product behavior was changed.
+
+The complete follow-up `CI=1 mise run test:logged -- --name merge-browser-final -- mise run test:browser -- --workers=2` passed, exit 0, in 149.8 seconds.

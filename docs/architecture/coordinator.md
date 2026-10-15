@@ -84,6 +84,24 @@ launched belong to the main.
 
 At most 16 conversations may be open, the main included.
 
+## Tab groups
+
+Conversation tabs split into tab groups the same way environment panes do:
+drag a tab onto another group's strip to move it, or onto a pane edge to open
+a new group beside or below it, so a side agent can sit next to the main
+coordinator. Dividers resize, and a group closes when its last tab leaves.
+Each group has its own **New side agent** action, and a new conversation
+joins whichever group is focused.
+
+The arrangement is renderer presentation only
+(`apps/web/src/lib/coordinator-pane-layout.ts`, persisted per project in
+`coordinatorPaneLayoutStore`). It never opens or closes a conversation; on
+every snapshot it is reconciled against the backend's open set, dropping
+closed conversations and placing new ones. Focusing a group selects its front
+conversation (`selectCoordinatorConversation`), and a selection made elsewhere
+brings that conversation to the front of its group. Only each group's front
+conversation is mounted.
+
 ## Project home
 
 The files pane works on the project board too. With a project selected and no

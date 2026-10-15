@@ -7,6 +7,7 @@ import { ConnectionsSettingsFixture } from "./ConnectionsSettingsFixture";
 import { DesignCanvasFixture } from "./DesignCanvasFixture";
 import { MenuPlacementFixture } from "./MenuPlacementFixture";
 import { ReadCoordinatorFixture } from "./ReadCoordinatorFixture";
+import { CoordinatorPaneTreeFixture } from "./CoordinatorPaneTreeFixture";
 import { StreamingTranscriptFixture } from "./StreamingTranscriptFixture";
 import { FullscreenSettingsFixture } from "./FullscreenSettingsFixture";
 import { GlobalSettingsFixture } from "./GlobalSettingsFixture";
@@ -1610,6 +1611,7 @@ function PullRequestCheckStatusFixture() {
 }
 
 function fixtureForPath() {
+  if (window.location.pathname === "/coordinator-pane-tree") return <CoordinatorPaneTreeFixture />;
   if (window.location.pathname === "/add-project") return <AddProjectDialogFixture />;
   if (window.location.pathname === "/project-navigation") {
     return (

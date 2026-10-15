@@ -13,7 +13,6 @@ import {
   parseDraggableTabId,
   parseEdgeDroppableId,
   type EdgeDirection,
-  type PaneLeaf,
   type PaneNode,
   type TabInfo,
 } from "@/types/paneLayout";
@@ -237,7 +236,8 @@ export function getTerminalTabDragEndAction({
   activeId: string;
   overId: string | null | undefined;
   lastDragOverPaneId: string | null;
-  getPane: (paneId: string) => PaneLeaf | null;
+  /** Only tab order is read, so any tab group (pane or coordinator) can supply it. */
+  getPane: (paneId: string) => { tabs: ReadonlyArray<{ id: string }> } | null;
 }): TerminalTabDragEndAction {
   if (!overId) return { type: "none" };
 

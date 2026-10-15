@@ -114,6 +114,21 @@ passed unchanged alone, exit 0, in 6.5 seconds. These task metadata fixes do
 not alter Pi runtime staging. Host contention remains an unconfirmed
 hypothesis; no timeout, assertion or skip was changed.
 
+## Recurrence — 2026-10-15 (coordinator pane merge validation)
+
+With the testing guide's GNU-tool PATH,
+`mise run test:logged -- --name merge-tests -- mise run test` reserved
+4/1/2/1 workspace/root/bridge/protocol slots while component browser
+validation also ran. The staged-runtime test timed out at 30003.36 ms;
+the root/support group reported 2,978 passed, one skipped and one failed
+across 137 files (269.50 seconds). Evidence:
+`/tmp/orkestrator-test-run.j0YfiD/root-and-agent-support-tests.log.gz`
+(compressed when the aggregate completes).
+
+`mise run test:logged -- --name merge-pi-vendor-rerun -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+passed unchanged alone, exit 0, in 15.3 seconds. Host contention remains
+an unconfirmed hypothesis; no timeout, assertion or skip was changed.
+
 ## Recurrence — 2026-10-15 (coordinator mail branch merge)
 
 With the testing guide's GNU-tool PATH,

@@ -1,6 +1,6 @@
 # Terminal toolbar reload briefly exposes duplicate readiness outputs
 
-- **ID:** 0234
+- **ID:** 0235
 - **Status:** open
 - **Date observed:** 2026-10-15
 - **Test:** `[mobile-chromium] › e2e/TerminalCornerToolbar.spec.ts:72 › touch

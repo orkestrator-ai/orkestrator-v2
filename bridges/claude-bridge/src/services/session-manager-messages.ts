@@ -24,7 +24,10 @@ import type { McpToolMetadata } from "../types/mcp.js";
 import { generateMessageId } from "./session-manager-core.js";
 import {
   LIVE_BACKGROUND_TASK_STATUSES,
+  RUN_SCOPED_TASK_METADATA_RESET,
   boundBackgroundTaskHistory,
+  carriedTaskMetadata,
+  taskMessageMetadata,
 } from "./session-manager-background-tasks.js";
 
 export class ToolTracker {
@@ -939,12 +942,23 @@ export interface BackgroundTaskSystemMessage {
   output_file?: string;
   /** On `task_progress` and `task_notification`; already validated. */
   usage?: BackgroundTaskUsage;
+  /** Only on `task_started`. */
+  task_type?: string;
+  parent_task_id?: string;
+  prompt?: string;
+  workflow_name?: string;
+  /** Only on `task_progress`. */
+  last_tool_name?: string;
+  /** Only on `task_notification`. */
+  reason?: "worker_restart";
+  ambient?: boolean;
   patch?: {
     status?: BackgroundTaskSnapshot["status"];
     description?: string;
     end_time?: number;
     error?: string;
     is_backgrounded?: boolean;
+    total_paused_ms?: number;
   };
 }
 
@@ -1003,6 +1017,28 @@ export function persistedTaskIdentifier(value: unknown): string | undefined {
     return undefined;
   }
   return normalized;
+}
+
+export const MAX_PERSISTED_BACKGROUND_TASK_NAME_LENGTH = 256;
+
+/**
+ * A name the CLI chose (a task kind, a tool, a workflow). Like a path, one
+ * that is too long or carries control characters is dropped rather than cut
+ * down to a different name.
+ */
+export function persistedTaskName(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const name = value.trim();
+  return name.length > 0 &&
+    name.length <= MAX_PERSISTED_BACKGROUND_TASK_NAME_LENGTH &&
+    !/[\u0000-\u001f\u007f]/.test(name)
+    ? name
+    : undefined;
+}
+
+/** A non-negative duration in milliseconds, or nothing. */
+export function persistedTaskDuration(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 export function persistedTaskText(value: unknown): string | undefined {
@@ -1417,12 +1453,20 @@ export function persistedBackgroundTaskMessage(raw: {
     const patchError = persistedTaskText(rawPatch?.error);
     const patchIsBackgrounded =
       typeof rawPatch?.is_backgrounded === "boolean" ? rawPatch.is_backgrounded : undefined;
+    const patchPausedMs = persistedTaskDuration(rawPatch?.total_paused_ms);
     const hasPatch =
       patchStatus !== undefined ||
       patchDescription !== undefined ||
       patchEndTime !== undefined ||
       patchError !== undefined ||
-      patchIsBackgrounded !== undefined;
+      patchIsBackgrounded !== undefined ||
+      patchPausedMs !== undefined;
+    const taskType = persistedTaskName(message.task_type);
+    const parentTaskId = persistedTaskIdentifier(message.parent_task_id);
+    // Bounded like every task text: the whole map is re-sent on each edge.
+    const prompt = persistedTaskText(message.prompt);
+    const workflowName = persistedTaskName(message.workflow_name);
+    const lastToolName = persistedTaskName(message.last_tool_name);
     return {
       subtype: message.subtype,
       task_id: taskId,
@@ -1432,6 +1476,13 @@ export function persistedBackgroundTaskMessage(raw: {
       status: notificationStatus,
       output_file: persistedTaskPath(message.output_file),
       usage: persistedTaskUsage(message.usage),
+      ...(taskType ? { task_type: taskType } : {}),
+      ...(parentTaskId ? { parent_task_id: parentTaskId } : {}),
+      ...(prompt ? { prompt } : {}),
+      ...(workflowName ? { workflow_name: workflowName } : {}),
+      ...(lastToolName ? { last_tool_name: lastToolName } : {}),
+      ...(message.reason === "worker_restart" ? { reason: "worker_restart" as const } : {}),
+      ...(message.ambient === true || message.skip_transcript === true ? { ambient: true } : {}),
       ...(hasPatch
         ? {
             patch: {
@@ -1440,6 +1491,7 @@ export function persistedBackgroundTaskMessage(raw: {
               end_time: patchEndTime,
               error: patchError,
               is_backgrounded: patchIsBackgrounded,
+              ...(patchPausedMs !== undefined ? { total_paused_ms: patchPausedMs } : {}),
             },
           }
         : {}),
@@ -1489,6 +1541,7 @@ export function reducePersistedBackgroundTaskMessage(
   const previous = resumedRun
     ? {
         ...stored,
+        ...RUN_SCOPED_TASK_METADATA_RESET,
         status: "running" as const,
         startedAt: timestamp,
         endedAt: undefined,
@@ -1525,6 +1578,8 @@ export function reducePersistedBackgroundTaskMessage(
         outputFile: message.output_file ?? previous?.outputFile,
         usage: message.usage ?? previous?.usage,
         subagentType: previous?.subagentType,
+        ...carriedTaskMetadata(previous),
+        ...taskMessageMetadata(message),
       },
     });
   }
@@ -1560,6 +1615,8 @@ export function reducePersistedBackgroundTaskMessage(
           ? previous.usage
           : (message.usage ?? previous?.usage),
       subagentType: previous?.subagentType,
+      ...carriedTaskMetadata(previous),
+      ...taskMessageMetadata(message),
     },
   });
 }

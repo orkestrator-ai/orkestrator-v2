@@ -1,5 +1,6 @@
 import {
   normalizeNativeAgentTurnActivity,
+  type NativeAgentBackgroundTaskKind,
   type NativeAgentBackgroundTaskSummary,
   type NativeAgentBackgroundTaskUsage,
   type NativeAgentTurnActivity,
@@ -46,10 +47,9 @@ function settledAtFromEndedAt(endedAt: unknown, status: unknown): { settledAt?: 
 const BACKGROUND_TASK_TEXT_MAX_LENGTH = 4_096;
 const BACKGROUND_TASK_PATH_MAX_LENGTH = 4_096;
 
-function textField<K extends "error" | "summary">(
-  key: K,
-  value: unknown,
-): Partial<Record<K, string>> {
+function textField<
+  K extends "error" | "summary" | "prompt" | "command" | "outputTail" | "progressSummary",
+>(key: K, value: unknown): Partial<Record<K, string>> {
   if (typeof value !== "string") return {};
   const text = value.trim().slice(0, BACKGROUND_TASK_TEXT_MAX_LENGTH);
   return text ? ({ [key]: text } as Partial<Record<K, string>>) : {};
@@ -74,12 +74,44 @@ const BACKGROUND_TASK_AGENT_ROLE_MAX_LENGTH = 256;
  * rather than cut down to a different name.
  */
 function agentRoleField(value: unknown): { agentRole?: string } {
+  return nameField("agentRole", value);
+}
+
+/** A name passes whole or not at all, for the reason {@link agentRoleField} gives. */
+function nameField<K extends "agentRole" | "parentTaskId" | "workflowName" | "lastToolName">(
+  key: K,
+  value: unknown,
+): Partial<Record<K, string>> {
   if (typeof value !== "string") return {};
-  const role = value.trim();
-  return role.length > 0 &&
-    role.length <= BACKGROUND_TASK_AGENT_ROLE_MAX_LENGTH &&
-    !/[\u0000-\u001f\u007f]/.test(role)
-    ? { agentRole: role }
+  const name = value.trim();
+  return name.length > 0 &&
+    name.length <= BACKGROUND_TASK_AGENT_ROLE_MAX_LENGTH &&
+    !/[\u0000-\u001f\u007f]/.test(name)
+    ? ({ [key]: name } as Partial<Record<K, string>>)
+    : {};
+}
+
+/** Claude's CLI task kinds, in the protocol's neutral terms. */
+const CLAUDE_TASK_KINDS: Record<string, NativeAgentBackgroundTaskKind> = {
+  local_bash: "shell",
+  local_agent: "agent",
+  local_workflow: "workflow",
+  remote_agent: "remote-agent",
+  mcp_task: "mcp",
+  monitor_mcp: "mcp",
+  in_process_teammate: "teammate",
+};
+
+function kindField(taskType: unknown): { kind?: NativeAgentBackgroundTaskKind } {
+  if (typeof taskType !== "string" || taskType.length === 0) return {};
+  return {
+    kind: Object.hasOwn(CLAUDE_TASK_KINDS, taskType) ? CLAUDE_TASK_KINDS[taskType] : "other",
+  };
+}
+
+function pausedMsField(value: unknown): { pausedMs?: number } {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? { pausedMs: value }
     : {};
 }
 
@@ -123,6 +155,17 @@ export function normalizeClaudeBackgroundTasks(
           ...outputFileField(task.outputFile),
           ...usageField(task.usage),
           ...agentRoleField(task.subagentType),
+          ...kindField(task.taskType),
+          ...nameField("parentTaskId", task.parentTaskId),
+          ...textField("prompt", task.prompt),
+          ...textField("command", task.command),
+          ...textField("outputTail", task.outputTail),
+          ...nameField("workflowName", task.workflowName),
+          ...(task.ambient === true ? { ambient: true } : {}),
+          ...nameField("lastToolName", task.lastToolName),
+          ...textField("progressSummary", task.progressSummary),
+          ...pausedMsField(task.pausedMs),
+          ...(task.endReason === "worker_restart" ? { endReason: "process-restart" as const } : {}),
         },
       ];
     });

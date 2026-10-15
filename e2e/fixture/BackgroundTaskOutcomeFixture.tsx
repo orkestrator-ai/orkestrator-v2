@@ -22,7 +22,10 @@ export function BackgroundTaskOutcomeFixture() {
   const [loaded, setLoaded] = useState(params.has("loaded"));
   const [away, setAway] = useState(false);
   const [stopped, setStopped] = useState(params.has("stopped"));
-  const [startedAt] = useState(() => new Date(Date.now() - 125_000).toISOString());
+  const [startedAt] = useState(
+    () => params.get("startedAt") ?? new Date(Date.now() - 125_000).toISOString(),
+  );
+  const [settledAt, setSettledAt] = useState(params.get("settledAt") ?? undefined);
   const running = params.has("running");
   const task = (
     running
@@ -31,6 +34,8 @@ export function BackgroundTaskOutcomeFixture() {
           description: "Review validation",
           status: stopped ? "killed" : "running",
           startedAt,
+          ...(stopped ? { settledAt } : {}),
+          ...(params.has("paused") ? { pausedMs: 65_000 } : {}),
           usage: { totalTokens: 12_000, toolUses: 7, durationMs: 1_000 },
         }
       : outcomeTask
@@ -82,6 +87,9 @@ export function BackgroundTaskOutcomeFixture() {
             running
               ? async () => {
                   params.set("stopped", "1");
+                  const ended = new Date(Date.now()).toISOString();
+                  params.set("settledAt", ended);
+                  setSettledAt(ended);
                   window.history.replaceState(null, "", `?${params}`);
                   setStopped(true);
                   return true;

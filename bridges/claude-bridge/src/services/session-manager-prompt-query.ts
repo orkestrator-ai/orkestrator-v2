@@ -28,7 +28,7 @@ import { runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
 import { claudeExecutableOptions, sdkSessionIdFromBridgeId } from "./session-manager-core.js";
 import { buildSdkPrompt } from "./session-manager-persistence.js";
 import { appendTranscriptNotice } from "./session-manager-prompt-handlers/transcript-notice.js";
-import { commandChangeHookFor } from "./session-manager-prompt-hooks.js";
+import { commandChangeHookFor, shellTaskHooks } from "./session-manager-prompt-hooks.js";
 import type { PromptTestHooks, TurnState } from "./session-manager-prompt-turn.js";
 import {
   claudeLiveSettings,
@@ -253,6 +253,7 @@ export function claudeQueryOptions(
       pick(turnFor())(...args);
   const backgroundTaskHook = latestTurnHook((target) => target.recordBackgroundTaskHook);
   const commandChangeHook = commandChangeHookFor(turnFor);
+  const shellTaskHook = shellTaskHooks(session);
   return {
     cwd,
     ...claudeExecutableOptions(),
@@ -387,9 +388,10 @@ export function claudeQueryOptions(
           ? [{ hooks: [createCoordinatorReadOnlyHook(policy)] }]
           : []),
         commandChangeHook.PreToolUse,
+        shellTaskHook.PreToolUse,
       ],
-      PostToolUse: [commandChangeHook.PostToolUse],
-      PostToolUseFailure: [commandChangeHook.PostToolUseFailure],
+      PostToolUse: [commandChangeHook.PostToolUse, shellTaskHook.PostToolUse],
+      PostToolUseFailure: [commandChangeHook.PostToolUseFailure, shellTaskHook.PostToolUseFailure],
       TaskCreated: [{ hooks: [backgroundTaskHook] }],
       TaskCompleted: [{ hooks: [backgroundTaskHook] }],
       SubagentStart: [{ hooks: [backgroundTaskHook] }],

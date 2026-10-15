@@ -117,3 +117,26 @@ for (const tool of ["Agent", "Bash"] as const) {
     await expect(page.getByText("Stopped", { exact: true })).toBeVisible();
   });
 }
+
+for (const tool of ["Agent", "Bash"]) {
+  test(`${tool} duration includes separately reported pauses before and after settle`, async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      Date.now = () => Date.parse("2026-08-16T10:03:05Z");
+    });
+    await page.goto(
+      `/background-task-outcome?tool=${tool}&loaded=1&running=1&paused=1&startedAt=2026-08-16T10:00:00Z`,
+    );
+    await expect(page.getByText("3m 5s", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Switch environment", exact: true }).click();
+    await page.getByRole("button", { name: "Return to task", exact: true }).click();
+    await expect(page.getByText("3m 5s", { exact: true })).toBeVisible();
+    const stop = page.getByRole("button", { name: "Stop Review validation", exact: true });
+    await stop.focus();
+    await stop.click();
+    await expect(page.getByText("3m 5s", { exact: true })).toBeVisible();
+    await page.reload();
+    await expect(page.getByText("3m 5s", { exact: true })).toBeVisible();
+  });
+}

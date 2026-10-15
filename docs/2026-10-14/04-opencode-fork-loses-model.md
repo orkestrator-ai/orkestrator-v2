@@ -99,4 +99,3 @@ API test sets the source's controls explicitly because, until 01 is fixed,
 Not verified live: whether OpenCode 1.19's `session.fork` response populates
 `Session.model`. The fallback to the source's model covers the case where it
 does not.
-

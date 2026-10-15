@@ -1,6 +1,6 @@
 # Pre-existing problems found on 2026-10-14
 
-Status: Active — 04 fixed.
+Status: Active — items 04 and 06 fixed on 2026-10-15; the remaining items are open.
 
 These came out of validating the OpenCode boundary cleanup branch
 (`opencode-bridge-a8c2ab5c85b9-r1`): live OpenCode QA in a `dev:test` profile,
@@ -15,7 +15,7 @@ not touch, so none of them is a regression from that work.
 | [03](03-startup-claude-login-dialog.md) | "Claude Code Login Required" blocks the whole app when `claude` is unauthenticated and OpenCode is absent, ignoring Codex, Cursor, Grok and Pi; it also breaks the isolated browser suite | High | Renderer startup gate, host tool checks |
 | [04](04-opencode-fork-loses-model.md) | A forked OpenCode session switches to the first catalogue model (fixed 2026-10-15) | Medium | Fork flow, composer inference |
 | [05](05-real-stack-suite-host-dependencies.md) | Browser, root and bridge suites fail on an ordinary developer machine for host reasons | Medium | Test infrastructure |
-| [06](06-opencode-auth-status-truncation.md) | OpenCode shows "needs auth" while a provider is connected | Low–medium | OpenCode capabilities |
+| [06](06-opencode-auth-status-truncation.md) | **Fixed 2026-10-15.** OpenCode shows "needs auth" while a provider is connected | Low–medium | OpenCode capabilities |
 | [07](07-cleanup-follow-ups.md) | Leftover dead renderer helpers, store consolidation, doc drift, a decision to confirm, a known version-skew limitation, the day's flakes (0207, 0208), a live OpenCode spec to commit, and a fault-isolation watch item | Low | Cleanup and follow-ups |
 
 01, 04 and 06 share one underlying weakness: OpenCode model and provider

@@ -272,6 +272,20 @@ describe("PrMonitorService", () => {
     expect(harness.pendingDelays()).toEqual([20_000]);
   });
 
+  test("persists a retargeted PR even when its state and mergeability are unchanged", async () => {
+    const harness = createHarness();
+    harness.service.sync([openPr({ prBaseBranch: "main" })]);
+    harness.setDetect(async () => detection({ baseBranch: "release/2.0" }));
+    await harness.fireNext();
+    expect(harness.calls.persist).toEqual([
+      { environmentId: "env-1", detection: detection({ baseBranch: "release/2.0" }) },
+    ]);
+    await harness.fireNext();
+    expect(harness.calls.persist).toHaveLength(1);
+    expect(harness.calls.detect.at(-1)?.prBaseBranch).toBe("release/2.0");
+    harness.service.shutdown();
+  });
+
   test("sync holds the last reading for an unready environment without polling it", () => {
     const harness = createHarness();
     harness.service.sync([openPr({ ready: false })]);

@@ -6,6 +6,7 @@ import {
 } from "@orkestrator/protocol/parent-watchdog";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
 import { watchClientDisconnect } from "./acp-client-disconnect.js";
+import { CredentialError } from "./acp-credentials.js";
 import { applyOriginPolicy, acceptsGzip, json, RESPONSE_ACCEPTS_GZIP, route } from "./acp-http.js";
 import {
   HttpError,
@@ -31,6 +32,12 @@ export const server = createServer((request, response) => {
   const stopWatchingClient = watchClientDisconnect(request, response, () => controller.abort());
   void route(request, response, controller.signal)
     .catch((error: unknown) => {
+      // `kind` separates a missing agent login from a bad bridge token, which
+      // is also a 401; the backend shows the former's message as written.
+      if (error instanceof CredentialError) {
+        json(response, 401, { error: error.message, kind: "authentication-required" });
+        return;
+      }
       const status = error instanceof HttpError ? error.status : 500;
       json(response, status, { error: error instanceof Error ? error.message : String(error) });
     })

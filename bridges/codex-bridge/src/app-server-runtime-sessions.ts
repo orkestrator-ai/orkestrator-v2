@@ -8,6 +8,7 @@ import {
   MAX_STEER_REQUESTS,
 } from "./app-server-runtime-base.js";
 import { inheritCommandChanges } from "./sessions/command-changes.js";
+import type { NativeAgentReadiness } from "@orkestrator/protocol/native-agent";
 import type { CodexRuntimeContext } from "./app-server-runtime-context.js";
 import type { CodexRuntimeLifecycle } from "./app-server-runtime-lifecycle.js";
 import { openAssistantRow } from "./app-server-runtime-rows.js";
@@ -1225,7 +1226,7 @@ export class CodexRuntimeSessions {
     messageRevision: number;
     contentEpoch: number;
     commandRevision?: number;
-    readiness?: { state: "authentication-required"; message: string };
+    readiness?: NativeAgentReadiness;
   } | null {
     const session = this.ctx.registry.getSession(sessionId);
     if (!session) return null;
@@ -1281,6 +1282,8 @@ export class CodexRuntimeSessions {
             readiness: {
               state: "authentication-required" as const,
               message: CODEX_SIGN_IN_REQUIRED_MESSAGE,
+              // `/global/auth/login` returns the browser URL the tab opens.
+              signIn: { kind: "browser-url" as const },
             },
           }
         : {}),

@@ -24,6 +24,7 @@ import type {
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import type {
   NativeAgentCommandRefreshOutcome,
+  NativeAgentReadiness,
   NativeAgentResumeEntry,
 } from "@orkestrator/protocol/native-agent";
 import {
@@ -43,7 +44,7 @@ import {
   noteCommandError,
   readSessionCommandCatalogue,
 } from "./commands.js";
-import { assertAuthenticated } from "./credentials.js";
+import { assertAuthenticated, NOT_AUTHENTICATED_MESSAGE, PI_SIGN_IN } from "./credentials.js";
 import { requestToolApproval } from "./interactions.js";
 import {
   closePiMcp,
@@ -245,6 +246,26 @@ export async function hydrateSessionComposer(
   });
   composerHydrations.set(state, operation);
   return operation;
+}
+
+/**
+ * Prompt admission for this session, read off the composer hydration the
+ * status route has just run, so it costs no extra probe.
+ *
+ * Locked only when a catalogue read *succeeded* with no models: that is the
+ * same verdict `assertAuthenticated` refuses a turn on. A failed read proves
+ * nothing, and a session with models is runnable, so both stay unreported.
+ * The empty answer is re-read after its retry deadline, so a `/login` made in
+ * a terminal unlocks the tab without a send.
+ */
+export function piReadiness(state: SessionState): NativeAgentReadiness | undefined {
+  if (state.composer.models.length > 0) return undefined;
+  if (!composerHydrationRetryAfter.has(state) || catalogReadFailed()) return undefined;
+  return {
+    state: "authentication-required",
+    message: NOT_AUTHENTICATED_MESSAGE,
+    signIn: PI_SIGN_IN,
+  };
 }
 
 /**

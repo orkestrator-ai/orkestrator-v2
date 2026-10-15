@@ -67,6 +67,8 @@ export { claudeSessionPreferencesDir, setClaudeHomeForTesting };
 import { readSessionPreferences, updateSessionPreferences } from "./session-preferences.js";
 export { readSessionPreferences, updateSessionPreferences };
 
+import { resetClaudeSignInForTesting } from "./claude-sign-in.js";
+
 export const sessionManagerTestHome = mkdtempSync(join(tmpdir(), "claude-session-manager-home-"));
 
 // Simulated turns must never consult the developer's gh login or capture a
@@ -271,6 +273,8 @@ afterEach(() => {
   // The probe memo is keyed by SDK session id and outlives a test, so without
   // this one test's "this rollout exists" answer could serve another's.
   resetSessionActivityProbeCacheForTesting();
+  // The account read is bridge-wide; one test's "no login" must not lock the next.
+  resetClaudeSignInForTesting();
   installSdkModuleMock();
   for (const key of Object.keys(queryControlOverrides)) delete queryControlOverrides[key];
 });

@@ -45,6 +45,107 @@ describe("ACP bridge", () => {
     expect(payload).not.toContain("private-test-token");
   });
 
+  test("opens a Grok tab with no login as a deferred session until a login exists", async () => {
+    const credential = resolve(await temporaryDirectory(), "auth.json");
+    const { base, headers } = await spawnBridge({
+      env: {
+        ACP_PROVIDER: "grok",
+        GROK_AUTH_FILE: credential,
+        XAI_API_KEY: undefined,
+        GROK_AUTH_PROVIDER_COMMAND: undefined,
+        GROK_AUTH_METHOD_ID: undefined,
+      },
+    });
+    const status = async (id: string) =>
+      (await nativeFetch(`${base}/session/${id}/status`, { headers }).then((response) =>
+        response.json(),
+      )) as { status: string; error?: string; readiness?: unknown; resumableSessionId?: string };
+    const message = "Grok Build isn't signed in. Run grok login in a terminal to keep working.";
+
+    // Grok's `authenticate` would wait on an interactive sign-in here; the
+    // session is created without starting it.
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers });
+    expect(created.ok).toBe(true);
+    const { id } = (await created.json()) as { id: string };
+    expect(await status(id)).toMatchObject({
+      status: "idle",
+      readiness: {
+        state: "authentication-required",
+        message,
+        signIn: { kind: "terminal", hint: "Open a terminal and run grok login." },
+      },
+    });
+    expect((await status(id)).resumableSessionId).toBeUndefined();
+
+    const refused = await nativeFetch(`${base}/session/${id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "hello", requestId: "before-login" }),
+    });
+    expect(refused.status).toBe(401);
+    expect(await refused.json()).toEqual({ error: message, kind: "authentication-required" });
+
+    await fs.writeFile(credential, "{}");
+    expect((await status(id)).readiness).toBeUndefined();
+    const accepted = await nativeFetch(`${base}/session/${id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "DIRECT:signed in", requestId: "after-login" }),
+    });
+    expect(accepted.status).toBe(202);
+    const settled = await waitFor(
+      () => status(id),
+      (value) => value.status === "idle" && value.resumableSessionId !== undefined,
+    );
+    expect(settled.error).toBeUndefined();
+  });
+
+  test("starts a deferred Grok session on the model chosen while signed out", async () => {
+    const credential = resolve(await temporaryDirectory(), "auth.json");
+    const { base, headers } = await spawnBridge({
+      env: {
+        ACP_PROVIDER: "grok",
+        GROK_AUTH_FILE: credential,
+        XAI_API_KEY: undefined,
+        GROK_AUTH_PROVIDER_COMMAND: undefined,
+        GROK_AUTH_METHOD_ID: undefined,
+      },
+    });
+    const status = async (id: string) =>
+      (await nativeFetch(`${base}/session/${id}/status`, { headers }).then((response) =>
+        response.json(),
+      )) as {
+        status: string;
+        resumableSessionId?: string;
+        composer: { selectedModelId?: string };
+      };
+    const { id } = (await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ model: "grok-build" }),
+    }).then((response) => response.json())) as { id: string };
+    // A change made before a login exists is recorded without starting Grok.
+    const configured = await nativeFetch(`${base}/session/${id}/config`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ modelId: "grok-composer-2.5-fast" }),
+    });
+    expect(configured.ok).toBe(true);
+    expect((await status(id)).composer.selectedModelId).toBe("grok-composer-2.5-fast");
+
+    await fs.writeFile(credential, "{}");
+    await nativeFetch(`${base}/session/${id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "DIRECT:signed in", requestId: "after-login" }),
+    });
+    const started = await waitFor(
+      () => status(id),
+      (value) => value.status === "idle" && value.resumableSessionId !== undefined,
+    );
+    expect(started.composer.selectedModelId).toBe("grok-composer-2.5-fast");
+  });
+
   test("runtime health uses the shared envelope and answers unknown sessions in band", async () => {
     const { base, headers } = await spawnBridge();
     const missing = await nativeFetch(`${base}/session/missing/runtime-health`, { headers });

@@ -436,10 +436,13 @@ export type AgentConversationMode = "build" | "plan";
  * Optional on projections for compatibility with older bridges. A missing
  * value therefore means "unknown", never "ready" or "blocked". Credential
  * material and provider-specific account details must not be attached here.
+ *
+ * `signIn` names where the user signs in. An older bridge or backend omits it,
+ * so the renderer falls back to reading the platform's auth status.
  */
 export type NativeAgentReadiness =
   | { state: "ready" }
-  | { state: "authentication-required"; message: string };
+  | { state: "authentication-required"; message: string; signIn?: NativeAgentSignInRoute };
 
 /**
  * Provider-neutral composer snapshot. ACP adapters normalize vendor wire
@@ -1248,6 +1251,24 @@ export type NativeAgentAuthState =
   | "expired"
   | "unknown";
 
+export const NATIVE_AGENT_SIGN_IN_KINDS = [
+  "browser-url",
+  "device-code",
+  "terminal",
+  "none",
+] as const;
+
+/**
+ * How a platform is signed in to. `browser-url` and `device-code` run from the
+ * tab (`beginSignIn`); `terminal` needs the platform's own CLI; `none` has no
+ * flow Orkestrator can start. `hint` is short user-facing text naming the
+ * route, never a credential.
+ */
+export interface NativeAgentSignInRoute {
+  kind: (typeof NATIVE_AGENT_SIGN_IN_KINDS)[number];
+  hint?: string;
+}
+
 export interface NativeAgentAuthStatus {
   state: NativeAgentAuthState;
   account?: { label: string; plan?: string; expiresAt?: string };
@@ -1257,7 +1278,7 @@ export interface NativeAgentAuthStatus {
     state: NativeAgentAuthState;
     method?: "api-key" | "oauth" | "subscription";
   }>;
-  signIn?: { kind: "browser-url" | "device-code" | "terminal" | "none"; hint?: string };
+  signIn?: NativeAgentSignInRoute;
   signOut?: boolean;
 }
 

@@ -1,5 +1,9 @@
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
-import type { NativeAgentReadiness } from "@orkestrator/protocol/native-agent";
+import {
+  NATIVE_AGENT_SIGN_IN_KINDS,
+  type NativeAgentReadiness,
+  type NativeAgentSignInRoute,
+} from "@orkestrator/protocol/native-agent";
 import type { PromptAttachment } from "./prompt-attachments.js";
 import {
   type BridgeConnection,
@@ -166,6 +170,15 @@ export async function readProviderActivityObservation(
   };
 }
 
+/** Validate a bridge's sign-in route; an unknown kind drops the route, not its readiness. */
+export function normalizeSignInRoute(value: unknown): NativeAgentSignInRoute | undefined {
+  const route = asRecord(value);
+  const kind = NATIVE_AGENT_SIGN_IN_KINDS.find((candidate) => candidate === route?.kind);
+  if (!kind) return undefined;
+  const hint = nonEmptyString(route?.hint)?.trim();
+  return { kind, ...(hint ? { hint: hint.slice(0, 500) } : {}) };
+}
+
 /** Validate the provider-neutral prompt-admission state at the bridge boundary. */
 export function normalizeProviderReadiness(value: unknown): NativeAgentReadiness | undefined {
   const readiness = asRecord(value);
@@ -173,7 +186,12 @@ export function normalizeProviderReadiness(value: unknown): NativeAgentReadiness
   if (readiness?.state !== "authentication-required") return undefined;
   const message = nonEmptyString(readiness.message)?.trim();
   if (!message) return undefined;
-  return { state: "authentication-required", message: message.slice(0, 500) };
+  const signIn = normalizeSignInRoute(readiness.signIn);
+  return {
+    state: "authentication-required",
+    message: message.slice(0, 500),
+    ...(signIn ? { signIn } : {}),
+  };
 }
 
 /**

@@ -64,6 +64,16 @@ entry, so live and resumed transcripts have the same shape.
 - The engine boundary is `src/translate.ts` and `src/tool-rendering.ts`. Every
   Pi-specific shape stops there; nothing downstream should learn a new field to
   render a Pi turn.
+- Pi does not fail a run by rejecting it. A provider error, or a run that
+  threw (an OAuth refresh that failed), arrives as an assistant message with
+  `stopReason: "error"` and the run still resolves; `translate.ts` keeps the
+  last response's failure (`turnError`) and `finishTurn` fails the turn with
+  it. Pi retries within the same run, so only the last response counts.
+- Pi refuses a prompt in preflight with a plain error. Nothing has run, so the
+  route answers a definite refusal, never the outcome-unknown 500: 401
+  `authentication-required` when the bridge's own check finds the model's
+  provider signed out (`assertModelSignedIn`, before Pi is asked), otherwise
+  422 `prompt-refused` with Pi's reason (`PromptRefusedError`).
 - `applySessionEvent` never awaits. It runs on the SDK's own listener, so an
   await there would let a large transcript back-pressure a live run.
 - A tool variant Pi adds — or a custom tool from a project extension, whose

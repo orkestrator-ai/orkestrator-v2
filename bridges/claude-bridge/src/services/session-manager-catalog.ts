@@ -1,13 +1,7 @@
 import { createHash } from "node:crypto";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import type { McpServerStatus, Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type {
-  AccountInfo,
-  McpServerStatus,
-  Query,
-  SDKUserMessage,
-} from "@anthropic-ai/claude-agent-sdk";
-import type {
-  NativeAgentAuthStatus,
   NativeAgentAccountUsageWindow,
   NativeAgentMcpServer,
   NativeAgentMcpServerAction,
@@ -26,6 +20,7 @@ import {
   sessionOperationError,
   sessions,
 } from "./session-manager-core.js";
+import { resetClaudeSignInForTesting } from "./claude-sign-in.js";
 import { eventEmitter } from "./event-emitter.js";
 import { markTranscriptChanged } from "./transcript-revision.js";
 import { MAX_STEER_JOURNAL_ENTRIES, updateSessionPreferences } from "./session-preferences.js";
@@ -38,11 +33,10 @@ import type {
   SessionState,
 } from "../types/index.js";
 
-const AUTH_CACHE_TTL_MS = 30_000;
-let authCache: { expiresAt: number; value: NativeAgentAuthStatus } | undefined;
+export { readClaudeAuthStatus } from "./claude-sign-in.js";
 
 export function resetClaudeCatalogCachesForTesting(): void {
-  authCache = undefined;
+  resetClaudeSignInForTesting();
 }
 
 /**
@@ -322,51 +316,6 @@ export async function performSessionMcpAction(
       session.mcpInventory = (await control.mcpServerStatus()).slice(0, 128).map(normalizeMcp);
     }
     return {};
-  } finally {
-    await Promise.resolve(probe?.close()).catch(() => undefined);
-  }
-}
-
-function normalizeAccount(account: AccountInfo): NativeAgentAuthStatus {
-  const source = account.apiKeySource ?? account.tokenSource;
-  const signedIn = Boolean(
-    source || account.subscriptionType || account.organization || account.apiProvider,
-  );
-  const label = account.organization || account.subscriptionType || account.apiProvider;
-  return {
-    state: signedIn ? "signed-in" : "needs-auth",
-    ...(label
-      ? {
-          account: {
-            label,
-            ...(account.subscriptionType ? { plan: account.subscriptionType } : {}),
-          },
-        }
-      : {}),
-    signIn: {
-      kind: "terminal",
-      hint: "Open a Claude terminal tab and run /login.",
-    },
-    signOut: false,
-  };
-}
-
-export async function readClaudeAuthStatus(): Promise<NativeAgentAuthStatus> {
-  if (authCache && authCache.expiresAt > Date.now()) return authCache.value;
-  let probe: Query | undefined;
-  try {
-    probe = createProbe();
-    const value = normalizeAccount(await probe.accountInfo());
-    authCache = { expiresAt: Date.now() + AUTH_CACHE_TTL_MS, value };
-    return value;
-  } catch {
-    const value: NativeAgentAuthStatus = {
-      state: "unknown",
-      signIn: { kind: "terminal", hint: "Open a Claude terminal tab and run /login." },
-      signOut: false,
-    };
-    authCache = { expiresAt: Date.now() + 5_000, value };
-    return value;
   } finally {
     await Promise.resolve(probe?.close()).catch(() => undefined);
   }

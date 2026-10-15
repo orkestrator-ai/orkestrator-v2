@@ -262,7 +262,7 @@ describe("cancel while Pi's preflight is held", () => {
 
       pi.refuse();
       pi.failRun(new Error("no credential"));
-      expect((await prompt).status).toBe(500);
+      expect((await prompt).status).toBe(422);
 
       // One terminal transition: the rollback, not a rollback plus a run end.
       expect(state.status).toBe("error");

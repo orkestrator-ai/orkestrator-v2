@@ -1,5 +1,5 @@
 import { publicInteractionKinds } from "./public.js";
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
@@ -33,6 +33,7 @@ const { loadPersistedState, setPersistWriteGateForTests } = await import("./pers
 const { applySessionEvent } = await import("./translate.js");
 const { nativeFetch } = await import("./testing/native-fetch.js");
 const { buildCommandCatalogue, publishCommandCatalogue } = await import("./commands.js");
+const { NOT_AUTHENTICATED_MESSAGE } = await import("./credentials.js");
 
 let origin: string;
 
@@ -663,6 +664,91 @@ describe("successful lifecycle routes", () => {
     }
   });
 
+  describe("sign-in readiness", () => {
+    const signInRequired = {
+      state: "authentication-required",
+      message: NOT_AUTHENTICATED_MESSAGE,
+      signIn: { kind: "terminal", hint: "Open a Pi terminal tab and run /login." },
+    };
+
+    async function readiness(id: string): Promise<unknown> {
+      const status = await call(`/session/${id}/status`);
+      expect(status.status).toBe(200);
+      return ((await status.json()) as { readiness?: unknown }).readiness;
+    }
+
+    test("reports sign-in required once a catalogue read finds no signed-in provider", async () => {
+      installRuntime({}, []);
+      const state = seedSession();
+      try {
+        expect(await readiness(state.id)).toEqual(signInRequired);
+      } finally {
+        sessions.clear();
+        resetTestDependencies();
+      }
+    });
+
+    test.each([
+      ["a runnable model exists", () => installRuntime()],
+      [
+        "the catalogue read failed",
+        () =>
+          installRuntime({
+            getAvailable: async () => {
+              throw new Error("provider offline");
+            },
+          }),
+      ],
+    ])("leaves readiness unreported when %s", async (_name, install) => {
+      install();
+      const state = seedSession();
+      try {
+        expect(await readiness(state.id)).toBeUndefined();
+      } finally {
+        sessions.clear();
+        resetTestDependencies();
+      }
+    });
+
+    test("a login made elsewhere unlocks the session after its retry deadline", async () => {
+      let available: Model<Api>[] = [];
+      installRuntime({ getAvailable: async () => available });
+      const state = seedSession();
+      const now = Date.now();
+      const clock = spyOn(Date, "now");
+      try {
+        expect(await readiness(state.id)).toEqual(signInRequired);
+
+        available = [testModel()];
+        // Inside the retry deadline the empty answer still stands.
+        expect(await readiness(state.id)).toEqual(signInRequired);
+        clock.mockImplementation(() => now + 31_000);
+        expect(await readiness(state.id)).toBeUndefined();
+        expect(state.composer.models).toHaveLength(1);
+      } finally {
+        clock.mockRestore();
+        sessions.clear();
+        resetTestDependencies();
+      }
+    });
+
+    test("refuses an attach with no signed-in provider as a sign-in problem", async () => {
+      installRuntime({}, []);
+      const state = seedSession();
+      try {
+        const response = await call(`/session/${state.id}/attach`, { method: "POST" });
+        expect(response.status).toBe(401);
+        expect(await response.json()).toEqual({
+          error: NOT_AUTHENTICATED_MESSAGE,
+          kind: "authentication-required",
+        });
+      } finally {
+        sessions.clear();
+        resetTestDependencies();
+      }
+    });
+  });
+
   test("answers a polled status read without waiting out a stalled catalogue", async () => {
     // `/status` is what the backend polls, and it budgets the whole call at the
     // same 30s the catalogue probe is bounded by. Waiting the probe out would
@@ -958,6 +1044,125 @@ describe("successful lifecycle routes", () => {
       expect(state.messages.at(-1)).toMatchObject({ role: "user", content: "ship it" });
       expect(state.status).toBe("idle");
       expect(state.promptJournal.get("req-success")?.state).toBe("completed");
+    } finally {
+      resetTestDependencies();
+    }
+  });
+
+  test.each([
+    [
+      false,
+      "Pi has no credentials for Other Provider. Sign in with /login other-provider in a Pi " +
+        "terminal tab, set the provider's API key, or choose another model.",
+    ],
+    [
+      true,
+      "Pi's sign-in for Other Provider failed: it may have expired, or the network is " +
+        "unavailable. Run /login other-provider in a Pi terminal tab, or choose another model.",
+    ],
+  ])(
+    "refuses a turn whose model's provider has no login (OAuth %p) before Pi is asked",
+    async (oauth, message) => {
+      const state = seedSession();
+      let prompts = 0;
+      state.session = fakeAgentSession({
+        // Another provider is signed in, so the session itself attached fine.
+        model: { provider: "other-provider", id: "other-model" },
+        prompt: () => {
+          prompts += 1;
+          return Promise.reject(new Error("No API key found for other-provider."));
+        },
+      });
+      installRuntime({
+        hasConfiguredAuth: (provider: string) => provider !== "other-provider",
+        checkAuth: async (provider: string) =>
+          provider === "other-provider" ? undefined : { source: "environment", type: "api_key" },
+        getProvider: (provider: string) => ({
+          id: provider,
+          name: provider === "other-provider" ? "Other Provider" : "Test Provider",
+        }),
+        isUsingOAuth: () => oauth,
+      });
+      try {
+        const response = await call(`/session/${state.id}/prompt`, {
+          method: "POST",
+          body: JSON.stringify({ prompt: "hello", requestId: "req-signed-out" }),
+        });
+
+        expect(response.status).toBe(401);
+        expect(await response.json()).toEqual({ error: message, kind: "authentication-required" });
+        expect(prompts).toBe(0);
+        expect(state.messages).toHaveLength(0);
+        expect(state.status).toBe("idle");
+        expect(state.dispatching).toBe(false);
+        expect(state.promptJournal.has("req-signed-out")).toBe(false);
+      } finally {
+        resetTestDependencies();
+      }
+    },
+  );
+
+  test("fails a turn Pi ended on a failed response instead of completing it empty", async () => {
+    const state = seedSession();
+    state.session = fakeAgentSession({
+      prompt: (_text: string, options: { preflightResult?: (disposition: string) => void }) => {
+        options.preflightResult?.("started");
+        // What pi-agent-core emits when the run throws, e.g. an OAuth refresh.
+        applySessionEvent(state, {
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "" }],
+            stopReason: "error",
+            errorMessage: "OAuth token refresh failed: invalid_grant",
+          },
+        });
+        return Promise.resolve();
+      },
+    });
+    installRuntime();
+    try {
+      const response = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "hello", requestId: "req-run-failed" }),
+      });
+      expect(response.status).toBe(202);
+      await waitFor(() => state.status !== "running");
+      expect(state.status).toBe("error");
+      expect(state.error).toBe("OAuth token refresh failed: invalid_grant");
+      expect(state.promptJournal.get("req-run-failed")?.state).toBe("failed");
+    } finally {
+      resetTestDependencies();
+    }
+  });
+
+  test("a retry's answer replaces an earlier failed response", async () => {
+    const state = seedSession();
+    state.session = fakeAgentSession({
+      prompt: (_text: string, options: { preflightResult?: (disposition: string) => void }) => {
+        options.preflightResult?.("started");
+        applySessionEvent(state, {
+          type: "message_end",
+          message: { role: "assistant", stopReason: "error", errorMessage: "overloaded" },
+        });
+        applySessionEvent(state, {
+          type: "message_end",
+          message: { role: "assistant", stopReason: "stop" },
+        });
+        return Promise.resolve();
+      },
+    });
+    installRuntime();
+    try {
+      const response = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "hello", requestId: "req-retried" }),
+      });
+      expect(response.status).toBe(202);
+      await waitFor(() => state.status !== "running");
+      expect(state.status).toBe("idle");
+      expect(state.error).toBeUndefined();
+      expect(state.promptJournal.get("req-retried")?.state).toBe("completed");
     } finally {
       resetTestDependencies();
     }
@@ -1873,7 +2078,9 @@ describe("steering", () => {
     expect(steerCalls).toBe(0);
 
     rejectFirstRun(new Error("preflight rejected"));
-    expect((await firstPrompt).status).toBe(500);
+    const refused = await firstPrompt;
+    expect(refused.status).toBe(422);
+    expect(await refused.json()).toEqual({ error: "preflight rejected", kind: "prompt-refused" });
     expect(state.pendingSteerDeliveries).toEqual([]);
     expect(state.steerJournal.size).toBe(0);
 
@@ -2328,7 +2535,13 @@ describe("at-most-once dispatch", () => {
       body: JSON.stringify({ prompt: "never accepted", requestId: "req-refused" }),
     });
 
-    expect(response.status).toBe(500);
+    // Nothing ran, so this is a definite refusal with Pi's reason, not the
+    // outcome-unknown 500 the backend would park as ambiguous.
+    expect(response.status).toBe(422);
+    expect(await response.json()).toEqual({
+      error: "Pi refused the prompt",
+      kind: "prompt-refused",
+    });
     expect(state.messages).toHaveLength(0);
     expect(state.status).toBe("error");
     expect(state.dispatching).toBe(false);

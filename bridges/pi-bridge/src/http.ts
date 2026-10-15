@@ -19,7 +19,7 @@ import {
   PROVIDER,
   workingDirectory,
 } from "./config.js";
-import { authStatus, CredentialError } from "./credentials.js";
+import { assertModelSignedIn, authStatus, CredentialError } from "./credentials.js";
 import { publicApprovals, publicInteractions, resolveApproval } from "./interactions.js";
 import { listModels, refreshModels } from "./models.js";
 import { parseAgentMcpConnection } from "./mcp-config.js";
@@ -29,6 +29,7 @@ import {
   dispatchPrompt,
   errorText,
   journal,
+  PromptRefusedError,
   PromptStartupTimeoutError,
   requestTurnCancellation,
   setPromptJournal,
@@ -94,6 +95,7 @@ import {
   markSessionClosed,
   navigateSessionHistory,
   parseComposerPatch,
+  piReadiness,
   reconcileAgentMcp,
   refreshSessionCommands,
   resumeSession,
@@ -236,7 +238,14 @@ export async function route(
     return await routeSession(request, response, url, clientSignal);
   } catch (error) {
     if (error instanceof HttpError) return json(response, error.status, { error: error.message });
-    if (error instanceof CredentialError) return json(response, 401, { error: error.message });
+    // `kind` separates a missing provider login from a bad bridge token, which
+    // is also a 401; the backend shows the former's message as written.
+    if (error instanceof CredentialError) {
+      return json(response, 401, { error: error.message, kind: "authentication-required" });
+    }
+    if (error instanceof PromptRefusedError) {
+      return json(response, 422, { error: error.message, kind: "prompt-refused" });
+    }
     if (error instanceof SessionClosingError) {
       return json(response, 409, { error: error.message, kind: "session-closing" });
     }
@@ -530,7 +539,7 @@ async function routeSession(
     );
   }
   if (action === "status" && request.method === "GET") {
-    return json(response, 200, publicStatus(state));
+    return json(response, 200, publicStatus(state, piReadiness(state)));
   }
   if (action === "activity" && request.method === "GET") {
     // Shared with `POST /sessions/activity`; see `sessionActivityObservation`.
@@ -1348,6 +1357,8 @@ async function handleAdmittedPrompt(
     stopIfCancelled();
     session = await ensureSession(state);
     await applyComposerToSession(state);
+    // After the composer is applied: `session.model` is what will run.
+    await assertModelSignedIn(session.model);
     stopIfCancelled();
     if (command) {
       // A cold attach re-read the list from a fresh runtime. Hold the

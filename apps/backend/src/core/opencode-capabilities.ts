@@ -11,19 +11,28 @@ import { readOpenCodeCommandInventory } from "./opencode-commands.js";
 const MAX_OPENCODE_AUTH_PROVIDERS = 128;
 const MAX_OPENCODE_HINT_PROVIDERS = 8;
 
+/**
+ * OpenCode signs a provider in with its own CLI (`opencode auth login`, an
+ * alias of `providers login`), and the running server picks the credential up
+ * without a restart. Orkestrator's OpenCode settings cannot connect one.
+ */
+export const OPENCODE_SIGN_IN_REQUIRED_MESSAGE =
+  "OpenCode has no connected model provider. Run opencode auth login in a terminal to connect one.";
+export const OPENCODE_SIGN_IN_COMMAND_HINT = "Open a terminal and run opencode auth login.";
+
 /** Names the allowlisted providers to connect, when the allowlist is narrow enough to list. */
 function openCodeSignInHint(
   allowedProviders: readonly string[],
   known: ReadonlyArray<{ id: string; label: string }>,
 ): string {
-  const fallback = "Connect a provider from OpenCode settings.";
+  const fallback = "Connect a provider with opencode auth login in a terminal.";
   if (allowedProviders.length === 0 || allowedProviders.length > MAX_OPENCODE_HINT_PROVIDERS) {
     return fallback;
   }
   const labels = allowedProviders.map(
     (id) => known.find((provider) => provider.id.trim().toLowerCase() === id)?.label ?? id,
   );
-  return `Connect ${labels.length === 1 ? labels[0] : `one of ${labels.join(", ")}`} from OpenCode settings.`;
+  return `Connect ${labels.length === 1 ? labels[0] : `one of ${labels.join(", ")}`} with opencode auth login in a terminal.`;
 }
 
 /** SDK-backed discovery and account operations that are independent of session rendering. */
@@ -157,7 +166,7 @@ export class OpenCodeCapabilities {
     return {
       state: signedIn ? "signed-in" : "needs-auth",
       providers,
-      signIn: { kind: "none", hint: openCodeSignInHint(allowedProviders, known) },
+      signIn: { kind: "terminal", hint: openCodeSignInHint(allowedProviders, known) },
       signOut: false,
     };
   }

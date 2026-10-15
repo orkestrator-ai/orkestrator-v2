@@ -427,18 +427,37 @@ describe("HTTP bridge provider", () => {
     await expect(sent).rejects.toThrow(message);
   });
 
-  test("surfaces Cursor credential rejection without an HTTP transport envelope", async () => {
-    const message =
-      "Cursor is not signed in. Sign in from Settings › Cursor, or set a Cursor API key.";
-    const { provider } = httpProvider(
-      () => Response.json({ error: message, kind: "authentication-required" }, { status: 401 }),
+  test.each([
+    [
+      "Cursor",
       cursorConnection,
-    );
+      "Cursor is not signed in. Sign in from Settings › Cursor, or set a Cursor API key.",
+    ],
+    [
+      "Pi",
+      piConnection,
+      "Pi has no signed-in model provider. Sign in with /login in a Pi terminal tab, or set the provider's API key.",
+    ],
+    [
+      "Grok",
+      grokConnection,
+      "Grok Build isn't signed in. Run grok login in a terminal to keep working.",
+    ],
+  ])(
+    "surfaces a %s login rejection without an HTTP transport envelope",
+    async (_name, connection, message) => {
+      const { provider } = httpProvider(
+        () => Response.json({ error: message, kind: "authentication-required" }, { status: 401 }),
+        connection,
+      );
 
-    await expect(
-      provider.send("cursor-session", "Build it", { requestId: "request-1" }),
-    ).rejects.toThrow(message);
-  });
+      const error = await provider
+        .send("session-1", "Build it", { requestId: "request-1" })
+        .catch((rejection: unknown) => rejection);
+      expect(error).toBeInstanceOf(PromptRejectedError);
+      expect((error as Error).message).toBe(message);
+    },
+  );
 
   test.each([
     [
@@ -454,10 +473,10 @@ describe("HTTP bridge provider", () => {
       "cursor rejected the prompt (HTTP 401): Sign in again",
     ],
     [
-      "a non-Cursor rejection",
+      "a Grok transport rejection",
       grokConnection,
-      { error: "Sign in again", kind: "authentication-required" },
-      "grok rejected the prompt (HTTP 401): Sign in again",
+      { error: "Unauthorized" },
+      "grok rejected the prompt (HTTP 401): Unauthorized",
     ],
     ["an empty error", cursorConnection, { error: "  " }, "cursor rejected the prompt (HTTP 401)"],
   ])("keeps the HTTP envelope for %s", async (_name, connection, body, expected) => {
@@ -482,6 +501,25 @@ describe("HTTP bridge provider", () => {
     expect(normalizeProviderReadiness({ state: "ready", message: "ignored" })).toEqual({
       state: "ready",
     });
+    expect(
+      normalizeProviderReadiness({
+        state: "authentication-required",
+        message: "Sign in",
+        signIn: { kind: "terminal", hint: ` ${"h".repeat(600)} `, token: "never copied" },
+      }),
+    ).toEqual({
+      state: "authentication-required",
+      message: "Sign in",
+      signIn: { kind: "terminal", hint: "h".repeat(500) },
+    });
+    // An unknown route is dropped; the readiness it came with still stands.
+    expect(
+      normalizeProviderReadiness({
+        state: "authentication-required",
+        message: "Sign in",
+        signIn: { kind: "carrier-pigeon" },
+      }),
+    ).toEqual({ state: "authentication-required", message: "Sign in" });
     expect(
       normalizeProviderReadiness({
         state: "authentication-required",
@@ -808,6 +846,25 @@ describe("HTTP bridge provider", () => {
       title: "Claude's title",
       controls: { mode: "plan" },
     });
+  });
+
+  test("projects Claude's sign-in readiness in the interactive snapshot", async () => {
+    const readiness = {
+      state: "authentication-required",
+      message: "Claude isn't signed in. Sign in to Claude to keep working.",
+      signIn: { kind: "terminal", hint: "Open a Claude terminal tab and run /login." },
+    } as const;
+    const read = async (body: Record<string, unknown>) => {
+      const { provider } = httpProvider((url) => {
+        if (url.endsWith("/messages")) return Response.json({ messages: [] });
+        return Response.json({ status: "idle", ...body });
+      });
+      return provider.interactiveSnapshot!("session-1");
+    };
+
+    expect((await read({ readiness })).readiness).toEqual(readiness);
+    // An older bridge omits it, which is unknown rather than ready.
+    expect((await read({})).readiness).toBeUndefined();
   });
 
   test("carries Claude's turn activity only while the turn runs", async () => {

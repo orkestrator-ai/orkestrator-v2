@@ -12,12 +12,15 @@ import {
   normalizeAcpSessionConfig,
   planComposerApply,
   type AcpComposerPatch,
+  type AcpNormalizedSessionConfig,
 } from "./session-config.js";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import { parseAcpTurnUsage, type AcpTurnUsage } from "./usage.js";
+import { acpSignInMissing, assertAcpSignedIn } from "./acp-credentials.js";
 import {
   AcpProcess,
   bumpCursorDiscoveryRevision,
+  catalogCache,
   MAX_APPROVALS_PER_SESSION,
   MAX_MESSAGES,
   MAX_MESSAGE_TEXT_BYTES,
@@ -43,6 +46,7 @@ import {
   isCursorUpdateTodosMethod,
   parseExternalSessionToken,
   provider,
+  providerConfig,
   rememberCatalog,
   sessionCreations,
   sessionListProbe,
@@ -398,6 +402,9 @@ export async function createSessionReserved(
   signal?: AbortSignal,
   spawnOptions: AcpSpawnOptions & AcpComposerPatch = {},
 ): Promise<SessionState> {
+  if (await acpSignInMissing(provider, providerConfig.authMethodEnv)) {
+    return createDeferredSession(clientSessionKey, spawnOptions);
+  }
   const child = new AcpProcess({
     model: spawnOptions.model,
     effort: spawnOptions.effort ?? spawnOptions.reasoningId,
@@ -427,45 +434,14 @@ export async function createSessionReserved(
     const id = randomBytes(16).toString("hex");
     const sessionConfig = normalizeAcpSessionConfig(provider, created);
     rememberCatalog(sessionConfig.composer);
-    const state: SessionState = {
+    const state = newSessionState(
       id,
-      ...(clientSessionKey ? { clientSessionKey } : {}),
-      acpSessionId: created.sessionId,
-      status: "idle",
-      messages: [],
-      activeSubagentToolIds: new Set(),
-      activeSubagentDescriptors: new Map(),
-      settledCursorAgentIds: new Set(),
-      subagentLimitExceeded: false,
-      subagentToolIds: new Map(),
-      cursorTodos: [],
-      historyMessageIds: new Map(),
+      clientSessionKey,
+      created.sessionId,
       child,
-      revision: 0,
-      structured: new Map(),
-      promptJournal: new Map(),
-      grokInterjectionJournal: new Map(),
-      approvals: new Map(),
-      interactions: new Map(),
-      outputTruncated: false,
-      uncheckedTranscriptBytes: 0,
-      currentTurnOutput: null,
-      promptSequence: 0,
-      droppedMessages: 0,
-      droppedParts: 0,
-      transcriptTruncated: false,
       sessionConfig,
-      ...(spawnOptions.policy ? { policy: spawnOptions.policy } : {}),
-      ...(typeof spawnOptions.readOnly === "boolean" ? { readOnly: spawnOptions.readOnly } : {}),
-      attachedMcpKey: mcpConnectionKey(spawnOptions.agentMcp),
-      ...(spawnOptions.agentMcp ? { agentMcp: spawnOptions.agentMcp } : {}),
-      // The session is reachable from `sessions` before its initial
-      // configuration finishes, so hold the same claim the config and prompt
-      // routes take rather than leaving a window where both see it idle.
-      dispatching: true,
-      historyReplay: false,
-      health: new RuntimeHealthRecorder(),
-    };
+      spawnOptions,
+    );
     attachChild(state, child);
     sessions.set(id, state);
     if (clientSessionKey) clientSessionKeys.set(clientSessionKey, id);
@@ -489,6 +465,156 @@ export async function createSessionReserved(
     }
   } catch (error) {
     await child.close();
+    throw error;
+  }
+}
+
+function newSessionState(
+  id: string,
+  clientSessionKey: string | undefined,
+  acpSessionId: string,
+  child: AcpProcess | null,
+  sessionConfig: AcpNormalizedSessionConfig,
+  spawnOptions: AcpSpawnOptions & AcpComposerPatch,
+): SessionState {
+  return {
+    id,
+    ...(clientSessionKey ? { clientSessionKey } : {}),
+    acpSessionId,
+    status: "idle",
+    messages: [],
+    activeSubagentToolIds: new Set(),
+    activeSubagentDescriptors: new Map(),
+    settledCursorAgentIds: new Set(),
+    subagentLimitExceeded: false,
+    subagentToolIds: new Map(),
+    cursorTodos: [],
+    historyMessageIds: new Map(),
+    child,
+    revision: 0,
+    structured: new Map(),
+    promptJournal: new Map(),
+    grokInterjectionJournal: new Map(),
+    approvals: new Map(),
+    interactions: new Map(),
+    outputTruncated: false,
+    uncheckedTranscriptBytes: 0,
+    currentTurnOutput: null,
+    promptSequence: 0,
+    droppedMessages: 0,
+    droppedParts: 0,
+    transcriptTruncated: false,
+    sessionConfig,
+    ...(spawnOptions.policy ? { policy: spawnOptions.policy } : {}),
+    ...(typeof spawnOptions.readOnly === "boolean" ? { readOnly: spawnOptions.readOnly } : {}),
+    attachedMcpKey: mcpConnectionKey(spawnOptions.agentMcp),
+    ...(spawnOptions.agentMcp ? { agentMcp: spawnOptions.agentMcp } : {}),
+    // The session is reachable from `sessions` before its initial
+    // configuration finishes, so hold the same claim the config and prompt
+    // routes take rather than leaving a window where both see it idle.
+    dispatching: true,
+    historyReplay: false,
+    health: new RuntimeHealthRecorder(),
+  };
+}
+
+/**
+ * A session with no agent behind it yet, for an agent that has no login.
+ *
+ * Starting the agent would only wait on a sign-in nobody sees, so the tab gets
+ * a session that reports `authentication-required` instead of a create error.
+ * The requested selection is kept on its composer (which is persisted), and
+ * the first attach or prompt after a login creates the ACP session with it
+ * (`startDeferredSession`). An empty `acpSessionId` marks it.
+ */
+async function createDeferredSession(
+  clientSessionKey: string | undefined,
+  spawnOptions: AcpSpawnOptions & AcpComposerPatch,
+): Promise<SessionState> {
+  const id = randomBytes(16).toString("hex");
+  // The known models only: another session's selection is not this one's, and
+  // an unset one lets the agent pick its default once it starts.
+  const empty = normalizeAcpSessionConfig(provider, {});
+  const sessionConfig = withRequestedSelection(
+    { ...empty, composer: { ...empty.composer, models: catalogCache?.models ?? [] } },
+    composerPatchFromSpawn(spawnOptions),
+  );
+  const state = newSessionState(id, clientSessionKey, "", null, sessionConfig, spawnOptions);
+  state.dispatching = false;
+  sessions.set(id, state);
+  if (clientSessionKey) clientSessionKeys.set(clientSessionKey, id);
+  await persistState();
+  return state;
+}
+
+/** Record a selection on a deferred session's composer for its first spawn. */
+function withRequestedSelection(
+  config: AcpNormalizedSessionConfig,
+  patch: AcpComposerPatch | undefined,
+): AcpNormalizedSessionConfig {
+  if (!patch) return config;
+  return {
+    ...config,
+    composer: {
+      ...config.composer,
+      ...(patch.modelId ? { selectedModelId: patch.modelId } : {}),
+      ...(patch.reasoningId ? { selectedReasoningId: patch.reasoningId } : {}),
+      ...(patch.mode ? { selectedModeId: patch.mode } : {}),
+      ...(patch.fastMode === undefined ? {} : { fastModeEnabled: patch.fastMode }),
+    },
+  };
+}
+
+/**
+ * Create the ACP session a deferred session stands for, with the selection
+ * recorded on it. A session the agent created is kept even if configuring it
+ * fails, so the next attach loads it rather than creating a second.
+ */
+async function startDeferredSession(state: SessionState): Promise<AcpProcess> {
+  await assertAcpSignedIn(provider, providerConfig.authMethodEnv);
+  const requested = state.sessionConfig.composer;
+  const patch = composerPatchFromSpawn({
+    ...(requested.selectedModelId ? { modelId: requested.selectedModelId } : {}),
+    ...(requested.selectedReasoningId ? { reasoningId: requested.selectedReasoningId } : {}),
+    ...(requested.selectedModeId ? { mode: requested.selectedModeId } : {}),
+    ...(typeof requested.fastModeEnabled === "boolean"
+      ? { fastMode: requested.fastModeEnabled }
+      : {}),
+  });
+  const child = new AcpProcess({
+    model: requested.selectedModelId,
+    effort: requested.selectedReasoningId,
+    policy: effectiveTurnExecutionPolicy(state),
+  });
+  try {
+    await child.initialize();
+    const created = await child.request(
+      "session/new",
+      {
+        cwd: workingDirectory,
+        additionalDirectories: [],
+        mcpServers: configuredAcpMcpServers(state.agentMcp),
+      },
+      RPC_TIMEOUT_MS,
+    );
+    if (!isObject(created) || typeof created.sessionId !== "string") {
+      throw new Error(`${provider} returned an invalid ACP session`);
+    }
+    state.acpSessionId = created.sessionId;
+    state.sessionConfig = normalizeAcpSessionConfig(provider, created);
+    rememberCatalog(state.sessionConfig.composer);
+    attachChild(state, child);
+    if (patch) await applyComposerCalls(state, child, patch);
+    state.attachedMcpKey = mcpConnectionKey(state.agentMcp);
+    state.status = "idle";
+    state.error = undefined;
+    state.revision += 1;
+    await persistState();
+    return child;
+  } catch (error) {
+    if (state.child === child) state.child = null;
+    await child.close();
+    if (state.acpSessionId) await persistState().catch(() => undefined);
     throw error;
   }
 }
@@ -692,6 +818,7 @@ export async function setSessionReadOnly(state: SessionState, readOnly: boolean)
 
 export async function spawnAndLoadSession(state: SessionState): Promise<AcpProcess> {
   if (state.child) return state.child;
+  if (!state.acpSessionId) return startDeferredSession(state);
   const child = new AcpProcess({ policy: effectiveTurnExecutionPolicy(state) });
   try {
     const initialized = await child.initialize();
@@ -1316,7 +1443,24 @@ export async function applyComposerPatch(
     !patch.parameterValues
   )
     return;
+  // A deferred session has no agent to configure until a login exists. Keep
+  // the selection for its first spawn instead of starting one now.
+  if (!state.acpSessionId && !state.child && !state.attaching) {
+    state.sessionConfig = withRequestedSelection(state.sessionConfig, patch);
+    state.revision += 1;
+    await persistState();
+    return;
+  }
   const child = await ensureSessionProcess(state, signal);
+  await applyComposerCalls(state, child, patch, signal);
+}
+
+async function applyComposerCalls(
+  state: SessionState,
+  child: AcpProcess,
+  patch: AcpComposerPatch,
+  signal?: AbortSignal,
+): Promise<void> {
   const calls = planComposerApply(state.acpSessionId, state.sessionConfig, patch);
   for (const call of calls) {
     const result = await child.request(call.method, call.params, RPC_TIMEOUT_MS, signal);

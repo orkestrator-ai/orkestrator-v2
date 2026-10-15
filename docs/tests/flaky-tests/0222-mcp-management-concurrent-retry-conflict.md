@@ -16,3 +16,15 @@ mise run test:logged -- --name mcp-management-alone -- bun test --cwd apps/backe
 
 Aggregate evidence: `/tmp/orkestrator-test-run.lhp1N0/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 The cause is not established; no assertions or production behavior were changed.
+
+Recurred on 2026-10-15 in `mise run test` for the sign-in readiness change
+(bridges, backend provider and renderer; no MCP code touched): the same
+`request-conflict` after 4.74 ms, 1 failure in the backend workspace group,
+every other group passing. The unchanged owning file then passed alone three
+times in a row (23 pass each):
+
+```bash
+bun test src/core/mcp-management/service.test.ts --preload ../../tests/setup-node.ts --only-failures
+```
+
+Aggregate evidence: `/tmp/orkestrator-test-run.wdZIQN/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.

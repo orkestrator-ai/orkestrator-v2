@@ -8,6 +8,7 @@
  */
 import type {
   NativeAgentContextUsage,
+  NativeAgentReadiness,
   NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
 import { transcriptTailStart } from "@orkestrator/protocol/node/transcript-window";
@@ -68,7 +69,7 @@ export function publicSessionReference(state: SessionState): JsonObject {
   };
 }
 
-export function publicStatus(state: SessionState): JsonObject {
+export function publicStatus(state: SessionState, readiness?: NativeAgentReadiness): JsonObject {
   const contextUsage = publicContextUsage(state);
   return {
     // A claimed prompt Pi has not settled yet is reported as running for the
@@ -89,6 +90,7 @@ export function publicStatus(state: SessionState): JsonObject {
     ...(contextUsage ? { contextUsage } : {}),
     runtime: publicRuntime(state),
     capabilities: { interactions: { kinds: publicInteractionKinds(state) } },
+    ...(readiness ? { readiness } : {}),
   };
 }
 

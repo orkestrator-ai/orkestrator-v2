@@ -55,7 +55,6 @@ import {
   asRecord,
   assertSdkResponse,
   InteractionSnapshotTracker,
-  INTERACTIVE_RUNTIME_METADATA_TTL_MS,
   isTransientHttpStatus,
   MAX_TRACKED_INTERACTION_SESSIONS,
   MAX_TRACKED_PROVIDER_INTERACTIONS,
@@ -64,11 +63,7 @@ import {
   setBoundedMapEntry,
   setBoundedSetEntry,
 } from "./agent-provider-runtime.js";
-import {
-  normalizeOpenCodeComposerCatalog,
-  openCodeCatalogCacheKey,
-  resolveOpenCodeDefaultModel,
-} from "./opencode-model-catalog.js";
+import { openCodeCatalogCacheKey, resolveOpenCodeDefaultModel } from "./opencode-model-catalog.js";
 import {
   collectNormalizedOpenCodeSubagentIds,
   collectRawOpenCodeSubagentIds,
@@ -96,6 +91,7 @@ import {
 import { OpenCodeInteractionAdapter } from "./opencode-interactions.js";
 import { OpenCodeSessionLifecycle } from "./opencode-session-lifecycle.js";
 import { OpenCodeCapabilities } from "./opencode-capabilities.js";
+import { OpenCodeCatalogCache } from "./opencode-catalog-cache.js";
 import {
   dispatchOpenCodeCommand,
   OpenCodeCommandRegistry,
@@ -161,15 +157,14 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       readOpenCodeDiscoveryFanOut(sessionId, providers, providersKey, {
         optionalSdkCall: (group, method, args) =>
           this.optionalSdkCall(group as never, method as never, args as never),
-        readComposerCatalog: (allowed, connectedOnly) =>
-          this.readComposerCatalog(allowed, connectedOnly),
+        readComposerCatalog: (allowed, connectedOnly) => this.catalog.read(allowed, connectedOnly),
         drift: () => this.health.drift(),
         notices: () => this.health.listNotices(),
         directory: this.connection.directory,
       }),
     allowedProviders: () => this.allowedModelProviders(),
     // Composer reads are picker-facing, so they carry the connectivity filter
-    // and must key on it exactly as `readComposerCatalog` does.
+    // and must key on it exactly as `OpenCodeCatalogCache.read` does.
     cacheKey: (providers) => openCodeCatalogCacheKey(providers, true),
     applyStreamState: (sessionId, metadata) => this.applyStreamMetadata(sessionId, metadata),
     store: (sessionId, entry) =>
@@ -181,11 +176,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       ),
     now: () => Date.now(),
   });
-  private catalogMetadata: {
-    expiresAt: number;
-    providersKey: string;
-    catalog: ReturnType<typeof normalizeOpenCodeComposerCatalog>;
-  } | null = null;
+  private readonly catalog = new OpenCodeCatalogCache((allowed, options) =>
+    readOpenCodeComposerCatalog(this.client, this.requestOptions(), allowed, options),
+  );
   private readonly commands: OpenCodeCommandRegistry;
   private readonly blockedSessions = new Set<string>();
   private readonly failedQuestionSessions = new Set<string>();
@@ -349,37 +342,6 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     return resolveAllowedOpenCodeModelProviders(this.resolveOpenCodeModelProviders);
   }
 
-  private async readComposerCatalog(
-    allowedProviders: readonly string[],
-    requireConnected: boolean,
-    priorityProviders: readonly string[] = [],
-  ): Promise<ReturnType<typeof normalizeOpenCodeComposerCatalog>> {
-    const providersKey = openCodeCatalogCacheKey(
-      allowedProviders,
-      requireConnected,
-      priorityProviders,
-    );
-    if (
-      this.catalogMetadata &&
-      this.catalogMetadata.expiresAt > Date.now() &&
-      this.catalogMetadata.providersKey === providersKey
-    ) {
-      return this.catalogMetadata.catalog;
-    }
-    const catalog = await readOpenCodeComposerCatalog(
-      this.client,
-      this.requestOptions(),
-      allowedProviders,
-      { requireConnected, priorityProviders },
-    );
-    this.catalogMetadata = {
-      expiresAt: Date.now() + INTERACTIVE_RUNTIME_METADATA_TTL_MS,
-      providersKey,
-      catalog,
-    };
-    return catalog;
-  }
-
   /** See {@link preflightOpenCodeModel}; a successful read also refreshes the catalogue. */
   private async assertSelectedModelAvailable(model: string | undefined): Promise<void> {
     await preflightOpenCodeModel({
@@ -388,32 +350,27 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       requestOptions: this.requestOptions(),
       allowedProviders: () => this.allowedModelProviders(),
       // Keep the effective default reservable even beyond the catalogue cap.
-      defaultModelId: this.catalogMetadata?.catalog.selectedModelId,
+      defaultModelId: this.catalog.selectedModelId,
       publishCatalog: (catalog, allowedProviders) => {
-        this.catalogMetadata = {
-          // Preflight must not keep extending a config read's lifetime.
-          expiresAt: this.catalogMetadata?.expiresAt ?? Date.now(),
-          providersKey: openCodeCatalogCacheKey(allowedProviders, true),
-          catalog,
-        };
+        this.catalog.publish(catalog, allowedProviders);
         this.invalidateInteractiveMetadata();
       },
     });
   }
 
   async modelCatalog(): Promise<AgentModel[]> {
-    return (await this.readComposerCatalog(await this.allowedModelProviders(), true)).models;
+    return (await this.catalog.read(await this.allowedModelProviders(), true)).models;
   }
 
   /** Shares the read `rawModelCatalog` makes: connectivity is reported either way. */
   async connectedModelProviders(): Promise<string[] | undefined> {
-    const catalog = await this.readComposerCatalog([], false, await this.allowedModelProviders());
+    const catalog = await this.catalog.read([], false, await this.allowedModelProviders());
     return catalog.connectedProviderIds;
   }
 
   /** The effective default, from the same connected catalogue the picker reads. */
   async resolveDefaultModel(modelId: string | undefined) {
-    const catalog = await this.readComposerCatalog(await this.allowedModelProviders(), true);
+    const catalog = await this.catalog.read(await this.allowedModelProviders(), true);
     return resolveOpenCodeDefaultModel(modelId, catalog);
   }
 
@@ -430,7 +387,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     // OpenCode happens to list first, which on a real catalogue of thousands of
     // models truncated the managed pair out entirely — leaving every read of
     // this catalogue, filtered or not, with no selectable model at all.
-    return (await this.readComposerCatalog([], false, await this.allowedModelProviders())).models;
+    return (await this.catalog.read([], false, await this.allowedModelProviders())).models;
   }
 
   private async monitorRequests(): Promise<void> {
@@ -1042,6 +999,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       }),
       ...(sessionModel.modelId ? { sessionModelId: sessionModel.modelId } : {}),
       ...(sessionModel.reasoningId ? { sessionReasoningId: sessionModel.reasoningId } : {}),
+      ...(await this.catalog.signInReadiness(() => this.allowedModelProviders())),
     };
   }
 
@@ -1135,6 +1093,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       },
       ...(metadata.sessionModelId ? { sessionModelId: metadata.sessionModelId } : {}),
       ...(metadata.sessionReasoningId ? { sessionReasoningId: metadata.sessionReasoningId } : {}),
+      ...(await this.catalog.signInReadiness(() => this.allowedModelProviders())),
       ...(latestUsage ? { contextUsage: latestUsage } : {}),
       ...(this.sessionPolicies.get(sessionId)
         ? { policy: this.sessionPolicies.get(sessionId) }
@@ -1291,7 +1250,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   refreshCatalog(): void {
-    this.catalogMetadata = null;
+    this.catalog.clear();
     this.commands.invalidate();
     this.invalidateInteractiveMetadata();
   }

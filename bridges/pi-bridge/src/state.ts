@@ -444,6 +444,13 @@ export interface SessionState {
    * completed. Runtime-only, reset when a turn is dispatched.
    */
   turnAborted?: boolean;
+  /**
+   * The current turn's last response failure, from an assistant message Pi
+   * ended with `stopReason: "error"` (a provider error, or a run that threw,
+   * such as an OAuth refresh that failed). A retry's later answer replaces it.
+   * Runtime-only, reset when a turn is dispatched.
+   */
+  turnError?: string;
   turnStartedAt?: number;
   /** Steering and follow-up prompts Pi is holding for the running turn. */
   queue: { steering: string[]; followUp: string[] };

@@ -33,6 +33,7 @@ describe("session authentication readiness", () => {
     expect(h.runtime.getStatus(sessionId)?.readiness).toEqual({
       state: "authentication-required",
       message: CODEX_SIGN_IN_REQUIRED_MESSAGE,
+      signIn: { kind: "browser-url" },
     });
 
     signedIn = true;

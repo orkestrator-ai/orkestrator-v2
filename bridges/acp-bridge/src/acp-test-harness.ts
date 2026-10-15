@@ -243,6 +243,13 @@ export async function spawnBridge(
     ACP_MEASURE_COMMAND_CHANGES: "0",
   };
   delete env.ACP_MAX_SESSIONS;
+  // Grok fixtures run signed in. Without a login the bridge never starts Grok
+  // (its `authenticate` would wait on an interactive sign-in), so a test that
+  // means "signed out" points `GROK_AUTH_FILE` at a missing file instead.
+  if (!options.env || !("GROK_HOME" in options.env || "GROK_AUTH_FILE" in options.env)) {
+    await fs.mkdir(env.GROK_HOME!, { recursive: true });
+    await fs.writeFile(join(env.GROK_HOME!, "auth.json"), "{}");
+  }
   Object.assign(env, options.env);
   // The child inherits this process's environment, so a test that pins a
   // fail-closed default has to prove the variable is genuinely absent rather

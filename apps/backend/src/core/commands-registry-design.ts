@@ -1,8 +1,8 @@
 import { beginEnvironmentMutation } from "./environment-replacement-fence.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import { registerDesignCommandHandlers } from "./design-commands.js";
+import { registerDesignCommandHandlers } from "./design/index.js";
 
-/** Registers the design command surface (see `design-commands.ts`). */
+/** Registers the design command surface (see `design/commands.ts`). */
 export function registerDesignCommands(
   register: CommandRegistrar,
   _dependencies: RegistryDependencies,

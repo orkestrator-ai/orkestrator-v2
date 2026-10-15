@@ -34,7 +34,6 @@ import {
   terminalProcesses,
   mergingEnvironments,
   environmentSetupSessions,
-  syncDiffStatsTracking,
   syncPrMonitorTracking,
   asString,
   assertOnlyKeys,
@@ -155,7 +154,7 @@ export function registerEnvironmentCommands(
     }
     // Same recovery argument for diff watchers: reconciling here re-arms them
     // after a backend restart without waiting for a lifecycle command.
-    void syncDiffStatsTracking(context).catch(() => undefined);
+    void context.runtime.diffStats.sync(context).catch(() => undefined);
     // Cleanup-after-merge intent also makes exact-URL PR monitoring authoritative
     // after a restart. The monitor never resubmits the merge; it only confirms a
     // terminal state so the persisted deletion follow-up can resume safely.
@@ -354,7 +353,7 @@ export function registerEnvironmentCommands(
     });
     // The home is a tracked worktree like any other: its watcher is what
     // announces a dropped or edited file as a change.
-    await syncDiffStatsTracking(context);
+    await context.runtime.diffStats.sync(context);
     await syncPrMonitorTracking(context);
     return toClientEnvironment(environment);
   });

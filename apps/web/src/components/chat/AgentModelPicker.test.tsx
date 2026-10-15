@@ -264,6 +264,45 @@ describe("AgentModelPicker", () => {
     expect(document.querySelector('[data-native-model-row-platform="pi"]')).toBeTruthy();
   });
 
+  // The connectivity a pre-bridge catalogue carries can predate a sign-in, so
+  // a model it reports as disconnected is marked but stays selectable.
+  test("marks a model whose provider was last reported as not connected", () => {
+    setMobileViewport(false);
+    const { onModelChange } = renderPicker({
+      models: [
+        {
+          platform: "opencode",
+          id: "opencode-go/deepseek-v4.1-flash",
+          label: "DeepSeek V4.1 Flash",
+          providerLabel: "opencode-go",
+        },
+        {
+          platform: "opencode",
+          id: "opencode/big-pickle",
+          label: "Big Pickle",
+          providerLabel: "opencode",
+          connected: false,
+        },
+      ],
+      enabledPlatforms: ["opencode"],
+      selectedPlatform: "opencode",
+      selectedModelId: "opencode-go/deepseek-v4.1-flash",
+      selectedModelLabel: "DeepSeek V4.1 Flash",
+      reasoningOptions: [],
+      fastModeAvailable: false,
+    });
+
+    fireEvent.pointerDown(screen.getByTitle(/Choose model/));
+    const marked = screen.getByRole("menuitemradio", { name: /Big Pickle/ });
+    expect(marked.textContent).toContain("Not connected");
+    expect(marked.getAttribute("aria-disabled") === "true").toBe(false);
+    expect(
+      screen.getByRole("menuitemradio", { name: /DeepSeek V4.1 Flash/ }).textContent,
+    ).not.toContain("Not connected");
+    fireEvent.click(marked);
+    expect(onModelChange).toHaveBeenCalledWith("opencode/big-pickle");
+  });
+
   test("shows the selected platform icon before the model name", () => {
     setMobileViewport(false);
     renderPicker({ selectedPlatform: "codex" });

@@ -5,6 +5,7 @@ import path from "node:path";
 import { WORKTREE_SNAPSHOT_CHANGED_EVENT } from "@orkestrator/protocol/worktree-snapshots";
 import { getLocalGitStatusDetailed } from "./commands-files.js";
 import { DiffStatsService } from "./diff-stats-service.js";
+import { createGitFetchScheduler } from "./diff-stats-tracking.js";
 import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
 import { startWorktreeWatcher } from "./worktree-watcher.js";
 
@@ -69,6 +70,7 @@ beforeAll(async () => {
   run(repo, "worktree", "add", "-q", linked, "-b", "feature");
 
   metrics = new RecurringWorkMetrics();
+  const gitFetches = createGitFetchScheduler();
   service = new DiffStatsService({
     metrics,
     pollIntervalMs: 10 * 60_000,
@@ -82,6 +84,7 @@ beforeAll(async () => {
         target.worktreePath!,
         target.comparisonRef,
         true,
+        gitFetches,
       );
       return {
         stats: {

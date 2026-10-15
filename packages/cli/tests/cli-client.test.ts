@@ -87,7 +87,7 @@ describe("packaged client entrypoint", () => {
       JSON.parse(named.stdout)
         .result.tools.map((tool: { tool: string }) => tool.tool)
         .sort(),
-    ).toEqual(["claude", "codex", "pi"]);
+    ).toEqual(["claude", "codex", "gh", "pi"]);
     const fromEnv = await runBin(["toolchain", "install", "--dry-run", "--json"], env);
     expect(JSON.parse(fromEnv.stdout).result.dataDir).toBe(path.join(root, "from-env"));
     const fromDefault = await runBin(["toolchain", "install", "--dry-run", "--json"], {

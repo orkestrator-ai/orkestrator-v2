@@ -10,6 +10,7 @@ const {
   createCommandRegistry,
   createContext,
   createEnvironment,
+  createRuntime,
   createGitRepoOnBranch,
   createGitWorktreeWithOrigin,
   createHash,
@@ -161,7 +162,7 @@ describe("storage-backed command delegation", () => {
         return config;
       }),
     };
-    const context = { storage } as unknown as CommandContext;
+    const context = { storage, runtime: createRuntime() } as unknown as CommandContext;
     const commands = createCommandRegistry();
 
     await expect(commands.get("get_projects")?.({}, context)).resolves.toEqual([project]);
@@ -519,7 +520,7 @@ describe("storage-backed command delegation", () => {
       getDataDir: () => "/tmp/orkestrator-session-delegation",
       loadEnvironments: mock(async () => [{ id: "env-1", containerId: "container-1" }]),
     };
-    const context = { storage } as unknown as CommandContext;
+    const context = { storage, runtime: createRuntime() } as unknown as CommandContext;
     const commands = createCommandRegistry();
 
     await expect(
@@ -601,7 +602,7 @@ describe("storage-backed command delegation", () => {
         ...update,
       })),
     };
-    const context = { storage } as unknown as CommandContext;
+    const context = { storage, runtime: createRuntime() } as unknown as CommandContext;
     const commands = createCommandRegistry();
 
     await expect(
@@ -707,7 +708,7 @@ describe("storage-backed command delegation", () => {
       createFeaturePlan: mock(async () => feature),
       updateFeaturePlan: mock(async () => ({ ...feature, title: "Updated" })),
     };
-    const context = { storage } as unknown as CommandContext;
+    const context = { storage, runtime: createRuntime() } as unknown as CommandContext;
     const commands = createCommandRegistry();
 
     expect(commands.get("get_log_directory")?.({}, context)).toBe("/data/logs");
@@ -2079,7 +2080,7 @@ exit 1
         () => emitted.some((entry) => entry.event === "environment-diff-stats-changed"),
         "initial diff tracking to start",
       );
-      expect(commandTesting.trackedDiffStatsIds()).toContain(environment.id);
+      expect(context.runtime.diffStats.service.trackedIds()).toContain(environment.id);
 
       const staleSnapshot = [environment];
       let releaseLoad!: () => void;
@@ -2109,7 +2110,7 @@ exit 1
       releaseLoad();
       await rehydrate;
 
-      expect(commandTesting.trackedDiffStatsIds()).not.toContain(environment.id);
+      expect(context.runtime.diffStats.service.trackedIds()).not.toContain(environment.id);
     });
 
     test("reads for itself when no recent scan is cached", async () => {

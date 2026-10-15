@@ -21,6 +21,7 @@ import type {
   NativeAgentAuthStatus,
   NativeAgentMcpServer,
   NativeAgentMcpServerAction,
+  NativeAgentDefaultModelResolution,
   NativeAgentReadiness,
   NativeAgentRateLimitWindow,
   NativeAgentResumeEntry,
@@ -652,6 +653,21 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
    * be offered by launch dialogs before another bridge starts.
    */
   rawModelCatalog?(): Promise<AgentModel[]>;
+  /**
+   * Providers the runtime reports as able to serve a prompt right now, or
+   * undefined when it does not report connectivity. Backend-only: it is
+   * persisted beside the durable catalogue so reads made before a bridge starts
+   * know which providers were connected.
+   */
+  connectedModelProviders?(): Promise<string[] | undefined>;
+  /**
+   * The model to run for a configured default, set or unset: a set model the
+   * runtime positively reports it cannot serve is replaced, and an unset one
+   * resolves to the runtime's effective default. Callers resolve at session or
+   * stage creation and never write the answer back to the user's
+   * configuration.
+   */
+  resolveDefaultModel?(modelId: string | undefined): Promise<NativeAgentDefaultModelResolution>;
   interactiveSnapshot?(sessionId: string): Promise<ProviderInteractiveSnapshot>;
   updateInteractiveControls?(
     sessionId: string,

@@ -9,7 +9,6 @@ import { startEnvironmentSetupOnce } from "./commands-environment.js";
 import { projectHomeTesting } from "./project-home-environment.js";
 import { runCommand } from "./shell.js";
 import type { Environment } from "./models.js";
-import { diffStatsService } from "./commands-runtime-state.js";
 import {
   deleteMergedEnvironmentRemoteBranch,
   startEnvironmentOnce,
@@ -25,6 +24,7 @@ import {
   detectEnvironmentPullRequest,
   prMonitorService,
 } from "./commands-pr-monitor.js";
+import { BackendRuntime } from "./backend-runtime.js";
 
 let root: string;
 let checkout: string;
@@ -32,6 +32,7 @@ let storage: StorageService;
 let context: CommandContext;
 let projectId: string;
 let commands: ReturnType<typeof createCommandRegistry>;
+let runtime: BackendRuntime;
 let restoreDiffTracking: () => void;
 
 const ensure = async () => {
@@ -46,7 +47,8 @@ beforeEach(async () => {
   // This suite drives Git directly; watcher behavior has its own integration
   // suite. Untracking after ensure was too late: an in-flight background scan
   // could still refresh Git's index while the fixture switched branches.
-  const tracking = spyOn(diffStatsService, "track").mockImplementation(() => undefined);
+  runtime = new BackendRuntime({ emit: () => undefined });
+  const tracking = spyOn(runtime.diffStats.service, "track").mockImplementation(() => undefined);
   restoreDiffTracking = () => tracking.mockRestore();
   root = await mkdtemp(path.join(tmpdir(), "ork-project-home-"));
   checkout = path.join(root, "checkout");
@@ -67,6 +69,7 @@ beforeEach(async () => {
     storage,
     emit: () => undefined,
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+    runtime,
     worktreeDir: path.join(root, "workspaces"),
   } as unknown as CommandContext;
   commands = createCommandRegistry();
@@ -75,7 +78,7 @@ beforeEach(async () => {
 afterEach(async () => {
   try {
     projectHomeTesting.reset();
-    for (const id of diffStatsService.trackedIds()) diffStatsService.untrack(id);
+    runtime.shutdown();
     prMonitorService.sync([]);
     await rm(root, { recursive: true, force: true });
   } finally {

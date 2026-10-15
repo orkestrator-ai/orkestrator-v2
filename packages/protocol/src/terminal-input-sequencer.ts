@@ -24,20 +24,17 @@ export const TERMINAL_INPUT_CLOSED_MESSAGE = "Terminal input is closed until the
 export const TERMINAL_INPUT_NOT_DELIVERED_MESSAGE = "Terminal session is not running";
 
 /**
- * What re-enables input after a send failed or a lifecycle outcome was lost.
- *
- * - `rearm-on-lifecycle`: a successful resize (or a socket-accepted write)
- *   proves the transport recovered and re-arms the queue; a failed start or
- *   close leaves the terminal writable. The terminal's echo shows what the
- *   shell actually holds.
- * - `fence-until-start`: only a successful start re-arms. A failed resize,
- *   close or start fences input too, so nothing typed after an ambiguous loss
- *   can join a partially delivered prefix.
- *
- * The browser gateway uses the first and the desktop client the second. That
- * divergence is deliberate and undecided; keep it to this one switch.
+ * Client-side commands that re-arm one terminal's input after a failure fence,
+ * one per input family. The sequencer answers them and never sends them to the
+ * backend, because the fence they clear lives in the client queue.
  */
-export type TerminalInputRecovery = "rearm-on-lifecycle" | "fence-until-start";
+export const TERMINAL_INPUT_RESUME_COMMAND = "terminal_input_resume";
+export const LOCAL_TERMINAL_INPUT_RESUME_COMMAND = "local_terminal_input_resume";
+
+export interface TerminalInputResumeResult {
+  /** False when nothing was fenced, or the terminal is closed. */
+  resumed: boolean;
+}
 
 export type TerminalLifecycleKind = "resize" | "close" | "start";
 
@@ -66,7 +63,6 @@ export interface TerminalInputSequencerOptions {
   sendInput(request: TerminalInputRequest, signal: AbortSignal): Promise<unknown>;
   /** Runs one lifecycle command once every earlier input has settled. */
   runLifecycle(operation: TerminalLifecycleOperation, signal: AbortSignal): Promise<unknown>;
-  recovery: TerminalInputRecovery;
   pipelined?: PipelinedTerminalInput;
   batchDelayMs?: number;
   maxBatchBytes?: number;
@@ -90,6 +86,11 @@ const LIFECYCLE_COMMANDS: Readonly<
   start_local_terminal_session: { inputCommand: "local_terminal_write", kind: "start" },
 };
 
+const RESUME_COMMANDS: Readonly<Record<string, TerminalInputCommand>> = {
+  [TERMINAL_INPUT_RESUME_COMMAND]: "terminal_write",
+  [LOCAL_TERMINAL_INPUT_RESUME_COMMAND]: "local_terminal_write",
+};
+
 /**
  * A lifecycle command that must be ordered against one terminal's input, or
  * null. Without a string session id there is no queue to order against, so
@@ -106,6 +107,12 @@ export function parseTerminalLifecycleCommand(
   return { command, args: { ...args }, sessionId: args.sessionId, ...lifecycle };
 }
 
+interface InputReservation {
+  bytes: number;
+  controller: AbortController;
+  currentSession: boolean;
+}
+
 const queueKey = (command: TerminalInputCommand, sessionId: string): string =>
   `${command}\0${sessionId}`;
 
@@ -120,7 +127,10 @@ const queueKey = (command: TerminalInputCommand, sessionId: string): string =>
  *   Writes issued after a lifecycle command wait for it.
  * - Close fences input immediately; only a start reopens it. Start discards
  *   input queued against the previous incarnation instead of waiting for it.
- * - A failed send fails the queue closed; `recovery` decides what re-arms it.
+ * - A failed send, or a lost resize, close or start outcome, fences input so
+ *   nothing typed after an ambiguous loss can join a partially delivered
+ *   prefix. Nothing re-arms it automatically: only a successful start, or an
+ *   explicit resume once the user has checked the terminal.
  */
 export class TerminalInputSequencer {
   private readonly batcher: TerminalHttpInputBatcher;
@@ -137,15 +147,12 @@ export class TerminalInputSequencer {
   private readonly maxPendingLifecycleOperations: number;
   private readonly closedSessionMemory: number;
   /** Reservations include writes waiting for lifecycle or socket acknowledgement. */
-  private readonly inputs = new Map<string, Set<{ bytes: number; controller: AbortController }>>();
+  private readonly inputs = new Map<string, Set<InputReservation>>();
   private readonly overflowFailures = new Map<string, unknown>();
   private disposedReason: unknown = null;
   private disposed = false;
 
   constructor(private readonly options: TerminalInputSequencerOptions) {
-    if (options.recovery !== "rearm-on-lifecycle" && options.recovery !== "fence-until-start") {
-      throw new TypeError("recovery must be rearm-on-lifecycle or fence-until-start");
-    }
     this.sendTimeoutMs = options.sendTimeoutMs ?? TERMINAL_HTTP_INPUT_SEND_TIMEOUT_MS;
     this.maxPendingLifecycleOperations =
       options.maxPendingLifecycleOperations ?? TERMINAL_MAX_PENDING_LIFECYCLE_OPERATIONS;
@@ -181,19 +188,22 @@ export class TerminalInputSequencer {
     );
   }
 
-  private get rearms(): boolean {
-    return this.options.recovery === "rearm-on-lifecycle";
-  }
-
   /**
-   * Routes terminal input and lifecycle commands through the ordered queue.
-   * Returns null for anything else, which the caller sends directly.
+   * Routes terminal input, lifecycle and resume commands through the ordered
+   * queue. Returns null for anything else, which the caller sends directly.
    */
   invoke(command: string, args: Record<string, unknown> | undefined): Promise<unknown> | null {
     const input = parseTerminalInputRequest(command, args);
     if (input) return this.write(input);
     const lifecycle = parseTerminalLifecycleCommand(command, args);
     if (lifecycle) return this.lifecycle(lifecycle);
+    if (Object.hasOwn(RESUME_COMMANDS, command)) {
+      // Answered here even when malformed: the backend has no such command.
+      if (typeof args?.sessionId !== "string") {
+        return Promise.reject(new TypeError(`${command} requires a string sessionId`));
+      }
+      return this.resume(RESUME_COMMANDS[command]!, args.sessionId);
+    }
     return null;
   }
 
@@ -254,10 +264,8 @@ export class TerminalInputSequencer {
     const bytes = this.encoder.encode(input.data).byteLength;
     if (bytes > maxBytes)
       throw new RangeError(`Terminal input exceeds the ${maxBytes}-byte terminal queue limit`);
-    if (this.overflowFailures.has(key)) throw this.overflowFailures.get(key);
     const releaseTerminal = this.batcher.reserveTerminal(input.command, input.sessionId);
-    const entries =
-      this.inputs.get(key) ?? new Set<{ bytes: number; controller: AbortController }>();
+    const entries = this.inputs.get(key) ?? new Set<InputReservation>();
     let retainedBytes = 0;
     for (const entry of entries) retainedBytes += entry.bytes;
     if (
@@ -273,7 +281,11 @@ export class TerminalInputSequencer {
       releaseTerminal();
       throw error;
     }
-    const entry = { bytes, controller: new AbortController() };
+    const entry = {
+      bytes,
+      controller: new AbortController(),
+      currentSession: true,
+    };
     entries.add(entry);
     this.inputs.set(key, entries);
     const signal = entry.controller.signal;
@@ -285,11 +297,12 @@ export class TerminalInputSequencer {
     // Register the cancellation race before running work, even for synchronous overflow.
     const run = async () => {
       if (this.options.pipelined?.active())
-        return this.writePipelined(input, key, signal, cancelled);
+        return this.writePipelined(input, key, entry, cancelled);
       const lifecycle = this.lifecycleTails.get(key);
       if (lifecycle) await Promise.race([lifecycle, cancelled]);
       this.assertUsable();
       signal.throwIfAborted();
+      if (this.overflowFailures.has(key)) throw this.overflowFailures.get(key);
       await this.batcher.enqueue(input);
       return { delivered: true as const };
     };
@@ -313,11 +326,22 @@ export class TerminalInputSequencer {
   private writePipelined(
     input: TerminalInputRequest,
     key: string,
-    signal: AbortSignal,
+    entry: InputReservation,
     cancelled: Promise<never>,
   ): Promise<{ delivered: true }> {
+    const signal = entry.controller.signal;
     const lifecycle = this.lifecycleTails.get(key);
     const previousSend = this.pipelinedSendTails.get(key) ?? lifecycle ?? Promise.resolve();
+
+    const fail = (error: unknown): never => {
+      // A start supersedes old reservations; overflow and disposal cancel
+      // them. Late failures must never fence the replacement session.
+      if (entry.currentSession && !signal.aborted && !this.disposed) {
+        this.batcher.failQueue(input.command, input.sessionId, error);
+        for (const entry of this.inputs.get(key) ?? []) entry.controller.abort(error);
+      }
+      throw error;
+    };
 
     const send = Promise.race([previousSend, cancelled])
       .catch(() => undefined)
@@ -326,27 +350,23 @@ export class TerminalInputSequencer {
         this.assertUsable();
         if (lifecycle) await Promise.race([lifecycle, cancelled]);
         this.assertUsable();
-        const flushed = this.batcher.flush(input.command, input.sessionId);
-        if (this.rearms) {
-          // A latched HTTP failure must not veto a healthy channel; its
-          // rejection has already reached whoever issued that write.
-          await Promise.race([flushed.catch(() => undefined), cancelled]);
-        } else {
-          await Promise.race([flushed, cancelled]);
-        }
+        signal.throwIfAborted();
+        if (this.overflowFailures.has(key)) throw this.overflowFailures.get(key);
+        // A latched HTTP failure vetoes the channel too: a healthy socket says
+        // nothing about how much of the lost write reached the shell.
+        await Promise.race([this.batcher.flush(input.command, input.sessionId), cancelled]);
         this.assertUsable();
         signal.throwIfAborted();
         const acknowledgement = this.options.pipelined?.send(input) ?? null;
         if (acknowledgement) {
-          // The channel accepted this write, so the transport has recovered.
-          if (this.rearms) this.batcher.clearFailure(input.command, input.sessionId);
           // Wrapped, not returned bare: an async function adopts a returned
           // promise, which would make the send tail wait for the acknowledgement.
-          return { acknowledgement };
+          return { acknowledgement: acknowledgement.catch(fail) };
         }
         await this.batcher.enqueue(input);
         return null;
-      });
+      })
+      .catch(fail);
 
     // The send tail releases once the frame is handed off, so the next
     // keystroke follows immediately and still in order.
@@ -393,30 +413,73 @@ export class TerminalInputSequencer {
     } catch (error) {
       return Promise.reject(error);
     }
-    if (operation.kind === "start") this.overflowFailures.delete(key);
-    const previous = this.lifecycleTails.get(key) ?? Promise.resolve();
+    if (operation.kind === "start") {
+      this.overflowFailures.delete(key);
+      // An earlier close still drains its input before this start. Mark old
+      // reservations instead of cancelling them, so their late failures cannot
+      // fence the replacement session or change that lifecycle ordering.
+      for (const entry of this.inputs.get(key) ?? []) entry.currentSession = false;
+    }
     // Snapshot at issue time. Later writes wait on this lifecycle and cannot
     // become part of the acknowledgements it drains without forming a cycle.
     const priorPipelined = Array.from(this.pipelinedAcks.get(key) ?? []);
 
     // Install the barrier before the first await, so writes issued after this
     // call wait behind resize/start and are rejected after close. The close
-    // marker is provisional under `rearm-on-lifecycle`: a close that never
-    // reached the backend leaves a live terminal that must stay writable.
+    // marker stands even if the close never lands; only a start clears it.
     if (operation.kind === "close") this.rememberClosed(key);
     if (operation.kind === "start") this.closed.delete(key);
 
-    const run = previous
-      .catch(() => undefined)
-      .then(() => this.runOrdered(operation, key, priorPipelined));
+    return this.chainLifecycle(
+      key,
+      () => this.runOrdered(operation, key, priorPipelined),
+      releaseTerminal,
+    );
+  }
+
+  /**
+   * Clears one terminal's failure fence once every lifecycle command issued
+   * before it has settled, so a resume cannot jump ahead of a close or start.
+   * It never reopens a closed terminal; only a start does that.
+   */
+  private resume(
+    inputCommand: TerminalInputCommand,
+    sessionId: string,
+  ): Promise<TerminalInputResumeResult> {
+    try {
+      this.assertUsable();
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    const key = queueKey(inputCommand, sessionId);
+    if ((this.lifecycleCounts.get(key) ?? 0) >= this.maxPendingLifecycleOperations) {
+      return Promise.reject(new Error("Terminal lifecycle queue limit exceeded"));
+    }
+    return this.chainLifecycle(key, async () => {
+      this.assertUsable();
+      if (this.closed.has(key)) return { resumed: false };
+      const overflowed = this.overflowFailures.delete(key);
+      const failed = this.batcher.clearFailure(inputCommand, sessionId);
+      return { resumed: overflowed || failed };
+    });
+  }
+
+  /** Runs `task` after this terminal's lifecycle tail and becomes the new tail. */
+  private chainLifecycle<T>(
+    key: string,
+    task: () => Promise<T>,
+    onSettled?: () => void,
+  ): Promise<T> {
+    const previous = this.lifecycleTails.get(key) ?? Promise.resolve();
+    const run = previous.catch(() => undefined).then(task);
     const tail = run.then(
       () => undefined,
       () => undefined,
     );
-    this.lifecycleCounts.set(key, pendingCount + 1);
+    this.lifecycleCounts.set(key, (this.lifecycleCounts.get(key) ?? 0) + 1);
     this.lifecycleTails.set(key, tail);
     void tail.finally(() => {
-      releaseTerminal();
+      onSettled?.();
       const remaining = (this.lifecycleCounts.get(key) ?? 1) - 1;
       if (remaining > 0) this.lifecycleCounts.set(key, remaining);
       else this.lifecycleCounts.delete(key);
@@ -445,7 +508,7 @@ export class TerminalInputSequencer {
       try {
         return await this.runWithDeadline(operation);
       } catch (error) {
-        if (!this.rearms && !this.disposed) this.batcher.failQueue(inputCommand, sessionId, error);
+        if (!this.disposed) this.batcher.failQueue(inputCommand, sessionId, error);
         throw error;
       }
     }
@@ -458,21 +521,11 @@ export class TerminalInputSequencer {
     // against the backend being replaced.
     this.assertUsable();
     try {
-      const result = await this.runWithDeadline(operation);
-      // Resize proves the transport recovered. Without this, one transient
-      // write failure would leave a terminal that streams output but refuses
-      // every keystroke.
-      if (operation.kind === "resize" && this.rearms) {
-        this.overflowFailures.delete(key);
-        this.batcher.clearFailure(inputCommand, sessionId);
-      }
-      return result;
+      // A successful resize says nothing about what a lost write delivered, so
+      // it does not re-arm a fenced terminal.
+      return await this.runWithDeadline(operation);
     } catch (error) {
-      if (this.rearms) {
-        // The terminal is still alive, so undo the provisional close rather
-        // than rejecting its input for the lifetime of the client.
-        if (operation.kind === "close") this.closed.delete(key);
-      } else if (operation.kind === "resize" && !this.disposed) {
+      if (operation.kind === "resize" && !this.disposed) {
         // A lost lifecycle response leaves terminal state uncertain too.
         this.batcher.failQueue(inputCommand, sessionId, error);
       }

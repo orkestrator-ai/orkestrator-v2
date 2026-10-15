@@ -36,3 +36,27 @@ changed.
 - **Isolated rerun:** `mise run test:logged -- --name fix-scheduling-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/build-pipeline-scheduling.test.ts --parallel=1 --only-failures` passed (exit 0, 2.9 seconds).
 - **Evidence:** `/tmp/orkestrator-test-run.Pv387k/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Hypothesis:** scheduler progress and fixture cleanup exceeded the generic test deadline under aggregate load or shared backend activity. The owning test and backend were unchanged; the cause is unconfirmed. No test was skipped or timeout raised.
+
+## Recurrence during main merge validation — 2026-10-15
+
+- **Tests:** `old and new drivers make the same transitions from one
+  persisted fixture` timed out at 5,574.47 ms. The subsequent
+  `retained history is enumerated only by the safety scan` observed 155
+  records instead of 123 and failed at 1,355.24 ms.
+- **Associated error:** late `phaseOf` work from the timed-out first test
+  read storage after teardown, raising `SQLITE_IOERR_VNODE` between tests.
+- **Original command:** `PATH="/opt/homebrew/opt/bash/bin:/opt/homebrew/opt/coreutils/libexec/gnubin:/opt/homebrew/opt/findutils/libexec/gnubin:/opt/homebrew/opt/gnu-tar/libexec/gnubin:/opt/homebrew/opt/grep/libexec/gnubin:/opt/homebrew/opt/gnu-sed/libexec/gnubin:/opt/homebrew/bin:$PATH" mise run test:logged -- --name merge-main-full-suite -- mise run test`.
+- **Worker configuration:** backend package `--parallel=2`, two workspace
+  package tasks, alongside the other aggregate groups and other host validations.
+- **Suite counts:** backend 7,745 passed, 39 skipped, 6 failed and one
+  between-tests error across 7,790 tests in 427 files (361.91 seconds).
+  The whole aggregate finished in 594.9 seconds; root and protocol groups passed,
+  while the bridges group also reported the ACP hook timeout tracked as 0219.
+- **Evidence:** `/tmp/orkestrator-test-run.jDL6Dp/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Isolated rerun:** `mise run test:logged -- --name
+  build-pipeline-scheduling-isolated -- bun test --cwd apps/backend
+  --preload ../../tests/setup-node.ts ./src/core/build-pipeline-scheduling.test.ts
+  --parallel=1 --only-failures` passed unchanged in 3.1 seconds.
+- **Hypothesis:** late work from a timed-out case can affect the following
+  test and outlive its fixture storage. The unchanged isolated pass matches
+  earlier observations; no timeout, assertion or skip was changed.

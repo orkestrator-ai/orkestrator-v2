@@ -23,7 +23,7 @@ import {
   removeLocalEvidence,
   type EvidenceRemovalOutcome,
 } from "./web-annotation-evidence-files.js";
-import type { WebAnnotationHostEnvironment } from "./web-annotation-service-base.js";
+import type { WebAnnotationHostEnvironment } from "./web-annotation-context.js";
 import type { WebAnnotationManifest } from "./web-annotation-storage.js";
 
 /** Settled evidence stays in the workspace this long for transcript references. */

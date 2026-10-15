@@ -181,11 +181,16 @@ export function registerServerCommands(
     const allowedProviders = normalizeOpenCodeModelProviders(
       (await storage.loadConfig()).global.openCodeModelProviders,
     );
+    // The persisted connectivity can be stale, so a disconnected provider is
+    // marked for the launch dialogs rather than hidden from them.
+    const connected = snapshot.connectedProviderIds;
     return {
       ...snapshot,
-      models: snapshot.models.filter((model) =>
-        isSelectableOpenCodeProvider(model.provider, allowedProviders),
-      ),
+      models: snapshot.models
+        .filter((model) => isSelectableOpenCodeProvider(model.provider, allowedProviders))
+        .map((model) =>
+          connected && !connected.includes(model.provider) ? { ...model, connected: false } : model,
+        ),
     };
   });
   register("cache_opencode_model_catalog", (args, { storage }) => {

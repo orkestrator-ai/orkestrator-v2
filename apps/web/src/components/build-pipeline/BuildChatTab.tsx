@@ -987,6 +987,7 @@ export function BuildChatTab({
         detail: reviewerRuntime
           ? { text: reviewerRuntime, label: `${reviewLabel} runtime and token usage`, mono: true }
           : null,
+        notice: session.modelSubstitution?.message ?? null,
         autoDeclineCount,
         reportIssueCount: report?.issues.length,
         status,
@@ -1004,6 +1005,8 @@ export function BuildChatTab({
               false,
               displayNow,
             ),
+      // The configured model was unavailable, so the stage ran on another one.
+      notice: session.modelSubstitution?.message ?? null,
       autoDeclineCount,
       reportIssueCount: report?.issues.length,
       status,

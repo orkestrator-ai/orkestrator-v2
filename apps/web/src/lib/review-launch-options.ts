@@ -6,8 +6,6 @@ import type {
 import type { ClaudeModel } from "@/lib/claude-types";
 import { FALLBACK_CLAUDE_MODELS } from "@/lib/claude-fallback-models";
 import { CODEX_MODELS } from "@/lib/codex-models";
-import { useClaudeStore } from "@/stores/claudeStore";
-import { useCodexStore } from "@/stores/codexStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import {
   isSelectableOpenCodeModelId,
@@ -96,10 +94,12 @@ export function includeMissingOpenCodeModels(
  * durable OpenCode model cache on top of it.
  */
 export function buildReviewModelCatalog(): ReviewModelCatalog {
-  const liveClaudeModels = useClaudeStore.getState().models.map(claudeReviewModelOption);
+  const liveClaudeModels = useAgentModelCatalogStore
+    .getState()
+    .claudeModels.map(claudeReviewModelOption);
   const claude = liveClaudeModels.length > 0 ? liveClaudeModels : CLAUDE_FALLBACK_MODELS;
 
-  const codexModels = useCodexStore.getState().models;
+  const codexModels = useAgentModelCatalogStore.getState().codexModels;
   const codex = (codexModels.length > 0 ? codexModels : CODEX_MODELS).map((model) => ({
     id: model.id,
     name: model.name,

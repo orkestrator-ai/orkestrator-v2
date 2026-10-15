@@ -16,8 +16,8 @@ import {
   mergeAccountUsage,
   accountUsageFromLimits,
   parseCodexStructuredOutput,
-  AppServerRuntimeBase,
 } from "./app-server-runtime-base.js";
+import type { CodexRuntimeContext } from "./app-server-runtime-context.js";
 
 import type {
   EngineEvent,
@@ -77,33 +77,39 @@ import {
 export { CODEX_RESTARTED_MID_TURN_MESSAGE } from "./sessions/thread-registry.js";
 export { patchCommandChangePart } from "./app-server-runtime-rows.js";
 
-export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
-  /** Close admission fence shared with lazy thread reattachment. */
-  protected readonly closingSessionIds = new Set<string>();
+export class CodexRuntimeLifecycle {
+  constructor(private readonly ctx: CodexRuntimeContext) {}
+
+  /**
+   * Starts the child and loads the dispatch journal.
+   *
+   * The journal must be read before any prompt is accepted, or a request that was
+   * in flight when the bridge died could be dispatched a second time.
+   */
   async start(): Promise<void> {
-    if (this.started) return;
-    if (this.startPromise) return this.startPromise;
+    if (this.ctx.started) return;
+    if (this.ctx.startPromise) return this.ctx.startPromise;
     const startPromise = this.startOnce();
-    this.startPromise = startPromise;
+    this.ctx.startPromise = startPromise;
     try {
       await startPromise;
-      this.started = true;
+      this.ctx.started = true;
     } finally {
-      if (this.startPromise === startPromise) this.startPromise = null;
+      if (this.ctx.startPromise === startPromise) this.ctx.startPromise = null;
     }
   }
 
-  protected async startOnce(): Promise<void> {
-    await this.journal.load();
-    const persistedSessions = await this.store.load();
+  async startOnce(): Promise<void> {
+    await this.ctx.journal.load();
+    const persistedSessions = await this.ctx.store.load();
     for (const persisted of persistedSessions) {
-      this.registry.restoreSession({
+      this.ctx.registry.restoreSession({
         id: persisted.bridgeSessionId,
         threadId: persisted.threadId,
         config: isCoordinatorReadOnlyEnvironment(process.env)
           ? {
               ...persisted.config,
-              cwd: this.options.cwd,
+              cwd: this.ctx.options.cwd,
               approvalPolicy: "never",
               sandbox: "read-only",
               networkAccessEnabled: false,
@@ -130,52 +136,55 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         asyncQuestionItemIds: persisted.asyncQuestionItemIds ?? [],
         lastAccessed: Date.parse(persisted.lastAccessed),
       });
-      this.lastPersistedAccess.set(persisted.bridgeSessionId, Date.parse(persisted.lastAccessed));
+      this.ctx.lastPersistedAccess.set(
+        persisted.bridgeSessionId,
+        Date.parse(persisted.lastAccessed),
+      );
     }
     // Claim the affected threads *before* the first await below, so a request
     // racing startup sees `recovering` rather than a misleading `idle`.
-    for (const record of this.journal.unresolved()) {
-      if (record.threadId) this.threadsAwaitingDispatchRecovery.add(record.threadId);
+    for (const record of this.ctx.journal.unresolved()) {
+      if (record.threadId) this.ctx.threadsAwaitingDispatchRecovery.add(record.threadId);
     }
 
     try {
-      await this.options.engine.start();
-      await this.generationRecovery;
+      await this.ctx.options.engine.start();
+      await this.ctx.generationRecovery;
       const recovery = this.recoverUnresolvedDispatches().finally(() => {
-        this.threadsAwaitingDispatchRecovery.clear();
+        this.ctx.threadsAwaitingDispatchRecovery.clear();
       });
-      this.dispatchRecovery = recovery.catch(() => undefined);
+      this.ctx.dispatchRecovery = recovery.catch(() => undefined);
       await recovery;
     } catch (error) {
-      this.threadsAwaitingDispatchRecovery.clear();
+      this.ctx.threadsAwaitingDispatchRecovery.clear();
       throw error;
     }
 
-    const interval = this.options.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS;
+    const interval = this.ctx.options.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS;
     if (interval > 0) {
-      this.sweepTimer = setInterval(() => void this.sweepIdle(), interval);
-      this.sweepTimer.unref?.();
+      this.ctx.sweepTimer = setInterval(() => void this.sweepIdle(), interval);
+      this.ctx.sweepTimer.unref?.();
     }
   }
 
   async stop(): Promise<void> {
-    this.stopping = true;
-    this.resolveDispatchAdmissionStop();
-    if (this.sweepTimer) clearInterval(this.sweepTimer);
-    this.sweepTimer = null;
-    for (const timer of this.recoveryBackstops.values()) clearTimeout(timer);
-    this.recoveryBackstops.clear();
-    this.commandCatalogue.dispose();
+    this.ctx.stopping = true;
+    this.ctx.resolveDispatchAdmissionStop();
+    if (this.ctx.sweepTimer) clearInterval(this.ctx.sweepTimer);
+    this.ctx.sweepTimer = null;
+    for (const timer of this.ctx.recoveryBackstops.values()) clearTimeout(timer);
+    this.ctx.recoveryBackstops.clear();
+    this.ctx.commandCatalogue.dispose();
     // Nothing will report terminal after this, so release the drain rather than
     // holding shutdown for its full deadline.
-    this.notifyThreadActivity();
+    this.ctx.callbacks.notifyThreadActivity();
     // Stop the transport first so no new terminal notifications can arrive,
     // then settle work already handed off from its read loop before releasing
     // the render state that work still needs.
-    await this.options.engine.stop();
+    await this.ctx.options.engine.stop();
     await this.drainPendingWork();
-    await Promise.allSettled(this.pendingSessionWrites);
-    for (const threadId of Array.from(this.threadState.keys()))
+    await Promise.allSettled(this.ctx.pendingSessionWrites);
+    for (const threadId of Array.from(this.ctx.threadState.keys()))
       this.releaseThreadRuntimeState(threadId);
   }
 
@@ -190,20 +199,24 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     // Generation/dispatch recovery is also launched from transport callbacks.
     // Settle it before flushing render coalescers because recovery may create or
     // finalize turns and schedule a final snapshot.
-    await Promise.allSettled([this.generationRecovery, this.dispatchRecovery, this.accountReload]);
+    await Promise.allSettled([
+      this.ctx.generationRecovery,
+      this.ctx.dispatchRecovery,
+      this.ctx.accountReload,
+    ]);
     while (true) {
       // A finalization can schedule a coalesced render after an earlier flush,
       // so flush at the start of every pass rather than only once before
       // waiting. Otherwise shutdown (and the test harness) can observe all
       // tracked promises settled while one last snapshot is still timer-bound.
-      for (const state of this.threadState.values()) {
+      for (const state of this.ctx.threadState.values()) {
         await state.coalescer.flushNow();
       }
       const pending = [
-        ...this.pendingFinalizations,
-        ...this.pendingCommandChanges,
-        ...this.pendingSessionWrites,
-        ...[...this.threadState.values()]
+        ...this.ctx.pendingFinalizations,
+        ...this.ctx.pendingCommandChanges,
+        ...this.ctx.pendingSessionWrites,
+        ...[...this.ctx.threadState.values()]
           .filter((state) => state.orderedEventDraining)
           .map((state) => state.orderedEventTail),
       ];
@@ -213,38 +226,38 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
   }
 
   getRegistry(): ThreadRegistry {
-    return this.registry;
+    return this.ctx.registry;
   }
 
   getJournal(): DispatchJournal {
-    return this.journal;
+    return this.ctx.journal;
   }
 
   /**
    * Reconstructs live work from the durable dispatch journal before any route can
    * report a restored session idle.
    */
-  protected async recoverUnresolvedDispatches(): Promise<void> {
+  async recoverUnresolvedDispatches(): Promise<void> {
     const byThread = new Map<string, ReturnType<DispatchJournal["unresolved"]>[number]>();
-    for (const record of this.journal.unresolved()) {
+    for (const record of this.ctx.journal.unresolved()) {
       if (!record.threadId) {
         // The old bridge process and its child are gone. With no thread address
         // there is nothing that can still be executing, but the id must remain
         // spent because a prepared write may already have caused side effects.
-        await this.journal.markTerminal(record.requestId, "failed");
+        await this.ctx.journal.markTerminal(record.requestId, "failed");
         continue;
       }
       const current = byThread.get(record.threadId);
       if (!current || compareDispatchRecordsNewestFirst(record, current) < 0) {
         if (current) {
-          await this.journal.markTerminal(current.requestId, "failed", {
+          await this.ctx.journal.markTerminal(current.requestId, "failed", {
             threadId: current.threadId ?? undefined,
             turnId: current.turnId,
           });
         }
         byThread.set(record.threadId, record);
       } else {
-        await this.journal.markTerminal(record.requestId, "failed", {
+        await this.ctx.journal.markTerminal(record.requestId, "failed", {
           threadId: record.threadId,
           turnId: record.turnId,
         });
@@ -255,16 +268,16 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       const threadId = record.threadId;
       if (!threadId) continue;
       const session =
-        this.registry.getSession(record.bridgeSessionId) ??
-        this.registry.listSessions().find((candidate) => candidate.threadId === threadId);
+        this.ctx.registry.getSession(record.bridgeSessionId) ??
+        this.ctx.registry.listSessions().find((candidate) => candidate.threadId === threadId);
       if (!session) {
-        this.threadsAwaitingDispatchRecovery.delete(threadId);
+        this.ctx.threadsAwaitingDispatchRecovery.delete(threadId);
         // No bridge session is bound to this thread any more, so nothing will
         // ever rehydrate the record and it would stay unresolved — and therefore
         // exempt from retention and the cap — forever. Settling it `failed` keeps
         // the id spent (`already-done`), which is the direction that can never
         // duplicate an execution.
-        await this.journal.markTerminal(record.requestId, "failed", {
+        await this.ctx.journal.markTerminal(record.requestId, "failed", {
           threadId,
           turnId: record.turnId,
         });
@@ -279,28 +292,28 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
        * loop then overwrites with the unconfirmed placeholder for the *old*
        * record, orphaning it.
        */
-      await this.registry
+      await this.ctx.registry
         .withDispatchLock(session, async () => {
           let context: ThreadContext | undefined;
           try {
-            context = await this.ensureAttached(session.id);
+            context = await this.ctx.callbacks.ensureAttached(session.id);
           } catch (error) {
             // Keep the record unresolved and the session non-idle. A later request or
             // process restart can retry without risking a duplicate execution.
             const existing =
-              this.registry.getThread(threadId) ??
-              this.registry.attach(session.id, threadId, {
+              this.ctx.registry.getThread(threadId) ??
+              this.ctx.registry.attach(session.id, threadId, {
                 engineHandle: threadId,
-                engineGeneration: this.options.engine.info().generation,
+                engineGeneration: this.ctx.options.engine.info().generation,
               });
             existing.materialized = true;
             existing.unsubscribed = true;
-            this.registry.setPhase(existing, "recovering");
+            this.ctx.registry.setPhase(existing, "recovering");
             this.emitStatus(existing);
             // Arm the escalation path. Without it this thread stays `recovering`
             // — reported as `running` — with nothing scheduled to resolve it, and
             // every later prompt 409s until an unrelated generation change.
-            this.scheduleRecoveryBackstop(existing);
+            this.ctx.callbacks.scheduleRecoveryBackstop(existing);
             console.warn(
               `[codex-bridge] Could not restore dispatch ${record.requestId}:`,
               error instanceof Error ? error.message : error,
@@ -309,7 +322,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
           }
 
           if (!context) {
-            await this.journal.markTerminal(record.requestId, "failed", {
+            await this.ctx.journal.markTerminal(record.requestId, "failed", {
               threadId,
               turnId: record.turnId,
             });
@@ -325,17 +338,17 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
                   role: "assistant" as const,
                   content: "",
                   parts: [],
-                  createdAt: new Date(this.now()).toISOString(),
+                  createdAt: new Date(this.ctx.now()).toISOString(),
                 };
           if (lastMessage !== assistantMessage) {
             context.messages.push(assistantMessage);
-            this.bumpMessageRevision(context);
+            this.ctx.callbacks.bumpMessageRevision(context);
             // Announce the row before anything streams into it. Its updates are
             // sparse patches keyed by message id, and a patch for a message the
             // client has never seen can only be answered by refetching the whole
             // transcript.
             for (const sessionId of context.bridgeSessionIds) {
-              this.options.emit({
+              this.ctx.options.emit({
                 type: "message.updated",
                 sessionId,
                 data: { message: assistantMessage },
@@ -343,17 +356,22 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
             }
           }
 
-          this.registry.setPhase(context, "recovering");
+          this.ctx.registry.setPhase(context, "recovering");
           this.emitStatus(context);
-          await this.settleAmbiguousDispatch(context, record.requestId, assistantMessage.id, {
-            forgetIfAbsent: record.state === "prepared",
-          });
+          await this.ctx.callbacks.settleAmbiguousDispatch(
+            context,
+            record.requestId,
+            assistantMessage.id,
+            {
+              forgetIfAbsent: record.state === "prepared",
+            },
+          );
           this.emitStatus(context);
         })
         .finally(() => {
           // The thread now has a real phase, so the startup override must stop
           // applying whether the settle succeeded or threw.
-          this.threadsAwaitingDispatchRecovery.delete(threadId);
+          this.ctx.threadsAwaitingDispatchRecovery.delete(threadId);
         });
     }
   }
@@ -369,22 +387,22 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
    * subscription it has ever touched.
    */
   async sweepIdle(): Promise<{ detached: number; forgotten: number }> {
-    const idleMs = this.options.threadIdleMs ?? DEFAULT_THREAD_IDLE_MS;
+    const idleMs = this.ctx.options.threadIdleMs ?? DEFAULT_THREAD_IDLE_MS;
     let detached = 0;
 
     if (idleMs > 0) {
-      for (const context of this.registry.detachableThreads(idleMs)) {
+      for (const context of this.ctx.registry.detachableThreads(idleMs)) {
         await this.detachThread(context);
         detached += 1;
       }
     }
 
-    const retentionMs = this.options.sessionRetentionMs ?? DEFAULT_SESSION_RETENTION_MS;
+    const retentionMs = this.ctx.options.sessionRetentionMs ?? DEFAULT_SESSION_RETENTION_MS;
     let forgotten = 0;
-    for (const session of this.registry.expiredSessions(retentionMs)) {
-      this.registry.releaseSession(session.id);
-      this.lastPersistedAccess.delete(session.id);
-      await this.store.remove(session.id).catch(() => undefined);
+    for (const session of this.ctx.registry.expiredSessions(retentionMs)) {
+      this.ctx.registry.releaseSession(session.id);
+      this.ctx.lastPersistedAccess.delete(session.id);
+      await this.ctx.store.remove(session.id).catch(() => undefined);
       forgotten += 1;
     }
 
@@ -400,23 +418,23 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
    * "no rollout found" — so its id is cleared instead, and the next prompt starts a
    * fresh thread. Verified against codex 0.147.0.
    */
-  protected async detachThread(context: ThreadContext): Promise<void> {
+  async detachThread(context: ThreadContext): Promise<void> {
     const sessionIds = [...context.bridgeSessionIds];
     this.releaseThreadRuntimeState(context.threadId);
 
-    this.registry.detachThread(context.threadId);
+    this.ctx.registry.detachThread(context.threadId);
     if (!context.materialized) {
-      this.registry.clearThreadBinding(context.threadId);
+      this.ctx.registry.clearThreadBinding(context.threadId);
       await Promise.all(
         sessionIds.map(async (sessionId) => {
-          this.lastPersistedAccess.delete(sessionId);
-          await this.store.remove(sessionId).catch(() => undefined);
+          this.ctx.lastPersistedAccess.delete(sessionId);
+          await this.ctx.store.remove(sessionId).catch(() => undefined);
         }),
       );
     }
 
-    this.detachedThreads += 1;
-    await this.options.engine.unsubscribeThread(context.engineHandle).catch(() => undefined);
+    this.ctx.detachedThreads += 1;
+    await this.ctx.options.engine.unsubscribeThread(context.engineHandle).catch(() => undefined);
   }
 
   /**
@@ -427,17 +445,17 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
    * allocation — and the coalescer owns a live timer, so forgetting a thread
    * without this leaks both for a conversation that can never come back.
    */
-  protected releaseThreadRuntimeState(threadId: string): void {
-    const timer = this.recoveryBackstops.get(threadId);
+  releaseThreadRuntimeState(threadId: string): void {
+    const timer = this.ctx.recoveryBackstops.get(threadId);
     if (timer) {
       clearTimeout(timer);
-      this.recoveryBackstops.delete(threadId);
+      this.ctx.recoveryBackstops.delete(threadId);
     }
-    this.clearCompactionBackstop(threadId);
+    this.ctx.callbacks.clearCompactionBackstop(threadId);
     // Every thread the bridge has ever touched used to leave a permanent entry
     // here, which the rate-limit fan-out then walked on every tick.
-    this.usageByThread.delete(threadId);
-    const state = this.threadState.get(threadId);
+    this.ctx.usageByThread.delete(threadId);
+    const state = this.ctx.threadState.get(threadId);
     if (!state) return;
     state.coalescer.stop();
     state.orderedEvents.length = 0;
@@ -447,7 +465,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     state.historicalAssistantSegments.clear();
     state.releasedAssistantRows.clear();
     state.pendingEvents.clear();
-    this.threadState.delete(threadId);
+    this.ctx.threadState.delete(threadId);
   }
 
   /**
@@ -459,12 +477,12 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
    * makes "reopen a tab tomorrow" work without the caller knowing anything about
    * detaching.
    */
-  protected async ensureAttached(sessionId: string): Promise<ThreadContext | undefined> {
-    const session = this.registry.getSession(sessionId);
-    if (!session || this.closingSessionIds.has(sessionId)) return undefined;
+  async ensureAttached(sessionId: string): Promise<ThreadContext | undefined> {
+    const session = this.ctx.registry.getSession(sessionId);
+    if (!session || this.ctx.closingSessionIds.has(sessionId)) return undefined;
 
-    const existing = this.registry.getThreadForSession(sessionId);
-    const generation = this.options.engine.info().generation;
+    const existing = this.ctx.registry.getThreadForSession(sessionId);
+    const generation = this.ctx.options.engine.info().generation;
     if (existing && !existing.unsubscribed && existing.engineGeneration === generation) {
       // `getThreadForSession` resolves by thread id alone, with no membership
       // check. A session restored from disk onto a thread another session had
@@ -472,7 +490,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       // every emit path iterates that set, so the tab would receive no status,
       // no messages and no approval cards, not even for its own prompts.
       const modelsBeforeAttach = this.snapshotBoundModelOverrides(existing.threadId);
-      const attached = this.registry.attach(sessionId, existing.threadId, {
+      const attached = this.ctx.registry.attach(sessionId, existing.threadId, {
         engineHandle: existing.engineHandle,
         engineGeneration: existing.engineGeneration,
         cwd: existing.cwd,
@@ -480,10 +498,10 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       });
       this.publishPersistedModelOverrides(attached);
       await this.synchronizeAttachedModelOverrides(attached, modelsBeforeAttach);
-      const pendingHydrate = this.transcriptHydrateInFlight.get(attached.threadId);
+      const pendingHydrate = this.ctx.transcriptHydrateInFlight.get(attached.threadId);
       if (pendingHydrate) await pendingHydrate;
-      return this.registry.getSession(sessionId) === session &&
-        !this.closingSessionIds.has(sessionId)
+      return this.ctx.registry.getSession(sessionId) === session &&
+        !this.ctx.closingSessionIds.has(sessionId)
         ? attached
         : undefined;
     }
@@ -493,17 +511,19 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     const threadId = session.threadId;
     try {
       const modelsBeforeAttach = this.snapshotBoundModelOverrides(threadId);
-      const thread = await this.options.engine.resumeThread(threadId, { config: session.config });
+      const thread = await this.ctx.options.engine.resumeThread(threadId, {
+        config: session.config,
+      });
       if (
-        this.registry.getSession(sessionId) !== session ||
-        this.closingSessionIds.has(sessionId)
+        this.ctx.registry.getSession(sessionId) !== session ||
+        this.ctx.closingSessionIds.has(sessionId)
       ) {
-        await this.options.engine.unsubscribeThread(thread.handle).catch(() => undefined);
+        await this.ctx.options.engine.unsubscribeThread(thread.handle).catch(() => undefined);
         return undefined;
       }
       // Always through `attach`: it is idempotent for an existing context, and it
       // is the only thing that registers this session in `bridgeSessionIds`.
-      const context = this.registry.attach(sessionId, threadId, {
+      const context = this.ctx.registry.attach(sessionId, threadId, {
         engineHandle: thread.handle,
         engineGeneration: generation,
         cwd: thread.cwd,
@@ -516,9 +536,9 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       context.materialized = true;
       await this.hydrateAttachedTranscript(context, session, thread);
       await this.synchronizeAttachedModelOverrides(context, modelsBeforeAttach);
-      this.reattachedThreads += 1;
-      return this.registry.getSession(sessionId) === session &&
-        !this.closingSessionIds.has(sessionId)
+      this.ctx.reattachedThreads += 1;
+      return this.ctx.registry.getSession(sessionId) === session &&
+        !this.ctx.closingSessionIds.has(sessionId)
         ? context
         : undefined;
     } catch (error) {
@@ -526,7 +546,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       // timeout, restart, or temporary RPC failure is ambiguous and must leave
       // the original thread id available for the next retry.
       if (isMissingRolloutError(error)) {
-        const staleSessionIds = this.registry
+        const staleSessionIds = this.ctx.registry
           .listSessions()
           .filter((entry) => entry.threadId === threadId)
           .map((entry) => entry.id);
@@ -534,14 +554,16 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
           // Same teardown as a normal detach: the render state and coalescer must
           // go with the thread, and this one is never coming back.
           this.releaseThreadRuntimeState(threadId);
-          this.registry.detachThread(threadId);
-          await this.options.engine.unsubscribeThread(existing.engineHandle).catch(() => undefined);
+          this.ctx.registry.detachThread(threadId);
+          await this.ctx.options.engine
+            .unsubscribeThread(existing.engineHandle)
+            .catch(() => undefined);
         }
-        this.registry.clearThreadBinding(threadId);
+        this.ctx.registry.clearThreadBinding(threadId);
         await Promise.all(
           staleSessionIds.map(async (id) => {
-            this.lastPersistedAccess.delete(id);
-            await this.store.remove(id).catch(() => undefined);
+            this.ctx.lastPersistedAccess.delete(id);
+            await this.ctx.store.remove(id).catch(() => undefined);
           }),
         );
       }
@@ -563,21 +585,21 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
    * Shared so a concurrent `ensureAttached` can wait for the first hydrate
    * instead of treating the empty post-attach context as the exact transcript.
    */
-  protected async hydrateAttachedTranscript(
+  async hydrateAttachedTranscript(
     context: ThreadContext,
     session: BridgeSession,
     thread: { cwd?: string; name?: string | null },
   ): Promise<void> {
     if (context.transcriptHydrated) return;
-    const existing = this.transcriptHydrateInFlight.get(context.threadId);
+    const existing = this.ctx.transcriptHydrateInFlight.get(context.threadId);
     if (existing) {
       await existing;
       return;
     }
     const pending = this.readAttachedTranscriptBody(context, session, thread).finally(() => {
-      this.transcriptHydrateInFlight.delete(context.threadId);
+      this.ctx.transcriptHydrateInFlight.delete(context.threadId);
     });
-    this.transcriptHydrateInFlight.set(context.threadId, pending);
+    this.ctx.transcriptHydrateInFlight.set(context.threadId, pending);
     await pending;
   }
 
@@ -588,7 +610,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
   ): Promise<void> {
     if (context.messages.length === 0) {
       const hydrated = await hydrateMessagesFromPersistedSession(context.threadId, {
-        structuredOutputTurns: this.structuredOutputTurnsForThread(context.threadId),
+        structuredOutputTurns: this.ctx.structuredOutputTurnsForThread(context.threadId),
       });
       // A rollout that could not be read at all is not an empty conversation:
       // leave the transcript unhydrated so readers keep reporting a cached,
@@ -598,11 +620,11 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       context.messages = hydrated.messages;
       // Rows noted against the retained tail name nothing in the new history.
       for (const sessionId of context.bridgeSessionIds) {
-        this.registry.getSession(sessionId)?.revisedRows?.clear();
+        this.ctx.registry.getSession(sessionId)?.revisedRows?.clear();
       }
-      this.registry.indexHydratedAsyncQuestions(context);
+      this.ctx.registry.indexHydratedAsyncQuestions(context);
       this.applyPersistedModelOverrides(context);
-      if (hydrated.messages.length > 0) this.bumpMessageRevision(context);
+      if (hydrated.messages.length > 0) this.ctx.callbacks.bumpMessageRevision(context);
       if (!session.title) {
         session.title = thread.name ?? hydrated.title;
         session.titleSource = thread.name ? "codex" : hydrated.titleSource;
@@ -625,17 +647,17 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     let baselineEntries = 0;
     let baselineBytes = 0;
     let cacheEntries = 0;
-    for (const state of this.threadState.values()) {
+    for (const state of this.ctx.threadState.values()) {
       const stats = describeDiffBudget(state.render.fileChange);
       baselineEntries += stats.baselineEntries;
       baselineBytes += stats.baselineBytes;
       cacheEntries += stats.cacheEntries;
     }
     return {
-      threads: this.registry.listThreads().length,
-      sessions: this.registry.listSessions().length,
-      detachedThreads: this.detachedThreads,
-      reattachedThreads: this.reattachedThreads,
+      threads: this.ctx.registry.listThreads().length,
+      sessions: this.ctx.registry.listSessions().length,
+      detachedThreads: this.ctx.detachedThreads,
+      reattachedThreads: this.ctx.reattachedThreads,
       transcriptCache: getTranscriptCacheStats(),
       diffBudget: { baselineEntries, baselineBytes, cacheEntries },
     };
@@ -643,8 +665,8 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
 
   // ------------------------------------------------------------------ events
 
-  protected stateFor(threadId: string): ThreadRuntimeState {
-    let state = this.threadState.get(threadId);
+  stateFor(threadId: string): ThreadRuntimeState {
+    let state = this.ctx.threadState.get(threadId);
     if (!state) {
       state = {
         render: createTurnRenderState(),
@@ -661,17 +683,17 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         lastPublishedSnapshotChars: 0,
         coalescer: new UpdateCoalescer({
           intervalMs:
-            this.options.coalesceIntervalMs ??
+            this.ctx.options.coalesceIntervalMs ??
             (() =>
               messageSnapshotIntervalMs(
-                this.threadState.get(threadId)?.lastPublishedSnapshotChars ?? 0,
+                this.ctx.threadState.get(threadId)?.lastPublishedSnapshotChars ?? 0,
               )),
-          publish: () => this.publishAssistantMessage(threadId),
+          publish: () => this.ctx.callbacks.publishAssistantMessage(threadId),
           onError: (error) =>
             console.error("[codex-bridge] Failed to publish message update:", error),
         }),
       };
-      this.threadState.set(threadId, state);
+      this.ctx.threadState.set(threadId, state);
     }
     return state;
   }
@@ -684,7 +706,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
    * message against the previous one's parts, so this is the only supported way
    * to swap the streaming row.
    */
-  protected beginAssistantTurnRender(
+  beginAssistantTurnRender(
     state: ThreadRuntimeState,
     assistantMessage: { id: string; modelId?: string },
   ): void {
@@ -698,12 +720,12 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     state.publishedModelId = assistantMessage.modelId;
   }
 
-  protected onEngineEvent(event: EngineEvent): void {
+  onEngineEvent(event: EngineEvent): void {
     if (event.kind === "engine.state") {
       // A restart invalidates every loaded thread. Mark them recovering — never
       // idle, which would let the build pipeline advance on a lost turn.
       if (event.state === "restarting" || event.state === "failed") {
-        for (const context of this.registry.markAllRecovering()) {
+        for (const context of this.ctx.registry.markAllRecovering()) {
           this.emitStatus(context);
         }
       }
@@ -711,26 +733,26 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     }
     if (event.kind === "skills.changed") {
       // Constant-time mark; the catalogue coalesces the re-read off this path.
-      this.commandCatalogue.markSkillsChanged();
+      this.ctx.commandCatalogue.markSkillsChanged();
       return;
     }
     if (event.kind === "engine.generation") {
       // Skill bindings came from the dead child; never execute one of its paths
       // until the replacement has listed it again.
-      this.commandCatalogue.withdrawGeneration(event.generation);
+      this.ctx.commandCatalogue.withdrawGeneration(event.generation);
       // `recovering` must be transient. Left unresolved, the overlapping-turn
       // guard rejects every later prompt with a 409 and the session is bricked.
-      const recovery = this.generationRecovery.then(() =>
-        this.recoverAfterGenerationChange(event.generation),
+      const recovery = this.ctx.generationRecovery.then(() =>
+        this.ctx.callbacks.recoverAfterGenerationChange(event.generation),
       );
-      this.generationRecovery = recovery.catch((error) => {
+      this.ctx.generationRecovery = recovery.catch((error) => {
         console.error("[codex-bridge] Generation recovery failed:", error);
       });
       return;
     }
     if (event.kind === "unknown.protocol") return;
     if (event.kind === "account.reload.requested") {
-      void this.reloadStoredAccountLogin().catch((error: unknown) => {
+      void this.ctx.callbacks.reloadStoredAccountLogin().catch((error: unknown) => {
         console.warn(
           "[codex-bridge] Reloading the stored account login failed:",
           error instanceof Error ? error.message : error,
@@ -747,29 +769,32 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
        * an update carrying only `secondary` erased the primary window, and one
        * omitting `credits` erased the balance.
        */
-      this.accountRateLimits = mergeRateLimitWindows(this.accountRateLimits, event.rateLimits);
+      this.ctx.accountRateLimits = mergeRateLimitWindows(
+        this.ctx.accountRateLimits,
+        event.rateLimits,
+      );
       if (event.credits) {
-        this.accountCredits = { ...this.accountCredits, ...event.credits };
+        this.ctx.accountCredits = { ...this.ctx.accountCredits, ...event.credits };
       }
-      for (const [threadId, usage] of this.usageByThread) {
-        const sessionIds = this.sessionIdsForThread(threadId);
+      for (const [threadId, usage] of this.ctx.usageByThread) {
+        const sessionIds = this.ctx.sessionIdsForThread(threadId);
         // A thread nobody can address any more still has an entry here only until
         // its next release. Skip it rather than re-rendering a snapshot with no
         // reader on every rate-limit tick.
         if (sessionIds.length === 0) continue;
         const merged = {
           ...usage,
-          rateLimits: this.accountRateLimits,
-          ...(this.accountCredits ? { credits: this.accountCredits } : {}),
+          rateLimits: this.ctx.accountRateLimits,
+          ...(this.ctx.accountCredits ? { credits: this.ctx.accountCredits } : {}),
           account: mergeAccountUsage(
             usage.account,
-            accountUsageFromLimits(this.accountRateLimits, this.accountCredits),
+            accountUsageFromLimits(this.ctx.accountRateLimits, this.ctx.accountCredits),
           ),
-          updatedAt: new Date(this.now()).toISOString(),
+          updatedAt: new Date(this.ctx.now()).toISOString(),
         };
-        this.usageByThread.set(threadId, merged);
+        this.ctx.usageByThread.set(threadId, merged);
         for (const sessionId of sessionIds) {
-          this.options.emit({
+          this.ctx.options.emit({
             type: "session.updated",
             sessionId,
             data: { contextUsage: merged },
@@ -781,7 +806,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
 
     const threadId = "threadId" in event ? event.threadId : null;
     if (!threadId) return;
-    const context = this.registry.getThread(threadId);
+    const context = this.ctx.registry.getThread(threadId);
     if (!context) return;
 
     // Stale generation: the process that produced this has been replaced.
@@ -805,7 +830,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     // one, so routing it through the parking logic below would drop it and leave
     // the thread busy forever.
     if (event.kind === "thread.compacted") {
-      this.finishCompaction(context);
+      this.ctx.callbacks.finishCompaction(context);
       return;
     }
 
@@ -842,7 +867,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     this.applyEvent(context, event);
   }
 
-  protected bufferEvent(threadId: string, turnId: string, event: EngineEvent): void {
+  bufferEvent(threadId: string, turnId: string, event: EngineEvent): void {
     const state = this.stateFor(threadId);
     let queue = state.pendingEvents.get(turnId);
     if (!queue) {
@@ -858,7 +883,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
   }
 
   /** Replays events parked before the turn was registered, in arrival order. */
-  protected drainPendingEvents(context: ThreadContext, turnId: string): void {
+  drainPendingEvents(context: ThreadContext, turnId: string): void {
     const state = this.stateFor(context.threadId);
     const queue = state.pendingEvents.get(turnId);
     state.pendingEvents.clear();
@@ -866,7 +891,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     for (const event of queue) this.applyEvent(context, event);
   }
 
-  protected applyEvent(context: ThreadContext, event: EngineEvent): void {
+  applyEvent(context: ThreadContext, event: EngineEvent): void {
     const threadId = context.threadId;
 
     switch (event.kind) {
@@ -882,12 +907,12 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       case "turn.configuration.updated": {
         const turn = context.activeTurn;
         if (!turn || !turn.accepts(event)) return;
-        for (const session of this.registry.boundSessionsForThread(threadId)) {
+        for (const session of this.ctx.registry.boundSessionsForThread(threadId)) {
           // A user edit made after dispatch wins over an in-turn provider update.
           if (session.configurationRevision !== turn.configurationRevision) continue;
           session.config = { ...session.config, reasoningEffort: event.reasoningEffort };
-          void this.persistSession(session);
-          this.options.emit({
+          void this.ctx.callbacks.persistSession(session);
+          this.ctx.options.emit({
             type: "session.updated",
             sessionId: session.id,
             data: { modelReasoningEffort: event.reasoningEffort },
@@ -896,20 +921,22 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         return;
       }
       case "thread.usage.updated": {
-        const previous = this.usageByThread.get(threadId);
+        const previous = this.ctx.usageByThread.get(threadId);
         const usage = {
           ...event.usage,
           turns: mergeTurnUsage(previous?.turns, event.usage.turns),
-          ...(this.accountRateLimits.length > 0 ? { rateLimits: this.accountRateLimits } : {}),
-          ...(this.accountCredits ? { credits: this.accountCredits } : {}),
+          ...(this.ctx.accountRateLimits.length > 0
+            ? { rateLimits: this.ctx.accountRateLimits }
+            : {}),
+          ...(this.ctx.accountCredits ? { credits: this.ctx.accountCredits } : {}),
           account: mergeAccountUsage(
             previous?.account,
-            accountUsageFromLimits(this.accountRateLimits, this.accountCredits),
+            accountUsageFromLimits(this.ctx.accountRateLimits, this.ctx.accountCredits),
           ),
         };
-        this.usageByThread.set(threadId, usage);
+        this.ctx.usageByThread.set(threadId, usage);
         for (const sessionId of context.bridgeSessionIds) {
-          this.options.emit({
+          this.ctx.options.emit({
             type: "session.updated",
             sessionId,
             data: { contextUsage: usage },
@@ -942,7 +969,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         } else turn.onItemUpdated(event.item);
         // `item/completed` is authoritative; show it without waiting a tick.
         if (event.kind === "item.completed") void this.stateFor(threadId).coalescer.flushNow();
-        else this.stateFor(threadId).coalescer.schedule(this.now());
+        else this.stateFor(threadId).coalescer.schedule(this.ctx.now());
         return;
       }
       case "item.dynamic.started": {
@@ -959,7 +986,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         if (!turn || !turn.accepts(event)) return;
         this.openModelResponseRow(context, turn, event);
         turn.onTextDelta(event.itemId, event.delta);
-        this.stateFor(threadId).coalescer.schedule(this.now());
+        this.stateFor(threadId).coalescer.schedule(this.ctx.now());
         return;
       }
       case "item.reasoning.delta": {
@@ -967,28 +994,28 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         if (!turn || !turn.accepts(event)) return;
         this.openModelResponseRow(context, turn, event);
         turn.onReasoningDelta(event.itemId, event.delta, event.channel, event.index);
-        this.stateFor(threadId).coalescer.schedule(this.now());
+        this.stateFor(threadId).coalescer.schedule(this.ctx.now());
         return;
       }
       case "serverRequest.resolved": {
         // Withdraw only; never answer. app-server has the answer already, and
         // sending a second response would be answering a question it stopped
         // asking. Routed through the router because it owns the parked cards.
-        this.options.engine.withdrawResolvedServerRequest(event.requestId);
+        this.ctx.options.engine.withdrawResolvedServerRequest(event.requestId);
         return;
       }
       case "item.progress": {
         const turn = context.activeTurn;
         if (!turn || !turn.accepts(event)) return;
         turn.onItemProgress(event.itemId, event.message);
-        this.stateFor(threadId).coalescer.schedule(this.now());
+        this.stateFor(threadId).coalescer.schedule(this.ctx.now());
         return;
       }
       case "item.command.outputDelta": {
         const turn = context.activeTurn;
         if (!turn || !turn.accepts(event)) return;
         turn.onCommandOutputDelta(event.itemId, event.delta);
-        this.stateFor(threadId).coalescer.schedule(this.now());
+        this.stateFor(threadId).coalescer.schedule(this.ctx.now());
         return;
       }
       case "item.dynamic.output": {
@@ -1013,7 +1040,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
           threadId,
           () => {
             for (const sessionId of context.bridgeSessionIds) {
-              this.options.emit({
+              this.ctx.options.emit({
                 type: "session.warning",
                 sessionId,
                 data: {
@@ -1047,14 +1074,10 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
   }
 
   /** Gives the next model response a row of its own (see `openModelResponseRow`). */
-  protected openModelResponseRow(
-    context: ThreadContext,
-    turn: TurnAccumulator,
-    event: EngineEvent,
-  ): void {
+  openModelResponseRow(context: ThreadContext, turn: TurnAccumulator, event: EngineEvent): void {
     const state = this.stateFor(context.threadId);
-    if (openModelResponseRow(context, state, turn, event, this.now())) {
-      this.bumpMessageRevision(context);
+    if (openModelResponseRow(context, state, turn, event, this.ctx.now())) {
+      this.ctx.callbacks.bumpMessageRevision(context);
     }
   }
 
@@ -1067,10 +1090,10 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
    * the user, or another tool) from being charged to the turn's first command.
    * Dispatch waits for this baseline so a fast first command cannot race it.
    */
-  protected async primeCommandChanges(context: ThreadContext): Promise<void> {
-    const probe = this.options.commandChangeProbe;
+  async primeCommandChanges(context: ThreadContext): Promise<void> {
+    const probe = this.ctx.options.commandChangeProbe;
     if (!probe) return;
-    await probe.prime(context.cwd ?? this.options.cwd).catch(() => undefined);
+    await probe.prime(context.cwd ?? this.ctx.options.cwd).catch(() => undefined);
   }
 
   /**
@@ -1081,12 +1104,12 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
    * "after" snapshot and everything that follows run detached and are tracked
    * in `pendingCommandChanges`, never awaited here.
    */
-  protected trackCommandChangeWindow(
+  trackCommandChangeWindow(
     context: ThreadContext,
     phase: "started" | "completed",
     item: EngineItem,
   ): void {
-    const probe = this.options.commandChangeProbe;
+    const probe = this.ctx.options.commandChangeProbe;
     if (!probe) return;
     const role = commandChangeRole(item);
     if (!role) return;
@@ -1095,7 +1118,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       // A duplicate `item/started` after the call settled would open a window
       // nothing is left to close.
       if (context.activeTurn?.items.get(item.id)?.completed) return;
-      const cwd = commandChangeCwd(item, context.cwd ?? this.options.cwd);
+      const cwd = commandChangeCwd(item, context.cwd ?? this.ctx.options.cwd);
       const opening =
         role === "measure"
           ? probe.begin(cwd, item.id, { baseline: true })
@@ -1121,8 +1144,8 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
    * a server or watcher unified exec left behind. Its window would span
    * everything after it, so it is dropped rather than measured.
    */
-  protected discardOutlivingCommandWindows(turn: TurnAccumulator): void {
-    const probe = this.options.commandChangeProbe;
+  discardOutlivingCommandWindows(turn: TurnAccumulator): void {
+    const probe = this.ctx.options.commandChangeProbe;
     if (!probe) return;
     for (const accumulator of turn.items.values()) {
       if (!accumulator.completed && accumulator.item?.type === "command_execution") {
@@ -1131,15 +1154,15 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     }
   }
 
-  protected trackCommandChangeWork(work: Promise<void>): void {
+  trackCommandChangeWork(work: Promise<void>): void {
     const tracked = work.catch((error) => {
       console.error(
         "[codex-bridge] Failed to record a command's line changes:",
         error instanceof Error ? error.message : error,
       );
     });
-    this.pendingCommandChanges.add(tracked);
-    void tracked.finally(() => this.pendingCommandChanges.delete(tracked));
+    this.ctx.pendingCommandChanges.add(tracked);
+    void tracked.finally(() => this.ctx.pendingCommandChanges.delete(tracked));
   }
 
   /**
@@ -1157,31 +1180,27 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
    * onto the accumulator for a render still to come, and the stored row is
    * only patched once finalization is over — a no-op if that render took it.
    */
-  protected applyCommandChanges(
-    threadId: string,
-    itemId: string,
-    change: MeasuredWorkspaceChange,
-  ): void {
+  applyCommandChanges(threadId: string, itemId: string, change: MeasuredWorkspaceChange): void {
     if (!hasMeasuredChanges(change)) return;
     this.trackCommandChangeWork(
-      recordCommandChanges(this.options.codexHome, threadId, itemId, change),
+      recordCommandChanges(this.ctx.options.codexHome, threadId, itemId, change),
     );
     // A detached thread has no live transcript; its next hydrate reads the
     // journal written above.
-    const context = this.registry.getThread(threadId);
+    const context = this.ctx.registry.getThread(threadId);
     if (!context) return;
     const turn = context.activeTurn;
     const accumulated = turn?.onCommandChanges(itemId, change) ?? false;
     if (accumulated && !turn!.isTerminal()) {
       // The next publish renders the row holding the command, tracking it
       // again if it was past the bound (`app-server-runtime-rows.ts`).
-      this.stateFor(threadId).coalescer.schedule(this.now());
+      this.stateFor(threadId).coalescer.schedule(this.ctx.now());
       return;
     }
     if (accumulated) {
       this.trackCommandChangeWork(
-        Promise.allSettled(this.pendingFinalizations).then(() => {
-          const current = this.registry.getThread(threadId);
+        Promise.allSettled(this.ctx.pendingFinalizations).then(() => {
+          const current = this.ctx.registry.getThread(threadId);
           if (current) this.patchSettledCommandChanges(current, itemId, change);
         }),
       );
@@ -1190,7 +1209,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     this.patchSettledCommandChanges(context, itemId, change);
   }
 
-  protected patchSettledCommandChanges(
+  patchSettledCommandChanges(
     context: ThreadContext,
     itemId: string,
     change: MeasuredWorkspaceChange,
@@ -1217,13 +1236,13 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     // the rollout) cannot take a sparse patch; it is replaced whole instead.
     const patchable = Number.isInteger(message.revision);
     message.revision = (message.revision ?? 0) + 1;
-    const state = this.threadState.get(context.threadId);
+    const state = this.ctx.threadState.get(context.threadId);
     if (state?.publishedMessageId === message.id) state.publishedParts = message.parts.slice();
     const historical = state?.historicalAssistantSegments.get(message.id);
     if (historical) historical.publishedParts = message.parts.slice();
     // Noted now, with the bump: the send below waits for the coalesced flush
     // and can be dropped by an ordered-event overflow.
-    this.bumpMessageRevision(context, [message]);
+    this.ctx.callbacks.bumpMessageRevision(context, [message]);
 
     const target = message;
     const patch = {
@@ -1239,7 +1258,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       context.threadId,
       () => {
         for (const sessionId of context.bridgeSessionIds) {
-          this.options.emit(
+          this.ctx.options.emit(
             patchable
               ? { type: "message.patched", sessionId, data: patch }
               : { type: "message.updated", sessionId, data: { message: target } },
@@ -1258,16 +1277,16 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
    * Publish only app-server-observed model values. Thread settings confirm the
    * effective model for an accepted turn; a turn-scoped reroute wins over it.
    */
-  protected applyConfirmedModel(context: ThreadContext, model: string, turnId?: string): void {
+  applyConfirmedModel(context: ThreadContext, model: string, turnId?: string): void {
     if (!turnId) context.modelId = model;
     if (turnId) {
       context.confirmedModelsByTurn.set(turnId, model);
-      for (const session of this.registry.boundSessionsForThread(context.threadId)) {
+      for (const session of this.ctx.registry.boundSessionsForThread(context.threadId)) {
         session.confirmedModelsByTurn = {
           ...session.confirmedModelsByTurn,
           [turnId]: model,
         };
-        void this.persistSession(session);
+        void this.ctx.callbacks.persistSession(session);
       }
     }
     let targets: NormalizedMessage[] = [];
@@ -1308,7 +1327,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     }
     const changed = targets.filter((message) => message.modelId !== model);
     if (changed.length === 0) return;
-    const state = this.threadState.get(context.threadId);
+    const state = this.ctx.threadState.get(context.threadId);
     for (const message of changed) {
       message.modelId = model;
       message.revision = (message.revision ?? 0) + 1;
@@ -1323,10 +1342,10 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         historical.announced = true;
       }
     }
-    this.bumpMessageRevision(context, changed);
+    this.ctx.callbacks.bumpMessageRevision(context, changed);
     for (const message of changed) {
       for (const sessionId of context.bridgeSessionIds) {
-        this.options.emit({
+        this.ctx.options.emit({
           type: "message.updated",
           sessionId,
           data: { message },
@@ -1340,7 +1359,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
    * Reapply the bridge's sparse durable overlay after transcript hydration so
    * REST reads and a newly mounted tab agree with the live SSE view.
    */
-  protected applyPersistedModelOverrides(context: ThreadContext): NormalizedMessage[] {
+  applyPersistedModelOverrides(context: ThreadContext): NormalizedMessage[] {
     const changed: NormalizedMessage[] = [];
     for (const message of context.messages) {
       if (message.role !== "assistant" || !message.turnId) continue;
@@ -1358,13 +1377,13 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
    * overlay immediately and publish the same revision/SSE updates as a live
    * reroute so every mounted view catches up.
    */
-  protected publishPersistedModelOverrides(context: ThreadContext): void {
+  publishPersistedModelOverrides(context: ThreadContext): void {
     const changed = this.applyPersistedModelOverrides(context);
     if (changed.length === 0) return;
-    this.bumpMessageRevision(context, changed);
+    this.ctx.callbacks.bumpMessageRevision(context, changed);
     for (const message of changed) {
       for (const sessionId of context.bridgeSessionIds) {
-        this.options.emit({
+        this.ctx.options.emit({
           type: "message.updated",
           sessionId,
           data: { message },
@@ -1373,9 +1392,9 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     }
   }
 
-  protected snapshotBoundModelOverrides(threadId: string): Map<string, string> {
+  snapshotBoundModelOverrides(threadId: string): Map<string, string> {
     return new Map(
-      this.registry
+      this.ctx.registry
         .boundSessionsForThread(threadId)
         .map((session) => [session.id, JSON.stringify(session.confirmedModelsByTurn ?? {})]),
     );
@@ -1387,13 +1406,13 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
    * reroute has authority to update all bound records, while attach-time merging
    * must not let one tab's stale snapshot overwrite another inactive snapshot.
    */
-  protected async synchronizeAttachedModelOverrides(
+  async synchronizeAttachedModelOverrides(
     context: ThreadContext,
     before: Map<string, string>,
   ): Promise<void> {
     const canonical = Object.fromEntries(context.confirmedModelsByTurn);
     const changed: BridgeSession[] = [];
-    for (const session of this.registry.sessionsForThread(context.threadId)) {
+    for (const session of this.ctx.registry.sessionsForThread(context.threadId)) {
       session.confirmedModelsByTurn =
         context.confirmedModelsByTurn.size > 0 ? { ...canonical } : undefined;
       if (
@@ -1402,7 +1421,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         changed.push(session);
       }
     }
-    await Promise.all(changed.map((session) => this.persistSession(session)));
+    await Promise.all(changed.map((session) => this.ctx.callbacks.persistSession(session)));
   }
 
   /**
@@ -1418,9 +1437,9 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
    *   attach   → still executing; stay running and re-bind to the new generation
    *   absent   → provably never ran, so fail it and release the request id
    */
-  protected async recoverAfterGenerationChange(generation: EngineGeneration): Promise<void> {
-    for (const context of this.registry.listThreads()) {
-      const session = this.registry
+  async recoverAfterGenerationChange(generation: EngineGeneration): Promise<void> {
+    for (const context of this.ctx.registry.listThreads()) {
+      const session = this.ctx.registry
         .sessionsForThread(context.threadId)
         .find((entry) => entry !== undefined);
       if (!session) {
@@ -1428,7 +1447,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         // well as its registry entry. The engine handle belongs to the dead
         // generation, so there is nothing left to unsubscribe.
         this.releaseThreadRuntimeState(context.threadId);
-        this.registry.removeThread(context.threadId);
+        this.ctx.registry.removeThread(context.threadId);
         continue;
       }
 
@@ -1436,7 +1455,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       // never arrive. Release the hold here or the thread stays busy forever.
       if (context.compacting) {
         context.compacting = false;
-        this.clearCompactionBackstop(context.threadId);
+        this.ctx.callbacks.clearCompactionBackstop(context.threadId);
       }
 
       const phaseBeforeRebind = context.phase;
@@ -1450,12 +1469,12 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         if (!context.materialized) {
           const sessionIds = [...context.bridgeSessionIds];
           this.releaseThreadRuntimeState(context.threadId);
-          this.registry.detachThread(context.threadId);
-          this.registry.clearThreadBinding(context.threadId);
+          this.ctx.registry.detachThread(context.threadId);
+          this.ctx.registry.clearThreadBinding(context.threadId);
           await Promise.all(
             sessionIds.map(async (sessionId) => {
-              this.lastPersistedAccess.delete(sessionId);
-              await this.store.remove(sessionId).catch(() => undefined);
+              this.ctx.lastPersistedAccess.delete(sessionId);
+              await this.ctx.store.remove(sessionId).catch(() => undefined);
             }),
           );
           continue;
@@ -1463,7 +1482,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
 
         // app-server subscriptions are connection-local. Even an idle context
         // needs thread/resume after a controlled restart before its next turn.
-        const thread = await this.options.engine.resumeThread(context.threadId, {
+        const thread = await this.ctx.options.engine.resumeThread(context.threadId, {
           config: session.config,
         });
         context.engineHandle = thread.handle;
@@ -1474,7 +1493,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         context.engineGeneration = generation;
 
         if (!turn) {
-          this.registry.setPhase(
+          this.ctx.registry.setPhase(
             context,
             phaseBeforeRebind === "failed" ? "failed" : "idle",
             phaseBeforeRebind === "failed" ? errorBeforeRebind : undefined,
@@ -1489,7 +1508,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
           // Native review turns do not carry a client user-message id. Reconcile
           // them by the app-server turn id returned by review/start instead of
           // inventing an id that can never appear in the persisted rollout.
-          const reviewOutcome = await this.options.engine.reconcileTurnById(
+          const reviewOutcome = await this.ctx.options.engine.reconcileTurnById(
             context.threadId,
             turn.turnId,
           );
@@ -1499,12 +1518,12 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
             continue;
           }
           if (reviewOutcome.result === "running") {
-            this.registry.setPhase(context, "running");
+            this.ctx.registry.setPhase(context, "running");
             this.emitStatus(context);
             continue;
           }
           context.activeTurn = null;
-          this.registry.setPhase(
+          this.ctx.registry.setPhase(
             context,
             "failed",
             reviewOutcome.result === "absent"
@@ -1515,7 +1534,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
           continue;
         }
 
-        const outcome = await this.options.engine.reconcileRequest(
+        const outcome = await this.ctx.options.engine.reconcileRequest(
           context.threadId,
           turn.requestId,
         );
@@ -1527,23 +1546,23 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         }
         if (outcome.result === "attach") {
           if (outcome.turnId) turn.turnId = outcome.turnId;
-          this.registry.setPhase(context, "running");
+          this.ctx.registry.setPhase(context, "running");
           this.emitStatus(context);
           continue;
         }
 
         // Absent: the dispatch provably did not execute. Release the request id so
         // the client may retry it, and surface a failure rather than a silent stall.
-        await this.journal.forget(turn.requestId);
+        await this.ctx.journal.forget(turn.requestId);
         context.activeTurn = null;
-        this.registry.setPhase(
+        this.ctx.registry.setPhase(
           context,
           "failed",
           "Codex restarted before this turn started. Send the message again.",
         );
         this.emitStatus(context);
         for (const sessionId of context.bridgeSessionIds) {
-          this.options.emit({
+          this.ctx.options.emit({
             type: "session.error",
             sessionId,
             data: { error: "Codex restarted before this turn started. Send the message again." },
@@ -1562,10 +1581,10 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
           turn.complete("failed", { message, retryable: true });
           await this.runFinalization(context, turn);
         } else {
-          this.registry.setPhase(context, "failed", message);
+          this.ctx.registry.setPhase(context, "failed", message);
           this.emitStatus(context);
           for (const sessionId of context.bridgeSessionIds) {
-            this.options.emit({ type: "session.error", sessionId, data: { error: message } });
+            this.ctx.options.emit({ type: "session.error", sessionId, data: { error: message } });
           }
         }
       }
@@ -1581,7 +1600,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
    * session to idle with no error: the transcript simply ends mid-task and reads
    * as done. Surface it as a failure so the user knows to continue.
    */
-  protected completeRecoveredTurn(turn: TurnAccumulator, status: EngineTurnStatus): void {
+  completeRecoveredTurn(turn: TurnAccumulator, status: EngineTurnStatus): void {
     if (status === "interrupted" && !turn.cancelRequested) {
       turn.complete("failed", {
         message: CODEX_RESTARTED_MID_TURN_MESSAGE,
@@ -1592,14 +1611,14 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     turn.complete(status);
   }
 
-  protected async finalizeTurn(context: ThreadContext, turn: TurnAccumulator): Promise<void> {
+  async finalizeTurn(context: ThreadContext, turn: TurnAccumulator): Promise<void> {
     const state = this.stateFor(context.threadId);
     const structuredResult = turn.expectsStructuredOutput
       ? parseCodexStructuredOutput(turn)
       : undefined;
     const structuredSessions = structuredResult
       ? [...context.bridgeSessionIds]
-          .map((sessionId) => this.registry.getSession(sessionId))
+          .map((sessionId) => this.ctx.registry.getSession(sessionId))
           .filter(
             (session): session is BridgeSession =>
               session?.structuredOutputRequestId === turn.requestId,
@@ -1613,13 +1632,13 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       });
     }
     const structuredLedgerSessions = turn.expectsStructuredOutput
-      ? this.registry.recordStructuredOutputTurn(
+      ? this.ctx.registry.recordStructuredOutputTurn(
           context.threadId,
           turn.turnId,
           structuredResult?.ok === true && turn.phase === "completed",
         )
       : [];
-    const restartNoticeSessions = this.registry
+    const restartNoticeSessions = this.ctx.registry
       .boundSessionsForThread(context.threadId)
       .filter((session) => {
         if (turn.error?.code !== "app-server-restarted") return false;
@@ -1631,7 +1650,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     // finished" record must not wait on diff computation: a duplicate arriving in
     // that window would otherwise be told the turn is still processing.
     if (turn.requestId) {
-      await this.journal.markTerminal(
+      await this.ctx.journal.markTerminal(
         turn.requestId,
         turn.phase === "interrupted"
           ? "interrupted"
@@ -1656,10 +1675,10 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
             ...structuredLedgerSessions,
             ...restartNoticeSessions,
           ]),
-        ].map((session) => this.persistSession(session)),
+        ].map((session) => this.ctx.callbacks.persistSession(session)),
       );
       for (const session of structuredSessions) {
-        this.options.emit({
+        this.ctx.options.emit({
           type: "session.structured-output",
           sessionId: session.id,
           data: { structuredOutput: structuredResult },
@@ -1667,31 +1686,33 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       }
     }
     if (!structuredResult) {
-      await Promise.all(restartNoticeSessions.map((session) => this.persistSession(session)));
+      await Promise.all(
+        restartNoticeSessions.map((session) => this.ctx.callbacks.persistSession(session)),
+      );
     }
 
     context.activeTurn = null;
-    this.registry.setPhase(
+    this.ctx.registry.setPhase(
       context,
       turn.phase === "failed" ? "failed" : "idle",
       turn.error?.message,
     );
     state.assistantMessageId = undefined;
     // A terminal turn is the event a pre-restart drain is waiting for.
-    this.notifyThreadActivity();
+    this.ctx.callbacks.notifyThreadActivity();
 
     for (const sessionId of context.bridgeSessionIds) {
-      const session = this.registry.getSession(sessionId);
-      if (session) this.registry.touch(sessionId);
+      const session = this.ctx.registry.getSession(sessionId);
+      if (session) this.ctx.registry.touch(sessionId);
       if (turn.phase === "failed") {
-        this.options.emit({
+        this.ctx.options.emit({
           type: "session.error",
           sessionId,
           data: { error: turn.error?.message ?? "Codex execution failed" },
         });
         continue;
       }
-      this.options.emit({
+      this.ctx.options.emit({
         type: "session.idle",
         sessionId,
         data: { title: session?.title, phase: context.phase },
@@ -1699,12 +1720,12 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     }
   }
 
-  protected runFinalization(context: ThreadContext, turn: TurnAccumulator): Promise<void> {
-    const work = this.finalizeTurn(context, turn);
-    this.pendingFinalizations.add(work);
+  runFinalization(context: ThreadContext, turn: TurnAccumulator): Promise<void> {
+    const work = this.ctx.callbacks.finalizeTurn(context, turn);
+    this.ctx.pendingFinalizations.add(work);
     work.then(
-      () => this.pendingFinalizations.delete(work),
-      () => this.pendingFinalizations.delete(work),
+      () => this.ctx.pendingFinalizations.delete(work),
+      () => this.ctx.pendingFinalizations.delete(work),
     );
     return work;
   }
@@ -1714,7 +1735,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
    * chain is deliberately not awaited by notification handlers: app-server's
    * stdout loop must remain independent from rendering and SSE delivery.
    */
-  protected enqueueAfterMessageFlush(
+  enqueueAfterMessageFlush(
     threadId: string,
     publish: () => void,
     options: { bytes?: number; coalesceKey?: "status" } = {},
@@ -1725,7 +1746,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     // here would re-insert a render state and coalescer for a thread nothing
     // will ever release again. There is no transcript left to order behind, so
     // publish inline — exactly what `emitStatus` already does.
-    const state = this.threadState.get(threadId);
+    const state = this.ctx.threadState.get(threadId);
     if (!state) {
       publish();
       return;
@@ -1763,22 +1784,22 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
     this.startOrderedEventDrain(threadId, state);
   }
 
-  protected orderedEventMaxCount(): number {
-    return Math.max(1, this.options.orderedEventMaxCount ?? MAX_ORDERED_EVENTS_PER_THREAD);
+  orderedEventMaxCount(): number {
+    return Math.max(1, this.ctx.options.orderedEventMaxCount ?? MAX_ORDERED_EVENTS_PER_THREAD);
   }
 
-  protected orderedEventMaxBytes(): number {
-    return Math.max(1, this.options.orderedEventMaxBytes ?? MAX_ORDERED_EVENT_BYTES_PER_THREAD);
+  orderedEventMaxBytes(): number {
+    return Math.max(1, this.ctx.options.orderedEventMaxBytes ?? MAX_ORDERED_EVENT_BYTES_PER_THREAD);
   }
 
-  protected replaceOrderedEventsWithReconcile(threadId: string, state: ThreadRuntimeState): void {
+  replaceOrderedEventsWithReconcile(threadId: string, state: ThreadRuntimeState): void {
     state.orderedEvents.length = 0;
     state.orderedEventBytes = 0;
     state.orderedReconcilePending = true;
     this.startOrderedEventDrain(threadId, state);
   }
 
-  protected startOrderedEventDrain(threadId: string, state: ThreadRuntimeState): void {
+  startOrderedEventDrain(threadId: string, state: ThreadRuntimeState): void {
     if (state.orderedEventDraining) return;
     state.orderedEventDraining = true;
     state.orderedEventTail = (async () => {
@@ -1794,8 +1815,8 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
               );
             }
             state.orderedReconcilePending = false;
-            for (const sessionId of this.sessionIdsForThread(threadId)) {
-              this.options.emit({
+            for (const sessionId of this.ctx.sessionIdsForThread(threadId)) {
+              this.ctx.options.emit({
                 type: "session.reconcile-required",
                 sessionId,
                 data: { reason: "ordered-event-queue-overflow" },
@@ -1827,7 +1848,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         state.orderedEventDraining = false;
         if (
           (state.orderedReconcilePending || state.orderedEvents.length > 0) &&
-          this.threadState.get(threadId) === state
+          this.ctx.threadState.get(threadId) === state
         ) {
           this.startOrderedEventDrain(threadId, state);
         }
@@ -1836,35 +1857,36 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
   }
 
   /** Re-renders the active turn's assistant rows and publishes sparse updates. */
-  protected async publishAssistantMessage(threadId: string): Promise<void> {
-    const context = this.registry.getThread(threadId);
-    const state = this.threadState.get(threadId);
+  async publishAssistantMessage(threadId: string): Promise<void> {
+    const context = this.ctx.registry.getThread(threadId);
+    const state = this.ctx.threadState.get(threadId);
     if (!context || !state) return;
     const turn = context.activeTurn;
     if (!turn) return;
     await publishAssistantRows(context, state, turn, {
-      cwd: context.cwd ?? this.options.cwd,
-      emit: (event) => this.options.emit(event),
-      bumpMessageRevision: (target, revised) => this.bumpMessageRevision(target, revised),
+      cwd: context.cwd ?? this.ctx.options.cwd,
+      emit: (event) => this.ctx.options.emit(event),
+      bumpMessageRevision: (target, revised) =>
+        this.ctx.callbacks.bumpMessageRevision(target, revised),
       onRendered: (message) => {
-        if (!this.registry.recordAsyncQuestionMessages(context, message)) return;
+        if (!this.ctx.registry.recordAsyncQuestionMessages(context, message)) return;
         for (const sessionId of context.bridgeSessionIds) {
-          const session = this.registry.getSession(sessionId);
-          if (session) void this.persistSession(session);
+          const session = this.ctx.registry.getSession(sessionId);
+          if (session) void this.ctx.callbacks.persistSession(session);
         }
       },
     });
   }
 
-  protected emitStatus(context: ThreadContext): void {
+  emitStatus(context: ThreadContext): void {
     // Every phase transition passes through here, so it is also where a drain
     // waiting on this thread finds out that it may be finished.
-    this.notifyThreadActivity();
+    this.ctx.callbacks.notifyThreadActivity();
     const status = phaseToExternalStatus(context.phase);
     const phase = context.phase;
     const publish = () => {
       for (const sessionId of context.bridgeSessionIds) {
-        this.options.emit({
+        this.ctx.options.emit({
           type: "session.updated",
           sessionId,
           data: {
@@ -1875,7 +1897,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
         });
       }
     };
-    if (context.activeTurn && this.threadState.has(context.threadId)) {
+    if (context.activeTurn && this.ctx.threadState.has(context.threadId)) {
       this.enqueueAfterMessageFlush(context.threadId, publish, {
         bytes: 128,
         coalesceKey: "status",
@@ -1887,7 +1909,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
 
   // ---------------------------------------------------------------- sessions
 
-  protected toEngineConfig(body: Record<string, unknown>): EngineTurnConfig {
+  toEngineConfig(body: Record<string, unknown>): EngineTurnConfig {
     const mode: ConversationMode = body.mode === "plan" ? "plan" : "build";
     const coordinatorReadOnly = isCoordinatorReadOnlyEnvironment(process.env);
     const requestedPolicy = isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined;
@@ -1963,7 +1985,7 @@ export abstract class AppServerRuntimeLifecycle extends AppServerRuntimeBase {
       personality,
       // Explicit null clears a previously set tier rather than inheriting it.
       serviceTier: body.fastMode === true ? "fast" : null,
-      cwd: this.options.cwd,
+      cwd: this.ctx.options.cwd,
       approvalPolicy:
         policy?.approvals === "ask"
           ? "on-request"

@@ -20,7 +20,6 @@ afterEach(() => {
 });
 
 const browserTerminalAdapter: TerminalContractAdapter = {
-  recovery: "rearm-on-lifecycle",
   create(backend, options = {}) {
     globalThis.fetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const reply = await backend(

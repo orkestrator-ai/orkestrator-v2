@@ -6,6 +6,11 @@ import {
   type TerminalStateSnapshot,
 } from "@orkestrator/protocol/terminal-history";
 import type { TabTeardownInput } from "@orkestrator/protocol/tab-teardown";
+import {
+  LOCAL_TERMINAL_INPUT_RESUME_COMMAND,
+  TERMINAL_INPUT_RESUME_COMMAND,
+  type TerminalInputResumeResult,
+} from "@orkestrator/protocol/terminal-input-sequencer";
 import type { EnvironmentSetupSession } from "@/types";
 import {
   parseTerminalSessionCreateResult,
@@ -227,6 +232,31 @@ export async function teardownTab(input: TabTeardownInput): Promise<{ completed:
 
 export async function writeTerminal(sessionId: string, data: string): Promise<boolean> {
   return terminalWriteWasDelivered(await invoke("terminal_write", { sessionId, data }));
+}
+
+/**
+ * Re-arms one terminal's input after a failed write, keeping the shell and its
+ * processes. The client transport answers this itself; one without it rejects
+ * with "Unknown backend command", which reads as nothing resumed.
+ */
+export async function resumeTerminalInput(
+  sessionId: string,
+  { local = false }: { local?: boolean } = {},
+): Promise<boolean> {
+  try {
+    const result = await invoke<TerminalInputResumeResult | null>(
+      local ? LOCAL_TERMINAL_INPUT_RESUME_COMMAND : TERMINAL_INPUT_RESUME_COMMAND,
+      { sessionId },
+    );
+    return result?.resumed === true;
+  } catch (error) {
+    if (
+      String(error instanceof Error ? error.message : error).includes("Unknown backend command")
+    ) {
+      return false;
+    }
+    throw error;
+  }
 }
 
 export async function resizeTerminal(sessionId: string, cols: number, rows: number): Promise<void> {

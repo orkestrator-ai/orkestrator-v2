@@ -43,7 +43,11 @@ import {
   type RuntimeStatusManifest,
 } from "../../electron/runtime-profile.js";
 import { pinnedArtifactDirectory } from "@orkestrator/toolchain/manager";
-import { pinnedToolchainArtifacts, type ToolchainArtifact } from "@orkestrator/toolchain/manifest";
+import {
+  isSupportToolName,
+  pinnedToolchainArtifacts,
+  type ToolchainArtifact,
+} from "@orkestrator/toolchain/manifest";
 
 const MAX_MODEL_CACHE_BYTES = 16 * 1024 * 1024;
 const MODEL_CACHE_COPY_CHUNK_BYTES = 64 * 1024;
@@ -422,7 +426,7 @@ export async function seedInstalledAgentToolchains(
   const selected = new Set<string>(profile.agentPlatforms);
   const artifacts = (options.artifacts ?? pinnedToolchainArtifacts()).filter(
     (artifact) =>
-      selected.has(artifact.name) &&
+      (selected.has(artifact.name) || isSupportToolName(artifact.name)) &&
       artifact.platform === platform &&
       artifact.architecture === architecture,
   );

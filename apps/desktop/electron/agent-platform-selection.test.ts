@@ -127,12 +127,13 @@ describe("agent-test platform selection", () => {
 });
 
 describe("pinned artifacts for a platform selection", () => {
-  test("downloads only what the selection enables", () => {
+  test("downloads only what the selection enables, plus the support tools", () => {
     expect(
       pinnedArtifactsForPlatforms(["cursor", "grok"], "darwin", "arm64").map((a) => a.name),
-    ).toEqual(["grok"]);
+    ).toEqual(["grok", "gh"]);
     expect(pinnedArtifactsForPlatforms(["claude"], "linux", "x64").map((a) => a.name)).toEqual([
       "claude",
+      "gh",
     ]);
   });
 
@@ -141,7 +142,9 @@ describe("pinned artifacts for a platform selection", () => {
     expect(pinnedArtifactsForPlatforms([], "darwin", "arm64")).toEqual([]);
   });
 
-  test("treats a Cursor-only selection as requiring no managed artifact", () => {
-    expect(pinnedArtifactsForPlatforms(["cursor"], "darwin", "arm64")).toEqual([]);
+  test("gives a Cursor-only selection only the support tools", () => {
+    expect(pinnedArtifactsForPlatforms(["cursor"], "darwin", "arm64").map((a) => a.name)).toEqual([
+      "gh",
+    ]);
   });
 });

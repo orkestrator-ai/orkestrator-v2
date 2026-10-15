@@ -10,7 +10,7 @@ connection without exposing a raw port publicly. These are two distinct
 protocols: an application's WebSocket and Orkestrator's own transport tunnel.
 
 Add proposed `preview-websocket-proxy.ts` and `preview-tunnel-server.ts` modules.
-Extend routing in [gateway base](../../../../apps/backend/src/gateway-base.ts)
+Extend routing in [gateway lifecycle](../../../../apps/backend/src/gateway-lifecycle.ts)
 without changing [terminal WebSocket](../../../../apps/backend/src/terminal-websocket-server.ts)
 protocol semantics. Route by an exact known listener/path and reject everything
 unhandled. The preview route must not steal terminal upgrades.

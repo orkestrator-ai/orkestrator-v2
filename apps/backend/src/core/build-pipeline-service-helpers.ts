@@ -29,7 +29,11 @@ import {
   type AgentInteractionRequest,
   type AgentInteractionWorkflowSummary,
 } from "@orkestrator/protocol/agent-interactions";
-import { nativeAgentCapabilities, type AgentModel } from "@orkestrator/protocol/native-agent";
+import {
+  nativeAgentCapabilities,
+  type AgentModel,
+  type NativeAgentModelSubstitution,
+} from "@orkestrator/protocol/native-agent";
 import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 import type { AppConfig } from "./models.js";
 import {
@@ -253,6 +257,8 @@ export interface BuildStepSelection {
   model?: string;
   effort?: string;
   fastMode?: boolean;
+  /** Set when `model` replaced a configured default the runtime cannot serve. */
+  modelSubstitution?: NativeAgentModelSubstitution;
 }
 
 /** Reads the environment's model catalogue at most once, and never throws. */

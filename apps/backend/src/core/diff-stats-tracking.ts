@@ -1,0 +1,282 @@
+import { resolveComparisonRef } from "@orkestrator/protocol/diff-stats";
+import { runRemoteGit } from "./git-noninteractive-env.js";
+import { GitFetchScheduler } from "./git-fetch-scheduler.js";
+import { runCommand } from "./shell.js";
+import { gitDockerScanPool } from "./git-docker-scan-pool.js";
+import { CONTAINER_TREE_MAX_AGE_MS, DiffStatsService } from "./diff-stats-service.js";
+import { CONTAINER_FETCH_EXEC_MARGIN_MS, ContainerGitFetchPolicy } from "./container-git-fetch.js";
+import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
+import {
+  buildContainerFetchScript,
+  buildFileTree,
+  CONTAINER_FILE_TREE_LISTER,
+  getContainerGitStatusDetailed,
+  getLocalGitStatusDetailed,
+  MAX_FILE_TREE_NODES,
+  parseContainerFileTree,
+  type ContainerGitStatusDeps,
+} from "./commands-files.js";
+import { dockerExec } from "./commands-container-exec.js";
+import { quoteShell } from "./commands-agent-support.js";
+import type { BackendEmit, CommandContext } from "./commands-context.js";
+import type { Environment } from "./models.js";
+
+/**
+ * How long an *unwatched* target's file list or tree (a container, or a local
+ * worktree whose watcher failed) is served to a Files-panel reader.
+ *
+ * Comfortably under the panel's own refresh cadence, so the panel and the
+ * sidebar looking at the same environment share one scan without the panel
+ * ever showing something older than it would have fetched. Watched worktrees
+ * are not age-bounded: their results stay valid until a watcher hint, a
+ * mutation or an explicit refresh.
+ *
+ * Reconsidered when container fetches left the status scan (step 04): each
+ * container read now costs one local-only exec rather than a fetch, but the
+ * count is unchanged by design. With a 5 s panel poll, any bound of 5 s or
+ * more would serve every other read from the previous poll and let a change
+ * take up to ~10 s to show, over the 6 s Files-panel budget.
+ *
+ * Container *trees* are the exception (step 18): while a recent, complete
+ * file list covers them they use `CONTAINER_TREE_MAX_AGE_MS`, because a
+ * Git-visible membership change reaches the tree through that list within the
+ * budget anyway (see `DiffStatsService`). Ad hoc (untracked) tree reads have
+ * no such signal and keep this bound.
+ */
+export const DIFF_CACHE_MAX_AGE_MS = 3_000;
+
+/** The worktree fetch scheduler as the backend runs it: real `git fetch`, shared per repository. */
+export function createGitFetchScheduler(): GitFetchScheduler {
+  return new GitFetchScheduler({
+    run: (args, timeoutMs) =>
+      args[2] === "fetch"
+        ? runRemoteGit("fetch", args.slice(3), { cwd: args[1], timeoutMs })
+        : runCommand("git", args, { timeoutMs }),
+  });
+}
+
+export type DiffStatsTrackingOptions = {
+  emit: BackendEmit;
+};
+
+/**
+ * Diff stats and Git freshness for one backend: the worktree fetch scheduler,
+ * the container fetch policy, the diff-stats service built on both, and the
+ * reconciliation that decides which environments are tracked.
+ */
+export class DiffStatsTracking {
+  /**
+   * Shared by every worktree of every repository, so N environments of one
+   * project make one fetch rather than N against the same origin.
+   */
+  readonly gitFetchScheduler: GitFetchScheduler;
+  /**
+   * Remote freshness for container clones (`container-git-fetch.ts`): status
+   * scans read local refs, and fetches follow this policy instead of the scan
+   * cadence. Fetches share the `git-docker-scan` pool under each container's
+   * scan target key, so a fetch and a scan of one container never overlap.
+   */
+  readonly containerGitFetchPolicy: ContainerGitFetchPolicy;
+  readonly service: DiffStatsService;
+  private syncGeneration = 0;
+  private stopped = false;
+  private syncQueue: Promise<void> = Promise.resolve();
+  private readonly removeFetchPolicyDiagnostics: () => void;
+
+  constructor(options: DiffStatsTrackingOptions) {
+    this.gitFetchScheduler = createGitFetchScheduler();
+    this.containerGitFetchPolicy = new ContainerGitFetchPolicy({
+      admission: gitDockerScanPool,
+      runFetch: (containerId, ref, timeoutMs) =>
+        dockerExec(
+          containerId,
+          buildContainerFetchScript(ref, timeoutMs),
+          timeoutMs + CONTAINER_FETCH_EXEC_MARGIN_MS,
+        ),
+      onChange: ({ containerId, baselineMoved }) => {
+        // A moved `origin/<ref>` is outside anything a container scan watches:
+        // rescan once (step 03's baseline hook). Otherwise only the announced
+        // remote freshness may have changed.
+        if (baselineMoved) this.service.invalidateBaseline({ containerId });
+        this.service.remoteFreshnessChanged({ containerId });
+      },
+    });
+    this.removeFetchPolicyDiagnostics = recurringDiagnosticsRegistry.addFetchPolicy(
+      "container-git-fetch",
+      this.containerGitFetchPolicy,
+    );
+    const containerStatus: ContainerGitStatusDeps = {
+      exec: (id, script) => dockerExec(id, script),
+      fetches: this.containerGitFetchPolicy,
+    };
+    this.service = new DiffStatsService({
+      emit: options.emit,
+      admission: gitDockerScanPool,
+      fileListMaxAgeMs: DIFF_CACHE_MAX_AGE_MS,
+      containerTreeMaxAgeMs: CONTAINER_TREE_MAX_AGE_MS,
+      remoteFreshness: (target) =>
+        target.kind === "container" && target.containerId
+          ? this.containerGitFetchPolicy.freshness(target.containerId, target.comparisonRef)
+          : undefined,
+      scan: async (target) => {
+        const detailed =
+          target.kind === "local"
+            ? await getLocalGitStatusDetailed(
+                target.worktreePath!,
+                target.comparisonRef,
+                true,
+                this.gitFetchScheduler,
+              )
+            : await getContainerGitStatusDetailed(
+                target.containerId!,
+                target.comparisonRef,
+                true,
+                containerStatus,
+              );
+        return {
+          stats: {
+            additions: detailed.changes.reduce((sum, change) => sum + change.additions, 0),
+            deletions: detailed.changes.reduce((sum, change) => sum + change.deletions, 0),
+            filesChanged: detailed.changes.length,
+            truncated: detailed.truncated,
+          },
+          changes: detailed.changes,
+        };
+      },
+      readFiles: (request) =>
+        request.kind === "local"
+          ? getLocalGitStatusDetailed(
+              request.worktreePath!,
+              request.comparisonRef,
+              request.includeUncommitted,
+              this.gitFetchScheduler,
+            )
+          : getContainerGitStatusDetailed(
+              request.containerId!,
+              request.comparisonRef,
+              request.includeUncommitted,
+              containerStatus,
+            ),
+      walkTree: async (request) => {
+        if (request.kind === "local") return buildFileTree(request.worktreePath!);
+        return parseContainerFileTree(
+          await dockerExec(
+            request.containerId!,
+            `node -e ${quoteShell(CONTAINER_FILE_TREE_LISTER)} -- /workspace ${MAX_FILE_TREE_NODES}`,
+          ),
+        );
+      },
+      onWarning: (message, error) => {
+        console.warn(`[diff-stats] ${message}:`, error instanceof Error ? error.message : error);
+      },
+    });
+  }
+
+  /**
+   * Known remote mutations (a merge through the backend) and lifecycle changes
+   * route here so the next reader does not wait out a fetch cooldown.
+   */
+  invalidateRemoteFreshness(
+    environment: Pick<Environment, "environmentType" | "containerId" | "worktreePath">,
+  ): void {
+    if (environment.environmentType === "local") {
+      if (environment.worktreePath) this.gitFetchScheduler.invalidate(environment.worktreePath);
+      return;
+    }
+    if (environment.containerId) {
+      this.containerGitFetchPolicy.invalidate({ containerId: environment.containerId }, "mutation");
+    }
+  }
+
+  /** Discards any reconciliation still loading storage, so it cannot apply a stale snapshot. */
+  invalidatePendingSync(): void {
+    this.syncGeneration += 1;
+  }
+
+  /**
+   * Reconciles which environments are tracked against what storage says exists.
+   *
+   * Reconciling the whole set rather than patching it means every caller - start,
+   * stop, delete, a client connecting - converges on the same answer, and a missed
+   * lifecycle event self-corrects on the next call instead of leaving an
+   * environment permanently unwatched or a deleted one permanently watched.
+   */
+  async sync(context: Pick<CommandContext, "storage">): Promise<void> {
+    if (this.stopped) return;
+    const generation = this.syncGeneration;
+    const operation = this.syncQueue
+      .catch(() => undefined)
+      .then(async () => {
+        if (this.stopped || generation !== this.syncGeneration) return;
+        const [environments, config] = await Promise.all([
+          context.storage.loadEnvironments(),
+          context.storage.loadConfig(),
+        ]);
+        // A stop, delete, shutdown, or newer reconciliation may have happened
+        // while storage was loading. Applying this older snapshot would recreate
+        // a watcher or poller that the later lifecycle action deliberately
+        // removed.
+        if (generation !== this.syncGeneration) return;
+
+        const live = new Set<string>();
+        for (const environment of environments) {
+          live.add(environment.id);
+          const comparisonRef = resolveComparisonRef(
+            environment.createdFromCommit,
+            config.repositories?.[environment.projectId],
+          );
+          const target =
+            environment.environmentType === "local"
+              ? environment.worktreePath
+                ? {
+                    environmentId: environment.id,
+                    kind: "local" as const,
+                    worktreePath: environment.worktreePath,
+                    comparisonRef,
+                  }
+                : undefined
+              : environment.status === "running" && environment.containerId
+                ? {
+                    environmentId: environment.id,
+                    kind: "container" as const,
+                    containerId: environment.containerId,
+                    comparisonRef,
+                  }
+                : undefined;
+
+          // Readable now: scan it. Not readable but still an environment: hold the
+          // last counts and stop scanning, rather than discarding a reading that
+          // described work which is still on disk.
+          if (target) this.service.track(target);
+          else this.service.pause(environment.id);
+        }
+
+        for (const environmentId of this.service.trackedIds()) {
+          if (!live.has(environmentId)) this.service.untrack(environmentId);
+        }
+
+        // Fetch state belongs to a running container generation: a stopped,
+        // recreated or deleted container starts over (the lifecycle
+        // invalidation of the container fetch policy).
+        this.containerGitFetchPolicy.retainContainers(
+          environments.flatMap((environment) =>
+            environment.environmentType !== "local" &&
+            environment.status === "running" &&
+            environment.containerId
+              ? [environment.containerId]
+              : [],
+          ),
+        );
+      });
+    this.syncQueue = operation;
+    await operation;
+  }
+
+  /** Releases every diff watcher and timer; called on backend shutdown. */
+  shutdown(): void {
+    this.stopped = true;
+    this.invalidatePendingSync();
+    this.service.shutdown();
+    this.removeFetchPolicyDiagnostics();
+  }
+}

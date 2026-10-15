@@ -5,36 +5,18 @@ import type { PersistedPromptQueue } from "@/types";
 
 const realBackendSnapshot = { ...realBackend };
 const enqueuePromptQueueMessage = mock(async (..._args: unknown[]): Promise<unknown> => undefined);
-const requeuePromptQueueMessage = mock(async (..._args: unknown[]): Promise<unknown> => undefined);
 const removePromptQueueMessage = mock(async (..._args: unknown[]): Promise<unknown> => undefined);
 const movePromptQueueMessage = mock(async (..._args: unknown[]): Promise<unknown> => undefined);
-const claimPromptQueueHead = mock(async (..._args: unknown[]): Promise<unknown> => undefined);
-const acknowledgePromptQueueClaim = mock(
-  async (..._args: unknown[]): Promise<unknown> => undefined,
-);
-const rejectPromptQueueClaim = mock(async (..._args: unknown[]): Promise<unknown> => undefined);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   enqueuePromptQueueMessage,
-  requeuePromptQueueMessage,
   removePromptQueueMessage,
   movePromptQueueMessage,
-  claimPromptQueueHead,
-  acknowledgePromptQueueClaim,
-  rejectPromptQueueClaim,
 }));
 
-const {
-  acknowledgeAgentPromptClaim,
-  claimAgentPromptQueueHead,
-  createPromptQueueSources,
-  enqueueAgentPrompt,
-  moveAgentPrompt,
-  rejectAgentPromptClaim,
-  removeAgentPrompt,
-  requeueAgentPrompt,
-} = await import("./prompt-queue-sources");
+const { createPromptQueueSources, enqueueAgentPrompt, moveAgentPrompt, removeAgentPrompt } =
+  await import("./prompt-queue-sources");
 
 /**
  * The adapter reaches its store through `as unknown as AnyQueueStore`, so
@@ -82,15 +64,7 @@ function snapshot<T>(
 }
 
 beforeEach(() => {
-  for (const fn of [
-    enqueuePromptQueueMessage,
-    requeuePromptQueueMessage,
-    removePromptQueueMessage,
-    movePromptQueueMessage,
-    claimPromptQueueHead,
-    acknowledgePromptQueueClaim,
-    rejectPromptQueueClaim,
-  ]) {
+  for (const fn of [enqueuePromptQueueMessage, removePromptQueueMessage, movePromptQueueMessage]) {
     fn.mockReset();
   }
 });
@@ -164,18 +138,13 @@ describe("environmentIdFor", () => {
 });
 
 describe("backend mutation adapters", () => {
-  test("enqueues and requeues using authoritative snapshots", async () => {
+  test("enqueues using the authoritative snapshot", async () => {
     enqueuePromptQueueMessage.mockResolvedValueOnce(snapshot(queueKey, "env-1", [{ id: "m1" }], 1));
-    requeuePromptQueueMessage.mockResolvedValueOnce(
-      snapshot(queueKey, "env-1", [{ id: "m0" }, { id: "m1" }], 2),
-    );
 
     await enqueueAgentPrompt("claude-tmux", sessionKey, { id: "m1" });
-    await requeueAgentPrompt("claude-tmux", sessionKey, { id: "m0" });
 
     expect(enqueuePromptQueueMessage).toHaveBeenCalledWith(queueKey, "env-1", { id: "m1" });
-    expect(requeuePromptQueueMessage).toHaveBeenCalledWith(queueKey, "env-1", { id: "m0" });
-    expect(getTmuxProjection(sessionKey)).toEqual([{ id: "m0" }, { id: "m1" }]);
+    expect(getTmuxProjection(sessionKey)).toEqual([{ id: "m1" }]);
   });
 
   test("removes and moves while applying returned snapshots", async () => {
@@ -197,7 +166,7 @@ describe("backend mutation adapters", () => {
     expect(getTmuxProjection(sessionKey)).toEqual([{ id: "m1" }]);
   });
 
-  test("clears projections for null remove, move, and settlement snapshots", async () => {
+  test("clears projections for null remove and move snapshots", async () => {
     setTmuxProjection([{ id: "ghost" }]);
     removePromptQueueMessage.mockResolvedValueOnce({ removed: null, queue: null });
     await removeAgentPrompt("claude-tmux", sessionKey, "ghost");
@@ -209,33 +178,6 @@ describe("backend mutation adapters", () => {
     // A missing queue leaves the current move projection alone; the resource
     // change/hydration path owns deletion reconciliation.
     expect(getTmuxProjection(sessionKey)).toEqual([{ id: "ghost" }]);
-
-    acknowledgePromptQueueClaim.mockResolvedValueOnce(null);
-    await acknowledgeAgentPromptClaim("claude-tmux", sessionKey, "claim-1");
-    expect(getTmuxProjection(sessionKey)).toEqual([]);
-  });
-
-  test("claims and settles a backend-owned head", async () => {
-    setTmuxProjection([{ id: "m1" }, { id: "m2" }]);
-    claimPromptQueueHead.mockResolvedValueOnce({
-      claimed: { id: "m1" },
-      claimToken: "claim-1",
-      queue: snapshot(queueKey, "env-1", [{ id: "m2" }], 2),
-    });
-    acknowledgePromptQueueClaim.mockResolvedValueOnce(
-      snapshot(queueKey, "env-1", [{ id: "m2" }], 3),
-    );
-    rejectPromptQueueClaim.mockResolvedValueOnce(
-      snapshot(queueKey, "env-1", [{ id: "m1" }, { id: "m2" }], 4),
-    );
-
-    await expect(claimAgentPromptQueueHead("claude-tmux", sessionKey)).resolves.toEqual({
-      entry: { id: "m1" },
-      claimToken: "claim-1",
-    });
-    await acknowledgeAgentPromptClaim("claude-tmux", sessionKey, "claim-1");
-    await rejectAgentPromptClaim("claude-tmux", sessionKey, "claim-2");
-    expect(getTmuxProjection(sessionKey)).toEqual([{ id: "m1" }, { id: "m2" }]);
   });
 
   test("rejects unknown agents and unscoped session keys without invoking backend", async () => {
@@ -249,11 +191,8 @@ describe("backend mutation adapters", () => {
      */
     const mutations: Array<[string, (agent: string, key: string) => Promise<unknown>]> = [
       ["enqueue", (agent, key) => enqueueAgentPrompt(agent, key, { id: "m1" })],
-      ["requeue", (agent, key) => requeueAgentPrompt(agent, key, { id: "m1" })],
       ["remove", (agent, key) => removeAgentPrompt(agent, key, "m1")],
       ["move", (agent, key) => moveAgentPrompt(agent, key, "m1", "up")],
-      ["acknowledge", (agent, key) => acknowledgeAgentPromptClaim(agent, key, "token")],
-      ["reject", (agent, key) => rejectAgentPromptClaim(agent, key, "token")],
     ];
 
     for (const [label, mutate] of mutations) {
@@ -268,14 +207,9 @@ describe("backend mutation adapters", () => {
       ).rejects.toThrow("not scoped");
     }
 
-    await expect(claimAgentPromptQueueHead("unknown", sessionKey)).resolves.toBeNull();
     expect(enqueuePromptQueueMessage).not.toHaveBeenCalled();
-    expect(requeuePromptQueueMessage).not.toHaveBeenCalled();
     expect(removePromptQueueMessage).not.toHaveBeenCalled();
     expect(movePromptQueueMessage).not.toHaveBeenCalled();
-    expect(acknowledgePromptQueueClaim).not.toHaveBeenCalled();
-    expect(rejectPromptQueueClaim).not.toHaveBeenCalled();
-    expect(claimPromptQueueHead).not.toHaveBeenCalled();
   });
 
   test("propagates backend rejection without changing the projection", async () => {

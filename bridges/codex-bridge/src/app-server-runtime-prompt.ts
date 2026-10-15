@@ -8,7 +8,9 @@ import {
   buildRecoveredContextPrompt,
   PromptAcceptedResult,
 } from "./app-server-runtime-base.js";
-import { AppServerRuntimeSessions, SESSION_CLOSING_ERROR } from "./app-server-runtime-sessions.js";
+import type { CodexRuntimeContext } from "./app-server-runtime-context.js";
+import type { CodexRuntimeLifecycle } from "./app-server-runtime-lifecycle.js";
+import { SESSION_CLOSING_ERROR, type CodexRuntimeSessions } from "./app-server-runtime-sessions.js";
 
 import type { AppServerEngine } from "./engine/app-server-engine.js";
 
@@ -71,7 +73,13 @@ function closingRefusal(): PromptDispatchOutcome {
   return { ok: false, status: 409, error: SESSION_CLOSING_ERROR };
 }
 
-export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
+export class CodexRuntimePrompt {
+  constructor(
+    private readonly ctx: CodexRuntimeContext,
+    private readonly lifecycle: CodexRuntimeLifecycle,
+    private readonly sessions: CodexRuntimeSessions,
+  ) {}
+
   async prompt(
     sessionId: string,
     input: {
@@ -88,14 +96,14 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       command?: NativeAgentBridgeCommandInvocation;
     },
   ): Promise<PromptDispatchOutcome> {
-    const session = this.registry.getSession(sessionId);
+    const session = this.ctx.registry.getSession(sessionId);
     if (!session) return { ok: false, status: 404, error: "Session not found" };
-    if (this.sessionAdmissionClosed(session)) return closingRefusal();
+    if (this.sessions.sessionAdmissionClosed(session)) return closingRefusal();
     if (!input.requestId?.trim()) {
       return { ok: false, status: 400, error: "requestId is required" };
     }
     if (input.agentMcp) {
-      const scoped = this.toEngineConfig({
+      const scoped = this.lifecycle.toEngineConfig({
         mode: session.config.mode,
         model: session.config.model,
         modelReasoningEffort: session.config.reasoningEffort,
@@ -105,14 +113,14 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       }).agentMcp;
       if (scoped) session.config = { ...session.config, agentMcp: scoped };
     }
-    await this.touchSession(sessionId);
+    await this.ctx.callbacks.touchSession(sessionId);
     // Startup recovery may still be deciding whether this thread's last turn is
     // running. Dispatching underneath it would race that decision.
-    await this.dispatchRecovery;
+    await this.ctx.dispatchRecovery;
 
     try {
-      return await this.registry.withDispatchLock(session, () =>
-        this.withDispatchAdmission(() => this.dispatchPrompt(session, input)),
+      return await this.ctx.registry.withDispatchLock(session, () =>
+        this.ctx.withDispatchAdmission(() => this.dispatchPrompt(session, input)),
       );
     } catch (error) {
       if (error instanceof OverlappingTurnError) {
@@ -126,7 +134,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     }
   }
 
-  protected async dispatchPrompt(
+  async dispatchPrompt(
     session: BridgeSession,
     input: {
       prompt: string;
@@ -143,12 +151,12 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     },
   ): Promise<PromptDispatchOutcome> {
     const requestId = input.requestId!;
-    await this.generationRecovery;
+    await this.ctx.generationRecovery;
 
     // 1. Has this exact request been seen? Never dedupe on prompt text — the same
     //    text under a new id is a legitimately different turn.
     {
-      const decision = this.journal.classify(requestId);
+      const decision = this.ctx.journal.classify(requestId);
       if (decision.action === "blocked") {
         return {
           ok: false,
@@ -171,9 +179,10 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
             threadId: decision.record?.threadId ?? null,
             turnId: decision.record?.turnId,
             ...(decision.record?.threadId &&
-            this.registry.getThread(decision.record.threadId)?.turnStartedAt
+            this.ctx.registry.getThread(decision.record.threadId)?.turnStartedAt
               ? {
-                  turnStartedAt: this.registry.getThread(decision.record.threadId)!.turnStartedAt,
+                  turnStartedAt: this.ctx.registry.getThread(decision.record.threadId)!
+                    .turnStartedAt,
                 }
               : {}),
             duplicate: true,
@@ -181,12 +190,12 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
         };
       }
       if (decision.action === "reconcile" && decision.record?.threadId) {
-        const outcome = await this.options.engine.reconcileRequest(
+        const outcome = await this.ctx.options.engine.reconcileRequest(
           decision.record.threadId,
           requestId,
         );
         if (outcome.result === "terminal") {
-          await this.journal.markTerminal(requestId, outcome.status ?? "completed", {
+          await this.ctx.journal.markTerminal(requestId, outcome.status ?? "completed", {
             threadId: decision.record.threadId,
             turnId: outcome.turnId,
           });
@@ -196,7 +205,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
           };
         }
         if (outcome.result === "attach") {
-          await this.journal.markAccepted(requestId, {
+          await this.ctx.journal.markAccepted(requestId, {
             threadId: decision.record.threadId,
             turnId: outcome.turnId!,
           });
@@ -207,9 +216,10 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
               requestId,
               threadId: decision.record.threadId,
               turnId: outcome.turnId,
-              ...(this.registry.getThread(decision.record.threadId)?.turnStartedAt
+              ...(this.ctx.registry.getThread(decision.record.threadId)?.turnStartedAt
                 ? {
-                    turnStartedAt: this.registry.getThread(decision.record.threadId)!.turnStartedAt,
+                    turnStartedAt: this.ctx.registry.getThread(decision.record.threadId)!
+                      .turnStartedAt,
                   }
                 : {}),
               duplicate: true,
@@ -217,7 +227,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
           };
         }
         // Absent: proven not to have run, so dispatching once is safe.
-        await this.journal.forget(requestId);
+        await this.ctx.journal.forget(requestId);
       }
     }
 
@@ -229,7 +239,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     // prepared, so a stale one costs nothing and keeps the user's draft.
     let plan: CommandPlan | undefined;
     if (input.command) {
-      plan = await this.commandCatalogue.resolveSelected(input.command);
+      plan = await this.ctx.commandCatalogue.resolveSelected(input.command);
       if (plan.kind === "refused") return commandRefusal(plan.message);
       if (plan.kind === "builtin" && input.outputSchema) {
         return commandRefusal(
@@ -272,17 +282,17 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     // Re-attach first: without this a detached session would fall through to
     // `thread/start` below and silently fork a second thread, orphaning the
     // conversation the user was looking at.
-    let context = await this.ensureAttached(session.id);
-    this.registry.assertNoActiveTurn(context);
+    let context = await this.ctx.callbacks.ensureAttached(session.id);
+    this.ctx.registry.assertNoActiveTurn(context);
 
     // 2. A persistent child snapshots its environment at launch, so re-read
     //    managed runtime variables and restart before dispatching if they moved.
-    const generationBeforeDrain = this.options.engine.info().generation;
+    const generationBeforeDrain = this.ctx.options.engine.info().generation;
     // This thread is excluded from its own drain. The wait runs inside the
     // supervisor's `drainPromise` and every RPC queues behind it, so waiting on
     // work this call is itself about to perform would be a wait on ourselves.
     const drainingThreadId = context?.threadId ?? null;
-    await this.options.engine.ensureEnvironmentIsCurrent({
+    await this.ctx.options.engine.ensureEnvironmentIsCurrent({
       hasActiveTurns: () => this.hasActiveWorkOtherThan(drainingThreadId),
       waitForIdle: () =>
         this.waitForAllThreadsIdle(generationBeforeDrain, { excludeThreadId: drainingThreadId }),
@@ -291,23 +301,23 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     // announce the new generation before ensureEnvironmentIsCurrent resolves.
     // Recovery refreshes handles and reconciles active turns; never dispatch on
     // the pre-restart context while that work is still in flight.
-    await this.generationRecovery;
-    context = await this.ensureAttached(session.id);
-    this.registry.assertNoActiveTurn(context);
+    await this.ctx.generationRecovery;
+    context = await this.ctx.callbacks.ensureAttached(session.id);
+    this.ctx.registry.assertNoActiveTurn(context);
 
     // 3. Resolve typed commands. Structured turns must reach the provider: a
     //    local reply is plaintext and can never satisfy the caller's schema.
     if (!plan) {
       plan =
         interpretCommands && !input.outputSchema
-          ? await this.commandCatalogue.resolveTyped(input.prompt)
+          ? await this.ctx.commandCatalogue.resolveTyped(input.prompt)
           : { kind: "text" };
     } else if (plan.kind === "skill") {
       // The environment check above can replace the child. A binding listed by
       // the dead generation is withdrawn; re-validate against the live one.
-      const live = this.commandCatalogue.skills.current()?.byId.get(plan.binding.id);
+      const live = this.ctx.commandCatalogue.skills.current()?.byId.get(plan.binding.id);
       if (!live || live.path !== plan.binding.path || !live.enabled || live.ambiguous) {
-        const revalidated = await this.commandCatalogue.resolveSelected(input.command!);
+        const revalidated = await this.ctx.commandCatalogue.resolveSelected(input.command!);
         if (revalidated.kind === "refused") return commandRefusal(revalidated.message);
         plan = revalidated;
       }
@@ -322,7 +332,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     if (plan.kind === "builtin") {
       const response =
         plan.builtin === "help"
-          ? await this.commandCatalogue.helpText()
+          ? await this.ctx.commandCatalogue.helpText()
           : await this.modelsListText(session);
       this.emitLocalResponse(session, input.prompt, response);
       return { ok: true, result: { status: "processing", requestId } };
@@ -333,7 +343,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     let executionPrompt = input.prompt;
     let skillInput: { name: string; path: string } | undefined;
     if (plan.kind === "template") {
-      const expansion = await this.commandCatalogue.expandTemplate(plan.entry, plan.args);
+      const expansion = await this.ctx.commandCatalogue.expandTemplate(plan.entry, plan.args);
       if (!expansion.ok) {
         if (input.command) return commandRefusal(expansion.message);
         this.emitLocalResponse(session, input.prompt, expansion.message);
@@ -357,33 +367,33 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       // A thread that was never prompted has no rollout, so reloading it for
       // the result turn's configuration would lose it. Release it and start
       // the result turn on a fresh thread that carries that configuration.
-      await this.detachThread(context);
+      await this.lifecycle.detachThread(context);
       context = undefined;
     }
     const hadAttachedContext = context !== undefined;
     // 4. Lazily create the Codex thread on first prompt.
     if (!context) {
-      if (this.sessionAdmissionClosed(session)) return closingRefusal();
-      const thread = await this.options.engine.startThread({ config: promptConfig() });
+      if (this.sessions.sessionAdmissionClosed(session)) return closingRefusal();
+      const thread = await this.ctx.options.engine.startThread({ config: promptConfig() });
       if (!thread.id) return { ok: false, status: 503, error: "Codex did not return a thread id" };
-      if (this.sessionAdmissionClosed(session)) {
+      if (this.sessions.sessionAdmissionClosed(session)) {
         // Close retired the session during `thread/start`. Attaching now would
         // bind a thread to a session nothing references; the empty thread has
         // no rollout, so releasing it loses nothing.
-        await this.options.engine.unsubscribeThread(thread.handle).catch(() => undefined);
+        await this.ctx.options.engine.unsubscribeThread(thread.handle).catch(() => undefined);
         return closingRefusal();
       }
       // A new thread means a new rollout on disk; the next /session/list must
       // not answer from a catalog scanned before it existed.
       invalidateTranscriptCatalogCache();
-      context = this.registry.attach(session.id, thread.id, {
+      context = this.ctx.registry.attach(session.id, thread.id, {
         engineHandle: thread.handle,
-        engineGeneration: this.options.engine.info().generation,
+        engineGeneration: this.ctx.options.engine.info().generation,
         cwd: thread.cwd,
         modelId: thread.model,
         transcriptHydrated: true,
       });
-      await this.persistSession(session);
+      await this.ctx.callbacks.persistSession(session);
     }
     // Re-read after thread/start: updateConfig can be accepted while that RPC is
     // in flight, and turn/start must use the configuration that won that race.
@@ -398,7 +408,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       // The turn can only finish by calling this tool. Without it the model
       // runs to the end and pastes its result as text, which the backend waits
       // on for minutes before failing with no explanation.
-      const availability = await this.options.engine.workflowResultToolAvailability(
+      const availability = await this.ctx.options.engine.workflowResultToolAvailability(
         context.threadId,
         input.workflowResultTool,
       );
@@ -414,9 +424,9 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     // Last admission check, with no await between it and the claim below: a
     // close that fenced the session during any of the awaits above must not
     // find a turn starting after it decided the thread was quiet.
-    if (this.sessionAdmissionClosed(session)) return closingRefusal();
+    if (this.sessions.sessionAdmissionClosed(session)) return closingRefusal();
     context.dispatchInFlight = true;
-    this.registry.setPhase(context, "starting");
+    this.ctx.registry.setPhase(context, "starting");
 
     // `turn/start` applies the session's configured model but does not echo it
     // in its response and does not reliably emit `thread/settings/updated`.
@@ -432,12 +442,12 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       role: "assistant",
       content: "",
       parts: [],
-      createdAt: new Date(this.now()).toISOString(),
+      createdAt: new Date(this.ctx.now()).toISOString(),
       revision: 1,
       ...(modelForTurn ? { modelId: modelForTurn } : {}),
       ...(isPlanReview ? { planReview: true } : {}),
     };
-    const streamingState = this.stateFor(context.threadId);
+    const streamingState = this.lifecycle.stateFor(context.threadId);
     streamingState.publishedMessageId = assistantMessage.id;
     streamingState.publishedParts = [];
     streamingState.publishedModelId = assistantMessage.modelId;
@@ -461,9 +471,9 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     const refuseRetryForClose = async (): Promise<PromptDispatchOutcome> => {
       context!.dispatchInFlight = false;
       retractProvisionalMessages();
-      this.registry.setPhase(context!, "idle");
-      this.emitStatus(context!);
-      await this.journal.forget(requestId);
+      this.ctx.registry.setPhase(context!, "idle");
+      this.lifecycle.emitStatus(context!);
+      await this.ctx.journal.forget(requestId);
       return closingRefusal();
     };
     // Set only after app-server explicitly says an initial attempt did not run.
@@ -477,14 +487,18 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       // row as well as the assistant placeholder so every mounted client sees
       // the complete turn immediately. The renderer reconciles this echo with
       // any matching optimistic row.
-      this.options.emit({ type: "message.updated", sessionId: id, data: { message: userMessage } });
-      this.options.emit({
+      this.ctx.options.emit({
+        type: "message.updated",
+        sessionId: id,
+        data: { message: userMessage },
+      });
+      this.ctx.options.emit({
         type: "message.updated",
         sessionId: id,
         data: { message: assistantMessage },
       });
     }
-    this.emitStatus(context);
+    this.lifecycle.emitStatus(context);
 
     const promptWithRecoveredContext = session.recoveredContextPending
       ? buildRecoveredContextPrompt(session.localMessages, executionPrompt)
@@ -498,18 +512,18 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     );
     // The baseline its shell commands are measured from, taken before the turn
     // can run one.
-    await this.primeCommandChanges(context);
+    await this.ctx.callbacks.primeCommandChanges(context);
     try {
       // 5. Journal *before* the write: everything from here to `markAccepted` is
       //    the ambiguous window.
-      await this.journal.markPrepared({
+      await this.ctx.journal.markPrepared({
         requestId,
         bridgeSessionId: session.id,
         threadId: context.threadId,
       });
 
       const startTurn = () =>
-        this.options.engine.startTurn({
+        this.ctx.options.engine.startTurn({
           handle: context!.engineHandle,
           input: engineInput,
           config: turnConfig,
@@ -520,7 +534,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       try {
         turn = await startTurn();
       } catch (error) {
-        const failure = this.options.engine.classifyFailure(error);
+        const failure = this.ctx.options.engine.classifyFailure(error);
         if (!requestId.startsWith("initial-prompt:") || !failure.retryImmediately) {
           throw error;
         }
@@ -534,18 +548,22 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
         // await in this recovery path. Capturing it after the journal write left
         // a race where the replacement turn ran with an empty local transcript.
         const retryMessages = context.messages;
-        await this.journal.markRetryable(requestId);
+        await this.ctx.journal.markRetryable(requestId);
         await new Promise((resolve) =>
           setTimeout(
             resolve,
-            this.options.initialPromptRetryDelayMs ?? DEFAULT_INITIAL_PROMPT_RETRY_DELAY_MS,
+            this.ctx.options.initialPromptRetryDelayMs ?? DEFAULT_INITIAL_PROMPT_RETRY_DELAY_MS,
           ),
         );
-        let liveSession = this.registry.getSession(session.id);
-        if (!this.stopping && liveSession === session && this.sessionAdmissionClosed(session)) {
+        let liveSession = this.ctx.registry.getSession(session.id);
+        if (
+          !this.ctx.stopping &&
+          liveSession === session &&
+          this.sessions.sessionAdmissionClosed(session)
+        ) {
           return await refuseRetryForClose();
         }
-        if (this.stopping || liveSession !== session) {
+        if (this.ctx.stopping || liveSession !== session) {
           context.dispatchInFlight = false;
           // The phase was moved to `starting` before the dispatch, and `starting`
           // reports `running`. Settling it is not optional: the thread can outlive
@@ -558,18 +576,18 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
           // not a `cancelling`/`recovering` phase that must keep reporting busy.
           if (liveSession === session) {
             retractProvisionalMessages();
-            this.registry.setPhase(context, "failed", "Codex bridge is stopping");
-            this.emitStatus(context);
+            this.ctx.registry.setPhase(context, "failed", "Codex bridge is stopping");
+            this.lifecycle.emitStatus(context);
             // The marker was persisted before the delay, so shutdown can return
             // without launching work or writing new state after engine stop.
             return { ok: false, status: 503, error: "Codex bridge is stopping" };
           }
           retractProvisionalMessages();
-          this.registry.setPhase(context, "failed", "Session was deleted before its retry");
-          this.emitStatus(context);
+          this.ctx.registry.setPhase(context, "failed", "Session was deleted before its retry");
+          this.lifecycle.emitStatus(context);
           // A deleted session has no consumer to rehydrate this marker and must
           // never launch work after its final tab has gone away.
-          await this.journal.forget(requestId);
+          await this.ctx.journal.forget(requestId);
           return { ok: false, status: 404, error: "Session not found" };
         }
 
@@ -579,20 +597,24 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
         // prompt's empty thread has no rollout and is intentionally discarded by
         // generation recovery, so recreate it and carry the already-published
         // optimistic transcript onto the replacement context.
-        await this.generationRecovery;
-        liveSession = this.registry.getSession(session.id);
-        if (!this.stopping && liveSession === session && this.sessionAdmissionClosed(session)) {
+        await this.ctx.generationRecovery;
+        liveSession = this.ctx.registry.getSession(session.id);
+        if (
+          !this.ctx.stopping &&
+          liveSession === session &&
+          this.sessions.sessionAdmissionClosed(session)
+        ) {
           return await refuseRetryForClose();
         }
-        if (this.stopping || liveSession !== session) {
+        if (this.ctx.stopping || liveSession !== session) {
           context.dispatchInFlight = false;
-          const message = this.stopping
+          const message = this.ctx.stopping
             ? "Codex bridge stopped during retry recovery"
             : "Session was deleted during retry recovery";
           retractProvisionalMessages();
-          this.registry.setPhase(context, "failed", message);
-          this.emitStatus(context);
-          if (liveSession !== session) await this.journal.forget(requestId);
+          this.ctx.registry.setPhase(context, "failed", message);
+          this.lifecycle.emitStatus(context);
+          if (liveSession !== session) await this.ctx.journal.forget(requestId);
           return {
             ok: false,
             status: liveSession === session ? 503 : 404,
@@ -600,14 +622,14 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
           };
         }
         const staleContext = context;
-        let reboundContext = await this.ensureAttached(session.id);
+        let reboundContext = await this.ctx.callbacks.ensureAttached(session.id);
         // The replacement child can still be inside supervisor startup when the
         // delay expires. In that case the wait above observes the prior settled
         // recovery; ensureAttached is the RPC that finishes startup and publishes
         // the new generation event. Wait again, then discard any context that
         // recovery detached while that RPC was in flight.
-        await this.generationRecovery;
-        reboundContext = this.registry.getThreadForSession(session.id);
+        await this.ctx.generationRecovery;
+        reboundContext = this.ctx.registry.getThreadForSession(session.id);
         if (reboundContext) {
           context = reboundContext;
           // Recovery can win the race and create the replacement canonical
@@ -624,7 +646,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
         } else {
           let thread;
           try {
-            thread = await this.options.engine.startThread({ config: turnConfig });
+            thread = await this.ctx.options.engine.startThread({ config: turnConfig });
           } catch (error) {
             const message =
               error instanceof Error
@@ -632,22 +654,22 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
                 : "Codex failed to create a replacement thread";
             staleContext.dispatchInFlight = false;
             retractProvisionalMessages();
-            this.registry.setPhase(staleContext, "failed", message);
-            this.emitStatus(staleContext);
+            this.ctx.registry.setPhase(staleContext, "failed", message);
+            this.lifecycle.emitStatus(staleContext);
             return { ok: false, status: 503, error: message };
           }
           if (!thread.id) {
             const message = "Codex did not return a thread id";
             staleContext.dispatchInFlight = false;
             retractProvisionalMessages();
-            this.registry.setPhase(staleContext, "failed", message);
-            this.emitStatus(staleContext);
+            this.ctx.registry.setPhase(staleContext, "failed", message);
+            this.lifecycle.emitStatus(staleContext);
             return { ok: false, status: 503, error: message };
           }
           invalidateTranscriptCatalogCache();
-          context = this.registry.attach(session.id, thread.id, {
+          context = this.ctx.registry.attach(session.id, thread.id, {
             engineHandle: thread.handle,
-            engineGeneration: this.options.engine.info().generation,
+            engineGeneration: this.ctx.options.engine.info().generation,
             cwd: thread.cwd,
             modelId: thread.model,
             transcriptHydrated: true,
@@ -667,7 +689,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
         // with `turnStartedAt` cleared, so this also restores the busy state a
         // shared tab needs to see; `starting` reports `running`.
         context.dispatchInFlight = true;
-        this.registry.setPhase(context, "starting");
+        this.ctx.registry.setPhase(context, "starting");
         if (context !== staleContext) {
           // Only the replacement-thread branch above can reach this today: every
           // path that removes a thread from the registry also clears the session
@@ -676,13 +698,13 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
           // one identity check, and a future rebind would otherwise silently lose
           // the optimistic exchange published before the rejected dispatch.
           context.messages = retryMessages;
-          const replacementState = this.stateFor(context.threadId);
+          const replacementState = this.lifecycle.stateFor(context.threadId);
           replacementState.publishedMessageId = assistantMessage.id;
           replacementState.publishedParts = [];
           replacementState.publishedModelId = assistantMessage.modelId;
-          await this.persistSession(session);
+          await this.ctx.callbacks.persistSession(session);
         }
-        await this.journal.markPrepared({
+        await this.ctx.journal.markPrepared({
           requestId,
           bridgeSessionId: session.id,
           threadId: context.threadId,
@@ -696,7 +718,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       userMessage.turnId = turn.turnId;
       assistantMessage.turnId = turn.turnId;
 
-      await this.journal.markAccepted(requestId, {
+      await this.ctx.journal.markAccepted(requestId, {
         threadId: context.threadId,
         turnId: turn.turnId,
       });
@@ -704,7 +726,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       session.recoveredContextPending = false;
       // A new accepted user turn supersedes the restart notice for every tab
       // sharing this Codex thread, including tabs restored but not attached.
-      const clearedRestartNotices = this.registry
+      const clearedRestartNotices = this.ctx.registry
         .boundSessionsForThread(context.threadId)
         .filter((entry) => {
           if (!entry.restartFailure) return false;
@@ -716,11 +738,11 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       // detached and resumed later.
       context.materialized = true;
       const ledgerSessions = input.outputSchema
-        ? this.registry.recordStructuredOutputTurn(context.threadId, turn.turnId, false)
+        ? this.ctx.registry.recordStructuredOutputTurn(context.threadId, turn.turnId, false)
         : [];
       await Promise.all(
         [...new Set([session, ...ledgerSessions, ...clearedRestartNotices])].map((entry) =>
-          this.persistSession(entry),
+          this.ctx.callbacks.persistSession(entry),
         ),
       );
 
@@ -738,19 +760,19 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       context.activeTurn = accumulator;
       context.engineGeneration = turn.engineGeneration;
       context.dispatchInFlight = false;
-      this.registry.setPhase(context, "running");
+      this.ctx.registry.setPhase(context, "running");
       // Re-read: `recoverAfterGenerationChange` releases runtime state for an
       // unmaterialized thread — precisely a first prompt in flight — so the
       // reference captured before the dispatch may now be orphaned. Every later
       // reader goes through `stateFor`, and writing the streaming identity to a
       // dead object would leave the turn running but never streaming.
-      const liveState = this.stateFor(context.threadId);
-      this.beginAssistantTurnRender(liveState, assistantMessage);
+      const liveState = this.lifecycle.stateFor(context.threadId);
+      this.lifecycle.beginAssistantTurnRender(liveState, assistantMessage);
 
       // The turn is registered now, so anything that arrived while `turn/start`
       // was still in flight can be applied. A fast turn may already have
       // completed here, which is why this runs before returning.
-      this.drainPendingEvents(context, turn.turnId);
+      this.lifecycle.drainPendingEvents(context, turn.turnId);
 
       return {
         ok: true,
@@ -766,16 +788,16 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       context.dispatchInFlight = false;
       if (error instanceof DispatchJournalAdmissionError) {
         retractProvisionalMessages();
-        this.registry.setPhase(context, "failed", error.message);
-        this.emitStatus(context);
-        this.options.emit({
+        this.ctx.registry.setPhase(context, "failed", error.message);
+        this.lifecycle.emitStatus(context);
+        this.ctx.options.emit({
           type: "session.error",
           sessionId: session.id,
           data: { error: error.message, code: "dispatch_journal_capacity" },
         });
         return { ok: false, status: 503, error: error.message };
       }
-      const classified = this.options.engine.classifyFailure(error);
+      const classified = this.ctx.options.engine.classifyFailure(error);
       let ambiguousResolution: AmbiguousDispatchResolution | undefined;
 
       /**
@@ -786,8 +808,8 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
        */
       if (classified.class === "rejected" || dispatchDefinitelyDidNotRun) {
         retractProvisionalMessages();
-        this.registry.setPhase(context, "failed", classified.engineError.message);
-        await this.journal.markRetryable(requestId);
+        this.ctx.registry.setPhase(context, "failed", classified.engineError.message);
+        await this.ctx.journal.markRetryable(requestId);
       } else {
         ambiguousResolution = await this.settleAmbiguousDispatch(
           context,
@@ -815,8 +837,8 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
         if (ambiguousResolution === "attached") {
           session.lastAcceptedRequestId = requestId;
         }
-        await this.persistSession(session);
-        this.emitStatus(context);
+        await this.ctx.callbacks.persistSession(session);
+        this.lifecycle.emitStatus(context);
         return {
           ok: true,
           result: {
@@ -850,15 +872,15 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
               : undefined,
           },
         );
-        await this.persistSession(session);
-        this.options.emit({
+        await this.ctx.callbacks.persistSession(session);
+        this.ctx.options.emit({
           type: "session.structured-output",
           sessionId: session.id,
           data: { structuredOutput: session.structuredOutput },
         });
       }
-      this.emitStatus(context);
-      this.options.emit({
+      this.lifecycle.emitStatus(context);
+      this.ctx.options.emit({
         type: "session.error",
         sessionId: session.id,
         data: { error: classified.engineError.message, code: classified.engineError.code },
@@ -879,7 +901,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
   ): Promise<ThreadContext> {
     let thread;
     try {
-      thread = await this.options.engine.reloadThread(context.engineHandle, { config });
+      thread = await this.ctx.options.engine.reloadThread(context.engineHandle, { config });
     } catch (error) {
       // Unsubscribe or resume failed. Make the next request re-attach rather
       // than dispatch through the dropped handle; result turns still reload
@@ -888,9 +910,9 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       throw error;
     }
     if (!thread.id) throw new Error("Codex did not return a thread id");
-    return this.registry.attach(sessionId, thread.id, {
+    return this.ctx.registry.attach(sessionId, thread.id, {
       engineHandle: thread.handle,
-      engineGeneration: this.options.engine.info().generation,
+      engineGeneration: this.ctx.options.engine.info().generation,
       cwd: thread.cwd ?? context.cwd,
       name: thread.name ?? context.name,
       modelId: thread.model ?? context.modelId,
@@ -907,48 +929,48 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
    * a 409 and the session is bricked. `thread/read` is the one authority that can
    * say whether the write landed, so ask it and settle from the answer.
    */
-  protected async settleAmbiguousDispatch(
+  async settleAmbiguousDispatch(
     context: ThreadContext,
     requestId: string,
     assistantMessageId: string,
     options: { forgetIfAbsent?: boolean } = {},
   ): Promise<AmbiguousDispatchResolution> {
-    this.registry.setPhase(context, "recovering");
+    this.ctx.registry.setPhase(context, "recovering");
     let accumulator = context.activeTurn;
     if (!accumulator || accumulator.requestId !== requestId) {
       accumulator = new TurnAccumulator({
         threadId: context.threadId,
         turnId: unconfirmedTurnId(requestId),
         requestId,
-        engineGeneration: this.options.engine.info().generation,
+        engineGeneration: this.ctx.options.engine.info().generation,
         assistantMessageId,
         configurationRevision: Math.max(
           0,
           ...[...context.bridgeSessionIds].map(
-            (sessionId) => this.registry.getSession(sessionId)?.configurationRevision ?? 0,
+            (sessionId) => this.ctx.registry.getSession(sessionId)?.configurationRevision ?? 0,
           ),
         ),
         startedAt:
           context.turnStartedAt ??
           context.messages.find((message) => message.id === assistantMessageId)?.createdAt ??
-          new Date(this.now()).toISOString(),
+          new Date(this.ctx.now()).toISOString(),
         expectsStructuredOutput: [...context.bridgeSessionIds].some(
           (sessionId) =>
-            this.registry.getSession(sessionId)?.structuredOutputRequestId === requestId,
+            this.ctx.registry.getSession(sessionId)?.structuredOutputRequestId === requestId,
         ),
       });
       accumulator.markRunning();
       context.activeTurn = accumulator;
       // `recovering` was set before the accumulator existed. Re-apply it so the
       // registry can adopt the recovered backend/rollout timestamp immediately.
-      this.registry.setPhase(context, "recovering");
+      this.ctx.registry.setPhase(context, "recovering");
       // Goes through the shared helper so the publish baseline is reset with the
       // render state. Resetting only `render` left the first publish of this
       // recovered row emitting a patch against the previous turn's parts.
       const recoveredModelId = context.messages.find(
         (message) => message.id === assistantMessageId,
       )?.modelId;
-      this.beginAssistantTurnRender(this.stateFor(context.threadId), {
+      this.lifecycle.beginAssistantTurnRender(this.lifecycle.stateFor(context.threadId), {
         id: assistantMessageId,
         ...(recoveredModelId ? { modelId: recoveredModelId } : {}),
       });
@@ -959,7 +981,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     this.scheduleRecoveryBackstop(context);
     let outcome: Awaited<ReturnType<AppServerEngine["reconcileRequest"]>>;
     try {
-      outcome = await this.options.engine.reconcileRequest(context.threadId, requestId);
+      outcome = await this.ctx.options.engine.reconcileRequest(context.threadId, requestId);
     } catch (error) {
       console.warn(
         `[codex-bridge] Could not reconcile ${requestId} on thread ${context.threadId}:`,
@@ -971,7 +993,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     if (outcome.result === "attach") {
       // It really is executing. Adopt the turn so its terminal event finalizes
       // the transcript instead of arriving for a turn nobody is tracking.
-      await this.journal.markAccepted(requestId, {
+      await this.ctx.journal.markAccepted(requestId, {
         threadId: context.threadId,
         turnId: outcome.turnId!,
       });
@@ -979,11 +1001,11 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       // prompt must not prepend it a second time.
       this.clearRecoveredContextPending(context);
       accumulator.turnId = outcome.turnId!;
-      accumulator.engineGeneration = this.options.engine.info().generation;
+      accumulator.engineGeneration = this.ctx.options.engine.info().generation;
       this.clearRecoveryBackstop(context.threadId);
-      this.registry.setPhase(context, "running");
+      this.ctx.registry.setPhase(context, "running");
       // Anything that arrived for this turn while it had no owner.
-      this.drainPendingEvents(context, outcome.turnId!);
+      this.lifecycle.drainPendingEvents(context, outcome.turnId!);
       return "attached";
     }
 
@@ -995,18 +1017,18 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
         // cancellation would already have made its journal entry terminal.
         context.activeTurn = accumulator;
         accumulator.turnId = outcome.turnId ?? accumulator.turnId;
-        this.completeRecoveredTurn(accumulator, "interrupted");
-        await this.runFinalization(context, accumulator);
+        this.lifecycle.completeRecoveredTurn(accumulator, "interrupted");
+        await this.lifecycle.runFinalization(context, accumulator);
         this.clearRecoveredContextPending(context);
         return "terminal";
       }
-      await this.journal.markTerminal(requestId, outcome.status ?? "completed", {
+      await this.ctx.journal.markTerminal(requestId, outcome.status ?? "completed", {
         threadId: context.threadId,
         turnId: outcome.turnId,
       });
       // It ran to completion carrying the recovered transcript; do not resend it.
       this.clearRecoveredContextPending(context);
-      this.registry.setPhase(
+      this.ctx.registry.setPhase(
         context,
         outcome.status === "failed" ? "failed" : "idle",
         AMBIGUOUS_DISPATCH_FAILURE_MESSAGE,
@@ -1017,14 +1039,14 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
 
     // Absent: provably never executed, so release the id for a clean retry.
     if (options.forgetIfAbsent !== false) {
-      await this.journal.forget(requestId);
+      await this.ctx.journal.forget(requestId);
     } else {
-      await this.journal.markTerminal(requestId, "failed", {
+      await this.ctx.journal.markTerminal(requestId, "failed", {
         threadId: context.threadId,
         turnId: outcome.turnId,
       });
     }
-    this.registry.setPhase(context, "failed", AMBIGUOUS_DISPATCH_FAILURE_MESSAGE);
+    this.ctx.registry.setPhase(context, "failed", AMBIGUOUS_DISPATCH_FAILURE_MESSAGE);
     this.notifyThreadActivity();
     return "absent";
   }
@@ -1035,32 +1057,32 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
    * A timeout alone proves nothing about whether the turn is executing. Killing
    * its generation is the only safe way to release the overlap guard.
    */
-  protected scheduleRecoveryBackstop(context: ThreadContext): void {
+  scheduleRecoveryBackstop(context: ThreadContext): void {
     this.clearRecoveryBackstop(context.threadId);
     const timeoutMs =
-      this.options.ambiguousRecoveryTimeoutMs ?? DEFAULT_AMBIGUOUS_RECOVERY_TIMEOUT_MS;
+      this.ctx.options.ambiguousRecoveryTimeoutMs ?? DEFAULT_AMBIGUOUS_RECOVERY_TIMEOUT_MS;
     const timer = setTimeout(() => {
-      this.recoveryBackstops.delete(context.threadId);
+      this.ctx.recoveryBackstops.delete(context.threadId);
       void this.restartForAmbiguousDispatch(context.threadId);
     }, timeoutMs);
     timer.unref?.();
-    this.recoveryBackstops.set(context.threadId, timer);
+    this.ctx.recoveryBackstops.set(context.threadId, timer);
   }
 
-  protected async restartForAmbiguousDispatch(threadId: string): Promise<void> {
-    const context = this.registry.getThread(threadId);
+  async restartForAmbiguousDispatch(threadId: string): Promise<void> {
+    const context = this.ctx.registry.getThread(threadId);
     if (!context || context.phase !== "recovering") return;
     try {
-      await this.options.engine
+      await this.ctx.options.engine
         .getSupervisor()
         .restartNow(`ambiguous dispatch on thread ${threadId}`);
-      await this.generationRecovery;
+      await this.ctx.generationRecovery;
     } catch (error) {
       // Safe failure: keep the overlap guard in recovering. Reporting failed/idle
       // here would permit a second turn without proof that the first stopped.
       const message = error instanceof Error ? error.message : "Failed to restart Codex safely";
       for (const sessionId of context.bridgeSessionIds) {
-        this.options.emit({
+        this.ctx.options.emit({
           type: "session.error",
           sessionId,
           data: { error: message },
@@ -1075,7 +1097,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
        * stays `recovering` (reported as `running`) with nothing left to move it,
        * and every later prompt 409s until an unrelated generation change.
        */
-      const current = this.registry.getThread(threadId);
+      const current = this.ctx.registry.getThread(threadId);
       if (current && current.phase === "recovering") {
         this.scheduleRecoveryBackstop(current);
       }
@@ -1087,9 +1109,9 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
    * thread. Only the clean `markAccepted` path clears this inline; reconciliation
    * has to do the same whenever it proves the carrying turn actually ran.
    */
-  protected clearRecoveredContextPending(context: ThreadContext): void {
+  clearRecoveredContextPending(context: ThreadContext): void {
     for (const sessionId of context.bridgeSessionIds) {
-      const session = this.registry.getSession(sessionId);
+      const session = this.ctx.registry.getSession(sessionId);
       if (session) session.recoveredContextPending = false;
     }
   }
@@ -1107,14 +1129,11 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
    * are noted; noting every write would carry rows that merely aged out of
    * the window in every snapshot.
    */
-  protected bumpMessageRevision(
-    context: ThreadContext,
-    revised: readonly NormalizedMessage[] = [],
-  ): void {
+  bumpMessageRevision(context: ThreadContext, revised: readonly NormalizedMessage[] = []): void {
     const newestId = context.messages.at(-1)?.id;
     const noted = revised.filter((message) => message.id !== newestId);
     for (const sessionId of context.bridgeSessionIds) {
-      const session = this.registry.getSession(sessionId);
+      const session = this.ctx.registry.getSession(sessionId);
       if (!session) continue;
       session.messageRevision += 1;
       if (noted.length === 0) continue;
@@ -1129,7 +1148,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
    * initial-prompt retry path, so clean both it and any live replacement before
    * publishing removal frames to every client that saw the provisional rows.
    */
-  protected retractPromptMessages(
+  retractPromptMessages(
     context: ThreadContext,
     sessionIds: readonly string[],
     messageIds: readonly string[],
@@ -1137,7 +1156,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     const ids = new Set(messageIds);
     const contexts = new Set<ThreadContext>([context]);
     for (const sessionId of sessionIds) {
-      const liveContext = this.registry.getThreadForSession(sessionId);
+      const liveContext = this.ctx.registry.getThreadForSession(sessionId);
       if (liveContext) contexts.add(liveContext);
     }
     for (const candidate of contexts) {
@@ -1145,10 +1164,10 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     }
 
     for (const sessionId of sessionIds) {
-      const session = this.registry.getSession(sessionId);
+      const session = this.ctx.registry.getSession(sessionId);
       if (session) session.messageRevision += 1;
       for (const removedMessageId of messageIds) {
-        this.options.emit({
+        this.ctx.options.emit({
           type: "message.updated",
           sessionId,
           data: { removedMessageId },
@@ -1157,14 +1176,14 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     }
   }
 
-  protected clearRecoveryBackstop(threadId: string): void {
-    const timer = this.recoveryBackstops.get(threadId);
+  clearRecoveryBackstop(threadId: string): void {
+    const timer = this.ctx.recoveryBackstops.get(threadId);
     if (!timer) return;
     clearTimeout(timer);
-    this.recoveryBackstops.delete(threadId);
+    this.ctx.recoveryBackstops.delete(threadId);
   }
 
-  protected appendUserMessage(
+  appendUserMessage(
     context: ThreadContext,
     prompt: string,
     attachments: PromptAttachmentInput[],
@@ -1193,7 +1212,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
       role: "user",
       content: displayed,
       parts,
-      createdAt: new Date(this.now()).toISOString(),
+      createdAt: new Date(this.ctx.now()).toISOString(),
     };
     context.messages.push(message);
     return message;
@@ -1204,7 +1223,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
    * generated → prompt fallback. The generated title is dual-written to Codex
    * (`thread/name/set`) and the bridge's own index so rollback keeps titles.
    */
-  protected applyPromptTitle(session: BridgeSession, context: ThreadContext, prompt: string): void {
+  applyPromptTitle(session: BridgeSession, context: ThreadContext, prompt: string): void {
     // Both title paths name the user's request, so neither may see the injected
     // coordinator preamble or framed provider guidance: either would dominate
     // the generated title and leak internal context to the separate `codex exec`.
@@ -1212,12 +1231,12 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     if (!session.title) {
       const fallback = buildFallbackSessionTitle(titleSource);
       for (const id of context.bridgeSessionIds) {
-        const attached = this.registry.getSession(id);
+        const attached = this.ctx.registry.getSession(id);
         if (attached && !attached.title) {
           attached.title = fallback;
           attached.titleSource = "prompt";
         }
-        this.options.emit({
+        this.ctx.options.emit({
           type: "session.title-updated",
           sessionId: id,
           data: { title: fallback },
@@ -1228,13 +1247,13 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     const shouldGenerate =
       session.titleGenerationAttempted !== true &&
       (session.titleSource === "prompt" || !session.titleSource);
-    if (!shouldGenerate || !this.options.generateTitle) return;
+    if (!shouldGenerate || !this.ctx.options.generateTitle) return;
 
     session.titleGenerationAttempted = true;
     const token = Symbol("title");
     session.titleGenerationToken = token;
 
-    void this.options
+    void this.ctx.options
       .generateTitle(titleSource)
       .then(async (title) => {
         if (session.titleGenerationToken !== token) return;
@@ -1243,21 +1262,21 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
         if (threadId) {
           // Dual write: Codex owns the display name, but the bridge index is what
           // the SDK engine reads, so rollback must still see the title.
-          await this.options.engine.setThreadName(threadId, title).catch(() => false);
-          await persistSessionTitle(this.options.codexHome, threadId, title, {
+          await this.ctx.options.engine.setThreadName(threadId, title).catch(() => false);
+          await persistSessionTitle(this.ctx.options.codexHome, threadId, title, {
             source: "generated",
           }).catch(() => undefined);
         }
         for (const id of context.bridgeSessionIds) {
-          const attached = this.registry.getSession(id);
+          const attached = this.ctx.registry.getSession(id);
           if (attached) {
             attached.title = title;
             attached.titleSource = "generated";
             attached.titleGenerationAttempted = true;
             attached.titleGenerationToken = undefined;
-            await this.persistSession(attached);
+            await this.ctx.callbacks.persistSession(attached);
           }
-          this.options.emit({ type: "session.title-updated", sessionId: id, data: { title } });
+          this.ctx.options.emit({ type: "session.title-updated", sessionId: id, data: { title } });
         }
       })
       .catch(() => {
@@ -1276,33 +1295,33 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
    * discovery lists the workspace without resuming any thread.
    */
   async getCommandCatalogue(sessionId: string): Promise<BridgeCommandCatalogueResponse> {
-    if (!this.registry.getSession(sessionId)) {
+    if (!this.ctx.registry.getSession(sessionId)) {
       return {
         catalogueVersion: NATIVE_AGENT_COMMAND_CATALOGUE_VERSION,
         status: "missing",
         commands: [],
       };
     }
-    return this.commandCatalogue.list();
+    return this.ctx.commandCatalogue.list();
   }
 
   async refreshCommandCatalogue(
     sessionId: string,
   ): Promise<{ outcome: NativeAgentCommandRefreshOutcome; message?: string }> {
-    if (!this.registry.getSession(sessionId)) {
+    if (!this.ctx.registry.getSession(sessionId)) {
       return { outcome: "failed", message: "Session not found" };
     }
-    return this.commandCatalogue.refresh();
+    return this.ctx.commandCatalogue.refresh();
   }
 
   /** Legacy global rows: built-ins and templates, without starting Codex. */
   async listGlobalCommandRows(): Promise<NativeAgentSlashCommand[]> {
-    return this.commandCatalogue.listTemplateAndBuiltinRows();
+    return this.ctx.commandCatalogue.listTemplateAndBuiltinRows();
   }
 
   /** `/models`: the catalogue the model picker uses, with the current selection. */
-  protected async modelsListText(session: BridgeSession): Promise<string> {
-    const { models } = await this.listModels();
+  async modelsListText(session: BridgeSession): Promise<string> {
+    const { models } = await this.ctx.callbacks.listModels();
     const current = session.config.model || models[0]?.id || "UNCONFIRMED";
     return [
       "Available Codex models:",
@@ -1314,53 +1333,50 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
   }
 
   /** Answers a built-in command without involving Codex at all. */
-  protected emitLocalResponse(session: BridgeSession, prompt: string, response: string): void {
+  emitLocalResponse(session: BridgeSession, prompt: string, response: string): void {
     const userMessage: NormalizedMessage = {
       id: createMessageId(),
       role: "user",
       content: prompt,
       parts: [{ type: "text", content: prompt }],
-      createdAt: new Date(this.now()).toISOString(),
+      createdAt: new Date(this.ctx.now()).toISOString(),
     };
     const assistantMessage: NormalizedMessage = {
       id: createMessageId(),
       role: "assistant",
       content: response,
       parts: [{ type: "text", content: response }],
-      createdAt: new Date(this.now()).toISOString(),
+      createdAt: new Date(this.ctx.now()).toISOString(),
     };
     // Capped: these have no rollout to fall back on and survive detaching, so
     // they are the one transcript buffer nothing else ever evicts.
-    this.registry.appendLocalMessages(session, userMessage, assistantMessage);
+    this.ctx.registry.appendLocalMessages(session, userMessage, assistantMessage);
 
     if (!session.title) {
       session.title = buildFallbackSessionTitle(prompt);
       session.titleSource = "prompt";
-      this.options.emit({
+      this.ctx.options.emit({
         type: "session.title-updated",
         sessionId: session.id,
         data: { title: session.title },
       });
     }
     for (const message of [userMessage, assistantMessage]) {
-      this.options.emit({
+      this.ctx.options.emit({
         type: "message.updated",
         sessionId: session.id,
         data: { message },
       });
     }
-    this.options.emit({ type: "session.updated", sessionId: session.id });
-    this.options.emit({
+    this.ctx.options.emit({ type: "session.updated", sessionId: session.id });
+    this.ctx.options.emit({
       type: "session.idle",
       sessionId: session.id,
       data: { title: session.title },
     });
   }
 
-  protected messagesForSession(
-    session: BridgeSession,
-    context: ThreadContext,
-  ): NormalizedMessage[] {
+  messagesForSession(session: BridgeSession, context: ThreadContext): NormalizedMessage[] {
     if (session.localMessages.length === 0) return context.messages;
     // Context order is authoritative (steers can be inserted above already
     // opened response rows). Only local commands need a timestamp merge.
@@ -1374,7 +1390,7 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     return messages;
   }
 
-  protected threadHasActiveWork(context: ThreadContext): boolean {
+  threadHasActiveWork(context: ThreadContext): boolean {
     return (
       context.activeTurn !== null ||
       context.dispatchInFlight ||
@@ -1383,48 +1399,51 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     );
   }
 
-  protected reloadStoredAccountLogin(): Promise<void> {
-    if (this.accountReload) return this.accountReload;
-    if (this.stopping) {
-      this.options.engine.cancelStoredAccountReload();
+  reloadStoredAccountLogin(): Promise<void> {
+    if (this.ctx.accountReload) return this.ctx.accountReload;
+    if (this.ctx.stopping) {
+      this.ctx.options.engine.cancelStoredAccountReload();
       return Promise.resolve();
     }
     // Publish the fence synchronously, before any new prompt/review can enter.
     // Existing admissions may still need RPCs for preparation or dispatch: do
     // not install the supervisor's drain gate until those calls have settled.
     const reload = (async () => {
-      await Promise.race([Promise.all(this.admittedDispatches), this.dispatchAdmissionStopped]);
-      if (this.stopping) {
-        this.options.engine.cancelStoredAccountReload();
+      await Promise.race([
+        Promise.all(this.ctx.admittedDispatches),
+        this.ctx.dispatchAdmissionStopped,
+      ]);
+      if (this.ctx.stopping) {
+        this.ctx.options.engine.cancelStoredAccountReload();
         return;
       }
-      const generation = this.options.engine.info().generation;
-      await this.options.engine.reloadAccountFromStoredLogin({
+      const generation = this.ctx.options.engine.info().generation;
+      await this.ctx.options.engine.reloadAccountFromStoredLogin({
         hasActiveTurns: () => this.hasActiveWorkOtherThan(null),
         waitForIdle: () => this.waitForAllThreadsIdle(generation),
       });
       // Rebind every loaded thread before reopening dispatch admission.
-      await this.generationRecovery;
+      await this.ctx.generationRecovery;
     })();
     const settled = reload.finally(() => {
-      if (this.accountReload === settled) this.accountReload = null;
+      if (this.ctx.accountReload === settled) this.ctx.accountReload = null;
     });
-    this.accountReload = settled;
+    this.ctx.accountReload = settled;
     return settled;
   }
 
   /** Active work anywhere except the thread asking, which never waits on itself. */
-  protected hasActiveWorkOtherThan(threadId: string | null | undefined): boolean {
-    return this.registry
+  hasActiveWorkOtherThan(threadId: string | null | undefined): boolean {
+    return this.ctx.registry
       .listThreads()
       .some((entry) => entry.threadId !== threadId && this.threadHasActiveWork(entry));
   }
 
   /** Wakes the drain; over-notifying is free because it re-checks the registry. */
-  protected notifyThreadActivity(): void {
-    if (this.idleWaiters.size === 0) return;
-    const waiters = [...this.idleWaiters];
-    this.idleWaiters.clear();
+  notifyThreadActivity(): void {
+    if (this.ctx.idleWaiters.size === 0) return;
+    const waiters = [...this.ctx.idleWaiters];
+    this.ctx.idleWaiters.clear();
     for (const wake of waiters) wake();
   }
 
@@ -1439,17 +1458,18 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
    *   - it gives up at a deadline, so a turn that never reports terminal costs one
    *     interrupted turn rather than a wedged bridge.
    */
-  protected async waitForAllThreadsIdle(
+  async waitForAllThreadsIdle(
     expectedGeneration: EngineGeneration,
     options: { excludeThreadId?: string | null } = {},
   ): Promise<void> {
     // Deliberately real time, not the injected clock: this bounds an actual wait
     // on real timers, and a frozen test clock must not disable the deadline.
     const deadline =
-      Date.now() + (this.options.environmentDrainTimeoutMs ?? DEFAULT_ENVIRONMENT_DRAIN_TIMEOUT_MS);
+      Date.now() +
+      (this.ctx.options.environmentDrainTimeoutMs ?? DEFAULT_ENVIRONMENT_DRAIN_TIMEOUT_MS);
 
     while (this.hasActiveWorkOtherThan(options.excludeThreadId)) {
-      if (this.stopping || this.shouldAbandonDrain(expectedGeneration)) return;
+      if (this.ctx.stopping || this.shouldAbandonDrain(expectedGeneration)) return;
       if (Date.now() >= deadline) {
         console.warn(
           "[codex-bridge] Restarting app-server with turns still in flight: the drain deadline expired.",
@@ -1461,9 +1481,9 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
   }
 
   /** True when nothing this drain is waiting for can still finish. */
-  protected shouldAbandonDrain(expectedGeneration: EngineGeneration): boolean {
-    if (this.options.engine.info().generation !== expectedGeneration) return true;
-    const health = this.options.engine.getHealth();
+  shouldAbandonDrain(expectedGeneration: EngineGeneration): boolean {
+    if (this.ctx.options.engine.info().generation !== expectedGeneration) return true;
+    const health = this.ctx.options.engine.getHealth();
     if (health.state === "restarting" || health.state === "failed" || health.state === "stopped") {
       return true;
     }
@@ -1473,21 +1493,21 @@ export abstract class AppServerRuntimePrompt extends AppServerRuntimeSessions {
     return health.state === "draining" && health.pid === null;
   }
 
-  protected waitForThreadActivity(): Promise<void> {
+  waitForThreadActivity(): Promise<void> {
     return new Promise<void>((resolve) => {
       const wake = (): void => {
         clearTimeout(timer);
-        this.idleWaiters.delete(wake);
+        this.ctx.idleWaiters.delete(wake);
         resolve();
       };
       // Backstop only: a phase change that forgets to notify must not strand the
       // drain until its deadline.
       const timer = setTimeout(() => {
-        this.idleWaiters.delete(wake);
+        this.ctx.idleWaiters.delete(wake);
         resolve();
       }, IDLE_WAIT_POLL_MS);
       timer.unref?.();
-      this.idleWaiters.add(wake);
+      this.ctx.idleWaiters.add(wake);
     });
   }
 

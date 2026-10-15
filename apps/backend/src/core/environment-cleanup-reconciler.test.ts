@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -25,6 +25,7 @@ import {
   runStartupEnvironmentCleanup,
   scheduleEnvironmentCleanupReconcile,
   sweepAbandonedTempFiles,
+  sweepOrphanedDesignCanvases,
   sweepOrphanedEnvironmentBranches,
   sweepOrphanedEnvironmentState,
   sweepPreLedgerDiskState,
@@ -35,6 +36,10 @@ import { environmentStateDirectory } from "./environment-state-paths.js";
 import type { Environment } from "./models.js";
 import { runCommand } from "./shell.js";
 import { StorageService } from "./storage.js";
+import { DesignService } from "./design/index.js";
+import { createTestRenderer } from "./design/test-support.js";
+import { deleteStoredValue, seedStore, seedUnreadableStore } from "./storage-test-support.js";
+import { BackendRuntime } from "./backend-runtime.js";
 
 const tempDirectories: string[] = [];
 
@@ -77,6 +82,7 @@ async function reconcileContext(): Promise<{
     worktreeDir,
     strictDockerOwner: false,
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+    runtime: new BackendRuntime({ emit: () => undefined }),
   } as CommandContext;
   return { context, storage, dataDir, worktreeDir };
 }
@@ -279,6 +285,123 @@ describe("orphaned environment state sweep", () => {
     await eventually(async () => !(await exists(orphan)));
     expect(await exists(live)).toBe(true);
     cancelScheduledEnvironmentCleanup(dataDir);
+  });
+
+  test("the design canvas sweep receives every environment and the orphan age", async () => {
+    const { context, storage } = await reconcileContext();
+    await storage.addEnvironment(environment("live"));
+    const calls: Array<{ live: string[]; minAgeMs: number }> = [];
+    context.design = {
+      sweepOrphanedCanvases: async (live: ReadonlySet<string>, minAgeMs: number) => {
+        calls.push({ live: [...live], minAgeMs });
+        return 2;
+      },
+    } as unknown as CommandContext["design"];
+    expect(await sweepOrphanedDesignCanvases(context)).toBe(2);
+    expect(calls).toEqual([{ live: ["live"], minAgeMs: ORPHANED_STATE_MIN_AGE_MS }]);
+  });
+
+  test("the design canvas sweep does not run when environments cannot be listed", async () => {
+    const { context, storage } = await reconcileContext();
+    let swept = false;
+    context.design = {
+      sweepOrphanedCanvases: async () => {
+        swept = true;
+        return 0;
+      },
+    } as unknown as CommandContext["design"];
+    storage.loadEnvironmentIdsForCleanup = async () => {
+      throw new Error("unreadable");
+    };
+    await expect(sweepOrphanedDesignCanvases(context)).rejects.toThrow("unreadable");
+    expect(swept).toBe(false);
+  });
+
+  for (const state of ["corrupt", "missing", "invalid", "invalid-owner", "empty"] as const) {
+    test(`the design sweep requires an authoritative owner store: ${state}`, async () => {
+      const { context, storage, dataDir } = await reconcileContext();
+      const design = new DesignService(dataDir, () => {}, createTestRenderer(), {
+        now: () => new Date(Date.now() + 2 * ORPHANED_STATE_MIN_AGE_MS),
+      });
+      context.design = design;
+      try {
+        await storage.addEnvironment(environment("live"));
+        const canvas = await design.create("live", "Keep my data", undefined, "user");
+        await design.createFrame(
+          canvas.id,
+          "live",
+          1,
+          {
+            name: "Frame",
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+            html: "<p>Keep</p>",
+          },
+          "user",
+        );
+        const files = [
+          design.store.recordFile(canvas.id),
+          path.join(design.store.historyDir(canvas.id), "checkpoint"),
+          path.join(design.store.exportBackupDir(canvas.id), "backup"),
+          design.store.legacyBackupFile(canvas.id),
+        ];
+        for (const file of files.slice(1)) {
+          await fs.mkdir(path.dirname(file), { recursive: true });
+          await fs.writeFile(file, "retained content");
+        }
+        const before = await Promise.all(files.map((file) => fs.readFile(file)));
+        if (state === "corrupt") seedUnreadableStore(dataDir, "environments.json");
+        else if (state === "missing") deleteStoredValue(dataDir, "environments.json");
+        else if (state === "invalid") seedStore(dataDir, "environments.json", {});
+        else if (state === "invalid-owner") seedStore(dataDir, "environments.json", [{}]);
+        else await storage.removeEnvironment("live");
+
+        if (state === "empty") {
+          expect(await sweepOrphanedDesignCanvases(context)).toBe(1);
+          for (const file of files) expect(await exists(file)).toBe(false);
+        } else {
+          // These are the actual lenient fallbacks that previously admitted deletion.
+          if (state === "corrupt" || state === "missing") {
+            expect(await storage.loadEnvironments()).toEqual([]);
+          }
+          await expect(sweepOrphanedDesignCanvases(context)).rejects.toThrow();
+          expect(await Promise.all(files.map((file) => fs.readFile(file)))).toEqual(before);
+        }
+      } finally {
+        await design.close();
+        storage.close();
+      }
+    });
+  }
+
+  test("startup logs a rejected design sweep and continues to the disk sweep", async () => {
+    const { context, storage, dataDir } = await reconcileContext();
+    seedStore(dataDir, "environments.json", []);
+    const abandoned = path.join(dataDir, "environments.json.2147483647.tmp");
+    await fs.writeFile(abandoned, "abandoned");
+    const old = new Date(Date.now() - 2 * ORPHANED_STATE_MIN_AGE_MS);
+    await fs.utimes(abandoned, old, old);
+    context.design = {
+      sweepOrphanedCanvases: async () => {
+        throw new Error("design sweep unavailable");
+      },
+    } as unknown as CommandContext["design"];
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await runStartupEnvironmentCleanup(context);
+      expect(
+        warning.mock.calls.some(([message]) =>
+          String(message).includes("Orphaned design canvas sweep failed:"),
+        ),
+      ).toBe(true);
+      expect(await exists(abandoned)).toBe(false);
+    } finally {
+      cancelScheduledEnvironmentCleanup(dataDir);
+      warning.mockRestore();
+      storage.close();
+    }
   });
 
   test("startup retries an orphan sweep after an owner lookup failure", async () => {

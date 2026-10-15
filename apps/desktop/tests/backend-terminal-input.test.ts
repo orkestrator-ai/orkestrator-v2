@@ -3,7 +3,11 @@ import {
   TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES,
   TERMINAL_HTTP_INPUT_MAX_PENDING_INPUTS,
 } from "@orkestrator/protocol/terminal-input-batcher";
-import { TERMINAL_MAX_PENDING_LIFECYCLE_OPERATIONS } from "@orkestrator/protocol/terminal-input-sequencer";
+import {
+  LOCAL_TERMINAL_INPUT_RESUME_COMMAND,
+  TERMINAL_INPUT_RESUME_COMMAND,
+  TERMINAL_MAX_PENDING_LIFECYCLE_OPERATIONS,
+} from "@orkestrator/protocol/terminal-input-sequencer";
 import {
   terminalInputContractScenarios,
   type TerminalContractAdapter,
@@ -64,7 +68,6 @@ const outcome = (promise: Promise<unknown>) =>
   );
 
 const desktopAdapter: TerminalContractAdapter = {
-  recovery: "fence-until-start",
   create(backend, options = {}) {
     globalThis.fetch = Object.assign(
       mock(async (_url: unknown, init?: RequestInit) => {
@@ -220,6 +223,31 @@ describe("Electron terminal HTTP input", () => {
         [startCommand, undefined],
         [writeCommand, "fresh"],
         [writeCommand, "later"],
+      ]);
+    });
+  }
+
+  for (const [writeCommand, resumeCommand] of [
+    ["terminal_write", TERMINAL_INPUT_RESUME_COMMAND],
+    ["local_terminal_write", LOCAL_TERMINAL_INPUT_RESUME_COMMAND],
+  ] as const) {
+    test(`${resumeCommand} re-arms ${writeCommand} without an HTTP request`, async () => {
+      let failWrites = true;
+      const { client, bodies } = fixture(async () => {
+        if (failWrites) throw new Error("response lost");
+        return delivered();
+      });
+      await expect(client.invoke(writeCommand, { sessionId: "resume", data: "a" })).rejects.toThrow(
+        "response lost",
+      );
+      failWrites = false;
+      expect(await client.invoke(resumeCommand, { sessionId: "resume" })).toEqual({
+        resumed: true,
+      });
+      await client.invoke(writeCommand, { sessionId: "resume", data: "b" });
+      expect(bodies.map((body) => [body.command, body.args.data])).toEqual([
+        [writeCommand, "a"],
+        [writeCommand, "b"],
       ]);
     });
   }

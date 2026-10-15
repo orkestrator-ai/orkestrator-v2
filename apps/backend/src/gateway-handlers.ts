@@ -1,4 +1,7 @@
-import { GatewayAuth } from "./gateway-auth.js";
+import type { GatewayAuth } from "./gateway-auth.js";
+import type { GatewayContext } from "./gateway-context.js";
+import type { GatewayEvents } from "./gateway-events.js";
+import type { GatewayProxy } from "./gateway-proxy.js";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
 import { parseGatewayCursor } from "./gateway-event-replay.js";
 import {
@@ -33,14 +36,22 @@ import type {
 } from "./gateway-internals.js";
 import { recurringWorkDiagnostics } from "./core/recurring-diagnostics.js";
 
-export abstract class GatewayHandlers extends GatewayAuth {
-  protected commandIsRegistered(command: string, errorMessage: string): boolean {
-    const hasCommand = this.backend.hasCommand;
-    if (hasCommand) return hasCommand.call(this.backend, command);
+/** The invoke, event-stream, metrics and loopback-proxy routes. */
+export class GatewayHandlers {
+  constructor(
+    private readonly ctx: GatewayContext,
+    private readonly events: GatewayEvents,
+    private readonly auth: GatewayAuth,
+    private readonly proxy: GatewayProxy,
+  ) {}
+
+  commandIsRegistered(command: string, errorMessage: string): boolean {
+    const hasCommand = this.ctx.backend.hasCommand;
+    if (hasCommand) return hasCommand.call(this.ctx.backend, command);
     return !errorMessage.startsWith("Unknown backend command:");
   }
 
-  protected async handleInvoke(
+  async handleInvoke(
     request: IncomingMessage,
     response: ServerResponse,
     requestMetrics: GatewayRequestMetrics,
@@ -95,9 +106,9 @@ export abstract class GatewayHandlers extends GatewayAuth {
     const startedAt = Date.now();
 
     try {
-      const result = await this.backend.invoke(command, safeArgs);
+      const result = await this.ctx.backend.invoke(command, safeArgs);
       const responseBody = JSON.stringify({ result });
-      this.metrics.recordInvoke(
+      this.ctx.metrics.recordInvoke(
         command,
         requestBytes,
         Buffer.byteLength(responseBody),
@@ -116,7 +127,7 @@ export abstract class GatewayHandlers extends GatewayAuth {
       const metricCommand = this.commandIsRegistered(command, message)
         ? command
         : METRIC_UNKNOWN_COMMAND_KEY;
-      this.metrics.recordInvoke(
+      this.ctx.metrics.recordInvoke(
         metricCommand,
         requestBytes,
         Buffer.byteLength(responseBody),
@@ -127,20 +138,20 @@ export abstract class GatewayHandlers extends GatewayAuth {
     }
   }
 
-  protected handleEvents(request: IncomingMessage, response: ServerResponse, url: URL): void {
+  handleEvents(request: IncomingMessage, response: ServerResponse, url: URL): void {
     if (request.method !== "GET") {
       response.writeHead(405, { allow: "GET" });
       response.end();
       return;
     }
 
-    this.metrics.recordStreamConnecting();
+    this.ctx.metrics.recordStreamConnecting();
     const compressionContext = responseCompressionContexts.get(response);
     const wantsGzip =
       compressionContext?.mode === "on" &&
       negotiateEncoding(compressionContext.acceptEncoding, ["gzip", "identity"]) === "gzip";
     const releaseStreamingCompression = wantsGzip
-      ? this.metrics.tryStartStreamingCompression()
+      ? this.ctx.metrics.tryStartStreamingCompression()
       : null;
     const useGzip = releaseStreamingCompression !== null;
     const headers: OutgoingHttpHeaders = {
@@ -159,14 +170,14 @@ export abstract class GatewayHandlers extends GatewayAuth {
       response.writeHead(200, headers);
       const writerMetrics = {
         sourceBytes: (bytes: number) => {
-          this.metrics.recordStreamSourceBytes(bytes);
-          if (useGzip) this.metrics.recordStreamingCompressionSourceBytes(bytes);
+          this.ctx.metrics.recordStreamSourceBytes(bytes);
+          if (useGzip) this.ctx.metrics.recordStreamingCompressionSourceBytes(bytes);
         },
         encodedBytes: (bytes: number) => {
-          this.metrics.recordStreamEncodedBodyBytes(bytes);
-          if (useGzip) this.metrics.recordStreamingCompressionEncodedBytes(bytes);
+          this.ctx.metrics.recordStreamEncodedBodyBytes(bytes);
+          if (useGzip) this.ctx.metrics.recordStreamingCompressionEncodedBytes(bytes);
         },
-        compressionFailure: () => this.metrics.recordStreamingCompressionFailure(),
+        compressionFailure: () => this.ctx.metrics.recordStreamingCompressionFailure(),
         closed: () => releaseStreamingCompression?.(),
       };
       client = useGzip
@@ -182,7 +193,7 @@ export abstract class GatewayHandlers extends GatewayAuth {
       releaseStreamingCompression?.();
       // A handshake that never reaches `open` still has to release the gauge,
       // otherwise `connecting` climbs for the lifetime of the process.
-      this.metrics.recordStreamConnectFailed();
+      this.ctx.metrics.recordStreamConnectFailed();
       throw error;
     }
     const state: GatewayEventClient = {
@@ -215,7 +226,7 @@ export abstract class GatewayHandlers extends GatewayAuth {
     // until the handshake settles is guarded: a throw after the client is in the
     // map but before its `close` handler exists would leak both the client and
     // the `connecting` gauge for the lifetime of the process.
-    this.clients.set(client, state);
+    this.ctx.clients.set(client, state);
     try {
       client.write(": connected\n\n");
       if (isTerminalOnly) {
@@ -224,41 +235,41 @@ export abstract class GatewayHandlers extends GatewayAuth {
         state.handshake = null;
       } else {
         state.tracksReplayCursor = true;
-        this.initializeEventReplay(client, state, parseGatewayCursor(rawCursor));
+        this.events.initializeEventReplay(client, state, parseGatewayCursor(rawCursor));
       }
     } catch (error) {
-      this.clients.delete(client);
-      this.metrics.recordStreamConnectFailed();
+      this.ctx.clients.delete(client);
+      this.ctx.metrics.recordStreamConnectFailed();
       client.destroy();
       throw error;
     }
-    this.metrics.recordStreamOpened();
+    this.ctx.metrics.recordStreamOpened();
     // A client only ever falls behind after a write was refused, so "drained"
     // is the earliest safe moment to tell it what it missed — waiting for the
     // next event would leave a quiet session desynced indefinitely.
     client.onDrain(() => {
-      if (this.clients.get(client) !== state || state.desyncedSessions.size === 0) return;
-      this.flushDesyncNotices(client, state);
+      if (this.ctx.clients.get(client) !== state || state.desyncedSessions.size === 0) return;
+      this.events.flushDesyncNotices(client, state);
     });
 
     // A keepalive is a write like any other, so it has to respect the same hard
     // limit. Otherwise a stream with no event traffic keeps a client that is
     // already hopelessly behind — and its buffer — alive indefinitely.
-    this.keepalive ??= setInterval(() => {
-      for (const [client, clientState] of Array.from(this.clients)) {
+    this.ctx.keepalive ??= setInterval(() => {
+      for (const [client, clientState] of Array.from(this.ctx.clients)) {
         if (client.writableLength > SSE_CLIENT_HARD_BUFFER_BYTES) {
-          this.dropBufferedClient(client, METRIC_KEEPALIVE_KEY, client.writableLength);
+          this.events.dropBufferedClient(client, METRIC_KEEPALIVE_KEY, client.writableLength);
           continue;
         }
         // Before the comment, so a scoped stream that received nothing this
         // interval still leaves with a current cursor.
-        this.flushOmittedCursor(client, clientState);
-        if (!this.clients.has(client)) continue;
-        this.metrics.recordKeepalive();
+        this.events.flushOmittedCursor(client, clientState);
+        if (!this.ctx.clients.has(client)) continue;
+        this.ctx.metrics.recordKeepalive();
         client.write(": keepalive\n\n");
       }
-    }, this.keepaliveMs);
-    this.keepalive.unref?.();
+    }, this.ctx.keepaliveMs);
+    this.ctx.keepalive.unref?.();
 
     let closed = false;
     let credentialExpiryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -268,16 +279,16 @@ export abstract class GatewayHandlers extends GatewayAuth {
       closed = true;
       if (credentialExpiryTimer) clearTimeout(credentialExpiryTimer);
       credentialExpiryTimer = null;
-      this.clients.delete(client);
+      this.ctx.clients.delete(client);
       client.destroy();
-      this.metrics.recordStreamClosed();
+      this.ctx.metrics.recordStreamClosed();
     };
     const scheduleCredentialExpiry = () => {
-      if (!this.gatewayCredentialMatches(credential)) {
+      if (!this.auth.gatewayCredentialMatches(credential)) {
         close();
         return;
       }
-      const expiresAt = this.gatewayCredentialExpiresAt(credential);
+      const expiresAt = this.auth.gatewayCredentialExpiresAt(credential);
       if (expiresAt === null) return;
       credentialExpiryTimer = setTimeout(
         scheduleCredentialExpiry,
@@ -290,24 +301,24 @@ export abstract class GatewayHandlers extends GatewayAuth {
     scheduleCredentialExpiry();
   }
 
-  protected handleMetrics(request: IncomingMessage, response: ServerResponse): void {
+  handleMetrics(request: IncomingMessage, response: ServerResponse): void {
     if (request.method !== "GET") {
       response.writeHead(405, { allow: "GET" });
       response.end();
       return;
     }
-    const snapshot = this.metrics.snapshot();
+    const snapshot = this.ctx.metrics.snapshot();
     jsonResponse(response, 200, {
       ...snapshot,
       // Ring occupancy and eviction are otherwise invisible: a ring dropping
       // every gap looks exactly like one that never needed to retain anything.
-      replay: { ...snapshot.replay, ring: this.eventReplay.getStats() },
+      replay: { ...snapshot.replay, ring: this.ctx.eventReplay.getStats() },
       // Additive: bounded, content-free recurring-work counters (kinds only).
       recurringWork: recurringWorkDiagnostics(),
     });
   }
 
-  protected async handleClientMetrics(
+  async handleClientMetrics(
     request: IncomingMessage,
     response: ServerResponse,
     requestMetrics: GatewayRequestMetrics,
@@ -335,13 +346,13 @@ export abstract class GatewayHandlers extends GatewayAuth {
       throw error;
     }
 
-    this.metrics.recordClientBootReport(
+    this.ctx.metrics.recordClientBootReport(
       sanitizeClientBootReport(body, request.httpVersion || "1.1"),
     );
     jsonResponse(response, 202, { ok: true });
   }
 
-  protected async handleLoopbackProxy(
+  async handleLoopbackProxy(
     request: IncomingMessage,
     response: ServerResponse,
     url: URL,
@@ -358,7 +369,7 @@ export abstract class GatewayHandlers extends GatewayAuth {
 
     const restPath = slashIndex >= 0 ? remaining.slice(slashIndex) : "/";
     const targetPath = `${restPath}${url.search}`;
-    await this.proxyToTarget(
+    await this.proxy.proxyToTarget(
       request,
       response,
       new URL(`http://127.0.0.1:${port}${targetPath}`),
@@ -368,7 +379,7 @@ export abstract class GatewayHandlers extends GatewayAuth {
     );
   }
 
-  protected async handleBrowserLoopbackProxy(
+  async handleBrowserLoopbackProxy(
     request: IncomingMessage,
     response: ServerResponse,
     url: URL,
@@ -385,7 +396,7 @@ export abstract class GatewayHandlers extends GatewayAuth {
 
     const restPath = slashIndex >= 0 ? remaining.slice(slashIndex) : "/";
     const targetPath = `${restPath}${url.search}`;
-    await this.proxyToTarget(
+    await this.proxy.proxyToTarget(
       request,
       response,
       new URL(`http://127.0.0.1:${port}${targetPath}`),

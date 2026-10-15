@@ -39,7 +39,7 @@ import {
 } from "@/lib/compose-draft-persistence";
 import { cn } from "@/lib/utils";
 import {
-  useCodexStore,
+  useAgentModelCatalogStore,
   useConfigStore,
   useFeaturePlanStore,
   useKanbanStore,
@@ -842,7 +842,7 @@ export function NativeStyleChatPanel({
   onSend: (text: string) => void;
   onRefresh?: () => void;
 }) {
-  const models = useCodexStore((state) => state.models);
+  const models = useAgentModelCatalogStore((state) => state.codexModels);
   const resolveModelLabel = useCallback(
     (modelId: string) => resolveCatalogModelLabel(modelId, models),
     [models],

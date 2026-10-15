@@ -9,7 +9,11 @@ import {
   NativeAgentCommandCatalogueCache,
   commandCatalogueKey,
 } from "./native-agent-command-catalogue.js";
-import type { NativeAgentCommandRefreshOutcome } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentCommandRefreshOutcome,
+  NativeAgentDefaultModelResolution,
+  NativeAgentModelSubstitution,
+} from "@orkestrator/protocol/native-agent";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
   coordinatorRuntimeUnavailableMessage,
@@ -17,16 +21,23 @@ import {
 } from "./coordinator-runtime.js";
 import {
   BUILD_PIPELINE_AGENTS,
+  INITIAL_PROMPT_STAGING_DIRECTORY,
   INTERACTIVE_AGENT_INTERACTION_POLICY,
   NativeAgentProviderSessionMissingError,
   UNATTENDED_AGENT_INTERACTION_POLICY,
   controlsFromSessionInput,
+  createNativeAgentProvider,
   isValidInteractionMetadata,
   nativeAgentSessionStorageKey,
   nativeCapabilities,
   nonBlank,
   readProviderStatus,
+  stagePromptImages,
 } from "./native-agent-service-shared.js";
+import { localAgentAccountIds } from "./agent-account-bridge-state.js";
+import type { NativeAgentProviderEnvironment } from "./native-agent-provider.js";
+import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";
+import { ProviderRegistry } from "./native-agent-provider-registry.js";
 import { NATIVE_AGENT_SESSION_VERSION } from "./models.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { NativeAgentObservationBroker } from "./native-agent-observation.js";
@@ -60,6 +71,13 @@ type JsonSchema = shared.JsonSchema;
 type Environment = shared.Environment;
 type IncompleteTurnNotice = shared.IncompleteTurnNotice;
 type PersistedNativeAgentSession = shared.PersistedNativeAgentSession;
+/**
+ * An ensured session, plus the model substitution its creation made. The
+ * substitution is reported to the caller only and is never persisted.
+ */
+export type EnsuredNativeAgentSession = PersistedNativeAgentSession & {
+  modelSubstitution?: NativeAgentModelSubstitution;
+};
 type PersistedNativeAgentPendingDispatch = shared.PersistedNativeAgentPendingDispatch;
 type StorageService = shared.StorageService;
 type BridgeConnection = shared.BridgeConnection;
@@ -221,18 +239,8 @@ export abstract class NativeAgentServiceBase {
     }
   }
 
-  protected readonly providers = new Map<string, NativeAgentRuntimeProvider>();
-  /**
-   * Provider calls inside the durable at-most-once dispatch window. Deletion
-   * may now record its intent while one is running, so the background cache
-   * pruner must not dispose the provider until the send has settled.
-   */
-  protected readonly providerDispatchCounts = new Map<NativeAgentRuntimeProvider, number>();
-  /**
-   * Identity of the live bridge generation behind each production provider.
-   * Ports and bearer credentials both change when a bridge is replaced.
-   */
-  protected readonly providerConnections = new Map<string, string>();
+  /** Cached runtime providers, their bridge generations and their retirement. */
+  protected readonly providerRegistry: ProviderRegistry;
   /** Bounded, reconstructible view cache; providers remain authoritative. */
   protected readonly projectionCache = new Map<string, NativeAgentProjectionCacheEntry>();
   /** Bounded wire revisions for conditional/delta projection reads. */
@@ -312,7 +320,6 @@ export abstract class NativeAgentServiceBase {
   protected readonly scanTasks = new Set<Promise<void>>();
   protected readonly activityRetryAt = new Map<string, number>();
   protected readonly activityAttempts = new Map<string, number>();
-  protected readonly absentBridgeUntil = new Map<string, number>();
   /** Last provider-owned state per durable session, used for exact turn edges. */
   protected readonly observedSessionActivity = new Map<
     string,
@@ -325,18 +332,6 @@ export abstract class NativeAgentServiceBase {
    * trustworthy and how reusable each answer is.
    */
   protected readonly observations: NativeAgentObservationBroker;
-  /**
-   * Providers replaced or evicted from the cache but not yet disposed. An
-   * OpenCode provider owns an event subscription from construction, so an
-   * obsolete one left undisposed is a duplicate observer for the life of the
-   * process; disposing it while a prompt it sent is in flight would abort that
-   * prompt. Retirement waits for its dispatches to settle and a grace period.
-   */
-  protected readonly retiringProviders = new Map<
-    NativeAgentRuntimeProvider,
-    ReturnType<typeof setTimeout> | null
-  >();
-  protected readonly disposedProviders = new WeakSet<NativeAgentRuntimeProvider>();
   protected unsubscribeObservationWakeups: (() => void) | null = null;
   /**
    * Automatic continuation of incomplete turns, for platforms with a recovery
@@ -353,9 +348,6 @@ export abstract class NativeAgentServiceBase {
   abstract reconcileAgentInteractions(): Promise<void>;
   protected abstract assertAcceptingWork(): void;
   protected abstract assertEnvironmentLive(environmentId: string): Promise<Environment>;
-  protected abstract provider(
-    input: EnsureNativeAgentSessionInput,
-  ): Promise<NativeAgentRuntimeProvider>;
   protected abstract assertSessionIdentity(
     session: PersistedNativeAgentSession,
     input: EnsureNativeAgentSessionInput,
@@ -390,16 +382,6 @@ export abstract class NativeAgentServiceBase {
   ): Promise<PersistedNativeAgentSession>;
   protected abstract invalidateProjection(key: string): void;
   protected abstract drainPromptQueue(queueKey: string): Promise<void>;
-  protected abstract observeProvider(
-    input: EnsureNativeAgentSessionInput,
-  ): Promise<NativeAgentRuntimeProvider | undefined>;
-  protected abstract evictProvider(
-    input: Pick<EnsureNativeAgentSessionInput, "environmentId" | "agent">,
-    provider: NativeAgentRuntimeProvider,
-  ): void;
-  protected abstract pruneProviders(liveEnvironmentIds: Set<string>): Promise<void>;
-  protected abstract scheduleProviderRetirement(provider: NativeAgentRuntimeProvider): void;
-  protected abstract isProviderCached(provider: NativeAgentRuntimeProvider): boolean;
   protected abstract composeDraftHoldsQueue(value: unknown): boolean;
   protected abstract queueExecutionMode(
     agent: BuildPipelineAgent,
@@ -490,6 +472,32 @@ export abstract class NativeAgentServiceBase {
   ) {
     this.interactionMonitorAdoptionEnabled = options.interactionMonitorAdoptionEnabled !== false;
     this.observations = new NativeAgentObservationBroker(() => this.now());
+    this.providerRegistry = new ProviderRegistry({
+      now: () => this.now(),
+      isStopped: () => this.stopped,
+      assertAcceptingWork: () => this.assertAcceptingWork(),
+      assertEnvironmentLive: (environmentId) => this.assertEnvironmentLive(environmentId),
+      options,
+      observations: this.observations,
+      bridgeConnection: (agent, environment, model, effort) =>
+        this.bridgeConnection(agent, environment, model, effort),
+      observeBridgeConnection: (agent, environment) =>
+        this.observeBridgeConnection(agent, environment),
+      createProvider: (connection, environmentId, cacheKey) =>
+        createNativeAgentProvider(connection, {
+          // Interactive sessions belong to a tab that renders approvals and
+          // questions. Answering them here would run a command the user never saw
+          // and cancel the card that exists to answer it.
+          autoAnswerRequests: false,
+          onObservationHint: () => this.observations.wakeGroup(cacheKey, "provider-event"),
+          stageImages: (images) => this.stageImages(environmentId, images),
+          environment: this.providerEnvironment(environmentId),
+        }),
+      forgetGroup: (cacheKey) => {
+        this.activityRetryAt.delete(cacheKey);
+        this.activityAttempts.delete(cacheKey);
+      },
+    });
     this.turnRecovery = new NativeAgentTurnRecovery({
       storage,
       now: () => this.now(),
@@ -526,6 +534,167 @@ export abstract class NativeAgentServiceBase {
 
   protected now(): number {
     return this.options.now?.() ?? Date.now();
+  }
+
+  /** Resolve a provider, starting its bridge if needed. */
+  protected provider(input: EnsureNativeAgentSessionInput): Promise<NativeAgentRuntimeProvider> {
+    return this.providerRegistry.resolve(input);
+  }
+
+  /** Resolve a provider for observation only, never starting a bridge. */
+  protected observeProvider(
+    input: EnsureNativeAgentSessionInput,
+  ): Promise<NativeAgentRuntimeProvider | undefined> {
+    return this.providerRegistry.observe(input);
+  }
+
+  /**
+   * The environment an interactive provider serves. The provider factory
+   * derives platform-specific dependencies from it (per-environment on-disk
+   * state under the backend data directory, for example). Every creation site
+   * that can cache a tab's provider passes it: whichever one caches the
+   * provider serves the tab, so the observer and tab-close paths must not pass
+   * less than the tab path does. Storage doubles without a data directory get
+   * no on-disk provider state.
+   */
+  protected providerEnvironment(environmentId: string): NativeAgentProviderEnvironment {
+    // Read per call rather than per provider: providers are cached for the
+    // life of a bridge connection, so a settings edit would otherwise not
+    // reach the model catalogue until the environment restarted.
+    const loadConfig = () => this.storage.loadConfig();
+    return typeof this.storage.getDataDir === "function"
+      ? { environmentId, dataDir: this.storage.getDataDir(), loadConfig }
+      : { environmentId, loadConfig };
+  }
+
+  /** Stage base64 images into the workspace so a bridge will accept them. */
+  protected async stageImages(
+    environmentId: string,
+    images: readonly TaskSnapshotImage[],
+  ): Promise<PromptAttachment[]> {
+    // A coordinator's workspace is the user's own checkout, and the synthesized
+    // environment behind it carries that path like any other worktree. Staging
+    // there would have a read-only session write files into the repository it
+    // exists not to touch, so its images go to the same application-data
+    // directory a pasted attachment uses — the one root the bridge is
+    // launched able to read besides the checkout.
+    const coordinator = await resolveCoordinatorRuntime(this.storage, environmentId);
+    if (coordinator.status === "unavailable") {
+      throw new Error(coordinatorRuntimeUnavailableMessage(coordinator));
+    }
+    if (coordinator.status === "ready") {
+      const staged: PromptAttachment[] = [];
+      for (const image of assertValidPromptImages(images)) {
+        const path = await this.storage.writeCoordinatorAttachment(
+          coordinator.coordinatorId,
+          coordinator.conversationId,
+          image.filename,
+          image.data,
+        );
+        staged.push({
+          type: "image",
+          path,
+          filename: image.filename,
+          dataUrl: `data:${mimeTypeForImageData(image.filename, image.data)};base64,${image.data}`,
+        });
+      }
+      return staged;
+    }
+    const environment = await this.assertEnvironmentLive(environmentId);
+    return stagePromptImages(this.invoke, environment, images, INITIAL_PROMPT_STAGING_DIRECTORY);
+  }
+
+  protected async bridgeConnection(
+    agent: BuildPipelineAgent,
+    environment: Environment,
+    model?: string,
+    effort?: string,
+  ): Promise<BridgeConnection> {
+    if (environment.environmentType === "local") {
+      const result = await this.invoke<{ port: number; authToken?: string }>(
+        `start_local_${agent}_server_cmd`,
+        { environmentId: environment.id },
+      );
+      if (!result.authToken) {
+        throw new Error(`${agent} bridge authentication is unavailable`);
+      }
+      return {
+        agent,
+        baseUrl: `http://127.0.0.1:${result.port}`,
+        authToken: result.authToken,
+        ...(agent === "claude" || agent === "codex"
+          ? { accountId: localAgentAccountIds.get(`${agent}:${environment.id}`) ?? "unknown" }
+          : {}),
+        directory: environment.worktreePath,
+        model,
+        effort,
+      };
+    }
+
+    if (!environment.containerId) {
+      throw new Error("Native agent container is unavailable");
+    }
+    const result = await this.invoke<{ hostPort: number; authToken?: string }>(
+      `start_${agent}_server`,
+      { containerId: environment.containerId },
+    );
+    if (!result.authToken) {
+      throw new Error(`${agent} bridge authentication is unavailable`);
+    }
+    return {
+      agent,
+      baseUrl: `http://127.0.0.1:${result.hostPort}`,
+      authToken: result.authToken,
+      ...(agent === "claude" || agent === "codex" ? { accountId: "unknown" } : {}),
+      model,
+      effort,
+    };
+  }
+
+  /**
+   * Bridge coordinates for an already-running bridge, or `undefined`.
+   *
+   * The peek commands are the read-only twins of the start commands: they
+   * report a live, authenticated bridge and never spawn one. Anything that
+   * cannot be answered without starting a process is reported as "not running"
+   * rather than started on the observer's behalf.
+   */
+  protected async observeBridgeConnection(
+    agent: BuildPipelineAgent,
+    environment: Environment,
+  ): Promise<BridgeConnection | undefined> {
+    if (environment.environmentType === "local") {
+      const result = await this.invoke<{ port: number; authToken: string } | null>(
+        "peek_local_agent_bridge",
+        { environmentId: environment.id, agent },
+      );
+      if (!result?.authToken) return undefined;
+      return {
+        agent,
+        baseUrl: `http://127.0.0.1:${result.port}`,
+        authToken: result.authToken,
+        ...(agent === "claude" || agent === "codex"
+          ? { accountId: localAgentAccountIds.get(`${agent}:${environment.id}`) ?? "unknown" }
+          : {}),
+        directory: environment.worktreePath,
+      };
+    }
+
+    if (!environment.containerId) return undefined;
+    const result = await this.invoke<{ hostPort: number; authToken: string } | null>(
+      "peek_container_agent_bridge",
+      {
+        containerId: environment.containerId,
+        agent,
+      },
+    );
+    if (!result?.authToken) return undefined;
+    return {
+      agent,
+      baseUrl: `http://127.0.0.1:${result.hostPort}`,
+      authToken: result.authToken,
+      ...(agent === "claude" || agent === "codex" ? { accountId: "unknown" } : {}),
+    };
   }
 
   /** Resolve coordinator authority from persisted ownership, never caller metadata. */
@@ -768,7 +937,7 @@ export abstract class NativeAgentServiceBase {
     }
   }
 
-  async ensureSession(input: EnsureNativeAgentSessionInput): Promise<PersistedNativeAgentSession> {
+  async ensureSession(input: EnsureNativeAgentSessionInput): Promise<EnsuredNativeAgentSession> {
     input = await this.trustedSessionInput(input);
     this.assertAcceptingWork();
     if (
@@ -846,6 +1015,21 @@ export abstract class NativeAgentServiceBase {
      * session-create attempts with backoff, and every second of that stalled
      * activity, unread and deletion bookkeeping for *every* environment.
      */
+    /*
+     * Only an inherited default is resolved; an explicit model stays pinned
+     * and lets dispatch report its availability. A configured
+     * default can name a provider this login has not connected, and storing it
+     * as the session's controls would outrank the runtime's own default and
+     * reject the first prompt. An unset one resolves to the runtime's effective
+     * default. Either answer is stored on this session only; the configuration
+     * keeps the user's choice.
+     */
+    const resolution =
+      !input.model || input.model === "default" || input.modelSource === "default"
+        ? await this.resolveDefaultModel(provider, input.model)
+        : undefined;
+    const modelSubstitution = resolution?.substitution;
+    if (resolution?.modelId) input = { ...input, model: resolution.modelId };
     const session = await this.storage.getOrCreateNativeAgentSession(
       {
         key,
@@ -863,7 +1047,25 @@ export abstract class NativeAgentServiceBase {
       () => this.createProviderSession(provider, input),
     );
     void this.reconcileAgentInteractions().catch(() => undefined);
-    return session;
+    // A concurrent ensure may have created the session first, with its own
+    // controls; only report a substitution this session actually carries.
+    return modelSubstitution && session.controls?.modelId === modelSubstitution.modelId
+      ? { ...session, modelSubstitution }
+      : session;
+  }
+
+  private async resolveDefaultModel(
+    provider: NativeAgentRuntimeProvider,
+    modelId: string | undefined,
+  ): Promise<NativeAgentDefaultModelResolution | undefined> {
+    if (!provider.resolveDefaultModel) return undefined;
+    try {
+      return await provider.resolveDefaultModel(modelId);
+    } catch {
+      // Connectivity is advisory here. Dispatch preflight still reports a
+      // model the runtime cannot serve.
+      return undefined;
+    }
   }
 
   async adoptSession(input: AdoptNativeAgentSessionInput): Promise<PersistedNativeAgentSession> {
@@ -1128,6 +1330,16 @@ export abstract class NativeAgentServiceBase {
       return (await provider.rawModelCatalog()).slice(0, 512);
     }
     return provider.modelCatalog ? (await provider.modelCatalog()).slice(0, 512) : [];
+  }
+
+  /**
+   * Providers the runtime reports as connected, for the durable catalogue
+   * snapshot. Undefined when the runtime does not report connectivity.
+   */
+  async connectedModelProviders(input: NativeAgentProjectionInput): Promise<string[] | undefined> {
+    this.assertProjectionInput(input);
+    const provider = await this.provider(input);
+    return provider.connectedModelProviders?.();
   }
 
   async dispatchIntent(input: DispatchNativeAgentPromptInput): Promise<NativeAgentDispatchOutcome> {

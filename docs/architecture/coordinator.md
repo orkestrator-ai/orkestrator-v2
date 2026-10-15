@@ -25,6 +25,13 @@ Provider processes, projections, queues, transcripts, attachments, and mail
 use a distinct `coordinator:` runtime namespace
 (`coordinator:<id>:<conversation>`). Each conversation gets its own bridge so
 its scoped MCP and mail credential cannot be shared with a sibling tab.
+A conversation's native session key is the ordinary tab key,
+`env-coordinator:<id>:<conversation>:<tabId>`
+(`coordinatorConversationSessionKey`), on every path — the renderer, mail
+injects, close and the projection checks. Any other key opens a second
+provider session on the same bridge, so a mail-woken turn runs where the tab
+never shows it. Records with the older `coordinator-<id>:<conversation>` key
+migrate when read.
 
 One workspace is persisted per project: conversations, selected tab, immutable
 `coordinator-read-only` execution policy, repository-context revision, lifecycle

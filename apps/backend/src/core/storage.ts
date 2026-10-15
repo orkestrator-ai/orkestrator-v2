@@ -8,6 +8,7 @@ import {
   COORDINATOR_WORKSPACE_VERSION,
   isCoordinatorWorkspace,
   normalizeCoordinatorRoles,
+  normalizeCoordinatorSessionKeys,
   type CoordinatorWorkflowAssociation,
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
@@ -132,9 +133,10 @@ export class StorageService extends StoragePublicOperations {
         console.warn("[coordinator] Ignoring invalid coordinator workspace record");
         continue;
       }
-      // Read-time migration to one main plus side agents; persisted on the
-      // next write, and idempotent until then.
-      workspaces[projectId] = normalizeCoordinatorRoles(workspace);
+      // Read-time migration to one main plus side agents, and to the session
+      // key the renderer uses; persisted on the next write, and idempotent
+      // until then.
+      workspaces[projectId] = normalizeCoordinatorSessionKeys(normalizeCoordinatorRoles(workspace));
     }
     const workflows = Array.isArray(store.workflows)
       ? store.workflows.filter(
@@ -200,8 +202,12 @@ export class StorageService extends StoragePublicOperations {
       const store = await this.loadCoordinatorStore();
       const current = store.workspaces[projectId] ?? null;
       const mutated = mutate(current);
-      // Every write keeps the one-main invariant, whatever the mutator did.
-      const next = mutated && mutated !== current ? normalizeCoordinatorRoles(mutated) : mutated;
+      // Every write keeps the one-main and session-key invariants, whatever
+      // the mutator did.
+      const next =
+        mutated && mutated !== current
+          ? normalizeCoordinatorSessionKeys(normalizeCoordinatorRoles(mutated))
+          : mutated;
       if (next && (!isCoordinatorWorkspace(next) || next.projectId !== projectId)) {
         throw new Error("Coordinator workspace mutation returned an invalid record");
       }

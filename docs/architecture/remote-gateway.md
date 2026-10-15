@@ -129,6 +129,21 @@ The hosted origins that must be allowed are `https://orkestrator.dev` and
 `https://www.orkestrator.dev`. Electron **Allow web access** and
 `mise run start:web-public` both add them.
 
+## Version reminders
+
+The hosted client tracks `main`, the desktop app can connect to another
+machine's backend, and a browser tab can outlive a backend upgrade, so a
+renderer and its backend can run different Orkestrator versions. Nothing
+blocks that, but the renderer compares its bundled version with the backend's
+`get_app_version` on load and after every event-stream reconnect
+(`apps/web/src/components/BackendVersionReminder.tsx`). On a mismatch it shows
+a warning toast saying which side is older and how to update: reload a page
+the backend served, update the desktop app (**Check for Updates…**), or update
+Orkestrator on the backend's machine. Dismissing it hides it for the session
+until either version changes. The Settings **Debug** section shows the same
+note. The public CLI has its own schema handshake instead
+([public-cli.md](public-cli.md)).
+
 ## Security notes
 
 - The gateway requires a token before serving the app, backend API, event

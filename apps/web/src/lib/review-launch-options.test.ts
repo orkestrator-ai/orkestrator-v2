@@ -5,23 +5,25 @@ import {
   resolveDefaultReviewTabType,
 } from "./review-launch-options";
 import { useConfigStore } from "@/stores/configStore";
-import { useClaudeStore } from "@/stores/claudeStore";
-import { useCodexStore } from "@/stores/codexStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 
-const originalClaudeModels = useClaudeStore.getState().models;
-const originalCodexModels = useCodexStore.getState().models;
+const originalClaudeModels = useAgentModelCatalogStore.getState().claudeModels;
+const originalCodexModels = useAgentModelCatalogStore.getState().codexModels;
 
 afterEach(() => {
-  useClaudeStore.setState({ models: originalClaudeModels });
-  useCodexStore.setState({ models: originalCodexModels });
-  useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
+  useAgentModelCatalogStore.setState({
+    claudeModels: originalClaudeModels,
+    codexModels: originalCodexModels,
+    cursorModels: [],
+    grokModels: [],
+    piModels: [],
+  });
 });
 
 describe("buildReviewModelCatalog", () => {
   test("maps live models and effort metadata, with the unpinned OpenCode placeholder", () => {
-    useClaudeStore.setState({
-      models: [
+    useAgentModelCatalogStore.setState({
+      claudeModels: [
         {
           id: "claude-live",
           name: "Claude Live",
@@ -31,8 +33,8 @@ describe("buildReviewModelCatalog", () => {
         } as any,
       ],
     });
-    useCodexStore.setState({
-      models: [
+    useAgentModelCatalogStore.setState({
+      codexModels: [
         {
           id: "codex-live",
           name: "Codex Live",
@@ -71,8 +73,8 @@ describe("buildReviewModelCatalog", () => {
   });
 
   test("derives Claude effort choices from live capability metadata", () => {
-    useClaudeStore.setState({
-      models: [
+    useAgentModelCatalogStore.setState({
+      claudeModels: [
         {
           id: "supports-effort-without-levels",
           name: "Supports effort without levels",
@@ -119,8 +121,8 @@ describe("buildReviewModelCatalog", () => {
   });
 
   test("defaults omitted Claude speed capability to supported and honours explicit false", () => {
-    useClaudeStore.setState({
-      models: [
+    useAgentModelCatalogStore.setState({
+      claudeModels: [
         { id: "default-allow", name: "Default allow" },
         { id: "explicit-deny", name: "Explicit deny", supportsFastMode: false },
       ] as any,
@@ -189,8 +191,8 @@ describe("buildReviewModelCatalog", () => {
   });
 
   test("propagates the resolved Claude model used to match configured defaults", () => {
-    useClaudeStore.setState({
-      models: [
+    useAgentModelCatalogStore.setState({
+      claudeModels: [
         {
           id: "sonnet",
           name: "Sonnet",
@@ -209,8 +211,8 @@ describe("buildReviewModelCatalog", () => {
   });
 
   test("falls back to supported Codex efforts when live metadata omits them", () => {
-    useCodexStore.setState({
-      models: [
+    useAgentModelCatalogStore.setState({
+      codexModels: [
         {
           id: "codex-without-efforts",
           name: "Codex without efforts",
@@ -227,7 +229,7 @@ describe("buildReviewModelCatalog", () => {
   });
 
   test("uses safe fallbacks and does not expose stale configured models", () => {
-    useClaudeStore.setState({ models: [] });
+    useAgentModelCatalogStore.setState({ claudeModels: [] });
 
     const catalog = buildReviewModelCatalog();
 

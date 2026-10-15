@@ -74,13 +74,16 @@ describe("OrkestratorBackend resource event wiring", () => {
         environmentId: "e1",
         claimToken: claim.claimToken,
       });
-      await backend.invoke("transfer_prompt_queue_message_to_compose_draft", {
+      await backend.invoke("remove_prompt_queue_message", {
         queueKey: "claude env-e1:tab-1",
         environmentId: "e1",
         messageId: "m1",
+      });
+      await backend.invoke("save_compose_draft", {
         draftKey: "compose:e1:tab-1",
         ownerType: "environment",
         ownerId: "e1",
+        value: { text: "queued", mentions: [], attachments: [] },
       });
       await backend.invoke("enqueue_prompt_queue_message", {
         queueKey: "claude env-e1:tab-1",

@@ -15,3 +15,24 @@
 Host contention is a plausible explanation for the aggregate timeout; the isolated
 pass does not establish the cause. The teardown error follows the timeout and
 fixture shutdown. No test was skipped, loosened, or changed to conceal the failure.
+
+## Recurrence during version-reminder validation (2026-10-15)
+
+- **Original command:** the macOS GNU-tool PATH from the testing guide with
+  `mise run test:logged -- --name full-tests -- mise run test`.
+- **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1
+  slots; backend used two isolated Bun workers. Other worktrees were also
+  validating on the host, and browser checks ran concurrently.
+- **Failure:** the same gap-reset case exceeded its five-second deadline
+  (5729.97 ms), followed by `DesignError: Design service is stopping` during
+  teardown. The backend reported 7692 passed, 39 skipped, 5 failed and one
+  additional error across 423 files in 340.15 seconds. The other failures
+  belonged to environment deletion and shutdown tests.
+- **Isolated rerun:** `mise run test:logged -- --name design-sync-rerun -- bun test
+  --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/design-sync.test.ts
+  --parallel=1 --only-failures` passed unchanged in 5.5 seconds (exit 0).
+- **Evidence:** `/tmp/orkestrator-test-run.ZPe1mY/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
+  outer summary `/tmp/orkestrator-test-run.e91mPJ/summary.json`.
+- **Hypothesis:** contention may contribute to the aggregate deadline, as in
+  prior observations; the isolated pass does not establish the cause. No
+  assertion, timeout or skip was changed.

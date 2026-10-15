@@ -33,17 +33,11 @@ export const COMPOSER_OCCUPIED_MESSAGE =
 
 /**
  * Editing a queued prompt loads it into the composer, so it cannot proceed
- * while the composer holds something else — the backend refuses to overwrite a
- * draft it did not create, and overwriting locally would discard input the user
- * never chose to lose.
+ * while the composer holds something else: overwriting it would discard input
+ * the user never chose to lose.
  */
 export function composerOccupiedError(options?: ErrorOptions): PromptQueueActionError {
   return new PromptQueueActionError(COMPOSER_OCCUPIED_MESSAGE, options);
-}
-
-/** The backend's refusal to overwrite a compose draft it did not create. */
-export function isComposeDraftOccupiedBackendError(error: unknown): boolean {
-  return error instanceof Error && /compose draft already exists/i.test(error.message);
 }
 
 /**

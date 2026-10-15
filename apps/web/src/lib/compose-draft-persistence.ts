@@ -21,20 +21,6 @@ function revisionStateFor(draftKey: string, state?: DraftRevisionState): DraftRe
   return created;
 }
 
-/**
- * Synchronize the renderer's optimistic-concurrency cursor after another
- * backend operation creates or replaces this draft.
- */
-export function recordComposeDraftRevision(
-  draftKey: string,
-  revision: number,
-  revisionState?: DraftRevisionState,
-): void {
-  const state = revisionStateFor(draftKey, revisionState);
-  state.revision = revision;
-  state.conflictRevision = null;
-}
-
 async function recordComposeConflict(
   draftKey: string,
   state: DraftRevisionState,

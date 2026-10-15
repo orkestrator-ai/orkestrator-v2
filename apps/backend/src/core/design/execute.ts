@@ -17,7 +17,7 @@ import type {
   DesignOperationResult,
   DesignValidationReason,
 } from "@orkestrator/protocol/design-operations";
-import { DesignError, designConflict, isDesignError } from "./design-errors.js";
+import { DesignError, designConflict, isDesignError } from "./errors.js";
 import {
   eligibility,
   historyLabel,
@@ -25,9 +25,9 @@ import {
   redoCandidate,
   undoCandidate,
   type DesignCheckpoint,
-} from "./design-history.js";
-import type { DesignPrivateRecord, DesignRecordStore } from "./design-records.js";
-import { frameSchema } from "./design-schemas.js";
+} from "./history.js";
+import type { DesignPrivateRecord, DesignRecordStore } from "./records.js";
+import { frameSchema } from "./schemas.js";
 
 export type RenderPriority = "interactive" | "validation" | "background";
 export type RenderFn = (

@@ -10,8 +10,8 @@ import {
   deferred,
   trackUnhandledRejections,
   type DesignHarness,
-} from "./design-test-support.js";
-import { validate } from "./design-validation.js";
+} from "./test-support.js";
+import { validate } from "./validation.js";
 
 const frameInput = { name: "Frame", x: 0, y: 0, width: 400, height: 300, html: "<h1>Frame</h1>" };
 

@@ -30,7 +30,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants, promises as fs, type Stats } from "node:fs";
 import fsSync from "node:fs";
 import path from "node:path";
-import { DesignError } from "./design-errors.js";
+import { DesignError } from "./errors.js";
 
 export type DesignExportDestination =
   | { kind: "local"; worktreePath: string }
@@ -340,9 +340,7 @@ async function resolveLocalRoot(
   }
 }
 
-type PinnedDirectory = ReturnType<
-  typeof import("./design-export-directory.js").designExportDirectory
->;
+type PinnedDirectory = ReturnType<typeof import("./export-directory.js").designExportDirectory>;
 
 /** Node-based browser fixtures use the same pinned-cwd helper as containers. */
 function localHelperSpawn(root: string): DesignExportSpawn {
@@ -353,7 +351,7 @@ function localHelperSpawn(root: string): DesignExportSpawn {
 async function localDirectory(relativePath: string, maxBytes: number): Promise<PinnedDirectory> {
   try {
     // Pure path/digest helpers can also be imported by Node-based browser tests.
-    const { designExportDirectory } = await import("./design-export-directory.js");
+    const { designExportDirectory } = await import("./export-directory.js");
     return designExportDirectory();
   } catch {
     throw exportError("root-unavailable", relativePath, maxBytes);

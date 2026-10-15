@@ -6,9 +6,9 @@ import type {
   DesignOperationDescriptor,
   DesignOperationStatus,
 } from "@orkestrator/protocol/design-operations";
-import { DesignError, toDesignFailure } from "./design-errors.js";
-import { exportPreview, exportSave } from "./design-exports.js";
-import type { DesignExportDestination } from "./design-export-writer.js";
+import { DesignError, toDesignFailure } from "./errors.js";
+import { exportPreview, exportSave } from "./exports.js";
+import type { DesignExportDestination } from "./export-writer.js";
 import {
   descriptorSchema,
   designId,
@@ -17,10 +17,10 @@ import {
   revision,
   selectorSchema,
   stylesSchema,
-} from "./design-schemas.js";
-import { findCreate } from "./design-service-lifecycle.js";
-import type { DesignService } from "./design-service.js";
-import { validate as validateFrame } from "./design-validation.js";
+} from "./schemas.js";
+import { findCreate } from "./service-lifecycle.js";
+import type { DesignService } from "./service.js";
+import { validate as validateFrame } from "./validation.js";
 
 const canvasInput = { canvasId: designId };
 const frameInput = { ...canvasInput, frameId: designId };

@@ -34,10 +34,10 @@ import {
   type DesignSnapshotResult,
   type DesignSyncResult,
 } from "@orkestrator/protocol/design-operations";
-import { applyComputed, verifyComputed } from "./design-apply.js";
-import { CANVAS_LEASE, DesignCoordination, GLOBAL_LEASE } from "./design-coordination.js";
-import { DesignError, designConflict, toDesignFailure } from "./design-errors.js";
-import { computeOperation, type ComputedOperation, type RenderPriority } from "./design-execute.js";
+import { applyComputed, verifyComputed } from "./apply.js";
+import { CANVAS_LEASE, DesignCoordination, GLOBAL_LEASE } from "./coordination.js";
+import { DesignError, designConflict, toDesignFailure } from "./errors.js";
+import { computeOperation, type ComputedOperation, type RenderPriority } from "./execute.js";
 import {
   appendEntry,
   checkpointPreview,
@@ -50,8 +50,8 @@ import {
   PROTECTED_HISTORY_ENTRIES,
   readCheckpoint,
   writeCheckpoint,
-} from "./design-history.js";
-import { DesignLibraryIndex, summarizeRecord, type DesignSummary } from "./design-library.js";
+} from "./history.js";
+import { DesignLibraryIndex, summarizeRecord, type DesignSummary } from "./library.js";
 import {
   cloneRecord,
   descriptorDigest,
@@ -63,15 +63,15 @@ import {
   type DesignPendingOperation,
   type DesignPrivateRecord,
   type DesignStorageFaults,
-} from "./design-records.js";
-import { DesignRenderer } from "./design-renderer.js";
-import { descriptorSchema, designId, operationToken, revision } from "./design-schemas.js";
-import { buildSync, snapshotEnvelope, tombstone } from "./design-sync.js";
-import * as lifecycle from "./design-service-lifecycle.js";
-import * as validation from "./design-validation.js";
+} from "./records.js";
+import { DesignRenderer } from "./renderer.js";
+import { descriptorSchema, designId, operationToken, revision } from "./schemas.js";
+import { buildSync, snapshotEnvelope, tombstone } from "./sync.js";
+import * as lifecycle from "./service-lifecycle.js";
+import * as validation from "./validation.js";
 
 // Portable schemas remain importable from their historic module.
-export { canvasSchema, designId, frameSchema, htmlSchema, revision } from "./design-schemas.js";
+export { canvasSchema, designId, frameSchema, htmlSchema, revision } from "./schemas.js";
 
 export interface DesignServiceOptions {
   now?: () => Date;
@@ -130,7 +130,7 @@ const INTERRUPTED_FAILURE: DesignFailure = {
  * Lock order: global guard, then one canvas lane. Never wait for the renderer
  * or for the global guard while holding a lane. Both are cross-process: a lane
  * holds the canvas's database lease and the global guard holds the library
- * lease (see `design-coordination.ts`), so another backend sharing the data
+ * lease (see `design/coordination.ts`), so another backend sharing the data
  * directory is serialized too. Every cached record is revalidated against
  * the file's identity before use, so a lane always works on the latest record.
  */

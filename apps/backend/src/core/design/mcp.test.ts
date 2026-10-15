@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AgentToolsServer } from "./agent-tools.js";
-import { StorageService } from "./storage.js";
-import { DesignService } from "./design-service.js";
-import { createTestRenderer, trackUnhandledRejections } from "./design-test-support.js";
+import { AgentToolsServer } from "../agent-tools.js";
+import { StorageService } from "../storage.js";
+import { DesignService } from "./service.js";
+import { createTestRenderer, trackUnhandledRejections } from "./test-support.js";
 
 describe("design MCP", () => {
   let dir: string;

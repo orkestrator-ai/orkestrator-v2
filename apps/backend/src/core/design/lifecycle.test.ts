@@ -6,15 +6,15 @@ import {
   DESIGN_LIMITS,
   type DesignOperationDescriptor,
 } from "@orkestrator/protocol/design-operations";
-import { isDesignError } from "./design-errors.js";
-import { exportSave } from "./design-exports.js";
-import { enforceRecycleBin, purge } from "./design-service-lifecycle.js";
+import { isDesignError } from "./errors.js";
+import { exportSave } from "./exports.js";
+import { enforceRecycleBin, purge } from "./service-lifecycle.js";
 import {
   createDesignHarness,
   deferred,
   trackUnhandledRejections,
   type DesignHarness,
-} from "./design-test-support.js";
+} from "./test-support.js";
 
 const frameInput = { name: "Screen", x: 0, y: 0, width: 400, height: 300, html: "<h1>Screen</h1>" };
 

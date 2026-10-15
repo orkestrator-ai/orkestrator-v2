@@ -1,26 +1,26 @@
-import { DesignService } from "./design-service.js";
-import { createTestRenderer } from "./design-test-support.js";
+import { DesignService } from "./service.js";
+import { createTestRenderer } from "./test-support.js";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DesignCanvas } from "@orkestrator/protocol/design-canvas";
-import { isDesignError } from "./design-errors.js";
-import { designExportDigest, planDefaultDesignExportPath } from "./design-export-writer.js";
+import { isDesignError } from "./errors.js";
+import { designExportDigest, planDefaultDesignExportPath } from "./export-writer.js";
 import {
   exportPreview,
   exportSave,
   openDesignFile,
   reconcileExport,
   type DesignExportContext,
-} from "./design-exports.js";
+} from "./exports.js";
 import {
   createDesignHarness,
   deferred,
   trackUnhandledRejections,
   type DesignHarness,
-} from "./design-test-support.js";
+} from "./test-support.js";
 
 const frameInput = { name: "Page", x: 0, y: 0, width: 400, height: 300, html: "<h1>Page</h1>" };
 

@@ -11,7 +11,7 @@ import {
   type DesignOperationStatus,
   type DesignPrepareResult,
 } from "@orkestrator/protocol/design-operations";
-import { DesignError, toDesignFailure } from "./design-errors.js";
+import { DesignError, toDesignFailure } from "./errors.js";
 import {
   cloneRecord,
   descriptorDigest,
@@ -21,10 +21,10 @@ import {
   readBounded,
   type DesignPendingOperation,
   type DesignPrivateRecord,
-} from "./design-records.js";
-import { canvasSchema, designName } from "./design-schemas.js";
-import type { DesignService } from "./design-service.js";
-import * as validation from "./design-validation.js";
+} from "./records.js";
+import { canvasSchema, designName } from "./schemas.js";
+import type { DesignService } from "./service.js";
+import * as validation from "./validation.js";
 
 const LIFECYCLE = new Set(["create_canvas", "delete_canvas", "restore_canvas", "duplicate_canvas"]);
 

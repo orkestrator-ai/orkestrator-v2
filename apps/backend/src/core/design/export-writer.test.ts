@@ -5,7 +5,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { DesignError } from "./design-errors.js";
+import { DesignError } from "./errors.js";
 import {
   DESIGN_EXPORT_CONTAINER_INSPECTOR,
   DESIGN_EXPORT_CONTAINER_WRITER,
@@ -18,7 +18,7 @@ import {
   writeDesignExport,
   type DesignExportDestination,
   type DesignExportSpawn,
-} from "./design-export-writer.js";
+} from "./export-writer.js";
 
 const temporaryRoots: string[] = [];
 

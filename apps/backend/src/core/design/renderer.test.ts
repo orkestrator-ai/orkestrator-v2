@@ -1,13 +1,13 @@
 import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
 import type { Browser } from "playwright-core";
-import { DesignError } from "./design-errors.js";
-import { DesignRenderQueue } from "./design-render-queue.js";
+import { DesignError } from "./errors.js";
+import { DesignRenderQueue } from "./render-queue.js";
 import {
   DesignRenderer,
   resolveDesignChromiumPath,
   type DesignRenderBudgets,
   type DesignRenderJob,
-} from "./design-renderer.js";
+} from "./renderer.js";
 
 const frame = { html: "<p>Hello</p>", width: 320, height: 240 };
 

@@ -1,7 +1,7 @@
-import { deletionMarker, markDeletion } from "./storage-deletion-fences.js";
-import { DesignError } from "./design-errors.js";
-import type { StorageDatabase } from "./storage-database.js";
-import { openBackendDatabase } from "./storage-stores.js";
+import { deletionMarker, markDeletion } from "../storage-deletion-fences.js";
+import { DesignError } from "./errors.js";
+import type { StorageDatabase } from "../storage-database.js";
+import { openBackendDatabase } from "../storage-stores.js";
 
 /**
  * Cross-process coordination for design canvases.

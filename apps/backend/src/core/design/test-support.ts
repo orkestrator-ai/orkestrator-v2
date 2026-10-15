@@ -16,13 +16,9 @@ import {
   type DesignOperation,
 } from "@orkestrator/protocol/design-canvas";
 import type { DesignRendererHealth } from "@orkestrator/protocol/design-operations";
-import { DesignError } from "./design-errors.js";
-import type { DesignRenderJob } from "./design-renderer.js";
-import {
-  DesignService,
-  type DesignRendererLike,
-  type DesignServiceOptions,
-} from "./design-service.js";
+import { DesignError } from "./errors.js";
+import type { DesignRenderJob } from "./renderer.js";
+import { DesignService, type DesignRendererLike, type DesignServiceOptions } from "./service.js";
 
 /** A valid 1x1 transparent PNG. */
 export const TEST_PNG_BASE64 =

@@ -4,9 +4,9 @@ import type {
   DesignFrameMeta,
   DesignOperationResult,
 } from "@orkestrator/protocol/design-operations";
-import { DesignError, designConflict } from "./design-errors.js";
-import type { ComputedOperation } from "./design-execute.js";
-import type { DesignCheckpoint } from "./design-history.js";
+import { DesignError, designConflict } from "./errors.js";
+import type { ComputedOperation } from "./execute.js";
+import type { DesignCheckpoint } from "./history.js";
 import {
   freshFrameMeta,
   nextIdentity,
@@ -14,7 +14,7 @@ import {
   unvalidated,
   type DesignHistoryEntryRecord,
   type DesignPrivateRecord,
-} from "./design-records.js";
+} from "./records.js";
 
 export interface AppliedOperation {
   result: DesignOperationResult;

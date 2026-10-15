@@ -1,3 +1,4 @@
+import { gitHubCli } from "./github-cli-binary.js";
 import { runRemoteGit } from "./git-noninteractive-env.js";
 import { reconcileProjectHomeEnvironment } from "./project-home-environment.js";
 import { constants as fsConstants, promises as fs } from "node:fs";
@@ -2056,9 +2057,13 @@ export const SYNC_CONTAINER_GITHUB_CREDENTIAL_COMMAND = buildSyncContainerGitHub
 
 export async function getHostGitHubToken(): Promise<string | undefined> {
   try {
-    const { stdout } = await runCommand("gh", ["auth", "token", "--hostname", "github.com"], {
-      timeoutMs: 10_000,
-    });
+    const { stdout } = await runCommand(
+      gitHubCli(),
+      ["auth", "token", "--hostname", "github.com"],
+      {
+        timeoutMs: 10_000,
+      },
+    );
     return stdout.trim() || undefined;
   } catch {
     return undefined;

@@ -883,6 +883,12 @@ export interface AppConfig {
     githubToken?: string;
     /** Reuse the host's active `gh auth login` token for container GitHub access. */
     useHostGitHubCredentials?: boolean;
+    /**
+     * The user asked not to be reminded at startup to set up the GitHub CLI.
+     * Written only by `setGitHubCliReminderDismissed`; the settings form never
+     * sends it.
+     */
+    githubCliReminderDismissed?: boolean;
     /** Optional absolute SSH-agent socket path. Absent means auto-detect from the desktop session. */
     sshAgentSocketPath?: string;
     /**

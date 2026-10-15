@@ -35,3 +35,17 @@ was changed.
   (`Expected: 1, Received: 0` at line 136) in the workspace group; the file
   passed alone three times in a row (4 pass, 0 fail each). The change touches
   no worktree-snapshot code.
+
+## Recurrence on 2026-10-15
+
+GitHub setup recovery validation reproduced the same cache-hit assertion
+(`Expected: 1, Received: 0`, 143.34 ms) under `mise run test`, with four
+workspace worker slots. Evidence is in
+`/tmp/orkestrator-test-run.9M60yV/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+The unchanged owning file passed alone (exit 0, 0.7 seconds):
+
+```bash
+mise run test:logged -- --name worktree-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures
+```
+
+No watcher implementation, assertion, timeout or skip was changed.

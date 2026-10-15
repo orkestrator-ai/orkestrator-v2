@@ -390,11 +390,6 @@ export async function checkClaudeConfig(): Promise<boolean> {
   return invoke<boolean>("check_claude_config");
 }
 
-/** Check if the OpenCode CLI binary is installed and available */
-export async function checkOpencodeCli(): Promise<boolean> {
-  return invoke<boolean>("check_opencode_cli");
-}
-
 // --- Agent Skills ---
 
 export const AGENT_SKILL_PROVIDERS = [
@@ -487,14 +482,51 @@ export async function readEnvironmentAgentSkill(
   });
 }
 
-/** Check if the Codex CLI binary is installed and available */
-export async function checkCodexCli(): Promise<boolean> {
-  return invoke<boolean>("check_codex_cli");
-}
-
 /** Check if the GitHub CLI (gh) binary is installed and available */
 export async function checkGithubCli(): Promise<boolean> {
   return invoke<boolean>("check_github_cli");
+}
+
+export interface GitHubCliStatus {
+  installed: boolean;
+  /** `gh` holds a login for github.com. */
+  authenticated: boolean;
+  /** This backend may sign `gh` in. False in isolated test profiles. */
+  canSignIn: boolean;
+  /** The user turned off the startup reminder to set `gh` up. */
+  reminderDismissed: boolean;
+}
+
+export type GitHubCliOperationState = "idle" | "pending" | "succeeded" | "failed";
+
+export interface GitHubCliLoginProgress {
+  state: GitHubCliOperationState;
+  operationId?: string;
+  url?: string;
+  userCode?: string;
+  error?: string;
+}
+
+/** Whether the backend host's GitHub CLI is available and signed in. */
+export async function getGitHubCliStatus(): Promise<GitHubCliStatus> {
+  return invoke<GitHubCliStatus>("get_github_cli_status", {});
+}
+
+/** Start `gh auth login` with GitHub's device flow; poll with `getGitHubCliLogin`. */
+export async function startGitHubCliLogin(): Promise<GitHubCliLoginProgress> {
+  return invoke<GitHubCliLoginProgress>("start_github_cli_login", {});
+}
+
+export async function getGitHubCliLogin(): Promise<GitHubCliLoginProgress> {
+  return invoke<GitHubCliLoginProgress>("get_github_cli_login", {});
+}
+
+/** Cancel a pending GitHub sign-in, or dismiss a finished one. */
+export async function cancelGitHubCliLogin(operationId?: string): Promise<GitHubCliLoginProgress> {
+  return invoke<GitHubCliLoginProgress>(
+    "cancel_github_cli_login",
+    operationId ? { operationId } : {},
+  );
 }
 
 /** Check if any AI CLI (Claude or OpenCode) is available for name generation */

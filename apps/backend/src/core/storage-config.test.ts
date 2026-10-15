@@ -29,6 +29,30 @@ describe("StorageService config migration", () => {
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });
+  test("keeps the GitHub CLI reminder choice across settings saves and restarts", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-github-reminder-config-"));
+    try {
+      const storage = new StorageService(dataDir);
+      await storage.init();
+      expect((await storage.loadConfig()).global.githubCliReminderDismissed).toBeUndefined();
+
+      await storage.setGitHubCliReminderDismissed(true);
+      // The settings form sends neither this flag nor a stale copy of it.
+      const { githubCliReminderDismissed: _omitted, ...rendererSave } = (await storage.loadConfig())
+        .global;
+      await storage.updateGlobalConfig({ ...rendererSave, debugLogging: true });
+      await storage.updateGlobalConfig({ ...rendererSave, githubCliReminderDismissed: false });
+
+      const restarted = new StorageService(dataDir);
+      await restarted.init();
+      expect((await restarted.loadConfig()).global.githubCliReminderDismissed).toBe(true);
+
+      await restarted.setGitHubCliReminderDismissed(false);
+      expect((await restarted.loadConfig()).global.githubCliReminderDismissed).toBeUndefined();
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
   test("adds default notification settings to persisted legacy config", async () => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-sound-settings-migration-"));
     try {

@@ -5,7 +5,11 @@ import type {
   PinnedToolchainResult,
   ToolchainProgress,
 } from "@orkestrator/toolchain/manager";
-import type { ToolchainArtifact } from "@orkestrator/toolchain/manifest";
+import {
+  isSupportToolName,
+  pinnedToolchainArtifacts,
+  type ToolchainArtifact,
+} from "@orkestrator/toolchain/manifest";
 
 type ProgressWindow = Pick<BrowserWindow, "close" | "isDestroyed" | "once">;
 
@@ -104,14 +108,32 @@ export async function preparePinnedToolchains(options: {
    */
   interactive?: boolean;
 }): Promise<string | null> {
+  const artifacts = options.artifacts ?? pinnedToolchainArtifacts();
+  const requiredArtifacts = artifacts.filter((artifact) => !isSupportToolName(artifact.name));
   while (true) {
     try {
       const result = await options.ensure({
         dataDir: options.dataDir,
         fetchImpl: options.fetchImpl,
         onProgress: options.onProgress,
-        artifacts: options.artifacts,
+        artifacts: requiredArtifacts,
       });
+      if (requiredArtifacts.length !== artifacts.length) {
+        try {
+          // Activate the combined set so agents and support tools share one
+          // bin directory. Required agents are already verified and cached.
+          const withSupport = await options.ensure({
+            dataDir: options.dataDir,
+            fetchImpl: options.fetchImpl,
+            onProgress: options.onProgress,
+            artifacts,
+          });
+          return withSupport.binDir;
+        } catch (error) {
+          // gh is optional: use PATH or let the in-app setup offer recovery.
+          options.logError(error);
+        }
+      }
       return result.binDir;
     } catch (error) {
       options.logError(error);

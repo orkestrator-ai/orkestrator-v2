@@ -44,6 +44,23 @@ browser coverage. Live review and Docker tests remain opt-in and require the
 manual profile workflow below. Ambient live-review/Docker opt-ins are disabled
 inside these one-shot tasks.
 
+To work around a host-specific problem without hand-assembling a profile, pass
+`dev:test` profile flags through: `--credential-source <name>` (repeatable),
+`--agent-platforms <list>`, `--no-agent-credentials` and
+`--use-dev-worktree-folder`. A credential or platform flag replaces the
+matching default, for example:
+
+```bash
+mise run test:agent:browser:isolated --agent-platforms codex,opencode
+```
+
+The runner owns `--profile` and `--fixture` and rejects anything else before it
+creates a profile.
+
+Both full browser tasks (`test:agent:browser` and its isolated variant) build
+the packaged CLI first (`build:cli`), because `cli-ui.spec.ts` drives
+`packages/cli/dist`.
+
 Both commands and their workspace-exclusive resources are registered in
 `.orkestrator-test-scheduler.json`. Discovery must select them **verbatim** as
 separate commands. The full browser task covers the targeted design task; do
@@ -55,7 +72,12 @@ The fixture backend uses a private two-slot scheduler inside its disposable
 profile. Browser queue tests intentionally fill this simulated host; they must
 not enqueue against the real host capacity already reserved by the outer review
 task. Its fixed two-slot budget stays within the outer reservation, and reset
-removes its queue along with the profile.
+removes its queue along with the profile. A manually started profile uses the
+real host scheduler, so the queueing case skips unless the suite runs with
+`ORKESTRATOR_TEST_SCHEDULER_DIR` set and `ORKESTRATOR_TEST_HOST_WORKERS=2`. To
+run it against a manual profile, export those two variables and
+`ORKESTRATOR_TEST_HOST_MEMORY_MIB=2048` for both `dev:test` and the browser
+suite.
 
 ## Start or reuse a profile manually
 
@@ -162,6 +184,11 @@ mise run dev:test --profile cursor-qa --fixture --agent-platforms cursor,grok
 `--agent-platforms` belongs to `dev:test` only; `mise run dev` rejects it rather
 than accept a value it would ignore, because ordinary development keeps its
 durable per-installation selection.
+
+A new agent-test profile keeps its worktrees under `<profile>/worktrees/` even
+when Settings > Disk usage names a folder for new dev worktrees, so the browser
+suites see the same layout on every host. Pass `--use-dev-worktree-folder` to
+place them in that folder instead; `mise run dev` always uses it.
 
 The launcher prints what it seeded, what it could not seed, and what Electron
 will therefore download. A first run on a host without the pinned versions needs

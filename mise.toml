@@ -215,14 +215,18 @@ run = "bunx tsc --noEmit -p e2e/tsconfig.json && bunx playwright test --config e
 
 [tasks."test:agent:browser"]
 description = "Run browser agent tests against an already-running profile (use test:agent:browser:isolated for one-shot validation)"
+depends = ["build:cli"]
 run = "bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts"
 
 [tasks."test:agent:browser:isolated"]
 description = "Start a disposable profile, run all browser agent tests, then stop/reset it"
+raw_args = true
+depends = ["build:cli"]
 run = "bun apps/desktop/scripts/test-agent-browser-isolated.ts"
 
 [tasks."test:agent:design:isolated"]
 description = "One-shot real-stack design-canvas validation with disposable profile cleanup"
+raw_args = true
 run = "bun apps/desktop/scripts/test-agent-browser-isolated.ts --design"
 
 [tasks."test:cli:scenarios"]

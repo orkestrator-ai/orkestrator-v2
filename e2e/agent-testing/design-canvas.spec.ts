@@ -123,12 +123,23 @@ test("real gateway saves a design and rehydrates another client's edits", async 
     await expect(
       exportDialog.getByRole("button", { name: "Export revision 2", exact: true }),
     ).toBeEnabled();
+    await exportDialog.getByRole("button", { name: "Cancel" }).click();
+    await page.getByRole("button", { name: "Hide file panel", exact: true }).click();
+    // Below 768px the shell swaps to its mobile layout and remounts the panes,
+    // which drops an open dialog; measuring across that swap raced the
+    // remount. Open the dialog again on the phone layout instead.
     await page.setViewportSize({ width: 390, height: 844 });
+    await page
+      .getByRole("button", { name: "Close projects and environments", exact: true })
+      .first()
+      .click();
+    await page.getByRole("button", { name: "Export design to repository" }).click();
+    await expect(exportDialog).toBeVisible();
     const exportBounds = (await exportDialog.boundingBox())!;
     expect(exportBounds.x).toBeGreaterThanOrEqual(0);
     expect(exportBounds.x + exportBounds.width).toBeLessThanOrEqual(390);
-    await page.setViewportSize({ width: 1440, height: 900 });
     await exportDialog.getByRole("button", { name: "Cancel" }).click();
+    await page.setViewportSize({ width: 1440, height: 900 });
     const environment = await invoke<{ worktreePath: string }>("get_environment", {
       environmentId: env.id,
     });

@@ -11,6 +11,7 @@ import {
   compileElectronForDevelopment,
   startDevelopment,
   configuredDevWorktreeRoot,
+  profileWorktreeLocation,
 } from "./lifecycle.js";
 
 const complete = {
@@ -199,6 +200,36 @@ describe("development Electron compilation", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+});
+
+test("a new agent-test profile uses the configured dev worktree folder only when asked", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ork-dev-location-"));
+  const roots = {
+    developmentRoot: path.join(root, "dev"),
+    productionDataDir: path.join(root, "production"),
+    homeDir: root,
+  };
+  const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
+  try {
+    const configured = path.join(root, "trees");
+    await mkdir(roots.productionDataDir, { recursive: true });
+    await writeFile(
+      path.join(roots.productionDataDir, "config.json"),
+      JSON.stringify({ global: { worktreeLocations: { dev: configured } } }),
+    );
+    const profile = resolveRuntimeProfile({
+      repositoryRoot,
+      requestedId: "qa",
+      flavor: "agent-test",
+      roots,
+    });
+    expect(await profileWorktreeLocation(profile, roots, false)).toEqual({});
+    expect(await profileWorktreeLocation(profile, roots, true)).toEqual({
+      worktreeRoot: configured,
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("dev settings come from production and apply only to new profiles; restarts retain every stored directory", async () => {

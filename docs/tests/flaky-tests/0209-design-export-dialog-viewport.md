@@ -1,7 +1,7 @@
 # Design export dialog disappears after viewport resize
 
 - **ID:** 0209
-- **Status:** open
+- **Status:** resolved
 
 Observed: 2026-10-14
 
@@ -15,3 +15,28 @@ Observed: 2026-10-14
 - Owning-spec rerun: `mise run test:logged -- --name design-browser-rerun -- mise run test:agent:design:isolated` passed unchanged (both tests, one worker; wrapper duration 54.1 seconds). Each invocation stopped and reset its disposable profile.
 
 Hypothesis: responsive layout switching can temporarily remount or redirect the active pane around the resize, losing the dialog. The snapshot supports a pane change, but the cause is not established. This change touches backend persistence only; no renderer code or browser assertions were changed or skipped.
+
+## Resolution (2026-10-15)
+
+- **Root cause:** not load. Below 768px `AppShell` (`apps/web/src/components/layout/AppShell.tsx`)
+  swaps the desktop tree for `MobileAppShellLayout`, so React remounts every
+  pane under it, including `DesignCanvasTab`, which owns the dialog's open
+  state. The resize therefore always closes the export dialog. The spec
+  measured `boundingBox()` straight after `setViewportSize`, which passed only
+  when it won the race against the media-query re-render. When it lost, it
+  either timed out (the original observation) or got `null` (`TypeError:
+  Cannot read properties of null (reading 'x')` at line 128). The second form
+  reproduced on the first `mise run test:agent:design:isolated` run of
+  2026-10-15. Its failure screenshot shows the mobile file panel with no
+  dialog.
+- **Fix:** the spec cancels the dialog, hides the file panel, resizes to
+  390 × 844, closes the mobile projects drawer and opens the export dialog
+  again in the phone layout before it checks the bounds. The fit assertion is
+  unchanged.
+- **Verification:** `ORKESTRATOR_AGENT_TEST_PROFILE=d4538-qa mise run test:agent:browser -- e2e/agent-testing/design-canvas.spec.ts --workers=1`
+  passed both design specs (47.4 s) on a fresh `dev:test --fixture
+  --no-agent-credentials --agent-platforms codex` profile.
+- **Product note:** any open dialog or pane-local state is lost when a window
+  crosses the 768px breakpoint, for example when a phone rotates. This is
+  recorded in `docs/2026-10-14/05-real-stack-suite-host-dependencies.md`; the
+  renderer is not changed here.

@@ -1,6 +1,6 @@
 # Test suites that depend on the host
 
-Status: Active — found 2026-10-14, not fixed.
+Status: Resolved 2026-10-15, except the environment move case, which waits on doc 02. The findings below are the original 2026-10-14 report; see "Resolution (2026-10-15)" at the end.
 
 **Severity: medium.** These failures are not product regressions, but they
 make the validation suites fail on an ordinary developer machine. That hides
@@ -69,3 +69,51 @@ skip with that reason when the pinned binary is absent.
 
 `environment-move.test.ts` fails 22 of 34 cases on tmux 3.8 hosts. That is a
 product bug, not a test problem; see `02-tmux-3-8-no-server-detection.md`.
+
+## Resolution (2026-10-15)
+
+Each item was rechecked on `523eb0da` on the same host (macOS, bsdtar 3.5.3,
+tmux 3.8, a dev worktree folder set to `/Volumes/Lexar/workspaces-dev`, and an
+unauthenticated `claude`).
+
+| Item | Still failing on 2026-10-15? | Outcome |
+| --- | --- | --- |
+| `browser-gateway.spec.ts` worktree assertion ("authoritative local environment") | Yes, from the configured root | Fixed. A new `dev:test` profile ignores the dev worktree folder unless `--use-dev-worktree-folder` is passed (`apps/desktop/scripts/dev/lifecycle.ts` `profileWorktreeLocation`, `arguments.ts`). `mise run dev` still uses the folder. |
+| Environment move worktree path | Path cause fixed; the move itself still fails | The source worktree is now under `<profile>/worktrees/`, but the move never happens. The backend logs `claude-tmux cleanup incomplete`, the tmux 3.8 bug in doc 02. Left to that fix. |
+| Review validation queueing | Yes on a manual profile | The spec skips with a reason unless `ORKESTRATOR_TEST_SCHEDULER_DIR` is set and `ORKESTRATOR_TEST_HOST_WORKERS=2`. Exporting the variables from `test:agent:browser` cannot work: the backend reads them when `dev:test` starts. It passes under the one-shot runner. |
+| `design-canvas.spec.ts:9` export dialog at 390px | Yes (`TypeError: Cannot read properties of null (reading 'x')`) | Fixed in the spec. Root cause: below 768px `AppShell` swaps to `MobileAppShellLayout` and remounts every pane, which drops the dialog's state, so measuring after the resize was a race. The spec now reopens the dialog in the phone layout. Flake 0209 resolved. |
+| One-shot runner profile flags | Not supported | Fixed. `mise run test:agent:browser:isolated` and `test:agent:design:isolated` accept `--credential-source`, `--agent-platforms`, `--no-agent-credentials` and `--use-dev-worktree-folder`. A credential or platform flag replaces the matching default, and unknown flags fail before a profile is created. |
+| `verified copy helper` ×3 | Yes | Host tools, not a product bug. bsdtar has no `--no-wildcards-match-slash` and lists archives in a different format; the helper runs on GNU tar inside the image. |
+| Firewall "GitHub ranges…" and "domain that does not resolve…" | Yes | Host tools, not a product bug. `docker/firewall-domains.sh` uses GNU `date -d` (`ork_iso`, `ork_ranges_fresh_within`). On macOS `date` the seed always looked stale, so the script fetched live, and `ork_iso` failed. |
+| Codex bridge `session-titles.test.ts` message | No on this host (the pinned toolchain copy exists); reproduced with `HOME` pointed elsewhere | Fixed. The message now names `mise run toolchain:install --tool codex`, `mise run download:codex` and `CODEX_PROTOCOL_BINARY`. It still fails loudly, as the test's comment intends. |
+
+Root-suite fixtures: `tests/unit/gnu-shell-tools.ts` puts Homebrew's GNU tool
+directories ahead of the inherited PATH for the shell fixtures in
+`migrate-copy.test.ts`, `firewall-policy.test.ts` and
+`firewall-refresh.test.ts`. On Linux nothing changes. When GNU `tar` or `date`
+is missing, the dependent cases skip, and the install command appears in the
+test name. Flakes 0192 and 0199 stay open: they are aggregate-load timeouts
+with the GNU PATH already set, which is a different failure.
+
+The browser runs turned up two more host problems, and both are fixed:
+
+- `cli-ui.spec.ts:169` failed in a fresh worktree with "orkestrator project
+  list printed no envelope (1)" because `packages/cli/dist` had not been built.
+  `test:agent:browser` and `test:agent:browser:isolated` now depend on
+  `build:cli`.
+- `browser-gateway.spec.ts:386` (project Home) used an `isVisible()` probe
+  that raced the same mobile-shell swap. The drawer stayed open and blocked
+  "Open tools". Recorded and resolved as flake 0212.
+
+Product note, not changed here: any open dialog or pane-local state is lost
+whenever a window crosses the 768px breakpoint, for example when a phone
+rotates. Keeping `children` mounted across the `AppShell` swap would fix it.
+
+The startup dialog (doc 03) still blocks a Codex-only profile on this host: a
+manual `--agent-platforms codex` run had 9 failures behind "Claude Code Login
+Required". The suite was validated with the new pass-through instead:
+
+- `mise run test:agent:browser:isolated --agent-platforms codex,opencode,cursor,grok`:
+  **21 passed, 12 skipped, 1 failed**. The failure is the environment move
+  (doc 02).
+- The doc's original run had 17 passed, 12 skipped and 5 failed.

@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, writeFile, readFile, rm, access } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
-import { runIsolatedBrowser } from "./isolated-browser.js";
+import { isolatedProfileArguments, runIsolatedBrowser } from "./isolated-browser.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -107,6 +107,39 @@ test("runs the targeted spec while the foreground launcher stays alive, then sto
   expect(events.slice(-2).map((event) => event.task)).toEqual(["dev:stop", "dev:reset"]);
   expect(new Set(events.map((event) => event.profile)).size).toBe(1);
   expect(alive(events.find((event) => event.task === "dev:test")!.pid)).toBe(false);
+});
+
+test("profile flags replace the credential-free Codex defaults they name", async () => {
+  expect(isolatedProfileArguments()).toEqual([
+    "--fixture",
+    "--no-agent-credentials",
+    "--agent-platforms",
+    "codex",
+  ]);
+  expect(
+    isolatedProfileArguments([
+      "--credential-source",
+      "claude",
+      "--agent-platforms",
+      "codex,claude",
+    ]),
+  ).toEqual(["--fixture", "--credential-source", "claude", "--agent-platforms", "codex,claude"]);
+  expect(() => isolatedProfileArguments(["--profile", "other"])).toThrow("Unsupported");
+  expect(() => isolatedProfileArguments(["--agent-platforms", "nope"])).toThrow("accepts");
+
+  const f = await fixture();
+  expect(await runIsolatedBrowser({ ...f, profileArgs: ["--agent-platforms", "opencode"] })).toBe(
+    0,
+  );
+  const launcher = (await f.events()).find((event) => event.task === "dev:test")!;
+  expect(launcher.args.slice(2)).toEqual([
+    "--profile",
+    launcher.profile,
+    "--fixture",
+    "--no-agent-credentials",
+    "--agent-platforms",
+    "opencode",
+  ]);
 });
 
 test("full task runs the whole configured suite and preserves Playwright failure", async () => {

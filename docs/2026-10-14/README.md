@@ -1,6 +1,6 @@
 # Pre-existing problems found on 2026-10-14
 
-Status: Active — none fixed yet.
+Status: Active — 05 resolved (its move case waits on 02); the others are open.
 
 These came out of validating the OpenCode boundary cleanup branch
 (`opencode-bridge-a8c2ab5c85b9-r1`): live OpenCode QA in a `dev:test` profile,
@@ -14,7 +14,7 @@ not touch, so none of them is a regression from that work.
 | [02](02-tmux-3-8-no-server-detection.md) | tmux 3.8's new "no server" wording is read as failed cleanup; environment move fails, deletion leaves files | High | Backend tmux cleanup |
 | [03](03-startup-claude-login-dialog.md) | "Claude Code Login Required" blocks the whole app when `claude` is unauthenticated and OpenCode is absent, ignoring Codex, Cursor, Grok and Pi; it also breaks the isolated browser suite | High | Renderer startup gate, host tool checks |
 | [04](04-opencode-fork-loses-model.md) | A forked OpenCode session switches to the first catalogue model | Medium | Fork flow, composer inference |
-| [05](05-real-stack-suite-host-dependencies.md) | Browser, root and bridge suites fail on an ordinary developer machine for host reasons | Medium | Test infrastructure |
+| [05](05-real-stack-suite-host-dependencies.md) | Resolved 2026-10-15: browser, root and bridge suites no longer fail for host reasons; the environment move spec still fails until 02 is fixed | Medium | Test infrastructure |
 | [06](06-opencode-auth-status-truncation.md) | OpenCode shows "needs auth" while a provider is connected | Low–medium | OpenCode capabilities |
 | [07](07-cleanup-follow-ups.md) | Leftover dead renderer helpers, store consolidation, doc drift, a decision to confirm, a known version-skew limitation, the day's flakes (0207, 0208), a live OpenCode spec to commit, and a fault-isolation watch item | Low | Cleanup and follow-ups |
 
@@ -37,9 +37,9 @@ item:
   imported).
 - 04: that "MiMo-V2.6-Pro" is simply the first catalogue row (inferred from
   the label, not checked against OpenCode's provider order).
-- 05: the cause of the narrow-viewport export dialog failure in
-  `design-canvas.spec.ts:9`, and whether the `verified copy helper` failures
-  come from bsdtar versus GNU tar.
+- 05: confirmed 2026-10-15. The dialog failure is the 768px mobile-shell
+  remount; the copy helper and firewall failures come from bsdtar and BSD
+  `date`.
 - 06: that the connected provider really sits beyond index 127 of
   `provider.list().all` (the provider count in a live response was not
   measured).

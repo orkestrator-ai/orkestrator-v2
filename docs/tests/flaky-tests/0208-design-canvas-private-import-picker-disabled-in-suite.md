@@ -23,3 +23,23 @@
   picker listing or canvas quota) delays or blocks the picker's path
   resolution. The branch does not touch the design canvas, the host path
   picker or this spec.
+
+## Recurrence with a different symptom (2026-10-15)
+
+- **Original command:** `mise run test:logged -- --name design-isolated-before -- mise run test:agent:design:isolated`
+  (one Playwright worker, disposable `qa-browser-512b16ed-7a4` profile)
+  while validating the host-dependency fixes for
+  `docs/2026-10-14/05-real-stack-suite-host-dependencies.md`.
+- **Failure:** `locator.click: Timeout 15000ms exceeded` waiting for
+  `getByRole('button', { name: 'Expand project origin', exact: true })` at
+  line 266, called from line 289 just after `page.reload()`. The failure
+  screenshot is a blank dark page with no rendered app. The case ran second,
+  straight after the 0209 failure in the same profile.
+- **Suite counts:** 2 failed (this case and 0209), 0 passed.
+- **Reruns:** passed in the next three runs: the design spec file alone on a
+  manual profile (2 passed, 47.4 s) and two full `test:agent:browser:isolated`
+  runs.
+- **Evidence:** `output/agent-testing/qa-browser-512b16ed-7a4/browser/artifacts/design-canvas-private-canv-b923a-be-retired-to-recover-quota/`.
+- **Hypothesis:** the renderer had not mounted after the reload within the
+  action timeout. It has not recurred since 0209's spec was fixed, but the
+  cause is not established.

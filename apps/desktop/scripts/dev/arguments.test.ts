@@ -91,4 +91,12 @@ describe("development CLI arguments", () => {
       "only supported by mise run dev:test",
     );
   });
+
+  test("only dev:test opts into the configured dev worktree folder", () => {
+    expect(parseAgentTestArguments(["--fixture"]).useDevWorktreeFolder).toBeUndefined();
+    expect(parseAgentTestArguments(["--use-dev-worktree-folder"]).useDevWorktreeFolder).toBe(true);
+    expect(() => parseDevArguments(["--use-dev-worktree-folder"])).toThrow(
+      "only supported by mise run dev:test",
+    );
+  });
 });

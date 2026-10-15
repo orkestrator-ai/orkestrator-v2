@@ -54,7 +54,11 @@ those requirements. Install the tools with Homebrew:
 brew install bash coreutils findutils gnu-tar grep gnu-sed flock
 ```
 
-Prefer those tools for the validation command without changing the global shell
+The fixtures that need GNU `tar` or `date` put Homebrew's GNU tool directories
+(under `/opt/homebrew/opt` or `/usr/local/opt`) ahead of the inherited PATH
+themselves (`tests/unit/gnu-shell-tools.ts`), and skip with the install command
+in the test name when those tools are missing. For everything else, prefer the
+tools for the validation command without changing the global shell
 configuration (use `/usr/local` in place of `/opt/homebrew` on Intel Macs):
 
 ```bash

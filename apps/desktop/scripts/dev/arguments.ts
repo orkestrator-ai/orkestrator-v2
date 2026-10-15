@@ -11,6 +11,12 @@ export type DevArguments = {
   agentCredentialsDisabled: boolean;
   credentialSources: RuntimeProfile["credentialSources"];
   agentPlatforms: RuntimeProfile["agentPlatforms"];
+  /**
+   * `dev:test` only: place a new profile's worktrees in the production app's
+   * dev worktree folder. Agent-test profiles otherwise keep them under the
+   * profile, so test fixtures and moves see the same layout on every host.
+   */
+  useDevWorktreeFolder?: boolean;
 };
 
 const ALL_AGENT_CREDENTIAL_SOURCES: RuntimeProfile["credentialSources"] = [...AGENT_PLATFORMS];
@@ -18,17 +24,18 @@ const ALL_AGENT_PLATFORMS: RuntimeProfile["agentPlatforms"] = [...AGENT_PLATFORM
 
 type ParseOptions = {
   /**
-   * Only `dev:test` consumes a platform selection — Electron reads it for the
+   * Only `dev:test` consumes a platform selection or a worktree folder choice — Electron reads it for the
    * `agent-test` flavor alone, and the launcher seeds toolchains for that flavor
    * alone. Accepting the flag anywhere else would validate it, persist it into
    * the profile, and then quietly ignore it; honouring it instead would let a
-   * `dev` run override the user's durable per-installation choice.
+   * `dev` run override the user's durable per-installation choice. A `dev`
+   * profile always uses the configured dev worktree folder.
    */
-  agentPlatformsAllowed: boolean;
+  agentTest: boolean;
 };
 
 export function parseDevArguments(args: string[]): DevArguments {
-  return parseArguments(args, { agentPlatformsAllowed: false });
+  return parseArguments(args, { agentTest: false });
 }
 
 function parseArguments(args: string[], options: ParseOptions): DevArguments {
@@ -55,7 +62,12 @@ function parseArguments(args: string[], options: ParseOptions): DevArguments {
     else if (argument === "--keep-toolchains") result.keepToolchains = true;
     else if (argument === "--stop-first") result.stopFirst = true;
     else if (argument === "--no-agent-credentials") result.agentCredentialsDisabled = true;
-    else if (argument === "--fixture-environments") {
+    else if (argument === "--use-dev-worktree-folder") {
+      if (!options.agentTest) {
+        throw new Error("--use-dev-worktree-folder is only supported by mise run dev:test");
+      }
+      result.useDevWorktreeFolder = true;
+    } else if (argument === "--fixture-environments") {
       const values = valueAfter(index++, argument).split(",").filter(Boolean);
       if (values.some((value) => value !== "local" && value !== "container")) {
         throw new Error("--fixture-environments accepts local,container");
@@ -63,7 +75,7 @@ function parseArguments(args: string[], options: ParseOptions): DevArguments {
       result.fixtureEnvironments = [...new Set(values)] as DevArguments["fixtureEnvironments"];
       result.fixture = true;
     } else if (argument === "--agent-platforms") {
-      if (!options.agentPlatformsAllowed) {
+      if (!options.agentTest) {
         throw new Error("--agent-platforms is only supported by mise run dev:test");
       }
       const values = valueAfter(index++, argument).split(",").filter(Boolean);
@@ -117,7 +129,7 @@ export function applyAgentTestDefaults(args: DevArguments): DevArguments {
 }
 
 export function parseAgentTestArguments(args: string[]): DevArguments {
-  return applyAgentTestDefaults(parseArguments(args, { agentPlatformsAllowed: true }));
+  return applyAgentTestDefaults(parseArguments(args, { agentTest: true }));
 }
 
 export type PruneArguments = {

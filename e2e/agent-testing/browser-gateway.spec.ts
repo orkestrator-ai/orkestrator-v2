@@ -481,10 +481,13 @@ test("project Home retains background work and unread attention beneath the boar
       "true",
     );
     await page.setViewportSize({ width: 390, height: 844 });
-    const closeProjects = page
+    // The phone layout mounts with its projects drawer open. Wait for it rather
+    // than probe: an immediate visibility check can run before the media query
+    // swaps the shell, leaving the drawer to block the tools button.
+    await page
       .getByRole("button", { name: "Close projects and environments", exact: true })
-      .first();
-    if (await closeProjects.isVisible()) await closeProjects.click();
+      .first()
+      .click();
     await page.getByRole("button", { name: "Open tools", exact: true }).click();
     const homeTab = page.getByRole("tab", { name: "Home", exact: true });
     await expect(homeTab).toBeVisible();
@@ -1572,6 +1575,14 @@ test("Docker fixture ships a Playwright browser that launches for both container
 test("review validation queues across worktrees and runs while its environment is inactive", async ({
   page,
 }) => {
+  // The weight-2 blocker only fills a two-slot host. The one-shot runner gives
+  // its profile that simulated scheduler; a manually started profile uses the
+  // real host, where the second run starts at once instead of queueing.
+  test.skip(
+    !process.env.ORKESTRATOR_TEST_SCHEDULER_DIR ||
+      process.env.ORKESTRATOR_TEST_HOST_WORKERS !== "2",
+    "requires the simulated two-slot scheduler: use mise run test:agent:browser:isolated, or start dev:test and run this suite with ORKESTRATOR_TEST_SCHEDULER_DIR, ORKESTRATOR_TEST_HOST_WORKERS=2 and ORKESTRATOR_TEST_HOST_MEMORY_MIB=2048",
+  );
   const status = await profileStatus();
   const invoke = await authenticatedInvoke(page, status);
   const fixture = (await invoke<Project[]>("get_projects")).find(

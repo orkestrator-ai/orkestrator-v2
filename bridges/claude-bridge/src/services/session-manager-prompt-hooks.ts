@@ -192,7 +192,8 @@ export function shellTaskHooks(session: SessionState): {
     if (!live() || !("tool_use_id" in input) || !input.tool_use_id) return {};
     if (input.hook_event_name === "PreToolUse") {
       const command = (input.tool_input as { command?: unknown } | undefined)?.command;
-      if (typeof command === "string") recordShellCommand(session, input.tool_use_id, command);
+      if (typeof command === "string")
+        await recordShellCommand(session, input.tool_use_id, command);
     } else if (input.hook_event_name === "PostToolUse") {
       const response = input.tool_response as
         | { stdout?: unknown; stderr?: unknown; backgroundTaskId?: unknown }
@@ -200,12 +201,12 @@ export function shellTaskHooks(session: SessionState): {
       const output = [response?.stdout, response?.stderr]
         .filter((text): text is string => typeof text === "string" && text.trim().length > 0)
         .join("\n");
-      recordShellResult(session, input.tool_use_id, {
+      await recordShellResult(session, input.tool_use_id, {
         output,
         backgrounded: typeof response?.backgroundTaskId === "string",
       });
     } else if (input.hook_event_name === "PostToolUseFailure") {
-      recordShellResult(session, input.tool_use_id, {
+      await recordShellResult(session, input.tool_use_id, {
         failure: input.error,
         interrupted: input.is_interrupt === true,
       });

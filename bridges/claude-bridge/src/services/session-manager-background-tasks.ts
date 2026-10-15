@@ -6,6 +6,7 @@ import type {
   BackgroundTaskSnapshot,
   StopBackgroundTaskResult,
 } from "../types/index.js";
+import { MAX_SHELL_TASK_DETAILS, updateSessionPreferences } from "./session-preferences.js";
 import { eventEmitter } from "./event-emitter.js";
 import { debugLog } from "./logger.js";
 import { sessions } from "./session-manager-core.js";
@@ -197,7 +198,7 @@ export function taskMessageMetadata(message: BackgroundTaskSystemMessage): Backg
   };
 }
 
-const MAX_SHELL_COMMANDS = 256;
+const MAX_SHELL_COMMANDS = MAX_SHELL_TASK_DETAILS;
 const MAX_SHELL_COMMAND_LENGTH = 4_000;
 const SHELL_OUTPUT_TAIL_LENGTH = 2_000;
 
@@ -228,37 +229,77 @@ function patchBackgroundTask(
   emitBackgroundTaskSnapshot(session);
 }
 
-/**
- * Remember the command one Bash call runs, so a task the CLI registers for it
- * can say what it runs. Oldest entries go first past the bound.
- */
-export function recordShellCommand(
+async function persistShellTaskFields(
   session: SessionState,
   toolUseId: string,
-  command: string,
+  fields: { command?: string; outputTail?: string; error?: string },
+): Promise<void> {
+  if (!session.sdkSessionId) return;
+  const { command, outputTail, error } = fields;
+  try {
+    await updateSessionPreferences(session.sdkSessionId, {
+      shellTaskDetails: [
+        {
+          toolUseId,
+          ...(command !== undefined ? { command } : {}),
+          ...(outputTail !== undefined ? { outputTail } : {}),
+          ...(error !== undefined ? { error } : {}),
+        },
+      ],
+    });
+  } catch {
+    // Content-free: hook payloads must never reach logs.
+    console.warn("[session-manager] Could not persist shell task details");
+  }
+}
+
+function cacheShellTaskFields(
+  session: SessionState,
+  toolUseId: string,
+  fields: Pick<BackgroundTaskSnapshot, "command" | "outputTail" | "error"> & {
+    completed?: boolean;
+  },
 ): void {
-  const bounded = boundedShellText(command, "head", MAX_SHELL_COMMAND_LENGTH);
-  if (!bounded) return;
   const commands = (session.shellCommands ??= new Map());
+  const previous = commands.get(toolUseId);
   commands.delete(toolUseId);
   while (commands.size >= MAX_SHELL_COMMANDS) {
     const oldest = commands.keys().next().value;
     if (oldest === undefined) break;
     commands.delete(oldest);
   }
-  commands.set(toolUseId, bounded);
-  // The task edge normally follows the hook, but nothing orders the two.
-  const task = backgroundTaskByToolUseId(session, toolUseId);
-  if (task && task.command === undefined) patchBackgroundTask(session, task, { command: bounded });
+  commands.set(toolUseId, { ...previous, ...fields });
 }
 
-/** The command a task's launching Bash call ran, when the hook saw it. */
-export function shellCommandField(
+/**
+ * Remember the command one Bash call runs, so a task the CLI registers for it
+ * can say what it runs. Oldest entries go first past the bound.
+ */
+export async function recordShellCommand(
+  session: SessionState,
+  toolUseId: string,
+  command: string,
+): Promise<void> {
+  if (toolUseId.length === 0 || toolUseId.length > 512) return;
+  const bounded = boundedShellText(command, "head", MAX_SHELL_COMMAND_LENGTH);
+  if (!bounded) return;
+  cacheShellTaskFields(session, toolUseId, { command: bounded });
+  // The task edge normally follows the hook, but nothing orders the two.
+  const task = backgroundTaskByToolUseId(session, toolUseId);
+  if (task) patchBackgroundTask(session, task, takeShellTaskFields(session, toolUseId));
+  await persistShellTaskFields(session, toolUseId, { command: bounded });
+}
+
+/** Consume a completed call only once a task has correlated its launching id. */
+export function takeShellTaskFields(
   session: SessionState,
   toolUseId: string | undefined,
-): { command?: string } {
-  const command = toolUseId ? session.shellCommands?.get(toolUseId) : undefined;
-  return command ? { command } : {};
+): Pick<BackgroundTaskSnapshot, "command" | "outputTail" | "error"> {
+  const fields = toolUseId ? session.shellCommands?.get(toolUseId) : undefined;
+  if (!fields) return {};
+  const { completed, ...metadata } = fields;
+  if (completed) session.shellCommands?.delete(toolUseId!);
+  return metadata;
 }
 
 /**
@@ -268,15 +309,13 @@ export function shellCommandField(
  * background; its output is in the task's output file instead, so that result
  * attaches nothing. A failed call's error names the exit code first.
  */
-export function recordShellResult(
+export async function recordShellResult(
   session: SessionState,
   toolUseId: string,
   result: { output?: string; failure?: string; interrupted?: boolean; backgrounded?: boolean },
-): void {
-  if (result.backgrounded) return;
-  session.shellCommands?.delete(toolUseId);
+): Promise<void> {
+  if (result.backgrounded || toolUseId.length === 0 || toolUseId.length > 512) return;
   const task = backgroundTaskByToolUseId(session, toolUseId);
-  if (!task) return;
   const [firstLine = "", ...rest] = (result.failure ?? "").split("\n");
   const exitLine = /^exit code \d+/i.test(firstLine.trim()) ? firstLine.trim() : undefined;
   const output =
@@ -284,11 +323,20 @@ export function recordShellResult(
   const outputTail = output ? boundedShellText(output, "tail", SHELL_OUTPUT_TAIL_LENGTH) : "";
   const patch: Partial<BackgroundTaskSnapshot> = {
     ...(outputTail ? { outputTail } : {}),
-    ...(result.failure !== undefined && task.error === undefined
-      ? { error: exitLine ?? (result.interrupted ? "Interrupted" : "Command failed") }
+    ...(result.failure !== undefined && task?.error === undefined
+      ? {
+          error: exitLine
+            ? boundedShellText(exitLine, "head", 255)
+            : result.interrupted
+              ? "Interrupted"
+              : "Command failed",
+        }
       : {}),
   };
-  if (Object.keys(patch).length > 0) patchBackgroundTask(session, task, patch);
+  const fields = { ...session.shellCommands?.get(toolUseId), ...patch, completed: true };
+  cacheShellTaskFields(session, toolUseId, fields);
+  if (task) patchBackgroundTask(session, task, takeShellTaskFields(session, toolUseId));
+  await persistShellTaskFields(session, toolUseId, fields);
 }
 
 /** Publish a launch, preserving terminal records unless a start hook names a new run. */

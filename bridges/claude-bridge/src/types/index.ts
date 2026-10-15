@@ -730,13 +730,16 @@ export interface SessionState {
    */
   backgroundTaskCandidates?: Map<string, ClaudeQueryControl>;
   /**
-   * Recent Bash commands by tool-use id, from the `PreToolUse` hook.
+   * Recent Bash commands and unmatched results by tool-use id.
    *
    * No task message names a shell task's command, and a background
    * subagent's tool calls never reach this stream, so this is what lets a
    * task the CLI registers for one of those calls say what it runs. Bounded.
    */
-  shellCommands?: Map<string, string>;
+  shellCommands?: Map<
+    string,
+    { command?: string; outputTail?: string; error?: string; completed?: boolean }
+  >;
   /**
    * Controls kept alive across a background-task notification.
    *

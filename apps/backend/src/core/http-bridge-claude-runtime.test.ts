@@ -65,6 +65,27 @@ describe("normalizeClaudeBackgroundTasks", () => {
     });
   });
 
+  test("maps every provider kind and preserves prompt and workflow name", () => {
+    const kinds = {
+      local_bash: "shell",
+      local_agent: "agent",
+      local_workflow: "workflow",
+      remote_agent: "remote-agent",
+      mcp_task: "mcp",
+      monitor_mcp: "mcp",
+      in_process_teammate: "teammate",
+    } as const;
+    for (const [taskType, kind] of Object.entries(kinds)) {
+      expect(
+        normalizeClaudeBackgroundTasks({
+          task: { status: "running", taskType, prompt: "Review docs", workflowName: "spec" },
+        }),
+      ).toEqual([
+        { id: "task", status: "running", kind, prompt: "Review docs", workflowName: "spec" },
+      ]);
+    }
+  });
+
   test("names an unknown task kind other and drops unusable metadata", () => {
     const [task] = normalizeClaudeBackgroundTasks({
       odd: {

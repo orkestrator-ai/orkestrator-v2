@@ -1,12 +1,15 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, spyOn } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import {
   childBackgroundTasksByParent,
   rowlessBackgroundTaskMessages,
 } from "@/lib/chat/native-message-adapters";
-import type { NativeMessage as NativeMessageType } from "@/lib/chat/native-message-types";
+import type {
+  NativeTaskGroupPart,
+  NativeMessage as NativeMessageType,
+} from "@/lib/chat/native-message-types";
 import { NativeMessage } from "./NativeMessage";
-import { BackgroundTaskCard } from "./NativeMessage.agent-parts";
+import { BackgroundTaskCard, TaskGroupPart } from "./NativeMessage.agent-parts";
 import { BackgroundTaskChildrenContext } from "./NativeMessage.shared";
 
 afterEach(cleanup);
@@ -112,8 +115,96 @@ describe("background task details", () => {
     expect(screen.getByText("Paused")).toBeTruthy();
     expect(screen.getByText("1m 5s")).toBeTruthy();
     expect(screen.getByText("Ended")).toBeTruthy();
-    // 3m 5s on the clock, less 1m 5s paused.
-    expect(screen.getByText("2m 0s")).toBeTruthy();
+    // Wall time includes the separately displayed paused time.
+    expect(screen.getByText("3m 5s")).toBeTruthy();
+  });
+
+  for (const grouped of [false, true]) {
+    test(`${grouped ? "task group" : "rowless card"} keeps wall time consistent on settle and remount`, () => {
+      const clock = spyOn(Date, "now").mockReturnValue(Date.parse("2026-08-16T10:03:05Z"));
+      const task = {
+        id: "timed",
+        status: "running" as const,
+        kind: "agent" as const,
+        description: "Audit docs",
+        startedAt: "2026-08-16T10:00:00Z",
+        pausedMs: 65_000,
+      };
+      const view = (status: "running" | "paused" | "completed") => {
+        const backgroundTask = {
+          ...task,
+          status,
+          ...(status === "completed" ? { settledAt: "2026-08-16T10:03:05Z" } : {}),
+        };
+        const part: NativeTaskGroupPart = {
+          type: "task-group",
+          content: "Agent",
+          childTools: [],
+          task: {
+            type: "tool-invocation",
+            content: "Agent",
+            toolName: "Agent",
+            toolUseId: "timed-tool",
+            toolArgs: { description: "Audit docs" },
+            backgroundTask,
+          },
+        };
+        return grouped ? (
+          <TaskGroupPart part={part} partKey="timed" />
+        ) : (
+          <BackgroundTaskCard task={backgroundTask} open={false} onOpenChange={() => {}} />
+        );
+      };
+      try {
+        const { rerender, unmount } = render(view("running"));
+        expect(screen.getByText("3m 5s")).toBeTruthy();
+        rerender(view("paused"));
+        expect(screen.getByText("3m 5s")).toBeTruthy();
+        rerender(view("completed"));
+        expect(screen.getByText("3m 5s")).toBeTruthy();
+        unmount();
+        render(view("completed"));
+        expect(screen.getByText("3m 5s")).toBeTruthy();
+      } finally {
+        clock.mockRestore();
+      }
+    });
+  }
+
+  test("a task group previews its own background progress, then its last tool", () => {
+    const base: NativeTaskGroupPart = {
+      type: "task-group",
+      content: "Agent",
+      childTools: [],
+      task: {
+        type: "tool-invocation",
+        content: "Agent",
+        toolName: "Agent",
+        toolUseId: "progress",
+        toolArgs: { description: "Audit docs" },
+        backgroundTask: {
+          id: "agent-progress",
+          status: "running",
+          progressSummary: "Checking links",
+          lastToolName: "Grep",
+        },
+      },
+    };
+    const { rerender } = render(<TaskGroupPart part={base} partKey="progress" />);
+    expect(screen.getByText("Checking links")).toBeTruthy();
+    rerender(
+      <TaskGroupPart
+        part={{
+          ...base,
+          task: {
+            ...base.task,
+            backgroundTask: { ...base.task.backgroundTask!, progressSummary: undefined },
+          },
+        }}
+        partKey="progress"
+      />,
+    );
+    expect(screen.getByText("Using Grep")).toBeTruthy();
   });
 
   test("an agent card lists the tasks its agent launched and previews the live one", () => {

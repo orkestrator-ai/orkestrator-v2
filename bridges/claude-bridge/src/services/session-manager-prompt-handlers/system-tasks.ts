@@ -10,7 +10,7 @@ import {
   inheritBackgroundTaskHookRun,
   isHookRunningBackgroundTask,
   parkSettlingBackgroundTask,
-  shellCommandField,
+  takeShellTaskFields,
   takeProvisionalBackgroundTask,
   takeSettlingBackgroundTask,
   taskMessageMetadata,
@@ -50,6 +50,7 @@ interface TaskSystemMessage {
     subagent_type?: unknown;
     parent_task_id?: unknown;
     ambient?: unknown;
+    skip_transcript?: unknown;
   }>;
   patch?: {
     status?: BackgroundTaskSnapshot["status"];
@@ -146,7 +147,11 @@ export function handleTaskEdge(turn: TurnState, message: SDKMessage): void | "st
     ...carriedTaskMetadata(previous),
     ...taskEdgeMetadata(message),
   };
-  if (task.command === undefined) Object.assign(task, shellCommandField(session, task.toolUseId));
+  Object.assign(
+    task,
+    takeShellTaskFields(session, task.toolUseId),
+    task.error ? { error: task.error } : {},
+  );
   inheritBackgroundTaskHookRun(previous, task);
   session.backgroundTasks = boundBackgroundTaskHistory({
     ...session.backgroundTasks,
@@ -231,6 +236,11 @@ export function handleTaskNotification(turn: TurnState, message: SDKMessage): vo
     ...carriedTaskMetadata(previous),
     ...taskMessageMetadata(notification),
   };
+  Object.assign(
+    task,
+    takeShellTaskFields(session, task.toolUseId),
+    task.error ? { error: task.error } : {},
+  );
   session.backgroundTasks = boundBackgroundTaskHistory({
     ...session.backgroundTasks,
     [task.id]: task,
@@ -317,11 +327,12 @@ export function handleBackgroundTasksChanged(turn: TurnState, message: SDKMessag
       isBackgrounded: previous?.isBackgrounded ?? true,
       startedAt: previous?.startedAt ?? Date.now(),
       ...(previous?.usage ? { usage: previous.usage } : {}),
+      ...(previous?.error ? { error: previous.error } : {}),
       ...(subagentType ? { subagentType } : {}),
       ...carriedTaskMetadata(previous),
       ...(taskType ? { taskType } : {}),
-      ...(parentTaskId ? { parentTaskId } : {}),
-      ...(entry.ambient === true ? { ambient: true } : {}),
+      parentTaskId,
+      ambient: entry.ambient === true || entry.skip_transcript === true,
     };
     inheritBackgroundTaskHookRun(previous, replacement[id]!);
     // An id already owned by another live control keeps that owner:

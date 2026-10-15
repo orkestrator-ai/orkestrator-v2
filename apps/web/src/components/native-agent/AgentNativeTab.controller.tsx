@@ -751,8 +751,8 @@ export function SharedNativeAgentController({
   // The tasks an agent launched render inside that agent's card, wherever the
   // transcript puts it; the rows above leave them out.
   const childBackgroundTasks = useMemo(
-    () => childBackgroundTasksByParent(projection?.backgroundTasks ?? []),
-    [projection?.backgroundTasks],
+    () => childBackgroundTasksByParent(projection?.backgroundTasks ?? [], displayMessages),
+    [displayMessages, projection?.backgroundTasks],
   );
   /*
    * The transcript the reader sees, rowless tasks included. The announcement

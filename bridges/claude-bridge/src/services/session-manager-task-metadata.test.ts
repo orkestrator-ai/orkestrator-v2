@@ -7,6 +7,7 @@ import {
 } from "./session-manager-messages.js";
 import {
   createSession,
+  createPromptTurnForTesting,
   getSession,
   inspectDuringTurn,
   nextQueryCall,
@@ -14,6 +15,17 @@ import {
   track,
   waitFor,
 } from "./session-manager-test-harness.js";
+
+import {
+  handleTaskEdge,
+  handleBackgroundTasksChanged,
+} from "./session-manager-prompt-handlers/system-tasks.js";
+import {
+  recordBackgroundTaskLaunch,
+  recordShellCommand,
+  recordShellResult,
+} from "./session-manager-background-tasks.js";
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 
 type Hooks = Partial<Record<string, HookCallbackMatcher[]>>;
 
@@ -132,6 +144,217 @@ describe("background task metadata", () => {
     await finish();
   });
 
+  for (const cleared of [{ ambient: false }, {}, { ambient: false, parent_task_id: 42 }]) {
+    test(`replacement clears classification and parent: ${JSON.stringify(cleared)}`, () => {
+      const created = createSession("Replacement");
+      track(created.id);
+      const session = getSession(created.id)!;
+      const { turn } = createPromptTurnForTesting(session);
+      turn.queryIteratorControl = {} as NonNullable<typeof session.queryControl>;
+      session.backgroundTasks = {
+        parent: { id: "parent", status: "completed" },
+        child: { id: "child", status: "running", ambient: true, parentTaskId: "parent" },
+      };
+      handleBackgroundTasksChanged(turn, {
+        type: "system",
+        subtype: "background_tasks_changed",
+        tasks: [{ task_id: "child", ...cleared }],
+      } as unknown as SDKMessage);
+      expect(session.backgroundTasks.child?.ambient).toBe(false);
+      expect(session.backgroundTasks.child?.parentTaskId).toBeUndefined();
+      expect(session.backgroundTasks.parent?.status).toBe("completed");
+      // Sparse edges still carry the authoritative classification forward.
+      handleTaskEdge(turn, {
+        type: "system",
+        subtype: "task_progress",
+        task_id: "child",
+      } as SDKMessage);
+      expect(session.backgroundTasks.child?.ambient).toBe(false);
+    });
+  }
+
+  test("replacement accepts the skip_transcript alias", () => {
+    const created = createSession("Ambient alias");
+    track(created.id);
+    const session = getSession(created.id)!;
+    const { turn } = createPromptTurnForTesting(session);
+    turn.queryIteratorControl = {} as NonNullable<typeof session.queryControl>;
+    handleBackgroundTasksChanged(turn, {
+      type: "system",
+      subtype: "background_tasks_changed",
+      tasks: [{ task_id: "watch", skip_transcript: true }],
+    } as unknown as SDKMessage);
+    expect(session.backgroundTasks?.watch?.ambient).toBe(true);
+  });
+
+  for (const failure of [false, true]) {
+    test(`retains ${failure ? "failed" : "successful"} result hooks before registration`, async () => {
+      const created = createSession("Unordered hooks");
+      track(created.id);
+      const prompt = sendPrompt(created.id, "delegate");
+      const call = await nextQueryCall();
+      const hooks = call.options.hooks as Hooks;
+      const session = getSession(created.id)!;
+      await shellHook(
+        hooks,
+        "PreToolUse",
+      )({ tool_name: "Bash", tool_use_id: "early", tool_input: { command: "bun test" } });
+      await shellHook(
+        hooks,
+        failure ? "PostToolUseFailure" : "PostToolUse",
+      )({
+        tool_name: "Bash",
+        tool_use_id: "early",
+        error: "cancelled\npartial output",
+        is_interrupt: true,
+        tool_response: { stdout: "stdout", stderr: "stderr" },
+      });
+      expect(session.shellCommands?.has("early")).toBe(true);
+      // The level carries no tool id; only the later edge can correlate it.
+      call.push({
+        type: "system",
+        subtype: "background_tasks_changed",
+        tasks: [{ task_id: "early-task", task_type: "local_bash" }],
+      });
+      await waitFor(() => session.backgroundTasks?.["early-task"] !== undefined);
+      expect(session.backgroundTasks?.["early-task"]?.command).toBeUndefined();
+      call.push({
+        type: "system",
+        subtype: "task_started",
+        task_id: "early-task",
+        tool_use_id: "early",
+      });
+      await waitFor(() => session.backgroundTasks?.["early-task"]?.command !== undefined);
+      expect(session.backgroundTasks?.["early-task"]).toMatchObject({
+        command: "bun test",
+        outputTail: failure ? "cancelled\npartial output" : "stdout\nstderr",
+      });
+      expect(session.backgroundTasks?.["early-task"]?.error).toBe(
+        failure ? "Interrupted" : undefined,
+      );
+      expect(session.shellCommands?.has("early")).toBe(false);
+      call.finish();
+      await prompt;
+    });
+  }
+
+  test("successful result after registration joins stdout and stderr and consumes the command", async () => {
+    const created = createSession("Successful shell");
+    track(created.id);
+    const prompt = sendPrompt(created.id, "delegate");
+    const call = await nextQueryCall();
+    const session = getSession(created.id)!;
+    const hooks = call.options.hooks as Hooks;
+    call.push({
+      type: "system",
+      subtype: "task_started",
+      task_id: "success",
+      tool_use_id: "success-tool",
+    });
+    await waitFor(() => session.backgroundTasks?.success !== undefined);
+    await shellHook(
+      hooks,
+      "PreToolUse",
+    )({ tool_name: "Bash", tool_use_id: "success-tool", tool_input: { command: "echo ok" } });
+    await shellHook(
+      hooks,
+      "PostToolUse",
+    )({
+      tool_name: "Bash",
+      tool_use_id: "success-tool",
+      tool_response: { stdout: "ok", stderr: "warning" },
+    });
+    expect(session.backgroundTasks?.success).toMatchObject({
+      command: "echo ok",
+      outputTail: "ok\nwarning",
+    });
+    expect(session.backgroundTasks?.success?.error).toBeUndefined();
+    expect(session.shellCommands?.has("success-tool")).toBe(false);
+    call.finish();
+    await prompt;
+  });
+
+  test("bounds pending calls and strips controls before truncating command and output", async () => {
+    const created = createSession("Bounds");
+    track(created.id);
+    const session = getSession(created.id)!;
+    for (let i = 0; i < 257; i++) {
+      await recordShellCommand(session, `call-${i}`, "echo ok");
+      await recordShellResult(session, `call-${i}`, { output: "done" });
+    }
+    expect(session.shellCommands?.size).toBe(256);
+    expect(session.shellCommands?.has("call-0")).toBe(false);
+    expect(session.shellCommands?.has("call-256")).toBe(true);
+    await recordShellCommand(session, "bounded", "\u0000" + "x".repeat(4100) + "END");
+    await recordShellResult(session, "bounded", {
+      output: "HEAD" + "y".repeat(2100) + "\u0007\u007f\tEND",
+    });
+    session.backgroundTasks = {
+      bounded: { id: "bounded", status: "running", toolUseId: "bounded" },
+    };
+    // Another hook can attach a cached completed result after an edge.
+    await recordShellCommand(session, "bounded", "\u0000" + "x".repeat(4100) + "END");
+    expect(session.backgroundTasks.bounded?.command).toBe("x".repeat(4000) + "…");
+    expect(session.backgroundTasks.bounded?.outputTail).toBe("…" + "y".repeat(1996) + "\tEND");
+    expect(session.shellCommands?.has("bounded")).toBe(false);
+  });
+
+  for (const hookRestart of [false, true]) {
+    test(`${hookRestart ? "hook" : "SendMessage"} resume clears run metadata`, () => {
+      const created = createSession("Resume");
+      track(created.id);
+      const session = getSession(created.id)!;
+      const { turn } = createPromptTurnForTesting(session);
+      turn.queryIteratorControl = {} as NonNullable<typeof session.queryControl>;
+      session.backgroundTasks = {
+        agent: {
+          id: "agent",
+          status: "completed",
+          toolUseId: "old",
+          startedAt: 1,
+          endedAt: 2,
+          taskType: "local_agent",
+          prompt: "Review",
+          outputTail: "old output",
+          lastToolName: "Read",
+          progressSummary: "Old progress",
+          pausedMs: 500,
+          endReason: "worker_restart",
+          error: "old error",
+          summary: "old summary",
+        },
+      };
+      if (hookRestart)
+        recordBackgroundTaskLaunch(
+          session,
+          { id: "agent" },
+          {} as NonNullable<typeof session.queryControl>,
+          { newRun: true },
+        );
+      else
+        handleTaskEdge(turn, {
+          type: "system",
+          subtype: "task_started",
+          task_id: "agent",
+          tool_use_id: "new",
+        } as SDKMessage);
+      const task = session.backgroundTasks.agent!;
+      expect(task).toMatchObject({ status: "running", taskType: "local_agent", prompt: "Review" });
+      expect(task.startedAt).toBeGreaterThan(2);
+      for (const key of [
+        "outputTail",
+        "lastToolName",
+        "progressSummary",
+        "pausedMs",
+        "endReason",
+        "error",
+        "summary",
+        "endedAt",
+      ] as const)
+        expect(task[key]).toBeUndefined();
+    });
+  }
+
   test("captures a shell task's command and how it ended from the Bash hooks", async () => {
     const created = createSession("Shell hooks");
     track(created.id);
@@ -218,6 +441,7 @@ describe("background task metadata", () => {
       tool_response: { stdout: "", stderr: "", interrupted: false, backgroundTaskId: "shell-4" },
     });
     expect(session.backgroundTasks?.["shell-4"]?.outputTail).toBeUndefined();
+    expect(session.shellCommands?.has("toolu-late")).toBe(true);
 
     call.finish();
     await prompt;

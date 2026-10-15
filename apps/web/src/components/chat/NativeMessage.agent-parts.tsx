@@ -166,18 +166,17 @@ function useAgentRuntimeLabel(
   });
 }
 
-/** Time the task spent working: launch to settle, less any time it was paused. */
+/** Wall time, matching the live clock; paused time is shown as a separate detail. */
 function backgroundTaskDurationMs(
   startedAt: string | undefined,
   settledAt: string | undefined,
-  pausedMs?: number,
 ): number | undefined {
   const startedAtMs = parseBackendTurnStartedAt(startedAt);
   const settledAtMs = parseBackendTurnStartedAt(settledAt);
   if (startedAtMs === undefined || settledAtMs === undefined || settledAtMs < startedAtMs) {
     return undefined;
   }
-  return Math.max(0, settledAtMs - startedAtMs - (pausedMs ?? 0));
+  return Math.max(0, settledAtMs - startedAtMs);
 }
 
 function RuntimeLabel({ value, className }: { value?: string; className?: string }) {
@@ -1053,7 +1052,7 @@ export function BackgroundTaskCard({
   const durationLabel = useAgentRuntimeLabel(
     presentation.status,
     startedAt,
-    backgroundTaskDurationMs(startedAt, task.settledAt, task.pausedMs),
+    backgroundTaskDurationMs(startedAt, task.settledAt),
     task.id,
   );
   const children = useBackgroundTaskChildren(task.id);
@@ -1457,7 +1456,6 @@ export function TaskGroupPart({
       ? backgroundTaskDurationMs(
           backgroundAgentTask.startedAt ?? part.task.createdAt ?? part.createdAt,
           backgroundAgentTask.settledAt,
-          backgroundAgentTask.pausedMs,
         )
       : numberToolArg(part.task.toolArgs, "durationMs"),
     part.task.toolUseId ?? partKey,

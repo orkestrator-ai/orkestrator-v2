@@ -4032,6 +4032,32 @@ describe("tasks an agent launched", () => {
     ]);
   });
 
+  test("does not repeat a child that already has its own transcript card", () => {
+    const childCard = rowlessBackgroundTaskMessages(
+      [{ ...shell, parentTaskId: undefined }],
+      [],
+    )[0]!;
+    const tasks = [agent, shell];
+    const messages = [agentCard, childCard];
+    expect(rowlessBackgroundTaskMessages(tasks, messages)).toHaveLength(0);
+    expect(childBackgroundTasksByParent(tasks, messages).size).toBe(0);
+  });
+
+  test("a replacement that clears ambient and parent restores the child's row", () => {
+    const parent = { ...agent, status: "completed", settledAt: agentCard.createdAt } as const;
+    expect(
+      rowlessBackgroundTaskMessages([parent, { ...shell, ambient: true }], [agentCard]),
+    ).toHaveLength(0);
+    const [row] = rowlessBackgroundTaskMessages(
+      [parent, { ...shell, ambient: false, parentTaskId: undefined }],
+      [agentCard],
+    );
+    expect(row?.id).toBe("background-task:shell-1");
+    expect(childBackgroundTasksByParent([parent, { ...shell, parentTaskId: undefined }]).size).toBe(
+      0,
+    );
+  });
+
   test("gives a child its own row when its parent has no card", () => {
     // The parent is not in the snapshot at all, so nothing else can show it.
     expect(rowlessBackgroundTaskMessages([shell], [agentCard])).toHaveLength(1);

@@ -1481,16 +1481,19 @@ function nestedBackgroundTaskIds(
 /**
  * Each task's child tasks, by parent id, oldest first.
  *
- * Every child of a parent in the snapshot is listed: whichever card shows the
- * parent shows these with it, and `rowlessBackgroundTaskMessages` gives a row
- * only to a child whose parent has no card at all.
+ * Children without their own transcript card are listed under their parent.
+ * `rowlessBackgroundTaskMessages` gives a row only to a child whose parent
+ * has no card at all.
  */
 export function childBackgroundTasksByParent(
   tasks: readonly BackgroundTaskSnapshot[],
+  messages: readonly NativeMessage[] = [],
 ): ReadonlyMap<string, readonly NativeBackgroundTask[]> {
   const byId = new Map(tasks.map((task) => [task.id, task]));
   const children = new Map<string, NativeBackgroundTask[]>();
+  const rendered = collectRenderedBackgroundTaskIds(messages);
   for (const task of tasks) {
+    if (rendered.has(task.id)) continue;
     const parentId = task.ambient ? undefined : backgroundTaskParent(task, byId)?.id;
     if (!parentId) continue;
     const list = children.get(parentId) ?? [];

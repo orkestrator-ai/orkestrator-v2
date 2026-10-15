@@ -68,6 +68,95 @@ import {
 } from "./session-manager-test-harness.js";
 import type { SdkSessionInfo, SdkSessionMessage } from "./session-manager-test-harness.js";
 
+import { recordShellCommand, recordShellResult } from "./session-manager-background-tasks.js";
+import { sessions } from "./session-manager-core.js";
+
+describe("durable shell task enrichment", () => {
+  for (const failed of [false, true]) {
+    test(`keeps ${failed ? "failed" : "successful"} shell details through eviction and restart`, async () => {
+      const toolUseId = failed ? "durable-failure" : "durable-success";
+      let resumed = false;
+      mockSdkGetSessionMessages.mockImplementation(async () => [
+        {
+          type: "system",
+          uuid: "shell-start",
+          session_id: PERSISTED_SDK_ID,
+          parent_tool_use_id: null,
+          message: {
+            type: "system",
+            subtype: "task_started",
+            task_id: "shell",
+            tool_use_id: resumed ? "new-run" : toolUseId,
+            task_type: "local_bash",
+          },
+        },
+        {
+          type: "system",
+          uuid: "shell-end",
+          session_id: PERSISTED_SDK_ID,
+          parent_tool_use_id: null,
+          message: {
+            type: "system",
+            subtype: "task_notification",
+            task_id: "shell",
+            status: "completed",
+          },
+        },
+      ]);
+      const state = await materializePersistedSession();
+      await hydratePersistedSessionMessages(state.id);
+      await recordShellCommand(state, toolUseId, "bun test");
+      await recordShellResult(
+        state,
+        toolUseId,
+        failed ? { failure: "Exit code 2\nfailed output" } : { output: "passed output" },
+      );
+      const expected = {
+        command: "bun test",
+        outputTail: failed ? "failed output" : "passed output",
+      };
+      expect(state.backgroundTasks?.shell).toMatchObject(expected);
+      state.lastAccessedAt = Date.now() - IDLE_TRANSCRIPT_EVICTION_MS - 1;
+      expect(evictIdleHydratedTranscripts()).toContain(state.id);
+      await hydratePersistedSessionMessages(state.id);
+      expect(state.backgroundTasks?.shell).toMatchObject(expected);
+      expect(state.backgroundTasks?.shell?.error).toBe(failed ? "Exit code 2" : undefined);
+      // Drop all in-memory state as a new bridge process would.
+      sessions.delete(state.id);
+      const recreated = await materializePersistedSession();
+      await hydratePersistedSessionMessages(recreated.id);
+      expect(recreated.backgroundTasks?.shell).toMatchObject(expected);
+      expect(recreated.backgroundTasks?.shell?.error).toBe(failed ? "Exit code 2" : undefined);
+      resumed = true;
+      sessions.delete(recreated.id);
+      const nextRun = await materializePersistedSession();
+      await hydratePersistedSessionMessages(nextRun.id);
+      expect(nextRun.backgroundTasks?.shell?.command).toBeUndefined();
+      expect(nextRun.backgroundTasks?.shell?.outputTail).toBeUndefined();
+      expect(nextRun.backgroundTasks?.shell?.error).toBeUndefined();
+    });
+  }
+
+  test("bounds durable hook metadata and merges fields for the same call", async () => {
+    const entries = Array.from({ length: 257 }, (_, i) => ({
+      toolUseId: `call-${i}`,
+      command: `echo ${i}`,
+    }));
+    await updateSessionPreferences(PERSISTED_SDK_ID, { shellTaskDetails: entries });
+    await updateSessionPreferences(PERSISTED_SDK_ID, {
+      shellTaskDetails: [{ toolUseId: "call-256", outputTail: "done" }],
+    });
+    const details = (await readSessionPreferences(PERSISTED_SDK_ID))?.shellTaskDetails;
+    expect(details).toHaveLength(256);
+    expect(details?.some((entry) => entry.toolUseId === "call-0")).toBe(false);
+    expect(details?.at(-1)).toEqual({
+      toolUseId: "call-256",
+      command: "echo 256",
+      outputTail: "done",
+    });
+  });
+});
+
 describe("reconcilePersistedSessions", () => {
   test("does nothing when the installed SDK has no listSessions API", async () => {
     installSdkModuleMock({ listSessions: undefined });

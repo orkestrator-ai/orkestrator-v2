@@ -683,9 +683,11 @@ supervisor.lock            one supervisor per data directory
 
 Normal operation:
 
-1. Run the backend from `current` if it exists and is at least the
-   supervisor's own version. Otherwise run the supervisor's own package (the
-   bootstrap).
+1. Run the backend from `current` whenever it points at an installed
+   package, even one older than the supervisor's own: a rollback and an
+   approved downgrade both point it back. Without a `current`, run the
+   supervisor's own package (the bootstrap). `orkestrator service install`
+   resets `current` to the package it runs from.
 2. Spawn `bun <root>/bin/orkestrator.js serve <user flags> --control-host 127.0.0.1 --control-port 0`
    as a child, with `ORKESTRATOR_UPDATE_HOST=supervisor`.
 3. Parse the readiness line, then register as host.
@@ -704,11 +706,17 @@ Normal operation:
    manifest.
 3. Rename the staging directory into `versions/<version>`.
 
+A bootstrap run stages its own version too, so a rollback has a copy that a
+cache clean cannot remove. Each `bun add` can take minutes, so the supervisor
+reports progress every minute while it stages.
+
 `install()`, the health-gated cutover:
 
-1. Record `previous` = the realpath of the running root, the realpath of
-   `toolchains/bin/current`, and the database's `PRAGMA user_version`, all in
-   `supervisor-state.json`.
+1. Record `previous` = the realpath of the running root (for the bootstrap,
+   its staged copy), the realpath of `toolchains/bin/current`, and the
+   database's `PRAGMA user_version`, all in `supervisor-state.json`. If the
+   target cannot be staged at this point, nothing has stopped: the old backend
+   keeps running and the job ends `rolled-back` (`install-failed`).
 2. SIGTERM the old backend and wait for it (60 s, then SIGKILL).
 3. Point `toolchains/bin/current` at the prefetched target set, and `current`
    at `versions/<target>`.
@@ -720,12 +728,20 @@ Normal operation:
 6. **Unhealthy:** kill the new backend. If `user_version` moved, restore the
    database from the `backups/pre-migration-v<old>-*.sqlite` snapshot the new
    backend took during this cutover (newer than the recorded start), and
-   delete `-wal` and `-shm`. Repoint both symlinks back, start the old version
+   move `-wal` and `-shm` aside, deleting them only after the swap so a crash
+   never pairs them with the snapshot. Repoint both symlinks back, start the old version
    with the same health check, and report `rolled-back` with the reason. If
    the old version is also unhealthy, keep retrying it with backoff and report
-   `failed` (`rollbackFailed`).
+   `failed` (`rollbackFailed`). Any error after the old backend stopped (a
+   full disk, a symlink that cannot be swapped) takes the same rollback path.
 7. **Crash-loop guard.** If a version installed less than 30 minutes ago
-   crashes 3 times in 10 minutes, roll back automatically.
+   crashes 3 times in 10 minutes, roll back automatically. After 30 minutes
+   the install record is dropped: later failures are not the update's, and
+   restoring its database snapshot then would discard newer data.
+8. A stop (SIGTERM) that arrives during a cutover lets it finish, then stops
+   whichever backend is running. A supervisor restarted mid-cutover rolls
+   back on start, best effort, and still starts a backend if part of the
+   restore fails (reported as `rollbackFailed`).
 
 The supervisor's own code is the version that launched it. A newer backend
 works with an older supervisor through `protocolVersion`. The supervisor
@@ -776,11 +792,14 @@ writable, because the swap renames the new file next to the old one.
     copy after the next successful start.
   - If `app.getVersion() === from`, the install did not apply: report
     `failed`, with code `install-not-applied`.
-  - If the backend fails to start under the new version: restore the database
-    snapshot if `user_version` moved, then swap the bundle back. On macOS,
-    rename the running bundle aside and `ditto` the copy into place; on Linux,
-    copy the AppImage back. Then `app.relaunch()` the old version, which
-    reports `rolled-back`.
+  - If the backend fails to start during the first launch of the new version
+    (the marker records that launch, so a later failure never restores an
+    out-of-date snapshot): stop the new backend and wait for it to exit,
+    restore the database snapshot if `user_version` moved, then swap the
+    bundle back. On macOS, rename the running bundle aside and `ditto` the
+    copy into place; on Linux, copy the AppImage back. Then relaunch the old
+    version (for an AppImage, the restored file, not the failed version's
+    mount), which reports `rolled-back`.
   - If the new Electron main cannot run at all, nothing can roll back. That
     case is unqualified, and the bundle was signed and notarized, so it is
     expected to be rare.

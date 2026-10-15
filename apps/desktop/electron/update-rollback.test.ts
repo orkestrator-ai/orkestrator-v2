@@ -1,9 +1,22 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { PendingInstallMarker } from "./update-host.js";
 import {
+  readPendingInstallMarker,
+  writePendingInstallMarker,
+  type PendingInstallMarker,
+} from "./update-host.js";
+import {
+  claimFirstLaunchAfterUpdate,
   installedApp,
   keepRollbackCopy,
   rollBackFailedUpdate,
@@ -126,6 +139,7 @@ describe("rolling back a failed update", () => {
     const result = await rollBackFailedUpdate({
       marker: marker({ rollbackPath: copy }),
       appVersion: "2.22.0",
+      firstLaunch: true,
       app: { kind: "mac-app", path: app },
       dataDir,
       now: 42,
@@ -135,6 +149,7 @@ describe("rolling back a failed update", () => {
     expect(readFileSync(path.join(app, "Contents", "version"), "utf8")).toBe("2.21.0");
     expect(readFileSync(path.join(dataDir, "orkestrator.sqlite"), "utf8")).toBe("schema-3");
     expect(existsSync(path.join(dataDir, "orkestrator.sqlite-wal"))).toBe(false);
+    expect(readdirSync(dataDir).filter((name) => name.includes(".replaced-"))).toEqual([]);
     expect(existsSync(`${app}.failed-42`)).toBe(false);
     expect(existsSync(path.join(root, "Applications"))).toBe(true);
   });
@@ -150,6 +165,7 @@ describe("rolling back a failed update", () => {
     const result = await rollBackFailedUpdate({
       marker: marker({ rollbackPath: copy }),
       appVersion: "2.22.0",
+      firstLaunch: true,
       app: { kind: "mac-app", path: app },
       dataDir,
       now: 1,
@@ -173,6 +189,7 @@ describe("rolling back a failed update", () => {
     await rollBackFailedUpdate({
       marker: marker({ rollbackPath: copy }),
       appVersion: "2.22.0",
+      firstLaunch: true,
       app: { kind: "appimage", path: appImage },
       dataDir: path.join(root, "data"),
       now: 1,
@@ -183,7 +200,13 @@ describe("rolling back a failed update", () => {
 
   test("only rolls back the update that installed this very version, once", async () => {
     const { app, dataDir } = setup();
-    const base = { app: { kind: "mac-app" as const, path: app }, dataDir, now: 1, ops };
+    const base = {
+      app: { kind: "mac-app" as const, path: app },
+      dataDir,
+      now: 1,
+      ops,
+      firstLaunch: true,
+    };
     expect(
       await rollBackFailedUpdate({ ...base, marker: null, appVersion: "2.22.0" }),
     ).toMatchObject({ rolledBack: false });
@@ -207,5 +230,27 @@ describe("rolling back a failed update", () => {
         appVersion: "2.22.0",
       }),
     ).toMatchObject({ rolledBack: false });
+    // A later launch of the new version never rolls the update back.
+    expect(
+      await rollBackFailedUpdate({
+        ...base,
+        firstLaunch: false,
+        marker: marker({ rollbackPath: "/x" }),
+        appVersion: "2.22.0",
+      }),
+    ).toEqual({
+      rolledBack: false,
+      reason: "only the first launch after an update rolls it back",
+    });
+  });
+
+  test("claims the first launch of the installed version once", async () => {
+    const markerFile = path.join(temp(), "updates", "pending-install.json");
+    expect(await claimFirstLaunchAfterUpdate(markerFile, "2.22.0")).toBe(false);
+    await writePendingInstallMarker(markerFile, marker({ rollbackPath: "/x" }));
+    expect(await claimFirstLaunchAfterUpdate(markerFile, "2.21.0")).toBe(false);
+    expect(await claimFirstLaunchAfterUpdate(markerFile, "2.22.0")).toBe(true);
+    expect((await readPendingInstallMarker(markerFile))?.launched).toBe(true);
+    expect(await claimFirstLaunchAfterUpdate(markerFile, "2.22.0")).toBe(false);
   });
 });

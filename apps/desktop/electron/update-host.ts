@@ -69,6 +69,12 @@ export type PendingInstallMarker = {
   rollbackPath?: string | null;
   /** Set by the failed new version once it put the previous one back. */
   rolledBack?: { reason: string } | null;
+  /**
+   * Set when the new version first starts. A rollback is allowed only during
+   * that first launch: later failures are not the update's, and restoring
+   * the pre-update database then would discard everything since.
+   */
+  launched?: boolean;
 };
 
 function isMarker(value: unknown): value is PendingInstallMarker {

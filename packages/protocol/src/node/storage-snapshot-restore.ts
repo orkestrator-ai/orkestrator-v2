@@ -44,11 +44,27 @@ export function findPreMigrationSnapshot(
 /**
  * Puts a snapshot back as the live database. The backend must be stopped:
  * the WAL and shared-memory files belong to the database being replaced.
+ *
+ * They are moved aside before the swap and deleted after it, never deleted
+ * first: a crash in between then leaves the replaced database's committed
+ * WAL on disk rather than discarding it, and never pairs it with the
+ * snapshot.
  */
 export function restoreDatabaseSnapshot(dataDir: string, snapshotFile: string): void {
   const target = path.join(dataDir, STORAGE_DATABASE_FILE);
-  const temporary = `${target}.restore-${randomUUID()}`;
+  const id = randomUUID();
+  const temporary = `${target}.restore-${id}`;
   copyFileSync(snapshotFile, temporary);
-  for (const suffix of ["-wal", "-shm"]) rmSync(`${target}${suffix}`, { force: true });
+  const aside: string[] = [];
+  for (const suffix of ["-wal", "-shm"]) {
+    const moved = `${target}.replaced-${id}${suffix}`;
+    try {
+      renameSync(`${target}${suffix}`, moved);
+      aside.push(moved);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
   renameSync(temporary, target);
+  for (const file of aside) rmSync(file, { force: true });
 }

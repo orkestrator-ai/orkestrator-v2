@@ -23,8 +23,14 @@ export const POLL_INTERVAL_MS = 2_000;
 export const RESTART_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000] as const;
 /** Launch failures of a freshly installed version before it is rolled back. */
 export const CRASH_LOOP_LIMIT = 3;
+/** ...within this sliding window... */
+export const CRASH_LOOP_WINDOW_MS = 10 * 60 * 1000;
+/** ...and only this soon after the install; later failures are not the update's. */
+export const CRASH_LOOP_INSTALL_WINDOW_MS = 30 * 60 * 1000;
 /** A backend that ran this long before exiting resets the backoff. */
 export const STABLE_RUN_MS = 5 * 60 * 1000;
+/** Progress while staging, so a slow download does not look like a stalled host. */
+export const STAGE_HEARTBEAT_MS = 60_000;
 
 export type BackendEndpoint = { url: string; token: string };
 export type ExitInfo = { code: number | null; signal: string | null };
@@ -144,7 +150,8 @@ export class Supervisor {
   private wakeStop: (() => void) | null = null;
   private state: SupervisorState = EMPTY_STATE;
   private readonly handled = new Set<string>();
-  private launchFailures = 0;
+  /** When recent launches failed or backends exited, for the crash-loop guard. */
+  private crashes: number[] = [];
 
   constructor(private readonly options: SupervisorOptions) {
     this.runtime = options.runtime;
@@ -161,6 +168,15 @@ export class Supervisor {
     await this.runtime.writeState(this.state);
   }
 
+  /** For paths that must go on when the disk is full: the state stays in memory. */
+  private async trySaveState(patch: Partial<SupervisorState>): Promise<void> {
+    try {
+      await this.saveState(patch);
+    } catch (error) {
+      this.runtime.log.error(`[Supervisor] Could not save the supervisor state: ${String(error)}`);
+    }
+  }
+
   private registration(version: string | null): UpdateHostRegistration {
     return {
       hostKind: "supervisor",
@@ -171,13 +187,22 @@ export class Supervisor {
     };
   }
 
-  /** Runs `current` when it is at least as new as this package; otherwise this package. */
+  /**
+   * Runs `current` whenever it points at an installed package, even an older
+   * one than this supervisor's: a rollback and an approved downgrade both
+   * point it back. This package runs only without a `current`.
+   */
   private async resolveRoot(): Promise<{ root: string; installDir: string | null }> {
     const installDir = await this.runtime.readCurrent();
     if (installDir) {
       const root = this.runtime.packageRootOf(installDir);
       const version = await this.runtime.packageVersion(root);
-      if (version && this.runtime.compareVersions(version, this.options.ownVersion) >= 0) {
+      if (version) {
+        if (this.runtime.compareVersions(this.options.ownVersion, version) > 0) {
+          this.runtime.log.info(
+            `[Supervisor] Running ${version} from current, not this package's ${this.options.ownVersion}; \`orkestrator service install\` resets it`,
+          );
+        }
         return { root, installDir };
       }
     }
@@ -311,9 +336,18 @@ export class Supervisor {
     running: Running,
     request: Extract<UpdateHostRequest, { kind: "prepare" }>,
   ): Promise<void> {
-    await this.report(running, request, "progress", {
+    const progress = {
       progress: { percent: null, message: `Installing orkestrator@${request.target.version}` },
-    });
+    };
+    await this.report(running, request, "progress", progress);
+    let staging = true;
+    void (async () => {
+      // Each `bun add` may take minutes; the backend fails a host that is quiet for too long.
+      while (staging) {
+        await this.runtime.sleep(STAGE_HEARTBEAT_MS);
+        if (staging) await this.report(running, request, "progress", progress);
+      }
+    })();
     try {
       // A rollback needs a version that will still exist: the bootstrap
       // package can live in a cache that is cleaned, so stage it too.
@@ -321,8 +355,10 @@ export class Supervisor {
         await this.runtime.stage(running.version, "");
       }
       await this.runtime.stage(request.target.version, request.target.requirementsSha256);
+      staging = false;
       await this.report(running, request, "succeeded");
     } catch (error) {
+      staging = false;
       await this.report(running, request, "failed", {
         error: {
           code: "stage-failed",
@@ -398,23 +434,73 @@ export class Supervisor {
     request: Extract<UpdateHostRequest, { kind: "install" }>,
   ): Promise<Running | null> {
     const toVersion = request.target.version;
-    const toInstallDir = await this.runtime.stage(toVersion, request.target.requirementsSha256);
-    const toRoot = this.runtime.packageRootOf(toInstallDir);
+    let toInstallDir: string;
+    let fromRoot = running.root;
+    let fromInstallDir = running.installDir;
     const startedAt = this.runtime.now();
-    await this.saveState({
-      cutover: {
-        jobId: request.jobId,
-        fromRoot: running.root,
-        fromInstallDir: running.installDir,
-        toRoot,
-        toInstallDir,
-        toVersion,
-        startedAt,
-        toolchainBefore: await this.runtime.readToolchainCurrent(),
-        userVersionBefore: null,
-      },
-    });
+    try {
+      toInstallDir = await this.runtime.stage(toVersion, request.target.requirementsSha256);
+      if (!fromInstallDir && running.version) {
+        // Roll back to the staged copy of the bootstrap package (normally
+        // staged by prepare already), not to a cache that may be cleaned.
+        try {
+          fromInstallDir = await this.runtime.stage(running.version, "");
+          fromRoot = this.runtime.packageRootOf(fromInstallDir);
+        } catch (error) {
+          this.runtime.log.warn(
+            `[Supervisor] Could not stage ${running.version} to roll back to; using this package: ${String(error)}`,
+          );
+        }
+      }
+      await this.saveState({
+        cutover: {
+          jobId: request.jobId,
+          fromRoot,
+          fromInstallDir,
+          toRoot: this.runtime.packageRootOf(toInstallDir),
+          toInstallDir,
+          toVersion,
+          startedAt,
+          toolchainBefore: await this.runtime.readToolchainCurrent(),
+          userVersionBefore: null,
+        },
+      });
+    } catch (error) {
+      // Nothing was stopped or changed: the running backend stays, and the
+      // job it already marked restarting ends as an install that never ran.
+      this.runtime.log.error(`[Supervisor] Could not prepare the update: ${String(error)}`);
+      await this.trySaveState({
+        cutover: null,
+        pendingOutcome: {
+          jobId: request.jobId,
+          outcome: "failed",
+          rollbackFailed: false,
+          error: { code: "install-failed", message: String(error).slice(0, 2000) },
+        },
+      });
+      await this.deliverPendingOutcome(running);
+      return running;
+    }
     await this.stopChild(running.child);
+    try {
+      return await this.switchTo(request, toInstallDir, startedAt);
+    } catch (error) {
+      this.runtime.log.error(`[Supervisor] The update to ${toVersion} failed: ${String(error)}`);
+      return this.rollBack(request.jobId, {
+        code: "install-failed",
+        message: String(error).slice(0, 2000),
+      });
+    }
+  }
+
+  /** With the old backend stopped: switch over and health-check the new version. */
+  private async switchTo(
+    request: Extract<UpdateHostRequest, { kind: "install" }>,
+    toInstallDir: string,
+    startedAt: number,
+  ): Promise<Running | null> {
+    const toVersion = request.target.version;
+    const toRoot = this.runtime.packageRootOf(toInstallDir);
     await this.saveState({
       cutover: { ...this.state.cutover!, userVersionBefore: this.runtime.readUserVersion() },
     });
@@ -474,21 +560,33 @@ export class Supervisor {
   ): Promise<Running | null> {
     const cutover = this.state.cutover;
     if (!cutover) return null;
-    await this.restorePrevious(cutover);
+    let restoreError: string | null = null;
+    try {
+      await this.restorePrevious(cutover);
+    } catch (caught) {
+      // Still start the previous version from its own root; the failure is reported.
+      restoreError = String(caught);
+      this.runtime.log.error(
+        `[Supervisor] Could not restore the previous version: ${restoreError}`,
+      );
+    }
     const restored = await this.launch(cutover.fromRoot, cutover.fromInstallDir, null);
-    await this.saveState({
+    const failure = !restored.ok
+      ? "the previous version did not start either"
+      : restoreError
+        ? `restoring the previous version failed: ${restoreError}`
+        : null;
+    await this.trySaveState({
       cutover: null,
-      pendingOutcome: restored.ok
-        ? { jobId, outcome: "rolled-back", error }
-        : {
-            jobId,
-            outcome: "failed",
-            rollbackFailed: true,
-            error: {
-              code: error.code,
-              message: `${error.message}; the previous version did not start either`,
+      pendingOutcome:
+        failure === null
+          ? { jobId, outcome: "rolled-back", error }
+          : {
+              jobId,
+              outcome: "failed",
+              rollbackFailed: true,
+              error: { code: error.code, message: `${error.message}; ${failure}`.slice(0, 2000) },
             },
-          },
     });
     if (!restored.ok) {
       this.runtime.log.error(`[Supervisor] The previous version did not start: ${restored.reason}`);
@@ -498,37 +596,69 @@ export class Supervisor {
     return restored.running;
   }
 
-  /** A supervisor that died mid-cutover finishes by rolling back. */
+  /**
+   * A supervisor that died mid-cutover finishes by rolling back. Best
+   * effort: whatever cannot be restored is reported, and the supervisor still
+   * starts a backend rather than exiting on the same error every restart.
+   */
   private async recover(): Promise<void> {
-    this.state = (await this.runtime.readState()) ?? { ...EMPTY_STATE };
+    this.state = (await this.runtime.readState().catch(() => null)) ?? { ...EMPTY_STATE };
     const cutover = this.state.cutover;
     if (!cutover) return;
     this.runtime.log.warn(
       `[Supervisor] Rolling back an update to ${cutover.toVersion} that a restart interrupted`,
     );
-    await this.restorePrevious(cutover);
-    await this.saveState({
+    let restoreError: string | null = null;
+    try {
+      await this.restorePrevious(cutover);
+    } catch (error) {
+      restoreError = String(error);
+      this.runtime.log.error(
+        `[Supervisor] Could not restore the previous version: ${restoreError}`,
+      );
+    }
+    const error = { code: "interrupted", message: "The supervisor restarted during the update" };
+    await this.trySaveState({
       cutover: null,
-      pendingOutcome: {
-        jobId: cutover.jobId,
-        outcome: "rolled-back",
-        error: { code: "interrupted", message: "The supervisor restarted during the update" },
-      },
+      pendingOutcome: restoreError
+        ? {
+            jobId: cutover.jobId,
+            outcome: "failed",
+            rollbackFailed: true,
+            error: { ...error, message: `${error.message}; ${restoreError}`.slice(0, 2000) },
+          }
+        : { jobId: cutover.jobId, outcome: "rolled-back", error },
     });
   }
 
+  private recordCrash(): void {
+    const now = this.runtime.now();
+    this.crashes = [...this.crashes.filter((at) => now - at < CRASH_LOOP_WINDOW_MS), now];
+  }
+
   /**
-   * A version this supervisor just installed that keeps failing to start is
-   * rolled back rather than retried forever.
+   * A version this supervisor installed less than 30 minutes ago that fails
+   * to start 3 times within 10 minutes is rolled back rather than retried
+   * forever. Later failures are not the update's: rolling back then would
+   * restore a database snapshot that is out of date.
    */
   private async crashLoopGuard(root: string): Promise<void> {
     const last = this.state.lastInstall;
-    if (!last || last.toRoot !== root || this.launchFailures < CRASH_LOOP_LIMIT) return;
+    if (!last) return;
+    if (this.runtime.now() - last.at >= CRASH_LOOP_INSTALL_WINDOW_MS) {
+      await this.trySaveState({ lastInstall: null });
+      return;
+    }
+    if (last.toRoot !== root || this.crashes.length < CRASH_LOOP_LIMIT) return;
     this.runtime.log.error(`[Supervisor] ${root} keeps failing to start; rolling back`);
-    await this.restorePrevious({ ...last, startedAt: last.at });
-    await this.runtime.setPrevious(null);
-    await this.saveState({ lastInstall: null });
-    this.launchFailures = 0;
+    try {
+      await this.restorePrevious({ ...last, startedAt: last.at });
+      await this.runtime.setPrevious(null);
+    } catch (error) {
+      this.runtime.log.error(`[Supervisor] Could not roll back: ${String(error)}`);
+    }
+    await this.trySaveState({ lastInstall: null });
+    this.crashes = [];
   }
 
   async run(): Promise<number> {
@@ -540,7 +670,7 @@ export class Supervisor {
         const { root, installDir } = await this.resolveRoot();
         const started = await this.launch(root, installDir, null);
         if (!started.ok) {
-          this.launchFailures += 1;
+          this.recordCrash();
           this.runtime.log.error(`[Supervisor] ${started.reason}`);
           await this.crashLoopGuard(root);
           await this.runtime.sleep(
@@ -553,17 +683,14 @@ export class Supervisor {
         await this.deliverPendingOutcome(running);
       }
       const wake = await this.serve(running);
-      if (wake.kind === "stopped") {
-        await this.stopChild(running.child);
-        break;
-      }
+      if (wake.kind === "stopped") break;
       if (wake.kind === "exited") {
         // A backend that ran for a while before exiting is not a crash loop.
         if (this.runtime.now() - running.startedAt > STABLE_RUN_MS) {
           backoff = 0;
-          this.launchFailures = 0;
+          this.crashes = [];
         }
-        this.launchFailures += 1;
+        this.recordCrash();
         this.runtime.log.warn(
           `[Supervisor] The backend exited (${wake.exit.signal ?? wake.exit.code}); restarting`,
         );
@@ -576,9 +703,18 @@ export class Supervisor {
         continue;
       }
       backoff = 0;
-      this.launchFailures = 0;
-      running = await this.cutover(running, wake.request);
+      this.crashes = [];
+      const from = running;
+      try {
+        running = await this.cutover(from, wake.request);
+      } catch (error) {
+        this.runtime.log.error(`[Supervisor] The update failed unexpectedly: ${String(error)}`);
+        await this.stopChild(from.child);
+        running = null;
+      }
     }
+    // A stop that arrived during a cutover or a launch finds the backend here.
+    if (running) await this.stopChild(running.child);
     return 0;
   }
 }

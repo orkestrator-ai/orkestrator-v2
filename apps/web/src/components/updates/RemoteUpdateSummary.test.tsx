@@ -22,6 +22,7 @@ const statusCall = mock(async (_id: string) => status);
 const invokeUpdate = mock(async (_id: string, command: string) => {
   if (command === "update_get_status") {
     return {
+      generation: "remote-1",
       revision: 1,
       updateProtocol: 1,
       currentVersion: "2.21.0",

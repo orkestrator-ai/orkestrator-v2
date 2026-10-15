@@ -17,7 +17,11 @@ import {
   findPreMigrationSnapshot,
   restoreDatabaseSnapshot,
 } from "@orkestrator/protocol/node/storage-snapshot-restore";
-import type { PendingInstallMarker } from "./update-host.js";
+import {
+  readPendingInstallMarker,
+  writePendingInstallMarker,
+  type PendingInstallMarker,
+} from "./update-host.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -84,6 +88,23 @@ export async function keepRollbackCopy(options: {
   return destination;
 }
 
+/**
+ * Called once at startup, before the backend starts. Marks the first launch
+ * of a version an update just installed, and returns whether this launch may
+ * roll that update back.
+ */
+export async function claimFirstLaunchAfterUpdate(
+  markerFile: string,
+  appVersion: string,
+): Promise<boolean> {
+  const marker = await readPendingInstallMarker(markerFile);
+  if (!marker || marker.toVersion !== appVersion || marker.rolledBack || marker.launched) {
+    return false;
+  }
+  await writePendingInstallMarker(markerFile, { ...marker, launched: true });
+  return true;
+}
+
 export type RollbackResult =
   | { rolledBack: true; restoredDatabase: boolean }
   | { rolledBack: false; reason: string };
@@ -95,6 +116,8 @@ export type RollbackResult =
 export async function rollBackFailedUpdate(options: {
   marker: PendingInstallMarker | null;
   appVersion: string;
+  /** From `claimFirstLaunchAfterUpdate`: only the first launch rolls back. */
+  firstLaunch: boolean;
   app: InstalledApp | null;
   dataDir: string;
   now: number;
@@ -104,6 +127,9 @@ export async function rollBackFailedUpdate(options: {
   const ops = options.ops ?? defaultRollbackFileOps;
   if (!marker || marker.toVersion !== options.appVersion || marker.rolledBack) {
     return { rolledBack: false, reason: "no update to roll back" };
+  }
+  if (!options.firstLaunch) {
+    return { rolledBack: false, reason: "only the first launch after an update rolls it back" };
   }
   if (!marker.rollbackPath) return { rolledBack: false, reason: "no copy of the previous version" };
   if (!app) return { rolledBack: false, reason: "this install cannot be replaced in place" };

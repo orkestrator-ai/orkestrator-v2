@@ -520,6 +520,8 @@ export class BackendHttpClient {
 
 export class BackendProcess {
   private child: ChildProcess | null = null;
+  /** Kept after a failed start drops `child`, so a rollback can wait for it. */
+  private lastChild: ChildProcess | null = null;
   private client: BackendHttpClient | null = null;
   private info: GatewayStartInfo | null = null;
   private starting: Promise<BackendHttpClient> | null = null;
@@ -663,6 +665,7 @@ export class BackendProcess {
     }
     const child = spawn(bun, args, { env, stdio: ["ignore", "pipe", "pipe"] });
     this.child = child;
+    this.lastChild = child;
     // Line-oriented: production logging tees `console`, so a chunk boundary
     // must not become a log-entry boundary or double-prefix a single diagnostic.
     if (child.stderr) {
@@ -767,4 +770,35 @@ export class BackendProcess {
     this.child = null;
     this.info = null;
   }
+
+  /**
+   * Stops the backend, or the one a failed start left draining (a readiness
+   * timeout only signals it), and waits for it to exit. An update rollback
+   * restores the database only after this.
+   */
+  async stopAndWait(graceMs?: number): Promise<void> {
+    const child = this.child ?? this.lastChild;
+    this.stop();
+    if (child) await terminateChild(child, graceMs);
+  }
+}
+
+type TerminableChild = Pick<ChildProcess, "exitCode" | "signalCode" | "kill" | "once">;
+
+/** SIGTERM, then SIGKILL after `graceMs`; resolves once the child has exited. */
+export async function terminateChild(
+  child: TerminableChild,
+  graceMs = 10_000,
+  sleep: (ms: number) => Promise<void> = (ms) =>
+    new Promise((resolve) => setTimeout(resolve, ms).unref()),
+): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise<void>((resolve) => {
+    child.once("exit", () => resolve());
+  });
+  child.kill("SIGTERM");
+  const timedOut = await Promise.race([exited.then(() => false), sleep(graceMs).then(() => true)]);
+  if (!timedOut) return;
+  child.kill("SIGKILL");
+  await Promise.race([exited, sleep(5_000)]);
 }

@@ -81,7 +81,12 @@ import {
   writePendingInstallMarker,
   type DesktopUpdateHost,
 } from "./update-host.js";
-import { installedApp, keepRollbackCopy, rollBackFailedUpdate } from "./update-rollback.js";
+import {
+  claimFirstLaunchAfterUpdate,
+  installedApp,
+  keepRollbackCopy,
+  rollBackFailedUpdate,
+} from "./update-rollback.js";
 import {
   LOCAL_UPDATE_RESYNC_EVENT,
   LOCAL_UPDATE_STATUS_EVENT,
@@ -448,12 +453,17 @@ function currentInstalledApp() {
  * previous version reports the rollback from `pending-install.json`.
  */
 async function rollBackAfterFailedUpdate(failure: unknown): Promise<boolean> {
-  if (!app.isPackaged) return false;
+  if (!app.isPackaged || !firstLaunchAfterUpdate) return false;
+  firstLaunchAfterUpdate = false;
   const markerFile = pendingInstallMarkerFile();
   const marker = await readPendingInstallMarker(markerFile);
+  // The database goes back only once the new backend is gone: a readiness
+  // timeout leaves it draining, and later startup failures leave it running.
+  await backendProcess.stopAndWait();
   const result = await rollBackFailedUpdate({
     marker,
     appVersion: app.getVersion(),
+    firstLaunch: true,
     app: currentInstalledApp(),
     dataDir: app.getPath("userData"),
     now: Date.now(),
@@ -470,7 +480,13 @@ async function rollBackAfterFailedUpdate(failure: unknown): Promise<boolean> {
   const reason = `${app.getVersion()} failed to start: ${failure instanceof Error ? failure.message : String(failure)}`;
   await writePendingInstallMarker(markerFile, { ...marker!, rolledBack: { reason } });
   console.error(`[Updater] ${reason}; rolled back to ${marker!.fromVersion}`);
-  app.relaunch();
+  // An AppImage's executable lives in the failed version's mount; relaunch
+  // the restored file instead.
+  app.relaunch(
+    process.env.APPIMAGE
+      ? { execPath: process.env.APPIMAGE, args: process.argv.slice(1) }
+      : undefined,
+  );
   app.exit(0);
   return true;
 }
@@ -771,7 +787,16 @@ function registerIpc(): void {
   });
 }
 
+/** This is the first launch of a version an update just installed; see `rollBackAfterFailedUpdate`. */
+let firstLaunchAfterUpdate = false;
+
 async function startApplication(): Promise<void> {
+  if (app.isPackaged) {
+    firstLaunchAfterUpdate = await claimFirstLaunchAfterUpdate(
+      pendingInstallMarkerFile(),
+      app.getVersion(),
+    ).catch(() => false);
+  }
   const { appRoot, resourceRoot } = resolveRuntimeRoots({
     isDev,
     dirname: __dirname,

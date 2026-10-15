@@ -41,7 +41,16 @@ function harness(options: {
   state?: SupervisorState | null;
   userVersion?: number;
   snapshotAvailable?: boolean;
+  /** The supervisor's clock, which a test may move. */
+  clock?: { now: number };
+  /** Staging these versions fails. */
+  stageFails?: string[];
+  /** Staging waits for this before it finishes. */
+  stageGate?: Promise<void>;
+  /** Pointing `current` at these install directories fails. */
+  setCurrentFails?: string[];
 }) {
+  const clock = options.clock ?? { now: 1_000 };
   const log: string[] = [];
   const backends: FakeBackend[] = [];
   let current: string | null = options.current ?? null;
@@ -108,10 +117,13 @@ function harness(options: {
     },
     async stage(version) {
       staged.push(version);
+      await options.stageGate;
+      if (options.stageFails?.includes(version)) throw new Error(`bun add ${version} failed`);
       return installDir(version);
     },
     readCurrent: async () => current,
     setCurrent: async (dir) => {
+      if (dir && options.setCurrentFails?.includes(dir)) throw new Error(`ENOSPC: ${dir}`);
       current = dir;
     },
     setPrevious: async (dir) => {
@@ -138,7 +150,7 @@ function harness(options: {
       pruned.push([...keep]);
     },
     compareVersions: (left, right) => Bun.semver.order(left, right),
-    now: () => 1_000,
+    now: () => clock.now,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 1))),
     log: {
       info: (message: string) => log.push(message),
@@ -251,7 +263,7 @@ describe("running the backend", () => {
     expect(h.backends[0]!.signals).toEqual(["SIGTERM"]);
   });
 
-  test("prefers an installed current version that is at least its own", async () => {
+  test("runs the installed current version, even one older than its own", async () => {
     const h = harness({
       current: installDir("2.22.0"),
       behaviours: {
@@ -271,8 +283,9 @@ describe("running the backend", () => {
         [versionRoot("2.22.0")]: { version: "2.22.0" },
       },
     });
+    // A rollback or an approved downgrade points current at an older version.
     await until(() => older.backends.length === 1);
-    expect(older.backends[0]!.root).toBe(OWN_ROOT);
+    expect(older.backends[0]!.root).toBe(versionRoot("2.22.0"));
     older.supervisor.stop();
     await older.running;
   });
@@ -296,6 +309,31 @@ describe("updating", () => {
       reports(h.backends[0]!, "update_host_report").some((report) => report.status === "succeeded"),
     );
     expect(h.staged).toEqual(["2.21.0", "2.22.0"]);
+    h.supervisor.stop();
+    await h.running;
+  });
+
+  test("keeps reporting progress while staging is slow", async () => {
+    let release!: () => void;
+    const h = harness({
+      behaviours: { [OWN_ROOT]: { version: "2.21.0" } },
+      stageGate: new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    });
+    await until(() => h.backends.length === 1);
+    h.backends[0]!.pending.push(prepare("2.22.0"));
+    await until(
+      () =>
+        reports(h.backends[0]!, "update_host_report").filter(
+          (report) => report.status === "progress",
+        ).length >= 3,
+      "heartbeats",
+    );
+    release();
+    await until(() =>
+      reports(h.backends[0]!, "update_host_report").some((report) => report.status === "succeeded"),
+    );
     h.supervisor.stop();
     await h.running;
   });
@@ -437,6 +475,107 @@ describe("updating", () => {
     await h.running;
   });
 
+  test("a target that cannot be staged at install leaves the old backend running", async () => {
+    const h = harness({
+      current: installDir("2.21.0"),
+      stageFails: ["2.22.0"],
+      behaviours: {
+        [OWN_ROOT]: { version: "2.21.0" },
+        [versionRoot("2.21.0")]: { version: "2.21.0" },
+      },
+    });
+    await until(() => h.backends.length === 1);
+    const old = h.backends[0]!;
+    old.pending.push(install("2.22.0"));
+    await until(() => reports(old, "update_host_outcome").length === 1, "the outcome");
+    expect(reports(old, "update_host_outcome")[0]).toMatchObject({
+      jobId: "job-1",
+      outcome: "failed",
+      rollbackFailed: false,
+      error: { code: "install-failed" },
+    });
+    expect(old.signals).toEqual([]);
+    expect(h.backends).toHaveLength(1);
+    expect(h.current).toBe(installDir("2.21.0"));
+    h.supervisor.stop();
+    await h.running;
+  });
+
+  test("a failure after the old backend stopped is rolled back", async () => {
+    const h = harness({
+      current: installDir("2.21.0"),
+      setCurrentFails: [installDir("2.22.0")],
+      behaviours: {
+        [OWN_ROOT]: { version: "2.21.0" },
+        [versionRoot("2.21.0")]: { version: "2.21.0" },
+        [versionRoot("2.22.0")]: { version: "2.22.0" },
+      },
+    });
+    await until(() => h.backends.length === 1);
+    h.backends[0]!.pending.push(install("2.22.0"));
+    await until(
+      () => reports(h.backends[1] ?? { invokes: [] }, "update_host_outcome").length === 1,
+      "the rollback outcome",
+    );
+    expect(h.backends.map((backend) => backend.root)).toEqual([
+      versionRoot("2.21.0"),
+      versionRoot("2.21.0"),
+    ]);
+    expect(reports(h.backends[1]!, "update_host_outcome")[0]).toMatchObject({
+      outcome: "rolled-back",
+      error: { code: "install-failed", message: expect.stringContaining("ENOSPC") },
+    });
+    expect(h.toolchain).toBe("/data/toolchains/bin/old");
+    h.supervisor.stop();
+    await h.running;
+  });
+
+  test("an update of the bootstrap package rolls back to its staged copy", async () => {
+    const h = harness({
+      behaviours: {
+        [OWN_ROOT]: { version: "2.21.0" },
+        [versionRoot("2.21.0")]: { version: "2.21.0" },
+        [versionRoot("2.22.0")]: { version: "2.22.0", reportsVersion: "0.0.0" },
+      },
+    });
+    await until(() => h.backends.length === 1);
+    h.backends[0]!.pending.push(install("2.22.0"));
+    await until(
+      () => reports(h.backends[2] ?? { invokes: [] }, "update_host_outcome").length === 1,
+      "the rollback outcome",
+    );
+    expect(h.backends.map((backend) => backend.root)).toEqual([
+      OWN_ROOT,
+      versionRoot("2.22.0"),
+      versionRoot("2.21.0"),
+    ]);
+    expect(h.current).toBe(installDir("2.21.0"));
+    h.supervisor.stop();
+    await h.running;
+  });
+
+  test("a stop that arrives during a cutover stops the new backend", async () => {
+    let release!: () => void;
+    const h = harness({
+      current: installDir("2.21.0"),
+      stageGate: new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+      behaviours: {
+        [OWN_ROOT]: { version: "2.21.0" },
+        [versionRoot("2.21.0")]: { version: "2.21.0" },
+        [versionRoot("2.22.0")]: { version: "2.22.0" },
+      },
+    });
+    await until(() => h.backends.length === 1);
+    h.backends[0]!.pending.push(install("2.22.0"));
+    await until(() => h.staged.includes("2.22.0"), "staging");
+    h.supervisor.stop();
+    release();
+    expect(await h.running).toBe(0);
+    expect(h.backends.at(-1)?.signals).toEqual(["SIGTERM"]);
+  });
+
   test("a freshly installed version that keeps crashing is rolled back", async () => {
     const behaviours: Record<string, BackendBehaviour> = {
       [OWN_ROOT]: { version: "2.21.0" },
@@ -457,6 +596,31 @@ describe("updating", () => {
       () => h.backends.at(-1)?.root === versionRoot("2.21.0"),
       "the old version running again",
     );
+    h.supervisor.stop();
+    await h.running;
+  });
+
+  test("an installed version that fails long after its install is not rolled back", async () => {
+    const clock = { now: 1_000 };
+    const behaviours: Record<string, BackendBehaviour> = {
+      [OWN_ROOT]: { version: "2.21.0" },
+      [versionRoot("2.21.0")]: { version: "2.21.0" },
+      [versionRoot("2.22.0")]: { version: "2.22.0" },
+    };
+    const h = harness({ current: installDir("2.21.0"), behaviours, clock });
+    await until(() => h.backends.length === 1);
+    h.backends[0]!.pending.push(install("2.22.0"));
+    await until(
+      () => reports(h.backends[1] ?? { invokes: [] }, "update_host_outcome").length === 1,
+    );
+    // Hours later the new version starts failing for reasons of its own.
+    clock.now += 3 * 60 * 60 * 1000;
+    behaviours[versionRoot("2.22.0")] = { version: "2.22.0", failsToStart: true };
+    h.backends[1]!.exit();
+    await until(() => h.backends.length >= 6, "several restarts");
+    expect(h.current).toBe(installDir("2.22.0"));
+    expect(h.restored).toEqual([]);
+    expect(h.state?.lastInstall).toBeNull();
     h.supervisor.stop();
     await h.running;
   });

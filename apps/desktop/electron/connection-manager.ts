@@ -11,6 +11,7 @@ import {
   type StoredDesktopConnections,
 } from "@orkestrator/protocol/connections";
 import { normalizeGatewayToken } from "@orkestrator/protocol/gateway-token";
+import type { GatewayStatusPayload, UpdateClientCommand } from "@orkestrator/protocol/updates";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 import { BackendHttpClient } from "./backend-process.js";
 
@@ -43,6 +44,8 @@ export type ConnectionManagerOptions = {
 
 const CONNECTION_TIMEOUT_MS = 10_000;
 const CONNECTION_PROBE_TIMEOUT_MS = 3_000;
+/** A remote answers update commands quickly; `update_start` re-checks its feed first. */
+const UPDATE_INVOKE_TIMEOUT_MS = 60_000;
 export const DEFAULT_CONNECTION_SCOPE = "default";
 
 type RemoteConnection = {
@@ -403,6 +406,68 @@ export class ConnectionManager {
     }
   }
 
+  /** A saved remote's token: the bound connection's, or decrypted from storage. */
+  private async tokenFor(connectionId: string): Promise<string | null> {
+    const activeRemote = this.remoteConnections.get(connectionId);
+    if (activeRemote) return activeRemote.token;
+    const sessionToken = this.sessionTokens.get(connectionId);
+    if (sessionToken) return sessionToken;
+    const record = this.stored.connections.find((connection) => connection.id === connectionId);
+    if (!record?.encryptedToken || !this.secureStorageAvailable) return null;
+    const decrypted = await this.secureStorage.decryptStringAsync(
+      Buffer.from(record.encryptedToken, "base64"),
+    );
+    return normalizeGatewayToken(decrypted.result);
+  }
+
+  /**
+   * A saved remote's `/status` handshake: its version, update host and update
+   * summary. Null when it is unreachable, its token is unavailable, or it
+   * predates the handshake (it then answers only `{ ok: true }`).
+   */
+  async remoteStatus(connectionId: string): Promise<GatewayStatusPayload | null> {
+    const record = this.stored.connections.find((connection) => connection.id === connectionId);
+    if (!record) return null;
+    try {
+      const token = await this.tokenFor(connectionId);
+      if (!token) return null;
+      return await this.checkRemote(
+        record.address,
+        token,
+        Math.min(this.connectionTimeoutMs, CONNECTION_PROBE_TIMEOUT_MS),
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * An update command on any saved connection, whichever one a window is
+   * bound to. Only the client update commands get here (`ipc.ts`); a remote
+   * enforces its own consent, audit and installer rules.
+   */
+  async invokeUpdate<T>(
+    connectionId: string,
+    command: UpdateClientCommand,
+    args: Record<string, unknown>,
+  ): Promise<T> {
+    if (connectionId === LOCAL_CONNECTION_ID) return this.localBackend.invoke<T>(command, args);
+    const record = this.stored.connections.find((connection) => connection.id === connectionId);
+    if (!record) throw new Error("That connection no longer exists");
+    const token = await this.tokenFor(connectionId);
+    if (!token) throw new Error("Enter this connection's token before updating it");
+    const response = await fetch(new URL("/__orkestrator/invoke", record.address), {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ command, args }),
+      signal: AbortSignal.timeout(UPDATE_INVOKE_TIMEOUT_MS),
+    });
+    const body = (await response.json().catch(() => ({}))) as { result?: T; error?: string };
+    if (response.status === 401) throw new Error("The gateway token was rejected.");
+    if (!response.ok) throw new Error(body.error ?? `The remote answered HTTP ${response.status}.`);
+    return body.result as T;
+  }
+
   invoke<T>(
     command: string,
     args: Record<string, unknown> = {},
@@ -738,7 +803,7 @@ export class ConnectionManager {
     address: string,
     token: string,
     timeoutMs = this.connectionTimeoutMs,
-  ): Promise<void> {
+  ): Promise<GatewayStatusPayload> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -751,6 +816,7 @@ export class ConnectionManager {
       if (!response.ok || payload.ok !== true) {
         throw new Error(payload.error ?? `Backend check failed with HTTP ${response.status}.`);
       }
+      return payload as GatewayStatusPayload;
     } catch (error) {
       if (controller.signal.aborted) {
         const seconds = timeoutMs / 1_000;

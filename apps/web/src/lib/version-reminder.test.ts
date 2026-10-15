@@ -60,7 +60,7 @@ describe("describeVersionReminder", () => {
       });
       expect(reminder?.title).toBe("The Orkestrator backend is out of date");
       expect(reminder?.description).toContain("computer running the backend");
-      expect(reminder?.action).toBeNull();
+      expect(reminder?.action).toBe("update-backend");
     }
   });
 

@@ -66,6 +66,16 @@ interface Window {
     connections?: {
       list(): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
       probe(connectionId: string): Promise<boolean>;
+      /** A saved connection's version and update summary; null if unreachable or older. */
+      status?(
+        connectionId: string,
+      ): Promise<import("@orkestrator/protocol/updates").GatewayStatusPayload | null>;
+      /** The client update commands on any saved connection. */
+      invokeUpdate?<T>(
+        connectionId: string,
+        command: import("@orkestrator/protocol/updates").UpdateClientCommand,
+        args?: Record<string, unknown>,
+      ): Promise<T>;
       connect(
         input: import("@orkestrator/protocol/connections").ConnectToRemoteInput,
       ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;

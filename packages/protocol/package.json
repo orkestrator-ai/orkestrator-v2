@@ -46,6 +46,7 @@
     "./github-repository": "./src/github-repository.ts",
     "./node/host-test-scheduler": "./src/node/host-test-scheduler.ts",
     "./node/storage-database": "./src/node/storage-database.ts",
+    "./node/storage-snapshot-restore": "./src/node/storage-snapshot-restore.ts",
     "./initial-prompt-attachments": "./src/initial-prompt-attachments.ts",
     "./macos-permissions": "./src/macos-permissions.ts",
     "./mcp-management": "./src/mcp-management.ts",

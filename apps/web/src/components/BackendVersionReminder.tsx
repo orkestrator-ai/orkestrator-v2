@@ -5,8 +5,20 @@ import * as backend from "@/lib/backend";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT, listen } from "@/lib/native/events";
 import { appVersionSkew, BUNDLED_APP_VERSION, normalizeBackendVersion } from "@/lib/app-version";
 import { describeVersionReminder, versionClientKind } from "@/lib/version-reminder";
+import { requestGlobalSettings } from "@/lib/settings-navigation";
+import { useUpdateStore } from "@/stores/updateStore";
 
 export const VERSION_REMINDER_TOAST_ID = "orkestrator-version-reminder";
+
+/**
+ * Where an older backend is updated from: the desktop app lists every remote
+ * with its Update remote action under Settings › Connections; a browser's own
+ * update dialog already targets the backend it is connected to.
+ */
+function openBackendUpdate(): void {
+  if (versionClientKind() === "desktop") requestGlobalSettings("connections");
+  else useUpdateStore.getState().setDialogOpen(true);
+}
 const DISMISSED_KEY = "orkestrator.versionReminder.dismissed";
 
 function readDismissed(): string | null {
@@ -92,7 +104,9 @@ export function BackendVersionReminder() {
         },
         ...(reminder.action === "reload"
           ? { action: { label: "Reload", onClick: () => window.location.reload() } }
-          : {}),
+          : reminder.action === "update-backend"
+            ? { action: { label: "Update backend", onClick: () => openBackendUpdate() } }
+            : {}),
       });
     };
 

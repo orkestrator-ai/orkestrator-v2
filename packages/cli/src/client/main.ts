@@ -12,6 +12,7 @@ import { projectCommands } from "./commands/project.js";
 import { runCommands } from "./commands/run.js";
 import { sessionCommands } from "./commands/session.js";
 import { toolchainCommands } from "./commands/toolchain.js";
+import { serviceCommands } from "./commands/service.js";
 import { CliConfigStore, defaultCliConfigDir } from "./config.js";
 import { CliError } from "./errors.js";
 import { helpFor, SERVE_HELP } from "./help.js";
@@ -31,6 +32,7 @@ export const CLIENT_COMMANDS: readonly CommandSpec[] = [
   ...sessionCommands,
   ...runCommands,
   ...toolchainCommands,
+  ...serviceCommands,
 ];
 
 export const COMMAND_TREE: CommandTree = { commands: CLIENT_COMMANDS };

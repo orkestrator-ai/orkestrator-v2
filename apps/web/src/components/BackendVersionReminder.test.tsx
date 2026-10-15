@@ -152,7 +152,7 @@ describe("BackendVersionReminder", () => {
   );
 
   test.each(["desktop", "hosted"] as const)(
-    "%s client points to an older backend without a Reload action",
+    "%s client points to an older backend and offers to update it",
     async (clientKind) => {
       window.orkestratorGateway = {
         enabled: true,
@@ -165,7 +165,7 @@ describe("BackendVersionReminder", () => {
       const [title, options] = lastWarning();
       expect(title).toBe("The Orkestrator backend is out of date");
       expect(options.description).toContain("computer running the backend");
-      expect(options.action).toBeUndefined();
+      expect(options.action?.label).toBe("Update backend");
     },
   );
 

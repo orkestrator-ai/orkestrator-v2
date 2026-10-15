@@ -40,6 +40,12 @@ export type DesktopUpdateHostOptions = {
   /** Minimum gap between forwarded download-progress reports. */
   progressIntervalMs?: number;
   now?: () => number;
+  /**
+   * Keeps a copy of the running app before installing, so a version that
+   * fails to start can be rolled back (`update-rollback.ts`). Absent where
+   * the install cannot be replaced in place.
+   */
+  keepRollbackCopy?: () => Promise<string>;
 };
 
 export type DesktopUpdateHost = {
@@ -59,6 +65,10 @@ export type PendingInstallMarker = {
   toVersion: string;
   mode: "now" | "on-quit";
   createdAt: string;
+  /** The copy of the previous app a failed start restores. */
+  rollbackPath?: string | null;
+  /** Set by the failed new version once it put the previous one back. */
+  rolledBack?: { reason: string } | null;
 };
 
 function isMarker(value: unknown): value is PendingInstallMarker {
@@ -69,7 +79,10 @@ function isMarker(value: unknown): value is PendingInstallMarker {
     typeof record.jobId === "string" &&
     typeof record.fromVersion === "string" &&
     typeof record.toVersion === "string" &&
-    (record.mode === "now" || record.mode === "on-quit")
+    (record.mode === "now" || record.mode === "on-quit") &&
+    (record.rollbackPath === undefined ||
+      record.rollbackPath === null ||
+      typeof record.rollbackPath === "string")
   );
 }
 
@@ -82,7 +95,10 @@ export async function readPendingInstallMarker(file: string): Promise<PendingIns
   }
 }
 
-async function writeMarker(file: string, marker: PendingInstallMarker): Promise<void> {
+export async function writePendingInstallMarker(
+  file: string,
+  marker: PendingInstallMarker,
+): Promise<void> {
   await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   const temporary = `${file}.${process.pid}.tmp`;
   await writeFile(temporary, `${JSON.stringify(marker, null, 2)}\n`, { mode: 0o600 });
@@ -126,6 +142,8 @@ export function createDesktopUpdateHost(options: DesktopUpdateHostOptions): Desk
   >();
   let download: { jobId: string; cancel(): void } | null = null;
   let updaterError: Error | null = null;
+  /** The copy of this app the last successful prepare kept. */
+  let rollbackPath: string | null = null;
   /** The install this process armed: restarting into it now, or on quit. */
   let armed: { jobId: string; mode: "now" | "on-quit" } | null = null;
 
@@ -254,6 +272,19 @@ export function createDesktopUpdateHost(options: DesktopUpdateHostOptions): Desk
       // checks the code signature when it stages the update, at install.
       await updater.downloadUpdate(token);
       if (updaterError) throw updaterError;
+      if (options.keepRollbackCopy) {
+        // Before install, not after: a version that cannot start must find it.
+        try {
+          rollbackPath = await options.keepRollbackCopy();
+        } catch (error) {
+          throw Object.assign(
+            new Error(
+              `Could not keep a copy of this version to roll back to (${error instanceof Error ? error.message : String(error)}); free some disk space and try again`,
+            ),
+            { code: "rollback-copy-failed" },
+          );
+        }
+      }
       await report(request, "succeeded");
     } catch (error) {
       await report(request, "failed", { error: errorReport(error, "download-failed") });
@@ -282,9 +313,10 @@ export function createDesktopUpdateHost(options: DesktopUpdateHostOptions): Desk
       toVersion: request.target.version,
       mode: request.restart,
       createdAt: new Date(now()).toISOString(),
+      rollbackPath,
     };
     try {
-      await writeMarker(options.markerFile, marker);
+      await writePendingInstallMarker(options.markerFile, marker);
     } catch (error) {
       await report(request, "failed", { error: errorReport(error, "marker-failed") });
       return;
@@ -353,7 +385,11 @@ export function createDesktopUpdateHost(options: DesktopUpdateHostOptions): Desk
       protocolVersion: UPDATE_HOST_PROTOCOL_VERSION,
       hostVersion: options.appVersion,
       installKind: options.installKind,
-      capabilities: { install: updater !== null, rollback: false, restart: ["now", "on-quit"] },
+      capabilities: {
+        install: updater !== null,
+        rollback: updater !== null && options.keepRollbackCopy !== undefined,
+        restart: ["now", "on-quit"],
+      },
       unavailableReason: updater ? null : options.unavailableReason,
       armedJobId: armed?.mode === "on-quit" ? armed.jobId : null,
     };
@@ -416,8 +452,12 @@ export function createDesktopUpdateHost(options: DesktopUpdateHostOptions): Desk
     async reportStartupOutcome() {
       const marker = await readPendingInstallMarker(options.markerFile);
       if (!marker || !hostSessionId) return;
-      const outcome =
-        options.appVersion === marker.toVersion
+      const outcome = marker.rolledBack
+        ? {
+            outcome: "rolled-back" as const,
+            error: { code: "health-check", message: marker.rolledBack.reason.slice(0, 2000) },
+          }
+        : options.appVersion === marker.toVersion
           ? { outcome: "succeeded" as const }
           : {
               outcome: "failed" as const,

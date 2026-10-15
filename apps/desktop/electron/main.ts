@@ -75,7 +75,13 @@ import {
 } from "./quit-policy.js";
 import { createApplicationMenuTemplate } from "./application-menu.js";
 import { autoUpdateUnavailableReason, type UpdaterLike } from "./auto-update.js";
-import { createDesktopUpdateHost, type DesktopUpdateHost } from "./update-host.js";
+import {
+  createDesktopUpdateHost,
+  readPendingInstallMarker,
+  writePendingInstallMarker,
+  type DesktopUpdateHost,
+} from "./update-host.js";
+import { installedApp, keepRollbackCopy, rollBackFailedUpdate } from "./update-rollback.js";
 import {
   LOCAL_UPDATE_RESYNC_EVENT,
   LOCAL_UPDATE_STATUS_EVENT,
@@ -393,6 +399,7 @@ async function startUpdateHost(): Promise<void> {
     }
   }
   const feedOverride = process.env[UPDATE_FEED_URL_ENV]?.trim();
+  const runningApp = currentInstalledApp();
   updateHost = createDesktopUpdateHost({
     updater,
     unavailableReason: updater ? null : (unavailableReason ?? "The updater could not be loaded."),
@@ -400,8 +407,18 @@ async function startUpdateHost(): Promise<void> {
     appVersion: app.getVersion(),
     invoke: (command, args) => localBackend.invoke(command, args),
     createCancellationToken,
-    markerFile: path.join(app.getPath("userData"), "updates", "pending-install.json"),
+    markerFile: pendingInstallMarkerFile(),
     allowedFeedBaseUrls: [RELEASE_DOWNLOAD_BASE_URL, ...(feedOverride ? [feedOverride] : [])],
+    ...(runningApp
+      ? {
+          keepRollbackCopy: () =>
+            keepRollbackCopy({
+              app: runningApp,
+              version: app.getVersion(),
+              rollbackRoot: path.join(app.getPath("userData"), "updates", "rollback"),
+            }),
+        }
+      : {}),
   });
   canUpdateItself = updater !== null;
   try {
@@ -411,6 +428,51 @@ async function startUpdateHost(): Promise<void> {
     console.error("[Updater] Could not register with the backend:", error);
   }
   createMenu();
+}
+
+function pendingInstallMarkerFile(): string {
+  return path.join(app.getPath("userData"), "updates", "pending-install.json");
+}
+
+function currentInstalledApp() {
+  return installedApp({
+    platform: process.platform,
+    exePath: app.getPath("exe"),
+    appImage: process.env.APPIMAGE,
+  });
+}
+
+/**
+ * This version failed to start right after an update installed it: put the
+ * previous version (and the database it can read) back and relaunch it. The
+ * previous version reports the rollback from `pending-install.json`.
+ */
+async function rollBackAfterFailedUpdate(failure: unknown): Promise<boolean> {
+  if (!app.isPackaged) return false;
+  const markerFile = pendingInstallMarkerFile();
+  const marker = await readPendingInstallMarker(markerFile);
+  const result = await rollBackFailedUpdate({
+    marker,
+    appVersion: app.getVersion(),
+    app: currentInstalledApp(),
+    dataDir: app.getPath("userData"),
+    now: Date.now(),
+  }).catch((error: unknown) => ({
+    rolledBack: false as const,
+    reason: error instanceof Error ? error.message : String(error),
+  }));
+  if (!result.rolledBack) {
+    if (marker?.toVersion === app.getVersion()) {
+      console.error(`[Updater] Could not roll back the failed update: ${result.reason}`);
+    }
+    return false;
+  }
+  const reason = `${app.getVersion()} failed to start: ${failure instanceof Error ? failure.message : String(failure)}`;
+  await writePendingInstallMarker(markerFile, { ...marker!, rolledBack: { reason } });
+  console.error(`[Updater] ${reason}; rolled back to ${marker!.fromVersion}`);
+  app.relaunch();
+  app.exit(0);
+  return true;
 }
 
 /**
@@ -703,6 +765,9 @@ function registerIpc(): void {
       if (!backend) throw new Error("The local backend is not running");
       return backend.invoke(command, args);
     },
+    remoteConnectionStatus: (connectionId) => manager().remoteStatus(connectionId),
+    invokeConnectionUpdate: (connectionId, command, args) =>
+      manager().invokeUpdate(connectionId, command, args),
   });
 }
 
@@ -880,7 +945,8 @@ if (isPrimaryInstance) {
   void app
     .whenReady()
     .then(startApplication)
-    .catch((error: unknown) => {
+    .catch(async (error: unknown) => {
+      if (await rollBackAfterFailedUpdate(error)) return;
       handleStartupFailure({
         isQuitting: quitReopen.isQuitting,
         error,

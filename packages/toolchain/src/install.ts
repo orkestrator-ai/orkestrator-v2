@@ -32,7 +32,7 @@ import {
   type ToolchainArtifact,
   type ToolchainName,
 } from "./manifest.js";
-import { CURRENT_TOOLCHAIN_LINK, currentToolchainBinDir } from "./layout.js";
+import { CURRENT_TOOLCHAIN_LINK, currentToolchainBinDir, toolchainRootDir } from "./layout.js";
 import { loadAgentPlatformSelection } from "./platform-selection.js";
 
 export { CURRENT_TOOLCHAIN_LINK, currentToolchainBinDir };
@@ -188,6 +188,15 @@ async function toolsInCurrent(rootDir: string): Promise<ToolchainName[]> {
  * mid-update sees the old set or the new one and never a missing path. It only
  * ever replaces a symlink: anything else at that name is not ours to remove.
  */
+/**
+ * Points `toolchains/bin/current` at an activated set. The headless
+ * supervisor uses it to switch to an update's pre-fetched set at cutover and
+ * back on rollback.
+ */
+export async function pointToolchainCurrentAt(dataDir: string, binDir: string): Promise<string> {
+  return pointCurrentAt(toolchainRootDir(dataDir), binDir);
+}
+
 async function pointCurrentAt(rootDir: string, binDir: string): Promise<string> {
   const binRoot = path.join(rootDir, "bin");
   // A wrong `binDir` must not point the link somewhere outside the toolchain tree.

@@ -25,6 +25,11 @@ if (invocation.mode === "serve") {
   process.env.ORKESTRATOR_RESOURCE_ROOT ??= path.join(packageRoot, "resources");
   process.env.ORKESTRATOR_VERSION ??= version;
   await import("../dist/main.js");
+} else if (invocation.mode === "supervise") {
+  // The supervisor imports no backend code; it runs the service as a child
+  // from <data-dir>/runtime/current (or this package) and installs updates.
+  const { runSupervisor } = await import("../dist/supervisor.js");
+  process.exitCode = await runSupervisor(invocation.args, packageRoot, version);
 } else if (invocation.mode === "client") {
   process.exitCode = await client.runClientProcess(invocation.argv, version);
 } else {

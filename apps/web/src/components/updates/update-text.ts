@@ -1,5 +1,9 @@
 import type { ReleaseChannel } from "@orkestrator/protocol/release-channels";
-import type { UpdateJobPhase, UpdateStatusSnapshot } from "@orkestrator/protocol/updates";
+import type {
+  UpdateJobPhase,
+  UpdateNotice,
+  UpdateStatusSnapshot,
+} from "@orkestrator/protocol/updates";
 
 export const CHANNEL_OPTIONS: Array<{ value: ReleaseChannel; label: string; description: string }> =
   [
@@ -67,4 +71,20 @@ export function indicatorState(snapshot: UpdateStatusSnapshot | null): UpdateInd
     return { kind: "available", version: snapshot.available.version };
   }
   return { kind: "none" };
+}
+
+/** macOS permission ids an update asked someone at this machine to grant, by version. */
+export function macOsPermissionsAddedByUpdates(
+  notices: readonly UpdateNotice[],
+): Map<string, string> {
+  const added = new Map<string, string>();
+  for (const notice of notices) {
+    if (notice.kind !== "action-needed-on-host") continue;
+    for (const item of notice.items) {
+      if (item.category === "macos-permission") {
+        added.set(item.id.slice("macos-permission:".length), notice.version);
+      }
+    }
+  }
+  return added;
 }

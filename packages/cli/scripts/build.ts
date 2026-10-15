@@ -25,6 +25,15 @@ const builds = await Promise.all([
     target: "bun",
     format: "esm",
   }),
+  // `serve --supervised`: kept separate from the backend so the supervisor
+  // stays small and works against backends newer than itself.
+  Bun.build({
+    entrypoints: [path.join(packageRoot, "src/supervisor/main.ts")],
+    outdir: outputRoot,
+    naming: "supervisor.js",
+    target: "bun",
+    format: "esm",
+  }),
   Bun.build({
     entrypoints: [path.join(repositoryRoot, "apps/backend/src/main.ts")],
     outdir: outputRoot,

@@ -79,6 +79,7 @@ function setup(
     /** Final reports to fail before delivering, as a replaced session would. */
     failFinalReports?: number;
     markerFile?: string;
+    keepRollbackCopy?: () => Promise<string>;
   } = {},
 ) {
   let failFinalReports = options.failFinalReports ?? 0;
@@ -113,6 +114,7 @@ function setup(
     allowedFeedBaseUrls: [BASE],
     log: { info: () => undefined, warn: () => undefined },
     progressIntervalMs: 1_000,
+    keepRollbackCopy: options.keepRollbackCopy,
     now: () => (clock += 600),
   });
   const reports = () =>
@@ -456,5 +458,60 @@ describe("after a restart", () => {
     await h.host.reportStartupOutcome();
     expect(h.calls.map((call) => call.command)).toEqual(["update_host_register"]);
     expect(readFileSync(h.markerFile, "utf8")).toBe("{not json");
+  });
+});
+
+describe("rollback copies", () => {
+  test("keeps a copy before install and records it for a failed start to restore", async () => {
+    const keepRollbackCopy = mock(async () => "/data/updates/rollback/2.21.0/Orkestrator AI.app");
+    const h = setup({ keepRollbackCopy });
+    await h.host.register();
+    expect(h.calls[0]?.args).toMatchObject({ registration: { capabilities: { rollback: true } } });
+    await deliver(h, prepare());
+    expect(keepRollbackCopy).toHaveBeenCalledTimes(1);
+    expect(h.reports().at(-1)).toMatchObject({ status: "succeeded" });
+    await deliver(h, install("now"));
+    expect((await readPendingInstallMarker(h.markerFile))?.rollbackPath).toBe(
+      "/data/updates/rollback/2.21.0/Orkestrator AI.app",
+    );
+  });
+
+  test("a copy that cannot be made fails the download, before anything is installed", async () => {
+    const h = setup({
+      keepRollbackCopy: async () => {
+        throw new Error("ENOSPC: no space left on device");
+      },
+    });
+    await h.host.register();
+    await deliver(h, prepare());
+    expect(h.reports().at(-1)).toMatchObject({
+      status: "failed",
+      error: { code: "rollback-copy-failed" },
+    });
+  });
+
+  test("the restored version reports the rollback the failed one performed", async () => {
+    const h = setup({ appVersion: "2.21.0" });
+    mkdirSync(path.dirname(h.markerFile), { recursive: true });
+    writeFileSync(
+      h.markerFile,
+      JSON.stringify({
+        version: 1,
+        jobId: "job-1",
+        fromVersion: "2.21.0",
+        toVersion: "2.22.0",
+        mode: "now",
+        createdAt: "x",
+        rollbackPath: "/r",
+        rolledBack: { reason: "2.22.0 failed to start: Backend service exited during startup" },
+      }),
+    );
+    await h.host.register();
+    await h.host.reportStartupOutcome();
+    expect(h.calls.at(-1)?.args).toMatchObject({
+      outcome: "rolled-back",
+      error: { code: "health-check", message: expect.stringContaining("failed to start") },
+    });
+    expect(existsSync(h.markerFile)).toBe(false);
   });
 });

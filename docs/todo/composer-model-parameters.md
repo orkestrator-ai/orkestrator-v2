@@ -1,0 +1,116 @@
+# Composer model parameters
+
+Checked against `main` at `2459b05c` (2026-10-15).
+
+Every model axis should render through the generic `parameters` descriptors,
+with its value held in backend session state, and no axis should need its own
+UI. The descriptor model is in place and drives Claude, Cursor, ACP and Pi
+controls. What is left is either migrating the two legacy axes (reasoning and
+speed) onto it or recording that both models stay, plus four values the bridges
+forward that nothing in the backend supplies.
+
+## Current state
+
+- Protocol (`packages/protocol/src/native-agent.ts`):
+  - `AgentModel.parameters` (`AgentModelParameter[]`);
+  - `NativeAgentComposerState.parameterValues` and `persistedDefaults`;
+  - `SUPPRESSED_COMPOSER_PARAMETERS` with `isSuppressedComposerParameter`, the
+    single list of parameters the input bar must not show.
+- The backend builds composer controls from `parameters` generically
+  (`native-agent-service-shared.ts`) and keeps `parameterValues` in session
+  state, so a reload restores them.
+- Per provider:
+  - Claude: `thinking` and `context1m` from `claudeModelParameters`
+    (`packages/protocol/src/claude-model-catalog.ts`). Both are suppressed in
+    the input bar as settings-backed session defaults. They are applied live
+    through `applyClaudeLiveSettings` (`setMaxThinkingTokens`) when a turn joins
+    a running CLI; the 1M-context beta is a launch option.
+  - Cursor: `thinking`, `context` and `cyber` (`bridges/cursor-bridge/src/models.ts`).
+    The retired `variant` cross product is suppressed.
+  - ACP: agent config options become parameters
+    (`bridges/acp-bridge/src/session-config.ts`).
+  - Pi: `setModel(model, { persist })` through `applyComposerToSession`
+    (`bridges/pi-bridge/src/agent-session.ts`).
+- Legacy axes: `AgentModel.reasoning`, `defaultReasoningId` and `supportsSpeed`
+  are still separate fields, and the renderer's launch paths still build or read
+  them (`apps/web/src/lib/agent-launch.ts`, `BuildLaunchDialog.tsx`,
+  `FeatureBuildFields.tsx`). OpenCode variants and Grok effort map onto
+  `reasoning`.
+- Forwarded but unsourced:
+  - Codex: the bridge reads `parameterValues.summary` and `personality`
+    (`bridges/codex-bridge/src/app-server-runtime-lifecycle.ts`) and sends them
+    on `turn/start` / `thread/start`. No Codex catalogue advertises either
+    parameter, and no setting supplies them. `SUPPRESSED_COMPOSER_PARAMETERS`
+    still hides `parameter:summary` with the comment "configured outside the
+    input bar".
+  - Claude permission mode: `http-bridge-prompt-body.ts` forwards
+    `parameterValues.permissionMode` (falling back to `bypassPermissions`), and
+    the bridge route accepts `acceptEdits`. No descriptor offers it.
+  - Claude budget: the bridge forwards `options.maxBudgetUsd` and handles
+    `error_max_budget_usd` (`session-manager-prompt-handlers/result.ts`).
+    Nothing in `apps/backend` supplies it.
+
+## Outstanding work
+
+### Code
+
+1. **Codex reasoning summary and personality.** Either add an agent or
+   environment setting that supplies `summary` and `personality`, and advertise
+   `summary` where `model/list` reports support, or remove the bridge plumbing
+   and the `parameter:summary` suppression entry. Do not leave a suppression
+   for a control nothing produces.
+2. **Reasoning and speed axes.** Migrate `AgentModel.reasoning` /
+   `supportsSpeed` onto `parameters`, keeping the old fields as aliases until
+   the renderer reads only `parameters`. Move OpenCode variants and Grok effort
+   with them. Or record a decision to keep both models, with the reason, in
+   `native-agent.ts`. Done when one of the two is true and no renderer code
+   branches on the axis name.
+3. **Claude `acceptEdits`.** Decide whether "Auto-accept edits" becomes an
+   option on the generic `mode` axis for Claude. If not, stop forwarding
+   `parameterValues.permissionMode` from the prompt body. Keep `dontAsk`,
+   `auto` and `default` unexposed: the execution policy owns approvals.
+4. **`maxBudgetUsd`.** Add a backend-owned per-environment budget setting, with
+   `error_max_budget_usd` mapping to a `stopped` notice, or drop the option from
+   the bridge.
+
+### Qualification
+
+- Change an extra Cursor axis, send a turn, reload, and confirm the value comes
+  back from the backend.
+- After item 2: the reasoning and speed controls on every platform round trip
+  through `NativeAgentControlUpdate` and survive a reload.
+
+## Constraints and rationale
+
+- The backend owns the selection state. The renderer renders descriptors and
+  sends `NativeAgentControlUpdate`; it never decides which axes exist.
+- One suppression table. Every projection path and renderer filters through
+  `isSuppressedComposerParameter`, so a control hidden on one read cannot
+  reappear on another.
+- Provider-only axes are fine; provider-only UI is not.
+- Approval behaviour belongs to the execution policy, not to a composer mode,
+  except for modes the user switches per turn (plan, and possibly
+  `acceptEdits`).
+- A parameter whose change needs a new process is launch-only: changing it
+  against a running Claude CLI is a conflict, not a silent relaunch.
+
+## Open questions
+
+- Is migrating reasoning and speed worth the churn, given that both already
+  render correctly?
+- Should a Claude budget cap be per environment or per agent default?
+
+## Related
+
+- [mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md) (live
+  setting changes need a warm Claude runtime between turns).
+- [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md)
+  (execution policy and approvals).
+
+## Replaces
+
+- `docs/plans/sdk-coverage/10-composer-model-axes-and-settings.md` (except the
+  mid-session item, which moved to
+  [mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md))
+- `docs/plans/sdk-coverage-2026-09-06.md` (Claude §3.9 and the composer half
+  of §3.11; Cursor §6.9)

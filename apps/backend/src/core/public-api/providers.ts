@@ -23,8 +23,8 @@ import type {
  * addition to the provider-neutral controlled-provider tests. Unqualified
  * providers keep every other action; their runs report `unsupported` rather
  * than a completion the backend has not proven for them. Qualification
- * evidence is recorded in
- * docs/improvements/cli-commands/plan/10-run-completion-and-waiting.md.
+ * evidence is summarised in docs/architecture/public-cli.md; providers still
+ * to qualify are tracked in docs/todo/cli-qualification.md.
  * Withdraw one provider here (to `unqualified`) if its mapping fails; its run
  * evidence stays readable.
  */

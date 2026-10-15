@@ -24,7 +24,7 @@ export function newTally(): VisitTally {
  * The hook is a non-enumerable `toJSON`, so it never appears in a spread copy
  * or in the encoded output: the encoding is byte-identical to the uncounted
  * value. This is the method the review's original probes used (see
- * docs/improvements/efficiency/validation.md). A copy made by the code under
+ * docs/improvements/efficiency/baseline/README.md). A copy made by the code under
  * test (`{ ...message }`) is not counted, which undercounts rather than
  * overcounts — the numbers are lower bounds on repeated work.
  */

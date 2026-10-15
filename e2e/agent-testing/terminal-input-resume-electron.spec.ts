@@ -12,7 +12,8 @@ import { prepareFixtureRepository } from "../../apps/desktop/scripts/dev/fixture
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
 
 /**
- * The desktop half of docs/2026-10-14/terminal-input-recovery-plan.md: the
+ * The desktop half of terminal input recovery
+ * (docs/architecture/event-snapshot-recovery.md): the
  * same recovery flow as terminal-input-resume.spec.ts, through the real
  * Electron main process, IPC and BackendHttpClient. A wrapper around the main
  * process's fetch loses one write's response after the backend applied it.

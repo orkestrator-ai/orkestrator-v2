@@ -204,9 +204,10 @@ export class ProviderRegistry {
    * idle for up to its full window after a user opens a tab.
    */
   cache(cacheKey: string, provider: NativeAgentRuntimeProvider, connectionIdentity?: string): void {
+    const previousProvider = this.providers.get(cacheKey);
     const previousIdentity = this.connections.get(cacheKey);
     this.install(cacheKey, provider);
-    if (connectionIdentity !== previousIdentity && this.providers.get(cacheKey) === provider) {
+    if (connectionIdentity !== previousIdentity && previousProvider === provider) {
       // Same object, new bridge coordinates: still a new provider generation.
       this.deps.observations.replaceGroupGeneration(cacheKey);
     }

@@ -98,6 +98,52 @@ describe("ProviderRegistry", () => {
     expect(providerCacheKey("env-1", "codex" as BuildPipelineAgent)).toBe("env-1\0codex");
   });
 
+  test.each([undefined, "generation-1"])(
+    "initial caching replaces the observation generation once (identity: %s)",
+    (identity) => {
+      const { registry, replaced } = harness();
+
+      registry.cache(KEY, fakeProvider("first").provider, identity);
+
+      expect(replaced).toEqual([KEY]);
+    },
+  );
+
+  test.each(["generation-1", "generation-2"])(
+    "provider-object replacement replaces the observation generation once (identity: %s)",
+    async (identity) => {
+      const { registry, replaced } = harness();
+      registry.cache(KEY, fakeProvider("first").provider, "generation-1");
+      expect(replaced).toEqual([KEY]);
+
+      registry.cache(KEY, fakeProvider("replacement").provider, identity);
+
+      expect(replaced).toEqual([KEY, KEY]);
+      await registry.shutdown();
+    },
+  );
+
+  test("re-caching the same provider replaces its observation generation only when identity changes", () => {
+    const { registry, replaced } = harness();
+    const { provider } = fakeProvider("same-object");
+    registry.cache(KEY, provider, "generation-1");
+    expect(replaced).toEqual([KEY]);
+
+    registry.cache(KEY, provider, "generation-1");
+    expect(replaced).toEqual([KEY]);
+
+    registry.cache(KEY, provider, "generation-2");
+    expect(replaced).toEqual([KEY, KEY]);
+    expect(registry.cachedForConnection(KEY, "generation-2")).toBe(provider);
+
+    registry.cache(KEY, provider);
+    expect(replaced).toEqual([KEY, KEY, KEY]);
+    expect(registry.connectionIdentity(KEY)).toBeUndefined();
+
+    registry.cache(KEY, provider);
+    expect(replaced).toEqual([KEY, KEY, KEY]);
+  });
+
   test("bridge identity changes with the port, the token and the account", () => {
     const base = bridgeConnectionIdentity(connection(4000));
     expect(bridgeConnectionIdentity(connection(4000))).toBe(base);
@@ -143,13 +189,14 @@ describe("ProviderRegistry", () => {
     });
 
     const first = await registry.resolve(INPUT);
+    expect(replaced).toEqual([KEY]);
     port = 4001;
     const replacement = await registry.resolve(INPUT);
 
     expect(replacement).not.toBe(first);
     expect(created).toEqual([first, replacement]);
     expect(registry.cached(KEY)).toBe(replacement);
-    expect(replaced.filter((key) => key === KEY).length).toBeGreaterThanOrEqual(2);
+    expect(replaced).toEqual([KEY, KEY]);
     expect(registry.stateForTesting().retiring.has(first)).toBe(true);
     await settleTimers();
     expect(dispositions[0]).toHaveBeenCalledTimes(1);
@@ -177,6 +224,28 @@ describe("ProviderRegistry", () => {
     expect(observeBridgeConnection).toHaveBeenCalledTimes(2);
     expect(bridgeConnection).not.toHaveBeenCalled();
     expect(registry.isBridgeKnownAbsent(KEY)).toBe(false);
+  });
+
+  test("observation skips the injected factory until the absent-bridge cooldown expires", async () => {
+    const injected = fakeProvider("injected");
+    const factory = mock(async () => injected.provider);
+    const { registry, advance, bridgeConnection, observeBridgeConnection } = harness({
+      options: { provider: factory, providerRetirementGraceMs: 0 },
+    });
+    registry.markBridgeAbsent(KEY);
+
+    expect(await registry.observe(INPUT)).toBeUndefined();
+    advance(ABSENT_BRIDGE_RECHECK_MS - 1);
+    expect(await registry.observe(INPUT)).toBeUndefined();
+    expect(factory).not.toHaveBeenCalled();
+    expect(registry.cached(KEY)).toBeUndefined();
+
+    advance(1);
+    expect(await registry.observe(INPUT)).toBe(injected.provider);
+    expect(await registry.observe(INPUT)).toBe(injected.provider);
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(bridgeConnection).not.toHaveBeenCalled();
+    expect(observeBridgeConnection).not.toHaveBeenCalled();
   });
 
   test("caching a provider clears the absent-bridge note", async () => {

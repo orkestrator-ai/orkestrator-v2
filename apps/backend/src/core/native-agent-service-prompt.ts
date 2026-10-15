@@ -138,6 +138,7 @@ import {
   type NativeAgentCommandIntent,
 } from "@orkestrator/protocol/native-agent";
 import { commandCatalogueKey } from "./native-agent-command-catalogue.js";
+import { providerCacheKey } from "./native-agent-provider-registry.js";
 import {
   commandDispatchNeedsCatalogue,
   planCommandDispatch,
@@ -204,7 +205,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
    * turn. Purely in-memory apart from the session list; never reads a bridge.
    */
   async hasObservedLiveWork(environmentId: string, agent: BuildPipelineAgent): Promise<boolean> {
-    const provider = this.providerRegistry.cached(`${environmentId}\0${agent}`);
+    const provider = this.providerRegistry.cached(providerCacheKey(environmentId, agent));
     if (provider && this.providerRegistry.hasDispatchInFlight(provider)) return true;
     const sessions = await this.storage.listNativeAgentSessions();
     return sessions.some((session) => {

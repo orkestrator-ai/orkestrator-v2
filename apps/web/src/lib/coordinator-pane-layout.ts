@@ -154,10 +154,22 @@ export function reconcileCoordinatorLayout(
   const placed = new Set<string>();
   const root = mapNode(layout.root, (node) => {
     if (node.kind !== "leaf") return node;
+    const conversationIds = node.conversationIds.filter((id) => {
+      if (!open.has(id) || placed.has(id)) return false;
+      placed.add(id);
+      return true;
+    });
     let leaf = node;
-    for (const id of node.conversationIds) {
-      if (!open.has(id) || placed.has(id)) leaf = withoutConversation(leaf, id);
-      else placed.add(id);
+    if (conversationIds.length !== node.conversationIds.length) {
+      const previousIndex = node.conversationIds.indexOf(node.activeConversationId ?? "");
+      leaf = {
+        ...node,
+        conversationIds,
+        activeConversationId: conversationIds.includes(node.activeConversationId ?? "")
+          ? node.activeConversationId
+          : (conversationIds[Math.min(Math.max(previousIndex, 0), conversationIds.length - 1)] ??
+            null),
+      };
     }
     if (leaf.activeConversationId === null && leaf.conversationIds.length > 0) {
       leaf = { ...leaf, activeConversationId: leaf.conversationIds[0]! };
@@ -335,13 +347,21 @@ function isPersistedId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= MAX_PERSISTED_ID_LENGTH;
 }
 
-function sanitizeNode(value: unknown, level: number): CoordinatorPaneNode | null {
+function sanitizeNode(
+  value: unknown,
+  level: number,
+  nodeIds: Set<string>,
+): CoordinatorPaneNode | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
-  if (!isPersistedId(record.id)) return null;
+  if (!isPersistedId(record.id) || nodeIds.has(record.id)) return null;
+  nodeIds.add(record.id);
   if (record.kind === "leaf") {
     if (!Array.isArray(record.conversationIds)) return null;
-    const conversationIds = record.conversationIds.filter(isPersistedId).slice(0, 64);
+    const conversationIds = Array.from(new Set(record.conversationIds.filter(isPersistedId))).slice(
+      0,
+      64,
+    );
     return {
       kind: "leaf",
       id: record.id,
@@ -356,8 +376,8 @@ function sanitizeNode(value: unknown, level: number): CoordinatorPaneNode | null
   if (record.kind !== "split" || level >= MAX_SPLIT_DEPTH) return null;
   if (record.direction !== "horizontal" && record.direction !== "vertical") return null;
   if (!Array.isArray(record.children) || record.children.length !== 2) return null;
-  const first = sanitizeNode(record.children[0], level + 1);
-  const second = sanitizeNode(record.children[1], level + 1);
+  const first = sanitizeNode(record.children[0], level + 1, nodeIds);
+  const second = sanitizeNode(record.children[1], level + 1, nodeIds);
   if (!first || !second) return null;
   const sizes = Array.isArray(record.sizes) ? record.sizes : [];
   const valid = (size: unknown): size is number =>
@@ -375,7 +395,7 @@ function sanitizeNode(value: unknown, level: number): CoordinatorPaneNode | null
 export function sanitizeCoordinatorPaneLayout(value: unknown): CoordinatorPaneLayout | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
-  const root = sanitizeNode(record.root, 0);
+  const root = sanitizeNode(record.root, 0, new Set());
   if (!root) return null;
   const leaves = collectCoordinatorLeaves(root);
   const activePaneId = leaves.some((leaf) => leaf.id === record.activePaneId)

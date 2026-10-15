@@ -13,6 +13,8 @@ import {
   type CoordinatorPaneLayout,
 } from "./coordinator-pane-layout";
 
+import { MAX_SPLIT_DEPTH } from "@/types/paneLayout";
+
 const ids = ["main", "side-1", "side-2"];
 
 function single(): CoordinatorPaneLayout {
@@ -142,6 +144,63 @@ describe("coordinator pane layout", () => {
       ["main", "side-2"],
       ["side-1"],
     ]);
+  });
+
+  test("reconciling preserves one copy of a conversation repeated within a leaf", () => {
+    const layout = single();
+    if (layout.root.kind !== "leaf") throw new Error("expected leaf");
+    layout.root.conversationIds = ["main", "main"];
+    expect(leafIds(reconcileCoordinatorLayout(layout, ["main"]))).toEqual([["main"]]);
+  });
+
+  test("refuses another split at MAX_SPLIT_DEPTH", () => {
+    const open = Array.from({ length: MAX_SPLIT_DEPTH + 2 }, (_, index) => `tab-${index}`);
+    let layout = reconcileCoordinatorLayout(null, open);
+    const paneId = layout.activePaneId;
+    for (let index = 0; index < MAX_SPLIT_DEPTH; index += 1) {
+      const next = splitCoordinatorPaneAtEdge(layout, paneId, "right", open[index]!, paneId);
+      expect(next).not.toBe(layout);
+      layout = next;
+    }
+    expect(splitCoordinatorPaneAtEdge(layout, paneId, "right", open.at(-1)!, paneId)).toBe(layout);
+  });
+
+  test("sanitizing deduplicates tabs and rejects repeated leaf or split IDs", () => {
+    const layout = single();
+    if (layout.root.kind !== "leaf") throw new Error("expected leaf");
+    expect(
+      sanitizeCoordinatorPaneLayout({
+        ...layout,
+        root: { ...layout.root, conversationIds: ["main", "main"] },
+      })?.root,
+    ).toEqual({ ...layout.root, conversationIds: ["main"] });
+    const split = splitCoordinatorPaneAtEdge(
+      layout,
+      layout.activePaneId,
+      "right",
+      "side-1",
+      layout.activePaneId,
+    );
+    if (split.root.kind !== "split") throw new Error("expected split");
+    const [left, right] = split.root.children;
+    expect(
+      sanitizeCoordinatorPaneLayout({
+        ...split,
+        root: {
+          ...split.root,
+          children: [left, { ...right, id: left.id }],
+        },
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeCoordinatorPaneLayout({
+        ...split,
+        root: {
+          ...split.root,
+          children: [left, { ...right, id: split.root.id }],
+        },
+      }),
+    ).toBeNull();
   });
 
   test("reveal brings a conversation forward in its group and focuses the group", () => {

@@ -54,17 +54,33 @@ export const useCoordinatorPaneLayoutStore = create<CoordinatorPaneLayoutState>(
               if (!entry || typeof entry !== "object") return [];
               const record = entry as Record<string, unknown>;
               const layout = sanitizeCoordinatorPaneLayout(record.layout);
-              if (typeof record.projectId !== "string" || !layout) return [];
+              if (
+                typeof record.projectId !== "string" ||
+                record.projectId.length === 0 ||
+                record.projectId.length > 200 ||
+                !layout
+              )
+                return [];
               return [
                 {
                   projectId: record.projectId,
                   layout,
-                  updatedAt: typeof record.updatedAt === "number" ? record.updatedAt : 0,
+                  updatedAt:
+                    typeof record.updatedAt === "number" && Number.isFinite(record.updatedAt)
+                      ? record.updatedAt
+                      : 0,
                 },
               ];
             })
           : [];
-        return { ...current, layouts };
+        return {
+          ...current,
+          layouts: layouts.filter(
+            (entry, index) =>
+              layouts.findLastIndex((candidate) => candidate.projectId === entry.projectId) ===
+              index,
+          ),
+        };
       },
     },
   ),

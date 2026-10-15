@@ -199,24 +199,60 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   useEffect(() => {
     if (layout && layout !== storedLayout) setStoredLayout(projectId, layout);
   }, [layout, projectId, setStoredLayout, storedLayout]);
-  // A selection made elsewhere — a new conversation, a close, another window —
-  // brings that conversation to the front of its group.
+  // Selection intent outlives an individual request. Serialize writes so an
+  // older answer (or its reconciliation read) cannot reveal a superseded pane.
+  const selectionRef = useRef<{
+    projectId: string;
+    desired: string | null;
+    pending: boolean;
+    live: boolean;
+  } | null>(null);
+  useLayoutEffect(() => {
+    const selection = { projectId, desired: null as string | null, pending: false, live: true };
+    selectionRef.current = selection;
+    return () => {
+      selection.live = false;
+    };
+  }, [projectId]);
   useEffect(() => {
+    const selection = selectionRef.current;
+    if (!selection || selection.pending) return;
     if (backendSelectedId) {
       updateLayout((current) => revealCoordinatorConversation(current, backendSelectedId));
     }
-  }, [backendSelectedId, updateLayout]);
+  }, [backendSelectedId, snapshot, updateLayout]);
   const selectConversation = useCallback(
     (conversationId: string) => {
+      const selection = selectionRef.current;
+      if (!selection || selection.projectId !== projectId) return;
+      selection.desired = conversationId;
+      if (selection.pending) return;
+      selection.pending = true;
       setError(null);
-      void backend
-        .selectCoordinatorConversation(projectId, conversationId)
-        .then(setSnapshot)
-        .catch((cause) =>
-          setError(cause instanceof Error ? cause.message : "Could not select conversation"),
-        );
+      void (async () => {
+        while (selection.live && selection.desired !== null) {
+          const requested = selection.desired;
+          try {
+            const next = await backend.selectCoordinatorConversation(projectId, requested);
+            if (!selection.live) return;
+            if (selection.desired === requested) {
+              setSnapshot(next);
+              updateLayout((current) => revealCoordinatorConversation(current, requested));
+              selection.desired = null;
+            }
+          } catch (cause) {
+            if (!selection.live) return;
+            if (selection.desired !== requested) continue;
+            selection.desired = null;
+            setError(cause instanceof Error ? cause.message : "Could not select conversation");
+            invalidateView();
+            break;
+          }
+        }
+        selection.pending = false;
+      })();
     },
-    [projectId, setSnapshot],
+    [invalidateView, projectId, setSnapshot, updateLayout],
   );
   /**
    * Applies a layout change, then keeps the backend's selection on the
@@ -230,7 +266,9 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         useCoordinatorPaneLayoutStore.getState(),
       );
       const focused = current ? focusedCoordinatorConversationId(current) : null;
-      if (focused && focused !== backendSelectedId) selectConversation(focused);
+      if (focused && focused !== (selectionRef.current?.desired ?? backendSelectedId)) {
+        selectConversation(focused);
+      }
     },
     [backendSelectedId, projectId, selectConversation, updateLayout],
   );
@@ -402,10 +440,7 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
    * authoritative signal, and re-dispatch is safe in the meantime because the
    * opening submit carries a deterministic idempotency key.
    */
-  useEffect(() => {
-    if (!pendingLaunch || !launchObserved) return;
-    setPendingLaunch(null);
-  }, [launchObserved, pendingLaunch]);
+  if (pendingLaunch && launchObserved) setPendingLaunch(null);
 
   // A settled turn may have changed delegations: one coalesced conditional read.
   useEffect(() => {
@@ -470,7 +505,11 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     setError(null);
     void backend
       .createCoordinatorConversation(projectId)
-      .then(setSnapshot)
+      .then((createdSnapshot) => {
+        setSnapshot(createdSnapshot);
+        const createdId = createdSnapshot.workspace.selectedConversationId;
+        if (createdId && selectionRef.current?.pending) selectConversation(createdId);
+      })
       .catch((cause) =>
         setError(cause instanceof Error ? cause.message : "Could not create conversation"),
       )

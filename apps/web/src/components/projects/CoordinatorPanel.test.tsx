@@ -13,9 +13,14 @@ import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionSto
 import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalStore";
 import { useCoordinatorPaneLayoutStore } from "@/stores/coordinatorPaneLayoutStore";
 import {
+  collectCoordinatorLeaves,
+  focusedCoordinatorConversationId,
+  moveCoordinatorConversation,
   reconcileCoordinatorLayout,
   splitCoordinatorPaneAtEdge,
 } from "@/lib/coordinator-pane-layout";
+import { dispatchResourceChange } from "@/lib/resource-sync";
+import * as paneTree from "./CoordinatorPaneTree";
 import { createSessionKey } from "@/lib/utils";
 
 const backendSnapshot = { ...realBackend };
@@ -1048,6 +1053,228 @@ describe("CoordinatorPanel", () => {
     expect(screen.getAllByTestId("native-agent")[1]!.getAttribute("data-owns-shortcuts")).toBe(
       "true",
     );
+  });
+
+  function setupGroups() {
+    const base = snapshot.workspace.conversations[0]!;
+    ensuredSnapshot = {
+      ...snapshot,
+      workspace: {
+        ...snapshot.workspace,
+        conversations: [
+          { ...base, role: "main", title: "Coordinator" },
+          {
+            ...base,
+            id: "side-1",
+            tabId: "side-tab",
+            role: "side",
+            title: "Side 1",
+            sideOrdinal: 1,
+          },
+          {
+            ...base,
+            id: "side-2",
+            tabId: "side-tab-2",
+            role: "side",
+            title: "Side 2",
+            sideOrdinal: 2,
+          },
+        ],
+      },
+    };
+    const single = reconcileCoordinatorLayout(
+      null,
+      ensuredSnapshot.workspace.conversations.map((item) => item.id),
+    );
+    const split = splitCoordinatorPaneAtEdge(
+      single,
+      single.activePaneId,
+      "right",
+      "side-1",
+      single.activePaneId,
+    );
+    useCoordinatorPaneLayoutStore.getState().setLayout("project-1", split);
+    return split;
+  }
+
+  test("keeps the newest pane intent through deferred selection answers and view reads", async () => {
+    setupGroups();
+    const initial = ensuredSnapshot;
+    let resolveSide!: (value: CoordinatorSnapshot) => void;
+    let resolveMain!: (value: CoordinatorSnapshot) => void;
+    select.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSide = resolve;
+        }),
+    );
+    select.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveMain = resolve;
+        }),
+    );
+    render(<CoordinatorPanel projectId="project-1" />);
+    await waitFor(() => expect(screen.getAllByTestId("native-agent")).toHaveLength(2));
+    const agents = screen.getAllByTestId("native-agent");
+    fireEvent.click(agents[1]!);
+    fireEvent.click(agents[0]!);
+    expect(select).toHaveBeenCalledTimes(1);
+    const sideSelected = {
+      ...initial,
+      workspace: { ...initial.workspace, selectedConversationId: "side-1" },
+    };
+    ensuredSnapshot = sideSelected;
+    await act(async () => {
+      resolveSide(sideSelected);
+    });
+    await waitFor(() => expect(select).toHaveBeenLastCalledWith("project-1", "conversation-1"));
+    // An authoritative reconciliation snapshot of B must not steal focus while A waits.
+    const reads = getCoordinatorView.mock.calls.length;
+    await act(async () => {
+      dispatchResourceChange({
+        resource: "coordinator",
+        id: "project-1",
+        projectId: "project-1",
+        revision: 1,
+      });
+    });
+    await waitFor(() => expect(getCoordinatorView.mock.calls.length).toBeGreaterThan(reads));
+    expect(screen.getAllByTestId("native-agent")[0]!.getAttribute("data-owns-shortcuts")).toBe(
+      "true",
+    );
+    ensuredSnapshot = initial;
+    await act(async () => {
+      resolveMain(initial);
+    });
+    await waitFor(() =>
+      expect(screen.getAllByTestId("native-agent")[0]!.getAttribute("data-owns-shortcuts")).toBe(
+        "true",
+      ),
+    );
+    expect(
+      focusedCoordinatorConversationId(useCoordinatorPaneLayoutStore.getState().layouts[0]!.layout),
+    ).toBe("conversation-1");
+    expect(select).toHaveBeenCalledTimes(2);
+  });
+
+  test("focus entry and stopped pointer bubbling transfer shortcut ownership", async () => {
+    setupGroups();
+    select.mockImplementationOnce(async () => {
+      ensuredSnapshot = {
+        ...ensuredSnapshot,
+        workspace: { ...ensuredSnapshot.workspace, selectedConversationId: "side-1" },
+      };
+      return ensuredSnapshot;
+    });
+    render(<CoordinatorPanel projectId="project-1" />);
+    await waitFor(() => expect(screen.getAllByTestId("native-agent")).toHaveLength(2));
+    const agents = screen.getAllByTestId("native-agent");
+    fireEvent.focusIn(agents[1]!, { relatedTarget: agents[0] });
+    await waitFor(() => expect(select).toHaveBeenCalledWith("project-1", "side-1"));
+    expect(agents[1]!.getAttribute("data-owns-shortcuts")).toBe("true");
+    const stop = (event: Event) => event.stopPropagation();
+    agents[0]!.addEventListener("pointerdown", stop);
+    fireEvent.pointerDown(agents[0]!);
+    await waitFor(() => expect(select).toHaveBeenLastCalledWith("project-1", "conversation-1"));
+    expect(agents[0]!.getAttribute("data-owns-shortcuts")).toBe("true");
+    agents[0]!.removeEventListener("pointerdown", stop);
+  });
+
+  test.each(["split", "move"])(
+    "a drag %s selects its newly focused conversation",
+    async (action) => {
+      const layout = setupGroups();
+      let changeLayout!: Parameters<typeof paneTree.CoordinatorPaneTree>[0]["onLayoutChange"];
+      const original = paneTree.CoordinatorPaneTree;
+      const treeSpy = spyOn(paneTree, "CoordinatorPaneTree").mockImplementation((props) => {
+        changeLayout = props.onLayoutChange;
+        return original(props);
+      });
+      try {
+        select.mockImplementationOnce(async () => ({
+          ...ensuredSnapshot,
+          workspace: { ...ensuredSnapshot.workspace, selectedConversationId: "side-2" },
+        }));
+        render(<CoordinatorPanel projectId="project-1" />);
+        await waitFor(() => expect(screen.getAllByTestId("native-agent")).toHaveLength(2));
+        const [left, right] = collectCoordinatorLeaves(layout.root);
+        act(() =>
+          changeLayout((current) =>
+            action === "split"
+              ? splitCoordinatorPaneAtEdge(current, left!.id, "bottom", "side-2", left!.id)
+              : moveCoordinatorConversation(current, left!.id, right!.id, "side-2"),
+          ),
+        );
+        await waitFor(() => expect(select).toHaveBeenCalledWith("project-1", "side-2"));
+        expect(
+          focusedCoordinatorConversationId(
+            useCoordinatorPaneLayoutStore.getState().layouts[0]!.layout,
+          ),
+        ).toBe("side-2");
+      } finally {
+        treeSpy.mockRestore();
+      }
+    },
+  );
+
+  test("New side agent from a non-focused group places and focuses the created conversation there", async () => {
+    const layout = setupGroups();
+    const beforeCreate = ensuredSnapshot;
+    let resolveFocus!: (value: CoordinatorSnapshot) => void;
+    select.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFocus = resolve;
+        }),
+    );
+    select.mockImplementationOnce(async () => ensuredSnapshot);
+    const [, right] = collectCoordinatorLeaves(layout.root);
+    const created = {
+      ...ensuredSnapshot.workspace.conversations[1]!,
+      id: "side-3",
+      tabId: "side-tab-3",
+      title: "Side 3",
+      sideOrdinal: 3,
+    };
+    createConversation.mockImplementationOnce(async () => {
+      ensuredSnapshot = {
+        ...ensuredSnapshot,
+        workspace: {
+          ...ensuredSnapshot.workspace,
+          conversations: [...ensuredSnapshot.workspace.conversations, created],
+          selectedConversationId: created.id,
+        },
+      };
+      return ensuredSnapshot;
+    });
+    render(<CoordinatorPanel projectId="project-1" />);
+    await waitFor(() => expect(screen.getAllByTestId("native-agent")).toHaveLength(2));
+    const sidePane = screen.getAllByTestId("native-agent")[1]!.closest("[data-coordinator-pane]")!;
+    const newButton = Array.from(sidePane.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("New side agent"),
+    )!;
+    fireEvent.pointerDown(newButton);
+    fireEvent.click(newButton);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Side 3, Codex" })).toBeTruthy());
+    await act(async () => {
+      resolveFocus({
+        ...beforeCreate,
+        workspace: { ...beforeCreate.workspace, selectedConversationId: "side-1" },
+      });
+    });
+    await waitFor(() => expect(select).toHaveBeenLastCalledWith("project-1", "side-3"));
+    await waitFor(() =>
+      expect(
+        focusedCoordinatorConversationId(
+          useCoordinatorPaneLayoutStore.getState().layouts[0]!.layout,
+        ),
+      ).toBe("side-3"),
+    );
+    const stored = useCoordinatorPaneLayoutStore.getState().layouts[0]!.layout;
+    expect(stored.activePaneId).toBe(right!.id);
+    expect(collectCoordinatorLeaves(stored.root)[1]!.conversationIds).toEqual(["side-1", "side-3"]);
+    expect(focusedCoordinatorConversationId(stored)).toBe("side-3");
   });
 
   test("closing the only tab of a split group collapses the group", async () => {

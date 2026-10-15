@@ -293,6 +293,10 @@ function PaneLeafView({ pane }: { pane: CoordinatorPaneLeaf }) {
         // once there is more than one.
         isSplit && isFocused && "ring-1 ring-primary/20",
       )}
+      onPointerDownCapture={() => onFocusPane(pane.id)}
+      onFocusCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) onFocusPane(pane.id);
+      }}
       onClick={() => onFocusPane(pane.id)}
     >
       <div
@@ -320,13 +324,14 @@ export function SortableCoordinatorTab({
   style,
   ...shell
 }: ComponentProps<typeof TabShell> & { conversationId: string; paneId: string }) {
-  const { setNodeRef, listeners, transform, transition, isDragging } = useSortable({
+  const { setNodeRef, attributes, listeners, transform, transition, isDragging } = useSortable({
     id: createDraggableTabId(conversationId, paneId),
   });
   return (
     <TabShell
       ref={setNodeRef}
       style={{ ...style, transform: CSS.Transform.toString(transform), transition }}
+      {...attributes}
       {...listeners}
       className={cn(
         "cursor-grab active:cursor-grabbing",

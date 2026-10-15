@@ -21,7 +21,7 @@ type TestTerminalOutputSnapshot = Omit<realBackend.TerminalOutputSnapshot, "trun
 };
 
 const getTerminalSessionMock = mock(
-  async (_sessionId: string): Promise<realBackend.TerminalSessionStatus> => ({
+  async (_sessionId: string): Promise<realBackend.TerminalSessionStatus | null> => ({
     id: "session-old",
     running: true,
   }),
@@ -169,6 +169,30 @@ describe("useTerminal reconnect behavior", () => {
   afterEach(() => {
     cleanup();
   });
+
+  // Browser SSE reopen and WebSocket snapshot-required/desync all arrive
+  // through the output listener, without an app-wide connected notification.
+  const recoveryEvents = [
+    NATIVE_EVENT_STREAM_CONNECTED_EVENT,
+    TERMINAL_EVENT_STREAM_CONNECTED_EVENT,
+    "terminal-output-session-old",
+  ];
+  function captureRecovery(eventName: string): () => void {
+    let recover: (() => void) | undefined;
+    listenMock.mockImplementation(async (event, handler) => {
+      if (event === eventName) {
+        recover = () =>
+          handler({
+            payload: event.startsWith("terminal-output-") ? { desynced: true } : undefined,
+          });
+      }
+      return unlistenMock;
+    });
+    return () => {
+      expect(recover).toBeDefined();
+      recover!();
+    };
+  }
 
   it("reconnects to a running existing local terminal session without restarting it", async () => {
     getTerminalSessionMock.mockResolvedValue({ id: "session-old", running: true });
@@ -1008,81 +1032,196 @@ describe("useTerminal reconnect behavior", () => {
     expect(received).toEqual([]);
   });
 
-  it("drops a connection whose session stopped while the stream was down, so a reconnect replaces it", async () => {
-    let reconnectHandler: (() => void) | undefined;
-    listenMock.mockImplementation(async (event, handler) => {
-      if (event === TERMINAL_EVENT_STREAM_CONNECTED_EVENT) {
-        reconnectHandler = () => handler({ payload: undefined });
+  for (const recoveryEvent of recoveryEvents) {
+    for (const isLocal of [true, false]) {
+      it(`releases a stopped ${isLocal ? "local" : "container"} session on ${recoveryEvent}`, async () => {
+        const recover = captureRecovery(recoveryEvent);
+        const { result } = renderHook(() =>
+          useTerminal({
+            containerId: isLocal ? null : "container-1",
+            environmentId: "env-1",
+            isLocal,
+            existingSessionId: "session-old",
+            persistSession: true,
+            replayOutputBuffer: true,
+          }),
+        );
+        await act(async () => {
+          await result.current.connect();
+        });
+        act(() => {
+          result.current.markBootstrapped("session-old");
+        });
+        expect(result.current.isConnected).toBe(true);
+        expect(result.current.bootstrapped).toBe(true);
+
+        getTerminalSessionMock.mockResolvedValue({ id: "session-old", running: false });
+        await act(async () => {
+          recover();
+        });
+
+        expect(result.current.isConnected).toBe(false);
+        expect(result.current.isConnecting).toBe(false);
+        expect(result.current.sessionId).toBeNull();
+        expect(result.current.bootstrapped).toBe(false);
+        expect(unlistenMock).toHaveBeenCalled();
+        expect(closeLocalTerminalSessionMock).not.toHaveBeenCalled();
+        expect(detachTerminalMock).not.toHaveBeenCalled();
+
+        await act(async () => {
+          await result.current.connect();
+        });
+        const replacement = isLocal ? "session-new-local" : "session-new-container";
+        expect(
+          isLocal ? createLocalTerminalSessionMock : createTerminalSessionMock,
+        ).toHaveBeenCalledTimes(1);
+        expect(
+          isLocal ? startLocalTerminalSessionMock : startTerminalSessionMock,
+        ).toHaveBeenCalledWith(replacement);
+        expect(result.current.sessionId).toBe(replacement);
+        expect(result.current.isConnected).toBe(true);
+      });
+    }
+
+    for (const status of ["running", "null", "rejected", "different-session"] as const) {
+      it(`retains the attachment for a ${status} liveness response on ${recoveryEvent}`, async () => {
+        const recover = captureRecovery(recoveryEvent);
+        const { result } = renderHook(() =>
+          useTerminal({
+            containerId: null,
+            environmentId: "env-1",
+            isLocal: true,
+            existingSessionId: "session-old",
+            persistSession: true,
+            replayOutputBuffer: true,
+          }),
+        );
+        await act(async () => {
+          await result.current.connect();
+        });
+        getTerminalSessionMock.mockClear();
+        if (status === "rejected")
+          getTerminalSessionMock.mockRejectedValue(new Error("unavailable"));
+        else
+          getTerminalSessionMock.mockResolvedValue(
+            status === "null"
+              ? null
+              : {
+                  id: status === "different-session" ? "another-session" : "session-old",
+                  running: status === "running",
+                },
+          );
+        await act(async () => {
+          recover();
+        });
+        expect(getTerminalSessionMock).toHaveBeenCalledTimes(1);
+        expect(getTerminalSessionMock).toHaveBeenCalledWith("session-old");
+        expect(result.current.isConnected).toBe(true);
+        expect(result.current.sessionId).toBe("session-old");
+        expect(result.current.error).toBeNull();
+        expect(createLocalTerminalSessionMock).not.toHaveBeenCalled();
+        expect(closeLocalTerminalSessionMock).not.toHaveBeenCalled();
+        expect(unlistenMock).not.toHaveBeenCalled();
+        expect(getTerminalOutputSnapshotMock).toHaveBeenCalledTimes(2);
+      });
+    }
+
+    it(`keeps backend-owned attach-only sessions on ${recoveryEvent}`, async () => {
+      const recover = captureRecovery(recoveryEvent);
+      const { result } = renderHook(() =>
+        useTerminal({
+          containerId: null,
+          environmentId: "env-1",
+          isLocal: true,
+          existingSessionId: "session-old",
+          attachExistingOnly: true,
+          persistSession: true,
+          replayOutputBuffer: true,
+        }),
+      );
+      await act(async () => {
+        await result.current.connect();
+      });
+      getTerminalSessionMock.mockClear();
+      getTerminalSessionMock.mockResolvedValue({ id: "session-old", running: false });
+      await act(async () => {
+        recover();
+      });
+      expect(getTerminalOutputSnapshotMock).toHaveBeenCalledTimes(2);
+      expect(getTerminalSessionMock).not.toHaveBeenCalled();
+      expect(result.current.isConnected).toBe(true);
+      expect(result.current.sessionId).toBe("session-old");
+      expect(createLocalTerminalSessionMock).not.toHaveBeenCalled();
+    });
+  }
+
+  for (const change of ["unmount", "session", "target", "reconnect"] as const) {
+    it(`ignores a late stopped-session probe after ${change}`, async () => {
+      const recover = captureRecovery("terminal-output-session-old");
+      let resolveStatus!: (status: realBackend.TerminalSessionStatus) => void;
+      const pendingStatus = new Promise<realBackend.TerminalSessionStatus>((resolve) => {
+        resolveStatus = resolve;
+      });
+      const { result, rerender, unmount } = renderHook(
+        ({ environmentId, existingSessionId }) =>
+          useTerminal({
+            containerId: null,
+            environmentId,
+            isLocal: true,
+            existingSessionId,
+            persistSession: true,
+            replayOutputBuffer: true,
+          }),
+        { initialProps: { environmentId: "env-1", existingSessionId: "session-old" } },
+      );
+      await act(async () => {
+        await result.current.connect();
+      });
+      getTerminalSessionMock.mockImplementationOnce(() => pendingStatus);
+      await act(async () => {
+        recover();
+      });
+      expect(getTerminalSessionMock).toHaveBeenCalledTimes(2);
+      if (change === "unmount") {
+        unmount();
+      } else {
+        if (change === "reconnect") {
+          // Reattach the same id: checking only the session id cannot fence the
+          // previous generation's result.
+          await act(async () => {
+            await result.current.reconnect();
+          });
+        } else {
+          rerender({
+            environmentId: change === "target" ? "env-2" : "env-1",
+            existingSessionId: change === "session" ? "session-successor" : "session-old",
+          });
+          await act(async () => {
+            await result.current.connect();
+          });
+        }
+        expect(result.current.isConnected).toBe(true);
       }
-      return unlistenMock;
-    });
-
-    const { result } = renderHook(() =>
-      useTerminal({
-        containerId: null,
-        environmentId: "env-1",
-        isLocal: true,
-        existingSessionId: "session-old",
-        persistSession: true,
-        replayOutputBuffer: true,
-      }),
-    );
-    await act(async () => {
-      await result.current.connect();
-    });
-    expect(result.current.isConnected).toBe(true);
-    expect(result.current.sessionId).toBe("session-old");
-
-    // The backend restarted: the stream comes back, the PTY did not.
-    getTerminalSessionMock.mockResolvedValue({ id: "session-old", running: false });
-    act(() => reconnectHandler?.());
-
-    await waitFor(() => expect(result.current.isConnected).toBe(false));
-    expect(result.current.sessionId).toBeNull();
-    // Dropping a dead connection never closes the session it pointed at.
-    expect(closeLocalTerminalSessionMock).not.toHaveBeenCalled();
-
-    await act(async () => {
-      await result.current.connect();
-    });
-    expect(createLocalTerminalSessionMock).toHaveBeenCalledTimes(1);
-    expect(startLocalTerminalSessionMock).toHaveBeenCalledWith("session-new-local");
-    expect(result.current.sessionId).toBe("session-new-local");
-    expect(result.current.isConnected).toBe(true);
-  });
-
-  it("keeps an attach-only connection when the stream reconnects", async () => {
-    let reconnectHandler: (() => void) | undefined;
-    listenMock.mockImplementation(async (event, handler) => {
-      if (event === TERMINAL_EVENT_STREAM_CONNECTED_EVENT) {
-        reconnectHandler = () => handler({ payload: undefined });
+      const successor = result.current.sessionId;
+      const disposalsBeforeResult = unlistenMock.mock.calls.length;
+      const closesBeforeResult = closeLocalTerminalSessionMock.mock.calls.length;
+      await act(async () => {
+        resolveStatus({ id: "session-old", running: false });
+        await pendingStatus;
+      });
+      expect(unlistenMock).toHaveBeenCalledTimes(disposalsBeforeResult);
+      expect(closeLocalTerminalSessionMock).toHaveBeenCalledTimes(closesBeforeResult);
+      expect(detachTerminalMock).not.toHaveBeenCalled();
+      expect(result.current.sessionId).toBe(successor);
+      if (change !== "unmount") {
+        expect(result.current.isConnected).toBe(true);
+        await act(async () => {
+          await result.current.write("healthy");
+        });
+        expect(writeLocalTerminalMock).toHaveBeenLastCalledWith(successor, "healthy");
       }
-      return unlistenMock;
     });
-
-    const { result } = renderHook(() =>
-      useTerminal({
-        containerId: null,
-        environmentId: "env-1",
-        isLocal: true,
-        existingSessionId: "env-1:setup",
-        attachExistingOnly: true,
-        persistSession: true,
-        replayOutputBuffer: true,
-      }),
-    );
-    await act(async () => {
-      await result.current.connect();
-    });
-    getTerminalSessionMock.mockClear();
-    getTerminalSessionMock.mockResolvedValue({ id: "env-1:setup", running: false });
-    act(() => reconnectHandler?.());
-
-    await waitFor(() => expect(getTerminalOutputSnapshotMock).toHaveBeenCalledTimes(2));
-    expect(getTerminalSessionMock).not.toHaveBeenCalled();
-    expect(result.current.isConnected).toBe(true);
-    expect(result.current.sessionId).toBe("env-1:setup");
-  });
+  }
 
   it("replaces the view when a live event belongs to a new output generation", async () => {
     let outputHandler:

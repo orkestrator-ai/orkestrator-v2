@@ -49,3 +49,27 @@ The isolated owning-file failure means this recurrence is still reproducible;
 this validation does not establish a new flaky classification or resolve the
 existing hypothesis. The mail changes do not alter the tools popover or project
 selection. No assertions were skipped or weakened.
+
+## Terminal transport recovery revalidation (2026-10-15)
+
+The same hidden "Repository settings" button recurred while validating terminal
+transport recovery on branch `terminal-input-issue-ccc06ff4761a-r1`:
+
+- `mise run test:logged -- --name browser-recovery -- mise run test:agent:browser:isolated`
+  on fixture profile `qa-browser-3a4ddc8d-34b`: 24 passed, 14 skipped, 1 failed
+  at the existing narrow host-picker click. Both new terminal-only SSE and
+  WebSocket recovery cases passed, including automatic shell replacement,
+  inactive-environment output and reload. Failure log:
+  `/tmp/orkestrator-test-run.I32g1i/browser-recovery.log.gz`.
+- The terminal owning file separately passed all three cases on credential-free
+  fixture profile `qa-terminal-review-1015` using
+  `ORKESTRATOR_AGENT_TEST_PROFILE=qa-terminal-review-1015 ORKESTRATOR_AGENT_TEST_RUN_ID=qa-terminal-review-1015-terminal-final mise run test:logged -- --name terminal-browser-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/terminal-input-resume.spec.ts --workers=1`.
+
+- The full unchanged browser-gateway owning file passed alone: 11 passed,
+  5 opt-in skips, including the narrow host-picker case, using
+  `ORKESTRATOR_AGENT_TEST_PROFILE=qa-terminal-review-1015 ORKESTRATOR_AGENT_TEST_RUN_ID=qa-terminal-review-1015-gateway mise run test:logged -- --name browser-gateway-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1`.
+  Sanitized browser evidence is under
+  `output/agent-testing/qa-terminal-review-1015-gateway/browser/`.
+
+The terminal changes do not modify project selection or the tools popover.
+No existing assertions were skipped or weakened.

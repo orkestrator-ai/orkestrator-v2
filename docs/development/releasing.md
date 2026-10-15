@@ -108,7 +108,7 @@ dispatched with **force**. For a new build it:
    | `APPLE_API_KEY_ID` | The key's id |
    | `APPLE_API_ISSUER` | The issuer id |
    | `NPM_TOKEN` | A granular npm token that can publish `orkestrator` |
-   | `ORKESTRATOR_RELEASE_SIGNING_KEY` | The **active** manifest signing key (see [Manifest signing keys](#manifest-signing-keys)). Required once `release-signing-keys.ts` lists keys |
+   | `ORKESTRATOR_RELEASE_SIGNING_KEY` | The **active** manifest signing key (see [Manifest signing keys](#manifest-signing-keys)). Required: every release must be signed |
 
 3. If a tag ruleset protects `v*`, let GitHub Actions create and delete
    `v*-unstable.*` tags.
@@ -127,10 +127,15 @@ access to GitHub releases from swapping them. Two keys exist:
 - the **standby** key signs nothing. It is kept offline only (the password
   manager, plus an encrypted backup), never in CI.
 
-Turning signing on, once:
+Signing is on: both keys were generated on 2026-10-16, and their public keys
+are listed in `packages/protocol/src/release-signing-keys.ts`, active first.
+Before the first release that contains them, the active key must be the
+`ORKESTRATOR_RELEASE_SIGNING_KEY` secret.
 
-1. Generate both keys on a maintainer machine. Each command writes an
-   owner-only PEM (it refuses to overwrite one) and prints the public key:
+How the keys were made, and how to make replacements:
+
+1. Generate the keys on a maintainer machine. Each command writes an owner-only
+   PEM (it refuses to overwrite one) and prints the public key:
 
    ```bash
    bun scripts/release-requirements.ts keygen --out ~/orkestrator-release-active.pem
@@ -143,7 +148,7 @@ Turning signing on, once:
 3. List both printed public keys, active first, in
    `packages/protocol/src/release-signing-keys.ts`, and merge that change.
 
-From the first release that embeds them, every later release must be signed:
+From the first release that embeds the keys, every later release must be signed:
 installs reject a manifest without a valid signature from a listed key.
 `release:desktop` refuses to start a publishing build without
 `ORKESTRATOR_RELEASE_SIGNING_KEY`, and checks that the key is one the build

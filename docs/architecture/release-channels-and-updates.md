@@ -317,10 +317,9 @@ manifest cannot drift from the code:
   - When the build embeds at least one key, a valid signature is **required**.
     Accepting an unsigned manifest would let anyone who can strip the file
     bypass the check.
-  - Until the keys are generated and listed, the list is empty, which means
-    checksum-only mode. Turning signing on is a one-way door: from then on
-    every release must be signed, and `release:desktop` refuses to publish
-    without the key.
+  - Both keys were generated on 2026-10-16 and are listed. That is a one-way
+    door: from the first release that ships them, every release must be
+    signed, and `release:desktop` refuses to publish without the key.
   - Generation, custody, rotation and loss recovery are in
     [releasing.md](../development/releasing.md#manifest-signing-keys).
     electron-builder 27's mandatory signed update manifests

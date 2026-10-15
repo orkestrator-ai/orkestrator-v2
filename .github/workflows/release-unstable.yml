@@ -11,8 +11,7 @@ name: Release unstable
 #   MAC_CERTIFICATE_P12_BASE64, MAC_CERTIFICATE_PASSWORD  Developer ID Application
 #   APPLE_API_KEY_P8, APPLE_API_KEY_ID, APPLE_API_ISSUER   notarization
 #   NPM_TOKEN                                               npm publish (unstable tag)
-#   ORKESTRATOR_RELEASE_SIGNING_KEY                         manifest signature (required once
-#                                                           release-signing-keys.ts lists keys)
+#   ORKESTRATOR_RELEASE_SIGNING_KEY                         manifest signature (required)
 
 on:
   schedule:

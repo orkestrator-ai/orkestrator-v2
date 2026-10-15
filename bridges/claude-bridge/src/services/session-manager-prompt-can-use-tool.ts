@@ -1,4 +1,5 @@
 import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
+import { InteractionDeadline } from "@orkestrator/protocol/agent-interaction-deadline";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 import type { PlanApprovalRequest, QuestionInfo, QuestionRequest } from "../types/index.js";
 import {
@@ -20,6 +21,10 @@ import {
   questionResolvers,
 } from "./session-manager-core.js";
 import { canAdmitInteraction } from "./session-manager-interaction-budget.js";
+import {
+  interactionExpiryMessage,
+  registerInteractionDeadline,
+} from "./session-manager-interaction-holds.js";
 import { claudeWorkflowResultTools } from "./claude-workflow-result-tools.js";
 import { abortSession } from "./session-manager-lifecycle.js";
 import { requestClaudeToolApproval } from "./session-manager-parked-interactions.js";
@@ -60,12 +65,14 @@ export async function turnCanUseTool(
     // The SDK request id survives transport reinitialization. Reusing it
     // keeps a redelivered question attached to the same UI interaction.
     const questionId = permissionContext?.requestId || generateMessageId();
+    const requestedAt = Date.now();
     const questionRequest: QuestionRequest = {
       id: questionId,
       sessionId,
       questions,
       toolUseId: permissionContext?.toolUseID ?? questionId,
-      expiresAt: Date.now() + QUESTION_TIMEOUT_MS,
+      requestedAt,
+      expiresAt: requestedAt + QUESTION_TIMEOUT_MS,
     };
 
     if (!canAdmitInteraction(questionRequest, "questions")) {
@@ -74,6 +81,19 @@ export async function turnCanUseTool(
         message: "Too many pending interactions. Answer an existing request first.",
       };
     }
+    // The deadline the user may pause. Registered before the question is
+    // announced, so the first read already carries its hold state.
+    let rejectOnExpiry!: (error: Error) => void;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      rejectOnExpiry = reject;
+    });
+    const deadline: InteractionDeadline = new InteractionDeadline({
+      requestedAt,
+      windowMs: QUESTION_TIMEOUT_MS,
+      onExpire: () => rejectOnExpiry(new Error(interactionExpiryMessage("Question", deadline))),
+    });
+    const releaseDeadline = registerInteractionDeadline("questions", questionRequest, deadline);
+
     // Store the question
     pendingQuestions.set(questionId, questionRequest);
 
@@ -87,13 +107,6 @@ export async function turnCanUseTool(
     // Wait for answer with a Promise that can be resolved externally
     const answerPromise = new Promise<Record<string, string>>((resolve, reject) => {
       questionResolvers.set(questionId, { resolve, reject });
-    });
-
-    let questionTimeoutId: ReturnType<typeof setTimeout> | undefined;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      questionTimeoutId = setTimeout(() => {
-        reject(new Error("Question timed out after 5 minutes"));
-      }, QUESTION_TIMEOUT_MS);
     });
 
     try {
@@ -124,7 +137,7 @@ export async function turnCanUseTool(
       return { behavior: "deny" as const, message };
     } finally {
       // Cleanup
-      if (questionTimeoutId) clearTimeout(questionTimeoutId);
+      releaseDeadline();
       pendingQuestions.delete(questionId);
       questionResolvers.delete(questionId);
     }
@@ -175,12 +188,14 @@ export async function turnCanUseTool(
     // semantics and could drift from the bytes Claude actually asks
     // the user to approve.
     const directPlan = boundedPlan(input?.plan);
+    const requestedAt = Date.now();
     const approvalRequest: PlanApprovalRequest = {
       id: approvalId,
       sessionId,
       toolUseId: permissionContext?.toolUseID ?? approvalId,
       ...directPlan,
-      expiresAt: Date.now() + PLAN_APPROVAL_TIMEOUT_MS,
+      requestedAt,
+      expiresAt: requestedAt + PLAN_APPROVAL_TIMEOUT_MS,
     };
 
     if (!canAdmitInteraction(approvalRequest, "approvals")) {
@@ -189,6 +204,22 @@ export async function turnCanUseTool(
         message: "Too many pending interactions. Answer an existing request first.",
       };
     }
+    let rejectOnExpiry!: (error: Error) => void;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      rejectOnExpiry = reject;
+    });
+    const deadline: InteractionDeadline = new InteractionDeadline({
+      requestedAt,
+      windowMs: PLAN_APPROVAL_TIMEOUT_MS,
+      onExpire: () =>
+        rejectOnExpiry(new Error(interactionExpiryMessage("Plan approval", deadline))),
+    });
+    const releaseDeadline = registerInteractionDeadline(
+      "plan-approvals",
+      approvalRequest,
+      deadline,
+    );
+
     // Store the approval request and set up the resolver BEFORE emitting,
     // so an instant response from the UI can never find a missing resolver.
     pendingPlanApprovals.set(approvalId, approvalRequest);
@@ -202,13 +233,6 @@ export async function turnCanUseTool(
       type: "plan.approval-requested",
       sessionId,
       data: approvalRequest,
-    });
-
-    let approvalTimeoutId: ReturnType<typeof setTimeout> | undefined;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      approvalTimeoutId = setTimeout(() => {
-        reject(new Error("Plan approval timed out after 5 minutes"));
-      }, PLAN_APPROVAL_TIMEOUT_MS);
     });
 
     try {
@@ -303,7 +327,7 @@ export async function turnCanUseTool(
       return { behavior: "deny" as const, message: errorMessage };
     } finally {
       // Cleanup
-      if (approvalTimeoutId) clearTimeout(approvalTimeoutId);
+      releaseDeadline();
       pendingPlanApprovals.delete(approvalId);
       planApprovalResolvers.delete(approvalId);
     }

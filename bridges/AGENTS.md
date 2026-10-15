@@ -108,6 +108,27 @@ When touching any of them:
   teardown is serialized per (environment, agent, provider session) and only
   the tab that finds no other mapping performs the provider close.
 
+## Interaction deadlines and pauses
+
+Every parked question, approval and elicitation runs on an
+`InteractionDeadline` (`packages/protocol/src/agent-interaction-deadline.ts`),
+never a bare `setTimeout`. When touching one:
+
+- **A pause only moves the deadline.** `POST /session/:id/{family}/:requestId/hold`
+  with `{ held }` re-arms it at the hold ceiling (or the provider's own sooner
+  limit) and a resume restarts a fresh window. Expiry still declines, denies
+  or cancels; a hold never answers anything.
+- **Always publish a deadline and the `hold` beside it.** A paused request
+  carries its ceiling as `expiresAt`; older backends drop a request without
+  one. Pass any limit the provider enforces itself (`providerLimitAt`) so the
+  card says when the pause still ends.
+- **Answer a missing request in band.** 409 `stale` for a request that is no
+  longer pending, 422 `unavailable` when there is no room to extend. The
+  backend only calls the route for a request whose published `hold` says it
+  can, so it never probes an older bridge; it reads a 404 there as stale.
+- **Never persist a deadline.** It holds a live timer; parked requests do not
+  survive a bridge restart, and neither does their pause.
+
 ## Native slash commands
 
 The contract is [`docs/architecture/native-agent-commands.md`](../docs/architecture/native-agent-commands.md).

@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
-import { chromium, type Browser } from "playwright-core";
+import { chromium, errors, type Browser } from "playwright-core";
 import { DesignError } from "./errors.js";
 import { DesignRenderQueue } from "./render-queue.js";
 import {
@@ -666,12 +666,68 @@ describe("DesignRenderer health", () => {
 });
 
 const realChromium = resolveDesignChromiumPath();
-// This case proves script blocking and capture, not launch speed; the fake
-// launchers above own the production launch deadline. A first Chromium start
-// on a loaded four-core CI runner has exceeded that deadline (flake 0244).
+// The functional case proves script blocking and capture independently of
+// cold-start speed. The first real-browser case exercises the production budget.
 const REAL_CHROMIUM_LAUNCH_MS = 45_000;
 
 describe("DesignRenderer with real Chromium", () => {
+  test.skipIf(!realChromium)(
+    "uses the production launch budget and reports cold-start timeouts",
+    async () => {
+      let launchOutcome: Promise<unknown> | undefined;
+      let launchTimeout: number | undefined;
+      const instance = new DesignRenderer({
+        launchBrowser: (options) => {
+          launchTimeout = options?.timeout;
+          const browser = chromium.launch(options);
+          launchOutcome = browser.then(
+            () => undefined,
+            (error: unknown) => error,
+          );
+          return browser;
+        },
+      });
+      renderers.push(instance);
+      const started = performance.now();
+      const outcome = await instance.run<string>(job()).then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      expect(launchTimeout).toBe(DEFAULT_DESIGN_RENDER_BUDGETS.launchMs);
+      if (outcome.ok) {
+        expect(outcome.value).toContain("Hello");
+        expect(instance.status()).toMatchObject({ state: "ready", ready: true });
+        return;
+      }
+
+      // A slow cold start is a supported production failure, not a render
+      // success. Only a launch deadline is acceptable here; installation,
+      // context creation and runtime failures must still fail the test.
+      const launchError = await Promise.race([
+        launchOutcome,
+        Bun.sleep(1_000).then(() => undefined),
+      ]);
+      if (launchError !== undefined && !(launchError instanceof errors.TimeoutError))
+        throw launchError;
+      expect(outcome.error).toBeInstanceOf(DesignError);
+      expect((outcome.error as DesignError).code).toBe("renderer-unavailable");
+      if ((outcome.error as Error).message !== "Design renderer did not start in time")
+        expect(launchError).toBeInstanceOf(errors.TimeoutError);
+      // Timers use millisecond resolution; tolerate only rounding at the boundary.
+      expect(performance.now() - started).toBeGreaterThanOrEqual(
+        DEFAULT_DESIGN_RENDER_BUDGETS.launchMs - 1,
+      );
+      expect(instance.status()).toMatchObject({
+        state: "launch-failed",
+        ready: false,
+        queued: 0,
+        running: 0,
+      });
+      console.warn(`[real Chromium] production launch timed out after ${launchTimeout} ms (0244)`);
+    },
+    DEFAULT_DESIGN_RENDER_BUDGETS.overallMs + 5_000,
+  );
+
   test.skipIf(!realChromium)(
     "blocks authored scripts and remote images while capturing a PNG",
     async () => {

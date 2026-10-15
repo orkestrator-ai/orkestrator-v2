@@ -28,7 +28,10 @@ reliably green on `main`, and nothing requires it to be.
   failures, now addressed:
   - **Real-Chromium design renderer** (flake 0244, open): the launch missed
     its 15 s deadline on three of the four runs. The case now allows 45 s and
-    prints Playwright's launch log on failure. The cause is unconfirmed.
+    prints Playwright's launch log on failure. A separate real-browser case
+    uses the production 15 s budget and checks successful rendering or the
+    bounded startup failure state; timeout warnings still require follow-up.
+    The cause is unconfirmed.
   - **`environment cleanup steps`, the two container cases** (one run): the
     ownership probe before `docker rm` called the runner's real Docker, so an
     unreachable daemon, or `c1` prefixing another object, refused before the
@@ -114,7 +117,8 @@ reliably green on `main`, and nothing requires it to be.
    then check it with `gh api repos/{owner}/{repo}/rulesets`. If a run fails
    first, fix or register the failure and restart the count; the 0244 launch
    log says why the real-Chromium case failed. The maintainer approved this
-   ruleset on 2026-10-15:
+   ruleset on 2026-10-15. Track production-budget timeout warnings separately;
+   green functional runs alone do not resolve flake 0244:
 
    ```json
    {

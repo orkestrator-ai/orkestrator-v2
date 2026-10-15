@@ -46,8 +46,8 @@ containers at the time.
 ## Change (2026-10-15)
 
 The case proves script blocking, blocked remote images and PNG capture in a
-real browser, not launch speed. The production launch deadline is covered by
-the fake-launcher cases in the same file. So the case now:
+real browser, not launch speed. The fake-launcher cases cover deterministic
+deadline, cleanup and recovery behavior. The functional case now:
 
 - gives its renderer a 45 s launch budget (`REAL_CHROMIUM_LAUNCH_MS`), and the
   overall budget extended by the same amount. The production defaults
@@ -57,9 +57,25 @@ the fake-launcher cases in the same file. So the case now:
   Playwright's call log and the browser's stderr. A forced hang with a fake
   executable printed the `<launching>` line and the browser's stderr.
 
+A separate real-Chromium case runs first, without budget overrides, so a cold
+browser still exercises the production 15 s launch budget. It asserts either
+a successful render and ready state, or a launch timeout and an unavailable,
+empty renderer. Non-timeout Playwright errors and failures in context creation
+or rendering fail the test. A timeout emits a warning referencing this entry;
+it is accepted as the production failure contract, not evidence that cold
+startup meets the budget. This preserves the default-budget integration check
+without making the functional security/capture case depend on startup speed.
+
+Local verification on 2026-10-15: the owning file passed with real Chromium
+in 1.9 s. A temporary executable wrapper delaying startup by 20 s exercised
+the production-budget timeout branch; the focused case passed in 15.1 s.
+These checks do not reproduce or explain the GitHub runner's cold-start cause.
+
 ## To resolve
 
-Watch the next `main` runs. If the case passes three in a row, resolve this
-entry as a cold-start budget. If it fails, the printed launch log shows whether
-the browser hung or was only slow. Fix that cause rather than raising the
-budget further.
+Watch the next `main` runs, including warnings from the production-budget case.
+Passing the 45 s functional case alone does not qualify the production budget.
+Resolve this entry only after identifying the cold-start cause and observing
+three consecutive runs without a production-budget timeout. If the functional
+case fails, use its printed launch log to distinguish a hung browser from a
+slow start. Fix that cause rather than raising the budget further.

@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import type { ProviderRegistry } from "./native-agent-provider-registry.js";
 
 import { promises as fs } from "node:fs";
 
@@ -221,11 +222,9 @@ function internals(service: NativeAgentService) {
       model?: string,
       effort?: string,
     ): Promise<BridgeConnection>;
-    providers: Map<string, AgentSessionProvider>;
-    retiringProviders: Map<AgentSessionProvider, unknown>;
+    providerRegistry: ProviderRegistry;
     activityRetryAt: Map<string, number>;
     activityAttempts: Map<string, number>;
-    absentBridgeUntil: Map<string, number>;
     observedSessionActivity: Map<
       string,
       { providerSessionId: string; state: ProviderActivityState }
@@ -4217,7 +4216,7 @@ describe("NativeAgentService", () => {
             logicalSessionKey: `env-${environmentId}:tab-1`,
           });
         }
-        expect(internals(service).providers.size).toBe(3);
+        expect(internals(service).providerRegistry.stateForTesting().providers.size).toBe(3);
 
         await storage.updateEnvironment("env-2", {
           deletionRequestedAt: new Date().toISOString(),
@@ -4227,7 +4226,9 @@ describe("NativeAgentService", () => {
 
         // A cached provider for a departed environment holds its bridge
         // connection open for the life of the process.
-        expect([...internals(service).providers.keys()]).toEqual(["env-1\u0000codex"]);
+        expect([...internals(service).providerRegistry.stateForTesting().providers.keys()]).toEqual(
+          ["env-1\u0000codex"],
+        );
         expect(doomed.dispose).toHaveBeenCalledTimes(2);
         expect(alive.dispose).not.toHaveBeenCalled();
       } finally {
@@ -5186,11 +5187,11 @@ describe("NativeAgentService shared observations", () => {
 
         // A new bridge generation replaces the provider mid-read.
         current = second.provider;
-        (
-          service as unknown as {
-            cacheProvider(key: string, provider: NativeAgentRuntimeProvider, id?: string): void;
-          }
-        ).cacheProvider("env-1\u0000codex", second.provider, "bridge-generation-2");
+        internals(service).providerRegistry.cache(
+          "env-1\u0000codex",
+          second.provider,
+          "bridge-generation-2",
+        );
         late.resolve("idle");
         await sweep;
 
@@ -5233,7 +5234,7 @@ describe("NativeAgentService shared observations", () => {
         current = second.provider;
         await captureWarnings(() => service.reconcileAgentActivity());
         // Evicted, but its send is inside the at-most-once window.
-        expect(internals(service).providers.get("env-1\u0000codex")).toBeUndefined();
+        expect(internals(service).providerRegistry.cached("env-1\u0000codex")).toBeUndefined();
         await new Promise((resolve) => setTimeout(resolve, 5));
         expect(first.dispose).not.toHaveBeenCalled();
 
@@ -5264,10 +5265,14 @@ describe("NativeAgentService shared observations", () => {
       async ({ storage, service }) => {
         await adopt(storage, "tab-1", "provider-1");
         await captureWarnings(() => service.reconcileAgentActivity());
-        expect(internals(service).retiringProviders.has(stub.provider)).toBe(true);
+        expect(
+          internals(service).providerRegistry.stateForTesting().retiring.has(stub.provider),
+        ).toBe(true);
         fail = false;
         await internals(service).provider(TAB);
-        expect(internals(service).retiringProviders.has(stub.provider)).toBe(false);
+        expect(
+          internals(service).providerRegistry.stateForTesting().retiring.has(stub.provider),
+        ).toBe(false);
         expect(stub.dispose).not.toHaveBeenCalled();
       },
     );

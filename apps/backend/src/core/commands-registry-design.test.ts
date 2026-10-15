@@ -14,9 +14,9 @@ import type {
 } from "@orkestrator/protocol/design-operations";
 import { createCommandRegistry } from "./commands.js";
 import type { CommandContext } from "./commands-context.js";
-import { resolveDesignDestination } from "./design-exports.js";
-import { DesignService } from "./design-service.js";
-import { createTestRenderer, trackUnhandledRejections } from "./design-test-support.js";
+import { resolveDesignDestination } from "./design/exports.js";
+import { DesignService } from "./design/service.js";
+import { createTestRenderer, trackUnhandledRejections } from "./design/test-support.js";
 import { StorageService } from "./storage.js";
 
 const frame = {

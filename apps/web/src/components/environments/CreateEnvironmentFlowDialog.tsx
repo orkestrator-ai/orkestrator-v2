@@ -467,7 +467,7 @@ export function CreateEnvironmentFlowDialog({
         : "GitHub credentials could not be verified";
   const warningDescription =
     pendingCredentialWarning?.status?.source === "host-cli"
-      ? "Orkestrator could not read an active GitHub CLI login from the host running Orkestrator. Private repositories will not clone until you run gh auth login or switch to a personal access token in General Settings."
+      ? "Orkestrator could not read an active GitHub CLI login from the host running Orkestrator. Private repositories will not clone until you sign in to GitHub or switch to a personal access token under GitHub authentication in General Settings."
       : pendingCredentialWarning?.status?.source === "pat"
         ? "Personal access token mode is selected, but no token is stored. Private repositories will not clone until you add a token in General Settings or switch to host GitHub CLI credentials."
         : "Orkestrator could not confirm that GitHub credentials are available. Private repositories may fail to clone.";

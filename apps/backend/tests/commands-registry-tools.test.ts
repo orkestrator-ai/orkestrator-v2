@@ -922,6 +922,109 @@ exit 0
     }
   });
 
+  test("ignores host PATH installs that an agent-test profile did not provision", async () => {
+    const managedRoot = await createTempDir("ork-agent-test-cli-managed-");
+    const pathRoot = await createTempDir("ork-agent-test-cli-path-");
+    const { context } = createContext(createEnvironment());
+    context.appRoot = managedRoot;
+    context.resourceRoot = managedRoot;
+    context.toolchainBinDir = managedRoot;
+    context.runtimeFlavor = "agent-test";
+    const commands = createCommandRegistry();
+    const previousPath = process.env.PATH;
+
+    try {
+      for (const name of ["claude", "opencode", "codex", "pi"]) {
+        await fs.writeFile(path.join(pathRoot, name), "#!/bin/sh\nexit 0\n");
+        await fs.chmod(path.join(pathRoot, name), 0o755);
+      }
+      await fs.writeFile(path.join(managedRoot, "codex"), "managed codex");
+      process.env.PATH = `${pathRoot}:/usr/bin:/bin`;
+
+      await expect(commands.get("check_claude_cli")?.({}, context)).resolves.toBe(false);
+      await expect(commands.get("check_opencode_cli")?.({}, context)).resolves.toBe(false);
+      await expect(commands.get("check_pi_cli")?.({}, context)).resolves.toBe(false);
+      await expect(commands.get("check_codex_cli")?.({}, context)).resolves.toBe(true);
+      await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBe("codex");
+
+      await fs.rm(path.join(managedRoot, "codex"));
+      await expect(commands.get("check_any_ai_cli")?.({}, context)).resolves.toBe(false);
+      await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBeNull();
+
+      // Outside agent-test the same host install is a usable platform.
+      context.runtimeFlavor = "development";
+      await expect(commands.get("check_claude_cli")?.({}, context)).resolves.toBe(true);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+  });
+
+  test("finds the toolchain's gh, and only that one in agent-test profiles", async () => {
+    const managedRoot = await createTempDir("ork-github-cli-managed-");
+    const pathRoot = await createTempDir("ork-github-cli-path-");
+    const { context } = createContext(createEnvironment());
+    context.appRoot = managedRoot;
+    context.resourceRoot = managedRoot;
+    context.toolchainBinDir = managedRoot;
+    const commands = createCommandRegistry();
+    const previousPath = process.env.PATH;
+
+    try {
+      process.env.PATH = "";
+      await expect(commands.get("check_github_cli")?.({}, context)).resolves.toBe(false);
+      await fs.writeFile(path.join(managedRoot, "gh"), "managed gh");
+      await expect(commands.get("check_github_cli")?.({}, context)).resolves.toBe(true);
+
+      await fs.rm(path.join(managedRoot, "gh"));
+      await fs.writeFile(path.join(pathRoot, "gh"), "#!/bin/sh\nexit 0\n");
+      await fs.chmod(path.join(pathRoot, "gh"), 0o755);
+      process.env.PATH = `${pathRoot}:/usr/bin:/bin`;
+      await expect(commands.get("check_github_cli")?.({}, context)).resolves.toBe(true);
+      context.runtimeFlavor = "agent-test";
+      await expect(commands.get("check_github_cli")?.({}, context)).resolves.toBe(false);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+  });
+
+  test("reads the host Claude login when an agent-test profile may use it", async () => {
+    const hostHome = await createTempDir("ork-agent-test-claude-home-");
+    const configDir = await createTempDir("ork-agent-test-claude-config-");
+    const { context } = createContext(createEnvironment());
+    context.runtimeFlavor = "agent-test";
+    context.credentialSources = new Set(["claude"]);
+    const commands = createCommandRegistry();
+    const previousHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
+    const previousConfigDir = process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR;
+
+    try {
+      process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = hostHome;
+      process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR = configDir;
+      await expect(commands.get("check_claude_config")?.({}, context)).resolves.toBe(false);
+
+      // Claude keeps `.claude.json` in CLAUDE_CONFIG_DIR when it is set.
+      await fs.writeFile(path.join(configDir, ".claude.json"), "{}");
+      await expect(commands.get("check_claude_config")?.({}, context)).resolves.toBe(true);
+      await fs.rm(path.join(configDir, ".claude.json"));
+
+      await fs.writeFile(path.join(hostHome, ".claude.json"), "{}");
+      await expect(commands.get("check_claude_config")?.({}, context)).resolves.toBe(true);
+      await expect(commands.get("has_claude_credentials")?.({}, context)).resolves.toBe(true);
+
+      context.credentialSources = new Set(["codex"]);
+      expect(await commands.get("check_claude_config")?.({}, context)).toBe(false);
+      expect(await commands.get("has_claude_credentials")?.({}, context)).toBe(false);
+    } finally {
+      if (previousHome === undefined) delete process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
+      else process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = previousHome;
+      if (previousConfigDir === undefined)
+        delete process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR;
+      else process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR = previousConfigDir;
+    }
+  });
+
   test("checks the packaged Cursor bridge under resourceRoot in production", async () => {
     const appRoot = await createTempDir("ork-electron-app-root-");
     const resourceRoot = await createTempDir("ork-electron-resource-root-");

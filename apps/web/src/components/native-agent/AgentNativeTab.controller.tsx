@@ -8,6 +8,7 @@ import {
   withResolvedNativeComposerModel,
   resolveReasoningId,
   withoutSuppressedComposerControls,
+  type NativeAgentModelSubstitution,
   type NativeAgentNotice,
 } from "@orkestrator/protocol/native-agent";
 import { MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE } from "@orkestrator/protocol/multi-review";
@@ -213,6 +214,11 @@ export async function enqueueNativeAsyncQuestionResponse(input: {
   });
 }
 
+/** The configured model was unavailable, so the new session started on another. */
+function announceModelSubstitution(substitution: NativeAgentModelSubstitution): void {
+  toast.info(substitution.message);
+}
+
 export function SharedNativeAgentController({
   tabId,
   data,
@@ -405,6 +411,7 @@ export function SharedNativeAgentController({
     onResumeSessionReplaced: tabId.startsWith("multi-review-fix:")
       ? reconcileReplacedFixSession
       : undefined,
+    onModelSubstituted: announceModelSubstitution,
     // A *new* mode-capable tab starts in build. Left undefined it would adopt
     // whatever mode the provider happens to report. A resumed session is
     // excluded deliberately: that thread already has a mode, and forcing build

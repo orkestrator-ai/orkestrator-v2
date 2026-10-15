@@ -116,7 +116,7 @@ to solve. The Electron credential hook currently filters HTTP/HTTPS URLs;
 its behavior for WS/WSS must be explicitly implemented and tested.
 
 Sources:
-[gateway listener](../../../apps/backend/src/gateway-base.ts),
+[gateway listener](../../../apps/backend/src/gateway-lifecycle.ts),
 [terminal upgrade handler](../../../apps/backend/src/terminal-websocket-server.ts),
 [credential hook](../../../apps/desktop/electron/remote-gateway-request-auth.ts).
 Vite explicitly expects a reverse proxy to forward WebSockets and documents

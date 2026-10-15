@@ -1,6 +1,4 @@
 import { getAgentModelCatalogCache } from "@/lib/backend";
-import { useClaudeStore } from "@/stores/claudeStore";
-import { useCodexStore } from "@/stores/codexStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 
 /**
@@ -9,17 +7,23 @@ import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
  * it; startup still bounds this call and lets the stores update when it settles.
  */
 export async function hydrateAgentModelCatalogCache(): Promise<void> {
-  const claudeModelsBeforeRead = useClaudeStore.getState().models;
-  const codexModelsBeforeRead = useCodexStore.getState().models;
+  const claudeModelsBeforeRead = useAgentModelCatalogStore.getState().claudeModels;
+  const codexModelsBeforeRead = useAgentModelCatalogStore.getState().codexModels;
   const cursorModelsBeforeRead = useAgentModelCatalogStore.getState().cursorModels;
   const grokModelsBeforeRead = useAgentModelCatalogStore.getState().grokModels;
   const piModelsBeforeRead = useAgentModelCatalogStore.getState().piModels;
   const cache = await getAgentModelCatalogCache();
-  if (cache.claude?.models.length && useClaudeStore.getState().models === claudeModelsBeforeRead) {
-    useClaudeStore.getState().setModels(cache.claude.models);
+  if (
+    cache.claude?.models.length &&
+    useAgentModelCatalogStore.getState().claudeModels === claudeModelsBeforeRead
+  ) {
+    useAgentModelCatalogStore.getState().setClaudeModels(cache.claude.models);
   }
-  if (cache.codex?.models.length && useCodexStore.getState().models === codexModelsBeforeRead) {
-    useCodexStore.getState().setModels(cache.codex.models);
+  if (
+    cache.codex?.models.length &&
+    useAgentModelCatalogStore.getState().codexModels === codexModelsBeforeRead
+  ) {
+    useAgentModelCatalogStore.getState().setCodexModels(cache.codex.models);
   }
   const currentAcpModels = useAgentModelCatalogStore.getState();
   useAgentModelCatalogStore.setState({

@@ -1,6 +1,12 @@
 # Backend runtime state ownership — plan
 
-Status: Active — not started. Follow-up to the module-boundary guardrails added
+Status: Active — steps 1 and 2 done (2026-10-15); step 3 (terminals) is next.
+`BackendRuntime` (`core/backend-runtime.ts`) is wired as `CommandContext.runtime`
+and owns `DiffStatsTracking` (`core/diff-stats-tracking.ts`), which replaced
+the diff-stats `let`s, the three Git/diff singletons and the lazy
+`commands-files` imports. Contexts built by hand in tests now need a
+`runtime`: fire-and-forget `sync` calls used to swallow a missing one.
+Follow-up to the module-boundary guardrails added
 on branch `architecture-boundaries-01141669b04a-r1` (2026-10-14).
 `import/no-mutable-exports` now stops new `export let`, and
 `commands-runtime-state.ts` is on that rule's burn-down allowlist in
@@ -30,9 +36,10 @@ process-wide state bag. It exports:
   same maps. Embedded command fixtures (`public-api/test-support.ts`,
   `tests/unit/electron/*`) only stay isolated because `--parallel` gives each
   file its own process. Two backends in one test cannot be told apart.
-- **Global clean-up in tests.** Twenty-five test files call
+- **Global clean-up in tests.** Test teardown called
   `shutdownDiffStatsTracking()` just to reset the module singleton between
-  tests.
+  tests (by 2026-10-15 only `command-fixtures.ts` still did, on behalf of the
+  suites built on it).
 - **Late wiring.** `diffStatsEmit` is an `export let` because "the context
   that carries `emit` only arrives with the first invocation". The backend
   constructs that context in `index.ts`, so owned state can take `emit` in its

@@ -83,10 +83,6 @@ import {
   getLocalServerShutdownPromise,
   setLocalServerShutdownPromise,
   spawnLocalServerCommandImpl,
-  gitFetchScheduler,
-  containerGitFetchPolicy,
-  diffStatsService,
-  invalidatePendingDiffStatsSync,
 } from "./commands-runtime-state.js";
 import {
   localAgentAccountIds,
@@ -1617,7 +1613,8 @@ export async function deleteEnvironment(
       });
       if (environment)
         await deleteMergedEnvironmentRemoteBranch(environment).catch(() => undefined);
-      if (environment?.worktreePath) gitFetchScheduler.forget(environment.worktreePath);
+      if (environment?.worktreePath)
+        context.runtime.diffStats.gitFetchScheduler.forget(environment.worktreePath);
       // Before the container is removed and before the worktree is deleted:
       // killing the tmux sessions needs the container alive, and restoring the
       // user's `.claude/settings.local.json` from the tmux-mode backup needs
@@ -1739,16 +1736,17 @@ export async function deleteEnvironment(
       cleanupEnvironmentSetupState(environmentId);
       // Releases the watcher and discards the counts. This is the one case where
       // discarding is right: the worktree they described is gone.
-      invalidatePendingDiffStatsSync();
-      diffStatsService.untrack(environmentId);
+      context.runtime.diffStats.invalidatePendingSync();
+      context.runtime.diffStats.service.untrack(environmentId);
       // The PR belonged to a branch whose environment is gone; polling it would
       // resurrect state for an id no client can display.
       invalidatePendingPrMonitorSync();
       prMonitorService.untrack(environmentId);
-      if (environment?.worktreePath) gitFetchScheduler.forget(environment.worktreePath);
+      if (environment?.worktreePath)
+        context.runtime.diffStats.gitFetchScheduler.forget(environment.worktreePath);
       // Its clone is gone; a fetch still running for it can no longer stamp.
       if (environment?.containerId)
-        containerGitFetchPolicy.forgetContainer(environment.containerId);
+        context.runtime.diffStats.containerGitFetchPolicy.forgetContainer(environment.containerId);
     });
     // Other deletions may have left steps pending; a successful one is a cheap
     // moment to retry them without waiting for the next startup.

@@ -25,7 +25,9 @@ import {
   type ToolchainProgress,
 } from "./manager.js";
 import {
-  PINNED_TOOLCHAIN_VERSIONS,
+  PINNED_TOOL_VERSIONS,
+  isSupportToolName,
+  isToolchainName,
   pinnedToolchainArtifacts,
   type ToolchainArtifact,
   type ToolchainName,
@@ -48,9 +50,7 @@ export interface ToolchainSelection {
   source: ToolchainSelectionSource;
 }
 
-export function isToolchainName(value: string): value is ToolchainName {
-  return Object.hasOwn(PINNED_TOOLCHAIN_VERSIONS, value);
-}
+export { isToolchainName };
 
 /**
  * Decide what to install.
@@ -60,30 +60,33 @@ export function isToolchainName(value: string): value is ToolchainName {
  * A directory nobody has configured yet gets every pinned tool: a fresh server
  * has no first-run dialog to choose in, and installing too much is recoverable
  * where a missing binary at the first turn is not.
+ *
+ * Support tools such as `gh` join every selection, as they do for the desktop
+ * app, whichever agents are chosen.
  */
 export async function resolveToolchainSelection(options: {
   dataDir: string;
   tools?: readonly string[];
 }): Promise<ToolchainSelection> {
-  const known = Object.keys(PINNED_TOOLCHAIN_VERSIONS) as ToolchainName[];
+  const known = Object.keys(PINNED_TOOL_VERSIONS) as ToolchainName[];
+  const withSupportTools = (chosen: Set<string>) =>
+    known.filter((name) => chosen.has(name) || isSupportToolName(name));
   if (options.tools !== undefined) {
     if (options.tools.length === 0) throw new Error("At least one tool must be selected");
     const unknown = options.tools.filter((tool) => !isToolchainName(tool));
     if (unknown.length > 0) {
       throw new Error(`Unknown tool: ${unknown.join(", ")}. Expected: ${known.join(", ")}`);
     }
-    const requested = new Set(options.tools);
-    return { tools: known.filter((name) => requested.has(name)), source: "explicit" };
+    return { tools: withSupportTools(new Set(options.tools)), source: "explicit" };
   }
   const selection = await loadAgentPlatformSelection(options.dataDir);
   if (selection.needsFirstRunChoice) return { tools: known, source: "all" };
-  const enabled = new Set<string>(selection.enabled);
-  return { tools: known.filter((name) => enabled.has(name)), source: "config" };
+  return { tools: withSupportTools(new Set<string>(selection.enabled)), source: "config" };
 }
 
 export interface InstallToolchainOptions {
   dataDir: string;
-  /** Overrides the configuration; names from `PINNED_TOOLCHAIN_VERSIONS`. */
+  /** Overrides the configuration; names from `PINNED_TOOL_VERSIONS`. */
   tools?: readonly string[];
   platform?: NodeJS.Platform;
   architecture?: string;
@@ -132,12 +135,6 @@ export async function installPinnedToolchains(
   options: InstallToolchainOptions,
 ): Promise<InstallToolchainResult> {
   const plan = await planToolchainInstall(options);
-  if (plan.artifacts.length === 0) {
-    throw new Error(
-      "None of the selected agent platforms has a pinned binary to install " +
-        "(SDK-only platforms such as Cursor need none). Name tools explicitly with --tool.",
-    );
-  }
   const ensure = options.ensure ?? ensurePinnedToolchains;
   let dropped: ToolchainName[] | undefined;
   let currentBinDir: string | undefined;
@@ -178,7 +175,7 @@ async function toolsInCurrent(rootDir: string): Promise<ToolchainName[]> {
   const entries: string[] = await readdir(path.join(rootDir, "bin", CURRENT_TOOLCHAIN_LINK)).catch(
     () => [],
   );
-  return (Object.keys(PINNED_TOOLCHAIN_VERSIONS) as ToolchainName[]).filter((tool) =>
+  return (Object.keys(PINNED_TOOL_VERSIONS) as ToolchainName[]).filter((tool) =>
     entries.includes(tool),
   );
 }

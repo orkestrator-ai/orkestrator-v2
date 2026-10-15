@@ -25,6 +25,7 @@ import {
   normalizeAgentPlatforms,
   normalizeClaudeModelCatalogEntries,
   normalizeCodexModelCatalogEntries,
+  normalizeOpenCodeConnectedProviderIds,
   normalizeOpenCodeModelCatalogEntries,
   normalizeOpenCodeModelCatalogProjectId,
   normalizePersistedConfig,
@@ -302,12 +303,19 @@ export abstract class StorageConfig extends StorageProjects {
     return parseOpenCodeModelCatalogStore(store)[normalizedProjectId] ?? null;
   }
 
+  /**
+   * `connectedProviderIds` is OpenCode's connectivity report from the same
+   * read. Omitted, the snapshot keeps the last one it was given, so a catalogue
+   * refresh from a source without connectivity cannot erase it.
+   */
   async cacheOpenCodeModelCatalog(
     projectId: string,
     models: OpenCodeModelCatalogEntry[],
+    connectedProviderIds?: readonly string[],
   ): Promise<OpenCodeModelCatalogSnapshot> {
     const normalizedProjectId = normalizeOpenCodeModelCatalogProjectId(projectId);
     const normalizedModels = normalizeOpenCodeModelCatalogEntries(models);
+    const normalizedConnected = normalizeOpenCodeConnectedProviderIds(connectedProviderIds);
     if (normalizedModels.length === 0) {
       throw new Error("OpenCode model catalogue must contain at least one model.");
     }
@@ -323,14 +331,26 @@ export abstract class StorageConfig extends StorageProjects {
         const persisted = await this.loadJson<unknown>(this.openCodeModelCatalogFile(), () => null);
         const catalogs = parseOpenCodeModelCatalogStore(persisted);
         const current = catalogs[normalizedProjectId];
-        if (current?.catalogVersion === catalogVersion) return current;
+        const connectivityChanged =
+          normalizedConnected !== undefined &&
+          JSON.stringify(normalizedConnected) !== JSON.stringify(current?.connectedProviderIds);
+        if (current?.catalogVersion === catalogVersion && !connectivityChanged) return current;
 
+        const now = new Date().toISOString();
         const snapshot: OpenCodeModelCatalogSnapshot = {
           schemaVersion: 2,
           projectId: normalizedProjectId,
           catalogVersion,
-          updatedAt: new Date().toISOString(),
+          updatedAt: current?.catalogVersion === catalogVersion ? current.updatedAt : now,
           models: normalizedModels,
+          ...(normalizedConnected
+            ? { connectedProviderIds: normalizedConnected, connectedProvidersCheckedAt: now }
+            : current?.connectedProviderIds && current.connectedProvidersCheckedAt
+              ? {
+                  connectedProviderIds: current.connectedProviderIds,
+                  connectedProvidersCheckedAt: current.connectedProvidersCheckedAt,
+                }
+              : {}),
         };
         catalogs[normalizedProjectId] = snapshot;
         const legacyUnscoped = getUnscopedLegacyOpenCodeModelCatalog(persisted);
@@ -519,6 +539,9 @@ export abstract class StorageConfig extends StorageProjects {
       if (config.global.worktreeLocations !== undefined)
         validated.worktreeLocations = config.global.worktreeLocations;
       else delete validated.worktreeLocations;
+      // Written only by `setGitHubCliReminderDismissed`, likewise.
+      if (config.global.githubCliReminderDismissed) validated.githubCliReminderDismissed = true;
+      else delete validated.githubCliReminderDismissed;
       config.global = options.preserveCredentials
         ? {
             ...validated,
@@ -578,6 +601,18 @@ export abstract class StorageConfig extends StorageProjects {
         ...config.global,
         notificationSounds,
       };
+      await this.saveSensitiveJson(this.configFile(), config);
+      this.announce("config", "app");
+      return config;
+    });
+  }
+
+  /** Turn the startup GitHub CLI reminder off, or back on. */
+  async setGitHubCliReminderDismissed(dismissed: boolean): Promise<AppConfig> {
+    return this.enqueueConfigMutation(async () => {
+      const config = await this.loadConfig();
+      if (dismissed) config.global.githubCliReminderDismissed = true;
+      else delete config.global.githubCliReminderDismissed;
       await this.saveSensitiveJson(this.configFile(), config);
       this.announce("config", "app");
       return config;

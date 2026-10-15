@@ -193,6 +193,16 @@ export interface OpenCodeModelCatalogSnapshot {
   catalogVersion: string;
   updatedAt: string;
   models: OpenCodeModelCatalogEntry[];
+  /**
+   * Providers OpenCode last reported as connected, so a read made before any
+   * bridge is running can tell a model this login can serve from one it
+   * cannot. Absent when OpenCode never reported connectivity for this project.
+   * `models` deliberately stays unfiltered by it: a provider connected later
+   * must still be known once the next bridge reports it.
+   */
+  connectedProviderIds?: string[];
+  /** When {@link connectedProviderIds} was last observed to change. */
+  connectedProvidersCheckedAt?: string;
 }
 
 export interface InitialPromptImageAttachment {
@@ -771,8 +781,9 @@ export interface PersistedComposeDraft {
   ownerId: string;
   value: unknown;
   /**
-   * Bounded provenance for an idempotent queue-to-draft transfer. Ordinary
-   * draft saves never set this field.
+   * Bounded provenance written by the retired queue-to-draft transfer command.
+   * Nothing sets it any more; drafts persisted by older versions still carry
+   * it, so it is validated on load and kept on save.
    */
   sourcePromptQueue?: {
     queueKey: string;
@@ -872,6 +883,12 @@ export interface AppConfig {
     githubToken?: string;
     /** Reuse the host's active `gh auth login` token for container GitHub access. */
     useHostGitHubCredentials?: boolean;
+    /**
+     * The user asked not to be reminded at startup to set up the GitHub CLI.
+     * Written only by `setGitHubCliReminderDismissed`; the settings form never
+     * sends it.
+     */
+    githubCliReminderDismissed?: boolean;
     /** Optional absolute SSH-agent socket path. Absent means auto-detect from the desktop session. */
     sshAgentSocketPath?: string;
     /**

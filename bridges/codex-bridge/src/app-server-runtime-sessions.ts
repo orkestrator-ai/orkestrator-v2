@@ -8,7 +8,8 @@ import {
   MAX_STEER_REQUESTS,
 } from "./app-server-runtime-base.js";
 import { inheritCommandChanges } from "./sessions/command-changes.js";
-import { AppServerRuntimeLifecycle } from "./app-server-runtime-lifecycle.js";
+import type { CodexRuntimeContext } from "./app-server-runtime-context.js";
+import type { CodexRuntimeLifecycle } from "./app-server-runtime-lifecycle.js";
 import { openAssistantRow } from "./app-server-runtime-rows.js";
 import { createHash } from "node:crypto";
 import {
@@ -41,7 +42,7 @@ import { type StructuredOutputResult } from "@orkestrator/protocol/structured-ou
 /** Fixed, content-free refusal for work arriving while a tab close is retiring the session. */
 export const SESSION_CLOSING_ERROR = "Session is closing";
 
-export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle {
+export class CodexRuntimeSessions {
   /**
    * Admission fence for `POST /session/:id/close`.
    *
@@ -56,12 +57,18 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
    * resurrect the session on the next start. Weak, so retired objects are not
    * retained.
    */
-  protected readonly retiredSessions = new WeakSet<BridgeSession>();
+  readonly retiredSessions = new WeakSet<BridgeSession>();
+
+  constructor(
+    private readonly ctx: CodexRuntimeContext,
+    private readonly lifecycle: CodexRuntimeLifecycle,
+  ) {}
 
   /** True once close fenced this session, or it is no longer the registered object. */
-  protected sessionAdmissionClosed(session: BridgeSession): boolean {
+  sessionAdmissionClosed(session: BridgeSession): boolean {
     return (
-      this.closingSessionIds.has(session.id) || this.registry.getSession(session.id) !== session
+      this.ctx.closingSessionIds.has(session.id) ||
+      this.ctx.registry.getSession(session.id) !== session
     );
   }
 
@@ -74,24 +81,24 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
         : undefined;
     const sessionId = clientSessionKey
       ? `session-client-${createHash("sha256")
-          .update(this.options.cwd)
+          .update(this.ctx.options.cwd)
           .update("\0")
           .update(clientSessionKey)
           .digest("hex")
           .slice(0, 32)}`
       : createSessionId();
-    const existing = this.registry.getSession(sessionId);
+    const existing = this.ctx.registry.getSession(sessionId);
     if (existing) {
-      this.registry.touch(sessionId);
+      this.ctx.registry.touch(sessionId);
       return { sessionId, title: existing.title };
     }
 
     const title = typeof body.title === "string" ? body.title : undefined;
-    const session = this.registry.createSession({
+    const session = this.ctx.registry.createSession({
       id: sessionId,
       // No Codex thread yet: an abandoned session must not appear in history.
       threadId: null,
-      config: this.toEngineConfig(body),
+      config: this.lifecycle.toEngineConfig(body),
       title,
       titleSource: title ? "explicit" : undefined,
       titleGenerationAttempted: Boolean(title),
@@ -115,9 +122,9 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     // catalog cached from before those changes.
     invalidateTranscriptCatalogCache();
 
-    const config = this.toEngineConfig(body);
+    const config = this.lifecycle.toEngineConfig(body);
     const sessionId = createSessionId();
-    const session = this.registry.createSession({
+    const session = this.ctx.registry.createSession({
       id: sessionId,
       threadId: null,
       config,
@@ -126,27 +133,27 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
 
     let thread: EngineThread;
     try {
-      thread = await this.options.engine.resumeThread(threadId, { config, includeTurns: true });
+      thread = await this.ctx.options.engine.resumeThread(threadId, { config, includeTurns: true });
     } catch (error) {
       // A resume can fail because the rollout is gone. Fall back to the parser so
       // the user still sees their conversation; the next prompt starts a fresh
       // thread with reconstructed context.
       if (!isMissingRolloutError(error)) throw error;
       const hydrated = await hydrateMessagesFromPersistedSession(threadId, {
-        structuredOutputTurns: this.structuredOutputTurnsForThread(threadId),
+        structuredOutputTurns: this.ctx.structuredOutputTurnsForThread(threadId),
       });
       session.title = hydrated.title;
       session.titleSource = hydrated.titleSource;
-      this.registry.appendLocalMessages(session, ...hydrated.messages);
-      if (hydrated.messages.length > 0) this.registry.bumpContentEpoch(session);
+      this.ctx.registry.appendLocalMessages(session, ...hydrated.messages);
+      if (hydrated.messages.length > 0) this.ctx.registry.bumpContentEpoch(session);
       session.recoveredContextPending = hydrated.messages.length > 0;
       return { sessionId, title: hydrated.title, threadId };
     }
 
-    const modelsBeforeAttach = this.snapshotBoundModelOverrides(threadId);
-    const context = this.registry.attach(sessionId, threadId, {
+    const modelsBeforeAttach = this.lifecycle.snapshotBoundModelOverrides(threadId);
+    const context = this.ctx.registry.attach(sessionId, threadId, {
       engineHandle: thread.handle,
-      engineGeneration: this.options.engine.info().generation,
+      engineGeneration: this.ctx.options.engine.info().generation,
       cwd: thread.cwd,
       name: thread.name,
       modelId: thread.model,
@@ -158,21 +165,21 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     let unreadable = false;
     if (context.messages.length === 0) {
       const hydrated = await hydrateMessagesFromPersistedSession(threadId, {
-        structuredOutputTurns: this.structuredOutputTurnsForThread(threadId),
+        structuredOutputTurns: this.ctx.structuredOutputTurnsForThread(threadId),
       });
       context.messages = hydrated.messages;
-      this.registry.indexHydratedAsyncQuestions(context);
-      this.applyPersistedModelOverrides(context);
+      this.ctx.registry.indexHydratedAsyncQuestions(context);
+      this.lifecycle.applyPersistedModelOverrides(context);
       if (hydrated.messages.length > 0) {
-        this.bumpMessageRevision(context);
-        this.registry.bumpContentEpoch(session);
+        this.ctx.callbacks.bumpMessageRevision(context);
+        this.ctx.registry.bumpContentEpoch(session);
       }
       session.title = thread.name ?? hydrated.title;
       session.titleSource = thread.name ? "codex" : hydrated.titleSource;
       if (hydrated.readFailed) unreadable = true;
     } else {
-      this.publishPersistedModelOverrides(context);
-      const existing = this.registry
+      this.lifecycle.publishPersistedModelOverrides(context);
+      const existing = this.ctx.registry
         .sessionsForThread(threadId)
         .find((entry) => entry.id !== sessionId && entry.title);
       session.title = existing?.title ?? thread.name ?? undefined;
@@ -184,8 +191,8 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     // authoritative empty history that would overwrite a display tail.
     if (!unreadable) context.transcriptHydrated = true;
 
-    await this.synchronizeAttachedModelOverrides(context, modelsBeforeAttach);
-    await this.persistSession(session);
+    await this.lifecycle.synchronizeAttachedModelOverrides(context, modelsBeforeAttach);
+    await this.ctx.callbacks.persistSession(session);
     return {
       sessionId,
       title: session.title,
@@ -213,9 +220,9 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       }
     | { outcome: "not-found" | "running" | "unknown-message" | "no-fork-point" | "unavailable" }
   > {
-    const parent = this.registry.getSession(sessionId);
+    const parent = this.ctx.registry.getSession(sessionId);
     if (!parent?.threadId) return { outcome: "not-found" };
-    const parentContext = await this.ensureAttached(sessionId);
+    const parentContext = await this.ctx.callbacks.ensureAttached(sessionId);
     if (!parentContext) return { outcome: "not-found" };
     if (phaseToExternalStatus(parentContext.phase) === "running") {
       return { outcome: "running" };
@@ -234,7 +241,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
 
     let fork: Awaited<ReturnType<AppServerEngine["forkThread"]>>;
     try {
-      fork = await this.options.engine.forkThread(parent.threadId, parent.config, lastTurnId);
+      fork = await this.ctx.options.engine.forkThread(parent.threadId, parent.config, lastTurnId);
     } catch (error) {
       // A restarting or failed app-server rejects here. That is an availability
       // problem, not a route bug — surface it as the mapped 503, never a raw 500.
@@ -248,7 +255,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     // The fork's rollout was just born; a catalog cached before it existed must
     // not answer the hydration or the next /session/list.
     invalidateTranscriptCatalogCache();
-    const child = this.registry.createSession({
+    const child = this.ctx.registry.createSession({
       id: createSessionId(),
       threadId: null,
       config: { ...parent.config },
@@ -259,36 +266,36 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       structuredOutputTurns: parent.structuredOutputTurns?.map((entry) => ({ ...entry })),
     });
     try {
-      const context = this.registry.attach(child.id, fork.id, {
+      const context = this.ctx.registry.attach(child.id, fork.id, {
         engineHandle: fork.handle,
-        engineGeneration: this.options.engine.info().generation,
+        engineGeneration: this.ctx.options.engine.info().generation,
         cwd: fork.cwd,
         name: fork.name,
         modelId: fork.model,
       });
       context.materialized = true;
       const hydrated = await hydrateMessagesFromPersistedSession(fork.id, {
-        structuredOutputTurns: this.structuredOutputTurnsForThread(fork.id),
+        structuredOutputTurns: this.ctx.structuredOutputTurnsForThread(fork.id),
       });
       await inheritCommandChanges(
-        this.options.codexHome,
+        this.ctx.options.codexHome,
         parent.threadId,
         fork.id,
         hydrated.messages,
       );
       context.messages = hydrated.messages;
-      this.registry.indexHydratedAsyncQuestions(context);
-      this.applyPersistedModelOverrides(context);
+      this.ctx.registry.indexHydratedAsyncQuestions(context);
+      this.lifecycle.applyPersistedModelOverrides(context);
       if (hydrated.messages.length > 0) {
-        this.bumpMessageRevision(context);
-        this.registry.bumpContentEpoch(child);
+        this.ctx.callbacks.bumpMessageRevision(context);
+        this.ctx.registry.bumpContentEpoch(child);
       }
       // A rollout that could not be read at all is not an empty conversation:
       // leave the transcript unhydrated so readers keep reporting a cached,
       // incomplete preview (and the next attach retries) instead of an
       // authoritative empty history that would overwrite a display tail.
       if (!hydrated.readFailed) context.transcriptHydrated = true;
-      await this.persistSession(child);
+      await this.ctx.callbacks.persistSession(child);
       return {
         outcome: "created",
         sessionId: child.id,
@@ -299,7 +306,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       // The child session was registered above; failing here would leave an
       // orphan bridge session bound to a fork no client ever learned about.
       // Close it — which unsubscribes, never `thread/delete` — before reporting.
-      await this.deleteSession(child.id).catch(() => undefined);
+      await this.ctx.callbacks.deleteSession(child.id).catch(() => undefined);
       console.warn(
         `[codex-bridge] Fork of ${parent.threadId} could not be hydrated:`,
         error instanceof Error ? error.message : error,
@@ -317,13 +324,13 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
    * and the caller reports "not a usable fork point" rather than forking the
    * conversation at a turn the user did not choose.
    */
-  protected async resolveTurnIdFromEngine(
+  async resolveTurnIdFromEngine(
     context: ThreadContext,
     message: NormalizedMessage,
   ): Promise<string | undefined> {
     let turns: { id: string }[] | undefined;
     try {
-      const thread = await this.options.engine.readThread(context.threadId, {
+      const thread = await this.ctx.options.engine.readThread(context.threadId, {
         includeTurns: true,
       });
       turns = thread?.turns;
@@ -362,14 +369,14 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
   async compactSession(
     sessionId: string,
   ): Promise<"accepted" | "not-found" | "running" | "unavailable" | "closing"> {
-    const session = this.registry.getSession(sessionId);
+    const session = this.ctx.registry.getSession(sessionId);
     if (!session?.threadId) return "not-found";
     if (this.sessionAdmissionClosed(session)) return "closing";
-    const context = await this.ensureAttached(sessionId);
+    const context = await this.ctx.callbacks.ensureAttached(sessionId);
     if (!context) return "not-found";
     if (this.sessionAdmissionClosed(session)) return "closing";
     try {
-      this.registry.assertNoActiveTurn(context);
+      this.ctx.registry.assertNoActiveTurn(context);
     } catch {
       return "running";
     }
@@ -377,12 +384,12 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     // Claimed before the first await, so a prompt arriving during the RPC sees a
     // busy thread rather than an idle one.
     context.compacting = true;
-    this.registry.setPhase(context, "running");
-    this.emitStatus(context);
+    this.ctx.registry.setPhase(context, "running");
+    this.lifecycle.emitStatus(context);
     this.armCompactionBackstop(context.threadId);
 
     try {
-      await this.options.engine.compactThread(session.threadId);
+      await this.ctx.options.engine.compactThread(session.threadId);
     } catch (error) {
       this.finishCompaction(
         context,
@@ -398,7 +405,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     // the last frame clients ever see, with nothing left to retract it.
     if (context.compacting) {
       for (const id of context.bridgeSessionIds) {
-        this.options.emit({
+        this.ctx.options.emit({
           type: "session.updated",
           sessionId: id,
           data: { compacted: true, compacting: true },
@@ -408,26 +415,26 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     return "accepted";
   }
 
-  protected armCompactionBackstop(threadId: string): void {
+  armCompactionBackstop(threadId: string): void {
     this.clearCompactionBackstop(threadId);
     const timer = setTimeout(() => {
-      this.compactionBackstops.delete(threadId);
-      const context = this.registry.getThread(threadId);
+      this.ctx.compactionBackstops.delete(threadId);
+      const context = this.ctx.registry.getThread(threadId);
       if (!context?.compacting) return;
       this.finishCompaction(
         context,
         "Codex never reported that compaction finished. The session was released.",
       );
-    }, this.options.compactionTimeoutMs ?? DEFAULT_COMPACTION_TIMEOUT_MS);
+    }, this.ctx.options.compactionTimeoutMs ?? DEFAULT_COMPACTION_TIMEOUT_MS);
     timer.unref?.();
-    this.compactionBackstops.set(threadId, timer);
+    this.ctx.compactionBackstops.set(threadId, timer);
   }
 
-  protected clearCompactionBackstop(threadId: string): void {
-    const timer = this.compactionBackstops.get(threadId);
+  clearCompactionBackstop(threadId: string): void {
+    const timer = this.ctx.compactionBackstops.get(threadId);
     if (!timer) return;
     clearTimeout(timer);
-    this.compactionBackstops.delete(threadId);
+    this.ctx.compactionBackstops.delete(threadId);
   }
 
   /**
@@ -436,34 +443,34 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
    * Never overrides a turn: an `abort` or a generation recovery may already have
    * moved the thread on, and compaction finishing must not drag it back to idle.
    */
-  protected finishCompaction(context: ThreadContext, error?: string): void {
+  finishCompaction(context: ThreadContext, error?: string): void {
     this.clearCompactionBackstop(context.threadId);
     if (!context.compacting) return;
     context.compacting = false;
     if (!context.activeTurn && !context.dispatchInFlight && context.phase === "running") {
-      this.registry.setPhase(context, error ? "failed" : "idle", error);
+      this.ctx.registry.setPhase(context, error ? "failed" : "idle", error);
     }
-    this.emitStatus(context);
+    this.lifecycle.emitStatus(context);
     for (const sessionId of context.bridgeSessionIds) {
       if (error) {
-        this.options.emit({ type: "session.error", sessionId, data: { error } });
+        this.ctx.options.emit({ type: "session.error", sessionId, data: { error } });
         continue;
       }
-      this.options.emit({
+      this.ctx.options.emit({
         type: "session.updated",
         sessionId,
         data: { compacted: true, compacting: false },
       });
-      this.options.emit({
+      this.ctx.options.emit({
         type: "session.idle",
         sessionId,
         data: {
-          title: this.registry.getSession(sessionId)?.title,
+          title: this.ctx.registry.getSession(sessionId)?.title,
           phase: context.phase,
         },
       });
     }
-    this.notifyThreadActivity();
+    this.ctx.callbacks.notifyThreadActivity();
   }
 
   async steerSession(
@@ -472,13 +479,13 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     expectedTurnId: string,
     requestId: string,
   ): Promise<"accepted" | "not-found" | "idle" | "mismatch" | "unknown" | "closing"> {
-    const session = this.registry.getSession(sessionId);
-    const context = this.registry.getThreadForSession(sessionId);
+    const session = this.ctx.registry.getSession(sessionId);
+    const context = this.ctx.registry.getThreadForSession(sessionId);
     const turn = context?.activeTurn;
     if (!session?.threadId || !context) return "not-found";
     if (this.sessionAdmissionClosed(session)) return "closing";
     const inputDigest = createHash("sha256").update(input).digest("hex");
-    const previous = this.steerRequests.get(requestId);
+    const previous = this.ctx.steerRequests.get(requestId);
     if (previous) {
       // Reusing an id for different input or a different target cannot be
       // interpreted safely. Do not dispatch either version again.
@@ -492,13 +499,16 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       if (previous.state === "accepted") return "accepted";
 
       try {
-        const reconciled = await this.options.engine.reconcileRequest(session.threadId, requestId);
+        const reconciled = await this.ctx.options.engine.reconcileRequest(
+          session.threadId,
+          requestId,
+        );
         if (
           (reconciled.result === "attach" || reconciled.result === "terminal") &&
           reconciled.turnId === expectedTurnId
         ) {
           this.rememberSteerRequest(requestId, { ...previous, state: "accepted" });
-          await this.options.engine.drainNotifications(session.threadId);
+          await this.ctx.options.engine.drainNotifications(session.threadId);
           // The original attempt is when this steer reached app-server, so it,
           // not now, is the instant that divides the two rows. Using `now` here
           // would sweep everything Codex has produced since into the row above.
@@ -511,7 +521,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
         }
         // A successful authoritative read found no matching client id, proving
         // the ambiguous write did not land. It is now safe to try the same id.
-        this.steerRequests.delete(requestId);
+        this.ctx.steerRequests.delete(requestId);
       } catch {
         return "unknown";
       }
@@ -528,7 +538,10 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     // read closes the bridge-restart and cache-eviction gaps. Steering is rare;
     // paying one read is preferable to ever applying the same instruction twice.
     try {
-      const reconciled = await this.options.engine.reconcileRequest(session.threadId, requestId);
+      const reconciled = await this.ctx.options.engine.reconcileRequest(
+        session.threadId,
+        requestId,
+      );
       if (reconciled.result === "attach" || reconciled.result === "terminal") {
         if (reconciled.turnId !== expectedTurnId) return "mismatch";
         this.rememberSteerRequest(requestId, {
@@ -536,7 +549,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
           turnId: expectedTurnId,
           inputDigest,
           state: "accepted",
-          requestedAt: new Date(this.now()).toISOString(),
+          requestedAt: new Date(this.ctx.now()).toISOString(),
         });
         // A request found after cache loss came from an earlier runtime. Its
         // transcript is already authoritative; appending here would duplicate it.
@@ -548,14 +561,14 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
         turnId: expectedTurnId,
         inputDigest,
         state: "unknown",
-        requestedAt: new Date(this.now()).toISOString(),
+        requestedAt: new Date(this.ctx.now()).toISOString(),
       });
       return "unknown";
     }
 
-    const attemptedAt = new Date(this.now()).toISOString();
+    const attemptedAt = new Date(this.ctx.now()).toISOString();
     try {
-      await this.options.engine.steerTurn(
+      await this.ctx.options.engine.steerTurn(
         session.threadId,
         expectedTurnId,
         [{ type: "text", text: input }],
@@ -563,7 +576,10 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       );
       let ordering: SteerOrdering = {};
       try {
-        const reconciled = await this.options.engine.reconcileRequest(session.threadId, requestId);
+        const reconciled = await this.ctx.options.engine.reconcileRequest(
+          session.threadId,
+          requestId,
+        );
         if (reconciled.turnId === expectedTurnId) {
           ordering = {
             precedingItemIds: reconciled.precedingItemIds,
@@ -574,13 +590,13 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
         // The steer response itself is authoritative. A failed ordering read
         // falls back to the live boundary rather than changing acceptance.
       }
-      await this.options.engine.drainNotifications(session.threadId);
+      await this.ctx.options.engine.drainNotifications(session.threadId);
       // Stamped only once app-server has acknowledged the steer, and once the
       // ordering read it is paired with has been taken. Sampling before the RPC
       // dated the row boundary earlier than the steer could possibly have
       // landed, so anything Codex emitted during the round-trip was attributed
       // to the row below while its item stayed in the row above.
-      const requestedAt = new Date(this.now()).toISOString();
+      const requestedAt = new Date(this.ctx.now()).toISOString();
       this.rememberSteerRequest(requestId, {
         threadId: session.threadId,
         turnId: expectedTurnId,
@@ -628,14 +644,17 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     sessionId: string,
     requestId: string,
   ): Promise<"dispatched" | "unknown"> {
-    const session = this.registry.getSession(sessionId);
+    const session = this.ctx.registry.getSession(sessionId);
     if (!session?.threadId) return "unknown";
-    const previous = this.steerRequests.get(requestId);
+    const previous = this.ctx.steerRequests.get(requestId);
     if (previous?.threadId === session.threadId && previous.state === "accepted") {
       return "dispatched";
     }
     try {
-      const reconciled = await this.options.engine.reconcileRequest(session.threadId, requestId);
+      const reconciled = await this.ctx.options.engine.reconcileRequest(
+        session.threadId,
+        requestId,
+      );
       return reconciled.result === "attach" || reconciled.result === "terminal"
         ? "dispatched"
         : "unknown";
@@ -644,7 +663,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     }
   }
 
-  protected rememberSteerRequest(
+  rememberSteerRequest(
     requestId: string,
     record: {
       threadId: string;
@@ -655,16 +674,16 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     },
   ): void {
     // Refresh insertion order so the cap retains the most recently used ids.
-    this.steerRequests.delete(requestId);
-    this.steerRequests.set(requestId, record);
-    while (this.steerRequests.size > MAX_STEER_REQUESTS) {
-      const oldest = this.steerRequests.keys().next().value;
+    this.ctx.steerRequests.delete(requestId);
+    this.ctx.steerRequests.set(requestId, record);
+    while (this.ctx.steerRequests.size > MAX_STEER_REQUESTS) {
+      const oldest = this.ctx.steerRequests.keys().next().value;
       if (typeof oldest !== "string") break;
-      this.steerRequests.delete(oldest);
+      this.ctx.steerRequests.delete(oldest);
     }
   }
 
-  protected async appendAcceptedSteer(
+  async appendAcceptedSteer(
     context: ThreadContext,
     input: string,
     turnId: string,
@@ -677,12 +696,12 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     // detach/re-attach reconstructs this same shape from rollout record order.
     const turn = context.activeTurn;
     if (!turn || turn.turnId !== turnId) return;
-    const state = this.stateFor(context.threadId);
+    const state = this.lifecycle.stateFor(context.threadId);
     const placement = turn.placeSteer(ordering);
     if (placement.kind === "before") {
       this.insertSteerBefore(context, input, turnId, placement.assistantMessageId);
       await state.coalescer.flushNow();
-      this.emitStatus(context);
+      this.lifecycle.emitStatus(context);
       return;
     }
     const boundary = turn.freezeAssistantSegment(placement.boundary, ordering.requestedAt);
@@ -693,20 +712,24 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     // above the steer.
     await state.coalescer.flushNow();
 
-    const userMessage = this.appendUserMessage(context, input, []);
+    const userMessage = this.ctx.callbacks.appendUserMessage(context, input, []);
     userMessage.turnId = turnId;
     const assistantMessage = openAssistantRow(context, state, turn, {
       boundary,
       startedAt: ordering.requestedAt,
-      createdAt: new Date(this.now()).toISOString(),
+      createdAt: new Date(this.ctx.now()).toISOString(),
       keepsRenderedItems: false,
     });
     // Announced below together with the user message, which must precede it.
     state.publishedMessageId = assistantMessage.id;
-    this.bumpMessageRevision(context);
+    this.ctx.callbacks.bumpMessageRevision(context);
     for (const id of context.bridgeSessionIds) {
-      this.options.emit({ type: "message.updated", sessionId: id, data: { message: userMessage } });
-      this.options.emit({
+      this.ctx.options.emit({
+        type: "message.updated",
+        sessionId: id,
+        data: { message: userMessage },
+      });
+      this.ctx.options.emit({
         type: "message.updated",
         sessionId: id,
         data: { message: assistantMessage },
@@ -717,7 +740,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     // their suffix visible immediately instead of waiting for another engine
     // event to happen to schedule the new row.
     await state.coalescer.flushNow();
-    this.emitStatus(context);
+    this.lifecycle.emitStatus(context);
   }
 
   /**
@@ -735,7 +758,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     turnId: string,
     rowId: string,
   ): void {
-    const userMessage = this.appendUserMessage(context, input, []);
+    const userMessage = this.ctx.callbacks.appendUserMessage(context, input, []);
     userMessage.turnId = turnId;
     let index = context.messages.length - 2;
     while (index >= 0 && context.messages[index]!.id !== rowId) index -= 1;
@@ -746,9 +769,13 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       userMessage.createdAt = context.messages[index]!.createdAt;
       context.messages.splice(index, 0, userMessage);
     }
-    this.bumpMessageRevision(context);
+    this.ctx.callbacks.bumpMessageRevision(context);
     for (const id of context.bridgeSessionIds) {
-      this.options.emit({ type: "message.updated", sessionId: id, data: { message: userMessage } });
+      this.ctx.options.emit({
+        type: "message.updated",
+        sessionId: id,
+        data: { message: userMessage },
+      });
     }
   }
 
@@ -769,7 +796,9 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     | { outcome: "closing" }
   > {
     try {
-      return await this.withDispatchAdmission(() => this.dispatchNativeReview(sessionId, target));
+      return await this.ctx.withDispatchAdmission(() =>
+        this.dispatchNativeReview(sessionId, target),
+      );
     } catch {
       return { outcome: "unavailable" };
     }
@@ -777,12 +806,12 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
 
   private async dispatchNativeReview(
     sessionId: string,
-    target: Parameters<AppServerRuntimeSessions["startNativeReview"]>[1],
-  ): ReturnType<AppServerRuntimeSessions["startNativeReview"]> {
-    const session = this.registry.getSession(sessionId);
+    target: Parameters<CodexRuntimeSessions["startNativeReview"]>[1],
+  ): ReturnType<CodexRuntimeSessions["startNativeReview"]> {
+    const session = this.ctx.registry.getSession(sessionId);
     if (!session?.threadId) return { outcome: "not-found" };
     if (this.sessionAdmissionClosed(session)) return { outcome: "closing" };
-    const context = await this.ensureAttached(sessionId);
+    const context = await this.ctx.callbacks.ensureAttached(sessionId);
     if (!context) return { outcome: "not-found" };
     // Re-checked after the only await, immediately before the claim below.
     if (this.sessionAdmissionClosed(session)) return { outcome: "closing" };
@@ -799,15 +828,15 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
      * thread `running` on a turn nothing would ever complete.
      */
     try {
-      this.registry.assertNoActiveTurn(context);
+      this.ctx.registry.assertNoActiveTurn(context);
     } catch {
       return { outcome: "running" };
     }
     const phaseBeforeReview = context.phase;
     const errorBeforeReview = context.error;
     context.dispatchInFlight = true;
-    this.registry.setPhase(context, "starting");
-    await this.primeCommandChanges(context);
+    this.ctx.registry.setPhase(context, "starting");
+    await this.ctx.callbacks.primeCommandChanges(context);
 
     const modelForReview = context.modelId ?? session.config.model;
     const assistantMessage: NormalizedMessage = {
@@ -815,18 +844,18 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       role: "assistant",
       content: "",
       parts: [],
-      createdAt: new Date(this.now()).toISOString(),
+      createdAt: new Date(this.ctx.now()).toISOString(),
       revision: 1,
       ...(modelForReview ? { modelId: modelForReview } : {}),
     };
-    const streamingState = this.stateFor(context.threadId);
+    const streamingState = this.lifecycle.stateFor(context.threadId);
     streamingState.publishedMessageId = assistantMessage.id;
     streamingState.publishedParts = [];
     streamingState.publishedModelId = assistantMessage.modelId;
     context.messages.push(assistantMessage);
-    this.bumpMessageRevision(context);
+    this.ctx.callbacks.bumpMessageRevision(context);
     for (const id of context.bridgeSessionIds) {
-      this.options.emit({
+      this.ctx.options.emit({
         type: "message.updated",
         sessionId: id,
         data: { message: assistantMessage },
@@ -834,11 +863,11 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     }
 
     try {
-      const review = await this.options.engine.startReview(session.threadId, target, "inline");
+      const review = await this.ctx.options.engine.startReview(session.threadId, target, "inline");
       const accumulator = new TurnAccumulator({
         threadId: context.threadId,
         turnId: review.turnId,
-        engineGeneration: this.options.engine.info().generation,
+        engineGeneration: this.ctx.options.engine.info().generation,
         assistantMessageId: assistantMessage.id,
         configurationRevision: session.configurationRevision,
         expectsStructuredOutput: false,
@@ -848,26 +877,26 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       assistantMessage.turnId = review.turnId;
       context.activeTurn = accumulator;
       context.dispatchInFlight = false;
-      this.registry.setPhase(context, "running");
+      this.ctx.registry.setPhase(context, "running");
       // Re-read: generation-change recovery can release this thread's runtime
       // state while `startReview` is in flight, and `stateFor` then hands every
       // later reader a *different* object. Writing the streaming identity to the
       // pre-dispatch reference would leave the live state without an
       // `assistantMessageId`, so `publishAssistantMessage` returns early and the
       // turn runs without ever streaming.
-      const liveState = this.stateFor(context.threadId);
-      this.beginAssistantTurnRender(liveState, assistantMessage);
-      this.emitStatus(context);
-      this.drainPendingEvents(context, review.turnId);
+      const liveState = this.lifecycle.stateFor(context.threadId);
+      this.lifecycle.beginAssistantTurnRender(liveState, assistantMessage);
+      this.lifecycle.emitStatus(context);
+      this.lifecycle.drainPendingEvents(context, review.turnId);
       await Promise.all(
-        this.registry
+        this.ctx.registry
           .boundSessionsForThread(context.threadId)
           .filter((entry) => {
             if (!entry.restartFailure) return false;
             entry.restartFailure = undefined;
             return true;
           })
-          .map((entry) => this.persistSession(entry)),
+          .map((entry) => this.ctx.callbacks.persistSession(entry)),
       );
       return { outcome: "accepted", turnId: review.turnId };
     } catch (error) {
@@ -879,9 +908,9 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
        * `messageRevision`, and without a second bump it would keep a permanently
        * blank assistant bubble with nothing to tell it to refetch.
        */
-      this.bumpMessageRevision(context);
+      this.ctx.callbacks.bumpMessageRevision(context);
       for (const id of context.bridgeSessionIds) {
-        this.options.emit({
+        this.ctx.options.emit({
           type: "message.updated",
           sessionId: id,
           data: { removedMessageId: assistantMessage.id },
@@ -896,39 +925,39 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       // rejects. Only undo the phase while this dispatch still owns `starting`;
       // never overwrite the replacement-generation recovery guard with `idle`.
       if (context.phase === "starting") {
-        this.registry.setPhase(context, phaseBeforeReview, errorBeforeReview);
+        this.ctx.registry.setPhase(context, phaseBeforeReview, errorBeforeReview);
       }
-      this.emitStatus(context);
+      this.lifecycle.emitStatus(context);
       const message = error instanceof Error ? error.message : "Native review failed";
       for (const id of context.bridgeSessionIds) {
-        this.options.emit({ type: "session.error", sessionId: id, data: { error: message } });
+        this.ctx.options.emit({ type: "session.error", sessionId: id, data: { error: message } });
       }
       return { outcome: "unavailable" };
     }
   }
 
   async getRuntimeHealth(sessionId: string): Promise<unknown | null> {
-    const session = this.registry.getSession(sessionId);
+    const session = this.ctx.registry.getSession(sessionId);
     if (!session) return null;
     // Runtime metadata is a no-touch read: it must not resume every durable
     // thread merely because the backend refreshes a projection. App-server only
     // accepts thread-scoped MCP inventory requests for a thread loaded in the
     // current generation, so a lazy/restored or idle-detached session uses the
     // engine-global inventory until another route attaches it.
-    return this.options.engine.getRuntimeHealth(this.loadedThreadId(sessionId));
+    return this.ctx.options.engine.getRuntimeHealth(this.loadedThreadId(sessionId));
   }
 
   async listMcpServers(sessionId: string): Promise<unknown | null> {
-    const session = this.registry.getSession(sessionId);
+    const session = this.ctx.registry.getSession(sessionId);
     if (!session) return null;
-    return this.options.engine.listMcpServers(this.loadedThreadId(sessionId));
+    return this.ctx.options.engine.listMcpServers(this.loadedThreadId(sessionId));
   }
 
   /** A thread id app-server can currently use without re-attaching the session. */
   private loadedThreadId(sessionId: string): string | null {
-    const context = this.registry.getThreadForSession(sessionId);
+    const context = this.ctx.registry.getThreadForSession(sessionId);
     if (!context || context.unsubscribed) return null;
-    if (context.engineGeneration !== this.options.engine.info().generation) return null;
+    if (context.engineGeneration !== this.ctx.options.engine.info().generation) return null;
     return context.threadId;
   }
 
@@ -937,57 +966,57 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     name: string,
     action: "reconnect" | "sign-in",
   ): Promise<{ authorizationUrl?: string } | null> {
-    const session = this.registry.getSession(sessionId);
+    const session = this.ctx.registry.getSession(sessionId);
     if (!session) return null;
     if (action === "sign-in") {
-      return this.options.engine.beginMcpOauth(name, session.threadId);
+      return this.ctx.options.engine.beginMcpOauth(name, session.threadId);
     }
-    await this.options.engine.reconnectMcpServers();
+    await this.ctx.options.engine.reconnectMcpServers();
     return {};
   }
 
   readAuthStatus(): Promise<unknown> {
-    return this.options.engine.readAccount();
+    return this.ctx.options.engine.readAccount();
   }
 
   beginAuthLogin(): Promise<unknown> {
-    return this.options.engine.beginAccountLogin();
+    return this.ctx.options.engine.beginAccountLogin();
   }
 
   logoutAuth(): Promise<void> {
-    return this.options.engine.logoutAccount();
+    return this.ctx.options.engine.logoutAccount();
   }
 
   async rewindMessages(
     sessionId: string,
     messageId: string,
   ): Promise<"rewound" | "not-found" | "running" | "unavailable"> {
-    const session = this.registry.getSession(sessionId);
+    const session = this.ctx.registry.getSession(sessionId);
     if (!session) return "not-found";
-    const context = this.registry.getThreadForSession(sessionId);
+    const context = this.ctx.registry.getThreadForSession(sessionId);
     if (!context || !session.threadId) return "unavailable";
     if (phaseToExternalStatus(context.phase) === "running") return "running";
     const index = context.messages.findIndex((message) => message.id === messageId);
     const beforeTurnId = context.messages[index]?.turnId;
     if (index < 0 || !beforeTurnId) return "unavailable";
-    await this.options.engine.revertThread(session.threadId, beforeTurnId);
+    await this.ctx.options.engine.revertThread(session.threadId, beforeTurnId);
     context.messages.splice(index);
     context.error = undefined;
-    this.registry.setPhase(context, "idle");
-    this.registry.bumpContentEpoch(session);
-    this.bumpMessageRevision(context);
+    this.ctx.registry.setPhase(context, "idle");
+    this.ctx.registry.bumpContentEpoch(session);
+    this.ctx.callbacks.bumpMessageRevision(context);
     for (const id of context.bridgeSessionIds) {
-      this.options.emit({ type: "session.reconcile-required", sessionId: id });
+      this.ctx.options.emit({ type: "session.reconcile-required", sessionId: id });
     }
     return "rewound";
   }
 
   async setSessionTitle(sessionId: string, title: string): Promise<boolean> {
-    const session = this.registry.getSession(sessionId);
+    const session = this.ctx.registry.getSession(sessionId);
     if (!session) return false;
     session.title = title;
     session.titleSource = "explicit";
-    if (session.threadId) await this.options.engine.setThreadName(session.threadId, title);
+    if (session.threadId) await this.ctx.options.engine.setThreadName(session.threadId, title);
     return true;
   }
 
@@ -1005,13 +1034,13 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     sessionId: string,
     body: Record<string, unknown>,
   ): Promise<"updated" | "not-found" | "running" | "unavailable" | "memory-only"> {
-    const session = this.registry.getSession(sessionId);
+    const session = this.ctx.registry.getSession(sessionId);
     if (!session) return "not-found";
-    await this.touchSession(sessionId);
-    const context = this.registry.getThreadForSession(sessionId);
+    await this.ctx.callbacks.touchSession(sessionId);
+    const context = this.ctx.registry.getThreadForSession(sessionId);
     if (context && phaseToExternalStatus(context.phase) === "running") return "running";
 
-    const nextConfig = this.toEngineConfig({
+    const nextConfig = this.lifecycle.toEngineConfig({
       ...body,
       ...(body.policy ? {} : { policy: session.config.policy }),
     });
@@ -1022,7 +1051,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       // ensureAttached fast-returns a healthy current-generation context, but
       // re-resumes one invalidated by a failed generation recovery. Never update
       // configuration through a handle owned by the dead child.
-      attached = await this.ensureAttached(sessionId);
+      attached = await this.ctx.callbacks.ensureAttached(sessionId);
       if (attached && phaseToExternalStatus(attached.phase) === "running") return "running";
       if (attached) {
         previousConfirmedModel = attached.modelId;
@@ -1030,7 +1059,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
         // Configuration is transactional from the bridge's perspective: a failed
         // engine update must leave both memory and the durable session record on
         // the last configuration the engine actually accepted.
-        await this.options.engine.configureThread(attached.engineHandle, nextConfig);
+        await this.ctx.options.engine.configureThread(attached.engineHandle, nextConfig);
       }
     } catch (error) {
       if (attached && requestedModelChanged) {
@@ -1048,18 +1077,18 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
 
     session.config = nextConfig;
     session.configurationRevision += 1;
-    this.registry.touch(sessionId);
+    this.ctx.registry.touch(sessionId);
     return (await this.persistSessionVerified(session)) ? "updated" : "memory-only";
   }
 
   async getMessages(sessionId: string): Promise<NormalizedMessage[] | null> {
-    const session = this.registry.getSession(sessionId);
+    const session = this.ctx.registry.getSession(sessionId);
     if (!session) return null;
-    await this.touchSession(sessionId);
+    await this.ctx.callbacks.touchSession(sessionId);
 
     let context: ThreadContext | undefined;
     try {
-      context = await this.ensureAttached(sessionId);
+      context = await this.ctx.callbacks.ensureAttached(sessionId);
     } catch (error) {
       // A read must never fail on an ambiguous re-attach. The binding is
       // deliberately preserved for the next attempt (see ensureAttached), so the
@@ -1069,12 +1098,14 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
         `[codex-bridge] Serving the last known transcript for session ${sessionId}:`,
         error instanceof Error ? error.message : error,
       );
-      const known = this.registry.getThreadForSession(sessionId);
-      return known ? this.messagesForSession(session, known) : [...session.localMessages];
+      const known = this.ctx.registry.getThreadForSession(sessionId);
+      return known
+        ? this.ctx.callbacks.messagesForSession(session, known)
+        : [...session.localMessages];
     }
     if (!context) return [...session.localMessages];
 
-    return this.messagesForSession(session, context);
+    return this.ctx.callbacks.messagesForSession(session, context);
   }
 
   /**
@@ -1087,10 +1118,10 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     freshness: "cached" | "current";
     complete: boolean;
   } | null {
-    const session = this.registry.getSession(sessionId);
+    const session = this.ctx.registry.getSession(sessionId);
     if (!session) return null;
-    const context = this.registry.getThreadForSession(sessionId);
-    const complete = this.transcriptComplete(sessionId);
+    const context = this.ctx.registry.getThreadForSession(sessionId);
+    const complete = this.ctx.callbacks.transcriptComplete(sessionId);
     // An attached thread's transcript is the same array `getMessages` would
     // return, so it is current; only the detached fallback to the retained
     // local tail is a cache. Reporting the difference is what lets the backend
@@ -1102,7 +1133,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     // concurrent poll can persist `{ current, complete, [] }` over the tail.
     if (context?.transcriptHydrated)
       return {
-        messages: this.messagesForSession(session, context),
+        messages: this.ctx.callbacks.messagesForSession(session, context),
         freshness: "current",
         complete,
       };
@@ -1119,7 +1150,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
    * are genuinely gone, so this is a notice rather than a paging cursor.
    */
   transcriptComplete(sessionId: string): boolean {
-    const session = this.registry.getSession(sessionId);
+    const session = this.ctx.registry.getSession(sessionId);
     if (!session || session.localMessagesTrimmed) return false;
 
     /*
@@ -1135,21 +1166,21 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
      * transcript (for example recovered context whose rollout is gone).
      */
     if (session.threadId === null) return true;
-    return this.registry.getThreadForSession(sessionId)?.transcriptHydrated === true;
+    return this.ctx.registry.getThreadForSession(sessionId)?.transcriptHydrated === true;
   }
 
   async getUsage(sessionId: string): Promise<EngineUsageSnapshot | undefined | null> {
-    const session = this.registry.getSession(sessionId);
+    const session = this.ctx.registry.getSession(sessionId);
     if (!session) return null;
-    void this.touchSession(sessionId);
-    const readAccountUsage = this.options.engine.readAccountUsage;
+    void this.ctx.callbacks.touchSession(sessionId);
+    const readAccountUsage = this.ctx.options.engine.readAccountUsage;
     const providerAccount = readAccountUsage
-      ? await readAccountUsage.call(this.options.engine)
+      ? await readAccountUsage.call(this.ctx.options.engine)
       : undefined;
-    const previous = session.threadId ? this.usageByThread.get(session.threadId) : undefined;
+    const previous = session.threadId ? this.ctx.usageByThread.get(session.threadId) : undefined;
     const withLimits = mergeAccountUsage(
       previous?.account,
-      accountUsageFromLimits(this.accountRateLimits, this.accountCredits),
+      accountUsageFromLimits(this.ctx.accountRateLimits, this.ctx.accountCredits),
     );
     const account = mergeAccountUsage(withLimits, providerAccount);
     if (!previous && !account) return undefined;
@@ -1160,13 +1191,13 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
         percentUsed: 0,
         estimated: false,
         source: "codex",
-        updatedAt: new Date(this.now()).toISOString(),
+        updatedAt: new Date(this.ctx.now()).toISOString(),
       }),
       ...(account ? { account } : {}),
-      updatedAt: new Date(this.now()).toISOString(),
+      updatedAt: new Date(this.ctx.now()).toISOString(),
     };
-    if (session.threadId) this.usageByThread.set(session.threadId, usage);
-    this.options.emit({
+    if (session.threadId) this.ctx.usageByThread.set(session.threadId, usage);
+    this.ctx.options.emit({
       type: "session.updated",
       sessionId,
       data: { contextUsage: usage },
@@ -1196,19 +1227,19 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     commandRevision?: number;
     readiness?: { state: "authentication-required"; message: string };
   } | null {
-    const session = this.registry.getSession(sessionId);
+    const session = this.ctx.registry.getSession(sessionId);
     if (!session) return null;
-    if (touch) void this.touchSession(sessionId);
-    const context = this.registry.getThreadForSession(sessionId);
+    if (touch) void this.ctx.callbacks.touchSession(sessionId);
+    const context = this.ctx.registry.getThreadForSession(sessionId);
     // A restored thread whose journal record has not been settled yet may still
     // be executing its last turn. `idle` here would let the build pipeline
     // advance on a turn whose fate is unknown.
     const awaitingRecovery =
-      session.threadId !== null && this.threadsAwaitingDispatchRecovery.has(session.threadId);
+      session.threadId !== null && this.ctx.threadsAwaitingDispatchRecovery.has(session.threadId);
     const phase =
       context?.phase ??
       (awaitingRecovery ? "recovering" : session.restartFailure ? "failed" : "idle");
-    const latestDispatch = this.journal.latestForSession(sessionId);
+    const latestDispatch = this.ctx.journal.latestForSession(sessionId);
 
     return {
       // Keeps the pre-migration contract; `phase` carries the new detail.
@@ -1234,18 +1265,18 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
         : {}),
       structuredOutputRequestId: session.structuredOutputRequestId,
       structuredOutput: session.structuredOutput,
-      contextUsage: session.threadId ? this.usageByThread.get(session.threadId) : undefined,
-      engineGeneration: this.options.engine.info().generation,
+      contextUsage: session.threadId ? this.ctx.usageByThread.get(session.threadId) : undefined,
+      engineGeneration: this.ctx.options.engine.info().generation,
       messageRevision: session.messageRevision,
       contentEpoch: session.contentEpoch,
       // The command inventory revision `/session/:id/commands` reports. An
       // in-memory counter: reading it scans nothing and lists no skills. The
       // backend revalidates its cached catalogue when it moves.
-      ...(this.commandCatalogue.revision > 0
-        ? { commandRevision: this.commandCatalogue.revision }
+      ...(this.ctx.commandCatalogue.revision > 0
+        ? { commandRevision: this.ctx.commandCatalogue.revision }
         : {}),
       // Omitted rather than "ready" otherwise: only a confirmed sign-out is known.
-      ...(this.options.engine.isAccountSignInRequired()
+      ...(this.ctx.options.engine.isAccountSignInRequired()
         ? {
             readiness: {
               state: "authentication-required" as const,
@@ -1270,16 +1301,16 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
    * resurrect a conversation nobody is looking at.
    */
   getActivity(sessionId: string): "idle" | "working" | "waiting" | "missing" {
-    const session = this.registry.getSession(sessionId);
+    const session = this.ctx.registry.getSession(sessionId);
     // In-band, so the caller can tell "this session is gone" apart from "this
     // bridge does not have the route" (see the /session/:id/activity handler).
     if (!session) return "missing";
 
-    const context = this.registry.getThreadForSession(sessionId);
+    const context = this.ctx.registry.getThreadForSession(sessionId);
     // Same rule as `getStatus`: a restored thread whose journal record has not
     // been settled yet may still be executing its last turn.
     const awaitingRecovery =
-      session.threadId !== null && this.threadsAwaitingDispatchRecovery.has(session.threadId);
+      session.threadId !== null && this.ctx.threadsAwaitingDispatchRecovery.has(session.threadId);
     const phase = context?.phase ?? (awaitingRecovery ? "recovering" : "idle");
 
     // `starting`, `cancelling` and `recovering` all map to `running`. Reporting
@@ -1296,7 +1327,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
   } {
     const activity = this.getActivity(sessionId);
     if (activity === "missing") return { activity };
-    const session = this.registry.getSession(sessionId);
+    const session = this.ctx.registry.getSession(sessionId);
     if (!session) return { activity: "missing" };
     return {
       activity,
@@ -1313,12 +1344,12 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
    * materializing their arrays — this runs on the backend's activity poll, once
    * per session, every couple of seconds.
    */
-  protected hasParkedInput(session: BridgeSession): boolean {
+  hasParkedInput(session: BridgeSession): boolean {
     if (!session.threadId) return false;
-    for (const entry of this.pendingApprovals.values()) {
+    for (const entry of this.ctx.pendingApprovals.values()) {
       if (entry.request.threadId === session.threadId) return true;
     }
-    for (const entry of this.pendingInteractions.values()) {
+    for (const entry of this.ctx.pendingInteractions.values()) {
       if (entry.request.threadId === session.threadId) return true;
     }
     return false;
@@ -1328,9 +1359,9 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     sessionId: string,
     requestId?: string,
   ): { requestId?: string; structuredOutput: StructuredOutputResult | null } | null {
-    const session = this.registry.getSession(sessionId);
+    const session = this.ctx.registry.getSession(sessionId);
     if (!session) return null;
-    void this.touchSession(sessionId);
+    void this.ctx.callbacks.touchSession(sessionId);
     if (
       requestId &&
       session.structuredOutputRequestId &&
@@ -1345,7 +1376,7 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
   }
 
   async deleteSession(sessionId: string): Promise<boolean> {
-    const session = this.registry.getSession(sessionId);
+    const session = this.ctx.registry.getSession(sessionId);
     if (session) this.deleteClaims.add(session);
     return (await this.releaseBridgeSession(sessionId, "best-effort")) === "released";
   }
@@ -1366,32 +1397,33 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
    *   stays registered, so the caller can report pending instead of claiming a
    *   removal that the next start would undo.
    */
-  protected async releaseBridgeSession(
+  async releaseBridgeSession(
     sessionId: string,
     publication: "best-effort" | "strict",
   ): Promise<"released" | "missing" | "unpublished"> {
-    const session = this.registry.getSession(sessionId);
+    const session = this.ctx.registry.getSession(sessionId);
     if (!session) return "missing";
 
-    const context = this.registry.getThreadForSession(sessionId);
+    const context = this.ctx.registry.getThreadForSession(sessionId);
     const turn = context?.activeTurn;
     // Last tab: stop the turn before detaching. DELETE used to only
     // unsubscribe, so Codex kept editing the worktree after the UI closed.
     if (context && turn && context.bridgeSessionIds.size === 1) {
-      await this.options.engine
+      await this.ctx.options.engine
         .interruptTurn(context.engineHandle, turn.turnId)
         .catch(() => undefined);
     }
 
     this.retiredSessions.add(session);
     try {
-      await this.store.publishRemoval(sessionId);
+      await this.ctx.store.publishRemoval(sessionId);
     } catch (error) {
       if (publication === "strict") {
         if (!this.deleteClaims.has(session)) {
           this.retiredSessions.delete(session);
           // Restore updates only if no concurrent DELETE has claimed removal.
-          if (this.registry.getSession(sessionId) === session) await this.persistSession(session);
+          if (this.ctx.registry.getSession(sessionId) === session)
+            await this.ctx.callbacks.persistSession(session);
         }
         return "unpublished";
       }
@@ -1401,39 +1433,39 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
       );
     }
     // A concurrent release may have won the race while the write was in flight.
-    if (this.registry.getSession(sessionId) !== session) return "released";
+    if (this.ctx.registry.getSession(sessionId) !== session) return "released";
 
     // Answered before the registry drops the thread, so the router can still map
     // the approval to a session and the pending turn is not left waiting on a
     // prompt whose UI has gone away.
-    const { removedThread } = this.registry.releaseSession(sessionId);
-    this.lastPersistedAccess.delete(sessionId);
+    const { removedThread } = this.ctx.registry.releaseSession(sessionId);
+    this.ctx.lastPersistedAccess.delete(sessionId);
     // The id is free again: a client-keyed session may legitimately be recreated.
-    this.closingSessionIds.delete(sessionId);
+    this.ctx.closingSessionIds.delete(sessionId);
 
     if (removedThread) {
       // Only the final tab releases the human decision. Another tab attached to
       // this canonical thread can still show and answer the same approval.
-      this.options.engine.abandonThreadApprovals(removedThread.threadId);
+      this.ctx.options.engine.abandonThreadApprovals(removedThread.threadId);
       // Last reference: release the thread but never delete the rollout.
-      this.releaseThreadRuntimeState(removedThread.threadId);
-      await this.options.engine
+      this.lifecycle.releaseThreadRuntimeState(removedThread.threadId);
+      await this.ctx.options.engine
         .unsubscribeThread(removedThread.engineHandle)
         .catch(() => undefined);
     }
     return "released";
   }
 
-  protected async persistSession(session: BridgeSession): Promise<void> {
+  async persistSession(session: BridgeSession): Promise<void> {
     if (!session.threadId) return;
     if (this.retiredSessions.has(session)) return;
-    this.lastPersistedAccess.set(session.id, session.lastAccessed);
-    const write = this.store
+    this.ctx.lastPersistedAccess.set(session.id, session.lastAccessed);
+    const write = this.ctx.store
       .upsert(
-        this.store.toRecord({
+        this.ctx.store.toRecord({
           bridgeSessionId: session.id,
           threadId: session.threadId,
-          cwd: this.options.cwd,
+          cwd: this.ctx.options.cwd,
           config: session.config,
           title: session.title,
           titleSource: session.titleSource,
@@ -1447,11 +1479,11 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
         }),
       )
       .catch(() => undefined);
-    this.pendingSessionWrites.add(write);
+    this.ctx.pendingSessionWrites.add(write);
     try {
       await write;
     } finally {
-      this.pendingSessionWrites.delete(write);
+      this.ctx.pendingSessionWrites.delete(write);
     }
   }
 
@@ -1466,16 +1498,16 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
    * A session with no thread yet has nothing durable to write, which is the
    * designed state rather than a failure.
    */
-  protected async persistSessionVerified(session: BridgeSession): Promise<boolean> {
+  async persistSessionVerified(session: BridgeSession): Promise<boolean> {
     if (!session.threadId) return true;
-    await this.persistSession(session);
+    await this.ctx.callbacks.persistSession(session);
     return this.isSessionConfigPersisted(session);
   }
 
-  protected async isSessionConfigPersisted(session: BridgeSession): Promise<boolean> {
+  async isSessionConfigPersisted(session: BridgeSession): Promise<boolean> {
     if (!session.threadId) return true;
     try {
-      const persisted = (await this.store.load()).find(
+      const persisted = (await this.ctx.store.load()).find(
         (record) => record.bridgeSessionId === session.id,
       );
       if (!persisted) return false;
@@ -1499,9 +1531,9 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     durable: boolean;
     policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
   } | null> {
-    const session = this.registry.getSession(sessionId);
+    const session = this.ctx.registry.getSession(sessionId);
     if (!session) return null;
-    await this.touchSession(sessionId);
+    await this.ctx.callbacks.touchSession(sessionId);
     return {
       ...(session.config.model ? { model: session.config.model } : {}),
       ...(session.config.reasoningEffort
@@ -1520,23 +1552,23 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
    * The interval shrinks for deliberately short retention windows, which keeps
    * the invariant that at least one heartbeat is possible before expiry.
    */
-  protected touchSession(sessionId: string): Promise<void> {
-    this.registry.touch(sessionId);
-    const session = this.registry.getSession(sessionId);
+  touchSession(sessionId: string): Promise<void> {
+    this.ctx.registry.touch(sessionId);
+    const session = this.ctx.registry.getSession(sessionId);
     if (!session?.threadId) return Promise.resolve();
 
-    const retentionMs = this.options.sessionRetentionMs ?? DEFAULT_SESSION_RETENTION_MS;
+    const retentionMs = this.ctx.options.sessionRetentionMs ?? DEFAULT_SESSION_RETENTION_MS;
     const persistIntervalMs =
       retentionMs > 0
         ? Math.min(DEFAULT_SESSION_ACTIVITY_PERSIST_INTERVAL_MS, Math.max(1, retentionMs / 2))
         : DEFAULT_SESSION_ACTIVITY_PERSIST_INTERVAL_MS;
-    const lastPersisted = this.lastPersistedAccess.get(sessionId) ?? 0;
+    const lastPersisted = this.ctx.lastPersistedAccess.get(sessionId) ?? 0;
     if (session.lastAccessed - lastPersisted < persistIntervalMs) return Promise.resolve();
 
     // Reserve the interval before awaiting the store so concurrent status polls
     // coalesce onto one write instead of all observing the old timestamp.
-    this.lastPersistedAccess.set(sessionId, session.lastAccessed);
-    return this.persistSession(session);
+    this.ctx.lastPersistedAccess.set(sessionId, session.lastAccessed);
+    return this.ctx.callbacks.persistSession(session);
   }
 
   // ------------------------------------------------------------------ prompt

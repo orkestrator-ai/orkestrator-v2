@@ -14,7 +14,7 @@ timeouts, cache behavior, or failure artifacts.
 
 ## Prerequisites
 
-- macOS or Linux, mise with the repository-pinned Bun 1.4.2 installed, and
+- macOS or Linux, mise with the repository-pinned Bun 1.4.3 installed, and
   repository dependencies installed.
 - Docker only for container fixture environments. The default fixture and local
   smoke path do not require a Docker image.
@@ -303,6 +303,34 @@ installed; the scenario runs only a Codex model turn. The scenario temporarily
 seeds an empty `.claude.json` onboarding marker in the profile's isolated HOME
 if it is absent, and removes only the marker it created during cleanup. This
 does not authenticate Claude or modify the host's configuration.
+
+The live OpenCode spec (`e2e/agent-testing/opencode-live.spec.ts`) has its own
+opt-in and uses the host's OpenCode credentials. It also requires a pinned
+model, written as `<provider>/<model>`, from a provider your OpenCode login has
+connected. The shipped default fails when its provider is not connected; see
+[`01-opencode-default-model-not-connected.md`](../2026-10-14/01-opencode-default-model-not-connected.md).
+The build-pipeline case also needs a model that emits reasoning.
+
+```bash
+mise run dev:test --profile qa-opencode-live --fixture --credential-source opencode --agent-platforms opencode
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-opencode-live ORKESTRATOR_AGENT_TEST_LIVE_OPENCODE=1 \
+  ORKESTRATOR_AGENT_TEST_OPENCODE_MODEL='<provider>/<model>' \
+  mise run test:logged -- --name opencode-live -- mise run test:agent:browser -- \
+  e2e/agent-testing/opencode-live.spec.ts
+mise run dev:stop --profile qa-opencode-live
+mise run dev:reset --profile qa-opencode-live
+```
+
+The native-tab case sends a real turn and switches environments while it
+runs. It then checks the transcript after returning and after a hard reload.
+It also checks Agent Info usage metrics, undo, redo, compact and fork. The
+build-pipeline case starts an OpenCode build on the pinned model. It checks
+that the served transcript has no raw `{ info, parts }` envelopes, then checks
+that thinking and timed tool rows render before and after reload. Each case
+removes its pipeline and environments during cleanup. The spec never presses
+**Share…**, which would publish the conversation. Without the opt-in, every
+case is skipped and no profile is needed.
 
 Do not add another `tee`; the terminal harness may already retain output, and a
 second verbatim copy recreates the disk-amplification problem. On failure the

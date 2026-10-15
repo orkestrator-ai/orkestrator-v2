@@ -196,6 +196,17 @@ export async function sweepOrphanedEnvironmentState(
   return removed;
 }
 
+/**
+ * Removes design canvases whose environment was deleted or no longer exists.
+ * A missing, corrupt or incomplete owner store aborts it, even when ordinary
+ * environment reads would return an empty fallback.
+ */
+export async function sweepOrphanedDesignCanvases(context: CommandContext): Promise<number> {
+  if (!context.design) return 0;
+  const live = await context.storage.loadEnvironmentIdsForCleanup();
+  return context.design.sweepOrphanedCanvases(live, ORPHANED_STATE_MIN_AGE_MS);
+}
+
 /** How often each project's local branches are checked for orphans. */
 export const ORPHANED_BRANCH_SWEEP_INTERVAL_MS = 24 * 60 * 60_000;
 /**
@@ -773,6 +784,18 @@ export async function runStartupEnvironmentCleanup(
         console.warn(
           `[backend] Orphaned environment state sweep failed: ${redactCleanupError(error)}`,
         );
+      }
+      if (!state.cancelled) {
+        try {
+          const removed = await sweepOrphanedDesignCanvases(context);
+          if (removed > 0) {
+            console.info(`[backend] Removed ${removed} orphaned design canvas(es)`);
+          }
+        } catch (error) {
+          console.warn(
+            `[backend] Orphaned design canvas sweep failed: ${redactCleanupError(error)}`,
+          );
+        }
       }
       if (!state.cancelled) {
         await sweepPreLedgerDiskState(context, { isCancelled: () => state.cancelled });

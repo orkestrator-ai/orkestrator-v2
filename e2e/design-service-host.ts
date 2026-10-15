@@ -13,9 +13,9 @@ import { createInterface } from "node:readline";
 import {
   registerDesignCommandHandlers,
   type DesignCommandContext,
-} from "../apps/backend/src/core/design-commands";
-import { DesignService } from "../apps/backend/src/core/design-service";
-import { runDesignAction } from "../apps/backend/src/core/design-tools";
+} from "../apps/backend/src/core/design/commands";
+import { DesignService } from "../apps/backend/src/core/design/service";
+import { runDesignAction } from "../apps/backend/src/core/design/tools";
 import {
   DESIGN_FIXTURE_ENVIRONMENT,
   DESIGN_SERVICE_METHODS,

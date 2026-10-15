@@ -247,7 +247,7 @@ describe("NativeAgentService projection lifecycle", () => {
           // carrying a prompt the user is waiting on, and disposing it aborts
           // every request it has in flight.
           expect(stale.dispose).not.toHaveBeenCalled();
-          expect(internals(service).providers.size).toBe(0);
+          expect(internals(service).providerRegistry.stateForTesting().providers.size).toBe(0);
 
           clock += 2_000;
           await service.reconcileAgentActivity();
@@ -322,7 +322,9 @@ describe("NativeAgentService projection lifecycle", () => {
       activity: async () => {
         // Stand in for a tab that resolved a fresh provider while this
         // read-only sweep was in flight.
-        internals(serviceRef!).providers.set("env-1\u0000codex", replacement.provider);
+        internals(serviceRef!)
+          .providerRegistry.stateForTesting()
+          .providers.set("env-1\u0000codex", replacement.provider);
         throw new ProviderUnavailableError("bridge stopped");
       },
     });
@@ -346,7 +348,9 @@ describe("NativeAgentService projection lifecycle", () => {
           await service.reconcileAgentActivity();
         });
 
-        expect(internals(service).providers.get("env-1\u0000codex")).toBe(replacement.provider);
+        expect(internals(service).providerRegistry.cached("env-1\u0000codex")).toBe(
+          replacement.provider,
+        );
         expect(replacement.dispose).not.toHaveBeenCalled();
         expect(failing.dispose).not.toHaveBeenCalled();
       },

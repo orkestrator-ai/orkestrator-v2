@@ -8,7 +8,7 @@ import {
   type ResumableBuildPhase,
 } from "@orkestrator/protocol/build-pipeline";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
-import { useCodexStore } from "@/stores/codexStore";
+import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import * as realBackend from "@/lib/backend";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
@@ -1629,9 +1629,9 @@ describe("BuildChatTab presentation", () => {
   });
 
   test("shows iteration letters, the friendly model name, elapsed time, and tokens", () => {
-    const previousModels = useCodexStore.getState().models;
-    useCodexStore.setState({
-      models: [
+    const previousModels = useAgentModelCatalogStore.getState().codexModels;
+    useAgentModelCatalogStore.setState({
+      codexModels: [
         {
           id: "gpt-5.6-sol",
           name: "GPT 5.6 Sol",
@@ -1676,7 +1676,7 @@ describe("BuildChatTab presentation", () => {
       ).toBe("1m 35s · 12k tokens");
     } finally {
       cleanup();
-      useCodexStore.setState({ models: previousModels });
+      useAgentModelCatalogStore.setState({ codexModels: previousModels });
     }
   });
 
@@ -1748,9 +1748,9 @@ describe("BuildChatTab presentation", () => {
   });
 
   test("keeps a surviving Review 2 tab on letter B and its configured model", () => {
-    const previousModels = useCodexStore.getState().models;
-    useCodexStore.setState({
-      models: [
+    const previousModels = useAgentModelCatalogStore.getState().codexModels;
+    useAgentModelCatalogStore.setState({
+      codexModels: [
         {
           id: "gpt-5.6-sol",
           name: "GPT 5.6 Sol",
@@ -1792,14 +1792,14 @@ describe("BuildChatTab presentation", () => {
       expect(screen.queryByText("Opus") === null).toBe(true);
     } finally {
       cleanup();
-      useCodexStore.setState({ models: previousModels });
+      useAgentModelCatalogStore.setState({ codexModels: previousModels });
     }
   });
 
   test("letters the live retry pair A/B and keeps each slot's configured model", () => {
-    const previousModels = useCodexStore.getState().models;
-    useCodexStore.setState({
-      models: [
+    const previousModels = useAgentModelCatalogStore.getState().codexModels;
+    useAgentModelCatalogStore.setState({
+      codexModels: [
         {
           id: "gpt-5.6-sol",
           name: "GPT 5.6 Sol",
@@ -1884,7 +1884,7 @@ describe("BuildChatTab presentation", () => {
       expect(screen.getAllByText("Opus").length).toBeGreaterThan(0);
     } finally {
       cleanup();
-      useCodexStore.setState({ models: previousModels });
+      useAgentModelCatalogStore.setState({ codexModels: previousModels });
     }
   });
 
@@ -3595,6 +3595,33 @@ describe("BuildChatTab presentation", () => {
     fireEvent.click(screen.getByText("Build Session"));
     await waitFor(() => expect(screen.getByText(/Build choice/)).toBeTruthy());
     expect(screen.queryByText(/Verify choice/) === null).toBe(true);
+  });
+
+  test("says on the stage when its configured model was substituted", () => {
+    const message = "claude-sonnet-5 isn't available with your OpenCode login; using GPT-5.6 Luna.";
+    renderTab({
+      ...pipeline,
+      id: "model-substitution",
+      sessions: [
+        {
+          ...pipeline.sessions[0]!,
+          agent: "opencode",
+          model: "opencode-go/gpt-5.6-luna",
+          modelSubstitution: {
+            requestedModelId: "opencode/claude-sonnet-5",
+            modelId: "opencode-go/gpt-5.6-luna",
+            message,
+          },
+        },
+        pipeline.sessions[1]!,
+      ],
+      currentSessionIndex: 1,
+      backendRevision: 50,
+    });
+
+    const [buildTab, verifyTab] = screen.getAllByRole("tab");
+    expect(buildTab!.textContent).toContain(message);
+    expect(verifyTab!.textContent).not.toContain("isn't available");
   });
 });
 

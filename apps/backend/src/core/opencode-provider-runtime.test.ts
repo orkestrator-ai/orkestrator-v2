@@ -13,10 +13,22 @@ import {
   openCodeProvider,
   openCodeActivityProvider,
 } from "./agent-provider-test-support.js";
-import { normalizeOpenCodeComposerCatalog } from "./opencode-model-catalog.js";
+import { withService, waitForCondition } from "./native-agent-service-projection-test-support.js";
+import {
+  normalizeOpenCodeComposerCatalog,
+  openCodeModelSubstitution,
+  resolveOpenCodeDefaultModel,
+} from "./opencode-model-catalog.js";
+import {
+  OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE,
+  OPENCODE_PROVIDER_LIST_RESPONSE,
+} from "./opencode-provider-list-test-fixtures.js";
 import { openCodeHistoryServer } from "./opencode-history-test-support.js";
 import { nativeCapabilities, nativeComposerControls } from "./native-agent-service-shared.js";
-import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
+import {
+  DEFAULT_OPENCODE_MODEL_PROVIDERS,
+  EMPTY_NATIVE_AGENT_COMPOSER_STATE,
+} from "@orkestrator/protocol/native-agent";
 
 describe("OpenCode provider runtime", () => {
   test.each([["permission"], ["question"]] as const)(
@@ -687,11 +699,7 @@ describe("OpenCode provider runtime", () => {
             },
           },
         ],
-        default: {
-          providerID: "opencode",
-          modelID: "claude-sonnet",
-          variant: "high",
-        },
+        default: { opencode: "claude-sonnet" },
       },
     }));
     Object.assign(fake.client as object, { provider: { list: providerList } });
@@ -729,7 +737,6 @@ describe("OpenCode provider runtime", () => {
         shareUrl: "https://share.opencode.test/live",
         composer: {
           selectedModelId: "opencode/claude-sonnet",
-          selectedReasoningId: "high",
           models: [
             {
               id: "opencode/claude-sonnet",
@@ -758,7 +765,7 @@ describe("OpenCode provider runtime", () => {
                 models: { "nemotron-ultra-free": { name: "Nemotron Ultra Free" } },
               },
             ],
-            default: { providerID: "opencode", modelID: "nemotron-ultra-free" },
+            default: { opencode: "nemotron-ultra-free" },
           },
         })),
       },
@@ -795,7 +802,7 @@ describe("OpenCode provider runtime", () => {
             models: { "claude-sonnet": { name: "Claude Sonnet", variants: { high: {} } } },
           },
         ],
-        default: { providerID: "opencode", modelID: "claude-sonnet", variant: "high" },
+        default: { opencode: "claude-sonnet" },
       },
       [],
     );
@@ -803,7 +810,7 @@ describe("OpenCode provider runtime", () => {
       ...EMPTY_NATIVE_AGENT_COMPOSER_STATE,
       models: catalog.models,
       selectedModelId: catalog.selectedModelId,
-      selectedReasoningId: catalog.selectedReasoningId,
+      selectedReasoningId: "high",
     };
     const controls = nativeComposerControls(
       composer,
@@ -823,6 +830,152 @@ describe("OpenCode provider runtime", () => {
         { id: "high", label: "High" },
       ],
     });
+  });
+
+  // `default` is a map of provider id to model id with an entry for every
+  // provider OpenCode knows. Parsed as anything else it yielded no default at
+  // all, so selection always fell through to the first catalogue row.
+  test("reads OpenCode's default from a real provider list response", () => {
+    const catalog = normalizeOpenCodeComposerCatalog(
+      OPENCODE_PROVIDER_LIST_RESPONSE,
+      DEFAULT_OPENCODE_MODEL_PROVIDERS,
+      { requireConnected: true },
+    );
+
+    // `anthropic` lists first but is outside the allowlist; `opencode-go`
+    // precedes `opencode` in OpenCode's own order.
+    expect(catalog.selectedModelId).toBe("opencode-go/gpt-5.6-luna");
+    expect(catalog.connectedProviderIds).toEqual(["opencode-go", "opencode"]);
+    expect(catalog.models.map((model) => model.id)).toEqual([
+      "opencode-go/mimo-v2.6-pro",
+      "opencode-go/deepseek-v4.1-flash",
+      "opencode-go/gpt-5.6-luna",
+      "opencode/longcat-2.5-preview-free",
+      "opencode/big-pickle",
+    ]);
+    expect(
+      normalizeOpenCodeComposerCatalog(OPENCODE_PROVIDER_LIST_RESPONSE, ["opencode"], {
+        requireConnected: true,
+      }).selectedModelId,
+    ).toBe("opencode/big-pickle");
+  });
+
+  test("skips a default whose provider is not connected", () => {
+    const catalog = normalizeOpenCodeComposerCatalog(
+      { ...OPENCODE_PROVIDER_LIST_RESPONSE, connected: ["opencode"] },
+      DEFAULT_OPENCODE_MODEL_PROVIDERS,
+    );
+
+    // Unfiltered models still include `opencode-go`, but its default is not
+    // one OpenCode can serve.
+    expect(catalog.models.some((model) => model.id.startsWith("opencode-go/"))).toBe(true);
+    expect(catalog.selectedModelId).toBe("opencode/big-pickle");
+  });
+
+  describe("openCodeModelSubstitution", () => {
+    const goOnly = normalizeOpenCodeComposerCatalog(
+      OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE,
+      DEFAULT_OPENCODE_MODEL_PROVIDERS,
+      { requireConnected: true },
+    );
+
+    test("replaces a configured model whose provider is not connected", () => {
+      expect(openCodeModelSubstitution("opencode/claude-sonnet-5", goOnly)).toEqual({
+        requestedModelId: "opencode/claude-sonnet-5",
+        modelId: "opencode-go/gpt-5.6-luna",
+        message: "claude-sonnet-5 isn't available with your OpenCode login; using GPT-5.6 Luna.",
+      });
+    });
+
+    test("falls back to the first connected model without an OpenCode default", () => {
+      expect(
+        openCodeModelSubstitution("opencode/claude-sonnet-5", {
+          ...goOnly,
+          selectedModelId: undefined,
+        })?.modelId,
+      ).toBe("opencode-go/mimo-v2.6-pro");
+    });
+
+    test.each([
+      ["a connected provider", "opencode-go/deepseek-v4.1-flash", goOnly],
+      [
+        "a catalogue without connectivity",
+        "opencode/claude-sonnet-5",
+        { ...goOnly, connectedProviderIds: undefined },
+      ],
+      [
+        "nothing connected to substitute",
+        "opencode/claude-sonnet-5",
+        { models: [], connectedProviderIds: [] },
+      ],
+      ["a placeholder that names no provider", "default", goOnly],
+    ] as const)("keeps the configured model for %s", (_label, modelId, catalog) => {
+      expect(openCodeModelSubstitution(modelId, catalog)).toBeUndefined();
+    });
+  });
+
+  describe("resolveOpenCodeDefaultModel", () => {
+    const goOnly = normalizeOpenCodeComposerCatalog(
+      OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE,
+      DEFAULT_OPENCODE_MODEL_PROVIDERS,
+      { requireConnected: true },
+    );
+
+    test.each([undefined, "", "default"])(
+      "resolves an unset model (%p) to the effective default",
+      (modelId) => {
+        expect(resolveOpenCodeDefaultModel(modelId, goOnly)).toEqual({
+          modelId: "opencode-go/gpt-5.6-luna",
+        });
+      },
+    );
+
+    test("keeps a connected model and substitutes a disconnected one", () => {
+      expect(resolveOpenCodeDefaultModel("opencode-go/deepseek-v4.1-flash", goOnly)).toEqual({
+        modelId: "opencode-go/deepseek-v4.1-flash",
+      });
+      expect(resolveOpenCodeDefaultModel("opencode/claude-sonnet-5", goOnly)).toMatchObject({
+        modelId: "opencode-go/gpt-5.6-luna",
+        substitution: { requestedModelId: "opencode/claude-sonnet-5" },
+      });
+    });
+
+    test("leaves an unset model to OpenCode when the catalogue is empty", () => {
+      expect(resolveOpenCodeDefaultModel(undefined, { models: [] })).toEqual({});
+    });
+  });
+
+  test("preselects the connected default and substitutes for a login with only opencode-go", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: { list: mock(async () => ({ data: OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE })) },
+    });
+    fake.setSessionGetResponse("owned-session", {
+      data: { id: "owned-session", directory: "/workspace" },
+    });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      const snapshot = await provider.interactiveSnapshot?.("owned-session");
+      expect(snapshot?.composer?.selectedModelId).toBe("opencode-go/gpt-5.6-luna");
+      expect(snapshot?.composer?.models.map((model) => model.id)).toEqual([
+        "opencode-go/mimo-v2.6-pro",
+        "opencode-go/deepseek-v4.1-flash",
+        "opencode-go/gpt-5.6-luna",
+      ]);
+      await expect(provider.connectedModelProviders?.()).resolves.toEqual(["opencode-go"]);
+      await expect(provider.resolveDefaultModel?.("opencode/claude-sonnet-5")).resolves.toEqual({
+        modelId: "opencode-go/gpt-5.6-luna",
+        substitution: expect.objectContaining({ requestedModelId: "opencode/claude-sonnet-5" }),
+      });
+      await expect(
+        provider.resolveDefaultModel?.("opencode-go/deepseek-v4.1-flash"),
+      ).resolves.toEqual({ modelId: "opencode-go/deepseek-v4.1-flash" });
+      await expect(provider.resolveDefaultModel?.(undefined)).resolves.toEqual({
+        modelId: "opencode-go/gpt-5.6-luna",
+      });
+    } finally {
+      await provider.dispose?.();
+    }
   });
 
   test("only exposes providers OpenCode reports as connected", async () => {
@@ -846,10 +999,7 @@ describe("OpenCode provider runtime", () => {
               },
             ],
             connected: ["opencode"],
-            default: {
-              providerID: "hpc-ai",
-              modelID: "deepseek/deepseek-v4-flash",
-            },
+            default: { "hpc-ai": "deepseek/deepseek-v4-flash" },
           },
         })),
       },
@@ -1071,7 +1221,7 @@ describe("OpenCode provider runtime", () => {
           models: { "grok-code": { name: "Grok Code" } },
         },
       ],
-      default: { providerID: "hpc-ai", modelID: "flood-0" },
+      default: { "hpc-ai": "flood-0" },
     },
   });
 
@@ -1164,7 +1314,7 @@ describe("OpenCode provider runtime", () => {
                 ),
               },
             ],
-            default: { providerID: "opencode", modelID: "model-500" },
+            default: { opencode: "model-500" },
           },
         })),
       },
@@ -1232,7 +1382,7 @@ describe("OpenCode provider runtime", () => {
             })),
           },
         ],
-        default: { providerID: "openrouter", modelID: "model-690" },
+        default: { openrouter: "model-690" },
       },
       [],
     );
@@ -1264,7 +1414,7 @@ describe("OpenCode provider runtime", () => {
             })),
           },
         ],
-        default: { providerID: "openrouter", modelID: "other-3" },
+        default: { openrouter: "other-3" },
       },
       [],
       { priorityProviders: ["opencode"] },
@@ -2352,6 +2502,165 @@ describe("OpenCode provider history paging", () => {
         if (!cursor) expect(page.complete).toBe(true);
       }
       expect(ids).toEqual(server.messages.map((message) => message.info.id));
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+});
+
+describe("OpenCode provider forkSession", () => {
+  function withFork(fake: ReturnType<typeof openCodeFake>, data: Record<string, unknown>) {
+    const forkCalls: Array<Record<string, unknown>> = [];
+    Object.assign(fake.client.session, {
+      async fork(parameters: Record<string, unknown>) {
+        forkCalls.push(parameters);
+        return { data };
+      },
+    });
+    return forkCalls;
+  }
+
+  test.each(["fork response", "source stream"] as const)(
+    "preserves the model seeded from %s through registration and adoption without controls",
+    async (modelSource) => {
+      const fake = openCodeFake();
+      const model = {
+        providerID: "opencode-go",
+        id: "deepseek-v4.1-flash",
+        variant: "high",
+      };
+      withFork(fake, {
+        id: "fork-session",
+        ...(modelSource === "fork response" ? { model } : {}),
+      });
+      Object.assign(fake.client, {
+        provider: {
+          list: async () => ({
+            data: {
+              providers: [
+                { id: "opencode", models: { "mimo-v2.6-pro": { name: "MiMo" } } },
+                {
+                  id: "opencode-go",
+                  models: {
+                    "deepseek-v4.1-flash": { name: "DeepSeek", variants: { high: {} } },
+                  },
+                },
+              ],
+              default: { opencode: "mimo-v2.6-pro" },
+            },
+          }),
+        },
+      });
+      // Later metadata reads provide no model: only the fork seed can supply it.
+      fake.setSessionGetResponse("fork-session", {
+        data: { id: "fork-session", directory: "/workspace" },
+      });
+      const provider = openCodeActivityProvider(fake);
+      try {
+        if (modelSource === "source stream") {
+          provider.registerSession?.("owned-session");
+          await waitUntil(() => fake.subscriptions.length === 1);
+          fake.subscriptions[0]!.push({
+            type: "session.updated",
+            properties: {
+              sessionID: "owned-session",
+              info: { id: "owned-session", model },
+            },
+          });
+          await waitForCondition(
+            async () =>
+              (await provider.sessionStateSnapshot?.("owned-session"))?.sessionModelId ===
+              "opencode-go/deepseek-v4.1-flash",
+          );
+        }
+        const fork = await provider.forkSession!("owned-session");
+        provider.registerSession?.(fork.sessionId);
+        expect(await provider.sessionStateSnapshot!(fork.sessionId)).toMatchObject({
+          sessionModelId: "opencode-go/deepseek-v4.1-flash",
+          sessionReasoningId: "high",
+        });
+        await withService(
+          {
+            prefix: "orkestrator-opencode-fork-adopt-",
+            provider: async () => provider,
+          },
+          async ({ service, storage }) => {
+            const identity = {
+              environmentId: "env-1",
+              agent: "opencode" as const,
+              logicalSessionKey: "fork-tab",
+            };
+            const adopted = await service.adoptSession({
+              ...identity,
+              providerSessionId: fork.sessionId,
+            });
+            expect(adopted.controls).toBeUndefined();
+            await waitForCondition(
+              async () =>
+                (await service.getProjection(identity))?.composer?.selectedModelId ===
+                "opencode-go/deepseek-v4.1-flash",
+            );
+            expect((await service.getProjection(identity))?.composer).toMatchObject({
+              selectedModelId: "opencode-go/deepseek-v4.1-flash",
+              selectedReasoningId: "high",
+            });
+            expect((await storage.getNativeAgentSession(adopted.key))?.controls).toBeUndefined();
+            expect(fake.promptCalls).toHaveLength(0);
+          },
+        );
+      } finally {
+        await provider.dispose?.();
+      }
+    },
+  );
+
+  test("seeds the fork's progressive state with the model OpenCode reports for it", async () => {
+    const fake = openCodeFake();
+    const forkCalls = withFork(fake, {
+      id: "fork-session",
+      title: "Forked",
+      model: { providerID: "opencode-go", id: "deepseek-v4.1-flash", variant: "high" },
+    });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      const outcome = await provider.forkSession?.("owned-session", "message-1");
+      expect(outcome).toEqual({ sessionId: "fork-session", title: "Forked" });
+      expect(forkCalls[0]).toMatchObject({ sessionID: "owned-session", messageID: "message-1" });
+      const state = await provider.sessionStateSnapshot?.("fork-session");
+      expect(state?.sessionModelId).toBe("opencode-go/deepseek-v4.1-flash");
+      expect(state?.sessionReasoningId).toBe("high");
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
+  test("falls back to the source session's streamed model when the fork reports none", async () => {
+    const fake = openCodeFake();
+    withFork(fake, { id: "fork-session" });
+    const provider = openCodeActivityProvider(fake);
+    try {
+      provider.registerSession?.("owned-session");
+      await waitUntil(() => fake.subscriptions.length === 1);
+      fake.subscriptions[0]!.push({
+        type: "session.updated",
+        properties: {
+          sessionID: "owned-session",
+          info: {
+            id: "owned-session",
+            model: { providerID: "opencode-go", id: "deepseek-v4.1-flash", variant: "max" },
+          },
+        },
+      });
+      let source = await provider.sessionStateSnapshot?.("owned-session");
+      for (let attempt = 0; !source?.sessionModelId && attempt < 100; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        source = await provider.sessionStateSnapshot?.("owned-session");
+      }
+      expect(source?.sessionModelId).toBe("opencode-go/deepseek-v4.1-flash");
+      await provider.forkSession?.("owned-session");
+      const state = await provider.sessionStateSnapshot?.("fork-session");
+      expect(state?.sessionModelId).toBe("opencode-go/deepseek-v4.1-flash");
+      expect(state?.sessionReasoningId).toBe("max");
     } finally {
       await provider.dispose?.();
     }

@@ -22,6 +22,8 @@ export interface AgentModelOption {
   providerLabel?: string;
   description?: string;
   reasoningEfforts: string[];
+  /** False when the provider was last reported as not connected. */
+  connected?: boolean;
   /**
    * The concrete model this catalog id resolves to on the bridge.
    *
@@ -101,17 +103,18 @@ export function resolveCatalogModelId(
 }
 
 /**
- * The preferred model when the catalog still offers it, otherwise the first one.
+ * The preferred connected model when offered, otherwise the first connected one.
  *
  * A configured default can name a model the running agent no longer exposes;
- * passing it through would send the run to a model that does not exist.
+ * passing it through would send the run to an unavailable model. Cached rows
+ * explicitly marked disconnected are never implicit launcher selections.
  */
 export function firstModelFor(
   agent: LaunchAgent,
   catalog: AgentModelCatalog,
   preferredModels?: Partial<Record<LaunchAgent, string>>,
 ): string {
-  const models = modelsForAgent(catalog, agent);
+  const models = modelsForAgent(catalog, agent).filter((model) => model.connected !== false);
   return (
     resolveCatalogModelId(agent, models, preferredModels?.[agent]) ?? models[0]?.id ?? "default"
   );
@@ -171,6 +174,7 @@ export function toPickerModel(platform: LaunchAgent, option: AgentModelOption): 
         }
       : {}),
     ...(option.supportsSpeed ? { supportsSpeed: true } : {}),
+    ...(option.connected === false ? { connected: false } : {}),
   };
 }
 

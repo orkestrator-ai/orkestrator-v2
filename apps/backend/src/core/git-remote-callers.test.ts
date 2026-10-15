@@ -8,7 +8,7 @@ import path from "node:path";
 import { createNonInteractiveGitFixture } from "./git-noninteractive-test-support.js";
 import { createLocalWorktree } from "./commands-environment.js";
 import { assertForkCommitUsable } from "./commands-environment-fork.js";
-import { gitFetchScheduler } from "./commands-runtime-state.js";
+import { createGitFetchScheduler } from "./diff-stats-tracking.js";
 import { ProjectGitService } from "./project-git-service.js";
 import { createProject, StorageService } from "./storage.js";
 import { runCommand } from "./shell.js";
@@ -17,9 +17,11 @@ import { runRemoteGit } from "./git-noninteractive-env.js";
 jest.setTimeout(30_000);
 let fixture: Awaited<ReturnType<typeof createNonInteractiveGitFixture>>;
 let saved: NodeJS.ProcessEnv;
+let gitFetchScheduler: ReturnType<typeof createGitFetchScheduler>;
 
 beforeEach(async () => {
   fixture = await createNonInteractiveGitFixture();
+  gitFetchScheduler = createGitFetchScheduler();
   saved = { ...process.env };
   process.env.GIT_CONFIG_GLOBAL = fixture.env.GIT_CONFIG_GLOBAL;
   process.env.GIT_CONFIG_NOSYSTEM = "1";

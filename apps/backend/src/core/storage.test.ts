@@ -62,7 +62,9 @@ describe("defaultConfig", () => {
   });
   test("returns the current default model selection", () => {
     const platforms = defaultConfig().global.agentSettings?.platforms;
-    expect(platforms?.opencode?.model).toBe("opencode/claude-sonnet-5");
+    // Unset: OpenCode's connected, allowlisted default, which no fixed id matches
+    // for every login.
+    expect(platforms?.opencode).toEqual({ mode: "terminal" });
     expect(platforms?.claude?.model).toBe("claude-sonnet-5-5");
     expect(platforms?.codex?.model).toBe("gpt-5.4");
     expect(platforms?.codex?.reasoningEffort).toBe("high");
@@ -476,7 +478,10 @@ describe("OpenCode model provider allowlist config", () => {
     });
   });
 
-  test("repoints to the shipped default when no favorite is selectable", async () => {
+  // No model ships as the OpenCode default, so there is nothing fixed to
+  // repoint to. Unset is the effective default: OpenCode's own default among
+  // the connected, allowlisted providers.
+  test("clears an unreachable default when no favorite is selectable", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
       await writeLegacyConfig(dataDir, {
         opencodeModel: "hpc-ai/deepseek/deepseek-v4-flash",
@@ -484,9 +489,9 @@ describe("OpenCode model provider allowlist config", () => {
         favoriteModels: [{ platform: "opencode", modelId: "openrouter/kimi-k2.5" }],
       });
 
-      expect((await storage.loadConfig()).global.agentSettings?.platforms?.opencode?.model).toBe(
-        "opencode/claude-sonnet-5",
-      );
+      const opencode = (await storage.loadConfig()).global.agentSettings?.platforms?.opencode;
+      expect(opencode).toBeDefined();
+      expect(opencode).not.toHaveProperty("model");
     });
   });
 
@@ -558,11 +563,15 @@ describe("OpenCode model provider allowlist config", () => {
         },
       );
 
-      // No selectable favourite, so it lands on the shipped default.
+      // No selectable favourite, so the repository stops overriding and
+      // inherits the global OpenCode default again.
+      const config = await storage.loadConfig();
       expect(
-        (await storage.loadConfig()).repositories["repo-inherited"]?.agentSettings?.platforms
-          ?.opencode?.model,
-      ).toBe("opencode/claude-sonnet-5");
+        config.repositories["repo-inherited"]?.agentSettings?.platforms?.opencode,
+      ).not.toHaveProperty("model");
+      expect(config.global.agentSettings?.platforms?.opencode?.model).toBe(
+        "opencode/claude-sonnet-5",
+      );
     });
   });
 
@@ -608,7 +617,7 @@ describe("OpenCode model provider allowlist config", () => {
     });
   });
 
-  test("keeps an unreachable default when nothing selectable is on hand", async () => {
+  test("clears an unreachable default when nothing selectable is on hand", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
       await writeLegacyConfig(dataDir, {
         opencodeModel: "hpc-ai/deepseek/deepseek-v4-flash",
@@ -616,11 +625,11 @@ describe("OpenCode model provider allowlist config", () => {
         favoriteModels: [],
       });
 
-      // Inventing a model the user never picked would be worse than leaving the
-      // one they can still see in settings.
-      expect((await storage.loadConfig()).global.agentSettings?.platforms?.opencode?.model).toBe(
-        "hpc-ai/deepseek/deepseek-v4-flash",
-      );
+      // Unset rather than unreachable: no picker could have listed it, and the
+      // effective default is a model this login can actually serve.
+      expect(
+        (await storage.loadConfig()).global.agentSettings?.platforms?.opencode,
+      ).not.toHaveProperty("model");
     });
   });
 
@@ -3447,6 +3456,37 @@ describe("OpenCode model catalogue cache", () => {
       ]);
       expect(updated.catalogVersion).not.toBe(initial.catalogVersion);
       expect(updated.models).toHaveLength(3);
+    });
+  });
+
+  test("persists the connected providers beside the catalogue", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const initial = await storage.cacheOpenCodeModelCatalog(projectId, models, [
+        "openrouter",
+        "openrouter",
+        " anthropic ",
+      ]);
+      expect(initial.connectedProviderIds).toEqual(["anthropic", "openrouter"]);
+      expect(Date.parse(initial.connectedProvidersCheckedAt ?? "")).not.toBeNaN();
+      expect(await storage.getOpenCodeModelCatalog(projectId)).toEqual(initial);
+
+      // The same models with new connectivity still rewrites the snapshot, but
+      // keeps the catalogue identity.
+      const reconnected = await storage.cacheOpenCodeModelCatalog(projectId, models, [
+        "openrouter",
+      ]);
+      expect(reconnected.connectedProviderIds).toEqual(["openrouter"]);
+      expect(reconnected.catalogVersion).toBe(initial.catalogVersion);
+      expect(reconnected.updatedAt).toBe(initial.updatedAt);
+
+      // A source without a connectivity report cannot erase the last one.
+      const widened = await storage.cacheOpenCodeModelCatalog(projectId, [
+        ...models,
+        { id: "openrouter/google/gemini", name: "Gemini", provider: "openrouter" },
+      ]);
+      expect(widened.models).toHaveLength(3);
+      expect(widened.connectedProviderIds).toEqual(["openrouter"]);
+      expect(widened.connectedProvidersCheckedAt).toBe(reconnected.connectedProvidersCheckedAt);
     });
   });
 

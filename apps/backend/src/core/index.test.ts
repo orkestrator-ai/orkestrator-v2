@@ -1802,7 +1802,9 @@ test("shutdown applies one deadline across lifecycle and local-operation drains"
   });
 
   let deletion: Promise<void> | undefined;
-  let restarted: OrkestratorBackend | undefined;
+  const design = (backend as unknown as { context: { design: { close(): Promise<void> } } }).context
+    .design;
+  const closeDesign = spyOn(design, "close");
   try {
     // An empty fixture worktree has no tmux runtime to clean up. That
     // best-effort warning is unrelated to shutdown coordination under test.
@@ -1815,40 +1817,21 @@ test("shutdown applies one deadline across lifecycle and local-operation drains"
     await expect(resolvesWithin(shutdown, 1_000)).resolves.toBe("resolved");
     expect(terminationAttempts).toBe(2);
     expect(commandTesting.getLocalServerProcess(`codex:${environmentId}`)).toBeUndefined();
+    expect(closeDesign).not.toHaveBeenCalled();
 
-    // The deletion outlived the deadline. Services it still needs (the design
-    // store, for one) may already be closed, so it can fail part-way; it must
-    // then leave the tombstone for the next startup rather than a half-deleted
-    // environment that looks alive.
     releaseFirstTermination.resolve();
-    await deletion.catch(() => undefined);
-    const remaining = await storage.getEnvironment(environmentId);
-    if (remaining) expect(remaining.lifecycleOperation).toBe("deleting");
-
-    // A restart is a new backend process; drop this one's shutdown state.
-    commandTesting.resetLocalServerLifecycle();
-    restarted = new OrkestratorBackend({
-      dataDir,
-      toolchainBinDir: "",
-      appRoot: "",
-      resourceRoot: "",
-      emit: () => undefined,
-      startupReapers: {
-        localServers: async () => [],
-        claudeTmuxRuntimes: async () => [],
-      },
-    });
-    await restarted.init();
-    await waitForCondition(
-      async () => (await storage.getEnvironment(environmentId)) === null,
-      "the next startup to finish the interrupted deletion",
-    );
+    // Await directly so a rejection reports its cause, not just a failed
+    // `.resolves` matcher (this previously hid a closed design coordinator).
+    expect(await deletion).toBeUndefined();
+    expect(await storage.getEnvironment(environmentId)).toBeNull();
+    await waitForCondition(() => closeDesign.mock.calls.length === 1, "deferred design close");
+    await closeDesign.mock.results[0]!.value;
   } finally {
     console.warn = originalWarn;
     releaseFirstTermination.resolve();
     await deletion?.catch(() => undefined);
-    await restarted?.shutdown().catch(() => undefined);
     await backend.shutdown().catch(() => undefined);
+    closeDesign.mockRestore();
     commandTesting.resetLocalServerLifecycle();
     await fs.rm(dataDir, { recursive: true, force: true });
   }

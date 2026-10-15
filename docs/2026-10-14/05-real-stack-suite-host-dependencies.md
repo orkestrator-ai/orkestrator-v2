@@ -103,7 +103,7 @@ The browser runs turned up two more host problems, and both are fixed:
   `build:cli`.
 - `browser-gateway.spec.ts:386` (project Home) used an `isVisible()` probe
   that raced the same mobile-shell swap. The drawer stayed open and blocked
-  "Open tools". Recorded and resolved as flake 0212.
+  "Open tools". Recorded and resolved as flake 0223.
 
 ### Follow-ups finished the same day
 
@@ -129,6 +129,9 @@ The browser runs turned up two more host problems, and both are fixed:
   instead would leak canvases, because nothing else collects them. The test
   now asserts that invariant: the deletion either finishes or is finished by a
   restarted backend.
+  After merging main, shutdown defers closing design coordination and storage
+  until admitted lifecycle tasks drain. The test now requires the original
+  deletion to finish and verifies that design closes afterwards.
 - **Environment move.** Confirmed as doc 02. With that worker's
   `2ca0b952` applied (not merged here), the real-stack move spec passed on
   this host, which has no tmux socket at all.
@@ -143,12 +146,12 @@ The browser runs turned up two more host problems, and both are fixed:
   unchanged. The suite passes again (189 passed, 57 skipped). No default CI
   job runs it, so `tests/unit/playwright-spec-loading.test.ts` now lists all
   three Playwright configs under Node inside `mise run test`.
-- **Flake 0213 (open).** The narrow host-picker case failed once with the
+- **Flake 0224 (open).** The narrow host-picker case failed once with the
   tools popover closed and passed seven times afterwards.
-- **Flake 0214 (open).** The first `mise run test` after these changes hit
+- **Flake 0225 (open).** The first `mise run test` after these changes hit
   three backend load failures in files this change does not touch (two design
   timeouts and an annotation benchmark bound). All three files pass alone.
-- **Flake 0215 (open).** The second `mise run test` passed the 0214 cases
+- **Flake 0226 (open).** The second `mise run test` passed the 0214 cases
   and every group except one backend timeout in
   `commands-registry-environments.test.ts`, whose file passes alone.
 

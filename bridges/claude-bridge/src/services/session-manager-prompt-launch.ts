@@ -1,0 +1,367 @@
+import type { SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { query } from "@anthropic-ai/claude-agent-sdk";
+import { debugLog } from "./logger.js";
+import { AGENT_MCP_SERVER_NAME } from "./mcp-config.js";
+import {
+  closeQueryControlIfUnused,
+  emitBackgroundTaskSnapshot,
+  forgetRetainedQueryControl,
+  forgetSettlingBackgroundTasksOwnedBy,
+  removeBackgroundTaskCandidatesOwnedBy,
+  settleTasksOwnedByClosedControl,
+} from "./session-manager-background-tasks.js";
+import { readLiveCommandInventory } from "./session-manager-commands.js";
+import {
+  createStructuredUsageRefreshCoordinator,
+  sessionOperationError,
+  sessions,
+} from "./session-manager-core.js";
+import { holdSdkPromptOpen, sdkPromptMessages } from "./session-manager-persistence.js";
+import {
+  claudeQueryOptions,
+  type QueryPlan,
+  recordMcpConfigRevision,
+} from "./session-manager-prompt-query.js";
+import { createClaudeRuntimeTurn } from "./session-manager-prompt-runtime-turn.js";
+import type { PromptTestHooks, TurnState } from "./session-manager-prompt-turn.js";
+import {
+  applyClaudeLiveSettings,
+  assertClaudeRuntimeAccepts,
+  claudeLaunchedProfile,
+  claudeLaunchResourceProfile,
+  type ClaudeRuntime,
+  type ClaudeRuntimeTurn,
+  createClaudeRuntime,
+  openClaudeRuntime,
+  retireDrainingClaudeRuntime,
+  routeClaudeFrame,
+  submitClaudeTurn,
+} from "./session-manager-runtime.js";
+import { reportUltracodeRuntime } from "./ultracode.js";
+
+// Running a turn on the session's one CLI: writing it into the process that
+// is still running, or launching a new one, and the consumer of its frames.
+// Each step ends at an await the turn always made, and everything from the
+// submit to `markQueryStarted` stays synchronous, so no frame is handled
+// before the turn is ready for it.
+
+/**
+ * The single consumer of a runtime's frames, for the life of its process.
+ *
+ * Each frame goes to the turn it belongs to (`routeClaudeFrame`). A turn whose
+ * handler throws ends the process — leaving the loop is the SDK's
+ * `transport.close()` — and that turn's `sendPrompt` reports the error.
+ */
+async function consumeClaudeRuntime(
+  runtime: ClaudeRuntime,
+  frames: AsyncIterable<SDKMessage>,
+  markEnded: () => void,
+): Promise<void> {
+  let failure: { turn: ClaudeRuntimeTurn; error: unknown } | undefined;
+  try {
+    for await (const message of frames) {
+      if (runtime.abortController.signal.aborted) break;
+      const turn = routeClaudeFrame(runtime, message);
+      try {
+        await turn.handleMessage(message);
+      } catch (error) {
+        failure = { turn, error };
+        break;
+      }
+    }
+  } catch (error) {
+    failure = { turn: runtime.latestTurn, error };
+  } finally {
+    endClaudeRuntime(runtime, failure);
+    markEnded();
+  }
+}
+
+/**
+ * Settle everything a finished process owned and release its turns.
+ *
+ * The consumer ends either exhausted or through an abrupt exit, which invokes
+ * `return()`, i.e. the SDK's `cleanup()` → `transport.close()`. So the handle
+ * is dead either way: nothing more can arrive on it and `stopTask` would answer
+ * a stop request with a transport error. Settle what it owned instead of
+ * retaining a handle that can only fail, and never leave a task at `running`.
+ */
+function endClaudeRuntime(
+  runtime: ClaudeRuntime,
+  failure: { turn: ClaudeRuntimeTurn; error: unknown } | undefined,
+): void {
+  runtime.state = "ended";
+  const { session, control } = runtime;
+  if (session.claudeRuntime === runtime) session.claudeRuntime = undefined;
+  // Dropping the retention is what lets the close below actually run.
+  forgetRetainedQueryControl(session, control);
+  removeBackgroundTaskCandidatesOwnedBy(session, control);
+  // The handle is dead, so no edge can still arrive to claim these.
+  forgetSettlingBackgroundTasksOwnedBy(session, control);
+  const settled = settleTasksOwnedByClosedControl(
+    session,
+    control,
+    "The Claude session that owned this task ended before it reported a result",
+  );
+  if (session.queryControl === control) session.queryControl = undefined;
+  if (session.queryControlDraining === control) session.queryControlDraining = undefined;
+  closeQueryControlIfUnused(session, control);
+  if (settled) emitBackgroundTaskSnapshot(session);
+  // A turn that failed after it stopped waiting still ended the process; the
+  // turn the user is waiting on is the one that has to say so.
+  const failedTurn =
+    failure && (runtime.waitingTurns.has(failure.turn) ? failure.turn : runtime.latestTurn);
+  const turns = Array.from(runtime.waitingTurns);
+  runtime.waitingTurns.clear();
+  for (const turn of turns) {
+    turn.runtimeEnded(turn === failedTurn && failure ? { error: failure.error } : undefined);
+  }
+}
+
+/** Drop the claims a failed join made; the previous turn's work is untouched. */
+function abandonJoin(turn: TurnState, running: ClaudeRuntime): void {
+  const { session } = turn;
+  turn.runtime = undefined;
+  if (session.queryControl === running.control) session.queryControl = undefined;
+  turn.queryIteratorControl = undefined;
+  // A setup failure never authorizes killing or replacing shared work.
+  // Leave the previous turn and retention intact; the turn's startup failure
+  // handling restores foreground ownership.
+}
+
+/** Restate this turn's settings on the running CLI, and build its input. */
+async function prepareJoin(turn: TurnState, plan: QueryPlan, running: ClaudeRuntime) {
+  const { session, options } = turn;
+  const { mcpServers, plugins, sdkPrompt, queryEnvironment, liveSettings, mcpServersKey } = plan;
+  // Launch-only settings may have changed while this turn was preparing.
+  await assertClaudeRuntimeAccepts(
+    session,
+    options,
+    claudeLaunchResourceProfile(plugins, queryEnvironment),
+  );
+  // Held from here so the process is not closed as unused while the
+  // settings below are applied.
+  session.queryControl = running.control;
+  turn.queryIteratorControl = running.control;
+  try {
+    await applyClaudeLiveSettings(running, liveSettings);
+    if (running.mcpServers !== mcpServersKey) {
+      if (!running.control.setMcpServers) {
+        throw sessionOperationError(
+          "conflict",
+          "Claude MCP configuration cannot be updated on this runtime",
+        );
+      }
+      // A partial update invalidates the previous identity too. Retrying
+      // either configuration must actually restate it on the CLI.
+      running.mcpServers = "";
+      const result = await running.control.setMcpServers(mcpServers).catch(() => {
+        throw sessionOperationError(
+          "conflict",
+          "Claude MCP configuration could not be applied; retry the prompt",
+        );
+      });
+      if (
+        !result ||
+        typeof result !== "object" ||
+        !("errors" in result) ||
+        !result.errors ||
+        typeof result.errors !== "object" ||
+        Array.isArray(result.errors) ||
+        Object.keys(result.errors).length > 0
+      ) {
+        throw sessionOperationError(
+          "conflict",
+          "Claude MCP configuration could not be applied; retry the prompt",
+        );
+      }
+    }
+    // Required injected servers can disconnect even without a config change.
+    if (mcpServers[AGENT_MCP_SERVER_NAME]) {
+      const statuses = await running.control.mcpServerStatus?.().catch(() => {
+        running.mcpServers = "";
+        throw sessionOperationError(
+          "conflict",
+          "Claude required MCP server could not be confirmed; retry the prompt",
+        );
+      });
+      const required = [
+        AGENT_MCP_SERVER_NAME,
+        ...(options?.agentMcp?.design ? ["orkestrator-design"] : []),
+      ];
+      if (
+        !required.every((name) =>
+          statuses?.some((server) => server.name === name && server.status === "connected"),
+        )
+      ) {
+        running.mcpServers = "";
+        throw sessionOperationError(
+          "conflict",
+          "Claude required MCP server is not connected; retry the prompt",
+        );
+      }
+    }
+    running.mcpServers = mcpServersKey;
+    recordMcpConfigRevision(session, plan);
+    return await sdkPromptMessages(sdkPrompt, turn.promptUuid);
+  } catch (error) {
+    abandonJoin(turn, running);
+    throw error;
+  }
+}
+
+/** Write the prompt into the running CLI. */
+function submitToRunningRuntime(
+  turn: TurnState,
+  running: ClaudeRuntime,
+  messages: Awaited<ReturnType<typeof sdkPromptMessages>>,
+): void {
+  try {
+    turn.runtime = running;
+    if (!submitClaudeTurn(running, turn.thisTurn!, messages)) {
+      throw sessionOperationError(
+        "conflict",
+        "Claude runtime could not accept prompt input; retry after it has stopped",
+      );
+    }
+  } catch (error) {
+    abandonJoin(turn, running);
+    throw error;
+  }
+}
+
+/**
+ * Wait until a new CLI may open the session's rollout. Answers false when the
+ * turn must not launch one after all.
+ */
+async function prepareLaunch(turn: TurnState): Promise<boolean> {
+  const { session, sessionId, abortController } = turn;
+  // Stopped while joining a process that was ending: nothing was written,
+  // and stopping must not start another one.
+  if (abortController.signal.aborted) return false;
+  // A previous CLI that is still exiting must be gone before another one
+  // opens the same rollout.
+  await retireDrainingClaudeRuntime(session);
+  return !(
+    abortController.signal.aborted ||
+    session.deleting ||
+    sessions.get(sessionId) !== session
+  );
+}
+
+/** Launch the session's CLI with this turn as its first. */
+function launchClaudeRuntime(turn: TurnState, plan: QueryPlan) {
+  const { session, options, abortController, stream } = turn;
+  const { plugins, sdkPrompt, queryEnvironment, mcpServersKey } = plan;
+  const heldSdkPrompt = holdSdkPromptOpen(sdkPrompt, abortController.signal, turn.promptUuid);
+  // Hooks and callbacks fire on the runtime's behalf for whichever turn
+  // they concern: the one whose row holds the tool, else the latest turn.
+  const turnFor = (toolUseId?: string): ClaudeRuntimeTurn =>
+    (toolUseId ? turn.runtime?.toolOwners.get(toolUseId) : undefined) ??
+    turn.runtime?.latestTurn ??
+    turn.thisTurn!;
+  const queryIterator = query({
+    prompt: heldSdkPrompt.prompt,
+    options: claudeQueryOptions(turn, plan, turnFor),
+  });
+  const liveQuery = Object.assign(queryIterator, {
+    pushInput: (message: SDKUserMessage) => turnFor().pushSteerInput(message),
+  });
+  const created = createClaudeRuntime({
+    session,
+    control: liveQuery,
+    heldInput: heldSdkPrompt,
+    abortController,
+    toolTracker: stream.toolTracker,
+    activeTaskIds: stream.activeTaskIds,
+    launch: {
+      ...claudeLaunchedProfile(session, options),
+      ...claudeLaunchResourceProfile(plugins, queryEnvironment),
+    },
+    mcpServers: mcpServersKey,
+    firstTurn: turn.thisTurn!,
+  });
+  const launched = created.runtime;
+  turn.runtime = launched;
+  session.claudeRuntime = launched;
+  session.queryControl = liveQuery;
+  turn.queryIteratorControl = liveQuery;
+  recordMcpConfigRevision(session, plan);
+  return { launched, queryIterator, markEnded: created.markEnded };
+}
+
+async function readSupportedAgents(
+  queryIterator: ReturnType<typeof query>,
+): Promise<ClaudeRuntime["supportedAgents"] | undefined> {
+  try {
+    return (await queryIterator.supportedAgents()).map((agent) => ({
+      name: agent.name,
+      description: agent.description,
+      model: agent.model,
+    }));
+  } catch (error) {
+    debugLog("[session-manager] Agent discovery unavailable:", error);
+    return undefined;
+  }
+}
+
+/** The SDK has the turn: start its per-turn reads and hand it the abort. */
+function markQueryStarted(turn: TurnState, testHooks: PromptTestHooks | undefined): void {
+  const { session, sessionId, abortController, diagnostics } = turn;
+  const control = turn.queryIteratorControl!;
+  const turnRuntime = turn.runtime!;
+  // Abort ownership follows the turn: stopping the latest turn stops the
+  // process it runs on, exactly as stopping a turn that launched it does.
+  abortController.signal.addEventListener(
+    "abort",
+    () => {
+      if (turnRuntime.latestTurn === turn.thisTurn) turnRuntime.abortController.abort();
+    },
+    { once: true },
+  );
+  session.finishTurnInputIfSettled = turn.finishTurnInputForThisTurn;
+  turn.queryStarted = true;
+  testHooks?.onQueryStarted?.();
+  // One control read per turn, off the message path, so the inventory a
+  // selected command is validated against is the session's own.
+  readLiveCommandInventory(session, control);
+  reportUltracodeRuntime(session, control);
+
+  turn.structuredUsageRefresh = createStructuredUsageRefreshCoordinator(session, control);
+  // Prime the limits panel as soon as the live control channel is ready.
+  // This intentionally runs off the SDK message-consumer path.
+  void turn.structuredUsageRefresh?.trigger();
+
+  diagnostics?.sent(sessionId);
+}
+
+/**
+ * Put this turn on the session's CLI: written into the running one, or as the
+ * first turn of a new one. Answers false when it was stopped before either.
+ */
+export async function runTurnOnRuntime(
+  turn: TurnState,
+  plan: QueryPlan,
+  testHooks: PromptTestHooks | undefined,
+): Promise<boolean> {
+  turn.thisTurn = createClaudeRuntimeTurn(turn);
+  // The session's CLI is still running when an earlier turn left background
+  // work in it. This prompt is written into that process: a second CLI
+  // resumed from the same rollout would run its own root loop beside it.
+  const running = openClaudeRuntime(turn.session);
+  if (running) {
+    const messages = await prepareJoin(turn, plan, running);
+    submitToRunningRuntime(turn, running, messages);
+  }
+  if (!turn.runtime) {
+    if (!(await prepareLaunch(turn))) return false;
+    const { launched, queryIterator, markEnded } = launchClaudeRuntime(turn, plan);
+    if (typeof queryIterator.supportedAgents === "function") {
+      const agents = await readSupportedAgents(queryIterator);
+      if (agents) launched.supportedAgents = agents;
+    }
+    void consumeClaudeRuntime(launched, queryIterator, markEnded);
+  }
+  markQueryStarted(turn, testHooks);
+  return true;
+}

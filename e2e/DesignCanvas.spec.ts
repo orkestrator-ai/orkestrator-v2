@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { planDefaultDesignExportPath } from "../apps/backend/src/core/design-export-writer";
+import { planDefaultDesignExportPath } from "../apps/backend/src/core/design/export-writer";
 import { DESIGN_EVENT } from "@orkestrator/protocol/design-canvas";
 import { startDesignServiceHost } from "./design-service-client";
 

@@ -15,6 +15,7 @@ import {
 import { EnvironmentLifecycleTaskTracker } from "../../../apps/backend/src/core/environment-lifecycle-tasks";
 import { runCommand } from "../../../apps/backend/src/core/shell";
 import { StorageService } from "../../../apps/backend/src/core/storage";
+import { BackendRuntime } from "../../../apps/backend/src/core/backend-runtime";
 
 jest.setTimeout(30_000);
 afterEach(cleanup);
@@ -151,6 +152,7 @@ describe("GitHub picker to project registration", () => {
         resourceRoot: "",
         emit: () => undefined,
         environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+        runtime: new BackendRuntime({ emit: () => undefined }),
       } as CommandContext;
       const transport = spyOn(native, "invoke").mockImplementation(async (name, args) => {
         const handler = commands.get(name);

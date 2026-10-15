@@ -45,7 +45,9 @@ import type {
   WebAnnotationThreadSummary,
 } from "./web-annotation-contracts.js";
 import { retainedRequestCount } from "./web-annotation-assets.js";
-import { WebAnnotationServiceResults } from "./web-annotation-service-results.js";
+import type { WebAnnotationContext } from "./web-annotation-context.js";
+import type { WebAnnotationResults } from "./web-annotation-service-results.js";
+import type { WebAnnotationStoreOperations } from "./web-annotation-service-store.js";
 import { buildWebAnnotationThreadSummary } from "./web-annotation-thread-summary.js";
 import { archivedError } from "./web-annotation-service-errors.js";
 import {
@@ -54,7 +56,8 @@ import {
   conflictError,
   newId,
   notFound,
-} from "./web-annotation-service-core.js";
+  type WebAnnotationThreads,
+} from "./web-annotation-service-threads.js";
 import type {
   WebAnnotationEnvironmentStore,
   WebAnnotationManifest,
@@ -112,7 +115,7 @@ function isInteractionId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 512;
 }
 
-export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceResults {
+export class WebAnnotationRequests {
   private readonly preparations = new Map<string, PreparationCandidate>();
   private preparing = 0;
   private readonly driving = new Map<string, Promise<void>>();
@@ -124,11 +127,18 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
   private reconcileOffset = 0;
   private stopped = false;
 
+  constructor(
+    private readonly ctx: WebAnnotationContext,
+    private readonly storeOps: WebAnnotationStoreOperations,
+    private readonly threads: WebAnnotationThreads,
+    private readonly results: WebAnnotationResults,
+  ) {}
+
   // -------------------------------------------------------------------------
   // Destinations and preparation
 
-  protected requireDispatch() {
-    const { dispatch, compileBrief, composeText } = this.options;
+  requireDispatch() {
+    const { dispatch, compileBrief, composeText } = this.ctx.options;
     if (!dispatch || !compileBrief || !composeText) {
       throw new WebAnnotationServiceError("Web annotation request dispatch is unavailable");
     }
@@ -139,12 +149,12 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
     environmentId: string,
   ): Promise<{ options: WebAnnotationDestinationOption[] }> {
     const { dispatch } = this.requireDispatch();
-    await this.env(environmentId);
+    await this.ctx.env(environmentId);
     return { options: await dispatch.listDestinations(environmentId, null) };
   }
 
   private pruneCandidates(): void {
-    const now = this.nowMs();
+    const now = this.ctx.nowMs();
     for (const [id, candidate] of Array.from(this.preparations)) {
       if (candidate.expiresAtMs <= now) this.dropCandidate(id);
     }
@@ -159,7 +169,7 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
     const candidate = this.preparations.get(preparationId);
     if (!candidate) return;
     this.preparations.delete(preparationId);
-    this.releaseAssets(candidate.assetIds);
+    this.ctx.releaseAssets(candidate.assetIds);
   }
 
   private async publishedEntries(
@@ -171,7 +181,7 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
       .filter((entry) => !entry.supersededBy && entry.kind !== "lifecycle")
       .slice(-BRIEF_ENTRY_LIMIT);
     const entries: WebAnnotationEntry[] = [];
-    for (const index of indexes) entries.push(await this.readEntry(store, index));
+    for (const index of indexes) entries.push(await this.threads.readEntry(store, index));
     return entries;
   }
 
@@ -331,7 +341,7 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
     }
     this.preparing++;
     try {
-      const store = await this.env(input.environmentId);
+      const store = await this.ctx.env(input.environmentId);
       const manifest = store.manifest;
       const issues: WebAnnotationPreparationIssue[] = [];
       let annotations = input.annotations;
@@ -343,13 +353,13 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
       >();
 
       if (followUpOf !== null) {
-        const previous = this.requireRequest(manifest, followUpOf);
+        const previous = this.results.requireRequest(manifest, followUpOf);
         if (isWebAnnotationRequestActive(previous.state)) {
           throw new WebAnnotationServiceError(
             "The earlier request is still active; follow up after it settles",
           );
         }
-        const selection = await this.followUpSelection(store, manifest, previous);
+        const selection = await this.results.followUpSelection(store, manifest, previous);
         for (const outcome of selection.result?.outcomes ?? []) {
           previousOutcomes.set(outcome.annotationId, {
             outcome: outcome.outcome,
@@ -391,7 +401,7 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
       }
 
       if (retargetOf !== null) {
-        const old = this.requireRequest(manifest, retargetOf);
+        const old = this.results.requireRequest(manifest, retargetOf);
         const blocker = this.retargetBlocker(old, input.destination);
         if (blocker) {
           issues.push({ code: "retarget-unavailable", severity: "blocker", message: blocker });
@@ -484,15 +494,19 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
             message: "This note is resolved",
           });
         }
-        const capture = await this.readCapture(store, manifest, annotation.currentCaptureId);
+        const capture = await this.threads.readCapture(
+          store,
+          manifest,
+          annotation.currentCaptureId,
+        );
         const assets = (capture?.assetIds ?? [])
           .map((id) => manifest.assets[id])
           .filter((asset): asset is NonNullable<typeof asset> => Boolean(asset))
-          .map((asset) => this.publicAsset(input.environmentId, asset));
+          .map((asset) => this.ctx.publicAsset(input.environmentId, asset));
         const entries = await this.publishedEntries(store, manifest, annotation.id);
         const delivered = this.deliveredEntryIds(manifest, input.destination, annotation.id);
         briefInputs.push({
-          annotation: this.project(store, annotation),
+          annotation: this.threads.project(store, annotation),
           capture,
           entries,
           assets,
@@ -527,7 +541,7 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
         .map((issue) => issue.code);
       this.pruneCandidates();
       const preparationId = newId("prep");
-      const expiresAtMs = this.nowMs() + WEB_ANNOTATION_LIMITS.preparationTtlMs;
+      const expiresAtMs = this.ctx.nowMs() + WEB_ANNOTATION_LIMITS.preparationTtlMs;
       const assetIds = compiled.attachments.map((attachment) => attachment.assetId);
       this.preparations.set(preparationId, {
         preparationId,
@@ -543,7 +557,7 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
         followUpOf,
         retargetOf,
       });
-      this.holdAssets(assetIds);
+      this.ctx.holdAssets(assetIds);
       return {
         preparationId,
         expiresAt: new Date(expiresAtMs).toISOString(),
@@ -584,14 +598,14 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
     if (typeof input.bodyHash !== "string" || !/^[a-f0-9]{64}$/.test(input.bodyHash)) {
       throw new WebAnnotationServiceError("bodyHash is invalid");
     }
-    const store = await this.env(input.environmentId);
+    const store = await this.ctx.env(input.environmentId);
     const existing = store.manifest.requests[input.requestId];
     if (existing) return this.dedupeSend(existing, input.bodyHash);
     const candidate = this.preparations.get(input.preparationId);
     if (
       !candidate ||
       candidate.environmentId !== input.environmentId ||
-      candidate.expiresAtMs <= this.nowMs()
+      candidate.expiresAtMs <= this.ctx.nowMs()
     ) {
       throw new WebAnnotationServiceError(
         "Web annotation preparation expired or was not found; prepare the request again",
@@ -732,14 +746,14 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
       for (const annotation of annotations) {
         annotation.requestIds.push(request.id);
         if (request.reservation) annotation.activeRequestId = request.id;
-        this.appendEntry(tx, annotation, {
+        this.threads.appendEntry(tx, annotation, {
           provenance: "system",
           kind: "lifecycle",
           body: null,
           lifecycle: { event: "request-sent", requestId: request.id, state: "prepared" },
           force: true,
         });
-        this.bumpMetadata(tx, annotation);
+        this.threads.bumpMetadata(tx, annotation);
       }
       tx.touch({ requestIds: [request.id] });
       return { request, deduplicated: false };
@@ -750,7 +764,7 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
         `[web-annotations] Request handoff deferred: ${error instanceof Error ? error.name : "unknown"}`,
       );
     });
-    const latest = (await this.env(input.environmentId)).manifest.requests[input.requestId];
+    const latest = (await this.ctx.env(input.environmentId)).manifest.requests[input.requestId];
     return {
       request: { ...(latest ?? result.value.request) },
       deduplicated: result.value.deduplicated,
@@ -807,7 +821,7 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
   // Durable handoff (outside the write queue)
 
   /** Single-flight per request: materialize then publish a `prepared` request. */
-  protected drive(environmentId: string, requestId: string): Promise<void> {
+  drive(environmentId: string, requestId: string): Promise<void> {
     const key = `${environmentId}\0${requestId}`;
     const existing = this.driving.get(key);
     if (existing) return existing;
@@ -823,7 +837,7 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
     this.failures.set(key, failures);
     this.retryAt.set(
       key,
-      this.nowMs() + Math.min(MAX_BACKOFF_MS, 1_000 * 2 ** Math.min(failures, 6)),
+      this.ctx.nowMs() + Math.min(MAX_BACKOFF_MS, 1_000 * 2 ** Math.min(failures, 6)),
     );
   }
 
@@ -834,7 +848,7 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
 
   private async driveOnce(environmentId: string, requestId: string): Promise<void> {
     const { dispatch, composeText } = this.requireDispatch();
-    const store = await this.env(environmentId);
+    const store = await this.ctx.env(environmentId);
     let request = store.manifest.requests[requestId];
     if (!request || request.state !== "prepared") return;
     const key = `${environmentId}\0${requestId}`;
@@ -845,7 +859,7 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
       });
       return;
     }
-    const environment = await this.hostEnvironment(environmentId);
+    const environment = await this.ctx.hostEnvironment(environmentId);
     if (!environment) return;
     const pending = request.attachments.filter((attachment) => !attachment.materializedPath);
     if (pending.length > 0) {
@@ -967,7 +981,7 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
    * provisional flag on results, and append `request-settled`, but never
    * resolve an annotation.
    */
-  protected applyStateInTx(
+  applyStateInTx(
     tx: WebAnnotationTransaction,
     request: WebAnnotationRequest,
     update: StateUpdate,
@@ -1053,7 +1067,7 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
         request.cancelSource = update.cancelSource;
       }
       if (update.retargetedTo) request.retargetedTo = update.retargetedTo;
-      this.settleResultsInTx(tx, request);
+      this.results.settleResultsInTx(tx, request);
     }
     request.revision++;
     request.updatedAt = tx.now;
@@ -1062,7 +1076,7 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
       if (!annotation) continue;
       if (terminal) {
         if (annotation.activeRequestId === request.id) annotation.activeRequestId = null;
-        this.appendEntry(tx, annotation, {
+        this.threads.appendEntry(tx, annotation, {
           provenance: "system",
           kind: "lifecycle",
           body: null,
@@ -1070,14 +1084,14 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
           force: true,
         });
       }
-      if (terminal || previous !== request.state) this.bumpMetadata(tx, annotation);
+      if (terminal || previous !== request.state) this.threads.bumpMetadata(tx, annotation);
     }
     tx.markEssential();
     tx.touch({ requestIds: [request.id] });
     return true;
   }
 
-  protected async updateRequestState(
+  async updateRequestState(
     store: WebAnnotationEnvironmentStore,
     requestId: string,
     update: StateUpdate,
@@ -1119,11 +1133,11 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
     environmentId: string,
     options: { annotationId?: string; activeOnly?: boolean } = {},
   ) {
-    const store = await this.env(environmentId);
+    const store = await this.ctx.env(environmentId);
     const manifest = store.manifest;
     let requests = Object.values(manifest.requests);
     if (options.annotationId !== undefined) {
-      const annotation = this.requireAnnotation(manifest, options.annotationId);
+      const annotation = this.threads.requireAnnotation(manifest, options.annotationId);
       const ids = new Set(annotation.requestIds);
       requests = requests.filter((request) => ids.has(request.id));
     }
@@ -1139,8 +1153,8 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
     expectedRevision: number,
   ): Promise<WebAnnotationRequestCancelResult> {
     this.requireDispatch();
-    const store = await this.env(environmentId);
-    const request = this.requireRequest(store.manifest, requestId);
+    const store = await this.ctx.env(environmentId);
+    const request = this.results.requireRequest(store.manifest, requestId);
     if (request.revision !== expectedRevision) {
       throw conflictError(
         `request revision ${expectedRevision} is stale (current ${request.revision})`,
@@ -1159,8 +1173,8 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
     environmentId: string,
     requestId: string,
   ): Promise<{ removed: boolean; request: WebAnnotationRequest } | null> {
-    if (!this.options.dispatch || !isWebAnnotationId(requestId)) return null;
-    const store = await this.env(environmentId).catch(() => null);
+    if (!this.ctx.options.dispatch || !isWebAnnotationId(requestId)) return null;
+    const store = await this.ctx.env(environmentId).catch(() => null);
     const request = store?.manifest.requests[requestId];
     if (!store || !request || !isWebAnnotationRequestActive(request.state)) return null;
     const result = await this.cancelActiveRequest(store, request, "chat-queue");
@@ -1238,8 +1252,8 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
     if (action !== "reconcile" && action !== "retry" && action !== "discard") {
       throw new WebAnnotationServiceError("action is invalid");
     }
-    const store = await this.env(environmentId);
-    const request = this.requireRequest(store.manifest, requestId);
+    const store = await this.ctx.env(environmentId);
+    const request = this.results.requireRequest(store.manifest, requestId);
     if (!isWebAnnotationRequestActive(request.state)) return { request: { ...request } };
     if (request.state === "prepared" && action !== "discard") {
       this.clearBackoff(`${environmentId}\0${requestId}`);
@@ -1252,7 +1266,7 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
   }
 
   async followUp(environmentId: string, requestId: string) {
-    return this.followUpCandidates(environmentId, requestId);
+    return this.results.followUpCandidates(environmentId, requestId);
   }
 
   async requestResponse(
@@ -1264,8 +1278,8 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
     sourceAvailable: boolean;
   }> {
     const { dispatch } = this.requireDispatch();
-    const store = await this.env(environmentId);
-    const request = this.requireRequest(store.manifest, requestId);
+    const store = await this.ctx.env(environmentId);
+    const request = this.results.requireRequest(store.manifest, requestId);
     const read = await dispatch.readResponse({ ...request });
     const excerpt = read.excerpt
       ? {
@@ -1314,7 +1328,7 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
         for (const selection of current.selections) {
           const annotation = tx.manifest.annotations[selection.annotationId];
           if (!annotation || annotation.state === "deleted") continue;
-          this.appendEntry(tx, annotation, {
+          this.threads.appendEntry(tx, annotation, {
             provenance: "agent-reference",
             kind: "agent-response",
             body: excerpt.text,
@@ -1324,7 +1338,7 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
             },
             force: true,
           });
-          this.bumpMetadata(tx, annotation);
+          this.threads.bumpMetadata(tx, annotation);
         }
       });
     }
@@ -1340,7 +1354,7 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
   // Background reconciler
 
   startReconciler(
-    intervalMs = this.options.reconcileIntervalMs ?? WEB_ANNOTATION_LIMITS.reconcileIntervalMs,
+    intervalMs = this.ctx.options.reconcileIntervalMs ?? WEB_ANNOTATION_LIMITS.reconcileIntervalMs,
   ): void {
     if (this.reconcileTimer || this.stopped) return;
     this.reconcileTimer = setInterval(() => {
@@ -1372,13 +1386,13 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
 
   private async runReconcile(): Promise<void> {
     if (this.stopped) return;
-    await this.initialize();
+    await this.ctx.initialize();
     this.reconcileTicks++;
     const work: Array<{ environmentId: string; requestId: string }> = [];
-    if (this.options.dispatch) {
+    if (this.ctx.options.dispatch) {
       const all: Array<{ environmentId: string; requestId: string }> = [];
-      for (const environmentId of this.storage.loadedEnvironmentIds()) {
-        const store = await this.storage.environment(environmentId).catch(() => null);
+      for (const environmentId of this.ctx.storage.loadedEnvironmentIds()) {
+        const store = await this.ctx.storage.environment(environmentId).catch(() => null);
         if (!store || store.status !== "ready" || store.isClosed) continue;
         for (const requestId of store.activeRequestIds()) all.push({ environmentId, requestId });
       }
@@ -1404,9 +1418,9 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
 
   private async collectAllGarbage(): Promise<void> {
     const deadline = Date.now() + GC_DEADLINE_MS;
-    for (const environmentId of this.storage.loadedEnvironmentIds()) {
+    for (const environmentId of this.ctx.storage.loadedEnvironmentIds()) {
       if (Date.now() >= deadline || this.stopped) return;
-      await this.collectGarbage(environmentId, { deadline }).catch((error: unknown) => {
+      await this.storeOps.collectGarbage(environmentId, { deadline }).catch((error: unknown) => {
         console.warn(
           `[web-annotations] Garbage collection failed: ${error instanceof Error ? error.name : "unknown"}`,
         );
@@ -1415,13 +1429,13 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
   }
 
   private async reconcileRequest(environmentId: string, requestId: string): Promise<void> {
-    const dispatch = this.options.dispatch;
+    const dispatch = this.ctx.options.dispatch;
     if (!dispatch) return;
-    const store = await this.env(environmentId);
+    const store = await this.ctx.env(environmentId);
     const request = store.manifest.requests[requestId];
     if (!request || !isWebAnnotationRequestActive(request.state)) return;
     const key = `${environmentId}\0${requestId}`;
-    if ((this.retryAt.get(key) ?? 0) > this.nowMs()) return;
+    if ((this.retryAt.get(key) ?? 0) > this.ctx.nowMs()) return;
     if (request.state === "prepared") {
       // Re-drive a committed enqueue intent with the same id; publication
       // dedupes against queued, in-flight, and consumed ids.
@@ -1432,17 +1446,17 @@ export abstract class WebAnnotationServiceRequests extends WebAnnotationServiceR
     await this.applyObservation(store, requestId, observation);
   }
 
-  override async close(): Promise<void> {
+  async close(): Promise<void> {
     this.stopReconciler();
     await this.reconcileInFlight?.catch(() => undefined);
     await Promise.all(Array.from(this.driving.values()).map((run) => run.catch(() => undefined)));
-    await super.close();
+    await this.ctx.close();
   }
 
-  override async deleteEnvironment(environmentId: string): Promise<void> {
+  async deleteEnvironment(environmentId: string): Promise<void> {
     for (const [id, candidate] of Array.from(this.preparations)) {
       if (candidate.environmentId === environmentId) this.dropCandidate(id);
     }
-    await super.deleteEnvironment(environmentId);
+    await this.ctx.deleteEnvironment(environmentId);
   }
 }

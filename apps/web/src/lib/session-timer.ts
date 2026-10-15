@@ -1,9 +1,3 @@
-export interface TimedSessionState {
-  isLoading: boolean;
-  loadingStartedAt?: number;
-  lastCompletedElapsedSeconds?: number | null;
-}
-
 /** Parse a backend-owned turn timestamp without falling back to renderer time. */
 export function parseBackendTurnStartedAt(value: unknown): number | undefined {
   if (typeof value !== "string") return undefined;
@@ -73,71 +67,4 @@ export function findLatestBackendTurnElapsedSeconds<T extends { role: string; cr
   // not a negative turn. Report nothing rather than a fabricated duration.
   if (completedAt === undefined || completedAt < startedAt) return undefined;
   return Math.floor((completedAt - startedAt) / 1000);
-}
-
-export function reconcileTimedSession<T extends TimedSessionState>(
-  previous: T | undefined,
-  session: T,
-  now = Date.now(),
-): T {
-  if (session.isLoading) {
-    return {
-      ...session,
-      loadingStartedAt: session.loadingStartedAt ?? previous?.loadingStartedAt,
-      lastCompletedElapsedSeconds: session.lastCompletedElapsedSeconds ?? null,
-    };
-  }
-
-  if (previous?.isLoading && previous.loadingStartedAt !== undefined) {
-    return {
-      ...session,
-      loadingStartedAt: undefined,
-      lastCompletedElapsedSeconds:
-        session.lastCompletedElapsedSeconds ?? Math.floor((now - previous.loadingStartedAt) / 1000),
-    };
-  }
-
-  return {
-    ...session,
-    loadingStartedAt: undefined,
-    lastCompletedElapsedSeconds:
-      session.lastCompletedElapsedSeconds ?? previous?.lastCompletedElapsedSeconds ?? null,
-  };
-}
-
-export function updateTimedSessionLoading<T extends TimedSessionState>(
-  session: T,
-  isLoading: boolean,
-  now = Date.now(),
-  authoritativeStartedAt?: number,
-): T {
-  if (isLoading) {
-    const loadingStartedAt = authoritativeStartedAt ?? session.loadingStartedAt;
-    if (
-      session.isLoading &&
-      session.loadingStartedAt === loadingStartedAt &&
-      session.lastCompletedElapsedSeconds === null
-    ) {
-      return session;
-    }
-
-    return {
-      ...session,
-      isLoading: true,
-      loadingStartedAt,
-      lastCompletedElapsedSeconds: null,
-    };
-  }
-
-  const lastCompletedElapsedSeconds =
-    session.loadingStartedAt !== undefined
-      ? Math.floor((now - session.loadingStartedAt) / 1000)
-      : (session.lastCompletedElapsedSeconds ?? null);
-
-  return {
-    ...session,
-    isLoading: false,
-    loadingStartedAt: undefined,
-    lastCompletedElapsedSeconds,
-  };
 }

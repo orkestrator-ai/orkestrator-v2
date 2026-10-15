@@ -75,14 +75,16 @@ const {
 } = await import("../src/core/commands");
 const { resolveBunBinary } = await import("../src/core/commands-agent-support");
 const { getWorktreeBaseDir } = await import("../src/core/commands-environment");
+const { BackendRuntime } = await import("../src/core/backend-runtime");
 
 const tempDirs: string[] = [];
+const runtimes: Array<InstanceType<typeof BackendRuntime>> = [];
 
 function createContext(
   environment: Record<string, unknown> | null = null,
   roots: { appRoot?: string; resourceRoot?: string } = {},
 ): CommandContext {
-  return {
+  const context = {
     appRoot: roots.appRoot ?? "",
     resourceRoot: roots.resourceRoot ?? "",
     emit: mock(() => undefined),
@@ -96,6 +98,9 @@ function createContext(
       getDataDir: () => path.join(os.tmpdir(), `ork-commands-io-history-${process.pid}`),
     },
   } as unknown as CommandContext;
+  context.runtime = new BackendRuntime({ emit: (event, payload) => context.emit(event, payload) });
+  runtimes.push(context.runtime);
+  return context;
 }
 
 async function createTempDir(prefix: string, parent = os.tmpdir()): Promise<string> {
@@ -150,6 +155,7 @@ async function withFakeDocker(
 }
 
 afterEach(async () => {
+  for (const runtime of runtimes.splice(0)) runtime.shutdown();
   spawnedPtys.length = 0;
   spawnPty.mockClear();
   await Promise.all(

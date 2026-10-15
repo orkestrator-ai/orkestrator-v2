@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 // Type-only: loading the service itself needs Bun's SQLite, which Node lacks.
-import type { DesignService } from "../apps/backend/src/core/design-service";
+import type { DesignService } from "../apps/backend/src/core/design/service";
 import {
   DESIGN_SERVICE_METHODS,
   REPLY_PREFIX,

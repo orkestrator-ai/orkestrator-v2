@@ -124,6 +124,16 @@ the container image in `docker/`.
 - Application data lives in `~/Library/Application Support/orkestrator-v2/`
   (macOS) or `${XDG_CONFIG_HOME:-~/.config}/orkestrator-v2/` (Linux).
 
+## Splitting large classes
+
+Split a large class by responsibility into collaborators (modules or small
+classes that take a shared context object), not into `extends` layers. A class
+cut into `-base` / `-core` / `-extra` files chained by `extends` and held
+together by `abstract` forward declarations is still one class, just harder to
+read. `tests/unit/inheritance-chains.test.ts` fails on any new project-class
+inheritance; a deliberate one-level subclass (an error refinement, a hook
+override) goes in its `INTENTIONAL_SUBCLASSES` list with a reason.
+
 ## OpenCode SDK v2 - CRITICAL
 
 **Always use v2 of the `@opencode-ai/sdk` package.**
@@ -352,7 +362,7 @@ touching it:
 | -------------------------------------------------------- | --------------------------- |
 | `apps/web/src/components/terminal/TerminalContainer.tsx` | xterm.js integration        |
 | `apps/web/src/components/native-agent/AgentNativeTab.tsx` | Shared Native Mode chat   |
-| `apps/web/src/stores/codexStore.ts`                      | Codex model catalogue       |
+| `apps/web/src/stores/agentModelCatalogStore.ts`          | Model catalogues per agent platform |
 | `apps/web/src/stores/nativeAgentProjectionStore.ts`      | Native agent projections for every native platform (Claude, Codex, OpenCode, Cursor, Grok, Pi) |
 | `apps/web/src/lib/native/backend.ts`                     | Native IPC command wrapper  |
 

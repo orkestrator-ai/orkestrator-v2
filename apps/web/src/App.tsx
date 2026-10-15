@@ -31,6 +31,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { ErrorDetailsDialog } from "@/components/errors";
 import { HostPathPickerDialog } from "@/components/host-path/HostPathPickerDialog";
 import { ContainerHostReachabilityNotice } from "@/components/docker/ContainerHostReachabilityNotice";
+import { BackendVersionReminder } from "@/components/BackendVersionReminder";
 import {
   checkDocker,
   checkClaudeCli,
@@ -1185,6 +1186,7 @@ function App() {
         <ErrorDetailsDialog />
         <HostPathPickerDialog />
         <ContainerHostReachabilityNotice />
+        <BackendVersionReminder />
 
         {macOsPermissionsReady && dockerCheckStatus === "error" && dockerAvailable === null && (
           <div

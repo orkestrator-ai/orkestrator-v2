@@ -44,12 +44,18 @@ every path keeps its snapshot read as the authority, per the invariants.
 
 ### Typing and correctness
 
-- [ ] Type the prompt payload: `parts` is `any[]` in
+- [x] ~~Type the prompt payload: `parts` is `any[]` in
   `apps/web/src/lib/opencode-prompts.ts:186` and cast `as never` at
   `opencode-provider.ts:732`. Build it as the SDK's `Part` input union in
-  the backend; the renderer sends attachments, not parts. (2026-10-14: the
-  renderer half is moot — `opencode-prompts.ts` was deleted with the rest of
-  the renderer OpenCode client; re-check the backend cast.)
+  the backend; the renderer sends attachments, not parts.~~ Done, confirmed
+  2026-10-15. The renderer half is moot: `opencode-prompts.ts` was deleted
+  with the rest of the renderer OpenCode client. In the backend,
+  `openCodePromptParts` builds `OpenCodePromptPart[]` (the SDK's
+  `TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput`,
+  `opencode-provider-helpers.ts:43`), which `session.promptAsync` takes
+  uncast; the command path narrows it with `openCodeFileParts`
+  (`FilePartInput[]`). The only `as never` left in `opencode-provider.ts`
+  is the discovery fan-out's generic `optionalSdkCall`, not the prompt.
 - [ ] `session.update` for titles (plan 09) and, if the v1 surface exposes
   the session permission ruleset, for plan 12. Record the finding either way.
 - [x] ~~Use `client.global.health` instead of the raw `fetch('/global/health')`

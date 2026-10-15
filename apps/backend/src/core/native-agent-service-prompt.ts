@@ -138,6 +138,7 @@ import {
   type NativeAgentCommandIntent,
 } from "@orkestrator/protocol/native-agent";
 import { commandCatalogueKey } from "./native-agent-command-catalogue.js";
+import { providerCacheKey } from "./native-agent-provider-registry.js";
 import {
   commandDispatchNeedsCatalogue,
   planCommandDispatch,
@@ -204,8 +205,8 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
    * turn. Purely in-memory apart from the session list; never reads a bridge.
    */
   async hasObservedLiveWork(environmentId: string, agent: BuildPipelineAgent): Promise<boolean> {
-    const provider = this.providers.get(`${environmentId}\0${agent}`);
-    if (provider && this.providerDispatchCounts.has(provider)) return true;
+    const provider = this.providerRegistry.cached(providerCacheKey(environmentId, agent));
+    if (provider && this.providerRegistry.hasDispatchInFlight(provider)) return true;
     const sessions = await this.storage.listNativeAgentSessions();
     return sessions.some((session) => {
       if (session.environmentId !== environmentId || session.agent !== agent) return false;
@@ -874,10 +875,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
        * and leave a confirmed turn unattributed.
        */
       await this.assertEnvironmentLive(input.environmentId);
-      this.providerDispatchCounts.set(
-        provider,
-        (this.providerDispatchCounts.get(provider) ?? 0) + 1,
-      );
+      this.providerRegistry.beginDispatch(provider);
       try {
         const result = await this.storage.dispatchNativeAgentPromptOnce(
           session.key,
@@ -1005,13 +1003,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
         }
         return result.session;
       } finally {
-        const remaining = (this.providerDispatchCounts.get(provider) ?? 1) - 1;
-        if (remaining > 0) this.providerDispatchCounts.set(provider, remaining);
-        else {
-          this.providerDispatchCounts.delete(provider);
-          // A provider retired while this send was in flight may go now.
-          this.scheduleProviderRetirement(provider);
-        }
+        this.providerRegistry.endDispatch(provider);
       }
     } finally {
       releaseCoordinatorTurn?.();
@@ -1236,26 +1228,9 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
         ...this.turnRecovery.pendingTasks(),
       ]);
     }
-    await Promise.allSettled([...this.providers.values()].map((provider) => provider.dispose?.()));
-    // Obsolete providers still in their retirement grace hold event streams
-    // of their own; nothing can be in flight on them once the drains above
-    // have settled.
-    const retiring = Array.from(this.retiringProviders.keys()).filter(
-      (provider) => !this.isProviderCached(provider) && !this.disposedProviders.has(provider),
-    );
-    for (const timer of this.retiringProviders.values()) if (timer) clearTimeout(timer);
-    this.retiringProviders.clear();
-    await Promise.allSettled(
-      retiring.map((provider) => {
-        this.disposedProviders.add(provider);
-        return provider.dispose?.();
-      }),
-    );
+    await this.providerRegistry.shutdown();
     this.observations.clear();
     this.turnRecovery.clear();
-    this.providerDispatchCounts.clear();
-    this.providers.clear();
-    this.providerConnections.clear();
     this.modelCatalogCache.clear();
     this.commandCatalogues.clear();
     this.modelCatalogRefreshes.clear();
@@ -1892,7 +1867,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
               retryKey,
               this.now() + Math.min(60_000, base * 2 ** Math.max(0, attempts - 1)),
             );
-            if (provider) this.evictProvider(session, provider);
+            if (provider) this.providerRegistry.evict(session, provider);
             console.warn(
               `[native-agent] Interaction observation for ${session.agent} failed:`,
               error instanceof Error ? error.name : "unknown error",

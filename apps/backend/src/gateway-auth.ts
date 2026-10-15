@@ -1,4 +1,7 @@
-import { GatewayEvents } from "./gateway-events.js";
+import type { GatewayContext } from "./gateway-context.js";
+import type { GatewayHandlers } from "./gateway-handlers.js";
+import type { GatewayLifecycle } from "./gateway-lifecycle.js";
+import type { GatewayProxy } from "./gateway-proxy.js";
 import { randomBytes } from "node:crypto";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
 import {
@@ -41,28 +44,53 @@ import {
 } from "./gateway-internals.js";
 import type { ListenerKind, GatewayRequestMetrics } from "./gateway-internals.js";
 
-export abstract class GatewayAuth extends GatewayEvents {
-  protected authenticated(request: IncomingMessage): boolean {
+/**
+ * The route handlers `handle` dispatches to. `GatewayHandlers` calls back into
+ * `GatewayAuth` for credential checks, so the facade builds this class first
+ * and passes these as callbacks bound late to its `GatewayHandlers`.
+ */
+export type GatewayRouteHandlers = Pick<
+  GatewayHandlers,
+  | "handleInvoke"
+  | "handleEvents"
+  | "handleMetrics"
+  | "handleClientMetrics"
+  | "handleLoopbackProxy"
+  | "handleBrowserLoopbackProxy"
+>;
+
+/** Request routing, CORS, credentials, login and the agent-test session flow. */
+export class GatewayAuth {
+  constructor(
+    private readonly ctx: GatewayContext,
+    private readonly lifecycle: GatewayLifecycle,
+    private readonly handlers: GatewayRouteHandlers,
+    private readonly proxy: GatewayProxy,
+  ) {}
+
+  authenticated(request: IncomingMessage): boolean {
     const credential = getBearerToken(request.headers) ?? getCookie(request.headers, AUTH_COOKIE);
     return this.gatewayCredentialMatches(credential);
   }
 
   private authenticatedWithAgentTestSession(request: IncomingMessage): boolean {
-    if (!this.agentTestMode) return false;
+    if (!this.ctx.agentTestMode) return false;
     const credential = getBearerToken(request.headers) ?? getCookie(request.headers, AUTH_COOKIE);
     return Boolean(
-      credential && !tokenMatches(this.token, credential) && this.agentTestSessions.has(credential),
+      credential &&
+      !tokenMatches(this.ctx.token, credential) &&
+      this.ctx.agentTestSessions.has(credential),
     );
   }
 
-  protected gatewayCredentialMatches(candidate: string | null): boolean {
-    if (tokenMatches(this.token, candidate)) return true;
-    if (!this.agentTestMode || !candidate) return false;
-    const session = this.agentTestSessions.get(candidate);
+  gatewayCredentialMatches(candidate: string | null): boolean {
+    if (tokenMatches(this.ctx.token, candidate)) return true;
+    if (!this.ctx.agentTestMode || !candidate) return false;
+    const session = this.ctx.agentTestSessions.get(candidate);
     if (session === undefined) return false;
     const now = Date.now();
     if (session.expiresAt <= now || session.absoluteExpiresAt <= now) {
-      this.agentTestSessions.delete(candidate);
+      this.ctx.agentTestSessions.delete(candidate);
       return false;
     }
     return true;
@@ -73,30 +101,30 @@ export abstract class GatewayAuth extends GatewayEvents {
    * `gatewayCredentialMatches`. Durable gateway tokens have no session
    * deadline; agent-test session cookies are bounded by both clocks.
    */
-  protected gatewayCredentialExpiresAt(candidate: string | null): number | null {
-    if (tokenMatches(this.token, candidate)) return null;
-    if (!this.agentTestMode || !candidate) return null;
-    const session = this.agentTestSessions.get(candidate);
+  gatewayCredentialExpiresAt(candidate: string | null): number | null {
+    if (tokenMatches(this.ctx.token, candidate)) return null;
+    if (!this.ctx.agentTestMode || !candidate) return null;
+    const session = this.ctx.agentTestSessions.get(candidate);
     return session ? Math.min(session.expiresAt, session.absoluteExpiresAt) : null;
   }
 
-  protected refreshAgentTestSession(candidate: string, now = Date.now()): boolean {
-    const session = this.agentTestSessions.get(candidate);
+  refreshAgentTestSession(candidate: string, now = Date.now()): boolean {
+    const session = this.ctx.agentTestSessions.get(candidate);
     if (!session || session.expiresAt <= now || session.absoluteExpiresAt <= now) {
-      this.agentTestSessions.delete(candidate);
+      this.ctx.agentTestSessions.delete(candidate);
       return false;
     }
     session.expiresAt = Math.min(now + AGENT_TEST_SESSION_IDLE_TTL_MS, session.absoluteExpiresAt);
     return true;
   }
 
-  protected pruneAgentTestCredentials(now = Date.now()): void {
-    for (const [code, expiresAt] of this.agentTestBootstraps) {
-      if (expiresAt <= now) this.agentTestBootstraps.delete(code);
+  pruneAgentTestCredentials(now = Date.now()): void {
+    for (const [code, expiresAt] of this.ctx.agentTestBootstraps) {
+      if (expiresAt <= now) this.ctx.agentTestBootstraps.delete(code);
     }
-    for (const [session, expiry] of this.agentTestSessions) {
+    for (const [session, expiry] of this.ctx.agentTestSessions) {
       if (expiry.expiresAt <= now || expiry.absoluteExpiresAt <= now) {
-        this.agentTestSessions.delete(session);
+        this.ctx.agentTestSessions.delete(session);
       }
     }
   }
@@ -111,7 +139,7 @@ export abstract class GatewayAuth extends GatewayEvents {
   private nearestAgentTestSession(): string | undefined {
     let nearest: string | undefined;
     let deadline = Number.POSITIVE_INFINITY;
-    for (const [session, expiry] of this.agentTestSessions) {
+    for (const [session, expiry] of this.ctx.agentTestSessions) {
       const effective = Math.min(expiry.expiresAt, expiry.absoluteExpiresAt);
       if (effective < deadline) {
         deadline = effective;
@@ -121,15 +149,15 @@ export abstract class GatewayAuth extends GatewayEvents {
     return nearest;
   }
 
-  protected issueAgentTestSession(now = Date.now()): string {
+  issueAgentTestSession(now = Date.now()): string {
     this.pruneAgentTestCredentials(now);
-    while (this.agentTestSessions.size >= MAX_AGENT_TEST_SESSIONS) {
+    while (this.ctx.agentTestSessions.size >= MAX_AGENT_TEST_SESSIONS) {
       const evicted = this.nearestAgentTestSession();
       if (!evicted) break;
-      this.agentTestSessions.delete(evicted);
+      this.ctx.agentTestSessions.delete(evicted);
     }
     const session = randomBytes(32).toString("base64url");
-    this.agentTestSessions.set(session, {
+    this.ctx.agentTestSessions.set(session, {
       expiresAt: now + AGENT_TEST_SESSION_IDLE_TTL_MS,
       absoluteExpiresAt: now + AGENT_TEST_SESSION_MAX_LIFETIME_MS,
     });
@@ -141,17 +169,17 @@ export abstract class GatewayAuth extends GatewayEvents {
    * sliding idle window and its absolute cap, so a fixed client-side expiry
    * would only be able to disagree with it.
    */
-  protected agentTestSessionCookie(session: string): string {
+  agentTestSessionCookie(session: string): string {
     return `${AUTH_COOKIE}=${session}; HttpOnly; SameSite=Strict; Path=/`;
   }
 
-  protected agentTestLoginHint(): string {
-    if (!this.agentTestMode) return "";
-    const profile = this.agentTestProfile ?? "<profile>";
+  agentTestLoginHint(): string {
+    if (!this.ctx.agentTestMode) return "";
+    const profile = this.ctx.agentTestProfile ?? "<profile>";
     return `Development profile "${profile}". On the host, run mise run dev:login --profile ${profile} and open the single-use URL it prints.`;
   }
 
-  protected isOriginAllowed(request: IncomingMessage, originValue: string): boolean {
+  isOriginAllowed(request: IncomingMessage, originValue: string): boolean {
     let origin: URL;
     try {
       origin = new URL(originValue);
@@ -162,10 +190,10 @@ export abstract class GatewayAuth extends GatewayEvents {
     // Keep the existing renderer served by the backend working without extra
     // configuration, including when TLS is terminated by Tailscale Serve.
     if (request.headers.host && origin.host === request.headers.host) return true;
-    return this.allowedOrigins.some((rule) => originMatchesRule(origin, rule));
+    return this.ctx.allowedOrigins.some((rule) => originMatchesRule(origin, rule));
   }
 
-  protected applyCorsHeaders(request: IncomingMessage, response: ServerResponse): boolean {
+  applyCorsHeaders(request: IncomingMessage, response: ServerResponse): boolean {
     const origin = request.headers.origin;
     if (!origin) return true;
     if (!this.isOriginAllowed(request, origin)) return false;
@@ -175,7 +203,7 @@ export abstract class GatewayAuth extends GatewayEvents {
     return true;
   }
 
-  protected handleCorsPreflight(request: IncomingMessage, response: ServerResponse): void {
+  handleCorsPreflight(request: IncomingMessage, response: ServerResponse): void {
     const origin = request.headers.origin;
     if (!origin || !this.isOriginAllowed(request, origin)) {
       jsonResponse(response, 403, { error: "Origin not allowed" });
@@ -195,10 +223,7 @@ export abstract class GatewayAuth extends GatewayEvents {
     response.end();
   }
 
-  protected handleBrowserPreviewCorsPreflight(
-    request: IncomingMessage,
-    response: ServerResponse,
-  ): void {
+  handleBrowserPreviewCorsPreflight(request: IncomingMessage, response: ServerResponse): void {
     const requestedHeaders = request.headers["access-control-request-headers"];
     const allowedHeaders = Array.isArray(requestedHeaders)
       ? requestedHeaders.join(", ")
@@ -220,24 +245,24 @@ export abstract class GatewayAuth extends GatewayEvents {
     response.end();
   }
 
-  protected async handle(
+  async handle(
     request: IncomingMessage,
     response: ServerResponse,
     listenerKind: ListenerKind,
   ): Promise<void> {
     responseCompressionContexts.set(response, {
-      mode: compressionModeForListener(this.compression, listenerKind),
+      mode: compressionModeForListener(this.ctx.compression, listenerKind),
       acceptEncoding: headerValueToString(request.headers["accept-encoding"]),
     });
     const url = new URL(request.url ?? "/", "http://orkestrator.local");
     const route = classifyGatewayRoute(url.pathname);
-    const requestMetrics = this.metrics.beginRequest({
+    const requestMetrics = this.ctx.metrics.beginRequest({
       route,
       listenerKind,
       method: request.method ?? "GET",
       httpVersion: request.httpVersion || "1.1",
       acceptEncoding: headerValueToString(request.headers["accept-encoding"]),
-      effectiveCompressionMode: compressionModeForListener(this.compression, listenerKind),
+      effectiveCompressionMode: compressionModeForListener(this.ctx.compression, listenerKind),
       requestBytes: parseContentLengthHeader(request.headers["content-length"]),
     });
     instrumentGatewayResponse(response, (responseBytes) => {
@@ -349,7 +374,7 @@ export abstract class GatewayAuth extends GatewayEvents {
     }
 
     if (url.pathname === `${API_PREFIX}/web-client-access`) {
-      if (listenerKind !== "control" || !this.webClientControl) {
+      if (listenerKind !== "control" || !this.ctx.webClientControl) {
         jsonResponse(response, 404, { error: "Not found" });
         return;
       }
@@ -368,44 +393,44 @@ export abstract class GatewayAuth extends GatewayEvents {
     }
 
     if (url.pathname === `${API_PREFIX}/invoke`) {
-      await this.handleInvoke(request, response, requestMetrics);
+      await this.handlers.handleInvoke(request, response, requestMetrics);
       return;
     }
 
     if (url.pathname === `${API_PREFIX}/events`) {
-      this.handleEvents(request, response, url);
+      this.handlers.handleEvents(request, response, url);
       return;
     }
 
     if (url.pathname === `${API_PREFIX}/metrics`) {
-      this.handleMetrics(request, response);
+      this.handlers.handleMetrics(request, response);
       return;
     }
 
     if (url.pathname === `${API_PREFIX}/client-metrics`) {
-      await this.handleClientMetrics(request, response, requestMetrics);
+      await this.handlers.handleClientMetrics(request, response, requestMetrics);
       return;
     }
 
     if (url.pathname.startsWith(`${API_PREFIX}/proxy/loopback/`)) {
-      await this.handleLoopbackProxy(request, response, url);
+      await this.handlers.handleLoopbackProxy(request, response, url);
       return;
     }
 
     if (url.pathname.startsWith(`${API_PREFIX}/browser/loopback/`)) {
-      await this.handleBrowserLoopbackProxy(request, response, url);
+      await this.handlers.handleBrowserLoopbackProxy(request, response, url);
       return;
     }
 
-    await this.serveStatic(
+    await this.proxy.serveStatic(
       request,
       url,
       response,
-      compressionModeForListener(this.compression, listenerKind) !== "off",
+      compressionModeForListener(this.ctx.compression, listenerKind) !== "off",
     );
   }
 
-  protected async handleGatewaySettings(
+  async handleGatewaySettings(
     request: IncomingMessage,
     response: ServerResponse,
     requestMetrics: GatewayRequestMetrics,
@@ -417,7 +442,7 @@ export abstract class GatewayAuth extends GatewayEvents {
       return;
     }
     if (request.method === "GET") {
-      jsonResponse(response, 200, await this.getTokenSettings());
+      jsonResponse(response, 200, await this.lifecycle.getTokenSettings());
       return;
     }
     if (request.method !== "PUT") {
@@ -448,7 +473,7 @@ export abstract class GatewayAuth extends GatewayEvents {
     }
 
     try {
-      const settings = await this.setToken(body.token);
+      const settings = await this.lifecycle.setToken(body.token);
       jsonResponse(response, 200, settings, {
         "set-cookie": gatewayTokenCookieHeader(settings.token),
       });
@@ -457,26 +482,26 @@ export abstract class GatewayAuth extends GatewayEvents {
         jsonResponse(response, 400, { error: error.message });
         return;
       }
-      this.logger.error("[RemoteGateway] Failed to persist gateway token:", error);
+      this.ctx.logger.error("[RemoteGateway] Failed to persist gateway token:", error);
       jsonResponse(response, 500, { error: "Unable to persist gateway token" });
     }
   }
 
-  protected async handleWebClientAccess(
+  async handleWebClientAccess(
     request: IncomingMessage,
     response: ServerResponse,
     requestMetrics: GatewayRequestMetrics,
   ): Promise<void> {
-    if (!this.webClientControl) {
+    if (!this.ctx.webClientControl) {
       jsonResponse(response, 404, { error: "Not found" });
       return;
     }
     if (request.method === "GET") {
-      jsonResponse(response, 200, this.webClientControl.getStatus());
+      jsonResponse(response, 200, this.ctx.webClientControl.getStatus());
       return;
     }
     if (request.method === "DELETE") {
-      jsonResponse(response, 200, await this.webClientControl.resetServe());
+      jsonResponse(response, 200, await this.ctx.webClientControl.resetServe());
       return;
     }
     if (request.method !== "PUT") {
@@ -505,10 +530,10 @@ export abstract class GatewayAuth extends GatewayEvents {
       jsonResponse(response, 400, { error: "Expected enabled to be a boolean" });
       return;
     }
-    jsonResponse(response, 200, await this.webClientControl.setEnabled(body.enabled));
+    jsonResponse(response, 200, await this.ctx.webClientControl.setEnabled(body.enabled));
   }
 
-  protected async handleLogin(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  async handleLogin(request: IncomingMessage, response: ServerResponse): Promise<void> {
     if (request.method === "GET") {
       textResponse(
         response,
@@ -539,7 +564,7 @@ export abstract class GatewayAuth extends GatewayEvents {
       }
       throw error;
     }
-    if (!tokenMatches(this.token, token)) {
+    if (!tokenMatches(this.ctx.token, token)) {
       textResponse(
         response,
         401,
@@ -549,9 +574,9 @@ export abstract class GatewayAuth extends GatewayEvents {
       return;
     }
 
-    const cookie = this.agentTestMode
+    const cookie = this.ctx.agentTestMode
       ? this.agentTestSessionCookie(this.issueAgentTestSession())
-      : gatewayTokenCookieHeader(this.token);
+      : gatewayTokenCookieHeader(this.ctx.token);
     response.writeHead(303, {
       location: "/",
       "set-cookie": cookie,
@@ -560,18 +585,15 @@ export abstract class GatewayAuth extends GatewayEvents {
     response.end();
   }
 
-  protected agentTestBootstrapAllowed(
-    request: IncomingMessage,
-    listenerKind: ListenerKind,
-  ): boolean {
+  agentTestBootstrapAllowed(request: IncomingMessage, listenerKind: ListenerKind): boolean {
     return (
-      this.agentTestMode &&
+      this.ctx.agentTestMode &&
       listenerKind === "browser" &&
       Boolean(request.socket.remoteAddress && isLoopbackAddress(request.socket.remoteAddress))
     );
   }
 
-  protected async handleAgentTestBootstrapMint(
+  async handleAgentTestBootstrapMint(
     request: IncomingMessage,
     response: ServerResponse,
     listenerKind: ListenerKind,
@@ -587,14 +609,14 @@ export abstract class GatewayAuth extends GatewayEvents {
     }
     const now = Date.now();
     this.pruneAgentTestCredentials(now);
-    while (this.agentTestBootstraps.size >= MAX_AGENT_TEST_BOOTSTRAPS) {
-      const oldest = this.agentTestBootstraps.keys().next().value as string | undefined;
+    while (this.ctx.agentTestBootstraps.size >= MAX_AGENT_TEST_BOOTSTRAPS) {
+      const oldest = this.ctx.agentTestBootstraps.keys().next().value as string | undefined;
       if (!oldest) break;
-      this.agentTestBootstraps.delete(oldest);
+      this.ctx.agentTestBootstraps.delete(oldest);
     }
     const code = randomBytes(32).toString("base64url");
     const expiresAt = now + AGENT_TEST_BOOTSTRAP_TTL_MS;
-    this.agentTestBootstraps.set(code, expiresAt);
+    this.ctx.agentTestBootstraps.set(code, expiresAt);
     jsonResponse(response, 201, { code, expiresAt }, { "cache-control": "no-store" });
   }
 
@@ -603,7 +625,7 @@ export abstract class GatewayAuth extends GatewayEvents {
    * browser activity. Ordinary API polling deliberately does not touch the
    * idle clock.
    */
-  protected handleAgentTestSession(
+  handleAgentTestSession(
     request: IncomingMessage,
     response: ServerResponse,
     listenerKind: ListenerKind,
@@ -613,7 +635,7 @@ export abstract class GatewayAuth extends GatewayEvents {
       return;
     }
     const session = getCookie(request.headers, AUTH_COOKIE);
-    if (!session || !this.agentTestSessions.has(session)) {
+    if (!session || !this.ctx.agentTestSessions.has(session)) {
       jsonResponse(response, 404, { error: "Not found" });
       return;
     }
@@ -634,7 +656,7 @@ export abstract class GatewayAuth extends GatewayEvents {
     response.end();
   }
 
-  protected async handleAgentTestBootstrapExchange(
+  async handleAgentTestBootstrapExchange(
     request: IncomingMessage,
     response: ServerResponse,
     listenerKind: ListenerKind,
@@ -679,9 +701,9 @@ export abstract class GatewayAuth extends GatewayEvents {
   }
 
   /** Redeems a bootstrap code exactly once, whichever route presented it. */
-  protected consumeAgentTestBootstrap(code: string): boolean {
-    const expiresAt = this.agentTestBootstraps.get(code);
-    this.agentTestBootstraps.delete(code);
+  consumeAgentTestBootstrap(code: string): boolean {
+    const expiresAt = this.ctx.agentTestBootstraps.get(code);
+    this.ctx.agentTestBootstraps.delete(code);
     return expiresAt !== undefined && expiresAt > Date.now();
   }
 
@@ -694,7 +716,7 @@ export abstract class GatewayAuth extends GatewayEvents {
    * to the app, so the credential neither survives in the address bar nor
    * travels onward in a Referer.
    */
-  protected handleAgentTestLoginLink(
+  handleAgentTestLoginLink(
     request: IncomingMessage,
     response: ServerResponse,
     url: URL,

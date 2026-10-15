@@ -6,7 +6,7 @@ import { openRegistryWriter } from "./registry-writer-lease.js";
 import { shutdownContainerLogService } from "./container-log-service.js";
 import { shutdownOomEventWatcher, startOomEventWatcher } from "./container-oom-events.js";
 import { reconcileContainerOperations } from "./container-lifecycle-service.js";
-import { DesignService } from "./design-service.js";
+import { DesignService } from "./design/index.js";
 import { PreviewRuntime } from "./preview-runtime.js";
 import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
@@ -43,7 +43,6 @@ import { McpManagementService } from "./mcp-management/service.js";
 import {
   closeLocalServerAdmission,
   createCommandRegistry,
-  shutdownDiffStatsTracking,
   shutdownLocalServers,
   shutdownPrMonitorTracking,
   type BackendEmit,
@@ -56,6 +55,7 @@ import {
 } from "./commands-local-server-lifecycle.js";
 import { claudeTmuxRuntimeRootPrefix } from "./tmux.js";
 import { StorageService } from "./storage.js";
+import { BackendRuntime } from "./backend-runtime.js";
 import { AgentToolsServer } from "./agent-tools.js";
 import { ContainerHostReachabilityService } from "./container-host-reachability.js";
 import {
@@ -134,6 +134,7 @@ export class OrkestratorBackend {
   private readonly promptQueues: PromptQueueDrainer;
   private readonly agentMail: AgentMailService;
   private readonly environmentLifecycleTasks: EnvironmentLifecycleTaskTracker;
+  private readonly runtime: BackendRuntime;
   private readonly environmentLifecycleDrainTimeoutMs: number;
   private readonly workflowResults: WorkflowResultService;
   /** Absent in `bun test` backends unless injected: probing runs real Docker commands. */
@@ -207,6 +208,8 @@ export class OrkestratorBackend {
       | "stop"
     >;
     environmentLifecycleTasks?: EnvironmentLifecycleTaskTracker;
+    /** Test seam: process state owned by this backend instance. */
+    runtime?: BackendRuntime;
     environmentLifecycleDrainTimeoutMs?: number;
     /**
      * Step 08 named due jobs for the activity bundle and maintenance. `false`
@@ -286,6 +289,9 @@ export class OrkestratorBackend {
       });
     this.environmentLifecycleTasks =
       options.environmentLifecycleTasks ?? new EnvironmentLifecycleTaskTracker();
+    this.runtime =
+      options.runtime ??
+      new BackendRuntime({ emit: (event, payload) => options.emit(event, payload) });
     this.environmentLifecycleDrainTimeoutMs =
       options.environmentLifecycleDrainTimeoutMs ?? ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS;
     // Every committed mutation fans out to all connected clients, so a second
@@ -311,6 +317,7 @@ export class OrkestratorBackend {
       containerHostReachability: this.containerHostReachability,
       controlMcp: this.controlMcp,
       environmentLifecycleTasks: this.environmentLifecycleTasks,
+      runtime: this.runtime,
     } as CommandContext;
     context.notifyAgentTurnCompleted = async (environmentId: string) => {
       const handler = this.commands.get("pr_monitor_agent_turn_completed");
@@ -1406,7 +1413,7 @@ export class OrkestratorBackend {
     this.activityJobs = null;
     // Synchronous and cannot fail, so it runs before the awaited drain rather
     // than racing it: every watcher holds a file descriptor and a debounce timer.
-    shutdownDiffStatsTracking();
+    this.runtime.shutdown();
     shutdownPrMonitorTracking();
     cancelScheduledEnvironmentCleanup(this.context.storage.getDataDir());
     const attempt = (async () => {
@@ -1470,7 +1477,6 @@ export class OrkestratorBackend {
         this.context.mcpManagement?.dispose();
         await this.controlMcp.stop();
         await this.agentTools.stop();
-        await this.context.design?.close();
         await Promise.race([
           this.webAnnotations.close().catch((error: unknown) => {
             console.warn(
@@ -1480,11 +1486,26 @@ export class OrkestratorBackend {
           }),
           new Promise<void>((resolve) => setTimeout(resolve, 5_000).unref?.()),
         ]);
-        // Last: closing checkpoints the WAL into the database file. A straggler
-        // that still reads storage reopens it lazily.
-        this.workflowResults.closeStorage();
-        closeEnvironmentCleanupStorage();
-        this.context.storage.close();
+        const closeLifecycleStorage = async () => {
+          await this.context.design?.close();
+          // Last: closing checkpoints the WAL into the database file.
+          this.workflowResults.closeStorage();
+          closeEnvironmentCleanupStorage();
+          this.context.storage.close();
+        };
+        if (this.environmentLifecycleTasks.pendingCount() > 0) {
+          // The quit deadline bounds waiting, not already-admitted deletion.
+          // Keep its design coordination and stores usable until it finishes;
+          // closing them now would strand the durable deletion tombstone.
+          void this.environmentLifecycleTasks
+            .whenDrained()
+            .then(closeLifecycleStorage)
+            .catch((error: unknown) => {
+              console.warn("[backend] Failed to close lifecycle storage:", error);
+            });
+        } else {
+          await closeLifecycleStorage();
+        }
       }
     })();
     this.shutdownPromise = attempt;

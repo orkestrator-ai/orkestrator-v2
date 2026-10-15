@@ -1,30 +1,63 @@
+/**
+ * The build pipeline stage supervisor: the whole-store tick, the per-pipeline
+ * lock, and the state machine each pass advances (provisioning, stage start and
+ * dispatch, review packages, validation and the multi-model review).
+ */
+import { randomUUID } from "node:crypto";
+import {
+  type BuildPipeline,
+  type BuildPipelineAgent,
+  type PipelineSession,
+  type PipelineSessionPhase,
+  type ResumableBuildPhase,
+  isBuildPipeline,
+  isActiveBuildPhase,
+  reviewValidationStage,
+  REVIEW_PACKAGE_SESSION_LABEL,
+  usesReviewFanout,
+  executionModeForSessionPhase,
+} from "@orkestrator/protocol/build-pipeline";
 import {
   newReviewValidationRun,
   parseReviewValidationPlan,
   type ReviewValidationRun,
+  type ReviewPackageReference,
 } from "@orkestrator/protocol/review-workflow";
+import type { Environment } from "./models.js";
+import {
+  type BuildPipelineProvider,
+  ProviderUnavailableError,
+  AmbiguousPromptDispatchError,
+  readProviderStatus,
+  type ProviderExecutionMode,
+} from "./build-pipeline-provider.js";
+import {
+  errorMessage,
+  sessionForCurrentPhase,
+  resumablePhase,
+  discardPreparationResult,
+  sessionAgent,
+  sessionPhaseFor,
+  discardSessionReviewReports,
+  withUnattendedPolicy,
+  type BuildStepSelection,
+  WORKTREE_PROBE_ATTEMPTS,
+  VALIDATION_STAGE_LABELS,
+  VERIFICATION_SCHEMA,
+  SESSION_LABELS,
+  PreSessionStageStartError,
+  executionModeOverrideForPhase,
+  DEFAULT_STALL_WARNING_MS,
+  attachBeforeDispatch,
+  elapsedSince,
+  elapsedSinceLatest,
+} from "./build-pipeline-service-helpers.js";
 import {
   reviewValidationDiscoveryPrompt,
   REVIEW_VALIDATION_PLAN_SCHEMA,
 } from "./review-validation-prompts.js";
 import { validationPreparation } from "./review-validation-service.js";
-import { randomUUID } from "node:crypto";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
-import type {
-  BuildPipeline,
-  BuildPipelineAgent,
-  PipelineSession,
-  PipelineSessionPhase,
-  ResumableBuildPhase,
-} from "@orkestrator/protocol/build-pipeline";
-import {
-  executionModeForSessionPhase,
-  isBuildPipeline,
-  isActiveBuildPhase,
-  REVIEW_PACKAGE_SESSION_LABEL,
-  reviewValidationStage,
-  usesReviewFanout,
-} from "@orkestrator/protocol/build-pipeline";
 import {
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
   safeParseStructuredReviewReport,
@@ -35,16 +68,7 @@ import {
   workflowResultInstruction,
   workflowResultToolName,
 } from "@orkestrator/protocol/workflow-results";
-import type { ReviewPackageReference } from "@orkestrator/protocol/review-workflow";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
-import type { Environment } from "./models.js";
-import {
-  AmbiguousPromptDispatchError,
-  ProviderUnavailableError,
-  readProviderStatus,
-  type BuildPipelineProvider,
-  type ProviderExecutionMode,
-} from "./build-pipeline-provider.js";
 import {
   addressPrompt,
   buildPipelineReviewPackageContext,
@@ -79,28 +103,10 @@ import {
   parseReviewPreparationResult,
 } from "./looped-review-prompts.js";
 import { parseReviewPackageReference } from "./review-package.js";
-import { BuildPipelineServiceBase } from "./build-pipeline-service-base.js";
-import {
-  errorMessage,
-  WORKTREE_PROBE_ATTEMPTS,
-  VALIDATION_STAGE_LABELS,
-  VERIFICATION_SCHEMA,
-  SESSION_LABELS,
-  PreSessionStageStartError,
-  sessionForCurrentPhase,
-  resumablePhase,
-  discardPreparationResult,
-  sessionAgent,
-  sessionPhaseFor,
-  executionModeOverrideForPhase,
-  DEFAULT_STALL_WARNING_MS,
-  withUnattendedPolicy,
-  attachBeforeDispatch,
-  elapsedSince,
-  elapsedSinceLatest,
-  discardSessionReviewReports,
-} from "./build-pipeline-service-helpers.js";
-import type { BuildStepSelection } from "./build-pipeline-service-helpers.js";
+import type { BuildPipelineContext } from "./build-pipeline-context.js";
+import type { BuildPipelineAgents } from "./build-pipeline-service-agents.js";
+import type { BuildPipelineRecovery } from "./build-pipeline-service-recovery.js";
+import type { BuildPipelineInteractions } from "./build-pipeline-service-interactions.js";
 
 /**
  * Shown in the build header while the pipeline waits for a person. Says what
@@ -109,7 +115,7 @@ import type { BuildStepSelection } from "./build-pipeline-service-helpers.js";
 export const UNCHANGED_FIX_PAUSE_MESSAGE =
   "Paused: the fix stage finished without changing the branch, so another review and verification round would check identical code. The verification failure may not be caused by this branch (for example a test that also fails on the target branch, or one this host cannot run). Read the Fix transcript, then Resume to run another round anyway, send a message first to steer the fix, or Cancel and open the pull request yourself.";
 
-export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServiceBase {
+export class BuildPipelineSupervisor {
   /**
    * Progress clocks for the reviewer fan-out.
    *
@@ -118,82 +124,93 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
    * cannot grow with pipeline history.
    */
   private readonly reviewProgress = new MultiReviewProgressTracker();
+
   private reviewFanoutRunner: BuildPipelineReviewFanout | null = null;
 
-  protected reviewFanout(): BuildPipelineReviewFanout {
+  constructor(
+    private readonly ctx: BuildPipelineContext,
+    private readonly agents: BuildPipelineAgents,
+    private readonly recovery: BuildPipelineRecovery,
+    private readonly interactions: BuildPipelineInteractions,
+  ) {}
+
+  reviewFanout(): BuildPipelineReviewFanout {
     if (!this.reviewFanoutRunner) {
       this.reviewFanoutRunner = new BuildPipelineReviewFanout({
-        provider: (pipeline, agent) => this.provider(pipeline, agent),
-        executionPolicy: (pipeline) => this.executionPolicy(pipeline),
+        provider: (pipeline, agent) => this.agents.provider(pipeline, agent),
+        executionPolicy: (pipeline) => this.ctx.executionPolicy(pipeline),
         save: async (pipeline) => {
-          await this.save(pipeline, pipeline.backendRevision);
+          await this.ctx.save(pipeline, pipeline.backendRevision);
         },
-        stepSettings: (pipeline, sessionPhase) => this.stepSettings(pipeline, sessionPhase),
+        stepSettings: (pipeline, sessionPhase) => this.agents.stepSettings(pipeline, sessionPhase),
         settingsForSelection: (pipeline, selection) =>
-          this.settingsForSelection(pipeline, selection),
+          this.agents.settingsForSelection(pipeline, selection),
         settingsForSelections: (pipeline, selections) =>
-          this.settingsForSelections(pipeline, selections),
+          this.agents.settingsForSelections(pipeline, selections),
         refreshTranscript: (session, provider, messages) =>
           this.refreshTranscript(session, provider, messages),
         shouldPersistTranscript: (session) => this.shouldPersistTranscript(session),
         targetBranch: async (pipeline) => {
-          const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
+          const repository = await this.ctx.storage.getRepositoryConfig(pipeline.projectId);
           return repository.prBaseBranch || "main";
         },
-        reviewInstruction: async () => (await this.storage.loadConfig()).global.reviewInstruction,
+        reviewInstruction: async () =>
+          (await this.ctx.storage.loadConfig()).global.reviewInstruction,
         reviewContext: async (pipeline) => {
-          const notes = (await this.storage.getProjectNotes(pipeline.projectId)).content;
+          const notes = (await this.ctx.storage.getProjectNotes(pipeline.projectId)).content;
           return buildPipelineReviewPackageContext(pipeline, notes).context;
         },
         verifyReviewPackage: (pipeline, reviewPackage) =>
           this.assertReviewPackageIntegrity(pipeline.environmentId, reviewPackage),
         progress: this.reviewProgress,
-        workflowResults: this.options.workflowResults,
+        workflowResults: this.ctx.options.workflowResults,
         workflowToolEnabled: (agent, kind) =>
-          this.workflowToolEnabled(agent as BuildPipelineAgent, kind),
+          this.ctx.workflowToolEnabled(agent as BuildPipelineAgent, kind),
         agentMcp: (pipeline, resultKey, provider, stage) =>
-          this.workflowAgentMcp(pipeline, resultKey, provider, stage),
-        concurrency: this.options.reviewFanoutConcurrency,
-        efficiency: this.options.efficiency,
+          this.ctx.workflowAgentMcp(pipeline, resultKey, provider, stage),
+        concurrency: this.ctx.options.reviewFanoutConcurrency,
+        efficiency: this.ctx.options.efficiency,
         pollGate: (pipeline) => ({
-          count: (scope) => this.reviewerPollGate.count(scope, this.passTrigger(pipeline.id)),
-          exhausted: (scope, count, limit) => this.reviewerPollGate.exhausted(scope, count, limit),
-          clear: (scope) => this.reviewerPollGate.clear(scope),
+          count: (scope) =>
+            this.ctx.reviewerPollGate.count(scope, this.ctx.passTrigger(pipeline.id)),
+          exhausted: (scope, count, limit) =>
+            this.ctx.reviewerPollGate.exhausted(scope, count, limit),
+          clear: (scope) => this.ctx.reviewerPollGate.clear(scope),
         }),
       });
     }
     return this.reviewFanoutRunner;
   }
 
-  protected requestTick(): Promise<void> {
+  requestTick(): Promise<void> {
     recurringWorkMetrics.requested("build-supervisor-tick");
-    if (this.tickPromise) {
+    if (this.ctx.tickPromise) {
       recurringWorkMetrics.coalesced("build-supervisor-tick");
-      this.tickRequested = true;
-      return this.tickPromise;
+      this.ctx.tickRequested = true;
+      return this.ctx.tickPromise;
     }
     const operation = (async () => {
       do {
-        this.tickRequested = false;
+        this.ctx.tickRequested = false;
         await recurringWorkMetrics.observe("build-supervisor-tick", () => this.tickPass());
-      } while (!this.stopped && this.tickRequested);
+      } while (!this.ctx.stopped && this.ctx.tickRequested);
     })().finally(() => {
-      if (this.tickPromise === operation) this.tickPromise = null;
+      if (this.ctx.tickPromise === operation) this.ctx.tickPromise = null;
     });
-    this.tickPromise = operation;
+    this.ctx.tickPromise = operation;
     return operation;
   }
 
-  protected async tickPass(): Promise<void> {
-    if (this.stopped) return;
-    const records = await this.storage.listAllBuildPipelines();
+  async tickPass(): Promise<void> {
+    if (this.ctx.stopped) return;
+    const records = await this.ctx.storage.listAllBuildPipelines();
     recurringWorkMetrics.work("record-scanned", records.length);
     await Promise.all(
       records.flatMap((record) => {
         if (
           !isBuildPipeline(record.snapshot) ||
           (!isActiveBuildPhase(record.snapshot.phase) &&
-            !this.needsTerminalReconciliation(record.snapshot))
+            !this.recovery.needsTerminalReconciliation(record.snapshot))
         ) {
           return [];
         }
@@ -203,38 +220,38 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     );
   }
 
-  protected runLocked(pipelineId: string, namingPrompt?: string): Promise<void> {
+  runLocked(pipelineId: string, namingPrompt?: string): Promise<void> {
     // Timer ticks are level-triggered. If a pass is already running, joining
     // it is sufficient; appending another promise every 1.5 seconds lets a
     // stalled provider call grow an unbounded queue.
-    const existing = this.locks.get(pipelineId);
+    const existing = this.ctx.locks.get(pipelineId);
     if (existing) return existing;
     const next = this.advance(pipelineId, namingPrompt)
       .catch(async (error) => {
         if (error instanceof ProviderUnavailableError) {
-          await this.recordReconnect(pipelineId, error).catch(() => undefined);
+          await this.interactions.recordReconnect(pipelineId, error).catch(() => undefined);
         } else {
-          await this.fail(pipelineId, error).catch(() => undefined);
+          await this.interactions.fail(pipelineId, error).catch(() => undefined);
         }
       })
       .finally(() => {
-        if (this.locks.get(pipelineId) === next) this.locks.delete(pipelineId);
+        if (this.ctx.locks.get(pipelineId) === next) this.ctx.locks.delete(pipelineId);
       });
-    this.locks.set(pipelineId, next);
+    this.ctx.locks.set(pipelineId, next);
     return next;
   }
 
-  protected async advance(pipelineId: string, namingPrompt?: string): Promise<void> {
-    const record = await this.requireRecord(pipelineId);
+  async advance(pipelineId: string, namingPrompt?: string): Promise<void> {
+    const record = await this.ctx.requireRecord(pipelineId);
     const pipeline = record.snapshot as BuildPipeline;
     pipeline.backendRevision = record.revision;
-    if (pipeline.pendingResultConsumptions?.length && this.options.workflowResults) {
+    if (pipeline.pendingResultConsumptions?.length && this.ctx.options.workflowResults) {
       try {
         for (const resultKey of pipeline.pendingResultConsumptions) {
-          await this.options.workflowResults.consume(resultKey);
+          await this.ctx.options.workflowResults.consume(resultKey);
         }
         delete pipeline.pendingResultConsumptions;
-        await this.save(pipeline, record.revision);
+        await this.ctx.save(pipeline, record.revision);
       } catch (error) {
         console.warn(
           `[build-pipeline] Deferred result consumption for ${pipeline.id}:`,
@@ -244,7 +261,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       return;
     }
     if (!isActiveBuildPhase(pipeline.phase)) {
-      await this.reconcileTerminalState(pipeline);
+      await this.recovery.reconcileTerminalState(pipeline);
       return;
     }
 
@@ -256,7 +273,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     if (pipeline.phase === "creating-environment") {
       const environment =
         (await this.findLinkedEnvironment(pipeline)) ??
-        (await this.invoke<Environment>("create_environment", {
+        (await this.ctx.invoke<Environment>("create_environment", {
           projectId: pipeline.projectId,
           // A launcher that collected a network mode wins; otherwise a
           // container is restricted, which is the app's own default, and a
@@ -281,13 +298,13 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
             ? { portMappings: pipeline.environmentOptions.portMappings }
             : {}),
           namingPrompt:
-            namingPrompt ?? this.provisioningPrompts.get(pipeline.id) ?? pipeline.taskTitle,
+            namingPrompt ?? this.ctx.provisioningPrompts.get(pipeline.id) ?? pipeline.taskTitle,
         }));
       pipeline.environmentId = environment.id;
       pipeline.environmentType = environment.environmentType;
       pipeline.phase = "starting-environment";
-      await this.save(pipeline, record.revision);
-      this.provisioningPrompts.delete(pipeline.id);
+      await this.ctx.save(pipeline, record.revision);
+      this.ctx.provisioningPrompts.delete(pipeline.id);
       return;
     }
 
@@ -296,21 +313,21 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     }
 
     if (pipeline.phase === "starting-environment") {
-      await this.configureEnvironment(pipeline);
-      const environment = await this.storage.getEnvironment(pipeline.environmentId);
+      await this.recovery.configureEnvironment(pipeline);
+      const environment = await this.ctx.storage.getEnvironment(pipeline.environmentId);
       if (!environment) throw new Error("Build environment no longer exists");
       if (environment.status !== "running") {
-        await this.invoke("start_environment", {
+        await this.ctx.invoke("start_environment", {
           environmentId: pipeline.environmentId,
         });
       }
       pipeline.phase = "waiting-for-setup";
-      await this.save(pipeline, record.revision);
+      await this.ctx.save(pipeline, record.revision);
       return;
     }
 
     if (pipeline.phase === "waiting-for-setup") {
-      await this.invoke("run_environment_setup", {
+      await this.ctx.invoke("run_environment_setup", {
         environmentId: pipeline.environmentId,
       });
       // Setup temporarily owns the active terminal tab while it installs the
@@ -318,7 +335,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       // selection back to the build surface before starting the first agent
       // turn. Keeping this in the backend means a renderer that was unmounted
       // during setup catches up from the persisted layout when it returns.
-      await this.storage.ensureBuildPipelineTab({
+      await this.ctx.storage.ensureBuildPipelineTab({
         pipelineId: pipeline.id,
         taskId: pipeline.taskId,
         environmentId: pipeline.environmentId,
@@ -413,7 +430,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       // Handled here rather than on the idle path below: that path is reached
       // through the current session, and the fan-out has several.
       if (pipeline.reviewRetryRequested) {
-        await this.abandonReviewFanout(pipeline, "idle");
+        await this.agents.abandonReviewFanout(pipeline, "idle");
         delete pipeline.reviewRetryRequested;
         discardSessionReviewReports(pipeline);
         delete pipeline.reviewFanout;
@@ -452,8 +469,8 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       return;
     }
     const currentAgent = sessionAgent(pipeline, session);
-    const provider = await this.provider(pipeline, currentAgent);
-    if (await this.enforcePendingInteraction(pipeline, provider, session)) {
+    const provider = await this.agents.provider(pipeline, currentAgent);
+    if (await this.interactions.enforcePendingInteraction(pipeline, provider, session)) {
       return;
     }
     // Read as data. A bridge that answers with a terminal turn error is
@@ -484,7 +501,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     ) {
       delete pipeline.reconnectAttempt;
       delete pipeline.error;
-      await this.save(pipeline, record.revision);
+      await this.ctx.save(pipeline, record.revision);
       return;
     }
     if (status === "missing") {
@@ -511,7 +528,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         delete pipeline.pendingPromptAttempt;
         delete pipeline.reconnectAttempt;
         delete pipeline.error;
-        await this.save(pipeline, record.revision);
+        await this.ctx.save(pipeline, record.revision);
         return;
       }
       await this.dispatchPending(pipeline, provider);
@@ -557,7 +574,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         (transcriptChanged && this.shouldPersistTranscript(session))
       ) {
         session.messagesPersistedAt = new Date().toISOString();
-        await this.save(pipeline, record.revision);
+        await this.ctx.save(pipeline, record.revision);
       }
       return;
     }
@@ -573,7 +590,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       // rather than leaving the throttled tail to whichever branch runs next —
       // several of them return without saving.
       session.messagesPersistedAt = new Date().toISOString();
-      await this.save(pipeline, pipeline.backendRevision);
+      await this.ctx.save(pipeline, pipeline.backendRevision);
     }
 
     if (pipeline.reviewRetryRequested) {
@@ -612,13 +629,13 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         await this.startStage(pipeline, "verify", "verifying");
         return;
       case "verifying":
-        await this.finishVerification(pipeline, provider, session);
+        await this.recovery.finishVerification(pipeline, provider, session);
         return;
       case "creating-pr":
-        await this.finishPullRequest(pipeline);
+        await this.recovery.finishPullRequest(pipeline);
         return;
       case "resolving-conflicts":
-        await this.finishConflictResolution(pipeline);
+        await this.recovery.finishConflictResolution(pipeline);
         return;
       default:
         return;
@@ -640,7 +657,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
    * still unknown afterwards is not survivable, because nothing downstream can
    * certify a turn whose starting point was never established.
    */
-  protected async reviewWorktreeSnapshot(pipeline: BuildPipeline): Promise<ReviewWorktreeSnapshot> {
+  async reviewWorktreeSnapshot(pipeline: BuildPipeline): Promise<ReviewWorktreeSnapshot> {
     let last = await this.probeWorktreeOnce(pipeline);
     for (
       let attempt = 1;
@@ -652,12 +669,12 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     return last;
   }
 
-  protected async probeWorktreeOnce(
+  async probeWorktreeOnce(
     pipeline: BuildPipeline,
     options: ReviewWorktreeProbeOptions = {},
   ): Promise<ReviewWorktreeSnapshot> {
     return probeReviewWorktreeOnce(
-      (command, args) => this.invoke(command, args),
+      (command, args) => this.ctx.invoke(command, args),
       pipeline.environmentId,
       options,
     );
@@ -670,9 +687,9 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
    * which then lets the loop continue exactly as it did before the check
    * existed rather than failing a stage over an optional optimisation.
    */
-  protected async worktreeFingerprint(pipeline: BuildPipeline): Promise<string | undefined> {
+  async worktreeFingerprint(pipeline: BuildPipeline): Promise<string | undefined> {
     const snapshot = await probeReviewWorktree(
-      (command, args) => this.invoke(command, args),
+      (command, args) => this.ctx.invoke(command, args),
       pipeline.environmentId,
       WORKTREE_PROBE_ATTEMPTS,
       { fingerprint: true },
@@ -693,10 +710,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
    * The baseline is consumed on the first comparison, so Resume runs the next
    * round as before instead of pausing again on the same turn.
    */
-  protected async pauseUnchangedFix(
-    pipeline: BuildPipeline,
-    session: PipelineSession,
-  ): Promise<boolean> {
+  async pauseUnchangedFix(pipeline: BuildPipeline, session: PipelineSession): Promise<boolean> {
     const baseline = session.fixWorktreeFingerprintAtStart;
     if (session.phase !== "fix" || !baseline) return false;
     // Every attempt in this fix stage shares the original baseline. Consume
@@ -708,14 +722,14 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     }
     const current = await this.worktreeFingerprint(pipeline);
     if (current !== baseline) {
-      await this.save(pipeline, pipeline.backendRevision);
+      await this.ctx.save(pipeline, pipeline.backendRevision);
       return false;
     }
     pipeline.pausedFromPhase = "fixing";
     pipeline.phase = "paused";
     pipeline.error = UNCHANGED_FIX_PAUSE_MESSAGE;
     delete pipeline.stallWarning;
-    await this.save(pipeline, pipeline.backendRevision);
+    await this.ctx.save(pipeline, pipeline.backendRevision);
     return true;
   }
 
@@ -730,7 +744,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
    * certified is not worth an agent turn, and failing after the fact would
    * discard a completed review and report it as a Git error.
    */
-  protected async validationBaseline(
+  async validationBaseline(
     pipeline: BuildPipeline,
     sessionPhase: "review" | "verify",
   ): Promise<ObservedWorktreeSnapshot> {
@@ -757,7 +771,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
    * uncommitted work the build stage left behind survives review instead of
    * failing the pipeline after the fact.
    */
-  protected async assertValidationWorktreeUnchanged(
+  async assertValidationWorktreeUnchanged(
     pipeline: BuildPipeline,
     session: PipelineSession,
   ): Promise<void> {
@@ -811,21 +825,21 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
    * preparation-only follow-up in the same session, preserving the model and
    * its implementation context across an upgrade.
    */
-  protected async finishReviewPackagePreparation(
+  async finishReviewPackagePreparation(
     pipeline: BuildPipeline,
     provider: BuildPipelineProvider,
     session: PipelineSession,
   ): Promise<void> {
-    const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
+    const repository = await this.ctx.storage.getRepositoryConfig(pipeline.projectId);
     const targetBranch = repository.prBaseBranch || "main";
-    await this.refreshWorkflowRollout();
+    await this.ctx.refreshWorkflowRollout();
     if (!session.structuredRequestId) {
       const requestId = randomUUID();
       const startedAt = new Date().toISOString();
       const prompt = withUnattendedPolicy(reviewPackagePreparationPrompt(pipeline, targetBranch));
       session.structuredRequestId = requestId;
       session.producedReviewPackagePlan = true;
-      session.resultTransport = this.workflowToolEnabled(
+      session.resultTransport = this.ctx.workflowToolEnabled(
         sessionAgent(pipeline, session),
         "review-preparation",
       )
@@ -845,17 +859,17 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         resultTransport: session.resultTransport,
         startedAt,
       };
-      await this.save(pipeline, pipeline.backendRevision);
+      await this.ctx.save(pipeline, pipeline.backendRevision);
       await this.dispatchPending(pipeline, provider);
       return;
     }
-    const result = await this.readWorkflowResult<unknown>(
+    const result = await this.ctx.readWorkflowResult<unknown>(
       provider,
       session,
       session.structuredRequestId,
     );
     if (!result) {
-      await this.awaitStructuredResult(pipeline, session, "review package preparation");
+      await this.recovery.awaitStructuredResult(pipeline, session, "review package preparation");
       return;
     }
     delete session.structuredWaitStartedAt;
@@ -871,17 +885,17 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       );
       session.structuredResultStatus = "accepted";
       session.producedReviewPackagePlan = true;
-      this.stageWorkflowResultConsumption(pipeline, session, session.structuredRequestId);
-      await this.save(pipeline, pipeline.backendRevision);
-      await this.consumeWorkflowResult(pipeline, session, session.structuredRequestId);
+      this.ctx.stageWorkflowResultConsumption(pipeline, session, session.structuredRequestId);
+      await this.ctx.save(pipeline, pipeline.backendRevision);
+      await this.ctx.consumeWorkflowResult(pipeline, session, session.structuredRequestId);
       return;
     }
     const preparation = parseReviewPreparationResult(result.value);
     const packageId = buildPipelineReviewPackageId(pipeline);
     const round = pipeline.iteration + 1;
-    const notes = (await this.storage.getProjectNotes(pipeline.projectId)).content;
+    const notes = (await this.ctx.storage.getProjectNotes(pipeline.projectId)).content;
     const boundedContext = buildPipelineReviewPackageContext(pipeline, notes);
-    const generated = await this.invoke<unknown>("generate_looped_review_package", {
+    const generated = await this.ctx.invoke<unknown>("generate_looped_review_package", {
       environmentId: pipeline.environmentId,
       packageId,
       round,
@@ -896,15 +910,15 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     });
     session.structuredResultStatus = "accepted";
     session.producedReviewPackagePlan = true;
-    this.stageWorkflowResultConsumption(pipeline, session, session.structuredRequestId);
+    this.ctx.stageWorkflowResultConsumption(pipeline, session, session.structuredRequestId);
     await this.startStage(pipeline, "review", "reviewing");
-    await this.consumeWorkflowResult(pipeline, session, session.structuredRequestId);
+    await this.ctx.consumeWorkflowResult(pipeline, session, session.structuredRequestId);
   }
 
   private async advanceValidation(pipeline: BuildPipeline): Promise<void> {
     let run = pipeline.validationRun!;
     if (run.status === "planned" || run.status === "running") {
-      run = await this.invoke<ReviewValidationRun>(
+      run = await this.ctx.invoke<ReviewValidationRun>(
         run.status === "planned" ? "start_review_validation" : "status_review_validation",
         {
           environmentId: pipeline.environmentId,
@@ -912,15 +926,15 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         },
       );
       pipeline.validationRun = run;
-      await this.save(pipeline, pipeline.backendRevision);
+      await this.ctx.save(pipeline, pipeline.backendRevision);
       if (run.status === "planned" || run.status === "running") return;
     }
-    const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
+    const repository = await this.ctx.storage.getRepositoryConfig(pipeline.projectId);
     const targetBranch = repository.prBaseBranch || "main";
     const round = pipeline.iteration + 1;
-    const notes = (await this.storage.getProjectNotes(pipeline.projectId)).content;
+    const notes = (await this.ctx.storage.getProjectNotes(pipeline.projectId)).content;
     const sealingStarted = Date.now();
-    const generated = await this.invoke<unknown>("generate_looped_review_package", {
+    const generated = await this.ctx.invoke<unknown>("generate_looped_review_package", {
       environmentId: pipeline.environmentId,
       packageId: run.id,
       round,
@@ -939,20 +953,20 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     await this.startStage(pipeline, "review", "reviewing");
   }
 
-  protected async findLinkedEnvironment(
+  async findLinkedEnvironment(
     pipeline: Pick<BuildPipeline, "id" | "projectId">,
   ): Promise<Environment | undefined> {
-    return (await this.storage.getEnvironmentsByProject(pipeline.projectId)).find(
+    return (await this.ctx.storage.getEnvironmentsByProject(pipeline.projectId)).find(
       (environment) =>
         environment.buildPipelineId === pipeline.id && !environment.deletionRequestedAt,
     );
   }
 
-  protected async assertReviewPackageIntegrity(
+  async assertReviewPackageIntegrity(
     environmentId: string,
     reviewPackage: ReviewPackageReference,
   ): Promise<void> {
-    const verification = await this.invoke<{ valid: boolean; reason?: string }>(
+    const verification = await this.ctx.invoke<{ valid: boolean; reason?: string }>(
       "verify_looped_review_package",
       { environmentId, reviewPackage },
     );
@@ -966,7 +980,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
   private async startVerifiedReviewOrPrepare(pipeline: BuildPipeline): Promise<void> {
     const reviewPackage = pipeline.reviewPackage;
     if (reviewPackage && "kind" in reviewPackage) {
-      const verification = await this.invoke<{ valid: boolean; reason?: string }>(
+      const verification = await this.ctx.invoke<{ valid: boolean; reason?: string }>(
         "verify_looped_review_package",
         { environmentId: pipeline.environmentId, reviewPackage },
       );
@@ -979,7 +993,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     }
   }
 
-  protected async refreshTranscript(
+  async refreshTranscript(
     session: PipelineSession,
     provider: BuildPipelineProvider,
     observedMessages?: readonly unknown[],
@@ -991,12 +1005,12 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     // commits it to the transcript store before the control record that
     // references it (plan step 16). "Changed" means changed since the last
     // committed checkpoint, so a throttled delta is re-detected until saved.
-    return this.transcriptCheckpoints.observe(session, messages);
+    return this.ctx.transcriptCheckpoints.observe(session, messages);
   }
 
-  protected shouldPersistTranscript(session: PipelineSession): boolean {
+  shouldPersistTranscript(session: PipelineSession): boolean {
     const elapsed = elapsedSince(session.messagesPersistedAt);
-    return elapsed === null || elapsed >= this.transcriptPersistIntervalMs;
+    return elapsed === null || elapsed >= this.ctx.transcriptPersistIntervalMs;
   }
 
   /**
@@ -1007,7 +1021,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
    * the normal pending-attempt path under the same request id rather than being
    * either dropped or delivered twice.
    */
-  protected async dispatchUserMessage(
+  async dispatchUserMessage(
     pipeline: BuildPipeline,
     provider: BuildPipelineProvider,
     session: PipelineSession,
@@ -1035,21 +1049,21 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     };
     session.turnStartedAt = startedAt;
     delete pipeline.stallWarning;
-    await this.save(pipeline, pipeline.backendRevision);
+    await this.ctx.save(pipeline, pipeline.backendRevision);
     await this.dispatchPending(pipeline, provider);
   }
 
-  protected async ensureSourceLink(pipeline: BuildPipeline): Promise<void> {
+  async ensureSourceLink(pipeline: BuildPipeline): Promise<void> {
     if (!pipeline.environmentId || pipeline.sourceLinkedAt) return;
     if (pipeline.source?.type === "kanban") {
-      await this.invoke("update_kanban_task", {
+      await this.ctx.invoke("update_kanban_task", {
         taskId: pipeline.source.taskId,
         environmentId: pipeline.environmentId,
         buildPipelineId: pipeline.id,
       });
     }
     if (pipeline.featurePlanId) {
-      await this.invoke("update_feature_plan", {
+      await this.ctx.invoke("update_feature_plan", {
         featureId: pipeline.featurePlanId,
         updates: {
           status: "building",
@@ -1060,10 +1074,10 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       });
     }
     pipeline.sourceLinkedAt = new Date().toISOString();
-    await this.save(pipeline, pipeline.backendRevision);
+    await this.ctx.save(pipeline, pipeline.backendRevision);
   }
 
-  protected async restartMissingStage(pipeline: BuildPipeline): Promise<void> {
+  async restartMissingStage(pipeline: BuildPipeline): Promise<void> {
     const stage =
       pipeline.phase === "building"
         ? "build"
@@ -1093,11 +1107,11 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
    * package-less review. Reusing the normal fixing completion path keeps
    * structured-result recovery and package generation in one state machine.
    */
-  protected async startReviewPackagePreparation(pipeline: BuildPipeline): Promise<void> {
-    const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
+  async startReviewPackagePreparation(pipeline: BuildPipeline): Promise<void> {
+    const repository = await this.ctx.storage.getRepositoryConfig(pipeline.projectId);
     const targetBranch = repository.prBaseBranch || "main";
     if (pipeline.validationRun) {
-      await this.invoke("cancel_review_validation", {
+      await this.ctx.invoke("cancel_review_validation", {
         environmentId: pipeline.environmentId,
         run: pipeline.validationRun,
       });
@@ -1115,7 +1129,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
             model: pipeline.reviewPreparation.model,
             effort: pipeline.reviewPreparation.reasoningEffort,
           }
-        : await this.stepSettings(pipeline, "address"),
+        : await this.agents.stepSettings(pipeline, "address"),
     });
   }
 
@@ -1126,7 +1140,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
    * so that the transition into `addressing` stays where every other stage
    * transition is, and a failure is raised the same way any other stage's is.
    */
-  protected async advanceReviewFanout(pipeline: BuildPipeline): Promise<void> {
+  async advanceReviewFanout(pipeline: BuildPipeline): Promise<void> {
     const step: ReviewFanoutStep = await this.reviewFanout().advance(pipeline);
     if (step.kind === "working") return;
     if (step.kind === "failed") throw new Error(step.error);
@@ -1140,10 +1154,10 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     // completed fan-out through the rest of the run — and makes a later review
     // iteration start a fresh one rather than resume this one.
     delete pipeline.reviewFanout;
-    await this.save(pipeline, pipeline.backendRevision);
+    await this.ctx.save(pipeline, pipeline.backendRevision);
   }
 
-  protected async startStage(
+  async startStage(
     pipeline: BuildPipeline,
     sessionPhase: PipelineSessionPhase,
     phase: ResumableBuildPhase,
@@ -1156,7 +1170,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       settings?: BuildStepSelection;
     },
   ): Promise<void> {
-    await this.refreshWorkflowRollout();
+    await this.ctx.refreshWorkflowRollout();
     // A pipeline retains reports only for its newest review attempt. This is
     // both the retry boundary and the iteration boundary, and prevents up to a
     // full reviewer panel of duplicate structured reports accumulating on
@@ -1178,7 +1192,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     }
     const dispatch = await (async () => {
       if (sessionPhase === "build") {
-        await this.updateKanbanLifecycle(pipeline, {
+        await this.recovery.updateKanbanLifecycle(pipeline, {
           status: "in-progress",
           comment: "🔨 Build started",
         });
@@ -1207,9 +1221,9 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
             : await this.worktreeFingerprint(pipeline)
           : undefined;
       const { agent, model, effort, fastMode, modelSubstitution } = override?.settings
-        ? await this.settingsForSelection(pipeline, override.settings)
-        : await this.stepSettings(pipeline, sessionPhase);
-      const provider = await this.provider(pipeline, agent);
+        ? await this.agents.settingsForSelection(pipeline, override.settings)
+        : await this.agents.stepSettings(pipeline, sessionPhase);
+      const provider = await this.agents.provider(pipeline, agent);
       const label = override?.label ?? SESSION_LABELS[sessionPhase];
       // Stated rather than left to each provider's own default, so the sandbox a
       // stage runs under is one decision in one place and does not move when a
@@ -1226,7 +1240,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         effort,
         ...(typeof fastMode === "boolean" ? { fastMode } : {}),
         mode,
-        policy: await this.executionPolicy(pipeline),
+        policy: await this.ctx.executionPolicy(pipeline),
         interaction: {
           origin: "build-pipeline",
           interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
@@ -1250,13 +1264,13 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       const prompt = withUnattendedPolicy(stagePrompt.prompt);
       const { schema, images } = stagePrompt;
       const requestId = randomUUID();
-      const dispatchResultKind = this.workflowResultKind(
+      const dispatchResultKind = this.ctx.workflowResultKind(
         phase,
         schema === REVIEW_VALIDATION_PLAN_SCHEMA,
       );
       const resultTransport =
         schema !== undefined
-          ? dispatchResultKind && this.workflowToolEnabled(agent, dispatchResultKind)
+          ? dispatchResultKind && this.ctx.workflowToolEnabled(agent, dispatchResultKind)
             ? ("tool-v1" as const)
             : ("structured-output-v1" as const)
           : undefined;
@@ -1331,7 +1345,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         pipeline.structuredReviewRequestId = requestId;
         delete pipeline.structuredReview;
       }
-      await this.save(pipeline, pipeline.backendRevision);
+      await this.ctx.save(pipeline, pipeline.backendRevision);
       return {
         provider,
         sessionId,
@@ -1364,9 +1378,9 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       resultTransport,
       agent,
     } = dispatch;
-    const resultKind = this.workflowResultKind(phase, schema === REVIEW_VALIDATION_PLAN_SCHEMA);
-    if (resultTransport === "tool-v1" && resultKind && this.options.workflowResults) {
-      await this.options.workflowResults.prepare({
+    const resultKind = this.ctx.workflowResultKind(phase, schema === REVIEW_VALIDATION_PLAN_SCHEMA);
+    if (resultTransport === "tool-v1" && resultKind && this.ctx.options.workflowResults) {
+      await this.ctx.options.workflowResults.prepare({
         resultKey: requestId,
         kind: resultKind,
         environmentId: pipeline.environmentId,
@@ -1377,7 +1391,12 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     }
     const agentMcp =
       resultTransport === "tool-v1"
-        ? await this.workflowAgentMcp(pipeline, requestId, agent, `build pipeline ${phase} step`)
+        ? await this.ctx.workflowAgentMcp(
+            pipeline,
+            requestId,
+            agent,
+            `build pipeline ${phase} step`,
+          )
         : undefined;
     await attachBeforeDispatch(
       provider,
@@ -1412,7 +1431,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         },
       );
       delete pipeline.pendingPromptAttempt;
-      await this.save(pipeline, pipeline.backendRevision);
+      await this.ctx.save(pipeline, pipeline.backendRevision);
     } catch (error) {
       if (error instanceof AmbiguousPromptDispatchError) {
         // The bridge may have accepted the stable request before the response
@@ -1425,10 +1444,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     }
   }
 
-  protected async dispatchPending(
-    pipeline: BuildPipeline,
-    provider: BuildPipelineProvider,
-  ): Promise<void> {
+  async dispatchPending(pipeline: BuildPipeline, provider: BuildPipelineProvider): Promise<void> {
     const attempt = pipeline.pendingPromptAttempt;
     if (!attempt) return;
     const schema = attempt.structuredReview
@@ -1451,12 +1467,12 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     const session = pipeline.sessions.find(
       (candidate) => candidate.sdkSessionId === attempt.sessionId,
     );
-    const resultKind = this.workflowResultKind(attempt.phase, attempt.validationPlan === true);
+    const resultKind = this.ctx.workflowResultKind(attempt.phase, attempt.validationPlan === true);
     if (attempt.resultTransport === "tool-v1") {
-      if (!resultKind || !this.options.workflowResults || !session) {
+      if (!resultKind || !this.ctx.options.workflowResults || !session) {
         throw new Error("Tool-mode prompt attempt lost its result-slot binding");
       }
-      await this.options.workflowResults.prepare({
+      await this.ctx.options.workflowResults.prepare({
         resultKey: attempt.requestId,
         kind: resultKind,
         environmentId: pipeline.environmentId,
@@ -1471,7 +1487,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         (session.model === undefined && !session.modelSelectionResolved) ||
         session.reasoningEffort === undefined ||
         session.fastMode === undefined)
-        ? await this.stepSettings(pipeline, sessionPhase)
+        ? await this.agents.stepSettings(pipeline, sessionPhase)
         : undefined;
     const step = !sessionPhase
       ? undefined
@@ -1492,7 +1508,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       (sessionPhase && step ? executionModeForSessionPhase(sessionPhase, step.agent) : undefined);
     const agentMcp =
       attempt.resultTransport === "tool-v1"
-        ? await this.workflowAgentMcp(
+        ? await this.ctx.workflowAgentMcp(
             pipeline,
             attempt.requestId,
             step?.agent,
@@ -1538,7 +1554,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       delete pipeline.pendingPromptAttempt;
       delete pipeline.reconnectAttempt;
       delete pipeline.error;
-      await this.save(pipeline, pipeline.backendRevision);
+      await this.ctx.save(pipeline, pipeline.backendRevision);
     } catch (error) {
       if (error instanceof AmbiguousPromptDispatchError) return;
       throw error;
@@ -1550,7 +1566,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
    * to reach both the prompt the reviewer reads and the session field the guard
    * later compares against, and two probes could disagree.
    */
-  protected async promptFor(
+  async promptFor(
     pipeline: BuildPipeline,
     phase: PipelineSessionPhase,
     agent: BuildPipelineAgent,
@@ -1559,9 +1575,9 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     schema?: JsonSchema;
     images: BuildPipeline["taskSnapshot"]["images"];
   }> {
-    const notes = (await this.storage.getProjectNotes(pipeline.projectId)).content;
-    const config = await this.storage.loadConfig();
-    const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
+    const notes = (await this.ctx.storage.getProjectNotes(pipeline.projectId)).content;
+    const config = await this.ctx.storage.loadConfig();
+    const repository = await this.ctx.storage.getRepositoryConfig(pipeline.projectId);
     const target = repository.prBaseBranch || "main";
     if (phase === "build") {
       return {
@@ -1605,7 +1621,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         sourceAgent: sessionAgent(pipeline, sourceSession),
         destinationAgent: agent,
         sourceSession,
-        sourceTranscript: await this.transcriptCheckpoints.window(
+        sourceTranscript: await this.ctx.transcriptCheckpoints.window(
           pipeline.id,
           sourceSession,
           BUILD_PIPELINE_HANDOFF_TAIL_MESSAGES,
@@ -1644,16 +1660,16 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     return { prompt: resolveConflictsPrompt(target), images: [] };
   }
 
-  protected async finishReview(
+  async finishReview(
     pipeline: BuildPipeline,
     provider: BuildPipelineProvider,
     session: PipelineSession,
   ): Promise<void> {
     const requestId = pipeline.structuredReviewRequestId;
     if (!requestId) throw new Error("Review result key is missing");
-    const result = await this.readWorkflowResult<unknown>(provider, session, requestId);
+    const result = await this.ctx.readWorkflowResult<unknown>(provider, session, requestId);
     if (!result) {
-      await this.awaitStructuredResult(pipeline, session, "review");
+      await this.recovery.awaitStructuredResult(pipeline, session, "review");
       return;
     }
     delete session.structuredWaitStartedAt;
@@ -1662,37 +1678,20 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       allowLegacyTestResults: true,
     });
     if (!parsed.success) {
-      await this.repairStructuredReport(pipeline, provider, session, parsed.error);
+      await this.recovery.repairStructuredReport(pipeline, provider, session, parsed.error);
       return;
     }
     const report = stripStructuredReviewProvenance(parsed.data);
     session.structuredResultStatus = "accepted";
     session.reviewReport = report;
     pipeline.structuredReview = report;
-    this.stageWorkflowResultConsumption(pipeline, session, requestId);
+    this.ctx.stageWorkflowResultConsumption(pipeline, session, requestId);
     if (report.issues.length || report.testCoverageGaps.length) {
       await this.startStage(pipeline, "address", "addressing");
-      await this.consumeWorkflowResult(pipeline, session, requestId);
+      await this.ctx.consumeWorkflowResult(pipeline, session, requestId);
       return;
     }
     await this.startStage(pipeline, "verify", "verifying");
-    await this.consumeWorkflowResult(pipeline, session, requestId);
+    await this.ctx.consumeWorkflowResult(pipeline, session, requestId);
   }
-
-  /**
-   * Asks the review session to re-emit a report the contract rejected.
-   *
-   * The failures this covers are the ones the provider's JSON schema cannot
-   * catch — totals that disagree with the arrays they count, duplicate ids,
-   * out-of-range confidences — so the reviewer has no way to know it produced an
-   * unusable report unless it is told. It is told here, in the session that
-   * still holds the whole review, rather than by restarting a stage that already
-   * spent its turn reaching the right conclusions.
-   *
-   * The corrected report is a new turn under a new structured request id, so it
-   * goes out through the same durable attempt every other prompt uses: a
-   * dispatch whose response is lost is retried under that id rather than
-   * delivered twice. The session's validation baseline is untouched, so the
-   * repair turn is certified against the same worktree state the review was.
-   */
 }

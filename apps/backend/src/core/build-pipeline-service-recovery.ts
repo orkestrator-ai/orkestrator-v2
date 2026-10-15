@@ -1,80 +1,79 @@
+/**
+ * Build pipeline stage completion and recovery: structured-result waits and
+ * repair, verification and pull-request outcomes, terminal reconciliation with
+ * the Kanban task or issue, and the durable interaction-resolution journal.
+ */
 import { randomUUID } from "node:crypto";
-import { needsBuildTerminalReconciliation } from "./build-pipeline-scheduling.js";
-import type {
-  BuildPipeline,
-  BuildPipelineAgent,
-  PipelineSession,
-  PendingPipelineInteractionResolution,
-  PipelineInteractionTranscriptEntry,
-  PipelineSessionPhase,
-} from "@orkestrator/protocol/build-pipeline";
 import {
-  stepKeyForSessionPhase,
+  type BuildPipeline,
+  type PipelineSession,
+  type PendingPipelineInteractionResolution,
+  type PipelineInteractionTranscriptEntry,
   isVerificationVerdict,
   type VerificationVerdict,
 } from "@orkestrator/protocol/build-pipeline";
-import { type ReviewContractValidationError } from "@orkestrator/protocol/structured-review";
-import type {
-  AgentModel,
-  NativeAgentDefaultModelResolution,
-} from "@orkestrator/protocol/native-agent";
+import type { ReviewContractValidationError } from "@orkestrator/protocol/structured-review";
+import { type BuildPipelineProvider, ProviderUnavailableError } from "./build-pipeline-provider.js";
 import {
+  errorMessage,
+  resumablePhase,
+  withUnattendedPolicy,
+  elapsedSince,
+  MAX_STRUCTURED_REPORT_REPAIR_ATTEMPTS,
+  DEFAULT_INTERACTION_PROCESSING_LEASE_MS,
+  appendInteractionSummary,
+  type PullRequestDetection,
+} from "./build-pipeline-service-helpers.js";
+import {
+  UNATTENDED_AGENT_INTERACTION_POLICY,
   AGENT_INTERACTION_JOURNAL_VERSION,
   AGENT_INTERACTION_LIMITS,
-  UNATTENDED_AGENT_INTERACTION_POLICY,
   agentInteractionPolicyAction,
   type AgentInteractionOutcome,
   type AgentInteractionRequest,
   type AgentInteractionResolutionJournalEntry,
 } from "@orkestrator/protocol/agent-interactions";
-import {
-  createBuildPipelineProvider,
-  ProviderUnavailableError,
-  type BuildPipelineProvider,
-} from "./build-pipeline-provider.js";
-import { stagePromptImages } from "./prompt-attachments.js";
+import { needsBuildTerminalReconciliation } from "./build-pipeline-scheduling.js";
 import {
   MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES,
   structuredReportRepairPrompt,
 } from "./build-pipeline-prompts.js";
-import { BuildPipelineServiceSupervisor } from "./build-pipeline-service-supervisor.js";
-import {
-  errorMessage,
-  resumablePhase,
-  connectionDefaultsFor,
-  createAgentModelCatalogReader,
-  resolveFastMode,
-  sessionAgent,
-  stepModel,
-  MAX_STRUCTURED_REPORT_REPAIR_ATTEMPTS,
-  DEFAULT_INTERACTION_PROCESSING_LEASE_MS,
-  withUnattendedPolicy,
-  elapsedSince,
-  appendInteractionSummary,
-} from "./build-pipeline-service-helpers.js";
-import type {
-  AgentModelCatalogReader,
-  BuildStepSelection,
-  PullRequestDetection,
-} from "./build-pipeline-service-helpers.js";
-import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
-import type { AppConfig } from "./models.js";
+import type { BuildPipelineContext } from "./build-pipeline-context.js";
+import type { BuildPipelineSupervisor } from "./build-pipeline-service-supervisor.js";
 
-/** Tiers and catalogue access shared by every selection in one operation. */
-interface BuildSelectionContext {
-  environment: { agentSettings?: AgentSettingsTier };
-  config: Pick<AppConfig, "global">;
-  repository: { agentSettings?: AgentSettingsTier };
-  readCatalog: AgentModelCatalogReader;
-  /** The model the runtime will use for a configured default, set or unset. */
-  resolveDefaultModel: (
-    agent: BuildPipelineAgent,
-    modelId: string | undefined,
-  ) => Promise<NativeAgentDefaultModelResolution | undefined>;
-}
+/**
+ * The stage-supervisor operations recovery calls back into: completing a stage
+ * opens the next one. The facade binds it late, because the supervisor in turn
+ * calls recovery for every stage it completes.
+ */
+export type BuildPipelineStageDispatch = Pick<
+  BuildPipelineSupervisor,
+  "startStage" | "dispatchPending" | "assertValidationWorktreeUnchanged"
+>;
 
-export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceSupervisor {
-  protected async repairStructuredReport(
+export class BuildPipelineRecovery {
+  constructor(
+    private readonly ctx: BuildPipelineContext,
+    private readonly stageSupervisor: BuildPipelineStageDispatch,
+  ) {}
+
+  /**
+   * Asks the review session to re-emit a report the contract rejected.
+   *
+   * The failures this covers are the ones the provider's JSON schema cannot
+   * catch — totals that disagree with the arrays they count, duplicate ids,
+   * out-of-range confidences — so the reviewer has no way to know it produced an
+   * unusable report unless it is told. It is told here, in the session that
+   * still holds the whole review, rather than by restarting a stage that already
+   * spent its turn reaching the right conclusions.
+   *
+   * The corrected report is a new turn under a new structured request id, so it
+   * goes out through the same durable attempt every other prompt uses: a
+   * dispatch whose response is lost is retried under that id rather than
+   * delivered twice. The session's validation baseline is untouched, so the
+   * repair turn is certified against the same worktree state the review was.
+   */
+  async repairStructuredReport(
     pipeline: BuildPipeline,
     provider: BuildPipelineProvider,
     session: PipelineSession,
@@ -117,14 +116,14 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
       startedAt,
     };
     delete pipeline.stallWarning;
-    await this.save(pipeline, pipeline.backendRevision);
+    await this.ctx.save(pipeline, pipeline.backendRevision);
     if (previousTransport === "tool-v1" && previousRequestId) {
-      await this.options.workflowResults?.close(previousRequestId, "superseded");
+      await this.ctx.options.workflowResults?.close(previousRequestId, "superseded");
     }
-    await this.dispatchPending(pipeline, provider);
+    await this.stageSupervisor.dispatchPending(pipeline, provider);
   }
 
-  protected async finishVerification(
+  async finishVerification(
     pipeline: BuildPipeline,
     provider: BuildPipelineProvider,
     session: PipelineSession,
@@ -138,9 +137,9 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     const resolvedRequestId =
       session.structuredRequestId ??
       session.legacyStructuredRequestId ??
-      (await this.transcriptCheckpoints.recoverStructuredRequestId(pipeline.id, session));
+      (await this.ctx.transcriptCheckpoints.recoverStructuredRequestId(pipeline.id, session));
     if (!resolvedRequestId) throw new Error("Verification result key is missing");
-    const result = await this.readWorkflowResult<VerificationVerdict>(
+    const result = await this.ctx.readWorkflowResult<VerificationVerdict>(
       provider,
       session,
       resolvedRequestId,
@@ -149,7 +148,7 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
       await this.awaitStructuredResult(pipeline, session, "verification");
       return;
     }
-    await this.assertValidationWorktreeUnchanged(pipeline, session);
+    await this.stageSupervisor.assertValidationWorktreeUnchanged(pipeline, session);
     delete session.structuredWaitStartedAt;
     if (!result.ok) throw new Error(result.error.message);
     if (!isVerificationVerdict(result.value)) {
@@ -161,13 +160,13 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     session.structuredResultStatus = "accepted";
     pipeline.verificationResult = complete ? "pass" : "fail";
     pipeline.verificationFeedback = rationale;
-    this.stageWorkflowResultConsumption(pipeline, session, resolvedRequestId);
+    this.ctx.stageWorkflowResultConsumption(pipeline, session, resolvedRequestId);
     if (complete) {
       await this.updateKanbanLifecycle(pipeline, {
         comment: "✅ Validation complete",
       });
-      await this.startStage(pipeline, "pr", "creating-pr");
-      await this.consumeWorkflowResult(pipeline, session, resolvedRequestId);
+      await this.stageSupervisor.startStage(pipeline, "pr", "creating-pr");
+      await this.ctx.consumeWorkflowResult(pipeline, session, resolvedRequestId);
       return;
     }
     if (pipeline.iteration >= pipeline.maxIterations) {
@@ -178,8 +177,8 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     delete pipeline.reviewPackage;
     delete pipeline.validationRun;
     pipeline.iteration += 1;
-    await this.startStage(pipeline, "fix", "fixing");
-    await this.consumeWorkflowResult(pipeline, session, resolvedRequestId);
+    await this.stageSupervisor.startStage(pipeline, "fix", "fixing");
+    await this.ctx.consumeWorkflowResult(pipeline, session, resolvedRequestId);
   }
 
   /**
@@ -193,7 +192,7 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
    * unchanged snapshot every 1.5 seconds forever, showing the user a stage that
    * looks live and will never move.
    */
-  protected async awaitStructuredResult(
+  async awaitStructuredResult(
     pipeline: BuildPipeline,
     session: PipelineSession,
     label: string,
@@ -201,21 +200,21 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     const elapsed = elapsedSince(session.structuredWaitStartedAt);
     if (elapsed === null) {
       session.structuredWaitStartedAt = new Date().toISOString();
-      await this.save(pipeline, pipeline.backendRevision);
+      await this.ctx.save(pipeline, pipeline.backendRevision);
       return;
     }
-    if (elapsed >= this.structuredResultDeadlineMs) {
+    if (elapsed >= this.ctx.structuredResultDeadlineMs) {
       throw new Error(`The ${label} finished without returning its required structured result`);
     }
   }
 
-  protected async finishPullRequest(pipeline: BuildPipeline): Promise<void> {
+  async finishPullRequest(pipeline: BuildPipeline): Promise<void> {
     const detection = await this.detectPullRequest(pipeline);
     if (!detection) {
       // PR creation and GitHub indexing are not atomic. Keep the pipeline in
       // creating-pr and let the durable monitor plus the next supervisor pass
       // observe it; absence is not evidence that creation succeeded.
-      await this.invoke("pr_monitor_watch", {
+      await this.ctx.invoke("pr_monitor_watch", {
         environmentId: pipeline.environmentId,
         mode: "create-pending",
       });
@@ -223,13 +222,13 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     }
     await this.persistPullRequest(pipeline, detection);
     if (detection.hasMergeConflicts === true) {
-      await this.startStage(pipeline, "resolve-conflicts", "resolving-conflicts");
+      await this.stageSupervisor.startStage(pipeline, "resolve-conflicts", "resolving-conflicts");
       return;
     }
     await this.complete(pipeline);
   }
 
-  protected async finishConflictResolution(pipeline: BuildPipeline): Promise<void> {
+  async finishConflictResolution(pipeline: BuildPipeline): Promise<void> {
     const detection = await this.detectPullRequest(pipeline);
     if (!detection) {
       throw new Error("The pull request could not be found after conflict resolution");
@@ -247,17 +246,17 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     await this.complete(pipeline);
   }
 
-  protected async detectPullRequest(pipeline: BuildPipeline): Promise<PullRequestDetection | null> {
-    const environment = await this.storage.getEnvironment(pipeline.environmentId);
+  async detectPullRequest(pipeline: BuildPipeline): Promise<PullRequestDetection | null> {
+    const environment = await this.ctx.storage.getEnvironment(pipeline.environmentId);
     if (!environment) throw new Error("Build environment no longer exists");
     const result =
       environment.environmentType === "local"
-        ? await this.invoke<PullRequestDetection | null>("detect_pr_local", {
+        ? await this.ctx.invoke<PullRequestDetection | null>("detect_pr_local", {
             environmentId: environment.id,
             branch: environment.branch,
           })
         : environment.containerId
-          ? await this.invoke<PullRequestDetection | null>("detect_pr", {
+          ? await this.ctx.invoke<PullRequestDetection | null>("detect_pr", {
               containerId: environment.containerId,
               branch: environment.branch,
             })
@@ -276,11 +275,11 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     return result;
   }
 
-  protected async persistPullRequest(
+  async persistPullRequest(
     pipeline: BuildPipeline,
     detection: PullRequestDetection,
   ): Promise<void> {
-    await this.storage.updateEnvironment(pipeline.environmentId, {
+    await this.ctx.storage.updateEnvironment(pipeline.environmentId, {
       prUrl: detection.url,
       prState: detection.state,
       hasMergeConflicts: detection.hasMergeConflicts,
@@ -291,35 +290,35 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
       prState: detection.state,
       comment: `🔗 PR raised: ${detection.url}`,
     });
-    await this.invoke("pr_monitor_watch", {
+    await this.ctx.invoke("pr_monitor_watch", {
       environmentId: pipeline.environmentId,
       mode: "normal",
     });
   }
 
-  protected async complete(pipeline: BuildPipeline): Promise<void> {
+  async complete(pipeline: BuildPipeline): Promise<void> {
     pipeline.phase = "complete";
     delete pipeline.error;
     delete pipeline.stallWarning;
-    this.provisioningPrompts.delete(pipeline.id);
-    this.lastProviderAgent.delete(pipeline.id);
-    await this.save(pipeline, pipeline.backendRevision);
+    this.ctx.provisioningPrompts.delete(pipeline.id);
+    this.ctx.lastProviderAgent.delete(pipeline.id);
+    await this.ctx.save(pipeline, pipeline.backendRevision);
     await this.reconcileTerminalState(pipeline);
   }
 
-  protected async postCompletionComment(pipeline: BuildPipeline): Promise<void> {
+  async postCompletionComment(pipeline: BuildPipeline): Promise<void> {
     const source = pipeline.source;
     if (!source || source.type === "kanban") return;
     if (pipeline.completionCommentStatus === "posted") return;
     pipeline.completionCommentStatus = "posting";
-    await this.save(pipeline, pipeline.backendRevision);
+    await this.ctx.save(pipeline, pipeline.backendRevision);
     const body =
       pipeline.phase === "complete"
         ? `✅ Orkestrator build completed for **${pipeline.taskTitle}**.`
         : `❌ Orkestrator build failed for **${pipeline.taskTitle}**: ${pipeline.error ?? "Unknown error"}`;
     const result =
       source.type === "linear"
-        ? await this.invoke<{ commentId?: string; postedAt?: string }>(
+        ? await this.ctx.invoke<{ commentId?: string; postedAt?: string }>(
             "post_linear_completion_comment",
             {
               pipelineId: pipeline.id,
@@ -327,7 +326,7 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
               body,
             },
           )
-        : await this.invoke<{ commentId?: string; postedAt?: string }>(
+        : await this.ctx.invoke<{ commentId?: string; postedAt?: string }>(
             "post_github_completion_comment",
             {
               pipelineId: pipeline.id,
@@ -342,32 +341,32 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     pipeline.completionCommentId = result.commentId;
     pipeline.completionCommentPostedAt = result.postedAt ?? new Date().toISOString();
     delete pipeline.completionCommentError;
-    await this.save(pipeline, pipeline.backendRevision);
+    await this.ctx.save(pipeline, pipeline.backendRevision);
   }
 
-  protected needsTerminalReconciliation(pipeline: BuildPipeline): boolean {
+  needsTerminalReconciliation(pipeline: BuildPipeline): boolean {
     return needsBuildTerminalReconciliation(pipeline);
   }
 
-  protected async reconcileTerminalState(pipeline: BuildPipeline): Promise<void> {
+  async reconcileTerminalState(pipeline: BuildPipeline): Promise<void> {
     if (pipeline.phase !== "complete" && pipeline.phase !== "failed") return;
     if (!pipeline.source) return;
     if (pipeline.source.type === "kanban") {
       if (pipeline.completionCommentStatus === "posted") return;
       try {
         pipeline.completionCommentStatus = "posting";
-        await this.save(pipeline, pipeline.backendRevision);
+        await this.ctx.save(pipeline, pipeline.backendRevision);
         await this.updateKanbanLifecycle(pipeline, {
           status: pipeline.phase === "complete" ? "review" : "backlog",
         });
         pipeline.completionCommentStatus = "posted";
         pipeline.completionCommentPostedAt = new Date().toISOString();
         delete pipeline.completionCommentError;
-        await this.save(pipeline, pipeline.backendRevision);
+        await this.ctx.save(pipeline, pipeline.backendRevision);
       } catch (error) {
         pipeline.completionCommentStatus = "failed";
         pipeline.completionCommentError = errorMessage(error);
-        await this.save(pipeline, pipeline.backendRevision);
+        await this.ctx.save(pipeline, pipeline.backendRevision);
       }
       return;
     }
@@ -376,11 +375,11 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     } catch (error) {
       pipeline.completionCommentStatus = "failed";
       pipeline.completionCommentError = errorMessage(error);
-      await this.save(pipeline, pipeline.backendRevision);
+      await this.ctx.save(pipeline, pipeline.backendRevision);
     }
   }
 
-  protected async updateKanbanLifecycle(
+  async updateKanbanLifecycle(
     pipeline: BuildPipeline,
     updates: {
       status?: "backlog" | "in-progress" | "review";
@@ -391,7 +390,7 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
   ): Promise<void> {
     const source = pipeline.source;
     if (source?.type !== "kanban") return;
-    const tasks = await this.invoke<
+    const tasks = await this.ctx.invoke<
       Array<{
         id: string;
         status: string;
@@ -407,7 +406,7 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
       (updates.prUrl && task.prUrl !== updates.prUrl) ||
       (updates.prState && task.prState !== updates.prState)
     ) {
-      await this.invoke("update_kanban_task", {
+      await this.ctx.invoke("update_kanban_task", {
         taskId: task.id,
         ...(updates.status ? { status: updates.status } : {}),
         ...(updates.prUrl ? { prUrl: updates.prUrl } : {}),
@@ -415,15 +414,15 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
       });
     }
     if (updates.comment && !task.comments.some((comment) => comment.text === updates.comment)) {
-      await this.invoke("add_kanban_comment", {
+      await this.ctx.invoke("add_kanban_comment", {
         taskId: task.id,
         text: updates.comment,
       });
     }
   }
 
-  protected async configureEnvironment(pipeline: BuildPipeline): Promise<void> {
-    await this.invoke("update_environment_agent_settings", {
+  async configureEnvironment(pipeline: BuildPipeline): Promise<void> {
+    await this.ctx.invoke("update_environment_agent_settings", {
       environmentId: pipeline.environmentId,
       agentSettings: {
         defaultAgent: pipeline.agentType,
@@ -433,265 +432,7 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     });
   }
 
-  /**
-   * The harness, model and reasoning a step runs under.
-   *
-   * A step's own selections win. A field it left unset resolves to that
-   * harness's default — the same value the launcher displayed for it — which
-   * `connectionDefaultsFor` supplies one layer down when these are `undefined`.
-   * The repository defaults never cross to a harness they were not chosen for.
-   */
-  protected async stepSettings(
-    pipeline: BuildPipeline,
-    sessionPhase: PipelineSessionPhase,
-  ): Promise<BuildStepSelection> {
-    const step = pipeline.steps?.[stepKeyForSessionPhase(sessionPhase)];
-    if (step) {
-      const effort = step.reasoningEffort?.trim();
-      return this.settingsForSelection(pipeline, {
-        agent: step.agent,
-        // Normalised on read as well as on write: `start()` is not the only way
-        // a snapshot gets here — `importLegacy` accepts one straight from disk,
-        // where a placeholder could otherwise be sent as a real model id.
-        model: stepModel(step.agent, step.model),
-        effort: effort && effort !== "default" ? effort : undefined,
-        fastMode: step.fastMode,
-      });
-    }
-    const config = await this.storage.loadConfig();
-    const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
-    // Deliberately without the environment tier, and deliberately without
-    // `fastMode`. Model and effort keep their established repository-and-global
-    // semantics here, while an unpinned speed has to stay absent so
-    // `settingsForSelection` can resolve it across all three tiers. Passing a
-    // repository value through as if the step had pinned it would let it shadow
-    // the environment's own choice.
-    const { fastMode: _inheritedFastMode, ...defaults } = connectionDefaultsFor(
-      pipeline.agentType,
-      config,
-      repository,
-    );
-    return this.settingsForSelection(
-      pipeline,
-      { agent: pipeline.agentType, ...defaults },
-      { modelFromDefaults: true },
-    );
-  }
-
-  /**
-   * The tiers and catalogue one operation resolves its selections against.
-   *
-   * Loaded once and shared, so a fan-out resolving one selection per reviewer
-   * does not repeat these reads — or the catalogue fetch behind them — per
-   * reviewer.
-   */
-  protected async selectionContext(pipeline: BuildPipeline): Promise<BuildSelectionContext> {
-    const environment = await this.storage.getEnvironment(pipeline.environmentId);
-    if (!environment) throw new Error("Build environment no longer exists");
-    const config = await this.storage.loadConfig();
-    const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
-    return {
-      environment,
-      config,
-      repository,
-      readCatalog: createAgentModelCatalogReader(() =>
-        this.invoke<AgentModel[]>("get_native_agent_model_catalog", {
-          environmentId: pipeline.environmentId,
-        }),
-      ),
-      // Asks the harness the stage is about to run on anyway, so connectivity
-      // comes from the same live report its dispatch preflight reads. Advisory:
-      // a provider that cannot be reached here fails in its own setup instead.
-      resolveDefaultModel: async (agent, modelId) => {
-        try {
-          const provider = await this.provider(pipeline, agent);
-          return await provider.resolveDefaultModel?.(modelId);
-        } catch {
-          return undefined;
-        }
-      },
-    };
-  }
-
-  protected async settingsForSelection(
-    pipeline: BuildPipeline,
-    selection: BuildStepSelection,
-    options: { modelFromDefaults?: boolean } = {},
-  ): Promise<BuildStepSelection> {
-    return this.resolveSelection(selection, await this.selectionContext(pipeline), options);
-  }
-
-  /** Resolve a whole fan-out's selections against one shared context. */
-  protected async settingsForSelections(
-    pipeline: BuildPipeline,
-    selections: readonly BuildStepSelection[],
-  ): Promise<BuildStepSelection[]> {
-    if (selections.length === 0) return [];
-    const context = await this.selectionContext(pipeline);
-    return Promise.all(selections.map((selection) => this.resolveSelection(selection, context)));
-  }
-
-  /**
-   * `modelFromDefaults` marks a selection whose model was filled in from the
-   * configured defaults rather than pinned by the step.
-   */
-  private async resolveSelection(
-    selection: BuildStepSelection,
-    context: BuildSelectionContext,
-    options: { modelFromDefaults?: boolean } = {},
-  ): Promise<BuildStepSelection> {
-    const defaults = connectionDefaultsFor(
-      selection.agent,
-      context.config,
-      context.repository,
-      context.environment,
-    );
-    // A configured default whose OpenCode provider this login has not
-    // connected would fail the stage at its first turn, and an unset one would
-    // leave the choice to OpenCode's server, which ignores the provider
-    // allowlist. Both resolve to OpenCode's effective default for this stage
-    // only: the configuration keeps the user's choice for when the provider
-    // reconnects. A model the step pinned is left alone, so an explicit choice
-    // still fails loudly.
-    const usesDefault = options.modelFromDefaults || !selection.model;
-    const configuredDefault = selection.model ?? defaults.model;
-    const resolution =
-      selection.agent === "opencode" && usesDefault
-        ? await context.resolveDefaultModel(selection.agent, configuredDefault)
-        : undefined;
-    const modelSubstitution = resolution?.substitution;
-    // Pinned only when the resolution differs from what the provider would
-    // have used anyway, so an unpinned step that resolves to its own default
-    // keeps its established unpinned shape.
-    const model =
-      resolution?.modelId && resolution.modelId !== configuredDefault
-        ? resolution.modelId
-        : selection.model;
-    // A deliberately unpinned step keeps its established model/effort
-    // semantics. The provider may still have a connection default, so use that
-    // effective model for the speed capability check without pinning it here.
-    const capabilityModel = model ?? defaults.model;
-    const fastMode = await resolveFastMode(
-      selection.agent,
-      selection.fastMode ?? defaults.fastMode,
-      capabilityModel,
-      context.readCatalog,
-    );
-    const substitution = modelSubstitution ?? selection.modelSubstitution;
-    return {
-      agent: selection.agent,
-      ...(model ? { model } : {}),
-      ...(selection.effort ? { effort: selection.effort } : {}),
-      ...(typeof fastMode === "boolean" ? { fastMode } : {}),
-      ...(substitution && substitution.modelId === model
-        ? { modelSubstitution: substitution }
-        : {}),
-    };
-  }
-
-  protected async provider(
-    pipeline: BuildPipeline,
-    agent: BuildPipelineAgent = pipeline.agentType,
-  ): Promise<BuildPipelineProvider> {
-    // Recorded before anything that can throw, so a bridge that is unreachable
-    // during connection setup is still attributed to the right harness.
-    this.lastProviderAgent.set(pipeline.id, agent);
-    const providerKey = `${pipeline.environmentId}:${agent}`;
-    // Concurrent reviewers of one harness resolve this key together. Joining
-    // the in-flight creation keeps it to one provider per key: a second
-    // instance would never be cached, so nothing would dispose it, and an
-    // OpenCode provider's event monitor runs until it is disposed.
-    let provider = this.providers.get(providerKey);
-    if (!provider) {
-      let creation = this.providerCreations.get(providerKey);
-      if (!creation) {
-        creation = this.createProvider(pipeline, agent).then((created) => {
-          this.providers.set(providerKey, created);
-          return created;
-        });
-        const pending = creation;
-        this.providerCreations.set(providerKey, pending);
-        void pending
-          .catch(() => undefined)
-          .finally(() => {
-            if (this.providerCreations.get(providerKey) === pending) {
-              this.providerCreations.delete(providerKey);
-            }
-          });
-      }
-      provider = await creation;
-    }
-    // Only this harness's own sessions. Registering a sibling step's session id
-    // would put a foreign session into an environment-wide monitor that is
-    // supposed to ignore everything it does not own.
-    for (const session of pipeline.sessions) {
-      if (sessionAgent(pipeline, session) !== agent) continue;
-      provider.registerSession?.(session.sdkSessionId, {
-        origin: session.origin ?? "build-pipeline",
-        interactionPolicy: session.interactionPolicy ?? UNATTENDED_AGENT_INTERACTION_POLICY,
-        phase: session.phase,
-        workflowId: pipeline.id,
-        provider: agent,
-        fence: session.sessionKey,
-      });
-    }
-    return provider;
-  }
-
-  /** Builds an uncached provider for one environment harness. */
-  private async createProvider(
-    pipeline: BuildPipeline,
-    agent: BuildPipelineAgent,
-  ): Promise<BuildPipelineProvider> {
-    if (this.options.provider) return this.options.provider(pipeline, agent);
-    const environment = await this.storage.getEnvironment(pipeline.environmentId);
-    if (!environment) throw new Error("Build environment no longer exists");
-    const config = await this.storage.loadConfig();
-    const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
-    const connection = await this.bridgeConnection(agent, environment);
-    const { fastMode: _fastMode, ...connectionDefaults } = connectionDefaultsFor(
-      agent,
-      config,
-      repository,
-      environment,
-    );
-    return createBuildPipelineProvider(
-      {
-        ...connection,
-        // Connection-level defaults only, and only this harness's own. Every
-        // pipeline turn passes the step's model and effort per call, which take
-        // precedence; these fill in whatever the step left unset.
-        ...connectionDefaults,
-      },
-      {
-        ...this.options.providerDependencies,
-        workflowResults: this.options.workflowResults,
-        // Milestone 4 resolves every provider through the same journaled backend
-        // path. The OpenCode event-loop compatibility path used to grant an
-        // unexpected permission once and fail questions before the common
-        // monitor could see them; leaving it enabled would violate both rules.
-        autoAnswerRequests: false,
-        // Task-snapshot images arrive as base64. Both bridges require a workspace
-        // path, so they have to be written into the environment before they can be
-        // attached to a prompt.
-        stageImages: (images) => stagePromptImages(this.invoke, environment, images),
-        onInteractionObservation: async (event) => {
-          const enriched = {
-            ...event,
-            environmentId: pipeline.environmentId,
-            provider: agent,
-          };
-          try {
-            await this.options.onInteractionObservation?.(enriched);
-          } catch {
-            // Passive diagnostics never control workflow behavior.
-          }
-        },
-      },
-    );
-  }
-
-  protected interactionJournalEntry(
+  interactionJournalEntry(
     entries: readonly AgentInteractionResolutionJournalEntry[],
     sessionId: string,
     interactionId: string,
@@ -701,14 +442,14 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     );
   }
 
-  protected async claimInteraction(
+  async claimInteraction(
     pipeline: BuildPipeline,
     session: PipelineSession,
     request: AgentInteractionRequest,
   ): Promise<AgentInteractionResolutionJournalEntry> {
     let selected: AgentInteractionResolutionJournalEntry | undefined;
     const claimedAt = Date.now();
-    await this.storage.updateAgentInteractionResolutionJournal((journal) => {
+    await this.ctx.storage.updateAgentInteractionResolutionJournal((journal) => {
       const existing = this.interactionJournalEntry(
         journal.entries,
         session.sdkSessionId,
@@ -755,20 +496,20 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     return entry;
   }
 
-  protected async markInteractionProviderResolved(
+  async markInteractionProviderResolved(
     pending: PendingPipelineInteractionResolution,
     outcome: AgentInteractionOutcome,
     resolvedAt: number,
     processingToken: string,
   ): Promise<boolean> {
     let recorded = false;
-    await this.storage.updateAgentInteractionResolutionJournal((journal) => ({
+    await this.ctx.storage.updateAgentInteractionResolutionJournal((journal) => ({
       ...journal,
       entries: journal.entries.map((entry) => {
         if (
           entry.id !== pending.journalId ||
           entry.state !== "claimed" ||
-          entry.processing?.ownerId !== this.interactionOwnerId ||
+          entry.processing?.ownerId !== this.ctx.interactionOwnerId ||
           entry.processing.token !== processingToken
         )
           return entry;
@@ -793,20 +534,20 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
    * responder has had longer than the bounded provider request sequence to
    * finish, then reconciles the authoritative snapshot before doing any I/O.
    */
-  protected async acquireInteractionProcessingLease(
+  async acquireInteractionProcessingLease(
     pending: PendingPipelineInteractionResolution,
   ): Promise<string | null> {
     const wallClock = Date.now();
     const proposedToken = randomUUID();
     let acquiredToken: string | null = null;
-    await this.storage.updateAgentInteractionResolutionJournal((journal) => ({
+    await this.ctx.storage.updateAgentInteractionResolutionJournal((journal) => ({
       ...journal,
       entries: journal.entries.map((entry) => {
         if (entry.id !== pending.journalId || entry.state !== "claimed") {
           return entry;
         }
         const current = entry.processing;
-        if (current?.ownerId === this.interactionOwnerId) {
+        if (current?.ownerId === this.ctx.interactionOwnerId) {
           acquiredToken = current.token;
           return entry;
         }
@@ -820,7 +561,7 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
         return {
           ...entry,
           processing: {
-            ownerId: this.interactionOwnerId,
+            ownerId: this.ctx.interactionOwnerId,
             token: proposedToken,
             acquiredAt: now,
             expiresAt: now + DEFAULT_INTERACTION_PROCESSING_LEASE_MS,
@@ -831,11 +572,11 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     return acquiredToken;
   }
 
-  protected async markInteractionWorkflowRecorded(
+  async markInteractionWorkflowRecorded(
     pending: PendingPipelineInteractionResolution,
     recordedAt: number,
   ): Promise<void> {
-    await this.storage.updateAgentInteractionResolutionJournal((journal) => ({
+    await this.ctx.storage.updateAgentInteractionResolutionJournal((journal) => ({
       ...journal,
       entries: journal.entries.map((entry) => {
         if (entry.id !== pending.journalId || entry.state === "workflow-recorded") {
@@ -856,7 +597,7 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     }));
   }
 
-  protected recoveredPendingInteraction(
+  recoveredPendingInteraction(
     entry: AgentInteractionResolutionJournalEntry,
     session: PipelineSession,
   ): PendingPipelineInteractionResolution {
@@ -881,7 +622,7 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     };
   }
 
-  protected interactionOutcomeIsDurable(
+  interactionOutcomeIsDurable(
     pipeline: BuildPipeline,
     pending: PendingPipelineInteractionResolution,
   ): boolean {
@@ -895,7 +636,7 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     );
   }
 
-  protected async saveInteractionOutcome(
+  async saveInteractionOutcome(
     pipeline: BuildPipeline,
     pending: PendingPipelineInteractionResolution,
     outcome: AgentInteractionOutcome,
@@ -904,11 +645,11 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     let candidate = pipeline;
     for (let attempt = 0; attempt < 8; attempt += 1) {
       try {
-        await this.save(candidate, candidate.backendRevision);
+        await this.ctx.save(candidate, candidate.backendRevision);
         return;
       } catch (error) {
         if (errorMessage(error) !== "Build pipeline revision conflict") throw error;
-        const record = await this.requireRecord(pipeline.id);
+        const record = await this.ctx.requireRecord(pipeline.id);
         const latest = record.snapshot as BuildPipeline;
         latest.backendRevision = record.revision;
         if (this.interactionOutcomeIsDurable(latest, pending)) {
@@ -942,16 +683,16 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
    * the loser must stop this pass and rehydrate that authoritative snapshot on
    * its next tick instead of continuing with its stale pipeline revision.
    */
-  protected async savePendingInteractionResolution(
+  async savePendingInteractionResolution(
     pipeline: BuildPipeline,
     pending: PendingPipelineInteractionResolution,
   ): Promise<boolean> {
     try {
-      await this.save(pipeline, pipeline.backendRevision);
+      await this.ctx.save(pipeline, pipeline.backendRevision);
       return true;
     } catch (error) {
       if (errorMessage(error) !== "Build pipeline revision conflict") throw error;
-      const latest = (await this.requireRecord(pipeline.id)).snapshot as BuildPipeline;
+      const latest = (await this.ctx.requireRecord(pipeline.id)).snapshot as BuildPipeline;
       if (
         latest.pendingInteractionResolution?.journalId !== pending.journalId &&
         !this.interactionOutcomeIsDurable(latest, pending)
@@ -962,7 +703,7 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     }
   }
 
-  protected applyInteractionOutcome(
+  applyInteractionOutcome(
     pipeline: BuildPipeline,
     pending: PendingPipelineInteractionResolution,
     outcome: AgentInteractionOutcome,
@@ -1051,8 +792,8 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
     delete pipeline.pendingInteractionResolution;
     delete pipeline.stallWarning;
     delete pipeline.pausedFromPhase;
-    this.provisioningPrompts.delete(pipeline.id);
-    this.lastProviderAgent.delete(pipeline.id);
+    this.ctx.provisioningPrompts.delete(pipeline.id);
+    this.ctx.lastProviderAgent.delete(pipeline.id);
     session.interactionSummary = appendInteractionSummary(
       session.interactionSummary,
       pending,

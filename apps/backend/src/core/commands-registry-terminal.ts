@@ -64,9 +64,6 @@ import {
   terminalOutputTruncated,
   CONTAINER_INTERACTIVE_SHELL_COMMAND,
   CONTAINER_SAFE_BASE64_READER,
-  diffStatsService,
-  containerGitFetchPolicy,
-  syncDiffStatsTracking,
   asString,
   asRecord,
   assertOnlyKeys,
@@ -807,10 +804,10 @@ export function registerTerminalCommands(
 
   register(
     "get_local_git_status",
-    async ({ worktreePath, targetBranch, includeUncommitted, knownDigest, refresh }) => {
+    async ({ worktreePath, targetBranch, includeUncommitted, knownDigest, refresh }, context) => {
       // The sidebar badge, every client's Files panel and the background scan
       // look at the same worktree; they share one read owner and one scan.
-      const read = await diffStatsService.readFileList({
+      const read = await context.runtime.diffStats.service.readFileList({
         lookup: { worktreePath: asString(worktreePath, "worktreePath") },
         comparisonRef: asString(targetBranch, "targetBranch"),
         includeUncommitted: includeUncommitted !== false,
@@ -834,25 +831,32 @@ export function registerTerminalCommands(
    * lifecycle command has run since the backend started.
    */
   register("get_environment_diff_stats", async (args, context) => {
-    await syncDiffStatsTracking(context);
+    await context.runtime.diffStats.sync(context);
     // Legacy `{ entries }` shape (additively stamped) without known-revision
     // arguments; the compact conditional outcome from `view-sync.ts` with them.
     const request = parseViewSnapshotRequest(args);
     if (request.kind === "absent") {
-      return diffStatsService.revisionedSnapshot() satisfies EnvironmentDiffStatsSnapshot;
+      return context.runtime.diffStats.service.revisionedSnapshot() satisfies EnvironmentDiffStatsSnapshot;
     }
-    return resolveViewSnapshotOutcome(request, diffStatsService.currentRevision(), () => ({
-      entries: diffStatsService.snapshot(),
-    })) satisfies EnvironmentDiffStatsSnapshotOutcome;
+    return resolveViewSnapshotOutcome(
+      request,
+      context.runtime.diffStats.service.currentRevision(),
+      () => ({
+        entries: context.runtime.diffStats.service.snapshot(),
+      }),
+    ) satisfies EnvironmentDiffStatsSnapshotOutcome;
   });
   register("refresh_environment_diff_stats", async ({ environmentId }, context) => {
-    await syncDiffStatsTracking(context);
+    await context.runtime.diffStats.sync(context);
     const id = asString(environmentId, "environmentId");
     const environment = await context.storage.getEnvironment(id).catch(() => null);
     if (environment && environment.environmentType !== "local" && environment.containerId) {
-      containerGitFetchPolicy.invalidate({ containerId: environment.containerId }, "explicit");
+      context.runtime.diffStats.containerGitFetchPolicy.invalidate(
+        { containerId: environment.containerId },
+        "explicit",
+      );
     }
-    diffStatsService.refresh(id);
+    context.runtime.diffStats.service.refresh(id);
   });
   /**
    * File-list and tree revisions of every tracked environment
@@ -860,18 +864,22 @@ export function registerTerminalCommands(
    * it arms tracking and answers conditional reads compactly.
    */
   register("get_worktree_snapshot_revisions", async (args, context) => {
-    await syncDiffStatsTracking(context);
+    await context.runtime.diffStats.sync(context);
     const request = parseViewSnapshotRequest(args);
     if (request.kind === "absent") {
-      return diffStatsService.revisionedWorktreeSnapshot() satisfies WorktreeSnapshotRevisionsSnapshot;
+      return context.runtime.diffStats.service.revisionedWorktreeSnapshot() satisfies WorktreeSnapshotRevisionsSnapshot;
     }
-    return resolveViewSnapshotOutcome(request, diffStatsService.currentWorktreeRevision(), () => ({
-      entries: diffStatsService.worktreeSnapshotEntries(),
-    })) satisfies WorktreeSnapshotRevisionsOutcome;
+    return resolveViewSnapshotOutcome(
+      request,
+      context.runtime.diffStats.service.currentWorktreeRevision(),
+      () => ({
+        entries: context.runtime.diffStats.service.worktreeSnapshotEntries(),
+      }),
+    ) satisfies WorktreeSnapshotRevisionsOutcome;
   });
 
-  register("get_local_file_tree", async ({ worktreePath, knownDigest, refresh }) => {
-    const read = await diffStatsService.readTree({
+  register("get_local_file_tree", async ({ worktreePath, knownDigest, refresh }, context) => {
+    const read = await context.runtime.diffStats.service.readTree({
       lookup: { worktreePath: asString(worktreePath, "worktreePath") },
       refresh: refreshRequested(refresh),
     });
@@ -880,11 +888,12 @@ export function registerTerminalCommands(
   register("read_local_file", ({ worktreePath, filePath }) =>
     readTextFile(asString(worktreePath, "worktreePath"), asString(filePath, "filePath")),
   );
-  register("read_local_file_at_branch", ({ worktreePath, filePath, branch }) =>
+  register("read_local_file_at_branch", ({ worktreePath, filePath, branch }, context) =>
     readLocalFileAtBranch(
       asString(worktreePath, "worktreePath"),
       asString(filePath, "filePath"),
       asString(branch, "branch"),
+      context.runtime.diffStats.gitFetchScheduler,
     ),
   );
   register("read_file_base64", async ({ filePath }, context) => {
@@ -945,9 +954,12 @@ export function registerTerminalCommands(
         environment.worktreePath!,
         asString(filePath, "filePath"),
         asString(targetBranch, "targetBranch"),
+        context.runtime.diffStats.gitFetchScheduler,
       );
-      diffStatsService.invalidateChanges({ worktreePath: environment.worktreePath! });
-      diffStatsService.refresh(id);
+      context.runtime.diffStats.service.invalidateChanges({
+        worktreePath: environment.worktreePath!,
+      });
+      context.runtime.diffStats.service.refresh(id);
       return result;
     });
   });
@@ -958,8 +970,10 @@ export function registerTerminalCommands(
         environment.worktreePath!,
         asString(filePath, "filePath"),
       );
-      diffStatsService.invalidateChanges({ worktreePath: environment.worktreePath! });
-      diffStatsService.refresh(id);
+      context.runtime.diffStats.service.invalidateChanges({
+        worktreePath: environment.worktreePath!,
+      });
+      context.runtime.diffStats.service.refresh(id);
       return result;
     });
   });
@@ -973,8 +987,10 @@ export function registerTerminalCommands(
           asString(sourcePath, "sourcePath"),
           asString(destinationDirectory, "destinationDirectory"),
         );
-        diffStatsService.invalidateChanges({ worktreePath: environment.worktreePath! });
-        diffStatsService.refresh(id);
+        context.runtime.diffStats.service.invalidateChanges({
+          worktreePath: environment.worktreePath!,
+        });
+        context.runtime.diffStats.service.refresh(id);
         return result;
       });
     },
@@ -987,8 +1003,10 @@ export function registerTerminalCommands(
         asString(filePath, "filePath"),
         asString(newName, "newName"),
       );
-      diffStatsService.invalidateChanges({ worktreePath: environment.worktreePath! });
-      diffStatsService.refresh(id);
+      context.runtime.diffStats.service.invalidateChanges({
+        worktreePath: environment.worktreePath!,
+      });
+      context.runtime.diffStats.service.refresh(id);
       return result;
     });
   });
@@ -1002,8 +1020,10 @@ export function registerTerminalCommands(
           asString(parentDirectory, "parentDirectory"),
           asString(folderName, "folderName"),
         );
-        diffStatsService.invalidateChanges({ worktreePath: environment.worktreePath! });
-        diffStatsService.refresh(id);
+        context.runtime.diffStats.service.invalidateChanges({
+          worktreePath: environment.worktreePath!,
+        });
+        context.runtime.diffStats.service.refresh(id);
         return result;
       });
     },
@@ -1011,7 +1031,7 @@ export function registerTerminalCommands(
 
   register(
     "get_git_status",
-    async ({ containerId, targetBranch, includeUncommitted, knownDigest, refresh }) => {
+    async ({ containerId, targetBranch, includeUncommitted, knownDigest, refresh }, context) => {
       const ref = validateGitRefName(asString(targetBranch, "targetBranch"), "target branch");
       const id = asString(containerId, "containerId");
       const explicit = refreshRequested(refresh);
@@ -1020,10 +1040,14 @@ export function registerTerminalCommands(
       // post-click scan below starts it in the background. The read itself
       // answers from local refs and never waits for the network; a fetch
       // that moves the base announces a new file-list revision.
-      if (explicit) containerGitFetchPolicy.invalidate({ containerId: id, ref }, "explicit");
+      if (explicit)
+        context.runtime.diffStats.containerGitFetchPolicy.invalidate(
+          { containerId: id, ref },
+          "explicit",
+        );
       // A missing baseline surfaces as "Target ref is not present in the
       // container" from the scanner, distinct from a corrupt response.
-      const read = await diffStatsService.readFileList({
+      const read = await context.runtime.diffStats.service.readFileList({
         lookup: { containerId: id },
         comparisonRef: ref,
         includeUncommitted: includeUncommitted !== false,
@@ -1091,8 +1115,8 @@ export function registerTerminalCommands(
       ...(captured.fingerprint === undefined ? {} : { fingerprint: captured.fingerprint }),
     };
   });
-  register("get_file_tree", async ({ containerId, knownDigest, refresh }) => {
-    const read = await diffStatsService.readTree({
+  register("get_file_tree", async ({ containerId, knownDigest, refresh }, context) => {
+    const read = await context.runtime.diffStats.service.readTree({
       lookup: { containerId: asString(containerId, "containerId") },
       refresh: refreshRequested(refresh),
     });
@@ -1201,8 +1225,8 @@ export function registerTerminalCommands(
     const target = validateWorkspaceMutationPath(asString(filePath, "filePath"));
     const branch = validateGitRefName(asString(targetBranch, "targetBranch"), "target branch");
     await dockerExec(id, containerRevertFileCommand(target, branch));
-    diffStatsService.invalidateChanges({ containerId: id });
-    diffStatsService.refresh(environmentIdString);
+    context.runtime.diffStats.service.invalidateChanges({ containerId: id });
+    context.runtime.diffStats.service.refresh(environmentIdString);
     return target;
   });
   register("delete_container_file", async ({ environmentId, filePath }, context) => {
@@ -1214,8 +1238,8 @@ export function registerTerminalCommands(
     const id = environment.containerId!;
     const target = validateWorkspaceMutationPath(asString(filePath, "filePath"));
     await dockerExec(id, containerDeleteFileCommand(target));
-    diffStatsService.invalidateChanges({ containerId: id });
-    diffStatsService.refresh(environmentIdString);
+    context.runtime.diffStats.service.invalidateChanges({ containerId: id });
+    context.runtime.diffStats.service.refresh(environmentIdString);
     return target;
   });
   register(
@@ -1232,8 +1256,8 @@ export function registerTerminalCommands(
         asString(destinationDirectory, "destinationDirectory"),
       );
       await dockerExec(id, containerMoveFileCommand(move.source, move.directory, move.destination));
-      diffStatsService.invalidateChanges({ containerId: id });
-      diffStatsService.refresh(environmentIdString);
+      context.runtime.diffStats.service.invalidateChanges({ containerId: id });
+      context.runtime.diffStats.service.refresh(environmentIdString);
       return move.destination;
     },
   );
@@ -1252,8 +1276,8 @@ export function registerTerminalCommands(
       id,
       containerMoveFileCommand(rename.source, rename.directory, rename.destination),
     );
-    diffStatsService.invalidateChanges({ containerId: id });
-    diffStatsService.refresh(environmentIdString);
+    context.runtime.diffStats.service.invalidateChanges({ containerId: id });
+    context.runtime.diffStats.service.refresh(environmentIdString);
     return rename.destination;
   });
   register(
@@ -1270,8 +1294,8 @@ export function registerTerminalCommands(
         asString(folderName, "folderName"),
       );
       await dockerExec(id, containerCreateFolderCommand(created.directory, created.folderPath));
-      diffStatsService.invalidateChanges({ containerId: id });
-      diffStatsService.refresh(environmentIdString);
+      context.runtime.diffStats.service.invalidateChanges({ containerId: id });
+      context.runtime.diffStats.service.refresh(environmentIdString);
       return created.folderPath;
     },
   );
@@ -1290,7 +1314,9 @@ export function registerTerminalCommands(
       if (environment.environmentType === "local") {
         await withLocalFileMutation(context, environmentIdString, async (local) => {
           await copyExternalFileToLocalWorkspace(local.worktreePath!, directory, name, data);
-          diffStatsService.invalidateChanges({ worktreePath: local.worktreePath! });
+          context.runtime.diffStats.service.invalidateChanges({
+            worktreePath: local.worktreePath!,
+          });
         });
       } else {
         const container = await requireContainerMutationEnvironment(
@@ -1333,9 +1359,11 @@ export function registerTerminalCommands(
           }
           throw new Error("The file could not be copied into the container workspace");
         }
-        diffStatsService.invalidateChanges({ containerId: container.containerId! });
+        context.runtime.diffStats.service.invalidateChanges({
+          containerId: container.containerId!,
+        });
       }
-      diffStatsService.refresh(environmentIdString);
+      context.runtime.diffStats.service.refresh(environmentIdString);
       return copy.destination;
     },
   );

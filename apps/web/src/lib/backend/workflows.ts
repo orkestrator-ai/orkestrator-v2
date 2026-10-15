@@ -1244,30 +1244,6 @@ export async function rejectPromptQueueClaim<T>(
   });
 }
 
-export async function transferPromptQueueMessageToComposeDraft<T>(
-  queueKey: string,
-  environmentId: string,
-  messageId: string,
-  draftKey: string,
-  ownerType: "environment" | "project",
-  ownerId: string,
-  expectedDraftRevision?: number,
-): Promise<{
-  removed: T | null;
-  queue: PersistedPromptQueue<T> | null;
-  draft: PersistedComposeDraft | null;
-}> {
-  return invoke("transfer_prompt_queue_message_to_compose_draft", {
-    queueKey,
-    environmentId,
-    messageId,
-    draftKey,
-    ownerType,
-    ownerId,
-    ...(expectedDraftRevision === undefined ? {} : { expectedDraftRevision }),
-  });
-}
-
 export async function retryPromptQueueDispatch<T = unknown>(
   queueKey: string,
 ): Promise<PersistedPromptQueue<T> | null> {

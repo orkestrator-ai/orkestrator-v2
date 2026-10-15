@@ -114,10 +114,6 @@ import {
   environmentStartTasks,
   environmentLifecycleOperations,
   environmentBaselineTasks,
-  containerGitFetchPolicy,
-  diffStatsService,
-  invalidatePendingDiffStatsSync,
-  syncDiffStatsTracking,
 } from "./commands-runtime-state.js";
 import {
   prMonitorService,
@@ -1547,7 +1543,7 @@ export async function startEnvironmentOnce(
         });
         const result = await startEnvironmentSetup(running, context);
         schedulePendingRename(environment.id, context);
-        await syncDiffStatsTracking(context);
+        await context.runtime.diffStats.sync(context);
         await syncPrMonitorTracking(context);
         return result;
       }
@@ -1594,7 +1590,7 @@ export async function startEnvironmentOnce(
       unpersistedWorktree = null;
       const result = await startEnvironmentSetup(updated, context);
       schedulePendingRename(environment.id, context);
-      await syncDiffStatsTracking(context);
+      await context.runtime.diffStats.sync(context);
       await syncPrMonitorTracking(context);
       return result;
     }
@@ -1634,7 +1630,7 @@ export async function startEnvironmentOnce(
     });
     const result = await startEnvironmentSetup(updated, context);
     schedulePendingRename(environment.id, context);
-    await syncDiffStatsTracking(context);
+    await context.runtime.diffStats.sync(context);
     await syncPrMonitorTracking(context);
     return result;
   } catch (error) {
@@ -1805,8 +1801,8 @@ export async function stopEnvironmentOnce(
     );
     if ("replayed" in outcome) return;
     shutdownClaudeStatePolling(containerId);
-    invalidatePendingDiffStatsSync();
-    diffStatsService.pause(environment.id);
+    context.runtime.diffStats.invalidatePendingSync();
+    context.runtime.diffStats.service.pause(environment.id);
     invalidatePendingPrMonitorSync();
     prMonitorService.pause(environment.id);
     return;
@@ -1965,7 +1961,7 @@ async function recreateEnvironmentOnceUnfenced(
     // keyed by environment (sessions, parked dispatches, queued prompts)
     // resolves the new runtime on its next use.
     shutdownClaudeStatePolling(environment.containerId);
-    containerGitFetchPolicy.forgetContainer(environment.containerId);
+    context.runtime.diffStats.containerGitFetchPolicy.forgetContainer(environment.containerId);
     cleanupEnvironmentSetupState(environment.id);
     // Setup belongs to a runtime: the new one runs it again (the preserved
     // checkout is kept, so the clone step is skipped). The workspace itself,
@@ -2030,7 +2026,7 @@ async function recreateEnvironmentOnceUnfenced(
       }).catch(() => undefined);
       throw error;
     }
-    containerGitFetchPolicy.forgetContainer(containerId);
+    context.runtime.diffStats.containerGitFetchPolicy.forgetContainer(containerId);
     await context.storage.clearBackendTerminalSessionIds?.(environment.id);
     cleanupEnvironmentSetupState(environment.id);
     const storage = parsedRecord.record.storage;
@@ -2067,7 +2063,7 @@ async function recreateEnvironmentOnceUnfenced(
       "Docker did not remove the container, so it was kept. Retry once Docker is healthy.",
     );
   }
-  containerGitFetchPolicy.forgetContainer(containerId);
+  context.runtime.diffStats.containerGitFetchPolicy.forgetContainer(containerId);
   // Terminals and setup state belong to the removed runtime. A pane-carried
   // PTY id or a retained setup buffer must not attach to the replacement.
   await context.storage.clearBackendTerminalSessionIds?.(environment.id);
@@ -2111,7 +2107,7 @@ export function restoreRecoveryCopyTask(
     if (!restored) return undefined;
     invalidateDiscovery(environment.id);
     if (environment.containerId) {
-      containerGitFetchPolicy.forgetContainer(environment.containerId);
+      context.runtime.diffStats.containerGitFetchPolicy.forgetContainer(environment.containerId);
       cancelOpenCodeAgentToolsConfiguration(`container:${environment.containerId}`);
     }
     cleanupEnvironmentSetupState(environment.id);

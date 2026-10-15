@@ -8,7 +8,7 @@ import {
   type ResumableBuildPhase,
 } from "@orkestrator/protocol/build-pipeline";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
-import { useCodexStore } from "@/stores/codexStore";
+import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import * as realBackend from "@/lib/backend";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
@@ -1629,9 +1629,9 @@ describe("BuildChatTab presentation", () => {
   });
 
   test("shows iteration letters, the friendly model name, elapsed time, and tokens", () => {
-    const previousModels = useCodexStore.getState().models;
-    useCodexStore.setState({
-      models: [
+    const previousModels = useAgentModelCatalogStore.getState().codexModels;
+    useAgentModelCatalogStore.setState({
+      codexModels: [
         {
           id: "gpt-5.6-sol",
           name: "GPT 5.6 Sol",
@@ -1676,7 +1676,7 @@ describe("BuildChatTab presentation", () => {
       ).toBe("1m 35s · 12k tokens");
     } finally {
       cleanup();
-      useCodexStore.setState({ models: previousModels });
+      useAgentModelCatalogStore.setState({ codexModels: previousModels });
     }
   });
 
@@ -1748,9 +1748,9 @@ describe("BuildChatTab presentation", () => {
   });
 
   test("keeps a surviving Review 2 tab on letter B and its configured model", () => {
-    const previousModels = useCodexStore.getState().models;
-    useCodexStore.setState({
-      models: [
+    const previousModels = useAgentModelCatalogStore.getState().codexModels;
+    useAgentModelCatalogStore.setState({
+      codexModels: [
         {
           id: "gpt-5.6-sol",
           name: "GPT 5.6 Sol",
@@ -1792,14 +1792,14 @@ describe("BuildChatTab presentation", () => {
       expect(screen.queryByText("Opus") === null).toBe(true);
     } finally {
       cleanup();
-      useCodexStore.setState({ models: previousModels });
+      useAgentModelCatalogStore.setState({ codexModels: previousModels });
     }
   });
 
   test("letters the live retry pair A/B and keeps each slot's configured model", () => {
-    const previousModels = useCodexStore.getState().models;
-    useCodexStore.setState({
-      models: [
+    const previousModels = useAgentModelCatalogStore.getState().codexModels;
+    useAgentModelCatalogStore.setState({
+      codexModels: [
         {
           id: "gpt-5.6-sol",
           name: "GPT 5.6 Sol",
@@ -1884,7 +1884,7 @@ describe("BuildChatTab presentation", () => {
       expect(screen.getAllByText("Opus").length).toBeGreaterThan(0);
     } finally {
       cleanup();
-      useCodexStore.setState({ models: previousModels });
+      useAgentModelCatalogStore.setState({ codexModels: previousModels });
     }
   });
 

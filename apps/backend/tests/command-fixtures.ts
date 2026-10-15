@@ -40,6 +40,7 @@ import { APP_SLUG, APP_VERSION } from "../src/core/constants";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 
 import { EnvironmentLifecycleTaskTracker } from "../src/core/environment-lifecycle-tasks";
+import { BackendRuntime } from "../src/core/backend-runtime";
 
 type MockPtyProcess = {
   write: ReturnType<typeof mock>;
@@ -67,6 +68,20 @@ export async function createCommandFixtures() {
   }
 
   const ptyProcesses: MockPtyProcess[] = [];
+
+  // Every context gets its own runtime; teardown releases each one's watchers
+  // and timers so nothing outlives the test that created it.
+  const runtimes: BackendRuntime[] = [];
+  const trackRuntime = (runtime: BackendRuntime): BackendRuntime => {
+    runtimes.push(runtime);
+    return runtime;
+  };
+  const shutdownRuntimes = () => {
+    for (const runtime of runtimes.splice(0)) runtime.shutdown();
+  };
+  /** A runtime for a hand-built context, released with the fixture's own. */
+  const createRuntime = (emit: CommandContext["emit"] = () => undefined): BackendRuntime =>
+    trackRuntime(new BackendRuntime({ emit }));
 
   const ptySpawn = mock((command: string, _args: string[], options: Record<string, unknown>) => {
     const dataCallbacks: Array<(data: string) => void> = [];
@@ -117,7 +132,6 @@ export async function createCommandFixtures() {
     isImmutableCommitRef,
     resolveBrowserOpenCommand,
     resolveFileManagerRevealCommands,
-    shutdownDiffStatsTracking,
     shutdownLocalServers,
     shutdownPrMonitorTracking,
     toClientEnvironment,
@@ -446,6 +460,9 @@ export async function createCommandFixtures() {
       resourceRoot: "",
       worktreeDir: options.worktreeDir ?? createWorktreeDir(),
       environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+      runtime: trackRuntime(
+        new BackendRuntime({ emit: (event, payload) => context.emit(event, payload) }),
+      ),
       emit: mock((event: string, payload: unknown) => {
         emitted.push({ event, payload });
       }),
@@ -1404,7 +1421,7 @@ exit 0
       await shutdownLocalServers();
     } finally {
       setAgentSkillsHomeForTesting(undefined);
-      shutdownDiffStatsTracking();
+      shutdownRuntimes();
       // Commands like set_environment_pr arm PR monitoring as a side effect;
       // dropping the entries here keeps a scheduled poll from spawning `gh`
       // against a fixture worktree later in the run.
@@ -1428,6 +1445,7 @@ exit 0
         createContext(createEnvironment()).context,
       );
     } finally {
+      shutdownRuntimes();
       if (originalDockerHost === undefined) delete process.env.DOCKER_HOST;
       else process.env.DOCKER_HOST = originalDockerHost;
     }
@@ -1463,6 +1481,7 @@ exit 0
     environmentBranchBase,
     createContext,
     createDeferred,
+    createRuntime,
     createEnvironment,
     createFakeChild,
     createGitRepoOnBranch,
@@ -1512,7 +1531,6 @@ exit 0
     resolveFileManagerRevealCommands,
     runGit,
     setAgentSkillsHomeForTesting,
-    shutdownDiffStatsTracking,
     shutdownLocalServers,
     shutdownPrMonitorTracking,
     spawnCommand,

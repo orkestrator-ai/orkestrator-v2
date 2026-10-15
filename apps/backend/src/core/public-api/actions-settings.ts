@@ -16,7 +16,6 @@ import {
   type PublicSettingsSnapshot,
   type PublicSettingValue,
 } from "@orkestrator/protocol/public-api-resources";
-import { syncDiffStatsTracking } from "../commands-runtime-state.js";
 import { applyEnvironmentAllowedDomains } from "../container-network.js";
 import type { AppConfig, Environment, PortMapping, RepositoryConfig } from "../models.js";
 import { defaultRepositoryConfig, isPortMapping } from "../storage-shared.js";
@@ -342,7 +341,7 @@ const projectConfigSet: MutationActionHandler<SettingsPatch & { projectId: strin
         if ("prBaseBranch" in input.set || input.unset.includes("prBaseBranch")) {
           // The PR base retargets every environment's diff baseline now, as
           // the settings UI does.
-          void syncDiffStatsTracking(context.command).catch(() => undefined);
+          void context.command.runtime.diffStats.sync(context.command).catch(() => undefined);
         }
         return {
           state: "succeeded",

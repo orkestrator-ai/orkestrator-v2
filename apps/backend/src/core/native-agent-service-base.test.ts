@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import type { ProviderRegistry } from "./native-agent-provider-registry.js";
 
 import { promises as fs } from "node:fs";
 
@@ -210,10 +211,9 @@ function internals(service: NativeAgentService) {
       model?: string,
       effort?: string,
     ): Promise<BridgeConnection>;
-    providers: Map<string, AgentSessionProvider>;
+    providerRegistry: ProviderRegistry;
     activityRetryAt: Map<string, number>;
     activityAttempts: Map<string, number>;
-    absentBridgeUntil: Map<string, number>;
     observedSessionActivity: Map<
       string,
       { providerSessionId: string; state: ProviderActivityState }
@@ -2979,7 +2979,9 @@ describe("NativeAgentService", () => {
         // Swap the real HTTP provider for a stub so the read needs no socket. The
         // cooldown was already cleared by the caching above, which is what lets
         // this sweep consult the cache at all.
-        internals(service).providers.set("env-1\u0000codex", started.provider);
+        internals(service)
+          .providerRegistry.stateForTesting()
+          .providers.set("env-1\u0000codex", started.provider);
 
         await service.reconcileAgentActivity();
 
@@ -3023,15 +3025,17 @@ describe("NativeAgentService", () => {
           agent: "codex",
           logicalSessionKey: "tab-1",
         });
-        expect(internals(service).providers.size).toBe(1);
+        expect(internals(service).providerRegistry.stateForTesting().providers.size).toBe(1);
 
         await storage.removeEnvironment("env-1");
         await internals(service).reconcilePendingLaunches();
 
-        expect(internals(service).providers.size).toBe(0);
+        expect(internals(service).providerRegistry.stateForTesting().providers.size).toBe(0);
         expect(internals(service).activityRetryAt.size).toBe(0);
         expect(internals(service).activityAttempts.size).toBe(0);
-        expect(internals(service).absentBridgeUntil.size).toBe(0);
+        expect(internals(service).providerRegistry.stateForTesting().absentBridgeUntil.size).toBe(
+          0,
+        );
         expect(failing.dispose).toHaveBeenCalledTimes(1);
       },
     );

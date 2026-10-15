@@ -380,6 +380,25 @@ export class OpenCodeStreamState {
     };
   }
 
+  /**
+   * Seed a fresh fork's session model. A fork has no `session.updated` yet, so
+   * without this the progressive state view has no model evidence and the
+   * composer falls back to the catalogue. Prefers the fork's own
+   * `Session.model`, then the source session's streamed model. A model the
+   * stream already reported for the fork wins: it is at least as new.
+   */
+  seedForkedSessionModel(forkedId: string, forked: unknown, sourceId: string): void {
+    const own = openCodeSessionModelRef(asRecord(forked)?.model);
+    const model = own.modelId ? own : this.sessionModel(sourceId);
+    if (!model.modelId) return;
+    const state = this.session(forkedId);
+    if (state.sessionModelId) return;
+    state.sessionModelId = model.modelId;
+    if (model.reasoningId) state.sessionReasoningId = model.reasoningId;
+    else delete state.sessionReasoningId;
+    this.bump(state);
+  }
+
   permission(sessionId: string): unknown {
     return this.sessions.get(sessionId)?.permission;
   }

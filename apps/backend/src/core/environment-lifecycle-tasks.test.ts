@@ -109,8 +109,17 @@ describe("EnvironmentLifecycleTaskTracker", () => {
     await expect(tracker.beginShutdown(5)).resolves.toBeUndefined();
     expect(tracker.pendingCount()).toBe(1);
 
+    let drained = false;
+    const completion = tracker.whenDrained().then(() => {
+      drained = true;
+    });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+
     stuck.resolve();
     await task;
+    await completion;
+    expect(drained).toBe(true);
   });
 
   test("keeps the drain open for work that finishes within the deadline", async () => {

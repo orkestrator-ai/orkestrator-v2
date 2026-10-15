@@ -1,4 +1,4 @@
-import { GatewayBase } from "./gateway-base.js";
+import type { GatewayContext } from "./gateway-context.js";
 import { formatGatewayCursor } from "./gateway-event-replay.js";
 import type {
   GatewayEventReplay,
@@ -20,18 +20,21 @@ import type {
   GatewayReconcileReason,
 } from "./gateway-internals.js";
 
-export abstract class GatewayEvents extends GatewayBase {
+/** SSE fan-out, the replay handshake, and bounded per-client buffering. */
+export class GatewayEvents {
+  constructor(private readonly ctx: GatewayContext) {}
+
   emit(event: string, payload: unknown): void {
-    this.terminalWebSocket.emit(event, payload);
+    this.ctx.terminalWebSocket.emit(event, payload);
     const droppable = event.startsWith(DROPPABLE_EVENT_PREFIX);
     // Authoritative state is revisioned and retained even while no renderer is
     // mounted. Terminal bytes have their own generation/revision snapshot
     // protocol and must never consume this replay ring.
-    const replayFrame = droppable ? null : this.eventReplay.append(event, payload);
-    if (this.clients.size === 0) return;
+    const replayFrame = droppable ? null : this.ctx.eventReplay.append(event, payload);
+    if (this.ctx.clients.size === 0) return;
     let message = replayFrame?.message ?? null;
     let messageBytes = replayFrame?.encodedBytes ?? 0;
-    for (const [client, state] of this.clients) {
+    for (const [client, state] of this.ctx.clients) {
       if (
         !eventMatchesSubscription(
           event,
@@ -60,8 +63,8 @@ export abstract class GatewayEvents extends GatewayBase {
         const projectedFrames = state.handshake.events.length + 1;
         const projectedBytes = state.handshake.bytes + messageBytes;
         if (
-          projectedFrames > this.replayHandshakeFrameCapacity ||
-          projectedBytes > this.replayHandshakeMaxBytes
+          projectedFrames > this.ctx.replayHandshakeFrameCapacity ||
+          projectedBytes > this.ctx.replayHandshakeMaxBytes
         ) {
           this.dropBufferedClient(client, event, projectedBytes);
           continue;
@@ -100,7 +103,7 @@ export abstract class GatewayEvents extends GatewayBase {
    * on the keepalive tick bounds that drift to one keepalive interval and costs
    * one small frame instead of one per omitted event.
    */
-  protected flushOmittedCursor(client: EventClientWriter, state: GatewayEventClient): void {
+  flushOmittedCursor(client: EventClientWriter, state: GatewayEventClient): void {
     const omitted = state.omittedRevision;
     if (
       omitted === null ||
@@ -115,7 +118,7 @@ export abstract class GatewayEvents extends GatewayBase {
       !this.writeControlFrame(
         client,
         GATEWAY_CURSOR_EVENT,
-        formatGatewayCursor(this.eventReplay.generation, omitted),
+        formatGatewayCursor(this.ctx.eventReplay.generation, omitted),
         null,
       )
     )
@@ -123,7 +126,7 @@ export abstract class GatewayEvents extends GatewayBase {
     state.sentRevision = omitted;
   }
 
-  protected writeEventToClient(
+  writeEventToClient(
     client: EventClientWriter,
     state: GatewayEventClient,
     event: string,
@@ -157,11 +160,11 @@ export abstract class GatewayEvents extends GatewayBase {
       return true;
     }
     client.write(message);
-    this.metrics.recordEvent(event, messageBytes);
+    this.ctx.metrics.recordEvent(event, messageBytes);
     return true;
   }
 
-  protected writeControlFrame(
+  writeControlFrame(
     client: EventClientWriter,
     event: string,
     cursor: string | null,
@@ -180,7 +183,7 @@ export abstract class GatewayEvents extends GatewayBase {
     return true;
   }
 
-  protected writeReplayFrame(
+  writeReplayFrame(
     client: EventClientWriter,
     state: GatewayEventClient,
     frame: GatewayReplayFrame,
@@ -217,7 +220,7 @@ export abstract class GatewayEvents extends GatewayBase {
    * has not absorbed. Checking up front turns a silent mid-replay destroy into
    * an explicit reconciliation.
    */
-  protected replayFitsClientBudget(
+  replayFitsClientBudget(
     client: EventClientWriter,
     frames: readonly GatewayReplayFrame[],
   ): boolean {
@@ -229,18 +232,18 @@ export abstract class GatewayEvents extends GatewayBase {
     return true;
   }
 
-  protected initializeEventReplay(
+  initializeEventReplay(
     client: EventClientWriter,
     state: GatewayEventClient,
     cursor: GatewayCursorParseResult,
   ): void {
-    const latestAtSubscribe = this.eventReplay.latestRevision;
+    const latestAtSubscribe = this.ctx.eventReplay.latestRevision;
     let replay: ReturnType<GatewayEventReplay["since"]> | null = null;
     // An invalid cursor is not safe to echo as an SSE id, and advancing to the
     // latest revision here could make a disconnect before reconcile-required
     // permanently skip the snapshot recovery signal.
     let connectedCursor: string | null =
-      cursor.kind === "invalid" ? null : this.eventReplay.latestCursor;
+      cursor.kind === "invalid" ? null : this.ctx.eventReplay.latestCursor;
     let replayStatus: "fresh" | "caught-up" | "replayed" | "reconcile" = "fresh";
     let reconcileReason: GatewayReconcileReason | null = null;
     let requestedRevision: number | null = null;
@@ -251,16 +254,16 @@ export abstract class GatewayEvents extends GatewayBase {
     } else if (cursor.kind === "valid") {
       connectedCursor = cursor.raw;
       requestedRevision = cursor.revision;
-      if (cursor.generation !== this.eventReplay.generation) {
+      if (cursor.generation !== this.ctx.eventReplay.generation) {
         replayStatus = "reconcile";
         reconcileReason = "prior-generation";
-      } else if (cursor.revision > this.eventReplay.latestRevision) {
+      } else if (cursor.revision > this.ctx.eventReplay.latestRevision) {
         // Ahead of the server is the opposite of expired. Both reconcile, but
         // conflating them hides a corrupt cursor behind a routine ring overrun.
         replayStatus = "reconcile";
         reconcileReason = "cursor-ahead";
       } else {
-        replay = this.eventReplay.since(cursor.revision);
+        replay = this.ctx.eventReplay.since(cursor.revision);
         if (!replay.complete) {
           replayStatus = "reconcile";
           reconcileReason = "cursor-expired";
@@ -278,37 +281,37 @@ export abstract class GatewayEvents extends GatewayBase {
     }
 
     const replayedFrames = replay?.complete ? replay.frames.length : 0;
-    this.metrics.recordReplayHandshake(replayStatus, reconcileReason, replayedFrames);
+    this.ctx.metrics.recordReplayHandshake(replayStatus, reconcileReason, replayedFrames);
     if (
       !this.writeControlFrame(client, GATEWAY_CONNECTED_EVENT, connectedCursor, {
-        generation: this.eventReplay.generation,
+        generation: this.ctx.eventReplay.generation,
         revision: latestAtSubscribe,
         status: replayStatus,
         replayed: replayedFrames,
       })
     )
       return;
-    if (!this.clients.has(client)) return;
+    if (!this.ctx.clients.has(client)) return;
 
     let highestSent = cursor.kind === "valid" ? cursor.revision : latestAtSubscribe;
     if (reconcileReason) {
-      const currentCursor = this.eventReplay.latestCursor;
+      const currentCursor = this.ctx.eventReplay.latestCursor;
       if (
         !this.writeControlFrame(client, GATEWAY_RECONCILE_REQUIRED_EVENT, currentCursor, {
           reason: reconcileReason,
           requestedCursor: cursor.kind === "absent" ? null : cursor.raw,
           requestedRevision,
-          oldestAvailableRevision: this.eventReplay.oldestRevision,
-          latestRevision: this.eventReplay.latestRevision,
-          generation: this.eventReplay.generation,
+          oldestAvailableRevision: this.ctx.eventReplay.oldestRevision,
+          latestRevision: this.ctx.eventReplay.latestRevision,
+          generation: this.ctx.eventReplay.generation,
         })
       )
         return;
-      if (!this.clients.has(client)) return;
-      highestSent = this.eventReplay.latestRevision;
+      if (!this.ctx.clients.has(client)) return;
+      highestSent = this.ctx.eventReplay.latestRevision;
     } else if (replay) {
       for (const frame of replay.frames) {
-        if (!this.clients.has(client)) return;
+        if (!this.ctx.clients.has(client)) return;
         if (!this.writeReplayFrame(client, state, frame)) return;
         highestSent = Math.max(highestSent, frame.revision);
       }
@@ -343,7 +346,7 @@ export abstract class GatewayEvents extends GatewayBase {
     state.omittedRevision = null;
   }
 
-  protected markTerminalFrameDropped(
+  markTerminalFrameDropped(
     client: EventClientWriter,
     state: GatewayEventClient,
     event: string,
@@ -353,14 +356,14 @@ export abstract class GatewayEvents extends GatewayBase {
     const sessionId = event.slice(DROPPABLE_EVENT_PREFIX.length);
     const streamAlreadyStalled = state.desyncedSessions.size > 0;
     state.desyncedSessions.add(sessionId);
-    this.metrics.recordDroppedEventFrame(event);
-    this.metrics.recordSoftDesync();
-    if (!streamAlreadyStalled) this.metrics.recordStreamStalled();
+    this.ctx.metrics.recordDroppedEventFrame(event);
+    this.ctx.metrics.recordSoftDesync();
+    if (!streamAlreadyStalled) this.ctx.metrics.recordStreamStalled();
     if (!sessionId.startsWith("tmux:") || !state.includedPrefixes?.includes(event)) return;
-    let frames = this.droppedTmuxFrames.get(client);
+    let frames = this.ctx.droppedTmuxFrames.get(client);
     if (!frames) {
       frames = new Map();
-      this.droppedTmuxFrames.set(client, frames);
+      this.ctx.droppedTmuxFrames.set(client, frames);
     }
     // A filtered terminal SSE can subscribe to several mounted sessions, so
     // retain at most the newest full-pane frame for each subscribed tmux
@@ -375,17 +378,13 @@ export abstract class GatewayEvents extends GatewayBase {
     }
   }
 
-  protected dropBufferedClient(
-    client: EventClientWriter,
-    event: string,
-    projectedBytes: number,
-  ): void {
-    this.logger.warn(
+  dropBufferedClient(client: EventClientWriter, event: string, projectedBytes: number): void {
+    this.ctx.logger.warn(
       `[RemoteGateway] Dropping an event-stream client buffering ${projectedBytes} bytes; it will reconnect and refetch`,
     );
-    this.clients.delete(client);
-    this.metrics.recordDroppedEventClient(event);
-    this.metrics.recordStreamDropped();
+    this.ctx.clients.delete(client);
+    this.ctx.metrics.recordDroppedEventClient(event);
+    this.ctx.metrics.recordStreamDropped();
     client.destroy();
   }
 
@@ -398,10 +397,10 @@ export abstract class GatewayEvents extends GatewayBase {
    * rides the session's own event rather than a second event name so consumers
    * need no extra subscription and existing filters keep working.
    */
-  protected flushDesyncNotices(client: EventClientWriter, state: GatewayEventClient): boolean {
+  flushDesyncNotices(client: EventClientWriter, state: GatewayEventClient): boolean {
     for (const sessionId of Array.from(state.desyncedSessions)) {
       const event = `${DROPPABLE_EVENT_PREFIX}${sessionId}`;
-      const retainedTmuxFrame = this.droppedTmuxFrames.get(client)?.get(sessionId);
+      const retainedTmuxFrame = this.ctx.droppedTmuxFrames.get(client)?.get(sessionId);
       const recoveryFrame =
         retainedTmuxFrame ?? `data: ${JSON.stringify({ event, payload: { desynced: true } })}\n\n`;
       const projectedBytes = client.writableLength + Buffer.byteLength(recoveryFrame);
@@ -414,13 +413,13 @@ export abstract class GatewayEvents extends GatewayBase {
       // pending across the write recurses on the same frame until the stack dies,
       // taking the recovery path down with it.
       if (retainedTmuxFrame) {
-        const retained = this.droppedTmuxFrames.get(client);
+        const retained = this.ctx.droppedTmuxFrames.get(client);
         retained?.delete(sessionId);
-        if (retained?.size === 0) this.droppedTmuxFrames.delete(client);
+        if (retained?.size === 0) this.ctx.droppedTmuxFrames.delete(client);
       }
       state.desyncedSessions.delete(sessionId);
       client.write(recoveryFrame);
-      this.metrics.recordEvent(event, Buffer.byteLength(recoveryFrame));
+      this.ctx.metrics.recordEvent(event, Buffer.byteLength(recoveryFrame));
     }
     return true;
   }

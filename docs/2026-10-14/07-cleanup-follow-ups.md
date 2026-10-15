@@ -1,6 +1,8 @@
 # Cleanup follow-ups, decisions to confirm and watch items
 
-Status: Active — collected 2026-10-14, none done.
+Status: Active — collected 2026-10-14. Done 2026-10-15: 1, 2, 3, 7. Decided
+2026-10-15: 4 (kept as is). Partly done: 5 (users are now told to update on a
+mismatch; no renderer guard for raw envelopes). Pointers only, no action: 6, 8.
 
 Smaller items left over from the OpenCode boundary cleanup branch
 (`opencode-bridge-a8c2ab5c85b9-r1`) and its validation. None is user-visible
@@ -26,6 +28,23 @@ outside tests are their own definitions or doc comments):
 Fix: delete them with the tests that cover only them, then run the web
 typecheck, the web suite and `tests/` (renderer tests live there too).
 
+**Done 2026-10-15.** All of the exports above are gone, with the tests that
+covered only them. Removing `mergeNativeMessagesPreservingClientOnly` also
+removed its fingerprinting helpers, `normalizeMessageContent` and
+`carryOverMessagesAddedDuringFetch` (also unused). No client (renderer, CLI,
+public API, gateway, iOS) invoked `transfer_prompt_queue_message_to_compose_draft`,
+so the backend command and `StorageService.transferPromptQueueMessageToComposeDraft`
+were removed too. Drafts persisted by older versions can still carry its
+`sourcePromptQueue` provenance, so that field is still validated on load.
+
+Left for a follow-up: removing the four claim helpers leaves the renderer's
+`claimPromptQueueHead` (`prompt-queue-persistence.ts`) and the
+`claimPromptQueueHead`, `requeuePromptQueueMessage`,
+`acknowledgePromptQueueClaim` and `rejectPromptQueueClaim` wrappers in
+`apps/web/src/lib/backend/workflows.ts` reachable only from tests (including
+the Claude Tmux test mocks). The matching backend commands have no client
+outside tests either; the backend `PromptQueueDrainer` calls storage directly.
+
 ## 2. Fold the Claude and Codex model stores into one catalogue store
 
 After the cleanup, `apps/web/src/stores/claudeStore.ts` (51 lines) and
@@ -44,6 +63,12 @@ Fix: give `agentModelCatalogStore` per-platform entries with an explicit
 fallback policy (per-environment for Claude, bundled list for Codex), migrate
 the readers and delete both stores.
 
+**Done 2026-10-15.** `agentModelCatalogStore` now holds `claudeModels`,
+`claudeModelCatalogs` and `codexModels` beside the ACP lists, with the fallback
+policy in its doc comment. `getClaudeModels(environmentId)` prefers the
+environment's catalogue; `setCodexModels([])` restores `CODEX_MODELS`, which is
+also the initial value. Both old stores are deleted and their tests moved.
+
 ## 3. Documentation drift
 
 - `docs/development/agent-testing.md:17` says "repository-pinned Bun 1.4.2";
@@ -55,6 +80,10 @@ the readers and delete both stores.
   `opencode-provider.ts:804`). The only remaining `as never` in
   `opencode-provider.ts` (`:157`) is the discovery fan-out's generic
   `optionalSdkCall`, not the prompt. Confirm, then tick the item.
+
+**Done 2026-10-15.** The Bun version now reads 1.4.3, and the plan item is
+ticked after confirming the backend passes `OpenCodePromptPart[]` (the SDK's
+part-input union) to `session.promptAsync` uncast.
 
 ## 4. Decision to confirm: inline-error duplicate check
 
@@ -68,6 +97,16 @@ any `error-` row instead of only `error-opencode-`. No backend or bridge
 produces other `error-` transcript rows today, so behaviour is unchanged. If an
 exact OpenCode-only match is preferred, narrow the check.
 
+**Decided 2026-10-15: keep the broad match.** A terminal notice is dropped
+only when the *last* transcript row has an `error-` id *and* its text equals
+the notice or ends with `: <notice>`, so a false suppression needs a second
+provider to write an inline error row repeating the same message, which is
+exactly the duplicate the check exists to remove. The broad match means a
+provider that adopts `providerInlineErrorMessageId` later is covered without
+touching the projection. Narrowing to `error-opencode-` would buy exactness
+for a case that cannot occur today, at the cost of a silent duplicate row the
+first time another provider writes inline errors.
+
 ## 5. Known limitation: renderer and backend must match
 
 OpenCode build-pipeline and Multi Review transcripts are now normalized by the
@@ -78,6 +117,31 @@ envelopes as nearly empty rows. Desktop builds ship both together, and the
 remote gateway serves the renderer from the same backend, so this only matters
 if a deployment can mix versions. If one can, add a version handshake or a
 renderer-side guard.
+
+**Finding 2026-10-15: deployments can mix versions.** Two supported paths put
+a newer renderer in front of an older backend:
+
+- `apps/web-public` (orkestrator.dev, deployed from `main`) lazy-loads the full
+  web app (`apps/web-public/src/PublicApp.tsx:44`) and connects to any user's
+  backend, whose version follows that user's desktop updates.
+- The Electron app always loads its bundled renderer
+  (`apps/desktop/electron/window.ts`) but can connect to a remote backend on
+  another machine (`apps/desktop/electron/connection-manager.ts`).
+
+Neither checks versions: `/__orkestrator/status` answers only `{ ok: true }`
+(`apps/backend/src/gateway-auth.ts:366`). The renderer compares versions only
+for the Settings Debug note. A gateway-served tab left open across a backend
+upgrade gives the reverse skew (old renderer, new backend), which is benign
+here.
+
+**Update 2026-10-15: version reminder added.** The renderer now compares its
+bundled version with the backend's `get_app_version` on load and after every
+event-stream reconnect, and shows a warning toast naming the older side and
+how to update it (`apps/web/src/components/BackendVersionReminder.tsx`; see
+"Version reminders" in `docs/architecture/remote-gateway.md`). It does not
+block or translate anything, so a newer renderer on an older backend still
+shows near-empty OpenCode rows until the backend is updated. A renderer-side
+guard for raw envelopes remains open if that is not enough.
 
 ## 6. Flaky tests recorded that day
 
@@ -114,6 +178,14 @@ Things the throwaway spec had to learn:
 
 `agent-browser` (the CLI some QA instructions expect) is not installed on this
 machine. Repository-owned Playwright specs avoid depending on it.
+
+**Done 2026-10-15.** `e2e/agent-testing/opencode-live.spec.ts`, skipped unless
+`ORKESTRATOR_AGENT_TEST_LIVE_OPENCODE=1`, with the pinned model in
+`ORKESTRATOR_AGENT_TEST_OPENCODE_MODEL`. How to run it is in
+`docs/development/agent-testing.md`. It typechecks and skips cleanly by
+default, but has not yet been run live. Known weak spots: undo asserts the
+success toast and an idle turn, not that the reverted turn disappears, and the
+build-pipeline case needs a model that emits reasoning.
 
 ## 8. Watch item: OpenCode fault isolation
 

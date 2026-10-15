@@ -5,7 +5,7 @@ import type { Environment } from "@/types";
 import type { GitHubCredentialStatus } from "@/lib/backend";
 import type { CreateFeatureBuildResult } from "@orkestrator/protocol/feature-build";
 import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
-import { useClaudeStore } from "@/stores/claudeStore";
+import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useUIStore } from "@/stores/uiStore";
@@ -137,7 +137,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       available: true,
     });
     useClaudeOptionsStore.setState({ options: {}, pendingNativeLaunches: {} });
-    useClaudeStore.setState({ models: [] });
+    useAgentModelCatalogStore.setState({ claudeModels: [] });
     useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
     useEnvironmentStore.setState({ environments: [] });
     useConfigStore.setState({
@@ -1175,8 +1175,8 @@ describe("CreateEnvironmentFlowDialog", () => {
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 
     act(() => {
-      useClaudeStore.setState({
-        models: [
+      useAgentModelCatalogStore.setState({
+        claudeModels: [
           {
             id: "late-claude",
             name: "Late Claude",
@@ -1239,8 +1239,8 @@ describe("CreateEnvironmentFlowDialog", () => {
     // "selected model vanished" effect stays quiet. Only the re-apply effect can
     // move the dialog onto the newly resolvable configured model.
     act(() => {
-      useClaudeStore.setState({
-        models: [
+      useAgentModelCatalogStore.setState({
+        claudeModels: [
           { id: "default", name: "Default (recommended)", supportsEffort: false },
           { id: "late-claude", name: "Late Claude", supportsEffort: false },
         ],

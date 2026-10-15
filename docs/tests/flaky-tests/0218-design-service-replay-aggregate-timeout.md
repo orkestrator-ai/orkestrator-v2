@@ -36,3 +36,24 @@
 
 - **Second merge reconciliation (2026-10-15):** Renumbered from 0214 to
   0218 because main independently added the Codex escalation case as 0214.
+
+## Recurrence during host-independent suite merge (2026-10-15)
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`.
+- **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1
+  slots; backend used two isolated Bun workers. The component browser suite ran
+  concurrently and passed.
+- **Failure:** the same case exceeded its five-second deadline (5012.51 ms),
+  followed by `DesignError: Design service is stopping` during timeout teardown.
+- **Suite counts:** backend 7,840 passed, 39 skipped, two failed and two
+  between-tests errors across 430 files (273.73 seconds). Root, bridge and
+  protocol groups passed; the complete run finished in 340.8 seconds.
+- **Isolated rerun:** `mise run test:logged -- --name merge-design-service -- bun
+  --cwd=apps/backend test --preload ../../tests/setup-node.ts
+  ./src/core/design/service.test.ts --parallel=1 --only-failures` passed unchanged
+  in 1.7 seconds (exit 0).
+- **Evidence:** `/tmp/orkestrator-test-run.vFlcN6/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
+  outer failure artifact `/tmp/orkestrator-test-run.OnVHEa/merge-tests.log.gz`.
+- **Hypothesis:** shared-host contention may contribute, as in earlier
+  observations; the isolated pass does not establish the cause. No test or
+  timeout was changed.

@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { allowedDomainsRevision } from "../../apps/backend/src/core/container-network";
 import { fixtureScript, read, statusFile, writeStub } from "./firewall-test-support";
+import { gnuToolPath, missingGnuTools, titleWithSkip } from "./gnu-shell-tools";
+
+// Expiry stamps go through GNU `date -d`.
+const NO_GNU_DATE = missingGnuTools("date");
 
 // A stateful ipset: one file per set, "entry timeout" per line.
 const IPSET = `
@@ -69,7 +73,7 @@ function withFixture(body: (fixture: Fixture) => void): void {
           cmd: ["bash", script, ...args],
           env: {
             ...process.env,
-            PATH: `${bin}:${process.env.PATH}`,
+            PATH: `${bin}:${gnuToolPath}`,
             CALL_LOG: join(dir, "calls"),
             IPSET_DIR: join(dir, "ipsets"),
             DIG_ANSWERS: join(dir, "answers"),
@@ -134,34 +138,40 @@ describe("firewall allowlist refresh and edits", () => {
     });
   });
 
-  test("a domain that does not resolve keeps its addresses only until they expire", () => {
-    withFixture((fixture) => {
-      const result = fixture.run(["--refresh"], "");
-      expect(result.exitCode).toBe(0);
-      const remaining = fixture.members().get("192.0.2.10");
-      expect(remaining).toBeGreaterThan(3500);
-      expect(remaining).toBeLessThanOrEqual(3600);
-      expect(fixture.status()).toMatchObject({ carriedDomains: 1, unresolvedDomains: 1 });
-      expect(typeof fixture.status().carriedUntil).toBe("string");
-      // A failed resolution retries sooner.
-      expect(readFileSync(join(fixture.dir, "run-firewall", "refresh-delay"), "utf8").trim()).toBe(
-        "60",
-      );
+  test.skipIf(NO_GNU_DATE !== undefined)(
+    titleWithSkip(
+      "a domain that does not resolve keeps its addresses only until they expire",
+      NO_GNU_DATE,
+    ),
+    () => {
+      withFixture((fixture) => {
+        const result = fixture.run(["--refresh"], "");
+        expect(result.exitCode).toBe(0);
+        const remaining = fixture.members().get("192.0.2.10");
+        expect(remaining).toBeGreaterThan(3500);
+        expect(remaining).toBeLessThanOrEqual(3600);
+        expect(fixture.status()).toMatchObject({ carriedDomains: 1, unresolvedDomains: 1 });
+        expect(typeof fixture.status().carriedUntil).toBe("string");
+        // A failed resolution retries sooner.
+        expect(
+          readFileSync(join(fixture.dir, "run-firewall", "refresh-delay"), "utf8").trim(),
+        ).toBe("60");
 
-      // Once the recorded expiry passes, a refresh drops and revokes it.
-      writeFileSync(
-        join(fixture.dir, "var", "domain-addresses"),
-        `a.example 192.0.2.10 ${Math.floor(Date.now() / 1000) - 1}\n`,
-      );
-      expect(fixture.run(["--refresh"], "").exitCode).toBe(0);
-      expect(fixture.members().has("192.0.2.10")).toBe(false);
-      expect(fixture.calls()).toContain("conntrack -D -d 192.0.2.10");
-      expect(fixture.status()).toMatchObject({ carriedDomains: 0, refreshFailures: 2 });
-      expect(readFileSync(join(fixture.dir, "run-firewall", "refresh-delay"), "utf8").trim()).toBe(
-        "120",
-      );
-    });
-  });
+        // Once the recorded expiry passes, a refresh drops and revokes it.
+        writeFileSync(
+          join(fixture.dir, "var", "domain-addresses"),
+          `a.example 192.0.2.10 ${Math.floor(Date.now() / 1000) - 1}\n`,
+        );
+        expect(fixture.run(["--refresh"], "").exitCode).toBe(0);
+        expect(fixture.members().has("192.0.2.10")).toBe(false);
+        expect(fixture.calls()).toContain("conntrack -D -d 192.0.2.10");
+        expect(fixture.status()).toMatchObject({ carriedDomains: 0, refreshFailures: 2 });
+        expect(
+          readFileSync(join(fixture.dir, "run-firewall", "refresh-delay"), "utf8").trim(),
+        ).toBe("120");
+      });
+    },
+  );
 
   test("a rotated answer keeps the domain's earlier address until it expires", () => {
     withFixture((fixture) => {

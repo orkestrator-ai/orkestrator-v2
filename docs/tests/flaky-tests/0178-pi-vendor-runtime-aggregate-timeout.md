@@ -70,3 +70,17 @@ was interrupted through the aggregate runner's signal handler. Those groups
 had already executed in the initial run. Evidence:
 `/tmp/orkestrator-test-run.IwbxBy/root-and-agent-support-tests.log.gz` and
 `/tmp/orkestrator-test-run.Vz2R6a/full-suite-gnu.log.gz`.
+
+## Recurrence — 2026-10-15 (main merge validation)
+
+With the testing guide's GNU-tool PATH,
+`mise run test:logged -- --name merge-latest-full-suite -- mise run test`
+timed out the same staged-runtime test at 30000.44 ms. The aggregate reserved
+4/1/2/1 workspace/root/bridge/protocol slots, with one isolated root worker;
+the component browser suite also ran. Root results were 2,978 passed,
+one skipped and one failed across 137 files (218.17 seconds). Evidence:
+`/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.uJ6Ien/root-and-agent-support-tests.log.gz`.
+
+`mise run test:logged -- --name merge-pi-vendor-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+passed unchanged alone, exit 0, in 8.5 seconds. Aggregate host contention
+remains an unconfirmed hypothesis. No timeout, assertion or skip was changed.

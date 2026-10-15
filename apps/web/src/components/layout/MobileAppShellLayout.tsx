@@ -36,6 +36,8 @@ interface MobileAppShellLayoutProps {
   agentInfoButton: ReactNode;
   sidebar: ReactNode;
   filesPanel: ReactNode;
+  /** Whether the projects drawer starts open. Defaults to open. */
+  initialSidebarOpen?: boolean;
   children?: ReactNode;
   onTitleBarMouseDown: (event: MouseEvent<HTMLDivElement>) => void;
 }
@@ -58,10 +60,11 @@ export function MobileAppShellLayout({
   agentInfoButton,
   sidebar,
   filesPanel,
+  initialSidebarOpen = true,
   children,
   onTitleBarMouseDown,
 }: MobileAppShellLayoutProps) {
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(initialSidebarOpen);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [titleTooltipOpen, setTitleTooltipOpen] = useState(false);
   const previousSelectionRef = useRef({ selectedEnvironmentId, selectedProjectId });

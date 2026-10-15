@@ -76,3 +76,14 @@
 - **Hypothesis:** the aggregate deadline failures match earlier observations;
   unchanged owning files pass alone. Contention may contribute, but the root
   cause remains unconfirmed. No assertion, timeout or skip was changed.
+
+## Separate deterministic failure on a BSD tool PATH (2026-10-15)
+
+`docs/2026-10-14/05-real-stack-suite-host-dependencies.md` recorded a case in
+this file failing on every run. That was not this timeout. Without the
+testing guide's GNU-tool PATH, macOS `date` rejects the `date -d` that
+`docker/firewall-domains.sh` uses for range stamps and expiry times. The
+fixture now puts Homebrew's GNU tools first on its own PATH
+(`tests/unit/gnu-shell-tools.ts`), and the date-dependent case skips with the
+install command when they are absent. This open entry still tracks only the
+aggregate-load timeouts.

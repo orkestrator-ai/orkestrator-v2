@@ -2,16 +2,9 @@ import { expect, test } from "@playwright/test";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import {
-  registerDesignCommandHandlers,
-  type DesignCommandContext,
-} from "../apps/backend/src/core/design/commands";
 import { planDefaultDesignExportPath } from "../apps/backend/src/core/design/export-writer";
-import { DesignService } from "../apps/backend/src/core/design/service";
-import { runDesignAction } from "../apps/backend/src/core/design/tools";
 import { DESIGN_EVENT } from "@orkestrator/protocol/design-canvas";
-
-type Handler = (args: Record<string, unknown>, context: DesignCommandContext) => unknown;
+import { startDesignServiceHost } from "./design-service-client";
 
 test("canvas edits, script isolation, missed events, conflict and reload", async ({
   page,
@@ -19,20 +12,9 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
   const dir = await mkdtemp(join(tmpdir(), "ork-design-browser-"));
   const worktree = join(dir, "worktree");
   await mkdir(worktree);
-  const service = new DesignService(dir, () => {});
   // The browser drives the real design command registry (v2 protocol) against
-  // a real service, runtime and repository worktree.
-  const handlers = new Map<string, Handler>();
-  registerDesignCommandHandlers((name, handler) => handlers.set(name, handler));
-  const context = {
-    design: service,
-    storage: {
-      getEnvironment: async (id: string) =>
-        id === "design-fixture"
-          ? { id, environmentType: "local", worktreePath: worktree }
-          : undefined,
-    },
-  } as unknown as DesignCommandContext;
+  // a real service, runtime and repository worktree, hosted in Bun.
+  const service = startDesignServiceHost(dir, worktree);
   try {
     const canvas = await service.create("design-fixture", "Design QA");
     const { frame } = await service.createFrame(canvas.id, "design-fixture", 1, {
@@ -48,9 +30,7 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
       "designInvoke",
       async (command: string, args: Record<string, unknown>) => {
         if (command === "design_snapshot") snapshots++;
-        const handler = handlers.get(command);
-        if (!handler) throw new Error(`Unknown backend command: ${command}`);
-        return handler(args, context);
+        return service.invoke(command, args);
       },
     );
     await page.goto(`/design-canvas?canvasId=${canvas.id}`);
@@ -225,13 +205,13 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
     );
     // Headless capture/DOM operations still work with the canvas unmounted.
     await page.getByRole("button", { name: "Switch tab" }).click();
-    const captured = (await runDesignAction(service, "design-fixture", "capture_frame", {
+    const captured = (await service.action("capture_frame", {
       canvasId: canvas.id,
       frameId: frame.id,
     })) as { data: string };
     expect(Buffer.from(captured.data, "base64").subarray(1, 4).toString()).toBe("PNG");
     const edit = (action: string, expectedRevision: number, input: Record<string, unknown>) =>
-      runDesignAction(service, "design-fixture", action, {
+      service.action(action, {
         canvasId: canvas.id,
         frameId: frame.id,
         expectedRevision,
@@ -245,7 +225,7 @@ test("canvas edits, script isolation, missed events, conflict and reload", async
       selector: "#move",
       html: "<strong id='replacement'>Replaced</strong>",
     });
-    const inspected = await runDesignAction(service, "design-fixture", "inspect_element", {
+    const inspected = await service.action("inspect_element", {
       canvasId: canvas.id,
       frameId: frame.id,
       selector: "#parent > #replacement",

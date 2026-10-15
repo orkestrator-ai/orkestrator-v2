@@ -35,7 +35,7 @@ function renderLayout(
     ...overrides,
   };
   const result = render(<MobileAppShellLayout {...props} />);
-  if (!options.keepInitialDrawerOpen) {
+  if (!options.keepInitialDrawerOpen && props.initialSidebarOpen !== false) {
     const dialog = screen.getByRole("dialog", { name: "Projects and environments" });
     const closeButton = dialog.querySelector<HTMLButtonElement>(
       "button[aria-controls='mobile-projects-drawer']",
@@ -336,6 +336,20 @@ describe("MobileAppShellLayout", () => {
 
     expect(screen.queryByRole("dialog", { name: "Tools" }) === null).toBe(true);
     await waitFor(() => expect(document.activeElement).toBe(toolsButton));
+  });
+
+  test("starts closed when initialSidebarOpen is false and still opens on demand", () => {
+    const { container, props, rerender } = renderLayout({ initialSidebarOpen: false });
+    const trigger = getTitleBarSidebarTrigger(container);
+    expect(screen.queryByRole("dialog", { name: "Projects and environments" }) === null).toBe(true);
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByText("Workspace")).toBeTruthy();
+
+    rerender(<MobileAppShellLayout {...props} title="Updated workspace" />);
+    expect(screen.queryByRole("dialog", { name: "Projects and environments" }) === null).toBe(true);
+    fireEvent.click(trigger);
+    expect(screen.getByRole("dialog", { name: "Projects and environments" })).toBeTruthy();
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
   });
 
   test("opens the project drawer on initial mobile entry and keeps workspace content mounted", async () => {

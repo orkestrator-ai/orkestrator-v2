@@ -1,14 +1,22 @@
 import { spawn } from "node:child_process";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
-import { runIsolatedBrowser } from "./dev/isolated-browser.js";
+import { isolatedProfileArguments, runIsolatedBrowser } from "./dev/isolated-browser.js";
 
 installFatalRejectionGuard({ label: "[isolated-browser]" });
 
 const args = process.argv.slice(2);
 const supervised = args[0] === "--supervised";
 if (supervised) args.shift();
-if (args.length > 1 || (args.length === 1 && args[0] !== "--design")) {
-  throw new Error("Usage: test-agent-browser-isolated.ts [--design]");
+const design = args[0] === "--design";
+// Everything else is forwarded to the profile's `dev:test`, validated up front
+// so a typo fails before a profile is created.
+const profileArgs = args.slice(design ? 1 : 0).filter((argument) => argument !== "--");
+try {
+  isolatedProfileArguments(profileArgs);
+} catch (error) {
+  throw new Error(
+    `Usage: test-agent-browser-isolated.ts [--design] [--credential-source <name>]… [--agent-platforms <list>] [--no-agent-credentials] [--use-dev-worktree-folder]\n${error instanceof Error ? error.message : error}`,
+  );
 }
 
 if (supervised) {
@@ -24,7 +32,8 @@ if (supervised) {
   process.on("SIGINT", cancel);
   try {
     process.exitCode = await runIsolatedBrowser({
-      design: args[0] === "--design",
+      design,
+      profileArgs,
       signal: controller.signal,
     });
   } catch (error) {

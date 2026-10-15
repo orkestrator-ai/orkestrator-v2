@@ -57,3 +57,33 @@ The aggregate and browser workload delayed the real Git/worktree operations beyo
   group: 5,023 passed, 24 skipped, 0 failed across 254 files in 160.88 seconds.
 - **Hypothesis:** this matches the existing load-sensitive Git/worktree timeout.
   No assertions, deadlines or skips were changed.
+
+## Recurrence 2026-10-15 (host-dependent suite fixes)
+
+- **Original command:** `mise run test:logged -- --name full-suite-4 -- mise run test`
+  on the default PATH, with the standard group slots and other workers' suites
+  on the host.
+- **Failure:** five-second timeout at 5,012.27 ms.
+- **Suite counts:** backend 7,704 passed, 39 skipped, 2 failed (7,745 tests,
+  308.64 s). The other failure is 0216.
+- **Isolated rerun:** `bun test --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1`
+  from `apps/backend` passed unchanged (55 tests, 32.14 s).
+- **Evidence:** `/tmp/orkestrator-test-run.9os4UH/`.
+
+## Recurrence 2026-10-15 (design-host review fixes)
+
+- **Original command:** `mise run test:logged -- --name complete-tests-final -- mise run test`
+  on branch `fix-host-dependent-test-suites-d453802ec96e` (base `dd86fc8c`).
+- **Worker configuration:** four workspace slots, one root slot, two bridge
+  slots and one protocol slot; workspace package tests used two Bun workers.
+- **Failure:** the same artifact-excludes test exceeded its five-second deadline
+  at 5,008.29 ms. A pending Git command then rejected after timeout cleanup
+  removed its worktree, producing one unhandled error between tests.
+- **Suite counts:** backend 7,705 passed, 39 skipped, one failed and one
+  additional error across 423 files (235.64 s). All other full-suite groups
+  passed. The workspace group had passed the preceding full run.
+- **Isolated rerun:** `mise run test:logged -- --name backend-integration-alone -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`
+  passed unchanged in 25.9 seconds.
+- **Evidence:** `/tmp/orkestrator-test-run.gyVhpj/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Hypothesis:** the timeout and late cleanup rejection match the existing
+  aggregate-load symptom. No backend code, assertion, deadline or skip was changed.

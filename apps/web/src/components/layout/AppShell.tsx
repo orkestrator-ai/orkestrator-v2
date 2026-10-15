@@ -1,4 +1,5 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { Sidebar } from "./Sidebar";
 import { ActionBar } from "./ActionBar";
@@ -27,8 +28,35 @@ interface AppShellProps {
   children?: React.ReactNode;
 }
 
+/** Mounts the shell's content host in whichever layout is current. */
+function ContentSlot({ host }: { host: HTMLElement }) {
+  const slotRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const slot = slotRef.current;
+    if (!slot) return;
+    slot.appendChild(host);
+    return () => {
+      if (host.parentNode === slot) slot.removeChild(host);
+    };
+  }, [host]);
+  return <div ref={slotRef} className="h-full w-full" />;
+}
+
 export function AppShell({ children }: AppShellProps) {
   const isMobile = useMediaQuery(MOBILE_SHELL_MEDIA_QUERY);
+  // The desktop and mobile layouts are different trees, so rendering `children`
+  // in each would remount every pane at the 768px breakpoint, closing dialogs
+  // and dropping pane state when a window narrows or a phone rotates. The
+  // content renders once into this host instead, and the layouts only move it.
+  const [contentHost] = useState(() => {
+    const host = document.createElement("div");
+    host.className = "h-full w-full";
+    return host;
+  });
+  // The mobile drawer opens with the layout only on a phone-sized first load;
+  // a window that narrows keeps showing what the user was working on.
+  const [desktopShown, setDesktopShown] = useState(!isMobile);
+  if (!isMobile && !desktopShown) setDesktopShown(true);
   const filesPanelOpen = useFilesPanelStore((state) => state.isOpen);
   const sidebarOpen = useUIStore((state) => state.sidebarOpen);
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
@@ -110,9 +138,10 @@ export function AppShell({ children }: AppShellProps) {
           }
           sidebar={<Sidebar />}
           filesPanel={<FilesPanel />}
+          initialSidebarOpen={!desktopShown}
           onTitleBarMouseDown={handleTitleBarMouseDown}
         >
-          {children}
+          <ContentSlot host={contentHost} />
         </MobileAppShellLayout>
       ) : (
         <>
@@ -179,7 +208,9 @@ export function AppShell({ children }: AppShellProps) {
             <ResizablePanel defaultSize={filesPanelOpen ? 50 : 78} minSize={30}>
               <div className="flex h-full flex-col" style={centralPanelThemeVars}>
                 <ActionBar />
-                <main className={cn("flex-1 overflow-hidden bg-background")}>{children}</main>
+                <main className={cn("flex-1 overflow-hidden bg-background")}>
+                  <ContentSlot host={contentHost} />
+                </main>
               </div>
             </ResizablePanel>
 
@@ -195,6 +226,8 @@ export function AppShell({ children }: AppShellProps) {
           </ResizablePanelGroup>
         </>
       )}
+      {/* After the layouts, so a slot holds the host before content effects run. */}
+      {createPortal(children, contentHost)}
     </div>
   );
 }

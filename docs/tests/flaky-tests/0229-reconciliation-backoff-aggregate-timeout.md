@@ -1,6 +1,6 @@
 # Environment reconciliation backoff times out in the aggregate
 
-- **ID:** 0223
+- **ID:** 0229
 - **Status:** open
 - **Date observed:** 2026-10-13
 - **Test:** `Electron backend command registry > backs off failed reconciliation for 30 seconds and clears the floor after success`

@@ -1,6 +1,7 @@
 # 03 — Claude bridge: break up the 3,252-line `sendPrompt`
 
-Status: Proposed (2026-10-14). Priority: third. Read
+Status: In progress. Step 1 (`TurnState`, in
+`session-manager-prompt-turn.ts`) landed 2026-10-15. Priority: third. Read
 [`bridges/AGENTS.md`](../../bridges/AGENTS.md) and
 [`bridges/claude-bridge/AGENTS.md`](../../bridges/claude-bridge/AGENTS.md)
 before starting.

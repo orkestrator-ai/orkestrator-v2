@@ -13,7 +13,6 @@ import { sessionHealth, systemSubtypeDisposition } from "../../types/index.js";
 import { commandChangeProbe } from "../command-changes.js";
 import { eventEmitter } from "../event-emitter.js";
 import { debugLog } from "../logger.js";
-import {} from "../session-manager-background-tasks.js";
 import { appendLocalCommandResult, recordCommandsChanged } from "../session-manager-commands.js";
 import {
   boundedNoticeText,
@@ -27,12 +26,12 @@ import {
   setTurnActivity,
 } from "../session-manager-prompt-turn-lifecycle.js";
 import type { TurnState } from "../session-manager-prompt-turn.js";
+import { markTranscriptChanged } from "../transcript-revision.js";
 import {
   handleBackgroundTasksChanged,
   handleTaskEdge,
   handleTaskNotification,
 } from "./system-tasks.js";
-import { markTranscriptChanged } from "../transcript-revision.js";
 import { appendTranscriptNotice, settlePendingApiRetry } from "./transcript-notice.js";
 
 /**

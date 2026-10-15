@@ -9,7 +9,21 @@ import type {
 import type { StructuredUsageRefreshCoordinator } from "./session-manager-core.js";
 import type { PromptStreamState } from "./session-manager-prompt-stream.js";
 import type { ClaudeRuntime, ClaudeRuntimeTurn } from "./session-manager-runtime.js";
+import {
+  closeTurnInput,
+  finishTurnInputIfSettled,
+} from "./session-manager-prompt-turn-lifecycle.js";
 import { ClaudeStreamUsageAccumulator } from "./session-manager-usage.js";
+
+/** Seams `sendPrompt` exposes to tests; never set in production. */
+export interface PromptTestHooks {
+  afterAttachmentSymlinkValidation?: (filePath: string) => void | Promise<void>;
+  afterAttachmentCanonicalValidation?: (filePath: string) => void | Promise<void>;
+  afterAttachmentInitialValidation?: (filePath: string) => void | Promise<void>;
+  onQueryStarted?: () => void;
+  /** Shortens the retained-continuation watchdog so tests can observe it. */
+  retainedContinuationTimeoutMs?: number;
+}
 
 /**
  * The session fields a turn claims, as they were before it claimed them.
@@ -103,6 +117,14 @@ export interface TurnState {
    * result, which cannot precede it.
    */
   readonly pendingCommandChanges: Map<string, MeasuredWorkspaceChange>;
+  /** Closes the CLI's input when this turn still owns it; see `closeTurnInput`. */
+  readonly closeSdkInput: () => void;
+  /** This turn's `session.finishTurnInputIfSettled`, recognized by identity when it ends. */
+  readonly finishTurnInputForThisTurn: () => void;
+  /** Reports a stop to the diagnostics; the listener is removed when the turn ends. */
+  readonly observeAbort: () => void;
+  /** This turn's `session.splitAssistantAfterSteer`, recognized by identity when it ends. */
+  readonly splitAssistantAfterSteer: () => void;
 
   sdkMessageCount: number;
   /** The mode this turn asked the CLI for. Set once the query policy is resolved. */
@@ -134,8 +156,6 @@ export interface TurnState {
   structuredUsageRefresh: StructuredUsageRefreshCoordinator | undefined;
   queryStarted: boolean;
   queryEnded: boolean;
-  closeSdkInput: (() => void) | undefined;
-  finishTurnInputForThisTurn: (() => void) | undefined;
   turnReleasedToBackgroundTasks: boolean;
   releasedTurnStartedAt: string | undefined;
   /**
@@ -204,6 +224,14 @@ export function createTurnState(
     unansweredSteerUuids: new Set(),
     informationalRowsByToolUse: new Map(),
     pendingCommandChanges: new Map(),
+    closeSdkInput: () => closeTurnInput(state as TurnState),
+    finishTurnInputForThisTurn: () => finishTurnInputIfSettled(state as TurnState),
+    observeAbort: () => {
+      (state as TurnState).diagnostics?.requestCancellation();
+    },
+    splitAssistantAfterSteer: () => {
+      init.stream.beginPostSteerScope();
+    },
     sdkMessageCount: 0,
     permissionMode: undefined,
     mcpServerNames: new Set(),
@@ -215,8 +243,6 @@ export function createTurnState(
     structuredUsageRefresh: undefined,
     queryStarted: false,
     queryEnded: false,
-    closeSdkInput: undefined,
-    finishTurnInputForThisTurn: undefined,
     turnReleasedToBackgroundTasks: false,
     releasedTurnStartedAt: undefined,
     retainedContinuationTimer: null,

@@ -1,4 +1,4 @@
-import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import { handleTurnMessage } from "./session-manager-prompt-handlers/dispatch.js";
 import { turnCanUseTool } from "./session-manager-prompt-can-use-tool.js";
 import {
   applyCommandChanges,
@@ -15,12 +15,9 @@ import type { TurnState } from "./session-manager-prompt-turn.js";
 import type { ClaudeRuntimeTurn } from "./session-manager-runtime.js";
 
 /** This turn as its runtime sees it: the boundary the runtime calls into. */
-export function createClaudeRuntimeTurn(
-  turn: TurnState,
-  handleMessage: (message: SDKMessage) => Promise<void>,
-): ClaudeRuntimeTurn {
+export function createClaudeRuntimeTurn(turn: TurnState): ClaudeRuntimeTurn {
   return {
-    handleMessage,
+    handleMessage: (message) => handleTurnMessage(turn, message),
     pushSteerInput: (message) => pushSteerInput(turn, message),
     canUseTool: (toolName, input, permissionContext) =>
       turnCanUseTool(turn, toolName, input, permissionContext),

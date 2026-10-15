@@ -1,19 +1,28 @@
 # 03 — Claude bridge: break up the 3,252-line `sendPrompt`
 
-Status: In progress. Steps 1–3 landed 2026-10-15:
+Status: Done (2026-10-15). All five steps landed:
 
 - Step 1: `TurnState` is in `session-manager-prompt-turn.ts`.
 - Step 2: every `handleMessage` branch has a module in
-  `session-manager-prompt-handlers/`. Handlers take `(turn, message)`, and
-  `dispatch.ts` picks one by message type.
+  `session-manager-prompt-handlers/`. Handlers take `(turn, message)`,
+  `dispatch.ts` picks one by message type, and `system.ts` picks a subtype
+  handler from a table (task subtypes in `system-tasks.ts`).
 - Step 3: the ownership, continuation and input closures are functions of
   `turn` in `session-manager-prompt-turn-lifecycle.ts`. The hooks are in
   `session-manager-prompt-hooks.ts`, `turnCanUseTool` is in
   `session-manager-prompt-can-use-tool.ts`, and `thisTurn` comes from
   `createClaudeRuntimeTurn`.
+- Steps 4–5: the phases are `session-manager-prompt-admission.ts` (admission,
+  plan mode, transcript read, prompt row, `createClaudeTurn`),
+  `-query.ts` (`resolveQueryPlan`, `claudeQueryOptions`), `-launch.ts` (join or
+  launch, the frame consumer, `markQueryStarted`) and `-settle.ts` (follow-ups,
+  failure, `finalizeTurn`). `sendPrompt` is a 40-line orchestrator that keeps
+  the follow-up re-prompt inline. Each async phase ends at an await the turn
+  always made, so the split adds no new point where other work can interleave.
 
-`sendPrompt` is now about 1,110 lines. Steps 4 and 5 remain, and
-`handleSystemMessage` (about 515 lines) is still over the 300-line target.
+One done-when item is outside this plan: `createPromptStreamState` in
+`session-manager-prompt-stream.ts` (about 630 lines) predates it and is still
+one closure scope.
 
 Priority: third. Read
 [`bridges/AGENTS.md`](../../bridges/AGENTS.md) and

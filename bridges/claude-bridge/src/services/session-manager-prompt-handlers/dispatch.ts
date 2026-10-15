@@ -4,6 +4,9 @@ import {
   isKnownInternalSdkMessageType,
   sessionHealth,
 } from "../../types/index.js";
+import { observeClaudeMessage } from "../diagnostics.js";
+import { debugLog, isDebugLoggingEnabled } from "../logger.js";
+import { armContinuationWatchdog } from "../session-manager-prompt-turn-lifecycle.js";
 import type { TurnState } from "../session-manager-prompt-turn.js";
 import { handleAssistantMessage } from "./assistant.js";
 import type { PromptMessageHandler } from "./context.js";
@@ -56,4 +59,42 @@ export function promptMessageHandler(type: unknown): PromptMessageHandler {
       ? MESSAGE_HANDLERS[type as SDKMessage["type"]]
       : undefined) ?? handleUnknownMessage
   );
+}
+
+/** One SDK frame routed to this turn by the runtime's single consumer. */
+export async function handleTurnMessage(turn: TurnState, message: SDKMessage): Promise<void> {
+  const { sessionId, abortController, stream, diagnostics } = turn;
+  if (abortController.signal.aborted) {
+    return;
+  }
+
+  turn.sdkMessageCount += 1;
+  // A superseded turn still draws frames for its own tools, after its
+  // diagnostics have closed.
+  if (diagnostics && !turn.queryEnded) observeClaudeMessage(diagnostics, message);
+  // Any frame is evidence the provider is still answering the notification,
+  // so the watchdog is pushed out rather than allowed to expire mid-stream.
+  // Retention itself is dropped by the reclaim, the result, or the watchdog
+  // firing — never by liveness alone.
+  if (turn.retainedContinuationTimer) armContinuationWatchdog(turn);
+  // Fires once per streamed delta — i.e. per token. Both the object
+  // literal and the write are guarded, not just the write.
+  if (isDebugLoggingEnabled) {
+    debugLog("[session-manager] SDK event received", {
+      sessionId,
+      type: message.type,
+      subtype: "subtype" in message ? message.subtype : undefined,
+      sdkMessageCount: turn.sdkMessageCount,
+    });
+  }
+
+  // Deltas are coalesced; everything else must observe them in order, so
+  // settle the pending snapshot before handling a non-delta message.
+  if (message.type !== "stream_event") stream.flushStreamedAssistantMessage();
+
+  // Only the handlers that must finish a control round trip before the
+  // next frame return a promise; the rest complete synchronously, exactly
+  // as the branches they replaced did.
+  const handled = promptMessageHandler(message.type)(turn, message);
+  if (handled) await handled;
 }

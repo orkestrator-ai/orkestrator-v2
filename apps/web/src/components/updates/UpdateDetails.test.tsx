@@ -39,6 +39,7 @@ function offer(items: ReleaseRequirementItem[], overrides: Partial<UpdateOffer> 
 
 function snapshot(overrides: Partial<UpdateStatusSnapshot> = {}): UpdateStatusSnapshot {
   return {
+    generation: "backend-1",
     revision: 1,
     updateProtocol: 1,
     currentVersion: "2.21.0",
@@ -115,7 +116,7 @@ function target(state: UpdateStatusSnapshot) {
     error: null,
     busy: false,
     api,
-    refresh: async () => undefined,
+    refresh: async () => true,
     run: async (action) => {
       await action(api);
       return true;
@@ -146,6 +147,22 @@ describe("reviewing an update", () => {
     ]);
     fireEvent.click(screen.getByRole("button", { name: "Download now, restart later" }));
     expect(calls.at(-1)).toContain('"manual"');
+  });
+
+  test("an approval does not carry over to a changed offer", () => {
+    const first = target(snapshot({ available: offer([item({})]) }));
+    const { rerender } = render(
+      <UpdateDetails target={first.handle} scope="local" canInstallOnQuit />,
+    );
+    fireEvent.click(screen.getByRole("checkbox", { name: "Approve these changes" }));
+    const changed = offer([item({})], { requirementsSha256: "b".repeat(64) });
+    const second = target(snapshot({ available: changed }));
+    rerender(<UpdateDetails target={second.handle} scope="local" canInstallOnQuit />);
+    const update = screen.getByRole("button", { name: /Approve, update and restart/ });
+    expect((update as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      screen.getByRole("checkbox", { name: "Approve these changes" }).getAttribute("aria-checked"),
+    ).toBe("false");
   });
 
   test("an update with nothing to approve is one click", () => {

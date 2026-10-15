@@ -9,6 +9,7 @@
  */
 import { randomUUID } from "node:crypto";
 import {
+  channelIncludes,
   DEFAULT_RELEASE_CHANNEL,
   isReleaseChannel,
   releaseChannelOfVersion,
@@ -61,6 +62,11 @@ export const PREPARE_STALL_MS = 10 * 60 * 1000;
 export const INSTALL_START_MS = 2 * 60 * 1000;
 /** Time after a restart for the host to report how it went. */
 export const OUTCOME_WAIT_MS = 10 * 60 * 1000;
+/**
+ * Time for an acknowledged restart to take this process down. Still running
+ * after it, the install did not happen.
+ */
+export const RESTART_WAIT_MS = 10 * 60 * 1000;
 
 export type UpdateErrorCode =
   | "invalid-request"
@@ -151,14 +157,29 @@ export class UpdateService {
     error: null,
     resolution: null,
   };
+  /** Revisions order snapshots only within one process; see the snapshot type. */
+  private readonly generation = randomUUID();
   private available: CachedOffer | null = null;
   private downgradeOption: CachedOffer | null = null;
   private job: UpdateJob | null = null;
   private notices: UpdateNotice[] = [];
-  private checkInFlight: Promise<UpdateStatusSnapshot> | null = null;
+  /** Bumped by a channel change, so a check started before it cannot publish its offer. */
+  private channelGeneration = 0;
+  private checkInFlight: { generation: number; promise: Promise<UpdateStatusSnapshot> } | null =
+    null;
+  /** A start is between its first check and creating the job. */
+  private admitting = false;
+  /** An install request is between its checks and reaching the host. */
+  private installAdmitting = false;
+  /**
+   * After a backend-only restart, a job armed to install on quit waits for
+   * the host to say whether it is still armed.
+   */
+  private awaitingArmedHost = false;
   private initialTimer: ReturnType<typeof setTimeout> | null = null;
   private intervalTimer: ReturnType<typeof setInterval> | null = null;
   private outcomeTimer: ReturnType<typeof setTimeout> | null = null;
+  private restartTimer: ReturnType<typeof setTimeout> | null = null;
   private jobManifest: ReleaseRequirements | null = null;
   private stopped = false;
 
@@ -209,6 +230,7 @@ export class UpdateService {
     if (this.initialTimer) this.timers.clearTimeout(this.initialTimer);
     if (this.intervalTimer) this.timers.clearInterval(this.intervalTimer);
     if (this.outcomeTimer) this.timers.clearTimeout(this.outcomeTimer);
+    if (this.restartTimer) this.timers.clearTimeout(this.restartTimer);
     this.host.dispose();
   }
 
@@ -220,6 +242,7 @@ export class UpdateService {
   snapshot(): UpdateStatusSnapshot {
     const job = this.job;
     return {
+      generation: this.generation,
       revision: this.revision,
       updateProtocol: UPDATE_PROTOCOL_VERSION,
       currentVersion: this.options.currentVersion,
@@ -348,36 +371,47 @@ export class UpdateService {
     };
   }
 
-  /** Runs a check, or joins the one in flight. A failure keeps the last offer. */
+  /**
+   * Runs a check, or joins the one in flight for the current channel. A
+   * failure keeps the last offer.
+   */
   check(): Promise<UpdateStatusSnapshot> {
-    this.checkInFlight ??= this.performCheck().finally(() => {
-      this.checkInFlight = null;
+    const generation = this.channelGeneration;
+    if (this.checkInFlight?.generation === generation) return this.checkInFlight.promise;
+    const promise: Promise<UpdateStatusSnapshot> = this.performCheck(generation).finally(() => {
+      if (this.checkInFlight?.promise === promise) this.checkInFlight = null;
     });
-    return this.checkInFlight;
+    this.checkInFlight = { generation, promise };
+    return promise;
   }
 
-  private async performCheck(): Promise<UpdateStatusSnapshot> {
+  private async performCheck(generation: number): Promise<UpdateStatusSnapshot> {
+    const channel = this.channel;
     this.checkState = { ...this.checkState, status: "checking" };
     this.changed(false);
     try {
       const index = await this.options.feed.fetchIndex();
       const resolution = resolveChannelUpdate({
         index,
-        subscribed: this.channel,
+        subscribed: channel,
         currentVersion: this.options.currentVersion,
       });
+      let available: CachedOffer | null = null;
+      let downgradeOption: CachedOffer | null = null;
       if (resolution.kind === "update") {
-        this.available = await this.offer(resolution.channel, resolution.entry, false);
-        this.downgradeOption = null;
-      } else if (resolution.kind === "waiting-for-channel") {
-        this.available = null;
-        this.downgradeOption = resolution.newest
-          ? await this.offer(resolution.newest.channel, resolution.newest.entry, true)
-          : null;
-      } else {
-        this.available = null;
-        this.downgradeOption = null;
+        available = await this.offer(resolution.channel, resolution.entry, false);
+      } else if (resolution.kind === "waiting-for-channel" && resolution.newest) {
+        downgradeOption = await this.offer(
+          resolution.newest.channel,
+          resolution.newest.entry,
+          true,
+        );
       }
+      // The channel changed while this check ran: its offers are for the old
+      // subscription, and the check the change started reports instead.
+      if (generation !== this.channelGeneration) return this.snapshot();
+      this.available = available;
+      this.downgradeOption = downgradeOption;
       this.checkState = {
         status: "ok",
         checkedAt: this.at(),
@@ -385,6 +419,7 @@ export class UpdateService {
         resolution: resolution.kind,
       };
     } catch (error) {
+      if (generation !== this.channelGeneration) return this.snapshot();
       this.checkState = {
         ...this.checkState,
         status: "failed",
@@ -404,6 +439,7 @@ export class UpdateService {
     await this.options.writeChannel(channel);
     const previous = this.channel;
     this.channel = channel;
+    this.channelGeneration += 1;
     this.available = null;
     this.downgradeOption = null;
     this.audit("set-channel", requester, { channel, detail: `from ${previous}` });
@@ -414,7 +450,7 @@ export class UpdateService {
   // ---- Jobs -----------------------------------------------------------------
 
   private assertNoActiveJob(): void {
-    if (this.job && !isTerminalUpdatePhase(this.job.phase)) {
+    if (this.admitting || (this.job && !isTerminalUpdatePhase(this.job.phase))) {
       throw new UpdateCommandError("job-in-progress", "An update is already in progress");
     }
   }
@@ -431,30 +467,40 @@ export class UpdateService {
         host.unavailableReason ?? "No installer is available",
       );
     }
+    // Held until the job exists: admitting awaits a check and the image
+    // inspection, and a second start must not slip in between.
+    this.admitting = true;
+    try {
+      return await this.admitJob(args, requester);
+    } finally {
+      this.admitting = false;
+    }
+  }
+
+  private async admitJob(
+    args: UpdateStartArgs,
+    requester: UpdateRequester,
+  ): Promise<UpdateStatusSnapshot> {
     const downgrade = args.allowDowngrade === true;
     const pick = () => (downgrade ? this.downgradeOption : this.available);
+    const matches = (candidate: CachedOffer | null): candidate is CachedOffer =>
+      candidate !== null &&
+      candidate.offer.version === args.targetVersion &&
+      candidate.offer.requirementsSha256 === args.requirementsSha256 &&
+      channelIncludes(this.channel, candidate.offer.channel);
     let target = pick();
-    if (
-      !target ||
-      target.offer.version !== args.targetVersion ||
-      target.offer.requirementsSha256 !== args.requirementsSha256
-    ) {
+    if (!matches(target)) {
       // The client may have shown an offer older than our last check, or we
       // restarted since; consent is only valid for the exact manifest bytes.
       await this.check();
       target = pick();
     }
-    if (
-      !target ||
-      target.offer.version !== args.targetVersion ||
-      target.offer.requirementsSha256 !== args.requirementsSha256
-    ) {
+    if (!matches(target)) {
       throw new UpdateCommandError(
         "stale-target",
         "The offered update changed; review what it needs again",
       );
     }
-    this.assertNoActiveJob();
     const diff = diffReleaseRequirements(
       this.options.readOwnRequirements(),
       target.manifest,
@@ -556,7 +602,9 @@ export class UpdateService {
       );
       if (!this.isCurrent(jobId)) return;
       this.apply(jobId, { type: "ready" });
-      if (this.job!.restartPolicy === "immediate") await this.install(jobId, "now", null);
+      if (this.job!.restartPolicy === "immediate" && !this.installAdmitting) {
+        await this.install(jobId, "now", null);
+      }
     } catch (error) {
       // From `installing` on, `install` settles the job itself.
       if (!this.isCurrent(jobId) || !isCancellableUpdatePhase(this.job!.phase)) return;
@@ -591,9 +639,32 @@ export class UpdateService {
 
   private fail(jobId: string, error: UpdateJobError): void {
     if (!this.isCurrent(jobId)) return;
+    const hostHolds = this.hostMayHold(this.job!);
     this.host.abandonJob(jobId, new UpdateHostError("cancelled", "The update failed"));
+    if (hostHolds) this.disarmHost(jobId);
     this.apply(jobId, { type: "fail", error });
     this.finish("failed", error.message);
+  }
+
+  /** Whether the host may have downloaded the job or armed it to install on quit. */
+  private hostMayHold(job: UpdateJob): boolean {
+    return (
+      job.phase === "downloading" ||
+      job.phase === "ready" ||
+      this.host.pending().some((request) => request.jobId === job.id)
+    );
+  }
+
+  /**
+   * Tells the host to drop a job: stop its download and disarm its install on
+   * quit. Best effort; the host may be gone, and a host that restarted holds
+   * nothing.
+   */
+  private disarmHost(jobId: string): void {
+    if (!this.host.currentRegistration()) return;
+    void this.host
+      .send({ kind: "cancel", requestId: this.randomId(), jobId }, { stallMs: 60_000 })
+      .catch(() => undefined);
   }
 
   private finish(action: "succeeded" | "failed" | "rolled-back" | "cancelled", detail?: string) {
@@ -646,29 +717,36 @@ export class UpdateService {
   }
 
   async installNow(jobId: unknown, requester: UpdateRequester): Promise<UpdateStatusSnapshot> {
-    if (typeof jobId !== "string" || !this.job || this.job.id !== jobId) {
-      throw new UpdateCommandError("no-job", "No such update job");
-    }
-    if (this.job.phase !== "ready") {
-      throw new UpdateCommandError("not-ready", "The update is not ready to install");
-    }
+    this.assertInstallable(jobId);
     await this.install(jobId, "now", requester);
     return this.snapshot();
   }
 
   /** Arms install-on-quit (desktop "Later"): the job stays ready until the app quits. */
   async installOnQuit(jobId: unknown, requester: UpdateRequester): Promise<UpdateStatusSnapshot> {
-    if (typeof jobId !== "string" || !this.job || this.job.id !== jobId) {
-      throw new UpdateCommandError("no-job", "No such update job");
-    }
-    if (this.job.phase !== "ready") {
-      throw new UpdateCommandError("not-ready", "The update is not ready to install");
-    }
+    this.assertInstallable(jobId);
     if (!this.host.currentRegistration()?.capabilities.restart.includes("on-quit")) {
       throw new UpdateCommandError("invalid-request", "This installation cannot install on quit");
     }
     await this.install(jobId, "on-quit", requester);
     return this.snapshot();
+  }
+
+  private assertInstallable(jobId: unknown): asserts jobId is string {
+    if (typeof jobId !== "string" || !this.job || this.job.id !== jobId) {
+      throw new UpdateCommandError("no-job", "No such update job");
+    }
+    if (this.job.phase !== "ready" || this.installAdmitting) {
+      throw new UpdateCommandError("not-ready", "The update is not ready to install");
+    }
+    if (!this.jobManifest) {
+      // Only an armed install on quit survives a backend restart, and the
+      // manifest the install step needs is not persisted.
+      throw new UpdateCommandError(
+        "not-ready",
+        "The backend restarted since this update was prepared; quit the app to install it",
+      );
+    }
   }
 
   private async install(
@@ -678,24 +756,31 @@ export class UpdateService {
   ): Promise<void> {
     const manifest = this.jobManifest;
     if (!this.job || this.job.id !== jobId || !manifest) return;
+    let prepared = true;
+    this.installAdmitting = true;
     try {
       await this.options.dependencies?.beforeInstall?.(manifest, this.job);
     } catch (error) {
+      prepared = false;
       this.fail(jobId, { step: "install", ...describe(error) });
-      return;
+    } finally {
+      this.installAdmitting = false;
     }
+    // Cancelled, failed or replaced while preparing: there is nothing to install.
+    if (!prepared || !this.isCurrent(jobId) || this.job!.phase !== "ready") return;
+    const job = this.job!;
     const request: UpdateHostRequest = {
       kind: "install",
       requestId: this.randomId(),
       jobId,
-      target: this.job.target,
-      fromVersion: this.job.fromVersion,
+      target: job.target,
+      fromVersion: job.fromVersion,
       restart: when,
-      storageSchemaVersion: this.job.storageSchemaVersion,
+      storageSchemaVersion: job.storageSchemaVersion,
     };
     this.audit("install", requester, { detail: when === "on-quit" ? "on quit" : undefined });
     if (when === "on-quit") {
-      this.job = { ...this.job, installWhen: "on-quit", updatedAt: this.at() };
+      this.job = { ...job, installWhen: "on-quit", updatedAt: this.at() };
       this.changed(true);
       try {
         await this.sendToHost(request, INSTALL_START_MS, "install");
@@ -704,7 +789,7 @@ export class UpdateService {
       }
       return;
     }
-    this.job = { ...this.job, installWhen: "now" };
+    this.job = { ...job, installWhen: "now" };
     this.apply(jobId, { type: "install" });
     try {
       // The host answers once the restart is under way; this process may be
@@ -718,7 +803,38 @@ export class UpdateService {
       // version is what is running. That is a rollback with nothing to undo.
       this.apply(jobId, { type: "roll-back", error: { step: "install", ...describe(error) } });
       this.finish("rolled-back", describe(error).message);
+      return;
     }
+    this.armRestartTimer(jobId);
+  }
+
+  /**
+   * The host acknowledged the install, so this process should go down with
+   * the restart. If it is still running long after, the installer failed
+   * without saying so (an asynchronous staging error, say), and the old
+   * version is what runs: a rollback with nothing to undo.
+   */
+  private armRestartTimer(jobId: string): void {
+    this.clearRestartTimer();
+    this.restartTimer = this.timers.setTimeout(() => {
+      this.restartTimer = null;
+      if (!this.isCurrent(jobId)) return;
+      const phase = this.job!.phase;
+      if (phase !== "installing" && phase !== "restarting") return;
+      const error: UpdateJobError = {
+        step: "restart",
+        code: "install-not-applied",
+        message: `${this.options.currentVersion} is still running; the installer did not restart it`,
+      };
+      this.apply(jobId, { type: "roll-back", error });
+      this.finish("rolled-back", error.message);
+    }, RESTART_WAIT_MS);
+    (this.restartTimer as { unref?(): void }).unref?.();
+  }
+
+  private clearRestartTimer(): void {
+    if (this.restartTimer) this.timers.clearTimeout(this.restartTimer);
+    this.restartTimer = null;
   }
 
   async cancel(jobId: unknown, requester: UpdateRequester): Promise<UpdateStatusSnapshot> {
@@ -729,13 +845,20 @@ export class UpdateService {
       throw new UpdateCommandError("not-cancellable", "The update is already installing");
     }
     const job = this.job;
-    const pending = this.host.pending().some((request) => request.jobId === job.id);
-    this.host.abandonJob(job.id, new UpdateHostError("cancelled", "Cancelled"));
-    if (pending) {
-      void this.host
-        .send({ kind: "cancel", requestId: this.randomId(), jobId: job.id }, { stallMs: 60_000 })
-        .catch(() => undefined);
+    if (
+      job.installWhen === "on-quit" &&
+      this.host.currentRegistration()?.installKind === "mac-app"
+    ) {
+      // Squirrel.Mac stages the update when it is armed, and a staged update
+      // installs on quit whatever electron-updater is told afterwards.
+      throw new UpdateCommandError(
+        "not-cancellable",
+        "macOS has already staged this update; it installs the next time the app quits",
+      );
     }
+    const hostHolds = this.hostMayHold(job);
+    this.host.abandonJob(job.id, new UpdateHostError("cancelled", "Cancelled"));
+    if (hostHolds) this.disarmHost(job.id);
     this.apply(job.id, { type: "cancel" });
     this.audit("cancel", requester);
     this.finish("cancelled");
@@ -756,8 +879,24 @@ export class UpdateService {
 
   registerHost(registration: UpdateHostRegistration) {
     const reply = this.host.register(registration);
+    this.resolveArmedJob(registration);
     this.changed(false);
     return reply;
+  }
+
+  /**
+   * After a restart of this backend, a job armed to install on quit is still
+   * armed only if the host process that armed it is still running. A host
+   * that comes back without it restarted (the app quit) and reports the
+   * outcome next; the outcome timer covers a report that never comes.
+   */
+  private resolveArmedJob(registration: UpdateHostRegistration): void {
+    if (!this.awaitingArmedHost) return;
+    this.awaitingArmedHost = false;
+    const job = this.job;
+    if (!job || job.phase !== "ready" || job.installWhen !== "on-quit") return;
+    if (registration.armedJobId === job.id) return;
+    this.armOutcomeTimer(job.id);
   }
 
   hostReport(report: UpdateHostReport): void {
@@ -786,10 +925,13 @@ export class UpdateService {
       return this.snapshot();
     }
     this.clearOutcomeTimer();
+    this.clearRestartTimer();
     const at = this.at();
     this.job = advanceUpdateJobTo(job, "verifying", at);
+    const installFailed =
+      outcome.error?.code === "install-failed" || outcome.error?.code === "install-not-applied";
     const error: UpdateJobError = {
-      step: "health",
+      step: installFailed ? "install" : "health",
       code: outcome.error?.code ?? "unhealthy",
       message: outcome.error?.message ?? "The new version did not start correctly",
     };
@@ -837,35 +979,42 @@ export class UpdateService {
       this.finish("failed", "interrupted");
       return;
     }
+    if (job.phase === "ready" && job.installWhen === "on-quit") {
+      // A backend-only restart leaves the host armed; its registration says.
+      this.awaitingArmedHost = true;
+      return;
+    }
+    this.armOutcomeTimer(job.id);
+  }
+
+  /** Decides from the running version when the host never reports an outcome. */
+  private armOutcomeTimer(jobId: string): void {
+    this.clearOutcomeTimer();
     this.outcomeTimer = this.timers.setTimeout(() => {
       this.outcomeTimer = null;
-      if (
-        this.stopped ||
-        !this.job ||
-        this.job.id !== job.id ||
-        isTerminalUpdatePhase(this.job.phase)
-      ) {
+      const job = this.job;
+      if (this.stopped || !job || job.id !== jobId || isTerminalUpdatePhase(job.phase)) {
         return;
       }
       const running = this.options.currentVersion;
       if (running === job.target.version) {
-        this.job = advanceUpdateJobTo(this.job, "verifying", this.at());
-        this.apply(job.id, { type: "succeed" });
+        this.job = advanceUpdateJobTo(job, "verifying", this.at());
+        this.apply(jobId, { type: "succeed" });
         this.finish("succeeded", "confirmed by the running version; the installer did not report");
-      } else if (this.job.phase === "ready") {
-        this.fail(job.id, {
+      } else if (job.phase === "ready") {
+        this.fail(jobId, {
           step: "install",
           code: "install-not-applied",
           message: "The update was not installed when the app quit",
         });
       } else {
-        this.job = advanceUpdateJobTo(this.job, "verifying", this.at());
+        this.job = advanceUpdateJobTo(job, "verifying", this.at());
         const error = {
           step: "restart" as const,
           code: "install-not-applied",
           message: `${running} is still running; the installer did not report`,
         };
-        this.apply(job.id, { type: "roll-back", error });
+        this.apply(jobId, { type: "roll-back", error });
         this.finish("rolled-back", error.message);
       }
     }, OUTCOME_WAIT_MS);

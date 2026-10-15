@@ -36,7 +36,26 @@ describe("isAutoUpdateSupported", () => {
   test("on Linux only updates an AppImage", () => {
     const linux = { ...supported, platform: "linux" as const };
     expect(isAutoUpdateSupported(linux)).toBe(false);
-    expect(isAutoUpdateSupported({ ...linux, env: { APPIMAGE: "/tmp/app.AppImage" } })).toBe(true);
+    const appImage = { ...linux, env: { APPIMAGE: "/opt/apps/app.AppImage" } };
+    expect(isAutoUpdateSupported({ ...appImage, isWritable: () => true })).toBe(true);
+  });
+
+  test("on Linux needs a writable folder to replace the AppImage in", () => {
+    const appImage = {
+      ...supported,
+      platform: "linux" as const,
+      env: { APPIMAGE: "/opt/apps/app.AppImage" },
+    };
+    const checked: string[] = [];
+    const reason = autoUpdateUnavailableReason({
+      ...appImage,
+      isWritable: (directory) => {
+        checked.push(directory);
+        return false;
+      },
+    });
+    expect(checked).toEqual(["/opt/apps"]);
+    expect(reason).toContain("not writable");
   });
 });
 

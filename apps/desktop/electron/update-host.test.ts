@@ -21,13 +21,17 @@ afterEach(() => {
     rmSync(directory, { recursive: true, force: true });
 });
 
-function fakeUpdater(options: { offered?: string | null; downloadError?: Error } = {}) {
+function fakeUpdater(
+  options: { offered?: string | null; downloadError?: Error; stageError?: Error } = {},
+) {
   const listeners = new Map<string, Set<(arg: never) => void>>();
   const updater = {
     autoDownload: true,
     autoInstallOnAppQuit: true,
     allowDowngrade: true,
     feeds: [] as unknown[],
+    /** `autoInstallOnAppQuit` at each download: set, a completed download stages the update. */
+    downloads: [] as boolean[],
     on(event: string, listener: (arg: never) => void) {
       if (!listeners.has(event)) listeners.set(event, new Set());
       listeners.get(event)!.add(listener);
@@ -47,6 +51,8 @@ function fakeUpdater(options: { offered?: string | null; downloadError?: Error }
         : { isUpdateAvailable: false };
     }),
     downloadUpdate: mock(async () => {
+      updater.downloads.push(updater.autoInstallOnAppQuit);
+      if (updater.autoInstallOnAppQuit && options.stageError) throw options.stageError;
       for (const percent of [10, 60, 100]) {
         for (const listener of listeners.get("download-progress") ?? [])
           listener({ percent } as never);
@@ -68,9 +74,14 @@ function setup(
     updater?: ReturnType<typeof fakeUpdater> | null;
     appVersion?: string;
     pending?: UpdateHostRequest[];
+    /** What the nth registration's reply lists; overrides `pending`. */
+    pendingFor?: (registration: number) => UpdateHostRequest[];
+    /** Final reports to fail before delivering, as a replaced session would. */
+    failFinalReports?: number;
     markerFile?: string;
   } = {},
 ) {
+  let failFinalReports = options.failFinalReports ?? 0;
   const directory = mkdtempSync(path.join(os.tmpdir(), "update-host-"));
   directories.push(directory);
   const markerFile = options.markerFile ?? path.join(directory, "updates", "pending-install.json");
@@ -80,7 +91,12 @@ function setup(
     calls.push({ command, args });
     if (command === "update_host_register") {
       session += 1;
-      return { hostSessionId: `session-${session}`, pending: options.pending ?? [] } as never;
+      const pending = options.pendingFor?.(session) ?? options.pending ?? [];
+      return { hostSessionId: `session-${session}`, pending } as never;
+    }
+    if (command === "update_host_report" && args.status !== "progress" && failFinalReports > 0) {
+      failFinalReports -= 1;
+      throw new Error("UpdateError:host-session-expired: register again");
     }
     return { ok: true } as never;
   });
@@ -154,6 +170,7 @@ describe("registering", () => {
           installKind: "mac-app",
           capabilities: { install: true, rollback: false, restart: ["now", "on-quit"] },
           unavailableReason: null,
+          armedJobId: null,
         },
       },
     });
@@ -180,6 +197,29 @@ describe("registering", () => {
     expect(h.calls.filter((call) => call.command === "update_host_register")).toHaveLength(2);
     // The same request delivered again is not run twice.
     expect(h.updater!.downloadUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  test("a final report that did not arrive is sent again while the backend still lists it", async () => {
+    const h = setup({
+      pendingFor: (registration) => (registration === 1 ? [] : [prepare()]),
+      failFinalReports: 1,
+    });
+    await h.host.register();
+    await deliver(h, prepare());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const finals = h.reports().filter((report) => report.status === "succeeded");
+    expect(finals.map((report) => report.hostSessionId)).toEqual(["session-1", "session-2"]);
+    // Re-sent, not re-run.
+    expect(h.updater!.downloadUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  test("a final report for a request the backend no longer lists is dropped", async () => {
+    const h = setup({ failFinalReports: 1 });
+    await h.host.register();
+    await deliver(h, prepare());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(h.calls.filter((call) => call.command === "update_host_register")).toHaveLength(2);
+    expect(h.reports().filter((report) => report.status === "succeeded")).toHaveLength(1);
   });
 
   test("ignores requests for another host session", async () => {
@@ -284,14 +324,64 @@ describe("installing", () => {
     expect(h.updater!.quitAndInstall).toHaveBeenCalledWith(true, true);
   });
 
-  test("install on quit arms the updater without restarting", async () => {
+  test("an updater error after quitAndInstall reports the install failed and clears the marker", async () => {
     const h = setup();
     await h.host.register();
+    await deliver(h, install("now"));
+    h.updater!.emit("error", new Error("EACCES: cannot replace the AppImage"));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(h.calls.at(-1)).toEqual({
+      command: "update_host_outcome",
+      args: {
+        hostSessionId: "session-1",
+        jobId: "job-1",
+        outcome: "failed",
+        rollbackFailed: false,
+        error: { code: "install-failed", message: "EACCES: cannot replace the AppImage" },
+      },
+    });
+    expect(existsSync(h.markerFile)).toBe(false);
+  });
+
+  test("install on quit stages the downloaded update with the flag set, without restarting", async () => {
+    const h = setup();
+    await h.host.register();
+    await deliver(h, prepare());
     await deliver(h, install("on-quit"));
+    // electron-updater stages (macOS) or adds its quit handler (AppImage)
+    // only for a download that completes with the flag set.
+    expect(h.updater!.downloads).toEqual([false, true]);
     expect(h.updater!.autoInstallOnAppQuit).toBe(true);
     expect(h.updater!.quitAndInstall).not.toHaveBeenCalled();
     expect(h.reports().at(-1)).toMatchObject({ status: "succeeded" });
     expect((await readPendingInstallMarker(h.markerFile))?.mode).toBe("on-quit");
+    await h.host.register();
+    expect(h.calls.at(-1)?.args).toMatchObject({ registration: { armedJobId: "job-1" } });
+  });
+
+  test("install on quit that cannot stage fails and stays disarmed", async () => {
+    const h = setup({ updater: fakeUpdater({ stageError: new Error("code signature invalid") }) });
+    await h.host.register();
+    await deliver(h, install("on-quit"));
+    expect(h.reports().at(-1)).toMatchObject({
+      status: "failed",
+      error: { message: "code signature invalid" },
+    });
+    expect(h.updater!.autoInstallOnAppQuit).toBe(false);
+    expect(existsSync(h.markerFile)).toBe(false);
+  });
+
+  test("a staging error after arming on quit reports the install failed", async () => {
+    const h = setup();
+    await h.host.register();
+    await deliver(h, install("on-quit"));
+    h.updater!.emit("error", new Error("Squirrel could not verify the update"));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(h.calls.at(-1)).toMatchObject({
+      command: "update_host_outcome",
+      args: { outcome: "failed", error: { code: "install-failed" } },
+    });
+    expect(h.updater!.autoInstallOnAppQuit).toBe(false);
   });
 
   test("a staging error reported by the updater refuses the install", async () => {

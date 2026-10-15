@@ -8,6 +8,7 @@
  * - Remote connections get their own transport (see `remote-update-client.ts`).
  */
 import {
+  LOCAL_UPDATE_RESYNC_EVENT,
   LOCAL_UPDATE_STATUS_EVENT,
   UPDATE_STATUS_EVENT,
   type UpdateAuditEntry,
@@ -60,6 +61,9 @@ export function localUpdateTransport(): UpdateTransport {
           (event) => onStatus(event.payload),
         ),
         listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => onResync()),
+        // In the desktop app the local backend's stream is main's, not the
+        // window's, which may be bound to a remote.
+        ...(desktop ? [listen(LOCAL_UPDATE_RESYNC_EVENT, () => onResync())] : []),
       ]);
       return () => {
         for (const stop of stops) stop();

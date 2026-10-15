@@ -324,7 +324,13 @@ export function UpdateDetails(props: UpdateDetailsProps) {
           </div>
         </div>
       ) : snapshot.available ? (
-        <OfferReview offer={snapshot.available} snapshot={snapshot} props={props} />
+        <OfferReview
+          // Approval belongs to one manifest: a changed offer starts unapproved.
+          key={`${snapshot.available.version}:${snapshot.available.requirementsSha256}`}
+          offer={snapshot.available}
+          snapshot={snapshot}
+          props={props}
+        />
       ) : (
         <div className="space-y-3">
           <div className="text-sm text-foreground" data-testid="update-status-line">
@@ -337,7 +343,12 @@ export function UpdateDetails(props: UpdateDetailsProps) {
                   : "Up to date."}
           </div>
           {snapshot.downgradeOption ? (
-            <OfferReview offer={snapshot.downgradeOption} snapshot={snapshot} props={props} />
+            <OfferReview
+              key={`${snapshot.downgradeOption.version}:${snapshot.downgradeOption.requirementsSha256}`}
+              offer={snapshot.downgradeOption}
+              snapshot={snapshot}
+              props={props}
+            />
           ) : null}
         </div>
       )}

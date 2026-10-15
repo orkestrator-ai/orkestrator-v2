@@ -18,6 +18,7 @@ import {
   INITIAL_CHECK_DELAY_MS,
   OUTCOME_WAIT_MS,
   PREPARE_STALL_MS,
+  RESTART_WAIT_MS,
   UpdateService,
   type UpdateDependencies,
 } from "./update-service.js";
@@ -223,6 +224,39 @@ describe("checking", () => {
     );
   });
 
+  test("a check that started before a channel change cannot publish its offer", async () => {
+    const h = await harness({ channel: "unstable" });
+    await h.feed.publish(manifestFor("2.22.0-unstable.20261015.7.g3f2a9c1"));
+    const fetchIndex = h.feed.fetchIndex.bind(h.feed);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let fetches = 0;
+    h.feed.fetchIndex = async () => {
+      fetches += 1;
+      if (fetches === 1) await gate;
+      return fetchIndex();
+    };
+    const stale = h.service.check();
+    await flush();
+    expect((await h.service.setChannel("stable", REQUESTER)).available).toBeNull();
+    release();
+    await stale;
+    expect(h.service.snapshot()).toMatchObject({
+      channel: "stable",
+      available: null,
+      check: { resolution: "up-to-date" },
+    });
+  });
+
+  test("snapshots name the backend process their revisions count in", async () => {
+    const first = await harness();
+    const second = await harness();
+    expect(first.service.snapshot().generation).toEqual(expect.any(String));
+    expect(first.service.snapshot().generation).not.toBe(second.service.snapshot().generation);
+  });
+
   test("automatic checks run after the startup delay and only when enabled", async () => {
     const h = await harness({ automaticChecks: true });
     await h.feed.publish(manifestFor("2.22.0"));
@@ -305,6 +339,21 @@ describe("starting an update", () => {
     ).rejects.toThrow("UpdateError:blocked: Update this app first");
   });
 
+  test("two starts at once create one job", async () => {
+    const h = await harness();
+    h.service.registerHost(DESKTOP_HOST);
+    const snapshot = await availableUpdate(h);
+    const results = await Promise.allSettled([
+      h.service.startJob(startArgs(snapshot), REQUESTER),
+      h.service.startJob(startArgs(snapshot), REQUESTER),
+    ]);
+    expect(results.map((result) => result.status)).toEqual(["fulfilled", "rejected"]);
+    expect(String((results[1] as PromiseRejectedResult).reason)).toContain("job-in-progress");
+    await flush();
+    expect(h.hostRequests().filter((request) => request.kind === "prepare")).toHaveLength(1);
+    expect(h.service.auditLog(10).filter((entry) => entry.action === "start")).toHaveLength(1);
+  });
+
   test("only one job at a time", async () => {
     const h = await harness();
     h.service.registerHost(DESKTOP_HOST);
@@ -318,6 +367,38 @@ describe("starting an update", () => {
 
 async function hostSession(h: Harness, registration = DESKTOP_HOST) {
   return h.service.registerHost(registration).hostSessionId;
+}
+
+const APPIMAGE_HOST: UpdateHostRegistration = { ...DESKTOP_HOST, installKind: "appimage" };
+
+/** A manual-restart job downloaded and armed to install when the app quits. */
+async function armedOnQuit(h: Harness, registration = DESKTOP_HOST) {
+  const session = await hostSession(h, registration);
+  const snapshot = await availableUpdate(h);
+  await h.service.startJob({ ...startArgs(snapshot), restartPolicy: "manual" }, REQUESTER);
+  await flush();
+  report(h, session, h.hostRequests()[0]!, "succeeded");
+  await flush();
+  const job = h.service.snapshot().job!;
+  const armed = h.service.installOnQuit(job.id, REQUESTER);
+  await flush();
+  report(h, session, h.hostRequests().at(-1)!, "succeeded");
+  await armed;
+  return { job, session };
+}
+
+/** An immediate job whose host acknowledged the install and said it is restarting. */
+async function acknowledgedRestart(h: Harness) {
+  const session = await hostSession(h);
+  await h.service.startJob(startArgs(await availableUpdate(h)), REQUESTER);
+  await flush();
+  report(h, session, h.hostRequests()[0]!, "succeeded");
+  await flush();
+  const install = h.hostRequests()[1]!;
+  report(h, session, install, "progress", { progress: { percent: null, message: "restarting" } });
+  report(h, session, install, "succeeded");
+  await flush();
+  return { session, jobId: install.jobId };
 }
 
 function report(
@@ -536,6 +617,78 @@ describe("running a job", () => {
     });
   });
 
+  test("an acknowledged restart that never happens is a rollback with nothing to undo", async () => {
+    const h = await harness();
+    await acknowledgedRestart(h);
+    h.timers.advance(RESTART_WAIT_MS - 1);
+    expect(h.service.snapshot().job?.phase).toBe("restarting");
+    h.timers.advance(1);
+    expect(h.service.snapshot().job).toMatchObject({
+      phase: "rolled-back",
+      error: { step: "restart", code: "install-not-applied" },
+    });
+  });
+
+  test("an install failure the host reports after the restart began is a rollback", async () => {
+    const h = await harness();
+    const { session, jobId } = await acknowledgedRestart(h);
+    h.service.hostOutcome({
+      hostSessionId: session,
+      jobId,
+      outcome: "failed",
+      rollbackFailed: false,
+      error: { code: "install-failed", message: "EACCES" },
+    });
+    expect(h.service.snapshot().job).toMatchObject({
+      phase: "rolled-back",
+      error: { step: "install", code: "install-failed", message: "EACCES" },
+    });
+    h.timers.advance(RESTART_WAIT_MS);
+    expect(h.service.snapshot().job?.phase).toBe("rolled-back");
+  });
+
+  test("a job cancelled while its install step prepares is not installed", async () => {
+    let release!: () => void;
+    const h = await harness({
+      dependencies: {
+        beforeInstall: () =>
+          new Promise<void>((resolve) => {
+            release = resolve;
+          }),
+      },
+    });
+    const session = await hostSession(h);
+    const snapshot = await availableUpdate(h);
+    await h.service.startJob({ ...startArgs(snapshot), restartPolicy: "manual" }, REQUESTER);
+    await flush();
+    report(h, session, h.hostRequests()[0]!, "succeeded");
+    await flush();
+    const job = h.service.snapshot().job!;
+    const installing = h.service.installNow(job.id, REQUESTER);
+    await flush();
+    await expect(h.service.installNow(job.id, REQUESTER)).rejects.toThrow("not-ready");
+    await h.service.cancel(job.id, REQUESTER);
+    release();
+    await installing;
+    expect(h.hostRequests().some((request) => request.kind === "install")).toBe(false);
+    expect(h.service.snapshot().job?.phase).toBe("cancelled");
+  });
+
+  test("cancelling an install armed for quit disarms the host; a macOS-staged one cannot be cancelled", async () => {
+    const h = await harness();
+    const { job } = await armedOnQuit(h, APPIMAGE_HOST);
+    await h.service.cancel(job.id, REQUESTER);
+    expect(h.hostRequests().at(-1)).toMatchObject({ kind: "cancel", jobId: job.id });
+    expect(h.service.snapshot().job?.phase).toBe("cancelled");
+
+    const mac = await harness();
+    const { job: staged } = await armedOnQuit(mac);
+    await expect(mac.service.cancel(staged.id, REQUESTER)).rejects.toThrow(
+      "UpdateError:not-cancellable: macOS has already staged",
+    );
+    expect(mac.service.snapshot().job).toMatchObject({ phase: "ready", installWhen: "on-quit" });
+  });
+
   test("manual restart waits in ready; install now and install on quit", async () => {
     const h = await harness();
     const session = await hostSession(h);
@@ -609,6 +762,35 @@ describe("recovering after a restart", () => {
       phase: "failed",
       error: { code: "interrupted" },
     });
+  });
+
+  test("an install armed for quit waits for a host that is still armed after a backend-only restart", async () => {
+    const h = await harness();
+    const { job } = await armedOnQuit(h);
+    h.service.stop();
+    const restarted = await harness({ dataDir: h.dataDir });
+    restarted.service.registerHost({ ...DESKTOP_HOST, armedJobId: job.id });
+    restarted.timers.advance(OUTCOME_WAIT_MS);
+    expect(restarted.service.snapshot().job).toMatchObject({
+      phase: "ready",
+      installWhen: "on-quit",
+    });
+    await expect(restarted.service.installNow(job.id, REQUESTER)).rejects.toThrow("quit the app");
+  });
+
+  test("an install armed for quit that a restarted app never reports fails and disarms", async () => {
+    const h = await harness();
+    const { job } = await armedOnQuit(h);
+    h.service.stop();
+    const relaunched = await harness({ dataDir: h.dataDir });
+    // Registered without the job armed: the app restarted, and no outcome came.
+    relaunched.service.registerHost(DESKTOP_HOST);
+    relaunched.timers.advance(OUTCOME_WAIT_MS);
+    expect(relaunched.service.snapshot().job).toMatchObject({
+      phase: "failed",
+      error: { code: "install-not-applied" },
+    });
+    expect(relaunched.hostRequests().at(-1)).toMatchObject({ kind: "cancel", jobId: job.id });
   });
 
   test("with no outcome reported, the running version decides", async () => {

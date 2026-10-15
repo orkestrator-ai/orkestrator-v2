@@ -895,6 +895,16 @@ describe("main IPC registration", () => {
     expect(harness.backend?.invoke).toHaveBeenCalledWith("get_projects", {});
   });
 
+  test("never forwards the installer's host commands from a window", async () => {
+    const harness = createHarness();
+    for (const command of ["update_host_register", "update_host_report", "update_host_outcome"]) {
+      await expect(harness.invoke("orkestrator:invoke", command, {})).rejects.toThrow(
+        "Installer commands are not available",
+      );
+    }
+    expect(harness.backend?.invoke).not.toHaveBeenCalled();
+  });
+
   test("rejects privileged IPC from untrusted and detached renderer frames", async () => {
     const harness = createHarness();
 

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import {
+  LOCAL_UPDATE_RESYNC_EVENT,
   LOCAL_UPDATE_STATUS_EVENT,
   OPEN_UPDATE_PANEL_EVENT,
   type UpdateStatusSnapshot,
@@ -19,6 +20,7 @@ const listeners = new Map<string, (payload: unknown) => void>();
 
 function snapshot(revision: number, available: string | null): UpdateStatusSnapshot {
   return {
+    generation: "backend-1",
     revision,
     updateProtocol: 1,
     currentVersion: "2.21.0",
@@ -128,13 +130,47 @@ describe("UpdatesController", () => {
     await waitFor(() => expect(useUpdateStore.getState().dialogOpen).toBe(true));
   });
 
-  test("a stale event triggers an authoritative re-read", async () => {
+  test("an older event from the same backend is ignored; a restarted backend's applies", async () => {
     current = snapshot(5, null);
-    render(<UpdatesController />);
+    render(
+      <>
+        <UpdatesController />
+        <UpdateIndicator />
+      </>,
+    );
     await waitFor(() => expect(ipc).toHaveBeenCalledTimes(1));
     act(() =>
       listeners.get(LOCAL_UPDATE_STATUS_EVENT)?.({ revision: 1, snapshot: snapshot(1, "2.22.0") }),
     );
+    expectDomAbsent(screen.queryByTestId("update-indicator"));
+    const restarted = { ...snapshot(1, "2.22.0"), generation: "backend-2" };
+    act(() => listeners.get(LOCAL_UPDATE_STATUS_EVENT)?.({ revision: 1, snapshot: restarted }));
+    await waitFor(() => expect(screen.getByTestId("update-indicator")).toBeTruthy());
+    expect(ipc).toHaveBeenCalledTimes(1);
+  });
+
+  test("re-reads join the read in flight", async () => {
+    let answer!: (value: UpdateStatusSnapshot) => void;
+    ipc.mockImplementationOnce(
+      () =>
+        new Promise<UpdateStatusSnapshot>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    render(<UpdatesController />);
+    await waitFor(() => expect(listeners.has(LOCAL_UPDATE_RESYNC_EVENT)).toBe(true));
+    act(() => listeners.get(LOCAL_UPDATE_RESYNC_EVENT)?.(undefined));
+    act(() => listeners.get(LOCAL_UPDATE_RESYNC_EVENT)?.(undefined));
+    expect(ipc).toHaveBeenCalledTimes(1);
+    await act(async () => answer(current));
+    act(() => listeners.get(LOCAL_UPDATE_RESYNC_EVENT)?.(undefined));
+    await waitFor(() => expect(ipc).toHaveBeenCalledTimes(2));
+  });
+
+  test("the local backend's stream reconnecting re-reads this app's status", async () => {
+    render(<UpdatesController />);
+    await waitFor(() => expect(ipc).toHaveBeenCalledTimes(1));
+    act(() => listeners.get(LOCAL_UPDATE_RESYNC_EVENT)?.(undefined));
     await waitFor(() => expect(ipc).toHaveBeenCalledTimes(2));
   });
 });

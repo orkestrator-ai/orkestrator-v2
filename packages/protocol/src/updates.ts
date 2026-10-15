@@ -18,6 +18,12 @@ export const UPDATE_STATUS_EVENT = "update-status";
  * update state.
  */
 export const LOCAL_UPDATE_STATUS_EVENT = "local-update-status";
+/**
+ * Desktop main → every window: its event stream from the local backend
+ * reconnected, so local update events may have been missed. Windows re-read
+ * the status, whichever connection they are bound to.
+ */
+export const LOCAL_UPDATE_RESYNC_EVENT = "local-update-resync";
 /** Menu → renderer: open the update panel (the menu has already asked for a check). */
 export const OPEN_UPDATE_PANEL_EVENT = "open-update-panel";
 
@@ -37,6 +43,11 @@ export type UpdateClientCommand = (typeof UPDATE_CLIENT_COMMANDS)[number];
 
 export function isUpdateClientCommand(value: unknown): value is UpdateClientCommand {
   return typeof value === "string" && (UPDATE_CLIENT_COMMANDS as readonly string[]).includes(value);
+}
+
+/** The installer's own commands; only the host process may send them. */
+export function isUpdateHostCommand(value: unknown): boolean {
+  return typeof value === "string" && value.startsWith("update_host_");
 }
 export const UPDATE_HOST_REQUEST_EVENT = "update-host-request";
 export const UPDATE_HOST_PROTOCOL_VERSION = 1;
@@ -166,6 +177,11 @@ export type UpdateCheckState = {
 };
 
 export type UpdateStatusSnapshot = {
+  /**
+   * Identifies the backend process. Revisions count from zero again in a new
+   * process, so they only order snapshots with the same generation.
+   */
+  generation: string;
   revision: number;
   updateProtocol: number;
   currentVersion: string;
@@ -244,6 +260,12 @@ export type UpdateHostRegistration = {
   capabilities: UpdateHostCapabilities;
   /** Why the host cannot install (a dev build, the opt-out), when it cannot. */
   unavailableReason?: string | null;
+  /**
+   * The job this host process has armed to install when the app quits. After
+   * a backend-only restart it tells a still-armed host from one that
+   * restarted without installing.
+   */
+  armedJobId?: string | null;
 };
 
 export type UpdateHostRequest =

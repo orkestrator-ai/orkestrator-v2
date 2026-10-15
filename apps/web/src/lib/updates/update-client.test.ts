@@ -15,8 +15,8 @@ afterEach(() => {
   useUpdateStore.setState({ targets: new Map(), dialogOpen: false });
 });
 
-function snapshot(revision: number): UpdateStatusSnapshot {
-  return { revision } as UpdateStatusSnapshot;
+function snapshot(revision: number, generation = "backend-1"): UpdateStatusSnapshot {
+  return { generation, revision } as UpdateStatusSnapshot;
 }
 
 describe("update errors", () => {
@@ -83,13 +83,18 @@ describe("the update API", () => {
 });
 
 describe("the update store", () => {
-  test("applies newer events, defers stale ones to a re-read, and always takes authoritative reads", () => {
+  test("orders snapshots by revision within one backend process, never across them", () => {
     const store = useUpdateStore.getState();
+    const apply = (next: UpdateStatusSnapshot, authoritative: boolean) =>
+      useUpdateStore.getState().applySnapshot("local", next, authoritative);
     expect(store.applySnapshot("local", snapshot(5), false)).toBe("applied");
-    expect(useUpdateStore.getState().applySnapshot("local", snapshot(5), false)).toBe("stale");
-    expect(useUpdateStore.getState().applySnapshot("local", snapshot(4), false)).toBe("stale");
-    // A restarted backend counts from zero; the re-read it triggers wins.
-    expect(useUpdateStore.getState().applySnapshot("local", snapshot(1), true)).toBe("applied");
+    expect(apply(snapshot(5), false)).toBe("stale");
+    expect(apply(snapshot(4), false)).toBe("stale");
+    // A read answered after a newer event must not roll the state back.
+    expect(apply(snapshot(4), true)).toBe("stale");
+    expect(apply(snapshot(5), true)).toBe("applied");
+    // A restarted backend counts from zero again.
+    expect(apply(snapshot(1, "backend-2"), false)).toBe("applied");
     expect(useUpdateStore.getState().targets.get("local")?.snapshot?.revision).toBe(1);
     expect(useUpdateStore.getState().applySnapshot("remote-a", snapshot(9), false)).toBe("applied");
     useUpdateStore.getState().forget("remote-a");

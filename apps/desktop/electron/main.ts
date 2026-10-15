@@ -77,13 +77,16 @@ import { createApplicationMenuTemplate } from "./application-menu.js";
 import { autoUpdateUnavailableReason, type UpdaterLike } from "./auto-update.js";
 import { createDesktopUpdateHost, type DesktopUpdateHost } from "./update-host.js";
 import {
+  LOCAL_UPDATE_RESYNC_EVENT,
   LOCAL_UPDATE_STATUS_EVENT,
   OPEN_UPDATE_PANEL_EVENT,
+  UPDATE_HOST_REQUEST_EVENT,
   UPDATE_FEED_URL_ENV,
   UPDATE_STATUS_EVENT,
   type UpdateStatusSnapshot,
 } from "@orkestrator/protocol/updates";
 import { RELEASE_DOWNLOAD_BASE_URL } from "@orkestrator/protocol/release-channels";
+import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@orkestrator/protocol/gateway-event-stream";
 import {
   applyWindowTitle,
   focusWindowById,
@@ -793,7 +796,12 @@ async function startApplication(): Promise<void> {
     onEvent: (event, payload) => {
       // Every window sees this app's own update state, whatever it is bound to.
       if (event === UPDATE_STATUS_EVENT) emitToAllWindows(LOCAL_UPDATE_STATUS_EVENT, payload);
+      if (event === NATIVE_EVENT_STREAM_CONNECTED_EVENT) {
+        emitToAllWindows(LOCAL_UPDATE_RESYNC_EVENT, undefined);
+      }
       updateHost?.handleBackendEvent(event, payload);
+      // Installer requests carry the host session; they are main's alone.
+      if (event === UPDATE_HOST_REQUEST_EVENT) return;
       if (connectionManager) connectionManager.handleLocalEvent(event, payload);
     },
     onUnexpectedExit: (error) => {

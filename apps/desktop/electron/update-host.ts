@@ -98,15 +98,36 @@ function errorReport(error: unknown, fallbackCode: string): { code: string; mess
   return { code, message: message || fallbackCode };
 }
 
+type ReportExtra = {
+  progress?: { percent: number | null; message: string | null };
+  error?: { code: string; message: string };
+};
+
+/** Delivery attempts for a final report before the backend's own timeout takes over. */
+const MAX_REPORT_ATTEMPTS = 3;
+
 export function createDesktopUpdateHost(options: DesktopUpdateHostOptions): DesktopUpdateHost {
   const log = options.log ?? console;
   const now = options.now ?? (() => Date.now());
   const progressIntervalMs = options.progressIntervalMs ?? 1_000;
   let hostSessionId: string | null = null;
   let registering: Promise<void> | null = null;
+  let registerAgain = false;
   const handled = new Set<string>();
+  /** Final reports the backend has not received, re-sent while it still lists the request. */
+  const undelivered = new Map<
+    string,
+    {
+      request: UpdateHostRequest;
+      status: "succeeded" | "failed";
+      extra: ReportExtra;
+      attempts: number;
+    }
+  >();
   let download: { jobId: string; cancel(): void } | null = null;
   let updaterError: Error | null = null;
+  /** The install this process armed: restarting into it now, or on quit. */
+  let armed: { jobId: string; mode: "now" | "on-quit" } | null = null;
 
   const updater = options.updater;
   if (updater) {
@@ -116,18 +137,20 @@ export function createDesktopUpdateHost(options: DesktopUpdateHostOptions): Desk
     updater.on("error", (error) => {
       updaterError = error;
       log.warn("[Updater] Update failed:", error);
+      if (armed) void abandonArmedInstall(armed.jobId, error);
     });
   }
 
   async function report(
     request: UpdateHostRequest,
     status: "progress" | "succeeded" | "failed",
-    extra: {
-      progress?: { percent: number | null; message: string | null };
-      error?: { code: string; message: string };
-    } = {},
+    extra: ReportExtra = {},
   ): Promise<void> {
-    if (!hostSessionId) return;
+    const final = status !== "progress";
+    if (!hostSessionId) {
+      if (final) undelivered.set(request.requestId, { request, status, extra, attempts: 0 });
+      return;
+    }
     try {
       await options.invoke("update_host_report", {
         hostSessionId,
@@ -136,10 +159,46 @@ export function createDesktopUpdateHost(options: DesktopUpdateHostOptions): Desk
         status,
         ...extra,
       });
+      if (final) undelivered.delete(request.requestId);
     } catch (error) {
-      // A report the backend no longer wants (a cancelled job) is not fatal;
-      // the backend's own timeout settles anything we fail to deliver.
       log.warn("[Updater] Could not report to the backend:", error);
+      if (!final) return;
+      // A reconnect may have replaced the session. Registering again lists
+      // the request if the backend still waits for it, and the report goes
+      // again; a request it no longer lists (a cancelled job) is dropped.
+      const attempts = (undelivered.get(request.requestId)?.attempts ?? 0) + 1;
+      if (attempts >= MAX_REPORT_ATTEMPTS) {
+        undelivered.delete(request.requestId);
+        return;
+      }
+      undelivered.set(request.requestId, { request, status, extra, attempts });
+      void register().catch((registerError: unknown) =>
+        log.warn("[Updater] Could not re-register with the backend:", registerError),
+      );
+    }
+  }
+
+  /**
+   * The updater failed after this host armed an install (Squirrel.Mac's
+   * staging, or the AppImage swap), so nothing was installed and the old
+   * version keeps running. The install request is already settled, so the
+   * backend hears about it as an outcome.
+   */
+  async function abandonArmedInstall(jobId: string, error: unknown): Promise<void> {
+    armed = null;
+    if (updater) updater.autoInstallOnAppQuit = false;
+    await rm(options.markerFile, { force: true }).catch(() => undefined);
+    if (!hostSessionId) return;
+    try {
+      await options.invoke("update_host_outcome", {
+        hostSessionId,
+        jobId,
+        outcome: "failed",
+        rollbackFailed: false,
+        error: { code: "install-failed", message: errorReport(error, "install-failed").message },
+      });
+    } catch (reportError) {
+      log.warn("[Updater] Could not report the failed install:", reportError);
     }
   }
 
@@ -191,8 +250,8 @@ export function createDesktopUpdateHost(options: DesktopUpdateHostOptions): Desk
           { code: "feed-mismatch" },
         );
       }
-      // electron-updater verifies the SHA-512 from the feed; Squirrel.Mac
-      // also checks the code signature while staging.
+      // electron-updater verifies the SHA-512 from the feed. Squirrel.Mac
+      // checks the code signature when it stages the update, at install.
       await updater.downloadUpdate(token);
       if (updaterError) throw updaterError;
       await report(request, "succeeded");
@@ -232,6 +291,21 @@ export function createDesktopUpdateHost(options: DesktopUpdateHostOptions): Desk
     }
     if (request.restart === "on-quit") {
       updater.autoInstallOnAppQuit = true;
+      try {
+        // electron-updater hands a download to Squirrel.Mac, or registers the
+        // AppImage's quit handler, only when a download completes with the
+        // flag set. The file is cached from prepare, so this completes at
+        // once and stages the update (macOS) or arms the swap (AppImage).
+        updaterError = null;
+        await updater.downloadUpdate(options.createCancellationToken?.());
+        if (updaterError) throw updaterError;
+      } catch (error) {
+        updater.autoInstallOnAppQuit = false;
+        await rm(options.markerFile, { force: true }).catch(() => undefined);
+        await report(request, "failed", { error: errorReport(error, "staging-failed") });
+        return;
+      }
+      armed = { jobId: request.jobId, mode: "on-quit" };
       await report(request, "succeeded");
       return;
     }
@@ -239,18 +313,25 @@ export function createDesktopUpdateHost(options: DesktopUpdateHostOptions): Desk
     // after quitAndInstall, and the job must already read "restarting".
     await report(request, "progress", { progress: { percent: null, message: "restarting" } });
     await report(request, "succeeded");
+    armed = { jobId: request.jobId, mode: "now" };
     try {
+      // Its failures (Squirrel.Mac's staging, the AppImage swap) arrive as
+      // updater `error` events, which abandon the armed install.
       updater.quitAndInstall(true, true);
     } catch (error) {
-      await rm(options.markerFile, { force: true }).catch(() => undefined);
-      log.warn("[Updater] quitAndInstall failed:", error);
+      await abandonArmedInstall(request.jobId, error);
     }
   }
 
   async function cancel(request: Extract<UpdateHostRequest, { kind: "cancel" }>) {
     if (download?.jobId === request.jobId) download.cancel();
-    if (updater) updater.autoInstallOnAppQuit = false;
-    await rm(options.markerFile, { force: true }).catch(() => undefined);
+    if (!armed || armed.jobId === request.jobId) {
+      // An update Squirrel.Mac has staged still installs on quit; the
+      // backend refuses to cancel one.
+      armed = null;
+      if (updater) updater.autoInstallOnAppQuit = false;
+      await rm(options.markerFile, { force: true }).catch(() => undefined);
+    }
     await report(request, "succeeded");
   }
 
@@ -274,19 +355,39 @@ export function createDesktopUpdateHost(options: DesktopUpdateHostOptions): Desk
       installKind: options.installKind,
       capabilities: { install: updater !== null, rollback: false, restart: ["now", "on-quit"] },
       unavailableReason: updater ? null : options.unavailableReason,
+      armedJobId: armed?.mode === "on-quit" ? armed.jobId : null,
     };
   }
 
   async function register(): Promise<void> {
-    registering ??= (async () => {
+    if (registering) {
+      // Whatever asked may have missed this registration's pending list.
+      registerAgain = true;
+      return registering;
+    }
+    registering = (async () => {
       const reply = await options.invoke<{ hostSessionId: string; pending: UpdateHostRequest[] }>(
         "update_host_register",
         { registration: registration() },
       );
       hostSessionId = reply.hostSessionId;
-      for (const request of reply.pending) handle(request);
+      const listed = new Set(reply.pending.map((request) => request.requestId));
+      for (const requestId of Array.from(undelivered.keys())) {
+        if (!listed.has(requestId)) undelivered.delete(requestId);
+      }
+      for (const request of reply.pending) {
+        const retry = undelivered.get(request.requestId);
+        if (retry) void report(retry.request, retry.status, retry.extra);
+        else handle(request);
+      }
     })().finally(() => {
       registering = null;
+      if (registerAgain) {
+        registerAgain = false;
+        void register().catch((error: unknown) =>
+          log.warn("[Updater] Could not re-register with the backend:", error),
+        );
+      }
     });
     return registering;
   }

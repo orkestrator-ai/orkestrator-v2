@@ -17,10 +17,10 @@ type UpdateStore = {
   dialogOpen: boolean;
   setDialogOpen(open: boolean): void;
   /**
-   * An event snapshot applies only when it is newer than what we hold; an
-   * authoritative read always replaces it. A restarted backend counts
-   * revisions from zero again, so a stale-looking event asks the caller to
-   * re-read instead of being trusted or silently dropped.
+   * Applies a snapshot unless it is older than what we hold. Revisions only
+   * order snapshots of one backend process (`generation`); a snapshot from
+   * another process (a restart) always applies. An authoritative read also
+   * replaces a snapshot of the same revision, an event does not.
    */
   applySnapshot(
     key: string,
@@ -48,7 +48,12 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
   setDialogOpen: (open) => set({ dialogOpen: open }),
   applySnapshot(key, snapshot, authoritative) {
     const current = get().targets.get(key)?.snapshot;
-    if (!authoritative && current && snapshot.revision <= current.revision) return "stale";
+    if (current?.generation !== undefined && current.generation === snapshot.generation) {
+      const older = authoritative
+        ? snapshot.revision < current.revision
+        : snapshot.revision <= current.revision;
+      if (older) return "stale";
+    }
     set((state) => ({ targets: update(state.targets, key, { snapshot, error: null }) }));
     return "applied";
   },

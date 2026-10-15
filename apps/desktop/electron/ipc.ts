@@ -28,7 +28,11 @@ import {
   type MacOsPermissionsStatus,
 } from "@orkestrator/protocol/macos-permissions";
 import { isTrustedRendererUrl } from "./window.js";
-import { isUpdateClientCommand, type UpdateClientCommand } from "@orkestrator/protocol/updates";
+import {
+  isUpdateClientCommand,
+  isUpdateHostCommand,
+  type UpdateClientCommand,
+} from "@orkestrator/protocol/updates";
 import { macOsPrivacySettingsUrl } from "./macos-permissions.js";
 import {
   readClipboardImage,
@@ -277,6 +281,9 @@ export function registerMainIpc({
     const backend = getBackend(event);
     if (!backend) throw new Error("Backend is not initialized");
     if (typeof command !== "string") throw new Error("Expected command to be a string");
+    // The local backend client talks to the control listener, which accepts
+    // the installer's commands; only Electron main's update host may send them.
+    if (isUpdateHostCommand(command)) throw new Error("Installer commands are not available");
     const safeArgs =
       args && typeof args === "object" && !Array.isArray(args)
         ? (args as Record<string, unknown>)

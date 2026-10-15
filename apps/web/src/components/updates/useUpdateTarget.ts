@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { isTerminalUpdatePhase, type UpdateStatusSnapshot } from "@orkestrator/protocol/updates";
 import {
   parseUpdateError,
@@ -10,10 +10,15 @@ import { selectUpdateTarget, useUpdateStore, type UpdateTargetState } from "@/st
 
 /** While a job runs, also poll: a restart drops the event stream for a while. */
 export const ACTIVE_JOB_POLL_MS = 2_000;
+/** Failed polls back off to this interval (a restarting or unreachable remote). */
+export const MAX_POLL_BACKOFF_MS = 30_000;
+/** Polls that keep failing for this long stop; the dialog's refresh re-reads. */
+export const POLL_GIVE_UP_MS = 10 * 60 * 1000;
 
 export type UpdateTargetHandle = UpdateTargetState & {
   api: UpdatesApi;
-  refresh(): Promise<void>;
+  /** Re-reads the status, or joins the read in flight; false when it failed. */
+  refresh(): Promise<boolean>;
   /** Runs a command, applies the snapshot it returns, and records its error. */
   run(action: (api: UpdatesApi) => Promise<UpdateStatusSnapshot>): Promise<boolean>;
 };
@@ -21,8 +26,8 @@ export type UpdateTargetHandle = UpdateTargetState & {
 /**
  * Keeps one update target fresh: an authoritative read on mount, live
  * snapshots from the event stream, a re-read whenever events may have been
- * missed (a reconnect, a stale revision), and polling while a job runs.
- * Background work lives in the backend, so unmounting only stops watching.
+ * missed (a reconnect), and polling while a job runs. Background work lives
+ * in the backend, so unmounting only stops watching.
  */
 export function useUpdateTarget(transport: UpdateTransport, options: { watch?: boolean } = {}) {
   const watch = options.watch ?? true;
@@ -30,16 +35,25 @@ export function useUpdateTarget(transport: UpdateTransport, options: { watch?: b
   const state = useUpdateStore(selectUpdateTarget(key));
   const api = useMemo(() => updatesApi(transport), [transport]);
 
-  const refresh = useCallback(async () => {
-    try {
-      const snapshot = await api.status();
-      if (!snapshot || typeof snapshot.revision !== "number") {
-        throw new Error("The backend returned no update status");
+  const inFlight = useRef<Promise<boolean> | null>(null);
+  const refresh = useCallback(() => {
+    // A slow or unreachable backend must not collect a read per poll tick.
+    inFlight.current ??= (async () => {
+      try {
+        const snapshot = await api.status();
+        if (!snapshot || typeof snapshot.revision !== "number") {
+          throw new Error("The backend returned no update status");
+        }
+        useUpdateStore.getState().applySnapshot(key, snapshot, true);
+        return true;
+      } catch (error) {
+        useUpdateStore.getState().setError(key, parseUpdateError(error));
+        return false;
+      } finally {
+        inFlight.current = null;
       }
-      useUpdateStore.getState().applySnapshot(key, snapshot, true);
-    } catch (error) {
-      useUpdateStore.getState().setError(key, parseUpdateError(error));
-    }
+    })();
+    return inFlight.current;
   }, [api, key]);
 
   useEffect(() => {
@@ -48,11 +62,7 @@ export function useUpdateTarget(transport: UpdateTransport, options: { watch?: b
     let stop: (() => void) | undefined;
     void transport
       .subscribe(
-        (event) => {
-          if (useUpdateStore.getState().applySnapshot(key, event.snapshot, false) === "stale") {
-            void refresh();
-          }
-        },
+        (event) => void useUpdateStore.getState().applySnapshot(key, event.snapshot, false),
         () => void refresh(),
       )
       .then((unsubscribe) => {
@@ -72,8 +82,28 @@ export function useUpdateTarget(transport: UpdateTransport, options: { watch?: b
   );
   useEffect(() => {
     if (!watch || !jobActive) return;
-    const timer = setInterval(() => void refresh(), ACTIVE_JOB_POLL_MS);
-    return () => clearInterval(timer);
+    let disposed = false;
+    let delay = ACTIVE_JOB_POLL_MS;
+    let failingSince: number | null = null;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      const ok = await refresh();
+      if (disposed) return;
+      if (ok) {
+        delay = ACTIVE_JOB_POLL_MS;
+        failingSince = null;
+      } else {
+        failingSince ??= Date.now();
+        if (Date.now() - failingSince >= POLL_GIVE_UP_MS) return;
+        delay = Math.min(delay * 2, MAX_POLL_BACKOFF_MS);
+      }
+      timer = setTimeout(() => void poll(), delay);
+    };
+    timer = setTimeout(() => void poll(), delay);
+    return () => {
+      disposed = true;
+      clearTimeout(timer);
+    };
   }, [jobActive, refresh, watch]);
 
   const run = useCallback(

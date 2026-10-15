@@ -29,13 +29,17 @@ out.
 
 ## Fix
 
-The spec now clicks "Close projects and environments" unconditionally after
-the resize. The click auto-waits for the drawer, which the phone layout always
-opens on mount. The same spec file's host-picker case and
-`native-draft-attachments.spec.ts` already wait before probing.
+The spec waits for the phone layout's tools trigger (by CSS, which a modal
+drawer cannot hide) before probing for the drawer. It closes the drawer only
+if one is open. A later product change means the drawer now opens on its own
+only on a phone-sized first load, so after this resize there is normally none.
+The same spec file's host-picker case and `native-draft-attachments.spec.ts`
+already wait before probing.
 
 ## Verification
 
 The case passed three times in a row on a fresh `dev:test --fixture
 --no-agent-credentials --agent-platforms codex,opencode,cursor,grok` profile
 (5.7 s, 5.5 s, 5.5 s).
+After the `AppShell` change it passed again on a fresh profile and in a full
+`test:agent:browser:isolated` run.

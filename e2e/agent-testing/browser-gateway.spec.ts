@@ -481,13 +481,15 @@ test("project Home retains background work and unread attention beneath the boar
       "true",
     );
     await page.setViewportSize({ width: 390, height: 844 });
-    // The phone layout mounts with its projects drawer open. Wait for it rather
-    // than probe: an immediate visibility check can run before the media query
-    // swaps the shell, leaving the drawer to block the tools button.
-    await page
+    // Wait for the phone layout before probing for its drawer: a check that
+    // runs before the media query swaps the shell sees no drawer at all. The
+    // drawer opens only on a phone-sized first load; CSS finds the trigger
+    // even while that modal hides it from roles.
+    await expect(page.locator('button[aria-label="Open tools"]')).toBeVisible();
+    const closeProjects = page
       .getByRole("button", { name: "Close projects and environments", exact: true })
-      .first()
-      .click();
+      .first();
+    if (await closeProjects.isVisible()) await closeProjects.click();
     await page.getByRole("button", { name: "Open tools", exact: true }).click();
     const homeTab = page.getByRole("tab", { name: "Home", exact: true });
     await expect(homeTab).toBeVisible();

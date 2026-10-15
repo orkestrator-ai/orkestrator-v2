@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { useEffect, useState } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as realResizable from "@/components/ui/resizable";
 import * as realFilesPanelComponents from "@/components/files-panel";
@@ -65,14 +66,20 @@ mock.module("./MobileAppShellLayout", () => ({
     title,
     actionBar,
     agentInfoButton,
+    initialSidebarOpen,
     children,
   }: {
     title: string;
     actionBar: React.ReactNode;
     agentInfoButton: React.ReactNode;
+    initialSidebarOpen?: boolean;
     children?: React.ReactNode;
   }) => (
-    <div data-testid="mobile-layout" data-title={title}>
+    <div
+      data-testid="mobile-layout"
+      data-title={title}
+      data-initial-sidebar-open={String(initialSidebarOpen ?? true)}
+    >
       {actionBar}
       <div data-testid="mobile-agent-info-slot">{agentInfoButton}</div>
       {children}
@@ -380,5 +387,57 @@ describe("AppShell", () => {
 
     expect(screen.getByTestId("mobile-layout").getAttribute("data-title")).toBe("Orkestrator AI");
     expect(document.title).toBe("Orkestrator AI");
+  });
+
+  test("keeps its content mounted when the layout crosses the mobile breakpoint", () => {
+    let mounts = 0;
+    function Counter() {
+      const [count, setCount] = useState(0);
+      useEffect(() => {
+        mounts += 1;
+      }, []);
+      return <button onClick={() => setCount(count + 1)}>Count {count}</button>;
+    }
+    isMobile = false;
+    const { rerender } = render(
+      <AppShell>
+        <Counter />
+      </AppShell>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Count 0" }));
+
+    isMobile = true;
+    rerender(
+      <AppShell>
+        <Counter />
+      </AppShell>,
+    );
+    expect(screen.getByTestId("mobile-layout").contains(screen.getByText("Count 1"))).toBe(true);
+
+    isMobile = false;
+    rerender(
+      <AppShell>
+        <Counter />
+      </AppShell>,
+    );
+    expect(screen.queryByTestId("mobile-layout") === null).toBe(true);
+    expect(screen.getByRole("main").contains(screen.getByText("Count 1"))).toBe(true);
+    expect(mounts).toBe(1);
+  });
+
+  test("opens the mobile drawer only on a phone-sized first load", () => {
+    render(<AppShell>Workspace</AppShell>);
+    expect(screen.getByTestId("mobile-layout").getAttribute("data-initial-sidebar-open")).toBe(
+      "true",
+    );
+    cleanup();
+
+    isMobile = false;
+    const { rerender } = render(<AppShell>Workspace</AppShell>);
+    isMobile = true;
+    rerender(<AppShell>Workspace</AppShell>);
+    expect(screen.getByTestId("mobile-layout").getAttribute("data-initial-sidebar-open")).toBe(
+      "false",
+    );
   });
 });

@@ -1,6 +1,6 @@
 # Test suites that depend on the host
 
-Status: Resolved 2026-10-15, except the environment move case, which waits on doc 02. The findings below are the original 2026-10-14 report; see "Resolution (2026-10-15)" at the end.
+Status: Resolved 2026-10-15, except the environment move case, which waits on doc 02 (verified to pass with its fix). `mise run test:browser` is blocked by a separate #969 regression; see "Follow-ups finished the same day". The findings below are the original 2026-10-14 report; see "Resolution (2026-10-15)" at the end.
 
 **Severity: medium.** These failures are not product regressions, but they
 make the validation suites fail on an ordinary developer machine. That hides
@@ -81,7 +81,7 @@ unauthenticated `claude`).
 | `browser-gateway.spec.ts` worktree assertion ("authoritative local environment") | Yes, from the configured root | Fixed. A new `dev:test` profile ignores the dev worktree folder unless `--use-dev-worktree-folder` is passed (`apps/desktop/scripts/dev/lifecycle.ts` `profileWorktreeLocation`, `arguments.ts`). `mise run dev` still uses the folder. |
 | Environment move worktree path | Path cause fixed; the move itself still fails | The source worktree is now under `<profile>/worktrees/`, but the move never happens. The backend logs `claude-tmux cleanup incomplete`, the tmux 3.8 bug in doc 02. Left to that fix. |
 | Review validation queueing | Yes on a manual profile | The spec skips with a reason unless `ORKESTRATOR_TEST_SCHEDULER_DIR` is set and `ORKESTRATOR_TEST_HOST_WORKERS=2`. Exporting the variables from `test:agent:browser` cannot work: the backend reads them when `dev:test` starts. It passes under the one-shot runner. |
-| `design-canvas.spec.ts:9` export dialog at 390px | Yes (`TypeError: Cannot read properties of null (reading 'x')`) | Fixed in the spec. Root cause: below 768px `AppShell` swaps to `MobileAppShellLayout` and remounts every pane, which drops the dialog's state, so measuring after the resize was a race. The spec now reopens the dialog in the phone layout. Flake 0209 resolved. |
+| `design-canvas.spec.ts:9` export dialog at 390px | Yes (`TypeError: Cannot read properties of null (reading 'x')`) | Fixed in the product. Root cause: below 768px `AppShell` swapped to `MobileAppShellLayout` and remounted every pane, which dropped the dialog's state, so measuring after the resize was a race. `AppShell` now keeps its content mounted across the swap (see below). The spec keeps the dialog open, waits for the phone layout and then measures. Flake 0209 resolved. |
 | One-shot runner profile flags | Not supported | Fixed. `mise run test:agent:browser:isolated` and `test:agent:design:isolated` accept `--credential-source`, `--agent-platforms`, `--no-agent-credentials` and `--use-dev-worktree-folder`. A credential or platform flag replaces the matching default, and unknown flags fail before a profile is created. |
 | `verified copy helper` ×3 | Yes | Host tools, not a product bug. bsdtar has no `--no-wildcards-match-slash` and lists archives in a different format; the helper runs on GNU tar inside the image. |
 | Firewall "GitHub ranges…" and "domain that does not resolve…" | Yes | Host tools, not a product bug. `docker/firewall-domains.sh` uses GNU `date -d` (`ork_iso`, `ork_ranges_fresh_within`). On macOS `date` the seed always looked stale, so the script fetched live, and `ork_iso` failed. |
@@ -105,15 +105,51 @@ The browser runs turned up two more host problems, and both are fixed:
   that raced the same mobile-shell swap. The drawer stayed open and blocked
   "Open tools". Recorded and resolved as flake 0212.
 
-Product note, not changed here: any open dialog or pane-local state is lost
-whenever a window crosses the 768px breakpoint, for example when a phone
-rotates. Keeping `children` mounted across the `AppShell` swap would fix it.
+### Follow-ups finished the same day
+
+- **Breakpoint remount (product).** Crossing 768px used to remount every pane,
+  losing open dialogs and pane state, for example when a phone rotated.
+  `AppShell` now renders its content once through a portal into a stable host
+  node, and each layout only moves that node into its slot
+  (`apps/web/src/components/layout/AppShell.tsx`). The mobile projects drawer
+  opens on its own only on a phone-sized first load; a window that narrows
+  keeps showing the user's work (`initialSidebarOpen` on
+  `MobileAppShellLayout`). The two specs that crossed the breakpoint
+  (`design-canvas.spec.ts`, and project Home in `browser-gateway.spec.ts`) now
+  wait for the phone layout and only then close a drawer if one is open.
+  Remaining limit: on phones, a pane split still shows one pane at a time
+  (`PaneTree` → `MobilePaneSwitcher`), so the hidden panes of a split still
+  remount when the window crosses the breakpoint.
+- **Backend shutdown test.** `apps/backend/src/core/index.test.ts` "shutdown
+  applies one deadline across lifecycle and local-operation drains" failed on
+  every run after #969. A deletion that outlives the shutdown deadline now
+  reaches a closed design store and rejects with "Design service is
+  stopping". That is safe: the environment keeps its `deleting` tombstone and
+  the next startup re-runs the deletion. Making design cleanup best-effort
+  instead would leak canvases, because nothing else collects them. The test
+  now asserts that invariant: the deletion either finishes or is finished by a
+  restarted backend.
+- **Environment move.** Confirmed as doc 02. With that worker's
+  `2ca0b952` applied (not merged here), the real-stack move spec passed on
+  this host, which has no tmux socket at all.
+- **New, not fixed here:** `mise run test:browser` cannot start.
+  `e2e/DesignCanvas.spec.ts` and `e2e/DesignHistoryLayout.spec.ts` import the
+  backend `DesignService`, which since #969 loads `bun:sqlite`. Playwright runs
+  specs under Node, so loading aborts the whole component suite ("Only URLs
+  with a scheme in: file, data, and node are supported by the default ESM
+  loader. Received protocol 'bun:'"). Without those two files the suite passes
+  (185 passed, 57 skipped).
+- **Flake 0213 (open).** The narrow host-picker case failed once with the
+  tools popover closed and passed seven times afterwards.
+- **Flake 0214 (open).** The first `mise run test` after these changes hit
+  three backend load failures in files this change does not touch (two design
+  timeouts and an annotation benchmark bound). All three files pass alone.
 
 The startup dialog (doc 03) still blocks a Codex-only profile on this host: a
 manual `--agent-platforms codex` run had 9 failures behind "Claude Code Login
 Required". The suite was validated with the new pass-through instead:
 
 - `mise run test:agent:browser:isolated --agent-platforms codex,opencode,cursor,grok`:
-  **21 passed, 12 skipped, 1 failed**. The failure is the environment move
-  (doc 02).
+  **21 passed, 12 skipped, 1 failed**, both before and after the `AppShell`
+  change. The failure is the environment move (doc 02).
 - The doc's original run had 17 passed, 12 skipped and 5 failed.

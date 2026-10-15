@@ -14,7 +14,7 @@ not touch, so none of them is a regression from that work.
 | [02](02-tmux-3-8-no-server-detection.md) | tmux 3.8's new "no server" wording is read as failed cleanup; environment move fails, deletion leaves files | High | Backend tmux cleanup |
 | [03](03-startup-claude-login-dialog.md) | "Claude Code Login Required" blocks the whole app when `claude` is unauthenticated and OpenCode is absent, ignoring Codex, Cursor, Grok and Pi; it also breaks the isolated browser suite | High | Renderer startup gate, host tool checks |
 | [04](04-opencode-fork-loses-model.md) | A forked OpenCode session switches to the first catalogue model | Medium | Fork flow, composer inference |
-| [05](05-real-stack-suite-host-dependencies.md) | Resolved 2026-10-15: browser, root and bridge suites no longer fail for host reasons; the environment move spec still fails until 02 is fixed | Medium | Test infrastructure |
+| [05](05-real-stack-suite-host-dependencies.md) | Resolved 2026-10-15: browser, root and bridge suites no longer fail for host reasons, and panes survive the mobile breakpoint; the environment move spec waits on 02, and `test:browser` is blocked by a `bun:sqlite` import from #969 | Medium | Test infrastructure, renderer shell |
 | [06](06-opencode-auth-status-truncation.md) | OpenCode shows "needs auth" while a provider is connected | Low–medium | OpenCode capabilities |
 | [07](07-cleanup-follow-ups.md) | Leftover dead renderer helpers, store consolidation, doc drift, a decision to confirm, a known version-skew limitation, the day's flakes (0207, 0208), a live OpenCode spec to commit, and a fault-isolation watch item | Low | Cleanup and follow-ups |
 

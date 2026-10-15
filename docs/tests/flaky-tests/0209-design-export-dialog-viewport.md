@@ -36,7 +36,9 @@ Hypothesis: responsive layout switching can temporarily remount or redirect the 
 - **Verification:** `ORKESTRATOR_AGENT_TEST_PROFILE=d4538-qa mise run test:agent:browser -- e2e/agent-testing/design-canvas.spec.ts --workers=1`
   passed both design specs (47.4 s) on a fresh `dev:test --fixture
   --no-agent-credentials --agent-platforms codex` profile.
-- **Product note:** any open dialog or pane-local state is lost when a window
-  crosses the 768px breakpoint, for example when a phone rotates. This is
-  recorded in `docs/2026-10-14/05-real-stack-suite-host-dependencies.md`; the
-  renderer is not changed here.
+- **Product fix (same day):** `AppShell` now keeps its content mounted across
+  the breakpoint, so the dialog stays open. The spec keeps it open, waits for
+  the phone layout (by CSS, since the modal hides the rest of the page from
+  role queries) and measures. It passed on a fresh profile and in a full
+  `test:agent:browser:isolated` run (21 passed, 12 skipped, 1 failed: the
+  doc 02 move case).

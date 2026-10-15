@@ -6,6 +6,9 @@ import type { DesignCanvas, DesignFrame } from "@orkestrator/protocol/design-can
 
 test.use({ actionTimeout: 15_000 });
 
+/** The phone layout's tools trigger, found by CSS so an open modal does not hide it. */
+const MOBILE_TOOLS_TRIGGER = 'button[aria-label="Open tools"]';
+
 test("real gateway saves a design and rehydrates another client's edits", async ({
   page,
 }, testInfo) => {
@@ -123,23 +126,17 @@ test("real gateway saves a design and rehydrates another client's edits", async 
     await expect(
       exportDialog.getByRole("button", { name: "Export revision 2", exact: true }),
     ).toBeEnabled();
-    await exportDialog.getByRole("button", { name: "Cancel" }).click();
-    await page.getByRole("button", { name: "Hide file panel", exact: true }).click();
-    // Below 768px the shell swaps to its mobile layout and remounts the panes,
-    // which drops an open dialog; measuring across that swap raced the
-    // remount. Open the dialog again on the phone layout instead.
     await page.setViewportSize({ width: 390, height: 844 });
-    await page
-      .getByRole("button", { name: "Close projects and environments", exact: true })
-      .first()
-      .click();
-    await page.getByRole("button", { name: "Export design to repository" }).click();
+    // The open dialog survives the swap to the phone layout. Wait for that
+    // layout (by CSS: the modal dialog hides the rest of the page from roles)
+    // so the bounds are measured after it, not before.
+    await expect(page.locator(MOBILE_TOOLS_TRIGGER)).toBeVisible();
     await expect(exportDialog).toBeVisible();
     const exportBounds = (await exportDialog.boundingBox())!;
     expect(exportBounds.x).toBeGreaterThanOrEqual(0);
     expect(exportBounds.x + exportBounds.width).toBeLessThanOrEqual(390);
-    await exportDialog.getByRole("button", { name: "Cancel" }).click();
     await page.setViewportSize({ width: 1440, height: 900 });
+    await exportDialog.getByRole("button", { name: "Cancel" }).click();
     const environment = await invoke<{ worktreePath: string }>("get_environment", {
       environmentId: env.id,
     });
@@ -280,11 +277,13 @@ test("private canvases survive reload and can be retired to recover quota", asyn
   const openLibrary = async () => {
     const tools = page.getByRole("button", { name: "Open tools", exact: true });
     if ((page.viewportSize()?.width ?? 1440) < 768) {
-      await page
+      // The phone layout opens its projects drawer only on a phone-sized first
+      // load, so wait for the layout before checking for the drawer.
+      await expect(page.locator(MOBILE_TOOLS_TRIGGER)).toBeVisible();
+      const closeProjects = page
         .getByRole("button", { name: "Close projects and environments", exact: true })
-        .first()
-        .click();
-      await expect(tools).toBeVisible();
+        .first();
+      if (await closeProjects.isVisible()) await closeProjects.click();
       await tools.click();
     }
     await page.getByRole("button", { name: "New design workspace" }).click();

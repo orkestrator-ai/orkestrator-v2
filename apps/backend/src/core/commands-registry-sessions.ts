@@ -1,5 +1,5 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import { allowlistEntryDomain } from "@orkestrator/protocol/network-allowlist";
+import { allowlistEntryDomain, parseAllowlistEntry } from "@orkestrator/protocol/network-allowlist";
 import { paneLayoutUnsupportedVersionMessage } from "@orkestrator/protocol/pane-layout";
 import { PANE_LAYOUT_VERSION } from "./models.js";
 import { runCommand } from "./shell.js";
@@ -51,11 +51,23 @@ export function registerSessionCommands(
   register("test_domain_resolution", ({ domains }) =>
     Promise.all(
       asStringArray(domains).map(async (domain) => {
+        // Keep bare-host DNS diagnostics (including localhost), but never
+        // strip an invalid port and report the resulting host as valid.
+        const entry = parseAllowlistEntry(domain);
+        if (domain.includes(":") && !entry) {
+          return {
+            domain,
+            valid: false,
+            resolvable: false,
+            ips: [],
+            error: "Invalid domain or port",
+          };
+        }
         try {
           const dns = await import("node:dns/promises");
-          const ips = (await dns.lookup(allowlistEntryDomain(domain), { all: true })).map(
-            ({ address }) => address,
-          );
+          const ips = (
+            await dns.lookup(entry?.domain ?? allowlistEntryDomain(domain), { all: true })
+          ).map(({ address }) => address);
           return { domain, valid: true, resolvable: true, ips, error: null };
         } catch (error) {
           return {

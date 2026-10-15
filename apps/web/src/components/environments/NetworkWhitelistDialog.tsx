@@ -15,11 +15,7 @@ import { Loader2, Shield, Globe, CheckCircle2, XCircle, AlertCircle } from "luci
 import * as backend from "@/lib/backend";
 import { useConfigStore } from "@/stores";
 import type { Environment, DomainTestResult } from "@/types";
-import {
-  ALLOWLIST_ENTRY_HINT,
-  parseAllowlistEntry,
-} from "@orkestrator/protocol/network-allowlist";
-
+import { ALLOWLIST_ENTRY_HINT, parseAllowlistEntry } from "@orkestrator/protocol/network-allowlist";
 
 interface NetworkWhitelistDialogProps {
   open: boolean;

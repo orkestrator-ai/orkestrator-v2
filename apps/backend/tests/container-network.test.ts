@@ -350,9 +350,7 @@ describe("allowlist edits in place", () => {
         expect(result.kind).toBe("applied");
         expect(result.policy.policyVersion).toBe(3);
         expect(result.policy.configured.domainsRevision).toBe(tuples);
-        expect(await log.read()).toContain(
-          "--set-domains one.example,db.example:5432,db.example",
-        );
+        expect(await log.read()).toContain("--set-domains one.example,db.example:5432,db.example");
       },
     );
     resetImageManifestCache();
@@ -420,6 +418,47 @@ describe("allowlist edits in place", () => {
         const result = await applyEnvironmentAllowedDomains("env-lifecycle", context);
         expect(result.kind).toBe("applied");
         expect(await log.read()).not.toContain("--set-domains");
+      },
+    );
+  });
+});
+
+describe("recorded host-service ports", () => {
+  test.each([
+    ["3\n41234\n", 42345, true],
+    ["3\n41234,42345\n", 42345, false],
+    ["2\n41234\n", 42345, true],
+    ["1\n41234\n", 42345, false],
+    ["", 42345, false],
+    ["3\n41234\n", null, false],
+  ])("record %s with service port %s updates: %s", async (record, port, updates) => {
+    const { ensureContainerHostServicePorts } = await import("../src/core/commands-environment");
+    await withDockerScript(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$*" in *'cat /etc/orkestrator/network-policy'*) printf '%s' '${record}' ;; esac
+`,
+      async (log) => {
+        await ensureContainerHostServicePorts("container-1", port);
+        const calls = await log.read();
+        expect(
+          calls.includes(
+            "exec --user root container-1 /usr/local/bin/update-firewall.sh --host-ports 42345",
+          ),
+        ).toBe(updates);
+        if (port === null) expect(calls).toBe("");
+      },
+    );
+  });
+
+  test("a failed host-port update rejects before callers can use a stale tools URL", async () => {
+    const { ensureContainerHostServicePorts } = await import("../src/core/commands-environment");
+    await withDockerScript(
+      `#!/bin/sh
+case "$*" in *--host-ports*) exit 1 ;; *) printf '3\\n41234\\n' ;; esac
+`,
+      async () => {
+        await expect(ensureContainerHostServicePorts("container-1", 42345)).rejects.toThrow();
       },
     );
   });

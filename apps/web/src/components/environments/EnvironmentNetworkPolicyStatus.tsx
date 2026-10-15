@@ -149,7 +149,7 @@ export function EnvironmentNetworkPolicyStatus({ environmentId }: { environmentI
           Restricted
           {effective.appliedAt ? ` since ${new Date(effective.appliedAt).toLocaleString()}` : ""}
           {effective.allowedEntries !== null
-            ? ` · ${effective.allowedEntries} allowed address ranges`
+            ? ` · ${effective.allowedEntries} ${policy.policyVersion === 3 ? "allowed address and port rules" : "allowed address ranges"}`
             : ""}
           {effective.unresolvedDomains
             ? ` · ${effective.unresolvedDomains} domains did not resolve`

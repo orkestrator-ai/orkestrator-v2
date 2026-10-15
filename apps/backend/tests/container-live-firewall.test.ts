@@ -67,6 +67,7 @@ function firewallContext(environments: Environment[]) {
     credentialSources: new Set(),
   });
   Object.assign(fixture.context.storage, {
+    loadAgentAccounts: async () => ({ version: 1, accounts: [], active: {} }),
     getProject: async () => ({
       id: "project-1",
       name: "Project",
@@ -318,6 +319,176 @@ describe("C23 allowlist edits, refresh and revocation", () => {
       expect(await probe(containerId, "https://example.com/")).toBe(0);
       expect((await applyEnvironmentAllowedDomains(environment.id, context)).kind).toBe("applied");
       expect(await probe(containerId, "https://example.com/")).not.toBe(0);
+    },
+    LIVE_TIMEOUT_MS,
+  );
+});
+
+// A local peer makes protocol matching independent of public UDP services.
+// Every port answers TCP and UDP, so a failed probe demonstrates filtering.
+const ECHO_PEER = `
+const net = require("node:net");
+const dgram = require("node:dgram");
+for (const port of [18080, 18081, 18082]) {
+  net.createServer(socket => {
+    socket.on("error", () => {});
+    socket.on("data", data => socket.write(data));
+  }).listen(port, "0.0.0.0");
+  const udp = dgram.createSocket("udp4");
+  udp.on("message", (data, peer) => udp.send(data, peer.port, peer.address));
+  udp.bind(port, "0.0.0.0");
+}
+`;
+
+async function echoProbe(
+  containerId: string,
+  protocol: "tcp" | "udp",
+  port: number,
+): Promise<number> {
+  const script =
+    protocol === "tcp"
+      ? `
+    const socket = require("node:net").connect(${port}, "firewall-peer.test");
+    socket.on("connect", () => socket.write("probe"));
+    socket.on("data", data => process.exit(data.toString() === "probe" ? 0 : 2));
+    socket.on("error", () => process.exit(1));
+    setTimeout(() => process.exit(1), 2000);
+  `
+      : `
+    const socket = require("node:dgram").createSocket("udp4");
+    socket.on("message", data => process.exit(data.toString() === "probe" ? 0 : 2));
+    socket.on("error", () => process.exit(1));
+    socket.send("probe", ${port}, "firewall-peer.test");
+    setTimeout(() => process.exit(1), 2000);
+  `;
+  return dockerStatus(["exec", "-u", "node", containerId, "node", "-e", script]);
+}
+
+async function heldEcho(containerId: string, port: number, tag: string): Promise<void> {
+  const script = `
+    const fs = require("node:fs");
+    const socket = require("node:net").connect(${port}, "firewall-peer.test");
+    let first = true;
+    const finish = result => { fs.writeFileSync("/tmp/${tag}.second", result); process.exit(0); };
+    socket.on("error", () => finish("closed"));
+    socket.on("connect", () => socket.write("first"));
+    socket.on("data", data => {
+      if (first) { first = false; fs.writeFileSync("/tmp/${tag}.first", data); }
+      else finish(data.toString());
+    });
+    const poll = setInterval(() => {
+      if (!fs.existsSync("/tmp/${tag}.go")) return;
+      clearInterval(poll);
+      socket.write("second");
+      setTimeout(() => finish("timeout"), 2000);
+    }, 50);
+    setTimeout(() => finish("expired"), 30000);
+  `;
+  await docker(["exec", "-d", "-u", "node", containerId, "node", "-e", script]);
+  for (let attempt = 0; attempt < 50; attempt++) {
+    if (
+      (await docker(["exec", containerId, "cat", `/tmp/${tag}.first`]).catch(() => "")) === "first"
+    )
+      return;
+    await Bun.sleep(100);
+  }
+  throw new Error("local peer did not answer the held connection");
+}
+
+describe("policy 3 kernel tuple qualification", () => {
+  live(
+    "TCP and UDP match separately and removing a port revokes only its established connection",
+    async () => {
+      const { createDockerContainer } = await import("../src/core/commands-containers");
+      const { resolveDockerImage } = await import("../src/core/docker-image");
+      const { applyEnvironmentAllowedDomains, environmentNetworkPolicy } =
+        await import("../src/core/container-network");
+      const entries = [
+        "firewall-peer.test:18080",
+        "firewall-peer.test:18081",
+        "firewall-peer.test:18080/udp",
+      ];
+      const environment = lifecycleEnvironment({ id: `tuple-${RUN}`, allowedDomains: entries });
+      const { context } = firewallContext([environment]);
+      const resolved = await resolveDockerImage(IMAGE);
+      if (resolved.kind !== "present") throw new Error("qualification image missing");
+      const containerId = await createDockerContainer(environment, context, {
+        imageId: resolved.imageId,
+      });
+      await context.storage.updateEnvironment(environment.id, { containerId, status: "running" });
+      const network = await docker([
+        "inspect",
+        "--format",
+        "{{.HostConfig.NetworkMode}}",
+        containerId,
+      ]);
+      const peer = await docker([
+        "run",
+        "-d",
+        "--label",
+        `orkestrator-owner=${owner}`,
+        "--network",
+        network,
+        "--network-alias",
+        "firewall-peer.test",
+        "--entrypoint",
+        "node",
+        IMAGE,
+        "-e",
+        ECHO_PEER,
+      ]);
+      try {
+        // Docker returns before Node necessarily has its listeners open.
+        let ready = false;
+        for (let attempt = 0; attempt < 20; attempt++) {
+          if ((await echoProbe(peer, "tcp", 18080)) === 0) {
+            ready = true;
+            break;
+          }
+          await Bun.sleep(100);
+        }
+        expect(ready).toBe(true);
+        // Prove all server ports really answer before testing the restricted client.
+        for (const protocol of ["tcp", "udp"] as const) {
+          for (const port of [18080, 18081, 18082])
+            expect(await echoProbe(peer, protocol, port)).toBe(0);
+        }
+        await docker(["start", containerId]);
+        await booted(containerId);
+        const policy = await environmentNetworkPolicy(environment.id, context);
+        expect(policy.policyVersion).toBe(3);
+        const members = await docker([
+          "exec",
+          "--user",
+          "root",
+          containerId,
+          "ipset",
+          "list",
+          "allowed-domains",
+        ]);
+        expect(policy.effective?.allowedEntries).toBe(
+          Number(members.match(/Number of entries: (\d+)/)?.[1]),
+        );
+        expect(await echoProbe(containerId, "tcp", 18080)).toBe(0);
+        expect(await echoProbe(containerId, "tcp", 18081)).toBe(0);
+        expect(await echoProbe(containerId, "udp", 18080)).toBe(0);
+        expect(await echoProbe(containerId, "udp", 18081)).toBe(1);
+        expect(await echoProbe(containerId, "tcp", 18082)).toBe(1);
+        await heldEcho(containerId, 18080, "tuple-revoked");
+        await heldEcho(containerId, 18081, "tuple-kept");
+        await context.storage.updateEnvironment(environment.id, {
+          allowedDomains: entries.slice(1),
+        });
+        expect((await applyEnvironmentAllowedDomains(environment.id, context)).kind).toBe(
+          "applied",
+        );
+        expect(await secondRequest(containerId, "tuple-revoked")).not.toBe("second");
+        expect(await secondRequest(containerId, "tuple-kept")).toBe("second");
+        expect(await echoProbe(containerId, "tcp", 18080)).toBe(1);
+        expect(await echoProbe(containerId, "udp", 18080)).toBe(0);
+      } finally {
+        await docker(["rm", "-f", peer]);
+      }
     },
     LIVE_TIMEOUT_MS,
   );

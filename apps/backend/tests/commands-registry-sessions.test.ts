@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 
 import { createCommandFixtures } from "./command-fixtures";
 
@@ -196,5 +196,67 @@ describe("pane layout commands", () => {
       },
       3,
     );
+  });
+});
+
+describe("port-aware domain commands", () => {
+  test("resolves parsed hosts, preserves entry labels and refuses invalid ports before DNS", async () => {
+    const dns = await import("node:dns/promises");
+    const resolver = dns as {
+      lookup: (
+        host: string,
+        options: { all: true },
+      ) => Promise<Array<{ address: string; family: number }>>;
+    };
+    const lookup = spyOn(resolver, "lookup").mockResolvedValue([
+      { address: "192.0.2.15", family: 4 },
+    ]);
+    try {
+      const commands = createCommandRegistry();
+      const context = {} as CommandContext;
+      const entries = [
+        "service.example:5432",
+        "service.example:443/udp",
+        "service.example:443/tcp",
+      ];
+      for (const command of ["test_domain_resolution", "validate_domains"]) {
+        lookup.mockClear();
+        const results = await commands.get(command)?.(
+          {
+            domains: [
+              ...entries,
+              "service.example:0",
+              "service.example:65536",
+              "service.example:443/quic",
+            ],
+          },
+          context,
+        );
+        expect(results).toEqual([
+          ...entries.map((domain) => ({
+            domain,
+            valid: true,
+            resolvable: true,
+            ips: ["192.0.2.15"],
+            error: null,
+          })),
+          ...["service.example:0", "service.example:65536", "service.example:443/quic"].map(
+            (domain) => ({
+              domain,
+              valid: false,
+              resolvable: false,
+              ips: [],
+              error: "Invalid domain or port",
+            }),
+          ),
+        ]);
+        expect(lookup).toHaveBeenCalledTimes(3);
+        expect(
+          lookup.mock.calls.every(([host, options]) => host === "service.example" && options.all),
+        ).toBe(true);
+      }
+    } finally {
+      lookup.mockRestore();
+    }
   });
 });

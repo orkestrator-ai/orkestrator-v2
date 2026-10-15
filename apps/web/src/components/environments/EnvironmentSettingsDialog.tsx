@@ -76,11 +76,7 @@ import {
   LEGACY_CONTAINER_DISCARD_WARNING,
   parseContainerLifecycleError,
 } from "@orkestrator/protocol/container-lifecycle";
-import {
-  ALLOWLIST_ENTRY_HINT,
-  parseAllowlistEntry,
-} from "@orkestrator/protocol/network-allowlist";
-
+import { ALLOWLIST_ENTRY_HINT, parseAllowlistEntry } from "@orkestrator/protocol/network-allowlist";
 
 interface EnvironmentSettingsDialogProps {
   open: boolean;

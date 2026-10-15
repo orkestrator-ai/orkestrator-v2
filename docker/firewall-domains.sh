@@ -185,7 +185,7 @@ ork_group_entries() {
             ORK_INVALID_PORTS=$((ORK_INVALID_PORTS + 1))
             continue
         fi
-        domain="${BASH_REMATCH[1]}"
+        domain="${BASH_REMATCH[1],,}"
         port="${BASH_REMATCH[5]:-tcp}:${BASH_REMATCH[3]:-443}"
         if [ -z "${ORK_DOMAIN_PORTS[$domain]+set}" ]; then
             domains+=("$domain")
@@ -210,14 +210,26 @@ ork_add_address() {
     done <<< "${ORK_DOMAIN_PORTS[$domain]}"
 }
 
+# GitHub ranges cover the built-in TCP ports only. Explicit extra tuples
+# must be resolved like any other domain so edits can add and revoke them.
+ork_github_covers_entries() {
+    local domain="$1" spec
+    [[ "$domain" == github.com || "$domain" == *.github.com ]] || return 1
+    [ "$ORK_TUPLES" = 1 ] || return 0
+    while IFS= read -r spec; do
+        case "$spec" in ''|tcp:443|tcp:22) ;; *) return 1 ;; esac
+    done <<< "${ORK_DOMAIN_PORTS[$domain]}"
+    return 0
+}
+
 # Resolves ORK_DOMAIN_LIST with bounded concurrency. Each domain's answer
 # lands in "$1/<index>" as "address ttl" lines; an empty or missing file is a
-# failure. Invalid names and GitHub's own hosts are not resolved.
+# failure. Invalid names and entries covered by GitHub ranges are skipped.
 ork_resolve_all() {
     local dir="$1" index=0 domain running=0
     ORK_INVALID_DOMAINS=0
     for domain in "${ORK_DOMAIN_LIST[@]}"; do
-        if [[ "$domain" == *"github.com"* ]]; then
+        if ork_github_covers_entries "$domain"; then
             : > "$dir/skip.$index"
         elif [ "${#domain}" -gt 253 ] || [[ ! "$domain" =~ $ORK_DOMAIN ]]; then
             ORK_INVALID_DOMAINS=$((ORK_INVALID_DOMAINS + 1))

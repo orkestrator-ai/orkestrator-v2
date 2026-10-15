@@ -59,7 +59,6 @@ import { GlobalSettingsSections } from "./GlobalSettings.sections";
 // enough that releasing a control feels like it saved immediately.
 const AUTO_SAVE_DEBOUNCE_MS = 400;
 
-
 const DEFAULT_CODEX_MAX_CONCURRENT_THREADS = 5;
 
 // The debounce effect re-arms on every edit, so a save that changes nothing is

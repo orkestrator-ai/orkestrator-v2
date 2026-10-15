@@ -59,6 +59,8 @@ describe("environment network policy status", () => {
     install({ ...base, policyVersion: 3 });
     render(<EnvironmentNetworkPolicyStatus environmentId="env-net" />);
     await screen.findByText(/HTTPS \(port 443\) and on the ports their entries name/);
+    expect(screen.getByText(/40 allowed address and port rules/)).toBeTruthy();
+    expect(screen.queryByText(/allowed address ranges/) === null).toBe(true);
     expect(screen.queryByText(/every port/) === null).toBe(true);
   });
 

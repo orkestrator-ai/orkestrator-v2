@@ -355,7 +355,13 @@ echo "Verifying firewall rules..."
 # example.com itself, which must not make every boot fail.
 BLOCKED_PROBE=""
 for candidate in example.com example.net example.org; do
-    case ",$DOMAINS_CSV," in *",$candidate,"*) continue ;; esac
+    if [ "$ORK_TUPLES" = 1 ]; then
+        # ork_add_domains grouped the validated entries by host. Only TCP
+        # 443 permits this HTTPS probe; other ports and UDP do not.
+        case $'\n'"${ORK_DOMAIN_PORTS[$candidate]:-}" in *$'\n''tcp:443'$'\n'*) continue ;; esac
+    else
+        case ",$DOMAINS_CSV," in *",$candidate,"*) continue ;; esac
+    fi
     BLOCKED_PROBE="$candidate"
     break
 done

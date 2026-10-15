@@ -311,7 +311,9 @@ describe("firewall allowlist refresh and edits", () => {
         const calls = fixture.calls();
         // The dropped port of a kept address, and a dropped range by its mask.
         expect(calls).toContain("conntrack -D -p tcp --dport 80 -d 192.0.2.10\n");
-        expect(calls).toContain("conntrack -D -p tcp --dport 22 -d 198.18.0.0 --mask-dst 255.254.0.0");
+        expect(calls).toContain(
+          "conntrack -D -p tcp --dport 22 -d 198.18.0.0 --mask-dst 255.254.0.0",
+        );
         expect(calls).not.toContain("--dport 443 -d 192.0.2.10");
         expect(calls).not.toContain("conntrack -D -d ");
         expect(readFileSync(join(fixture.dir, "policy", "allowed-domains"), "utf8")).toBe(
@@ -322,6 +324,43 @@ describe("firewall allowlist refresh and edits", () => {
         expect(status.domainsRevision).toBe(
           allowedDomainsRevision(["a.example", "b.example:5432/udp"]),
         );
+      },
+      { policy: 3 },
+    );
+  });
+
+  test("policy 3 installs and removes explicit GitHub tuples while retaining built-in ranges", () => {
+    withFixture(
+      (fixture) => {
+        const answers =
+          "github.com 203.0.113.10 60\napi.github.com 203.0.113.11 60\nnotgithub.com.example 192.0.2.40 60\n";
+        expect(
+          fixture.run(
+            [
+              "--set-domains",
+              "github.com:80,github.com:443/udp,api.github.com:8443,notgithub.com.example",
+            ],
+            answers,
+          ).exitCode,
+        ).toBe(0);
+        expect([...fixture.members().keys()].sort()).toEqual(
+          [
+            "203.0.113.0/24,tcp:443",
+            "203.0.113.0/24,tcp:22",
+            "203.0.113.10,tcp:80",
+            "203.0.113.10,udp:443",
+            "203.0.113.11,tcp:8443",
+            "192.0.2.40,tcp:443",
+          ].sort(),
+        );
+        expect(fixture.status().allowedEntries).toBe(fixture.members().size);
+        expect(fixture.run(["--set-domains", "github.com,github.com:22"], "").exitCode).toBe(0);
+        expect([...fixture.members().keys()].sort()).toEqual(
+          ["203.0.113.0/24,tcp:443", "203.0.113.0/24,tcp:22"].sort(),
+        );
+        expect(fixture.calls()).toContain("conntrack -D -p tcp --dport 80 -d 203.0.113.10");
+        expect(fixture.calls()).toContain("conntrack -D -p udp --dport 443 -d 203.0.113.10");
+        expect(fixture.calls()).not.toContain("--dport 443 -d 203.0.113.0");
       },
       { policy: 3 },
     );

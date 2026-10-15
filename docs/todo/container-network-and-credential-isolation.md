@@ -103,6 +103,21 @@ restricted containers no longer need `NET_ADMIN` can the sudo grants shrink or
   would not start containers that day), and `hash:net,port` support on the
   Desktop and rootless kernels is unconfirmed (init fails closed without
   it). The live re-run in container-platform-qualification.md covers both.
+- Review follow-up added regressions for explicit GitHub ports and UDP,
+  HTTPS-aware startup probe selection, policy-3 creation metadata,
+  host-service port updates, DNS validation and the settings editor. C23
+  additionally uses a local TCP/UDP echo peer to distinguish protocols on
+  one port, check blocked ports, compare the reported entry count with ipset,
+  and remove one established TCP flow while retaining another and UDP on the
+  removed TCP port. The live attempt on Docker Desktop 29.8.1 still could not
+  start containers (120-second timeouts; a minimal `/bin/true` container also
+  remained `Created`). It did not reach any packet assertions. Evidence:
+  `/tmp/orkestrator-test-run.0g2KQN/live-firewall.log.gz`. Run again with a
+  current qualification image on a working daemon:
+
+  ```bash
+  RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> mise run test:logged -- --name live-firewall -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-firewall.test.ts --parallel=1 --only-failures
+  ```
 
 ## Constraints and rationale
 

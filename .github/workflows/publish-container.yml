@@ -15,6 +15,11 @@ on:
         description: Release tag to build (v<version>)
         required: true
         type: string
+      moving-tags:
+        description: Also push the channel's moving tags (latest, X.Y, X, beta, unstable)
+        required: false
+        type: boolean
+        default: true
 
 concurrency:
   group: publish-container-${{ inputs.tag || github.ref }}
@@ -199,13 +204,18 @@ jobs:
         env:
           RELEASE_VERSION: ${{ needs.validate-release.outputs.version }}
           RELEASE_COMMIT: ${{ needs.validate-release.outputs.commit }}
+          # A caller that publishes the release afterwards moves these itself,
+          # so a channel tag never names a version no channel offers yet.
+          IMMUTABLE_ONLY: ${{ inputs.moving-tags == false && '--immutable-only' || '' }}
         shell: bash
         run: |
           set -euo pipefail
+          flags=()
+          if [[ -n "$IMMUTABLE_ONLY" ]]; then flags+=("$IMMUTABLE_ONLY"); fi
           {
             echo "tags<<EOF"
             mise exec -- bun scripts/release-channel.ts container-tags "$RELEASE_VERSION" \
-              --image "${REGISTRY}/${IMAGE_NAME}" --sha "$RELEASE_COMMIT"
+              --image "${REGISTRY}/${IMAGE_NAME}" --sha "$RELEASE_COMMIT" "${flags[@]}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 

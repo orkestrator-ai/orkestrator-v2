@@ -77,11 +77,15 @@ dispatched with **force**. For a new build it:
    next patch after `main`'s stable version, or `main`'s own core when `main`
    is a prerelease, plus the date, the run number and the short commit;
 2. writes it into every manifest, regenerates the lockfiles, commits that on
-   top of `main` **without** touching `main`, and pushes only the tag;
+   top of `main` **without** touching `main`, pushes only the tag, and opens
+   the draft release every build job uploads to;
 3. builds macOS arm64 (signed and notarized from secrets) and Linux x64 and
-   arm64 with `release:desktop`, publishes npm on the `unstable` dist-tag,
-   runs `release:publish`, and prunes all but the newest ten unstable releases;
-4. calls `publish-container.yml` for the `unstable` image tag;
+   arm64 with `release:desktop` (only the macOS build uploads the
+   requirements manifest), and calls `publish-container.yml` for the version
+   and `sha-` image tags only;
+4. publishes npm on the `unstable` dist-tag, runs `release:publish`, moves the
+   GHCR `unstable` tag once the release is public, and prunes all but the
+   newest ten unstable releases;
 5. deletes the draft and tag again if any step before publication failed.
 
 ## One-time setup

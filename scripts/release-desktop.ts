@@ -231,8 +231,10 @@ function build(publish: boolean, runtime: ReleaseRuntime): void {
     if (publish)
       run(["gh", "release", "upload", tag, "--repo", REPOSITORY, "--clobber", ...feeds], env);
   }
-  // Every platform uploads the same bytes: generation is deterministic.
-  if (publish) {
+  // Generation is deterministic, so every platform makes the same bytes; only
+  // the macOS build (required in every release) uploads them, so parallel CI
+  // jobs never race on one asset. `publish` re-derives and compares them.
+  if (publish && platform === "darwin") {
     run(
       [
         "gh",

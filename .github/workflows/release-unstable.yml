@@ -58,7 +58,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          short="$(git rev-parse --short=7 HEAD)"
+          # Exactly seven characters, like the version's g<sha>; --short may add more.
+          short="$(git rev-parse HEAD | cut -c1-7)"
           existing="$(git tag --list "v*-unstable.*.g${short}" | head -n 1)"
           if [[ -n "$existing" && "$FORCE" != "true" ]]; then
             echo "main (${short}) is already released as ${existing}."
@@ -78,9 +79,10 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tag=v${version}" >> "$GITHUB_OUTPUT"
 
-      - name: Create the release commit and push its tag
+      - name: Create the release commit, push its tag and open the draft
         if: steps.check.outputs.skip != 'true'
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.version }}
           TAG: ${{ steps.version.outputs.tag }}
         shell: bash
@@ -99,6 +101,11 @@ jobs:
           git tag "$TAG"
           # Only the tag is pushed; the release commit is not on any branch.
           git push origin "refs/tags/${TAG}"
+          # One draft for every build job to upload to: electron-builder would
+          # otherwise list-then-create in three parallel jobs and race.
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --prerelease \
+            --verify-tag --title "$TAG" \
+            --notes "Unstable build of main at $(git rev-parse HEAD^)."
 
   build-macos:
     name: Build macOS arm64
@@ -214,11 +221,14 @@ jobs:
 
   publish-release:
     name: Publish the prerelease and the channel index
-    needs: [prepare, publish-npm]
+    # The image must exist first: the release's manifest names it and an
+    # update pulls it.
+    needs: [prepare, publish-npm, container]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: write
+      packages: write
     steps:
       - name: Check out the release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -239,6 +249,28 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: mise run release:publish
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Only now that the release is public does the image's channel tag move.
+      - name: Move the GHCR unstable tag
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY}"
+          while read -r tag; do
+            [[ -n "$tag" ]] && docker buildx imagetools create --tag "$tag" "${image}:${VERSION}"
+          done < <(bun scripts/release-channel.ts moving-tags "$VERSION" --image "$image")
+
       - name: Prune old unstable releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -256,11 +288,13 @@ jobs:
     uses: ./.github/workflows/publish-container.yml
     with:
       tag: ${{ needs.prepare.outputs.tag }}
+      # publish-release moves `unstable` once the release is public.
+      moving-tags: false
 
   # A failed run leaves a draft and a tag no channel will ever point at.
   clean-up:
     name: Remove an unpublished release
-    needs: [prepare, build-macos, build-linux, publish-npm, publish-release]
+    needs: [prepare, build-macos, build-linux, publish-npm, container, publish-release]
     if: failure() && needs.prepare.outputs.tag != ''
     runs-on: ubuntu-24.04
     timeout-minutes: 10

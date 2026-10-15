@@ -200,6 +200,24 @@ describe("release-channel CLI", () => {
     ]);
   });
 
+  test("splits immutable and moving container tags for a publish-later caller", () => {
+    const version = "2.22.0-unstable.20261015.7.g3f2a9c1";
+    expect(
+      runReleaseChannel([
+        "container-tags",
+        version,
+        "--image",
+        "ghcr.io/o/r",
+        "--sha",
+        "a".repeat(40),
+        "--immutable-only",
+      ]).split("\n"),
+    ).toEqual([`ghcr.io/o/r:${version}`, `ghcr.io/o/r:sha-${"a".repeat(40)}`]);
+    expect(runReleaseChannel(["moving-tags", version, "--image", "ghcr.io/o/r"])).toBe(
+      "ghcr.io/o/r:unstable",
+    );
+  });
+
   test("rewrites only the top-level version line", () => {
     const text =
       '{\n  "name": "x",\n  "version": "2.20.1",\n  "dependencies": {\n    "y": { "version": "1.0.0" }\n  }\n}\n';

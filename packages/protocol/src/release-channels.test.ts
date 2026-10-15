@@ -3,6 +3,7 @@ import {
   channelIncludes,
   compareReleaseVersions,
   containerTagsForVersion,
+  movingContainerTags,
   newestIncludedRelease,
   npmDistTagForChannel,
   parseReleaseChannelIndex,
@@ -176,6 +177,16 @@ describe("container tags", () => {
     ]);
     const unstable = "2.22.0-unstable.20261015.412.g3f2a9c1";
     expect(containerTagsForVersion(unstable, SHA)).toEqual([unstable, "unstable", `sha-${SHA}`]);
+  });
+
+  test("a caller that publishes later can push only the immutable tags, then move the rest", () => {
+    const unstable = "2.22.0-unstable.20261015.412.g3f2a9c1";
+    expect(containerTagsForVersion(unstable, SHA, { moving: false })).toEqual([
+      unstable,
+      `sha-${SHA}`,
+    ]);
+    expect(movingContainerTags(unstable)).toEqual(["unstable"]);
+    expect(movingContainerTags("2.21.0")).toEqual(["2.21", "2", "latest", "stable"]);
   });
 
   test("refuses non-channel versions and short SHAs", () => {

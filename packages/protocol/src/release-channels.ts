@@ -194,18 +194,30 @@ export function unstableVersion(options: {
  * Container image tags for a release. Only a stable version moves `latest`,
  * `X.Y` and `X`; prereleases get their exact version and their channel tag.
  */
-export function containerTagsForVersion(version: string, commitSha: string): string[] {
-  const channel = assertReleaseChannelVersion(version);
+export function containerTagsForVersion(
+  version: string,
+  commitSha: string,
+  options: { moving?: boolean } = {},
+): string[] {
+  assertReleaseChannelVersion(version);
   if (!/^[0-9a-f]{40}$/.test(commitSha)) throw new Error("commitSha must be a full commit id");
-  const parsed = parseSemver(version)!;
   const tags = [version];
-  if (channel === "stable") {
-    tags.push(`${parsed.major}.${parsed.minor}`, `${parsed.major}`, "latest", "stable");
-  } else {
-    tags.push(channel);
-  }
+  if (options.moving !== false) tags.push(...movingContainerTags(version));
   tags.push(`sha-${commitSha}`);
   return tags;
+}
+
+/**
+ * The tags that move with each release of a channel. A workflow that pushes
+ * the image before the release is public moves these only after publishing,
+ * so `unstable` never names a version no channel offers.
+ */
+export function movingContainerTags(version: string): string[] {
+  const channel = assertReleaseChannelVersion(version);
+  const parsed = parseSemver(version)!;
+  return channel === "stable"
+    ? [`${parsed.major}.${parsed.minor}`, `${parsed.major}`, "latest", "stable"]
+    : [channel];
 }
 
 export type ReleaseChannelEntry = {

@@ -5,7 +5,8 @@
  *
  *   bun scripts/release-channel.ts classify <version>
  *   bun scripts/release-channel.ts unstable-version --run <n> --sha <commit> [--date <iso>]
- *   bun scripts/release-channel.ts container-tags <version> --image <ref> --sha <commit>
+ *   bun scripts/release-channel.ts container-tags <version> --image <ref> --sha <commit> [--immutable-only]
+ *   bun scripts/release-channel.ts moving-tags <version> --image <ref>
  *   bun scripts/release-channel.ts set-version <version>
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -13,6 +14,7 @@ import path from "node:path";
 import {
   assertReleaseChannelVersion,
   containerTagsForVersion,
+  movingContainerTags,
   npmDistTagForChannel,
   parseSemver,
   releaseTagForVersion,
@@ -100,9 +102,20 @@ export function runReleaseChannel(args: string[], repositoryRoot = root): string
     const image = option(flags, "--image");
     const sha = option(flags, "--sha");
     if (!version || !image || !sha) {
-      throw new Error("usage: container-tags <version> --image <ref> --sha <commit>");
+      throw new Error(
+        "usage: container-tags <version> --image <ref> --sha <commit> [--immutable-only]",
+      );
     }
-    return containerTagsForVersion(version, sha)
+    return containerTagsForVersion(version, sha, { moving: !flags.includes("--immutable-only") })
+      .map((tag) => `${image}:${tag}`)
+      .join("\n");
+  }
+  if (command === "moving-tags" && rest.length === 3) {
+    const [version, flag, image] = rest;
+    if (!version || flag !== "--image" || !image) {
+      throw new Error("usage: moving-tags <version> --image <ref>");
+    }
+    return movingContainerTags(version)
       .map((tag) => `${image}:${tag}`)
       .join("\n");
   }
@@ -112,7 +125,8 @@ export function runReleaseChannel(args: string[], repositoryRoot = root): string
   }
   throw new Error(
     "usage: release-channel.ts classify <version> | unstable-version --run <n> --sha <commit> " +
-      "| container-tags <version> --image <ref> --sha <commit> | set-version <version>",
+      "| container-tags <version> --image <ref> --sha <commit> [--immutable-only] " +
+      "| moving-tags <version> --image <ref> | set-version <version>",
   );
 }
 

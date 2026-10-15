@@ -201,18 +201,20 @@ describe("desktop release commands", () => {
                 "--clobber",
                 "release/latest-mac.yml",
               ],
+              // Only the macOS build uploads the manifest: parallel CI jobs
+              // must not race on one asset.
+              [
+                "gh",
+                "release",
+                "upload",
+                tag,
+                "--repo",
+                REPO,
+                "--clobber",
+                "build/release-requirements.json",
+              ],
             ]
           : []),
-        [
-          "gh",
-          "release",
-          "upload",
-          tag,
-          "--repo",
-          REPO,
-          "--clobber",
-          "build/release-requirements.json",
-        ],
       ]);
       expect(run.mock.calls[2]?.[1]).toMatchObject({
         GH_TOKEN: "test-only",

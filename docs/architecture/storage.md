@@ -142,9 +142,13 @@ from that.
   Never wrap work that must be durable *before* an external side effect, such
   as a native `pendingDispatch` written before the provider send.
 
-Reads are cached per store and revalidated against the committed revision on
-every read (one indexed lookup), which also observes other processes' writes.
-`getResourceSnapshotRevision` hashes the database identity and that revision.
+Whole-store reads are cached per store and revalidated against the committed
+revision on every read (one indexed lookup), which also observes other
+processes' writes. Keyed reads and mutations fetch only their named row even
+on a cold connection or after another process writes; keyed mutations invalidate
+any whole-store cache after commit. Legacy document representations retain the
+whole-document fallback. `getResourceSnapshotRevision` hashes the database
+identity and that revision.
 
 Several backends may share a data directory (the desktop app and `orkestrator
 serve` default to the same one). WAL lets them read concurrently, and the

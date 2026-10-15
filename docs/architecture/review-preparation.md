@@ -200,7 +200,10 @@ generation, transcript reads bounded by reviewer count, at most one save per
 running pass, no whole-store read and at most two Multi Review lease
 acquisitions per running pass (unchanged by retained history),
 `min(reviewers, 4)` concurrent setups, and that a slow setup does not
-serialise the panel. To record the result table:
+serialise the panel. Separate storage probes count the actual SQLite rows and
+serialized bytes fetched with zero and 50 retained workflows. They check a cold
+reader and a reader invalidated by another backend, so a keyed API cannot hide
+a whole-store cache load. To record the result table:
 
 ```bash
 MULTI_REVIEW_BENCH_OUT=/tmp/multi-review-bench.json \

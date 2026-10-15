@@ -191,7 +191,8 @@ export interface StorageDatabaseOptions {
   beforeMigrate?: (database: StorageDatabase, from: number, to: number) => void;
   /**
    * Observes reads: `cache-hit` when the committed revision matched the cached
-   * rows, `load` when they were read from the database. Never sees content.
+   * rows, `load` when rows were read from the database (whole-store or keyed).
+   * Never sees content.
    */
   observe?: (event: "cache-hit" | "load") => void;
 }
@@ -451,30 +452,43 @@ export class StorageDatabase {
     return rows.map((row) => JSON.parse(row.value) as unknown);
   }
 
-  /** Reads one row of a record/array store without assembling the whole value. */
+  /**
+   * Reads one committed row without loading the store's cached history. The
+   * header and value share a read snapshot, including representation changes
+   * by another connection. A document representation retains the legacy fallback.
+   */
   readStoreRow(store: string, key: string, collection = ""): unknown | undefined {
-    const cached = this.loadCached(store);
-    if (!cached) return undefined;
-    if (cached.mode === "rows") {
-      const row = cached.rows.get(rowId(collection, key));
-      if (!row) return undefined;
-      try {
-        return JSON.parse(row.value) as unknown;
-      } catch {
-        throw new StoreCorruptError(store);
-      }
-    }
-    const value = this.assemble(store, cached);
-    if (collection) {
-      const records = isPlainRecord(value) ? value[collection] : undefined;
-      return isPlainRecord(records) ? records[key] : undefined;
-    }
-    if (Array.isArray(value)) {
-      const layout = this.layoutFor(store);
-      const field = layout.kind === "array" ? (layout.key ?? "id") : "id";
-      return value.find((item) => isPlainRecord(item) && item[field] === key);
-    }
-    return isPlainRecord(value) ? value[key] : undefined;
+    return this.db
+      .transaction(() => {
+        const header = this.readStoreHeader(store);
+        if (!header) return undefined;
+        let value: unknown;
+        try {
+          if (header.mode === "rows") {
+            this.observe?.("load");
+            const row = this.db
+              .query("SELECT value FROM store_rows WHERE store = ? AND collection = ? AND key = ?")
+              .get(store, collection, key) as { value: string } | null;
+            return row ? (JSON.parse(row.value) as unknown) : undefined;
+          }
+          this.observe?.("load");
+          value = assembleStoredValue(header, []);
+        } catch (error) {
+          if (error instanceof SyntaxError) throw new StoreCorruptError(store);
+          throw error;
+        }
+        if (collection) {
+          const records = isPlainRecord(value) ? value[collection] : undefined;
+          return isPlainRecord(records) ? records[key] : undefined;
+        }
+        if (Array.isArray(value)) {
+          const layout = this.layoutFor(store);
+          const field = layout.kind === "array" ? (layout.key ?? "id") : "id";
+          return value.find((item) => isPlainRecord(item) && item[field] === key);
+        }
+        return isPlainRecord(value) ? value[key] : undefined;
+      })
+      .deferred();
   }
 
   /**
@@ -610,9 +624,8 @@ export class StorageDatabase {
       throw new Error(`Store ${store} has no collection ${collection}`);
     }
     return this.transaction(() => {
-      const committed = this.storeRevision(store);
-      const cached = committed === null ? null : this.loadCachedInTransaction(store, committed);
-      if (!cached || cached.mode === "document") {
+      const header = this.readStoreHeader(store);
+      if (!header || header.mode === "document") {
         const whole = this.readStoreValueInTransaction(store, options);
         const value = isPlainRecord(whole?.value) ? { ...whole.value } : { ...options.initial?.() };
         const records = collection
@@ -630,8 +643,12 @@ export class StorageDatabase {
         );
         return update.result;
       }
-      const id = rowId(collection, key);
-      const existing = cached.rows.get(id);
+      this.observe?.("load");
+      const existing = this.db
+        .query(
+          "SELECT position, value FROM store_rows WHERE store = ? AND collection = ? AND key = ?",
+        )
+        .get(store, collection, key) as { position: number; value: string } | null;
       let current: unknown;
       try {
         current = existing ? (JSON.parse(existing.value) as unknown) : undefined;
@@ -639,24 +656,25 @@ export class StorageDatabase {
         throw new StoreCorruptError(store);
       }
       const update = mutate(current);
-      const rows = new Map(cached.rows);
-      let document = cached.document;
+      let document = header.document;
       if (update.delete) {
         if (!existing) return update.result;
         this.db
           .query("DELETE FROM store_rows WHERE store = ? AND collection = ? AND key = ?")
           .run(store, collection, key);
-        rows.delete(id);
       } else if ("value" in update) {
         if (update.value === undefined) throw new Error(`Cannot persist undefined to ${store}`);
         const value = JSON.stringify(update.value);
         if (existing?.value === value) return update.result;
         let position = existing?.position;
         if (position === undefined) {
-          position = 0;
-          for (const row of cached.rows.values()) {
-            if (row.collection === collection) position = Math.max(position, row.position + 1);
-          }
+          position = (
+            this.db
+              .query(
+                "SELECT coalesce(max(position) + 1, 0) AS next FROM store_rows WHERE store = ? AND collection = ?",
+              )
+              .get(store, collection) as { next: number }
+          ).next;
         }
         const owner = layout.kind === "record" ? layout.owner?.(update.value) : undefined;
         this.db
@@ -667,7 +685,6 @@ export class StorageDatabase {
                owner = excluded.owner, value = excluded.value`,
           )
           .run(store, collection, key, position, owner ?? null, value);
-        rows.set(id, { collection, key, position, value });
         if (collection && document !== null) {
           // A first row of a collection the envelope did not have yet.
           const envelope = JSON.parse(document) as Record<string, unknown>;
@@ -679,11 +696,13 @@ export class StorageDatabase {
       } else {
         return update.result;
       }
-      const revision = committed! + 1;
+      const revision = header.revision + 1;
       this.db
         .query("UPDATE stores SET revision = ?, document = ?, updated_at = ? WHERE name = ?")
         .run(revision, document, Date.now(), store);
-      this.setCache(store, { ...cached, revision, rows, document });
+      // Whole-store readers must reload after a keyed write; keeping a full
+      // cached copy here would make each mutation copy retained history.
+      this.setCache(store, null);
       return update.result;
     });
   }

@@ -47,16 +47,23 @@ function storeDir(storage: StorageService): string {
 
 async function withStorage(
   run: (storage: StorageService) => Promise<void>,
-  options: { legacyMultiReviews?: Record<string, unknown> } = {},
+  options: {
+    legacyMultiReviews?: Record<string, unknown>;
+    legacyLoopedReviews?: Record<string, unknown>;
+  } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-storage-multi-review-"));
   try {
-    if (options.legacyMultiReviews) {
+    for (const [file, records] of [
+      ["multi-reviews.json", options.legacyMultiReviews],
+      ["looped-reviews.json", options.legacyLoopedReviews],
+    ] as const) {
+      if (!records) continue;
       // A pre-SQLite store and its backup: the first open imports them and
       // moves both into the retired JSON archive.
-      const raw = JSON.stringify(options.legacyMultiReviews);
-      await fs.writeFile(path.join(dataDir, "multi-reviews.json"), raw);
-      await fs.writeFile(path.join(dataDir, "multi-reviews.json.bak.1"), raw);
+      const raw = JSON.stringify(records);
+      await fs.writeFile(path.join(dataDir, file), raw);
+      await fs.writeFile(path.join(dataDir, `${file}.bak.1`), raw);
     }
     const storage = new StorageService(dataDir);
     await storage.init();
@@ -77,7 +84,11 @@ async function withStorage(
       worktreePath: "/tmp/review",
       setupScriptsComplete: true,
     });
-    await run(storage);
+    try {
+      await run(storage);
+    } finally {
+      storage.close();
+    }
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }
@@ -455,5 +466,132 @@ test("an environment sweep removes every Multi Review record that names it", asy
       elsewhere: { environmentId: "env-2", note: "kept" },
     });
     expect(storageFilesContain(dataDir, secret)).toBe(false);
+  });
+});
+
+test.each(["multi", "looped"] as const)(
+  "%s review deletion retries scrubbing after the row deletion committed",
+  async (kind) => {
+    const secret = `${kind}-RETRY-DELETE-SECRET-3f6a`;
+    const kept = `${kind}-RETRY-DELETE-KEPT-9b2c`;
+    const persisted = (id: string, marker: string) => ({
+      version: 1,
+      id,
+      environmentId: "env-1",
+      snapshot: { ...completed(id), targetBranch: marker },
+      updatedAt: new Date(0).toISOString(),
+      revision: 1,
+    });
+    const records = {
+      "review-1": persisted("review-1", secret),
+      "review-2": persisted("review-2", kept),
+    };
+    await withStorage(
+      async (storage) => {
+        const dataDir = storeDir(storage);
+        const remove = (id: string) =>
+          kind === "multi"
+            ? storage.deleteMultiReviewWorkflow(id)
+            : storage.deleteLoopedReviewWorkflow(id);
+        const get = (id: string) =>
+          kind === "multi"
+            ? storage.getMultiReviewWorkflow(id)
+            : storage.getLoopedReviewWorkflow(id);
+        const changes: unknown[] = [];
+        const unsubscribe = storage.addResourceChangeListener((change) => changes.push(change));
+        const scrub = spyOn(
+          storage as unknown as {
+            scrubSensitiveJsonBackups: (
+              file: string,
+              keep: (id: string, value: unknown) => boolean,
+            ) => Promise<void>;
+          },
+          "scrubSensitiveJsonBackups",
+        ).mockRejectedValueOnce(new Error("scrub interrupted"));
+        try {
+          await expect(remove("review-1")).rejects.toThrow("scrub interrupted");
+          expect(await get("review-1")).toBeNull();
+          expect(storageFilesContain(dataDir, secret)).toBe(true);
+          const stamp = (await fs.readdir(path.join(dataDir, LEGACY_JSON_DIRECTORY)))[0]!;
+          const archiveFiles = ["", ".bak.1"].map((suffix) =>
+            path.join(dataDir, LEGACY_JSON_DIRECTORY, stamp, `${kind}-reviews.json${suffix}`),
+          );
+          for (const file of archiveFiles)
+            expect(await fs.readFile(file, "utf8")).toContain(secret);
+
+          await remove("review-1");
+
+          expect(scrub).toHaveBeenCalledTimes(2);
+          expect(changes).toHaveLength(1);
+          expect(await get("review-1")).toBeNull();
+          expect(storageFilesContain(dataDir, secret)).toBe(false);
+          for (const file of archiveFiles) {
+            const archived = await fs.readFile(file, "utf8");
+            expect(archived).not.toContain(secret);
+            expect(archived).toContain(kept);
+          }
+          expect((await get("review-2"))?.snapshot).toMatchObject({ targetBranch: kept });
+        } finally {
+          scrub.mockRestore();
+          unsubscribe();
+        }
+      },
+      kind === "multi" ? { legacyMultiReviews: records } : { legacyLoopedReviews: records },
+    );
+  },
+);
+
+test("a successful fence read cannot authorize a save after another backend takes over", async () => {
+  await withStorage(async (storage) => {
+    const other = new StorageService(storeDir(storage));
+    await other.init();
+    const clock = spyOn(Date, "now").mockReturnValue(10_000);
+    try {
+      await storage.saveMultiReviewWorkflow("multi-1", "env-1", 1, workflow("multi-1"));
+      const first = await storage.claimMultiReviewController("multi-1", "owner-1", 2_000);
+      clock.mockReturnValue(11_999);
+      expect(await storage.validateMultiReviewController("multi-1", "owner-1", first.token)).toBe(
+        true,
+      );
+
+      clock.mockReturnValue(12_001);
+      const second = await other.claimMultiReviewController("multi-1", "owner-2", 15_000);
+      expect(second.granted).toBe(true);
+      expect(second.token).not.toBe(first.token);
+      // No intervening validation: the save itself must check the committed fence.
+      await expect(
+        storage.saveMultiReviewWorkflow(
+          "multi-1",
+          "env-1",
+          1,
+          { ...workflow("multi-1"), phase: "addressing" },
+          1,
+          { ownerId: "owner-1", token: first.token },
+        ),
+      ).rejects.toThrow("Multi review controller lease conflict");
+      const unchanged = await other.getMultiReviewWorkflow("multi-1");
+      expect(unchanged).toMatchObject({
+        revision: 1,
+        snapshot: workflow("multi-1"),
+        controllerLease: { ownerId: "owner-2", token: second.token },
+      });
+      await expect(
+        other.saveMultiReviewWorkflow(
+          "multi-1",
+          "env-1",
+          1,
+          { ...workflow("multi-1"), phase: "consolidating" },
+          1,
+          { ownerId: "owner-2", token: second.token },
+        ),
+      ).resolves.toMatchObject({ revision: 2, snapshot: { phase: "consolidating" } });
+      await storage.releaseMultiReviewController("multi-1", "owner-1", first.token);
+      expect(await other.validateMultiReviewController("multi-1", "owner-2", second.token)).toBe(
+        true,
+      );
+    } finally {
+      clock.mockRestore();
+      other.close();
+    }
   });
 });

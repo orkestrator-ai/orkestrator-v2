@@ -224,6 +224,28 @@ describe("StorageDatabase", () => {
     expect(db.readStoreRow("mail", "m", "mailboxes")).toEqual({ n: 1 });
   });
 
+  test.each([
+    ["records", "a", "", { a: { n: 1 } }, { a: { n: 2 } }],
+    ["items", "a", "", [{ id: "a", n: 1 }], [{ id: "a", n: 2 }]],
+    ["mail", "a", "mailboxes", { mailboxes: { a: { n: 1 } } }, { mailboxes: { a: { n: 2 } } }],
+  ])(
+    "keyed reads follow %s document and row representation changes",
+    async (store, key, collection, first, second) => {
+      const directory = await dataDir();
+      const writer = database(directory);
+      const reader = database(directory);
+      expect(reader.readStoreRow(store, key, collection)).toBeUndefined();
+      writer.transaction(() => writer.writeRawDocumentInTransaction(store, JSON.stringify(first)));
+      expect(reader.readStoreRow(store, key, collection)).toMatchObject({ n: 1 });
+      // A whole-store cached document must not mask the later row representation.
+      reader.readStore(store);
+      writer.writeStore(store, second);
+      expect(reader.readStoreRow(store, key, collection)).toMatchObject({ n: 2 });
+      writer.transaction(() => writer.writeRawDocumentInTransaction(store, JSON.stringify(first)));
+      expect(reader.readStoreRow(store, key, collection)).toMatchObject({ n: 1 });
+    },
+  );
+
   test("deletes stores and lists them by prefix", async () => {
     const db = database(await dataDir());
     db.writeStore("ops/a", 1);
@@ -535,6 +557,31 @@ describe("StorageDatabase.updateStoreRow", () => {
     db.transaction(() => db.writeRawDocumentInTransaction("records", "{ torn"));
     db.updateStoreRow("records", "b", () => ({ result: null, value: 2 }));
     expect(db.readStore("records")?.value).toEqual({ b: 2 });
+  });
+
+  test("keyed writes invalidate whole-store caches only after commit", async () => {
+    const directory = await dataDir();
+    const db = database(directory);
+    const other = database(directory);
+    const original = { a: { n: 1 }, b: { n: 2 } };
+    db.writeStore("records", original);
+    other.readStore("records");
+    const revision = db.storeRevision("records");
+    expect(() =>
+      db.transaction(() => {
+        db.updateStoreRow("records", "a", () => ({ result: null, value: { n: 3 } }));
+        db.updateStoreRow("records", "b", () => ({ result: null, delete: true }));
+        expect(db.readStoreRow("records", "a")).toEqual({ n: 3 });
+        expect(db.readStore("records")?.value).toEqual({ a: { n: 3 } });
+        throw new Error("rollback keyed writes");
+      }),
+    ).toThrow("rollback keyed writes");
+    expect(db.storeRevision("records")).toBe(revision);
+    expect(db.readStore("records")?.value).toEqual(original);
+    expect(other.readStore("records")?.value).toEqual(original);
+    db.updateStoreRow("records", "a", () => ({ result: null, value: { n: 4 } }));
+    expect(db.readStore("records")?.value).toEqual({ ...original, a: { n: 4 } });
+    expect(other.readStore("records")?.value).toEqual({ ...original, a: { n: 4 } });
   });
 
   test("refuses stores that are not keyed records", async () => {

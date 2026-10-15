@@ -433,8 +433,8 @@ export abstract class StorageReviews extends StorageSessions {
           ? { result: true, delete: true }
           : { result: false },
       );
-      if (!deleted) return;
-      this.announce("looped-review", workflowId, undefined, undefined, true);
+      if (deleted) this.announce("looped-review", workflowId, undefined, undefined, true);
+      // A previous attempt may have committed the delete before its scrub failed.
       await this.scrubSensitiveJsonBackups(
         this.loopedReviewsFile(),
         (storedId) => storedId !== workflowId,
@@ -732,8 +732,8 @@ export abstract class StorageReviews extends StorageSessions {
       const deleted = this.updateStoreRow(this.multiReviewsFile(), workflowId, (current) =>
         current === undefined ? { result: false } : { result: true, delete: true },
       );
-      if (!deleted) return;
-      this.announce("multi-review", workflowId, undefined, undefined, true);
+      if (deleted) this.announce("multi-review", workflowId, undefined, undefined, true);
+      // A previous attempt may have committed the delete before its scrub failed.
       await this.scrubSensitiveJsonBackups(
         this.multiReviewsFile(),
         (storedId) => storedId !== workflowId,

@@ -691,7 +691,8 @@ preparation boundary without calling Pi, or through `session.abort()` once Pi
 is starting the turn. Startup is bounded by `PI_BRIDGE_STARTUP_TIMEOUT_MS`. The
 session reports running on every read route while a claim exists.
 
-Pi's vendor SDK has no MCP client. The bridge owns one (`bridges/pi-bridge/src/mcp.ts`)
+Pi's SDK sessions load no MCP client; only Pi's CLI loads its built-in `mcp`
+extension, which is what a Pi terminal tab uses. The bridge owns one (`bridges/pi-bridge/src/mcp.ts`)
 and loads it through `extensionFactories` next to the approval gate: Orkestrator
 from env / per-tab `agentMcp` (reserved name, HTTP only), user servers from
 `~/.pi/agent/mcp.json`, and project `.pi/mcp.json` only when

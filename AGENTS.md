@@ -619,8 +619,8 @@ When touching the Pi bridge:
   extension is arbitrary TypeScript this process would execute, so cloning a
   repository must not be enough to run its code — the same boundary
   `ACP_APPROVE_PROJECT_MCPS` draws for the ACP bridge.
-- Pi's vendor SDK has no MCP client and no plan/build mode. The bridge owns
-  an MCP client (`src/mcp.ts`) and registers tools through the inline
+- Pi's SDK sessions load no MCP client (only its CLI loads the built-in `mcp`
+  extension) and have no plan/build mode. The bridge owns an MCP client (`src/mcp.ts`) and registers tools through the inline
   `orkestrator-mcp` extension: Orkestrator from env / per-tab `agentMcp`,
   user servers from `~/.pi/agent/mcp.json`, and project `.pi/mcp.json` only
   when the execution policy opts into project resources. A session records

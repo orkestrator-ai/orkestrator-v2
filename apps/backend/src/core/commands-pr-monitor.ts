@@ -175,7 +175,7 @@ export function getPrMonitorDetectionRequest(target: PrMonitorTarget): PrMonitor
       "--json",
       target.projectHome
         ? "url,state,mergeable,headRefName,baseRefName,isCrossRepository"
-        : "url,state,mergeable",
+        : "url,state,mergeable,baseRefName",
     ];
     return {
       args,
@@ -197,7 +197,7 @@ export function getPrMonitorDetectionRequest(target: PrMonitorTarget): PrMonitor
     "--json",
     target.projectHome
       ? "url,state,mergeable,updatedAt,headRefName,baseRefName,isCrossRepository"
-      : "url,state,mergeable,updatedAt",
+      : "url,state,mergeable,updatedAt,baseRefName",
   ];
   return {
     args,
@@ -424,6 +424,7 @@ export const prMonitorService = new PrMonitorService({
     persistPr: async (environmentId, detection) => {
       await requirePrMonitorStorage().updateEnvironment(environmentId, {
         prUrl: detection.url,
+        prBaseBranch: detection.baseBranch ?? null,
         prState: detection.state,
         hasMergeConflicts: detection.hasMergeConflicts,
         ...(detection.state !== "open" || detection.hasMergeConflicts === false
@@ -447,6 +448,7 @@ export const prMonitorService = new PrMonitorService({
     clearPr: async (environmentId) => {
       await requirePrMonitorStorage().updateEnvironment(environmentId, {
         prUrl: null,
+        prBaseBranch: null,
         prState: null,
         hasMergeConflicts: null,
         prRecheckAfterAgentCompletionArmedAt: undefined,
@@ -483,6 +485,7 @@ export function environmentToPrMonitorTarget(environment: Environment): PrMonito
         ? !!environment.worktreePath
         : environment.status === "running" && !!environment.containerId,
     prUrl: environment.prUrl ?? null,
+    prBaseBranch: environment.prBaseBranch ?? null,
     prState: environment.prState ?? null,
     hasMergeConflicts: environment.hasMergeConflicts ?? null,
     projectHome: environment.projectHome,

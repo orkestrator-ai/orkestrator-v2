@@ -281,6 +281,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     setPrDialogTarget,
     prLaunchError,
     setPrLaunchError,
+    prBranchSuggestions,
     prDialogOpen,
     createPrButtonRef,
     createPrLaunchPending,
@@ -1574,6 +1575,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         preferredReasoningEfforts={prLaunchDefaults.preferredReasoningEfforts}
         preferredFastModes={prLaunchDefaults.preferredFastModes}
         targetBranch={prDialogTarget?.targetBranch ?? targetBranch}
+        editableTargetBranch
+        targetBranchSuggestions={prBranchSuggestions}
         returnFocusRef={createPrButtonRef}
         // Below the mobile breakpoint this toolbar lives inside the tools
         // popover, which collapses as the dialog opens. The trigger stays

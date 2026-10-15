@@ -6269,6 +6269,29 @@ describe("pr monitor commands", () => {
     });
   });
 
+  test("PR discovery and known-URL lookup carry the actual base and reject unsafe metadata", () => {
+    const metadata = {
+      url: "https://github.com/acme/repo/pull/7",
+      state: "OPEN",
+      mergeable: "CONFLICTING",
+      baseRefName: "release/2.0",
+    };
+    for (const knownPrUrl of [null, metadata.url]) {
+      const request = { args: [], shellCommand: "", branch: "feature", knownPrUrl };
+      const encode = (value: typeof metadata) => JSON.stringify(knownPrUrl ? value : [value]);
+      expect(parsePrMonitorDetectionResponse(request, encode(metadata))).toMatchObject({
+        baseBranch: "release/2.0",
+        hasMergeConflicts: true,
+      });
+      expect(() =>
+        parsePrMonitorDetectionResponse(
+          request,
+          encode({ ...metadata, baseRefName: "main; unsafe" }),
+        ),
+      ).toThrow("invalid pull request base branch");
+    }
+  });
+
   test("production detection uses branch discovery only until a PR URL is known", () => {
     const discovery = getPrMonitorDetectionRequest({
       environmentId: "e1",
@@ -6290,7 +6313,7 @@ describe("pr monitor commands", () => {
       "--limit",
       "30",
       "--json",
-      "url,state,mergeable,updatedAt",
+      "url,state,mergeable,updatedAt,baseRefName",
     ]);
     expect(discovery.knownPrUrl).toBeNull();
     expect(discovery.shellCommand).not.toContain("statusCheckRollup");
@@ -6310,10 +6333,10 @@ describe("pr monitor commands", () => {
       "view",
       "https://github.com/acme/repo/pull/7",
       "--json",
-      "url,state,mergeable",
+      "url,state,mergeable,baseRefName",
     ]);
     expect(known.shellCommand).toBe(
-      "gh pr view 'https://github.com/acme/repo/pull/7' --json url,state,mergeable",
+      "gh pr view 'https://github.com/acme/repo/pull/7' --json url,state,mergeable,baseRefName",
     );
     expect(
       parsePrMonitorDetectionResponse(

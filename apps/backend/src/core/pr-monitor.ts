@@ -90,6 +90,7 @@ import {
  */
 
 export interface PrMonitorTarget {
+  prBaseBranch?: string | null;
   projectHome?: boolean;
   defaultBranch?: string;
   environmentId: string;
@@ -105,6 +106,7 @@ export interface PrMonitorTarget {
 }
 
 export interface PrDetection {
+  baseBranch?: string;
   url: string;
   state: PrState;
   /** Null means GitHub has not determined mergeability yet. */
@@ -1154,7 +1156,8 @@ export class PrMonitorService {
     const changed =
       detection.url !== previous.prUrl ||
       detection.state !== previous.prState ||
-      detection.hasMergeConflicts !== previous.hasMergeConflicts;
+      detection.hasMergeConflicts !== previous.hasMergeConflicts ||
+      (detection.baseBranch ?? null) !== (previous.prBaseBranch ?? null);
 
     const observedChanged =
       detection.url !== entry.observedPr?.url || detection.state !== entry.observedPr?.state;
@@ -1177,6 +1180,7 @@ export class PrMonitorService {
         entry.target = {
           ...entry.target,
           prUrl: detection.url,
+          prBaseBranch: detection.baseBranch ?? null,
           prState: detection.state,
           hasMergeConflicts: detection.hasMergeConflicts,
         };
@@ -1296,7 +1300,13 @@ export class PrMonitorService {
     try {
       await this.options.effects.clearPr(entry.target.environmentId);
       if (!this.isCurrent(entry, generation)) return;
-      entry.target = { ...entry.target, prUrl: null, prState: null, hasMergeConflicts: null };
+      entry.target = {
+        ...entry.target,
+        prUrl: null,
+        prBaseBranch: null,
+        prState: null,
+        hasMergeConflicts: null,
+      };
       entry.persistencePending = false;
       entry.observedPr = null;
       entry.checkSummary = null;
@@ -1590,6 +1600,7 @@ function isSameTarget(a: PrMonitorTarget, b: PrMonitorTarget): boolean {
     a.containerId === b.containerId &&
     a.ready === b.ready &&
     a.prUrl === b.prUrl &&
+    (a.prBaseBranch ?? null) === (b.prBaseBranch ?? null) &&
     a.prState === b.prState &&
     a.hasMergeConflicts === b.hasMergeConflicts
   );

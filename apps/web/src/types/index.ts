@@ -101,6 +101,8 @@ export interface Environment {
   containerId: string | null;
   status: EnvironmentStatus;
   prUrl: string | null;
+  /** Actual PR base observed by the backend, independent of repository defaults. */
+  prBaseBranch?: string | null;
   /** State of the PR (open, merged, closed) */
   prState: PrState | null;
   /** Whether the PR has merge conflicts with the target branch */

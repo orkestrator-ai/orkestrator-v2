@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import type { ProviderRegistry } from "./native-agent-provider-registry.js";
 
 import { promises as fs } from "node:fs";
 
@@ -198,10 +199,9 @@ function internals(service: NativeAgentService) {
       model?: string,
       effort?: string,
     ): Promise<BridgeConnection>;
-    providers: Map<string, AgentSessionProvider>;
+    providerRegistry: ProviderRegistry;
     activityRetryAt: Map<string, number>;
     activityAttempts: Map<string, number>;
-    absentBridgeUntil: Map<string, number>;
     observedSessionActivity: Map<
       string,
       { providerSessionId: string; state: ProviderActivityState }

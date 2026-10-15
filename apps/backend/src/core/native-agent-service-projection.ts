@@ -2062,7 +2062,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
   ): ProjectedProgressiveTranscript {
     const previous = this.progressiveTranscriptCache.get(key);
     const sourceGeneration =
-      this.providerConnections.get(`${input.environmentId}\0${input.agent}`) ??
+      this.providerRegistry.connectionIdentity(`${input.environmentId}\0${input.agent}`) ??
       `in-process:${input.agent}`;
     const identity = this.progressiveIdentity(input, providerSessionId, sourceGeneration);
     const previewHead = snapshot.messages[0];
@@ -2644,7 +2644,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           identity: this.progressiveIdentity(
             input,
             persisted.providerSessionId,
-            this.providerConnections.get(`${input.environmentId}\0${input.agent}`) ??
+            this.providerRegistry.connectionIdentity(`${input.environmentId}\0${input.agent}`) ??
               `in-process:${input.agent}`,
           ),
           freshness: persisted.messages.length === 0 ? "empty" : "cached",
@@ -2875,7 +2875,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     );
     const blocked = interactionSnapshot.requests.some((request) => request.blocking !== false);
     const providerGeneration =
-      this.providerConnections.get(`${input.environmentId}\0${input.agent}`) ??
+      this.providerRegistry.connectionIdentity(`${input.environmentId}\0${input.agent}`) ??
       `in-process:${input.agent}`;
     const sourceGeneration = providerGeneration;
     const sessionKey = nativeAgentSessionStorageKey(
@@ -3177,7 +3177,8 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       key.includes("\0progressive-v1\0discovery:"),
     ).length;
     const providerKey = `${input.environmentId}\0${input.agent}\0${String(
-      this.providerConnections.get(`${input.environmentId}\0${input.agent}`) ?? "in-process",
+      this.providerRegistry.connectionIdentity(`${input.environmentId}\0${input.agent}`) ??
+        "in-process",
     )}`;
     if (
       activeDiscoveryJobs >= 4 ||
@@ -3271,7 +3272,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     const resolved = await this.resolveProjectionSession(input);
     if (!resolved) return { viewVersion: 1, status: "missing" };
     const providerGeneration =
-      this.providerConnections.get(`${input.environmentId}\0${input.agent}`) ??
+      this.providerRegistry.connectionIdentity(`${input.environmentId}\0${input.agent}`) ??
       `in-process:${input.agent}`;
     const identity = this.progressiveIdentity(
       input,
@@ -4289,7 +4290,8 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       }
       transient = resolved.transient;
       const providerCacheKey = `${input.environmentId}\0${input.agent}`;
-      generation = this.providerConnections.get(providerCacheKey) ?? `in-process:${input.agent}`;
+      generation =
+        this.providerRegistry.connectionIdentity(providerCacheKey) ?? `in-process:${input.agent}`;
       const advertisedCapabilities = nativeCapabilities(input.agent);
       // User-triggered supplementary metadata. A billing endpoint failure
       // must not make an otherwise healthy transcript unavailable. Merge the

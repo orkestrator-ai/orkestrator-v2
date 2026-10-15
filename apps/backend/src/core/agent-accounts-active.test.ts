@@ -13,6 +13,7 @@ import type { CommandContext } from "./commands-context.js";
 import {
   localAgentAccountIds,
   localAgentAccountTokenExpiry,
+  loginlessLocalBridges,
 } from "./agent-account-bridge-state.js";
 import { prepareCoordinatorClaudeHome } from "./commands-servers.js";
 import { StorageService } from "./storage.js";
@@ -77,6 +78,7 @@ beforeEach(async () => {
   } as unknown as CommandContext;
   localAgentAccountIds.clear();
   localAgentAccountTokenExpiry.clear();
+  loginlessLocalBridges.clear();
 });
 
 afterEach(async () => {
@@ -86,6 +88,7 @@ afterEach(async () => {
   }
   localAgentAccountIds.clear();
   localAgentAccountTokenExpiry.clear();
+  loginlessLocalBridges.clear();
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -163,7 +166,7 @@ describe("applyCoordinatorClaudeAccount", () => {
           },
         }),
     );
-    expect(soon.tokenExpiresAt).toBeUndefined();
+    expect(soon).toEqual({ accountId: ACCOUNT_IDS.claude, loginless: true });
   });
   test("copies the active account's credential file and replaces an earlier one", async () => {
     await activate("claude");
@@ -204,7 +207,7 @@ describe("applyCoordinatorClaudeAccount", () => {
       env,
       prepareCoordinatorClaudeHome,
     );
-    expect(account).toEqual({ accountId: "default" });
+    expect(account).toEqual({ accountId: "default", loginless: true });
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
   });
 });
@@ -251,6 +254,28 @@ describe("localBridgeIsOnActiveAccount", () => {
         claudeAiOauth: { accessToken: "fresh-token", expiresAt: Date.now() + 60 * 60_000 },
       }),
     );
+    expect(await localBridgeIsOnActiveAccount(key, "claude", "coordinator-1", context)).toBe(false);
+  });
+
+  test("replaces an idle coordinator launched without a login once one appears", async () => {
+    await activate("claude");
+    const key = "claude:coordinator-1";
+    localAgentAccountIds.set(key, ACCOUNT_IDS.claude);
+    loginlessLocalBridges.add(key);
+    // Still signed out: a relaunch would not help.
+    expect(await localBridgeIsOnActiveAccount(key, "claude", "coordinator-1", context)).toBe(true);
+
+    // Signed in from a terminal, which Orkestrator is never told about.
+    await fs.mkdir(accountHome("claude"), { recursive: true });
+    await fs.writeFile(
+      path.join(accountHome("claude"), ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: { accessToken: "fresh-token", expiresAt: Date.now() + 60 * 60_000 },
+      }),
+    );
+    liveWork = true;
+    expect(await localBridgeIsOnActiveAccount(key, "claude", "coordinator-1", context)).toBe(true);
+    liveWork = false;
     expect(await localBridgeIsOnActiveAccount(key, "claude", "coordinator-1", context)).toBe(false);
   });
 });

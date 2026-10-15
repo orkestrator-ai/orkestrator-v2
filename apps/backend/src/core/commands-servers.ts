@@ -87,6 +87,7 @@ import {
 import {
   localAgentAccountIds,
   localAgentAccountTokenExpiry,
+  loginlessLocalBridges,
   staleLoginLocalBridges,
 } from "./agent-account-bridge-state.js";
 import {
@@ -1076,6 +1077,7 @@ export async function startLocalServerUnlocked(
   let cwd = environment.worktreePath;
   let launchedAccountId: string | undefined;
   let launchedTokenExpiresAt: number | undefined;
+  let launchedLoginless = false;
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PORT: String(port),
@@ -1159,6 +1161,7 @@ export async function startLocalServerUnlocked(
       );
       launchedAccountId = account.accountId;
       launchedTokenExpiresAt = account.tokenExpiresAt;
+      launchedLoginless = account.loginless === true;
     } else {
       launchedAccountId = await applyActiveAgentAccountEnvironment(context, "claude", env);
     }
@@ -1392,6 +1395,8 @@ export async function startLocalServerUnlocked(
   staleLoginLocalBridges.delete(key);
   if (launchedTokenExpiresAt) localAgentAccountTokenExpiry.set(key, launchedTokenExpiresAt);
   else localAgentAccountTokenExpiry.delete(key);
+  if (launchedLoginless) loginlessLocalBridges.add(key);
+  else loginlessLocalBridges.delete(key);
   child.stdout.on("data", (data) => console.debug(`[${kind}:${environmentId}] ${data.toString()}`));
   child.stderr.on("data", (data) => console.error(`[${kind}:${environmentId}] ${data.toString()}`));
   child.once("exit", () => {

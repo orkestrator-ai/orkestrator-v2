@@ -1,6 +1,6 @@
 # Tmux orphan reconciliation intermittently leaves the installed hook
 
-- **ID:** 0244
+- **ID:** 0245
 - **Status:** open
 - **Date observed:** 2026-10-15
 - **Test:** `Electron tmux environment teardown > orphan reconciliation retains failed managed stops and cleans hooks when tmux has no server`

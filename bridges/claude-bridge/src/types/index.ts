@@ -997,6 +997,77 @@ export interface PlanApprovalRequest {
   expiresAt: number;
 }
 
+/**
+ * Everything else the bridge holds for the user: an MCP server's elicitation,
+ * or a tool call waiting for approval under the `ask` execution policy.
+ * Served by `GET /session/:id/interactions`, answered through
+ * `POST /session/:id/interactions/:interactionId`.
+ */
+export type ClaudeInteractionRequest = ClaudeElicitationRequest | ClaudeToolApprovalRequest;
+
+interface ClaudeInteractionRequestBase {
+  id: string;
+  sessionId: string;
+  toolUseId?: string;
+  requestedAt: number;
+  /**
+   * Absolute time when the bridge settles the unanswered request: an
+   * elicitation is cancelled, a tool call denied.
+   */
+  expiresAt: number;
+}
+
+export interface ClaudeElicitationRequest extends ClaudeInteractionRequestBase {
+  kind: "mcp-form" | "mcp-url";
+  /** The MCP server's name as configured: untrusted display text. */
+  serverName: string;
+  message: string;
+  /** The server's permission-display header, when it sent one. */
+  title?: string;
+  /** `mcp-form` only: the JSON Schema the answer must satisfy. */
+  schema?: Record<string, unknown>;
+  /** `mcp-url` only. */
+  url?: string;
+  elicitationId?: string;
+}
+
+export interface ClaudeToolApprovalRequest extends ClaudeInteractionRequestBase {
+  kind: "command-approval" | "file-approval" | "permission";
+  toolName: string;
+  /** The prompt sentence the CLI composed, e.g. "Claude wants to read foo.txt". */
+  title?: string;
+  description?: string;
+  /** Why the CLI asked. */
+  reason?: string;
+  blockedPath?: string;
+  /** For an `mcp__*` tool, the server that serves it. */
+  mcpServer?: string;
+  /** `command-approval` only. */
+  command?: string;
+  /** `file-approval` only. */
+  paths?: string[];
+  /** `permission` only: the tool input as bounded JSON. */
+  input?: string;
+}
+
+/** The values an MCP form answer may carry, as MCP defines them. */
+export type ClaudeElicitationContent = Record<string, string | number | boolean | string[]>;
+
+/** The user's answer to a {@link ClaudeInteractionRequest}. */
+export type ClaudeInteractionResponse =
+  | { action: "accept"; content?: ClaudeElicitationContent }
+  | { action: "decline" }
+  | { action: "cancel" };
+
+/**
+ * How a parked request ended: the user's answer, its deadline, or the turn or
+ * session that raised it going away.
+ */
+export type ClaudeInteractionOutcome =
+  | ClaudeInteractionResponse
+  | { action: "timeout" }
+  | { action: "withdrawn" };
+
 /** SSE event types */
 export type SSEEventType =
   | "replay.required"
@@ -1014,6 +1085,8 @@ export type SSEEventType =
   | "plan.exit-requested"
   | "plan.approval-requested"
   | "plan.approval-responded"
+  | "interaction.requested"
+  | "interaction.resolved"
   | "system.compact";
 
 /** MCP server status from SDK init message */

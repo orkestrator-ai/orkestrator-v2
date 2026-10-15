@@ -8,8 +8,11 @@ import {
   LEGACY_JSON_DIRECTORY,
   LEGACY_JSON_RETENTION_MS,
   databaseStoreForPath,
+  hasLegacyJsonStore,
   openBackendDatabase,
+  pruneRemovedContent,
   retireLegacyJsonStores,
+  scrubLegacyJsonStore,
 } from "./storage-stores.js";
 
 const directories: string[] = [];
@@ -282,5 +285,88 @@ describe("legacy JSON import", () => {
     const stat = await fs.stat(path.join(directory, STORAGE_DATABASE_FILE));
     expect(stat.mode & 0o777).toBe(0o600);
     storage.close();
+  });
+});
+
+describe("retired JSON archive scrubbing", () => {
+  test("pruning returns the archived value itself when nothing was removed", () => {
+    const archived = { draft: { text: "old" }, list: [{ id: "m1", body: "old" }, "tag"], count: 1 };
+    const next = {
+      draft: { text: "new", extra: true },
+      list: ["tag", { id: "m1", body: "new" }, { id: "m2" }],
+      count: 2,
+      added: {},
+    };
+    expect(pruneRemovedContent(archived, next)).toBe(archived);
+  });
+
+  test("pruning drops removed content and keeps every other archived value", () => {
+    const archived = {
+      gone: { secret: "s1" },
+      cleared: { secret: "s2" },
+      unset: 1,
+      kept: { text: "archived", nested: { gone: "s3", stays: "archived" } },
+      messages: [
+        { id: "m1", body: "archived" },
+        { id: "m2", body: "s4" },
+      ],
+      pending: [
+        { mailboxId: "a", messageId: "m1" },
+        { mailboxId: "b", messageId: "m2" },
+      ],
+    };
+    const original = structuredClone(archived);
+    const next = {
+      cleared: null,
+      unset: undefined,
+      kept: { text: "current", nested: { stays: "current" } },
+      messages: [{ id: "m1", body: "current" }],
+      // Items without an id match by content, whatever the key order.
+      pending: [{ messageId: "m1", mailboxId: "a" }],
+    };
+    expect(pruneRemovedContent(archived, next)).toEqual({
+      cleared: null,
+      kept: { text: "archived", nested: { stays: "archived" } },
+      messages: [{ id: "m1", body: "archived" }],
+      pending: [{ mailboxId: "a", messageId: "m1" }],
+    });
+    expect(archived).toEqual(original);
+  });
+
+  test.each([
+    [[{ secret: "deleted" }], { kept: {} }],
+    [{ secret: "deleted" }, []],
+    [{ nested: [{ secret: "deleted" }] }, { nested: {} }],
+    [{ nested: { secret: "deleted" } }, { nested: [] }],
+    [{ nested: { secret: "deleted" } }, { nested: "scalar" }],
+    ["malformed root", {}],
+  ])("clears incompatible archive shapes (%j -> %j)", (archived, next) => {
+    expect(JSON.stringify(pruneRemovedContent(archived, next))).not.toContain("deleted");
+    expect(pruneRemovedContent(archived, next)).not.toBe(archived);
+  });
+
+  test("leaves a copy the transform does not change byte-identical", async () => {
+    const directory = await dataDir();
+    await writeJson(directory, "compose-drafts.json", { a: { text: "x" } });
+    await writeJson(directory, "compose-drafts.json.bak.1", {
+      a: { text: "x" },
+      b: { text: "secret" },
+    });
+    retireLegacyJsonStores(directory);
+    const [stamp] = await fs.readdir(path.join(directory, LEGACY_JSON_DIRECTORY));
+    const archive = path.join(directory, LEGACY_JSON_DIRECTORY, stamp!);
+    const primary = await fs.readFile(path.join(archive, "compose-drafts.json"), "utf8");
+
+    scrubLegacyJsonStore(directory, "compose-drafts", (value) =>
+      pruneRemovedContent(value, { a: { text: "y" } }),
+    );
+    expect(await fs.readFile(path.join(archive, "compose-drafts.json"), "utf8")).toBe(primary);
+    expect(
+      JSON.parse(await fs.readFile(path.join(archive, "compose-drafts.json.bak.1"), "utf8")),
+    ).toEqual({ a: { text: "x" } });
+
+    expect(hasLegacyJsonStore(directory, "compose-drafts")).toBe(true);
+    scrubLegacyJsonStore(directory, "compose-drafts");
+    expect(hasLegacyJsonStore(directory, "compose-drafts")).toBe(false);
   });
 });

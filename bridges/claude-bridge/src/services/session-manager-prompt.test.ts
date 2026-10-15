@@ -4979,7 +4979,7 @@ describe("sendPrompt", () => {
     const prompt = sendPrompt(session.id, "Report back");
     const call = await nextQueryCall();
 
-    expect(call.options.permissionMode).toBe("dontAsk");
+    expect(call.options.permissionMode).toBe("default");
     for (const tool of ["send_message", "reply_message", "check_inbox", "ack_message"]) {
       expect(call.options.allowedTools).toContain(`mcp__orkestrator__${tool}`);
     }

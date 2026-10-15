@@ -31,6 +31,7 @@ import {
 import {
   localAgentAccountIds,
   localAgentAccountTokenExpiry,
+  loginlessLocalBridges,
 } from "./agent-account-bridge-state.js";
 import type { LocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
@@ -200,6 +201,7 @@ export function releaseLocalServerOwnership(
   localServerUnresponsiveSince.delete(key);
   localAgentAccountIds.delete(key);
   localAgentAccountTokenExpiry.delete(key);
+  loginlessLocalBridges.delete(key);
   if (key.startsWith("codex:")) {
     localCodexBridgeTokens.delete(key.slice("codex:".length));
   } else if (key.startsWith("claude:")) {

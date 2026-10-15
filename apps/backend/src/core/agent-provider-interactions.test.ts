@@ -25,6 +25,11 @@ import {
   openCodeActivityProvider,
 } from "./agent-provider-test-support.js";
 
+/** What a Claude bridge serves for a snapshot family a test leaves empty. */
+function emptyClaudeFamily(url: string) {
+  return url.endsWith("/interactions") ? { interactions: [] } : { approvals: [] };
+}
+
 describe("provider-neutral interaction adapters", () => {
   test("normalizes Grok plan and question requests and maps their exact outcomes", async () => {
     const requestedAt = Date.now();
@@ -121,6 +126,7 @@ describe("provider-neutral interaction adapters", () => {
     const upstream: Array<{ url: string; body: unknown }> = [];
     const { provider } = httpProvider(async (url, init) => {
       if (url.endsWith("/questions")) return Response.json({ questions });
+      if (url.endsWith("/interactions")) return Response.json({ interactions: [] });
       if (url.endsWith("/plan-approvals")) return Response.json({ approvals });
       if (url.includes("/questions/question-1/answer")) {
         upstream.push({ url, body: JSON.parse(String(init.body)) });
@@ -221,6 +227,7 @@ describe("provider-neutral interaction adapters", () => {
           ],
         });
       }
+      if (url.endsWith("/interactions")) return Response.json({ interactions: [] });
       if (url.endsWith("/plan-approvals")) return Response.json({ approvals });
       if (url.includes("/plan-approvals/")) {
         upstream.push({ url, body: JSON.parse(String(init.body)) });
@@ -275,6 +282,155 @@ describe("provider-neutral interaction adapters", () => {
     expect(upstream[0]!.body).toEqual({ approved: false });
   });
 
+  test("Claude parks MCP elicitations and tool approvals and answers each exactly", async () => {
+    const requestedAt = Date.now();
+    const expiresAt = requestedAt + 60_000;
+    let interactions: Array<Record<string, unknown>> = [
+      {
+        id: "form-1",
+        kind: "mcp-form",
+        serverName: "linear",
+        message: "Which team?",
+        schema: { type: "object", properties: { team: { type: "string" } } },
+        requestedAt,
+        expiresAt,
+      },
+      {
+        id: "url-1",
+        kind: "mcp-url",
+        serverName: "linear",
+        message: "Authorize Linear",
+        url: "https://linear.app/oauth",
+        requestedAt,
+        expiresAt,
+      },
+      {
+        id: "command-1",
+        kind: "command-approval",
+        toolName: "Bash",
+        title: "Claude wants to run git push",
+        command: "git push",
+        requestedAt,
+        expiresAt,
+      },
+      {
+        id: "permission-1",
+        kind: "permission",
+        toolName: "mcp__linear__create_issue",
+        mcpServer: "linear",
+        input: '{"title":"Bug"}',
+        requestedAt,
+        expiresAt,
+      },
+    ];
+    const upstream: Array<{ url: string; body: unknown }> = [];
+    const { provider } = httpProvider(async (url, init) => {
+      if (url.endsWith("/questions")) return Response.json({ questions: [] });
+      if (url.endsWith("/plan-approvals")) return Response.json({ approvals: [] });
+      if (url.endsWith("/interactions")) return Response.json({ interactions });
+      const id = decodeURIComponent(url.split("/interactions/")[1] ?? "");
+      upstream.push({ url, body: JSON.parse(String(init.body)) });
+      interactions = interactions.filter((interaction) => interaction.id !== id);
+      return Response.json({ status: "resolved" });
+    });
+
+    const snapshot = await provider.interactions!.listPendingInteractions("session-1");
+    expect(snapshot.requests.map((request) => request.kind)).toEqual([
+      "mcp-form",
+      "mcp-url",
+      "command-approval",
+      "permission",
+    ]);
+    const [form, link, command, permission] = snapshot.requests as [
+      AgentInteractionRequest,
+      AgentInteractionRequest,
+      AgentInteractionRequest,
+      AgentInteractionRequest,
+    ];
+    expect(form.presentation).toMatchObject({ title: "linear needs input", body: "Which team?" });
+    expect(JSON.parse(form.presentation.questions[0]!.description!)).toEqual({
+      type: "object",
+      properties: { team: { type: "string" } },
+    });
+    expect(link.presentation).toMatchObject({
+      title: "Sign in to linear",
+      url: "https://linear.app/oauth",
+    });
+    expect(command.presentation).toMatchObject({
+      title: "Claude wants to run git push",
+      body: "Command: git push",
+      confirmLabel: "Approve",
+    });
+    expect(permission.presentation.title).toBe("Allow mcp__linear__create_issue");
+    expect(permission.presentation.body).toContain('Input: {"title":"Bug"}');
+    expect(snapshot.requests.every((request) => request.blocking === true)).toBe(true);
+
+    await expect(
+      provider.interactions!.resolveInteraction(
+        "session-1",
+        form.id,
+        freeTextResolution(form, JSON.stringify({ team: "core" })),
+      ),
+    ).resolves.toMatchObject({ result: "applied" });
+    await expect(
+      provider.interactions!.resolveInteraction("session-1", link.id, answerResolution(link)),
+    ).resolves.toMatchObject({ result: "applied" });
+    // Allow-once only: nothing could honour "for the session".
+    await expect(
+      provider.interactions!.resolveInteraction("session-1", command.id, {
+        ...answerResolution(command),
+        action: "approve-for-session",
+        answer: undefined,
+      }),
+    ).resolves.toMatchObject({ result: "rejected" });
+    await expect(
+      provider.interactions!.resolveInteraction("session-1", command.id, answerResolution(command)),
+    ).resolves.toMatchObject({ result: "applied" });
+    await expect(
+      provider.interactions!.resolveInteraction("session-1", permission.id, {
+        ...declineResolution(permission),
+        action: "cancel",
+      }),
+    ).resolves.toMatchObject({ result: "applied" });
+
+    expect(upstream).toEqual([
+      {
+        url: expect.stringContaining("/session/session-1/interactions/form-1"),
+        body: { action: "accept", content: { team: "core" } },
+      },
+      {
+        url: expect.stringContaining("/interactions/url-1"),
+        body: { action: "accept" },
+      },
+      {
+        url: expect.stringContaining("/interactions/command-1"),
+        body: { action: "accept" },
+      },
+      {
+        url: expect.stringContaining("/interactions/permission-1"),
+        body: { action: "cancel" },
+      },
+    ]);
+  });
+
+  test("a Claude bridge without the interactions route still serves its questions", async () => {
+    const expiresAt = Date.now() + 60_000;
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/interactions")) return new Response(null, { status: 404 });
+      return Response.json(
+        url.endsWith("/questions")
+          ? {
+              questions: [
+                { id: "question-1", expiresAt, questions: [{ question: "Go?", options: [] }] },
+              ],
+            }
+          : { approvals: [] },
+      );
+    });
+    const snapshot = await provider.interactions!.listPendingInteractions("session-1");
+    expect(snapshot.requests.map((request) => request.kind)).toEqual(["question"]);
+  });
+
   test("lets the first real registration replace an implicit placeholder", async () => {
     const expiresAt = Date.now() + 60_000;
     const { provider } = httpProvider((url) =>
@@ -289,7 +445,7 @@ describe("provider-neutral interaction adapters", () => {
                 },
               ],
             }
-          : { approvals: [] },
+          : emptyClaudeFamily(url),
       ),
     );
 
@@ -1299,7 +1455,7 @@ describe("provider-neutral interaction adapters", () => {
                 },
               ],
             }
-          : { approvals: [] },
+          : emptyClaudeFamily(url),
       ),
     );
     await expect(
@@ -1382,6 +1538,7 @@ describe("provider-neutral interaction adapters", () => {
           ],
         });
       }
+      if (url.endsWith("/interactions")) return Response.json({ interactions: [] });
       if (url.endsWith("/plan-approvals")) return Response.json({ approvals: [] });
       responses.push(url);
       return Response.json({ status: "answered" });
@@ -1405,7 +1562,7 @@ describe("provider-neutral interaction adapters", () => {
     const expiresAt = Date.now() + 60_000;
     let questions: Array<Record<string, unknown>> = [];
     const { provider } = httpProvider((url) =>
-      Response.json(url.endsWith("/questions") ? { questions } : { approvals: [] }),
+      Response.json(url.endsWith("/questions") ? { questions } : emptyClaudeFamily(url)),
     );
     const empty = await provider.interactions!.listPendingInteractions("session-1");
     const sameEmpty = await provider.interactions!.listPendingInteractions("session-1");
@@ -1432,7 +1589,9 @@ describe("provider-neutral interaction adapters", () => {
 
   test("bounds tracker sessions, interaction identities, and pending snapshots", async () => {
     const expiresAt = Date.now() + 60_000;
-    const { provider } = httpProvider(() => Response.json({ questions: [], approvals: [] }));
+    const { provider } = httpProvider(() =>
+      Response.json({ questions: [], approvals: [], interactions: [] }),
+    );
     const internal = provider as unknown as {
       interactionAdapter: {
         interactionTracker: {
@@ -1500,7 +1659,7 @@ describe("provider-neutral interaction adapters", () => {
                 questions: [{ question: `Question ${index}`, options: [] }],
               })),
             }
-          : { approvals: [] },
+          : emptyClaudeFamily(url),
       ),
     );
     await expect(
@@ -1509,7 +1668,9 @@ describe("provider-neutral interaction adapters", () => {
   });
 
   test("accepts a new policy only after a tracked session is evicted", async () => {
-    const { provider } = httpProvider(() => Response.json({ questions: [], approvals: [] }));
+    const { provider } = httpProvider(() =>
+      Response.json({ questions: [], approvals: [], interactions: [] }),
+    );
     const internal = provider as unknown as {
       interactionAdapter: {
         interactionTracker: {
@@ -1570,7 +1731,7 @@ describe("provider-neutral interaction adapters", () => {
                 },
               ],
             }
-          : { approvals: [] },
+          : emptyClaudeFamily(url),
       ),
     );
     const internal = provider as unknown as {
@@ -1614,6 +1775,7 @@ describe("provider-neutral interaction adapters", () => {
       let writes = 0;
       const { provider } = httpProvider((url) => {
         if (url.endsWith("/questions")) return Response.json({ questions });
+        if (url.endsWith("/interactions")) return Response.json({ interactions: [] });
         if (url.endsWith("/plan-approvals")) return Response.json({ approvals: [] });
         writes += 1;
         return new Response(null, { status: responseStatus });
@@ -1643,6 +1805,7 @@ describe("provider-neutral interaction adapters", () => {
     let writes = 0;
     const { provider } = httpProvider((url) => {
       if (url.endsWith("/questions")) return Response.json({ questions });
+      if (url.endsWith("/interactions")) return Response.json({ interactions: [] });
       if (url.endsWith("/plan-approvals")) return Response.json({ approvals: [] });
       writes += 1;
       questions = [];
@@ -1664,7 +1827,7 @@ describe("provider-neutral interaction adapters", () => {
     ];
     const expiredProvider = httpProvider((url) =>
       Response.json(
-        url.endsWith("/questions") ? { questions: expiredQuestions } : { approvals: [] },
+        url.endsWith("/questions") ? { questions: expiredQuestions } : emptyClaudeFamily(url),
       ),
     ).provider;
     const expired = (await expiredProvider.interactions!.listPendingInteractions("session-1"))
@@ -1692,6 +1855,7 @@ describe("provider-neutral interaction adapters", () => {
           if (wrote) throw new Error("reconciliation unavailable");
           return Response.json({ questions: [question] });
         }
+        if (url.endsWith("/interactions")) return Response.json({ interactions: [] });
         if (url.endsWith("/plan-approvals")) {
           if (wrote) throw new Error("reconciliation unavailable");
           return Response.json({ approvals: [] });

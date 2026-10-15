@@ -52,3 +52,22 @@ No assertions or deadlines were changed.
 - **Disposition:** aggregate-only deadline failures recorded without changing
   assertions, deadlines or skips. Host contention is a hypothesis, not a proven
   cause.
+
+## Recurrence — 2026-10-15 (coordinator mail branch merge)
+
+With the testing guide's GNU-tool PATH,
+`mise run test:logged -- --name merge-repository-tests -- mise run test`
+timed out the same cleanup-retry test at 5870.46 ms against its 5000 ms
+limit. The aggregate reserved 4/1/2/1 workspace/root/bridge/protocol slots,
+with two concurrent workspace package tasks and two backend Bun workers.
+Backend results were 7,903 passed, 39 skipped and one failed across 433 files
+(331.16 seconds); the aggregate finished in 435.9 seconds. Root separately
+hit the Pi staging timeout tracked in 0178; bridges and protocol passed.
+Evidence:
+`/tmp/orkestrator-test-run.XSWXem/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+After the aggregate and the Pi isolated rerun finished, the same GNU-tool PATH
+with
+`mise run test:logged -- --name merge-cleanup-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`
+passed the unchanged owning file, exit 0, in 24.1 seconds. Host contention
+remains an unconfirmed hypothesis. No timeout, assertion or skip was changed.

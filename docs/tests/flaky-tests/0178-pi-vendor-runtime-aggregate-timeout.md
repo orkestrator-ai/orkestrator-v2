@@ -85,6 +85,21 @@ one skipped and one failed across 137 files (218.17 seconds). Evidence:
 passed unchanged alone, exit 0, in 8.5 seconds. Aggregate host contention
 remains an unconfirmed hypothesis. No timeout, assertion or skip was changed.
 
+## Recurrence — 2026-10-15 (coordinator mail upgrade recovery)
+
+`mise run test:logged -- --name repository-tests -- mise run test` timed out
+the staged-runtime test at 30000.01 ms. The aggregate reserved 4/1/2/1
+workspace/root/bridge/protocol slots; the workspace group waited 100.3 seconds
+for shared host capacity. Root results were 2,978 passed, one skipped and one
+failed across 137 files (227.03 seconds). Bridges and protocol verification
+passed. Evidence:
+`/tmp/orkestrator-test-run.sDh5nl/root-and-agent-support-tests.log.gz`.
+
+`mise run test:logged -- --name pi-vendor-isolated-mail-fix -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+passed the unchanged owning file (four tests, exit 0, 12.9 seconds). The mail
+recovery fix does not change Pi runtime staging. Host contention remains the
+hypothesis; no timeout, assertion or skip was changed.
+
 ## Recurrence — 2026-10-15 (background task metadata review fixes)
 
 `mise run test:logged -- --name full-suite -- mise run test` timed out the
@@ -98,3 +113,20 @@ validation also ran on the host. Evidence:
 passed unchanged alone, exit 0, in 6.5 seconds. These task metadata fixes do
 not alter Pi runtime staging. Host contention remains an unconfirmed
 hypothesis; no timeout, assertion or skip was changed.
+
+## Recurrence — 2026-10-15 (coordinator mail branch merge)
+
+With the testing guide's GNU-tool PATH,
+`mise run test:logged -- --name merge-repository-tests -- mise run test`
+timed out the same staged-runtime test at 30000.02 ms. The aggregate reserved
+4/1/2/1 workspace/root/bridge/protocol slots. Root results were 2,978 passed,
+one skipped and one failed across 137 files (271.33 seconds). The backend
+also hit the cleanup-retry timeout tracked in 0211; bridges and protocol
+verification passed. Evidence:
+`/tmp/orkestrator-test-run.XSWXem/root-and-agent-support-tests.log.gz`.
+
+After the aggregate finished, the same GNU-tool PATH with
+`mise run test:logged -- --name merge-pi-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+passed the unchanged owning file, exit 0, in 7.0 seconds. The merge resolution
+only changes registry documentation. Host contention remains a hypothesis;
+no timeout, assertion or skip was changed.

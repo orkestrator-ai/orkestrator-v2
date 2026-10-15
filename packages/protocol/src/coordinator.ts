@@ -162,6 +162,43 @@ export function normalizeCoordinatorRoles(workspace: CoordinatorWorkspace): Coor
 }
 
 /**
+ * The native session key of a coordinator conversation.
+ *
+ * It is the ordinary tab key (`env-<runtime>:<tab>`) — the one the renderer
+ * opens, prompts and displays. Any other key names a second provider session
+ * on the same bridge, so mail injected into it runs where nobody can see it.
+ */
+export function coordinatorConversationSessionKey(
+  coordinatorId: string,
+  conversation: Pick<CoordinatorConversation, "id" | "tabId">,
+): string {
+  return `env-${coordinatorRuntimeId(coordinatorId, conversation.id)}:${conversation.tabId}`;
+}
+
+/**
+ * Give every conversation its canonical session key.
+ *
+ * Records written before keys were unified carry `coordinator-<id>:<conversation>`,
+ * which the renderer never used. Returns the same object when nothing needs to
+ * change.
+ */
+export function normalizeCoordinatorSessionKeys(
+  workspace: CoordinatorWorkspace,
+): CoordinatorWorkspace {
+  const settled = workspace.conversations.every(
+    (item) => item.logicalSessionKey === coordinatorConversationSessionKey(workspace.id, item),
+  );
+  if (settled) return workspace;
+  return {
+    ...workspace,
+    conversations: workspace.conversations.map((item) => {
+      const logicalSessionKey = coordinatorConversationSessionKey(workspace.id, item);
+      return item.logicalSessionKey === logicalSessionKey ? item : { ...item, logicalSessionKey };
+    }),
+  };
+}
+
+/**
  * One outstanding request from a coordinator conversation to a worker tab.
  *
  * A delegation exists so the coordinator can be woken exactly once, when the

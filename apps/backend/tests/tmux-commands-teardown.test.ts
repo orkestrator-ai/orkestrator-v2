@@ -19,16 +19,16 @@ import {
 } from "./tmux-test-harness.js";
 
 describe("Electron tmux environment teardown", () => {
-  test("session reaping accepts an empty server but refuses ambiguous connection failures", async () => {
+  test("session reaping accepts an absent server but refuses other connection failures", async () => {
     const backend = TmuxBackend.local("/unused-fixture");
     const exec = spyOn(backend, "exec");
     for (const [stderr, complete] of [
-      // An absent socket does not prove the server stopped: it may have been deleted.
-      ["error connecting to /private/tmp/tmux-501/default (No such file or directory)", false],
+      // No server has used this socket since /tmp was last cleared.
+      ["error connecting to /private/tmp/tmux-501/default (No such file or directory)", true],
+      ["error connecting to /tmp/tmux-501/default (Connection refused)", true],
       ["no server running on /tmp/tmux-501/default", true],
       ["no sessions", true],
       ["error connecting to /tmp/tmux-501/default (Permission denied)", false],
-      ["error connecting to /tmp/tmux-501/default (Connection refused)", false],
       ["tmux: No such file or directory", false],
     ] as const) {
       exec.mockResolvedValue({ status: 1, stdout: "", stderr });

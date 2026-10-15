@@ -24,6 +24,7 @@ import {
   delay,
   existsSync,
   isMissingTmuxSessionError,
+  isTmuxNoServerMessage,
   parseTmuxAgentObservation,
   parseTmuxSelectionPrompt,
   parseTmuxSessionNames,
@@ -1587,11 +1588,7 @@ export async function killEnvironmentTmuxSessions(
     .catch(() => null);
   if (!listed) return { killed: [], complete: false };
   if (listed.status !== 0) {
-    const noServer =
-      /no server running/i.test(listed.stderr) ||
-      /failed to connect to server/i.test(listed.stderr) ||
-      /no sessions/i.test(listed.stderr);
-    return { killed: [], complete: noServer };
+    return { killed: [], complete: isTmuxNoServerMessage(listed.stderr) };
   }
   const targets = selectReapableTmuxSessions({
     names: parseTmuxSessionNames(listed.stdout),

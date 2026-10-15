@@ -112,16 +112,35 @@ export function runtimeRootPrefixForContext(context: CommandContext): string {
     : RUNTIME_ROOT_PREFIX;
 }
 
-/** True when tmux confirms that a target disappeared before cleanup reached it. */
-export function isMissingTmuxSessionError(value: unknown): boolean {
+/**
+ * True when tmux reports that no server (or no session) is there to talk to.
+ *
+ * tmux prints `no server running on <socket>` when a socket file is left over
+ * from a server that exited, and `error connecting to <socket> (No such file
+ * or directory)` when no server has used the socket since `/tmp` was last
+ * cleared, as after a reboot. The second also appears when a live server's
+ * socket file was deleted, but no tmux client can reach such a server, so it
+ * counts as no server too. Any other connection error, a timeout or a
+ * missing tmux executable says nothing about a detached server and must not
+ * match.
+ */
+export function isTmuxNoServerMessage(value: unknown): boolean {
   const message = String(value);
   return (
-    /can't find session/i.test(message) ||
     /no server running/i.test(message) ||
     /failed to connect to server/i.test(message) ||
+    /error connecting to \S.* \((?:no such file or directory|connection refused)\)/i.test(
+      message,
+    ) ||
     /no sessions/i.test(message)
   );
 }
+
+/** True when tmux confirms that a target disappeared before cleanup reached it. */
+export function isMissingTmuxSessionError(value: unknown): boolean {
+  return /can't find session/i.test(String(value)) || isTmuxNoServerMessage(value);
+}
+
 /**
  * The thinking flags the launcher asks for. The probe below is built from these
  * same constants so the pair it validates can never drift from the pair the

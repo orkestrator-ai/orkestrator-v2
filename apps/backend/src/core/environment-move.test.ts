@@ -32,7 +32,12 @@ import { parseWorktreeMoveRecord } from "./storage-projects.js";
 const roots: string[] = [];
 const listTmuxSessions = mock(async (args: string[]) => {
   expect(args).toEqual(["tmux", "list-sessions", "-F", "#{session_name}"]);
-  return { status: 1, stdout: "", stderr: "no sessions" };
+  // What tmux prints when no server has used the socket since /tmp was cleared.
+  return {
+    status: 1,
+    stdout: "",
+    stderr: "error connecting to /private/tmp/tmux-501/default (No such file or directory)",
+  };
 });
 let optionalLocks: string | undefined;
 beforeEach(() => {

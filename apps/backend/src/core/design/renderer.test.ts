@@ -1,8 +1,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
-import type { Browser } from "playwright-core";
+import { chromium, type Browser } from "playwright-core";
 import { DesignError } from "./errors.js";
 import { DesignRenderQueue } from "./render-queue.js";
 import {
+  DEFAULT_DESIGN_RENDER_BUDGETS,
   DesignRenderer,
   resolveDesignChromiumPath,
   type DesignRenderBudgets,
@@ -665,40 +666,74 @@ describe("DesignRenderer health", () => {
 });
 
 const realChromium = resolveDesignChromiumPath();
+// This case proves script blocking and capture, not launch speed; the fake
+// launchers above own the production launch deadline. A first Chromium start
+// on a loaded four-core CI runner has exceeded that deadline (flake 0244).
+const REAL_CHROMIUM_LAUNCH_MS = 45_000;
 
 describe("DesignRenderer with real Chromium", () => {
   test.skipIf(!realChromium)(
     "blocks authored scripts and remote images while capturing a PNG",
     async () => {
-      const instance = new DesignRenderer();
+      let launch: Promise<string> | undefined;
+      const instance = new DesignRenderer({
+        budgets: {
+          launchMs: REAL_CHROMIUM_LAUNCH_MS,
+          overallMs: REAL_CHROMIUM_LAUNCH_MS + DEFAULT_DESIGN_RENDER_BUDGETS.overallMs,
+        },
+        launchBrowser: (options) => {
+          const started = performance.now();
+          const elapsed = () => `${Math.round(performance.now() - started)} ms`;
+          const browser = chromium.launch(options);
+          launch = browser.then(
+            () => `started after ${elapsed()}`,
+            (error: unknown) =>
+              `failed after ${elapsed()}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          return browser;
+        },
+      });
       renderers.push(instance);
-      const html =
-        '<div id="root">Hi</div><script>document.body.dataset.ran = "yes"</script><img src="https://example.com/x.png">';
-      const realFrame = { html, width: 200, height: 120 };
-
-      const serialized = await instance.run<string>(job({ frame: realFrame }));
-      expect(serialized).not.toContain("<script");
-      expect(serialized).not.toContain("data-ran");
-      expect(serialized).toContain("Hi");
-      const capture = await instance.run<{ mimeType: string; data: string }>(
-        job({ frame: realFrame, operation: { op: "capture" } }),
-      );
-      expect(capture.mimeType).toBe("image/png");
-      expect(Buffer.from(capture.data, "base64").subarray(1, 4).toString()).toBe("PNG");
-      // Awaiting the rejection directly: `expect(promise).rejects` starves the
-      // real browser connection under bun test and makes this step take seconds.
-      const runtimeError = await instance
-        .run(job({ frame: realFrame, operation: { op: "inspectElement", selector: "p" } }))
-        .then(
-          () => undefined,
-          (error: unknown) => error,
-        );
-      expect(runtimeError).not.toBeInstanceOf(DesignError);
-      expect((runtimeError as Error).message).toBe("Selector must match exactly one element");
+      try {
+        await rendersInRealChromium(instance);
+      } catch (error) {
+        // Playwright's own launch error carries the browser's log.
+        const outcome = launch
+          ? await Promise.race([launch, Bun.sleep(1_000).then(() => "still pending")])
+          : "never attempted";
+        console.error(`[real Chromium] launch ${outcome}`);
+        throw error;
+      }
     },
-    30_000,
+    REAL_CHROMIUM_LAUNCH_MS + 45_000,
   );
 });
+
+async function rendersInRealChromium(instance: DesignRenderer): Promise<void> {
+  const html =
+    '<div id="root">Hi</div><script>document.body.dataset.ran = "yes"</script><img src="https://example.com/x.png">';
+  const realFrame = { html, width: 200, height: 120 };
+
+  const serialized = await instance.run<string>(job({ frame: realFrame }));
+  expect(serialized).not.toContain("<script");
+  expect(serialized).not.toContain("data-ran");
+  expect(serialized).toContain("Hi");
+  const capture = await instance.run<{ mimeType: string; data: string }>(
+    job({ frame: realFrame, operation: { op: "capture" } }),
+  );
+  expect(capture.mimeType).toBe("image/png");
+  expect(Buffer.from(capture.data, "base64").subarray(1, 4).toString()).toBe("PNG");
+  // Awaiting the rejection directly: `expect(promise).rejects` starves the
+  // real browser connection under bun test and makes this step take seconds.
+  const runtimeError = await instance
+    .run(job({ frame: realFrame, operation: { op: "inspectElement", selector: "p" } }))
+    .then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+  expect(runtimeError).not.toBeInstanceOf(DesignError);
+  expect((runtimeError as Error).message).toBe("Selector must match exactly one element");
+}
 
 function base(priority: "interactive" | "validation" | "background") {
   return { environmentId: "x", canvasId: "y", priority, enqueuedAt: 0 };

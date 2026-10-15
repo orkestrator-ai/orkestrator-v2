@@ -79,7 +79,7 @@ it reaches. Some rules of thumb:
 
 ### Cross-cutting (very high)
 
-- [ ] Get the unit test job green on `main` and require lint, typecheck and tests via branch protection ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
+- [ ] Apply the approved `main` ruleset (lint, typecheck and tests required) once `main` passes three CI runs in a row; the CI-only failures are fixed or registered ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 
 ## High
 
@@ -149,7 +149,7 @@ it reaches. Some rules of thumb:
 
 ### Multi Review (high)
 
-- [ ] Make the slow-reviewer admission benchmark deterministic with deferred fakes or a controllable clock ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
+- [x] Make the slow-reviewer admission benchmark deterministic with deferred fakes or a controllable clock ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
 - [ ] Run the real-stack Multi Review inactive-environment cycle with restart, reload and bridge interruption ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), qualification)
 - [ ] Run the Multi Review browser and agent-browser suites for the #833 launcher and reviewer tab ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), qualification)
 - [ ] Compare full and compact consolidation on real providers over the corpus for recall and provenance ([multi-review-panel-value.md](multi-review-panel-value.md), qualification)
@@ -171,7 +171,7 @@ it reaches. Some rules of thumb:
 
 - [ ] Qualify Codex sub-agent cards on a fixture profile: one card per child, recovery after reload and restart ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
 - [ ] Decide and implement a renderer-backend skew guard for raw OpenCode envelopes from older backends ([mixed-version-compatibility.md](mixed-version-compatibility.md))
-- [ ] Fix flake 0166 (OpenCode probe deadline), which recurred on 2026-10-15 ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
+- [x] Fix flake 0166 (OpenCode probe deadline), which recurred on 2026-10-15 ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [ ] Keep split panes mounted across the mobile breakpoint through stable per-pane hosts ([mobile-layout-gaps.md](mobile-layout-gaps.md))
 - [ ] Move the environment settings dialog out of the drawer row so it is usable on mobile ([mobile-layout-gaps.md](mobile-layout-gaps.md))
 

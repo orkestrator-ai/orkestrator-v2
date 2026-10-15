@@ -15,6 +15,7 @@ import {
   type OpenCodeLiveCompatibilityOptions,
   type ServerHandle,
 } from "./opencode-live-compatibility-probe";
+import { installControlledTimeout } from "../tests/helpers/controlled-timeout";
 
 /**
  * Every seam is injected here: these cover the probe's error paths without a
@@ -366,17 +367,34 @@ describe("runOpenCodeLiveCompatibility", () => {
   test("kills the server when the overall deadline expires", async () => {
     const before = await tempRoots();
     const server = createFakeServer();
-    await expect(
-      runOpenCodeLiveCompatibility(
+    // The deadline fires only once the probe is stuck listing sessions. A real
+    // 10 ms deadline can expire during setup under load, where the probe
+    // rightly never spawns a server (flake 0166).
+    const deadline = installControlledTimeout(10, { label: "probe deadline" });
+    let listingStarted: () => void = () => {};
+    const listing = new Promise<void>((resolve) => {
+      listingStarted = resolve;
+    });
+    try {
+      const probe = runOpenCodeLiveCompatibility(
         options({
           spawnServer: () => server,
           // A hung SDK call would otherwise pin the probe open past the live
           // test's own timeout, which is exactly what leaks a server.
-          listSessions: () => new Promise(() => {}),
+          listSessions: () => {
+            listingStarted();
+            return new Promise(() => {});
+          },
           deadlineMs: 10,
         }),
-      ),
-    ).rejects.toThrow("OpenCode compatibility probe exceeded 10ms");
+      );
+      await Promise.race([listing, probe.catch(() => {})]);
+      expect(deadline.advance()).toBe(1);
+      await expect(probe).rejects.toThrow("OpenCode compatibility probe exceeded 10ms");
+      deadline.assertDrained();
+    } finally {
+      deadline.restore();
+    }
     expect(server.exitCode).toBe(0);
     expect(await tempRoots()).toEqual(before);
   });

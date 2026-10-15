@@ -7,8 +7,8 @@ what it proves. Every test file has exactly one owner, waits are controlled
 rather than slept, and setup matches what each assertion needs. Most of the
 2026-09-21 streamlining review landed in #815, and #966 moved the backend and
 desktop suites into their packages. What remains is a set of slow owners, one
-untracked skipped test, and two desktop test gaps. More urgently, CI is red on
-`main` and nothing requires it to be green.
+untracked skipped test, and two desktop test gaps. More urgently, CI is not
+reliably green on `main`, and nothing requires it to be.
 
 ## Current state
 
@@ -17,12 +17,28 @@ untracked skipped test, and two desktop test gaps. More urgently, CI is red on
   integration tests". `validate-bun-runtime.yml` builds the bundled Bun per
   platform and runs the container smoke.
 - **`main` is unprotected.** `gh api repos/{owner}/{repo}/branches/main/protection`
-  answers 404 "Branch not protected", and the repository has no rulesets.
-- **`main` is red.** The newest green `lint.yml` run on `main` is from
-  2026-09-30 (run 36746796730). Lint and typecheck pass on every run; the test
-  job failed on every completed run since. An investigation of the 15 completed
-  runs on 2026-10-14 and 2026-10-15 found these causes; the first five are
-  fixed:
+  answers 404 "Branch not protected", and the repository has no rulesets
+  (checked at `7ccb193e`). The maintainer approved the ruleset in item 1 on
+  2026-10-15.
+- **`main` is intermittently red.** Lint and typecheck pass on every run. #999
+  (`cefcaf69`) made the backend suite finish on CI. Of the four `main` and
+  pull-request runs that then completed it, only `5c7517eb` (#1001, run
+  38778314321) passed. It was the first green `lint.yml` run on `main` since
+  2026-09-30 (run 36746796730). The runs since #999 surfaced three more
+  failures, now addressed:
+  - **Real-Chromium design renderer** (flake 0244, open): the launch missed
+    its 15 s deadline on three of the four runs. The case now allows 45 s and
+    prints Playwright's launch log on failure. The cause is unconfirmed.
+  - **`environment cleanup steps`, the two container cases** (one run): the
+    ownership probe before `docker rm` called the runner's real Docker, so an
+    unreachable daemon, or `c1` prefixing another object, refused before the
+    injected runner ran. Both now pass `containerOwnershipVerified`. The
+    probe's verdicts are covered in `container-lifecycle-service.test.ts`.
+  - **Multi Review slow-reviewer benchmark** (flake 0171, resolved): 630 ms
+    against a 310 ms bound. It now asserts dispatch ordering, not wall time.
+
+  An investigation of the 15 completed runs on 2026-10-14 and 2026-10-15,
+  before #999, found these causes; the first five are fixed:
   - **The backend suite never finished on CI.** Turbo's default log order is
     `grouped` in CI, so a package task prints nothing until it exits. The
     four-core runner gives each package one Bun worker, and the backend
@@ -49,7 +65,7 @@ untracked skipped test, and two desktop test gaps. More urgently, CI is red on
     0240 (Cursor steering at capacity).
 
   A full backend run under CI emulation (one worker, `CI` and
-  `GITHUB_ACTIONS` set) then exposed one more: `AgentRegistry > lists every
+  `GITHUB_ACTIONS` set) also exposed: `AgentRegistry > lists every
   agent tab and coordinator with live state and counts` compared two
   snapshots whose `generatedAt` stamps could differ by a millisecond (23 of
   300 reruns failed). It now ignores only the stamp.
@@ -90,23 +106,58 @@ untracked skipped test, and two desktop test gaps. More urgently, CI is red on
 
 ### Code
 
-1. **Get the test job green on `main`, then protect it.** With the backend
-   suite now completing on CI, fix or register whatever it reveals; the
-   watchdog had hidden its later files since 2026-09-30. Once `main` passes
-   three runs in a row, protect it. The recommendation, which is the
-   maintainer's decision:
-   - A repository ruleset on `~DEFAULT_BRANCH` requiring "oxfmt and oxlint",
-     "Typecheck" and "Unit and integration tests" from GitHub Actions
-     (integration 15368), plus the deletion and non-fast-forward rules.
-   - Strict up-to-date checks off at first: about 226 pull requests a month
-     and a 12-minute test job would serialise merges. Revisit with a merge
-     queue, which needs a `merge_group:` trigger in `lint.yml`.
+1. **Confirm `main` stays green, then apply the approved ruleset.** Every
+   failure the completed CI runs have shown so far is fixed, registered or
+   mitigated (see Current state). Once `main` passes three `lint.yml` runs in a
+   row, create the ruleset below with
+   `gh api -X POST repos/orkestrator-ai/orkestrator-v2/rulesets --input <file>`,
+   then check it with `gh api repos/{owner}/{repo}/rulesets`. If a run fails
+   first, fix or register the failure and restart the count; the 0244 launch
+   log says why the real-Chromium case failed. The maintainer approved this
+   ruleset on 2026-10-15:
+
+   ```json
+   {
+     "name": "main: required CI",
+     "target": "branch",
+     "enforcement": "active",
+     "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
+     "bypass_actors": [{ "actor_type": "RepositoryRole", "actor_id": 5, "bypass_mode": "always" }],
+     "rules": [
+       { "type": "deletion" },
+       { "type": "non_fast_forward" },
+       {
+         "type": "required_status_checks",
+         "parameters": {
+           "strict_required_status_checks_policy": false,
+           "do_not_enforce_on_create": false,
+           "required_status_checks": [
+             { "context": "oxfmt and oxlint", "integration_id": 15368 },
+             { "context": "Typecheck", "integration_id": 15368 },
+             { "context": "Unit and integration tests", "integration_id": 15368 }
+           ]
+         }
+       }
+     ]
+   }
+   ```
+
+   - The three contexts are the `lint.yml` job names, reported by
+     `github-actions` (app 15368), as checked on `7ccb193e`. `actor_id` 5 is
+     the repository Admin role.
+   - Strict up-to-date checks stay off at first: about 226 pull requests a
+     month and a 12-minute test job would serialise merges. Revisit with a
+     merge queue, which needs a `merge_group:` trigger in `lint.yml`.
    - Repository admins may bypass, because version bumps are pushed to `main`
      directly (44 such pushes since 2026-09-15). Moving them to pull requests
      would allow pull-request-only bypass.
-   - Do not require the Bundled Bun or Container checks: that workflow is
+   - The Bundled Bun and Container checks are not required: that workflow is
      path-filtered, so a required check would stay pending on unrelated pull
      requests.
+   - Once active, the app's merge (`gh pr merge` without `--admin`,
+     `apps/backend/src/core/commands-review.ts`) is refused until the three
+     checks pass. That is intended; the maintainer chose not to add `--admin`
+     or `--auto`.
 2. **`AddProjectDialog.test.tsx`**, which is new since the review and the root
    group's long pole. It runs about 47 tests (including `test.each` rows) in
    55 s, with real 1.2 s, 2.15 s and 2.3 s sleeps and 3 s `waitFor` timeouts.
@@ -142,10 +193,10 @@ untracked skipped test, and two desktop test gaps. More urgently, CI is red on
      `useConnection` and `forgetConnection` with mocks. The menu helpers in
      `window-menu.ts` are tested.
 7. **Flakes.** Resolve the gateway-auth part of flake 0006 once the registry
-   criteria are met; the file now runs in well under a second. Flake 0166 (the
-   OpenCode probe deadline, in a suite #815 assigned an owner) recurred on
-   2026-10-15. The Multi Review benchmark flake 0171 is owned by
-   [multi-review-scale-and-cost.md](multi-review-scale-and-cost.md).
+   criteria are met; the file now runs in well under a second. Flakes 0166
+   (OpenCode probe deadline) and 0171 (Multi Review slow-reviewer benchmark)
+   were resolved on 2026-10-15 with a controlled deadline and an ordering
+   check. Resolve 0244 (real-Chromium launch) as item 1 describes.
 
 ### Qualification
 
@@ -231,7 +282,8 @@ untracked skipped test, and two desktop test gaps. More urgently, CI is red on
 - [Flake registry](../tests/flaky-tests/0000-index.md); entries
   [0006](../tests/flaky-tests/0006-2026-09-08-coordinator-action-validation.md),
   [0166](../tests/flaky-tests/0166-opencode-probe-deadline-exit-code.md),
-  [0171](../tests/flaky-tests/0171-multi-review-admission-benchmark-load.md).
+  [0171](../tests/flaky-tests/0171-multi-review-admission-benchmark-load.md),
+  [0244](../tests/flaky-tests/0244-design-renderer-real-chromium-launch-deadline.md).
 - [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md)
   for runs CI cannot do.
 - [environment-and-disk-cleanup.md](environment-and-disk-cleanup.md) for test

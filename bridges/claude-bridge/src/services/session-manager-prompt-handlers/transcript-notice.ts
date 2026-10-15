@@ -33,3 +33,29 @@ export function appendTranscriptNotice(
   emit({ type: "message.updated", sessionId, data: { message } });
   return message;
 }
+
+/**
+ * Settle a retry row this turn opened.
+ *
+ * A retry is only interesting until it resolves; a row left pending reports a
+ * request still in flight long after the turn ended, which is the failure mode
+ * this part kind exists to fix. Every terminal path calls this — the next
+ * assistant message, the turn's own end, and its error branch.
+ */
+export function settlePendingApiRetry(
+  session: SessionState,
+  sessionId: string,
+  emit: (event: SSEEvent) => void,
+  stream: { pendingApiRetryMessageId?: string },
+  outcome: { state: "success" | "failure" },
+): void {
+  const messageId = stream.pendingApiRetryMessageId;
+  if (!messageId) return;
+  stream.pendingApiRetryMessageId = undefined;
+  const message = session.messages.find((candidate) => candidate.id === messageId);
+  const part = message?.parts[0];
+  if (!message || part?.type !== "retry") return;
+  part.toolState = outcome.state;
+  markTranscriptChanged(session);
+  emit({ type: "message.updated", sessionId, data: { message } });
+}

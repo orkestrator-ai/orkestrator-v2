@@ -95,6 +95,8 @@ export interface TurnState {
   sdkMessageCount: number;
   /** The mode this turn asked the CLI for. Set once the query policy is resolved. */
   permissionMode: PermissionMode | undefined;
+  /** Names of the MCP servers this turn configured. Set once they are resolved. */
+  mcpServerNames: Set<string>;
   /**
    * A bridge that attaches after the transcript already exists has no
    * in-memory cumulative origin. Its first result must be bootstrapped from
@@ -188,6 +190,7 @@ export function createTurnState(
     pendingCommandChanges: new Map(),
     sdkMessageCount: 0,
     permissionMode: undefined,
+    mcpServerNames: new Set(),
     queryIteratorControl: undefined,
     runtime: undefined,
     thisTurn: undefined,

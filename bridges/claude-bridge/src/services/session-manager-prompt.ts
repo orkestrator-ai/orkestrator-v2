@@ -6,40 +6,23 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import type {
   CanUseTool,
   HookCallback,
-  SDKAPIRetryMessage,
-  SDKAssistantMessage,
-  SDKHookResponseMessage,
-  SDKInformationalMessage,
-  SDKMemoryRecallMessage,
-  SDKPermissionDeniedMessage,
   SDKStartupFailureReason,
-  SDKStatusMessage,
-  SDKThinkingTokensMessage,
-  SDKUsageReport,
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { createHash } from "node:crypto";
 import type {
-  SessionState,
   NormalizedMessage,
-  NormalizedPart,
-  SSEEvent,
   PromptOptions,
   SdkMessageBase,
   SdkResultMessage,
-  SdkSystemMessage,
-  SessionUsageSnapshot,
-  BackgroundTaskSnapshot,
 } from "../types/index.js";
 import {
   isHandledSdkMessageType,
   isKnownInternalSdkMessageType,
   isSdkResultMessage,
   sessionHealth,
-  systemSubtypeDisposition,
 } from "../types/index.js";
-import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { structuredOutputFailure } from "@orkestrator/protocol/structured-output";
 import { eventEmitter } from "./event-emitter.js";
@@ -65,13 +48,7 @@ import {
   claudeTurnPolicy,
   claudeWorkspaceCwd,
 } from "./claude-query-config.js";
-import {
-  appendLocalCommandResult,
-  readLiveCommandInventory,
-  recordCommandsChanged,
-} from "./session-manager-commands.js";
-import { claudePlanWindowFromKind } from "@orkestrator/protocol/plan-usage";
-import { commandChangeProbe } from "./command-changes.js";
+import { appendLocalCommandResult, readLiveCommandInventory } from "./session-manager-commands.js";
 
 export function claudeStartupFailureMessage(reason: SDKStartupFailureReason): string {
   switch (reason) {
@@ -116,82 +93,28 @@ export function claudeStartupFailureMessage(reason: SDKStartupFailureReason): st
   }
 }
 
-export function applyClaudeUsageReport(
-  session: SessionState,
-  report: SDKUsageReport,
-): SessionUsageSnapshot {
-  const previous = session.inProgressUsage ?? session.usage;
-  const limits = report.rate_limits?.limits?.flatMap((limit) => {
-    const identity = claudePlanWindowFromKind(limit.kind, limit.scope?.model?.display_name);
-    if (!Number.isFinite(limit.percent) || limit.percent < 0) return [];
-    return [
-      {
-        label:
-          identity?.label ??
-          limit.scope?.model?.display_name ??
-          limit.scope?.surface?.display_name ??
-          limit.kind.replaceAll("_", " "),
-        ...(identity ? { windowMinutes: identity.windowMinutes } : {}),
-        usedPercent: Math.max(0, Math.min(100, limit.percent)),
-        ...(limit.resets_at ? { resetsAt: limit.resets_at } : {}),
-      },
-    ];
-  });
-  if (limits) session.rateLimits = limits;
-
-  const extra = report.rate_limits?.extra_usage;
-  const remaining =
-    extra?.monthly_limit != null && extra.used_credits != null
-      ? Math.max(0, extra.monthly_limit - extra.used_credits)
-      : undefined;
-  const snapshot: SessionUsageSnapshot = {
-    ...(previous ?? {
-      usedTokens: 0,
-      source: "claude" as const,
-      updatedAt: new Date().toISOString(),
-    }),
-    costUsd: report.session.total_cost_usd,
-    durationMs: report.session.total_duration_ms,
-    apiDurationMs: report.session.total_api_duration_ms,
-    linesAdded: report.session.total_lines_added,
-    linesRemoved: report.session.total_lines_removed,
-    ...(extra
-      ? {
-          credits: {
-            hasCredits: extra.is_enabled,
-            ...(remaining !== undefined
-              ? { balance: `${(remaining / 100).toFixed(2)} ${extra.currency ?? "USD"}` }
-              : {}),
-          },
-        }
-      : {}),
-    ...(limits ? { rateLimits: limits } : {}),
-    updatedAt: new Date().toISOString(),
-  };
-  session.usage = snapshot;
-  return snapshot;
-}
 import { createPromptStreamState } from "./session-manager-prompt-stream.js";
 import { captureTurnStartup, createTurnState } from "./session-manager-prompt-turn.js";
 import { commandChangeHookFor } from "./session-manager-prompt-hooks.js";
 import { createClaudeRuntimeTurn } from "./session-manager-prompt-runtime-turn.js";
 import {
   armContinuationWatchdog,
-  clearThinkingTokens,
   closeTurnInput,
   diagnosticErrorClass,
   finishTurnInputIfSettled,
   ownsActiveTurn,
-  reclaimReleasedTurnForAssistant,
-  reconcilePlanModeFromStatus,
-  setTurnActivity,
   settleResultWithoutOwnership,
-  waitForContinuationAfterNotification,
 } from "./session-manager-prompt-turn-lifecycle.js";
 export { RETAINED_CONTINUATION_TIMEOUT_MS } from "./session-manager-prompt-turn-lifecycle.js";
 import { handleInitMessage } from "./session-manager-prompt-handlers/init.js";
+import { handleAssistantMessage } from "./session-manager-prompt-handlers/assistant.js";
 import { leafMessageHandler } from "./session-manager-prompt-handlers/leaf.js";
-import { appendTranscriptNotice } from "./session-manager-prompt-handlers/transcript-notice.js";
+import { handleSystemMessage } from "./session-manager-prompt-handlers/system.js";
+import { handleUserMessage } from "./session-manager-prompt-handlers/user.js";
+import {
+  appendTranscriptNotice,
+  settlePendingApiRetry,
+} from "./session-manager-prompt-handlers/transcript-notice.js";
 import { reconcileClaudeUsage } from "./session-manager-usage.js";
 import { nextTurnGeneration } from "./session-manager-core.js";
 import {
@@ -214,23 +137,9 @@ import {
   recordPromptDispatch,
 } from "./session-manager-lifecycle.js";
 import {
-  bashToolResultOutcomes,
-  bashToolUseIdsFromAssistantMessage,
-  appendInterruptedNotice,
-  appendSubagentInterruptedNotice,
-  boundedNoticeText,
-  memoryRecallPart,
-  parseMessageContent,
-  persistedBackgroundTaskMessage,
-  persistedTaskUsage,
-  provisionalBackgroundTaskId,
-  provisionalBackgroundTaskLaunchesFromAssistantMessage,
-  refreshSettledToolRows,
   resultAnswersOtherInput,
   resultInputUuids,
   resultSupersededBySteer,
-  taskNotificationNoticePart,
-  toolResultIds,
 } from "./session-manager-messages.js";
 export { memoryRecallPart } from "./session-manager-messages.js";
 import {
@@ -251,7 +160,6 @@ import {
   claudeLiveSettings,
   createClaudeRuntime,
   openClaudeRuntime,
-  recordClaudeToolOwner,
   retireDrainingClaudeRuntime,
   routeClaudeFrame,
   submitClaudeTurn,
@@ -259,23 +167,12 @@ import {
   type ClaudeRuntimeTurn,
 } from "./session-manager-runtime.js";
 import {
-  LIVE_BACKGROUND_TASK_STATUSES,
-  inheritBackgroundTaskHookRun,
-  isHookRunningBackgroundTask,
-  boundBackgroundTaskHistory,
   closeQueryControlIfUnused,
   emitBackgroundTaskSnapshot,
   forgetRetainedQueryControl,
   forgetSettlingBackgroundTasksOwnedBy,
-  parkSettlingBackgroundTask,
-  recordBackgroundTaskLaunch,
-  registerBackgroundTaskCandidate,
   removeBackgroundTaskCandidatesOwnedBy,
-  settleBackgroundTask,
   settleTasksOwnedByClosedControl,
-  takeBackgroundTaskCandidate,
-  takeProvisionalBackgroundTask,
-  takeSettlingBackgroundTask,
 } from "./session-manager-background-tasks.js";
 export const STREAM_EVENT_COALESCE_MS = 100;
 /**
@@ -288,130 +185,15 @@ export const STREAM_EVENT_COALESCE_MS = 100;
  */
 export const MAX_STREAM_CONTENT_BLOCK_INDEX = 4_095;
 
+export { THINKING_TOKENS_EMIT_INTERVAL_MS } from "./session-manager-prompt-handlers/system.js";
+export { applyClaudeUsageReport } from "./session-manager-prompt-handlers/assistant.js";
+
 export const PLAN_MODE_INSTRUCTIONS = `The user has enabled planning mode. Use this phase to:
 1. Thoroughly explore the codebase and its existing patterns.
 2. Consider viable approaches and their trade-offs.
 3. Design a concrete implementation strategy.
 4. When ready, call ExitPlanMode with the plan for approval.
 Do not write or edit files until the plan is approved.`;
-
-/**
- * Settle a retry row this turn opened.
- *
- * A retry is only interesting until it resolves; a row left pending reports a
- * request still in flight long after the turn ended, which is the failure mode
- * this part kind exists to fix. Every terminal path calls this — the next
- * assistant message, the turn's own end, and its error branch.
- */
-function settlePendingApiRetry(
-  session: SessionState,
-  sessionId: string,
-  emit: (event: SSEEvent) => void,
-  stream: { pendingApiRetryMessageId?: string },
-  outcome: { state: "success" | "failure" },
-): void {
-  const messageId = stream.pendingApiRetryMessageId;
-  if (!messageId) return;
-  stream.pendingApiRetryMessageId = undefined;
-  const message = session.messages.find((candidate) => candidate.id === messageId);
-  const part = message?.parts[0];
-  if (!message || part?.type !== "retry") return;
-  part.toolState = outcome.state;
-  markTranscriptChanged(session);
-  emit({ type: "message.updated", sessionId, data: { message } });
-}
-
-/**
- * How loudly to report one Claude system subtype.
- *
- * These are the SDK's own diagnostics, so they are recorded as `provider`
- * notices. The severity split is what decides whether the tab shows the notice
- * at all: `info` and `warning` stay in the health panel, while the backend
- * raises `error` in the tab as a persistent toast. Dedicated transcript rows,
- * such as API retry progress, remain independent of this health severity.
- */
-const SYSTEM_MESSAGE_SEVERITIES: Record<string, "info" | "warning" | "error"> = {
-  informational: "info",
-  notification: "info",
-  // Hook progress never reaches here (`ignored` in the disposition table). A
-  // hook *response* only does when it failed, and is graded by its outcome
-  // below, because a failed hook is the case this bridge cannot otherwise
-  // notice.
-  api_retry: "warning",
-  model_refusal_fallback: "warning",
-  model_refusal_no_fallback: "error",
-  mirror_error: "error",
-};
-
-/**
- * Record a system subtype the dispatch above had no branch for.
- *
- * Only the subtype name and, where the SDK supplies a plain string, a bounded
- * message travel: the rest of an SDK system message can carry prompts, file
- * contents and tool output, and a notice reaches the renderer and the logs.
- */
-function recordSystemMessageNotice(session: SessionState, message: SdkSystemMessage): void {
-  const subtype = message.subtype ?? "unknown";
-  if (subtype === "plugin_install") {
-    // A failed install names its plugin and carries its own `error`, not the
-    // `message` every other subtype uses; reading it generically recorded an
-    // info notice with no detail.
-    const install = message as { status?: unknown; name?: unknown; error?: unknown };
-    if (install.status === "failed") {
-      const name = typeof install.name === "string" && install.name ? install.name : undefined;
-      sessionHealth(session).recordNotice({
-        message: name
-          ? `Claude plugin ${name} failed to install`
-          : "A Claude plugin failed to install",
-        method: "plugin/install",
-        severity: "error",
-        source: "provider",
-        ...(typeof install.error === "string" && install.error ? { detail: install.error } : {}),
-      });
-      return;
-    }
-  }
-  const outcome = (message as { outcome?: unknown }).outcome;
-  const severity =
-    subtype === "hook_response"
-      ? // The hook this bridge registers observes plan writes. If it fails,
-        // plan observation is broken and nothing else would report it.
-        outcome === "error"
-        ? "error"
-        : "info"
-      : (SYSTEM_MESSAGE_SEVERITIES[subtype] ?? "info");
-  const detail = (message as { message?: unknown }).message;
-  sessionHealth(session).recordNotice({
-    message: `Claude reported ${subtype.replaceAll("_", " ")}`,
-    method: `system/${subtype}`,
-    severity,
-    source: "provider",
-    ...(typeof detail === "string" && detail.length > 0 ? { detail } : {}),
-  });
-}
-
-/**
- * Minimum spacing between published thinking-token estimates.
- *
- * The SDK sends one frame per thinking delta — thousands in a long turn — and
- * every `session.updated` reaches each subscriber. A counter that ticks a few
- * times a second reads as live; one frame per delta is only load.
- */
-export const THINKING_TOKENS_EMIT_INTERVAL_MS = 500;
-
-/** Ids of the tool calls an assistant message makes. */
-function toolUseIdsFromAssistantMessage(message: unknown): string[] {
-  const content = (message as { message?: { content?: unknown } }).message?.content;
-  if (!Array.isArray(content)) return [];
-  return content.flatMap((block) => {
-    const { type, id } = (block ?? {}) as { type?: unknown; id?: unknown };
-    return (type === "tool_use" || type === "server_tool_use" || type === "mcp_tool_use") &&
-      typeof id === "string" &&
-      id
-      ? [id]
-      : [];
-  });
-}
 
 /**
  * The single consumer of a runtime's frames, for the life of its process.
@@ -752,7 +534,6 @@ export async function sendPrompt(
       cost: baseline.cost,
     };
   };
-  const { toolTracker, taskRegistry, activeTaskIds } = stream;
   const recordInterruptedStructuredOutputIfCurrent = () => {
     if (
       !options?.outputSchema ||
@@ -806,6 +587,7 @@ export async function sendPrompt(
         getMcpRuntimeConfig(cwd, process.env, options?.agentMcp, mcpSourceScopeForPolicy(policy)),
         getPluginsForSdk(cwd, includeProjectResources),
       ]);
+    turn.mcpServerNames = mcpServerNames;
 
     const mcpServerCount = Object.keys(mcpServers).length;
     const pluginCount = plugins.length;
@@ -882,8 +664,6 @@ export async function sendPrompt(
     // `resultAnswersOtherInput`.
     const promptUuid = crypto.randomUUID();
     turn.closeSdkInput = () => closeTurnInput(turn);
-    const recordUnknownContentBlock = (blockType: string) =>
-      sessionHealth(session).recordUnknown(`block:${blockType}`);
     turn.finishTurnInputForThisTurn = () => finishTurnInputIfSettled(turn);
 
     const queryEnvironment = await runtimeEnvironmentForAgentQuery();
@@ -917,15 +697,6 @@ export async function sendPrompt(
       // settle the pending snapshot before handling a non-delta message.
       if (message.type !== "stream_event") stream.flushStreamedAssistantMessage();
 
-      // SDKUserMessage.timestamp is optional (older emitters omit it). Capture
-      // one receive-time clock for a record that can carry transcript content,
-      // so a terminal tool result still records where its card settled. Do not
-      // allocate an ISO string for each token-sized stream event.
-      const receivedAt =
-        message.type === "assistant" || message.type === "user"
-          ? new Date().toISOString()
-          : undefined;
-
       // Handle different message types from SDK
       const leafHandler = leafMessageHandler(message.type);
       if (leafHandler) {
@@ -933,764 +704,11 @@ export async function sendPrompt(
       } else if (message.type === "system" && message.subtype === "init") {
         await handleInitMessage(turn, message);
       } else if (message.type === "system") {
-        // Handle other system messages (log for debugging)
-        const sysMsg = message as SdkSystemMessage;
-        debugLog("[session-manager] System message received", {
-          sessionId,
-          subtype: sysMsg.subtype,
-        });
-
-        const taskMessage = message as {
-          subtype?: string;
-          task_id?: string;
-          tool_use_id?: string;
-          description?: string;
-          summary?: string;
-          /** Only on `task_notification`; the terminal edge of a task. */
-          status?: "completed" | "failed" | "stopped";
-          /** Only on `task_notification`; where the CLI wrote the full output. */
-          output_file?: unknown;
-          /** On `task_progress` and `task_notification`. */
-          usage?: unknown;
-          /** Only on `background_tasks_changed`; the full live set. */
-          tasks?: Array<{
-            task_id?: string;
-            task_type?: string;
-            description?: string;
-            /** Agent SDK 0.3.296+: agent type, or `main-session`. */
-            subagent_type?: unknown;
-          }>;
-          patch?: {
-            status?: BackgroundTaskSnapshot["status"];
-            description?: string;
-            end_time?: number;
-            error?: string;
-            is_backgrounded?: boolean;
-          };
-        };
-
-        const emitBackgroundTasks = () => {
-          eventEmitter.emit({
-            type: "session.updated",
-            sessionId,
-            data: { backgroundTasks: session.backgroundTasks },
-          });
-        };
-
-        if (sysMsg.subtype === "commands_changed") {
-          // A full replacement (SDKCommandsChangedMessage). Applied to the
-          // bridge-owned inventory whether or not anybody is subscribed.
-          recordCommandsChanged(session, message);
-        } else if (sysMsg.subtype === "local_command_output") {
-          // A command the CLI answered itself (SDKLocalCommandOutputMessage).
-          // Without this row the turn settles with nothing visible.
-          const output = (message as { content?: unknown }).content;
-          if (typeof output === "string") {
-            turn.localCommandOutputSeen = true;
-            appendLocalCommandResult(
-              session,
-              output,
-              typeof sysMsg.uuid === "string"
-                ? sysMsg.uuid
-                : `${turnGeneration}:${turn.sdkMessageCount}`,
-            );
-          }
-        } else if (
-          (taskMessage.subtype === "task_started" ||
-            taskMessage.subtype === "task_progress" ||
-            taskMessage.subtype === "task_updated") &&
-          taskMessage.task_id
-        ) {
-          if (
-            isHookRunningBackgroundTask(session.backgroundTasks?.[taskMessage.task_id]) &&
-            taskMessage.patch?.status &&
-            !LIVE_BACKGROUND_TASK_STATUSES.has(taskMessage.patch.status)
-          )
-            return;
-          const correlated = takeProvisionalBackgroundTask(session, taskMessage.tool_use_id);
-          const stored = session.backgroundTasks?.[taskMessage.task_id] ?? correlated.task;
-          // A `SendMessage` resume re-runs a finished agent under its old task
-          // id, announced by a `task_started` from the resuming call. That is a
-          // new run, not a late edge of the old one: left terminal, nothing
-          // held this query's input open for it, and the CLI stopped the agent
-          // once its idle wind-down ran out.
-          const resumedRun =
-            taskMessage.subtype === "task_started" &&
-            stored !== undefined &&
-            !LIVE_BACKGROUND_TASK_STATUSES.has(stored.status) &&
-            typeof taskMessage.tool_use_id === "string" &&
-            taskMessage.tool_use_id !== stored.toolUseId;
-          if (resumedRun) {
-            // The finished run's parked snapshot must not describe this one.
-            const parked = takeSettlingBackgroundTask(session, taskMessage.task_id);
-            if (parked) closeQueryControlIfUnused(session, parked.owner);
-          }
-          const previous = resumedRun
-            ? {
-                ...stored,
-                status: "running" as const,
-                startedAt: Date.now(),
-                endedAt: undefined,
-                error: undefined,
-                summary: undefined,
-                outputFile: undefined,
-                usage: undefined,
-              }
-            : stored;
-          const patchedStatus = taskMessage.patch?.status ?? previous?.status ?? "running";
-          // Within one run, level and edge messages may be delivered in either
-          // order, so a late start/progress edge must enrich a terminal record
-          // rather than resurrect it.
-          const status =
-            previous &&
-            !LIVE_BACKGROUND_TASK_STATUSES.has(previous.status) &&
-            LIVE_BACKGROUND_TASK_STATUSES.has(patchedStatus)
-              ? previous.status
-              : patchedStatus;
-          const task: BackgroundTaskSnapshot = {
-            id: taskMessage.task_id,
-            toolUseId: taskMessage.tool_use_id ?? previous?.toolUseId,
-            description:
-              taskMessage.patch?.description ?? taskMessage.description ?? previous?.description,
-            status,
-            isBackgrounded: taskMessage.patch?.is_backgrounded ?? previous?.isBackgrounded,
-            startedAt: previous?.startedAt ?? Date.now(),
-            endedAt: taskMessage.patch?.end_time ?? previous?.endedAt,
-            error: taskMessage.patch?.error ?? previous?.error,
-            summary: previous?.summary,
-            outputFile: previous?.outputFile,
-            subagentType: previous?.subagentType,
-            // Terminal usage wins over an older progress frame delivered late.
-            usage:
-              previous && !LIVE_BACKGROUND_TASK_STATUSES.has(previous.status) && previous.usage
-                ? previous.usage
-                : (persistedTaskUsage(taskMessage.usage) ?? previous?.usage),
-          };
-          inheritBackgroundTaskHookRun(previous, task);
-          session.backgroundTasks = boundBackgroundTaskHistory({
-            ...session.backgroundTasks,
-            [task.id]: task,
-          });
-          if (LIVE_BACKGROUND_TASK_STATUSES.has(task.status)) {
-            (session.backgroundTaskControls ??= new Map()).set(task.id, turn.queryIteratorControl!);
-          } else {
-            const owner = session.backgroundTaskControls?.get(task.id) ?? correlated.owner;
-            session.backgroundTaskControls?.delete(task.id);
-            // A finishing task sends its terminal patch before the
-            // `task_notification` edge, while the CLI is still queueing the
-            // notification it will answer. For a released turn this is the
-            // same boundary as that edge: closing here kills the CLI between
-            // writing the notification and running the model on it, so the
-            // reply the model promised never comes.
-            if (
-              owner === turn.queryIteratorControl &&
-              turn.turnReleasedToBackgroundTasks &&
-              previous !== undefined &&
-              LIVE_BACKGROUND_TASK_STATUSES.has(previous.status)
-            ) {
-              turn.receivedResult = false;
-              waitForContinuationAfterNotification(turn);
-            }
-            closeQueryControlIfUnused(session, owner);
-          }
-          closeQueryControlIfUnused(session, correlated.owner);
-          emitBackgroundTasks();
-        } else if (taskMessage.subtype === "task_notification" && taskMessage.task_id) {
-          const notification = persistedBackgroundTaskMessage({ message: taskMessage });
-          // Invalid terminal statuses are not completion evidence, live or on replay.
-          if (!notification) return;
-          // A same-id wake can happen while usage settlement holds the JSONL
-          // consumer. This frame may belong to the preceding run; only the
-          // current run's stop hook can retire its live control.
-          if (isHookRunningBackgroundTask(session.backgroundTasks?.[notification.task_id])) {
-            return;
-          }
-          // A task notification can re-enter the root agent loop after an
-          // earlier result. That earlier result is only the response boundary
-          // before the notification, not permission to close streaming input.
-          // Wait for the resumed loop's own result; otherwise stdin EOF lands
-          // between its final tool result and final assistant message and the
-          // rollout records `[Request interrupted by user]`.
-          turn.receivedResult = false;
-          // The terminal edge. Without it nothing ever leaves `running`, so
-          // `GET /session/:id` reported a finished task as live indefinitely.
-          const correlated = takeProvisionalBackgroundTask(session, notification.tool_use_id);
-          // A level signal that preceded this edge has already removed the task
-          // from the live set; its parked snapshot is the only remaining source
-          // of the original description and start time.
-          const parked = takeSettlingBackgroundTask(session, notification.task_id);
-          const previous =
-            session.backgroundTasks?.[notification.task_id] ?? parked?.task ?? correlated.task;
-          const terminalStatus: BackgroundTaskSnapshot["status"] =
-            notification.status === "failed"
-              ? "failed"
-              : notification.status === "stopped"
-                ? "killed"
-                : "completed";
-          const task: BackgroundTaskSnapshot = {
-            id: notification.task_id,
-            toolUseId: notification.tool_use_id ?? previous?.toolUseId,
-            description: previous?.description ?? notification.description ?? notification.summary,
-            status: terminalStatus,
-            isBackgrounded: previous?.isBackgrounded,
-            startedAt: previous?.startedAt ?? Date.now(),
-            endedAt: Date.now(),
-            error:
-              terminalStatus === "failed"
-                ? (notification.summary ?? previous?.error)
-                : previous?.error,
-            summary: notification.summary ?? previous?.summary,
-            outputFile: notification.output_file ?? previous?.outputFile,
-            usage: notification.usage ?? previous?.usage,
-            subagentType: previous?.subagentType,
-          };
-          session.backgroundTasks = boundBackgroundTaskHistory({
-            ...session.backgroundTasks,
-            [task.id]: task,
-          });
-          const owner =
-            session.backgroundTaskControls?.get(task.id) ?? parked?.owner ?? correlated.owner;
-          session.backgroundTaskControls?.delete(task.id);
-          // The notification is injected into the same root loop and may be
-          // followed by another assistant/result boundary. `Query.close()` is
-          // destructive (it terminates the CLI and suppresses later frames),
-          // so a released query must stay alive until that boundary arrives.
-          // A later result closes held input, while abort/delete still closes
-          // the control explicitly.
-          if (owner === turn.queryIteratorControl && turn.turnReleasedToBackgroundTasks) {
-            waitForContinuationAfterNotification(turn);
-          } else {
-            closeQueryControlIfUnused(session, owner);
-          }
-          emitBackgroundTasks();
-        } else if (
-          taskMessage.subtype === "background_tasks_changed" &&
-          Array.isArray(taskMessage.tasks)
-        ) {
-          // A level signal replaces live membership only. Terminal bookends
-          // are retained (within the bounded history) because the SDK permits
-          // this level to arrive after the terminal edge for the same
-          // transition; replacing the whole snapshot here erased failures and
-          // could even resurrect the task as running.
-          const replacement: Record<string, BackgroundTaskSnapshot> = Object.fromEntries(
-            (
-              Object.entries(session.backgroundTasks ?? {}) as Array<
-                [string, BackgroundTaskSnapshot]
-              >
-            ).filter(([, task]) => !LIVE_BACKGROUND_TASK_STATUSES.has(task.status)),
-          ) as Record<string, BackgroundTaskSnapshot>;
-          const previousControls = session.backgroundTaskControls;
-          const previousOwners = new Set(previousControls?.values() ?? []);
-          const replacementControls = new Map<string, NonNullable<SessionState["queryControl"]>>();
-          // The SDK documents this level signal as per-process. Every turn runs
-          // on the session's one CLI, so it normally speaks for every live
-          // task; a member owned by another control (a CLI still exiting while
-          // its successor starts) is preserved, and only this query's slice is
-          // replaced.
-          const previouslyLiveOwnedByThisQuery: BackgroundTaskSnapshot[] = [];
-          for (const [id, task] of Object.entries(session.backgroundTasks ?? {}) as Array<
-            [string, BackgroundTaskSnapshot]
-          >) {
-            if (!LIVE_BACKGROUND_TASK_STATUSES.has(task.status)) continue;
-            const owner = previousControls?.get(id);
-            if (
-              (owner && owner !== turn.queryIteratorControl!) ||
-              isHookRunningBackgroundTask(task)
-            ) {
-              replacement[id] = task;
-              if (owner) replacementControls.set(id, owner);
-              continue;
-            }
-            // Owned by this query (or by no handle at all, which only this
-            // query can still speak for). Whether it survives depends on the
-            // payload below.
-            previouslyLiveOwnedByThisQuery.push(task);
-          }
-          for (const entry of taskMessage.tasks) {
-            const id = entry?.task_id;
-            if (typeof id !== "string" || id.length === 0) continue;
-            const previous = session.backgroundTasks?.[id];
-            if (previous && !LIVE_BACKGROUND_TASK_STATUSES.has(previous.status)) {
-              replacement[id] = previous;
-              continue;
-            }
-            // Only the level names the agent type (the edges do not), and it
-            // never changes within a run, so an earlier value stands in for a
-            // CLI that predates the field.
-            const subagentType =
-              typeof entry.subagent_type === "string" && entry.subagent_type.length > 0
-                ? entry.subagent_type
-                : previous?.subagentType;
-            replacement[id] = {
-              id,
-              toolUseId: previous?.toolUseId,
-              description: entry.description ?? previous?.description,
-              status: LIVE_BACKGROUND_TASK_STATUSES.has(previous?.status ?? "running")
-                ? (previous?.status ?? "running")
-                : "running",
-              isBackgrounded: previous?.isBackgrounded ?? true,
-              startedAt: previous?.startedAt ?? Date.now(),
-              ...(previous?.usage ? { usage: previous.usage } : {}),
-              ...(subagentType ? { subagentType } : {}),
-            };
-            inheritBackgroundTaskHookRun(previous, replacement[id]!);
-            // An id already owned by another live control keeps that owner:
-            // only the process that started a task can stop it, and a control
-            // asked to stop an id it never started answers `ok` without
-            // reaching anything. This query claims genuinely new ids only.
-            replacementControls.set(id, previousControls?.get(id) ?? turn.queryIteratorControl!);
-          }
-          session.backgroundTasks = boundBackgroundTaskHistory(replacement);
-          session.backgroundTaskControls =
-            replacementControls.size > 0 ? replacementControls : undefined;
-          // Anything this query owned that the level no longer lists has
-          // stopped running, but the level says nothing about *how* it ended.
-          // The edge that does may still be on its way (the SDK leaves the
-          // order unspecified; an edge that already landed made the task
-          // terminal, so it is not in this list), so the query still owes a
-          // continuation and must not be torn down
-          // here — that close is what silently dropped the "I'll report back
-          // when it finishes" reply the model had already promised.
-          const droppedByThisQuery = previouslyLiveOwnedByThisQuery.filter(
-            (task) => replacement[task.id] === undefined,
-          );
-          if (droppedByThisQuery.length > 0 && turn.turnReleasedToBackgroundTasks) {
-            for (const task of droppedByThisQuery) {
-              parkSettlingBackgroundTask(session, task, turn.queryIteratorControl!);
-            }
-            // Mirrors the `task_notification` branch: the earlier result is
-            // only the boundary before this transition, not permission to
-            // close streaming input. Closing it here lands stdin EOF between
-            // the model's final tool result and its final assistant message,
-            // which the rollout records as `[Request interrupted by user]`.
-            turn.receivedResult = false;
-            waitForContinuationAfterNotification(turn);
-          }
-          // Retention above is what keeps this query out of the close below:
-          // `closeQueryControlIfUnused` treats a retained control as still in
-          // use. Every other owner is closed exactly as before.
-          for (const owner of previousOwners) {
-            closeQueryControlIfUnused(session, owner);
-          }
-          emitBackgroundTasks();
-        } else if (sysMsg.subtype === "thinking_tokens") {
-          // A running estimate during the redacted-thinking phase, where the
-          // API otherwise streams only pings. Arrives once per delta, so the
-          // session keeps every value but publishes at most one per interval.
-          const estimate = (message as SDKThinkingTokensMessage).estimated_tokens;
-          if (
-            ownsActiveTurn(turn) &&
-            typeof estimate === "number" &&
-            Number.isFinite(estimate) &&
-            estimate >= 0
-          ) {
-            session.thinkingTokens = Math.round(estimate);
-            const now = Date.now();
-            if (now - turn.lastThinkingTokensEmitAt >= THINKING_TOKENS_EMIT_INTERVAL_MS) {
-              turn.lastThinkingTokensEmitAt = now;
-              eventEmitter.emit({
-                type: "session.updated",
-                sessionId,
-                data: { thinkingTokens: session.thinkingTokens },
-              });
-            }
-          }
-        } else if (sysMsg.subtype === "status") {
-          const status = message as SDKStatusMessage;
-          setTurnActivity(turn, status.status === "compacting" ? "compacting" : undefined);
-          // The compaction row is written by the PostCompact hook, which only
-          // runs on success. A failed compaction left nothing in the tab while
-          // the context stayed exactly as full as before.
-          if (status.compact_result === "failed") {
-            const reason = boundedNoticeText(status.compact_error);
-            appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
-              type: "status",
-              severity: "warning",
-              content: reason ? `Compaction failed: ${reason}` : "Compaction failed",
-              createdAt: new Date().toISOString(),
-            });
-          }
-          await reconcilePlanModeFromStatus(turn, status.permissionMode);
-        } else if (sysMsg.subtype === "hook_response") {
-          // Most of these are this bridge's own compaction and background-task
-          // hooks. Only a failed or cancelled hook says something is broken.
-          if ((message as SDKHookResponseMessage).outcome !== "success") {
-            recordSystemMessageNotice(session, sysMsg);
-          }
-        } else if (sysMsg.subtype === "informational") {
-          const info = message as SDKInformationalMessage;
-          const content = boundedNoticeText(info.content);
-          // `info` renders only in the CLI's verbose transcript mode and
-          // `notice` in inactive gray: inventory, not something to interrupt
-          // the tab with. A stopped continuation is always shown, because the
-          // turn ends on it and nothing else would say why.
-          const visible =
-            info.prevent_continuation === true ||
-            info.level === "warning" ||
-            info.level === "suggestion";
-          if (content && visible) {
-            const part: NormalizedPart = {
-              type: "status",
-              severity:
-                info.prevent_continuation === true || info.level === "warning" ? "warning" : "info",
-              content,
-              createdAt: new Date().toISOString(),
-            };
-            // The SDK repeats a progress line for one tool use; keep one row.
-            const existingId = info.tool_use_id
-              ? turn.informationalRowsByToolUse.get(info.tool_use_id)
-              : undefined;
-            const existing = existingId
-              ? session.messages.find((candidate) => candidate.id === existingId)
-              : undefined;
-            if (existing) {
-              existing.content = part.content;
-              existing.parts = [part];
-              markTranscriptChanged(session);
-              eventEmitter.emit({
-                type: "message.updated",
-                sessionId,
-                data: { message: existing },
-              });
-            } else {
-              const row = appendTranscriptNotice(
-                session,
-                sessionId,
-                (event) => eventEmitter.emit(event),
-                part,
-              );
-              if (info.tool_use_id) turn.informationalRowsByToolUse.set(info.tool_use_id, row.id);
-            }
-          } else {
-            recordSystemMessageNotice(session, sysMsg);
-          }
-        } else if (sysMsg.subtype === "permission_denied") {
-          const denial = message as SDKPermissionDeniedMessage;
-          // The tool result that follows carries the rejection the model read.
-          // What only this frame says is *who* decided and why, so that is
-          // what is kept on the call, where the renderer shows it.
-          const reason = boundedNoticeText(denial.decision_reason ?? denial.message);
-          // PreToolUse ran before the permission decision; no PostToolUse
-          // will close the window it opened.
-          if (typeof denial.tool_use_id === "string") {
-            commandChangeProbe.discard(denial.tool_use_id);
-          }
-          const marked =
-            typeof denial.tool_use_id === "string" &&
-            toolTracker.recordDenial(denial.tool_use_id, {
-              reason,
-              ...(typeof denial.decision_reason_type === "string"
-                ? { source: denial.decision_reason_type.slice(0, 64) }
-                : {}),
-            });
-          if (marked) {
-            const refreshed = stream.refreshToolRows([denial.tool_use_id]);
-            refreshSettledToolRows(
-              session,
-              sessionId,
-              toolTracker,
-              [denial.tool_use_id],
-              refreshed,
-            );
-          } else {
-            // A call this turn never saw (a subagent's, or one from before a
-            // reconnect) still deserves to say it was refused.
-            const toolName = boundedNoticeText(denial.tool_name) ?? "A tool call";
-            appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
-              type: "status",
-              severity: "warning",
-              content: reason ? `${toolName} was denied: ${reason}` : `${toolName} was denied`,
-              createdAt: new Date().toISOString(),
-            });
-          }
-        } else if (sysMsg.subtype === "memory_recall") {
-          const recall = message as SDKMemoryRecallMessage;
-          const memories = Array.isArray(recall.memories) ? recall.memories : [];
-          if (memories.length > 0) {
-            appendTranscriptNotice(
-              session,
-              sessionId,
-              (event) => eventEmitter.emit(event),
-              memoryRecallPart(recall.mode, memories),
-            );
-          }
-        }
-        finishTurnInputIfSettled(turn);
-
-        // System subtypes with no branch above are diagnostics, not transcript
-        // content. They used to be re-emitted as an untyped `system.message`
-        // frame carrying the whole SDK message — which nothing consumed, and
-        // which put arbitrary provider payload on the wire. Record them as
-        // runtime notices instead, where they are bounded, redacted, carry a
-        // severity, and reach the health panel. Only errors are additionally
-        // raised in the tab by the backend. Which subtypes are recorded at all
-        // is `SYSTEM_SUBTYPE_DISPOSITIONS`, applied at the end of this branch.
-        if (sysMsg.subtype === "api_retry") {
-          // A retry the user can see, rather than a silent stall. Recorded as a
-          // pending row and settled by the next assistant message or by the
-          // turn's own outcome — a retry row that never settles is exactly the
-          // stale card this replaces.
-          const retry = sysMsg as unknown as SDKAPIRetryMessage;
-          // A later retry proves the preceding attempt failed. Settle that row
-          // before opening the next one so no superseded spinner can survive.
-          settlePendingApiRetry(session, sessionId, (event) => eventEmitter.emit(event), stream, {
-            state: "failure",
-          });
-          stream.pendingApiRetryMessageId = appendTranscriptNotice(
-            session,
-            sessionId,
-            (event) => eventEmitter.emit(event),
-            {
-              type: "retry",
-              content:
-                typeof retry.error_status === "number"
-                  ? `The API answered ${retry.error_status}`
-                  : "The API request failed",
-              toolState: "pending",
-              ...(typeof retry.attempt === "number" ? { retryAttempt: retry.attempt } : {}),
-              createdAt: new Date().toISOString(),
-            },
-          ).id;
-        }
-        const disposition = systemSubtypeDisposition(sysMsg.subtype);
-        if (disposition === undefined) {
-          // A subtype newer than the table: counted as drift, and still kept
-          // as a notice so whatever it said is not lost.
-          sessionHealth(session).recordUnknown(`system:${sysMsg.subtype ?? "(untyped)"}`);
-          recordSystemMessageNotice(session, sysMsg);
-        } else if (disposition === "notice" || disposition === "handled+notice") {
-          recordSystemMessageNotice(session, sysMsg);
-        }
+        await handleSystemMessage(turn, message);
       } else if (message.type === "assistant") {
-        const usageReport = (message as SDKAssistantMessage).usage_report;
-        if (usageReport) {
-          const usage = applyClaudeUsageReport(session, usageReport);
-          eventEmitter.emit({
-            type: "session.updated",
-            sessionId,
-            data: {
-              contextUsage: usage,
-              ...(session.rateLimits !== undefined ? { rateLimits: session.rateLimits } : {}),
-            },
-          });
-        }
-        // The thinking this estimate measured has produced its block.
-        clearThinkingTokens(turn);
-        // The retry above worked: the model answered. Settle the row rather
-        // than leaving a spinner on a request that has already succeeded.
-        settlePendingApiRetry(session, sessionId, (event) => eventEmitter.emit(event), stream, {
-          state: "success",
-        });
-        reclaimReleasedTurnForAssistant(turn, message as SdkMessageBase);
-
-        // If we receive a new assistant message after a plan denial, it means
-        // the SDK continued the agent loop and Claude did see the feedback.
-        // Clear the pending feedback so we don't re-prompt unnecessarily.
-        if (stream.pendingPlanRejectionFeedback) {
-          debugLog(
-            "[session-manager] Claude responded after plan denial, clearing re-prompt feedback",
-            { sessionId },
-          );
-          stream.pendingPlanRejectionFeedback = null;
-        }
-
-        // Assistant message - parse content and register tools with tracker
-        const { orderedParts, newTaskIds, contentBlockCount } = parseMessageContent(
-          message,
-          toolTracker,
-          mcpServerNames,
-          activeTaskIds,
-          taskRegistry,
-          receivedAt,
-          recordUnknownContentBlock,
-        );
-
-        // Frames a subagent sends name the call that started it. Remember that
-        // this turn's row holds the call, so they reach it after a newer turn
-        // has taken over the root conversation.
-        if (turn.runtime && turn.thisTurn) {
-          for (const toolUseId of toolUseIdsFromAssistantMessage(message)) {
-            recordClaudeToolOwner(turn.runtime, toolUseId, turn.thisTurn);
-          }
-        }
-
-        // A foreground Bash call can become background work after a timeout or
-        // Ctrl+B. Keep that possibility hidden from the task snapshot, but
-        // retain this query's control until the correlated provider result
-        // tells us whether it actually happened.
-        for (const toolUseId of bashToolUseIdsFromAssistantMessage(message)) {
-          registerBackgroundTaskCandidate(session, toolUseId, turn.queryIteratorControl!);
-        }
-
-        // Establish liveness from the invocation itself. The provider can emit
-        // the turn result before its Bash tool_result or task lifecycle frames;
-        // waiting for either of those edges recreates the stdin-close race that
-        // kills the just-launched process. The provisional id is replaced by
-        // the provider task id as soon as either later edge supplies it.
-        for (const launch of provisionalBackgroundTaskLaunchesFromAssistantMessage(message)) {
-          recordBackgroundTaskLaunch(session, launch, turn.queryIteratorControl!);
-        }
-
-        // Update active Task tracking - add new Tasks
-        for (const taskId of newTaskIds) {
-          activeTaskIds.add(taskId);
-        }
-
-        // Each root model response is a row of its own; a subagent's output
-        // joins the row holding the call that started it.
-        const apiMessageId = (message as SDKAssistantMessage).message?.id;
-        const parentToolUseId = (message as { parent_tool_use_id?: unknown }).parent_tool_use_id;
-        const isRootAssistant = isRootAssistantRecord(
-          parentToolUseId,
-          (message as { isSidechain?: unknown }).isSidechain,
-        );
-        const sdkMessageUuid = (message as { uuid?: unknown }).uuid;
-        const observedModel = (message as { message?: { model?: unknown } }).message?.model;
-        const modelId = isRootAssistant ? normalizeBackendModelId(observedModel) : undefined;
-        stream.applyAssistantRecord({
-          ...(typeof apiMessageId === "string" ? { apiMessageId } : {}),
-          ...(typeof sdkMessageUuid === "string" ? { uuid: sdkMessageUuid } : {}),
-          ...(typeof parentToolUseId === "string" && parentToolUseId.length > 0
-            ? { parentToolUseId }
-            : {}),
-          isRoot: isRootAssistant,
-          orderedParts,
-          contentBlockCount,
-          ...(modelId ? { modelId } : {}),
-          ...(receivedAt ? { receivedAt } : {}),
-        });
+        handleAssistantMessage(turn, message);
       } else if (message.type === "user") {
-        // User message with tool results - parse to update tool tracker
-        const {
-          completedTaskIds,
-          unattachedTaskNotifications,
-          attachedTaskToolUseIds,
-          interrupted,
-          subagentInterrupted,
-        } = parseMessageContent(
-          message,
-          toolTracker,
-          mcpServerNames,
-          activeTaskIds,
-          taskRegistry,
-          receivedAt,
-          recordUnknownContentBlock,
-        );
-
-        const sdkUserMessage = message as SDKUserMessage;
-        for (const toolUseId of toolResultIds(sdkUserMessage)) {
-          // A call whose PostToolUse already ran has closed its window, so this
-          // only drops one no hook will close: a call refused by `canUseTool`,
-          // or one cut off by an interrupt.
-          commandChangeProbe.discard(toolUseId);
-          const pending = turn.pendingCommandChanges.get(toolUseId);
-          if (pending) {
-            turn.pendingCommandChanges.delete(toolUseId);
-            toolTracker.setCommandChanges(toolUseId, pending);
-          }
-        }
-        let settledProvisionalTask = false;
-        for (const outcome of bashToolResultOutcomes(sdkUserMessage, toolTracker)) {
-          if (outcome.launch) {
-            recordBackgroundTaskLaunch(session, outcome.launch, turn.queryIteratorControl!);
-            continue;
-          }
-          if (outcome.retainCandidate) continue;
-          takeBackgroundTaskCandidate(session, outcome.toolUseId);
-          const provisionalId = provisionalBackgroundTaskId(outcome.toolUseId);
-          const provisional = session.backgroundTasks?.[provisionalId];
-          if (
-            outcome.failed &&
-            provisional &&
-            LIVE_BACKGROUND_TASK_STATUSES.has(provisional.status)
-          ) {
-            settleBackgroundTask(
-              session,
-              provisionalId,
-              "failed",
-              "The Bash invocation failed before its background task was confirmed",
-            );
-            settledProvisionalTask = true;
-          }
-        }
-        if (settledProvisionalTask) emitBackgroundTaskSnapshot(session);
-        finishTurnInputIfSettled(turn);
-
-        // Update active Task tracking - remove completed Tasks
-        for (const taskId of completedTaskIds) {
-          activeTaskIds.delete(taskId);
-        }
-
-        // Defensive fallback: if the user approved the plan this turn but the
-        // SDK still reported the ExitPlanMode tool as a failure, rewrite the
-        // tracked tool to "success" so the UI doesn't show a red failure for
-        // something the user explicitly approved. Capture a continuation
-        // re-prompt so Claude doesn't just abandon the turn. See the comment
-        // block where `stream.planApprovedThisTurn` is declared for full context.
-        if (stream.planApprovedThisTurn) {
-          for (const tool of toolTracker.getTools()) {
-            if (
-              tool.toolName === "ExitPlanMode" &&
-              tool.toolState === "failure" &&
-              tool.toolUseId
-            ) {
-              console.warn(
-                "[session-manager] ExitPlanMode reported failure despite user approval — overriding to success and scheduling continuation re-prompt",
-                { sessionId, toolUseId: tool.toolUseId, sdkError: tool.toolError },
-              );
-              toolTracker.updateToolResult(tool.toolUseId, {
-                state: "success",
-                output: "Plan approved by the user. Proceeding with implementation.",
-                error: undefined,
-              });
-              if (!stream.pendingPlanApprovalContinuation) {
-                stream.pendingPlanApprovalContinuation =
-                  "The user has approved your plan. Please proceed with implementing it now. You are no longer in plan mode and may write, edit, and run commands as needed.";
-              }
-            }
-          }
-        }
-
-        // Rebuild the rows holding the calls these results settle. A result can
-        // land on an earlier row of this turn: a subagent's tools render in the
-        // row holding the call that started it, however many responses ago.
-        const refreshed = stream.refreshToolRows([
-          ...toolResultIds(sdkUserMessage),
-          ...attachedTaskToolUseIds,
-        ]);
-        // A result can land on a call this turn no longer tracks: a task report
-        // for an earlier turn's call, or a row past the tracking bound.
-        refreshSettledToolRows(
-          session,
-          sessionId,
-          toolTracker,
-          [...toolResultIds(sdkUserMessage), ...attachedTaskToolUseIds],
-          refreshed,
-        );
-        for (const report of unattachedTaskNotifications) {
-          appendTranscriptNotice(
-            session,
-            sessionId,
-            (event) => eventEmitter.emit(event),
-            taskNotificationNoticePart(report, receivedAt ?? new Date().toISOString()),
-          );
-        }
-        if (interrupted) appendInterruptedNotice(session, sessionId);
-        else if (subagentInterrupted) {
-          const parentToolUseId = sdkUserMessage.parent_tool_use_id;
-          const stoppedTask = parentToolUseId
-            ? (Object.values(session.backgroundTasks ?? {}) as BackgroundTaskSnapshot[]).find(
-                (task) => task.toolUseId === parentToolUseId,
-              )
-            : undefined;
-          appendSubagentInterruptedNotice(
-            session,
-            sessionId,
-            stoppedTask?.description,
-            parentToolUseId ?? undefined,
-          );
-        }
-        // Skip adding user message replay as we already added it
+        handleUserMessage(turn, message);
       } else if (isSdkResultMessage(message as SdkMessageBase)) {
         // Only allowlisted metadata reaches the shared debug sink.
         const resultMsg = message as SdkResultMessage;

@@ -3314,42 +3314,6 @@ describe("prompt queue commands", () => {
     });
   });
 
-  test("atomically transfers the authoritative queued payload to a draft", async () => {
-    await withCommands(async (invoke) => {
-      await invoke("enqueue_prompt_queue_message", {
-        queueKey: KEY,
-        environmentId: "e1",
-        message: {
-          id: "m1",
-          text: "authoritative",
-          attachments: [{ id: "attachment-1" }],
-          mode: "plan",
-        },
-      });
-      await expect(
-        invoke("transfer_prompt_queue_message_to_compose_draft", {
-          queueKey: KEY,
-          environmentId: "e1",
-          messageId: "m1",
-          draftKey: "compose:e1:tab-1",
-          ownerType: "environment",
-          ownerId: "e1",
-          expectedDraftRevision: 0,
-        }),
-      ).resolves.toMatchObject({
-        removed: { id: "m1", mode: "plan" },
-        queue: { messages: [] },
-        draft: {
-          value: {
-            text: "authoritative",
-            mentions: [],
-            attachments: [{ id: "attachment-1" }],
-          },
-        },
-      });
-    });
-  });
-
   test("rejects malformed atomic-claim arguments", async () => {
     await withCommands(async (invoke) => {
       await expect(
@@ -3378,16 +3342,6 @@ describe("prompt queue commands", () => {
           queueKey: KEY,
           environmentId: "e1",
           claimToken: "",
-        }),
-      ).rejects.toThrow();
-      await expect(
-        invoke("transfer_prompt_queue_message_to_compose_draft", {
-          queueKey: KEY,
-          environmentId: "e1",
-          messageId: "",
-          draftKey: "compose:e1:tab-1",
-          ownerType: "environment",
-          ownerId: "e1",
         }),
       ).rejects.toThrow();
     });
@@ -3434,31 +3388,6 @@ describe("prompt queue commands", () => {
           message: "bad",
         }),
       ).rejects.toThrow("non-blank ID");
-    });
-  });
-
-  test("rejects a non-numeric expected draft revision before the transfer runs", async () => {
-    await withCommands(async (invoke, storage) => {
-      await invoke("enqueue_prompt_queue_message", {
-        queueKey: KEY,
-        environmentId: "e1",
-        message: { id: "m1", text: "queued", attachments: [] },
-      });
-
-      await expect(
-        invoke("transfer_prompt_queue_message_to_compose_draft", {
-          queueKey: KEY,
-          environmentId: "e1",
-          messageId: "m1",
-          draftKey: "compose:e1:tab-1",
-          ownerType: "environment",
-          ownerId: "e1",
-          expectedDraftRevision: "1",
-        }),
-      ).rejects.toThrow("expectedDraftRevision");
-
-      expect(await storage.getPromptQueue(KEY)).toMatchObject({ messages: [{ id: "m1" }] });
-      expect(await storage.getComposeDraft("compose:e1:tab-1")).toBeNull();
     });
   });
 

@@ -1,6 +1,6 @@
 # Design service replay aggregate timeout
 
-- **ID:** 0214
+- **ID:** 0218
 - **Status:** open
 - **Date observed:** 2026-10-15
 - **Test:** `design service (legacy adapters over prepare/execute) > missed events,
@@ -33,3 +33,6 @@
   retain the independent agent-skills case added on main. The owning test now
   lives at `apps/backend/src/core/design/service.test.ts` after the design-domain
   move; the paths above preserve the original observation and rerun commands.
+
+- **Second merge reconciliation (2026-10-15):** Renumbered from 0214 to
+  0218 because main independently added the Codex escalation case as 0214.

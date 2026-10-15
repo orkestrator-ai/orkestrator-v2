@@ -805,9 +805,6 @@ describe("direct backend command registry coverage", () => {
       claimPromptQueueHead: value("claimPromptQueueHead", { claimed: { id: "m1" } }),
       acknowledgePromptQueueClaim: value("acknowledgePromptQueueClaim", { queueKey: "queue-1" }),
       rejectPromptQueueClaim: value("rejectPromptQueueClaim", { queueKey: "queue-1" }),
-      transferPromptQueueMessageToComposeDraft: value("transferPromptQueueMessageToComposeDraft", {
-        removed: { id: "m1" },
-      }),
       getComposeDraft: value("getComposeDraft", { draftKey: "compose-1" }),
       listComposeDrafts: value("listComposeDrafts", [{ draftKey: "compose-1" }]),
       deleteComposeDraft: value("deleteComposeDraft", undefined),
@@ -941,41 +938,6 @@ describe("direct backend command registry coverage", () => {
         args: { queueKey: "queue-1", environmentId: "env-1", claimToken: "token-1" },
         expected: { queueKey: "queue-1" },
         call: { method: "rejectPromptQueueClaim", args: ["queue-1", "env-1", "token-1"] },
-      },
-      {
-        command: "transfer_prompt_queue_message_to_compose_draft",
-        args: {
-          queueKey: "queue-1",
-          environmentId: "env-1",
-          messageId: "m1",
-          draftKey: "draft-1",
-          ownerType: "environment",
-          ownerId: "env-1",
-          expectedDraftRevision: 2,
-        },
-        expected: { removed: { id: "m1" } },
-        call: {
-          method: "transferPromptQueueMessageToComposeDraft",
-          args: ["queue-1", "env-1", "m1", "draft-1", "environment", "env-1", 2],
-        },
-      },
-      // The optional revision must be forwarded as `undefined`, not coerced to
-      // 0: a 0 would assert "no draft exists" against a slot that may hold one.
-      {
-        command: "transfer_prompt_queue_message_to_compose_draft",
-        args: {
-          queueKey: "queue-1",
-          environmentId: "env-1",
-          messageId: "m1",
-          draftKey: "draft-1",
-          ownerType: "environment",
-          ownerId: "env-1",
-        },
-        expected: { removed: { id: "m1" } },
-        call: {
-          method: "transferPromptQueueMessageToComposeDraft",
-          args: ["queue-1", "env-1", "m1", "draft-1", "environment", "env-1", undefined],
-        },
       },
       {
         command: "get_compose_draft",

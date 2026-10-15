@@ -1,9 +1,7 @@
 import {
   applyPromptQueueSnapshot,
-  claimPromptQueueHead,
   retryPromptQueueDispatch,
   promptQueueKey,
-  type ClaimedPrompt,
   type PromptQueueSource,
   type QueuedItem,
 } from "@/lib/prompt-queue-persistence";
@@ -70,20 +68,6 @@ export function createPromptQueueSources(): PromptQueueSource[] {
   return [...getSharedSources()];
 }
 
-/**
- * Claims one queued prompt for an agent tab. Agent components use this instead
- * of synchronously removing from their renderer store, so no prompt leaves the
- * process until the backend has granted this client ownership.
- */
-export async function claimAgentPromptQueueHead<TItem extends QueuedItem>(
-  agent: string,
-  sessionKey: string,
-): Promise<ClaimedPrompt<TItem> | null> {
-  const source = getSharedSources().find((candidate) => candidate.agent === agent);
-  if (!source) return null;
-  return claimPromptQueueHead(source as unknown as PromptQueueSource<TItem>, sessionKey);
-}
-
 export async function retryAgentPromptQueueDispatch(
   agent: string,
   sessionKey: string,
@@ -126,69 +110,6 @@ export async function enqueueAgentPrompt<TItem extends QueuedItem>(
     message,
   );
   applyPromptQueueSnapshot(source, queue);
-}
-
-export async function requeueAgentPrompt<TItem extends QueuedItem>(
-  agent: string,
-  sessionKey: string,
-  message: TItem,
-): Promise<void> {
-  const source = sourceFor<TItem>(agent);
-  if (!source) throw new Error(`Unknown prompt queue agent: ${agent}`);
-  const identity = queueIdentity(source, sessionKey);
-  const queue = await backend.requeuePromptQueueMessage<TItem>(
-    identity.queueKey,
-    identity.environmentId,
-    message,
-  );
-  applyPromptQueueSnapshot(source, queue);
-}
-
-async function settleAgentPromptClaim<TItem extends QueuedItem>(
-  agent: string,
-  sessionKey: string,
-  claimToken: string,
-  settle: (
-    queueKey: string,
-    environmentId: string,
-    claimToken: string,
-  ) => Promise<import("@/types").PersistedPromptQueue<TItem> | null>,
-): Promise<void> {
-  const source = sourceFor<TItem>(agent);
-  if (!source) throw new Error(`Unknown prompt queue agent: ${agent}`);
-  const identity = queueIdentity(source, sessionKey);
-  const queue = await settle(identity.queueKey, identity.environmentId, claimToken);
-  if (queue) {
-    applyPromptQueueSnapshot(source, queue);
-  } else {
-    source.setQueue(sessionKey, []);
-  }
-}
-
-export async function acknowledgeAgentPromptClaim<TItem extends QueuedItem>(
-  agent: string,
-  sessionKey: string,
-  claimToken: string,
-): Promise<void> {
-  await settleAgentPromptClaim<TItem>(
-    agent,
-    sessionKey,
-    claimToken,
-    backend.acknowledgePromptQueueClaim,
-  );
-}
-
-export async function rejectAgentPromptClaim<TItem extends QueuedItem>(
-  agent: string,
-  sessionKey: string,
-  claimToken: string,
-): Promise<void> {
-  await settleAgentPromptClaim<TItem>(
-    agent,
-    sessionKey,
-    claimToken,
-    backend.rejectPromptQueueClaim,
-  );
 }
 
 export async function removeAgentPrompt<TItem extends QueuedItem>(

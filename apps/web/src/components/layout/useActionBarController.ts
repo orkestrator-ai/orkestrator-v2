@@ -61,6 +61,7 @@ import {
 } from "@/lib/pane-layout-authoritative";
 import { findActiveMultiReviewWorkflow } from "@/lib/multi-review-persistence";
 import { findProjectHomeEnvironment } from "@/lib/project-home";
+import { prTargetBranchSuggestions } from "@/lib/pr-target-branches";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { toast } from "sonner";
 import { onGlobalSettingsRequest, type GlobalSettingsSection } from "@/lib/settings-navigation";
@@ -222,6 +223,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     targetBranch: string;
   } | null>(null);
   const [prLaunchError, setPrLaunchError] = useState<string | null>(null);
+  const [prBranchSuggestions, setPrBranchSuggestions] = useState<string[]>([]);
+  const prBranchRequestRef = useRef(0);
   const prDialogOpen = prDialogTarget !== null;
   const createPrButtonRef = useRef<HTMLButtonElement>(null);
   const createPrLaunchClaimsRef = useRef(new Map<string, CreatePrLaunchClaim>());
@@ -1819,12 +1822,25 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
   const openPrDialog = useCallback(() => {
     if (!canConfigurePR || !selectedEnvironmentId || !selectedProjectId) return;
+    const projectId = selectedProjectId;
+    const targetBranch = config.repositories[projectId]?.prBaseBranch || "main";
     setPrLaunchError(null);
     setPrDialogTarget({
       environmentId: selectedEnvironmentId,
-      projectId: selectedProjectId,
-      targetBranch: config.repositories[selectedProjectId]?.prBaseBranch || "main",
+      projectId,
+      targetBranch,
     });
+    // Suggestions are a convenience: the field still accepts any branch name,
+    // so a project without a readable local checkout simply offers only the default.
+    const request = ++prBranchRequestRef.current;
+    setPrBranchSuggestions([targetBranch]);
+    void Promise.resolve()
+      .then(() => backend.getProjectGitStatus(projectId))
+      .then((status) => {
+        if (prBranchRequestRef.current !== request) return;
+        setPrBranchSuggestions(prTargetBranchSuggestions(status.branches, targetBranch));
+      })
+      .catch(() => undefined);
   }, [canConfigurePR, config.repositories, selectedEnvironmentId, selectedProjectId]);
 
   const prLongPress = useLongPressAction(openPrDialog, canConfigurePR);
@@ -1858,7 +1874,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           initialReasoningEffort: selection.reasoningEffort,
           initialFastMode: selection.fastMode,
         },
-        prDialogTarget.targetBranch,
+        selection.targetBranch || prDialogTarget.targetBranch,
       );
       if (!created) {
         setPrLaunchError(
@@ -1967,7 +1983,11 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       setResolveLaunchEnvironmentId(operationEnvironmentId);
 
       const repoConfig = config.repositories[selectedProjectId];
-      const targetBranch = targetBranchOverride || repoConfig?.prBaseBranch || "main";
+      const targetBranch =
+        targetBranchOverride ||
+        selectedEnvironment?.prBaseBranch ||
+        repoConfig?.prBaseBranch ||
+        "main";
       const resolvePrompt = createResolveConflictsPrompt(targetBranch);
       const fail = (message: string): ResolveLaunchResult => {
         if (reportFailure === "toast") {
@@ -2043,6 +2063,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       preferredFastModesByPlatform,
       preferredModelsByPlatform,
       reviewModelCatalog,
+      selectedEnvironment?.prBaseBranch,
       selectedEnvironmentId,
       selectedProjectId,
       tabCount,
@@ -2068,9 +2089,18 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     setResolveDialogTarget({
       environmentId: selectedEnvironmentId,
       projectId: selectedProjectId,
-      targetBranch: config.repositories[selectedProjectId]?.prBaseBranch || "main",
+      targetBranch:
+        selectedEnvironment?.prBaseBranch ||
+        config.repositories[selectedProjectId]?.prBaseBranch ||
+        "main",
     });
-  }, [canConfigureResolve, config.repositories, selectedEnvironmentId, selectedProjectId]);
+  }, [
+    canConfigureResolve,
+    config.repositories,
+    selectedEnvironment?.prBaseBranch,
+    selectedEnvironmentId,
+    selectedProjectId,
+  ]);
 
   useEffect(() => {
     const handleConfigureShortcut = (event: KeyboardEvent) => {
@@ -2381,6 +2411,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     setPrDialogTarget,
     prLaunchError,
     setPrLaunchError,
+    prBranchSuggestions,
     prDialogOpen,
     createPrButtonRef,
     createPrLaunchPending,

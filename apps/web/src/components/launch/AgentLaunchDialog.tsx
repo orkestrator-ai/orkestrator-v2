@@ -9,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
@@ -25,12 +26,15 @@ import {
   type LaunchAgent,
 } from "@/lib/agent-launch";
 import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
+import { isSafeLoopedReviewTargetBranch } from "@orkestrator/protocol/review-workflow";
 
 export interface AgentLaunchSelection {
   agent: LaunchAgent;
   model: string;
   reasoningEffort?: string;
   fastMode?: boolean;
+  /** Present only when the dialog let the user choose the base branch. */
+  targetBranch?: string;
 }
 
 /** The workflow being launched. Every entry restyles the same picker. */
@@ -50,6 +54,10 @@ interface AgentLaunchDialogProps {
   preferredFastModes?: Partial<Record<LaunchAgent, boolean>>;
   /** Base branch the launch targets, shown so it can be verified. */
   targetBranch?: string;
+  /** Lets the user replace `targetBranch`; the choice is returned on confirm. */
+  editableTargetBranch?: boolean;
+  /** Branch names offered while editing the target branch. */
+  targetBranchSuggestions?: readonly string[];
   returnFocusRef?: RefObject<HTMLElement | null>;
   returnFocusFallback?: () => HTMLElement | null;
   confirmDisabled?: boolean;
@@ -83,6 +91,8 @@ export function AgentLaunchDialog({
   preferredReasoningEfforts,
   preferredFastModes,
   targetBranch,
+  editableTargetBranch = false,
+  targetBranchSuggestions = [],
   returnFocusRef,
   returnFocusFallback,
   confirmDisabled = false,
@@ -100,6 +110,7 @@ export function AgentLaunchDialog({
   const [fastMode, setFastMode] = useState(() =>
     defaultFastModeFor(defaultAgent, initialModel, catalog, preferredFastModes),
   );
+  const [branch, setBranch] = useState(targetBranch ?? "");
   const wasOpenRef = useRef(false);
 
   // Only the closed -> open edge reconfigures the dialog: a parent re-render
@@ -117,7 +128,20 @@ export function AgentLaunchDialog({
       defaultEffortFor(defaultAgent, nextModel, catalog, preferredReasoningEfforts),
     );
     setFastMode(defaultFastModeFor(defaultAgent, nextModel, catalog, preferredFastModes));
-  }, [catalog, defaultAgent, open, preferredFastModes, preferredModels, preferredReasoningEfforts]);
+    setBranch(targetBranch ?? "");
+  }, [
+    catalog,
+    defaultAgent,
+    open,
+    preferredFastModes,
+    preferredModels,
+    preferredReasoningEfforts,
+    targetBranch,
+  ]);
+
+  const chosenBranch = editableTargetBranch ? branch.trim() : targetBranch;
+  // The branch is interpolated into the agent's prompt and shell commands.
+  const branchValid = !editableTargetBranch || isSafeLoopedReviewTargetBranch(chosenBranch);
 
   const models = modelsForAgent(catalog, agent);
   const selectedModel = models.find((option) => option.id === model) ?? models[0];
@@ -187,7 +211,7 @@ export function AgentLaunchDialog({
     agentLabel(agent),
     selectedModel?.name ?? model,
     effectiveEffort === "default" ? "default effort" : `${effectiveEffort} effort`,
-    ...(isScript ? [] : [`${isResolve ? "against" : "into"} ${targetBranch}`]),
+    ...(isScript ? [] : [`${isResolve ? "against" : "into"} ${chosenBranch}`]),
   ].join(" · ");
   const pickerId = isScript
     ? "create-run-script-model"
@@ -252,7 +276,7 @@ export function AgentLaunchDialog({
             ) : (
               <>
                 Launch an agent that commits the work, pushes the branch, and opens a pull request
-                against <span className="text-zinc-300">{targetBranch}</span>.
+                against <span className="text-zinc-300">{chosenBranch}</span>.
               </>
             )}
           </DialogDescription>
@@ -263,12 +287,13 @@ export function AgentLaunchDialog({
           aria-busy={busy}
           onSubmit={(event) => {
             event.preventDefault();
-            if (busy || confirmDisabled) return;
+            if (busy || confirmDisabled || !branchValid) return;
             onConfirm({
               agent,
               model: selectedModel?.id ?? model,
               reasoningEffort: effectiveEffort === "default" ? undefined : effectiveEffort,
               fastMode: speedAvailable ? fastMode : undefined,
+              ...(editableTargetBranch ? { targetBranch: chosenBranch } : {}),
             });
           }}
         >
@@ -324,6 +349,36 @@ export function AgentLaunchDialog({
                 </p>
               )}
 
+              {editableTargetBranch && (
+                <>
+                  <Label
+                    htmlFor={`${pickerId}-target-branch`}
+                    className="mb-2 mt-5 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400"
+                  >
+                    Target branch
+                  </Label>
+                  <Input
+                    id={`${pickerId}-target-branch`}
+                    value={branch}
+                    list={`${pickerId}-target-branches`}
+                    spellCheck={false}
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    placeholder={targetBranch}
+                    aria-invalid={!branchValid}
+                    onChange={(event) => setBranch(event.target.value)}
+                  />
+                  <datalist id={`${pickerId}-target-branches`}>
+                    {targetBranchSuggestions.map((suggestion) => (
+                      <option key={suggestion} value={suggestion} />
+                    ))}
+                  </datalist>
+                  {!branchValid && (
+                    <p className="mt-1.5 text-xs text-destructive">Enter a valid branch name.</p>
+                  )}
+                </>
+              )}
+
               <div className="mt-5 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-400">
                 <span className="text-zinc-500">Launch:</span> {summary}
               </div>
@@ -357,7 +412,7 @@ export function AgentLaunchDialog({
               >
                 Cancel
               </Button>
-              <Button type="submit" disabled={confirmDisabled || busy}>
+              <Button type="submit" disabled={confirmDisabled || busy || !branchValid}>
                 {confirmLabel}
               </Button>
             </DialogFooter>

@@ -243,6 +243,8 @@ export interface McpConfigSource {
   /** Project execution policy, when the source is project-controlled. */
   trust?: "allowed" | "excluded" | "unknown";
   trustReason?: string;
+  /** How the file's layout affects some reader of it, e.g. a Pi bare map Pi's CLI ignores. */
+  note?: string;
 }
 
 export type McpDefinitionStatus =

@@ -19,6 +19,7 @@ import { resolveGitHubRepository } from "./github.js";
 import type { Environment, PrState } from "./models.js";
 import type { PrCheckSummary } from "@orkestrator/protocol/pr-monitor";
 import {
+  isSafeLoopedReviewTargetBranch,
   REVIEW_PACKAGE_FORMAT,
   REVIEW_VALIDATION_ENVIRONMENT_CHANGES_MAX,
   type ReviewPackage,
@@ -48,6 +49,7 @@ import {
 } from "./review-package.js";
 
 export type PrDetectionResult = {
+  baseBranch?: string;
   url: string;
   state: PrState;
   hasMergeConflicts: boolean | null;
@@ -64,6 +66,7 @@ export type MergeEnvironmentPrResult = MergePrResult & {
 };
 
 export type GhPrListEntry = {
+  baseRefName?: unknown;
   url?: unknown;
   state?: unknown;
   mergeable?: unknown;
@@ -1354,12 +1357,16 @@ export function buildPrDetectionCandidate(
 ): { rank: number; updatedAt: string; result: PrDetectionResult } | null {
   const state = parsePrState(entry.state);
   if (!state || !isValidPrUrl(entry.url)) return null;
+  if (entry.baseRefName !== undefined && !isSafeLoopedReviewTargetBranch(entry.baseRefName)) {
+    throw new Error("GitHub returned an invalid pull request base branch");
+  }
   const mergeable = typeof entry.mergeable === "string" ? entry.mergeable.toUpperCase() : null;
   return {
     rank: prStateRank(state),
     updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : "",
     result: {
       url: entry.url,
+      ...(typeof entry.baseRefName === "string" ? { baseBranch: entry.baseRefName } : {}),
       state,
       hasMergeConflicts:
         mergeable === "CONFLICTING" ? true : mergeable === "MERGEABLE" ? false : null,

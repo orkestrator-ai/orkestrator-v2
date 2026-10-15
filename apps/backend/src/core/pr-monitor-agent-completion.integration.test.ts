@@ -45,7 +45,7 @@ test("agent completion immediately rechecks and clears a resolved conflict", asy
     path.join(fakeBinDir, "gh"),
     `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
-printf '%s\\n' '{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE"}'
+printf '%s\\n' '{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE","baseRefName":"release/2.0"}'
 `,
     { mode: 0o755 },
   );
@@ -142,13 +142,17 @@ printf '%s\\n' '{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE"}'
     }, "the immediate PR recheck to persist mergeability");
 
     const ghCommands = (await fs.readFile(ghLogPath, "utf8")).trim().split("\n");
-    expect(ghCommands).toContain(`pr view ${PR_URL} --json url,state,mergeable`);
+    expect(ghCommands).toContain(`pr view ${PR_URL} --json url,state,mergeable,baseRefName`);
     expect(ghCommands).toContain(`pr view ${PR_URL} --json statusCheckRollup`);
     expect(await storage.getEnvironment("env-1")).toMatchObject({
       prUrl: PR_URL,
       prState: "open",
       hasMergeConflicts: false,
+      prBaseBranch: "release/2.0",
     });
+    const reloadedStorage = new StorageService(dataDir);
+    await reloadedStorage.init();
+    expect((await reloadedStorage.getEnvironment("env-1"))?.prBaseBranch).toBe("release/2.0");
   } finally {
     await nativeAgents?.shutdown().catch(() => undefined);
     shutdownPrMonitorTracking();
@@ -171,7 +175,7 @@ test("an ended agent turn discovers a pull request the agent created itself", as
   await withProbeHarness(
     `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
-printf '%s\\n' '[{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE","updatedAt":"2026-08-06T10:00:00Z"}]'
+printf '%s\\n' '[{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE","baseRefName":"release/2.0","updatedAt":"2026-08-06T10:00:00Z"}]'
 `,
     async ({ storage, invoke, events, ghLog }) => {
       const before = await storage.getEnvironment("env-1");
@@ -191,6 +195,7 @@ printf '%s\\n' '[{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE","upda
         prUrl: PR_URL,
         prState: "open",
         hasMergeConflicts: false,
+        prBaseBranch: "release/2.0",
       });
       // A found PR is announced, so a client that was never mounted for this
       // environment still learns about it.

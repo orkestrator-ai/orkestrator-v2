@@ -940,7 +940,7 @@ const TRANSPORTS: Record<AgentPlatform, Record<McpTransport, McpCapabilityFlag>>
     http: flag(true),
     sse: flag(
       false,
-      "Pi's MCP client speaks Streamable HTTP; a separate SSE client is not implemented.",
+      "Pi's own CLI rejects SSE servers and Orkestrator's Pi sessions reach them over Streamable HTTP; use HTTP.",
     ),
   },
 };
@@ -1007,8 +1007,9 @@ const TERMINAL: Record<AgentPlatform, McpTargetCapabilities["terminal"]> = {
       "Running Grok terminals keep their servers; restart the terminal session to load changes.",
   },
   pi: {
-    readsNativeConfig: false,
-    guidance: "Pi terminals have no MCP client; these servers are used by native Pi sessions only.",
+    readsNativeConfig: true,
+    guidance:
+      "Pi terminals load these files with Pi's own MCP client, which ignores a file without the mcpServers wrapper, honours only enabled: false (not disabled) and rejects SSE servers. Running Pi terminals keep their servers; restart the terminal session to load changes.",
   },
 };
 
@@ -1021,7 +1022,10 @@ const SIGN_IN: Record<AgentPlatform, McpCapabilityFlag> = {
     "Sign in to the server from Cursor itself; the Cursor SDK reuses that authorization.",
   ),
   grok: flag(false, "Grok Build's MCP sign-in is not exposed to Orkestrator."),
-  pi: flag(false, "Pi's MCP client has no OAuth support; use a header or environment variable."),
+  pi: flag(
+    false,
+    "Orkestrator's Pi sessions cannot sign in to a server; use a header or environment variable. Pi terminals sign in with /mcp login.",
+  ),
 };
 
 const ENABLED_FLAG: Record<AgentPlatform, McpCapabilityFlag> = {
@@ -1045,7 +1049,7 @@ const CWD_FLAG: Record<AgentPlatform, McpCapabilityFlag> = {
   opencode: flag(true),
   cursor: flag(true),
   grok: flag(false, "Not supported by Grok Build's configuration."),
-  pi: flag(false, "Pi starts servers in the session's working directory."),
+  pi: flag(true),
 };
 
 export function providerCapabilities(

@@ -100,8 +100,9 @@ describe("Bash command change measurement", () => {
   test("read-only coordinator denial runs before the measuring hook", async () => {
     const turn = await startTurn("command-changes-read-only", true);
     const hooks = turn.call.options.hooks as Hooks;
-    // Read-only denial, then command-change measuring, then shell-task capture.
-    expect(hooks.PreToolUse).toHaveLength(3);
+    // Read-only denial, stale MCP server refusal, then command-change
+    // measuring, then shell-task capture.
+    expect(hooks.PreToolUse).toHaveLength(4);
     const denied = await hooks.PreToolUse![0]!.hooks[0]!(
       {
         hook_event_name: "PreToolUse",

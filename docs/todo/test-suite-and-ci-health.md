@@ -46,7 +46,7 @@ untracked skipped test, and two desktop test gaps. More urgently, CI is red on
   - **Load flakes** recorded in the registry: 0160 (runtime-env-wiring, 5 of
     16 runs; its Claude setup block case now has the 15-second budget its
     Codex sibling already had), 0176 (InitializationLogs), 0232 (ACP close fixture) and the new
-    0239 (Cursor steering at capacity).
+    0240 (Cursor steering at capacity).
 
   A full backend run under CI emulation (one worker, `CI` and
   `GITHUB_ACTIONS` set) then exposed one more: `AgentRegistry > lists every

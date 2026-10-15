@@ -29,6 +29,11 @@ import { claudeExecutableOptions, sdkSessionIdFromBridgeId } from "./session-man
 import { buildSdkPrompt } from "./session-manager-persistence.js";
 import { appendTranscriptNotice } from "./session-manager-prompt-handlers/transcript-notice.js";
 import { commandChangeHookFor, shellTaskHooks } from "./session-manager-prompt-hooks.js";
+import {
+  type ClaudeRuntimeMcp,
+  createStaleMcpServerHook,
+  reportedStaleServers,
+} from "./session-manager-prompt-mcp-sync.js";
 import type { PromptTestHooks, TurnState } from "./session-manager-prompt-turn.js";
 import {
   claudeLiveSettings,
@@ -187,6 +192,7 @@ export async function resolveQueryPlan(
     policy,
     effortLevel,
     mcpServers,
+    mcpServerNames,
     mcpConfigRevision,
     plugins,
     mcpServerCount,
@@ -208,26 +214,36 @@ export async function resolveQueryPlan(
 /**
  * The configuration the CLI actually has, recorded only once it has it: a
  * save made while the previous turn ran is "pending" until here, and one
- * made after here is pending for the next turn.
+ * made after here is pending for the next turn. `staleServers` names what
+ * the CLI still runs although the configuration dropped it, so a removal is
+ * never reported done while the server still runs.
  */
-export function recordMcpConfigRevision(session: SessionState, plan: QueryPlan): void {
+export function recordMcpConfigRevision(
+  session: SessionState,
+  plan: QueryPlan,
+  mcp: ClaudeRuntimeMcp,
+): void {
   const { mcpConfigRevision } = plan;
   if (!mcpConfigRevision) return;
+  const staleServers = reportedStaleServers(mcp);
   session.mcpConfigRevision = {
     ...mcpConfigRevision,
     sources: { ...mcpConfigRevision.sources },
     queryStartedAt: new Date().toISOString(),
+    ...(staleServers ? { staleServers } : {}),
   };
 }
 
 /**
  * The SDK options for a CLI this turn launches. Hooks and callbacks reach the
  * turn `turnFor` names: the one whose row holds the tool, else the latest.
+ * `mcp` is the launching runtime's MCP state, which its hooks read for life.
  */
 export function claudeQueryOptions(
   turn: TurnState,
   plan: QueryPlan,
   turnFor: (toolUseId?: string) => ClaudeRuntimeTurn,
+  mcp: ClaudeRuntimeMcp,
 ): Options {
   const { session, sessionId, options, abortController } = turn;
   const {
@@ -375,6 +391,8 @@ export function claudeQueryOptions(
     // one. `strictMcpConfig` is deliberately NOT set: it would also drop
     // every plugin-provided MCP server. The coordinator boundary instead
     // rests on `settingSources: []` plus an inline set of `none` scope.
+    // A later `setMcpServers` cannot drop these until it has taken them
+    // over; see `session-manager-prompt-mcp-sync.ts`.
     mcpServers: mcpServerCount > 0 ? mcpServers : undefined,
     // Load plugins from user config
     plugins: pluginCount > 0 ? plugins : undefined,
@@ -387,6 +405,7 @@ export function claudeQueryOptions(
         ...(coordinatorReadOnly && policy
           ? [{ hooks: [createCoordinatorReadOnlyHook(policy)] }]
           : []),
+        { hooks: [createStaleMcpServerHook(mcp)] },
         commandChangeHook.PreToolUse,
         shellTaskHook.PreToolUse,
       ],

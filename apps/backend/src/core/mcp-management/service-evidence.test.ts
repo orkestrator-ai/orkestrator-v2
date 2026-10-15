@@ -4,15 +4,18 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
+import { MCP_MANAGEMENT_LIMITS } from "@orkestrator/protocol/mcp-management";
+import type { StoredOperation } from "./operations-store.js";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
 import {
   EVIDENCE_READS_PER_TICK,
   EVIDENCE_RECHECK_MS,
   EVIDENCE_WINDOW_MS,
+  STILL_LOADED_REASON,
   type RuntimeEvidenceRead,
 } from "./evidence.js";
 import {
@@ -61,7 +64,7 @@ function report(
   agent: AgentPlatform,
   sources: { user?: string; project?: string; local?: string },
   observedAt: number,
-  options: { key?: string; scope?: "session" | "process" } = {},
+  options: { key?: string; scope?: "session" | "process"; staleServers?: string[] } = {},
 ): void {
   const answer: RuntimeEvidenceRead = {
     state: "evidence",
@@ -69,6 +72,7 @@ function report(
       sources,
       observedAt: new Date(observedAt).toISOString(),
       scope: options.scope ?? (agent === "grok" ? "process" : "session"),
+      ...(options.staleServers ? { staleServers: options.staleServers } : {}),
     },
   };
   fixture.evidence.set(`env-1:${agent}:${options.key ?? KEY}`, answer);
@@ -288,6 +292,116 @@ describe("Claude evidence", () => {
     report("claude", { user: digestOf(USER_FILE.claude) }, fixture.now.value);
     await fixture.service.tick();
     expect(await stateOf(removal.operation.operationId)).toEqual(["applied"]);
+  });
+
+  async function changeSaved(kind: "remove" | "rename") {
+    const add = await saveAndApply("claude", "claude:user");
+    const snapshot = await fixture.service.snapshot({ targetId: add.targetId });
+    const target = {
+      entryId: entry(snapshot, "claude:user", "fixture").entryId,
+      expectedRevision: revision(snapshot, "claude:user")!,
+    };
+    return fixture.service.mutate(
+      mutation(
+        add.targetId,
+        kind === "remove"
+          ? { kind: "remove", ...target }
+          : { kind: "rename", ...target, newName: "renamed" },
+        "save-and-apply",
+      ),
+    );
+  }
+
+  test.each(["remove", "rename"] as const)(
+    "a %s the running CLI could not unload waits for a new CLI",
+    async (kind) => {
+      session("claude");
+      const change = await changeSaved(kind);
+      fixture.now.value += 1_000;
+      // The query read the saved bytes, but its CLI still runs the old server.
+      report("claude", { user: digestOf(USER_FILE.claude) }, fixture.now.value, {
+        staleServers: ["fixture"],
+      });
+      await fixture.service.tick();
+      const held = await fixture.service.getOperation({
+        operationId: change.operation.operationId,
+      });
+      expect(held.apply.runtimes[0]).toMatchObject({
+        state: "restart-required",
+        reason: STILL_LOADED_REASON,
+      });
+      // The background work ended and the next message started a new CLI.
+      fixture.now.value += EVIDENCE_RECHECK_MS;
+      report("claude", { user: digestOf(USER_FILE.claude) }, fixture.now.value);
+      await fixture.service.tick();
+      expect(await stateOf(change.operation.operationId)).toEqual(["applied"]);
+    },
+  );
+
+  test("history pressure preserves restart evidence across backend restart", async () => {
+    session("claude");
+    const change = await changeSaved("remove");
+    fixture.now.value += EVIDENCE_RECHECK_MS;
+    report("claude", { user: digestOf(USER_FILE.claude) }, fixture.now.value, {
+      staleServers: ["fixture"],
+    });
+    await fixture.service.tick();
+    expect(await stateOf(change.operation.operationId)).toEqual(["restart-required"]);
+    fixture.service.dispose();
+
+    // Fill the history with settled records. The next persist would previously
+    // evict this oldest restart-required operation before its replacement CLI ran.
+    const file = path.join(fixture.dataDir, "mcp-management", "operations.json");
+    const persisted = JSON.parse(readFileSync(file, "utf8")) as { operations: StoredOperation[] };
+    const held = persisted.operations.find(
+      (stored) => stored.snapshot.operationId === change.operation.operationId,
+    )!;
+    persisted.operations = [
+      held,
+      ...Array.from(
+        { length: MCP_MANAGEMENT_LIMITS.retainedOperations },
+        (_, index) =>
+          ({
+            snapshot: {
+              ...held.snapshot,
+              operationId: `finished-${index}`,
+              requestId: `finished-${index}`,
+              apply: { state: "applied", runtimes: [], omitted: 0 },
+            },
+            recovery: { fingerprint: `finished-${index}`, expectedRevision: null, name: "done" },
+          }) as StoredOperation,
+      ),
+    ];
+    writeFileSync(file, JSON.stringify(persisted));
+    fixture.service = fixture.newService();
+    // A save persists/prunes history while the removed server is still loaded.
+    await saveAndApply("claude", "claude:user", "unrelated");
+    expect(await stateOf(change.operation.operationId)).toEqual(["restart-required"]);
+    const kept = JSON.parse(readFileSync(file, "utf8")) as { operations: StoredOperation[] };
+    expect(kept.operations.length).toBeLessThanOrEqual(MCP_MANAGEMENT_LIMITS.retainedOperations);
+    expect(
+      kept.operations.some((stored) => stored.snapshot.operationId === held.snapshot.operationId),
+    ).toBe(true);
+
+    // Rehydrate with the new CLI's report, including the later unrelated save.
+    fixture.service.dispose();
+    fixture.service = fixture.newService();
+    expect(await stateOf(change.operation.operationId)).toEqual(["restart-required"]);
+    fixture.now.value += EVIDENCE_RECHECK_MS;
+    report("claude", { user: digestOf(USER_FILE.claude) }, fixture.now.value);
+    await fixture.service.tick();
+    expect(await stateOf(change.operation.operationId)).toEqual(["applied"]);
+  });
+
+  test("a stale server the change did not touch does not hold it back", async () => {
+    session("claude");
+    const add = await saveAndApply("claude", "claude:user");
+    fixture.now.value += 1_000;
+    report("claude", { user: digestOf(USER_FILE.claude) }, fixture.now.value, {
+      staleServers: ["something-else"],
+    });
+    await fixture.service.tick();
+    expect(await stateOf(add.operationId)).toEqual(["applied"]);
   });
 });
 

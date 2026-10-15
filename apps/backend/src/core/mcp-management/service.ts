@@ -60,7 +60,7 @@ import {
   type LoadedEntry,
   type LoadedSource,
 } from "./catalog.js";
-import { PROVIDER_CODECS, piSanitizedName } from "./codecs.js";
+import { PROVIDER_CODECS, piNamespace } from "./codecs.js";
 import { editSource, parseSource, type DocumentEdit, type ParsedSource } from "./document.js";
 import {
   applyPatch,
@@ -687,9 +687,8 @@ export class McpManagementService {
     const operation = mutation.operation;
     let reveals: LoadedEntry | undefined;
     let shadows: LoadedEntry | undefined;
-    const disablesPi =
-      operation.kind === "set-enabled" && !operation.enabled && target.provider === "pi";
-    if (entry && (operation.kind === "remove" || operation.kind === "rename" || disablesPi)) {
+    // A disabled Pi entry still hides lower ones, so disabling reveals nothing.
+    if (entry && (operation.kind === "remove" || operation.kind === "rename")) {
       reveals = revealedBy(catalog.entries, entry);
     }
     if (resultName && (operation.kind === "add" || operation.kind === "rename")) {
@@ -1302,9 +1301,10 @@ function assertNameFree(
   if ((entries.has(name) || issues.has(name)) && name !== ignoring)
     throw mcpFailure("duplicate-name");
   if (provider === "pi") {
-    const target = piSanitizedName(name);
+    // Pi reads names that differ only in `-` and `_` as one server and drops the later one.
+    const target = piNamespace(name);
     for (const existing of entries.keys()) {
-      if (existing !== ignoring && piSanitizedName(existing) === target) {
+      if (target && existing !== ignoring && piNamespace(existing) === target) {
         throw mcpFailure("duplicate-name", {
           message: `Pi treats this name the same as "${existing}".`,
         });

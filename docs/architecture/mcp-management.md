@@ -24,7 +24,7 @@ and "Control MCP").
 | Service | `mcp-management/service.ts` | Targets, snapshots, preview, locked conflict-checked writes, idempotency, apply scheduling, crash recovery |
 | Targets | `mcp-management/targets.ts` | Opaque target ids (`mcp1~<provider>~backend~<backend hash>`, `mcp1~<provider>~env~<id>~<incarnation>`) |
 | Sources | `mcp-management/providers.ts`, `native-policy.ts` | Per-provider source paths, precedence, trust (Codex/Grok trust files, Grok compatibility switches), capabilities, apply strategy |
-| Catalog | `mcp-management/catalog.ts`, `references.ts` | Passive reads, effective/shadowed computation (including the Pi bridge's acceptance and last-wins rules), public summaries, rename reference warnings |
+| Catalog | `mcp-management/catalog.ts`, `references.ts` | Passive reads, effective/shadowed computation (including the Pi bridge's load and merge rules), public summaries, rename reference warnings |
 | Rollout | `mcp-management/rollout.ts` | Kill switch and per-provider write/apply gate from `global.mcpManagement` |
 | Evidence | `mcp-management/evidence.ts`, `apps/backend/src/core/http-bridge-mcp-evidence.ts` | Proof that a runtime loaded the saved bytes |
 | Codecs | `mcp-management/codecs.ts` | Native entry ⇄ canonical definition; unknown keys preserved |
@@ -67,7 +67,7 @@ described below. Higher precedence wins for a same-name entry.
 | Grok | Backend user | `$GROK_HOME/config.toml` (default `~/.grok`) | TOML `[mcp_servers.*]` | 10 | yes | — |
 | Grok | Project | `<worktree>/.grok/config.toml` | TOML | 20 | yes | from `$GROK_HOME/trusted_folders.toml` (a trusted parent covers the worktree; `GROK_FOLDER_TRUST=0` or `[folder_trust] enabled = false` turns the gate off); `unknown` when undecided |
 | Grok | Compatibility | Claude `~/.claude.json` (user and private local) > Cursor `~/.cursor/mcp.json` and project `.cursor/mcp.json` > project `.mcp.json` | JSON | 1–5 | never | Claude/Cursor imports honour `GROK_*_MCPS_ENABLED`, then `requirements.toml`, user `config.toml`, `managed_config.toml` `[compat.*] mcps`; the project config is never read for it |
-| Pi | Backend user | `$PI_CODING_AGENT_DIR` or `~/.pi/agent`, `mcp.json` | JSON `mcpServers` or bare map | 10 | yes | — |
+| Pi | Backend user | `$PI_CODING_AGENT_DIR` or `~/.pi/agent`, `mcp.json` | JSON `mcpServers`, or a bare map (bridge only; labelled) | 10 | yes | — |
 | Pi | Project | `<worktree>/.pi/mcp.json` | same | 20 | yes | **excluded** on host |
 | all | Orkestrator | injected at launch | runtime | 1000 | never | — |
 
@@ -91,25 +91,75 @@ is not permission to execute. The editor never changes an execution policy.
   (and `project` / `local` when project resources are on), the CLI child also
   loads `~/.claude.json` `mcpServers`, `.mcp.json` and `projects[cwd]` itself.
   A same-name inline server wins and only one copy starts. Consequences: SSE
-  entries the bridge drops from its inline set probably still run (inferred, not
-  probed with an SSE server), and with `CLAUDE_CONFIG_DIR` set the CLI reads
-  `$CLAUDE_CONFIG_DIR/.claude.json` while the bridge (and this editor) read
-  `homedir()/.claude.json`. `strictMcpConfig` would remove the CLI's own load
-  but also stops plugin MCP servers (confirmed), so it is deliberately not set.
+  entries the bridge drops from its inline set still run (probed on CLI
+  2.1.296: an SSE entry in the user file shows up with source `user`), and with
+  `CLAUDE_CONFIG_DIR` set the CLI reads `$CLAUDE_CONFIG_DIR/.claude.json` while
+  the bridge (and this editor) read `homedir()/.claude.json`. `strictMcpConfig`
+  would remove the CLI's own load but also stops plugin MCP servers
+  (confirmed), so it is deliberately not set.
   Coordinators use `settingSources: []`, under which the CLI loads no MCP file,
   and the bridge passes them only the injected servers.
+- **A running Claude CLI unloads only what `setMcpServers` gave it.** Probed on
+  CLI 2.1.296: servers passed at launch are not part of the set
+  `setMcpServers` replaces, so an update that omits one reports nothing removed
+  and its tools stay offered to the model. Naming a server in an update takes
+  it over, and restating it unchanged does not reconnect it. The bridge
+  therefore restates the launch set before the first update that drops a
+  server (`session-manager-prompt-mcp-sync.ts`). `mise run
+  verify:claude:mcp-live` re-proves this on the real CLI without credentials;
+  the same test runs in the default suite and CI. A loopback model also proves
+  stale tools are refused in root and background-subagent calls while the
+  process stays connected. Server and tool names can both contain `__`, so
+  every matching stale prefix is refused until restart, including ambiguous
+  live tools. A longer declared server name alone never proves ownership.
+  Restart-required operation records awaiting runtime evidence survive count
+  and byte retention pressure for the evidence window, so a replacement CLI
+  can still resolve them to applied.
 - **OpenCode and Codex merge.** OpenCode deep-merges same-name entries and
   Codex merges them field by field; a higher entry that omits a field inherits
   it. Rows say so rather than claiming replacement.
-- **Pi disabled and skipped entries.** The Pi bridge skips a `disabled: true`
-  entry and any entry it cannot load (bad name, non-object, unknown transport,
-  missing or non-http(s) URL, no command, beyond 64 per file), so a
-  lower-priority entry with the same normalized name becomes effective. The
-  catalog applies the same rules: such rows are `disabled` or `invalid` with a
-  reason and the fallback is shown as effective; the preview names it.
-- **Pi normalized-name collisions.** Two entries in one file that Pi normalizes
-  to the same name are all shown `invalid` naming the one Pi uses (the last, as
-  the bridge's map does). Edit, rename and enable are refused; remove is allowed.
+- **Pi follows the bridge, which follows Pi 1.x.** The catalog mirrors the Pi
+  bridge's loader (`bridges/pi-bridge/src/mcp-config.ts`), which follows Pi's
+  own (`dist/extensions/mcp/config.js` in `@earendil-works/pi-coding-agent`):
+  - `enabled: false` (Pi's spelling, written by `pi mcp`) and `disabled: true`
+    (the Claude and Cursor spelling, which the bridge also honours) both turn
+    a server off. The editor writes `enabled: false`, removes the key to
+    enable, and rewrites `disabled` whenever it saves that entry.
+  - An entry Pi rejects (bad name, not an object, unknown transport, a
+    non-http(s) URL, non-text args, env or headers, a non-boolean `enabled`, a
+    bad `exposure`, `toolExposure`, `timeout` or `description`, an invalid
+    `auth`, `auth` in a project file) is `invalid` with a reason and hides
+    nothing, so a lower entry of the same name stays in use. An override that
+    fails the same checks is not applied.
+  - A project server replaces the user server of the same name even when it is
+    disabled or cannot start. A project entry with no `command`, `url` or
+    `type` is an override: it switches the user server on or off and is shown
+    with that server's state; it cannot be edited as a server, only removed.
+  - Names that differ only in `-` and `_` are one Pi namespace across both
+    files; the later one is `invalid` and loads once the first is removed (the
+    remove preview names it). Adding or renaming into a taken namespace in the
+    same file is refused.
+  - A user `auth` entry (a Pi provider sign-in), a `!command` value, or a value
+    naming one of the bridge's own secrets is read and still hides lower
+    entries, but Orkestrator's Pi sessions never start it, so the row is
+    `invalid` with the reason. A `$NAME` that may be unset in the bridge's
+    environment is not flagged: the backend cannot see that environment.
+  - The bridge reads at most 64 entries per file, counting disabled entries and
+    overrides, and starts at most 63 servers beside Orkestrator's own.
+  - SSE entries run over Streamable HTTP and are shown in use, but are not
+    editable.
+  - Two entries in one file that the bridge normalizes to the same name (it
+    rewrites characters Pi rejects to `_`) are both `invalid`, naming the one
+    it uses (the last). Edit, rename and enable are refused; remove is allowed.
+
+  Two tests keep this honest over shared fixtures
+  (`bridges/pi-bridge/src/testing/mcp-config-fixtures.ts`):
+  `mcp-config-upstream.test.ts` in the bridge runs the bridge and the pinned
+  Pi's `loadMcpConfig`, with every intended difference listed and explained,
+  and `pi-mcp-parity.test.ts` here runs the bridge and this catalog. Pi
+  terminals use Pi's own loader instead: it ignores a bare map and
+  `disabled`, rejects SSE, and needs the project trusted; the terminal guidance
+  says so.
 - **Grok saved enable.** `enabled = false` and the top-level
   `disabled_mcp_servers` list are shown as disabled. The editor does not offer
   the switch (unverified) and never writes `enabled`.
@@ -129,7 +179,7 @@ is not permission to execute. The editor never changes an execution policy.
 | OpenCode | ✓ (`local`) | ✓ (`remote`) | ✗ | `enabled` | ✓ | timeout, disable auto-OAuth | existing `mcp.auth.start` |
 | Cursor | ✓ | ✓ | ✓ | ✗ | ✓ | — | ✗ (sign in via Cursor) |
 | Grok | ✓ | ✓ | ✗ unverified | shown, not editable (unverified) | ✗ | timeouts | ✗ |
-| Pi | ✓ | ✓ | ✗ (treated as HTTP) | `disabled` | ✗ | — (limits: 32 args, 32 env, 16 headers) | ✗ |
+| Pi | ✓ | ✓ | ✗ (run as HTTP; Pi's CLI rejects it) | `enabled` | ✓ (`~/` expands) | — (limits: 32 args, 32 env, 16 headers) | ✗ (Pi terminals: `/mcp login`) |
 
 Unsupported transports are refused on add and update; existing entries that use
 one stay visible and removable. Fields the chosen transport cannot carry (a URL
@@ -211,7 +261,7 @@ already knows (persisted native sessions) and never creates a session.
 
 | Provider | Strategy | What the backend reports |
 | --- | --- | --- |
-| Claude | per-query reload (bridge re-reads files every query) | `pending-next-turn`, then `applied` on evidence (below) |
+| Claude | the bridge re-reads files every query; a CLI kept alive by background work is updated in place | `pending-next-turn`, then `applied` on evidence (below); `restart-required` while that CLI still runs a removed or renamed server |
 | Codex | `config/mcpServer/reload` on the environment's app-server | `queued` until **every** Codex session in the environment is idle (unknown activity and pending dispatches count as busy), then one reload; `pending-next-turn` after it succeeds, `failed` on error or after 30 minutes busy |
 | OpenCode | server restart | `restart-required`; nothing is restarted |
 | Cursor | bridge reattaches at the next message | `pending-next-turn` (see below), then `applied` on evidence |
@@ -274,6 +324,13 @@ A runtime becomes `applied` when all of these hold:
 3. Grok only: the bridge process id differs from the one recorded when apply
    was planned. Grok's evidence is whichever child reported last, so only a
    replaced bridge guarantees no session still holds a pre-save child.
+4. for a removal or rename, the runtime no longer runs the old server. Claude
+   reports `staleServers`: names the configuration dropped that its running
+   CLI could not unload (in practice an SSE entry the CLI loaded from a file
+   itself). The bridge refuses their tools with a PreToolUse hook, and the
+   runtime is `restart-required` until a query on a new CLI reports the name
+   gone; the CLI ends once its background work does, or when the session is
+   stopped.
 
 An older bridge without the field, a failed or timed-out read, `absent` /
 `excluded`, or a read that predates the save all leave the planned state
@@ -364,10 +421,10 @@ worktrees; nothing reads or writes the operator's configuration):
 | Protocol | `packages/protocol/src/mcp-management.test.ts` — bounds, unions, keep/set/clear, redaction, error round-trip |
 | Editors | `json-edit.test.ts`, `toml-edit.test.ts` — comments, CRLF, multi-line strings, inline/dotted refusal |
 | Files | `source-store.test.ts` — conflicts, modes, symlinks, locks, stale-lock takeover |
-| Service | `service.test.ts`, `service-providers.test.ts`, `service-pi.test.ts`, `service-grok.test.ts`, `service-sources.test.ts`, `service-transport-fields.test.ts`, `service-rename.test.ts`, `service-limits.test.ts`, `service-rollout.test.ts`, `service-apply.test.ts`, `service-apply-scope.test.ts`, `operations-store.test.ts`, `providers.test.ts`, `references.test.ts` — add/update/rename/remove for all six providers in user and project scope, custom homes, two worktrees, shadowing and fallback, Pi skip/collision rules, Grok compat/trust, secret absence (including `operations.json` and logs), idempotency, recovery, limits, rollout gate, Codex queue, supersession, coordinator and deleted-environment runtimes, container catalog |
+| Service | `service.test.ts`, `service-providers.test.ts`, `service-pi.test.ts`, `pi-mcp-parity.test.ts`, `service-grok.test.ts`, `service-sources.test.ts`, `service-transport-fields.test.ts`, `service-rename.test.ts`, `service-limits.test.ts`, `service-rollout.test.ts`, `service-apply.test.ts`, `service-apply-scope.test.ts`, `operations-store.test.ts`, `providers.test.ts`, `references.test.ts` — add/update/rename/remove for all six providers in user and project scope, custom homes, two worktrees, shadowing and fallback, Pi skip/collision rules, Grok compat/trust, secret absence (including `operations.json` and logs), idempotency, recovery, limits, rollout gate, Codex queue, supersession, coordinator and deleted-environment runtimes, container catalog |
 | Evidence | `service-evidence.test.ts` (per-provider applied/not-applied rules, bounds, idleness, digest privacy), `http-bridge-mcp-config-evidence.test.ts` (bridge shapes, renderer summary excludes digests), `native-agent-service-provider.test.ts` (no bridge start) |
 | Commands | `commands-registry-mcp.test.ts` (correlation ids, rollout commands, reload probe), `http-bridge-mcp-reload.test.ts`, `storage-config-mcp-rollout.test.ts`, `apps/backend/tests/gateway-base.test.ts` (body cap) |
-| Bridges | Pi `mcp.test.ts`, `mcp-lifecycle.test.ts`, `agent-session.test.ts`, `http.test.ts`; Cursor `agent-session.test.ts`, `agent-session-mcp-reattach.test.ts`, `http.test.ts`, `persistence.test.ts`; Claude `mcp-config-scope.test.ts`, `session-manager-prompt-mcp.test.ts`, `runtime-health-body.test.ts`; ACP `acp-mcp-inventory.test.ts`; Codex `mcp-reload-route.test.ts`, `process-supervisor.test.ts` |
+| Bridges | Pi `mcp.test.ts`, `mcp-config.test.ts`, `mcp-config-upstream.test.ts`, `mcp-lifecycle.test.ts`, `agent-session.test.ts`, `http.test.ts`; Cursor `agent-session.test.ts`, `agent-session-mcp-reattach.test.ts`, `http.test.ts`, `persistence.test.ts`; Claude `mcp-config-scope.test.ts`, `session-manager-prompt-mcp.test.ts`, `runtime-health-body.test.ts`; ACP `acp-mcp-inventory.test.ts`; Codex `mcp-reload-route.test.ts`, `process-supervisor.test.ts` |
 | UI | `mcp-draft.test.ts`, `mcp-local-validation.test.ts`, `ProviderMcpSettings.test.tsx`, `McpEditorFlows.test.tsx`, `McpEntryFlows.test.tsx`, `McpStatusAndStates.test.tsx`, `AgentInfoMcpSection.test.tsx`, `FullscreenSettingsLayout.test.tsx`, `ActionBar.test.tsx` — focus return, keyboard-only flows, conflict reload, discard prompt, rollout gate, empty/offline/partial states |
 | Container reader | Manual smoke against a throwaway container: ok, absent, oversized, offline, shell-metacharacter path |
 | Real browser | 2026-09-24, `dev:test` profile `agent-mcp-settings-qa` with the fixture project, Playwright at 1440×900 and 390×844: section and pickers for all six platforms, Control MCP kept separate, add → edit → rename → remove of a Claude project-scope server in a fixture worktree (previews named the worktree path and the execution warning; the file ended `{"mcpServers": {}}`), keyboard open/Escape with focus return, reload rehydration, discard prompt on a dirty target switch, platform-settings deep link. Found that every MCP dialog rendered behind the fullscreen settings layer (default `z-50` under `z-[60]`); fixed with the fullscreen dialog layers and pinned by `McpEditorFlows.test.tsx`; the fix was confirmed in that browser session by raising the layer, not by a second full pass. The agent-panel link was not exercised (no live session in the fixture). Operator MCP files were hashed before and after and were unchanged. |

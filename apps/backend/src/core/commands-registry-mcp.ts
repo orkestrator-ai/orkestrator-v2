@@ -114,6 +114,7 @@ export function createMcpRuntimeProbe(context: CommandContext): RuntimeProbe {
               sources: read.evidence.sources,
               observedAt: read.evidence.observedAt,
               scope: read.evidence.scope,
+              ...(read.evidence.staleServers ? { staleServers: read.evidence.staleServers } : {}),
             },
           }
         : read;

@@ -299,6 +299,10 @@ run = [
   "bun test --cwd apps/backend src/core/opencode-review-permissions.live.test.ts",
 ]
 
+[tasks."verify:claude:mcp-live"]
+description = "Prove Claude MCP removal and rename on a running CLI (real CLI, no credentials)"
+run = "bun test --cwd bridges/claude-bridge ./src/services/session-manager-prompt-mcp-sync.live.test.ts --preload ../../tests/setup-node.ts --parallel=1"
+
 [tasks."verify:toolchains:live"]
 description = "Verify live toolchain artifacts"
 env = { RUN_LIVE_TOOLCHAIN_ARTIFACTS = "1" }

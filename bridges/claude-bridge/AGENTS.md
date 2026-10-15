@@ -39,6 +39,14 @@ writers on one `.jsonl`. When touching the prompt path:
   A failed live MCP update remains pending and is retried, never recorded as
   applied. During join setup, the session generation fences the old turn's
   input-close and retention paths until submission transfers runtime ownership.
+- **A running CLI unloads only what `setMcpServers` gave it.** Servers passed
+  to `query()` at launch survive an update that omits them, so the first
+  update that drops one restates the launch set first
+  (`syncClaudeRuntimeMcp` in `session-manager-prompt-mcp-sync.ts`). A server
+  the configuration dropped that the CLI still runs is never reported as
+  unloaded: a PreToolUse hook refuses its tools and the revision names it in
+  `staleServers`. Re-prove the CLI behaviour with
+  `mise run verify:claude:mcp-live` on every Claude bump.
 
 ## One row per model response
 

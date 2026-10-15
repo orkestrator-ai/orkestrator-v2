@@ -12,6 +12,8 @@ import {
   syncClaudeRuntimeMcp,
 } from "./session-manager-prompt-mcp-sync.js";
 import {
+  eventEmitter,
+  getSession,
   mockGetMcpRuntimeConfig,
   queryControlOverrides,
   releaseWithBackgroundWork,
@@ -52,7 +54,7 @@ function fakeCli(
       calls.push(servers);
       const removed: string[] = [];
       for (const name of Array.from(owned)) {
-        if (name in servers || options.neverRemoves) continue;
+        if (Object.hasOwn(servers, name) || options.neverRemoves) continue;
         owned.delete(name);
         removed.push(name);
       }
@@ -96,6 +98,70 @@ describe("syncing a running CLI's MCP servers", () => {
     expect(runtime.mcpServers).toBe("next");
     expect(reportedStaleServers(runtime.mcp)).toBeUndefined();
   });
+
+  test.each(["constructor", "toString", "valueOf", "hasOwnProperty"])(
+    "a launch server named %s is taken over before removal",
+    async (name) => {
+      const launch = { [name]: stdio(name), keep: stdio("keep") };
+      const cli = fakeCli(launch);
+      const runtime = runtimeFor(cli.control, launch);
+      const next = { keep: stdio("keep") };
+      await syncClaudeRuntimeMcp(runtime, target(next, "next"));
+      expect(cli.calls).toEqual([launch, next]);
+      expect(cli.running()).toEqual(["keep"]);
+      expect(runtime.mcp.stale.size).toBe(0);
+    },
+  );
+
+  test.each(["throws", "errors"])(
+    "a target update that %s after takeover retries without repeating takeover",
+    async (failure) => {
+      const launch = { alpha: stdio("alpha"), keep: stdio("keep") };
+      const cli = fakeCli(launch, { neverRemoves: true });
+      const apply = cli.control.setMcpServers!;
+      let attempts = 0;
+      cli.control.setMcpServers = async (servers) => {
+        attempts += 1;
+        if (attempts === 2) {
+          if (failure === "throws") throw new Error("fixture failure");
+          return { added: [], removed: [], errors: { keep: "fixture failure" } };
+        }
+        return apply(servers);
+      };
+      const runtime = runtimeFor(cli.control, launch);
+      const next = target({ keep: stdio("keep") }, "next");
+      await expect(syncClaudeRuntimeMcp(runtime, next)).rejects.toMatchObject({ code: "conflict" });
+      expect(runtime.mcp.claimed).toBe(true);
+      expect(runtime.mcpServers).toBe("");
+      expect(runtime.mcp.declared).toEqual(new Set(["alpha", "keep"]));
+      await syncClaudeRuntimeMcp(runtime, next);
+      expect(attempts).toBe(3);
+      expect(cli.calls).toEqual([launch, next.servers]);
+      expect(runtime.mcpServers).toBe("next");
+      expect(runtime.mcp.declared).toEqual(new Set(["keep"]));
+      expect(reportedStaleServers(runtime.mcp)).toEqual(["alpha"]);
+    },
+  );
+
+  test.each(["plugin", "sdk", "claudeai"])(
+    "a same-named %s server alone is not a leftover user server",
+    async (source) => {
+      const launch = { alpha: stdio("alpha") };
+      const cli = fakeCli(launch);
+      cli.statusReads.mockResolvedValue([{ name: "alpha", status: "connected", source }]);
+      const runtime = runtimeFor(cli.control, launch);
+      await syncClaudeRuntimeMcp(runtime, target({}, "next"));
+      expect(reportedStaleServers(runtime.mcp)).toBeUndefined();
+      // A foreign row must not hide a simultaneous leftover user row.
+      cli.statusReads.mockResolvedValue([
+        { name: "alpha", status: "connected", source },
+        { name: "alpha", status: "connected", source: "user" },
+      ]);
+      const leftover = runtimeFor(cli.control, launch);
+      await syncClaudeRuntimeMcp(leftover, target({}, "next"));
+      expect(reportedStaleServers(leftover.mcp)).toEqual(["alpha"]);
+    },
+  );
 
   test("a rename unloads the old name and loads the new one", async () => {
     const launch = { alpha: stdio("alpha") };
@@ -188,14 +254,51 @@ describe("refusing a stale server's tools", () => {
     expect(claudeMcpToolPrefix("a-b_c")).toBe("mcp__a-b_c__");
   });
 
-  test("the longest prefix wins, and a tie is refused", () => {
+  test("overlapping declared prefixes and normalization collisions cannot bypass refusal", () => {
     const mcp = mcpWith(["x__y", "a_b"], ["x", "a.b"]);
     expect(staleMcpServerFor(mcp, "mcp__x__probe", {})).toBe("x");
-    expect(staleMcpServerFor(mcp, "mcp__x__y__probe", {})).toBeUndefined();
+    expect(staleMcpServerFor(mcp, "mcp__x__y__probe", {})).toBe("x");
+    // Even a live x__y ping is ambiguous with x's y__ping: fail closed.
+    expect(staleMcpServerFor(mcp, "mcp__x__y__ping", {})).toBe("x");
     expect(staleMcpServerFor(mcp, "mcp__a_b__probe", {})).toBe("a.b");
     expect(staleMcpServerFor(mcp, "mcp__other__probe", {})).toBeUndefined();
     expect(staleMcpServerFor(mcp, "Bash", { server: "x" })).toBeUndefined();
   });
+
+  test.each([true, false])(
+    "an overlapping declared server cannot mask stale ownership (loaded: %s)",
+    async (loaded) => {
+      const cli = fakeCli({ x: stdio("x"), x__y: stdio("x__y") }, { neverRemoves: true });
+      cli.statusReads.mockResolvedValue([
+        { name: "x", status: "connected", source: "user", tools: [{ name: "y__probe" }] },
+        ...(loaded
+          ? [
+              {
+                name: "x__y",
+                status: "connected" as const,
+                source: "dynamic",
+                tools: [{ name: "ping" }],
+              },
+            ]
+          : []),
+      ]);
+      const runtime = runtimeFor(cli.control, { x: stdio("x"), x__y: stdio("x__y") });
+      await syncClaudeRuntimeMcp(runtime, target({ x__y: stdio("x__y") }, "next"));
+      const hook = createStaleMcpServerHook(runtime.mcp);
+      const call = (tool_name: string) =>
+        hook({ hook_event_name: "PreToolUse", tool_name, tool_input: {} } as HookInput, "fixture", {
+          signal: new AbortController().signal,
+        });
+      expect(await call("mcp__x__y__probe")).toMatchObject({
+        hookSpecificOutput: { permissionDecision: "deny" },
+      });
+      // Conservative refusal also covers live tools with ambiguous prefixes.
+      expect(await call("mcp__x__y__ping")).toMatchObject({
+        hookSpecificOutput: { permissionDecision: "deny" },
+      });
+      expect(await call("mcp__keep__ping")).toEqual({});
+    },
+  );
 
   test("MCP resource tools are matched by the server they name", () => {
     const mcp = mcpWith([], ["alpha"]);
@@ -296,14 +399,27 @@ describe("joining a running CLI after a removal", () => {
     );
     mockGetMcpRuntimeConfig.mockImplementation(async () => configure({}));
     const second = sendPrompt(session.id, "after removal");
-    // The prompt still runs: refusing the tools holds the removal.
+    // Simulate the tab's observer going away while the second turn runs.
+    const observe = mock(() => {});
+    const unsubscribe = eventEmitter.subscribe(observe);
+    unsubscribe();
     expect((await input.next()).done).toBe(false);
-    const revision = sessionRuntimeHealthBody(session).mcpConfig as Record<string, unknown>;
+    const other = await releaseWithBackgroundWork("another active session");
+    expect(getSession(other.session.id)?.id).not.toBe(session.id);
+    // Returning to the old tab reads the authoritative snapshot; no live
+    // event was needed to retain its stale-server protection.
+    const revision = sessionRuntimeHealthBody(getSession(session.id)).mcpConfig as Record<
+      string,
+      unknown
+    >;
+    expect(observe).not.toHaveBeenCalled();
     expect(revision.staleServers).toEqual(["alpha"]);
     expect(await denies(call.options, "mcp__alpha__probe")).toBe(true);
     expect(await denies(call.options, "mcp__beta__probe")).toBe(false);
     call.push({ type: "result", subtype: "success" });
     call.finish();
-    await Promise.all([firstPrompt, second]);
+    other.call.push({ type: "result", subtype: "success" });
+    other.call.finish();
+    await Promise.all([firstPrompt, second, other.firstPrompt]);
   });
 });

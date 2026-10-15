@@ -114,7 +114,7 @@ export async function syncClaudeRuntimeMcp(
     // A partial update invalidates the previous identity too. Retrying
     // either configuration must actually restate it on the CLI.
     runtime.mcpServers = "";
-    const dropped = Object.keys(mcp.servers).some((name) => !(name in next.servers));
+    const dropped = Object.keys(mcp.servers).some((name) => !Object.hasOwn(next.servers, name));
     if (dropped && !mcp.claimed) {
       // Unchanged, so nothing reconnects. Its errors are about servers that
       // are either being dropped or restated again just below.
@@ -179,10 +179,10 @@ export function claudeMcpToolPrefix(name: string): string {
 /**
  * The stale server a tool call reaches, if any.
  *
- * Tool names are matched by the longest server prefix, so a live `a__b` is
- * not taken for a stale `a`. Two names the CLI prefixes the same way cannot be
- * told apart, and that tie is refused. MCP resource tools name their server in
- * their input instead.
+ * Server and tool names can both contain `__`, so even a longer declared
+ * prefix cannot prove ownership. Refuse every matching stale prefix until
+ * restart, including ambiguous live tools. MCP resource tools name their
+ * server in their input instead.
  */
 export function staleMcpServerFor(
   mcp: ClaudeRuntimeMcp,
@@ -193,7 +193,6 @@ export function staleMcpServerFor(
   if (toolName.startsWith("mcp__")) {
     let stale: string | undefined;
     let staleLength = 0;
-    let liveLength = 0;
     for (const name of mcp.stale) {
       const prefix = claudeMcpToolPrefix(name);
       if (toolName.startsWith(prefix) && prefix.length > staleLength) {
@@ -201,11 +200,7 @@ export function staleMcpServerFor(
         staleLength = prefix.length;
       }
     }
-    for (const name of mcp.declared) {
-      const prefix = claudeMcpToolPrefix(name);
-      if (toolName.startsWith(prefix)) liveLength = Math.max(liveLength, prefix.length);
-    }
-    return stale && staleLength >= liveLength ? stale : undefined;
+    return stale;
   }
   const server = (toolInput as { server?: unknown } | undefined)?.server;
   return toolName.includes("Mcp") && typeof server === "string" && mcp.stale.has(server)

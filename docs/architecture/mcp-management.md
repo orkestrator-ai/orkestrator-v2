@@ -106,7 +106,15 @@ is not permission to execute. The editor never changes an execution policy.
   it over, and restating it unchanged does not reconnect it. The bridge
   therefore restates the launch set before the first update that drops a
   server (`session-manager-prompt-mcp-sync.ts`). `mise run
-  verify:claude:mcp-live` re-proves this on the real CLI without credentials.
+  verify:claude:mcp-live` re-proves this on the real CLI without credentials;
+  the same test runs in the default suite and CI. A loopback model also proves
+  stale tools are refused in root and background-subagent calls while the
+  process stays connected. Server and tool names can both contain `__`, so
+  every matching stale prefix is refused until restart, including ambiguous
+  live tools. A longer declared server name alone never proves ownership.
+  Restart-required operation records awaiting runtime evidence survive count
+  and byte retention pressure for the evidence window, so a replacement CLI
+  can still resolve them to applied.
 - **OpenCode and Codex merge.** OpenCode deep-merges same-name entries and
   Codex merges them field by field; a higher entry that omits a field inherits
   it. Rows say so rather than claiming replacement.

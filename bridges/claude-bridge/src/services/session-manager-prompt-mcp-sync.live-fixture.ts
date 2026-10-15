@@ -23,6 +23,7 @@ createInterface({ input: process.stdin })
     const reply = (result: unknown) => send({ jsonrpc: "2.0", id: message.id, result });
     switch (message.method) {
       case "initialize":
+        if (markerFile) appendFileSync(markerFile, `initialize ${name}\n`);
         return reply({
           protocolVersion: message.params?.protocolVersion ?? "2025-06-18",
           capabilities: { tools: {} },
@@ -39,6 +40,7 @@ createInterface({ input: process.stdin })
           ],
         });
       case "tools/call":
+        if (markerFile) appendFileSync(markerFile, `call ${name}\n`);
         return reply({ content: [{ type: "text", text: `pong from ${name} v${version}` }] });
       case "ping":
         return reply({});

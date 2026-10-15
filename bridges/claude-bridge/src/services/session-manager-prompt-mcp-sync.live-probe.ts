@@ -3,10 +3,11 @@
 // process, because the session-manager suites replace the SDK with a mock.
 //
 // Credential-free: every CLI runs in a temporary home and configuration
-// directory with non-essential traffic off, and no prompt is ever written, so
-// no model is called. The servers are `session-manager-prompt-mcp-sync.live-fixture.ts`.
+// directory with non-essential traffic off. Inventory scenarios write no prompt;
+// the call scenario uses a deterministic loopback model. The servers are `session-manager-prompt-mcp-sync.live-fixture.ts`.
 // What the model is offered is read from `getContextUsage({ detail: "summary" })`,
 // which lists the CLI's own MCP tool registry without a token-count request.
+import { runMcpCallProbe } from "./session-manager-prompt-mcp-sync.live-calls.js";
 import { query, type Query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -33,6 +34,9 @@ export interface McpSyncObservation {
   stale: string[];
   /** Fixture servers whose process is still alive. */
   alive: string[];
+  /** All process starts and handshakes, including servers later stopped. */
+  started: string[];
+  initialized: string[];
 }
 
 const FIXTURE = join(import.meta.dir, "session-manager-prompt-mcp-sync.live-fixture.ts");
@@ -139,13 +143,27 @@ async function run(
       .sort();
     const usage = await control.getContextUsage({ detail: "summary" });
     const tools = usage.mcpTools.map((tool) => tool.name).sort();
-    const alive = readFileSync(markers, "utf8")
+    const events = readFileSync(markers, "utf8")
       .split("\n")
-      .map((line) => line.split(" "))
+      .map((line) => line.split(" "));
+    const alive = events
       .filter(([event, , pid]) => event === "start" && isAlive(Number(pid)))
       .map(([, name]) => name!)
       .sort();
-    return { servers, tools, stale: Array.from(runtime.mcp.stale).sort(), alive };
+    return {
+      servers,
+      tools,
+      stale: Array.from(runtime.mcp.stale).sort(),
+      alive,
+      started: events
+        .filter(([event]) => event === "start")
+        .map(([, name]) => name!)
+        .sort(),
+      initialized: events
+        .filter(([event]) => event === "initialize")
+        .map(([, name]) => name!)
+        .sort(),
+    };
   } finally {
     release();
     open.delete(control);
@@ -221,7 +239,9 @@ if (import.meta.main) {
     });
   }
   try {
-    console.log(`${RESULT_SENTINEL}${JSON.stringify(await runMcpSyncProbe())}`);
+    console.log(
+      `${RESULT_SENTINEL}${JSON.stringify({ ...(await runMcpSyncProbe()), calls: await runMcpCallProbe(open) })}`,
+    );
   } catch (error) {
     console.error(error instanceof Error ? error.stack || error.message : String(error));
     process.exitCode = 1;

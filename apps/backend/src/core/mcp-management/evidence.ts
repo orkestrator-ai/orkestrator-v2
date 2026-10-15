@@ -117,6 +117,25 @@ export function awaitsEvidenceIn(provider: AgentPlatform, state: McpApplyState):
   }
 }
 
+/** Shared by polling and retention: evidence-waiting records survive history pressure. */
+export function operationAwaitsEvidence(stored: StoredOperation, nowMs: number): boolean {
+  const { recovery, snapshot } = stored;
+  if (snapshot.phase !== "saved") return false;
+  if (!recovery.savedDigest || !recovery.writeStartedAt || !recovery.evidenceRole) return false;
+  const queuedAt = Date.parse(recovery.applyQueuedAt ?? "");
+  if (!Number.isFinite(queuedAt) || nowMs - queuedAt > EVIDENCE_WINDOW_MS) return false;
+  return snapshot.apply.runtimes.some((runtime) => {
+    const record = recovery.runtimes?.find(
+      (candidate) => candidate.runtimeId === runtime.runtimeId,
+    );
+    return (
+      !!record?.awaitsEvidence &&
+      !!record.logicalSessionKey &&
+      awaitsEvidenceIn(record.agent as AgentPlatform, runtime.state)
+    );
+  });
+}
+
 /**
  * The digest a report offers as evidence for `role`, or undefined when it
  * offers none: an unreported slot, `absent`/`excluded`, or a read that
@@ -222,10 +241,7 @@ export class EvidenceScheduler {
     const found: Candidate[] = [];
     for (const stored of operations) {
       const recovery = stored.recovery;
-      if (stored.snapshot.phase !== "saved") continue;
-      if (!recovery.savedDigest || !recovery.writeStartedAt || !recovery.evidenceRole) continue;
-      const queuedAt = Date.parse(recovery.applyQueuedAt ?? "");
-      if (!Number.isFinite(queuedAt) || nowMs - queuedAt > EVIDENCE_WINDOW_MS) continue;
+      if (!operationAwaitsEvidence(stored, nowMs)) continue;
       if (this.deps.blocked(stored.snapshot.provider)) continue;
       const runtimes = stored.snapshot.apply.runtimes;
       for (const runtime of runtimes) {

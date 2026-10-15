@@ -435,7 +435,9 @@ under `bypassPermissions`.
    `setMcpServers` unloading only servers an earlier call gave it, and on an
    unchanged restatement not reconnecting a server
    (`session-manager-prompt-mcp-sync.ts`). This runs the real CLI in a
-   temporary home, with no credentials and no model call:
+   temporary home, with no credentials. Inventory checks make no model call;
+   a deterministic loopback model exercises root and background-subagent
+   stale-tool denial. The test also runs in the default suite and CI:
 
    ```bash
    mise run verify:claude:mcp-live

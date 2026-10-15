@@ -80,3 +80,39 @@ Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run
 and its compressed group logs. Status remains open; the isolated pass confirms
 recurrence but does not establish a root cause. No assertion, timeout or skip
 was changed.
+
+## Recurrence on 2026-10-15 during MCP removal validation
+
+On macOS with Bun 1.4.3, the unchanged `src/http.test.ts` reported two
+beforeEach/afterEach hook timeouts under:
+
+```bash
+mise run test:logged -- --name full-tests -- mise run test
+```
+
+- `authentication > reports an authenticated credential as ready`: 10004.15 ms.
+- `authentication > an attached agent is ready without reading credentials`: 7364.10 ms.
+- Cursor package: 719 passed, 2 failed, 6564 assertions across 39 files in 28.80 s.
+- Group allocations: workspace 4 slots, root 1, bridges 2, protocol 1. The
+  bridge packages each used one Bun worker. Turbo stopped sibling bridge
+  tasks when Cursor failed, so those tasks do not provide completed evidence.
+
+The owning file passed unchanged alone, exit 0, in 1.3 s:
+
+```bash
+mise run test:logged -- --name cursor-http-isolated -- \
+  bun test --cwd bridges/cursor-bridge ./src/http.test.ts \
+  --preload ../../tests/setup-node.ts --parallel=1
+```
+
+Evidence: `/private/tmp/orkestrator-test-run.sYaNWH/bridges.log.gz` and
+`summary.json` from the aggregate, plus the logged isolated PASS. The passing
+log is removed by the runner. The recurrence is consistent with the prior
+HTTP fixture cleanup/setup timeouts under aggregate load; its root cause
+remains unproven. No assertion, timeout or skip was changed.
+
+The warm full-suite rerun (`full-tests-warm`) subsequently passed every bridge
+package: Cursor 721 passed, 0 failed, and all five bridge tasks completed in
+77.4 s. The run's only failure was the unrelated agent-account directory
+assertion tracked in case 0238. Evidence:
+`/private/tmp/orkestrator-test-run.HeXNK8/bridges.log.gz` and `summary.json`.

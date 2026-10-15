@@ -4,9 +4,11 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
+import { MCP_MANAGEMENT_LIMITS } from "@orkestrator/protocol/mcp-management";
+import type { StoredOperation } from "./operations-store.js";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
 import {
@@ -335,6 +337,61 @@ describe("Claude evidence", () => {
       expect(await stateOf(change.operation.operationId)).toEqual(["applied"]);
     },
   );
+
+  test("history pressure preserves restart evidence across backend restart", async () => {
+    session("claude");
+    const change = await changeSaved("remove");
+    fixture.now.value += EVIDENCE_RECHECK_MS;
+    report("claude", { user: digestOf(USER_FILE.claude) }, fixture.now.value, {
+      staleServers: ["fixture"],
+    });
+    await fixture.service.tick();
+    expect(await stateOf(change.operation.operationId)).toEqual(["restart-required"]);
+    fixture.service.dispose();
+
+    // Fill the history with settled records. The next persist would previously
+    // evict this oldest restart-required operation before its replacement CLI ran.
+    const file = path.join(fixture.dataDir, "mcp-management", "operations.json");
+    const persisted = JSON.parse(readFileSync(file, "utf8")) as { operations: StoredOperation[] };
+    const held = persisted.operations.find(
+      (stored) => stored.snapshot.operationId === change.operation.operationId,
+    )!;
+    persisted.operations = [
+      held,
+      ...Array.from(
+        { length: MCP_MANAGEMENT_LIMITS.retainedOperations },
+        (_, index) =>
+          ({
+            snapshot: {
+              ...held.snapshot,
+              operationId: `finished-${index}`,
+              requestId: `finished-${index}`,
+              apply: { state: "applied", runtimes: [], omitted: 0 },
+            },
+            recovery: { fingerprint: `finished-${index}`, expectedRevision: null, name: "done" },
+          }) as StoredOperation,
+      ),
+    ];
+    writeFileSync(file, JSON.stringify(persisted));
+    fixture.service = fixture.newService();
+    // A save persists/prunes history while the removed server is still loaded.
+    await saveAndApply("claude", "claude:user", "unrelated");
+    expect(await stateOf(change.operation.operationId)).toEqual(["restart-required"]);
+    const kept = JSON.parse(readFileSync(file, "utf8")) as { operations: StoredOperation[] };
+    expect(kept.operations.length).toBeLessThanOrEqual(MCP_MANAGEMENT_LIMITS.retainedOperations);
+    expect(
+      kept.operations.some((stored) => stored.snapshot.operationId === held.snapshot.operationId),
+    ).toBe(true);
+
+    // Rehydrate with the new CLI's report, including the later unrelated save.
+    fixture.service.dispose();
+    fixture.service = fixture.newService();
+    expect(await stateOf(change.operation.operationId)).toEqual(["restart-required"]);
+    fixture.now.value += EVIDENCE_RECHECK_MS;
+    report("claude", { user: digestOf(USER_FILE.claude) }, fixture.now.value);
+    await fixture.service.tick();
+    expect(await stateOf(change.operation.operationId)).toEqual(["applied"]);
+  });
 
   test("a stale server the change did not touch does not hold it back", async () => {
     session("claude");

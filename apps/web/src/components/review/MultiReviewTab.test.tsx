@@ -16,9 +16,8 @@ import {
 } from "@/contexts";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
+import { MultiReviewTab, allowsReviewTileActivation } from "./MultiReviewTab";
 import {
-  MultiReviewTab,
-  allowsReviewTileActivation,
   autoPrLaunchNotice,
   consolidationStep,
   fixSessionRuntimeStep,
@@ -32,7 +31,7 @@ import {
   reviewerProgressSummary,
   reviewerRuntimeSummary,
   reviewerStatusNote,
-} from "./MultiReviewTab";
+} from "./multi-review-steps";
 
 /**
  * A node of the flow graph. Nodes are tabs controlling the inspector, named

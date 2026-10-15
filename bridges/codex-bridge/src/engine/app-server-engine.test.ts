@@ -1,3 +1,4 @@
+import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { afterEach, describe, test, expect, spyOn } from "bun:test";
 import { EventEmitter } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -311,6 +312,10 @@ describe("thread lifecycle", () => {
           http_headers: { Authorization: "Bearer tab-secret" },
           required: false,
           startup_timeout_sec: 3,
+          // Only the mail tools bypass the ordinary approval policy.
+          tools: Object.fromEntries(
+            AGENT_MAIL_TOOL_NAMES.map((name) => [name, { approval_mode: "approve" }]),
+          ),
         },
       });
     }

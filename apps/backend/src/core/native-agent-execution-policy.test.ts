@@ -1,3 +1,4 @@
+import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { describe, expect, test } from "bun:test";
 import {
   resolveEnvironmentExecutionPolicy,
@@ -221,9 +222,35 @@ describe("OpenCode execution policy translation", () => {
       }),
     ).toEqual([
       { permission: "*", pattern: "*", action: "ask" },
+      // A worker's mail tools never ask, so it can always report back.
+      ...AGENT_MAIL_TOOL_NAMES.map((name) => ({
+        permission: `orkestrator_${name}`,
+        pattern: "*",
+        action: "allow" as const,
+      })),
       { permission: "read", pattern: "*", action: "allow" },
       { permission: "shell", pattern: "*", action: "deny" },
     ]);
+  });
+
+  test("a deny-by-default worker still allows only its mail tools, and an explicit deny wins", () => {
+    const rules = openCodePermissionRules({
+      id: "interactive-host",
+      sandbox: "provider",
+      approvals: "deny",
+      projectResources: true,
+      toolPolicy: { deny: ["orkestrator_send_message"] },
+      networkAccess: "restricted",
+    });
+    expect(rules[0]).toEqual({ permission: "*", pattern: "*", action: "deny" });
+    const allowed = rules.filter((rule) => rule.action === "allow").map((rule) => rule.permission);
+    expect(allowed).toContain("orkestrator_reply_message");
+    expect(allowed).not.toContain("orkestrator_launch_environment");
+    expect(rules.at(-1)).toEqual({
+      permission: "orkestrator_send_message",
+      pattern: "*",
+      action: "deny",
+    });
   });
 
   test("allows every permission for the unattended default policy", () => {
@@ -269,6 +296,11 @@ describe("OpenCode execution policy translation", () => {
     expect(allowed).not.toContain("edit");
     expect(allowed).not.toContain("bash");
     expect(allowed).not.toContain("write");
+    // Its own mail and delegation tools, by exact OpenCode MCP tool id.
+    for (const tool of ["read_messages", "get_message", "send_message", "launch_environment"]) {
+      expect(allowed).toContain(`orkestrator_${tool}`);
+    }
+    expect(allowed.some((permission) => permission.includes("*"))).toBe(false);
   });
 
   test("an explicit deny still wins over the coordinator read allowances", () => {

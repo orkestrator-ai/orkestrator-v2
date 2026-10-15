@@ -5,6 +5,10 @@ import { Button } from "@/components/ui/button";
 import * as backend from "@/lib/backend";
 import { useAgentMailStore } from "@/stores/agentMailStore";
 import { openAgentMailForTab } from "./AgentMailButton";
+import {
+  AGENT_MAIL_HOURLY_LIMIT_REASON,
+  isAgentMailBudgetHeld,
+} from "@orkestrator/protocol/agent-mail";
 
 let summaryHydration: Promise<void> | null = null;
 
@@ -48,10 +52,7 @@ export function AgentMailBanner({
   if (!entry || dismissedRevision === entry.revision) return null;
   const messages = mailbox?.messages ?? [];
   const failed = messages.find((message) => message.placement === "inject_failed");
-  const paused = messages.find(
-    (message) =>
-      message.placement === "inject-held" && message.placementReason === "loop-budget-exhausted",
-  );
+  const paused = messages.find(isAgentMailBudgetHeld);
   const pending = messages.find((message) => message.placement === "pending-inject");
   const pullOnly = messages.find(
     (message) =>
@@ -95,7 +96,7 @@ export function AgentMailBanner({
       reportActionError("discard message", error);
     }
   };
-  const deliver = async () => {
+  const deliver = async (switchToIdle = false) => {
     const deliverable = pending ?? pullOnly;
     if (!deliverable) return;
     setActionError(undefined);
@@ -109,7 +110,11 @@ export function AgentMailBanner({
       return;
     }
     try {
-      await backend.updateAgentMailboxPolicy({ environmentId, tabId, inject: "idle" });
+      // "Deliver now" releases this one message. Only the explicit "Switch to
+      // deliver when idle" action changes the tab's policy; writing it here
+      // would quietly replace an inherited policy with a per-tab override.
+      if (switchToIdle)
+        await backend.updateAgentMailboxPolicy({ environmentId, tabId, inject: "idle" });
       await backend.retryAgentMailInject(environmentId, tabId, deliverable.id);
       await refresh();
     } catch (error) {
@@ -118,7 +123,15 @@ export function AgentMailBanner({
   };
   let text = "Message waiting";
   if (failed) text = `Delivery failed: ${failed.placementReason || "unknown reason"}`;
-  else if (paused) text = "Delivery paused: loop budget";
+  else if (paused)
+    text =
+      paused.placementReason === AGENT_MAIL_HOURLY_LIMIT_REASON
+        ? "Delivery paused: hourly limit · resumes on its own"
+        : "Delivery paused: loop budget";
+  else if (pending?.placementReason === "retrying")
+    text = "Delivery was refused · retrying automatically";
+  else if (pending?.placementReason === "verifying")
+    text = "Checking whether the last delivery arrived · retries automatically";
   else if (descriptor?.presence === "draft")
     text = "Delivery waiting: you have unsent text in the composer";
   else if (pullOnly) {
@@ -128,7 +141,7 @@ export function AgentMailBanner({
     text = `${entry.pendingInjectCount} message${entry.pendingInjectCount === 1 ? "" : "s"} waiting · delivers when this agent is idle`;
 
   return (
-    <div className="flex shrink-0 items-center gap-2 border-b border-amber-400/25 bg-amber-400/[0.07] px-3 py-1.5 text-xs">
+    <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-amber-400/25 bg-amber-400/[0.07] px-3 py-1.5 text-xs">
       {failed || paused ? (
         <AlertTriangle className="h-3.5 w-3.5 text-amber-400" />
       ) : (
@@ -163,7 +176,12 @@ export function AgentMailBanner({
       )}
       {(pending || pullOnly) && (
         <Button size="sm" variant="ghost" onClick={() => void deliver()}>
-          {descriptor?.injectPolicy === "off" ? "Switch to deliver when idle" : "Deliver now"}
+          Deliver now
+        </Button>
+      )}
+      {(pending || pullOnly) && descriptor?.injectPolicy === "off" && (
+        <Button size="sm" variant="ghost" onClick={() => void deliver(true)}>
+          Switch to deliver when idle
         </Button>
       )}
       <button

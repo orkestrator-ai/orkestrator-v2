@@ -83,6 +83,82 @@ export interface CoordinatorConversation {
   repositoryContextRevisionAcknowledged?: number;
   bridgePort?: number;
   bridgePid?: number;
+  /**
+   * `main` is the project's one coordinator: every worker reports to it and it
+   * owns all delegation. A `side` agent (Side 1, Side 2…) can read the project
+   * and exchange mail with the main coordinator only. Absent on records written
+   * before roles existed; `normalizeCoordinatorRoles` assigns one on read.
+   */
+  role?: CoordinatorConversationRole;
+  /** The N in "Side N"; only on side agents. */
+  sideOrdinal?: number;
+}
+
+export type CoordinatorConversationRole = "main" | "side";
+
+/**
+ * The address any agent in a project can mail to reach its coordinator.
+ *
+ * It resolves to the project's current main conversation, starting one with
+ * the default agent if the user closed it. Workers are told this rather than a
+ * conversation id, which would go stale the moment the main is replaced.
+ */
+export const COORDINATOR_MAIL_ADDRESS = "coordinator";
+
+/** The project's open main coordinator conversation, if any. */
+export function coordinatorMainConversation(
+  workspace: Pick<CoordinatorWorkspace, "conversations">,
+): CoordinatorConversation | undefined {
+  return workspace.conversations.find((item) => !item.closedAt && item.role === "main");
+}
+
+/**
+ * Give every open conversation a role, keeping exactly one main.
+ *
+ * Records from before roles keep their history: the selected conversation (or
+ * failing that the oldest one with an agent, or the oldest open one) becomes
+ * main and the rest become Side 1, Side 2… in creation order. Nothing is
+ * closed. Returns the same object when nothing needs to change.
+ */
+export function normalizeCoordinatorRoles(workspace: CoordinatorWorkspace): CoordinatorWorkspace {
+  const open = workspace.conversations.filter((item) => !item.closedAt);
+  const mains = open.filter((item) => item.role === "main");
+  const settled =
+    mains.length <= 1 &&
+    open.every(
+      (item) =>
+        item.role === "main" ||
+        (item.role === "side" && Number.isSafeInteger(item.sideOrdinal) && item.sideOrdinal! > 0),
+    );
+  if (settled) return workspace;
+  const main =
+    mains[0] ??
+    open.find((item) => item.id === workspace.selectedConversationId) ??
+    open.find((item) => item.agent) ??
+    open[0];
+  const used = new Set(
+    open
+      .filter((item) => item !== main && item.role === "side" && item.sideOrdinal)
+      .map((item) => item.sideOrdinal!),
+  );
+  let next = 1;
+  const nextOrdinal = () => {
+    while (used.has(next)) next += 1;
+    used.add(next);
+    return next;
+  };
+  return {
+    ...workspace,
+    conversations: workspace.conversations.map((item) => {
+      if (item.closedAt) return item;
+      if (item === main) {
+        const { sideOrdinal: _sideOrdinal, ...rest } = item;
+        return { ...rest, role: "main" };
+      }
+      if (item.role === "side" && item.sideOrdinal && item.sideOrdinal > 0) return item;
+      return { ...item, role: "side", sideOrdinal: nextOrdinal() };
+    }),
+  };
 }
 
 /**
@@ -138,6 +214,57 @@ export interface CoordinatorWorkflowAssociation {
   /** Present on `environment` associations that a coordinator is waiting on. */
   delegation?: CoordinatorDelegation;
 }
+
+/**
+ * Every Control MCP tool a coordinator credential is offered.
+ *
+ * Bridges that gate a read-only coordinator's tools by name (Pi) exempt exactly
+ * these. They are Orkestrator's own actions, served by the backend under the
+ * coordinator's scoped credential, never a write to the checkout. A backend
+ * test asserts the server offers no more and no fewer, so a new tool cannot be
+ * silently refused on one platform.
+ */
+export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
+  "ack_message",
+  "add_ticket_comment",
+  "address_multi_review",
+  "adopt_workflow",
+  "cancel_build_pipeline",
+  "cancel_multi_review",
+  "create_ticket",
+  "get_build_pipeline",
+  "get_environment",
+  "get_launch_options",
+  "get_message",
+  "get_message_status",
+  "get_multi_review",
+  "get_repository_context",
+  "get_tab_state",
+  "get_tab_transcript",
+  "get_ticket",
+  "launch_environment",
+  "launch_job",
+  "launch_multi_review",
+  "list_agents",
+  "list_environments",
+  "list_mailboxes",
+  "list_projects",
+  "list_tabs",
+  "list_tickets",
+  "list_workflows",
+  "open_multi_review",
+  "open_multi_review_fix",
+  "pause_build_pipeline",
+  "read_messages",
+  "resume_build_pipeline",
+  "send_message",
+  "send_prompt_to_tab",
+  "start_build_pipeline",
+  "start_environment",
+  "start_multi_review",
+  "stop_environment",
+  "update_ticket",
+] as const);
 
 /** The mail-store hold reason that keeps worker progress from waking anyone. */
 export const COORDINATOR_DELEGATION_HOLD_REASON = "delegation-running";
@@ -320,7 +447,10 @@ export function isCoordinatorWorkspace(value: unknown): value is CoordinatorWork
         typeof item.mailboxIncarnationId === "string" &&
         (item.repositoryContextRevisionAcknowledged === undefined ||
           (Number.isSafeInteger(item.repositoryContextRevisionAcknowledged) &&
-            (item.repositoryContextRevisionAcknowledged as number) >= 0))
+            (item.repositoryContextRevisionAcknowledged as number) >= 0)) &&
+        (item.role === undefined || item.role === "main" || item.role === "side") &&
+        (item.sideOrdinal === undefined ||
+          (Number.isSafeInteger(item.sideOrdinal) && (item.sideOrdinal as number) > 0))
       );
     }) &&
     (workspace.selectedConversationId === null ||

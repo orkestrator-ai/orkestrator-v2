@@ -131,6 +131,21 @@ describe("AgentMailBanner", () => {
     expect(screen.getByRole("button", { name: "Resume" })).toBeTruthy();
   });
 
+  for (const [placement, placementReason, text] of [
+    ["inject-held", "hourly-limit", "Delivery paused: hourly limit · resumes on its own"],
+    ["pending-inject", "retrying", "Delivery was refused · retrying automatically"],
+    [
+      "pending-inject",
+      "verifying",
+      "Checking whether the last delivery arrived · retries automatically",
+    ],
+  ] as const)
+    test(`explains ${placementReason} delivery`, () => {
+      install(placement, { placementReason });
+      render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+      expect(screen.getByText(text)).toBeTruthy();
+    });
+
   test("explains a compose draft hold", () => {
     install("pending-inject", { presence: "draft", policy: "idle" });
     render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);

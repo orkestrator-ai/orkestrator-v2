@@ -12,6 +12,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { DesignEnvironmentDeletionNotice } from "@/components/design/DesignEnvironmentDeletionNotice";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
+import { EnvironmentAgentSummary } from "./EnvironmentAgentSummary";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -631,6 +632,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
           <div className="space-y-1">
             <p className="font-medium">{displayName}</p>
             <p className="text-xs text-muted-foreground">Created: {createdDate}</p>
+            <EnvironmentAgentSummary environmentId={environment.id} open={tooltip.open} />
             {isProjectHome ? (
               <p className="text-xs text-muted-foreground flex items-center gap-1">
                 <House className="h-3 w-3" />

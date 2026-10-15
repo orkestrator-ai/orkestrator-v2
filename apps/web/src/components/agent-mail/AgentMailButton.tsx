@@ -24,7 +24,10 @@ import type {
   AgentMailMessageSummary,
   MailboxDescriptor,
 } from "@orkestrator/protocol/agent-mail";
-import { AGENT_MAIL_DEFAULT_LIST_LIMIT } from "@orkestrator/protocol/agent-mail";
+import {
+  AGENT_MAIL_DEFAULT_LIST_LIMIT,
+  isAgentMailBudgetHeld,
+} from "@orkestrator/protocol/agent-mail";
 
 const OPEN_EVENT = "orkestrator:open-agent-mail";
 
@@ -794,23 +797,19 @@ export function AgentMailButton() {
                               );
                             })()}
                           {(message.placement === "inject_failed" ||
-                            (message.placement === "inject-held" &&
-                              message.placementReason === "loop-budget-exhausted")) && (
+                            isAgentMailBudgetHeld(message)) && (
                             <Button
                               size="sm"
                               variant="outline"
                               onClick={() => void retryMessage(mailbox, message.id)}
                             >
                               <RotateCcw className="mr-1 h-3 w-3" />
-                              {message.placementReason === "loop-budget-exhausted"
-                                ? "Resume"
-                                : "Retry"}
+                              {isAgentMailBudgetHeld(message) ? "Resume" : "Retry"}
                             </Button>
                           )}
                           {(message.placement === "inject_failed" ||
                             message.placement === "pending-inject" ||
-                            (message.placement === "inject-held" &&
-                              message.placementReason === "loop-budget-exhausted")) && (
+                            isAgentMailBudgetHeld(message)) && (
                             <Button
                               size="sm"
                               variant="ghost"

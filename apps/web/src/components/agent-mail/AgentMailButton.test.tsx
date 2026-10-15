@@ -1303,6 +1303,24 @@ describe("AgentMailButton", () => {
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("discard failed"));
   });
 
+  test("Deliver now preserves an inherited off policy", async () => {
+    installBannerMailbox("pending-inject", { presence: "idle", policy: "off" });
+    const current = useAgentMailStore.getState();
+    const mailboxes = new Map(current.mailboxes);
+    for (const [id, mailbox] of mailboxes)
+      mailboxes.set(id, {
+        ...mailbox,
+        descriptor: { ...mailbox.descriptor, injectOverride: "inherit" },
+      });
+    useAgentMailStore.setState({ mailboxes });
+    render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Deliver now" }));
+    await waitFor(() =>
+      expect(retryAgentMailInject).toHaveBeenCalledWith("env-1", "tab-1", "message-1"),
+    );
+    expect(updateAgentMailboxPolicy).not.toHaveBeenCalled();
+  });
+
   test("delivers pending mail only when the recipient is available", async () => {
     installBannerMailbox("stored", { presence: "idle", policy: "off" });
     render(<AgentMailBanner environmentId="env-1" tabId="tab-1" />);

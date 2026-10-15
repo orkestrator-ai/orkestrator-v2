@@ -4957,6 +4957,39 @@ describe("sendPrompt", () => {
     await prompt;
   });
 
+  test("a worker whose policy denies tools can still use Orkestrator's mail tools", async () => {
+    mockGetMcpRuntimeConfig.mockImplementationOnce(async () => ({
+      servers: { orkestrator: { type: "http", url: "http://localhost/mcp" } },
+      names: new Set(["orkestrator"]),
+      revision: {
+        fingerprint: "mail",
+        sources: { user: "absent", project: "absent" },
+        scope: "all",
+      },
+    }));
+    const session = createSession("deny policy worker");
+    track(session.id);
+    session.executionPolicy = {
+      id: "interactive-host",
+      sandbox: "provider",
+      approvals: "deny",
+      projectResources: false,
+      networkAccess: "restricted",
+    };
+    const prompt = sendPrompt(session.id, "Report back");
+    const call = await nextQueryCall();
+
+    expect(call.options.permissionMode).toBe("dontAsk");
+    for (const tool of ["send_message", "reply_message", "check_inbox", "ack_message"]) {
+      expect(call.options.allowedTools).toContain(`mcp__orkestrator__${tool}`);
+    }
+    // Only the mail tools: Orkestrator's other tools follow the policy.
+    expect(call.options.allowedTools).not.toContain("mcp__orkestrator__*");
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await prompt;
+  });
+
   test("the unsandboxed default policy bypasses permissions and sends no sandbox", async () => {
     const session = createSession("default policy");
     track(session.id);

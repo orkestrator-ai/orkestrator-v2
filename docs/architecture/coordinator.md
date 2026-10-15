@@ -41,12 +41,41 @@ dependencies, copy environment files, or load repository hooks.
 Unmounting the page or changing projects detaches the view only. Backend-owned
 sessions, pending mail, and workflows continue. Closing a conversation settles
 live approvals, revokes its credential, and tombstones its mailbox without
-deleting provider history or the checkout. Orkestrator does not silently
-recreate a tab the user just closed. Removing the project stops Coordinator and
-deletes the isolated runtime, never the user's local repository.
+deleting provider history or the checkout. Removing the project stops
+Coordinator and deletes the isolated runtime, never the user's local repository.
 
-At most 16 conversations may be open. Unassigned conversations count toward
-that limit.
+## One main coordinator, and side agents
+
+A project has exactly one **main** coordinator conversation
+(`CoordinatorConversation.role`). Every worker reports to it and it owns all
+delegation. Any agent reaches it at the mail address `"coordinator"`
+(`COORDINATOR_MAIL_ADDRESS`), which resolves to whichever conversation is the
+main right now; an address of a conversation that has since closed is
+redirected there too.
+
+Closing the main tab is how its provider is changed. Nothing reopens it on its
+own until it is needed: the next agent mail to the coordinator, or a worker's
+delegation wake, starts a new main with the repository's default agent
+(`CoordinatorService.ensureMainConversation`) and moves onto it the work the
+closed one still owed a report for (open delegations, unreported workflows).
+A build-pipeline or review notice does not start one by itself — it waits for
+the next main — so finished work from long-closed conversations cannot wake a
+fresh coordinator. With no main open, the toolbar action reads **Start
+coordinator**.
+
+Every other conversation is a **side agent**, named Side 1, Side 2… (the lowest
+free number). A side agent reads the project and Orkestrator state (its
+credential carries only the `discovery` and `mail` capabilities, so it launches
+nothing), and exchanges mail with the main coordinator only: the mail store
+refuses side ↔ worker and side ↔ peer mail in both directions. The user may
+still write to it.
+
+Records from before roles migrate when read (`normalizeCoordinatorRoles`): the
+selected conversation, else the oldest with an agent, becomes main and the
+others become side agents. Nothing is closed. Workers a former conversation
+launched belong to the main.
+
+At most 16 conversations may be open, the main included.
 
 ## Project home
 
@@ -284,13 +313,45 @@ and readable, held with reason `delegation-running`, and released together with
 the final report. The mail drain claims every ready message for one mailbox,
 renders them into a single carrier in send order (bounded at 10 messages and
 128 KiB), and settles them together. A worker that finishes without reporting
-still wakes its coordinator, with a system notice saying so. A second live
-request to the same worker tab is rejected: one turn-end cannot identify which
-queued request it completed.
+still wakes its coordinator, with a system notice saying so.
+
+A follow-up message to a worker that is still on an earlier request joins that
+delegation instead of opening a second one: the open delegation does not close
+while the follow-up is undelivered, so the worker reads it in its next turn and
+the coordinator is woken once, after both. (`send_prompt_to_tab` and
+`launch_job` still refuse a second live request to the same tab.)
+
+"Finished" is read from the turn, not the process: a worker whose turn ended
+while background tasks still run counts as idle on the sweep, so a missed
+turn-end edge cannot hold its report until those tasks finish. A report held
+for a delegation that closed and was woken without it (a race with the
+"finished without a report" notice) is released on the next sweep.
+
+Mail for a stopped worker waits in its inbox. A stopped **local** worker is
+started (at most once every five minutes) and the mail is delivered once it
+runs; a stopped **container** is never started behind the user's back — the
+coordinator gets one notice per worker per hour asking it to call
+`start_environment` or ask the user. The coordinator's `send_message` result
+carries a `deliveryNote` saying which. Peer mail never starts an environment.
+
+When a new main starts after the old one was closed, unhandled mail from the
+old main's inbox moves to it — a report still owed to a delegation stays held
+for that delegation, anything else is delivered.
 
 Coordinator sessions participate in the same activity reconciler as environment
 sessions, so `idle` is an observed edge. That edge drains mail and the prompt
 queue immediately. User prompts queued during a turn still run first.
+
+A launched worker wakes only the main coordinator: mail it sends to a sibling
+worker or an ordinary environment is stored without a wake (route `isolated`,
+see [`agent-messaging.md`](agent-messaging.md#routes)), and mail to a side
+agent is refused. Mail between the main and its workers wakes whatever the
+default inject policy is. Workers are told to report with `send_message` to
+`"coordinator"`; the coordinator may message a worker by environment id alone,
+which resolves to the tab it is waiting on or the environment's agent tab.
+
+`list_agents` (discovery) returns every agent tab in the project and what each
+is doing — see [`agent-registry.md`](agent-registry.md).
 
 Pause or mute messaging, or set a mailbox's injection policy to **Off**, to
 hold automatic delivery. Stored, injected, acknowledged, and completed remain

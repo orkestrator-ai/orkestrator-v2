@@ -11,8 +11,52 @@ export const AGENT_MAIL_MAX_PENDING_INJECTS = 2_000;
 export const AGENT_MAIL_MAX_STORE_BYTES = 32 * 1024 * 1024;
 export const AGENT_MAIL_DEFAULT_RETENTION_DAYS = 14;
 export const AGENT_MAIL_MAX_THREAD_HOPS = 8;
+/** Default wakes a routed pair may trade before a person or a new request resets it. */
+export const AGENT_MAIL_DEFAULT_AUTONOMOUS_WAKE_BUDGET = 16;
+export const AGENT_MAIL_MAX_AUTONOMOUS_WAKE_BUDGET = 100;
+/** Default routed messages one pair may schedule in a rolling hour. */
+export const AGENT_MAIL_DEFAULT_HOURLY_WAKE_LIMIT = 40;
+export const AGENT_MAIL_MAX_HOURLY_WAKE_LIMIT = 1_000;
+/** Hold reasons for routed mail over its budget. */
+export const AGENT_MAIL_LOOP_BUDGET_REASON = "loop-budget-exhausted";
+export const AGENT_MAIL_HOURLY_LIMIT_REASON = "hourly-limit";
+
+/** Routed mail held over a budget: Resume releases it (the hourly hold also clears itself). */
+export function isAgentMailBudgetHeld(message: {
+  placement: string;
+  placementReason?: string;
+}): boolean {
+  return (
+    message.placement === "inject-held" &&
+    (message.placementReason === AGENT_MAIL_LOOP_BUDGET_REASON ||
+      message.placementReason === AGENT_MAIL_HOURLY_LIMIT_REASON)
+  );
+}
 export const AGENT_MAIL_DEFAULT_LIST_LIMIT = 100;
 export const AGENT_MAIL_MAX_LIST_LIMIT = 200;
+
+/** The MCP server name every bridge registers Orkestrator's agent tools under. */
+export const ORKESTRATOR_MCP_SERVER_NAME = "orkestrator";
+
+/**
+ * The Agent Tools mail tools a worker tab is offered.
+ *
+ * Always allowed, whatever the environment's approval setting: they write only
+ * to Orkestrator's own rate-limited message store, and they are how a worker
+ * reports back. Prompting for them leaves a delegation waiting on a person;
+ * refusing them leaves the coordinator waiting forever. The setting still
+ * governs edits, commands and every other tool. A backend test asserts the
+ * server offers exactly these.
+ */
+export const AGENT_MAIL_TOOL_NAMES = Object.freeze([
+  "list_mailboxes",
+  "send_message",
+  "check_inbox",
+  "read_message",
+  "ack_message",
+  "reply_message",
+  "get_message_status",
+] as const);
 
 export const AGENT_MAIL_PLACEMENTS = [
   "stored",
@@ -73,6 +117,15 @@ export interface AgentMessagingSettings {
   enabled: boolean;
   allowCrossProject: boolean;
   defaultInjectPolicy: "off" | "idle";
+  /** Whether mail between ordinary (non-coordinator-created) tabs wakes its recipient. */
+  wakePeers: boolean;
+  /**
+   * Wakes a routed pair may trade unattended. A coordinator request, a user
+   * prompt to either tab, or Resume starts a new budget.
+   */
+  autonomousWakeBudget: number;
+  /** Routed messages one pair may schedule per rolling hour; the runaway guard. */
+  hourlyWakeLimit: number;
   retentionDays: number;
   paused: boolean;
 }
@@ -81,9 +134,78 @@ export const DEFAULT_AGENT_MESSAGING_SETTINGS: Readonly<AgentMessagingSettings> 
   enabled: true,
   allowCrossProject: false,
   defaultInjectPolicy: "off",
+  wakePeers: false,
+  autonomousWakeBudget: AGENT_MAIL_DEFAULT_AUTONOMOUS_WAKE_BUDGET,
+  hourlyWakeLimit: AGENT_MAIL_DEFAULT_HOURLY_WAKE_LIMIT,
   retentionDays: AGENT_MAIL_DEFAULT_RETENTION_DAYS,
   paused: false,
 });
+
+/**
+ * How a same-project message relates its sender to its recipient.
+ *
+ * - `coordinator`: a coordinator conversation (or a workflow notice) and a tab
+ *   that conversation created, or a tab no coordinator created.
+ * - `peer`: two tabs, neither in an environment a coordinator created.
+ * - `isolated`: a tab in a coordinator-created environment and anyone other
+ *   than its own coordinator. The coordinator is the hub for its workers.
+ *
+ * `coordinator` mail always wakes its recipient and `peer` mail wakes it when
+ * `wakePeers` is on; `isolated` mail falls back to the recipient's inject
+ * policy like any other message.
+ */
+export const AGENT_MAIL_ROUTES = ["coordinator", "peer", "isolated"] as const;
+export type AgentMailRoute = (typeof AGENT_MAIL_ROUTES)[number];
+
+export interface AgentMailRouteInput {
+  trust: AgentMailTrust;
+  sender:
+    | { kind: "tab"; coordinatorOrigin?: string }
+    | { kind: "coordinator"; environmentId: string }
+    | { kind: "system" | "user" | "external" };
+  recipient: {
+    environmentId: string;
+    ownerKind?: "environment" | "coordinator";
+    coordinatorOrigin?: string;
+  };
+}
+
+/**
+ * Classify a message's route. `coordinatorOrigin` is the runtime environment id
+ * (`coordinator:<id>:<conversation>`) of the open conversation that created the
+ * tab's environment; it is absent for every other tab. Returns null for user,
+ * external and cross-project mail, which never take a route exception.
+ */
+export function classifyAgentMailRoute(input: AgentMailRouteInput): AgentMailRoute | null {
+  if (input.trust !== "same-project" && input.trust !== "same-environment") return null;
+  const { sender, recipient } = input;
+  if (sender.kind === "user" || sender.kind === "external") return null;
+  if (sender.kind === "system") return "coordinator";
+  const senderCoordinator = sender.kind === "coordinator" ? sender.environmentId : undefined;
+  const recipientCoordinator =
+    recipient.ownerKind === "coordinator" ? recipient.environmentId : undefined;
+  const senderOrigin = sender.kind === "tab" ? sender.coordinatorOrigin : undefined;
+  const recipientOrigin =
+    recipient.ownerKind === "coordinator" ? undefined : recipient.coordinatorOrigin;
+  if (senderOrigin && senderOrigin !== recipientCoordinator) return "isolated";
+  if (recipientOrigin && recipientOrigin !== senderCoordinator) return "isolated";
+  if (senderCoordinator || recipientCoordinator) return "coordinator";
+  return "peer";
+}
+
+/**
+ * Whether a routed message wakes its recipient regardless of the default
+ * inject policy. An explicit per-tab `off` still wins; `inherit` and `idle`
+ * both count as on.
+ */
+export function agentMailRouteWakes(
+  route: AgentMailRoute | null | undefined,
+  injectOverride: "inherit" | "off" | "idle" | undefined,
+  settings: Pick<AgentMessagingSettings, "wakePeers">,
+): boolean {
+  if (injectOverride === "off") return false;
+  return route === "coordinator" || (route === "peer" && settings.wakePeers);
+}
 
 export type MailActor =
   | {
@@ -129,6 +251,19 @@ export interface AgentMailMessage {
   threadDepth: number;
   /** Monotonic store sequence for coordinator/worker loop-budget lineage. */
   autonomousSequence?: number;
+  /** Pair budget generation established by a new delegation. */
+  autonomousBudgetEpoch?: number;
+  /** Time admitted for automatic delivery, distinct from message chronology. */
+  wakeAdmittedAt?: string;
+  /** Durable one-shot claim for starting a stopped family worker. */
+  workerStartAttemptedAt?: string;
+  /** Recipient was stopped when this request was admitted. */
+  recipientStoppedAtSend?: boolean;
+  recipientStopGeneration?: number;
+  /** Sender/recipient relationship fixed at send time; absent on older mail. */
+  route?: AgentMailRoute;
+  /** A person asked for this one message to be delivered despite the policy. */
+  userReleasedAt?: string;
   placement: AgentMailPlacement;
   placementReason?: string;
   /** Coordinator delegation whose completion releases this held report. */
@@ -177,6 +312,8 @@ export interface MailboxDescriptor {
   ownerKind?: "environment" | "coordinator";
   coordinatorId?: string;
   conversationId?: string;
+  /** Runtime id of the open coordinator conversation that created this tab's environment. */
+  coordinatorOrigin?: string;
   logicalSessionKey?: string;
   tombstonedAt?: string;
 }
@@ -385,6 +522,8 @@ export function normalizeAgentMessagingSettings(
   if (!value || typeof value !== "object" || Array.isArray(value)) return { ...fallback };
   const record = value as Record<string, unknown>;
   const retentionDays = Number(record.retentionDays);
+  const autonomousWakeBudget = Number(record.autonomousWakeBudget);
+  const hourlyWakeLimit = Number(record.hourlyWakeLimit);
   return {
     enabled: typeof record.enabled === "boolean" ? record.enabled : fallback.enabled,
     allowCrossProject:
@@ -395,6 +534,19 @@ export function normalizeAgentMessagingSettings(
       record.defaultInjectPolicy === "idle" || record.defaultInjectPolicy === "off"
         ? record.defaultInjectPolicy
         : fallback.defaultInjectPolicy,
+    wakePeers: typeof record.wakePeers === "boolean" ? record.wakePeers : fallback.wakePeers,
+    autonomousWakeBudget:
+      Number.isInteger(autonomousWakeBudget) &&
+      autonomousWakeBudget >= 1 &&
+      autonomousWakeBudget <= AGENT_MAIL_MAX_AUTONOMOUS_WAKE_BUDGET
+        ? autonomousWakeBudget
+        : fallback.autonomousWakeBudget,
+    hourlyWakeLimit:
+      Number.isInteger(hourlyWakeLimit) &&
+      hourlyWakeLimit >= 1 &&
+      hourlyWakeLimit <= AGENT_MAIL_MAX_HOURLY_WAKE_LIMIT
+        ? hourlyWakeLimit
+        : fallback.hourlyWakeLimit,
     retentionDays:
       Number.isInteger(retentionDays) && retentionDays >= 1 && retentionDays <= 365
         ? retentionDays

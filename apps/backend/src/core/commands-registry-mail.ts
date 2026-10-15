@@ -6,6 +6,29 @@ import {
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import type { StorageService } from "./storage.js";
 
+/**
+ * Start a new routed mail budget for a tab that was just prompted.
+ *
+ * Called from the prompt commands, which a person (renderer, CLI) or a
+ * coordinator request (`send_prompt_to_tab`) reaches but mail injection never
+ * does: either way the next exchange was asked for rather than run away. Mail
+ * bookkeeping must never block a prompt, so failure is logged and ignored.
+ */
+export async function resetAgentMailBudget(
+  context: { storage: Pick<StorageService, "resetAgentMailBudgetForSession"> },
+  environmentId: string,
+  logicalSessionKey: string,
+): Promise<void> {
+  try {
+    await context.storage.resetAgentMailBudgetForSession(environmentId, logicalSessionKey);
+  } catch (error) {
+    console.warn(
+      "[agent-mail] Could not reset the mail budget for a prompted tab:",
+      error instanceof Error ? error.message : error,
+    );
+  }
+}
+
 function required(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim()) throw new Error(`${name} is required`);
   return value.trim();
@@ -28,6 +51,16 @@ async function requireMessagingEnabled(storage: StorageService) {
 }
 
 export function registerAgentMailCommands(register: CommandRegistrar): void {
+  // Not mail, but read by the same audiences: the renderer, Control MCP, and
+  // any service that needs to know which agents exist and which are busy.
+  register("get_agent_registry", async ({ projectId, environmentId }, context) => {
+    if (!context.agentRegistry) throw new Error("Agent registry is unavailable");
+    return context.agentRegistry.snapshot({
+      ...(typeof projectId === "string" && projectId ? { projectId } : {}),
+      ...(typeof environmentId === "string" && environmentId ? { environmentId } : {}),
+    });
+  });
+
   register(
     "list_agent_mailboxes",
     async ({ projectId, q, offset, limit, includeTombstoned, strictProjectScope }, { storage }) => {

@@ -4,6 +4,7 @@ import { NATIVE_AGENT_OBSERVATION_EVENT_VERSION } from "@orkestrator/protocol/na
 import { NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION } from "@orkestrator/protocol/native-agent-transcript-patch";
 import { BUILD_PIPELINE_AGENTS } from "@orkestrator/protocol/build-pipeline";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
+import { resetAgentMailBudget } from "./commands-registry-mail.js";
 import {
   asString,
   asRecord,
@@ -107,14 +108,18 @@ export function registerNativeAgentCommands(
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }
-    return context.nativeAgents.dispatchPrompt(asDispatchNativeAgentPromptInput(args));
+    const input = asDispatchNativeAgentPromptInput(args);
+    await resetAgentMailBudget(context, input.environmentId, input.logicalSessionKey);
+    return context.nativeAgents.dispatchPrompt(input);
   });
 
   register("dispatch_native_agent_intent", async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");
     }
-    return context.nativeAgents.dispatchIntent(asDispatchNativeAgentPromptInput(args));
+    const input = asDispatchNativeAgentPromptInput(args);
+    await resetAgentMailBudget(context, input.environmentId, input.logicalSessionKey);
+    return context.nativeAgents.dispatchIntent(input);
   });
 
   register("retry_native_agent_dispatch", async (args, context) => {

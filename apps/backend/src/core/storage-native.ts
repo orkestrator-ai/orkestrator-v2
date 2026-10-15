@@ -187,6 +187,14 @@ export abstract class StorageNative extends StorageReviews {
     return [];
   }
 
+  /**
+   * Every coordinator workflow association, so the mail layer can tell which
+   * environments a coordinator created. Empty for the same reason as above.
+   */
+  async listAllCoordinatorWorkflowAssociations(): Promise<CoordinatorWorkflowAssociation[]> {
+    return [];
+  }
+
   private announceNativeAgentRecord(
     session: Pick<PersistedNativeAgentSession, "environmentId" | "agent" | "logicalSessionKey">,
     deleted = false,

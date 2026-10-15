@@ -7,6 +7,8 @@ import {
   coordinatorRuntimeId,
   isCoordinatorWorkspace,
   stripCoordinatorContext,
+  normalizeCoordinatorRoles,
+  type CoordinatorWorkspace,
 } from "./coordinator.js";
 
 describe("coordinator runtime identities", () => {
@@ -102,5 +104,75 @@ describe("coordinator context stripping", () => {
     // caller decides whether the row still has parts.
     expect(stripCoordinatorContext(preamble)).toBe("");
     expect(stripCoordinatorContext(`${preamble}\n\n`)).toBe("");
+  });
+});
+
+describe("coordinator conversation roles", () => {
+  const conversationOf = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    tabId: `coordinator-${id}`,
+    logicalSessionKey: `coordinator-w:${id}`,
+    title: id,
+    createdAt: new Date(0).toISOString(),
+    mailboxIncarnationId: `incarnation-${id}`,
+    ...extra,
+  });
+  const workspaceOf = (
+    conversations: ReturnType<typeof conversationOf>[],
+    selected: string | null,
+  ): CoordinatorWorkspace =>
+    ({
+      version: 1,
+      id: "w",
+      projectId: "p",
+      executionPolicy: "coordinator-read-only",
+      lifecycleState: "ready",
+      conversations,
+      selectedConversationId: selected,
+      repositoryContextRevision: 0,
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    }) as CoordinatorWorkspace;
+
+  test("a legacy workspace keeps every conversation: the selected one becomes main", () => {
+    const migrated = normalizeCoordinatorRoles(
+      workspaceOf(
+        [
+          conversationOf("a", { agent: "claude" }),
+          conversationOf("b", { agent: "codex" }),
+          conversationOf("c", { closedAt: new Date(0).toISOString() }),
+          conversationOf("d"),
+        ],
+        "b",
+      ),
+    );
+    expect(
+      migrated.conversations.map((item) => [item.id, item.role, item.sideOrdinal, item.closedAt]),
+    ).toEqual([
+      ["a", "side", 1, undefined],
+      ["b", "main", undefined, undefined],
+      ["c", undefined, undefined, new Date(0).toISOString()],
+      ["d", "side", 2, undefined],
+    ]);
+    // Idempotent: a settled workspace is returned as is.
+    expect(normalizeCoordinatorRoles(migrated)).toBe(migrated);
+  });
+
+  test("never two mains, and no main is invented when only sides are open", () => {
+    const twoMains = normalizeCoordinatorRoles(
+      workspaceOf(
+        [conversationOf("a", { role: "main" }), conversationOf("b", { role: "main" })],
+        "b",
+      ),
+    );
+    expect(twoMains.conversations.map((item) => item.role)).toEqual(["main", "side"]);
+    const sidesOnly = workspaceOf(
+      [
+        conversationOf("a", { role: "main", closedAt: new Date(0).toISOString() }),
+        conversationOf("b", { role: "side", sideOrdinal: 1 }),
+      ],
+      null,
+    );
+    expect(normalizeCoordinatorRoles(sidesOnly)).toBe(sidesOnly);
   });
 });

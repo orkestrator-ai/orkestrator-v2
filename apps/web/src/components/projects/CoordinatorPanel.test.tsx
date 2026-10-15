@@ -472,9 +472,37 @@ describe("CoordinatorPanel", () => {
       },
     };
     render(<CoordinatorPanel projectId="project-1" />);
-    const newConversation = await screen.findAllByRole("button", { name: "New conversation" });
+    // With no main open, the action starts the main coordinator.
+    const newConversation = await screen.findAllByRole("button", { name: "Start coordinator" });
     fireEvent.click(newConversation.at(-1)!);
     expect(await screen.findByText("create failed")).toBeTruthy();
+  });
+
+  test("pins the main coordinator first and offers side agents once it is open", async () => {
+    const base = snapshot.workspace.conversations[0]!;
+    ensuredSnapshot = {
+      ...snapshot,
+      workspace: {
+        ...snapshot.workspace,
+        conversations: [
+          {
+            ...base,
+            id: "side-1",
+            tabId: "coordinator-side-1",
+            title: "Side 1",
+            role: "side",
+            sideOrdinal: 1,
+          },
+          { ...base, title: "Coordinator", role: "main" },
+        ],
+      },
+    };
+    render(<CoordinatorPanel projectId="project-1" />);
+    const main = await screen.findByRole("button", { name: "Coordinator, Codex" });
+    const side = screen.getByRole("button", { name: "Side 1, Codex" });
+    expect(main.compareDocumentPosition(side) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("button", { name: "New side agent" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Start coordinator" }) === null).toBe(true);
   });
 
   test("selects a conversation from the full tab shell and shows its agent brand", async () => {
@@ -804,13 +832,13 @@ describe("CoordinatorPanel", () => {
 
     const active = render(<CoordinatorPanel projectId="project-1" />);
     expect(await screen.findByText(/Earlier analysis may be stale/)).toBeTruthy();
-    expect(screen.getByText("No open coordinator conversation.")).toBeTruthy();
+    expect(screen.getByText(/No coordinator is open/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Dismiss repository context notice" }));
     expect(screen.queryByText(/Earlier analysis may be stale/) === null).toBe(true);
     active.unmount();
 
     render(<CoordinatorPanel projectId="project-1" />);
-    await screen.findByText("No open coordinator conversation.");
+    await screen.findByText(/No coordinator is open/);
     expect(screen.queryByText(/Earlier analysis may be stale/) === null).toBe(true);
   });
 

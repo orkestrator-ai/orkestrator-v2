@@ -1,3 +1,9 @@
+import {
+  COORDINATOR_WORKSPACE_VERSION,
+  COORDINATOR_EXECUTION_POLICY,
+  coordinatorRuntimeId,
+} from "@orkestrator/protocol/coordinator";
+import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
@@ -34,14 +40,9 @@ type RpcCall = {
   rawText: string;
 };
 
+// The bridges always allow exactly these mail tools, so the server must offer them.
 const ALL_AGENT_TOOL_NAMES = [
-  "list_mailboxes",
-  "send_message",
-  "check_inbox",
-  "read_message",
-  "ack_message",
-  "reply_message",
-  "get_message_status",
+  ...AGENT_MAIL_TOOL_NAMES,
   "list_tickets",
   "get_ticket",
   "create_ticket",
@@ -664,7 +665,56 @@ describe("agent Kanban tools", () => {
     expect(held.body.result?.structuredContent).toMatchObject({
       placement: "inject-held",
       message: { placementReason: "submitting" },
-      deliveryHint: "stored, delivery pending",
+      deliveryHint: "held, delivery pending",
+    });
+    // A real worker report in an open delegation explains its turn-end hold,
+    // even when the coordinator inherits the default Off policy.
+    const now = new Date().toISOString();
+    await storage.mutateCoordinatorWorkspace("project-mail", () => ({
+      version: COORDINATOR_WORKSPACE_VERSION,
+      id: "hint-coordinator",
+      projectId: "project-mail",
+      executionPolicy: COORDINATOR_EXECUTION_POLICY,
+      lifecycleState: "ready",
+      conversations: [
+        {
+          id: "main",
+          tabId: "main-tab",
+          logicalSessionKey: "hint-main",
+          title: "Coordinator",
+          createdAt: now,
+          mailboxIncarnationId: "hint-main-incarnation",
+          role: "main",
+          agent: "codex",
+        },
+      ],
+      selectedConversationId: "main",
+      repositoryContextRevision: 0,
+      createdAt: now,
+      updatedAt: now,
+    }));
+    await storage.saveCoordinatorWorkflowAssociation({
+      id: "hint-delegation",
+      projectId: "project-mail",
+      coordinatorId: "hint-coordinator",
+      conversationId: "main",
+      kind: "environment",
+      resourceId: "env-a",
+      requestId: "hint-delegate",
+      createdAt: now,
+    });
+    await storage.openCoordinatorDelegation("hint-delegation", "agent-a");
+    await storage.synchronizeAgentMailboxes();
+    const report = await call({
+      ...args,
+      requestId: "hint-report",
+      toEnvironmentId: coordinatorRuntimeId("hint-coordinator", "main"),
+      toTabId: "main-tab",
+    });
+    expect(report.body.result?.structuredContent).toMatchObject({
+      placement: "inject-held",
+      message: { placementReason: "delegation-running" },
+      deliveryHint: "queued, delivers when the worker turn ends",
     });
     await storage.updateAgentMailboxPolicy("env-c", "agent-c", { mutedInbound: true });
     const bounced = await call({ ...args, requestId: "hint-bounced" });

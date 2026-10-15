@@ -8,6 +8,7 @@ import {
   type ControlMcpInvoker,
 } from "./control-mcp-server.js";
 import { coordinatorDelegationPresentationFrom } from "./coordinator-delegation-authority.js";
+import { COORDINATOR_CONTROL_TOOL_NAMES } from "@orkestrator/protocol/coordinator";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
   parseCoordinatorDelegatedPrompt,
@@ -232,6 +233,10 @@ describe("Orkestrator control MCP server", () => {
     });
     const metadata = await rpc(credential.url, credential.token, "tools/list");
     const definitions = metadata.body.result!.tools!;
+    // Bridges gate a coordinator's tools by this list (Pi); it must not drift.
+    expect(definitions.map((tool) => tool.name).toSorted()).toEqual(
+      [...COORDINATOR_CONTROL_TOOL_NAMES].toSorted(),
+    );
     expect(definitions.find((tool) => tool.name === "launch_multi_review")?.description).toContain(
       "Preferred complete Multi Review button action",
     );
@@ -309,6 +314,23 @@ describe("Orkestrator control MCP server", () => {
       projects: [{ id: "project-1" }],
     });
 
+    const registrySnapshot = {
+      revision: 7,
+      entries: [{ environmentId: "env-project-1", tabId: "agent", state: "working" }],
+      environments: [{ environmentId: "env-project-1", tabs: 1, working: 1 }],
+    };
+    overrides.set("get_agent_registry", () => registrySnapshot);
+    const agents = await rpc(credential.url, credential.token, "tools/call", {
+      name: "list_agents",
+      arguments: { environmentId: "env-project-1" },
+    });
+    expect(agents.body.result?.structuredContent).toEqual(registrySnapshot);
+    expect(invocations.filter((entry) => entry.command === "get_agent_registry")).toEqual([
+      {
+        command: "get_agent_registry",
+        args: { projectId: "project-1", environmentId: "env-project-1" },
+      },
+    ]);
     overrides.set("get_environment_snapshots", ({ projectId }) => [
       {
         id: `env-${projectId}`,
@@ -601,6 +623,7 @@ describe("Orkestrator control MCP server", () => {
       "list_environments",
       "get_environment",
       "list_tabs",
+      "list_agents",
       "get_tab_state",
       "get_tab_transcript",
       "list_tickets",

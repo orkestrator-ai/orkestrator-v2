@@ -1,3 +1,7 @@
+import {
+  AGENT_MAIL_TOOL_NAMES,
+  ORKESTRATOR_MCP_SERVER_NAME,
+} from "@orkestrator/protocol/agent-mail";
 import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import {
@@ -17,7 +21,6 @@ import {
   MAX_APPROVALS_PER_SESSION,
   MAX_MESSAGES,
   MAX_MESSAGE_TEXT_BYTES,
-  MAX_MODEL_ID_BYTES,
   MAX_PARTS_PER_MESSAGE,
   MAX_SESSIONS,
   MAX_SESSION_LIST_PAGES,
@@ -51,8 +54,6 @@ import {
   supportsSessionCapability,
   workingDirectory,
   type AcpSpawnOptions,
-  type BridgeMessage,
-  type BridgeMessagePart,
   type BridgeTextPart,
   type JsonObject,
   type SessionState,
@@ -492,6 +493,53 @@ export async function createSessionReserved(
   }
 }
 
+const ORKESTRATOR_MAIL_TOOL_IDS = new Set(
+  AGENT_MAIL_TOOL_NAMES.flatMap((name) => [
+    `${ORKESTRATOR_MCP_SERVER_NAME}__${name}`,
+    `mcp__${ORKESTRATOR_MCP_SERVER_NAME}__${name}`,
+    `${ORKESTRATOR_MCP_SERVER_NAME}_${name}`,
+    `${ORKESTRATOR_MCP_SERVER_NAME}/${name}`,
+    `${ORKESTRATOR_MCP_SERVER_NAME}.${name}`,
+  ]),
+);
+
+/**
+ * The allow option of a permission request for an Orkestrator mail tool, if it
+ * is one.
+ *
+ * Only a server-qualified name counts: a bare `send_message` could belong to
+ * any server. Grok names tools in `_meta["x.ai/tool"].name`; other agents in
+ * the tool call's own name. Display titles never identify tools.
+ */
+export function orkestratorMailPermissionOption(
+  params: JsonObject,
+  approvals?: string,
+): string | undefined {
+  if (approvals === "deny") return undefined;
+  const toolCall = isObject(params.toolCall) ? params.toolCall : undefined;
+  if (!toolCall) return undefined;
+  const meta = isObject(toolCall._meta) ? toolCall._meta : undefined;
+  const xaiTool = meta && isObject(meta["x.ai/tool"]) ? meta["x.ai/tool"] : undefined;
+  if (toolCall.kind === "execute" || toolCall.kind === "edit") return undefined;
+  const names = [xaiTool ? xaiTool.name : toolCall.name].filter(
+    (value): value is string => typeof value === "string",
+  );
+  // Grok 1.0.46 names MCP tools `server__tool`, and its tool metadata also
+  // carries the server as `namespace` next to a bare `name`.
+  const namespaced =
+    xaiTool?.namespace === ORKESTRATOR_MCP_SERVER_NAME &&
+    typeof xaiTool.name === "string" &&
+    (AGENT_MAIL_TOOL_NAMES as readonly string[]).includes(xaiTool.name.trim());
+  if (!namespaced && !names.some((name) => ORKESTRATOR_MAIL_TOOL_IDS.has(name.trim()))) {
+    return undefined;
+  }
+  const options = Array.isArray(params.options) ? params.options.filter(isObject) : [];
+  const allow =
+    options.find((option) => option.kind === "allow_once") ??
+    options.find((option) => option.kind === "allow_always");
+  return typeof allow?.optionId === "string" ? allow.optionId : undefined;
+}
+
 export function attachChild(state: SessionState, child: AcpProcess): void {
   state.child = child;
   state.pendingLateTurnUsage = undefined;
@@ -515,6 +563,14 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
     // A closing session answers nothing it parked, so it parks nothing new.
     if (state.child !== child || sessions.get(state.id) !== state || state.closing) {
       child.respond(requestId, { outcome: { outcome: "cancelled" } });
+      return;
+    }
+    const mailAllow = orkestratorMailPermissionOption(
+      params,
+      effectiveTurnExecutionPolicy(state)?.approvals,
+    );
+    if (mailAllow) {
+      child.respond(requestId, { outcome: { outcome: "selected", optionId: mailAllow } });
       return;
     }
     if (effectiveTurnExecutionPolicy(state)?.approvals === "deny") {

@@ -1,4 +1,5 @@
 import type { CanUseTool, HookCallback, Options } from "@anthropic-ai/claude-agent-sdk";
+import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { createHash } from "node:crypto";
 import type { SessionState } from "../types/index.js";
@@ -122,13 +123,19 @@ export async function resolveQueryPlan(
     "Agent",
   ];
   const coordinatorReadOnly = isCoordinatorReadOnlyPolicy(policy);
+  // A worker can always report back, whatever its approval setting: under
+  // "deny" (`dontAsk`) only allowed tools run, and the mail tools must be
+  // among them. An explicit toolPolicy deny still wins.
+  const agentMailTools = mcpServerNames.has(AGENT_MCP_SERVER_NAME)
+    ? AGENT_MAIL_TOOL_NAMES.map((name) => `mcp__${AGENT_MCP_SERVER_NAME}__${name}`)
+    : [];
   const allowedTools = coordinatorReadOnly
     ? claudeReadOnlyAllowedTools({
         agentMcpServerNames: mcpServerNames.has(AGENT_MCP_SERVER_NAME)
           ? [AGENT_MCP_SERVER_NAME]
           : [],
       })
-    : (policy?.toolPolicy?.allow ?? defaultAllowedTools);
+    : [...(policy?.toolPolicy?.allow ?? defaultAllowedTools), ...agentMailTools];
   // Provider tool names, not the policy's own: `toolPolicy.deny` carries
   // Codex's vocabulary, and passing it to `disallowedTools` matches nothing.
   const disallowedTools = coordinatorReadOnly

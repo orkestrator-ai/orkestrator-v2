@@ -1273,6 +1273,36 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
     await expect(
       page.getByRole("button", { name: "Agent inbox, 1 unseen", exact: true }),
     ).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 844 });
+    const deliverNow = page.getByRole("button", { name: "Deliver now", exact: true });
+    await expect(deliverNow).toBeVisible();
+    const bounds = await deliverNow.boundingBox();
+    expect(bounds && bounds.x >= 0 && bounds.x + bounds.width <= 390).toBe(true);
+    // Release only this message under inherited Off. Reload and switching
+    // environments must preserve the authoritative per-tab policy.
+    await page.getByRole("button", { name: "Deliver now", exact: true }).click();
+    const mailbox = () =>
+      invoke<{
+        descriptor: { injectPolicy: string; injectOverride: string };
+        messages: Array<{ userReleasedAt?: string }>;
+      }>("get_agent_mail_mailbox", { environmentId: recipient.id, tabId: recipientTabId });
+    await expect
+      .poll(async () =>
+        (await mailbox()).messages.some((message) => Boolean(message.userReleasedAt)),
+      )
+      .toBe(true);
+    expect((await mailbox()).descriptor).toMatchObject({
+      injectPolicy: "off",
+      injectOverride: "inherit",
+    });
+    await page.setViewportSize({ width: 1440, height: 960 });
+    await page.getByText(sender.name, { exact: true }).first().click();
+    await page.getByText(recipient.name, { exact: true }).first().click();
+    await page.reload();
+    expect((await mailbox()).descriptor).toMatchObject({
+      injectPolicy: "off",
+      injectOverride: "inherit",
+    });
   } finally {
     await invoke("update_agent_messaging_settings", { settings: previousSettings }).catch(
       () => undefined,

@@ -1,3 +1,4 @@
+import { stoppedWorkerMailHook } from "./agent-mail-stopped-worker.js";
 import { setManagedGitHubCli } from "./github-cli-binary.js";
 import { resolveManagedBinary } from "./commands-agent-support.js";
 import { closeEnvironmentCleanupStorage } from "./environment-cleanup-ledger.js";
@@ -88,6 +89,8 @@ import {
 import { MultiReviewService } from "./multi-review-service.js";
 import { FeaturePlanningService } from "./feature-planning.js";
 import { PromptQueueDrainer } from "./prompt-queue-drainer.js";
+import { AgentRegistry } from "./agent-registry.js";
+import { tmuxManager } from "./tmux-session-manager.js";
 import { AgentMailService } from "./agent-mail-service.js";
 import { CoordinatorService } from "./coordinator-service.js";
 import { coordinatorProviderQualification } from "./coordinator-providers.js";
@@ -347,7 +350,11 @@ export class OrkestratorBackend {
             candidate.logicalSessionKey === logicalSessionKey,
         );
         if (!session) return "unknown";
-        return this.nativeAgents.sessionActivitySnapshot(
+        // The turn view: a worker whose turn ended but whose background tasks
+        // still run has answered, and its report must not wait for them. The
+        // raw state stays `working` until every task finishes, which held a
+        // report indefinitely when the turn-end edge itself was missed.
+        return this.nativeAgents.sessionTurnActivitySnapshot(
           environmentId,
           session.agent,
           logicalSessionKey,
@@ -486,6 +493,11 @@ export class OrkestratorBackend {
       },
     );
     context.nativeAgents = this.nativeAgents;
+    context.agentRegistry = new AgentRegistry(storage, {
+      native: (environmentId, agent, logicalSessionKey) =>
+        this.nativeAgents.sessionTurnActivitySnapshot(environmentId, agent, logicalSessionKey),
+      tmux: (environmentId, tabId) => tmuxManager.get(environmentId, tabId)?.activityState(),
+    });
     context.mcpManagement = new McpManagementService({
       dataDir: options.dataDir,
       storage,
@@ -659,7 +671,15 @@ export class OrkestratorBackend {
         return (await handler(args, context)) as T;
       },
     );
-    this.agentMail = new AgentMailService(storage, this.nativeAgents, this.promptQueues);
+    this.agentMail = new AgentMailService(storage, this.nativeAgents, this.promptQueues, {
+      coordinatorMailForStoppedEnvironment: stoppedWorkerMailHook(
+        storage,
+        async (environmentId) => {
+          const handler = this.commands.get("start_environment_background");
+          if (handler) await handler({ environmentId }, context);
+        },
+      ),
+    });
     context.drainAgentMail = () => this.agentMail.drainInjects();
     // Scoped workflow wakeups (step 08), subscribed before any owner's first
     // discovery so nothing that commits during startup is missed. Each wake

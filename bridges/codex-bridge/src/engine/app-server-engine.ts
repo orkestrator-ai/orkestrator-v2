@@ -21,6 +21,7 @@
  *     `clientUserMessageId`; after an ambiguous failure the engine reconciles
  *     against persisted turns rather than retrying blind.
  */
+import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { open } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -81,6 +82,15 @@ import {
   type StartThreadOptions,
   type StartTurnOptions,
 } from "./types.js";
+
+/**
+ * Per-tool MCP approval for Orkestrator's mail tools (keyed by the raw tool
+ * name). Always approved: they only write to Orkestrator's message store, and
+ * they are how a worker reports back whatever its approval setting.
+ */
+const AGENT_MAIL_TOOL_APPROVALS = Object.fromEntries(
+  AGENT_MAIL_TOOL_NAMES.map((name) => [name, { approval_mode: "approve" }]),
+);
 
 /**
  * Root source kinds Orkestrator threads can have.
@@ -1365,8 +1375,11 @@ export class AppServerEngine implements CodexEngine {
                 // for an explicitly auto-approved policy, the trusted
                 // coordinator profile, or a backend-selected tool paired with
                 // an attempt-scoped workflow result server. Ask/deny must
-                // retain Codex's defaults for ordinary MCP connections.
-                ...(approveAgentMcpTools ? { default_tools_approval_mode: "approve" } : {}),
+                // retain Codex's defaults for ordinary MCP connections — except
+                // the mail tools, which a worker always needs to report back.
+                ...(approveAgentMcpTools
+                  ? { default_tools_approval_mode: "approve" }
+                  : { tools: AGENT_MAIL_TOOL_APPROVALS }),
               },
             },
           }

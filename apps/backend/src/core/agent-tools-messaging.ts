@@ -1,8 +1,11 @@
 import {
   AgentMailError,
   AGENT_MAIL_MAX_BODY_BYTES,
+  AGENT_MAIL_HOURLY_LIMIT_REASON,
+  AGENT_MAIL_LOOP_BUDGET_REASON,
   type AgentMailIdentity,
 } from "@orkestrator/protocol/agent-mail";
+import { COORDINATOR_DELEGATION_HOLD_REASON } from "@orkestrator/protocol/coordinator";
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { StorageService } from "./storage.js";
@@ -84,13 +87,22 @@ async function assertCallerMailbox(
   };
 }
 
-function deliveryHint(
+export function deliveryHint(
   placement: string,
   placementReason: string | undefined,
   injectPolicy: string,
 ): string {
   if (placement === "bounced" || placement === "undeliverable")
     return `bounced: ${placementReason ?? placement}`;
+  if (placement === "inject-held") {
+    if (placementReason === COORDINATOR_DELEGATION_HOLD_REASON)
+      return "queued, delivers when the worker turn ends";
+    if (placementReason === AGENT_MAIL_HOURLY_LIMIT_REASON)
+      return "held by hourly limit, resumes automatically";
+    if (placementReason === AGENT_MAIL_LOOP_BUDGET_REASON)
+      return "held by unattended message budget, awaiting resume or a new delegation";
+    return "held, delivery pending";
+  }
   if (placement === "pending-inject") return "queued, delivers when idle";
   if (placement === "injected") return "delivered to recipient";
   return injectPolicy === "idle" ? "stored, delivery pending" : "stored, recipient pulls";
@@ -161,13 +173,13 @@ export function registerAgentMessagingTools(
       title: "Send an agent message",
       description: mailToolDescription(
         scope,
-        "Durably send bounded Markdown text to one other tab. Idle delivery can start a turn that edits files; use a stable requestId when retrying. Subagents share their parent tab's mailbox, so this cannot reach the session that launched you.",
+        'Durably send bounded Markdown text to one other tab. Idle delivery can start a turn that edits files; use a stable requestId when retrying. To reach your project coordinator set toEnvironmentId to "coordinator" and omit toTabId. For an environment with one agent tab, toTabId may be omitted. Subagents share their parent tab\'s mailbox, so this cannot reach the session that launched you.',
       ),
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),
         fromTabId: z.string().trim().min(1).max(256).optional(),
         toEnvironmentId: z.string().trim().min(1).max(256),
-        toTabId: z.string().trim().min(1).max(256),
+        toTabId: z.string().trim().min(1).max(256).optional(),
         subject: z.string().trim().max(200).optional(),
         body: z
           .string()
@@ -196,11 +208,13 @@ export function registerAgentMessagingTools(
             projectId: scope.projectId,
             tabId: identity.tabId,
           },
-          input,
+          { ...input, toTabId: input.toTabId ?? "" },
         );
-        const recipient = await storage.getAgentMailMailbox(input.toEnvironmentId, input.toTabId, {
-          limit: 1,
-        });
+        const recipient = await storage.getAgentMailMailbox(
+          message.toEnvironmentId,
+          message.toTabId,
+          { limit: 1 },
+        );
         return result({
           identity,
           message: { ...message, body: undefined },

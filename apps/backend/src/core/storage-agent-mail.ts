@@ -10,10 +10,15 @@ import {
   AGENT_MAIL_MAX_REQUEST_ID_LENGTH,
   AGENT_MAIL_MAX_STORE_BYTES,
   AGENT_MAIL_MAX_SUBJECT_LENGTH,
+  AGENT_MAIL_HOURLY_LIMIT_REASON,
+  AGENT_MAIL_LOOP_BUDGET_REASON,
   AGENT_MAIL_MAX_THREAD_HOPS,
   AgentMailError,
   agentMailCapabilities,
+  agentMailRouteWakes,
   agentMailboxId,
+  isAgentMailBudgetHeld,
+  classifyAgentMailRoute,
   normalizeAgentMessagingSettings,
   resolveTabDisplayName,
   type AgentMailMailboxSnapshot,
@@ -24,6 +29,7 @@ import {
   type AgentMailSendInput,
   type AgentMailSummarySnapshot,
   type AgentMailTrust,
+  type AgentMessagingSettings,
   type MailActor,
   type MailboxDescriptor,
   type MailboxKind,
@@ -33,7 +39,13 @@ import { StorageDrafts } from "./storage-drafts.ts";
 import { paneLayoutLeaves } from "./storage-shared.js";
 import {
   COORDINATOR_DELEGATION_HOLD_REASON,
+  COORDINATOR_MAIL_ADDRESS,
+  coordinatorConversationIdFromRuntimeId,
+  coordinatorIdFromRuntimeId,
+  coordinatorMainConversation,
   coordinatorRuntimeId,
+  type CoordinatorWorkflowAssociation,
+  type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
 
 type PersistedMailbox = {
@@ -61,6 +73,15 @@ type PersistedMailbox = {
   ownerKind?: "environment" | "coordinator";
   coordinatorId?: string;
   conversationId?: string;
+  /** Main coordinator or side agent; only on coordinator mailboxes. */
+  coordinatorRole?: "main" | "side";
+  /** Mail address of the main coordinator whose coordinator created this environment. */
+  coordinatorOrigin?: string;
+  /**
+   * Store revision at which a person or a new request last reset this tab's
+   * routed budgets. Routed mail sequenced at or before it no longer counts.
+   */
+  budgetResetSequence?: number;
   logicalSessionKey?: string;
 };
 
@@ -85,6 +106,16 @@ type PersistedAgentMailStore = {
     nextAttemptAt?: string;
     attempts?: number;
     lastHoldReason?: string;
+    /**
+     * Not before this time, whatever the recipient's presence. Busy backoff
+     * (`nextAttemptAt`) resets on an activity edge; a failed dispatch must
+     * not, or a recipient that keeps refusing would be retried every pass.
+     */
+    retryAt?: string;
+    retryAttempts?: number;
+    verificationAttempts?: number;
+    /** An ambiguous dispatch to confirm against the session journal before resending. */
+    verifyRequestId?: string;
   }>;
   counterparts: Record<string, AgentMailMessageSummary>;
 };
@@ -107,7 +138,27 @@ export type PendingAgentMailInject = {
   mailbox: MailboxDescriptor;
   message: AgentMailMessage;
   deferredUntil?: string;
+  /** Present when an earlier dispatch's outcome is unknown and must be confirmed first. */
+  verifyRequestId?: string;
+  retryAttempts?: number;
+  verificationAttempts?: number;
 };
+
+/**
+ * Delay before retrying a failed delivery: quick at first, then settling at a
+ * quarter of an hour. A refused dispatch is retried for as long as the message
+ * is retained, so nobody has to press Retry for mail to arrive eventually.
+ */
+const AGENT_MAIL_RETRY_DELAYS_MS = [10_000, 30_000, 60_000, 120_000, 300_000, 600_000, 900_000];
+
+export function agentMailRetryDelayMs(attempt: number): number {
+  return AGENT_MAIL_RETRY_DELAYS_MS[
+    Math.min(Math.max(attempt, 1), AGENT_MAIL_RETRY_DELAYS_MS.length) - 1
+  ]!;
+}
+
+/** Inconclusive journal checks before an ambiguous dispatch is given up as failed. */
+export const AGENT_MAIL_MAX_VERIFY_ATTEMPTS = 8;
 
 const TERMINAL_TYPES = new Set(["claude", "codex", "opencode"]);
 const WORKFLOW_TYPES = new Set(["claude-build", "looped-review", "multi-review"]);
@@ -129,11 +180,22 @@ function metadataMessage(message: AgentMailMessage): AgentMailMessageSummary {
   return summary;
 }
 
+/**
+ * Whether a message is past the thread hop limit. Routed mail (it carries an
+ * `autonomousSequence`) is bounded by the pair budget at send time instead,
+ * where it is held rather than refused, so its depth is not a limit here.
+ */
+function exceedsThreadHops(message: AgentMailMessage): boolean {
+  return (
+    message.autonomousSequence === undefined && message.threadDepth >= AGENT_MAIL_MAX_THREAD_HOPS
+  );
+}
+
 function countsAsPendingInject(message: AgentMailMessage | AgentMailMessageSummary): boolean {
   return (
     message.placement === "pending-inject" ||
     (message.placement === "inject-held" &&
-      (message.placementReason === "loop-budget-exhausted" ||
+      (isAgentMailBudgetHeld(message) ||
         // Held until its delegation completes, not withheld from delivery: it
         // is still on its way to the recipient, so it counts as pending.
         message.placementReason === COORDINATOR_DELEGATION_HOLD_REASON))
@@ -176,18 +238,37 @@ function sameMailboxPair(
   );
 }
 
+/** The sequence at or before which a pair's routed mail no longer counts. */
+function pairBudgetEpoch(
+  store: PersistedAgentMailStore,
+  firstMailboxId: string,
+  secondMailboxId: string,
+): number {
+  return Math.max(
+    store.mailboxes[firstMailboxId]?.budgetResetSequence ?? 0,
+    store.mailboxes[secondMailboxId]?.budgetResetSequence ?? 0,
+    ...[firstMailboxId, secondMailboxId].flatMap((id) =>
+      (store.mailboxes[id]?.messages ?? [])
+        .filter((message) => sameMailboxPair(message, firstMailboxId, secondMailboxId))
+        .map((message) => message.autonomousBudgetEpoch ?? 0),
+    ),
+  );
+}
+
 function latestMailboxPairDepth(
   store: PersistedAgentMailStore,
   firstMailboxId: string,
   secondMailboxId: string,
   cutoff: number,
 ): number | null {
+  const epoch = pairBudgetEpoch(store, firstMailboxId, secondMailboxId);
   let latest: AgentMailMessage | null = null;
   for (const mailboxId of [firstMailboxId, secondMailboxId]) {
     const mailbox = store.mailboxes[mailboxId];
     if (!mailbox) continue;
     for (const message of mailbox.messages) {
       if (message.autonomousSequence === undefined) continue;
+      if (message.autonomousSequence <= epoch) continue;
       if (Date.parse(message.createdAt) < cutoff) continue;
       if (!sameMailboxPair(message, firstMailboxId, secondMailboxId)) continue;
       if (
@@ -202,6 +283,90 @@ function latestMailboxPairDepth(
     }
   }
   return latest?.threadDepth ?? null;
+}
+
+/**
+ * Routed messages this pair scheduled in the last hour, in either direction.
+ *
+ * Mail held over a budget has not been scheduled and does not count, so the
+ * hourly hold releases itself as older messages age out of the window.
+ */
+function pairMessagesInLastHour(
+  store: PersistedAgentMailStore,
+  firstMailboxId: string,
+  secondMailboxId: string,
+  now: number,
+): number {
+  const since = now - 3_600_000;
+  let count = 0;
+  for (const mailboxId of [firstMailboxId, secondMailboxId]) {
+    for (const message of store.mailboxes[mailboxId]?.messages ?? []) {
+      if (
+        message.autonomousSequence === undefined ||
+        Date.parse(message.wakeAdmittedAt ?? message.createdAt) < since ||
+        message.placement === "stored" ||
+        message.placement === "bounced" ||
+        isAgentMailBudgetHeld(message) ||
+        !sameMailboxPair(message, firstMailboxId, secondMailboxId)
+      ) {
+        continue;
+      }
+      count += 1;
+    }
+  }
+  return count;
+}
+
+/**
+ * Which coordinator each environment belongs to, as the mail address of that
+ * coordinator's main conversation.
+ *
+ * Only launch associations count: they carry the worker's base commit. A
+ * delegation that only messages or prompts an existing environment does not
+ * make the coordinator its creator, so a user's own environment never becomes
+ * some coordinator's worker just because a coordinator asked it something.
+ *
+ * Every worker belongs to the main coordinator, whichever conversation
+ * launched it. While no main is open the origin is the coordinator's bare
+ * runtime id: the worker stays attached (its mail is not peer mail), and the
+ * first message it sends to "coordinator" starts a new main.
+ */
+function coordinatorOriginsByEnvironment(
+  workspaces: CoordinatorWorkspace[],
+  workflows: CoordinatorWorkflowAssociation[],
+): Map<string, string> {
+  const originByCoordinator = new Map<string, string>();
+  for (const workspace of workspaces) {
+    const main = coordinatorMainConversation(workspace);
+    originByCoordinator.set(
+      workspace.id,
+      coordinatorRuntimeId(workspace.id, main ? main.id : undefined),
+    );
+  }
+  const origins = new Map<string, string>();
+  for (const association of workflows) {
+    if (association.kind !== "environment" || association.pending || !association.baseCommit) {
+      continue;
+    }
+    const origin = originByCoordinator.get(association.coordinatorId);
+    if (origin) origins.set(association.resourceId, origin);
+  }
+  return origins;
+}
+
+/**
+ * Whether a stored message may be woken despite a non-zero inject depth.
+ *
+ * Inject depth exists to stop an injected tab's replies from waking anyone, so
+ * two tabs cannot ping-pong unattended. Routed mail is instead bounded by the
+ * pair hop budget, so a reply is as deliverable as the message it answers.
+ */
+function routedMessageWakes(
+  message: AgentMailMessage,
+  mailbox: PersistedMailbox,
+  settings: Pick<AgentMessagingSettings, "wakePeers">,
+): boolean {
+  return agentMailRouteWakes(message.route, mailbox.injectOverride, settings);
 }
 
 function mailboxKind(tabType: string): MailboxKind | null {
@@ -250,6 +415,104 @@ export class StorageAgentMail extends StorageDrafts {
 
   setAgentMailRuntimeProvider(provider: StorageAgentMail["agentMailRuntimeProvider"]): void {
     this.agentMailRuntimeProvider = provider;
+  }
+
+  private coordinatorMailResolver:
+    | ((projectId: string) => Promise<{ environmentId: string; tabId: string } | null>)
+    | null = null;
+
+  /** Set by the coordinator service, which can start a main conversation. */
+  setCoordinatorMailResolver(resolver: StorageAgentMail["coordinatorMailResolver"]): void {
+    this.coordinatorMailResolver = resolver;
+  }
+
+  /**
+   * Rewrite a coordinator address to the project's current main conversation.
+   *
+   * Applies to the `"coordinator"` alias, a coordinator's bare runtime id, and
+   * the address of a conversation that has since closed — which is what a
+   * worker launched by a replaced main still holds. Redirected mail starts a
+   * new message rather than replying into the closed conversation's thread,
+   * whose other end no longer exists. Open conversations, side agents
+   * included, are left alone; who may mail them is checked at send.
+   */
+  /**
+   * The tab to deliver to when a sender named only an environment.
+   *
+   * A coordinator means the tab it is waiting on; otherwise the environment's
+   * only agent tab, then the agent it was launched with. Guessing between
+   * several tabs is refused with their ids, so the sender can choose.
+   */
+  /** The tab a sender naming only `environmentId` would reach (see `recipientTab`). */
+  resolveAgentMailRecipientTab(sender: AgentMailSender, environmentId: string): Promise<string> {
+    return this.recipientTab(sender, {
+      requestId: "resolve",
+      toEnvironmentId: environmentId,
+      toTabId: "",
+      body: "",
+    });
+  }
+
+  private async recipientTab(sender: AgentMailSender, input: AgentMailSendInput): Promise<string> {
+    await this.ensureAgentMailDirectoryFresh([input.toEnvironmentId]);
+    if (sender.kind === "coordinator") {
+      const delegated = (await this.listOpenCoordinatorDelegations()).find(
+        (association) =>
+          association.coordinatorId === sender.coordinatorId &&
+          association.resourceId === input.toEnvironmentId &&
+          association.delegation,
+      );
+      if (delegated) return delegated.delegation!.workerTabId;
+    }
+    const tabs = await this.listAgentMailPullTabIds(input.toEnvironmentId);
+    if (tabs.length === 1) return tabs[0]!;
+    if (tabs.includes("startup-agent")) return "startup-agent";
+    if (tabs.length === 0)
+      throw new AgentMailError(
+        "recipient-not-found",
+        "That environment has no agent tab to message",
+      );
+    throw new AgentMailError(
+      "recipient-not-found",
+      `That environment has several agent tabs; pass toTabId (one of: ${tabs.join(", ")})`,
+    );
+  }
+
+  private async resolveCoordinatorAddress(
+    sender: AgentMailSender,
+    input: AgentMailSendInput,
+  ): Promise<AgentMailSendInput> {
+    const alias = input.toEnvironmentId === COORDINATOR_MAIL_ADDRESS;
+    const coordinatorId = alias ? null : coordinatorIdFromRuntimeId(input.toEnvironmentId);
+    if (!alias && !coordinatorId) {
+      return input.toTabId ? input : { ...input, toTabId: await this.recipientTab(sender, input) };
+    }
+    const workspaces = await this.listCoordinatorWorkspaces();
+    const projectId =
+      sender.kind === "tab" || sender.kind === "coordinator" || sender.kind === "system"
+        ? sender.projectId
+        : undefined;
+    const workspace = alias
+      ? workspaces.find((candidate) => candidate.projectId === projectId)
+      : workspaces.find((candidate) => candidate.id === coordinatorId);
+    if (!workspace) {
+      if (alias) throw new AgentMailError("recipient-not-found", "This project has no coordinator");
+      return input;
+    }
+    if (!alias) {
+      const conversationId = coordinatorConversationIdFromRuntimeId(input.toEnvironmentId);
+      const conversation = workspace.conversations.find((item) => item.id === conversationId);
+      // One mailbox per conversation, so its tab id is never in doubt.
+      if (conversation && !conversation.closedAt) return { ...input, toTabId: conversation.tabId };
+    }
+    const open = coordinatorMainConversation(workspace);
+    const address = open
+      ? { environmentId: coordinatorRuntimeId(workspace.id, open.id), tabId: open.tabId }
+      : await this.coordinatorMailResolver?.(workspace.projectId);
+    if (!address)
+      throw new AgentMailError("recipient-not-found", "The project coordinator is not open");
+    const { replyToMessageId: _replyToMessageId, ...rest } = input;
+    return { ...rest, toEnvironmentId: address.environmentId, toTabId: address.tabId };
   }
 
   private enqueueAgentMailMutation<T>(operation: () => Promise<T>): Promise<T> {
@@ -342,12 +605,15 @@ export class StorageAgentMail extends StorageDrafts {
   }
 
   async synchronizeAgentMailboxes(): Promise<void> {
-    const [projects, environments, layoutsResult, coordinators] = await Promise.all([
-      this.loadProjects(),
-      this.loadEnvironments(),
-      this.loadPaneLayoutsForReconciliation(),
-      this.listCoordinatorWorkspaces(),
-    ]);
+    const [projects, environments, layoutsResult, coordinators, coordinatorWorkflows] =
+      await Promise.all([
+        this.loadProjects(),
+        this.loadEnvironments(),
+        this.loadPaneLayoutsForReconciliation(),
+        this.listCoordinatorWorkspaces(),
+        this.listAllCoordinatorWorkflowAssociations(),
+      ]);
+    const coordinatorOrigins = coordinatorOriginsByEnvironment(coordinators, coordinatorWorkflows);
     if (!layoutsResult.available) return;
     const sessionsByEnvironment = new Map(
       await Promise.all(
@@ -427,6 +693,8 @@ export class StorageAgentMail extends StorageDrafts {
             agent,
             kind,
             locked,
+            // Present even when undefined so a closed creator clears it.
+            coordinatorOrigin: coordinatorOrigins.get(environmentId),
           });
         }
       }
@@ -461,6 +729,7 @@ export class StorageAgentMail extends StorageDrafts {
           ownerKind: "coordinator",
           coordinatorId: workspace.id,
           conversationId: conversation.id,
+          coordinatorRole: conversation.role ?? "main",
           logicalSessionKey: conversation.logicalSessionKey,
           incarnationId: conversation.mailboxIncarnationId,
         });
@@ -609,6 +878,7 @@ export class StorageAgentMail extends StorageDrafts {
       ...(mailbox.ownerKind ? { ownerKind: mailbox.ownerKind } : {}),
       ...(mailbox.coordinatorId ? { coordinatorId: mailbox.coordinatorId } : {}),
       ...(mailbox.conversationId ? { conversationId: mailbox.conversationId } : {}),
+      ...(mailbox.coordinatorOrigin ? { coordinatorOrigin: mailbox.coordinatorOrigin } : {}),
       ...(mailbox.logicalSessionKey ? { logicalSessionKey: mailbox.logicalSessionKey } : {}),
       ...(mailbox.tombstonedAt ? { tombstonedAt: mailbox.tombstonedAt } : {}),
     };
@@ -894,9 +1164,89 @@ export class StorageAgentMail extends StorageDrafts {
     return null;
   }
 
+  /** Serializes follow-up admission with worker completion, including periodic recovery. */
+  withAgentMailWorkerAdmission<T>(environmentId: string, operation: () => Promise<T>): Promise<T> {
+    return this.serializeMutation(
+      `${this.agentMailFile()}:worker-admission:${environmentId}`,
+      "worker mail admission",
+      operation,
+    );
+  }
+
+  private authenticateMailSender(
+    store: PersistedAgentMailStore,
+    sender: AgentMailSender,
+  ): { actor: MailActor; senderScope: string; senderMailbox: PersistedMailbox | undefined } {
+    let actor: MailActor;
+    let senderScope: string;
+    let senderMailbox: PersistedMailbox | undefined;
+    if (sender.kind === "tab" || sender.kind === "coordinator") {
+      senderMailbox = store.mailboxes[agentMailboxId(sender.environmentId, sender.tabId)];
+      if (
+        !senderMailbox ||
+        senderMailbox.tombstonedAt ||
+        senderMailbox.projectId !== sender.projectId
+      ) {
+        throw new AgentMailError("sender-not-found", "Sender tab is not an active mailbox");
+      }
+      if (
+        sender.kind === "coordinator" &&
+        (senderMailbox.ownerKind !== "coordinator" ||
+          senderMailbox.coordinatorId !== sender.coordinatorId ||
+          senderMailbox.conversationId !== sender.conversationId)
+      ) {
+        throw new AgentMailError(
+          "capability-denied",
+          "Coordinator identity does not own this mailbox",
+        );
+      }
+      const capabilities = agentMailCapabilities(
+        senderMailbox.tabType,
+        senderMailbox.agent,
+        senderMailbox.locked,
+      );
+      if (!capabilities.canSend)
+        throw new AgentMailError("capability-denied", "This tab cannot send agent mail");
+      if (senderMailbox.mutedOutbound)
+        throw new AgentMailError("policy-denied", "Outbound messaging is muted for this mailbox");
+      actor =
+        sender.kind === "coordinator"
+          ? {
+              kind: "coordinator",
+              projectId: senderMailbox.projectId,
+              coordinatorId: sender.coordinatorId,
+              conversationId: sender.conversationId,
+              environmentId: senderMailbox.environmentId,
+              tabId: senderMailbox.tabId,
+              incarnationId: senderMailbox.incarnationId,
+              agent: senderMailbox.agent!,
+              title: senderMailbox.title,
+            }
+          : {
+              kind: "tab",
+              projectId: senderMailbox.projectId,
+              environmentId: senderMailbox.environmentId,
+              tabId: senderMailbox.tabId,
+              incarnationId: senderMailbox.incarnationId,
+              agent: senderMailbox.agent,
+              title: senderMailbox.title,
+            };
+      senderScope = `${sender.kind}:${senderMailbox.mailboxId}`;
+    } else {
+      actor = sender;
+      senderScope =
+        sender.kind === "system"
+          ? `system:${sender.projectId}:${sender.source}:${sender.resourceId}`
+          : sender.kind;
+    }
+
+    return { actor, senderScope, senderMailbox };
+  }
+
   async sendAgentMail(
     sender: AgentMailSender,
     input: AgentMailSendInput,
+    options: { newDelegation?: boolean } = {},
   ): Promise<AgentMailMessage> {
     const requestId = input.requestId.trim();
     if (!requestId || requestId.length > AGENT_MAIL_MAX_REQUEST_ID_LENGTH)
@@ -907,82 +1257,53 @@ export class StorageAgentMail extends StorageDrafts {
     const subject = input.subject?.trim() || undefined;
     if (subject && subject.length > AGENT_MAIL_MAX_SUBJECT_LENGTH)
       throw new Error("subject must be at most 200 characters");
+    // Idempotency keys on what the sender asked for, so a retry still matches
+    // after "coordinator" has come to mean a different conversation.
+    const requested = input;
+    await this.ensureAgentMailDirectoryFresh([
+      sender.kind === "tab" || sender.kind === "coordinator" ? sender.environmentId : "",
+    ]);
+    const replay = await this.enqueueAgentMailMutation(async () => {
+      const store = await this.loadAgentMailStore();
+      const { senderScope } = this.authenticateMailSender(store, sender);
+      const key = idempotencyKey(senderScope, requestId);
+      const fingerprint = sendFingerprint({ ...requested, subject });
+      const prior = store.idempotency[key];
+      if (prior) {
+        if (prior.fingerprint !== fingerprint)
+          throw new AgentMailError(
+            "idempotency-conflict",
+            "requestId was already used with different content",
+          );
+        if (prior.bounce) return prior.bounce;
+        const located = prior.messageId ? this.findMessage(store, prior.messageId) : null;
+        if (located) return located.message;
+        const counterpart = prior.messageId ? store.counterparts[prior.messageId] : undefined;
+        if (counterpart) return { ...counterpart, body: "" };
+        throw new AgentMailError(
+          "message-not-found",
+          "Idempotent message record is no longer retained",
+        );
+      }
+      return null;
+    });
+    if (replay) return replay;
+    input = await this.resolveCoordinatorAddress(sender, input);
     await this.ensureAgentMailDirectoryFresh([
       input.toEnvironmentId,
       sender.kind === "tab" || sender.kind === "coordinator" ? sender.environmentId : "",
     ]);
+    const recipientEnvironment = await this.getEnvironment(input.toEnvironmentId);
     const config = await this.loadConfig();
     const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
     if (!settings.enabled)
       throw new AgentMailError("messaging-disabled", "Agent messaging is disabled");
 
-    return this.enqueueAgentMailMutation(async () => {
+    const placed = await this.enqueueAgentMailMutation(async () => {
       const store = await this.loadAgentMailStore();
-      let actor: MailActor;
-      let senderScope: string;
-      let senderMailbox: PersistedMailbox | undefined;
-      if (sender.kind === "tab" || sender.kind === "coordinator") {
-        senderMailbox = store.mailboxes[agentMailboxId(sender.environmentId, sender.tabId)];
-        if (
-          !senderMailbox ||
-          senderMailbox.tombstonedAt ||
-          senderMailbox.projectId !== sender.projectId
-        ) {
-          throw new AgentMailError("sender-not-found", "Sender tab is not an active mailbox");
-        }
-        if (
-          sender.kind === "coordinator" &&
-          (senderMailbox.ownerKind !== "coordinator" ||
-            senderMailbox.coordinatorId !== sender.coordinatorId ||
-            senderMailbox.conversationId !== sender.conversationId)
-        ) {
-          throw new AgentMailError(
-            "capability-denied",
-            "Coordinator identity does not own this mailbox",
-          );
-        }
-        const capabilities = agentMailCapabilities(
-          senderMailbox.tabType,
-          senderMailbox.agent,
-          senderMailbox.locked,
-        );
-        if (!capabilities.canSend)
-          throw new AgentMailError("capability-denied", "This tab cannot send agent mail");
-        if (senderMailbox.mutedOutbound)
-          throw new AgentMailError("policy-denied", "Outbound messaging is muted for this mailbox");
-        actor =
-          sender.kind === "coordinator"
-            ? {
-                kind: "coordinator",
-                projectId: senderMailbox.projectId,
-                coordinatorId: sender.coordinatorId,
-                conversationId: sender.conversationId,
-                environmentId: senderMailbox.environmentId,
-                tabId: senderMailbox.tabId,
-                incarnationId: senderMailbox.incarnationId,
-                agent: senderMailbox.agent!,
-                title: senderMailbox.title,
-              }
-            : {
-                kind: "tab",
-                projectId: senderMailbox.projectId,
-                environmentId: senderMailbox.environmentId,
-                tabId: senderMailbox.tabId,
-                incarnationId: senderMailbox.incarnationId,
-                agent: senderMailbox.agent,
-                title: senderMailbox.title,
-              };
-        senderScope = `${sender.kind}:${senderMailbox.mailboxId}`;
-      } else {
-        actor = sender;
-        senderScope =
-          sender.kind === "system"
-            ? `system:${sender.projectId}:${sender.source}:${sender.resourceId}`
-            : sender.kind;
-      }
-
+      const { actor, senderScope, senderMailbox } = this.authenticateMailSender(store, sender);
       const key = idempotencyKey(senderScope, requestId);
-      const fingerprint = sendFingerprint({ ...input, subject });
+      const fingerprint = sendFingerprint({ ...requested, subject });
       const prior = store.idempotency[key];
       if (prior) {
         if (prior.fingerprint !== fingerprint)
@@ -1017,6 +1338,35 @@ export class StorageAgentMail extends StorageDrafts {
           "policy-denied",
           "A tab cannot message its own mailbox. Subagents and background tasks share their parent tab's address, so this would only reach you; report to the parent session in your final result instead.",
         );
+      // A side agent talks to its main coordinator and nobody else; only the
+      // main (or the user) may talk to it. Everything else in the project
+      // addresses the main, so a side agent is never a second coordinator.
+      if (
+        senderMailbox?.coordinatorRole === "side" &&
+        !(
+          recipient.ownerKind === "coordinator" &&
+          recipient.coordinatorRole === "main" &&
+          recipient.coordinatorId === senderMailbox.coordinatorId
+        )
+      ) {
+        throw new AgentMailError(
+          "policy-denied",
+          'A side agent can only message the main coordinator. Send to "coordinator".',
+        );
+      }
+      if (
+        recipient.coordinatorRole === "side" &&
+        sender.kind !== "user" &&
+        !(
+          senderMailbox?.coordinatorRole === "main" &&
+          senderMailbox.coordinatorId === recipient.coordinatorId
+        )
+      ) {
+        throw new AgentMailError(
+          "policy-denied",
+          'Side agents only receive mail from the main coordinator. Send to "coordinator" instead.',
+        );
+      }
       const crossProject = senderMailbox && senderMailbox.projectId !== recipient.projectId;
       if (crossProject && !settings.allowCrossProject)
         throw new AgentMailError("policy-denied", "Cross-project messaging is disabled");
@@ -1025,7 +1375,7 @@ export class StorageAgentMail extends StorageDrafts {
       if (input.replyToMessageId) {
         parent = this.findMessage(store, input.replyToMessageId)?.message;
         if (!parent) throw new AgentMailError("message-not-found", "Reply parent was not found");
-        if (parent.threadDepth >= AGENT_MAIL_MAX_THREAD_HOPS)
+        if (exceedsThreadHops(parent))
           throw new AgentMailError("hop-limit", "Thread hop limit reached");
         if (sender.kind === "tab" || sender.kind === "coordinator") {
           const senderIsParentSource =
@@ -1122,23 +1472,50 @@ export class StorageAgentMail extends StorageDrafts {
         recipient.injectOverride === "inherit"
           ? settings.defaultInjectPolicy
           : recipient.injectOverride;
-      const coordinatorExchange =
-        trust === "same-project" &&
-        recipient.injectOverride === "inherit" &&
-        (sender.kind === "coordinator" ||
-          sender.kind === "system" ||
-          recipient.ownerKind === "coordinator");
+      const route = classifyAgentMailRoute({
+        trust,
+        sender:
+          sender.kind === "tab"
+            ? { kind: "tab", coordinatorOrigin: senderMailbox?.coordinatorOrigin }
+            : sender.kind === "coordinator"
+              ? { kind: "coordinator", environmentId: senderMailbox!.environmentId }
+              : { kind: sender.kind },
+        recipient,
+      });
+      // Coordinator ↔ its workers, and peer ↔ peer, wake the recipient whatever
+      // the default inject policy is. Only an explicit per-tab Off or a mute
+      // stops them; the pair hop budget below bounds an unattended exchange.
+      const routeWakes = agentMailRouteWakes(route, recipient.injectOverride, settings);
       const pairDepth =
-        coordinatorExchange && senderMailbox
+        routeWakes && senderMailbox
           ? latestMailboxPairDepth(store, senderMailbox.mailboxId, destinationId, lineageCutoff)
           : null;
-      // A new subject still belongs to the same autonomous coordinator/worker
-      // exchange. Only the explicit Resume action resets the latest message to
-      // depth zero; omitting replyToMessageId cannot restart the budget.
-      const nextThreadDepth =
-        (coordinatorExchange
-          ? Math.max(parent?.threadDepth ?? -1, pairDepth ?? -1)
-          : (parent?.threadDepth ?? -1)) + 1;
+      // Only admission of a new delegation, a user prompt, or Resume resets
+      // the pair budget. Follow-ups and main/side mail consume the same lineage.
+      const startsBudget =
+        options.newDelegation === true &&
+        sender.kind === "coordinator" &&
+        recipient.ownerKind !== "coordinator";
+      const pairEpoch = startsBudget
+        ? store.revision
+        : senderMailbox
+          ? pairBudgetEpoch(store, senderMailbox.mailboxId, destinationId)
+          : 0;
+      const parentDepthInEpoch =
+        parent?.autonomousSequence !== undefined && parent.autonomousSequence > pairEpoch
+          ? parent.threadDepth
+          : -1;
+      const nextThreadDepth = !routeWakes
+        ? (parent?.threadDepth ?? -1) + 1
+        : startsBudget
+          ? 0
+          : Math.max(parentDepthInEpoch, pairDepth ?? -1) + 1;
+      const depthLimit = routeWakes ? settings.autonomousWakeBudget : AGENT_MAIL_MAX_THREAD_HOPS;
+      const overHourlyLimit =
+        routeWakes &&
+        senderMailbox !== undefined &&
+        pairMessagesInLastHour(store, senderMailbox.mailboxId, destinationId, Date.now()) >=
+          settings.hourlyWakeLimit;
       const canInject = agentMailCapabilities(
         recipient.tabType,
         recipient.agent,
@@ -1168,25 +1545,29 @@ export class StorageAgentMail extends StorageDrafts {
                 // waiting on it, so holding its mail would silence a message
                 // nothing will ever release.
                 association.conversationId !== undefined &&
-                coordinatorRuntimeId(association.coordinatorId, association.conversationId) ===
-                  recipient.environmentId,
+                (coordinatorRuntimeId(association.coordinatorId, association.conversationId) ===
+                  recipient.environmentId ||
+                  // Work moves to the main coordinator; so does the hold.
+                  (recipient.coordinatorRole === "main" &&
+                    recipient.coordinatorId === association.coordinatorId)),
             )
           : undefined;
-      const heldForDelegation = Boolean(holdingDelegation);
+      const heldForDelegation =
+        Boolean(holdingDelegation) && nextThreadDepth < depthLimit && !overHourlyLimit;
       const shouldScheduleInject =
-        (effectivePolicy === "idle" || coordinatorExchange) &&
+        (effectivePolicy === "idle" || routeWakes) &&
         !recipient.mutedInbound &&
         !heldForDelegation &&
         trust !== "cross-project" &&
         trust !== "external" &&
-        (injectDepth === 0 || coordinatorExchange) &&
-        nextThreadDepth < AGENT_MAIL_MAX_THREAD_HOPS &&
+        (injectDepth === 0 || routeWakes) &&
+        nextThreadDepth < depthLimit &&
+        !overHourlyLimit &&
         canInject;
       const heldForLoopBudget =
-        coordinatorExchange &&
-        !recipient.mutedInbound &&
-        nextThreadDepth >= AGENT_MAIL_MAX_THREAD_HOPS &&
-        canInject;
+        routeWakes && !recipient.mutedInbound && nextThreadDepth >= depthLimit && canInject;
+      const heldForHourlyLimit =
+        routeWakes && !recipient.mutedInbound && !heldForLoopBudget && overHourlyLimit && canInject;
       const message: AgentMailMessage = {
         version: 1,
         id,
@@ -1204,10 +1585,22 @@ export class StorageAgentMail extends StorageDrafts {
         trust,
         injectDepth,
         threadDepth: nextThreadDepth,
-        ...(coordinatorExchange ? { autonomousSequence: store.revision + 1 } : {}),
+        ...(routeWakes
+          ? { autonomousSequence: store.revision + 1, autonomousBudgetEpoch: pairEpoch }
+          : {}),
+        ...((shouldScheduleInject || heldForDelegation) && routeWakes
+          ? { wakeAdmittedAt: now }
+          : {}),
+        ...(sender.kind === "coordinator" && recipientEnvironment?.status === "stopped"
+          ? {
+              recipientStoppedAtSend: true,
+              recipientStopGeneration: recipientEnvironment.stopGeneration ?? 0,
+            }
+          : {}),
+        ...(route ? { route } : {}),
         placement: shouldScheduleInject
           ? "pending-inject"
-          : heldForDelegation || heldForLoopBudget
+          : heldForDelegation || heldForLoopBudget || heldForHourlyLimit
             ? "inject-held"
             : "stored",
         ...(shouldScheduleInject
@@ -1225,8 +1618,25 @@ export class StorageAgentMail extends StorageDrafts {
                 coordinatorDelegationId: holdingDelegation!.id,
               }
             : heldForLoopBudget
-              ? { placementReason: "loop-budget-exhausted" }
-              : {}),
+              ? { placementReason: AGENT_MAIL_LOOP_BUDGET_REASON }
+              : heldForHourlyLimit
+                ? { placementReason: AGENT_MAIL_HOURLY_LIMIT_REASON }
+                : {
+                    // Stored is a decision, not a default: name why nobody will
+                    // be woken so the sender and the user can see it.
+                    placementReason:
+                      trust === "cross-project" || trust === "external"
+                        ? "untrusted-sender"
+                        : !canInject
+                          ? "recipient-cannot-inject"
+                          : effectivePolicy !== "idle" && !routeWakes
+                            ? route === "isolated"
+                              ? "isolated-route"
+                              : "inject-policy-off"
+                            : injectDepth !== 0 && !routeWakes
+                              ? "reply-to-injected-turn"
+                              : "hop-limit",
+                  }),
         revision: 1,
       };
       if (recipient.mutedInbound) {
@@ -1255,9 +1665,186 @@ export class StorageAgentMail extends StorageDrafts {
       }
       store.revision += 1;
       await this.saveAgentMailStore(store);
+      // Ids and decisions only: never subjects or bodies.
+      console.info("[agent-mail] placed", {
+        messageId: message.id,
+        from: message.from.kind,
+        toEnvironmentId: message.toEnvironmentId,
+        toTabId: message.toTabId,
+        route: route ?? "none",
+        trust,
+        placement: message.placement,
+        reason: message.placementReason ?? null,
+        injectDepth,
+        threadDepth: nextThreadDepth,
+      });
       this.announce("agent-mail", destinationId, recipient.projectId);
       this.announce("agent-mail-summary", "all");
       return message;
+    });
+    await this.noticeCoordinatorBudgetHold(placed);
+    return placed;
+  }
+
+  /**
+   * Tell a coordinator, once per budget, that a worker's mail is being held.
+   *
+   * The held message cannot wake anyone, so without this the coordinator would
+   * never learn the worker is still talking. The notice is a workflow message
+   * and wakes it once; its request id is fixed per budget epoch (or per hour
+   * for the hourly limit), so a worker that keeps sending does not keep waking
+   * it. Mail the coordinator itself sent is not noticed: its send result
+   * already reports the hold.
+   */
+  private async noticeCoordinatorBudgetHold(message: AgentMailMessage): Promise<void> {
+    if (message.from.kind !== "tab" || message.route !== "coordinator") return;
+    if (!isAgentMailBudgetHeld(message)) return;
+    const store = await this.loadAgentMailStore();
+    const coordinatorMailboxId = agentMailboxId(message.toEnvironmentId, message.toTabId);
+    if (store.mailboxes[coordinatorMailboxId]?.ownerKind !== "coordinator") return;
+    const workerMailboxId = agentMailboxId(message.from.environmentId, message.from.tabId);
+    const hourly = message.placementReason === AGENT_MAIL_HOURLY_LIMIT_REASON;
+    const window = hourly
+      ? `hour-${Math.floor(Date.parse(message.createdAt) / 3_600_000)}`
+      : `epoch-${pairBudgetEpoch(store, workerMailboxId, coordinatorMailboxId)}`;
+    const worker = message.from.title ?? message.from.tabId;
+    try {
+      await this.sendAgentMail(
+        {
+          kind: "system",
+          projectId: message.from.projectId,
+          source: "workflow",
+          resourceId: message.from.environmentId,
+        },
+        {
+          requestId: `mail-budget:${message.from.tabId}:${message.toTabId}:${window}`,
+          toEnvironmentId: message.toEnvironmentId,
+          toTabId: message.toTabId,
+          subject: hourly ? "Worker mail held: hourly limit" : "Worker mail held: loop budget",
+          body: hourly
+            ? `Mail from worker ${worker} (environment ${message.from.environmentId}) reached the hourly message limit for this conversation and is being held. It is delivered automatically as the hour passes. Read it now with read_messages if it cannot wait.`
+            : `Mail from worker ${worker} (environment ${message.from.environmentId}) used up its unattended message budget and is being held. Read it with read_messages, then send the worker a new request (which starts a new budget) or ask the user to resume delivery.`,
+        },
+      );
+    } catch (error) {
+      console.warn(
+        "[agent-mail] Could not notify the coordinator of held worker mail:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+
+  /**
+   * Start a new routed budget for the tab a user just prompted.
+   *
+   * A person taking part in an exchange is the authority the budget stands in
+   * for, so a prompt to either tab of a pair lets it run unattended again.
+   * Mail already held stays held until Resume: the prompt is about what the
+   * user typed, not consent to deliver a backlog. A no-op when nothing routed
+   * has touched the tab since its last reset.
+   */
+  async resetAgentMailBudgetForSession(
+    environmentId: string,
+    logicalSessionKey: string,
+  ): Promise<boolean> {
+    return this.enqueueAgentMailMutation(async () => {
+      const store = await this.loadAgentMailStore();
+      const mailbox = Object.values(store.mailboxes).find(
+        (candidate) =>
+          candidate.environmentId === environmentId &&
+          !candidate.tombstonedAt &&
+          (candidate.logicalSessionKey ?? `env-${candidate.environmentId}:${candidate.tabId}`) ===
+            logicalSessionKey,
+      );
+      if (!mailbox) return false;
+      let latest = 0;
+      for (const candidate of Object.values(store.mailboxes)) {
+        for (const message of candidate.messages) {
+          if (message.autonomousSequence === undefined) continue;
+          if (
+            candidate.mailboxId !== mailbox.mailboxId &&
+            !(
+              (message.from.kind === "tab" || message.from.kind === "coordinator") &&
+              agentMailboxId(message.from.environmentId, message.from.tabId) === mailbox.mailboxId
+            )
+          ) {
+            continue;
+          }
+          latest = Math.max(latest, message.autonomousSequence);
+        }
+      }
+      if (latest <= (mailbox.budgetResetSequence ?? 0)) return false;
+      mailbox.budgetResetSequence = store.revision + 1;
+      mailbox.revision += 1;
+      store.revision += 1;
+      await this.saveAgentMailStore(store);
+      this.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
+      return true;
+    });
+  }
+
+  /**
+   * Release mail held by the hourly limit once its pair is back under it.
+   *
+   * The hourly limit is a runaway guard, not a request for a person to step
+   * in, so it clears itself. Oldest first, and only as many as the window has
+   * room for, so a burst is spread across the hour rather than replayed at once.
+   */
+  async releaseHourlyHeldAgentMail(): Promise<number> {
+    const settings = normalizeAgentMessagingSettings(
+      (await this.loadConfig()).global.agentMessaging,
+    );
+    const store = await this.loadAgentMailStore();
+    const hasHeld = Object.values(store.mailboxes).some((mailbox) =>
+      mailbox.messages.some(
+        (message) =>
+          message.placement === "inject-held" &&
+          message.placementReason === AGENT_MAIL_HOURLY_LIMIT_REASON,
+      ),
+    );
+    if (!hasHeld) return 0;
+    return this.enqueueAgentMailMutation(async () => {
+      const store = await this.loadAgentMailStore();
+      const now = Date.now();
+      const changed = new Set<PersistedMailbox>();
+      for (const mailbox of Object.values(store.mailboxes)) {
+        if (mailbox.tombstonedAt || mailbox.mutedInbound) continue;
+        const held = mailbox.messages
+          .filter(
+            (message) =>
+              message.placement === "inject-held" &&
+              message.placementReason === AGENT_MAIL_HOURLY_LIMIT_REASON &&
+              !message.discardedAt &&
+              (message.from.kind === "tab" || message.from.kind === "coordinator"),
+          )
+          .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+        for (const message of held) {
+          if (message.from.kind !== "tab" && message.from.kind !== "coordinator") continue;
+          const senderMailboxId = agentMailboxId(message.from.environmentId, message.from.tabId);
+          if (
+            pairMessagesInLastHour(store, senderMailboxId, mailbox.mailboxId, now) >=
+            settings.hourlyWakeLimit
+          ) {
+            continue;
+          }
+          message.placement = "pending-inject";
+          message.wakeAdmittedAt = new Date(now).toISOString();
+          delete message.placementReason;
+          message.injectRequestId ??= `mail-inject-${message.id}`;
+          message.revision += 1;
+          store.pendingInject.push({ mailboxId: mailbox.mailboxId, messageId: message.id });
+          changed.add(mailbox);
+        }
+      }
+      if (changed.size === 0) return 0;
+      for (const mailbox of changed) mailbox.revision += 1;
+      store.revision += 1;
+      await this.saveAgentMailStore(store);
+      for (const mailbox of changed) {
+        this.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
+      }
+      this.announce("agent-mail-summary", "all");
+      return changed.size;
     });
   }
 
@@ -1340,11 +1927,14 @@ export class StorageAgentMail extends StorageDrafts {
    * one that could wake mail the user muted or already acknowledged.
    */
   async promoteStoredAgentMailForMailbox(environmentId: string, tabId: string): Promise<number> {
+    const settings = normalizeAgentMessagingSettings(
+      (await this.loadConfig()).global.agentMessaging,
+    );
     return this.enqueueAgentMailMutation(async () => {
       const store = await this.loadAgentMailStore();
       const mailbox = store.mailboxes[agentMailboxId(environmentId, tabId)];
       if (!mailbox) return 0;
-      const promoted = this.promoteStoredMessages(store, mailbox);
+      const promoted = this.promoteStoredMessages(store, mailbox, settings, "all");
       if (promoted === 0) return 0;
       mailbox.revision += 1;
       store.revision += 1;
@@ -1360,8 +1950,17 @@ export class StorageAgentMail extends StorageDrafts {
    * the mutation lock and the save. Mail addressed to an earlier incarnation of
    * the tab is left alone: the claim would refuse it, and it would sit in
    * `pending-inject` for good.
+   *
+   * `routed` promotes only mail whose route wakes the recipient on its own —
+   * what an explicit Off was holding back — and leaves policy-governed mail
+   * stored, since the drain would never claim it.
    */
-  private promoteStoredMessages(store: PersistedAgentMailStore, mailbox: PersistedMailbox): number {
+  private promoteStoredMessages(
+    store: PersistedAgentMailStore,
+    mailbox: PersistedMailbox,
+    settings: Pick<AgentMessagingSettings, "wakePeers">,
+    scope: "all" | "routed",
+  ): number {
     if (!agentMailCapabilities(mailbox.tabType, mailbox.agent, mailbox.locked).canInject) return 0;
     if (mailbox.tombstonedAt || mailbox.mutedInbound) return 0;
     let promoted = 0;
@@ -1371,8 +1970,9 @@ export class StorageAgentMail extends StorageDrafts {
         message.toIncarnationId !== mailbox.incarnationId ||
         message.ackedAt ||
         message.discardedAt ||
-        message.injectDepth !== 0 ||
-        message.threadDepth >= AGENT_MAIL_MAX_THREAD_HOPS ||
+        (message.injectDepth !== 0 && !routedMessageWakes(message, mailbox, settings)) ||
+        (scope === "routed" && !routedMessageWakes(message, mailbox, settings)) ||
+        exceedsThreadHops(message) ||
         message.trust === "cross-project" ||
         message.trust === "external"
       ) {
@@ -1430,6 +2030,153 @@ export class StorageAgentMail extends StorageDrafts {
    * recorded before this mutation, distinguishes a silent worker from a retry
    * after an earlier pass already released the report.
    */
+  /**
+   * Hand a replaced main coordinator's unhandled mail to the new main.
+   *
+   * Closing the main tombstones its mailbox, which marks what was waiting there
+   * undeliverable — including a worker's report held for a delegation. When a
+   * new main starts it collects that mail: a report its delegation still owes
+   * goes back to being held for that delegation (which moved with it),
+   * anything else waits for delivery. Acknowledged, discarded and expired mail
+   * stays where it was.
+   */
+  async moveClosedCoordinatorMail(
+    coordinatorId: string,
+    to: { environmentId: string; tabId: string },
+    owedDelegations: ReadonlySet<string>,
+  ): Promise<number> {
+    const settings = normalizeAgentMessagingSettings(
+      (await this.loadConfig()).global.agentMessaging,
+    );
+    return this.enqueueAgentMailMutation(async () => {
+      const store = await this.loadAgentMailStore();
+      const target = store.mailboxes[agentMailboxId(to.environmentId, to.tabId)];
+      if (!target || target.tombstonedAt) return 0;
+      const cutoff = Date.now() - settings.retentionDays * 86_400_000;
+      let moved = 0;
+      for (const mailbox of Object.values(store.mailboxes)) {
+        if (
+          mailbox === target ||
+          !mailbox.tombstonedAt ||
+          mailbox.ownerKind !== "coordinator" ||
+          mailbox.coordinatorId !== coordinatorId ||
+          mailbox.coordinatorRole === "side"
+        ) {
+          continue;
+        }
+        const keep: AgentMailMessage[] = [];
+        for (const message of mailbox.messages) {
+          const waiting =
+            message.placement === "pending-inject" ||
+            message.placement === "inject-held" ||
+            message.placement === "stored" ||
+            (message.placement === "undeliverable" && message.placementReason === "tab-closed");
+          if (
+            !waiting ||
+            message.ackedAt ||
+            message.discardedAt ||
+            Date.parse(message.createdAt) < cutoff ||
+            target.messages.length >= AGENT_MAIL_MAX_MESSAGES_PER_MAILBOX
+          ) {
+            keep.push(message);
+            continue;
+          }
+          message.toEnvironmentId = target.environmentId;
+          message.toTabId = target.tabId;
+          message.toIncarnationId = target.incarnationId;
+          if (message.placement !== "stored") {
+            const owed =
+              message.coordinatorDelegationId !== undefined &&
+              owedDelegations.has(message.coordinatorDelegationId);
+            const canInject = agentMailCapabilities(
+              target.tabType,
+              target.agent,
+              target.locked,
+            ).canInject;
+            message.placement = owed ? "inject-held" : canInject ? "pending-inject" : "stored";
+            message.placementReason = owed
+              ? COORDINATOR_DELEGATION_HOLD_REASON
+              : canInject
+                ? undefined
+                : "recipient-cannot-inject";
+            if (!owed && canInject) {
+              message.injectRequestId ??= `mail-inject-${message.id}`;
+              store.pendingInject.push({ mailboxId: target.mailboxId, messageId: message.id });
+            }
+          }
+          message.revision += 1;
+          target.messages.push(message);
+          moved += 1;
+        }
+        if (keep.length !== mailbox.messages.length) {
+          store.pendingInject = store.pendingInject.filter(
+            (entry) =>
+              entry.mailboxId !== mailbox.mailboxId ||
+              keep.some((message) => message.id === entry.messageId),
+          );
+          mailbox.messages = keep;
+          mailbox.revision += 1;
+        }
+      }
+      if (moved === 0) return 0;
+      target.revision += 1;
+      store.revision += 1;
+      await this.saveAgentMailStore(store);
+      this.announce("agent-mail", target.mailboxId, target.projectId);
+      this.announce("agent-mail-summary", "all");
+      return moved;
+    });
+  }
+
+  /**
+   * Release worker mail still held for a delegation nobody owes a wake any
+   * more.
+   *
+   * A report can be held in the instant between its delegation being read as
+   * open and that delegation closing with a "finished without a report"
+   * notice. The wake then never looks for it, and without this it would stay
+   * held for good. `owed` is every delegation still open or closed but not yet
+   * woken; anything held for a different delegation is released to deliver as
+   * ordinary mail.
+   */
+  async releaseOrphanedDelegationHolds(owed: ReadonlySet<string>): Promise<number> {
+    return this.enqueueAgentMailMutation(async () => {
+      const store = await this.loadAgentMailStore();
+      let released = 0;
+      const changed = new Set<PersistedMailbox>();
+      for (const mailbox of Object.values(store.mailboxes)) {
+        for (const message of mailbox.messages) {
+          if (
+            message.placement !== "inject-held" ||
+            message.placementReason !== COORDINATOR_DELEGATION_HOLD_REASON ||
+            !message.coordinatorDelegationId ||
+            owed.has(message.coordinatorDelegationId) ||
+            message.ackedAt ||
+            message.discardedAt
+          ) {
+            continue;
+          }
+          message.placement = "pending-inject";
+          delete message.placementReason;
+          message.injectRequestId ??= `mail-inject-${message.id}`;
+          message.revision += 1;
+          store.pendingInject.push({ mailboxId: mailbox.mailboxId, messageId: message.id });
+          changed.add(mailbox);
+          released += 1;
+        }
+      }
+      if (released === 0) return 0;
+      for (const mailbox of changed) mailbox.revision += 1;
+      store.revision += 1;
+      await this.saveAgentMailStore(store);
+      for (const mailbox of changed) {
+        this.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
+      }
+      this.announce("agent-mail-summary", "all");
+      return released;
+    });
+  }
+
   async releaseDelegationHeldAgentMail(
     associationId: string,
     coordinatorEnvironmentId: string,
@@ -1486,6 +2233,9 @@ export class StorageAgentMail extends StorageDrafts {
     tabId: string,
     messageId: string,
   ): Promise<AgentMailMessage> {
+    const settings = normalizeAgentMessagingSettings(
+      (await this.loadConfig()).global.agentMessaging,
+    );
     return this.enqueueAgentMailMutation(async () => {
       const store = await this.loadAgentMailStore();
       const mailboxId = agentMailboxId(environmentId, tabId);
@@ -1493,16 +2243,15 @@ export class StorageAgentMail extends StorageDrafts {
       const message = mailbox?.messages.find((candidate) => candidate.id === messageId);
       if (!mailbox || !message)
         throw new AgentMailError("message-not-found", "Message not found in this mailbox");
-      const resumesLoopBudget =
-        message.placement === "inject-held" && message.placementReason === "loop-budget-exhausted";
+      const resumesLoopBudget = isAgentMailBudgetHeld(message);
       const wakesPending = message.placement === "pending-inject";
       const wakesStored =
         message.placement === "stored" &&
         !message.ackedAt &&
         !message.discardedAt &&
         !mailbox.mutedInbound &&
-        message.injectDepth === 0 &&
-        message.threadDepth < AGENT_MAIL_MAX_THREAD_HOPS &&
+        (message.injectDepth === 0 || routedMessageWakes(message, mailbox, settings)) &&
+        !exceedsThreadHops(message) &&
         message.trust !== "cross-project" &&
         message.trust !== "external" &&
         agentMailCapabilities(mailbox.tabType, mailbox.agent, mailbox.locked).canInject;
@@ -1520,25 +2269,49 @@ export class StorageAgentMail extends StorageDrafts {
         if (pending) {
           delete pending.nextAttemptAt;
           pending.attempts = 0;
+          // A person asked: skip the remaining wait. A pending journal check
+          // stays, so an ambiguous dispatch is still never sent twice.
+          delete pending.retryAt;
         }
       }
       message.placement = "pending-inject";
       if (!wakesPending || wakesStored) delete message.placementReason;
       message.injectRequestId ??= `mail-inject-${message.id}`;
+      // A person asked for this message. The drain delivers it once even when
+      // the mailbox policy is off, without the caller having to change that
+      // policy (which would also change how every later message is routed).
+      message.userReleasedAt = new Date().toISOString();
+      const released = [message];
       if (resumesLoopBudget) {
-        // Preserve the thread identity while beginning a new user-authorized
-        // autonomous run budget. Replies remain in the same lineage and cannot
-        // reset this counter merely by changing subject or acknowledging mail.
-        message.threadDepth = 0;
-        message.injectDepth = 0;
-        message.autonomousSequence = store.revision + 1;
+        // Resume is one decision for this tab, not one per message: release
+        // everything its budgets were holding and start a new budget for every
+        // pair it is in. Replies keep their thread identity, and the epoch
+        // still cannot move by changing subject or acknowledging mail.
+        mailbox.budgetResetSequence = store.revision + 1;
+        for (const sibling of mailbox.messages) {
+          if (sibling === message || !isAgentMailBudgetHeld(sibling) || sibling.discardedAt)
+            continue;
+          sibling.placement = "pending-inject";
+          delete sibling.placementReason;
+          sibling.injectRequestId ??= `mail-inject-${sibling.id}`;
+          sibling.userReleasedAt = message.userReleasedAt;
+          sibling.revision += 1;
+          released.push(sibling);
+        }
+        for (const entry of released) {
+          entry.threadDepth = 0;
+          entry.injectDepth = 0;
+          entry.autonomousSequence = store.revision + 1;
+        }
       }
-      if (
-        !store.pendingInject.some(
-          (candidate) => candidate.mailboxId === mailboxId && candidate.messageId === message.id,
-        )
-      ) {
-        store.pendingInject.push({ mailboxId, messageId: message.id });
+      for (const entry of released) {
+        if (
+          !store.pendingInject.some(
+            (candidate) => candidate.mailboxId === mailboxId && candidate.messageId === entry.id,
+          )
+        ) {
+          store.pendingInject.push({ mailboxId, messageId: entry.id });
+        }
       }
       message.revision += 1;
       mailbox.revision += 1;
@@ -1587,20 +2360,24 @@ export class StorageAgentMail extends StorageDrafts {
       const mailbox = store.mailboxes[agentMailboxId(environmentId, tabId)];
       if (!mailbox) throw new AgentMailError("recipient-not-found", "Mailbox not found");
       const config = await this.loadConfig();
-      const defaultPolicy = normalizeAgentMessagingSettings(
-        config.global.agentMessaging,
-      ).defaultInjectPolicy;
+      const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
+      const defaultPolicy = settings.defaultInjectPolicy;
       const deliversWhenIdle = () =>
         !mailbox.mutedInbound &&
         (mailbox.injectOverride === "inherit" ? defaultPolicy : mailbox.injectOverride) === "idle";
+      const routesWake = () => !mailbox.mutedInbound && mailbox.injectOverride !== "off";
       const delivered = deliversWhenIdle();
+      const routed = routesWake();
       if (updates.inject) mailbox.injectOverride = updates.inject;
       if (typeof updates.mutedInbound === "boolean") mailbox.mutedInbound = updates.mutedInbound;
       if (typeof updates.mutedOutbound === "boolean") mailbox.mutedOutbound = updates.mutedOutbound;
       // Turning delivery on is a request to deliver what is already waiting,
       // not only what arrives next. Mail sent while delivery was off would
       // otherwise stay `stored` until an agent happened to pull it.
-      if (!delivered && deliversWhenIdle()) this.promoteStoredMessages(store, mailbox);
+      if (!delivered && deliversWhenIdle())
+        this.promoteStoredMessages(store, mailbox, settings, "all");
+      else if (!routed && routesWake())
+        this.promoteStoredMessages(store, mailbox, settings, "routed");
       mailbox.revision += 1;
       store.revision += 1;
       await this.saveAgentMailStore(store);
@@ -1635,7 +2412,16 @@ export class StorageAgentMail extends StorageDrafts {
       const bDeferred = b.nextAttemptAt && Date.parse(b.nextAttemptAt) > now ? 1 : 0;
       return aDeferred - bDeferred;
     });
-    for (const { mailboxId, messageId, nextAttemptAt } of entries) {
+    for (const {
+      mailboxId,
+      messageId,
+      nextAttemptAt,
+      retryAt,
+      retryAttempts,
+      verificationAttempts,
+      verifyRequestId,
+    } of entries) {
+      if (retryAt && Date.parse(retryAt) > now) continue;
       const deferred = Boolean(nextAttemptAt && Date.parse(nextAttemptAt) > now);
       if (deferred && !options.includeDeferred) continue;
       const mailbox = store.mailboxes[mailboxId];
@@ -1645,6 +2431,9 @@ export class StorageAgentMail extends StorageDrafts {
         mailbox: this.descriptor(mailbox, settings.defaultInjectPolicy),
         message,
         ...(deferred && nextAttemptAt ? { deferredUntil: nextAttemptAt } : {}),
+        ...(verifyRequestId ? { verifyRequestId } : {}),
+        ...(retryAttempts ? { retryAttempts } : {}),
+        ...(verificationAttempts ? { verificationAttempts } : {}),
       });
       if (pending.length >= Math.max(1, Math.min(limit, AGENT_MAIL_MAX_PENDING_INJECTS))) break;
     }
@@ -1719,10 +2508,55 @@ export class StorageAgentMail extends StorageDrafts {
       .map(metadataMessage);
   }
 
+  /** One durable startup attempt per queued item, only for a local family worker. */
+  async claimAgentMailWorkerStart(environmentId: string, messageId: string): Promise<boolean> {
+    const environment = await this.getEnvironment(environmentId);
+    if (
+      !environment ||
+      environment.environmentType !== "local" ||
+      environment.status !== "stopped" ||
+      environment.deletionRequestedAt
+    )
+      return false;
+    return this.enqueueAgentMailMutation(async () => {
+      const store = await this.loadAgentMailStore();
+      const located = this.findMessage(store, messageId);
+      const message = located?.message;
+      const recipient = located?.mailbox;
+      if (
+        !message ||
+        !recipient ||
+        message.from.kind !== "coordinator" ||
+        message.route !== "coordinator" ||
+        message.placement !== "pending-inject" ||
+        !message.recipientStoppedAtSend ||
+        message.workerStartAttemptedAt ||
+        message.recipientStopGeneration !== (environment.stopGeneration ?? 0) ||
+        recipient.coordinatorOrigin !== message.from.environmentId
+      )
+        return false;
+      // A queued batch asks for one start, even if it contains several requests.
+      const now = new Date().toISOString();
+      for (const mailbox of Object.values(store.mailboxes)) {
+        if (mailbox.environmentId !== environmentId) continue;
+        for (const item of mailbox.messages) {
+          if (
+            item.placement === "pending-inject" &&
+            item.recipientStopGeneration === message.recipientStopGeneration
+          )
+            item.workerStartAttemptedAt = now;
+        }
+      }
+      await this.saveAgentMailStore(store);
+      return true;
+    });
+  }
+
   async beginAgentMailInject(
     mailboxId: string,
     messageId: string,
     incarnationId: string,
+    verificationRequestId?: string,
   ): Promise<AgentMailMessage | null> {
     return this.enqueueAgentMailMutation(async () => {
       const store = await this.loadAgentMailStore();
@@ -1737,10 +2571,16 @@ export class StorageAgentMail extends StorageDrafts {
         message.placement !== "pending-inject"
       )
         return null;
-      message.placement = "inject-held";
       const pendingEntry = store.pendingInject.find(
         (candidate) => candidate.mailboxId === mailboxId && candidate.messageId === messageId,
       );
+      if (
+        pendingEntry?.verifyRequestId !== verificationRequestId ||
+        (pendingEntry?.retryAt && Date.parse(pendingEntry.retryAt) > Date.now()) ||
+        (pendingEntry?.nextAttemptAt && Date.parse(pendingEntry.nextAttemptAt) > Date.now())
+      )
+        return null;
+      message.placement = "inject-held";
       if (pendingEntry) pendingEntry.lastHoldReason = message.placementReason;
       message.placementReason = "submitting";
       await this.saveAgentMailStore(store);
@@ -1754,7 +2594,11 @@ export class StorageAgentMail extends StorageDrafts {
     outcome:
       | { outcome: "accepted" }
       | { outcome: "held"; reason: string }
-      | { outcome: "failed"; reason: "ambiguous" | "rejected" },
+      | { outcome: "failed"; reason: "ambiguous" | "rejected" }
+      /** Refused before it reached the agent: queue it again after a delay. */
+      | { outcome: "retry"; reason: string }
+      /** Outcome unknown: confirm `requestId` against the journal before resending. */
+      | { outcome: "verify"; requestId: string },
   ): Promise<AgentMailMessage | null> {
     return this.enqueueAgentMailMutation(async () => {
       const store = await this.loadAgentMailStore();
@@ -1790,6 +2634,33 @@ export class StorageAgentMail extends StorageDrafts {
           attempts,
           nextAttemptAt: new Date(Date.now() + delayMs).toISOString(),
           lastHoldReason: reason,
+        };
+        if (pendingIndex >= 0) store.pendingInject[pendingIndex] = next;
+        else store.pendingInject.push(next);
+        announce = previousReason !== reason;
+      } else if (outcome.outcome === "retry" || outcome.outcome === "verify") {
+        const retryAttempts =
+          (pendingEntry?.retryAttempts ?? 0) + (outcome.outcome === "retry" ? 1 : 0);
+        const verificationAttempts =
+          outcome.outcome === "verify" ? (pendingEntry?.verificationAttempts ?? 0) + 1 : 0;
+        const reason = outcome.outcome === "retry" ? "retrying" : "verifying";
+        // `beginAgentMailInject` saved the placement reason it replaced.
+        const previousReason = pendingEntry?.lastHoldReason;
+        message.placement = "pending-inject";
+        message.placementReason = reason;
+        const next = {
+          mailboxId,
+          messageId,
+          retryAttempts,
+          verificationAttempts,
+          retryAt: new Date(
+            Date.now() +
+              agentMailRetryDelayMs(
+                outcome.outcome === "verify" ? verificationAttempts : retryAttempts,
+              ),
+          ).toISOString(),
+          lastHoldReason: reason,
+          ...(outcome.outcome === "verify" ? { verifyRequestId: outcome.requestId } : {}),
         };
         if (pendingIndex >= 0) store.pendingInject[pendingIndex] = next;
         else store.pendingInject.push(next);

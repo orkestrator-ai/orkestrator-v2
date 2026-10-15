@@ -1,3 +1,4 @@
+import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   BRIDGE_ATTACHMENT_ROOT_ENV,
@@ -346,7 +347,13 @@ describe("Codex app-server configuration", () => {
       "mcp_servers.orkestrator.bearer_token_env_var",
       "mcp_servers.orkestrator.required",
       "mcp_servers.orkestrator.startup_timeout_sec",
+      // The mail tools alone are approved; the server default is untouched.
+      ...AGENT_MAIL_TOOL_NAMES.map((name) => `mcp_servers.orkestrator.tools.${name}.approval_mode`),
     ]);
+    expect(overrides["mcp_servers.orkestrator.tools.send_message.approval_mode"]).toBe(
+      JSON.stringify("approve"),
+    );
+    expect(overrides["mcp_servers.orkestrator.default_tools_approval_mode"]).toBeUndefined();
   });
 
   test("accepts whitespace and the largest safely convertible child limit", () => {

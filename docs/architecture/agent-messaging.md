@@ -37,7 +37,7 @@ MCP token.
 | Idle inject | When policy allows, the store drains pending mail into a new user turn as a tagged carrier |
 | Presence gate | Inject only when the recipient is idle (or an unprompted “cold” native tab) |
 | User inbox | Global compose/read UI, per-tab banner, mute and inject-policy overrides |
-| Coordinator round-trip | Authenticated same-project mail can wake both coordinator and worker even when the default inject policy is off |
+| Routed wake | Coordinator ↔ the workers it created, and peer ↔ peer, wake the recipient even when the default inject policy is off (see [Routes](#routes)) |
 
 A carrier the recipient cannot acknowledge is not a usable delivery channel:
 it never becomes retention-eligible and eventually wedges the mailbox
@@ -92,7 +92,7 @@ carrier text tells the model the payload is untrusted.
 | `pending-inject` | Waiting for the drain; busy, queue, draft and parked-dispatch holds retain a reason and retry backoff |
 | `injected` | Carrier was accepted as a prompt |
 | `inject-held` | Held by an open worker delegation or hop budget, or claimed with reason `submitting` while dispatch is in flight |
-| `inject_failed` | Dispatch rejected or ambiguous; UI can retry |
+| `inject_failed` | Only after automatic recovery gave up: an ambiguous dispatch the journal never settled, or a tmux dispatch with no journal. UI can retry |
 | `undeliverable` | Recipient gone or superseded |
 | `bounced` | Policy refusal (muted inbound, messaging disabled, …) |
 | `expired` | Past retention |
@@ -107,7 +107,8 @@ The UI counts them separately (`userUnseenCount` vs `agentUnackedCount`).
 - Body 32 KiB UTF-8, subject 200 characters, `requestId` 256
 - 200 messages per mailbox, 2 000 mailboxes, 2 000 pending injects
 - Store file 32 MiB
-- Thread / autonomous hop budget 8
+- Thread hop limit 8 for unrouted mail; routed mail uses the budgets below
+  (default 16 per budget, 40 per pair per hour)
 - Default retention 14 days (1–365)
 - Inject batch: 10 messages or 128 KiB of rendered carriers per wake
 - Agent Tools rate limits: read 30/min and 2 000/day; send 20/min and 200/day, per `(environment, tab, kind)`
@@ -146,21 +147,105 @@ sender  --send-->  store (placement + trust)
                               failed   --> inject_failed
 ```
 
+### Routes
+
+Every same-project message from a tab, a coordinator, or a workflow is given a
+**route** at send time (`classifyAgentMailRoute` in
+`packages/protocol/src/agent-mail.ts`), stored on the message as `route`:
+
+| Route | Between | Wakes the recipient? |
+| --- | --- | --- |
+| `coordinator` | The main coordinator and a worker it (or a former main) launched; a coordinator and a tab no coordinator created; main ↔ side agent; workflow (`system`) notices | Yes |
+| `peer` | Two tabs, neither in an environment a coordinator created (including sibling tabs in one environment) | Yes, while **Wake peers** is on (default) |
+| `isolated` | A tab in a coordinator-created environment and anyone other than its own coordinator: sibling workers, a worker and a peer, a worker and another conversation | Only if the recipient's policy is `idle` and inject depth is 0, like unrouted mail |
+
+User, external and cross-project mail has no route.
+
+A mailbox's `coordinatorOrigin` is the mail address of the main coordinator
+whose coordinator launched its environment, derived on every mailbox sync from
+the coordinator's launch associations (those carrying a base commit), so a
+delegation that merely messages or prompts an existing environment never
+makes it a worker. Workers belong to the main whichever conversation launched
+them; while no main is open the origin is the coordinator's bare runtime id, so
+the worker stays attached rather than becoming a peer.
+
+**Addresses.** `"coordinator"` resolves to the sender's project's main
+coordinator, starting one if it was closed (see
+[`coordinator.md`](coordinator.md#one-main-coordinator-and-side-agents)). The
+address of a closed conversation is redirected there as a new message (no
+reply threading into a conversation that no longer exists). `toTabId` may be
+omitted for a coordinator address, and for an environment: it resolves to the
+tab a coordinator is waiting on, the environment's only agent tab, or its
+`startup-agent`, and otherwise fails listing the tab ids. Idempotency keys on
+the address the sender wrote, so a retry still matches after a redirect.
+
+**Side agents** send only to their main coordinator and receive only from it
+(and the user); anything else is `policy-denied`.
+
+A waking route ignores the default inject policy and inject depth. Only an
+explicit per-tab **Off**, a mute, or the pair hop budget stops it; per-tab
+`idle` and `inherit` both count as on. Mail sent before routes existed keeps
+the coordinator-exchange rule it was scheduled under.
+
+### Scheduling
+
 `shouldScheduleInject` (`storage-agent-mail.ts`) is true only when all of
 these hold:
 
 1. Global messaging is enabled (and not relevantly paused for the schedule
    itself — pause still accepts mail).
-2. Recipient inject policy is `idle`, **or** this is a coordinator exchange
-   (same-project mail from/to a coordinator while the mailbox still
-   `inherit`s the default).
+2. Recipient inject policy is `idle`, **or** the message's route wakes.
 3. Inbound is not muted.
 4. Trust is not `cross-project` or `external`.
-5. Inject depth is 0, unless it is a coordinator exchange.
-6. Thread / pair depth is below 8.
+5. Inject depth is 0, unless the route wakes.
+6. For unrouted mail, thread depth is below 8. For a waking route, the pair
+   is inside its budget and its hourly limit (see [Budgets](#budgets)).
 7. Recipient `canInject`.
 8. The sender is not a worker still held by an open delegation to this
    coordinator conversation.
+
+### Budgets
+
+Routed mail is bounded two ways, both per pair of mailboxes and both
+settings under **Settings → Messaging**:
+
+- **Unattended budget** (`autonomousWakeBudget`, default 16). Each routed
+  message's depth is one more than the latest routed message between the
+  pair, either direction, whatever its subject. At the budget the message is
+  `inject-held` with `loop-budget-exhausted`. A new budget starts when:
+  - a coordinator sends its worker a message (a new request, so the message
+    is depth 0);
+  - anyone prompts either tab through `dispatch_native_agent_prompt`,
+    `dispatch_native_agent_intent` or `enqueue_prompt_queue_message` — a
+    person in the renderer or CLI, or a coordinator's `send_prompt_to_tab`.
+    The tab's `budgetResetSequence` moves past every earlier routed message.
+    Mail already held stays held;
+  - the user presses **Resume**, which releases every budget-held message in
+    that tab's inbox at once and resets the tab.
+- **Hourly limit** (`hourlyWakeLimit`, default 40). Counts routed messages the
+  pair scheduled in the last hour. Over it, mail is `inject-held` with
+  `hourly-limit` and the drain releases it, oldest first, as the window moves
+  (checked every 30 s). Resume releases it early.
+
+When a worker's mail to its coordinator is held by either, the coordinator
+gets one workflow notice per budget (or per hour), so it can read the held
+mail and decide. Peers get no notice; the sender's `send_message` result and
+the recipient's banner show the hold.
+
+Mail that is only stored records why in `placementReason`: `inject-policy-off`,
+`isolated-route`, `reply-to-injected-turn`, `recipient-cannot-inject`,
+`untrusted-sender`, or `hop-limit`. `get_message_status` returns it to the
+sender.
+
+**Releasing one message.** Retry, Resume and **Deliver now** call
+`retry_agent_mail_inject`, which stamps `userReleasedAt`. The drain delivers a
+released message once even when the mailbox policy is off, so the banner no
+longer rewrites the tab's policy to deliver a single message.
+
+**Logs.** The backend logs one `[agent-mail] placed` line per send, one
+`[agent-mail] waiting` line each time the drain's reason for passing over a
+pending message changes, and one `[agent-mail] dispatched` line per batch.
+They carry ids, route, placement and reason, never subjects or bodies.
 
 A worker that chats while the coordinator is waiting has its mail stored
 and released once when the delegation completes. That is intentional: one
@@ -189,8 +274,24 @@ observed idle and will not restart a stopped session. Terminal-kind
 mailboxes are never drained.
 
 Interrupted native injects are reconciled on backend start against the
-session’s dispatch journal (`reconcileMailInject`). Ambiguous outcomes fail
-closed as `inject_failed` rather than double-sending. A refusal the bridge
+session’s dispatch journal (`reconcileMailInject`).
+
+**Automatic retry.** Nobody has to press Retry for mail to arrive:
+
+- A dispatch refused before the agent saw it (checkout lease, bridge start
+  failure, rebuild fence) goes back to `pending-inject` with reason `retrying`
+  and a hard `retryAt` — 10 s, 30 s, 1 min, 2 min, 5 min, 10 min, then every
+  15 min for as long as the message is retained. Busy backoff resets on an
+  activity edge; `retryAt` does not.
+- A native dispatch whose outcome is unknown goes to `pending-inject` with
+  reason `verifying`. Before anything is resent the drain asks the session's
+  dispatch journal under the request id it was sent with: delivered settles as
+  `injected`, provably not delivered is retried, still unknown is asked again
+  on the same schedule. After 8 inconclusive answers it fails closed as
+  `inject_failed` (`ambiguous`), so mail is never sent twice.
+- A tmux dispatch has no journal and still fails closed at once.
+
+A manual Retry skips the remaining wait but keeps a pending journal check. A refusal the bridge
 proves was not processed (409, 503, unreachable) is held and retried, and
 its dispatch-journal row is released before reporting a busy hold. If cleanup
 fails, the mail stays pending with a parked reason and the durable session
@@ -245,29 +346,49 @@ Coordinator mail tools: `list_mailboxes`, `send_message`, `read_messages`,
 `reply_message`; replies go out as `send_message` to the worker. Reads are
 restricted to the conversation’s own mailbox.
 
-Authenticated same-project coordinator and system messages bypass an
-inherited “inject off” default so a worker can wake the coordinator and a
-delegation can wake the worker. Mute, pause, hop budget, and `canInject`
-still apply.
+Coordinator and workflow messages take the `coordinator` route, so a worker
+wakes its coordinator and a delegation wakes the worker whatever the default
+policy is. Mute, explicit Off, pause, hop budget, and `canInject` still apply.
 
 ## User interface
 
 | Surface | Location | Notes |
 | --- | --- | --- |
-| Settings | Settings → Messaging | `enabled`, `paused`, `allowCrossProject`, `defaultInjectPolicy` (`off` / `idle`), `retentionDays` |
+| Settings | Settings → Messaging | `enabled`, `paused`, `allowCrossProject`, `wakePeers`, `autonomousWakeBudget`, `hourlyWakeLimit`, `defaultInjectPolicy` (`off` / `idle`), `retentionDays` |
 | Global inbox | `AgentMailButton` | Compose, sent, seen; destinations filtered to `canPull` |
-| Per-tab banner | `AgentMailBanner` | Pending, failed, pull-only, loop-budget held; retry / discard |
+| Per-tab banner | `AgentMailBanner` | Pending, failed, pull-only, budget or hourly-limit held; retry / resume / discard |
 | Tab menu | `DraggableTab` | “Message this tab” / inbox settings when `canPull` |
 | Agent info | `AgentInfoButton` | Mail section when `canPull` |
 | Per-mailbox policy | `mute_agent_mail` | `inject`: inherit / off / idle; inbound and outbound mute |
 
 Default inject policy is **off**. Idle delivery can start a billable turn,
 including on a tab that has never been prompted, so it is opt-in per
-install or per mailbox.
+install or per mailbox for unrouted mail (from the user, and `isolated`
+mail). Routed mail wakes regardless; turn **Wake peers** off to make
+peer mail pull-only again.
 
 The user sender bypasses the sender `canSend` check. The compose UI still
 only lists pull-capable destinations, so native Cursor and Grok tabs appear
 there the same way Claude and Pi do.
+
+## Mail tools and approval settings
+
+A worker's mail tools (`AGENT_MAIL_TOOL_NAMES`) are always allowed, whatever
+the environment's approval setting: they write only to this store, are rate
+limited, and are how a worker reports back. Prompting for them would leave a
+delegation waiting on a person; refusing them would leave the coordinator
+waiting forever. The setting still governs edits, commands and every other
+tool, including Orkestrator's ticket tools. An explicit `toolPolicy` deny still
+wins.
+
+| Provider | How |
+| --- | --- |
+| Claude | Added to `allowedTools`, which is what `dontAsk` (deny) runs; ask/auto never prompt |
+| Codex | Per-tool `approval_mode = "approve"` on the `orkestrator` server (thread config and process overrides) |
+| OpenCode | `allow` rules for `orkestrator_<tool>` ahead of the ask/deny default |
+| Pi | The bridge's tool gate exempts them for any approval policy |
+| Grok (ACP) | A permission request for a mail tool is answered with its allow option when it names the Orkestrator server: `orkestrator__<tool>` (Grok 1.0.46's own `server__tool` form) or `_meta["x.ai/tool"]` `{ namespace: "orkestrator", name }`. Never a bare `send_message`, which any server could offer |
+| Cursor | Never asks |
 
 ## How each provider gets the tools
 
@@ -364,6 +485,9 @@ Defaults (`DEFAULT_AGENT_MESSAGING_SETTINGS`):
 - `paused: false`
 - `allowCrossProject: false`
 - `defaultInjectPolicy: "off"`
+- `wakePeers: true`
+- `autonomousWakeBudget: 16`
+- `hourlyWakeLimit: 40`
 - `retentionDays: 14`
 
 Disable messaging and the Agent Tools server omits the mail tools.
@@ -377,7 +501,7 @@ partial (code path exists but identity, policy, or ownership is weaker
 than the complete row). **—** = not applicable.
 
 “Complete” is the first data column: the union of what the store, Agent
-Tools, idle inject, and coordinator exchange already implement for a
+Tools, idle inject, and routed wake already implement for a
 locked native mailbox.
 
 ### Native agent tabs (`agent-native`)
@@ -396,7 +520,7 @@ locked native mailbox.
 | Per-tab MCP credential | Y | Y | Y | P | Y | Y | Y |
 | User inbox + banner | Y | Y | Y | Y | Y | Y | Y |
 | Coordinator delegation | Y | Y | Y | Y | Y | Y | Y |
-| Coordinator inject exception | Y | Y | Y | Y | Y | Y | Y |
+| Routed wake (coordinator, peer) | Y | Y | Y | Y | Y | Y | Y |
 
 OpenCode’s **P** on per-tab credentials: environment-level MCP is enough
 for a single native tab; several pull-capable tabs in one environment must
@@ -452,3 +576,5 @@ capability row says so.
 | Delegation = MCP ∧ inject | `apps/backend/src/core/coordinator-providers.ts` |
 | UI commands | `apps/backend/src/core/commands-registry-mail.ts` |
 | Settings / inbox / banner | `apps/web/src/components/settings/MessagingSettings.tsx`, `apps/web/src/components/agent-mail/` |
+| Main / side coordinator, respawn | `apps/backend/src/core/coordinator-service.ts`, `packages/protocol/src/coordinator.ts` |
+| Multi-actor scenarios | `apps/backend/src/core/agent-mail-scenarios.test.ts` on `agent-mail-world-test-support.ts` |

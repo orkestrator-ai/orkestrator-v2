@@ -641,6 +641,9 @@ export abstract class StorageProjects extends StorageBase {
         "status" in updates &&
         isOneOf(updates.status, ["running", "stopped", "error", "creating", "stopping"])
       ) {
+        if (updates.status === "stopped" && environment.status !== "stopped") {
+          environment.stopGeneration = (environment.stopGeneration ?? 0) + 1;
+        }
         environment.status = updates.status;
         if (updates.status === "stopped" || updates.status === "error") {
           // Idempotent: re-stopping an environment whose activity is already

@@ -89,3 +89,25 @@ hypothesis; no timeout, assertion or skip was changed.
 - **Hypothesis:** the aggregate deadline failures match earlier observations;
   unchanged owning files pass alone. Contention may contribute, but the root
   cause remains unconfirmed. No assertion, timeout or skip was changed.
+
+## Recurrence during main merge validation — 2026-10-15
+
+- **Tests:** `enables git's scan caches on a newly created worktree` timed
+  out at 5,662.64 ms; `deleting an environment drops its counts from the
+  snapshot` timed out at 5,175.95 ms. Both exceeded the 5,000 ms deadline.
+- **Original command:** `PATH="/opt/homebrew/opt/bash/bin:/opt/homebrew/opt/coreutils/libexec/gnubin:/opt/homebrew/opt/findutils/libexec/gnubin:/opt/homebrew/opt/gnu-tar/libexec/gnubin:/opt/homebrew/opt/grep/libexec/gnubin:/opt/homebrew/opt/gnu-sed/libexec/gnubin:/opt/homebrew/bin:$PATH" mise run test:logged -- --name merge-main-full-suite -- mise run test`.
+- **Worker configuration:** backend package `--parallel=2`, two workspace
+  package tasks, alongside the other aggregate groups and other host validations.
+- **Suite counts:** backend 7,745 passed, 39 skipped, 6 failed and one
+  between-tests error across 7,790 tests in 427 files (361.91 seconds).
+  The whole aggregate finished in 594.9 seconds; root and protocol groups passed,
+  while the bridges group also reported the ACP hook timeout tracked as 0219.
+- **Evidence:** `/tmp/orkestrator-test-run.jDL6Dp/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Isolated rerun:** the documented GNU-tool PATH with
+  `mise run test:logged -- --name commands-integration-isolated -- bun test
+  --cwd apps/backend --preload ../../tests/setup-node.ts
+  ./tests/commands-integration.test.ts --parallel=1 --only-failures`
+  passed the unchanged owning file in 47.2 seconds.
+- **Disposition:** aggregate-only deadline failures recorded without changing
+  assertions, deadlines or skips. Host contention is a hypothesis, not a proven
+  cause.

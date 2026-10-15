@@ -11,6 +11,8 @@ import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { resetContainerOwnershipCache } from "../src/core/container-lifecycle-service";
 
 const { createCommandRegistry, shutdownPrMonitorTracking } = await import("../src/core/commands");
+const { BackendRuntime } = await import("../src/core/backend-runtime");
+const runtimes: Array<InstanceType<typeof BackendRuntime>> = [];
 
 type Registry = ReturnType<typeof createCommandRegistry>;
 type Handler = NonNullable<ReturnType<Registry["get"]>>;
@@ -121,7 +123,7 @@ function contextWithStorage(
   storage: Record<string, unknown>,
   events: Array<{ event: string; payload: unknown }> = [],
 ): CommandContext {
-  return {
+  const context = {
     appRoot: fixtureRoot,
     resourceRoot: fixtureRoot,
     emit: mock((event: string, payload: unknown) => events.push({ event, payload })),
@@ -130,6 +132,9 @@ function contextWithStorage(
       ...storage,
     },
   } as unknown as CommandContext;
+  context.runtime = new BackendRuntime({ emit: (event, payload) => context.emit(event, payload) });
+  runtimes.push(context.runtime);
+  return context;
 }
 
 async function invoke(
@@ -205,6 +210,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  for (const runtime of runtimes.splice(0)) runtime.shutdown();
   shutdownPrMonitorTracking();
   mock.restore();
 });

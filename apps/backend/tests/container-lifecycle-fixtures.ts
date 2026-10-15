@@ -4,6 +4,7 @@ import path from "node:path";
 import type { CommandContext } from "../src/core/commands-context";
 import type { Environment } from "../src/core/models";
 import { EnvironmentLifecycleTaskTracker } from "../src/core/environment-lifecycle-tasks";
+import { BackendRuntime } from "../src/core/backend-runtime";
 
 /**
  * Small, dependency-free fixtures for container lifecycle suites. They avoid
@@ -83,6 +84,7 @@ export function memoryLifecycleContext(
     appRoot: dataDir,
     resourceRoot: dataDir,
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+    runtime: new BackendRuntime({ emit: (event, payload) => context.emit(event, payload) }),
   } as unknown as CommandContext;
   return { context, events, writes, environments: store };
 }

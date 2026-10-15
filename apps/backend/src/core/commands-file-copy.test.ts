@@ -9,16 +9,20 @@ import {
   resolveWorkspaceExternalFileCopy,
 } from "./commands-files.js";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
+import { BackendRuntime } from "./backend-runtime.js";
 
 describe("external workspace file copies", () => {
   let worktreePath = "";
+  let runtime: BackendRuntime;
 
   beforeEach(async () => {
     worktreePath = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-file-copy-"));
+    runtime = new BackendRuntime({ emit: () => undefined });
     await fs.mkdir(path.join(worktreePath, "assets"));
   });
 
   afterEach(async () => {
+    runtime.shutdown();
     await fs.rm(worktreePath, { recursive: true, force: true });
   });
 
@@ -56,6 +60,7 @@ describe("external workspace file copies", () => {
           worktreePath,
         }),
       },
+      runtime,
     } as unknown as CommandContext;
 
     await expect(

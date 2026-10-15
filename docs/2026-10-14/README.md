@@ -1,6 +1,6 @@
 # Pre-existing problems found on 2026-10-14
 
-Status: Active — none fixed yet.
+Status: Active — item 06 fixed on 2026-10-15; the remaining items are open.
 
 These came out of validating the OpenCode boundary cleanup branch
 (`opencode-bridge-a8c2ab5c85b9-r1`): live OpenCode QA in a `dev:test` profile,

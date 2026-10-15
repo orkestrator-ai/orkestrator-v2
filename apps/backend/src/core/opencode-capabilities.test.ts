@@ -67,4 +67,81 @@ describe("OpenCodeCapabilities.authStatus", () => {
     expect(status.state).toBe("needs-auth");
     expect(status.signIn?.hint).toBe("Connect OpenCode Go from OpenCode settings.");
   });
+
+  test("accepts object-shaped connected entries alongside strings and invalid entries", async () => {
+    const status = await capabilities(
+      {
+        ...providerList([]),
+        connected: [null, "", { id: " " }, {}, { id: " opencode-go " }, "provider-150"],
+      },
+      ["opencode-go"],
+    ).authStatus();
+
+    expect(status.state).toBe("signed-in");
+    expect(status.providers?.slice(0, 2)).toEqual([
+      { id: "opencode-go", label: "OpenCode Go", state: "signed-in" },
+      { id: "provider-150", label: "Provider 150", state: "signed-in" },
+    ]);
+  });
+
+  test("ignores null and empty connected IDs with an unrestricted allowlist", async () => {
+    const status = await capabilities(
+      {
+        ...providerList([]),
+        connected: [null, "", " ", {}, { id: null }, { id: "" }, { id: " " }],
+      },
+      [],
+    ).authStatus();
+
+    expect(status.state).toBe("needs-auth");
+    expect(status.providers?.every((provider) => provider.state === "signed-out")).toBe(true);
+  });
+
+  test.each([
+    { name: "unrestricted", allowed: [] },
+    {
+      name: "more than eight providers",
+      allowed: Array.from({ length: 9 }, (_, i) => `provider-${i}`),
+    },
+  ])("uses the generic sign-in hint for $name", async ({ allowed }) => {
+    const status = await capabilities(providerList([]), allowed).authStatus();
+
+    expect(status.state).toBe("needs-auth");
+    expect(status.signIn?.hint).toBe("Connect a provider from OpenCode settings.");
+  });
+
+  test("names all eight providers at the hint limit", async () => {
+    const allowed = Array.from({ length: 8 }, (_, i) => `provider-${i}`);
+    const status = await capabilities(providerList([]), allowed).authStatus();
+
+    expect(status.signIn?.hint).toBe(
+      "Connect one of Provider 0, Provider 1, Provider 2, Provider 3, Provider 4, Provider 5, Provider 6, Provider 7 from OpenCode settings.",
+    );
+  });
+
+  test("matches mixed-case provider IDs to the lowercased allowlist and hint labels", async () => {
+    const status = await capabilities(
+      {
+        all: [{ id: "OpenCode-Go", name: "OpenCode Go" }],
+        connected: ["OpenCode-Go"],
+      },
+      ["opencode-go"],
+    ).authStatus();
+
+    expect(status.state).toBe("signed-in");
+    expect(status.providers).toEqual([
+      { id: "OpenCode-Go", label: "OpenCode Go", state: "signed-in" },
+    ]);
+    expect(status.signIn?.hint).toBe("Connect OpenCode Go from OpenCode settings.");
+  });
+
+  test("is signed in when the connected selectable provider is absent from all", async () => {
+    const status = await capabilities({ all: [], connected: ["opencode-go"] }, [
+      "opencode-go",
+    ]).authStatus();
+
+    expect(status.state).toBe("signed-in");
+    expect(status.providers).toEqual([]);
+    expect(status.signIn?.hint).toBe("Connect opencode-go from OpenCode settings.");
+  });
 });

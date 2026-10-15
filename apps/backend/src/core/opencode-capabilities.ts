@@ -120,14 +120,15 @@ export class OpenCodeCapabilities {
       (Array.isArray(data?.connected) ? data.connected : []).flatMap((candidate) => {
         const id =
           typeof candidate === "string"
-            ? nonEmptyString(candidate)
-            : nonEmptyString(asRecord(candidate)?.id);
+            ? nonEmptyString(candidate)?.trim()
+            : nonEmptyString(asRecord(candidate)?.id)?.trim();
         return id ? [id] : [];
       }),
     );
     // Derived from `connected` itself, never from the capped list below:
     // OpenCode's `all` names every provider it knows about, so a connected one
-    // can sit past the cap. Only an allowlisted provider can serve a turn.
+    // can sit past the cap. Signed-in means a picker-selectable provider is
+    // connected; the allowlist does not restrict dispatch of stored models.
     const signedIn = [...connected].some((id) =>
       isSelectableOpenCodeProvider(id, allowedProviders),
     );

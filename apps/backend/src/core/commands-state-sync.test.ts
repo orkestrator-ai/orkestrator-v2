@@ -1146,9 +1146,10 @@ describe("native agent model catalogue command", () => {
   });
 
   // Before any bridge runs, the connectivity persisted with the durable
-  // catalogue is all a picker can know. A provider this login does not have
-  // must not be offered, as a cached row or as a favourite.
-  test("hides providers the persisted connectivity reports as disconnected", async () => {
+  // catalogue is all a picker can know, and it may predate a sign-in. A
+  // provider it omits is marked rather than hidden, as a cached row or as a
+  // favourite.
+  test("marks providers the persisted connectivity reports as disconnected", async () => {
     await withCommands(async (invoke, storage) => {
       await storage.cacheOpenCodeModelCatalog(
         "proj-1",
@@ -1170,11 +1171,26 @@ describe("native agent model catalogue command", () => {
 
       const models = (await invoke("get_native_agent_model_catalog", {
         environmentId: "e1",
-      })) as Array<{ platform: string; id: string }>;
+      })) as Array<{ platform: string; id: string; connected?: boolean }>;
 
       expect(
-        models.filter((model) => model.platform === "opencode").map((model) => model.id),
-      ).toEqual(["opencode-go/deepseek-v4.1-flash"]);
+        models
+          .filter((model) => model.platform === "opencode")
+          .map((model) => [model.id, model.connected]),
+      ).toEqual([
+        ["opencode-go/deepseek-v4.1-flash", undefined],
+        ["opencode/claude-sonnet-5", false],
+        ["opencode/big-pickle", false],
+      ]);
+
+      // The launch dialogs read the same marks from the durable cache.
+      const cached = (await invoke("get_opencode_model_catalog_cache", {
+        projectId: "proj-1",
+      })) as { models: Array<{ id: string; connected?: boolean }> };
+      expect(cached.models.map((model) => [model.id, model.connected])).toEqual([
+        ["opencode-go/deepseek-v4.1-flash", undefined],
+        ["opencode/claude-sonnet-5", false],
+      ]);
     });
   });
 

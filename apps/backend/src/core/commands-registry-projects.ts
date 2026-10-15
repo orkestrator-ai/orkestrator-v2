@@ -113,6 +113,16 @@ function normalizedClaudeModels(models: readonly ClaudeModelCatalogEntry[]): Age
   });
 }
 
+/** Mark a model whose provider a persisted, possibly stale, report omits. */
+function markOpenCodeConnectivity(
+  model: AgentModel,
+  connectedProviderIds: readonly string[] | undefined,
+): AgentModel {
+  return connectedProviderIds && !connectedProviderIds.includes(openCodeModelProviderId(model.id))
+    ? { ...model, connected: false }
+    : model;
+}
+
 function normalizedOpenCodeModels(models: readonly OpenCodeModelCatalogEntry[]): AgentModel[] {
   return models.map((model): AgentModel => {
     const modelReasoningOptions = [
@@ -594,11 +604,8 @@ export function registerProjectCommands(
       const openCodeSnapshot = qualified.has("opencode")
         ? await storage.getOpenCodeModelCatalog(projectId)
         : null;
-      const connectedProviderIds = openCodeSnapshot?.connectedProviderIds;
-      const openCodeModels = (openCodeSnapshot?.models ?? []).filter(
-        (model) =>
-          isSelectableOpenCodeProvider(model.provider, openCodeModelProviders) &&
-          (!connectedProviderIds || connectedProviderIds.includes(model.provider)),
+      const openCodeModels = (openCodeSnapshot?.models ?? []).filter((model) =>
+        isSelectableOpenCodeProvider(model.provider, openCodeModelProviders),
       );
       // Durable caches only. A coordinator has no bridge until a provider is
       // assigned, so there is nothing live to ask, and starting one to answer a
@@ -607,7 +614,9 @@ export function registerProjectCommands(
       const coordinatorModels = [
         ...normalizedClaudeModels(cache.claude?.models ?? []),
         ...normalizedCodexModels(cache.codex?.models ?? []),
-        ...normalizedOpenCodeModels(openCodeModels),
+        ...normalizedOpenCodeModels(openCodeModels).map((model) =>
+          markOpenCodeConnectivity(model, openCodeSnapshot?.connectedProviderIds),
+        ),
         ...(cache.cursor?.models ?? []),
         ...(cache.grok?.models ?? []),
         ...(cache.pi?.models ?? []),
@@ -703,12 +712,16 @@ export function registerProjectCommands(
             .connectedModelProviders(openCodeCatalogInput)
             .catch(() => undefined)
         : undefined;
-    // The live report, or the last one persisted with the durable catalogue
-    // when no bridge is running. Pickers only offer providers it lists, so a
-    // model this login cannot serve is never offered or preselected.
-    const connectedProviderIds = liveConnectedProviderIds ?? openCodeSnapshot?.connectedProviderIds;
+    // A live report is authoritative, so a provider it omits is not offered
+    // at all. Without one, the report persisted with the durable catalogue may
+    // be stale — the user can have signed in since — so its disconnected
+    // providers are marked rather than hidden.
     const isConnectedOpenCodeModel = (modelId: string): boolean =>
-      !connectedProviderIds || connectedProviderIds.includes(openCodeModelProviderId(modelId));
+      !liveConnectedProviderIds ||
+      liveConnectedProviderIds.includes(openCodeModelProviderId(modelId));
+    const persistedConnectedProviderIds = liveConnectedProviderIds
+      ? undefined
+      : openCodeSnapshot?.connectedProviderIds;
     const openCodeModels = (openCodeSnapshot?.models ?? []).filter(
       (model) =>
         isSelectableOpenCodeProvider(model.provider, openCodeModelProviders) &&
@@ -772,7 +785,9 @@ export function registerProjectCommands(
     const cataloguedOpenCodeModels =
       selectableLiveOpenCodeModels.length > 0
         ? selectableLiveOpenCodeModels
-        : normalizedOpenCodeModels(openCodeModels);
+        : normalizedOpenCodeModels(openCodeModels).map((model) =>
+            markOpenCodeConnectivity(model, persistedConnectedProviderIds),
+          );
     const cataloguedOpenCodeIds = new Set(cataloguedOpenCodeModels.map((model) => model.id));
     // Favourites (and TUI-chosen ids stored as favourites) have to appear in
     // the empty-tab picker before an OpenCode server has listed models.
@@ -785,7 +800,7 @@ export function registerProjectCommands(
       const synthesized = synthesizedOpenCodeAgentModel(favorite.modelId);
       if (!synthesized) return [];
       cataloguedOpenCodeIds.add(favorite.modelId);
-      return [synthesized];
+      return [markOpenCodeConnectivity(synthesized, persistedConnectedProviderIds)];
     });
     const result: AgentModel[] = [
       ...normalizedClaudeModels(claudeModels),

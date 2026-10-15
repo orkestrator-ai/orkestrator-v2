@@ -11,6 +11,7 @@ import {
 } from "./native-agent-command-catalogue.js";
 import type {
   NativeAgentCommandRefreshOutcome,
+  NativeAgentDefaultModelResolution,
   NativeAgentModelSubstitution,
 } from "@orkestrator/protocol/native-agent";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
@@ -857,14 +858,16 @@ export abstract class NativeAgentServiceBase {
      * activity, unread and deletion bookkeeping for *every* environment.
      */
     /*
-     * A new session starts on a model the runtime can serve. The configured
-     * default can name a provider this login has not connected — OpenCode ships
-     * one — and storing it as the session's controls would outrank the
-     * runtime's own default and reject the first prompt. The substitute is
-     * stored on this session only; the configuration keeps the user's choice.
+     * A new session starts on a model the runtime can serve. A configured
+     * default can name a provider this login has not connected, and storing it
+     * as the session's controls would outrank the runtime's own default and
+     * reject the first prompt. An unset one resolves to the runtime's effective
+     * default. Either answer is stored on this session only; the configuration
+     * keeps the user's choice.
      */
-    const modelSubstitution = await this.unavailableModelSubstitution(provider, input.model);
-    if (modelSubstitution) input = { ...input, model: modelSubstitution.modelId };
+    const resolution = await this.resolveDefaultModel(provider, input.model);
+    const modelSubstitution = resolution?.substitution;
+    if (resolution?.modelId) input = { ...input, model: resolution.modelId };
     const session = await this.storage.getOrCreateNativeAgentSession(
       {
         key,
@@ -889,13 +892,13 @@ export abstract class NativeAgentServiceBase {
       : session;
   }
 
-  private async unavailableModelSubstitution(
+  private async resolveDefaultModel(
     provider: NativeAgentRuntimeProvider,
     modelId: string | undefined,
-  ): Promise<NativeAgentModelSubstitution | undefined> {
-    if (!modelId || !provider.substituteUnavailableModel) return undefined;
+  ): Promise<NativeAgentDefaultModelResolution | undefined> {
+    if (!provider.resolveDefaultModel) return undefined;
     try {
-      return await provider.substituteUnavailableModel(modelId);
+      return await provider.resolveDefaultModel(modelId);
     } catch {
       // Connectivity is advisory here. Dispatch preflight still reports a
       // model the runtime cannot serve.

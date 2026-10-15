@@ -14,7 +14,10 @@ import {
   type VerificationVerdict,
 } from "@orkestrator/protocol/build-pipeline";
 import { type ReviewContractValidationError } from "@orkestrator/protocol/structured-review";
-import type { AgentModel, NativeAgentModelSubstitution } from "@orkestrator/protocol/native-agent";
+import type {
+  AgentModel,
+  NativeAgentDefaultModelResolution,
+} from "@orkestrator/protocol/native-agent";
 import {
   AGENT_INTERACTION_JOURNAL_VERSION,
   AGENT_INTERACTION_LIMITS,
@@ -63,11 +66,11 @@ interface BuildSelectionContext {
   config: Pick<AppConfig, "global">;
   repository: { agentSettings?: AgentSettingsTier };
   readCatalog: AgentModelCatalogReader;
-  /** The runtime's replacement for a default model it cannot serve, if any. */
-  substituteUnavailableModel: (
+  /** The model the runtime will use for a configured default, set or unset. */
+  resolveDefaultModel: (
     agent: BuildPipelineAgent,
-    modelId: string,
-  ) => Promise<NativeAgentModelSubstitution | undefined>;
+    modelId: string | undefined,
+  ) => Promise<NativeAgentDefaultModelResolution | undefined>;
 }
 
 export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceSupervisor {
@@ -499,10 +502,10 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
       // Asks the harness the stage is about to run on anyway, so connectivity
       // comes from the same live report its dispatch preflight reads. Advisory:
       // a provider that cannot be reached here fails in its own setup instead.
-      substituteUnavailableModel: async (agent, modelId) => {
+      resolveDefaultModel: async (agent, modelId) => {
         try {
           const provider = await this.provider(pipeline, agent);
-          return await provider.substituteUnavailableModel?.(modelId);
+          return await provider.resolveDefaultModel?.(modelId);
         } catch {
           return undefined;
         }
@@ -544,20 +547,26 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
       context.environment,
     );
     // A configured default whose OpenCode provider this login has not
-    // connected would fail the stage at its first turn. Run on OpenCode's
-    // connected default instead, for this stage only: the configuration keeps
-    // the user's choice for when the provider reconnects. A model the step
-    // pinned is left alone, so an explicit choice still fails loudly.
-    const configuredDefault = options.modelFromDefaults
-      ? selection.model
-      : selection.model
-        ? undefined
-        : defaults.model;
-    const modelSubstitution =
-      selection.agent === "opencode" && configuredDefault
-        ? await context.substituteUnavailableModel(selection.agent, configuredDefault)
+    // connected would fail the stage at its first turn, and an unset one would
+    // leave the choice to OpenCode's server, which ignores the provider
+    // allowlist. Both resolve to OpenCode's effective default for this stage
+    // only: the configuration keeps the user's choice for when the provider
+    // reconnects. A model the step pinned is left alone, so an explicit choice
+    // still fails loudly.
+    const usesDefault = options.modelFromDefaults || !selection.model;
+    const configuredDefault = selection.model ?? defaults.model;
+    const resolution =
+      selection.agent === "opencode" && usesDefault
+        ? await context.resolveDefaultModel(selection.agent, configuredDefault)
         : undefined;
-    const model = modelSubstitution?.modelId ?? selection.model;
+    const modelSubstitution = resolution?.substitution;
+    // Pinned only when the resolution differs from what the provider would
+    // have used anyway, so an unpinned step that resolves to its own default
+    // keeps its established unpinned shape.
+    const model =
+      resolution?.modelId && resolution.modelId !== configuredDefault
+        ? resolution.modelId
+        : selection.model;
     // A deliberately unpinned step keeps its established model/effort
     // semantics. The provider may still have a connection default, so use that
     // effective model for the speed capability check without pinning it here.

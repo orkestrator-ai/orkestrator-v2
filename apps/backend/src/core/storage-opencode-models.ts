@@ -56,9 +56,6 @@ function openCodeModelOf(tier: JsonRecord): unknown {
   return isRecord(opencode) ? opencode.model : undefined;
 }
 
-/** The OpenCode default a fresh install ships with. */
-export const DEFAULT_OPENCODE_MODEL_ID = "opencode/claude-sonnet-5";
-
 /** Whether an OpenCode id contains both a provider and a non-blank model. */
 function isConcreteOpenCodeModelId(modelId: string): boolean {
   const separator = modelId.indexOf("/");
@@ -72,14 +69,15 @@ function isConcreteOpenCodeModelId(modelId: string): boolean {
  * unusual: no picker lists it, so the user cannot replace it there, while
  * environment launches and build pipelines keep dispatching it. It can only
  * arise from a catalogue the user has since narrowed, so it is repointed at the
- * first OpenCode model they already chose that the allowlist still admits —
- * their favourites, then the shipped default.
+ * first OpenCode favourite the allowlist still admits, or else cleared.
  *
- * An unrestricted allowlist admits everything and therefore never repoints, a
- * value that is not `provider/model` is left alone rather than reinterpreted
- * (which is also what keeps the `"default"` sentinel intact), and a stored id
- * survives when nothing selectable is on hand: inventing a model the user never
- * picked would be worse than an unreachable one.
+ * Cleared means unset, and unset is the effective OpenCode default: OpenCode's
+ * own default among the connected, allowlisted providers. No fixed model ships,
+ * because no single one is available to every OpenCode login.
+ *
+ * An unrestricted allowlist admits everything and therefore never repoints, and
+ * a value that is not `provider/model` is left alone rather than reinterpreted
+ * (which is also what keeps the `"default"` sentinel intact).
  */
 export function selectableOpenCodeDefaultModel(
   storedModelId: unknown,
@@ -91,18 +89,14 @@ export function selectableOpenCodeDefaultModel(
   if (!stored.includes("/") || isSelectableOpenCodeModelId(stored, allowedProviders)) {
     return storedModelId;
   }
-  return (
-    [
-      ...favoriteModels
-        .filter((favorite) => favorite.platform === "opencode")
-        .map((favorite) => favorite.modelId),
-      DEFAULT_OPENCODE_MODEL_ID,
-    ].find(
+  return favoriteModels
+    .filter((favorite) => favorite.platform === "opencode")
+    .map((favorite) => favorite.modelId)
+    .find(
       (modelId) =>
         isConcreteOpenCodeModelId(modelId) &&
         isSelectableOpenCodeModelId(modelId, allowedProviders),
-    ) ?? storedModelId
-  );
+    );
 }
 
 /**
@@ -146,13 +140,14 @@ export function normalizeOpenCodeRepositoryDefaults<T>(
     changed = true;
     const settings = (repository as JsonRecord).agentSettings as JsonRecord;
     const platforms = settings.platforms as JsonRecord;
+    const { model: _unreachable, ...opencode } = platforms.opencode as JsonRecord;
     next[id] = {
       ...(repository as JsonRecord),
       agentSettings: {
         ...settings,
         platforms: {
           ...platforms,
-          opencode: { ...(platforms.opencode as JsonRecord), model },
+          opencode: model === undefined ? opencode : { ...opencode, model },
         },
       },
     };

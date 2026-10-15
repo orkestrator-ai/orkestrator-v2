@@ -67,7 +67,7 @@ import {
 import {
   normalizeOpenCodeComposerCatalog,
   openCodeCatalogCacheKey,
-  openCodeModelSubstitution,
+  resolveOpenCodeDefaultModel,
   selectOpenCodeComposerCatalog,
 } from "./opencode-model-catalog.js";
 import {
@@ -411,9 +411,9 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   /** The effective default, from the same connected catalogue the picker reads. */
-  async substituteUnavailableModel(modelId: string) {
+  async resolveDefaultModel(modelId: string | undefined) {
     const catalog = await this.readComposerCatalog(await this.allowedModelProviders(), true);
-    return openCodeModelSubstitution(modelId, catalog);
+    return resolveOpenCodeDefaultModel(modelId, catalog);
   }
 
   async rawModelCatalog(): Promise<AgentModel[]> {

@@ -21,7 +21,7 @@ import type {
   NativeAgentAuthStatus,
   NativeAgentMcpServer,
   NativeAgentMcpServerAction,
-  NativeAgentModelSubstitution,
+  NativeAgentDefaultModelResolution,
   NativeAgentReadiness,
   NativeAgentRateLimitWindow,
   NativeAgentResumeEntry,
@@ -661,12 +661,13 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
    */
   connectedModelProviders?(): Promise<string[] | undefined>;
   /**
-   * The model to run instead of a configured default the runtime positively
-   * reports it cannot serve. Undefined keeps the configured model. Callers
-   * substitute at resolution time and never write the answer back to the
-   * user's configuration.
+   * The model to run for a configured default, set or unset: a set model the
+   * runtime positively reports it cannot serve is replaced, and an unset one
+   * resolves to the runtime's effective default. Callers resolve at session or
+   * stage creation and never write the answer back to the user's
+   * configuration.
    */
-  substituteUnavailableModel?(modelId: string): Promise<NativeAgentModelSubstitution | undefined>;
+  resolveDefaultModel?(modelId: string | undefined): Promise<NativeAgentDefaultModelResolution>;
   interactiveSnapshot?(sessionId: string): Promise<ProviderInteractiveSnapshot>;
   updateInteractiveControls?(
     sessionId: string,

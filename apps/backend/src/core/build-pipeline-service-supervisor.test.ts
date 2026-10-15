@@ -35,10 +35,9 @@ import { REVIEW_PREPARATION_RESULT_JSON_SCHEMA } from "./looped-review-prompts.j
 import { DEFAULT_OPENCODE_MODEL_PROVIDERS } from "@orkestrator/protocol/native-agent";
 import {
   normalizeOpenCodeComposerCatalog,
-  openCodeModelSubstitution,
+  resolveOpenCodeDefaultModel,
 } from "./opencode-model-catalog.js";
 import { OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE } from "./opencode-provider-list-test-fixtures.js";
-import { DEFAULT_OPENCODE_MODEL_ID } from "./storage-opencode-models.js";
 
 import type {
   BuildPipelineProvider,
@@ -47,6 +46,9 @@ import type {
   ProviderSessionRegistration,
   ProviderStatus,
 } from "./build-pipeline-provider.js";
+
+/** The model earlier releases shipped as the OpenCode default. */
+const LEGACY_OPENCODE_DEFAULT_MODEL_ID = "opencode/claude-sonnet-5";
 
 const cleanReview: StructuredReviewReport = {
   reviewScope: {
@@ -119,7 +121,7 @@ class FakeProvider implements BuildPipelineProvider {
   verificationComplete = true;
   settleTurn?: BuildPipelineProvider["settleTurn"];
   observeSession?: BuildPipelineProvider["observeSession"];
-  substituteUnavailableModel?: BuildPipelineProvider["substituteUnavailableModel"];
+  resolveDefaultModel?: BuildPipelineProvider["resolveDefaultModel"];
 
   registerSession(sessionId: string, interaction?: ProviderSessionRegistration): void {
     this.registered.push({ sessionId, interaction });
@@ -429,24 +431,33 @@ describe("BuildPipelineService", () => {
       DEFAULT_OPENCODE_MODEL_PROVIDERS,
       { requireConnected: true },
     );
-    const answerFromGoOnlyLogin = async (modelId: string) =>
-      openCodeModelSubstitution(modelId, goOnlyCatalog);
+    const answerFromGoOnlyLogin = async (modelId: string | undefined) =>
+      resolveOpenCodeDefaultModel(modelId, goOnlyCatalog);
+    const configureOpenCodeModel = async (storage: StorageService, model?: string) => {
+      const config = await storage.loadConfig();
+      config.global.agentSettings = {
+        ...config.global.agentSettings,
+        platforms: {
+          ...config.global.agentSettings?.platforms,
+          opencode: { mode: "native", ...(model ? { model } : {}) },
+        },
+      };
+      await storage.saveConfig(config);
+      return storage.loadConfig();
+    };
 
     test("starts a build with no step model on the connected default", async () => {
       await withService(async (service, storage, provider) => {
-        provider.substituteUnavailableModel = answerFromGoOnlyLogin;
-        const config = await storage.loadConfig();
-        // The shipped default, which this login cannot serve.
-        expect(config.global.agentSettings?.platforms?.opencode?.model).toBe(
-          DEFAULT_OPENCODE_MODEL_ID,
-        );
+        provider.resolveDefaultModel = answerFromGoOnlyLogin;
+        // What earlier releases shipped, and still stored on upgraded installs.
+        const config = await configureOpenCodeModel(storage, LEGACY_OPENCODE_DEFAULT_MODEL_ID);
 
         const { session } = await startBuilding(service, storage, { agentType: "opencode" });
 
         expect(session.model).toBe("opencode-go/gpt-5.6-luna");
         expect(provider.created[0]?.options?.model).toBe("opencode-go/gpt-5.6-luna");
         expect(session.modelSubstitution).toEqual({
-          requestedModelId: DEFAULT_OPENCODE_MODEL_ID,
+          requestedModelId: LEGACY_OPENCODE_DEFAULT_MODEL_ID,
           modelId: "opencode-go/gpt-5.6-luna",
           message: "claude-sonnet-5 isn't available with your OpenCode login; using GPT-5.6 Luna.",
         });
@@ -457,16 +468,61 @@ describe("BuildPipelineService", () => {
       });
     });
 
+    test("resolves an unset OpenCode model to the connected default", async () => {
+      await withService(async (service, storage, provider) => {
+        provider.resolveDefaultModel = answerFromGoOnlyLogin;
+        const config = await configureOpenCodeModel(storage);
+        expect(config.global.agentSettings?.platforms?.opencode?.model).toBeUndefined();
+
+        const { session } = await startBuilding(service, storage, { agentType: "opencode" });
+
+        // OpenCode's server default ignores the allowlist, so it is not left to it.
+        expect(session.model).toBe("opencode-go/gpt-5.6-luna");
+        expect(provider.created[0]?.options?.model).toBe("opencode-go/gpt-5.6-luna");
+        expect(session.modelSubstitution).toBeUndefined();
+      });
+    });
+
+    test("records the substitution on unpinned fan-out reviewers", async () => {
+      await withService(async (service, storage, provider) => {
+        provider.resolveDefaultModel = answerFromGoOnlyLogin;
+        await configureOpenCodeModel(storage, LEGACY_OPENCODE_DEFAULT_MODEL_ID);
+
+        const { started } = await startBuilding(service, storage, {
+          agentType: "opencode",
+          reviewers: [{ agent: "opencode" }, { agent: "opencode" }],
+        });
+        let current = await pipeline(storage, started.id);
+        let reviewers = current.reviewFanout?.reviewers ?? [];
+        for (let pass = 0; pass < 12 && current.phase !== "complete"; pass++) {
+          await service.advanceNow(started.id);
+          current = await pipeline(storage, started.id);
+          if (current.reviewFanout) reviewers = current.reviewFanout.reviewers;
+        }
+
+        expect(reviewers).toHaveLength(2);
+        for (const reviewer of reviewers) {
+          expect(reviewer).toMatchObject({
+            model: "opencode-go/gpt-5.6-luna",
+            modelSubstitution: { requestedModelId: LEGACY_OPENCODE_DEFAULT_MODEL_ID },
+          });
+          expect(reviewer.modelUnpinned).toBeUndefined();
+        }
+        const reviewerSession = current.sessions.find((session) => session.label === "Review 1");
+        expect(reviewerSession?.modelSubstitution?.modelId).toBe("opencode-go/gpt-5.6-luna");
+      });
+    });
+
     test("keeps a model the step pinned", async () => {
       await withService(async (service, storage, provider) => {
-        provider.substituteUnavailableModel = answerFromGoOnlyLogin;
+        provider.resolveDefaultModel = answerFromGoOnlyLogin;
 
         const { session } = await startBuilding(service, storage, {
           agentType: "opencode",
-          steps: { build: { agent: "opencode", model: DEFAULT_OPENCODE_MODEL_ID } },
+          steps: { build: { agent: "opencode", model: LEGACY_OPENCODE_DEFAULT_MODEL_ID } },
         });
 
-        expect(session.model).toBe(DEFAULT_OPENCODE_MODEL_ID);
+        expect(session.model).toBe(LEGACY_OPENCODE_DEFAULT_MODEL_ID);
         expect(session.modelSubstitution).toBeUndefined();
       });
     });

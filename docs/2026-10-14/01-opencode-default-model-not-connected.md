@@ -1,7 +1,6 @@
 # OpenCode defaults to a model whose provider is not connected
 
-Status: Fixed 2026-10-15 (Fix points 1–3). Point 4, whether a fixed default
-should ship at all, is still open; see the recommendation under Resolution.
+Status: Fixed 2026-10-15, all four Fix points. See Resolution.
 
 **Severity: high.** A user whose OpenCode login covers only some of the
 allowlisted providers cannot send the first prompt in a new OpenCode tab, and
@@ -142,67 +141,82 @@ default).
    `opencode-provider-list-test-fixtures.ts` holds a trimmed live
    `GET /provider` response from OpenCode 1.19.0 (credentials removed), typed
    against the SDK's `ProviderListResponse`.
-2. **One effective default, substituted at resolution time.**
-   `openCodeModelSubstitution` replaces a configured model only when OpenCode
-   positively reports `connected` and the model's provider is absent. The
-   replacement is OpenCode's connected default, then the first connected
-   model. OpenCode exposes it as the optional provider capability
-   `substituteUnavailableModel`.
-   - Tabs: `NativeAgentServiceBase.ensureSession` substitutes before it stores
-     a new session's controls, so the picker preselects the substitute and the
-     first prompt dispatches. The result carries a transient
+2. **One effective default, resolved when a session or stage starts.**
+   `resolveOpenCodeDefaultModel` answers "which model does OpenCode run for
+   this configured default", set or unset. A set model is kept unless
+   `openCodeModelSubstitution` replaces it, which happens only when OpenCode
+   positively reports `connected` and the model's provider is absent. Unset
+   (or the `"default"` placeholder) resolves to the effective default:
+   OpenCode's own default among the connected, allowlisted providers, then the
+   first such model. It is resolved here rather than left to OpenCode's server,
+   whose own default ignores the allowlist. OpenCode exposes this as the
+   optional provider capability `resolveDefaultModel`.
+   - Tabs: `NativeAgentServiceBase.ensureSession` resolves before it stores a
+     new session's controls, so the picker preselects the resolved model and
+     the first prompt dispatches. A substitution is returned as a transient
      `modelSubstitution`, which the tab shows as a toast. It is not persisted.
-   - Builds: `resolveSelection` substitutes a model that came from the
-     configured defaults (no step model, or an unpinned step). A model the step
-     pinned is left alone. The stage records `PipelineSession.modelSubstitution`
-     and the stage rail shows its message.
-   - The saved configuration is never rewritten, so the user's choice returns
-     when the provider reconnects.
+   - Builds: `resolveSelection` resolves a model that came from the configured
+     defaults (no step model, or an unpinned step). A model the step pinned is
+     left alone. Stage sessions, fan-out reviewers (`ReviewerRecord`) and the
+     consolidation session (`ReviewConsolidationSession`) record
+     `modelSubstitution`, and the stage rail shows its message as a notice line
+     under the row.
+   - The saved configuration is never rewritten by resolution, so the user's
+     choice returns when the provider reconnects.
 3. **Connectivity is persisted.** `OpenCodeModelCatalogSnapshot` gained
    `connectedProviderIds` and `connectedProvidersCheckedAt`.
    `cacheOpenCodeModelCatalog` stores them when given and keeps the last report
    when a source has none. `get_native_agent_model_catalog` persists the live
-   report with the raw catalogue, and returns only connected providers to
-   pickers: from the live bridge when one runs, otherwise from the persisted
-   report. That covers cached rows and synthesized favourites, in the
-   environment and coordinator branches. `get_opencode_model_catalog_cache`
-   passes the fields through, but the launch dialogs do not use them yet.
+   report with the raw catalogue. With a live bridge, pickers get only the
+   providers it reports as connected. Without one, the persisted report can
+   predate a sign-in, so its disconnected providers are marked rather than
+   hidden: cached rows and synthesized favourites carry `AgentModel.connected:
+   false`, in the environment and coordinator branches.
+   `get_opencode_model_catalog_cache` marks its entries the same way, so the
+   create-environment dialog and the build and review launchers show them too.
+   The shared model picker labels such a row "Not connected" and keeps it
+   selectable.
+4. **No fixed OpenCode default ships.** `DEFAULT_OPENCODE_MODEL_ID` is gone:
+   fresh backend and renderer configs leave `platforms.opencode.model` unset,
+   which settings shows as "OpenCode default" and resolves as in point 2.
+   `selectableOpenCodeDefaultModel` repoints an allowlist-excluded default to
+   the first selectable OpenCode favourite, or else clears it (globally, or for
+   a repository, which then inherits). Stored values are kept as they are: a
+   previously shipped default cannot be told apart from one the user chose, and
+   point 2 substitutes it when its provider is not connected.
 
 Pinned tests, as changed:
 
 | Behaviour | Outcome |
 | --- | --- |
-| Shipped default `opencode/claude-sonnet-5` | Unchanged; point 4 not done |
-| Allowlist-only repointing to the shipped default | Unchanged; the saved config is deliberately not rewritten |
+| Shipped default `opencode/claude-sonnet-5` | Now unset in `storage.test.ts` and `configStore.test.ts` |
+| Allowlist-only repointing to the shipped default | Repoints to a favourite or clears; `storage.test.ts` updated |
 | Raw catalogue unfiltered | Unchanged; connectivity is persisted beside it instead |
-| Allowlist-only catalogue command | Still holds with no connectivity report; new tests cover live and persisted connectivity |
+| Allowlist-only catalogue command | Still holds with no connectivity report; new tests cover live (hide) and persisted (mark) connectivity |
 | Wrong `default` shape in mocks | Mocks moved to the SDK map, plus real-fixture tests |
-| Composer resolution order | Unchanged; the substitute is what reaches session controls |
+| Composer resolution order | Unchanged; the resolved model is what reaches session controls |
 
 New tests for a login with only `opencode-go` connected:
 `native-agent-service-provider.test.ts` (new tab: substitution, picker
-preselection, first prompt dispatched on `opencode-go`),
-`build-pipeline-service-supervisor.test.ts` (build with no step model, pinned
-step model kept), `opencode-provider-runtime.test.ts` (parser and substitution
-on the real fixture), `commands-registry-coverage.test.ts` and
-`commands-state-sync.test.ts` (live and persisted connectivity), `storage.test.ts`
-(snapshot connectivity), `AgentNativeTab.test.tsx` (toast) and
-`build-pipeline.test.ts` (validator).
+preselection, first prompt dispatched on `opencode-go`; unset model resolved),
+`build-pipeline-service-supervisor.test.ts` (build with no step model, unset
+model, fan-out reviewers, pinned step model kept),
+`opencode-provider-runtime.test.ts` (parser, substitution and resolution on the
+real fixture), `commands-registry-coverage.test.ts` and
+`commands-state-sync.test.ts` (live and persisted connectivity, launch-dialog
+cache marks), `storage.test.ts` (snapshot connectivity, clearing),
+`AgentNativeTab.test.tsx` (toast), `AgentModelPicker.test.tsx` ("Not
+connected" row), `agent-launch.test.ts`, `BuildChatTab.test.tsx` (stage
+notice), and the `build-pipeline.test.ts` / `review-fanout.test.ts` validators.
 
-### Point 4: recommendation
+### Not done
 
-Stop shipping a fixed `DEFAULT_OPENCODE_MODEL_ID`. Leave a fresh install's
-OpenCode model unset, and let unset mean the effective default above, which
-is now a real answer because `default` is parsed. Keep stored values as they
-are: a shipped default cannot be told apart from one the user chose, and
-substitution already covers it at resolution time. `selectableOpenCodeDefaultModel`
-should then fall back to unset rather than to the shipped id.
-
-### Left open
-
-- The launch dialogs (`get_opencode_model_catalog_cache`) receive the
-  persisted connectivity but do not mark or hide disconnected providers yet.
-- Fan-out reviewers and the consolidation session are substituted too, but
-  only stage sessions record `modelSubstitution` for display.
-- A pre-bridge picker hides a provider authenticated after the last bridge
-  reported connectivity, until a bridge reports again.
+- `selectedReasoningId` is still optional in the OpenCode discovery-metadata
+  plumbing (`opencode-discovery-metadata.ts`, the composer in
+  `opencode-provider.ts`). The catalogue no longer produces it, so it is always
+  absent. Removing it is left alone so it does not collide with the
+  concurrent fix for 04.
+- Multi Review and looped review do not read the configured OpenCode default:
+  they run the launcher's selection, and their "Default" choice sends no model,
+  which leaves the choice to OpenCode's server as before. That is unchanged and
+  outside this issue.

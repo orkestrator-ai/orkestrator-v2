@@ -127,6 +127,7 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
             providerLabel: model.provider,
             description: model.provider,
             reasoningEfforts: [...(model.variants ?? [])],
+            ...(model.connected === false ? { connected: false } : {}),
           }));
     return {
       ...baseCatalog,

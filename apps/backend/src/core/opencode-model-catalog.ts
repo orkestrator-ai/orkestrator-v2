@@ -1,4 +1,8 @@
-import type { AgentModel, NativeAgentModelSubstitution } from "@orkestrator/protocol/native-agent";
+import type {
+  AgentModel,
+  NativeAgentDefaultModelResolution,
+  NativeAgentModelSubstitution,
+} from "@orkestrator/protocol/native-agent";
 import {
   DEFAULT_OPENCODE_MODEL_PROVIDERS,
   isSelectableOpenCodeModelId,
@@ -365,6 +369,45 @@ export function normalizeOpenCodeComposerCatalog(
   };
 }
 
+/** The connected, allowlisted catalogue a default is resolved against. */
+type OpenCodeDefaultCatalog = {
+  readonly models: readonly AgentModel[];
+  readonly selectedModelId?: string;
+  readonly connectedProviderIds?: readonly string[];
+};
+
+/** OpenCode's own default when the catalogue offers it, else its first model. */
+function effectiveOpenCodeDefault(catalog: OpenCodeDefaultCatalog): AgentModel | undefined {
+  return catalog.models.find((model) => model.id === catalog.selectedModelId) ?? catalog.models[0];
+}
+
+/**
+ * The model OpenCode should run for a configured default, set or unset.
+ *
+ * A set model is kept unless {@link openCodeModelSubstitution} replaces it.
+ * Unset means the effective default: OpenCode's own default among the
+ * connected, allowlisted providers, then the first such model. OpenCode's
+ * server-side default ignores the allowlist, so an unset model is resolved here
+ * rather than left to the server. An empty catalogue resolves to nothing, which
+ * leaves OpenCode's own choice in charge.
+ */
+export function resolveOpenCodeDefaultModel(
+  configuredModelId: string | undefined,
+  catalog: OpenCodeDefaultCatalog,
+): NativeAgentDefaultModelResolution {
+  const requestedModelId = configuredModelId?.trim();
+  // A value naming no provider, such as the launchers' `"default"` placeholder,
+  // is no model OpenCode knows, so it means unset too.
+  if (requestedModelId && openCodeModelProviderId(requestedModelId)) {
+    const substitution = openCodeModelSubstitution(requestedModelId, catalog);
+    return substitution
+      ? { modelId: substitution.modelId, substitution }
+      : { modelId: requestedModelId };
+  }
+  const effective = effectiveOpenCodeDefault(catalog);
+  return effective ? { modelId: effective.id } : {};
+}
+
 /**
  * The effective OpenCode model for a configured default.
  *
@@ -381,18 +424,13 @@ export function normalizeOpenCodeComposerCatalog(
  */
 export function openCodeModelSubstitution(
   configuredModelId: string | undefined,
-  catalog: {
-    readonly models: readonly AgentModel[];
-    readonly selectedModelId?: string;
-    readonly connectedProviderIds?: readonly string[];
-  },
+  catalog: OpenCodeDefaultCatalog,
 ): NativeAgentModelSubstitution | undefined {
   const requestedModelId = configuredModelId?.trim();
   if (!requestedModelId || !catalog.connectedProviderIds) return undefined;
   const providerId = openCodeModelProviderId(requestedModelId);
   if (!providerId || catalog.connectedProviderIds.includes(providerId)) return undefined;
-  const replacement =
-    catalog.models.find((model) => model.id === catalog.selectedModelId) ?? catalog.models[0];
+  const replacement = effectiveOpenCodeDefault(catalog);
   if (!replacement || replacement.id === requestedModelId) return undefined;
   return {
     requestedModelId,

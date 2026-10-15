@@ -18,6 +18,10 @@
 import { isAgentPlatform, type AgentPlatform } from "./agent-platforms.js";
 import { isStructuredReviewReport, type StructuredReviewReport } from "./structured-review.js";
 import { isWorkflowResultSubmissionState } from "./workflow-results.js";
+import {
+  isNativeAgentModelSubstitution,
+  type NativeAgentModelSubstitution,
+} from "./native-agent.js";
 
 export const REVIEW_FANOUT_MIN_REVIEWERS = 1;
 export const REVIEW_FANOUT_MAX_REVIEWERS = 32;
@@ -57,6 +61,11 @@ export interface ReviewerRecord extends ReviewerModelSelection {
    * gets the harness default, exactly as a single-reviewer review step does.
    */
   modelUnpinned?: boolean;
+  /**
+   * Set when `model` replaced a configured default the runtime reported it
+   * cannot serve, so the reviewer's row can say so.
+   */
+  modelSubstitution?: NativeAgentModelSubstitution;
   sessionKey?: string;
   providerSessionId?: string;
   requestId?: string;
@@ -121,6 +130,8 @@ export interface ReviewConsolidationSession {
   createdAt: string;
   agent: AgentPlatform;
   model?: string;
+  /** Set when `model` replaced a configured default the runtime cannot serve. */
+  modelSubstitution?: NativeAgentModelSubstitution;
   reasoningEffort?: string;
   fastMode?: boolean;
   resultTransport?: import("./workflow-results.js").WorkflowResultTransport;
@@ -228,6 +239,7 @@ const REVIEWER_KEYS = [
   "id",
   "status",
   "modelUnpinned",
+  "modelSubstitution",
   "sessionKey",
   "providerSessionId",
   "requestId",
@@ -262,6 +274,8 @@ export function isReviewerRecord(value: unknown): value is ReviewerRecord {
     nonBlank(value.id) &&
     REVIEWER_STATUSES.has(value.status as ReviewerStatus) &&
     (value.modelUnpinned === undefined || typeof value.modelUnpinned === "boolean") &&
+    (value.modelSubstitution === undefined ||
+      isNativeAgentModelSubstitution(value.modelSubstitution)) &&
     (value.sessionKey === undefined || nonBlank(value.sessionKey)) &&
     (value.providerSessionId === undefined || nonBlank(value.providerSessionId)) &&
     (value.requestId === undefined || nonBlank(value.requestId)) &&
@@ -346,6 +360,7 @@ export function isReviewConsolidationSession(value: unknown): value is ReviewCon
       "createdAt",
       "agent",
       "model",
+      "modelSubstitution",
       "reasoningEffort",
       "fastMode",
       "resultTransport",
@@ -365,6 +380,8 @@ export function isReviewConsolidationSession(value: unknown): value is ReviewCon
     Number.isFinite(Date.parse(value.createdAt)) &&
     isAgentPlatform(value.agent) &&
     (value.model === undefined || nonBlank(value.model)) &&
+    (value.modelSubstitution === undefined ||
+      isNativeAgentModelSubstitution(value.modelSubstitution)) &&
     (value.reasoningEffort === undefined || nonBlank(value.reasoningEffort, 128)) &&
     (value.fastMode === undefined || typeof value.fastMode === "boolean") &&
     (value.resultTransport === undefined ||

@@ -19,6 +19,7 @@ import {
   type AgentInteractionWorkflowSummary,
 } from "./agent-interactions.js";
 import { isWorkflowResultSubmissionState } from "./workflow-results.js";
+import { isNativeAgentModelSubstitution } from "./native-agent.js";
 
 export const BUILD_PIPELINE_VERSION = 2;
 
@@ -1040,18 +1041,6 @@ export function isBuildStepConfigs(value: unknown): value is BuildStepConfigs {
   );
 }
 
-function isPipelineModelSubstitution(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    isNonBlankString(value.requestedModelId) &&
-    value.requestedModelId.length <= 512 &&
-    isNonBlankString(value.modelId) &&
-    value.modelId.length <= 512 &&
-    isNonBlankString(value.message) &&
-    value.message.length <= 2048
-  );
-}
-
 function isPipelineSession(value: unknown): value is PipelineSession {
   if (!isRecord(value)) return false;
   return (
@@ -1059,7 +1048,7 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     (value.agent === undefined || AGENTS.has(value.agent as BuildPipelineAgent)) &&
     (value.model === undefined || isNonBlankString(value.model)) &&
     (value.modelSubstitution === undefined ||
-      isPipelineModelSubstitution(value.modelSubstitution)) &&
+      isNativeAgentModelSubstitution(value.modelSubstitution)) &&
     (value.reasoningEffort === undefined || isNonBlankString(value.reasoningEffort)) &&
     (value.fastMode === undefined || typeof value.fastMode === "boolean") &&
     ((value.origin === undefined && value.interactionPolicy === undefined) ||

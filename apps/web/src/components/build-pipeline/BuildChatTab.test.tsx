@@ -3596,6 +3596,33 @@ describe("BuildChatTab presentation", () => {
     await waitFor(() => expect(screen.getByText(/Build choice/)).toBeTruthy());
     expect(screen.queryByText(/Verify choice/) === null).toBe(true);
   });
+
+  test("says on the stage when its configured model was substituted", () => {
+    const message = "claude-sonnet-5 isn't available with your OpenCode login; using GPT-5.6 Luna.";
+    renderTab({
+      ...pipeline,
+      id: "model-substitution",
+      sessions: [
+        {
+          ...pipeline.sessions[0]!,
+          agent: "opencode",
+          model: "opencode-go/gpt-5.6-luna",
+          modelSubstitution: {
+            requestedModelId: "opencode/claude-sonnet-5",
+            modelId: "opencode-go/gpt-5.6-luna",
+            message,
+          },
+        },
+        pipeline.sessions[1]!,
+      ],
+      currentSessionIndex: 1,
+      backendRevision: 50,
+    });
+
+    const [buildTab, verifyTab] = screen.getAllByRole("tab");
+    expect(buildTab!.textContent).toContain(message);
+    expect(verifyTab!.textContent).not.toContain("isn't available");
+  });
 });
 
 describe("BuildChatTab transcript wiring", () => {

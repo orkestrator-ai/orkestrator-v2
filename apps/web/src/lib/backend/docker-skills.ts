@@ -251,6 +251,8 @@ export interface CachedOpenCodeModel {
   outputCost?: number;
   contextWindow?: number;
   supportsImageInput?: boolean;
+  /** False when the persisted connectivity report omits this model's provider. */
+  connected?: boolean;
 }
 
 export interface OpenCodeModelCatalogSnapshot {

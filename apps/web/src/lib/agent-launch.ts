@@ -22,6 +22,8 @@ export interface AgentModelOption {
   providerLabel?: string;
   description?: string;
   reasoningEfforts: string[];
+  /** False when the provider was last reported as not connected. */
+  connected?: boolean;
   /**
    * The concrete model this catalog id resolves to on the bridge.
    *
@@ -171,6 +173,7 @@ export function toPickerModel(platform: LaunchAgent, option: AgentModelOption): 
         }
       : {}),
     ...(option.supportsSpeed ? { supportsSpeed: true } : {}),
+    ...(option.connected === false ? { connected: false } : {}),
   };
 }
 

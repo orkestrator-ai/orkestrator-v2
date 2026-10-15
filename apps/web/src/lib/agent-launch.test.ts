@@ -273,6 +273,24 @@ describe("toPickerModel", () => {
     });
   });
 
+  test("carries a disconnected provider mark into the shared picker shape", () => {
+    expect(
+      toPickerModel("opencode", {
+        id: "opencode/big-pickle",
+        name: "Big Pickle",
+        providerLabel: "opencode",
+        reasoningEfforts: [],
+        connected: false,
+      }),
+    ).toEqual({
+      platform: "opencode",
+      id: "opencode/big-pickle",
+      label: "Big Pickle",
+      providerLabel: "opencode",
+      connected: false,
+    });
+  });
+
   test("omits speed when the catalog entry does not advertise it", () => {
     expect(
       toPickerModel("opencode", { id: "default", name: "Default", reasoningEfforts: [] }),

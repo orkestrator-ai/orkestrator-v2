@@ -16,6 +16,7 @@ import {
 import {
   normalizeOpenCodeComposerCatalog,
   openCodeModelSubstitution,
+  resolveOpenCodeDefaultModel,
 } from "./opencode-model-catalog.js";
 import {
   OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE,
@@ -912,6 +913,37 @@ describe("OpenCode provider runtime", () => {
     });
   });
 
+  describe("resolveOpenCodeDefaultModel", () => {
+    const goOnly = normalizeOpenCodeComposerCatalog(
+      OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE,
+      DEFAULT_OPENCODE_MODEL_PROVIDERS,
+      { requireConnected: true },
+    );
+
+    test.each([undefined, "", "default"])(
+      "resolves an unset model (%p) to the effective default",
+      (modelId) => {
+        expect(resolveOpenCodeDefaultModel(modelId, goOnly)).toEqual({
+          modelId: "opencode-go/gpt-5.6-luna",
+        });
+      },
+    );
+
+    test("keeps a connected model and substitutes a disconnected one", () => {
+      expect(resolveOpenCodeDefaultModel("opencode-go/deepseek-v4.1-flash", goOnly)).toEqual({
+        modelId: "opencode-go/deepseek-v4.1-flash",
+      });
+      expect(resolveOpenCodeDefaultModel("opencode/claude-sonnet-5", goOnly)).toMatchObject({
+        modelId: "opencode-go/gpt-5.6-luna",
+        substitution: { requestedModelId: "opencode/claude-sonnet-5" },
+      });
+    });
+
+    test("leaves an unset model to OpenCode when the catalogue is empty", () => {
+      expect(resolveOpenCodeDefaultModel(undefined, { models: [] })).toEqual({});
+    });
+  });
+
   test("preselects the connected default and substitutes for a login with only opencode-go", async () => {
     const fake = openCodeFake();
     Object.assign(fake.client as object, {
@@ -930,12 +962,16 @@ describe("OpenCode provider runtime", () => {
         "opencode-go/gpt-5.6-luna",
       ]);
       await expect(provider.connectedModelProviders?.()).resolves.toEqual(["opencode-go"]);
+      await expect(provider.resolveDefaultModel?.("opencode/claude-sonnet-5")).resolves.toEqual({
+        modelId: "opencode-go/gpt-5.6-luna",
+        substitution: expect.objectContaining({ requestedModelId: "opencode/claude-sonnet-5" }),
+      });
       await expect(
-        provider.substituteUnavailableModel?.("opencode/claude-sonnet-5"),
-      ).resolves.toMatchObject({ modelId: "opencode-go/gpt-5.6-luna" });
-      await expect(
-        provider.substituteUnavailableModel?.("opencode-go/deepseek-v4.1-flash"),
-      ).resolves.toBeUndefined();
+        provider.resolveDefaultModel?.("opencode-go/deepseek-v4.1-flash"),
+      ).resolves.toEqual({ modelId: "opencode-go/deepseek-v4.1-flash" });
+      await expect(provider.resolveDefaultModel?.(undefined)).resolves.toEqual({
+        modelId: "opencode-go/gpt-5.6-luna",
+      });
     } finally {
       await provider.dispose?.();
     }

@@ -255,8 +255,11 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       (sessionId, operation) =>
         this.messageIds.runExclusive(openCodeMessageIdScope(connection, sessionId), operation),
     );
-    this.capabilitiesAdapter = new OpenCodeCapabilities(this.client, connection.directory, () =>
-      this.requestOptions(),
+    this.capabilitiesAdapter = new OpenCodeCapabilities(
+      this.client,
+      connection.directory,
+      () => this.requestOptions(),
+      () => this.allowedModelProviders(),
     );
     this.interactionAdapter = new OpenCodeInteractionAdapter(
       this.client,

@@ -12,6 +12,7 @@ import { startLocalServerUnlocked } from "./commands-servers.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
 import { runCommand } from "./shell.js";
 import { localAgentAccountIds, staleLoginLocalBridges } from "./agent-account-bridge-state.js";
+import { BackendRuntime } from "./backend-runtime.js";
 
 describe("Coordinator Codex server", () => {
   let root: string;
@@ -124,6 +125,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       resourceRoot: root,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+      runtime: new BackendRuntime(),
       controlMcp: {
         getSettings: () => ({
           enabled: true,
@@ -248,6 +250,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       resourceRoot: root,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+      runtime: new BackendRuntime(),
       controlMcp: {
         getSettings: () => ({
           enabled: true,
@@ -319,6 +322,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       toolchainBinDir: managedBin,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+      runtime: new BackendRuntime(),
       controlMcp: {
         getSettings: () => ({
           enabled: true,
@@ -438,6 +442,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       resourceRoot: root,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+      runtime: new BackendRuntime(),
       controlMcp: {
         getSettings: () => ({
           enabled: true,
@@ -492,6 +497,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       resourceRoot: root,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+      runtime: new BackendRuntime(),
       controlMcp: {
         getSettings: () => ({
           enabled: true,
@@ -552,6 +558,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       resourceRoot: root,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+      runtime: new BackendRuntime(),
     } as CommandContext;
     // The conversation belongs to Codex, so starting a Claude bridge against
     // its runtime id must be refused: it would inherit that conversation's
@@ -613,6 +620,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       resourceRoot: root,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+      runtime: new BackendRuntime(),
     } as CommandContext;
     cleanupContext = context;
     cleanupRuntimeId = environment.id;
@@ -656,6 +664,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       resourceRoot: root,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+      runtime: new BackendRuntime(),
       nativeAgents: { hasObservedLiveWork: async () => false },
     } as unknown as CommandContext;
     cleanupContext = context;
@@ -731,6 +740,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       resourceRoot: root,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+      runtime: new BackendRuntime(),
     } as CommandContext;
     cleanupContext = context;
     cleanupRuntimeId = environment.id;
@@ -778,6 +788,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       toolchainBinDir: managedBin,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+      runtime: new BackendRuntime(),
     } as CommandContext;
     cleanupContext = context;
     cleanupRuntimeId = environment.id;
@@ -811,6 +822,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
       resourceRoot: root,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+      runtime: new BackendRuntime(),
     } as CommandContext;
 
     // Unassigned: nothing has been chosen yet, so there is no bridge to start.

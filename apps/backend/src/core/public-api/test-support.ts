@@ -14,6 +14,7 @@ import { EnvironmentLifecycleTaskTracker } from "../environment-lifecycle-tasks.
 import { runCommand } from "../shell.js";
 import { StorageService } from "../storage.js";
 import { stopReconciler } from "./reconciler.js";
+import { BackendRuntime } from "../backend-runtime.js";
 
 /**
  * Real-storage harness for public actions: a temporary data directory, a
@@ -74,6 +75,7 @@ export async function createPublicApiHarness(
     appRoot: root,
     resourceRoot: root,
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+    runtime: new BackendRuntime(),
     worktreeDir: path.join(root, "worktrees"),
     ...options.context,
   } as CommandContext;

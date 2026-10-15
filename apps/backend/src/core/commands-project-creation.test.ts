@@ -16,6 +16,7 @@ import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.j
 import type { Project } from "./models.js";
 import { CommandFailedError, runCommand as shellRunCommand } from "./shell.js";
 import { createProject, StorageService } from "./storage.js";
+import { BackendRuntime } from "./backend-runtime.js";
 
 const processCannotEnforceDirectoryModes =
   process.platform === "win32" || process.getuid?.() === 0 || process.geteuid?.() === 0;
@@ -46,6 +47,7 @@ async function withProjectCreation<T>(
     resourceRoot: "",
     emit: () => undefined,
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+    runtime: new BackendRuntime(),
   } as CommandContext;
   const handler = commands.get("create_project_from_scratch");
   if (!handler) throw new Error("create_project_from_scratch is not registered");

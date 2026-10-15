@@ -8,6 +8,7 @@ import type { CommandContext } from "../src/core/commands";
 import type { Environment } from "../src/core/models";
 import { EnvironmentLifecycleTaskTracker } from "../src/core/environment-lifecycle-tasks";
 import { dockerContainerRuntimeName, dockerOwnerNamespace } from "../src/core/docker-ownership";
+import { BackendRuntime } from "../src/core/backend-runtime";
 
 const { createCommandRegistry, __testing } = await import("../src/core/commands");
 
@@ -241,6 +242,7 @@ function createContext(initialEnvironment = environment()): {
     appRoot: root,
     resourceRoot: root,
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+    runtime: new BackendRuntime(),
     emit: mock((event: string, payload: unknown) => events.push({ event, payload })),
     storage: {
       getDataDir: () => root,

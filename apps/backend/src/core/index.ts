@@ -56,6 +56,7 @@ import {
 } from "./commands-local-server-lifecycle.js";
 import { claudeTmuxRuntimeRootPrefix } from "./tmux.js";
 import { StorageService } from "./storage.js";
+import { BackendRuntime } from "./backend-runtime.js";
 import { AgentToolsServer } from "./agent-tools.js";
 import { ContainerHostReachabilityService } from "./container-host-reachability.js";
 import {
@@ -134,6 +135,7 @@ export class OrkestratorBackend {
   private readonly promptQueues: PromptQueueDrainer;
   private readonly agentMail: AgentMailService;
   private readonly environmentLifecycleTasks: EnvironmentLifecycleTaskTracker;
+  private readonly runtime: BackendRuntime;
   private readonly environmentLifecycleDrainTimeoutMs: number;
   private readonly workflowResults: WorkflowResultService;
   /** Absent in `bun test` backends unless injected: probing runs real Docker commands. */
@@ -207,6 +209,8 @@ export class OrkestratorBackend {
       | "stop"
     >;
     environmentLifecycleTasks?: EnvironmentLifecycleTaskTracker;
+    /** Test seam: process state owned by this backend instance. */
+    runtime?: BackendRuntime;
     environmentLifecycleDrainTimeoutMs?: number;
     /**
      * Step 08 named due jobs for the activity bundle and maintenance. `false`
@@ -286,6 +290,7 @@ export class OrkestratorBackend {
       });
     this.environmentLifecycleTasks =
       options.environmentLifecycleTasks ?? new EnvironmentLifecycleTaskTracker();
+    this.runtime = options.runtime ?? new BackendRuntime();
     this.environmentLifecycleDrainTimeoutMs =
       options.environmentLifecycleDrainTimeoutMs ?? ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS;
     // Every committed mutation fans out to all connected clients, so a second
@@ -311,6 +316,7 @@ export class OrkestratorBackend {
       containerHostReachability: this.containerHostReachability,
       controlMcp: this.controlMcp,
       environmentLifecycleTasks: this.environmentLifecycleTasks,
+      runtime: this.runtime,
     } as CommandContext;
     context.notifyAgentTurnCompleted = async (environmentId: string) => {
       const handler = this.commands.get("pr_monitor_agent_turn_completed");

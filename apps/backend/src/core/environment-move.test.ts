@@ -28,6 +28,7 @@ import * as pathSafety from "./path-safety.js";
 import { setLocalServerShutdownRequested } from "./commands-runtime-state.js";
 import { createProject, StorageService } from "./storage.js";
 import { parseWorktreeMoveRecord } from "./storage-projects.js";
+import { BackendRuntime } from "./backend-runtime.js";
 
 const roots: string[] = [];
 const listTmuxSessions = mock(async (args: string[]) => {
@@ -93,6 +94,7 @@ async function setup() {
     resourceRoot: "",
     emit: () => undefined,
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+    runtime: new BackendRuntime(),
   } as CommandContext;
   const startLocal = async (): Promise<Environment> => {
     const created = (await commands.get("create_environment")!(

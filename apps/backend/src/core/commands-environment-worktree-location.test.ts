@@ -12,6 +12,7 @@ import type { Environment } from "./models.js";
 import { runCommand } from "./shell.js";
 import { createProject, StorageService } from "./storage.js";
 import { updateWorktreeLocations } from "./worktree-locations.js";
+import { BackendRuntime } from "./backend-runtime.js";
 
 const roots: string[] = [];
 
@@ -40,6 +41,7 @@ async function setup() {
     resourceRoot: "",
     emit: () => undefined,
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+    runtime: new BackendRuntime(),
   } as CommandContext;
   const create = (args: Record<string, unknown>) =>
     commands.get("create_environment")!(

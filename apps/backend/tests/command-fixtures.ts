@@ -40,6 +40,7 @@ import { APP_SLUG, APP_VERSION } from "../src/core/constants";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 
 import { EnvironmentLifecycleTaskTracker } from "../src/core/environment-lifecycle-tasks";
+import { BackendRuntime } from "../src/core/backend-runtime";
 
 type MockPtyProcess = {
   write: ReturnType<typeof mock>;
@@ -446,6 +447,7 @@ export async function createCommandFixtures() {
       resourceRoot: "",
       worktreeDir: options.worktreeDir ?? createWorktreeDir(),
       environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+      runtime: new BackendRuntime(),
       emit: mock((event: string, payload: unknown) => {
         emitted.push({ event, payload });
       }),

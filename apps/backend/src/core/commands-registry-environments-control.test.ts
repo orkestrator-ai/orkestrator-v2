@@ -5,6 +5,7 @@ import path from "node:path";
 import { createCommandRegistry } from "./commands-registry.js";
 import type { CommandContext } from "./commands-context.js";
 import { createProject, StorageService } from "./storage.js";
+import { BackendRuntime } from "./backend-runtime.js";
 
 describe("create_environment control request idempotency", () => {
   test("atomically converges concurrent retries on one environment", async () => {
@@ -19,6 +20,7 @@ describe("create_environment control request idempotency", () => {
       storage,
       emit: () => undefined,
       environmentLifecycleTasks: {},
+      runtime: new BackendRuntime(),
     } as unknown as CommandContext;
     const secondContext = {
       ...context,

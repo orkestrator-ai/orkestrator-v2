@@ -7,6 +7,7 @@ import { __testing as commandTesting } from "./commands-testing.js";
 import { startLocalServerUnlocked } from "./commands-servers.js";
 import { spawnCommand } from "./shell.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
+import { BackendRuntime } from "./backend-runtime.js";
 
 describe("local opencode serve environment", () => {
   let root: string;
@@ -47,6 +48,7 @@ describe("local opencode serve environment", () => {
       resourceRoot: root,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+      runtime: new BackendRuntime(),
     } as CommandContext;
 
     let spawned: { args: string[]; env: NodeJS.ProcessEnv | undefined } | undefined;

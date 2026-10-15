@@ -34,6 +34,7 @@ import type { ClaudeModelCatalogEntry } from "./models.js";
 import { ClaudeStatePollManager } from "./tmux.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { createProviderStub } from "./native-agent-service-projection-test-support.js";
+import { BackendRuntime } from "./backend-runtime.js";
 
 /**
  * Registry-level coverage for the commands that back the backend-owned state
@@ -4279,6 +4280,7 @@ describe("native agent and looped-review controller commands", () => {
           appRoot: "",
           resourceRoot: "",
           environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+          runtime: new BackendRuntime(),
           nativeAgents,
         });
 
@@ -4366,6 +4368,7 @@ describe("native agent and looped-review controller commands", () => {
             appRoot: "",
             resourceRoot: "",
             environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+            runtime: new BackendRuntime(),
             nativeAgents,
           }),
         ).resolves.toMatchObject({

@@ -25,6 +25,7 @@ import {
   detectEnvironmentPullRequest,
   prMonitorService,
 } from "./commands-pr-monitor.js";
+import { BackendRuntime } from "./backend-runtime.js";
 
 let root: string;
 let checkout: string;
@@ -67,6 +68,7 @@ beforeEach(async () => {
     storage,
     emit: () => undefined,
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+    runtime: new BackendRuntime(),
     worktreeDir: path.join(root, "workspaces"),
   } as unknown as CommandContext;
   commands = createCommandRegistry();

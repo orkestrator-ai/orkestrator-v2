@@ -35,6 +35,7 @@ import { environmentStateDirectory } from "./environment-state-paths.js";
 import type { Environment } from "./models.js";
 import { runCommand } from "./shell.js";
 import { StorageService } from "./storage.js";
+import { BackendRuntime } from "./backend-runtime.js";
 
 const tempDirectories: string[] = [];
 
@@ -77,6 +78,7 @@ async function reconcileContext(): Promise<{
     worktreeDir,
     strictDockerOwner: false,
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+    runtime: new BackendRuntime(),
   } as CommandContext;
   return { context, storage, dataDir, worktreeDir };
 }

@@ -327,9 +327,10 @@ export function claudeDeniedTools(policy: NativeAgentExecutionPolicy | undefined
  * The allowlist for a read-only turn.
  *
  * `mcp__orkestrator__*` has to be in here explicitly. Supplying an allowlist
- * replaces the SDK's default one, and `dontAsk` denies anything that reaches
- * the callback step — so omitting it would leave the coordinator unable to
- * delegate, which is the one thing it exists to do.
+ * replaces the SDK's default one, and the coordinator's `deny` policy refuses
+ * anything that reaches the callback step (`canUseTool`) — so omitting it would
+ * leave the coordinator unable to delegate, which is the one thing it exists
+ * to do.
  */
 export function claudeReadOnlyAllowedTools(options: {
   agentMcpServerNames?: readonly string[];
@@ -359,8 +360,8 @@ export function claudeReadOnlySandbox(policy: NativeAgentExecutionPolicy): {
     // this point with no sandbox means the probe was wrong.
     failIfUnavailable: true,
     // The hook has already vetted the command by the time the sandbox sees it,
-    // and `dontAsk` has no way to ask, so a prompt here would deny a command
-    // the policy allows.
+    // and a `deny` policy refuses every prompt, so a prompt here would deny a
+    // command the policy allows.
     autoAllowBashIfSandboxed: true,
     // Closes the model's own escape hatch: with this on, it could set
     // `dangerouslyDisableSandbox` and fall back to the permission system.

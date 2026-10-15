@@ -17,6 +17,8 @@ import type {
   QuestionInfo,
   QuestionRequest,
   PlanApprovalRequest,
+  ClaudeInteractionRequest,
+  ClaudeInteractionResponse,
   PromptOptions,
   SessionInitData,
   McpServerRuntimeStatus,
@@ -68,6 +70,8 @@ import * as lifecycle from "./session-manager-lifecycle.js";
 import {
   claudeExecutableOptions,
   execFileText,
+  interactionResolvers,
+  pendingInteractions,
   pendingPlanApprovals,
   pendingQuestions,
   planApprovalResolvers,
@@ -215,6 +219,33 @@ export function getPendingPlanApprovals(sessionId?: string): PlanApprovalRequest
     return approvals.filter((a) => isPendingInteractionFor(a, sessionId));
   }
   return approvals;
+}
+
+/**
+ * Answer a parked MCP elicitation or tool approval. The callback that parked
+ * it turns the answer into what the CLI expects.
+ */
+export function respondToInteraction(
+  requestId: string,
+  response: ClaudeInteractionResponse,
+): boolean {
+  const resolve = interactionResolvers.get(requestId);
+  if (!resolve || !pendingInteractions.has(requestId)) return false;
+  // Removed here rather than by the parking callback, which resumes a tick
+  // later: a read in between must not serve a card that is already answered.
+  pendingInteractions.delete(requestId);
+  interactionResolvers.delete(requestId);
+  resolve(response);
+  return true;
+}
+
+/** Parked MCP elicitations and tool approvals, for one session or all. */
+export function getPendingInteractions(sessionId?: string): ClaudeInteractionRequest[] {
+  const interactions = Array.from(pendingInteractions.values());
+  if (sessionId) {
+    return interactions.filter((interaction) => isPendingInteractionFor(interaction, sessionId));
+  }
+  return interactions;
 }
 
 /**

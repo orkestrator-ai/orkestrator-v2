@@ -17,6 +17,7 @@ import type {
   QuestionInfo,
   QuestionRequest,
   PlanApprovalRequest,
+  ClaudeInteractionRequest,
   PromptOptions,
   SessionInitData,
   McpServerRuntimeStatus,
@@ -65,6 +66,8 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import * as core from "./session-manager-core.js";
 import {
   claimedPromptDispatches,
+  interactionResolvers,
+  pendingInteractions,
   pendingPlanApprovals,
   pendingPromptDispatchClaims,
   pendingQuestions,
@@ -116,9 +119,9 @@ type PromptDispatchHandle = core.PromptDispatchHandle;
 export async function getSessionActivity(sessionId: string): Promise<SessionActivity> {
   const session = sessions.get(sessionId);
   if (session) {
-    // A running turn that has parked a question or a plan approval is blocked
-    // on the user, not on Claude. The backend renders those differently and
-    // must not treat them as progress it should wait out.
+    // A running turn that has parked a question, an approval or an MCP
+    // elicitation is blocked on the user, not on Claude. The backend renders
+    // those differently and must not treat them as progress it should wait out.
     //
     // This outranks the background-task sweep below. A backgrounded Bash
     // command started earlier in the same turn stays live while that turn asks
@@ -484,34 +487,54 @@ export function cleanupPendingQuestions(sessionId: string): void {
   }
 }
 
+/**
+ * Withdraw the session's parked MCP elicitations and tool approvals. Each
+ * waiting callback then answers the CLI itself: an elicitation is cancelled,
+ * a tool call denied.
+ */
+export function cleanupParkedInteractions(sessionId: string): void {
+  for (const [interactionId, interaction] of Array.from(pendingInteractions)) {
+    if (interaction.sessionId !== sessionId) continue;
+    const resolve = interactionResolvers.get(interactionId);
+    pendingInteractions.delete(interactionId);
+    interactionResolvers.delete(interactionId);
+    resolve?.({ action: "withdrawn" });
+  }
+}
+
 export function cleanupPendingInteractions(sessionId: string): void {
   cleanupPendingQuestions(sessionId);
   cleanupPendingPlanApprovals(sessionId);
+  cleanupParkedInteractions(sessionId);
 }
 
 /**
  * The single rule mapping a parked prompt to the session that raised it.
  *
- * `getPendingQuestions`, `getPendingPlanApprovals`, the eviction guard and
- * {@link getSessionActivity} all ask some form of "is anything of this
- * session's waiting on the user". Routing every one of them through this
- * predicate is what stops the `waiting` activity state from disagreeing with
- * the cards `/questions` and `/plan-approvals` actually serve.
+ * `getPendingQuestions`, `getPendingPlanApprovals`, `getPendingInteractions`,
+ * the eviction guard and {@link getSessionActivity} all ask some form of "is
+ * anything of this session's waiting on the user". Routing every one of them
+ * through this predicate is what stops the `waiting` activity state from
+ * disagreeing with the cards `/questions`, `/plan-approvals` and
+ * `/interactions` actually serve.
  */
 export function isPendingInteractionFor(
-  entry: QuestionRequest | PlanApprovalRequest,
+  entry: QuestionRequest | PlanApprovalRequest | ClaudeInteractionRequest,
   sessionId: string,
 ): boolean {
   return entry.sessionId === sessionId;
 }
 
-/** True while a question or plan approval is waiting on the user. */
+/** True while a question, approval or elicitation is waiting on the user. */
 export function sessionHasPendingInteractions(sessionId: string): boolean {
   for (const question of pendingQuestions.values()) {
     if (isPendingInteractionFor(question, sessionId)) return true;
   }
   for (const approval of pendingPlanApprovals.values()) {
     if (isPendingInteractionFor(approval, sessionId)) return true;
+  }
+  for (const interaction of pendingInteractions.values()) {
+    if (isPendingInteractionFor(interaction, sessionId)) return true;
   }
   return false;
 }

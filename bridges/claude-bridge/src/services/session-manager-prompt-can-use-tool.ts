@@ -1,6 +1,7 @@
 import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 import type { PlanApprovalRequest, QuestionInfo, QuestionRequest } from "../types/index.js";
+import { claudeTurnPolicy } from "./claude-query-config.js";
 import { eventEmitter } from "./event-emitter.js";
 import { debugLog } from "./logger.js";
 import {
@@ -14,6 +15,7 @@ import {
   planApprovalResolvers,
   questionResolvers,
 } from "./session-manager-core.js";
+import { requestClaudeToolApproval } from "./session-manager-parked-interactions.js";
 import type { TurnState } from "./session-manager-prompt-turn.js";
 
 function boundedPlan(content: unknown): Pick<PlanApprovalRequest, "plan" | "planTruncated"> {
@@ -267,6 +269,21 @@ export async function turnCanUseTool(
       pendingPlanApprovals.delete(approvalId);
       planApprovalResolvers.delete(approvalId);
     }
+  }
+
+  // An `ask` policy means the user decides, and a `deny` policy refuses
+  // anything outside its allow list. Questions and plan approvals are handled
+  // above, so a denying session can still ask the user. Under `auto-approve`
+  // the mode already chose not to ask, so a tool that still reaches here runs.
+  const approvals = claudeTurnPolicy(session.executionPolicy, turn.options?.readOnly)?.approvals;
+  if (approvals === "ask") {
+    return requestClaudeToolApproval(sessionId, toolName, input, permissionContext);
+  }
+  if (approvals === "deny") {
+    return {
+      behavior: "deny" as const,
+      message: `${toolName} is not allowed: this session's policy denies approvals.`,
+    };
   }
 
   // Allow this invocation only. SDK permission suggestions are durable

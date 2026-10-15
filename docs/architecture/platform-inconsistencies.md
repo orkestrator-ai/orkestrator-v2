@@ -114,9 +114,9 @@ verified. **partial** = present but weaker, different, or vendor-dependent.
 | Steer | **full** | none | **full** | **full** | none | none |
 | Native “Review changes” | none | none | **full** | none | none | none |
 | Questions | full | full (own cards) | partial | partial | partial | full |
-| Tool approvals | **fail-open** in build | **fail-closed hooks** | fail-closed | fail-closed cards; CLI `--force` | `--always-approve` | full |
+| Tool approvals | auto-approve by default; **partial** fail-closed cards under `ask`, refusal outside the allow list under `deny` (not browser-qualified) | **fail-closed hooks** | fail-closed | fail-closed cards; CLI `--force` | `--always-approve` | full |
 | Plan-exit UI | plan-approval card | own plan card | `CodexPlanModeCard` | permission/mode | permission/mode | none |
-| MCP elicitations | UI exists, unused | **full** | Codex interactions | none | none | none |
+| MCP elicitations | **partial** form and URL cards (not browser-qualified) | **full** | Codex interactions | none | none | none |
 | Interactive TUI overlay | none | **unique** | none | none | none | none |
 | TUI selection prompts | none | **unique** | none | none | none | none |
 | Context usage | full | partial (pane/transcript parse) | full | partial | partial | full |

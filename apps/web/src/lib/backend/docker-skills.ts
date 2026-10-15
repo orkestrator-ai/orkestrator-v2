@@ -489,8 +489,8 @@ export interface GitHubCliStatus {
   installed: boolean;
   /** `gh` holds a login for github.com. */
   authenticated: boolean;
-  /** One click can install `gh` here: macOS with Homebrew available. */
-  canInstallWithHomebrew: boolean;
+  /** This backend may sign `gh` in. False in isolated test profiles. */
+  canSignIn: boolean;
 }
 
 export type GitHubCliOperationState = "idle" | "pending" | "succeeded" | "failed";
@@ -503,24 +503,9 @@ export interface GitHubCliLoginProgress {
   error?: string;
 }
 
-export interface GitHubCliInstallProgress {
-  state: GitHubCliOperationState;
-  operationId?: string;
-  error?: string;
-}
-
-/** Whether the host's GitHub CLI is installed and signed in, and whether it can be installed. */
+/** Whether the backend host's GitHub CLI is available and signed in. */
 export async function getGitHubCliStatus(): Promise<GitHubCliStatus> {
   return invoke<GitHubCliStatus>("get_github_cli_status", {});
-}
-
-/** Start `brew install gh` on the backend host; poll with `getGitHubCliInstall`. */
-export async function startGitHubCliInstall(): Promise<GitHubCliInstallProgress> {
-  return invoke<GitHubCliInstallProgress>("start_github_cli_install", {});
-}
-
-export async function getGitHubCliInstall(): Promise<GitHubCliInstallProgress> {
-  return invoke<GitHubCliInstallProgress>("get_github_cli_install", {});
 }
 
 /** Start `gh auth login` with GitHub's device flow; poll with `getGitHubCliLogin`. */

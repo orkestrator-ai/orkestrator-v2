@@ -239,11 +239,14 @@ const mockCheckClaudeCli = mock(async () => true);
 const mockCheckClaudeConfig = mock(async () => true);
 const mockCheckGithubCli = mock(async () => true);
 const mockGetAvailableAiCli = mock<() => Promise<string | null>>(async () => "claude");
-const mockGetGitHubCliStatus = mock(async () => ({
-  installed: false,
-  authenticated: false,
-  canInstallWithHomebrew: false,
-}));
+// The status agrees with the last `check_github_cli` answer unless a test says otherwise.
+let lastGithubCliCheck: boolean | undefined;
+const defaultGitHubCliStatus = async () => ({
+  installed: lastGithubCliCheck !== false,
+  authenticated: true,
+  canSignIn: lastGithubCliCheck !== false,
+});
+const mockGetGitHubCliStatus = mock(defaultGitHubCliStatus);
 const mockGetConfig = mock(async () => mockConfig);
 const mockGetResourceRevisionManifest = mock(async () => ({
   generation: "a".repeat(32),
@@ -350,10 +353,12 @@ mock.module("@/lib/backend", () => ({
   checkDocker: mockCheckDocker,
   checkClaudeCli: mockCheckClaudeCli,
   checkClaudeConfig: mockCheckClaudeConfig,
-  checkGithubCli: mockCheckGithubCli,
+  checkGithubCli: async () => {
+    lastGithubCliCheck = await mockCheckGithubCli();
+    return lastGithubCliCheck;
+  },
   getAvailableAiCli: mockGetAvailableAiCli,
   getGitHubCliStatus: mockGetGitHubCliStatus,
-  getGitHubCliInstall: async () => ({ state: "idle" }),
   getGitHubCliLogin: async () => ({ state: "idle" }),
   getConfig: mockGetConfig,
   getResourceRevisionManifest: mockGetResourceRevisionManifest,
@@ -566,12 +571,9 @@ function resetAppMocks() {
   mockCheckGithubCli.mockImplementation(async () => true);
   mockGetAvailableAiCli.mockClear();
   mockGetAvailableAiCli.mockImplementation(async () => "claude");
+  lastGithubCliCheck = undefined;
   mockGetGitHubCliStatus.mockClear();
-  mockGetGitHubCliStatus.mockImplementation(async () => ({
-    installed: false,
-    authenticated: false,
-    canInstallWithHomebrew: false,
-  }));
+  mockGetGitHubCliStatus.mockImplementation(defaultGitHubCliStatus);
   mockGetConfig.mockClear();
   mockGetConfig.mockImplementation(async () => mockConfig);
   mockGetResourceRevisionManifest.mockClear();
@@ -3041,23 +3043,35 @@ describe("App startup checks and global events", () => {
     });
   });
 
-  test("keeps the GitHub CLI setup open after an install so the user can sign in", async () => {
-    mockCheckGithubCli.mockImplementation(async () => false);
-    // The setup reports gh as installed, as it does after a Homebrew install.
+  test("offers GitHub sign-in at startup when gh is signed out", async () => {
     mockGetGitHubCliStatus.mockImplementation(async () => ({
       installed: true,
       authenticated: false,
-      canInstallWithHomebrew: false,
+      canSignIn: true,
     }));
     resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
 
     render(<App />);
 
-    expect(await screen.findByText("GitHub CLI Not Found")).toBeTruthy();
+    expect(await screen.findByText("Sign In to GitHub")).toBeTruthy();
     expect(await screen.findByRole("button", { name: "Sign in to GitHub" })).toBeTruthy();
-    act(() => screen.getByRole("button", { name: "Done" }).click());
+    act(() => screen.getByRole("button", { name: "Not Now" }).click());
 
-    await waitFor(() => expect(screen.queryByText("GitHub CLI Not Found") === null).toBe(true));
+    await waitFor(() => expect(screen.queryByText("Sign In to GitHub") === null).toBe(true));
+  });
+
+  test("does not offer GitHub sign-in where the backend refuses it", async () => {
+    mockGetGitHubCliStatus.mockImplementation(async () => ({
+      installed: true,
+      authenticated: false,
+      canSignIn: false,
+    }));
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    render(<App />);
+
+    await waitFor(() => expect(mockGetGitHubCliStatus).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("Sign In to GitHub") === null).toBe(true);
   });
 
   test("continues rendering when config load fails", async () => {

@@ -1,3 +1,4 @@
+import { gitHubCli } from "./github-cli-binary.js";
 import { PrMonitorService } from "./pr-monitor.js";
 import { runCommand } from "./shell.js";
 import type { Environment } from "./models.js";
@@ -346,7 +347,7 @@ export async function detectEnvironmentPullRequest(
   const request = getPrMonitorDetectionRequest(detectionTarget);
   if (target.kind === "local") {
     if (!target.worktreePath) throw new Error("Local environment has no worktree path");
-    const { stdout } = await runCommand("gh", request.args, {
+    const { stdout } = await runCommand(gitHubCli(), request.args, {
       cwd: target.worktreePath,
       timeoutMs: PR_DETECTION_TIMEOUT_MS,
     });
@@ -362,7 +363,7 @@ export async function detectEnvironmentPullRequest(
       const checkSummary = await recurringWorkMetrics.observe("pr-check-rollup", async () =>
         parsePrMonitorCheckResponse(
           (
-            await runCommand("gh", checkRequest.args, {
+            await runCommand(gitHubCli(), checkRequest.args, {
               cwd: worktreePath,
               timeoutMs: 10_000,
             })

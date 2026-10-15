@@ -8,14 +8,13 @@ import type { ChildProcess } from "node:child_process";
 
 import { parseGitHubDeviceLoginOutput } from "./agent-accounts-login.js";
 import type { CommandContext } from "./commands-context.js";
+import { gitHubCli, setManagedGitHubCli } from "./github-cli-binary.js";
 import {
   cancelGitHubCliLogin,
   getGitHubCliStatus,
-  gitHubCliInstallProgress,
   gitHubCliLoginCommand,
   gitHubCliLoginProgress,
   resetGitHubCliSetupForTests,
-  startGitHubCliInstall,
   startGitHubCliLogin,
 } from "./github-cli-setup.js";
 
@@ -80,16 +79,36 @@ describe("GitHub CLI setup", () => {
 
   afterEach(() => {
     resetGitHubCliSetupForTests();
+    setManagedGitHubCli(undefined);
     if (previousPath === undefined) delete process.env.PATH;
     else process.env.PATH = previousPath;
     rmSync(root, { recursive: true, force: true });
   });
 
   function contextFor(runtimeFlavor: CommandContext["runtimeFlavor"] = "development") {
+    const toolchainBinDir = path.join(root, "toolchain");
+    const appRoot = path.join(root, "app");
+    mkdirSync(toolchainBinDir, { recursive: true });
+    mkdirSync(appRoot, { recursive: true });
     return {
       runtimeFlavor,
+      toolchainBinDir,
+      appRoot,
+      resourceRoot: appRoot,
       storage: { agentAccountsDirectory: () => path.join(root, "accounts") },
     } as unknown as CommandContext;
+  }
+
+  /** A fake `gh` whose `auth token` prints a token only when `signedIn`. */
+  function writeGh(directory: string, signedIn: boolean): string {
+    mkdirSync(directory, { recursive: true });
+    const file = path.join(directory, "gh");
+    writeFileSync(
+      file,
+      signedIn ? "#!/bin/sh\necho gho_test_token\n" : "#!/bin/sh\necho not logged in >&2\nexit 1\n",
+    );
+    chmodSync(file, 0o755);
+    return file;
   }
 
   /** A PATH holding only the named fake tools and the system basics. */
@@ -122,6 +141,10 @@ describe("GitHub CLI setup", () => {
     });
     expect(command.command).toBe("gh");
     expect(command.args).toEqual(["auth", "login", "--web", "--hostname", "github.com"]);
+
+    // With a toolchain copy, sign-in drives the same gh every GitHub call uses.
+    setManagedGitHubCli("/toolchain/gh");
+    expect(gitHubCliLoginCommand("/shim", {}).command).toBe("/toolchain/gh");
     expect(command.env.GH_TOKEN).toBeUndefined();
     expect(command.env.GITHUB_TOKEN).toBeUndefined();
     expect(command.env.GH_BROWSER).toBe("/shim/open");
@@ -173,98 +196,48 @@ describe("GitHub CLI setup", () => {
     expect(fake.child().signalCode).toBe("SIGTERM");
   });
 
-  test("refuses host setup in an isolated agent-test profile", async () => {
+  test("refuses sign-in in an isolated agent-test profile", async () => {
     const fake = fakeSpawn();
     await expect(
       startGitHubCliLogin(contextFor("agent-test"), { spawnImpl: fake.spawnImpl }),
-    ).rejects.toThrow("isolated test profile");
-    await expect(
-      startGitHubCliInstall(contextFor("agent-test"), {
-        spawnImpl: fake.spawnImpl,
-        platform: "darwin",
-      }),
     ).rejects.toThrow("isolated test profile");
     expect(fake.calls).toHaveLength(0);
   });
 
   test.skipIf(process.platform === "win32")(
-    "offers Homebrew only on macOS when gh is missing and brew is present",
+    "reports the toolchain's gh as installed without one on PATH",
     async () => {
-      pathWith("brew");
-      expect(await getGitHubCliStatus(contextFor(), { platform: "darwin" })).toEqual({
-        installed: false,
-        authenticated: false,
-        canInstallWithHomebrew: true,
-      });
-      expect(
-        (await getGitHubCliStatus(contextFor(), { platform: "linux" })).canInstallWithHomebrew,
-      ).toBe(false);
-      expect(
-        (await getGitHubCliStatus(contextFor("agent-test"), { platform: "darwin" }))
-          .canInstallWithHomebrew,
-      ).toBe(false);
-
       pathWith();
-      expect(
-        (await getGitHubCliStatus(contextFor(), { platform: "darwin" })).canInstallWithHomebrew,
-      ).toBe(false);
-      await expect(startGitHubCliInstall(contextFor(), { platform: "darwin" })).rejects.toThrow(
-        "only be installed automatically on macOS with Homebrew",
-      );
-    },
-  );
-
-  test.skipIf(process.platform === "win32")(
-    "installs with Homebrew and reports success",
-    async () => {
-      pathWith("brew");
-      const fake = fakeSpawn();
-      const progress = await startGitHubCliInstall(contextFor(), {
-        spawnImpl: fake.spawnImpl,
-        platform: "darwin",
-      });
-
-      expect(progress.state).toBe("pending");
-      expect(fake.calls[0]?.command).toBe("brew");
-      expect(fake.calls[0]?.args).toEqual(["install", "gh"]);
-      expect(fake.calls[0]?.env.NONINTERACTIVE).toBe("1");
-
-      fake.child().finish(0);
-      expect(gitHubCliInstallProgress()).toEqual({
-        state: "succeeded",
-        operationId: progress.operationId,
+      const context = contextFor();
+      setManagedGitHubCli(writeGh(context.toolchainBinDir!, true));
+      expect(await getGitHubCliStatus(context)).toEqual({
+        installed: true,
+        authenticated: true,
+        canSignIn: true,
       });
     },
   );
 
-  test.skipIf(process.platform === "win32")(
-    "reports the end of Homebrew's output when the install fails",
-    async () => {
-      pathWith("brew");
-      const fake = fakeSpawn();
-      await startGitHubCliInstall(contextFor(), { spawnImpl: fake.spawnImpl, platform: "darwin" });
-      fake.child().stderrStream.write("==> Fetching gh\nError: No such file or directory\n");
-      await Bun.sleep(0);
-      fake.child().finish(1);
+  test.skipIf(process.platform === "win32")("reports a signed-out gh", async () => {
+    pathWith();
+    const context = contextFor();
+    setManagedGitHubCli(writeGh(context.toolchainBinDir!, false));
+    expect(await getGitHubCliStatus(context)).toEqual({
+      installed: true,
+      authenticated: false,
+      canSignIn: true,
+    });
+    // An isolated profile may not sign in, so it is never offered there.
+    expect((await getGitHubCliStatus(contextFor("agent-test"))).canSignIn).toBe(false);
+  });
 
-      const progress = gitHubCliInstallProgress();
-      expect(progress.state).toBe("failed");
-      expect(progress.error).toContain("exit code 1");
-      expect(progress.error).toContain("Error: No such file or directory");
-    },
-  );
-
-  test.skipIf(process.platform === "win32")(
-    "does not reinstall when gh is already present",
-    async () => {
-      pathWith("brew", "gh");
-      const fake = fakeSpawn();
-      const progress = await startGitHubCliInstall(contextFor(), {
-        spawnImpl: fake.spawnImpl,
-        platform: "darwin",
-      });
-      expect(progress.state).toBe("succeeded");
-      expect(fake.calls).toHaveLength(0);
-    },
-  );
+  test.skipIf(process.platform === "win32")("reports a missing gh", async () => {
+    pathWith();
+    expect(gitHubCli()).toBe("gh");
+    expect(await getGitHubCliStatus(contextFor())).toEqual({
+      installed: false,
+      authenticated: false,
+      canSignIn: false,
+    });
+  });
 });

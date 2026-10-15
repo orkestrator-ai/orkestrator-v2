@@ -1,3 +1,4 @@
+import { gitHubCli } from "./github-cli-binary.js";
 import { beginEnvironmentMutation } from "./environment-replacement-fence.js";
 import {
   reconcileProjectHomeEnvironment,
@@ -147,7 +148,7 @@ export function isRemoteBranchAlreadyDeletedError(message: string): boolean {
 
 export function createLocalGhRunner(cwd: string): GhCliRunner {
   return async (args, timeoutMs = 60_000) => {
-    const { stdout } = await runCommand("gh", args, { cwd, timeoutMs });
+    const { stdout } = await runCommand(gitHubCli(), args, { cwd, timeoutMs });
     return stdout;
   };
 }
@@ -199,12 +200,16 @@ export function createEnvironmentCommandRunner(environment: Environment): Enviro
       const release = beginEnvironmentMutation(environment.id);
       try {
         return (
-          await runCommand(command, args, {
-            cwd: environment.worktreePath,
-            timeoutMs,
-            ...(env ? { env } : {}),
-          })
-        ).stdout;
+          // `gh` on the host is the backend's resolved copy; inside a
+          // container it is the image's own.
+          (
+            await runCommand(command === "gh" ? gitHubCli() : command, args, {
+              cwd: environment.worktreePath,
+              timeoutMs,
+              ...(env ? { env } : {}),
+            })
+          ).stdout
+        );
       } finally {
         release();
       }

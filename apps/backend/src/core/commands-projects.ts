@@ -1,3 +1,4 @@
+import { gitHubCli } from "./github-cli-binary.js";
 import { parseGitHubRepositoryRemote } from "@orkestrator/protocol/github-repository";
 import { runRemoteGit } from "./git-noninteractive-env.js";
 import { promises as fs } from "node:fs";
@@ -682,7 +683,7 @@ export async function createProjectFromScratch(
         // never deletes the only recoverable local repository in that case.
         remote.state = "ambiguous";
         await run(
-          "gh",
+          gitHubCli(),
           [
             "repo",
             "create",
@@ -700,8 +701,8 @@ export async function createProjectFromScratch(
         if (error instanceof CommandFailedError && error.executableMissing) {
           remote.state = "none";
           throw new Error(
-            "Could not create the private GitHub repository: GitHub CLI is not installed. " +
-              "Install gh and run `gh auth login`, then retry",
+            "Could not create the private GitHub repository: GitHub CLI is not available. " +
+              "Set it up under GitHub authentication in Settings, then retry",
           );
         }
         throw new Error(`Could not create the private GitHub repository: ${conciseError(error)}`);

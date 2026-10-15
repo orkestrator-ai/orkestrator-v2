@@ -1,3 +1,8 @@
+/**
+ * The agent CLIs. Each is installed only when its agent platform is enabled,
+ * and the container image carries the same versions (see
+ * `tests/unit/version-drift.test.ts`).
+ */
 export const PINNED_TOOLCHAIN_VERSIONS = {
   claude: "2.1.296",
   codex: "0.162.1",
@@ -6,7 +11,36 @@ export const PINNED_TOOLCHAIN_VERSIONS = {
   pi: "1.2.0",
 } as const;
 
-export type ToolchainName = keyof typeof PINNED_TOOLCHAIN_VERSIONS;
+/**
+ * Host tools installed for every profile, whichever agent platforms are
+ * enabled. They are not agents: nothing selects them in the platform picker,
+ * and the container image installs its own copies from the distribution.
+ *
+ * - `gh` backs PR detection, reviews and GitHub cloning. A host `gh` on PATH
+ *   is never shadowed for those calls; this copy is the fallback, so a user
+ *   without one can still sign in from the app.
+ */
+export const PINNED_SUPPORT_TOOL_VERSIONS = {
+  gh: "2.102.0",
+} as const;
+
+export type AgentToolchainName = keyof typeof PINNED_TOOLCHAIN_VERSIONS;
+export type SupportToolName = keyof typeof PINNED_SUPPORT_TOOL_VERSIONS;
+export type ToolchainName = AgentToolchainName | SupportToolName;
+
+/** Every pinned tool, agents and support tools alike. */
+export const PINNED_TOOL_VERSIONS: Readonly<Record<ToolchainName, string>> = {
+  ...PINNED_TOOLCHAIN_VERSIONS,
+  ...PINNED_SUPPORT_TOOL_VERSIONS,
+};
+
+export function isToolchainName(value: string): value is ToolchainName {
+  return Object.hasOwn(PINNED_TOOL_VERSIONS, value);
+}
+
+export function isSupportToolName(value: string): value is SupportToolName {
+  return Object.hasOwn(PINNED_SUPPORT_TOOL_VERSIONS, value);
+}
 export type ToolchainPlatform = "darwin" | "linux";
 export type ToolchainArchitecture = "arm64" | "x64";
 export type ToolchainArchiveFormat = "tar.gz" | "zip" | "raw";
@@ -107,6 +141,8 @@ export const CODEX_RELEASE_BASE =
   `https://github.com/openai/codex/releases/download/rust-v${PINNED_TOOLCHAIN_VERSIONS.codex}` as const;
 export const PI_RELEASE_BASE =
   `https://github.com/earendil-works/pi/releases/download/v${PINNED_TOOLCHAIN_VERSIONS.pi}` as const;
+export const GH_RELEASE_BASE =
+  `https://github.com/cli/cli/releases/download/v${PINNED_SUPPORT_TOOL_VERSIONS.gh}` as const;
 export const OPENCODE_RELEASE_BASE =
   `https://github.com/anomalyco/opencode/releases/download/v${PINNED_TOOLCHAIN_VERSIONS.opencode}` as const;
 
@@ -135,6 +171,37 @@ function codexCodeModeHost(
       allowedHosts: GITHUB_RELEASE_HOSTS,
     },
     executable,
+  };
+}
+
+/**
+ * GitHub publishes `gh` as a signed and notarized binary inside a versioned
+ * folder, so it installs byte-for-byte with no signature repair. The digests
+ * were checked against the release's `gh_<version>_checksums.txt`.
+ */
+function ghArtifact(
+  platform: ToolchainPlatform,
+  architecture: ToolchainArchitecture,
+  archive: { size: number; sha256: string },
+  executable: { size: number; sha256: string },
+): ToolchainArtifact {
+  const version = PINNED_SUPPORT_TOOL_VERSIONS.gh;
+  const target = `${platform === "darwin" ? "macOS" : "linux"}_${architecture === "x64" ? "amd64" : "arm64"}`;
+  const folder = `gh_${version}_${target}`;
+  return {
+    name: "gh",
+    version,
+    platform,
+    architecture,
+    archive: {
+      format: platform === "darwin" ? "zip" : "tar.gz",
+      url: `${GH_RELEASE_BASE}/${folder}.${platform === "darwin" ? "zip" : "tar.gz"}`,
+      entryPath: `${folder}/bin/gh`,
+      size: archive.size,
+      sha256: archive.sha256,
+      allowedHosts: GITHUB_RELEASE_HOSTS,
+    },
+    executable: { fileName: "gh", ...executable },
   };
 }
 
@@ -616,6 +683,54 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       sha256: "0da162bafd73665b3c0d3bb7ba87f873b6c79dcd4887a4eb001cc4c81c3282b8",
     },
   },
+  ghArtifact(
+    "darwin",
+    "arm64",
+    {
+      size: 14_359_983,
+      sha256: "da922c20d1792e5b2cbf375593d7a658acf034c12c84e007e71c76ef959c337e",
+    },
+    {
+      size: 39_834_784,
+      sha256: "8a4258433c81106343144857750316241759d06dcf16265cf3c4864a8f2f2ad6",
+    },
+  ),
+  ghArtifact(
+    "darwin",
+    "x64",
+    {
+      size: 15_995_994,
+      sha256: "b245f24eb2bf5f75b426b4c26da3651a107f8d5b6f4fddfbfccc5679041378b3",
+    },
+    {
+      size: 43_172_576,
+      sha256: "df615405bcf707c5855f22c8be477c62cd7f7af743de75c4805c2b375b3a479c",
+    },
+  ),
+  ghArtifact(
+    "linux",
+    "arm64",
+    {
+      size: 13_917_794,
+      sha256: "7862c86c72f43df3a2d93ddde6f473285b4e2af61b494849846827e513ef6484",
+    },
+    {
+      size: 39_059_616,
+      sha256: "93308395c2d296a63a662742c6366e4db413d2a4870d07bd9b84e491c065d65d",
+    },
+  ),
+  ghArtifact(
+    "linux",
+    "x64",
+    {
+      size: 15_319_960,
+      sha256: "bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386",
+    },
+    {
+      size: 42_086_560,
+      sha256: "7469124f706944133d6a169691dd1c6c3511b12e85878d255e044e2948df4c9b",
+    },
+  ),
 ] as const;
 
 export function selectPinnedToolchainArtifacts(
@@ -633,7 +748,7 @@ export function selectPinnedToolchainArtifacts(
   const matches = artifacts.filter(
     (artifact) => artifact.platform === platform && artifact.architecture === architecture,
   );
-  const expectedNames = Object.keys(PINNED_TOOLCHAIN_VERSIONS) as ToolchainName[];
+  const expectedNames = Object.keys(PINNED_TOOL_VERSIONS) as ToolchainName[];
   const matchedNames = new Set(matches.map((artifact) => artifact.name));
   if (
     matches.length !== expectedNames.length ||
@@ -652,11 +767,13 @@ export function pinnedToolchainArtifacts(
 }
 
 /**
- * The pinned artifacts for an enabled-platform selection.
+ * The pinned artifacts for an enabled-platform selection, plus the support
+ * tools. An empty selection downloads nothing at all; any other selection,
+ * even an SDK-only one such as Cursor, gets the support tools.
  *
- * Artifact names and agent platform ids coincide, and this is the one place that
- * relies on it — keeping the filter here means the selection-to-download mapping
- * is testable without starting Electron.
+ * Agent artifact names and agent platform ids coincide, and this is the one
+ * place that relies on it — keeping the filter here means the
+ * selection-to-download mapping is testable without starting Electron.
  */
 export function pinnedArtifactsForPlatforms(
   enabled: readonly string[],
@@ -664,7 +781,8 @@ export function pinnedArtifactsForPlatforms(
   architecture: string = process.arch,
 ): readonly ToolchainArtifact[] {
   const selected = new Set(enabled);
-  return pinnedToolchainArtifacts(platform, architecture).filter((artifact) =>
-    selected.has(artifact.name),
+  if (selected.size === 0) return [];
+  return pinnedToolchainArtifacts(platform, architecture).filter(
+    (artifact) => selected.has(artifact.name) || isSupportToolName(artifact.name),
   );
 }

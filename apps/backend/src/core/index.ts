@@ -1,3 +1,5 @@
+import { setManagedGitHubCli } from "./github-cli-binary.js";
+import { resolveManagedBinary } from "./commands-agent-support.js";
 import { closeEnvironmentCleanupStorage } from "./environment-cleanup-ledger.js";
 import { multiReviewNativeFixOptions } from "./multi-review-native-fix.js";
 import { cleanupStaleManifestProbes } from "./docker-image.js";
@@ -325,6 +327,7 @@ export class OrkestratorBackend {
     context.deleteWorkflowResultsByEnvironment = (environmentId: string) =>
       this.workflowResults.deleteByEnvironment(environmentId);
     this.context = context;
+    setManagedGitHubCli(resolveManagedBinary(context, "gh"));
     this.coordinators = new CoordinatorService(
       storage,
       () => this.controlMcp.getSettings(),

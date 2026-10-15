@@ -4,66 +4,70 @@ Status: Implemented 2026-10-15 on `fix-startup-claude-login-dialog-blocks-app-6b
 
 ## What the user sees
 
-- **Startup.** When `gh` is missing, the "GitHub CLI Not Found" dialog
-  now includes the setup steps:
-  - On macOS with Homebrew: an **Install with Homebrew** button.
-  - Elsewhere: the install commands, **Install instructions** (opens
-    cli.github.com) and **Check again**.
-  - Once `gh` is installed: **Sign in to GitHub**. It shows GitHub's one-time
-    code with a copy button and an **Open sign-in page** button, then waits for
-    the user to approve.
-  - The dialog stays open after an install so the user can sign in. Its button
-    reads **Done** once `gh` is installed, and **Continue Without GitHub CLI**
-    until then.
+- **No install step.** Orkestrator downloads its own pinned, checksum-verified
+  `gh` (2.102.0) with the agent CLIs, so `gh` is available without Homebrew,
+  apt or winget.
+- **Startup.** When `gh` is signed out, a dismissible "Sign In to GitHub"
+  dialog offers **Sign in to GitHub**:
+  - It shows GitHub's one-time code with a copy button, an **Open sign-in
+    page** button and "Waiting for you to approve the sign-in…".
+  - Once you approve, the dialog shows the signed-in state and its button
+    reads **Done**. Before that it reads **Not Now**.
+  - Dismissing it lasts for the session, like the other startup notices.
+- **No `gh` at all.** This is rare: Windows, or a failed toolchain download.
+  The old "GitHub CLI Not Found" dialog appears with install commands, an
+  **Install instructions** link and **Check again**.
 - **Settings → GitHub authentication.** With "Use host GitHub CLI
-  credentials" on, the same setup appears under the switch. This covers a `gh`
-  that is installed but signed out, which the startup dialog does not prompt
-  for.
+  credentials" on, the same setup appears under the switch.
+- **Isolated `agent-test` profiles** are never offered sign-in. They isolate
+  the host's GitHub configuration, and the backend refuses to write a login
+  there.
 
 ## How it works
 
-- `apps/backend/src/core/github-cli-setup.ts` has the commands:
-  - `get_github_cli_status` returns `{installed, authenticated,
-    canInstallWithHomebrew}`. `authenticated` is `gh auth token` for
-    github.com, the same check the container credential status uses.
-  - `start_github_cli_install` and `get_github_cli_install` run `brew install
-    gh` in the background with `NONINTERACTIVE=1`, a 10-minute cap and the
-    last lines of output on failure. Homebrew's bin directory is already on the
-    backend's PATH (`fix-path.ts`), so the new `gh` is used without a restart.
-  - `start_github_cli_login`, `get_github_cli_login` and
-    `cancel_github_cli_login` run `gh auth login --web --hostname github.com`.
-    Without a terminal, gh prints the code and `https://github.com/login/device`
-    and exits once the user approves.
-- The sign-in reuses the agent-account login driver
-  (`beginAgentAccountLogin`, kind `"github"`):
-  - It gets a GitHub output parser.
-  - It uses the same no-op `open`/`xdg-open` shim. The renderer opens the page,
-    which also works from a browser client on another machine.
-  - `GH_TOKEN` and `GITHUB_TOKEN` are removed from the login's environment.
-  - gh stores the login where it always does; the backend never sees the
-    token.
-- Isolated `agent-test` profiles refuse install and sign-in, and never offer
-  Homebrew, because both would write to the host.
-- Renderer: `apps/web/src/components/github/GitHubCliSetup.tsx`, with API
-  wrappers in `lib/backend/docker-skills.ts`.
+- **Toolchain** (`packages/toolchain/src/manifest.ts`):
+  - `PINNED_SUPPORT_TOOL_VERSIONS = { gh }` sits beside the agents'
+    `PINNED_TOOLCHAIN_VERSIONS`. `ToolchainName` covers both, and
+    `PINNED_TOOL_VERSIONS` merges them.
+  - There are four `ghArtifact(...)` entries: the macOS zip and Linux tar.gz
+    for arm64 and x64. They come from `cli/cli` releases, and the digests were
+    checked against the release's checksums file.
+  - The macOS binary is signed and notarized by GitHub and installs unmodified.
+  - `pinnedArtifactsForPlatforms` adds support tools to every non-empty
+    selection; an empty selection still downloads nothing. The headless
+    installer (`install.ts`) adds them to every selection, and dev profiles
+    seed them too.
+  - The Docker image keeps its distribution `gh`. The drift test asserts that
+    `gh` is not treated as an agent.
+- **Backend:**
+  - `github-cli-binary.ts` resolves the managed `gh` once at startup, falling
+    back to `gh` on `PATH`. Every host-side call uses it: the token read, PR
+    monitor, reviews, project creation, the clone browser and local
+    environment runners. Orkestrator's terminals and agents already find the
+    managed copy first on `PATH`, and all copies share gh's configuration and
+    login.
+  - `check_github_cli` uses the same `checkHostTool` as the agents (moved to
+    `host-tools.ts`). Agent-test profiles therefore see only their provisioned
+    copy.
+  - `github-cli-setup.ts` provides:
+    - `get_github_cli_status`, returning `{installed, authenticated,
+      canSignIn}`;
+    - start, poll and cancel commands for `gh auth login --web --hostname
+      github.com`, through the agent-account login driver (kind `"github"`).
+    The sign-in removes `GH_TOKEN` and `GITHUB_TOKEN` from the login's
+    environment, uses a no-op browser shim so the renderer opens the page, and
+    never sees the token.
+- **Renderer:** `components/github/GitHubCliSetup.tsx`, used by the startup
+  dialog in `App.tsx` and by `GlobalSettings.sections.tsx`.
+- **Messages:** the missing-`gh` errors in project creation and the clone
+  browser now point at Settings → GitHub authentication.
 
-## Not done: a managed `gh` download
+## Verified
 
-The alternative was to ship `gh` the way Orkestrator ships the agent CLIs:
-pinned, checksum-verified and installed into its own toolchain. That works
-without Homebrew and on Linux, but it is a larger change:
-
-- `PINNED_TOOLCHAIN_VERSIONS` defines `ToolchainName`.
-  `selectPinnedToolchainArtifacts` requires every name for each platform, and
-  `pinnedArtifactsForPlatforms` filters by agent platform. `gh` is not an agent
-  platform.
-- Each activated set gets its own bin directory, keyed by its contents. Adding
-  `gh` at runtime yields a new directory that the running backend never sees
-  until it restarts. Installs, leases and pruning also share one cache-wide
-  transaction.
-- Every `gh` call site runs `runCommand("gh", …)` against PATH. They would have
-  to switch to a resolver that prefers a host `gh` (keeping its Keychain login)
-  and falls back to the managed binary.
-
-If Linux users without `gh` matter, do this next. The sign-in flow above works
-unchanged with a managed binary.
+- The real toolchain manager installed the pinned `gh` into a scratch data
+  directory on macOS arm64. Download, digests, code signature, `--version`
+  probe and activation all passed in about a second.
+- `RUN_LIVE_TOOLCHAIN_ARTIFACTS=1 bun scripts/verify-toolchain-artifacts.ts
+  --tool=gh` verified all four artifacts.
+- The backend sign-in, run against the real `gh` with a scratch config,
+  returned `https://github.com/login/device` and a code, and cancelled cleanly.

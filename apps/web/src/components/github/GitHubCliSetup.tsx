@@ -4,13 +4,10 @@ import { Button } from "@/components/ui/button";
 import { writeText } from "@/lib/native/clipboard";
 import {
   cancelGitHubCliLogin,
-  getGitHubCliInstall,
   getGitHubCliLogin,
   getGitHubCliStatus,
   openInBrowser,
-  startGitHubCliInstall,
   startGitHubCliLogin,
-  type GitHubCliInstallProgress,
   type GitHubCliLoginProgress,
   type GitHubCliStatus,
 } from "@/lib/backend";
@@ -28,9 +25,9 @@ function CommandLine({ children }: { children: string }) {
 }
 
 /**
- * Gets the host's GitHub CLI working: installs it with Homebrew where that is
- * possible, otherwise shows how to install it, then signs it in with GitHub's
- * device flow. Both run on the backend host, so this also works from a browser
+ * Gets the GitHub CLI working: signs it in with GitHub's device flow, or, in
+ * the rare case Orkestrator's own copy is unavailable, shows how to install
+ * one. Sign-in runs on the backend host, so this also works from a browser
  * client on another machine.
  */
 export function GitHubCliSetup({
@@ -44,7 +41,6 @@ export function GitHubCliSetup({
 }) {
   const [status, setStatus] = useState<GitHubCliStatus | null>(null);
   const [checking, setChecking] = useState(false);
-  const [install, setInstall] = useState<GitHubCliInstallProgress>({ state: "idle" });
   const [login, setLogin] = useState<GitHubCliLoginProgress>({ state: "idle" });
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -71,12 +67,7 @@ export function GitHubCliSetup({
   useEffect(() => {
     mounted.current = true;
     void refresh();
-    // An install or sign-in outlives this view: reopening it resumes the one running.
-    void getGitHubCliInstall()
-      .then((progress) => {
-        if (mounted.current && progress.state === "pending") setInstall(progress);
-      })
-      .catch(() => undefined);
+    // A sign-in outlives this view: reopening it resumes the one running.
     void getGitHubCliLogin()
       .then((progress) => {
         if (mounted.current && progress.state === "pending") setLogin(progress);
@@ -86,22 +77,6 @@ export function GitHubCliSetup({
       mounted.current = false;
     };
   }, [refresh]);
-
-  useEffect(() => {
-    if (install.state !== "pending") return;
-    const timer = window.setTimeout(async () => {
-      try {
-        const next = await getGitHubCliInstall();
-        if (!mounted.current) return;
-        setInstall(next);
-        if (next.state === "failed") setError(next.error ?? "The install failed.");
-        if (next.state !== "pending") await refresh();
-      } catch (cause) {
-        if (mounted.current) setError(messageOf(cause));
-      }
-    }, pollIntervalMs);
-    return () => window.clearTimeout(timer);
-  }, [install, pollIntervalMs, refresh]);
 
   useEffect(() => {
     if (login.state !== "pending") return;
@@ -128,14 +103,6 @@ export function GitHubCliSetup({
     }
   };
 
-  const beginInstall = () =>
-    run(async () => {
-      const next = await startGitHubCliInstall();
-      if (!mounted.current) return;
-      setInstall(next);
-      if (next.state !== "pending") await refresh();
-    });
-
   const beginLogin = () =>
     run(async () => {
       setCopied(false);
@@ -153,7 +120,6 @@ export function GitHubCliSetup({
       setCopied(true);
     });
 
-  const installing = install.state === "pending";
   const signingIn = login.state === "pending";
 
   let body: ReactNode;
@@ -165,23 +131,7 @@ export function GitHubCliSetup({
       </p>
     );
   } else if (!status.installed) {
-    body = status.canInstallWithHomebrew ? (
-      <div className="space-y-2">
-        <p className="text-xs text-muted-foreground">
-          The GitHub CLI is not installed. Orkestrator can install it with Homebrew.
-        </p>
-        <Button type="button" size="sm" onClick={() => void beginInstall()} disabled={installing}>
-          {installing ? (
-            <>
-              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              Installing GitHub CLI…
-            </>
-          ) : (
-            "Install with Homebrew"
-          )}
-        </Button>
-      </div>
-    ) : (
+    body = (
       <div className="space-y-2 text-xs text-muted-foreground">
         <p>The GitHub CLI is not installed. Install it, then check again.</p>
         <p className="font-medium text-foreground">macOS (Homebrew)</p>
@@ -214,6 +164,12 @@ export function GitHubCliSetup({
           </Button>
         </div>
       </div>
+    );
+  } else if (!status.authenticated && !status.canSignIn) {
+    body = (
+      <p className="text-xs text-muted-foreground">
+        The GitHub CLI is not signed in, and this profile cannot sign it in.
+      </p>
     );
   } else if (!status.authenticated) {
     body = signingIn ? (

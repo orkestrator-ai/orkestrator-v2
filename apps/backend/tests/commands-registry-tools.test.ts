@@ -960,6 +960,35 @@ exit 0
     }
   });
 
+  test("finds the toolchain's gh, and only that one in agent-test profiles", async () => {
+    const managedRoot = await createTempDir("ork-github-cli-managed-");
+    const pathRoot = await createTempDir("ork-github-cli-path-");
+    const { context } = createContext(createEnvironment());
+    context.appRoot = managedRoot;
+    context.resourceRoot = managedRoot;
+    context.toolchainBinDir = managedRoot;
+    const commands = createCommandRegistry();
+    const previousPath = process.env.PATH;
+
+    try {
+      process.env.PATH = "";
+      await expect(commands.get("check_github_cli")?.({}, context)).resolves.toBe(false);
+      await fs.writeFile(path.join(managedRoot, "gh"), "managed gh");
+      await expect(commands.get("check_github_cli")?.({}, context)).resolves.toBe(true);
+
+      await fs.rm(path.join(managedRoot, "gh"));
+      await fs.writeFile(path.join(pathRoot, "gh"), "#!/bin/sh\nexit 0\n");
+      await fs.chmod(path.join(pathRoot, "gh"), 0o755);
+      process.env.PATH = `${pathRoot}:/usr/bin:/bin`;
+      await expect(commands.get("check_github_cli")?.({}, context)).resolves.toBe(true);
+      context.runtimeFlavor = "agent-test";
+      await expect(commands.get("check_github_cli")?.({}, context)).resolves.toBe(false);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+  });
+
   test("reads the host Claude login when an agent-test profile may use it", async () => {
     const hostHome = await createTempDir("ork-agent-test-claude-home-");
     const configDir = await createTempDir("ork-agent-test-claude-config-");

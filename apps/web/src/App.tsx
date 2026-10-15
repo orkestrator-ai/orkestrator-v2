@@ -38,6 +38,7 @@ import {
   checkClaudeConfig,
   checkGithubCli,
   getAvailableAiCli,
+  getGitHubCliStatus,
   getConfig,
   getEnvironment,
   getResourceRevisionManifest,
@@ -349,6 +350,9 @@ function App() {
   const [isCheckingClaude, setIsCheckingClaude] = useState(false);
   const [githubCliWarningDismissed, setGithubCliWarningDismissed] = useState(false);
   const [githubCliSetupStatus, setGithubCliSetupStatus] = useState<GitHubCliStatus | null>(null);
+  // Latched so the dialog stays open, showing the result, once the sign-in it
+  // offered has finished.
+  const [githubSignInOffered, setGithubSignInOffered] = useState(false);
   const [claudeLoginNoticeDismissed, setClaudeLoginNoticeDismissed] = useState(false);
   const [localBackendUnavailableMessage, setLocalBackendUnavailableMessage] = useState<
     string | null
@@ -910,13 +914,34 @@ function App() {
     claudeConfigAvailable === false &&
     !claudeLoginNoticeDismissed;
 
+  // Orkestrator installs its own gh with the agent CLIs, so a missing one is
+  // rare; a signed-out one is the usual reason GitHub features do not work.
+  useEffect(() => {
+    if (hostToolCheckStatus !== "complete" || githubCliAvailable !== true) return;
+    if (githubCliSetupStatus) return;
+    let active = true;
+    void getGitHubCliStatus()
+      .then((status) => {
+        if (!active) return;
+        setGithubCliSetupStatus(status);
+        if (status.installed && !status.authenticated && status.canSignIn) {
+          setGithubSignInOffered(true);
+        }
+      })
+      .catch((error) => console.warn("[App] Could not read GitHub CLI status:", error));
+    return () => {
+      active = false;
+    };
+  }, [hostToolCheckStatus, githubCliAvailable, githubCliSetupStatus]);
+
   const showGithubWarning =
     hostToolWarningsVisible &&
     hostToolCheckStatus === "complete" &&
     typeof availableAiCli === "string" &&
     !showClaudeLoginNotice &&
-    githubCliAvailable === false &&
+    (githubCliAvailable === false || githubSignInOffered) &&
     !githubCliWarningDismissed;
+  const githubCliMissing = githubCliAvailable === false && !githubCliSetupStatus?.installed;
 
   const handleStartEnvironmentFromOverlay = useCallback(
     async (environmentId: string, initialPrompt?: string): Promise<boolean> => {
@@ -1551,20 +1576,27 @@ function App() {
           </AlertDialogContent>
         </AlertDialog>
 
-        {/* GitHub CLI setup dialog - non-blocking, dismissible; installs and signs in gh */}
+        {/* GitHub CLI setup dialog - non-blocking, dismissible; signs in gh */}
         <AlertDialog open={showGithubWarning}>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>GitHub CLI Not Found</AlertDialogTitle>
+              <AlertDialogTitle>
+                {githubCliMissing ? "GitHub CLI Not Found" : "Sign In to GitHub"}
+              </AlertDialogTitle>
               <AlertDialogDescription>
-                The GitHub CLI (gh) is not installed on your system. While not required, it enables
-                features like PR detection and GitHub integration.
+                {githubCliMissing
+                  ? "The GitHub CLI (gh) is not installed on your system. While not required, it enables features like PR detection and GitHub integration."
+                  : "Orkestrator uses the GitHub CLI for PR detection, reviews and cloning private repositories. While not required, sign in to use them."}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <GitHubCliSetup onStatusChange={setGithubCliSetupStatus} />
             <AlertDialogFooter>
               <AlertDialogAction onClick={handleCloseGithubCliSetup}>
-                {githubCliSetupStatus?.installed ? "Done" : "Continue Without GitHub CLI"}
+                {githubCliMissing
+                  ? "Continue Without GitHub CLI"
+                  : githubCliSetupStatus?.authenticated
+                    ? "Done"
+                    : "Not Now"}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

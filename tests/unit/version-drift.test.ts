@@ -5,8 +5,10 @@ import { join } from "node:path";
 import {
   CODEX_RELEASE_BASE,
   OPENCODE_RELEASE_BASE,
+  GH_RELEASE_BASE,
   PINNED_TOOLCHAIN_ARTIFACTS,
   PINNED_TOOLCHAIN_VERSIONS,
+  PINNED_TOOL_VERSIONS,
   pinnedToolchainArtifacts,
   selectPinnedToolchainArtifacts,
 } from "@orkestrator/toolchain/manifest";
@@ -920,8 +922,25 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     // stale binary's size and digest would still agree with each other, so the
     // installer would happily verify and install the wrong release.
     for (const artifact of PINNED_TOOLCHAIN_ARTIFACTS) {
-      expect(artifact.version).toBe(PINNED_TOOLCHAIN_VERSIONS[artifact.name]);
+      expect(artifact.version).toBe(PINNED_TOOL_VERSIONS[artifact.name]);
       expect(artifact.archive.url).toContain(artifact.version);
+    }
+  });
+
+  test("gh is a support tool: pinned outside the agents and installed unmodified", () => {
+    // The container image installs gh from the distribution, so it has no
+    // Dockerfile pin and must not be mistaken for an agent.
+    expect(Object.keys(PINNED_TOOLCHAIN_VERSIONS)).not.toContain("gh");
+    const ghArtifacts = PINNED_TOOLCHAIN_ARTIFACTS.filter((artifact) => artifact.name === "gh");
+    expect(ghArtifacts).toHaveLength(4);
+    for (const artifact of ghArtifacts) {
+      expect(artifact.version).toBe(PINNED_TOOL_VERSIONS.gh);
+      expect(artifact.archive.url.startsWith(`${GH_RELEASE_BASE}/`)).toBe(true);
+      expect(artifact.archive.entryPath).toMatch(
+        /^gh_[\d.]+_(macOS|linux)_(arm64|amd64)\/bin\/gh$/,
+      );
+      // GitHub signs and notarizes the macOS binary; repairing it would replace that.
+      expect(artifact.executable.repairInvalidMacSignature).toBeUndefined();
     }
   });
 
@@ -1145,7 +1164,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     const expected = new Set<string>();
     for (const platform of ["darwin", "linux"]) {
       for (const architecture of ["arm64", "x64"]) {
-        for (const name of Object.keys(PINNED_TOOLCHAIN_VERSIONS)) {
+        for (const name of Object.keys(PINNED_TOOL_VERSIONS)) {
           expected.add(`${name}:${platform}:${architecture}`);
         }
       }
@@ -1167,7 +1186,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
         }
         expect(artifact.archive.size).toBeGreaterThan(0);
         expect(artifact.executable.size).toBeGreaterThan(0);
-        expect(artifact.version).toBe(PINNED_TOOLCHAIN_VERSIONS[artifact.name]);
+        expect(artifact.version).toBe(PINNED_TOOL_VERSIONS[artifact.name]);
         return `${artifact.name}:${artifact.platform}:${artifact.architecture}`;
       }),
     );
@@ -1240,7 +1259,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
       for (const architecture of ["arm64", "x64"] as const) {
         const selected = pinnedToolchainArtifacts(platform, architecture);
         expect<string[]>(selected.map((artifact) => artifact.name).sort()).toEqual(
-          Object.keys(PINNED_TOOLCHAIN_VERSIONS).sort(),
+          Object.keys(PINNED_TOOL_VERSIONS).sort(),
         );
         expect(
           selected.every(
@@ -1262,7 +1281,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
 
   test("rejects incomplete or duplicate target manifests", () => {
     const darwinArm64 = pinnedToolchainArtifacts("darwin", "arm64");
-    expect(darwinArm64).toHaveLength(Object.keys(PINNED_TOOLCHAIN_VERSIONS).length);
+    expect(darwinArm64).toHaveLength(Object.keys(PINNED_TOOL_VERSIONS).length);
 
     expect(() =>
       selectPinnedToolchainArtifacts(

@@ -6,12 +6,11 @@ import { AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV } from "./commands-runtime-state.
 import {
   cancelGitHubCliLogin,
   getGitHubCliStatus,
-  gitHubCliInstallProgress,
   gitHubCliLoginProgress,
-  startGitHubCliInstall,
   startGitHubCliLogin,
 } from "./github-cli-setup.js";
-import { commandExists, homePath, pathExists } from "./shell.js";
+import { checkHostTool } from "./host-tools.js";
+import { homePath, pathExists } from "./shell.js";
 import {
   asString,
   asAgentSkillProvider,
@@ -20,46 +19,7 @@ import {
   hasCursorSdkBridge,
   hasManagedAcpBinary,
   getContainerGitHubCredentialStatus,
-  resolveManagedBinary,
 } from "./commands-helpers.js";
-
-type HostToolSource = "managed" | "path" | "missing";
-
-const lastHostToolSourceByContext = new WeakMap<CommandContext, Map<string, HostToolSource>>();
-
-function logHostToolAvailability(
-  context: CommandContext,
-  name: string,
-  source: HostToolSource,
-): void {
-  let sources = lastHostToolSourceByContext.get(context);
-  if (!sources) {
-    sources = new Map();
-    lastHostToolSourceByContext.set(context, sources);
-  }
-  if (sources.get(name) === source) return;
-  sources.set(name, source);
-  const message = `[Tooling] Host tool availability: tool=${name} available=${source !== "missing"} source=${source}`;
-  if (source === "missing") console.warn(message);
-  else console.info(message);
-}
-
-async function checkHostTool(context: CommandContext, name: string) {
-  if (resolveManagedBinary(context, name)) {
-    logHostToolAvailability(context, name, "managed");
-    return true;
-  }
-  // An agent-test profile provisions its own toolchain. A host install on PATH
-  // is a platform the profile never set up, and its login state is one the
-  // isolated profile cannot see.
-  if (context.runtimeFlavor === "agent-test") {
-    logHostToolAvailability(context, name, "missing");
-    return false;
-  }
-  const available = await commandExists(name);
-  logHostToolAvailability(context, name, available ? "path" : "missing");
-  return available;
-}
 
 /**
  * Where this runtime's Claude login would be, or null when it may not use one.
@@ -167,23 +127,15 @@ export function registerToolingCommands(
   register("check_cursor_cli", (_args, context) => hasCursorSdkBridge(context));
   register("check_grok_cli", (_args, context) => hasManagedAcpBinary(context, "grok"));
   register("check_pi_cli", (_args, context) => checkHostTool(context, "pi"));
-  register("check_github_cli", () => commandExists("gh"));
+  register("check_github_cli", (_args, context) => checkHostTool(context, "gh"));
   register("get_github_cli_status", (args, context) => {
     assertOnlyKeys(args, [], "get_github_cli_status argument");
     return getGitHubCliStatus(context);
   });
   /**
-   * Install and sign-in are split into start and poll like the agent account
-   * sign-in: both outlast a request, and sign-in waits on the user.
+   * Sign-in is split into start and poll like the agent account sign-in: it
+   * waits on the user and must not hold a request open.
    */
-  register("start_github_cli_install", (args, context) => {
-    assertOnlyKeys(args, [], "start_github_cli_install argument");
-    return startGitHubCliInstall(context);
-  });
-  register("get_github_cli_install", (args) => {
-    assertOnlyKeys(args, [], "get_github_cli_install argument");
-    return gitHubCliInstallProgress();
-  });
   register("start_github_cli_login", (args, context) => {
     assertOnlyKeys(args, [], "start_github_cli_login argument");
     return startGitHubCliLogin(context);

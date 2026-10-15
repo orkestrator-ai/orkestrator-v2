@@ -225,7 +225,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     expect(await screen.findByText("No GitHub CLI credentials found")).toBeTruthy();
-    expect(screen.getByText(/run gh auth login/i)).toBeTruthy();
+    expect(screen.getByText(/sign in to GitHub/i)).toBeTruthy();
     expect(createEnvironment).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Create anyway" }));

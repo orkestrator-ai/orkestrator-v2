@@ -23,7 +23,7 @@ import { createGunzip } from "node:zlib";
 import * as tar from "tar-stream";
 import yauzl from "yauzl";
 import {
-  PINNED_TOOLCHAIN_VERSIONS,
+  isToolchainName,
   pinnedToolchainArtifacts,
   type ToolchainArchive,
   type ToolchainArtifact,
@@ -1556,7 +1556,7 @@ export async function leaseActivatedToolchainSet(dataDir: string, binDir: string
   );
   for (const entry of entries) {
     if (!entry.isSymbolicLink()) continue;
-    if (!Object.hasOwn(PINNED_TOOLCHAIN_VERSIONS, entry.name)) continue;
+    if (!isToolchainName(entry.name)) continue;
     const link = path.join(binDir, entry.name);
     const target = path.resolve(binDir, await readlink(link));
     const parts = path.relative(rootDir, target).split(path.sep);
@@ -1568,11 +1568,7 @@ export async function leaseActivatedToolchainSet(dataDir: string, binDir: string
       ))
     )
       continue;
-    await acquireVersionLease(
-      rootDir,
-      { name: entry.name as ToolchainName, version: parts[1] },
-      open,
-    );
+    await acquireVersionLease(rootDir, { name: entry.name, version: parts[1] }, open);
   }
 }
 

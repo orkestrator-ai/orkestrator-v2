@@ -19,6 +19,8 @@ import type { ProjectGitService } from "./project-git-service.js";
 export type BackendEmit = (event: string, payload: unknown) => void;
 
 export type CommandContext = {
+  /** The update workflow (channels, consent, jobs, host protocol). */
+  updates?: import("./updates/update-service.js").UpdateService;
   design?: import("./design/index.js").DesignService;
   previews?: import("./preview-runtime.js").PreviewRuntime;
   mcpManagement?: import("./mcp-management/service.js").McpManagementService;
@@ -82,7 +84,24 @@ export type CommandContext = {
   agentRegistry?: import("./agent-registry.js").AgentRegistry;
 };
 
+/**
+ * Where a gateway request came from, set by the gateway and never taken from
+ * the request body. In-process calls have no origin.
+ */
+export type InvocationOrigin = {
+  /** `control` is the loopback listener for this machine; `browser` serves remote clients. */
+  listener: "control" | "browser";
+  remoteAddress: string | null;
+  /**
+   * `Tailscale-User-Login`, kept only for a loopback request on the browser
+   * listener, which is where the managed `tailscale serve` delivers tailnet
+   * requests with that header set.
+   */
+  tailscaleUser: string | null;
+};
+
 export type CommandHandler = (
   args: JsonRecord,
   context: CommandContext,
+  origin?: InvocationOrigin,
 ) => Promise<unknown> | unknown;

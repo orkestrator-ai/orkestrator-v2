@@ -203,16 +203,29 @@ metadata without changing the local packaging configuration.
 
 ## How the in-app updater decides to run
 
-`apps/desktop/electron/auto-update.ts` enables `electron-updater` only when all
-of these hold: the app is packaged, the runtime flavor is `production`,
-`app-update.yml` exists in the app's resources, and (on Linux) the app runs as an
-AppImage. `app-update.yml` is only embedded by the release configs, so local
-`package:*` installs never update themselves. Set
-`ORKESTRATOR_DISABLE_AUTO_UPDATE=1` to opt out.
+The backend owns the update workflow (`apps/backend/src/core/updates/`): it
+reads the channel index, verifies the target's requirements manifest, shows
+what the update needs, and runs the job. Electron main installs on its behalf
+(`apps/desktop/electron/update-host.ts`): it pins electron-updater to the one
+release the backend resolved, downloads and verifies it, and restarts into it.
+See [release-channels-and-updates.md](../architecture/release-channels-and-updates.md).
 
-It checks 30 seconds after launch and every 6 hours, downloads in the
-background, then asks the user to restart. "Later" installs on the next quit.
-**Orkestrator AI → Check for Updates…** runs a check on demand.
+The desktop app can install updates only when all of these hold
+(`autoUpdateUnavailableReason` in `apps/desktop/electron/auto-update.ts`): the
+app is packaged, the runtime flavor is `production`, `app-update.yml` exists in
+the app's resources, and (on Linux) the app runs as an AppImage.
+`app-update.yml` is only embedded by the release configs, so local `package:*`
+installs never update themselves. Set `ORKESTRATOR_DISABLE_AUTO_UPDATE=1` to
+turn checks and installs off.
+
+The backend checks 30 seconds after launch and every 6 hours. When a newer
+release is on the installation's channel (Settings › Updates), a toast and a
+title-bar **Update** button open the update dialog, which lists what the
+release needs. Nothing is downloaded before the user approves: **Update and
+restart** fetches the pinned provider binaries and the app, verifies them, and
+restarts; **Download now, restart later** stops at **Restart now** / **Install
+when I quit**. **Orkestrator AI → Check for Updates…** runs a check and opens
+the dialog.
 
 ## Minimum macOS version
 

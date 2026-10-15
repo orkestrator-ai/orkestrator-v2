@@ -37,6 +37,16 @@ interface Window {
     shell?: {
       openExternal(url: string): Promise<void>;
     };
+    /**
+     * Electron only: this app's update commands (`update_*`), always sent to
+     * the local backend whichever connection the window is bound to.
+     */
+    updates?: {
+      invoke<T>(
+        command: import("@orkestrator/protocol/updates").UpdateClientCommand,
+        args?: Record<string, unknown>,
+      ): Promise<T>;
+    };
     /** Electron only: checks protected macOS folders before agent work begins. */
     permissions?: {
       getMacOsStatus(): Promise<

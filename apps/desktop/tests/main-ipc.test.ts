@@ -13,6 +13,7 @@ function createHarness(
     backend?: { invoke: ReturnType<typeof mock> } | null;
     window?: unknown;
     browserPreviews?: boolean;
+    invokeLocalUpdate?: ReturnType<typeof mock>;
   } = {},
 ) {
   const trustedRendererUrl = "file:///app/web/index.html";
@@ -189,6 +190,7 @@ function createHarness(
     openConnectionWindow,
     browserPreviews: options.browserPreviews === false ? undefined : browserPreviews,
     trustedRendererUrl,
+    invokeLocalUpdate: options.invokeLocalUpdate,
   });
 
   const invokeFrom = (senderUrl: string, channel: string, ...args: unknown[]) => {
@@ -1090,5 +1092,41 @@ describe("main IPC registration", () => {
 
     await harness.invoke("orkestrator:process:exit", "invalid");
     expect(harness.appApi.exit).toHaveBeenCalledWith(0);
+  });
+
+  test("routes only client update commands to the local backend", async () => {
+    const invokeLocalUpdate = mock(async (command: string, args: Record<string, unknown>) => ({
+      command,
+      args,
+    }));
+    const harness = createHarness({ invokeLocalUpdate });
+    await expect(
+      harness.invoke("orkestrator:updates:invoke", "update_check", { ignored: [] }),
+    ).resolves.toEqual({ command: "update_check", args: { ignored: [] } });
+    await expect(
+      harness.invoke("orkestrator:updates:invoke", "update_get_status"),
+    ).resolves.toEqual({
+      command: "update_get_status",
+      args: {},
+    });
+    // The installer's host commands are Electron main's own.
+    await expect(
+      harness.invoke("orkestrator:updates:invoke", "update_host_outcome", {}),
+    ).rejects.toThrow("Expected an update command");
+    await expect(
+      harness.invoke("orkestrator:updates:invoke", "delete_environment", {}),
+    ).rejects.toThrow("Expected an update command");
+    await expect(
+      harness.invokeFrom("https://evil.example", "orkestrator:updates:invoke", "update_check"),
+    ).rejects.toThrow("untrusted renderer");
+    expect(invokeLocalUpdate).toHaveBeenCalledTimes(2);
+    expect(harness.backend?.invoke).not.toHaveBeenCalled();
+  });
+
+  test("reports update commands as unavailable before the local backend runs", async () => {
+    const harness = createHarness();
+    await expect(harness.invoke("orkestrator:updates:invoke", "update_check")).rejects.toThrow(
+      "not available yet",
+    );
   });
 });

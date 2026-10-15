@@ -28,6 +28,7 @@ import {
   type MacOsPermissionsStatus,
 } from "@orkestrator/protocol/macos-permissions";
 import { isTrustedRendererUrl } from "./window.js";
+import { isUpdateClientCommand, type UpdateClientCommand } from "@orkestrator/protocol/updates";
 import { macOsPrivacySettingsUrl } from "./macos-permissions.js";
 import {
   readClipboardImage,
@@ -152,6 +153,14 @@ export type MainIpcDependencies = {
   browserPreviews?: BrowserPreviewController;
   getBrowserPreviews?: (event: IpcEventLike) => BrowserPreviewController | null;
   trustedRendererUrl: string;
+  /**
+   * This app's own update commands, always on the local backend whichever
+   * connection the window is bound to. Absent until the local backend runs.
+   */
+  invokeLocalUpdate?: (
+    command: UpdateClientCommand,
+    args: Record<string, unknown>,
+  ) => Promise<unknown>;
 };
 
 function browserPreviewTabId(value: unknown): string {
@@ -239,6 +248,7 @@ export function registerMainIpc({
   browserPreviews,
   getBrowserPreviews,
   trustedRendererUrl,
+  invokeLocalUpdate,
 }: MainIpcDependencies): void {
   const isTrustedSender = (event: IpcEventLike): boolean =>
     isTrustedRendererUrl(event.senderFrame?.url ?? "", trustedRendererUrl);
@@ -298,6 +308,18 @@ export function registerMainIpc({
       throw new Error("Expected a macOS privacy settings pane");
     }
     return shellApi.openExternal(macOsPrivacySettingsUrl(pane));
+  });
+
+  handle("orkestrator:updates:invoke", async (_event, command: unknown, args?: unknown) => {
+    // Only the client update commands: the installer's host commands are
+    // Electron main's own and never reachable from a renderer.
+    if (!isUpdateClientCommand(command)) throw new Error("Expected an update command");
+    if (!invokeLocalUpdate) throw new Error("Updates are not available yet");
+    const safeArgs =
+      args && typeof args === "object" && !Array.isArray(args)
+        ? (args as Record<string, unknown>)
+        : {};
+    return invokeLocalUpdate(command, safeArgs);
   });
 
   handle("orkestrator:web-client:get-status", (event) => getWebClientStatus(event));

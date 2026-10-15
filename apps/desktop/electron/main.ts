@@ -74,11 +74,16 @@ import {
   registerWindowAllClosedQuit,
 } from "./quit-policy.js";
 import { createApplicationMenuTemplate } from "./application-menu.js";
+import { autoUpdateUnavailableReason, type UpdaterLike } from "./auto-update.js";
+import { createDesktopUpdateHost, type DesktopUpdateHost } from "./update-host.js";
 import {
-  createAutoUpdateController,
-  isAutoUpdateSupported,
-  type AutoUpdateController,
-} from "./auto-update.js";
+  LOCAL_UPDATE_STATUS_EVENT,
+  OPEN_UPDATE_PANEL_EVENT,
+  UPDATE_FEED_URL_ENV,
+  UPDATE_STATUS_EVENT,
+  type UpdateStatusSnapshot,
+} from "@orkestrator/protocol/updates";
+import { RELEASE_DOWNLOAD_BASE_URL } from "@orkestrator/protocol/release-channels";
 import {
   applyWindowTitle,
   focusWindowById,
@@ -170,7 +175,9 @@ const quitReopen = registerQuitReopenRelaunch({
   allowRelaunch: runtimeFlavor !== "agent-test",
 });
 let startupComplete = false;
-let autoUpdate: AutoUpdateController | null = null;
+let updateHost: DesktopUpdateHost | null = null;
+/** The menu offers Check for Updates… only on an install that can update itself. */
+let canUpdateItself = false;
 const toolchainProgress = createToolchainProgressController({
   createWindow: () =>
     createToolchainBootstrapWindow({
@@ -212,6 +219,10 @@ function emitToConnection(connectionId: string, event: string, payload: unknown)
 function emitToFocusedWindow(event: string, payload: unknown): void {
   const context = focusedContext();
   if (context) emitToWindow(context.window, event, payload);
+}
+
+function emitToAllWindows(event: string, payload: unknown): void {
+  for (const context of windowContexts.values()) emitToWindow(context.window, event, payload);
 }
 
 function setConnectionTitle(window: BrowserWindow, scope: string): void {
@@ -353,36 +364,87 @@ function createWindowBrowserPreviews(
 }
 
 /**
- * Updates are checked after the first window exists, so a slow or failing
- * update server can never delay or break startup.
+ * The update host registers after the first window exists, so a slow or failing
+ * update server can never delay or break startup. The backend owns the update
+ * workflow; this process installs on its behalf (`update-host.ts`).
  */
-async function startAutoUpdate(): Promise<void> {
-  if (
-    !isAutoUpdateSupported({
-      isPackaged: app.isPackaged,
-      runtimeFlavor,
-      platform: process.platform,
-      env: process.env,
-      resourcesPath: process.resourcesPath,
-    })
-  ) {
+async function startUpdateHost(): Promise<void> {
+  const localBackend = backend;
+  if (!localBackend) return;
+  const unavailableReason = autoUpdateUnavailableReason({
+    isPackaged: app.isPackaged,
+    runtimeFlavor,
+    platform: process.platform,
+    env: process.env,
+    resourcesPath: process.resourcesPath,
+  });
+  let updater: UpdaterLike | null = null;
+  let createCancellationToken: (() => { cancel(): void }) | undefined;
+  if (unavailableReason === null) {
+    try {
+      const { default: electronUpdater } = await import("electron-updater");
+      updater = electronUpdater.autoUpdater as unknown as UpdaterLike;
+      createCancellationToken = () => new electronUpdater.CancellationToken();
+    } catch (error) {
+      console.error("[Updater] Auto-update is unavailable:", error);
+    }
+  }
+  const feedOverride = process.env[UPDATE_FEED_URL_ENV]?.trim();
+  updateHost = createDesktopUpdateHost({
+    updater,
+    unavailableReason: updater ? null : (unavailableReason ?? "The updater could not be loaded."),
+    installKind: process.platform === "darwin" ? "mac-app" : "appimage",
+    appVersion: app.getVersion(),
+    invoke: (command, args) => localBackend.invoke(command, args),
+    createCancellationToken,
+    markerFile: path.join(app.getPath("userData"), "updates", "pending-install.json"),
+    allowedFeedBaseUrls: [RELEASE_DOWNLOAD_BASE_URL, ...(feedOverride ? [feedOverride] : [])],
+  });
+  canUpdateItself = updater !== null;
+  try {
+    await updateHost.register();
+    await updateHost.reportStartupOutcome();
+  } catch (error) {
+    console.error("[Updater] Could not register with the backend:", error);
+  }
+  createMenu();
+}
+
+/**
+ * Menu "Check for Updates…": always this app's update, on the local backend.
+ * The renderer shows the result in its update panel; with no window open the
+ * outcome is a native dialog.
+ */
+async function checkForUpdatesFromMenu(): Promise<void> {
+  const localBackend = backend;
+  if (!localBackend) return;
+  const window = focusedContext()?.window ?? null;
+  if (window) emitToWindow(window, OPEN_UPDATE_PANEL_EVENT, undefined);
+  let snapshot: UpdateStatusSnapshot;
+  try {
+    snapshot = await localBackend.invoke<UpdateStatusSnapshot>("update_check", {});
+  } catch (error) {
+    if (!window) {
+      dialog.showErrorBox(
+        "Could not check for updates",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
     return;
   }
-  try {
-    const { default: electronUpdater } = await import("electron-updater");
-    autoUpdate = createAutoUpdateController({
-      updater: electronUpdater.autoUpdater,
-      productName,
-      currentVersion: app.getVersion(),
-      getWindow: () => focusedContext()?.window ?? null,
-      showMessageBox: (window, options) =>
-        window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options),
-    });
-    autoUpdate.start();
-    createMenu();
-  } catch (error) {
-    console.error("[Updater] Auto-update is unavailable:", error);
-  }
+  if (window) return;
+  const message = snapshot.available
+    ? `${productName} ${snapshot.available.version} is available`
+    : snapshot.check.status === "failed"
+      ? "Could not check for updates"
+      : `${productName} is up to date`;
+  await dialog.showMessageBox({
+    type: snapshot.check.status === "failed" ? "error" : "info",
+    message,
+    detail: snapshot.available
+      ? "Open a window and choose Update to review what it needs and install it."
+      : (snapshot.check.error?.message ?? `Version ${snapshot.currentVersion}.`),
+  });
 }
 
 function createMenu(): void {
@@ -397,7 +459,7 @@ function createMenu(): void {
     closeTab: () => emitToFocusedWindow("menu-close-tab", undefined),
     selectWindow: (id) => focusDesktopWindow(id),
     zoom: (direction) => emitToFocusedWindow("menu-zoom", direction),
-    checkForUpdates: autoUpdate ? () => void autoUpdate?.checkNow() : undefined,
+    checkForUpdates: canUpdateItself ? () => void checkForUpdatesFromMenu() : undefined,
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
@@ -634,6 +696,10 @@ function registerIpc(): void {
     resetWebClientServe: (event) => manager().resetWebClientServe(scopeForEvent(event)),
     getGatewayTokenSettings: (event) => manager().getTokenSettings(scopeForEvent(event)),
     setGatewayToken: (token, event) => manager().setToken(token, scopeForEvent(event)),
+    invokeLocalUpdate: (command, args) => {
+      if (!backend) throw new Error("The local backend is not running");
+      return backend.invoke(command, args);
+    },
   });
 }
 
@@ -725,6 +791,9 @@ async function startApplication(): Promise<void> {
     strictGatewayPort: runtimeFlavor === "agent-test",
     credentialSources: runtimeProfile?.credentialSources,
     onEvent: (event, payload) => {
+      // Every window sees this app's own update state, whatever it is bound to.
+      if (event === UPDATE_STATUS_EVENT) emitToAllWindows(LOCAL_UPDATE_STATUS_EVENT, payload);
+      updateHost?.handleBackendEvent(event, payload);
       if (connectionManager) connectionManager.handleLocalEvent(event, payload);
     },
     onUnexpectedExit: (error) => {
@@ -756,7 +825,7 @@ async function startApplication(): Promise<void> {
   }
   await toolchainProgress.close();
   startupComplete = true;
-  await startAutoUpdate();
+  await startUpdateHost();
 
   if (runtimeProfile) {
     const info = backendProcess.getInfo();

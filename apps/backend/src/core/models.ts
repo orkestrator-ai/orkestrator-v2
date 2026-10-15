@@ -893,6 +893,12 @@ export interface AppConfig {
      * sends it.
      */
     githubCliReminderDismissed?: boolean;
+    /**
+     * The release channel this installation updates from. Written only by
+     * `setUpdateChannel` (`update_set_channel`); the settings form never sends
+     * it. Absent means stable.
+     */
+    updateChannel?: import("@orkestrator/protocol/release-channels").ReleaseChannel;
     /** Optional absolute SSH-agent socket path. Absent means auto-detect from the desktop session. */
     sshAgentSocketPath?: string;
     /**

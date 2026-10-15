@@ -58,6 +58,9 @@ import {
 } from "./commands-local-server-lifecycle.js";
 import { claudeTmuxRuntimeRootPrefix } from "./tmux.js";
 import { StorageService } from "./storage.js";
+import type { InvocationOrigin } from "./commands-context.js";
+import { createBackendUpdateService, type UpdateService } from "./updates/index.js";
+import { APP_VERSION } from "./constants.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import { AgentToolsServer } from "./agent-tools.js";
 import { ContainerHostReachabilityService } from "./container-host-reachability.js";
@@ -153,6 +156,7 @@ export class OrkestratorBackend {
   private readonly workflowAdmission = new WorkAdmissionPool({ name: "workflow-provider" });
   private readonly webAnnotations: WebAnnotationService;
   private readonly webAnnotationRollout: WebAnnotationRollout;
+  readonly updates: UpdateService;
   private shuttingDown = false;
   private shutdownPromise: Promise<void> | null = null;
   private activityLeaseSweep: ReturnType<typeof setInterval> | null = null;
@@ -336,6 +340,15 @@ export class OrkestratorBackend {
     };
     context.deleteWorkflowResultsByEnvironment = (environmentId: string) =>
       this.workflowResults.deleteByEnvironment(environmentId);
+    this.updates = createBackendUpdateService({
+      dataDir: options.dataDir,
+      resourceRoot: options.resourceRoot,
+      currentVersion: APP_VERSION,
+      runtimeFlavor: options.runtimeFlavor ?? "production",
+      storage,
+      emit: (event, payload) => options.emit(event, payload),
+    });
+    context.updates = this.updates;
     this.context = context;
     setManagedGitHubCli(resolveManagedBinary(context, "gh"));
     this.coordinators = new CoordinatorService(
@@ -766,6 +779,14 @@ export class OrkestratorBackend {
       console.warn(
         "[backend] Design storage failed to initialize:",
         (error as NodeJS.ErrnoException)?.code ?? "error",
+      );
+    });
+    // Recovers a job a restart interrupted (the outcome of an install) and
+    // schedules checks. A broken update state degrades updates, not the backend.
+    await this.updates.start().catch((error: unknown) => {
+      console.warn(
+        "[backend] Failed to start the update service:",
+        error instanceof Error ? error.message : error,
       );
     });
     await this.webAnnotationRollout.refresh();
@@ -1402,16 +1423,21 @@ export class OrkestratorBackend {
     return this.controlMcp.getSettings();
   }
 
-  async invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
+  async invoke<T>(
+    command: string,
+    args: Record<string, unknown> = {},
+    origin?: InvocationOrigin,
+  ): Promise<T> {
     if (this.shuttingDown) throw new Error("Backend is shutting down");
     const handler = this.commands.get(command);
     if (!handler) throw new Error(`Unknown backend command: ${command}`);
-    return (await handler(args, this.context)) as T;
+    return (await handler(args, this.context, origin)) as T;
   }
 
   async shutdown(): Promise<void> {
     if (this.shutdownPromise) return this.shutdownPromise;
     this.shuttingDown = true;
+    this.updates.stop();
     // Stop new annotation reconciliation; pending requests stay as persisted
     // (never marked failed) and resume on the next start.
     this.webAnnotations.stopReconciler();

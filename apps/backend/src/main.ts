@@ -97,6 +97,7 @@ gateway = new OrkestratorGateway({
   agentTestMode: options.runtimeFlavor === "agent-test",
   agentTestProfile: options.runtimeProfileId,
   webClientControl: managedWebClient ?? undefined,
+  status: () => backend.updates.gatewayStatus(),
 });
 
 const gatewayInfo = await gateway.start();

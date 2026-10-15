@@ -22,6 +22,7 @@ import { MOBILE_SHELL_MEDIA_QUERY, MobileAppShellLayout } from "./MobileAppShell
 import { getApplicationTitle } from "@/lib/application-title";
 import { AgentInfoButton } from "./AgentInfoButton";
 import { AgentMailButton } from "@/components/agent-mail/AgentMailButton";
+import { UpdateIndicator } from "@/components/updates/UpdatesController";
 import { SystemUsageIndicator } from "./SystemUsageIndicator";
 
 interface AppShellProps {
@@ -132,6 +133,7 @@ export function AppShell({ children }: AppShellProps) {
           actionBar={<ActionBar presentation="grid" />}
           agentInfoButton={
             <div className="flex items-center gap-1">
+              <UpdateIndicator />
               <AgentMailButton />
               <AgentInfoButton activeTab={activeTab} mobile />
             </div>
@@ -186,6 +188,7 @@ export function AppShell({ children }: AppShellProps) {
                 className="mx-2 h-3 w-px self-center bg-border/50"
               />
               <div className="flex items-center gap-1">
+                <UpdateIndicator />
                 <AgentMailButton />
                 <AgentInfoButton activeTab={activeTab} />
               </div>

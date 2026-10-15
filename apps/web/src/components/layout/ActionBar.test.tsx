@@ -192,6 +192,17 @@ const toggleFilesPanelMock = mock(() => {});
 const openFilesPanelOnAllFilesMock = mock(() => {});
 const selectProjectAndEnvironmentMock = mock((_projectId: string, _environmentId: string) => {});
 const addEnvironmentStoreMock = mock((_environment: Environment) => {});
+const getProjectGitStatusMock = mock(async (_projectId: string) => ({
+  branches: [
+    { ref: "refs/remotes/origin/main", name: "origin/main", kind: "remote", remote: "origin" },
+    {
+      ref: "refs/remotes/origin/release/2.0",
+      name: "origin/release/2.0",
+      kind: "remote",
+      remote: "origin",
+    },
+  ],
+}));
 const ensureProjectHomeEnvironmentMock = mock(
   async (projectId: string): Promise<Environment> =>
     ({
@@ -854,6 +865,7 @@ mock.module("@/lib/backend", () => ({
   deleteMultiReviewWorkflow: deleteMultiReviewWorkflowMock,
   enqueuePromptQueueMessage: enqueuePromptQueueMessageMock,
   ensureProjectHomeEnvironment: ensureProjectHomeEnvironmentMock,
+  getProjectGitStatus: getProjectGitStatusMock,
 }));
 
 mock.module("@/lib/pane-layout-authoritative", () => ({
@@ -1023,6 +1035,7 @@ beforeEach(() => {
   selectProjectAndEnvironmentMock.mockReset();
   addEnvironmentStoreMock.mockReset();
   ensureProjectHomeEnvironmentMock.mockClear();
+  getProjectGitStatusMock.mockClear();
   toggleSidebarMock.mockReset();
   addCommentMock.mockReset();
   updateTaskMock.mockReset();
@@ -3772,6 +3785,38 @@ describe("ActionBar workflow tabs", () => {
     expect(screen.queryByRole("dialog", { name: "Configure pull request" }) === null).toBe(true);
     expect(createTabMock).not.toHaveBeenCalled();
     expect(setModeCreatePendingMock).not.toHaveBeenCalled();
+  });
+
+  test("creates the PR against the target branch chosen in the modal", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    const { container } = render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+    const field = screen.getByLabelText("Target branch") as HTMLInputElement;
+    expect(field.value).toBe("main");
+    await waitFor(() =>
+      expect(
+        [...container.ownerDocument.querySelectorAll("datalist option")].map(
+          (option) => (option as HTMLOptionElement).value,
+        ),
+      ).toEqual(["main", "release/2.0"]),
+    );
+
+    fireEvent.change(field, { target: { value: "release/2.0" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create pull request" }));
+    await waitFor(() =>
+      expect(launchNativeAgentJobMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          title: "PR",
+          prompt: expect.stringContaining("gh pr create --base release/2.0 --fill"),
+        }),
+      ),
+    );
   });
 
   test("keeps the PR modal pinned when the selected environment changes", () => {

@@ -1,3 +1,4 @@
+import { gitHubCli } from "./github-cli-binary.js";
 import { runRemoteGit } from "./git-noninteractive-env.js";
 import { reconcileProjectHomeEnvironment } from "./project-home-environment.js";
 import { constants as fsConstants, promises as fs } from "node:fs";
@@ -32,9 +33,8 @@ import {
   CONTAINER_CURSOR_CREDENTIAL_DIR,
   HOST_CLAUDE_KEYCHAIN_SERVICE,
   CONTAINER_UNTRACKED_STATS_SCANNER,
-  containerGitFetchPolicy,
-  gitFetchScheduler,
 } from "./commands-runtime-state.js";
+import type { GitFetchScheduler } from "./git-fetch-scheduler.js";
 import {
   CONTAINER_FETCH_STDERR_BYTES,
   CONTAINER_REPO_IDENTITY_SNIPPET,
@@ -706,12 +706,17 @@ function parseContainerGitStatusSections(
   return { changes, truncated: untracked.length > UNTRACKED_SCAN_MAX_FILES };
 }
 
+/** Rate-limits the `git fetch` a local read makes before resolving its baseline. */
+export type LocalGitFetches = Pick<GitFetchScheduler, "ensureFetched">;
+
 export async function getLocalGitStatus(
   worktreePath: string,
   targetBranch: string,
   includeUncommitted: boolean,
+  fetches: LocalGitFetches,
 ): Promise<GitFileChange[]> {
-  return (await getLocalGitStatusDetailed(worktreePath, targetBranch, includeUncommitted)).changes;
+  return (await getLocalGitStatusDetailed(worktreePath, targetBranch, includeUncommitted, fetches))
+    .changes;
 }
 
 export interface ContainerGitStatusDeps {
@@ -735,10 +740,7 @@ export async function getContainerGitStatusDetailed(
   containerId: string,
   targetBranch: string,
   includeWorkingTree: boolean,
-  deps: ContainerGitStatusDeps = {
-    exec: (id, script) => dockerExec(id, script),
-    fetches: containerGitFetchPolicy,
-  },
+  deps: ContainerGitStatusDeps,
 ): Promise<{ changes: GitFileChange[]; truncated: boolean; remote?: WorktreeRemoteFreshness }> {
   const ref = validateGitRefName(targetBranch, "target branch");
   const script = buildContainerGitStatusScript(ref, includeWorkingTree);
@@ -787,11 +789,12 @@ export async function getLocalGitStatusDetailed(
   worktreePath: string,
   targetBranch: string,
   includeUncommitted: boolean,
+  fetches: LocalGitFetches,
 ): Promise<{ changes: GitFileChange[]; truncated: boolean }> {
   validateGitRefName(targetBranch, "target branch");
   await addLocalWorkspaceArtifactsToGitExclude(worktreePath);
 
-  const base = await resolveLocalGitBase(worktreePath, targetBranch);
+  const base = await resolveLocalGitBase(worktreePath, targetBranch, fetches);
   const endRef = includeUncommitted ? [] : ["HEAD"];
   const [nameStatus, numstat, porcelain] = await Promise.all([
     runCommand("git", ["-C", worktreePath, "diff", "--name-status", "-z", "-M", base, ...endRef], {
@@ -989,6 +992,7 @@ export function isImmutableCommitRef(ref: string): boolean {
 export async function resolveLocalGitBase(
   worktreePath: string,
   targetBranch: string,
+  fetches: LocalGitFetches,
 ): Promise<string> {
   const branch = validateGitRefName(targetBranch, "target branch");
 
@@ -998,7 +1002,7 @@ export async function resolveLocalGitBase(
 
   // Rate limited and shared across every worktree of this repository, rather
   // than a network round trip per read per environment.
-  await gitFetchScheduler.ensureFetched(worktreePath, branch);
+  await fetches.ensureFetched(worktreePath, branch);
 
   const remoteRef = `origin/${branch}`;
   if (await gitRefExists(worktreePath, remoteRef)) return remoteRef;
@@ -1351,9 +1355,10 @@ export async function revertLocalFile(
   worktreePath: string,
   relativePath: string,
   targetBranch: string,
+  fetches: LocalGitFetches,
 ): Promise<string> {
   const target = validateWorkspaceMutationPath(relativePath);
-  const base = await resolveLocalGitBase(worktreePath, targetBranch);
+  const base = await resolveLocalGitBase(worktreePath, targetBranch, fetches);
   if (!(await gitRefExists(worktreePath, base))) {
     throw new Error(`Target ref not found: ${targetBranch}`);
   }
@@ -1987,9 +1992,10 @@ export async function readLocalFileAtBranch(
   worktreePath: string,
   filePath: string,
   branch: string,
+  fetches: LocalGitFetches,
 ): Promise<{ path: string; content: string; language: string } | null> {
   const target = validateRelativeFilePath(filePath, "filePath");
-  const base = await resolveLocalGitBase(worktreePath, branch);
+  const base = await resolveLocalGitBase(worktreePath, branch, fetches);
   const object = `${base}:${target}`;
   try {
     const { stdout: rawSize } = await runCommand("git", [
@@ -2051,9 +2057,13 @@ export const SYNC_CONTAINER_GITHUB_CREDENTIAL_COMMAND = buildSyncContainerGitHub
 
 export async function getHostGitHubToken(): Promise<string | undefined> {
   try {
-    const { stdout } = await runCommand("gh", ["auth", "token", "--hostname", "github.com"], {
-      timeoutMs: 10_000,
-    });
+    const { stdout } = await runCommand(
+      gitHubCli(),
+      ["auth", "token", "--hostname", "github.com"],
+      {
+        timeoutMs: 10_000,
+      },
+    );
     return stdout.trim() || undefined;
   } catch {
     return undefined;

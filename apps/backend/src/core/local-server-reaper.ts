@@ -34,6 +34,7 @@ import { runCommand } from "./shell.js";
 import { terminateProcessTree } from "./process-tree.js";
 import {
   isMissingTmuxSessionError,
+  confirmTmuxSessionGone,
   parseTmuxSessionNames,
   RUNTIME_ROOT_PREFIX,
   selectReapableTmuxSessions,
@@ -101,26 +102,25 @@ async function readRuntimeRoots(prefix: string): Promise<string[]> {
   }
 }
 
-async function readHostTmuxSessions(): Promise<string[]> {
+/** Lists the host's tmux sessions; `run` is injected in tests. */
+export async function readHostTmuxSessions(run: typeof runCommand = runCommand): Promise<string[]> {
   try {
-    const { stdout } = await runCommand("tmux", ["list-sessions", "-F", "#{session_name}"], {
+    const { stdout } = await run("tmux", ["list-sessions", "-F", "#{session_name}"], {
       timeoutMs: 5_000,
     });
     return parseTmuxSessionNames(stdout);
   } catch (error) {
-    const message = String(error);
-    if (
-      /no server running/i.test(message) ||
-      /failed to connect to server/i.test(message) ||
-      /no sessions/i.test(message)
-    ) {
-      return [];
-    }
+    if (await confirmTmuxSessionGone(error, (args) => runHostTmuxProbe(args, run))) return [];
     // A timeout, missing executable, or other unexpected failure says nothing
     // about whether a detached tmux server still owns sessions. Preserve the
     // runtime roots so a later startup can retry with the same attribution.
     throw error;
   }
+}
+
+async function runHostTmuxProbe(args: string[], run: typeof runCommand = runCommand) {
+  const result = await run(args[0]!, args.slice(1), { timeoutMs: 5_000 });
+  return { status: 0, stdout: result.stdout, stderr: result.stderr };
 }
 
 /**
@@ -136,14 +136,14 @@ export async function reapOrphanedClaudeTmuxRuntimes(
 ): Promise<ReapedClaudeTmuxRuntime[]> {
   const prefix = options.runtimeRootPrefix ?? RUNTIME_ROOT_PREFIX;
   const listRuntimeRoots = options.listRuntimeRoots ?? readRuntimeRoots;
-  const listTmuxSessions = options.listTmuxSessions ?? readHostTmuxSessions;
+  const listTmuxSessions = options.listTmuxSessions ?? (() => readHostTmuxSessions());
   const killTmuxSession =
     options.killTmuxSession ??
     (async (sessionName: string) => {
       try {
         await runCommand("tmux", ["kill-session", "-t", sessionName], { timeoutMs: 5_000 });
       } catch (error) {
-        if (!isMissingTmuxSessionError(error)) throw error;
+        if (!(await confirmTmuxSessionGone(error, (args) => runHostTmuxProbe(args)))) throw error;
       }
     });
   const removeRuntimeRoot =

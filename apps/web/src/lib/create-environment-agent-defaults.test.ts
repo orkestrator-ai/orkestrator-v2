@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
 import { buildReviewModelCatalog } from "@/lib/review-launch-options";
-import { useClaudeStore } from "@/stores/claudeStore";
+import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { useConfigStore } from "@/stores/configStore";
 import { resolveCreateEnvironmentAgentDefaults } from "./create-environment-agent-defaults";
 
@@ -240,7 +240,7 @@ describe("resolveCreateEnvironmentAgentDefaults", () => {
    * fall back to the catalog's first entry (`default`, which resolves to Opus).
    */
   test("honours the shipped global Claude preference exactly as the other launchers do", () => {
-    useClaudeStore.setState({ models: [] });
+    useAgentModelCatalogStore.setState({ claudeModels: [] });
     const shippedClaudeModel =
       useConfigStore.getInitialState().config.global.agentSettings?.platforms?.claude?.model;
     expect(shippedClaudeModel).toBe("claude-sonnet-5-5");

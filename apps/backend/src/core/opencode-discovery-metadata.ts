@@ -39,7 +39,6 @@ export interface OpenCodeDiscoveryMetadata {
   runtime: NativeAgentRuntimeSummary;
   models: AgentModel[];
   selectedModelId?: string;
-  selectedReasoningId?: string;
   /** OpenCode `Session.model`, distinct from the catalog default. */
   sessionModelId?: string;
   sessionReasoningId?: string;
@@ -58,7 +57,7 @@ export interface OpenCodeDiscoveryFanOutDeps {
   readComposerCatalog(
     allowedProviders: readonly string[],
     connectedOnly: true,
-  ): Promise<{ models: AgentModel[]; selectedModelId?: string; selectedReasoningId?: string }>;
+  ): Promise<{ models: AgentModel[]; selectedModelId?: string }>;
   /** Drift and notices observed on the shared event subscription. */
   drift(): NativeAgentRuntimeSummary["drift"];
   notices(): NonNullable<NativeAgentRuntimeSummary["notices"]>;
@@ -131,7 +130,6 @@ export async function readOpenCodeDiscoveryFanOut(
     ...(title ? { title } : {}),
     ...(shareUrl === undefined ? {} : { shareUrl }),
     ...(catalog.selectedModelId ? { selectedModelId: catalog.selectedModelId } : {}),
-    ...(catalog.selectedReasoningId ? { selectedReasoningId: catalog.selectedReasoningId } : {}),
     ...(sessionModel.modelId ? { sessionModelId: sessionModel.modelId } : {}),
     ...(sessionModel.reasoningId ? { sessionReasoningId: sessionModel.reasoningId } : {}),
   };

@@ -12,7 +12,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 
 import { useConfigStore } from "@/stores/configStore";
 
-import { useClaudeStore } from "@/stores/claudeStore";
+import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 
 import { useUIStore } from "@/stores/uiStore";
 
@@ -89,7 +89,7 @@ const updateGlobalConfigMock = mock(async (global: any) => ({
 const getClaudeModelCatalogMock = mock(
   async (environmentId: string, _forceRefresh?: boolean): Promise<ClaudeModelCatalogSnapshot> => ({
     environmentId,
-    models: useClaudeStore.getState().models,
+    models: useAgentModelCatalogStore.getState().claudeModels,
     source: "fallback",
     fetchedAt: "2026-07-25T12:00:00.000Z",
     stale: false,
@@ -638,8 +638,8 @@ function seedEnvironment(overrides: Partial<Environment> = {}) {
 }
 
 function seedModelsWithExplicitlyUnsupportedSpeed(): void {
-  useClaudeStore.setState({
-    models: [
+  useAgentModelCatalogStore.setState({
+    claudeModels: [
       {
         id: "default",
         name: "Default (recommended)",
@@ -662,7 +662,7 @@ function seedModelsWithExplicitlyUnsupportedSpeed(): void {
         supportsFastMode: false,
       },
     ] as ClaudeModel[],
-    modelCatalogs: new Map(),
+    claudeModelCatalogs: new Map(),
   });
 }
 
@@ -733,7 +733,7 @@ describe("ClaudeTmuxChatTab", () => {
     getClaudeModelCatalogMock.mockReset();
     getClaudeModelCatalogMock.mockImplementation(async (environmentId: string) => ({
       environmentId,
-      models: useClaudeStore.getState().models,
+      models: useAgentModelCatalogStore.getState().claudeModels,
       source: "fallback" as const,
       fetchedAt: "2026-07-25T12:00:00.000Z",
       stale: false,
@@ -928,7 +928,7 @@ describe("ClaudeTmuxChatTab", () => {
     usePromptDraftStore.getState().reset();
     // The tmux tab prefers the live SDK model list shared via the claude
     // store; keep it empty by default so tests exercise the fallback list.
-    useClaudeStore.setState({ models: [], modelCatalogs: new Map() });
+    useAgentModelCatalogStore.setState({ claudeModels: [], claudeModelCatalogs: new Map() });
     useConfigStore.setState((state) => ({
       ...state,
       config: {
@@ -960,7 +960,10 @@ describe("ClaudeTmuxChatTab", () => {
       supportsEffort: true,
       supportedEffortLevels: ["low", "medium", "high"],
     };
-    useClaudeStore.setState({ models: [catalogModel], modelCatalogs: new Map() });
+    useAgentModelCatalogStore.setState({
+      claudeModels: [catalogModel],
+      claudeModelCatalogs: new Map(),
+    });
     seedPane();
     mockRunningTmuxStatus();
     getTranscriptMock.mockResolvedValue([
@@ -2866,7 +2869,7 @@ describe("ClaudeTmuxChatTab", () => {
     // length. Resolving the one-shot model against the fallback list would
     // collapse it to the Default sentinel and consume it — after which the live
     // catalog arriving would prefer the persisted global model instead.
-    useClaudeStore.setState({ models: [], modelCatalogs: new Map() });
+    useAgentModelCatalogStore.setState({ claudeModels: [], claudeModelCatalogs: new Map() });
     seedPane(undefined, "claude-newer-opus", "high");
 
     const view = render(
@@ -2886,14 +2889,16 @@ describe("ClaudeTmuxChatTab", () => {
     });
 
     // Publish through the env-scoped catalog: the tab reads
-    // `modelCatalogs.get(env)?.models ?? models`, and the backend catalog fetch
-    // has already written an empty entry for this environment.
+    // `claudeModelCatalogs.get(env)?.models ?? claudeModels`, and the backend
+    // catalog fetch has already written an empty entry for this environment.
     await waitFor(() => {
       expect(getClaudeModelCatalogMock).toHaveBeenCalledWith("env-1", false);
-      expect(useClaudeStore.getState().getModelCatalog("env-1")?.models).toEqual([]);
+      expect(useAgentModelCatalogStore.getState().getClaudeModelCatalog("env-1")?.models).toEqual(
+        [],
+      );
     });
     await act(async () => {
-      useClaudeStore.getState().setModelCatalog({
+      useAgentModelCatalogStore.getState().setClaudeModelCatalog({
         environmentId: "env-1",
         models: [
           {
@@ -2925,7 +2930,7 @@ describe("ClaudeTmuxChatTab", () => {
     // The mirror of the test above: no need to wait for the SDK when the
     // bundled list can honour the choice, otherwise every offline tmux launch
     // would hold its options forever.
-    useClaudeStore.setState({ models: [], modelCatalogs: new Map() });
+    useAgentModelCatalogStore.setState({ claudeModels: [], claudeModelCatalogs: new Map() });
     seedPane(undefined, "claude-fable-5-1[1m]", "max");
 
     render(
@@ -3456,8 +3461,8 @@ describe("ClaudeTmuxChatTab", () => {
     seedPane();
     // Every fallback model reports effort since Haiku 5.5, so the no-effort
     // model is seeded explicitly.
-    useClaudeStore.setState({
-      models: [
+    useAgentModelCatalogStore.setState({
+      claudeModels: [
         {
           id: "sonnet",
           name: "Sonnet",
@@ -3496,8 +3501,8 @@ describe("ClaudeTmuxChatTab", () => {
 
   test("resets effort to the default when the new model doesn't support the chosen level", async () => {
     seedPane();
-    useClaudeStore.setState({
-      models: [
+    useAgentModelCatalogStore.setState({
+      claudeModels: [
         {
           id: "default",
           name: "Default (recommended)",
@@ -3584,8 +3589,10 @@ describe("ClaudeTmuxChatTab", () => {
 
     await waitFor(() => {
       expect(getClaudeModelCatalogMock).toHaveBeenCalledWith("env-1", false);
-      expect(useClaudeStore.getState().getModels("env-1")[0]?.id).toBe("claude-opus-5");
-      expect(useClaudeStore.getState().models[0]?.id).toBe("claude-opus-5");
+      expect(useAgentModelCatalogStore.getState().getClaudeModels("env-1")[0]?.id).toBe(
+        "claude-opus-5",
+      );
+      expect(useAgentModelCatalogStore.getState().claudeModels[0]?.id).toBe("claude-opus-5");
     });
 
     fireEvent.pointerDown(screen.getByRole("button", { name: /Default/ }));
@@ -3597,7 +3604,10 @@ describe("ClaudeTmuxChatTab", () => {
     seedPane();
     const hostModel = { id: "host-last-known-good", name: "Host LKG" };
     const fallbackModel = { id: "claude-fallback", name: "Bundled fallback" };
-    useClaudeStore.setState({ models: [hostModel], modelCatalogs: new Map() });
+    useAgentModelCatalogStore.setState({
+      claudeModels: [hostModel],
+      claudeModelCatalogs: new Map(),
+    });
     getClaudeModelCatalogMock.mockResolvedValueOnce({
       environmentId: "env-1",
       models: [fallbackModel],
@@ -3616,9 +3626,11 @@ describe("ClaudeTmuxChatTab", () => {
     );
 
     await waitFor(() => {
-      expect(useClaudeStore.getState().getModels("env-1")).toEqual([fallbackModel]);
+      expect(useAgentModelCatalogStore.getState().getClaudeModels("env-1")).toEqual([
+        fallbackModel,
+      ]);
     });
-    expect(useClaudeStore.getState().models).toEqual([hostModel]);
+    expect(useAgentModelCatalogStore.getState().claudeModels).toEqual([hostModel]);
   });
 
   test("keeps the bundled model catalog when authoritative rehydration fails", async () => {
@@ -3642,7 +3654,7 @@ describe("ClaudeTmuxChatTab", () => {
     expect(await screen.findByText("Opus (1M context)")).toBeTruthy();
     expect(screen.getByText("Fable")).toBeTruthy();
     expect(screen.queryByText(/model catalog unavailable/i) === null).toBe(true);
-    expect(useClaudeStore.getState().getModelCatalog("env-1")).toBeUndefined();
+    expect(useAgentModelCatalogStore.getState().getClaudeModelCatalog("env-1")).toBeUndefined();
   });
 
   test("prefers the live SDK model list and prepends the Default sentinel when missing", async () => {
@@ -3657,7 +3669,7 @@ describe("ClaudeTmuxChatTab", () => {
       },
       { id: "claude-newer-haiku", name: "Newer Haiku", description: "from the SDK" },
     ];
-    useClaudeStore.setState({ models: sdkModels });
+    useAgentModelCatalogStore.setState({ claudeModels: sdkModels });
 
     render(
       <ClaudeTmuxChatTab
@@ -3682,8 +3694,8 @@ describe("ClaudeTmuxChatTab", () => {
 
   test("uses the standard effort ladder when a model supports effort without listing levels", async () => {
     seedPane();
-    useClaudeStore.setState({
-      models: [
+    useAgentModelCatalogStore.setState({
+      claudeModels: [
         {
           id: "default",
           name: "Default (SDK)",
@@ -3712,8 +3724,8 @@ describe("ClaudeTmuxChatTab", () => {
 
   test("falls back to the first supported level when a model's levels exclude the default", async () => {
     seedPane();
-    useClaudeStore.setState({
-      models: [
+    useAgentModelCatalogStore.setState({
+      claudeModels: [
         {
           id: "default",
           name: "Default (recommended)",

@@ -5,10 +5,12 @@ import {
   agentToolConnectionTarget,
   boundedInfoEventMessage,
   containerExecArgs,
+  confirmTmuxSessionGone,
   fastModeFromPane,
   fastModeRejectionFromPane,
   isDirectJsonlChild,
   isMissingTmuxSessionError,
+  isTmuxNoServerMessage,
   jsonlByMtimeFindCommand,
   listLocalJsonlByMtime,
   newestJsonlFindCommand,
@@ -150,29 +152,51 @@ test("Claude tmux selects the agent tool endpoint for its execution backend", ()
 
 describe("tmux session cleanup helpers", () => {
   test("recognizes tmux's ordinary missing-session diagnostics", () => {
-    for (const diagnostic of [
-      "can't find session: missing",
-      "no server running on /tmp/tmux-501/default",
-      "failed to connect to server",
-      "no sessions",
-    ]) {
+    for (const diagnostic of ["can't find session: missing", "no sessions"]) {
       expect(isMissingTmuxSessionError(diagnostic)).toBe(true);
+      expect(isTmuxNoServerMessage(diagnostic)).toBe(!diagnostic.startsWith("can't find"));
     }
-    expect(isMissingTmuxSessionError("permission denied")).toBe(false);
-    // A deleted socket can leave the server and its sessions alive.
-    expect(
-      isMissingTmuxSessionError(
-        "error connecting to /private/tmp/tmux-501/default (No such file or directory)",
-      ),
-    ).toBe(false);
-    expect(
-      isMissingTmuxSessionError("error connecting to /tmp/tmux/default (Permission denied)"),
-    ).toBe(false);
-    expect(
-      isMissingTmuxSessionError("error connecting to /tmp/tmux/default (Connection refused)"),
-    ).toBe(false);
-    expect(isMissingTmuxSessionError("tmux: No such file or directory")).toBe(false);
+    for (const diagnostic of [
+      "permission denied",
+      "error connecting to /tmp/tmux/default (Permission denied)",
+      // A missing tmux executable, not a missing socket.
+      "tmux: No such file or directory",
+      "Command timed out after 5000 ms",
+    ]) {
+      expect(isMissingTmuxSessionError(diagnostic)).toBe(false);
+      expect(isTmuxNoServerMessage(diagnostic)).toBe(false);
+    }
     expect(isMissingTmuxSessionError(new Error("unrelated failure"))).toBe(false);
+  });
+
+  test("unreachable sockets require a successful process census before forgetting sessions", async () => {
+    for (const diagnostic of [
+      "error connecting to /private/tmp/tmux-501/default (No such file or directory)",
+      "error connecting to /tmp/tmux/default (Connection refused)",
+      "no server running on /tmp/tmux/default",
+      "failed to connect to server",
+    ]) {
+      expect(isTmuxNoServerMessage(diagnostic)).toBe(true);
+      expect(isMissingTmuxSessionError(diagnostic)).toBe(false);
+      for (const [stdout, status, gone] of [
+        ["  1 /sbin/init\n  2 /usr/bin/ps\n", 0, true],
+        ["  1 /sbin/init\n  3 tmux: server\n", 0, false],
+        ["  3 /opt/homebrew/bin/tmux\n", 0, false],
+        ["  3 tmux\n", 0, false],
+        ["", 0, false],
+        ["unreadable", 0, false],
+        ["  1 /sbin/init\n", 1, false],
+      ] as const) {
+        const exec = mock(async () => ({ stdout, status, stderr: "" }));
+        expect(await confirmTmuxSessionGone(diagnostic, exec)).toBe(gone);
+        expect(exec).toHaveBeenCalledWith(["ps", "-A", "-o", "pid=,comm="]);
+      }
+      expect(
+        await confirmTmuxSessionGone(diagnostic, async () => {
+          throw new Error("ps failed");
+        }),
+      ).toBe(false);
+    }
   });
 
   test("derives stable sanitized prefixes and parses list-sessions output", () => {

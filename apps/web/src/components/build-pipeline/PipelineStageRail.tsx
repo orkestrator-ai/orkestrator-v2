@@ -42,6 +42,8 @@ export interface PipelineStageRowView {
   meta?: string | null;
   /** Second line. `label` names it for assistive technology when it is terse. */
   detail?: { text: string; label?: string; mono?: boolean } | null;
+  /** A condition the user should know about, such as a substituted model. */
+  notice?: string | null;
   autoDeclineCount: number;
   reportIssueCount?: number;
   status: PipelineStageRowStatus;
@@ -302,6 +304,14 @@ export function PipelineStageRail({
                 aria-label={row.detail.label}
               >
                 {row.detail.text}
+              </span>
+            )}
+            {row.notice && (
+              <span
+                className="mt-0.5 block w-full truncate pl-[22px] text-[11px] text-amber-300/90"
+                title={row.notice}
+              >
+                {row.notice}
               </span>
             )}
             {row.autoDeclineCount > 0 && (

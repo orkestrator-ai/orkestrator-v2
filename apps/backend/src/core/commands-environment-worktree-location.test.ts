@@ -5,18 +5,19 @@ import path from "node:path";
 
 import { createCommandRegistry, type CommandContext } from "./commands.js";
 import { startEnvironmentOnce } from "./commands-environment.js";
-import { diffStatsService } from "./commands-runtime-state.js";
 import { prMonitorService } from "./commands-pr-monitor.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import type { Environment } from "./models.js";
 import { runCommand } from "./shell.js";
 import { createProject, StorageService } from "./storage.js";
 import { updateWorktreeLocations } from "./worktree-locations.js";
+import { BackendRuntime } from "./backend-runtime.js";
 
 const roots: string[] = [];
+const runtimes: BackendRuntime[] = [];
 
 afterEach(async () => {
-  for (const id of diffStatsService.trackedIds()) diffStatsService.untrack(id);
+  for (const runtime of runtimes.splice(0)) runtime.shutdown();
   prMonitorService.sync([]);
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
@@ -34,12 +35,15 @@ async function setup() {
     createProject("https://github.com/acme/app.git", projectPath),
   );
   const commands = createCommandRegistry();
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  runtimes.push(runtime);
   const context = {
     storage,
     appRoot: "",
     resourceRoot: "",
     emit: () => undefined,
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+    runtime,
   } as CommandContext;
   const create = (args: Record<string, unknown>) =>
     commands.get("create_environment")!(

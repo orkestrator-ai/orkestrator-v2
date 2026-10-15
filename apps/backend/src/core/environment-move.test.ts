@@ -5,7 +5,6 @@ import path from "node:path";
 
 import { createCommandRegistry, type CommandContext } from "./commands.js";
 import { startEnvironmentOnce } from "./commands-environment.js";
-import { diffStatsService } from "./commands-runtime-state.js";
 import { prMonitorService } from "./commands-pr-monitor.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import {
@@ -24,15 +23,24 @@ import { runCommand } from "./shell.js";
 import * as shell from "./shell.js";
 import * as tmux from "./tmux-commands.js";
 import { TmuxBackend } from "./tmux-backend.js";
+import { claudeTmuxRuntimeRootPrefix, tmuxSessionName } from "./tmux-shared.js";
+import { realTmux, withPrivateTmux } from "../../tests/tmux-lifecycle-fixture.js";
 import * as pathSafety from "./path-safety.js";
 import { setLocalServerShutdownRequested } from "./commands-runtime-state.js";
 import { createProject, StorageService } from "./storage.js";
 import { parseWorktreeMoveRecord } from "./storage-projects.js";
+import { BackendRuntime } from "./backend-runtime.js";
 
 const roots: string[] = [];
+const runtimes: BackendRuntime[] = [];
 const listTmuxSessions = mock(async (args: string[]) => {
   expect(args).toEqual(["tmux", "list-sessions", "-F", "#{session_name}"]);
-  return { status: 1, stdout: "", stderr: "no sessions" };
+  // What tmux prints when no server has used the socket since /tmp was cleared.
+  return {
+    status: 1,
+    stdout: "",
+    stderr: "error connecting to /private/tmp/tmux-501/default (No such file or directory)",
+  };
 });
 let optionalLocks: string | undefined;
 beforeEach(() => {
@@ -45,6 +53,8 @@ beforeEach(() => {
   const exec = TmuxBackend.prototype.exec;
   spyOn(TmuxBackend.prototype, "exec").mockImplementation(function (this: TmuxBackend, ...args) {
     if (args[0][0] === "tmux") return listTmuxSessions(args[0]);
+    if (args[0][0] === "ps")
+      return Promise.resolve({ status: 0, stdout: "1 /sbin/init\n", stderr: "" });
     return exec.apply(this, args);
   });
 });
@@ -54,7 +64,7 @@ afterEach(async () => {
   if (optionalLocks === undefined) delete process.env.GIT_OPTIONAL_LOCKS;
   else process.env.GIT_OPTIONAL_LOCKS = optionalLocks;
   setLocalServerShutdownRequested(false);
-  for (const id of diffStatsService.trackedIds()) diffStatsService.untrack(id);
+  for (const runtime of runtimes.splice(0)) runtime.shutdown();
   prMonitorService.sync([]);
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
@@ -87,12 +97,15 @@ async function setup() {
     createProject("https://github.com/acme/app.git", projectPath),
   );
   const commands = createCommandRegistry();
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  runtimes.push(runtime);
   const context = {
     storage,
     appRoot: "",
     resourceRoot: "",
     emit: () => undefined,
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+    runtime,
   } as CommandContext;
   const startLocal = async (): Promise<Environment> => {
     const created = (await commands.get("create_environment")!(
@@ -367,6 +380,63 @@ describe("move_environment", () => {
     expect(await registeredWorktrees(projectPath)).toContain(from);
     await expectSubmodulesLinked(from);
   });
+
+  for (const live of [false, true]) {
+    test.skipIf(!realTmux)(
+      `move with an absent socket (${live ? "live unlinked server" : "never started"})`,
+      async () => {
+        const { root, storage, context, startLocal } = await setup();
+        const environment = await startLocal();
+        const from = environment.worktreePath!;
+        const destination = path.join(root, "elsewhere");
+        const runtimeRoot = path.join(
+          claudeTmuxRuntimeRootPrefix(storage.getDataDir()),
+          environment.id,
+        );
+        const attribution = path.join(runtimeRoot, "sessions", "saved-session");
+        await fs.mkdir(attribution, { recursive: true });
+        await withPrivateTmux(async (fixture) => {
+          if (live) {
+            await fixture.start(tmuxSessionName(environment.id, "tab-live"), from);
+            await fs.unlink(fixture.socket);
+            expect(fixture.alive()).toBe(true);
+          }
+          const exec = TmuxBackend.prototype.exec;
+          spyOn(TmuxBackend.prototype, "exec").mockImplementation(function (
+            this: TmuxBackend,
+            ...args
+          ) {
+            return args[0][0] === "tmux" || args[0][0] === "ps"
+              ? fixture.exec(args[0])
+              : exec.apply(this, args);
+          });
+          try {
+            if (live) {
+              await expect(
+                moveEnvironmentTask(environment.id, destination, context, {
+                  sessionHomes: isolatedHomes(root),
+                }),
+              ).rejects.toThrow("cleanup incomplete");
+              expect((await storage.getEnvironment(environment.id))?.worktreePath).toBe(from);
+              expect(await exists(from)).toBe(true);
+              expect(await exists(path.join(destination, path.basename(from)))).toBe(false);
+              expect(await exists(attribution)).toBe(true);
+              expect(fixture.alive()).toBe(true);
+              await fixture.terminate();
+            }
+            const moved = await moveEnvironmentTask(environment.id, destination, context, {
+              sessionHomes: isolatedHomes(root),
+            });
+            expect(moved.worktreePath).toBe(path.join(destination, path.basename(from)));
+            expect(await exists(from)).toBe(false);
+            expect(await exists(runtimeRoot)).toBe(false);
+          } finally {
+            await fs.rm(runtimeRoot, { recursive: true, force: true });
+          }
+        });
+      },
+    );
+  }
 
   test("is refused while an agent is working or waiting, leaving the files in place", async () => {
     const { root, storage, context, startLocal } = await setup();

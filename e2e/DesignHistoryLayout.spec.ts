@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import {
   registerDesignCommandHandlers,
   type DesignCommandContext,
-} from "../apps/backend/src/core/design-commands";
-import { DesignService } from "../apps/backend/src/core/design-service";
+} from "../apps/backend/src/core/design/commands";
+import { DesignService } from "../apps/backend/src/core/design/service";
 
 type Handler = (args: Record<string, unknown>, context: DesignCommandContext) => unknown;
 

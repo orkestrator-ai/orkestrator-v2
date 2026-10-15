@@ -83,12 +83,12 @@ process.env.GH_TOKEN = "test-gh-token";
 
 setClaudeHomeForTesting(sessionManagerTestHome);
 
-// Only `captureEvents` below needs a type from here. The suites that assert on
-// patches, parts, usage, background tasks or the part-budget constants import
-// those from their own source, so the harness must not re-import them: it is
-// not a re-export surface for them, and `part-budget.js` was being pulled in at
-// runtime for nothing.
-import type { SSEEvent } from "../types/index.js";
+import type { PromptOptions, SessionState, SSEEvent } from "../types/index.js";
+import {
+  admitPrompt,
+  appendPromptMessage,
+  createClaudeTurn,
+} from "./session-manager-prompt-admission.js";
 
 export const {
   createSession,
@@ -147,6 +147,20 @@ export const {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** Prepare a real turn without starting its SDK query or consuming frames. */
+export function createPromptTurnForTesting(session: SessionState, options?: PromptOptions) {
+  const admission = admitPrompt(session.id, options);
+  if (!admission) throw new Error("Expected prompt admission");
+  const { userMessage, sdkTextPrompt } = appendPromptMessage(admission, "Test prompt", options);
+  const turn = createClaudeTurn(admission, {
+    options,
+    userMessage,
+    transcriptHydrationFailed: false,
+    testHooks: undefined,
+  });
+  return { turn, sdkTextPrompt };
+}
 
 export function captureEvents(): { events: SSEEvent[]; stop: () => void } {
   const events: SSEEvent[] = [];

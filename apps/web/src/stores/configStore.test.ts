@@ -10,7 +10,8 @@ const initialGlobal = useConfigStore.getInitialState().config.global;
 describe("configStore DEFAULT_CONFIG defaults", () => {
   test("uses the current default model selection", () => {
     const platforms = initialGlobal.agentSettings?.platforms;
-    expect(platforms?.opencode?.model).toBe("opencode/claude-sonnet-5");
+    // Unset: OpenCode's connected, allowlisted default.
+    expect(platforms?.opencode).toEqual({ mode: "terminal" });
     expect(platforms?.claude?.model).toBe("claude-sonnet-5-5");
     expect(platforms?.codex?.model).toBe("gpt-5.4");
     expect(platforms?.codex?.reasoningEffort).toBe("high");

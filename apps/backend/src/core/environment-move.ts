@@ -14,13 +14,9 @@ import {
 } from "./commands-local-server-lifecycle.js";
 import { syncPrMonitorTracking, invalidatePendingPrMonitorSync } from "./commands-pr-monitor.js";
 import {
-  diffStatsService,
   environmentSetupSessions,
-  gitFetchScheduler,
-  invalidatePendingDiffStatsSync,
   isLocalServerShutdownRequested,
   mergingEnvironments,
-  syncDiffStatsTracking,
 } from "./commands-runtime-state.js";
 import {
   assertEnvironmentDeletionNotRequested,
@@ -351,7 +347,7 @@ async function moveEnvironmentOnce(
         lifecycleError: `Moving the environment failed: ${errorMessage(error)}`,
       })
       .catch(() => undefined);
-    await syncDiffStatsTracking(context).catch(() => undefined);
+    await context.runtime.diffStats.sync(context).catch(() => undefined);
     throw error;
   }
 }
@@ -380,10 +376,11 @@ async function quiesceLocalEnvironment(
   await stopLocalServersForEnvironmentUnlocked(environment.id, context);
   options.invalidateDiscovery?.(environment.id);
   // Release the worktree watcher and fetch schedule of the old folder.
-  invalidatePendingDiffStatsSync();
-  diffStatsService.pause(environment.id);
+  context.runtime.diffStats.invalidatePendingSync();
+  context.runtime.diffStats.service.pause(environment.id);
   invalidatePendingPrMonitorSync();
-  if (environment.worktreePath) gitFetchScheduler.forget(environment.worktreePath);
+  if (environment.worktreePath)
+    context.runtime.diffStats.gitFetchScheduler.forget(environment.worktreePath);
 }
 
 async function tryGitWorktreeMove(
@@ -557,7 +554,7 @@ async function completeCommittedMove(
 
 async function afterMove(context: CommandContext): Promise<void> {
   // Terminal panes still name sessions that were closed in the old folder.
-  await syncDiffStatsTracking(context);
+  await context.runtime.diffStats.sync(context);
   await syncPrMonitorTracking(context);
 }
 

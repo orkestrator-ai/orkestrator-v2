@@ -73,8 +73,7 @@ import type {
   PortProtocol,
 } from "@/types";
 import type { AgentType } from "@/stores";
-import { useCodexStore, useConfigStore } from "@/stores";
-import { useClaudeStore } from "@/stores/claudeStore";
+import { useConfigStore } from "@/stores";
 import type { InitialPromptImageAttachment } from "@/lib/initial-prompt-attachments";
 import { buildReviewModelCatalog, includeMissingOpenCodeModels } from "@/lib/review-launch-options";
 import {
@@ -349,8 +348,8 @@ export function CreateEnvironmentDialog({
       : !localEnvironmentAvailable && configEnvironmentType === "local" && dockerAvailable
         ? "containerized"
         : configEnvironmentType;
-  const claudeModels = useClaudeStore((state) => state.models);
-  const codexModels = useCodexStore((state) => state.models);
+  const claudeModels = useAgentModelCatalogStore((state) => state.claudeModels);
+  const codexModels = useAgentModelCatalogStore((state) => state.codexModels);
   const cursorModels = useAgentModelCatalogStore((state) => state.cursorModels);
   const grokModels = useAgentModelCatalogStore((state) => state.grokModels);
   const piModels = useAgentModelCatalogStore((state) => state.piModels);
@@ -429,6 +428,7 @@ export function CreateEnvironmentDialog({
               providerLabel: candidate.provider,
               description: candidate.provider,
               reasoningEfforts: [...(candidate.variants ?? [])],
+              ...(candidate.connected === false ? { connected: false } : {}),
             })),
           }
         : baseCatalog;

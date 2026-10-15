@@ -127,6 +127,13 @@ export interface AgentModel {
   aliases?: string[];
   /** Provider-neutral, model-specific controls rendered by the shared composer. */
   parameters?: AgentModelParameter[];
+  /**
+   * False when the model's provider was reported as not connected the last
+   * time it was checked, before any live report was available. The row stays
+   * selectable because that report can be stale; a live catalogue omits such
+   * models instead, and dispatch still checks the live report.
+   */
+  connected?: boolean;
 }
 
 export interface AgentModelParameter {
@@ -136,6 +143,38 @@ export interface AgentModelParameter {
   options?: Array<{ id: string; label: string; description?: string }>;
   defaultValue?: string | boolean;
   scope: "session" | "turn";
+}
+
+/**
+ * A configured default model replaced, for one resolution, by one the runtime
+ * can serve. The configuration itself is never rewritten.
+ */
+export interface NativeAgentModelSubstitution {
+  /** The configured model the runtime reports it cannot currently serve. */
+  requestedModelId: string;
+  /** The model used instead. */
+  modelId: string;
+  /** User-facing explanation of the substitution. */
+  message: string;
+}
+
+/** Bounded shape check for a persisted {@link NativeAgentModelSubstitution}. */
+export function isNativeAgentModelSubstitution(
+  value: unknown,
+): value is NativeAgentModelSubstitution {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const { requestedModelId, modelId, message } = value as Record<string, unknown>;
+  const bounded = (field: unknown, max: number) =>
+    typeof field === "string" && field.length > 0 && field.length <= max;
+  return bounded(requestedModelId, 512) && bounded(modelId, 512) && bounded(message, 2048);
+}
+
+/** The model a runtime will actually use for a configured default, set or not. */
+export interface NativeAgentDefaultModelResolution {
+  /** Absent when the runtime has nothing to offer, which leaves its own default. */
+  modelId?: string;
+  /** Present when a configured model the runtime cannot serve was replaced. */
+  substitution?: NativeAgentModelSubstitution;
 }
 
 export interface AgentModelRef {

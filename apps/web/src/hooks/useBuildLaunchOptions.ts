@@ -24,8 +24,6 @@ import {
   openCodeModelDisplayLabel,
 } from "@orkestrator/protocol/native-agent";
 import { useConfigStore, useProjectStore } from "@/stores";
-import { useClaudeStore } from "@/stores/claudeStore";
-import { useCodexStore } from "@/stores/codexStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 
 function normalizeCachedOpenCodeModels(value: unknown): CachedOpenCodeModel[] | null {
@@ -57,8 +55,8 @@ function normalizeCachedOpenCodeModels(value: unknown): CachedOpenCodeModel[] | 
 export function useProjectModelCatalog(projectId: string, enabled: boolean) {
   // These subscriptions keep the memoized catalog current when a native agent
   // publishes its models after the launcher has mounted.
-  const claudeModels = useClaudeStore((state) => state.models);
-  const codexModels = useCodexStore((state) => state.models);
+  const claudeModels = useAgentModelCatalogStore((state) => state.claudeModels);
+  const codexModels = useAgentModelCatalogStore((state) => state.codexModels);
   const cursorModels = useAgentModelCatalogStore((state) => state.cursorModels);
   const grokModels = useAgentModelCatalogStore((state) => state.grokModels);
   const piModels = useAgentModelCatalogStore((state) => state.piModels);
@@ -127,6 +125,7 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
             providerLabel: model.provider,
             description: model.provider,
             reasoningEfforts: [...(model.variants ?? [])],
+            ...(model.connected === false ? { connected: false } : {}),
           }));
     return {
       ...baseCatalog,

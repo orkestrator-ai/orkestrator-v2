@@ -12,7 +12,7 @@ clicking one anywhere a file opens (file tree, quick open, chat links) opens it
 in the design canvas instead of a text tab. A canvas this environment already
 made from that exact file content is reused; any other file is imported as a new
 canvas that remembers the file as its save location (`design_open_file`,
-`openDesignFile` in `design-exports.ts`). Create is blocked, with a one-line
+`openDesignFile` in `design/exports.ts`). Create is blocked, with a one-line
 reason and **Check again**, when the backend, storage or renderer is unavailable.
 
 Images pasted into the **New design** brief are written into the environment
@@ -38,7 +38,7 @@ environmentId, name, revision and frames (id, name, x, y, width, height, HTML,
 revision). `.orkdes` import/export stays strictly version 1.
 
 The backend keeps each canvas in a **private record**
-(`design-canvases/<id>.orkrec`, `apps/backend/src/core/design-records.ts`)
+(`design-canvases/<id>.orkrec`, `apps/backend/src/core/design/records.ts`)
 that is never exported. It holds the version-1 document plus:
 
 - record `sequence`, an `incarnation`, `statusVersion` (monotonic for changes
@@ -68,8 +68,8 @@ dual-write.
 
 ## Operations
 
-Edits are **recoverable operations** (`design-service.ts`,
-`design-execute.ts`, `design-apply.ts`):
+Edits are **recoverable operations** (`design/service.ts`,
+`design/execute.ts`, `design/apply.ts`):
 
 1. **Prepare** validates a bounded descriptor (kind, input, observed
    preconditions, optional gesture/correlation ids) and writes it to a small
@@ -113,7 +113,7 @@ waits for the renderer or the global guard while holding a lane.
 
 Several backends may share one data directory. Records, pending files,
 checkpoints, exports and backups stay files, and the backend database
-coordinates them (`design-coordination.ts`): each lane holds the cross-process
+coordinates them (`design/coordination.ts`): each lane holds the cross-process
 lease `design-canvases/<id>` and the global guard holds `design-canvases`, so
 the order holds across processes too. A cached record is used only while the
 record file's identity (device, inode, size, nanosecond mtime/ctime) is
@@ -141,7 +141,7 @@ partial environment list, and keeps a record whose owner cannot be read.
 
 ## Renderer
 
-`design-renderer.ts`/`design-render-queue.ts` run one worker (≤16 admitted
+`design/renderer.ts`/`design/render-queue.ts` run one worker (≤16 admitted
 jobs) with fair round-robin across environments and canvases, priority
 (interactive > validation > background) with aging, and phase deadlines
 (queue 15 s, launch 15 s, context 5 s, run/capture 15 s, cleanup 3 s, overall
@@ -181,7 +181,7 @@ proves identity; an unauthorized environment also sees `missing`. The recycle
 bin keeps ≤32 designs/128 MiB for 7 days; purge is explicit. Restoring creates
 a new live revision and a new incarnation (old tokens stay dead).
 
-History (`design-history.ts`) is persistent and bounded (50 entries and
+History (`design/history.ts`) is persistent and bounded (50 entries and
 64 MiB per canvas, 512 MiB globally; the newest 3 entries per canvas are
 protected). Each entry references an immutable checkpoint file written and
 synced before the record references it. Undo/redo are per actor (your own
@@ -237,7 +237,7 @@ inside the frame returns to Inspect.
 ## Save, export and download
 
 Export (Save As) writes one exact committed revision to a repository-relative
-`.orkdes` path (`design-exports.ts`, `design-export-writer.ts`). By default
+`.orkdes` path (`design/exports.ts`, `design/export-writer.ts`). By default
 designs go to the `designs/` folder; the dialog has separate **Folder** and
 **File name** fields (the folder may be emptied to save in the repository root,
 and offers the repository's existing folders). A path is up to seven plain
@@ -302,10 +302,9 @@ credentials or prompts.
 
 ## Tests
 
-Backend: `design-service`, `design-operations`, `design-history`,
-`design-lifecycle`, `design-sync`, `design-records`, `design-exports`,
-`design-export-writer`, `design-renderer`, `commands-registry-design` and
-`design-mcp` tests (a happy-dom runtime renderer from `design-test-support.ts`
+Backend: the `core/design/` `service`, `operations`, `history`, `lifecycle`,
+`sync`, `records`, `exports`, `export-writer`, `renderer` and `mcp` tests, and
+`commands-registry-design` (a happy-dom runtime renderer from `design/test-support.ts`
 plus one real-Chromium renderer test). Web: controller, drafts, viewport,
 canvas tab, inspector, layer tree, history/export, entry and agent
 context tests. Browser: `e2e/DesignCanvas.spec.ts` runs the real runtime and

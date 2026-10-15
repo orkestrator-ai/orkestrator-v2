@@ -34,15 +34,16 @@ import {
   type WebAnnotationResultReportInput,
 } from "@orkestrator/protocol/web-annotations-validation";
 import type { WebAnnotationToolHost, WebAnnotationToolScope } from "./web-annotation-contracts.js";
+import type { WebAnnotationContext } from "./web-annotation-context.js";
 import {
-  WebAnnotationServiceCore,
   WebAnnotationServiceError,
   capacityError,
   conflictError,
   hashBody,
   newId,
   notFound,
-} from "./web-annotation-service-core.js";
+  type WebAnnotationThreads,
+} from "./web-annotation-service-threads.js";
 import type {
   ManifestResult,
   WebAnnotationEnvironmentStore,
@@ -132,18 +133,20 @@ export function webAnnotationComparison(
   };
 }
 
-export abstract class WebAnnotationServiceResults extends WebAnnotationServiceCore {
-  protected requireRequest(
-    manifest: WebAnnotationManifest,
-    requestId: string,
-  ): WebAnnotationRequest {
+export class WebAnnotationResults {
+  constructor(
+    private readonly ctx: WebAnnotationContext,
+    private readonly threads: WebAnnotationThreads,
+  ) {}
+
+  requireRequest(manifest: WebAnnotationManifest, requestId: string): WebAnnotationRequest {
     const request = isWebAnnotationId(requestId) ? manifest.requests[requestId] : undefined;
     if (!request) throw notFound("Request");
     return request;
   }
 
   /** A result is provisional only while its request can still execute. */
-  protected projectResult(
+  projectResult(
     result: WebAnnotationResult,
     request: WebAnnotationRequest | undefined,
   ): WebAnnotationResult {
@@ -153,16 +156,14 @@ export abstract class WebAnnotationServiceResults extends WebAnnotationServiceCo
   }
 
   /** Settlement clears the provisional flag on the request's result indexes. */
-  protected settleResultsInTx(tx: WebAnnotationTransaction, request: WebAnnotationRequest): void {
+  settleResultsInTx(tx: WebAnnotationTransaction, request: WebAnnotationRequest): void {
     for (const result of Object.values(tx.manifest.results)) {
       if (result.requestId === request.id && result.provisional) result.provisional = false;
     }
   }
 
-  override async get(
-    ...args: Parameters<WebAnnotationServiceCore["get"]>
-  ): Promise<WebAnnotationGetResult> {
-    const got = await super.get(...args);
+  async get(...args: Parameters<WebAnnotationThreads["get"]>): Promise<WebAnnotationGetResult> {
+    const got = await this.threads.get(...args);
     const requests = new Map(got.requests.map((request) => [request.id, request]));
     return {
       ...got,
@@ -176,11 +177,11 @@ export abstract class WebAnnotationServiceResults extends WebAnnotationServiceCo
     environmentId: string,
     requestId: string,
   ): Promise<{ request: WebAnnotationRequest; results: WebAnnotationResult[] }> {
-    const store = await this.env(environmentId);
+    const store = await this.ctx.env(environmentId);
     const request = this.requireRequest(store.manifest, requestId);
     const results: WebAnnotationResult[] = [];
     for (const id of request.resultIds.slice(-WEB_ANNOTATION_LIMITS.resultRevisions)) {
-      const result = await this.readResult(store, id);
+      const result = await this.threads.readResult(store, id);
       if (result) results.push(this.projectResult(result, request));
     }
     return { request: { ...request }, results };
@@ -189,14 +190,14 @@ export abstract class WebAnnotationServiceResults extends WebAnnotationServiceCo
   // -------------------------------------------------------------------------
   // Result chain
 
-  protected resultsFor(manifest: WebAnnotationManifest, requestId: string): ManifestResult[] {
+  resultsFor(manifest: WebAnnotationManifest, requestId: string): ManifestResult[] {
     return Object.values(manifest.results)
       .filter((result) => result.requestId === requestId)
       .sort((a, b) => a.revision - b.revision);
   }
 
   /** Latest result index for a request, optionally of one provenance. */
-  protected latestResult(
+  latestResult(
     manifest: WebAnnotationManifest,
     requestId: string,
     provenance?: WebAnnotationResult["provenance"],
@@ -208,7 +209,7 @@ export abstract class WebAnnotationServiceResults extends WebAnnotationServiceCo
     );
   }
 
-  protected writeResult(
+  writeResult(
     tx: WebAnnotationTransaction,
     request: WebAnnotationRequest,
     result: WebAnnotationResult,
@@ -231,12 +232,12 @@ export abstract class WebAnnotationServiceResults extends WebAnnotationServiceCo
     request.updatedAt = tx.now;
     for (const selection of request.selections) {
       const annotation = tx.manifest.annotations[selection.annotationId];
-      if (annotation) this.bumpMetadata(tx, annotation);
+      if (annotation) this.threads.bumpMetadata(tx, annotation);
     }
     tx.touch({ requestIds: [request.id] });
   }
 
-  protected assertResultCapacity(manifest: WebAnnotationManifest, requestId: string): number {
+  assertResultCapacity(manifest: WebAnnotationManifest, requestId: string): number {
     const existing = this.resultsFor(manifest, requestId);
     if (existing.length >= WEB_ANNOTATION_LIMITS.resultRevisions) {
       throw capacityError(
@@ -295,14 +296,14 @@ export abstract class WebAnnotationServiceResults extends WebAnnotationServiceCo
   async captureResult(
     input: WebAnnotationResultCaptureInput,
   ): Promise<{ result: WebAnnotationResult; captureId: string }> {
-    this.assertOperationId(input.operationId);
-    const capture = this.validateCapture(input.capture);
+    this.ctx.assertOperationId(input.operationId);
+    const capture = this.threads.validateCapture(input.capture);
     const metadataResult = validateWebAnnotationResultCaptureMetadata(
       input as unknown as Record<string, unknown>,
     );
     if (!metadataResult.ok) throw new WebAnnotationServiceError(metadataResult.error);
     const metadata = metadataResult.value;
-    const store = await this.env(input.environmentId);
+    const store = await this.ctx.env(input.environmentId);
     // Receipts written before annotation/metadata fields existed keep hashing
     // the same way, so a replay across an upgrade is still recognized.
     const extended = input.annotationId !== undefined || Object.keys(metadata).length > 0;
@@ -321,10 +322,10 @@ export abstract class WebAnnotationServiceResults extends WebAnnotationServiceCo
     const preview = this.requireRequest(store.manifest, input.requestId);
     const annotationId = this.resultAnnotationId(preview, input.annotationId);
     const selection = preview.selections.find((item) => item.annotationId === annotationId)!;
-    const original = await this.readCapture(store, store.manifest, selection.captureId);
+    const original = await this.threads.readCapture(store, store.manifest, selection.captureId);
 
     const committed = await store.mutate((tx) => {
-      const existing = this.lookupReceipt(
+      const existing = this.ctx.lookupReceipt(
         tx.manifest,
         input.operationId,
         "result-capture",
@@ -349,10 +350,10 @@ export abstract class WebAnnotationServiceResults extends WebAnnotationServiceCo
         metadata,
         selection.captureId,
       );
-      const record = this.captureFromInput(
+      const record = this.threads.captureFromInput(
         tx,
         annotationId,
-        this.nextCaptureRevision(tx.manifest, annotationId),
+        this.threads.nextCaptureRevision(tx.manifest, annotationId),
         capture,
         "result-capture",
         { requestId: request.id, resultId },
@@ -399,7 +400,7 @@ export abstract class WebAnnotationServiceResults extends WebAnnotationServiceCo
         observations: [...(previous?.observations ?? []), observation].slice(-MAX_OBSERVATIONS),
         ...(previous?.fileChecks ? { fileChecks: previous.fileChecks } : {}),
       });
-      this.pushReceipt(tx, {
+      this.ctx.pushReceipt(tx, {
         operationId: input.operationId,
         kind: "result-capture",
         bodyHash,
@@ -408,7 +409,7 @@ export abstract class WebAnnotationServiceResults extends WebAnnotationServiceCo
       });
       return { resultId, captureId: record.id };
     });
-    const result = await this.readResult(store, committed.value.resultId);
+    const result = await this.threads.readResult(store, committed.value.resultId);
     if (!result)
       throw new WebAnnotationServiceError(
         "Web annotation storage degraded: result record is unreadable",
@@ -428,13 +429,13 @@ export abstract class WebAnnotationServiceResults extends WebAnnotationServiceCo
    * reported addressed but not accepted are excluded by default (listed) so
    * work is not redone inadvertently.
    */
-  protected async followUpSelection(
+  async followUpSelection(
     store: WebAnnotationEnvironmentStore,
     manifest: WebAnnotationManifest,
     request: WebAnnotationRequest,
   ): Promise<WebAnnotationFollowUpCandidates & { result: WebAnnotationResult | null }> {
     const latest = this.latestResult(manifest, request.id);
-    const result = latest ? await this.readResult(store, latest.id) : null;
+    const result = latest ? await this.threads.readResult(store, latest.id) : null;
     const failed =
       request.state === "failed" ||
       request.state === "cancelled" ||
@@ -494,7 +495,7 @@ export abstract class WebAnnotationServiceResults extends WebAnnotationServiceCo
     environmentId: string,
     requestId: string,
   ): Promise<WebAnnotationFollowUpCandidates> {
-    const store = await this.env(environmentId);
+    const store = await this.ctx.env(environmentId);
     const request = this.requireRequest(store.manifest, requestId);
     if (isWebAnnotationRequestActive(request.state)) {
       throw new WebAnnotationServiceError(
@@ -518,7 +519,7 @@ export abstract class WebAnnotationServiceResults extends WebAnnotationServiceCo
     latestResult: WebAnnotationResult | null;
   } | null> {
     if (!scope.tabId) return null;
-    const store = await this.env(scope.environmentId);
+    const store = await this.ctx.env(scope.environmentId);
     const request = this.assignedFor(store.manifest, scope.tabId);
     if (!request) return null;
     let body = "";
@@ -527,11 +528,16 @@ export abstract class WebAnnotationServiceResults extends WebAnnotationServiceCo
     } catch {
       return null;
     }
-    const brief = this.options.composeText
-      ? this.options.composeText(request.id, { body }, request.operation, request.selections.length)
+    const brief = this.ctx.options.composeText
+      ? this.ctx.options.composeText(
+          request.id,
+          { body },
+          request.operation,
+          request.selections.length,
+        )
       : body;
     const latest = this.latestResult(store.manifest, request.id);
-    const record = latest ? await this.readResult(store, latest.id) : null;
+    const record = latest ? await this.threads.readResult(store, latest.id) : null;
     return {
       request: { ...request },
       brief,
@@ -539,10 +545,7 @@ export abstract class WebAnnotationServiceResults extends WebAnnotationServiceCo
     };
   }
 
-  protected assignedFor(
-    manifest: WebAnnotationManifest,
-    tabId: string,
-  ): WebAnnotationRequest | null {
+  assignedFor(manifest: WebAnnotationManifest, tabId: string): WebAnnotationRequest | null {
     const mine = Object.values(manifest.requests).filter(
       (request) => request.destination.tabId === tabId,
     );
@@ -569,7 +572,7 @@ export abstract class WebAnnotationServiceResults extends WebAnnotationServiceCo
     capture: WebAnnotationCapture | null;
     entries: WebAnnotationEntry[];
   }> {
-    const store = await this.env(scope.environmentId);
+    const store = await this.ctx.env(scope.environmentId);
     const manifest = store.manifest;
     const request = isWebAnnotationId(requestId) ? manifest.requests[requestId] : undefined;
     if (!request || !scope.tabId || request.destination.tabId !== scope.tabId) {
@@ -577,15 +580,15 @@ export abstract class WebAnnotationServiceResults extends WebAnnotationServiceCo
     }
     const selection = request.selections.find((item) => item.annotationId === annotationId);
     if (!selection) throw new WebAnnotationServiceError("Annotation is not part of this request");
-    const annotation = this.requireAnnotation(manifest, annotationId);
-    const capture = await this.readCapture(store, manifest, selection.captureId);
+    const annotation = this.threads.requireAnnotation(manifest, annotationId);
+    const capture = await this.threads.readCapture(store, manifest, selection.captureId);
     const indexes = manifest.entries[annotationId] ?? [];
     const entries: WebAnnotationEntry[] = [];
     for (const id of selection.entryIds.slice(0, WEB_ANNOTATION_LIMITS.entryPageItems)) {
       const index = indexes.find((entry) => entry.id === id);
-      if (index) entries.push(await this.readEntry(store, index));
+      if (index) entries.push(await this.threads.readEntry(store, index));
     }
-    return { annotation: this.project(store, annotation), capture, entries };
+    return { annotation: this.threads.project(store, annotation), capture, entries };
   }
 
   /** Workspace containment/existence of reported files (outside the write queue). */
@@ -593,13 +596,13 @@ export abstract class WebAnnotationServiceResults extends WebAnnotationServiceCo
     environmentId: string,
     files: readonly string[],
   ): Promise<WebAnnotationFileCheck[] | undefined> {
-    const check = this.options.dispatch?.checkWorkspacePaths;
+    const check = this.ctx.options.dispatch?.checkWorkspacePaths;
     if (files.length === 0 || !check) return undefined;
-    const environment = await this.hostEnvironment(environmentId).catch(() => null);
+    const environment = await this.ctx.hostEnvironment(environmentId).catch(() => null);
     if (!environment) return undefined;
     return check
       .call(
-        this.options.dispatch,
+        this.ctx.options.dispatch,
         {
           id: environment.id,
           environmentType: environment.environmentType,
@@ -618,7 +621,7 @@ export abstract class WebAnnotationServiceResults extends WebAnnotationServiceCo
     const validated = validateWebAnnotationResultReport(report);
     if (!validated.ok) throw new WebAnnotationServiceError(validated.error);
     const input = validated.value;
-    const store = await this.env(scope.environmentId);
+    const store = await this.ctx.env(scope.environmentId);
     const fileChecks = await this.fileChecks(scope.environmentId, input.files);
     const committed = await store.mutate((tx) => {
       const request = tx.manifest.requests[input.requestId];

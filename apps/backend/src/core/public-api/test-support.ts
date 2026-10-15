@@ -14,6 +14,7 @@ import { EnvironmentLifecycleTaskTracker } from "../environment-lifecycle-tasks.
 import { runCommand } from "../shell.js";
 import { StorageService } from "../storage.js";
 import { stopReconciler } from "./reconciler.js";
+import { BackendRuntime } from "../backend-runtime.js";
 
 /**
  * Real-storage harness for public actions: a temporary data directory, a
@@ -76,7 +77,23 @@ export async function createPublicApiHarness(
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
     worktreeDir: path.join(root, "worktrees"),
     ...options.context,
+    runtime: new BackendRuntime({ emit: (event, payload) => context.emit(event, payload) }),
   } as CommandContext;
+  let disposal: Promise<void> | undefined;
+  function dispose(): Promise<void> {
+    return (disposal ??= (async () => {
+      try {
+        await stopReconciler(storage);
+      } finally {
+        try {
+          await context.environmentLifecycleTasks.beginShutdown(5_000);
+        } finally {
+          context.runtime.shutdown();
+          storage.close();
+        }
+      }
+    })());
+  }
   const harness: PublicApiHarness = {
     dataDir,
     root,
@@ -111,7 +128,7 @@ export async function createPublicApiHarness(
       return { projectPath, originPath };
     },
     async restart() {
-      await stopReconciler(storage);
+      await dispose();
       return createPublicApiHarness({
         root,
         dataDir,
@@ -120,9 +137,11 @@ export async function createPublicApiHarness(
       });
     },
     async cleanup() {
-      await stopReconciler(storage);
-      await context.environmentLifecycleTasks.beginShutdown?.(5_000).catch(() => undefined);
-      await fs.rm(root, { recursive: true, force: true });
+      try {
+        await dispose();
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
     },
   };
   return harness;

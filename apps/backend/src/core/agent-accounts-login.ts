@@ -12,6 +12,8 @@ import type { AgentAccountPlatform } from "@orkestrator/protocol/agent-accounts"
  * - Codex: `codex login --device-auth` prints a verification URL and a one-time
  *   code, then exits once the user approves it. Device code avoids the browser
  *   flow's fixed `127.0.0.1:1455` callback.
+ * - GitHub: `gh auth login --web` behaves like Codex's device flow (see
+ *   `github-cli-setup.ts`).
  *
  * The CLI owns the OAuth exchange and writes the credential where it always
  * does for that directory; this module never sees a token.
@@ -56,6 +58,19 @@ export function parseCodexDeviceLoginOutput(output: string): ParsedLoginPrompt {
   const userCode = text.match(DEVICE_CODE_PATTERN)?.[0];
   return { ...(url ? { url } : {}), ...(userCode ? { userCode } : {}) };
 }
+
+/** gh prints `One-time code (ABCD-1234)` and `https://github.com/login/device`. */
+export function parseGitHubDeviceLoginOutput(output: string): ParsedLoginPrompt {
+  const text = stripAnsi(output);
+  const url = (text.match(URL_PATTERN) ?? []).find((candidate) =>
+    /^https:\/\/github\.com\/login\/device\b/.test(candidate),
+  );
+  const userCode = text.match(DEVICE_CODE_PATTERN)?.[0];
+  return { ...(url ? { url } : {}), ...(userCode ? { userCode } : {}) };
+}
+
+/** Which CLI a login drives: an agent account, or the host's GitHub CLI. */
+export type LoginFlowKind = AgentAccountPlatform | "github";
 
 export interface AgentAccountLoginCommand {
   command: string;
@@ -133,7 +148,7 @@ export type SpawnLike = (
  * challenge and state, and whatever the CLI prints about the account.
  */
 export async function beginAgentAccountLogin(
-  platform: AgentAccountPlatform,
+  platform: LoginFlowKind,
   command: AgentAccountLoginCommand,
   options: {
     spawnImpl?: SpawnLike;
@@ -168,7 +183,7 @@ export async function beginAgentAccountLogin(
   });
   void prompt.catch(() => undefined);
 
-  // Both CLIs trap SIGTERM (Codex even exits 0), so an exit we caused must
+  // The CLIs trap SIGTERM (Codex even exits 0), so an exit we caused must
   // never read as a completed sign-in.
   let cancelled = false;
   const cancel = (): void => {
@@ -191,7 +206,12 @@ export async function beginAgentAccountLogin(
   totalTimer.unref?.();
 
   let output = "";
-  const parse = platform === "claude" ? parseClaudeLoginOutput : parseCodexDeviceLoginOutput;
+  const parse =
+    platform === "claude"
+      ? parseClaudeLoginOutput
+      : platform === "github"
+        ? parseGitHubDeviceLoginOutput
+        : parseCodexDeviceLoginOutput;
   const onData = (chunk: Buffer | string): void => {
     output += chunk.toString();
     if (output.length > MAX_OUTPUT_BYTES) output = output.slice(-MAX_OUTPUT_BYTES);

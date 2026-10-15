@@ -110,7 +110,6 @@ import {
   normalizeOpenCodeModelProviders,
 } from "@orkestrator/protocol/native-agent";
 import {
-  DEFAULT_OPENCODE_MODEL_ID,
   normalizeOpenCodeRepositoryDefaults,
   selectableOpenCodeDefaultModel,
   storedOpenCodeModelIds,
@@ -1639,7 +1638,6 @@ export function sanitizePersistedReviewInstruction(config: AppConfig): AppConfig
 // `storage-shared.ts` and every existing caller reach for them, so the surface
 // stays here.
 export {
-  DEFAULT_OPENCODE_MODEL_ID,
   normalizeOpenCodeRepositoryDefaults,
   selectableOpenCodeDefaultModel,
   storedOpenCodeModelIds,
@@ -1735,17 +1733,17 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     defaultAgent: firstEnabledAgentPlatform(enabledAgentPlatforms, migratedGlobal.defaultAgent),
     platforms: {
       ...migratedGlobal.platforms,
-      opencode: {
-        ...migratedGlobal.platforms?.opencode,
-        ...(() => {
-          const model = selectableOpenCodeDefaultModel(
-            migratedGlobal.platforms?.opencode?.model,
-            favoriteModels,
-            openCodeModelProviders,
-          );
-          return typeof model === "string" && model ? { model } : {};
-        })(),
-      },
+      opencode: (() => {
+        const { model: stored, ...opencode } = migratedGlobal.platforms?.opencode ?? {};
+        const model = selectableOpenCodeDefaultModel(
+          stored,
+          favoriteModels,
+          openCodeModelProviders,
+        );
+        // An unreachable default with no favourite to take its place is
+        // cleared, which leaves the effective OpenCode default in charge.
+        return typeof model === "string" && model ? { ...opencode, model } : opencode;
+      })(),
     },
   };
 
@@ -1938,7 +1936,9 @@ export function defaultConfig(): AppConfig {
           // overwrite deliberate choices. Existing installs keep their stored
           // value until the user changes it in settings.
           codex: { mode: "native", model: "gpt-5.4", reasoningEffort: "high" },
-          opencode: { mode: "terminal", model: DEFAULT_OPENCODE_MODEL_ID },
+          // No model: unset is OpenCode's own default among the connected,
+          // allowlisted providers, which no fixed id can match for every login.
+          opencode: { mode: "terminal" },
           grok: { mode: "terminal" },
         },
       },

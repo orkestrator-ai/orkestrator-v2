@@ -1,5 +1,4 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import type { DiffStatsService } from "./diff-stats-service.js";
 import { spawnCommand } from "./shell.js";
 import { terminateProcessTree } from "./process-tree.js";
 import {
@@ -15,7 +14,6 @@ import {
   OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT,
   configuredOpenCodeAgentTools,
   deletingLocalServerEnvironments,
-  diffStatsService,
   enableGitScanCaches,
   establishCreatedFromCommit,
   ensureContainerAgentToolsHost,
@@ -143,12 +141,6 @@ export const __testing = {
   establishCreatedFromCommit,
   completeEnvironmentSetup,
   enableGitScanCaches,
-  trackDiffStats(target: Parameters<DiffStatsService["track"]>[0]): void {
-    diffStatsService.track(target);
-  },
-  trackedDiffStatsIds(): string[] {
-    return diffStatsService.trackedIds();
-  },
   terminalOutputBufferStats(sessionId: string): {
     chars: number;
     chunks: number;

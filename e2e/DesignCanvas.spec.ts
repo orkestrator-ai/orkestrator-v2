@@ -5,10 +5,10 @@ import { tmpdir } from "node:os";
 import {
   registerDesignCommandHandlers,
   type DesignCommandContext,
-} from "../apps/backend/src/core/design-commands";
-import { planDefaultDesignExportPath } from "../apps/backend/src/core/design-export-writer";
-import { DesignService } from "../apps/backend/src/core/design-service";
-import { runDesignAction } from "../apps/backend/src/core/design-tools";
+} from "../apps/backend/src/core/design/commands";
+import { planDefaultDesignExportPath } from "../apps/backend/src/core/design/export-writer";
+import { DesignService } from "../apps/backend/src/core/design/service";
+import { runDesignAction } from "../apps/backend/src/core/design/tools";
 import { DESIGN_EVENT } from "@orkestrator/protocol/design-canvas";
 
 type Handler = (args: Record<string, unknown>, context: DesignCommandContext) => unknown;

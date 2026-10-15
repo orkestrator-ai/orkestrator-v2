@@ -68,6 +68,10 @@ export interface PromptStreamState {
   clearFlushTimer: () => void;
 }
 
+/**
+ * Highest content-block index accepted from a streamed SDK event. Reject larger
+ * indices rather than retaining malformed sparse state for the rest of a turn.
+ */
 export const MAX_STREAM_CONTENT_BLOCK_INDEX = 4_095;
 
 /**

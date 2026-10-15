@@ -13,6 +13,7 @@ import {
   createCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
 import { withCoordinatorDelegationPresentation } from "./coordinator-delegation-authority.js";
+import { BackendRuntime } from "./backend-runtime.js";
 
 describe("launch_control_job command", () => {
   test("reads and rotates the persistent control MCP credential through backend commands", async () => {
@@ -69,6 +70,7 @@ describe("launch_control_job command", () => {
       appRoot: "",
       resourceRoot: "",
       environmentLifecycleTasks: {},
+      runtime: new BackendRuntime({ emit: () => undefined }),
       nativeAgents: {
         ensureSession: async (input: Record<string, unknown>) => {
           ensured.push(input);
@@ -185,6 +187,7 @@ describe("launch_control_job command", () => {
       appRoot: "",
       resourceRoot: "",
       environmentLifecycleTasks: {},
+      runtime: new BackendRuntime({ emit: () => undefined }),
       nativeAgents: {
         ensureSession: async (input: Record<string, unknown>) => {
           ensured.push(input);
@@ -255,6 +258,7 @@ describe("launch_control_job command", () => {
       appRoot: "",
       resourceRoot: "",
       environmentLifecycleTasks: {},
+      runtime: new BackendRuntime({ emit: () => undefined }),
       nativeAgents: {
         ensureSession: async (input: Record<string, unknown>) => {
           ensured.push(input);
@@ -341,6 +345,7 @@ describe("launch_control_job command", () => {
       appRoot: "",
       resourceRoot: "",
       environmentLifecycleTasks: {},
+      runtime: new BackendRuntime({ emit: () => undefined }),
       nativeAgents: {
         ensureSession: async () => ({ providerSessionId: "provider-session-1" }),
         dispatchIntent: async () => {

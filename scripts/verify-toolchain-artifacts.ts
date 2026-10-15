@@ -9,6 +9,8 @@ import { createGunzip } from "node:zlib";
 import * as tar from "tar-stream";
 import {
   PINNED_TOOLCHAIN_ARTIFACTS,
+  PINNED_TOOL_VERSIONS,
+  isToolchainName,
   type ToolchainArchive,
   type ToolchainArtifact,
   type ToolchainArchitecture,
@@ -41,15 +43,15 @@ export function parseFilters(args: string[]): Filters {
     const separator = argument.indexOf("=");
     const flag = separator === -1 ? argument : argument.slice(0, separator);
     const value = separator === -1 ? "" : argument.slice(separator + 1);
-    if (flag === "--tool" && ["claude", "codex", "grok", "opencode", "pi"].includes(value)) {
-      filters.tool = value as ToolchainName;
+    if (flag === "--tool" && isToolchainName(value)) {
+      filters.tool = value;
     } else if (flag === "--platform" && ["darwin", "linux"].includes(value)) {
       filters.platform = value as ToolchainPlatform;
     } else if (flag === "--arch" && ["arm64", "x64"].includes(value)) {
       filters.architecture = value as ToolchainArchitecture;
     } else {
       throw new Error(
-        `Unknown filter ${argument}. Use --tool=claude|codex|grok|opencode|pi, ` +
+        `Unknown filter ${argument}. Use --tool=${Object.keys(PINNED_TOOL_VERSIONS).join("|")}, ` +
           "--platform=darwin|linux, or --arch=arm64|x64.",
       );
     }

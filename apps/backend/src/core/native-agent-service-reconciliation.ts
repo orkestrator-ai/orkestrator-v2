@@ -3,7 +3,6 @@ import * as shared from "./native-agent-service-shared.js";
 import { nativeAsyncQuestionItemId } from "@orkestrator/protocol/native-agent";
 import { claudeNativeParameterValues } from "@orkestrator/protocol/agent-settings";
 import {
-  ABSENT_BRIDGE_RECHECK_MS,
   ACTIVITY_RETRY_BASE_MS,
   ACTIVITY_RETRY_CEILING_MS,
   ACTIVITY_STATUS_CONCURRENCY,
@@ -188,7 +187,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       if (session.pendingDispatch) return true;
       const provider = await this.observeProvider(session);
       if (!provider) continue;
-      if (this.providerDispatchCounts.has(provider)) return true;
+      if (this.providerRegistry.hasDispatchInFlight(provider)) return true;
       let active = false;
       await readActivityGroup({
         provider,
@@ -382,7 +381,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         // and starting one always runs through `provider()`, which clears this.
         // Re-probing on every tick would mean a `docker exec` per container
         // every two seconds to re-learn an answer that cannot have changed.
-        if ((this.absentBridgeUntil.get(groupKey) ?? 0) > this.now()) {
+        if (this.providerRegistry.isBridgeKnownAbsent(groupKey)) {
           for (const session of group) await applyObservation(session, "idle");
           continue;
         }
@@ -396,7 +395,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
             for (const session of group) await applyObservation(session, "idle");
             this.activityAttempts.delete(groupKey);
             this.activityRetryAt.delete(groupKey);
-            this.absentBridgeUntil.set(groupKey, this.now() + ABSENT_BRIDGE_RECHECK_MS);
+            this.providerRegistry.markBridgeAbsent(groupKey);
             this.observations.noteGroupObserved(groupKey, {
               settledIdle,
               wakeupQualified: false,
@@ -406,7 +405,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
           // Results are fenced against the provider actually read from: a
           // replacement installed from here on makes them inert.
           ticket = this.observations.withCurrentGeneration(ticket);
-          this.absentBridgeUntil.delete(groupKey);
+          this.providerRegistry.clearBridgeAbsent(groupKey);
           for (const session of group) {
             provider.registerSession?.(session.providerSessionId, {
               origin: session.origin,
@@ -469,7 +468,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
           this.observations.noteGroupFailed(groupKey);
           this.backOffActivityGroup(groupKey);
           if (provider) {
-            this.evictProvider(first, provider);
+            this.providerRegistry.evict(first, provider);
           }
           console.warn(
             `[native-agent] Activity reconciliation for ${first.environmentId} failed:`,
@@ -834,7 +833,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     const now = Date.now();
     const environments = await this.storage.loadEnvironments();
     if (this.stopped) return 0;
-    await this.pruneProviders(
+    await this.providerRegistry.prune(
       new Set(
         environments
           .filter((environment) => !environment.deletionRequestedAt)

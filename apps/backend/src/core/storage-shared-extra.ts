@@ -99,6 +99,12 @@ export function parseOpenCodeModelCatalogSnapshot(
       ? record.updatedAt
       : new Date(0).toISOString();
   const catalogVersion = createHash("sha256").update(JSON.stringify(models)).digest("hex");
+  const connectedProviderIds = normalizeOpenCodeConnectedProviderIds(record.connectedProviderIds);
+  const connectedProvidersCheckedAt =
+    typeof record.connectedProvidersCheckedAt === "string" &&
+    !Number.isNaN(Date.parse(record.connectedProvidersCheckedAt))
+      ? record.connectedProvidersCheckedAt
+      : undefined;
 
   return {
     schemaVersion: 2,
@@ -106,7 +112,25 @@ export function parseOpenCodeModelCatalogSnapshot(
     catalogVersion,
     updatedAt,
     models,
+    ...(connectedProviderIds && connectedProvidersCheckedAt
+      ? { connectedProviderIds, connectedProvidersCheckedAt }
+      : {}),
   };
+}
+
+/** Bounded, de-duplicated, sorted provider ids, or undefined when not a list. */
+export function normalizeOpenCodeConnectedProviderIds(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return Array.from(
+    new Set(
+      value
+        .filter((candidate): candidate is string => typeof candidate === "string")
+        .map((candidate) => candidate.trim())
+        .filter((candidate) => candidate.length > 0 && candidate.length <= 256),
+    ),
+  )
+    .sort((left, right) => left.localeCompare(right))
+    .slice(0, 512);
 }
 
 export function parseOpenCodeModelCatalogStore(

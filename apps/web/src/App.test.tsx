@@ -237,10 +237,18 @@ const mockCheckDocker = mock<() => Promise<boolean | DockerAvailability>>(async 
 const mockSyncAllEnvironmentsWithDocker = mock(async () => [] as string[]);
 const mockCheckClaudeCli = mock(async () => true);
 const mockCheckClaudeConfig = mock(async () => true);
-const mockCheckOpencodeCli = mock(async () => true);
-const mockCheckCodexCli = mock(async () => true);
 const mockCheckGithubCli = mock(async () => true);
 const mockGetAvailableAiCli = mock<() => Promise<string | null>>(async () => "claude");
+// The status agrees with the last `check_github_cli` answer unless a test says otherwise.
+let lastGithubCliCheck: boolean | undefined;
+const defaultGitHubCliStatus = async () => ({
+  installed: lastGithubCliCheck !== false,
+  authenticated: true,
+  canSignIn: lastGithubCliCheck !== false,
+  reminderDismissed: false,
+});
+const mockGetGitHubCliStatus = mock(defaultGitHubCliStatus);
+const mockSetGitHubCliReminderDismissed = mock(async (_dismissed: boolean) => mockConfig);
 const mockGetConfig = mock(async () => mockConfig);
 const mockGetResourceRevisionManifest = mock(async () => ({
   generation: "a".repeat(32),
@@ -347,10 +355,14 @@ mock.module("@/lib/backend", () => ({
   checkDocker: mockCheckDocker,
   checkClaudeCli: mockCheckClaudeCli,
   checkClaudeConfig: mockCheckClaudeConfig,
-  checkCodexCli: mockCheckCodexCli,
-  checkOpencodeCli: mockCheckOpencodeCli,
-  checkGithubCli: mockCheckGithubCli,
+  checkGithubCli: async () => {
+    lastGithubCliCheck = await mockCheckGithubCli();
+    return lastGithubCliCheck;
+  },
   getAvailableAiCli: mockGetAvailableAiCli,
+  getGitHubCliStatus: mockGetGitHubCliStatus,
+  setGitHubCliReminderDismissed: mockSetGitHubCliReminderDismissed,
+  getGitHubCliLogin: async () => ({ state: "idle" }),
   getConfig: mockGetConfig,
   getResourceRevisionManifest: mockGetResourceRevisionManifest,
   getScopedResourceRevisionManifest: mockGetScopedResourceRevisionManifest,
@@ -558,14 +570,14 @@ function resetAppMocks() {
   mockCheckClaudeCli.mockImplementation(async () => true);
   mockCheckClaudeConfig.mockClear();
   mockCheckClaudeConfig.mockImplementation(async () => true);
-  mockCheckOpencodeCli.mockClear();
-  mockCheckOpencodeCli.mockImplementation(async () => true);
-  mockCheckCodexCli.mockClear();
-  mockCheckCodexCli.mockImplementation(async () => true);
   mockCheckGithubCli.mockClear();
   mockCheckGithubCli.mockImplementation(async () => true);
   mockGetAvailableAiCli.mockClear();
   mockGetAvailableAiCli.mockImplementation(async () => "claude");
+  lastGithubCliCheck = undefined;
+  mockGetGitHubCliStatus.mockClear();
+  mockGetGitHubCliStatus.mockImplementation(defaultGitHubCliStatus);
+  mockSetGitHubCliReminderDismissed.mockClear();
   mockGetConfig.mockClear();
   mockGetConfig.mockImplementation(async () => mockConfig);
   mockGetResourceRevisionManifest.mockClear();
@@ -2340,8 +2352,6 @@ describe("App Docker availability", () => {
       });
     mockCheckClaudeCli.mockImplementation(async () => false);
     mockCheckClaudeConfig.mockImplementation(async () => false);
-    mockCheckOpencodeCli.mockImplementation(async () => false);
-    mockCheckCodexCli.mockImplementation(async () => false);
     mockGetAvailableAiCli.mockImplementation(async () => null);
 
     try {
@@ -2704,8 +2714,6 @@ describe("App startup checks and global events", () => {
   test("shows the no-AI-CLI dialog and retries CLI checks", async () => {
     mockCheckClaudeCli.mockImplementation(async () => false);
     mockCheckClaudeConfig.mockImplementation(async () => false);
-    mockCheckOpencodeCli.mockImplementation(async () => false);
-    mockCheckCodexCli.mockImplementation(async () => false);
     mockGetAvailableAiCli.mockImplementation(async () => null);
 
     resetStores({
@@ -2729,8 +2737,6 @@ describe("App startup checks and global events", () => {
 
     mockCheckClaudeCli.mockImplementation(async () => true);
     mockCheckClaudeConfig.mockImplementation(async () => true);
-    mockCheckOpencodeCli.mockImplementation(async () => false);
-    mockCheckCodexCli.mockImplementation(async () => false);
     mockGetAvailableAiCli.mockImplementation(async () => "claude");
 
     act(() => {
@@ -2755,8 +2761,6 @@ describe("App startup checks and global events", () => {
       .mockImplementationOnce(async () => false)
       .mockImplementationOnce(async () => true);
     mockCheckClaudeConfig.mockImplementation(async () => true);
-    mockCheckOpencodeCli.mockImplementation(async () => false);
-    mockCheckCodexCli.mockImplementation(async () => false);
     mockGetAvailableAiCli
       .mockImplementationOnce(async () => null)
       .mockImplementationOnce(async () => "claude");
@@ -2795,18 +2799,17 @@ describe("App startup checks and global events", () => {
     mockCheckClaudeConfig
       .mockImplementationOnce(async () => false)
       .mockImplementationOnce(async () => true);
-    mockCheckOpencodeCli.mockImplementation(async () => false);
     resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
 
     try {
       render(<App />);
       await waitFor(() => expect(mockCheckClaudeConfig).toHaveBeenCalledTimes(1));
-      expect(screen.queryByText("Claude Code Login Required") === null).toBe(true);
+      expect(screen.queryByText("Claude Code Is Not Logged In") === null).toBe(true);
       expect(deferredConfirmation.confirmationCallbacks).toHaveLength(1);
 
       await deferredConfirmation.releaseNext();
       await waitFor(() => expect(mockCheckClaudeConfig).toHaveBeenCalledTimes(2));
-      expect(screen.queryByText("Claude Code Login Required") === null).toBe(true);
+      expect(screen.queryByText("Claude Code Is Not Logged In") === null).toBe(true);
     } finally {
       deferredConfirmation.restore();
     }
@@ -2814,8 +2817,6 @@ describe("App startup checks and global events", () => {
 
   test("accepts a supported managed agent outside the legacy three CLI checks", async () => {
     mockCheckClaudeCli.mockImplementation(async () => false);
-    mockCheckOpencodeCli.mockImplementation(async () => false);
-    mockCheckCodexCli.mockImplementation(async () => false);
     mockGetAvailableAiCli.mockImplementation(async () => "cursor");
     resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
 
@@ -2829,8 +2830,6 @@ describe("App startup checks and global events", () => {
     mockCheckDocker.mockImplementation(async () => false);
     mockCheckClaudeCli.mockImplementation(async () => false);
     mockCheckClaudeConfig.mockImplementation(async () => false);
-    mockCheckOpencodeCli.mockImplementation(async () => false);
-    mockCheckCodexCli.mockImplementation(async () => false);
     mockCheckGithubCli.mockImplementation(async () => false);
     mockGetAvailableAiCli.mockImplementation(async () => null);
     resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
@@ -2842,8 +2841,6 @@ describe("App startup checks and global events", () => {
     expect(await screen.findByText("AI CLI Required")).toBeTruthy();
     expect(mockCheckClaudeCli).toHaveBeenCalledTimes(2);
     expect(mockCheckClaudeConfig).toHaveBeenCalledTimes(2);
-    expect(mockCheckOpencodeCli).toHaveBeenCalledTimes(2);
-    expect(mockCheckCodexCli).toHaveBeenCalledTimes(2);
     expect(mockCheckGithubCli).toHaveBeenCalledTimes(2);
     expect(mockGetAvailableAiCli).toHaveBeenCalledTimes(2);
   });
@@ -2863,22 +2860,18 @@ describe("App startup checks and global events", () => {
   test("shows the Claude login warning after continuing without Docker", async () => {
     mockCheckDocker.mockImplementation(async () => false);
     mockCheckClaudeConfig.mockImplementation(async () => false);
-    mockCheckOpencodeCli.mockImplementation(async () => false);
-    mockCheckCodexCli.mockImplementation(async () => false);
     resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
 
     render(<App />);
     expect(await screen.findByText("Docker Is Not Running")).toBeTruthy();
     act(() => screen.getByRole("button", { name: "Continue Without Docker" }).click());
 
-    expect(await screen.findByText("Claude Code Login Required")).toBeTruthy();
+    expect(await screen.findByText("Claude Code Is Not Logged In")).toBeTruthy();
   });
 
-  test("shows Claude login required when Claude is installed but not configured", async () => {
+  test("shows a Claude login notice when Claude is installed but not configured", async () => {
     mockCheckClaudeCli.mockImplementation(async () => true);
     mockCheckClaudeConfig.mockImplementation(async () => false);
-    mockCheckOpencodeCli.mockImplementation(async () => false);
-    mockCheckCodexCli.mockImplementation(async () => false);
     mockGetAvailableAiCli.mockImplementation(async () => "claude");
 
     resetStores({
@@ -2890,8 +2883,65 @@ describe("App startup checks and global events", () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByText("Claude Code Login Required")).toBeTruthy();
+      expect(screen.getByText("Claude Code Is Not Logged In")).toBeTruthy();
     });
+  });
+
+  test.each(["codex", "cursor"])("does not gate startup on a %s-only host", async (platform) => {
+    mockCheckClaudeCli.mockImplementation(async () => false);
+    mockCheckClaudeConfig.mockImplementation(async () => false);
+    mockGetAvailableAiCli.mockImplementation(async () => platform);
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    render(<App />);
+
+    await waitFor(() => expect(mockGetAvailableAiCli).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.queryByText("Checking CLI tools installation...") === null).toBe(true),
+    );
+    expect(screen.queryByText("AI CLI Required") === null).toBe(true);
+    expect(screen.queryByText("Claude Code Is Not Logged In") === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Close Application" }) === null).toBe(true);
+  });
+
+  test("lets an unauthenticated Claude be dismissed while Codex keeps working", async () => {
+    // The backend prefers Claude when it is installed, so Codex being present
+    // is invisible to the renderer here; the notice must not block either way.
+    mockCheckClaudeCli.mockImplementation(async () => true);
+    mockCheckClaudeConfig.mockImplementation(async () => false);
+    mockGetAvailableAiCli.mockImplementation(async () => "claude");
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    render(<App />);
+
+    expect(await screen.findByText("Claude Code Is Not Logged In")).toBeTruthy();
+    expect(screen.getByText(/other agent platforms keep working/)).toBeTruthy();
+    expect(screen.queryByText("AI CLI Required") === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Close Application" }) === null).toBe(true);
+
+    act(() => screen.getByRole("button", { name: "Continue Without Claude" }).click());
+
+    await waitFor(() =>
+      expect(screen.queryByText("Claude Code Is Not Logged In") === null).toBe(true),
+    );
+    expect(screen.queryByText("AI CLI Required") === null).toBe(true);
+  });
+
+  test("waits for the Claude login notice before showing the GitHub CLI warning", async () => {
+    mockCheckClaudeCli.mockImplementation(async () => true);
+    mockCheckClaudeConfig.mockImplementation(async () => false);
+    mockCheckGithubCli.mockImplementation(async () => false);
+    mockGetAvailableAiCli.mockImplementation(async () => "claude");
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    render(<App />);
+
+    expect(await screen.findByText("Claude Code Is Not Logged In")).toBeTruthy();
+    expect(screen.queryByText("GitHub CLI Not Found") === null).toBe(true);
+
+    act(() => screen.getByRole("button", { name: "Continue Without Claude" }).click());
+
+    expect(await screen.findByText("GitHub CLI Not Found")).toBeTruthy();
   });
 
   test("does not misreport a rejected CLI check as no installed tools", async () => {
@@ -2925,10 +2975,6 @@ describe("App startup checks and global events", () => {
     console.error = mock(() => {});
     mockCheckClaudeCli.mockImplementation(async () => true);
     mockCheckClaudeConfig.mockImplementation(async () => false);
-    mockCheckOpencodeCli.mockImplementation(async () => {
-      throw new Error("opencode probe failed");
-    });
-    mockCheckCodexCli.mockImplementation(async () => false);
     mockCheckGithubCli.mockImplementation(async () => false);
     mockGetAvailableAiCli.mockImplementation(async () => {
       throw new Error("AI CLI selection failed");
@@ -2940,7 +2986,7 @@ describe("App startup checks and global events", () => {
 
       await waitFor(() => expect(mockGetAvailableAiCli).toHaveBeenCalledTimes(2));
       expect(screen.queryByText("AI CLI Required") === null).toBe(true);
-      expect(screen.queryByText("Claude Code Login Required") === null).toBe(true);
+      expect(screen.queryByText("Claude Code Is Not Logged In") === null).toBe(true);
       expect(screen.queryByText("GitHub CLI Not Found") === null).toBe(true);
       expect(screen.queryByText("Checking CLI tools installation...") === null).toBe(true);
     } finally {
@@ -2953,8 +2999,6 @@ describe("App startup checks and global events", () => {
     console.error = mock(() => {});
     mockCheckClaudeCli.mockImplementation(async () => false);
     mockCheckClaudeConfig.mockImplementation(async () => false);
-    mockCheckOpencodeCli.mockImplementation(async () => false);
-    mockCheckCodexCli.mockImplementation(async () => false);
     mockGetAvailableAiCli.mockImplementation(async () => null);
 
     try {
@@ -3001,6 +3045,93 @@ describe("App startup checks and global events", () => {
     await waitFor(() => {
       expect(screen.queryByText("GitHub CLI Not Found") === null).toBe(true);
     });
+  });
+
+  test("offers GitHub sign-in at startup when gh is signed out", async () => {
+    mockGetGitHubCliStatus.mockImplementation(async () => ({
+      installed: true,
+      authenticated: false,
+      canSignIn: true,
+      reminderDismissed: false,
+    }));
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    render(<App />);
+
+    expect(await screen.findByText("Sign In to GitHub")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Sign in to GitHub" })).toBeTruthy();
+    act(() => screen.getByRole("button", { name: "Not Now" }).click());
+
+    await waitFor(() => expect(screen.queryByText("Sign In to GitHub") === null).toBe(true));
+  });
+
+  test("does not offer GitHub sign-in where the backend refuses it", async () => {
+    mockGetGitHubCliStatus.mockImplementation(async () => ({
+      installed: true,
+      authenticated: false,
+      canSignIn: false,
+      reminderDismissed: false,
+    }));
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    render(<App />);
+
+    await waitFor(() => expect(mockGetGitHubCliStatus).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("Sign In to GitHub") === null).toBe(true);
+  });
+
+  test("remembers 'Don't remind me again' for the GitHub sign-in", async () => {
+    mockGetGitHubCliStatus.mockImplementation(async () => ({
+      installed: true,
+      authenticated: false,
+      canSignIn: true,
+      reminderDismissed: false,
+    }));
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    render(<App />);
+
+    expect(await screen.findByText("Sign In to GitHub")).toBeTruthy();
+    act(() => screen.getByRole("checkbox", { name: "Don't remind me again" }).click());
+    act(() => screen.getByRole("button", { name: "Not Now" }).click());
+
+    await waitFor(() => expect(mockSetGitHubCliReminderDismissed).toHaveBeenCalledWith(true));
+    expect(screen.queryByText("Sign In to GitHub") === null).toBe(true);
+  });
+
+  test("does not save a reminder preference when the box is left unticked", async () => {
+    mockGetGitHubCliStatus.mockImplementation(async () => ({
+      installed: true,
+      authenticated: false,
+      canSignIn: true,
+      reminderDismissed: false,
+    }));
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    render(<App />);
+
+    expect(await screen.findByText("Sign In to GitHub")).toBeTruthy();
+    act(() => screen.getByRole("button", { name: "Not Now" }).click());
+
+    await waitFor(() => expect(screen.queryByText("Sign In to GitHub") === null).toBe(true));
+    expect(mockSetGitHubCliReminderDismissed).not.toHaveBeenCalled();
+  });
+
+  test("skips the GitHub setup reminder once the user turned it off", async () => {
+    mockCheckGithubCli.mockImplementation(async () => false);
+    mockGetGitHubCliStatus.mockImplementation(async () => ({
+      installed: false,
+      authenticated: false,
+      canSignIn: false,
+      reminderDismissed: true,
+    }));
+    resetStores({ environments: [], selectedProjectId: null, selectedEnvironmentId: null });
+
+    render(<App />);
+
+    await waitFor(() => expect(mockGetGitHubCliStatus).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("GitHub CLI Not Found") === null).toBe(true);
+    expect(screen.queryByText("Sign In to GitHub") === null).toBe(true);
   });
 
   test("continues rendering when config load fails", async () => {

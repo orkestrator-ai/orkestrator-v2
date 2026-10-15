@@ -13,6 +13,7 @@ import {
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import { StorageService } from "./storage.js";
+import { BackendRuntime } from "./backend-runtime.js";
 
 const PR_URL = "https://github.com/acme/repo/pull/7";
 
@@ -84,6 +85,7 @@ printf '%s\\n' '{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE"}'
       resourceRoot: "",
       toolchainBinDir: "",
       environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+      runtime: new BackendRuntime({ emit: () => undefined }),
     } as CommandContext;
     const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
       const handler = commands.get(command);
@@ -288,6 +290,7 @@ async function withProbeHarness(
       resourceRoot: "",
       toolchainBinDir: "",
       environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+      runtime: new BackendRuntime({ emit: (event, payload) => context.emit(event, payload) }),
     } as CommandContext;
     const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
       const handler = commands.get(command);

@@ -11,6 +11,8 @@ import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { resetContainerOwnershipCache } from "../src/core/container-lifecycle-service";
 
 const { createCommandRegistry, shutdownPrMonitorTracking } = await import("../src/core/commands");
+const { BackendRuntime } = await import("../src/core/backend-runtime");
+const runtimes: Array<InstanceType<typeof BackendRuntime>> = [];
 
 type Registry = ReturnType<typeof createCommandRegistry>;
 type Handler = NonNullable<ReturnType<Registry["get"]>>;
@@ -121,7 +123,7 @@ function contextWithStorage(
   storage: Record<string, unknown>,
   events: Array<{ event: string; payload: unknown }> = [],
 ): CommandContext {
-  return {
+  const context = {
     appRoot: fixtureRoot,
     resourceRoot: fixtureRoot,
     emit: mock((event: string, payload: unknown) => events.push({ event, payload })),
@@ -130,6 +132,9 @@ function contextWithStorage(
       ...storage,
     },
   } as unknown as CommandContext;
+  context.runtime = new BackendRuntime({ emit: (event, payload) => context.emit(event, payload) });
+  runtimes.push(context.runtime);
+  return context;
 }
 
 async function invoke(
@@ -205,6 +210,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  for (const runtime of runtimes.splice(0)) runtime.shutdown();
   shutdownPrMonitorTracking();
   mock.restore();
 });
@@ -504,13 +510,15 @@ describe("direct backend command registry coverage", () => {
         supportsMode: true,
       },
     ];
-    const cacheOpenCodeModelCatalog = mock(async (_projectId: string, models: unknown[]) => ({
-      schemaVersion: 2,
-      projectId: "project-1",
-      catalogVersion: "v2",
-      updatedAt: "2026-08-14T00:00:00.000Z",
-      models,
-    }));
+    const cacheOpenCodeModelCatalog = mock(
+      async (_projectId: string, models: unknown[], _connected?: readonly string[]) => ({
+        schemaVersion: 2,
+        projectId: "project-1",
+        catalogVersion: "v2",
+        updatedAt: "2026-08-14T00:00:00.000Z",
+        models,
+      }),
+    );
     const context = contextWithStorage({
       getEnvironment: mock(async () => ({
         id: "env-1",
@@ -529,6 +537,7 @@ describe("direct backend command registry coverage", () => {
       // The real service uses the provider's backend-only raw catalogue here;
       // picker responses remain filtered below in the command.
       listModelCatalogForCache: mock(async () => liveModels),
+      connectedModelProviders: mock(async () => ["opencode", "openrouter"]),
     };
 
     const health = await startHealthServer();
@@ -555,11 +564,94 @@ describe("direct backend command registry coverage", () => {
     // this cache before any OpenCode server is ready — missing it until an
     // environment happened to run and re-list.
     expect(cacheOpenCodeModelCatalog).toHaveBeenCalledTimes(1);
-    const [, persisted] = cacheOpenCodeModelCatalog.mock.calls[0]!;
+    const [, persisted, connected] = cacheOpenCodeModelCatalog.mock.calls[0]!;
     expect((persisted as Array<{ id: string }>).map((model) => model.id)).toEqual([
       "opencode/claude-sonnet-5",
       "openrouter/kimi-k2.5",
     ]);
+    // Connectivity is persisted beside it for reads made before a bridge runs.
+    expect(connected).toEqual(["opencode", "openrouter"]);
+  });
+
+  test("returns only connected OpenCode providers from a live bridge", async () => {
+    const liveModels = [
+      {
+        platform: "opencode",
+        id: "opencode/claude-sonnet-5",
+        label: "Claude Sonnet 5",
+        providerLabel: "OpenCode",
+        reasoning: [{ id: "default", label: "Default" }],
+        defaultReasoningId: "default",
+        supportsSpeed: false,
+        supportsMode: true,
+      },
+      {
+        platform: "opencode",
+        id: "opencode-go/deepseek-v4.1-flash",
+        label: "DeepSeek V4.1 Flash",
+        providerLabel: "OpenCode Go",
+        reasoning: [{ id: "default", label: "Default" }],
+        defaultReasoningId: "default",
+        supportsSpeed: false,
+        supportsMode: true,
+      },
+    ];
+    const cacheOpenCodeModelCatalog = mock(
+      async (_projectId: string, models: unknown[], _connected?: readonly string[]) => ({
+        schemaVersion: 2,
+        projectId: "project-1",
+        catalogVersion: "v2",
+        updatedAt: "2026-08-14T00:00:00.000Z",
+        models,
+      }),
+    );
+    const context = contextWithStorage({
+      getEnvironment: mock(async () => ({
+        id: "env-1",
+        projectId: "project-1",
+        environmentType: "containerized",
+        containerId: "assigned-container",
+      })),
+      getAgentModelCatalogCache: mock(async () => ({ schemaVersion: 1 as const })),
+      getOpenCodeModelCatalog: mock(async () => null),
+      cacheOpenCodeModelCatalog,
+      loadConfig: mock(async () => ({
+        global: { openCodeModelProviders: ["opencode", "opencode-go"] },
+      })),
+    });
+    (context as unknown as { nativeAgents: unknown }).nativeAgents = {
+      // The real service uses the provider's backend-only raw catalogue here;
+      // picker responses remain filtered below in the command.
+      listModelCatalogForCache: mock(async () => liveModels),
+      connectedModelProviders: mock(async () => ["opencode-go"]),
+    };
+
+    const health = await startHealthServer();
+    process.env.FAKE_DOCKER_PORT = String(health.port);
+    process.env.FAKE_OPENCODE_TOKEN = "t".repeat(43);
+    try {
+      const models = (await invoke(
+        "get_native_agent_model_catalog",
+        { environmentId: "env-1" },
+        context,
+      )) as Array<{ id: string }>;
+
+      // Both providers are allowlisted, but this login only has opencode-go,
+      // so the picker is never offered a model the dispatch would reject.
+      expect(models.map((model) => model.id)).toEqual(["opencode-go/deepseek-v4.1-flash"]);
+    } finally {
+      delete process.env.FAKE_DOCKER_PORT;
+      delete process.env.FAKE_OPENCODE_TOKEN;
+      await health.close();
+    }
+
+    // The durable cache still holds both, with the connectivity beside it.
+    const [, persisted, connected] = cacheOpenCodeModelCatalog.mock.calls[0]!;
+    expect((persisted as Array<{ id: string }>).map((model) => model.id)).toEqual([
+      "opencode/claude-sonnet-5",
+      "opencode-go/deepseek-v4.1-flash",
+    ]);
+    expect(connected).toEqual(["opencode-go"]);
   });
 
   test("validates and delegates host agent model catalogue writes", async () => {
@@ -799,9 +891,6 @@ describe("direct backend command registry coverage", () => {
       claimPromptQueueHead: value("claimPromptQueueHead", { claimed: { id: "m1" } }),
       acknowledgePromptQueueClaim: value("acknowledgePromptQueueClaim", { queueKey: "queue-1" }),
       rejectPromptQueueClaim: value("rejectPromptQueueClaim", { queueKey: "queue-1" }),
-      transferPromptQueueMessageToComposeDraft: value("transferPromptQueueMessageToComposeDraft", {
-        removed: { id: "m1" },
-      }),
       getComposeDraft: value("getComposeDraft", { draftKey: "compose-1" }),
       listComposeDrafts: value("listComposeDrafts", [{ draftKey: "compose-1" }]),
       deleteComposeDraft: value("deleteComposeDraft", undefined),
@@ -935,41 +1024,6 @@ describe("direct backend command registry coverage", () => {
         args: { queueKey: "queue-1", environmentId: "env-1", claimToken: "token-1" },
         expected: { queueKey: "queue-1" },
         call: { method: "rejectPromptQueueClaim", args: ["queue-1", "env-1", "token-1"] },
-      },
-      {
-        command: "transfer_prompt_queue_message_to_compose_draft",
-        args: {
-          queueKey: "queue-1",
-          environmentId: "env-1",
-          messageId: "m1",
-          draftKey: "draft-1",
-          ownerType: "environment",
-          ownerId: "env-1",
-          expectedDraftRevision: 2,
-        },
-        expected: { removed: { id: "m1" } },
-        call: {
-          method: "transferPromptQueueMessageToComposeDraft",
-          args: ["queue-1", "env-1", "m1", "draft-1", "environment", "env-1", 2],
-        },
-      },
-      // The optional revision must be forwarded as `undefined`, not coerced to
-      // 0: a 0 would assert "no draft exists" against a slot that may hold one.
-      {
-        command: "transfer_prompt_queue_message_to_compose_draft",
-        args: {
-          queueKey: "queue-1",
-          environmentId: "env-1",
-          messageId: "m1",
-          draftKey: "draft-1",
-          ownerType: "environment",
-          ownerId: "env-1",
-        },
-        expected: { removed: { id: "m1" } },
-        call: {
-          method: "transferPromptQueueMessageToComposeDraft",
-          args: ["queue-1", "env-1", "m1", "draft-1", "environment", "env-1", undefined],
-        },
       },
       {
         command: "get_compose_draft",

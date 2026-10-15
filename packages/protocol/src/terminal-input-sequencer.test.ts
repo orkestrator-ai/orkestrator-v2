@@ -132,6 +132,34 @@ describe("TerminalInputSequencer", () => {
     expect(log).toEqual(["http:a", "http:b"]);
   });
 
+  for (const pipelined of [false, true]) {
+    test(`post-resume input waits behind lifecycle with an overflow fence (pipelined=${pipelined})`, async () => {
+      const held = deferred<unknown>();
+      const { log, sequencer } = harness({
+        maxPendingInputs: 1,
+        runLifecycle: () => held.promise,
+        ...(pipelined ? { pipelined: { active: () => true, send: () => null } } : {}),
+      });
+      const resize = outcome(sequencer.invoke("terminal_resize", { sessionId: "s" }));
+      await tick();
+      const writes = ["a", "b"].map((data) =>
+        outcome(sequencer.invoke("terminal_write", { sessionId: "s", data })),
+      );
+      expect((await Promise.all(writes)).every((value) => value.includes("queue limit"))).toBe(
+        true,
+      );
+      const resumed = sequencer.invoke(TERMINAL_INPUT_RESUME_COMMAND, { sessionId: "s" });
+      const next = outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "new" }));
+      await tick();
+      expect(log).toEqual([]);
+      held.resolve(null);
+      expect(await resize).toBe("ok");
+      expect(await resumed).toEqual({ resumed: true });
+      expect(await next).toBe("ok");
+      expect(log).toEqual(["http:new"]);
+    });
+  }
+
   test("resume rejects once disposed", async () => {
     const { sequencer } = harness();
     sequencer.dispose(new Error("replaced"));
@@ -376,6 +404,102 @@ describe("TerminalInputSequencer", () => {
       expect(log).toEqual(["socket:a", "socket:b", "socket:c"]);
       for (const ack of acks) ack.resolve();
       expect(await Promise.all(writes)).toEqual(["ok", "ok", "ok"]);
+    });
+
+    for (const failure of ["send", "acknowledgement"] as const) {
+      test(`${failure} failure fences queued input, HTTP fallback and recovered sockets until resume`, async () => {
+        const ack = deferred();
+        let usable = true;
+        let enabled = true;
+        let failSend = failure === "send";
+        const { log, sequencer } = harness({
+          pipelined: {
+            active: () => enabled,
+            send: (request) => {
+              if (!usable) return null;
+              log.push(`socket:${request.data}`);
+              if (failSend) throw new Error("socket lost");
+              return request.data === "old" ? ack.promise : Promise.resolve();
+            },
+          },
+        });
+        const first = outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "old" }));
+        await tick();
+        if (failure === "acknowledgement") ack.reject(new Error("socket lost"));
+        const queued = outcome(
+          sequencer.invoke("terminal_write", { sessionId: "s", data: "queued" }),
+        );
+        expect(await first).toBe("rejected: socket lost");
+        expect(await queued).toBe("rejected: socket lost");
+        usable = false;
+        expect(
+          await outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "http" })),
+        ).toBe("rejected: socket lost");
+        enabled = false;
+        expect(
+          await outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "direct" })),
+        ).toBe("rejected: socket lost");
+        enabled = true;
+        usable = true;
+        failSend = false;
+        expect(
+          await outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "socket" })),
+        ).toBe("rejected: socket lost");
+        expect(log).toEqual(["socket:old"]);
+        expect(await sequencer.invoke(TERMINAL_INPUT_RESUME_COMMAND, { sessionId: "s" })).toEqual({
+          resumed: true,
+        });
+        expect(
+          await outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "new" })),
+        ).toBe("ok");
+        usable = false;
+        expect(
+          await outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "fresh" })),
+        ).toBe("ok");
+        expect(log).toEqual(["socket:old", "socket:new", "http:fresh"]);
+      });
+    }
+
+    test("resume drops outstanding input and ignores its late acknowledgement failure", async () => {
+      const { log, sequencer, acks } = pipelinedHarness();
+      const old = ["a", "b"].map((data) =>
+        outcome(sequencer.invoke("terminal_write", { sessionId: "s", data })),
+      );
+      await tick();
+      expect(log).toEqual(["socket:a", "socket:b"]);
+      acks[0]!.reject(new Error("socket lost"));
+      expect(await Promise.all(old)).toEqual(["rejected: socket lost", "rejected: socket lost"]);
+      expect(await sequencer.invoke(TERMINAL_INPUT_RESUME_COMMAND, { sessionId: "s" })).toEqual({
+        resumed: true,
+      });
+      const fresh = outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "new" }));
+      await tick();
+      acks[1]!.reject(new Error("late socket loss"));
+      await tick();
+      acks[2]!.resolve();
+      expect(await fresh).toBe("ok");
+      expect(log).toEqual(["socket:a", "socket:b", "socket:new"]);
+      expect(await sequencer.invoke(TERMINAL_INPUT_RESUME_COMMAND, { sessionId: "s" })).toEqual({
+        resumed: false,
+      });
+    });
+
+    test("a late acknowledgement failure cannot fence a restarted session", async () => {
+      const { log, sequencer, acks } = pipelinedHarness();
+      const old = outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "old" }));
+      await tick();
+      await sequencer.invoke("start_terminal_session", { sessionId: "s" });
+      acks[0]!.reject(new Error("late socket loss"));
+      expect(await old).toBe("rejected: late socket loss");
+      await tick();
+      const fresh = outcome(sequencer.invoke("terminal_write", { sessionId: "s", data: "new" }));
+      await tick();
+      expect(log).toEqual(["socket:old", "start_terminal_session", "socket:new"]);
+      acks[1]!.resolve();
+      expect(await fresh).toBe("ok");
+      expect(await sequencer.invoke(TERMINAL_INPUT_RESUME_COMMAND, { sessionId: "s" })).toEqual({
+        resumed: false,
+      });
     });
 
     test("a lifecycle command waits for every outstanding acknowledgement", async () => {

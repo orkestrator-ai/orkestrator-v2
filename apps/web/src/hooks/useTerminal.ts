@@ -7,6 +7,10 @@ import {
   UnlistenFn,
 } from "@/lib/native/events";
 import { toast } from "sonner";
+import {
+  TERMINAL_INPUT_CLOSED_MESSAGE,
+  TERMINAL_INPUT_NOT_DELIVERED_MESSAGE,
+} from "@orkestrator/protocol/terminal-input-sequencer";
 import * as backend from "@/lib/backend";
 import { createTerminalTargetIdentity } from "./terminal-target-identity";
 
@@ -1110,7 +1114,18 @@ export function useTerminal({
         }
       } catch (err) {
         console.error("[useTerminal] Failed to write to terminal:", err);
-        reportInputFailure(err instanceof Error ? err.message : String(err), currentSessionId);
+        const message = err instanceof Error ? err.message : String(err);
+        // Electron prefixes errors crossing invoke; the browser receives the
+        // sequencer message directly. Both identify the same definitive refusal.
+        const refusal = message.replace(
+          /^Error invoking remote method 'orkestrator:invoke': Error: /,
+          "",
+        );
+        reportInputFailure(message, currentSessionId, {
+          resumable:
+            refusal !== TERMINAL_INPUT_NOT_DELIVERED_MESSAGE &&
+            refusal !== TERMINAL_INPUT_CLOSED_MESSAGE,
+        });
       }
     },
     [reportInputFailure], // Otherwise refs, for sessionId and isLocal

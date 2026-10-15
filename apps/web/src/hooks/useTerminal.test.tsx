@@ -11,6 +11,11 @@ import {
   mockToastError as toastErrorMock,
 } from "../../../../tests/mocks/sonner";
 
+import {
+  TERMINAL_INPUT_CLOSED_MESSAGE,
+  TERMINAL_INPUT_NOT_DELIVERED_MESSAGE,
+} from "@orkestrator/protocol/terminal-input-sequencer";
+
 type TestTerminalOutputSnapshot = Omit<realBackend.TerminalOutputSnapshot, "truncated"> & {
   truncated?: boolean;
 };
@@ -2269,7 +2274,7 @@ describe("useTerminal reconnect behavior", () => {
   });
 
   it("offers a reconnect button that rebuilds the session a failed write left closed", async () => {
-    writeTerminalMock.mockRejectedValueOnce(new Error("closed until the session restarts"));
+    writeTerminalMock.mockRejectedValueOnce(new Error(TERMINAL_INPUT_CLOSED_MESSAGE));
     const { result } = renderHook(() =>
       useTerminal({
         containerId: "container-1",
@@ -2286,9 +2291,9 @@ describe("useTerminal reconnect behavior", () => {
     startTerminalSessionMock.mockClear();
     const [, options] = toastErrorMock.mock.calls.at(-1) as [
       string,
-      { cancel: { label: string; onClick: () => void } },
+      { action: { label: string; onClick: () => void } },
     ];
-    expect(options.cancel.label).toBe("Reconnect");
+    expect(options.action.label).toBe("Reconnect");
 
     // Only a restarted session reopens the gateway's input queue, so the action
     // has to detach and start rather than merely re-attach.
@@ -2297,7 +2302,7 @@ describe("useTerminal reconnect behavior", () => {
       running: false,
     }));
     await act(async () => {
-      options.cancel.onClick();
+      options.action.onClick();
       await waitFor(() => expect(startTerminalSessionMock).toHaveBeenCalled());
     });
 
@@ -2511,6 +2516,38 @@ describe("useTerminal reconnect behavior", () => {
       action: { label: "Reconnect", onClick: expect.any(Function) },
     });
   });
+
+  for (const isLocal of [false, true]) {
+    for (const refusal of [TERMINAL_INPUT_NOT_DELIVERED_MESSAGE, TERMINAL_INPUT_CLOSED_MESSAGE]) {
+      for (const message of [
+        refusal,
+        `Error invoking remote method 'orkestrator:invoke': Error: ${refusal}`,
+      ]) {
+        it(`offers only Reconnect for ${isLocal ? "local" : "container"} refusal: ${message}`, async () => {
+          const writeMock = isLocal ? writeLocalTerminalMock : writeTerminalMock;
+          writeMock.mockRejectedValueOnce(new Error(message));
+          const { result } = renderHook(() =>
+            useTerminal({
+              containerId: isLocal ? null : "container-1",
+              environmentId: "env-1",
+              isLocal,
+              persistSession: true,
+            }),
+          );
+          await act(async () => {
+            await result.current.connect();
+            await result.current.write("input");
+          });
+          expect(toastErrorMock).toHaveBeenCalledWith("Terminal input failed", {
+            id: `terminal-input-session-new-${isLocal ? "local" : "container"}`,
+            description: message,
+            action: { label: "Reconnect", onClick: expect.any(Function) },
+          });
+          expect(resumeTerminalInputMock).not.toHaveBeenCalled();
+        });
+      }
+    }
+  }
 
   it("stays quiet when the backend confirms the keystroke reached a shell", async () => {
     const { result } = renderHook(() =>

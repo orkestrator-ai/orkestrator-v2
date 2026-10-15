@@ -107,6 +107,12 @@ export function parseTerminalLifecycleCommand(
   return { command, args: { ...args }, sessionId: args.sessionId, ...lifecycle };
 }
 
+interface InputReservation {
+  bytes: number;
+  controller: AbortController;
+  currentSession: boolean;
+}
+
 const queueKey = (command: TerminalInputCommand, sessionId: string): string =>
   `${command}\0${sessionId}`;
 
@@ -141,7 +147,7 @@ export class TerminalInputSequencer {
   private readonly maxPendingLifecycleOperations: number;
   private readonly closedSessionMemory: number;
   /** Reservations include writes waiting for lifecycle or socket acknowledgement. */
-  private readonly inputs = new Map<string, Set<{ bytes: number; controller: AbortController }>>();
+  private readonly inputs = new Map<string, Set<InputReservation>>();
   private readonly overflowFailures = new Map<string, unknown>();
   private disposedReason: unknown = null;
   private disposed = false;
@@ -258,10 +264,8 @@ export class TerminalInputSequencer {
     const bytes = this.encoder.encode(input.data).byteLength;
     if (bytes > maxBytes)
       throw new RangeError(`Terminal input exceeds the ${maxBytes}-byte terminal queue limit`);
-    if (this.overflowFailures.has(key)) throw this.overflowFailures.get(key);
     const releaseTerminal = this.batcher.reserveTerminal(input.command, input.sessionId);
-    const entries =
-      this.inputs.get(key) ?? new Set<{ bytes: number; controller: AbortController }>();
+    const entries = this.inputs.get(key) ?? new Set<InputReservation>();
     let retainedBytes = 0;
     for (const entry of entries) retainedBytes += entry.bytes;
     if (
@@ -277,7 +281,11 @@ export class TerminalInputSequencer {
       releaseTerminal();
       throw error;
     }
-    const entry = { bytes, controller: new AbortController() };
+    const entry = {
+      bytes,
+      controller: new AbortController(),
+      currentSession: true,
+    };
     entries.add(entry);
     this.inputs.set(key, entries);
     const signal = entry.controller.signal;
@@ -289,11 +297,12 @@ export class TerminalInputSequencer {
     // Register the cancellation race before running work, even for synchronous overflow.
     const run = async () => {
       if (this.options.pipelined?.active())
-        return this.writePipelined(input, key, signal, cancelled);
+        return this.writePipelined(input, key, entry, cancelled);
       const lifecycle = this.lifecycleTails.get(key);
       if (lifecycle) await Promise.race([lifecycle, cancelled]);
       this.assertUsable();
       signal.throwIfAborted();
+      if (this.overflowFailures.has(key)) throw this.overflowFailures.get(key);
       await this.batcher.enqueue(input);
       return { delivered: true as const };
     };
@@ -317,11 +326,22 @@ export class TerminalInputSequencer {
   private writePipelined(
     input: TerminalInputRequest,
     key: string,
-    signal: AbortSignal,
+    entry: InputReservation,
     cancelled: Promise<never>,
   ): Promise<{ delivered: true }> {
+    const signal = entry.controller.signal;
     const lifecycle = this.lifecycleTails.get(key);
     const previousSend = this.pipelinedSendTails.get(key) ?? lifecycle ?? Promise.resolve();
+
+    const fail = (error: unknown): never => {
+      // A start supersedes old reservations; overflow and disposal cancel
+      // them. Late failures must never fence the replacement session.
+      if (entry.currentSession && !signal.aborted && !this.disposed) {
+        this.batcher.failQueue(input.command, input.sessionId, error);
+        for (const entry of this.inputs.get(key) ?? []) entry.controller.abort(error);
+      }
+      throw error;
+    };
 
     const send = Promise.race([previousSend, cancelled])
       .catch(() => undefined)
@@ -330,6 +350,8 @@ export class TerminalInputSequencer {
         this.assertUsable();
         if (lifecycle) await Promise.race([lifecycle, cancelled]);
         this.assertUsable();
+        signal.throwIfAborted();
+        if (this.overflowFailures.has(key)) throw this.overflowFailures.get(key);
         // A latched HTTP failure vetoes the channel too: a healthy socket says
         // nothing about how much of the lost write reached the shell.
         await Promise.race([this.batcher.flush(input.command, input.sessionId), cancelled]);
@@ -339,11 +361,12 @@ export class TerminalInputSequencer {
         if (acknowledgement) {
           // Wrapped, not returned bare: an async function adopts a returned
           // promise, which would make the send tail wait for the acknowledgement.
-          return { acknowledgement };
+          return { acknowledgement: acknowledgement.catch(fail) };
         }
         await this.batcher.enqueue(input);
         return null;
-      });
+      })
+      .catch(fail);
 
     // The send tail releases once the frame is handed off, so the next
     // keystroke follows immediately and still in order.
@@ -390,7 +413,13 @@ export class TerminalInputSequencer {
     } catch (error) {
       return Promise.reject(error);
     }
-    if (operation.kind === "start") this.overflowFailures.delete(key);
+    if (operation.kind === "start") {
+      this.overflowFailures.delete(key);
+      // An earlier close still drains its input before this start. Mark old
+      // reservations instead of cancelling them, so their late failures cannot
+      // fence the replacement session or change that lifecycle ordering.
+      for (const entry of this.inputs.get(key) ?? []) entry.currentSession = false;
+    }
     // Snapshot at issue time. Later writes wait on this lifecycle and cannot
     // become part of the acknowledgements it drains without forming a cycle.
     const priorPipelined = Array.from(this.pipelinedAcks.get(key) ?? []);

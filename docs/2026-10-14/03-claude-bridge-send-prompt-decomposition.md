@@ -1,17 +1,21 @@
 # 03 — Claude bridge: break up the 3,252-line `sendPrompt`
 
-Status: In progress. Step 1 (`TurnState`, in
-`session-manager-prompt-turn.ts`) landed 2026-10-15. Step 2 has started: `init`
-and the leaf branches (`prompt_suggestion`, `rate_limit_event`, `auth_status`,
-`stream_event`, `tool_progress`, `tool_use_summary`, `conversation_reset`) are
-in `session-manager-prompt-handlers/`, and handlers take `(turn, message)`.
-`system`, `assistant` and `user` have their own modules there too; only
-`result` is still inline. Step 3 is done: the
-ownership, continuation and input closures are functions of `turn` in
-`session-manager-prompt-turn-lifecycle.ts`, the hooks are in
-`session-manager-prompt-hooks.ts`, `turnCanUseTool` is in
-`session-manager-prompt-can-use-tool.ts`, and `thisTurn` comes from
-`createClaudeRuntimeTurn`. Priority: third. Read
+Status: In progress. Steps 1–3 landed 2026-10-15:
+
+- Step 1: `TurnState` is in `session-manager-prompt-turn.ts`.
+- Step 2: every `handleMessage` branch has a module in
+  `session-manager-prompt-handlers/`. Handlers take `(turn, message)`, and
+  `dispatch.ts` picks one by message type.
+- Step 3: the ownership, continuation and input closures are functions of
+  `turn` in `session-manager-prompt-turn-lifecycle.ts`. The hooks are in
+  `session-manager-prompt-hooks.ts`, `turnCanUseTool` is in
+  `session-manager-prompt-can-use-tool.ts`, and `thisTurn` comes from
+  `createClaudeRuntimeTurn`.
+
+`sendPrompt` is now about 1,110 lines. Steps 4 and 5 remain, and
+`handleSystemMessage` (about 515 lines) is still over the 300-line target.
+
+Priority: third. Read
 [`bridges/AGENTS.md`](../../bridges/AGENTS.md) and
 [`bridges/claude-bridge/AGENTS.md`](../../bridges/claude-bridge/AGENTS.md)
 before starting.

@@ -1,5 +1,6 @@
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { isRootAssistantRecord } from "@orkestrator/protocol/model-id";
+import { structuredOutputFailure } from "@orkestrator/protocol/structured-output";
 import type {
   BackgroundTaskSnapshot,
   SdkMessageBase,
@@ -13,7 +14,7 @@ import {
   forgetSettlingBackgroundTasksOwnedBy,
   retainQueryControl,
 } from "./session-manager-background-tasks.js";
-import { applySessionPlanMode, sessions } from "./session-manager-core.js";
+import { applySessionPlanMode, recordStructuredOutput, sessions } from "./session-manager-core.js";
 import { recordPromptDispatch } from "./session-manager-lifecycle.js";
 import { MAX_RESULT_INPUT_UUIDS } from "./session-manager-messages.js";
 import type { TurnState } from "./session-manager-prompt-turn.js";
@@ -391,4 +392,26 @@ export function settleResultWithoutOwnership(turn: TurnState) {
   // watchdog, exactly as for a turn released at its own result.
   turn.turnReleasedToBackgroundTasks = true;
   finishTurnInputIfSettled(turn);
+}
+
+/** A structured-output turn that ends without its result still owes the caller a terminal outcome. */
+export function recordInterruptedStructuredOutputIfCurrent(turn: TurnState): void {
+  const { session, options, structuredRequestId } = turn;
+  if (
+    !options?.outputSchema ||
+    !structuredRequestId ||
+    session.structuredOutputRequestId !== structuredRequestId ||
+    session.structuredOutput
+  ) {
+    return;
+  }
+  recordStructuredOutput(
+    session,
+    structuredOutputFailure(
+      "claude",
+      "interrupted",
+      "Claude structured-output turn was interrupted.",
+      { requestId: structuredRequestId, retryable: true },
+    ),
+  );
 }

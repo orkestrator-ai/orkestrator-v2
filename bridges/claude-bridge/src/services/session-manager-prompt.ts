@@ -6,23 +6,12 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import type {
   CanUseTool,
   HookCallback,
-  SDKStartupFailureReason,
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { createHash } from "node:crypto";
-import type {
-  NormalizedMessage,
-  PromptOptions,
-  SdkMessageBase,
-  SdkResultMessage,
-} from "../types/index.js";
-import {
-  isHandledSdkMessageType,
-  isKnownInternalSdkMessageType,
-  isSdkResultMessage,
-  sessionHealth,
-} from "../types/index.js";
+import type { NormalizedMessage, PromptOptions } from "../types/index.js";
+import {} from "../types/index.js";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { structuredOutputFailure } from "@orkestrator/protocol/structured-output";
 import { eventEmitter } from "./event-emitter.js";
@@ -48,79 +37,29 @@ import {
   claudeTurnPolicy,
   claudeWorkspaceCwd,
 } from "./claude-query-config.js";
-import { appendLocalCommandResult, readLiveCommandInventory } from "./session-manager-commands.js";
-
-export function claudeStartupFailureMessage(reason: SDKStartupFailureReason): string {
-  switch (reason) {
-    case "org_pin_api_key_conflict":
-      return "Claude is configured for a managed organization, but an API key or auth token is overriding that sign-in. Remove the conflicting credential and sign in again.";
-    case "org_verify_failed":
-      return "Claude could not verify the signed-in organization. Check connectivity, then sign in again if the token was revoked.";
-    case "org_pin_mismatch":
-      return "The Claude account does not belong to the organization required by managed settings. Sign in with an allowed organization.";
-    case "managed_settings_invalid":
-      return "Claude could not read the managed settings policy. Ask an administrator to validate the organization policy.";
-    case "remote_settings_required_unavailable":
-      return "Required Claude managed settings are unavailable. Restore connectivity to the managed-settings service and retry.";
-    case "gateway_signin_required":
-      return "The Claude gateway requires a fresh sign-in. Sign in to Claude again, then retry.";
-    case "gateway_access_denied":
-      return "The Claude gateway denied access to this account's managed settings. Ask an administrator to verify access.";
-    case "proxy_invalid":
-      return "Claude's proxy setting is not a valid complete URL. Correct the proxy configuration and retry.";
-    case "temp_dir_unusable":
-      return "Claude cannot safely use the current temporary directory. Check its ownership and permissions, then retry.";
-    case "cwd_unavailable":
-      return "The workspace directory is missing or unreadable. Restore access to it, then retry.";
-    case "shell_tool_missing":
-      return "Claude cannot find a supported shell. Install or enable Git Bash or PowerShell, then retry.";
-    case "session_held_by_background":
-      return "This Claude conversation is still running in a background session. Stop or reconnect to that session before resuming it here.";
-    case "worktree_resume_refused":
-      return "Claude refused to resume because the session worktree did not pass its safety checks. Review the provider error and reopen the workspace safely.";
-    case "worktree_unverified":
-      return "Claude could not verify the session worktree. Retry after the worktree becomes available.";
-    case "cli_version_too_old":
-      return "This Claude Code version is below the provider's minimum. Update Claude Code and retry.";
-    case "bypass_root":
-      return "Claude cannot use bypass-permissions mode while running as root. Run the agent as a non-root user.";
-    case "provider_not_allowed":
-      return "Managed settings do not allow the API provider this session is configured for. Ask an administrator to allow it, or switch provider.";
-    case "org_config_required_unavailable":
-      return "Claude could not load the policy limits and managed settings your organization requires. Check connectivity and any proxy, then retry.";
-    case "org_config_refused":
-      return "Anthropic refused your organization's required Claude settings for this sign-in. Sign in to Claude again; if that does not help, ask an administrator to allow Claude Code for this account.";
-  }
-}
+import { readLiveCommandInventory } from "./session-manager-commands.js";
 
 import { createPromptStreamState } from "./session-manager-prompt-stream.js";
 import { captureTurnStartup, createTurnState } from "./session-manager-prompt-turn.js";
+import { promptMessageHandler } from "./session-manager-prompt-handlers/dispatch.js";
 import { commandChangeHookFor } from "./session-manager-prompt-hooks.js";
 import { createClaudeRuntimeTurn } from "./session-manager-prompt-runtime-turn.js";
 import {
   armContinuationWatchdog,
+  recordInterruptedStructuredOutputIfCurrent,
   closeTurnInput,
   diagnosticErrorClass,
   finishTurnInputIfSettled,
   ownsActiveTurn,
-  settleResultWithoutOwnership,
 } from "./session-manager-prompt-turn-lifecycle.js";
 export { RETAINED_CONTINUATION_TIMEOUT_MS } from "./session-manager-prompt-turn-lifecycle.js";
-import { handleInitMessage } from "./session-manager-prompt-handlers/init.js";
-import { handleAssistantMessage } from "./session-manager-prompt-handlers/assistant.js";
-import { leafMessageHandler } from "./session-manager-prompt-handlers/leaf.js";
-import { handleSystemMessage } from "./session-manager-prompt-handlers/system.js";
-import { handleUserMessage } from "./session-manager-prompt-handlers/user.js";
 import {
   appendTranscriptNotice,
   settlePendingApiRetry,
 } from "./session-manager-prompt-handlers/transcript-notice.js";
-import { reconcileClaudeUsage } from "./session-manager-usage.js";
 import { nextTurnGeneration } from "./session-manager-core.js";
 import {
-  ClaudeStructuredOutputError,
   applySessionPlanMode,
-  buildClaudeUsageSnapshot,
   claimedPromptDispatches,
   claudeExecutableOptions,
   createStructuredUsageRefreshCoordinator,
@@ -136,11 +75,7 @@ import {
   getPromptDispatchRecord,
   recordPromptDispatch,
 } from "./session-manager-lifecycle.js";
-import {
-  resultAnswersOtherInput,
-  resultInputUuids,
-  resultSupersededBySteer,
-} from "./session-manager-messages.js";
+import {} from "./session-manager-messages.js";
 export { memoryRecallPart } from "./session-manager-messages.js";
 import {
   ClaudeAttachmentError,
@@ -187,6 +122,7 @@ export const MAX_STREAM_CONTENT_BLOCK_INDEX = 4_095;
 
 export { THINKING_TOKENS_EMIT_INTERVAL_MS } from "./session-manager-prompt-handlers/system.js";
 export { applyClaudeUsageReport } from "./session-manager-prompt-handlers/assistant.js";
+export { claudeStartupFailureMessage } from "./session-manager-prompt-handlers/result.js";
 
 export const PLAN_MODE_INSTRUCTIONS = `The user has enabled planning mode. Use this phase to:
 1. Thoroughly explore the codebase and its existing patterns.
@@ -499,6 +435,9 @@ export async function sendPrompt(
       : {}),
   });
   const turn = createTurnState(session, sessionId, {
+    options,
+    structuredRequestId,
+    userMessage,
     dispatchRequestId,
     retainedContinuationTimeoutMs: testHooks?.retainedContinuationTimeoutMs,
     beforeStartup,
@@ -534,26 +473,6 @@ export async function sendPrompt(
       cost: baseline.cost,
     };
   };
-  const recordInterruptedStructuredOutputIfCurrent = () => {
-    if (
-      !options?.outputSchema ||
-      !structuredRequestId ||
-      session.structuredOutputRequestId !== structuredRequestId ||
-      session.structuredOutput
-    ) {
-      return;
-    }
-    recordStructuredOutput(
-      session,
-      structuredOutputFailure(
-        "claude",
-        "interrupted",
-        "Claude structured-output turn was interrupted.",
-        { requestId: structuredRequestId, retryable: true },
-      ),
-    );
-  };
-
   try {
     // Create the query with Claude Agent SDK
     // Determine effort level: default to "high" if not specified
@@ -660,9 +579,6 @@ export async function sendPrompt(
       testHooks?.afterAttachmentCanonicalValidation,
       testHooks?.afterAttachmentInitialValidation,
     );
-    // Names this prompt on every result that answers it; see
-    // `resultAnswersOtherInput`.
-    const promptUuid = crypto.randomUUID();
     turn.closeSdkInput = () => closeTurnInput(turn);
     turn.finishTurnInputForThisTurn = () => finishTurnInputIfSettled(turn);
 
@@ -697,277 +613,11 @@ export async function sendPrompt(
       // settle the pending snapshot before handling a non-delta message.
       if (message.type !== "stream_event") stream.flushStreamedAssistantMessage();
 
-      // Handle different message types from SDK
-      const leafHandler = leafMessageHandler(message.type);
-      if (leafHandler) {
-        leafHandler(turn, message);
-      } else if (message.type === "system" && message.subtype === "init") {
-        await handleInitMessage(turn, message);
-      } else if (message.type === "system") {
-        await handleSystemMessage(turn, message);
-      } else if (message.type === "assistant") {
-        handleAssistantMessage(turn, message);
-      } else if (message.type === "user") {
-        handleUserMessage(turn, message);
-      } else if (isSdkResultMessage(message as SdkMessageBase)) {
-        // Only allowlisted metadata reaches the shared debug sink.
-        const resultMsg = message as SdkResultMessage;
-        // A resumed CLI can finish a turn of its own (a replayed task
-        // notification) before it reaches this prompt. That result says
-        // nothing about this turn; ending on it closed the CLI's input, which
-        // later stopped its background agents. Only this turn's first result
-        // is filtered: once it has arrived, a continuation's result is the
-        // legitimate end of the retained turn.
-        if (
-          !turn.receivedPromptResult &&
-          resultAnswersOtherInput(resultMsg, promptUuid, turn.steerUuids)
-        ) {
-          // Whatever the CLI ran first, it was not this prompt: an inherited
-          // continuation has now been answered.
-          turn.inheritedContinuation = false;
-          debugLog("[session-manager] Result for other input skipped", {
-            sessionId,
-            subtype: resultMsg.subtype,
-            durationMs: resultMsg.duration_ms,
-          });
-          return;
-        }
-        // The only authoritative link between the id this bridge minted for the
-        // prompt and the transcript record it became. Everything destructive
-        // (fork boundary, file rewind) resolves through it, so it is recorded
-        // and republished rather than inferred from message ordering. A steer's
-        // result names the steer, whose record is not this prompt's.
-        const recordPromptSdkUuid = () => {
-          const uuids = resultInputUuids(resultMsg);
-          const sdkUuid = uuids.includes(promptUuid)
-            ? promptUuid
-            : userMessage.sdkUuid
-              ? undefined
-              : uuids.find((uuid) => !turn.steerUuids.has(uuid));
-          if (sdkUuid && userMessage.sdkUuid !== sdkUuid) {
-            userMessage.sdkUuid = sdkUuid;
-            markTranscriptChanged(session);
-            eventEmitter.emit({
-              type: "message.updated",
-              sessionId,
-              data: { message: userMessage },
-            });
-          }
-        };
-        if (resultSupersededBySteer(resultMsg, turn.unansweredSteerUuids, turn.latestSteerUuid)) {
-          // The prompt was answered, if only by the interruption, so what
-          // follows is no longer filtered as another input's result.
-          if (resultInputUuids(resultMsg).includes(promptUuid)) turn.receivedPromptResult = true;
-          recordPromptSdkUuid();
-          debugLog("[session-manager] Result superseded by steer skipped", {
-            sessionId,
-            subtype: resultMsg.subtype,
-            durationMs: resultMsg.duration_ms,
-          });
-          return;
-        }
-        // A result that also names input other than this turn's own answered
-        // the inherited continuation together with this prompt.
-        if (
-          turn.inheritedContinuation &&
-          resultInputUuids(resultMsg).some(
-            (uuid) => uuid !== promptUuid && !turn.steerUuids.has(uuid),
-          )
-        ) {
-          turn.inheritedContinuation = false;
-        }
-        diagnostics?.terminalSettled("resolved");
-        turn.receivedResult = true;
-        turn.receivedPromptResult = true;
-        debugLog("[session-manager] Query result", {
-          sessionId,
-          subtype: resultMsg.subtype,
-          costUSD: resultMsg.total_cost_usd,
-          durationMs: resultMsg.duration_ms,
-        });
-        recordPromptSdkUuid();
-
-        // Account allocation can advance during the last model request. Queue
-        // one final coalesced refresh before publishing the completed token
-        // snapshot, preserving the previous end-of-turn exactness.
-        if (!ownsActiveTurn(turn)) {
-          if (!abortController.signal.aborted) {
-            settleResultWithoutOwnership(turn);
-            return;
-          }
-          recordInterruptedStructuredOutputIfCurrent();
-          closeTurnInput(turn);
-          return;
-        }
-        // Both round trips can take seconds. Lifecycle hooks and task stops
-        // keep arriving meanwhile; they record task state, and the settle they
-        // would trigger waits for `finishTurnInputIfSettled` below.
-        turn.settlingResult = true;
-        let exactUsage: Awaited<ReturnType<typeof buildClaudeUsageSnapshot>>;
-        try {
-          await turn.structuredUsageRefresh?.trigger();
-          exactUsage = await buildClaudeUsageSnapshot(
-            session,
-            resultMsg,
-            turn.queryIteratorControl,
-            options?.model,
-            {
-              ...(turn.bootstrapClaudeUsage
-                ? { bootstrapTurnTokens: streamUsage.completedTotals() }
-                : {}),
-              stillOwnsTurn: () => ownsActiveTurn(turn),
-            },
-          );
-        } finally {
-          turn.settlingResult = false;
-        }
-        if (!ownsActiveTurn(turn)) {
-          if (!abortController.signal.aborted) {
-            settleResultWithoutOwnership(turn);
-            return;
-          }
-          // The provider accepted this request, so the caller needs a
-          // terminal outcome even though abort won the race with the final
-          // usage snapshot. A newer structured turn replaces the request id
-          // before taking ownership; never let this old turn overwrite it.
-          recordInterruptedStructuredOutputIfCurrent();
-          closeTurnInput(turn);
-          return;
-        }
-        turn.bootstrapClaudeUsage = false;
-        const streamedUsage =
-          session.inProgressUsageGeneration === turnGeneration
-            ? session.inProgressUsage
-            : undefined;
-        const settledUsage = reconcileClaudeUsage(exactUsage, streamedUsage);
-        // A provider/runtime pair may omit terminal totals even though its
-        // message stream reported completed calls. Conversely, a completely
-        // silent turn must retain the prior durable snapshot.
-        if (settledUsage) session.usage = settledUsage;
-        if (session.inProgressUsageGeneration === turnGeneration) {
-          session.inProgressUsage = undefined;
-          session.inProgressUsageGeneration = undefined;
-        }
-        streamUsage.reset();
-        if (session.usage || session.rateLimits !== undefined) {
-          eventEmitter.emit({
-            type: "session.updated",
-            sessionId,
-            data: {
-              ...(session.usage ? { contextUsage: session.usage } : {}),
-              ...(session.rateLimits !== undefined ? { rateLimits: session.rateLimits } : {}),
-            },
-          });
-        }
-
-        // `is_error` is authoritative over `subtype`. The SDK documents
-        // `subtype: "success"` with `is_error: true` as "the turn ended on an
-        // API error", so reading the subtype alone reported a failed turn as a
-        // completed one and left the error text in `errors` unpublished.
-        const resultIsError = resultMsg.is_error === true;
-        if (resultMsg.subtype === "success" && !resultIsError) {
-          if (options?.outputSchema) {
-            if (resultMsg.structured_output === undefined) {
-              const failure = structuredOutputFailure(
-                "claude",
-                "malformed_output",
-                "Claude completed the turn without a structured result.",
-                { requestId: structuredRequestId },
-              );
-              recordStructuredOutput(session, failure);
-              throw new ClaudeStructuredOutputError(failure);
-            }
-            recordStructuredOutput(session, {
-              ok: true,
-              provider: "claude",
-              requestId: structuredRequestId,
-              value: resultMsg.structured_output,
-            });
-          }
-          // A local command (`/cost`, `/context`, ...) can finish with its
-          // answer only in `result` — no assistant message, no output frame.
-          // Surface that text so the turn does not settle invisibly. Taken
-          // from the SDK's own result, never synthesized from the command.
-          if (
-            !options?.outputSchema &&
-            !turn.localCommandOutputSeen &&
-            !stream.assistantOutputSeen &&
-            typeof resultMsg.result === "string" &&
-            resultMsg.result.trim()
-          ) {
-            appendLocalCommandResult(
-              session,
-              resultMsg.result,
-              `result:${typeof resultMsg.uuid === "string" ? resultMsg.uuid : turnGeneration}`,
-            );
-          }
-          debugLog("[session-manager] Query completed successfully", { sessionId });
-          finishTurnInputIfSettled(turn);
-        } else {
-          console.error("[session-manager] Query error:", resultMsg.subtype, {
-            sessionId,
-            isError: resultIsError,
-          });
-          const startupFailure = resultMsg.startup_failure_reason
-            ? claudeStartupFailureMessage(resultMsg.startup_failure_reason)
-            : undefined;
-          const resultError =
-            startupFailure ||
-            resultMsg.errors?.filter(Boolean).join("\n") ||
-            (resultMsg.subtype === "success"
-              ? "Claude ended the turn on an API error."
-              : `Claude query failed: ${resultMsg.subtype}`);
-          if (startupFailure) {
-            appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
-              type: "status",
-              content: startupFailure,
-              severity: "error",
-              createdAt: new Date().toISOString(),
-            });
-          }
-          if (resultMsg.subtype === "error_max_budget_usd") {
-            appendTranscriptNotice(session, sessionId, (event) => eventEmitter.emit(event), {
-              type: "status",
-              content: "Claude stopped because this session reached its spending cap.",
-              severity: "warning",
-              createdAt: new Date().toISOString(),
-            });
-          }
-          if (options?.outputSchema) {
-            const failure = structuredOutputFailure(
-              "claude",
-              resultMsg.subtype === "error_max_structured_output_retries"
-                ? "schema_retry_exhausted"
-                : "provider_error",
-              resultError,
-              {
-                requestId: structuredRequestId,
-                details: { subtype: resultMsg.subtype ?? "unknown" },
-              },
-            );
-            recordStructuredOutput(session, failure);
-            throw new ClaudeStructuredOutputError(failure);
-          }
-          throw new Error(resultError);
-        }
-      } else if (isKnownInternalSdkMessageType(message.type)) {
-        // An internal CLI frame outside the SDK's union that the bridge has
-        // read and needs nothing from. Not drift: counting it flagged every
-        // prompt as an unrecognised event.
-      } else {
-        // Everything the chain above did not claim. `HANDLED_SDK_MESSAGE_TYPES`
-        // is a `Record` over the SDK's own union, so a type it does not name is
-        // an SDK addition and is counted; a type it names as `false` is a
-        // documented gap this bridge has not filled yet and is counted too —
-        // the point is that neither is silent. Names only: an SDK message body
-        // carries prompts, file contents and tool output.
-        sessionHealth(session).recordUnknown(
-          isHandledSdkMessageType(message.type)
-            ? `unconsumed:${message.type}`
-            : String(message.type ?? "(untyped)"),
-        );
-      }
-      // Note: AskUserQuestion tool handling is done in the canUseTool callback above
+      // Only the handlers that must finish a control round trip before the
+      // next frame return a promise; the rest complete synchronously, exactly
+      // as the branches they replaced did.
+      const handled = promptMessageHandler(message.type)(turn, message);
+      if (handled) await handled;
     };
     turn.thisTurn = createClaudeRuntimeTurn(turn, handleMessage);
     const liveSettings = claudeLiveSettings({
@@ -1066,7 +716,7 @@ export async function sendPrompt(
         }
         running.mcpServers = mcpServersKey;
         recordMcpConfigRevision();
-        const messages = await sdkPromptMessages(sdkPrompt, promptUuid);
+        const messages = await sdkPromptMessages(sdkPrompt, turn.promptUuid);
         turn.runtime = running;
         if (!submitClaudeTurn(running, turn.thisTurn, messages)) {
           throw sessionOperationError(
@@ -1094,7 +744,7 @@ export async function sendPrompt(
       await retireDrainingClaudeRuntime(session);
       if (abortController.signal.aborted || session.deleting || sessions.get(sessionId) !== session)
         return;
-      const heldSdkPrompt = holdSdkPromptOpen(sdkPrompt, abortController.signal, promptUuid);
+      const heldSdkPrompt = holdSdkPromptOpen(sdkPrompt, abortController.signal, turn.promptUuid);
       let launched: ClaudeRuntime | undefined;
       // Hooks and callbacks fire on the runtime's behalf for whichever turn
       // they concern: the one whose row holds the tool, else the latest turn.
@@ -1400,7 +1050,7 @@ export async function sendPrompt(
       diagnostics?.terminalSettled("rejected");
       diagnostics?.streamSettled("rejected");
       if (options?.outputSchema && structuredRequestId) {
-        recordInterruptedStructuredOutputIfCurrent();
+        recordInterruptedStructuredOutputIfCurrent(turn);
       }
       return;
     }
@@ -1551,7 +1201,7 @@ export async function sendPrompt(
       throw error;
     }
     if (abortController.signal.aborted) {
-      recordInterruptedStructuredOutputIfCurrent();
+      recordInterruptedStructuredOutputIfCurrent(turn);
       return;
     }
     console.error("[session-manager] Error processing prompt", {

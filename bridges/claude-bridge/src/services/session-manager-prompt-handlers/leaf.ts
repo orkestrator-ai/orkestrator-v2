@@ -210,13 +210,8 @@ function handleConversationReset(turn: TurnState, message: SDKMessage): void {
   });
 }
 
-/**
- * Message types whose branch needs nothing from the rest of the dispatch.
- *
- * None of these types reaches any other branch, so looking them up before the
- * rest of the chain decides exactly what the chain decided.
- */
-const LEAF_MESSAGE_HANDLERS: Partial<Record<SDKMessage["type"], PromptMessageHandler>> = {
+/** Message types whose handling needs nothing beyond the frame and the turn. */
+export const LEAF_MESSAGE_HANDLERS: Partial<Record<SDKMessage["type"], PromptMessageHandler>> = {
   prompt_suggestion: handlePromptSuggestion,
   rate_limit_event: handleRateLimitEvent,
   auth_status: handleAuthStatus,

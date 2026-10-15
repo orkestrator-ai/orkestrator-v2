@@ -1,44 +1,19 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import type { SessionState, SSEEvent } from "../../types/index.js";
+import type { SSEEvent } from "../../types/index.js";
 import { eventEmitter } from "../event-emitter.js";
-import { sessions } from "../session-manager-core.js";
-import { createPromptStreamState } from "../session-manager-prompt-stream.js";
-import {
-  captureTurnStartup,
-  createTurnState,
-  type TurnState,
-} from "../session-manager-prompt-turn.js";
+import type { TurnState } from "../session-manager-prompt-turn.js";
 import { leafMessageHandler } from "./leaf.js";
+import { turnFixture } from "./turn-fixture.js";
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
   for (const cleanup of cleanups.splice(0)) cleanup();
 });
 
-function fixture() {
-  const session = {
-    id: "session-leaf",
-    messages: [],
-    status: "running",
-    createdAt: new Date(),
-    lastActivity: new Date(),
-  } as unknown as SessionState;
-  const stream = createPromptStreamState(session, session.id, {
-    flushIntervalMs: 100,
-    maxBlockIndex: 4_095,
-  });
-  cleanups.push(() => stream.clearFlushTimer());
-  const turn = createTurnState(session, session.id, {
-    dispatchRequestId: undefined,
-    retainedContinuationTimeoutMs: undefined,
-    beforeStartup: captureTurnStartup(session),
-    abortController: new AbortController(),
-    turnGeneration: 1,
-    stream,
-    bootstrapClaudeUsage: false,
-    transcriptHydrationFailed: false,
-  });
+function fixture(options?: { registered?: boolean }) {
+  const { session, turn, dispose } = turnFixture(options);
+  cleanups.push(dispose);
   return { session, turn };
 }
 
@@ -145,9 +120,7 @@ describe("leaf message handlers", () => {
     ["message_start", "running"],
     ["ping", "idle"],
   ])("stream_event %p on a released turn leaves the session %p", (eventType, status) => {
-    const { session, turn } = fixture();
-    sessions.set(session.id, session);
-    cleanups.push(() => sessions.delete(session.id));
+    const { session, turn } = fixture({ registered: true });
     session.status = "idle";
     session.latestTurnGeneration = turn.turnGeneration;
     turn.turnReleasedToBackgroundTasks = true;

@@ -1,6 +1,11 @@
 import { createBridgeDiagnostics } from "@orkestrator/protocol/node/bridge-diagnostics";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
-import type { PermissionMode, SessionState } from "../types/index.js";
+import type {
+  NormalizedMessage,
+  PermissionMode,
+  PromptOptions,
+  SessionState,
+} from "../types/index.js";
 import type { StructuredUsageRefreshCoordinator } from "./session-manager-core.js";
 import type { PromptStreamState } from "./session-manager-prompt-stream.js";
 import type { ClaudeRuntime, ClaudeRuntimeTurn } from "./session-manager-runtime.js";
@@ -54,6 +59,13 @@ export function captureTurnStartup(session: SessionState): TurnStartupSnapshot {
 export interface TurnState {
   readonly session: SessionState;
   readonly sessionId: string;
+  readonly options: PromptOptions | undefined;
+  /** Names this turn's structured result; set only when it asked for one. */
+  readonly structuredRequestId: string | undefined;
+  /** The transcript row of the prompt itself. */
+  readonly userMessage: NormalizedMessage;
+  /** Names this prompt on every result that answers it; see `resultAnswersOtherInput`. */
+  readonly promptUuid: string;
   /** The caller's idempotency key, when it sent one. */
   readonly dispatchRequestId: string | undefined;
   /** Overrides `RETAINED_CONTINUATION_TIMEOUT_MS`; tests only. */
@@ -155,6 +167,9 @@ export function createTurnState(
   session: SessionState,
   sessionId: string,
   init: {
+    options: PromptOptions | undefined;
+    structuredRequestId: string | undefined;
+    userMessage: NormalizedMessage;
     dispatchRequestId: string | undefined;
     retainedContinuationTimeoutMs: number | undefined;
     beforeStartup: TurnStartupSnapshot;
@@ -179,6 +194,7 @@ export function createTurnState(
     ...init,
     session,
     sessionId,
+    promptUuid: crypto.randomUUID(),
     startedAt: Date.now(),
     streamUsage: new ClaudeStreamUsageAccumulator(),
     turnEnded,

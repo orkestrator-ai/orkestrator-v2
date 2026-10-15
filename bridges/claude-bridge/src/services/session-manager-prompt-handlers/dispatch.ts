@@ -1,0 +1,59 @@
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import {
+  isHandledSdkMessageType,
+  isKnownInternalSdkMessageType,
+  sessionHealth,
+} from "../../types/index.js";
+import type { TurnState } from "../session-manager-prompt-turn.js";
+import { handleAssistantMessage } from "./assistant.js";
+import type { PromptMessageHandler } from "./context.js";
+import { handleInitMessage } from "./init.js";
+import { LEAF_MESSAGE_HANDLERS } from "./leaf.js";
+import { handleResultMessage } from "./result.js";
+import { handleSystemMessage } from "./system.js";
+import { handleUserMessage } from "./user.js";
+
+/** `init` is the one `system` subtype with a module of its own. */
+function handleSystemFrame(turn: TurnState, message: SDKMessage): Promise<void> {
+  return message.type === "system" && message.subtype === "init"
+    ? handleInitMessage(turn, message)
+    : handleSystemMessage(turn, message);
+}
+
+/**
+ * Everything the table does not claim.
+ *
+ * `HANDLED_SDK_MESSAGE_TYPES` is a `Record` over the SDK's own union, so a
+ * type it does not name is an SDK addition and is counted; a type it names
+ * as `false` is a documented gap this bridge has not filled yet and is
+ * counted too — the point is that neither is silent. Names only: an SDK
+ * message body carries prompts, file contents and tool output.
+ */
+function handleUnknownMessage(turn: TurnState, message: SDKMessage): void {
+  // An internal CLI frame outside the SDK's union that the bridge has read and
+  // needs nothing from. Not drift: counting it flagged every prompt as an
+  // unrecognised event.
+  if (isKnownInternalSdkMessageType(message.type)) return;
+  sessionHealth(turn.session).recordUnknown(
+    isHandledSdkMessageType(message.type)
+      ? `unconsumed:${message.type}`
+      : String(message.type ?? "(untyped)"),
+  );
+}
+
+const MESSAGE_HANDLERS: Partial<Record<SDKMessage["type"], PromptMessageHandler>> = {
+  ...LEAF_MESSAGE_HANDLERS,
+  system: handleSystemFrame,
+  assistant: handleAssistantMessage,
+  user: handleUserMessage,
+  result: handleResultMessage,
+};
+
+/** The handler for one SDK frame, by its `type`. */
+export function promptMessageHandler(type: unknown): PromptMessageHandler {
+  return (
+    (typeof type === "string" && Object.hasOwn(MESSAGE_HANDLERS, type)
+      ? MESSAGE_HANDLERS[type as SDKMessage["type"]]
+      : undefined) ?? handleUnknownMessage
+  );
+}

@@ -152,9 +152,9 @@ export function admitPrompt(
 /**
  * The plan-mode toggle a prompt states, when it differs from the session's.
  *
- * The UI maps its plan-mode toggle onto exactly these two permission modes,
- * so a prompt carrying one of them is an authoritative statement of the
- * toggle. Recording it here is a safety net behind the explicit preferences
+ * The UI maps its plan-mode toggle onto `plan` and the session's approval
+ * mode (`bypassPermissions` unless the user picked another), so a prompt
+ * carrying one of them is an authoritative statement of the toggle. Recording it here is a safety net behind the explicit preferences
  * endpoint (e.g. a toggle made before this session had a durable identity).
  * Other permission modes say nothing about the toggle and are left alone.
  */
@@ -162,10 +162,12 @@ export function promptPlanModeChange(
   session: SessionState,
   options: PromptOptions | undefined,
 ): boolean | undefined {
-  return (options?.permissionMode === "plan" || options?.permissionMode === "bypassPermissions") &&
-    session.planMode !== (options.permissionMode === "plan")
-    ? options.permissionMode === "plan"
-    : undefined;
+  const mode = options?.permissionMode;
+  const statesToggle =
+    mode === "plan" ||
+    mode === "bypassPermissions" ||
+    (mode !== undefined && mode !== "dontAsk" && mode === options?.approvalMode);
+  return statesToggle && session.planMode !== (mode === "plan") ? mode === "plan" : undefined;
 }
 
 /** Record the prompt's plan-mode toggle; a failure hands every claim back. */

@@ -511,6 +511,34 @@ are unattended. The coordinator always uses the immutable
 | Pi | approval extension; resource-loader exclusions and project trust; active SDK tool selection |
 | OpenCode | session permission rules; project resources remain enabled because OpenCode owns config discovery, which is stated in the effective policy note |
 
+### Approval modes
+
+Within that policy, Claude and Codex sessions also carry a per-session
+approval mode chosen from the compose bar. The modes are each SDK's own
+(`NATIVE_AGENT_APPROVAL_MODES` in `packages/protocol/src/native-agent.ts`), and
+each is placed on a provider-neutral `kind` (`ask`, `auto-edits`,
+`auto-review`, `auto-approve`) that the renderer uses for its icon.
+
+| Adapter | Modes | Applied as |
+| --- | --- | --- |
+| Claude | `default`, `acceptEdits`, `auto`, `bypassPermissions` | the turn's `permissionMode`; plan turns carry it as `approvalMode` for after the plan is accepted |
+| Codex | `untrusted`, `on-request`, `auto-review`, `never` | `turn/start` `approvalPolicy` and `approvalsReviewer`; `auto-review` is `on-request` with the `auto_review` reviewer |
+
+The policy stays the ceiling. `deny` offers no modes, `ask` leaves only the
+`ask` modes selectable, and both bridges cap a request the same way. A session
+that never picks a mode runs in the one its policy implied before modes
+existed (`bypassPermissions` / `never` under `auto-approve`). The selection
+lives in the session's durable `controls.approvalMode`, the launcher can set it
+for the session its first prompt creates, and every prompt resolves it against
+the policy at send time.
+
+Two consequences are deliberate. A Claude mode that asks narrows the CLI's
+allow list to reading tools, which is part of the launch boundary, so crossing
+between asking and non-asking modes needs a new CLI and is refused while
+background work holds the current one. Codex `on-request` and `auto-review` only
+ask when the agent leaves its sandbox, so on an unsandboxed host they narrow
+`danger-full-access` to `workspace-write`; a container keeps its own boundary.
+
 Legacy bridge environment variables remain accepted temporarily as deprecated
 compatibility overrides. Launchers no longer use them for normal sessions; the
 backend policy is the source of truth.

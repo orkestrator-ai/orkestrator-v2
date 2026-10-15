@@ -1009,6 +1009,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
             ...(update.mode ? { mode: update.mode } : {}),
             ...(update.fastMode === undefined ? {} : { fastMode: update.fastMode }),
             ...(update.parameterValues ? { parameterValues: update.parameterValues } : {}),
+            ...(update.approvalMode ? { approvalMode: update.approvalMode } : {}),
           }),
         },
         this.fetchImpl,

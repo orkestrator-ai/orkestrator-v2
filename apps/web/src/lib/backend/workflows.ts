@@ -833,6 +833,8 @@ export async function dispatchNativeAgentIntent(input: {
   sessionMode?: "plan" | "build";
   executionProfileId?: string;
   parameterValues?: Record<string, string | boolean>;
+  /** Approval mode for a session this dispatch creates. */
+  approvalMode?: string;
   /**
    * How to interpret the prompt. Absent is legacy behaviour (typed). For a
    * non-literal intent the backend keeps the prompt bytes, trimming only

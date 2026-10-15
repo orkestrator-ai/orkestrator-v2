@@ -1,6 +1,6 @@
 import { resolvedDefaultAgent, resolvedPlatformSettings } from "@/lib/agent-settings";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, History } from "lucide-react";
+import { History } from "lucide-react";
 import {
   AGENT_PLATFORMS,
   firstEnabledAgentPlatform,
@@ -8,12 +8,19 @@ import {
 } from "@orkestrator/protocol/agent-platforms";
 import { isPlanMarkdownPath } from "@orkestrator/protocol/agent-interactions";
 import {
+  nativeAgentApprovalModes,
+  resolveNativeAgentApprovalMode,
   resolveReasoningId,
   type AgentModel,
   type FallbackExecutionProfileId,
 } from "@orkestrator/protocol/native-agent";
 import { Button } from "@/components/ui/button";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
+import {
+  approvalModeIconOption,
+  ComposerIconPicker,
+  conversationModeIconOption,
+} from "@/components/chat/ComposerIconPicker";
 import { FileMentionMenu } from "@/components/chat/FileMentionMenu";
 import type { MentionableInputRef } from "@/components/chat/MentionableInput";
 import { NativeAttachmentMenu } from "@/components/chat/NativeAttachmentMenu";
@@ -27,13 +34,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import { useFileMentions } from "@/hooks/useFileMentions";
 import { useFileSearch } from "@/hooks/useFileSearch";
@@ -340,6 +340,7 @@ export function UnassignedNativeAgentComposer({
   initialConversationMode,
   initialFastMode,
   initialExecutionProfileId,
+  offerApprovalModes = true,
 }: {
   tabId: string;
   environmentId: string;
@@ -354,8 +355,11 @@ export function UnassignedNativeAgentComposer({
       fastMode: boolean;
       mode?: "build" | "plan";
       executionProfileId?: string;
+      approvalMode?: string;
     },
   ) => void;
+  /** False where the session's policy is fixed, as a coordinator's is. */
+  offerApprovalModes?: boolean;
   /**
    * Omitted where resuming makes no sense.
    *
@@ -624,6 +628,20 @@ export function UnassignedNativeAgentComposer({
   const selectedLaunchExecutionProfile =
     LAUNCH_EXECUTION_PROFILES.find((profile) => profile.id === draft.executionProfileId) ??
     LAUNCH_EXECUTION_PROFILES[0];
+  // The backend resolves the session's policy from these same environment
+  // settings and caps whatever is chosen here, so this list is only the offer.
+  const environmentApprovals = environment?.agentSettings?.executionPolicy?.approvals;
+  const { launchApprovalModes, selectedLaunchApprovalMode } = useMemo(() => {
+    const policy = { approvals: environmentApprovals ?? ("auto-approve" as const) };
+    return {
+      launchApprovalModes: offerApprovalModes ? nativeAgentApprovalModes(platform, policy) : [],
+      selectedLaunchApprovalMode: resolveNativeAgentApprovalMode(
+        platform,
+        policy,
+        draft.approvalMode,
+      ),
+    };
+  }, [draft.approvalMode, environmentApprovals, offerApprovalModes, platform]);
   // The catalogue's `supportsSpeed` describes the model; the table describes the
   // platform. Both have to allow it, so a catalogue entry cannot reintroduce a
   // toggle the platform has no way to apply.
@@ -770,6 +788,9 @@ export function UnassignedNativeAgentComposer({
             executionProfileId: selectedLaunchExecutionProfile.id,
           }
         : {}),
+      ...(launchApprovalModes.length > 0 && selectedLaunchApprovalMode
+        ? { approvalMode: selectedLaunchApprovalMode }
+        : {}),
     });
   };
 
@@ -894,6 +915,7 @@ export function UnassignedNativeAgentComposer({
                     modelId: undefined,
                     reasoningId: undefined,
                     executionProfileId: undefined,
+                    approvalMode: undefined,
                     fastMode: nextFastMode ?? false,
                     // Per type, not all-or-nothing: Codex takes images and
                     // refuses files, and its bridge rejects the entire prompt
@@ -948,64 +970,41 @@ export function UnassignedNativeAgentComposer({
                 disabled={disabled}
               />
               {canConfigureMode ? (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      disabled={disabled}
-                      aria-label="Conversation mode"
-                      className="h-7 gap-1 bg-elevated px-2 text-xs font-normal text-foreground hover:bg-elevated-hover hover:text-foreground"
-                    >
-                      {draft.mode === "plan" ? "Plan" : "Build"}
-                      <ChevronDown className="size-3" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start">
-                    <DropdownMenuRadioGroup
-                      value={draft.mode}
-                      onValueChange={(mode) =>
-                        updateDraft(sessionKey, { mode: mode as "build" | "plan" })
-                      }
-                    >
-                      <DropdownMenuRadioItem value="build">Build</DropdownMenuRadioItem>
-                      <DropdownMenuRadioItem value="plan">Plan</DropdownMenuRadioItem>
-                    </DropdownMenuRadioGroup>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                <ComposerIconPicker
+                  label="Mode"
+                  testId="launch-mode-picker"
+                  disabled={disabled}
+                  options={LAUNCH_EXECUTION_PROFILES.map((profile) =>
+                    conversationModeIconOption(profile.id, profile.label),
+                  )}
+                  value={draft.mode}
+                  onValueChange={(mode) =>
+                    updateDraft(sessionKey, { mode: mode as "build" | "plan" })
+                  }
+                />
               ) : canConfigureExecutionProfile ? (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      disabled={disabled}
-                      aria-label="Execution profile"
-                      className="h-7 gap-1 bg-elevated px-2 text-xs font-normal text-foreground hover:bg-elevated-hover hover:text-foreground"
-                    >
-                      {selectedLaunchExecutionProfile.label}
-                      <ChevronDown className="size-3" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start">
-                    <DropdownMenuRadioGroup
-                      value={selectedLaunchExecutionProfile.id}
-                      onValueChange={(executionProfileId) =>
-                        updateDraft(sessionKey, {
-                          executionProfileId,
-                        })
-                      }
-                    >
-                      {LAUNCH_EXECUTION_PROFILES.map((profile) => (
-                        <DropdownMenuRadioItem key={profile.id} value={profile.id}>
-                          {profile.label}
-                        </DropdownMenuRadioItem>
-                      ))}
-                    </DropdownMenuRadioGroup>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                <ComposerIconPicker
+                  label="Mode"
+                  testId="launch-execution-profile-picker"
+                  disabled={disabled}
+                  options={LAUNCH_EXECUTION_PROFILES.map((profile) =>
+                    conversationModeIconOption(profile.id, profile.label),
+                  )}
+                  value={selectedLaunchExecutionProfile.id}
+                  onValueChange={(executionProfileId) =>
+                    updateDraft(sessionKey, { executionProfileId })
+                  }
+                />
+              ) : null}
+              {launchApprovalModes.length > 0 ? (
+                <ComposerIconPicker
+                  label="Approvals"
+                  testId="launch-approval-mode-picker"
+                  disabled={disabled}
+                  options={launchApprovalModes.map(approvalModeIconOption)}
+                  value={selectedLaunchApprovalMode}
+                  onValueChange={(approvalMode) => updateDraft(sessionKey, { approvalMode })}
+                />
               ) : null}
             </>
           }

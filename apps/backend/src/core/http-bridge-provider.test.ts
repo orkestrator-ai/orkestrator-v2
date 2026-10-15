@@ -1775,6 +1775,45 @@ describe("HTTP bridge provider", () => {
     expect(JSON.parse(String(requests[0]!.init.body)).permissionMode).toBe("plan");
   });
 
+  test("runs Claude build turns in the session's approval mode", async () => {
+    const { provider, requests } = httpProvider(() => new Response(null, { status: 204 }));
+
+    await provider.send("session-1", "Edit it", {
+      requestId: "request-build",
+      mode: "build",
+      approvalMode: "default",
+    });
+    await provider.send("session-1", "Plan it", {
+      requestId: "request-plan",
+      mode: "plan",
+      approvalMode: "acceptEdits",
+    });
+
+    expect(JSON.parse(String(requests[0]!.init.body))).toMatchObject({
+      permissionMode: "default",
+      approvalMode: "default",
+    });
+    // The plan turn still carries the approval mode for after the plan is accepted.
+    expect(JSON.parse(String(requests[1]!.init.body))).toMatchObject({
+      permissionMode: "plan",
+      approvalMode: "acceptEdits",
+    });
+  });
+
+  test("forwards the Codex approval mode with each prompt", async () => {
+    const { provider, requests } = httpProvider(
+      () => Response.json({ status: "processing" }),
+      codexConnection,
+    );
+
+    await provider.send("codex-1", "Edit it", {
+      requestId: "request-1",
+      approvalMode: "auto-review",
+    });
+
+    expect(JSON.parse(String(requests[0]!.init.body)).approvalMode).toBe("auto-review");
+  });
+
   test("rejects malformed session creation responses", async () => {
     const { provider } = httpProvider(() => Response.json({}));
     await expect(provider.createSession("build", "Build task")).rejects.toThrow(

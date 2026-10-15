@@ -65,10 +65,11 @@ forward that nothing in the backend supplies.
    with them. Or record a decision to keep both models, with the reason, in
    `native-agent.ts`. Done when one of the two is true and no renderer code
    branches on the axis name.
-3. **Claude `acceptEdits`.** Decide whether "Auto-accept edits" becomes an
-   option on the generic `mode` axis for Claude. If not, stop forwarding
-   `parameterValues.permissionMode` from the prompt body. Keep `dontAsk`,
-   `auto` and `default` unexposed: the execution policy owns approvals.
+3. **Claude `parameterValues.permissionMode`.** `acceptEdits`, `auto` and
+   `default` are now approval modes (`controls.approvalMode`, see
+   [Approval modes](../architecture/agent-engines.md#approval-modes)), so no
+   descriptor will ever offer this parameter. Stop forwarding it from the
+   prompt body and the `/config` route.
 4. **`maxBudgetUsd`.** Add a backend-owned per-environment budget setting, with
    `error_max_budget_usd` mapping to a `stopped` notice, or drop the option from
    the bridge.
@@ -88,9 +89,8 @@ forward that nothing in the backend supplies.
   `isSuppressedComposerParameter`, so a control hidden on one read cannot
   reappear on another.
 - Provider-only axes are fine; provider-only UI is not.
-- Approval behaviour belongs to the execution policy, not to a composer mode,
-  except for modes the user switches per turn (plan, and possibly
-  `acceptEdits`).
+- Approval behaviour is bounded by the execution policy. The compose bar's
+  approval mode chooses within that bound and never widens it.
 - A parameter whose change needs a new process is launch-only: changing it
   against a running Claude CLI is a conflict, not a silent relaunch.
 

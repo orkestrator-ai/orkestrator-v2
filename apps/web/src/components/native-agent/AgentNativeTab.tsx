@@ -193,6 +193,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
         fastMode: boolean;
         mode?: "build" | "plan";
         executionProfileId?: string;
+        approvalMode?: string;
       },
     ) => {
       setAwaitingDurability(true);
@@ -232,6 +233,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
         sessionMode: options.mode,
         executionProfileId: options.executionProfileId,
         executionAgent: platform === "opencode" ? options.executionProfileId : undefined,
+        ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
         parameterValues:
           platform === "claude" ? claudeNativeParameterValues(configured) : undefined,
         attachments: draft?.attachments.map((attachment) => ({
@@ -369,6 +371,8 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
             initialConversationMode={props.initialConversationMode}
             initialFastMode={props.initialFastMode}
             initialExecutionProfileId={props.initialExecutionProfileId}
+            // A coordinator's read-only policy leaves nothing to choose.
+            offerApprovalModes={!props.onAssignPlatform}
             onSend={(platform, prompt, options) => {
               void (props.onAssignPlatform
                 ? assignAndSend(platform, prompt, options)

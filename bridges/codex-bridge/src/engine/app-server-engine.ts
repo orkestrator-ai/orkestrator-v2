@@ -1336,6 +1336,7 @@ export class AppServerEngine implements CodexEngine {
       cwd: config.cwd ?? this.options.cwd,
       // Passed explicitly on every call rather than relying on inherited state.
       approvalPolicy: config.approvalPolicy ?? "never",
+      approvalsReviewer: config.approvalsReviewer ?? "user",
       // Passing a legacy sandbox override makes Codex ignore an active
       // permission profile, including its restricted filesystem reads.
       ...(config.permissionProfile
@@ -2010,6 +2011,8 @@ export class AppServerEngine implements CodexEngine {
       input: options.input.map(toAppServerInput),
       cwd: options.config.cwd ?? this.options.cwd,
       approvalPolicy: options.config.approvalPolicy ?? "never",
+      // A turn's reviewer persists into later turns, so every turn states it.
+      approvalsReviewer: options.config.approvalsReviewer ?? "user",
       ...(options.config.model ? { model: options.config.model } : {}),
       ...(options.config.serviceTier !== undefined
         ? { serviceTier: options.config.serviceTier }

@@ -15,6 +15,7 @@ import { SESSION_CLOSING_ERROR, type CodexRuntimeSessions } from "./app-server-r
 import type { AppServerEngine } from "./engine/app-server-engine.js";
 
 import type { EngineGeneration, EngineTurnConfig, EngineUserInput } from "./engine/types.js";
+import { codexApprovalConfig, type CodexApprovalMode } from "./codex-approval-mode.js";
 import {
   OverlappingTurnError,
   phaseToExternalStatus,
@@ -90,6 +91,8 @@ export class CodexRuntimePrompt {
       readOnly?: boolean;
       agentMcp?: { url: string; token: string; design?: boolean };
       workflowResultTool?: string;
+      /** The session's composer approval mode. */
+      approvalMode?: CodexApprovalMode;
       /** `false` is literal intent: no bridge command resolution at all. */
       allowProviderCommands?: boolean;
       /** A selection resolved against this bridge's own catalogue. */
@@ -144,6 +147,8 @@ export class CodexRuntimePrompt {
       readOnly?: boolean;
       agentMcp?: { url: string; token: string; design?: boolean };
       workflowResultTool?: string;
+      /** The session's composer approval mode. */
+      approvalMode?: CodexApprovalMode;
       /** `false` is literal intent: no bridge command resolution at all. */
       allowProviderCommands?: boolean;
       /** A selection resolved against this bridge's own catalogue. */
@@ -360,7 +365,10 @@ export class CodexRuntimePrompt {
     // and workflow-result approval only to this dispatch.
     const promptConfig = (): EngineTurnConfig => ({
       ...session.config,
-      ...(input.readOnly ? { sandbox: "read-only", approvalPolicy: "never" } : {}),
+      ...codexApprovalConfig(session.config.policy, session.config.sandbox, input.approvalMode),
+      ...(input.readOnly
+        ? { sandbox: "read-only", approvalPolicy: "never", approvalsReviewer: "user" }
+        : {}),
       ...(input.workflowResultTool ? { workflowResultTool: input.workflowResultTool } : {}),
     });
     if (context && !context.materialized && input.workflowResultTool) {

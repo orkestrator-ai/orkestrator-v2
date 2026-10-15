@@ -414,6 +414,18 @@ session.put("/:id/preferences", async (c) => {
   }
 });
 
+/** The composer's approval modes; `plan` and `dontAsk` are set by other controls. */
+function claudeApprovalMode(
+  value: unknown,
+): "default" | "acceptEdits" | "auto" | "bypassPermissions" | undefined {
+  return value === "default" ||
+    value === "acceptEdits" ||
+    value === "auto" ||
+    value === "bypassPermissions"
+    ? value
+    : undefined;
+}
+
 session.post("/:id/config", async (c) => {
   const sessionData = getSession(c.req.param("id"));
   if (!sessionData) return c.json({ error: "Session not found" }, 404);
@@ -431,6 +443,7 @@ session.post("/:id/config", async (c) => {
       : undefined,
   );
   const rawPermissionMode = parameterValues?.permissionMode;
+  const approvalMode = claudeApprovalMode(body.approvalMode);
   const permissionMode =
     typeof rawPermissionMode === "string" &&
     ["acceptEdits", "bypassPermissions", "plan"].includes(rawPermissionMode)
@@ -438,8 +451,11 @@ session.post("/:id/config", async (c) => {
       : body.mode === "plan"
         ? "plan"
         : body.mode === "build"
-          ? "bypassPermissions"
-          : undefined;
+          ? (approvalMode ?? "bypassPermissions")
+          : // A session in plan mode stays there; the approval mode applies on leaving.
+            approvalMode !== undefined && sessionData.planMode !== true
+            ? approvalMode
+            : undefined;
   try {
     await configureClaudeSession(sessionData, {
       ...(typeof body.model === "string" ? { model: body.model } : {}),
@@ -460,7 +476,9 @@ session.post("/:id/config", async (c) => {
   if (nextPolicy) {
     sessionData.executionPolicy = structuredClone(nextPolicy);
   }
-  if (permissionMode === "plan" || permissionMode === "bypassPermissions") {
+  if (body.mode === "plan" || body.mode === "build") {
+    await setSessionPreferences(sessionData.id, { planMode: body.mode === "plan" });
+  } else if (permissionMode === "plan" || permissionMode === "bypassPermissions") {
     await setSessionPreferences(sessionData.id, { planMode: permissionMode === "plan" });
   }
   return c.json({ ok: true, policy: sessionData.executionPolicy });
@@ -658,6 +676,7 @@ session.post("/:id/prompt", async (c) => {
             | "dontAsk"
             | "auto")
         : undefined;
+    const approvalMode = claudeApprovalMode(body.approvalMode);
     const attachments = body.attachments as
       | Array<{
           type: "file" | "image";
@@ -812,6 +831,7 @@ session.post("/:id/prompt", async (c) => {
       outputSchema,
       model,
       permissionMode,
+      ...(approvalMode ? { approvalMode } : {}),
       promptSuggestions,
       parameterValues,
       ...(agentMcp ? { agentMcp } : {}),
@@ -832,6 +852,7 @@ session.post("/:id/prompt", async (c) => {
             attachments,
             effort,
             permissionMode,
+            ...(approvalMode ? { approvalMode } : {}),
             ...(typeof readOnly === "boolean" ? { readOnly } : {}),
             fastMode,
             agent,
@@ -898,6 +919,7 @@ session.post("/:id/prompt", async (c) => {
       attachments,
       effort,
       permissionMode,
+      ...(approvalMode ? { approvalMode } : {}),
       ...(typeof readOnly === "boolean" ? { readOnly } : {}),
       fastMode,
       agent,

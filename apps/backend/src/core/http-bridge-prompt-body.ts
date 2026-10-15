@@ -44,13 +44,17 @@ export function bridgePromptBody(
               ? "plan"
               : typeof options.parameterValues?.permissionMode === "string"
                 ? options.parameterValues.permissionMode
-                : "bypassPermissions",
+                : (options.approvalMode ?? "bypassPermissions"),
+          // Also sent on plan turns: it decides who approves tools once the
+          // plan is accepted.
+          ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
         }
       : agent === "codex"
         ? {
             fastMode: options.fastMode ?? connection.fastMode,
             agentMcp: options.agentMcp,
             workflowResultTool: options.workflowResultTool,
+            ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
           }
         : agent === "cursor" || agent === "grok" || agent === "pi"
           ? {

@@ -1,7 +1,7 @@
 import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 import type { PlanApprovalRequest, QuestionInfo, QuestionRequest } from "../types/index.js";
-import { claudeTurnPolicy } from "./claude-query-config.js";
+import { claudeAsksForApproval, claudeTurnPolicy } from "./claude-query-config.js";
 import { eventEmitter } from "./event-emitter.js";
 import { debugLog } from "./logger.js";
 import {
@@ -285,18 +285,20 @@ export async function turnCanUseTool(
     }
   }
 
-  // An `ask` policy means the user decides, and a `deny` policy refuses
-  // anything outside its allow list. Questions and plan approvals are handled
-  // above, so a denying session can still ask the user. Under `auto-approve`
-  // the mode already chose not to ask, so a tool that still reaches here runs.
+  // An `ask` policy or an asking approval mode means the user decides, and a
+  // `deny` policy refuses anything outside its allow list. Questions and plan
+  // approvals are handled above, so a denying session can still ask the user.
+  // Otherwise the mode already chose not to ask, so a tool that still reaches
+  // here runs.
   if (
     claudeWorkflowResultTools(turn.mcpServerNames).includes(toolName) &&
     !session.executionPolicy?.toolPolicy?.deny?.includes(toolName)
   ) {
     return { behavior: "allow", updatedInput: input };
   }
-  const approvals = claudeTurnPolicy(session.executionPolicy, turn.options?.readOnly)?.approvals;
-  if (approvals === "ask") {
+  const turnPolicy = claudeTurnPolicy(session.executionPolicy, turn.options?.readOnly);
+  const approvals = turnPolicy?.approvals;
+  if (claudeAsksForApproval(turnPolicy, turn.options)) {
     return requestClaudeToolApproval(sessionId, toolName, input, permissionContext);
   }
   if (approvals === "deny") {

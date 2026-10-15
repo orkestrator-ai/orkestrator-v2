@@ -3607,3 +3607,208 @@ describe("command catalogue dispatch", () => {
     expect(next.revision).toBe(h.runtime.getStatus(sessionId, false)?.commandRevision);
   });
 });
+
+describe("composed approval settings", () => {
+  test("generation recovery reapplies MCP supervision before the next selected turn", async () => {
+    const h = await harness({ "skills/list": () => ({ data: [] }) });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    const agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "tab-secret" };
+    await h.runtime.prompt(sessionId, {
+      prompt: "First",
+      requestId: "before-restart",
+      attachments: [],
+      agentMcp,
+      approvalMode: "untrusted",
+    });
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+    const generation = h.engine.info().generation;
+    h.child().exit(1);
+    await h.engine.listSkills({ cwd: "/tmp/ws" });
+    await h.drain();
+    expect(h.engine.info().generation).not.toBe(generation);
+    expect(
+      await h.runtime.prompt(sessionId, {
+        prompt: "Second",
+        requestId: "after-restart",
+        attachments: [],
+        agentMcp,
+        approvalMode: "untrusted",
+      }),
+    ).toMatchObject({ ok: true });
+    const requests = h.child().requests;
+    const resume = requests.findLast((r) => r.method === "thread/resume")!;
+    expect(resume.params.approvalPolicy).toBe("untrusted");
+    const server = (resume.params.config as Record<string, Record<string, unknown>>)[
+      "mcp_servers.orkestrator"
+    ]!;
+    expect(server.default_tools_approval_mode).toBeUndefined();
+    expect(requests[requests.lastIndexOf(resume) - 1]?.method).toBe("thread/unsubscribe");
+  });
+
+  test.each(["untrusted", "on-request", "auto-review"] as const)(
+    "new threads honor %s for ordinary MCP tools",
+    async (approvalMode) => {
+      const h = await harness();
+      const { sessionId } = h.runtime.createSession({ mode: "build" });
+      expect(
+        await h.runtime.prompt(sessionId, {
+          prompt: "Update a ticket",
+          requestId: "new-selected",
+          attachments: [],
+          approvalMode,
+          agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "tab-secret" },
+        }),
+      ).toMatchObject({ ok: true });
+      const thread = h.child().requests.find((r) => r.method === "thread/start")!;
+      expect(thread.params).toMatchObject({
+        approvalPolicy: approvalMode === "auto-review" ? "on-request" : approvalMode,
+        approvalsReviewer: approvalMode === "auto-review" ? "auto_review" : "user",
+      });
+      const server = (thread.params.config as Record<string, Record<string, unknown>>)[
+        "mcp_servers.orkestrator"
+      ]!;
+      expect(server.default_tools_approval_mode).toBeUndefined();
+      expect(server.tools).not.toHaveProperty("update_ticket");
+      expect(Object.values(server.tools as Record<string, unknown>)).toContainEqual({
+        approval_mode: "approve",
+      });
+    },
+  );
+
+  test.each(["none", "container"] as const)(
+    "new and attached %s threads apply each selected reviewer to MCP and commands",
+    async (sandbox) => {
+      const h = await harness();
+      const { sessionId } = h.runtime.createSession({
+        mode: "build",
+        policy: {
+          id: sandbox === "container" ? "interactive-container" : "interactive-host",
+          sandbox,
+          approvals: "auto-approve",
+          projectResources: true,
+          networkAccess: "full",
+        },
+      });
+      const agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "tab-secret" };
+      for (const [index, approvalMode] of [
+        "never",
+        "untrusted",
+        "on-request",
+        "auto-review",
+        "never",
+      ].entries()) {
+        expect(
+          await h.runtime.prompt(sessionId, {
+            prompt: "Change it",
+            requestId: `mode-${index}`,
+            attachments: [],
+            agentMcp,
+            approvalMode: approvalMode as "never" | "untrusted" | "on-request" | "auto-review",
+          }),
+        ).toMatchObject({ ok: true });
+        const requests = h.child().requests;
+        const thread = requests.findLast(
+          (r) => r.method === "thread/start" || r.method === "thread/resume",
+        )!;
+        const turn = requests.findLast((r) => r.method === "turn/start")!;
+        const reviewer = approvalMode === "auto-review" ? "auto_review" : "user";
+        const approvalPolicy = approvalMode === "auto-review" ? "on-request" : approvalMode;
+        expect(thread.params).toMatchObject({ approvalPolicy, approvalsReviewer: reviewer });
+        expect(turn.params).toMatchObject({ approvalPolicy, approvalsReviewer: reviewer });
+        const server = (thread.params.config as Record<string, Record<string, unknown>>)[
+          "mcp_servers.orkestrator"
+        ]!;
+        expect(server.default_tools_approval_mode).toBe(
+          approvalMode === "never" ? "approve" : undefined,
+        );
+        if (approvalMode !== "never") expect(server.tools).toBeDefined();
+        if (index > 0) {
+          const resumeIndex = requests.lastIndexOf(thread);
+          expect(requests[resumeIndex - 1]?.method).toBe("thread/unsubscribe");
+        }
+        const narrowed =
+          sandbox === "none" && (approvalMode === "on-request" || approvalMode === "auto-review");
+        expect(thread.params.sandbox).toBe(narrowed ? "workspace-write" : "danger-full-access");
+        h.child().notify("turn/completed", {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "completed" },
+        });
+        await h.drain();
+      }
+    },
+  );
+
+  test("read-only turns revoke a loaded full-access MCP exception and restore it only on build turns", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({
+      mode: "build",
+      policy: {
+        id: "interactive-host",
+        sandbox: "none",
+        approvals: "auto-approve",
+        projectResources: true,
+        networkAccess: "full",
+      },
+    });
+    for (const [index, readOnly] of [false, true, false].entries()) {
+      expect(
+        await h.runtime.prompt(sessionId, {
+          prompt: "Inspect",
+          requestId: `mcp-readonly-${index}`,
+          attachments: [],
+          readOnly,
+          approvalMode: "never",
+          agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "tab-secret" },
+        }),
+      ).toMatchObject({ ok: true });
+      const requests = h.child().requests;
+      const thread = requests.findLast(
+        (r) => r.method === "thread/start" || r.method === "thread/resume",
+      )!;
+      const server = (thread.params.config as Record<string, Record<string, unknown>>)[
+        "mcp_servers.orkestrator"
+      ]!;
+      expect(server.default_tools_approval_mode).toBe(readOnly ? undefined : "approve");
+      if (index > 0)
+        expect(requests[requests.lastIndexOf(thread) - 1]?.method).toBe("thread/unsubscribe");
+      h.child().notify("turn/completed", {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status: "completed" },
+      });
+      await h.drain();
+    }
+  });
+  test("read-only dispatch overrides selected reviewer without leaking into the following turn", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    for (const [index, readOnly] of [true, false].entries()) {
+      expect(
+        await h.runtime.prompt(sessionId, {
+          prompt: "Inspect",
+          requestId: `readonly-${index}`,
+          attachments: [],
+          readOnly,
+          approvalMode: "auto-review",
+          agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "tab-secret" },
+        }),
+      ).toMatchObject({ ok: true });
+      const turn = h.child().requests.findLast((r) => r.method === "turn/start")!;
+      expect(turn.params).toMatchObject({
+        approvalPolicy: readOnly ? "never" : "on-request",
+        approvalsReviewer: readOnly ? "user" : "auto_review",
+      });
+      expect(turn.params.sandboxPolicy).toMatchObject({
+        type: readOnly ? "readOnly" : "workspaceWrite",
+      });
+      h.child().notify("turn/completed", {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status: "completed" },
+      });
+      await h.drain();
+    }
+  });
+});

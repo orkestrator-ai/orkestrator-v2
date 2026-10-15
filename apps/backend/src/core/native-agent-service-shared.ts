@@ -145,6 +145,8 @@ export interface EnsureNativeAgentSessionInput {
   executionProfileId?: string;
   /** Generic provider parameters to persist before the first prompt. */
   parameterValues?: Record<string, string | boolean>;
+  /** Composer approval mode to persist before the first prompt. */
+  approvalMode?: string;
   /** Trusted backend ownership. Renderer-supplied values are replaced. */
   owner?: AgentSessionOwner;
   executionPolicy?: "coordinator-read-only";
@@ -311,6 +313,7 @@ export function controlsFromSessionInput(
     ...(input.sessionMode ? { mode: input.sessionMode } : {}),
     ...(input.executionProfileId ? { executionProfileId: input.executionProfileId } : {}),
     ...(input.parameterValues ? { parameterValues: input.parameterValues } : {}),
+    ...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
   };
   return Object.keys(controls).length > 0 ? controls : undefined;
 }

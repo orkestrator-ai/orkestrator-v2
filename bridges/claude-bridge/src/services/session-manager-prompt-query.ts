@@ -6,6 +6,7 @@ import type { SessionState } from "../types/index.js";
 import { claudeWorkflowResultTools } from "./claude-workflow-result-tools.js";
 import { backgroundCommandInstruction } from "./background-commands.js";
 import {
+  claudeAsksForApproval,
   claudePermissionMode,
   claudePolicyPermissionMode,
   claudeSettingSources,
@@ -111,24 +112,24 @@ export async function resolveQueryPlan(
   const policyPermissionMode = claudePolicyPermissionMode(policy);
   const permissionMode = claudePermissionMode(policy, options?.permissionMode);
   turn.permissionMode = permissionMode;
-  // Under `ask` only tools that read are approved up front. The CLI asks for
-  // the rest through `canUseTool`, which parks each one as an approval.
-  const defaultAllowedTools =
-    policy?.approvals === "ask"
-      ? ["Read", "Glob", "Grep", "AskUserQuestion", "Task", "Agent"]
-      : [
-          "Read",
-          "Edit",
-          "Write",
-          "Bash",
-          "Glob",
-          "Grep",
-          "WebSearch",
-          "WebFetch",
-          "AskUserQuestion",
-          "Task",
-          "Agent",
-        ];
+  // When the user approves tools, only tools that read are approved up front.
+  // The CLI asks for the rest through `canUseTool`, which parks each one as an
+  // approval.
+  const defaultAllowedTools = claudeAsksForApproval(policy, options)
+    ? ["Read", "Glob", "Grep", "AskUserQuestion", "Task", "Agent"]
+    : [
+        "Read",
+        "Edit",
+        "Write",
+        "Bash",
+        "Glob",
+        "Grep",
+        "WebSearch",
+        "WebFetch",
+        "AskUserQuestion",
+        "Task",
+        "Agent",
+      ];
   const coordinatorReadOnly = isCoordinatorReadOnlyPolicy(policy);
   // A worker can always report back, whatever its approval setting: under
   // "deny" only allowed tools run, and the mail tools must be among them. An
@@ -341,7 +342,8 @@ export function claudeQueryOptions(
         ? {
             sandbox: {
               enabled: true,
-              autoAllowBashIfSandboxed: policy.approvals === "auto-approve",
+              autoAllowBashIfSandboxed:
+                policy.approvals === "auto-approve" && !claudeAsksForApproval(policy, options),
               network: { allowLocalBinding: policy.networkAccess === "full" },
             },
           }

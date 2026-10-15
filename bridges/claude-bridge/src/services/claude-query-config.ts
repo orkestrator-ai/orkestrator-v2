@@ -16,7 +16,7 @@
  */
 import type { SettingSource } from "@anthropic-ai/claude-agent-sdk";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
-import type { PermissionMode } from "../types/index.js";
+import type { PermissionMode, PromptOptions } from "../types/index.js";
 import { getPluginsForSdk, type SdkPluginConfig } from "./plugin-config.js";
 import { effectiveExecutionPolicy, isCoordinatorReadOnlyPolicy } from "./read-only-policy.js";
 
@@ -99,6 +99,32 @@ export function claudePermissionMode(
   if (requested === undefined) return policyMode;
   if (!isRestrictivePolicy(policy)) return requested;
   return RESTRICTIVE_PERMISSION_MODES.has(requested) ? requested : policyMode;
+}
+
+/** Modes in which the CLI hands a tool it was not told to allow to `canUseTool`. */
+const ASKING_PERMISSION_MODES: ReadonlySet<PermissionMode> = new Set([
+  "default",
+  "acceptEdits",
+  "auto",
+]);
+
+/**
+ * Whether a turn's tool approvals go to the user.
+ *
+ * An `ask` policy always asks and a `deny` policy never does. Under
+ * `auto-approve` the session's approval mode decides, so that choosing an
+ * asking mode in the composer actually parks the tools the CLI wants approved
+ * instead of allowing every one that reaches `canUseTool`.
+ */
+export function claudeAsksForApproval(
+  policy: NativeAgentExecutionPolicy | undefined,
+  options: Pick<PromptOptions, "permissionMode" | "approvalMode"> | undefined,
+): boolean {
+  if (policy?.approvals === "ask") return true;
+  if (policy?.approvals === "deny") return false;
+  return ASKING_PERMISSION_MODES.has(
+    claudePermissionMode(policy, options?.approvalMode ?? options?.permissionMode),
+  );
 }
 
 /**

@@ -913,7 +913,8 @@ export function isPersistedNativeAgentSession(
             key === "includeLocalSettings" ||
             key === "promptSuggestions" ||
             key === "parameterValues" ||
-            key === "persistDefaults",
+            key === "persistDefaults" ||
+            key === "approvalMode",
         ) &&
         (value.controls.modelId === undefined || isNonBlankString(value.controls.modelId)) &&
         (value.controls.reasoningId === undefined ||
@@ -928,6 +929,8 @@ export function isPersistedNativeAgentSession(
           typeof value.controls.promptSuggestions === "boolean") &&
         (value.controls.persistDefaults === undefined ||
           typeof value.controls.persistDefaults === "boolean") &&
+        (value.controls.approvalMode === undefined ||
+          isNonBlankString(value.controls.approvalMode)) &&
         (value.controls.parameterValues === undefined ||
           (isRecord(value.controls.parameterValues) &&
             Object.keys(value.controls.parameterValues).length <= 64 &&

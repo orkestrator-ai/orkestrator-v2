@@ -1039,6 +1039,14 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     ) {
       throw new Error("Native agent execution profile is invalid");
     }
+    if (
+      input.update.approvalMode !== undefined &&
+      !composer?.approvalModes?.some(
+        (mode) => mode.id === input.update.approvalMode && !mode.disabled,
+      )
+    ) {
+      throw new Error("Native agent approval mode is invalid");
+    }
     const capabilities = nativeCapabilities(input.agent).composer;
     if (input.update.includeLocalSettings !== undefined && !capabilities.localSettings) {
       throw new Error("Native agent local settings are unavailable");
@@ -1049,7 +1057,11 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     if (resolved.provider.updateInteractiveControls) {
       await resolved.provider.updateInteractiveControls(
         resolved.session.providerSessionId,
-        input.update,
+        // Leaving plan mode returns a live Claude session to the session's
+        // approval mode, which this update may not restate.
+        input.update.mode === "build" && input.update.approvalMode === undefined
+          ? { ...input.update, approvalMode: composer?.selectedApprovalModeId }
+          : input.update,
       );
     }
     await this.storage.updateNativeAgentSessionControls(

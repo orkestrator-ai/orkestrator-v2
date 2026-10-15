@@ -337,6 +337,7 @@ export function asNonBlankString(value: unknown, name: string): string {
  * ids alone.
  */
 export const MAX_EXECUTION_PROFILE_ID_LENGTH = 256;
+const MAX_APPROVAL_MODE_ID_LENGTH = 64;
 
 export function asBoundedNonBlankString(value: unknown, name: string, maxLength: number): string {
   const normalized = asNonBlankString(value, name);
@@ -387,6 +388,15 @@ export function asDispatchNativeAgentPromptInput(args: JsonRecord): DispatchNati
             "executionProfileId",
             MAX_EXECUTION_PROFILE_ID_LENGTH,
           ),
+    ...(args.approvalMode === undefined
+      ? {}
+      : {
+          approvalMode: asBoundedNonBlankString(
+            args.approvalMode,
+            "approvalMode",
+            MAX_APPROVAL_MODE_ID_LENGTH,
+          ),
+        }),
     images: Array.isArray(args.images) ? assertValidPromptImages(args.images) : undefined,
     attachments: Array.isArray(args.attachments)
       ? assertValidPromptAttachments(args.attachments)
@@ -434,6 +444,7 @@ export function asNativeAgentControlUpdate(
     "promptSuggestions",
     "parameterValues",
     "persistDefaults",
+    "approvalMode",
   ]);
   if (Object.keys(raw).some((key) => !allowed.has(key))) {
     throw new Error("Native agent control update has unknown fields");
@@ -477,6 +488,15 @@ export function asNativeAgentControlUpdate(
     ...(raw.parameterValues === undefined
       ? {}
       : { parameterValues: asNativeAgentParameterValues(raw.parameterValues) }),
+    ...(raw.approvalMode === undefined
+      ? {}
+      : {
+          approvalMode: asBoundedNonBlankString(
+            raw.approvalMode,
+            "approvalMode",
+            MAX_APPROVAL_MODE_ID_LENGTH,
+          ),
+        }),
     ...(raw.persistDefaults === undefined
       ? {}
       : { persistDefaults: asRequiredBoolean(raw.persistDefaults, "persistDefaults") }),

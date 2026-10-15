@@ -287,6 +287,8 @@ export interface EngineTurnConfig {
   cwd?: string;
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   approvalPolicy?: "never" | "on-request" | "untrusted";
+  /** Who answers approvals; absent means the user. */
+  approvalsReviewer?: "user" | "auto_review";
   networkAccessEnabled?: boolean;
   /**
    * Trusted process-level permission profile. When set, legacy sandbox

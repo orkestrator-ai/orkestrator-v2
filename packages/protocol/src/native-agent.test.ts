@@ -42,6 +42,9 @@ import {
   NATIVE_INLINE_ERROR_MESSAGE_ID_PREFIX,
   providerInlineErrorMessageId,
   type NativeAgentSessionProjection,
+  defaultNativeAgentApprovalMode,
+  nativeAgentApprovalModes,
+  resolveNativeAgentApprovalMode,
 } from "./native-agent";
 
 describe("native async question identities", () => {
@@ -1130,6 +1133,46 @@ describe("progressive session state guard", () => {
     expect(isNativeAgentSessionStateUpdate(snapshot(Array.from({ length: 513 }, () => ({}))))).toBe(
       false,
     );
+  });
+});
+
+describe("native agent approval modes", () => {
+  test("offers each SDK's own modes, and none where the agent has none", () => {
+    expect(nativeAgentApprovalModes("claude", undefined).map((mode) => mode.id)).toEqual([
+      "default",
+      "acceptEdits",
+      "auto",
+      "bypassPermissions",
+    ]);
+    expect(nativeAgentApprovalModes("codex", undefined).map((mode) => mode.id)).toEqual([
+      "untrusted",
+      "on-request",
+      "auto-review",
+      "never",
+    ]);
+    expect(nativeAgentApprovalModes("cursor", undefined)).toEqual([]);
+  });
+
+  test("an ask policy keeps only the modes that ask a person", () => {
+    const modes = nativeAgentApprovalModes("claude", { approvals: "ask" });
+    expect(modes.filter((mode) => !mode.disabled).map((mode) => mode.id)).toEqual(["default"]);
+    expect(
+      resolveNativeAgentApprovalMode("claude", { approvals: "ask" }, "bypassPermissions"),
+    ).toBe("default");
+  });
+
+  test("a deny policy offers no choice", () => {
+    expect(nativeAgentApprovalModes("codex", { approvals: "deny" })).toEqual([]);
+    expect(defaultNativeAgentApprovalMode("codex", { approvals: "deny" })).toBeUndefined();
+  });
+
+  test("defaults to what the policy alone implied", () => {
+    expect(defaultNativeAgentApprovalMode("claude", { approvals: "auto-approve" })).toBe(
+      "bypassPermissions",
+    );
+    expect(defaultNativeAgentApprovalMode("codex", { approvals: "ask" })).toBe("on-request");
+    expect(resolveNativeAgentApprovalMode("codex", undefined, "not-a-mode")).toBe("never");
+    expect(resolveNativeAgentApprovalMode("codex", undefined, "untrusted")).toBe("untrusted");
   });
 });
 

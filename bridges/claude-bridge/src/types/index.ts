@@ -1179,6 +1179,12 @@ export interface PromptOptions {
   model?: string;
   effort?: EffortLevel;
   permissionMode?: PermissionMode;
+  /**
+   * The session's chosen approval mode. Differs from `permissionMode` on a
+   * plan or read-only turn, and decides who approves tools once a plan is
+   * accepted.
+   */
+  approvalMode?: PermissionMode;
   /** Restrict this turn to inspection without enabling Claude's plan workflow. */
   readOnly?: boolean;
   /** When true, enables Claude Code fast mode (Opus 4.6 priority service tier). */

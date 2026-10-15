@@ -2322,9 +2322,9 @@ describe("AgentNativeTab", () => {
 
     render(<PaneBackedAgentNativeTab tabId={tabId} />);
 
-    expect(screen.queryByRole("button", { name: "Conversation mode" }) === null).toBe(true);
-    const profileButton = await screen.findByRole("button", { name: "Execution profile" });
-    expect(profileButton.textContent).toContain("Build");
+    expect(screen.queryByTestId("launch-mode-picker") === null).toBe(true);
+    const profileButton = await screen.findByTestId("launch-execution-profile-picker");
+    expect(profileButton.getAttribute("aria-label")).toBe("Mode: Build");
     fireEvent.pointerDown(profileButton);
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "Plan" }));
 
@@ -2355,6 +2355,59 @@ describe("AgentNativeTab", () => {
     );
     expect(JSON.stringify(flushPaneLayoutNowMock.mock.calls[0]?.[1])).toContain(
       '"initialExecutionProfileId":"plan"',
+    );
+  });
+
+  test("starts the first prompt's session in the launcher's approval mode", async () => {
+    getNativeAgentModelCatalogMock.mockImplementation(
+      async () =>
+        [
+          {
+            platform: "codex",
+            id: "codex-m",
+            label: "Codex M",
+            supportsSpeed: false,
+            supportsMode: true,
+          },
+        ] as never,
+    );
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Approvals",
+          order: 0,
+          setupPhase: "ready",
+        } as never,
+      ],
+    });
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["codex"],
+      favoriteModels: [],
+    } as never);
+    const tabId = "tab-codex-initial-approvals";
+    seedUnassignedPane(tabId);
+    useNativeComposeStore.getState().updateDraft(createSessionKey("env-1", tabId), {
+      platform: "codex",
+      modelId: "codex-m",
+    });
+
+    render(<PaneBackedAgentNativeTab tabId={tabId} />);
+
+    const trigger = await screen.findByTestId("launch-approval-mode-picker");
+    expect(trigger.getAttribute("aria-label")).toBe("Approvals: Full access");
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Untrusted" }));
+
+    const input = screen.getByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Change it" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() =>
+      expect(dispatchNativeAgentIntentMock).toHaveBeenCalledWith(
+        expect.objectContaining({ agent: "codex", approvalMode: "untrusted" }),
+      ),
     );
   });
 
@@ -2400,8 +2453,8 @@ describe("AgentNativeTab", () => {
 
     render(<PaneBackedAgentNativeTab tabId={tabId} />);
 
-    const profileButton = await screen.findByRole("button", { name: "Execution profile" });
-    expect(profileButton.textContent).toContain("Build");
+    const profileButton = await screen.findByTestId("launch-execution-profile-picker");
+    expect(profileButton.getAttribute("aria-label")).toBe("Mode: Build");
     const input = screen.getByRole("textbox");
 
     fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
@@ -7710,7 +7763,7 @@ describe("AgentNativeTab", () => {
       render(<AgentNativeTab tabId="tab-pi-omitted-model" data={identity("pi")} isActive />);
 
       const trigger = await screen.findByTitle(/Choose model/);
-      expect(trigger.textContent).toContain("claude-opus-4-5");
+      expect(trigger.getAttribute("aria-label")).toContain("claude-opus-4-5");
       fireEvent.pointerDown(trigger);
       expect(screen.getByRole("menuitemradio", { name: /claude-opus-4-5/ })).toBeTruthy();
       expect(screen.queryByRole("button", { name: "opencode models" }) === null).toBe(true);
@@ -9151,8 +9204,8 @@ describe("AgentNativeTab", () => {
       });
       render(<AgentNativeTab tabId="tab-opencode-mode" data={identity("opencode")} isActive />);
 
-      const trigger = await screen.findByTitle("Choose mode");
-      expect(trigger.textContent).toContain("Build");
+      const trigger = await screen.findByTestId("native-execution-profile-picker");
+      expect(trigger.getAttribute("aria-label")).toContain("Build");
       expect(screen.getByTitle(/Choose model/).textContent).not.toContain("speed");
 
       const input = screen.getByRole("textbox");
@@ -9190,8 +9243,8 @@ describe("AgentNativeTab", () => {
         <AgentNativeTab tabId="tab-opencode-fallback-mode" data={identity("opencode")} isActive />,
       );
 
-      const trigger = await screen.findByTitle("Choose mode");
-      expect(trigger.textContent).toContain("Build");
+      const trigger = await screen.findByTestId("native-execution-profile-picker");
+      expect(trigger.getAttribute("aria-label")).toContain("Build");
       fireEvent.pointerDown(trigger);
       fireEvent.click(await screen.findByRole("menuitemradio", { name: "Plan" }));
       await waitFor(() => expect(updateNativeAgentControlsMock).toHaveBeenCalled());
@@ -9228,9 +9281,9 @@ describe("AgentNativeTab", () => {
         />,
       );
 
-      const trigger = await screen.findByTitle("Choose mode");
+      const trigger = await screen.findByTestId("native-execution-profile-picker");
       // The listed `build`, not `executionProfiles[0]`.
-      expect(trigger.textContent).toContain("Build");
+      expect(trigger.getAttribute("aria-label")).toContain("Build");
 
       const input = screen.getByRole("textbox");
       fireEvent.input(input, { target: { textContent: "Do the thing" } });
@@ -9260,8 +9313,8 @@ describe("AgentNativeTab", () => {
       });
       render(<AgentNativeTab tabId="tab-opencode-no-build" data={identity("opencode")} isActive />);
 
-      const trigger = await screen.findByTitle("Choose mode");
-      expect(trigger.textContent).toContain("Reviewer");
+      const trigger = await screen.findByTestId("native-execution-profile-picker");
+      expect(trigger.getAttribute("aria-label")).toContain("Reviewer");
 
       const input = screen.getByRole("textbox");
       fireEvent.input(input, { target: { textContent: "Do the thing" } });
@@ -9317,7 +9370,7 @@ describe("AgentNativeTab", () => {
         <AgentNativeTab tabId="tab-opencode-locked-profile" data={identity("opencode")} isActive />,
       );
 
-      const trigger = await screen.findByTitle("Choose mode");
+      const trigger = await screen.findByTestId("native-execution-profile-picker");
       expect((trigger as HTMLButtonElement).disabled).toBe(true);
 
       // Shift+Tab has to be inert too: `cycleMode` is the same gate, and a
@@ -9328,6 +9381,33 @@ describe("AgentNativeTab", () => {
       fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
       await Promise.resolve();
       expect(updateNativeAgentControlsMock).not.toHaveBeenCalled();
+    });
+
+    test("switches the approval mode from its icon button", async () => {
+      seedProjection({
+        composer: {
+          approvalModes: [
+            { id: "default", label: "Ask", description: "Ask first", kind: "ask" },
+            {
+              id: "bypassPermissions",
+              label: "Bypass",
+              description: "Approve everything",
+              kind: "auto-approve",
+            },
+          ],
+          selectedApprovalModeId: "bypassPermissions",
+        },
+      });
+      render(<AgentNativeTab tabId="tab-approvals" data={identity("claude")} isActive />);
+
+      const trigger = await screen.findByRole("button", { name: "Approvals: Bypass" });
+      expect(trigger.textContent).toBe("");
+      fireEvent.pointerDown(trigger);
+      fireEvent.click(await screen.findByRole("menuitemradio", { name: "Ask" }));
+      await waitFor(() => expect(updateNativeAgentControlsMock).toHaveBeenCalled());
+      expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
+        update: { approvalMode: "default" },
+      });
     });
 
     test("keeps advanced session settings out of the input bar", async () => {
@@ -9341,7 +9421,7 @@ describe("AgentNativeTab", () => {
       render(<AgentNativeTab tabId="tab-settings" data={identity("claude")} isActive />);
 
       await screen.findByRole("textbox");
-      expect(screen.queryByRole("combobox", { name: "Execution profile" }) === null).toBe(true);
+      expect(screen.queryByTestId("native-execution-profile-picker") === null).toBe(true);
       expect(screen.queryByText("Provider default") === null).toBe(true);
       expect(screen.queryByText("Local settings") === null).toBe(true);
       expect(screen.queryByText("Suggestions") === null).toBe(true);

@@ -1616,7 +1616,13 @@ describe("evictIdleHydratedTranscripts", () => {
 
     const [approval] = getPendingPlanApprovals(state.id);
     expect(respondToPlanApproval(approval!.id, true)).toBe(true);
-    expect((await toolPromise).behavior).toBe("allow");
+    // Cleanup removed the live control. Retaining the transcript does not
+    // authorize implementation when the selected mode cannot be applied.
+    expect(await toolPromise).toMatchObject({
+      behavior: "deny",
+      message: expect.stringContaining("Plan mode could not be exited safely"),
+    });
+    expect(state.planMode).toBe(true);
     call.finish();
     await promptPromise;
   });

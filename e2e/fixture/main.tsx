@@ -11,6 +11,7 @@ import { BackgroundTaskOutcomeFixture } from "./BackgroundTaskOutcomeFixture";
 import { ConnectionsSettingsFixture } from "./ConnectionsSettingsFixture";
 import { DesignCanvasFixture } from "./DesignCanvasFixture";
 import { MenuPlacementFixture } from "./MenuPlacementFixture";
+import { ComposerIconPickersFixture } from "./ComposerIconPickersFixture";
 import { ReadCoordinatorFixture } from "./ReadCoordinatorFixture";
 import { CoordinatorPaneTreeFixture } from "./CoordinatorPaneTreeFixture";
 import { StreamingTranscriptFixture } from "./StreamingTranscriptFixture";
@@ -1684,6 +1685,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/diff-viewer") return <DiffViewerFixture />;
   if (window.location.pathname === "/native-compose") return <NativeComposeFixture />;
   if (window.location.pathname === "/menu-placement") return <MenuPlacementFixture />;
+  if (window.location.pathname === "/composer-icon-pickers") return <ComposerIconPickersFixture />;
   if (window.location.pathname === "/agent-model-picker") return <AgentModelPickerFixture />;
   if (window.location.pathname === "/mobile-shell") return <MobileAppShellFixture />;
   if (window.location.pathname === "/path-truncation") return <PathTruncationFixture />;

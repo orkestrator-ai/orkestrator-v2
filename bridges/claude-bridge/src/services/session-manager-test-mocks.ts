@@ -229,6 +229,7 @@ export const mockQuery = mock((args: { prompt: unknown; options: QueryCall["opti
 
   const generator = iter();
   return Object.assign(generator, {
+    setPermissionMode: async (_mode: string) => {},
     supportedModels: async () => [
       {
         value: "claude-opus-mock",

@@ -32,6 +32,7 @@ import type { HeldSdkPrompt } from "./session-manager-persistence.js";
 import type { ClaudeRuntimeMcp } from "./session-manager-prompt-mcp-sync.js";
 import type { ToolTracker } from "./session-manager-messages.js";
 import {
+  claudeAsksForApproval,
   claudePolicyPermissionMode,
   claudeSettingSources,
   claudeTurnPolicy,
@@ -133,6 +134,12 @@ export function claudeLaunchProfile(
     cwd: claudeWorkspaceCwd(),
     boundary: JSON.stringify({
       policy: policy ?? null,
+      // The allow list narrows to reading tools when the user approves the
+      // rest, so switching approval modes across that line needs a new CLI.
+      // An `ask` policy is already distinguished by the policy itself.
+      ...(policy?.approvals !== "ask" && claudeAsksForApproval(policy, options)
+        ? { asksForApproval: true }
+        : {}),
       // A coordinator's allow-list names the Orkestrator MCP server only when
       // the turn has one.
       ...(isCoordinatorReadOnlyPolicy(policy) ? { agentMcp: options?.agentMcp !== undefined } : {}),

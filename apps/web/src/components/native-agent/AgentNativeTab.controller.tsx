@@ -20,6 +20,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { AgentThinkingIndicator } from "@/components/chat/AgentThinkingIndicator";
+import {
+  approvalModeIconOption,
+  ComposerIconPicker,
+  conversationModeIconOption,
+} from "@/components/chat/ComposerIconPicker";
 import { FileMentionMenu } from "@/components/chat/FileMentionMenu";
 import type { MentionableInputRef } from "@/components/chat/MentionableInput";
 import { NativeAttachmentMenu } from "@/components/chat/NativeAttachmentMenu";
@@ -2874,68 +2879,47 @@ export function SharedNativeAgentController({
                   );
                 })}
                 {!isReadOnlyCoordinator && composer.modes.length > 0 ? (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <button
-                        type="button"
-                        disabled={settingsLocked}
-                        className="flex h-7 items-center gap-1 rounded-lg bg-elevated px-2 text-xs text-foreground transition-colors hover:bg-elevated-hover disabled:cursor-not-allowed disabled:opacity-50"
-                        title="Choose mode"
-                      >
-                        <ChevronDown className="h-3 w-3" />
-                        <span>{composer.selectedModeId === "plan" ? "Plan" : "Build"}</span>
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start">
-                      <DropdownMenuRadioGroup
-                        value={composer.selectedModeId ?? "build"}
-                        onValueChange={(mode) => {
-                          void updateControlsSafely({ mode: mode as "build" | "plan" });
-                        }}
-                      >
-                        {composer.modes.map((mode) => (
-                          <DropdownMenuRadioItem key={mode.id} value={mode.id}>
-                            {mode.label}
-                          </DropdownMenuRadioItem>
-                        ))}
-                      </DropdownMenuRadioGroup>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                  <ComposerIconPicker
+                    label="Mode"
+                    testId="native-mode-picker"
+                    disabled={settingsLocked}
+                    options={composer.modes.map((mode) =>
+                      conversationModeIconOption(mode.id, mode.label),
+                    )}
+                    value={composer.selectedModeId ?? "build"}
+                    onValueChange={(mode) => {
+                      void updateControlsSafely({ mode: mode as "build" | "plan" });
+                    }}
+                  />
                 ) : !isReadOnlyCoordinator && composeExecutionProfiles.length > 0 ? (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <button
-                        type="button"
-                        disabled={settingsLocked}
-                        className="flex h-7 items-center gap-1 rounded-lg bg-elevated px-2 text-xs text-foreground transition-colors hover:bg-elevated-hover disabled:cursor-not-allowed disabled:opacity-50"
-                        title="Choose mode"
-                      >
-                        <ChevronDown className="h-3 w-3" />
-                        <span>
-                          {nativeComposeProfileLabel(
-                            selectedComposeProfileId,
-                            composeExecutionProfiles.find(
-                              (profile) => profile.id === selectedComposeProfileId,
-                            )?.label,
-                          )}
-                        </span>
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start">
-                      <DropdownMenuRadioGroup
-                        value={selectedComposeProfileId}
-                        onValueChange={(executionProfileId) => {
-                          void updateControlsSafely({ executionProfileId });
-                        }}
-                      >
-                        {composeExecutionProfiles.map((profile) => (
-                          <DropdownMenuRadioItem key={profile.id} value={profile.id}>
-                            {nativeComposeProfileLabel(profile.id, profile.label)}
-                          </DropdownMenuRadioItem>
-                        ))}
-                      </DropdownMenuRadioGroup>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                  <ComposerIconPicker
+                    label="Mode"
+                    testId="native-execution-profile-picker"
+                    disabled={settingsLocked}
+                    options={composeExecutionProfiles.map((profile) =>
+                      conversationModeIconOption(
+                        profile.id,
+                        nativeComposeProfileLabel(profile.id, profile.label),
+                        "description" in profile ? profile.description : undefined,
+                      ),
+                    )}
+                    value={selectedComposeProfileId}
+                    onValueChange={(executionProfileId) => {
+                      void updateControlsSafely({ executionProfileId });
+                    }}
+                  />
+                ) : null}
+                {!isReadOnlyCoordinator && composer.approvalModes?.length ? (
+                  <ComposerIconPicker
+                    label="Approvals"
+                    testId="native-approval-mode-picker"
+                    disabled={settingsLocked}
+                    options={composer.approvalModes.map(approvalModeIconOption)}
+                    value={composer.selectedApprovalModeId}
+                    onValueChange={(approvalMode) => {
+                      void updateControlsSafely({ approvalMode });
+                    }}
+                  />
                 ) : null}
               </>
             ) : null

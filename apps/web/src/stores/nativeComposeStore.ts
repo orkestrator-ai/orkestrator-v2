@@ -70,6 +70,8 @@ export interface NativeComposeDraft {
    * narrowed to the two the launcher offers by default.
    */
   executionProfileId?: string;
+  /** Launcher-only: the approval mode the first prompt creates its session with. */
+  approvalMode?: string;
   commandSelection?: NativeCommandSelection;
 }
 
@@ -202,6 +204,7 @@ function persistedDraftMetadata(draft: NativeComposeDraft): Readonly<Record<stri
     fastMode: draft.fastMode,
     mode: draft.mode,
     ...(draft.executionProfileId ? { executionProfileId: draft.executionProfileId } : {}),
+    ...(draft.approvalMode ? { approvalMode: draft.approvalMode } : {}),
     ...(draft.commandSelection ? { commandSelection: draft.commandSelection } : {}),
   });
   DRAFT_METADATA_CACHE.set(draft, metadata);
@@ -216,6 +219,7 @@ function hasPersistableDraftMetadata(draft: NativeComposeDraft): boolean {
     draft.requestId ||
     draft.pendingTranscriptConfirmation ||
     draft.executionProfileId ||
+    draft.approvalMode ||
     draft.commandSelection,
   );
 }
@@ -268,6 +272,12 @@ function restoreDraftMetadata(value: unknown): Partial<NativeComposeDraft> | und
     metadata.executionProfileId.length <= 256
       ? metadata.executionProfileId
       : undefined;
+  const approvalMode =
+    typeof metadata.approvalMode === "string" &&
+    metadata.approvalMode.trim().length > 0 &&
+    metadata.approvalMode.length <= 64
+      ? metadata.approvalMode
+      : undefined;
   const pendingTranscriptConfirmation = restorePendingTranscriptConfirmation(
     metadata.pendingTranscriptConfirmation,
   );
@@ -281,6 +291,7 @@ function restoreDraftMetadata(value: unknown): Partial<NativeComposeDraft> | und
     fastMode === undefined &&
     !mode &&
     !executionProfileId &&
+    !approvalMode &&
     !commandSelection
   )
     return undefined;
@@ -293,6 +304,7 @@ function restoreDraftMetadata(value: unknown): Partial<NativeComposeDraft> | und
     fastMode,
     mode,
     executionProfileId,
+    approvalMode,
     ...(commandSelection ? { commandSelection } : {}),
   };
 }

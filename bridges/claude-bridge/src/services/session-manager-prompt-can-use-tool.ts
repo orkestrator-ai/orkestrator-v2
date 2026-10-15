@@ -1,7 +1,11 @@
 import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 import type { PlanApprovalRequest, QuestionInfo, QuestionRequest } from "../types/index.js";
-import { claudeTurnPolicy } from "./claude-query-config.js";
+import {
+  claudeAsksForApproval,
+  claudePermissionMode,
+  claudeTurnPolicy,
+} from "./claude-query-config.js";
 import { eventEmitter } from "./event-emitter.js";
 import { debugLog } from "./logger.js";
 import {
@@ -17,6 +21,7 @@ import {
 } from "./session-manager-core.js";
 import { canAdmitInteraction } from "./session-manager-interaction-budget.js";
 import { claudeWorkflowResultTools } from "./claude-workflow-result-tools.js";
+import { abortSession } from "./session-manager-lifecycle.js";
 import { requestClaudeToolApproval } from "./session-manager-parked-interactions.js";
 import type { TurnState } from "./session-manager-prompt-turn.js";
 
@@ -222,8 +227,27 @@ export async function turnCanUseTool(
         // Approval ends plan mode; record it so the preference the
         // next prompt rehydrates from matches what the UI shows.
         try {
+          const control = session.queryControl;
+          if (!control?.setPermissionMode)
+            throw new Error("Claude permission control is unavailable");
+          await control.setPermissionMode(
+            claudePermissionMode(
+              claudeTurnPolicy(session.executionPolicy, turn.options?.readOnly),
+              turn.options?.approvalMode,
+            ),
+          );
           await applySessionPlanMode(session, false);
         } catch (error) {
+          // A rejected control request may already have reached the CLI. Restore
+          // plan mode, or stop the runtime if that boundary cannot be confirmed.
+          try {
+            const control = session.queryControl;
+            if (!control?.setPermissionMode)
+              throw new Error("Claude permission control is unavailable");
+            await control.setPermissionMode("plan");
+          } catch {
+            abortSession(sessionId);
+          }
           const message = error instanceof Error ? error.message : "Failed to persist plan mode";
           return {
             behavior: "deny" as const,
@@ -285,18 +309,20 @@ export async function turnCanUseTool(
     }
   }
 
-  // An `ask` policy means the user decides, and a `deny` policy refuses
-  // anything outside its allow list. Questions and plan approvals are handled
-  // above, so a denying session can still ask the user. Under `auto-approve`
-  // the mode already chose not to ask, so a tool that still reaches here runs.
+  // An `ask` policy or an asking approval mode means the user decides, and a
+  // `deny` policy refuses anything outside its allow list. Questions and plan
+  // approvals are handled above, so a denying session can still ask the user.
+  // Otherwise the mode already chose not to ask, so a tool that still reaches
+  // here runs.
   if (
     claudeWorkflowResultTools(turn.mcpServerNames).includes(toolName) &&
     !session.executionPolicy?.toolPolicy?.deny?.includes(toolName)
   ) {
     return { behavior: "allow", updatedInput: input };
   }
-  const approvals = claudeTurnPolicy(session.executionPolicy, turn.options?.readOnly)?.approvals;
-  if (approvals === "ask") {
+  const turnPolicy = claudeTurnPolicy(session.executionPolicy, turn.options?.readOnly);
+  const approvals = turnPolicy?.approvals;
+  if (claudeAsksForApproval(turnPolicy, turn.options)) {
     return requestClaudeToolApproval(sessionId, toolName, input, permissionContext);
   }
   if (approvals === "deny") {

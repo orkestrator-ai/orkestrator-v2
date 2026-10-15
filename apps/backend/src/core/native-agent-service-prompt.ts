@@ -135,6 +135,7 @@ import { unsupportedCommandCatalogueState } from "@orkestrator/protocol/agent-co
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
 import {
   nativeAgentCapabilities,
+  resolveNativeAgentApprovalMode,
   type NativeAgentCommandIntent,
 } from "@orkestrator/protocol/native-agent";
 import { commandCatalogueKey } from "./native-agent-command-catalogue.js";
@@ -962,6 +963,11 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
                     : (preparation.effort ?? input.reasoningEffort),
                 parameterValues: durable.controls?.parameterValues,
                 persistDefaults: durable.controls?.persistDefaults,
+                approvalMode: resolveNativeAgentApprovalMode(
+                  durable.agent,
+                  durable.policy,
+                  durable.controls?.approvalMode,
+                ),
                 agentMcp,
               });
               // Provider acceptance is the authoritative working edge. Record it

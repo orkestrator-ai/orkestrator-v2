@@ -26,6 +26,7 @@ import { registerMcpReloadRoute } from "./mcp-reload-route.js";
 import { registerSessionCloseRoute } from "./session-close-route.js";
 import { registerSessionActivityBatchRoute } from "./session-activity-batch-route.js";
 import { registerCodexTranscriptRoutes } from "./transcript-routes.js";
+import { isCodexApprovalMode } from "./codex-approval-mode.js";
 import {
   generateSessionTitleWithCodexExec,
   shutdownSessionTitleGeneration,
@@ -1353,6 +1354,7 @@ app.post("/session/:id/prompt", async (c) => {
   const readOnly = body.readOnly;
   const agentMcp = body.agentMcp;
   const workflowResultTool = body.workflowResultTool;
+  const approvalMode = body.approvalMode;
   const rawAttachments = Array.isArray(body.attachments) ? body.attachments : [];
   if (
     rawAttachments.some(
@@ -1396,6 +1398,9 @@ app.post("/session/:id/prompt", async (c) => {
   if (workflowResultTool !== undefined && !isScopedAgentMcp(agentMcp)) {
     return c.json({ error: "workflowResultTool requires agentMcp" }, 400);
   }
+  if (approvalMode !== undefined && !isCodexApprovalMode(approvalMode)) {
+    return c.json({ error: "approvalMode is not a Codex approval mode" }, 400);
+  }
   const commandFields = readBridgePromptCommandFields(
     body && typeof body === "object" && !Array.isArray(body) ? body : {},
   );
@@ -1409,6 +1414,7 @@ app.post("/session/:id/prompt", async (c) => {
     ...(typeof readOnly === "boolean" ? { readOnly } : {}),
     ...(isScopedAgentMcp(agentMcp) ? { agentMcp } : {}),
     ...(typeof workflowResultTool === "string" ? { workflowResultTool } : {}),
+    ...(isCodexApprovalMode(approvalMode) ? { approvalMode } : {}),
     ...(commandFields.allowProviderCommands ? {} : { allowProviderCommands: false }),
     ...(commandFields.command ? { command: commandFields.command } : {}),
   });

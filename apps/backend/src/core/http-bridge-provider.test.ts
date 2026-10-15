@@ -1775,6 +1775,57 @@ describe("HTTP bridge provider", () => {
     expect(JSON.parse(String(requests[0]!.init.body)).permissionMode).toBe("plan");
   });
 
+  test("runs Claude build turns in the session's approval mode", async () => {
+    const { provider, requests } = httpProvider(() => new Response(null, { status: 204 }));
+
+    await provider.send("session-1", "Edit it", {
+      requestId: "request-build",
+      mode: "build",
+      approvalMode: "default",
+      parameterValues: { permissionMode: "bypassPermissions" },
+    });
+    await provider.send("session-1", "Plan it", {
+      requestId: "request-plan",
+      mode: "plan",
+      approvalMode: "acceptEdits",
+    });
+
+    expect(JSON.parse(String(requests[0]!.init.body))).toMatchObject({
+      permissionMode: "default",
+      approvalMode: "default",
+    });
+    // The plan turn still carries the approval mode for after the plan is accepted.
+    expect(JSON.parse(String(requests[1]!.init.body))).toMatchObject({
+      permissionMode: "plan",
+      approvalMode: "acceptEdits",
+    });
+  });
+
+  test("approval-only Codex updates do not reset plan, fast mode or model configuration", async () => {
+    const { provider, requests } = httpProvider(() => Response.json({ ok: true }), codexConnection);
+    await provider.updateInteractiveControls!("codex-1", { approvalMode: "untrusted" });
+    expect(requests).toHaveLength(0);
+    await provider.updateInteractiveControls!("codex-1", {
+      fastMode: false,
+      approvalMode: "on-request",
+    });
+    expect(JSON.parse(String(requests[0]!.init.body))).toEqual({ fastMode: false });
+  });
+
+  test("forwards the Codex approval mode with each prompt", async () => {
+    const { provider, requests } = httpProvider(
+      () => Response.json({ status: "processing" }),
+      codexConnection,
+    );
+
+    await provider.send("codex-1", "Edit it", {
+      requestId: "request-1",
+      approvalMode: "auto-review",
+    });
+
+    expect(JSON.parse(String(requests[0]!.init.body)).approvalMode).toBe("auto-review");
+  });
+
   test("rejects malformed session creation responses", async () => {
     const { provider } = httpProvider(() => Response.json({}));
     await expect(provider.createSession("build", "Build task")).rejects.toThrow(

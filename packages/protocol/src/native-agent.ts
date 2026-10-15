@@ -462,6 +462,143 @@ export interface NativeAgentComposerState {
   parameterValues?: Record<string, string | boolean>;
   /** True when the provider can make the current selections its future defaults. */
   persistedDefaults?: boolean;
+  /** The provider's own approval modes, capped by the session's execution policy. */
+  approvalModes?: NativeAgentApprovalModeOption[];
+  selectedApprovalModeId?: string;
+}
+
+/**
+ * How much an approval mode lets the agent do before it asks.
+ *
+ * Ordered from most to least supervised. The renderer picks each option's
+ * icon from it, and the execution policy caps a session by it, so a provider
+ * mode is placed by what it does rather than by what its SDK calls it.
+ */
+export const NATIVE_AGENT_APPROVAL_MODE_KINDS = [
+  "ask",
+  "auto-edits",
+  "auto-review",
+  "auto-approve",
+] as const;
+export type NativeAgentApprovalModeKind = (typeof NATIVE_AGENT_APPROVAL_MODE_KINDS)[number];
+
+export interface NativeAgentApprovalModeOption {
+  /** The SDK's own value, forwarded to the bridge unchanged. */
+  id: string;
+  label: string;
+  description: string;
+  kind: NativeAgentApprovalModeKind;
+  /** Set when the session's execution policy does not allow this mode. */
+  disabled?: boolean;
+}
+
+/**
+ * Approval modes each SDK offers, in its own vocabulary.
+ *
+ * Claude's are `permissionMode` values; `plan` lives on the build/plan axis and
+ * `dontAsk` is the read-only turn's mode, so neither is offered here. Codex's
+ * are `approvalPolicy` values, plus `auto-review`: `on-request` with approvals
+ * routed to Codex's reviewer agent rather than to the user.
+ */
+const NATIVE_AGENT_APPROVAL_MODES: Readonly<
+  Partial<Record<AgentPlatform, readonly NativeAgentApprovalModeOption[]>>
+> = Object.freeze({
+  claude: [
+    {
+      id: "default",
+      label: "Ask",
+      description: "Ask before editing files or running commands",
+      kind: "ask",
+    },
+    {
+      id: "acceptEdits",
+      label: "Accept edits",
+      description: "Apply file edits without asking; ask before running commands",
+      kind: "auto-edits",
+    },
+    {
+      id: "auto",
+      label: "Auto",
+      description: "A model reviews each action, approving safe ones and blocking risky ones",
+      kind: "auto-review",
+    },
+    {
+      id: "bypassPermissions",
+      label: "Bypass",
+      description: "Approve everything without asking",
+      kind: "auto-approve",
+    },
+  ],
+  codex: [
+    {
+      id: "untrusted",
+      label: "Untrusted",
+      description: "Ask before running any command Codex does not trust",
+      kind: "ask",
+    },
+    {
+      id: "on-request",
+      label: "On request",
+      description: "Work in a sandbox; Codex asks before stepping outside it",
+      kind: "ask",
+    },
+    {
+      id: "auto-review",
+      label: "Auto review",
+      description: "Work in a sandbox; a reviewer agent decides when Codex may step outside it",
+      kind: "auto-review",
+    },
+    {
+      id: "never",
+      label: "Full access",
+      description: "Never ask; run everything",
+      kind: "auto-approve",
+    },
+  ],
+});
+
+/**
+ * The approval modes a session can choose from, or none when its policy leaves
+ * no choice. `deny` already refuses everything, and an `ask` policy keeps a
+ * person in the loop, so only the asking modes stay selectable under it.
+ */
+export function nativeAgentApprovalModes(
+  agent: AgentPlatform,
+  policy: Pick<NativeAgentExecutionPolicy, "approvals"> | undefined,
+): NativeAgentApprovalModeOption[] {
+  const modes = NATIVE_AGENT_APPROVAL_MODES[agent];
+  if (!modes || policy?.approvals === "deny") return [];
+  return modes.map((mode) =>
+    policy?.approvals === "ask" && mode.kind !== "ask" ? { ...mode, disabled: true } : { ...mode },
+  );
+}
+
+/**
+ * The mode a session runs in until someone picks one: what the policy alone
+ * implied before approval modes were selectable, so nothing changes for a
+ * session that never touches the control.
+ */
+export function defaultNativeAgentApprovalMode(
+  agent: AgentPlatform,
+  policy: Pick<NativeAgentExecutionPolicy, "approvals"> | undefined,
+): string | undefined {
+  const modes = nativeAgentApprovalModes(agent, policy);
+  if (modes.length === 0) return undefined;
+  if (agent === "claude") return policy?.approvals === "ask" ? "default" : "bypassPermissions";
+  if (agent === "codex") return policy?.approvals === "ask" ? "on-request" : "never";
+  return modes.find((mode) => !mode.disabled)?.id;
+}
+
+/** The selectable mode `requested` names, or the policy's default. */
+export function resolveNativeAgentApprovalMode(
+  agent: AgentPlatform,
+  policy: Pick<NativeAgentExecutionPolicy, "approvals"> | undefined,
+  requested: string | undefined,
+): string | undefined {
+  const selectable = nativeAgentApprovalModes(agent, policy).some(
+    (mode) => mode.id === requested && !mode.disabled,
+  );
+  return selectable ? requested : defaultNativeAgentApprovalMode(agent, policy);
 }
 
 export const EMPTY_NATIVE_AGENT_COMPOSER_STATE: NativeAgentComposerState = {
@@ -1807,6 +1944,8 @@ export interface NativeAgentControlUpdate {
   parameterValues?: Record<string, string | boolean>;
   /** Persist the supplied selections where the provider supports defaults. */
   persistDefaults?: boolean;
+  /** An id from the composer's `approvalModes`. */
+  approvalMode?: string;
 }
 
 /**

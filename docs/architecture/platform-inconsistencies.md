@@ -114,6 +114,7 @@ verified. **partial** = present but weaker, different, or vendor-dependent.
 | Steer | **full** | none | **full** | **full** | none | none |
 | Native “Review changes” | none | none | **full** | none | none | none |
 | Questions | full | full (own cards) | partial | partial | partial | full |
+| Approval mode picker | **partial** (`permissionMode`; not browser-qualified) | none | **partial** (`approvalPolicy` + reviewer; not browser-qualified) | none | none | none |
 | Tool approvals | auto-approve by default; **partial** fail-closed cards under `ask`, refusal outside the allow list under `deny` (not browser-qualified) | **fail-closed hooks** | fail-closed | fail-closed cards; CLI `--force` | `--always-approve` | full |
 | Plan-exit UI | plan-approval card | own plan card | `CodexPlanModeCard` | permission/mode | permission/mode | none |
 | MCP elicitations | **partial** form and URL cards (not browser-qualified) | **full** | Codex interactions | none | none | none |

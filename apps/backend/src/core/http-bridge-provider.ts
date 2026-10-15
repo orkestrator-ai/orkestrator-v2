@@ -1016,6 +1016,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
             ...(update.mode ? { mode: update.mode } : {}),
             ...(update.fastMode === undefined ? {} : { fastMode: update.fastMode }),
             ...(update.parameterValues ? { parameterValues: update.parameterValues } : {}),
+            ...(update.approvalMode ? { approvalMode: update.approvalMode } : {}),
           }),
         },
         this.fetchImpl,
@@ -1024,6 +1025,14 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       return undefined;
     }
     if (this.agent === "codex") {
+      // Approval-only changes are persisted by the backend, then sent with the turn.
+      const hasConfig = [
+        update.modelId,
+        update.reasoningId,
+        update.mode,
+        update.parameterValues,
+      ].some(Boolean);
+      if (!hasConfig && update.fastMode === undefined) return undefined;
       const response = await bridgeFetch(
         this.connection,
         `/session/${encodeURIComponent(sessionId)}/config`,

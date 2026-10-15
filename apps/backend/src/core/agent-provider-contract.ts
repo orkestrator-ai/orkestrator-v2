@@ -290,6 +290,11 @@ export interface ProviderSendOptions {
   parameterValues?: Record<string, string | boolean>;
   persistDefaults?: boolean;
   /**
+   * The session's approval mode, in the provider's own vocabulary. Absent
+   * means the execution policy alone decides, as it always did.
+   */
+  approvalMode?: string;
+  /**
    * False is literal intent: the provider must not interpret the prompt as a
    * command. Providers without a native suppression mechanism are guarded by
    * the backend before dispatch (see `literalCommandSuppression`).

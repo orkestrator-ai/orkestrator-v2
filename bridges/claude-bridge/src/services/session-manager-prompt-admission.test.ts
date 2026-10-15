@@ -182,3 +182,30 @@ describe("prompt admission", () => {
     expect(session.messages).toBe(before);
   });
 });
+
+test.each(["default", "acceptEdits", "auto"] as const)(
+  "a %s build selection exits plan mode only when it matches approvalMode",
+  (mode) => {
+    expect(
+      promptPlanModeChange(bareSession({ planMode: true }), {
+        permissionMode: mode,
+        approvalMode: mode,
+      }),
+    ).toBe(false);
+    expect(
+      promptPlanModeChange(bareSession({ planMode: false }), {
+        permissionMode: mode,
+        approvalMode: mode,
+      }),
+    ).toBeUndefined();
+    expect(
+      promptPlanModeChange(bareSession({ planMode: true }), { permissionMode: mode }),
+    ).toBeUndefined();
+    expect(
+      promptPlanModeChange(bareSession({ planMode: true }), {
+        permissionMode: "dontAsk",
+        approvalMode: mode,
+      }),
+    ).toBeUndefined();
+  },
+);

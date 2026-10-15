@@ -1691,6 +1691,53 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test("offers the provider's approval modes and runs prompts in the chosen one", async () => {
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+      updateInteractiveControls: async () => undefined,
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-projection-approvals-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-approvals",
+        };
+        await service.ensureSession(identity);
+        const projection = await service.getProjection(identity);
+        expect(projection?.composer?.approvalModes?.map((mode) => mode.id)).toEqual([
+          "untrusted",
+          "on-request",
+          "auto-review",
+          "never",
+        ]);
+        // Until someone picks, the session runs as its policy always did.
+        expect(projection?.composer?.selectedApprovalModeId).toBe("never");
+
+        await expect(
+          service.updateProjectionControls({ ...identity, update: { approvalMode: "yolo" } }),
+        ).rejects.toThrow("Native agent approval mode is invalid");
+
+        const updated = await service.updateProjectionControls({
+          ...identity,
+          update: { approvalMode: "untrusted" },
+        });
+        expect(updated?.composer?.selectedApprovalModeId).toBe("untrusted");
+
+        await service.dispatchPrompt({
+          ...identity,
+          prompt: "Change it",
+          requestId: "request-approvals",
+        });
+        expect(stub.send.mock.calls[0]?.[2]).toMatchObject({ approvalMode: "untrusted" });
+      },
+    );
+  });
+
   test("keeps a stored OpenCode model when the connected catalog only has the default", async () => {
     const stub = createProviderStub("opencode", {
       interactiveSnapshot: async () => ({

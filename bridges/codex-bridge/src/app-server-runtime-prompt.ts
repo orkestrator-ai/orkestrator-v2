@@ -15,6 +15,7 @@ import { SESSION_CLOSING_ERROR, type CodexRuntimeSessions } from "./app-server-r
 import type { AppServerEngine } from "./engine/app-server-engine.js";
 
 import type { EngineGeneration, EngineTurnConfig, EngineUserInput } from "./engine/types.js";
+import { codexApprovalConfig, type CodexApprovalMode } from "./codex-approval-mode.js";
 import {
   OverlappingTurnError,
   phaseToExternalStatus,
@@ -90,6 +91,8 @@ export class CodexRuntimePrompt {
       readOnly?: boolean;
       agentMcp?: { url: string; token: string; design?: boolean };
       workflowResultTool?: string;
+      /** The session's composer approval mode. */
+      approvalMode?: CodexApprovalMode;
       /** `false` is literal intent: no bridge command resolution at all. */
       allowProviderCommands?: boolean;
       /** A selection resolved against this bridge's own catalogue. */
@@ -144,6 +147,8 @@ export class CodexRuntimePrompt {
       readOnly?: boolean;
       agentMcp?: { url: string; token: string; design?: boolean };
       workflowResultTool?: string;
+      /** The session's composer approval mode. */
+      approvalMode?: CodexApprovalMode;
       /** `false` is literal intent: no bridge command resolution at all. */
       allowProviderCommands?: boolean;
       /** A selection resolved against this bridge's own catalogue. */
@@ -360,13 +365,29 @@ export class CodexRuntimePrompt {
     // and workflow-result approval only to this dispatch.
     const promptConfig = (): EngineTurnConfig => ({
       ...session.config,
-      ...(input.readOnly ? { sandbox: "read-only", approvalPolicy: "never" } : {}),
+      ...codexApprovalConfig(session.config.policy, session.config.sandbox, input.approvalMode),
+      ...(input.readOnly
+        ? { sandbox: "read-only", approvalPolicy: "never", approvalsReviewer: "user" }
+        : {}),
       ...(input.workflowResultTool ? { workflowResultTool: input.workflowResultTool } : {}),
     });
-    if (context && !context.materialized && input.workflowResultTool) {
+    const mcpApprovalConfig = (config: EngineTurnConfig): string | undefined =>
+      config.agentMcp
+        ? JSON.stringify([
+            config.approvalPolicy ?? "never",
+            config.approvalsReviewer ?? "user",
+            config.policy?.approvals,
+            config.sandbox,
+            config.permissionProfile,
+            config.workflowResultTool,
+          ])
+        : undefined;
+    const needsMcpReload = (config: EngineTurnConfig): boolean =>
+      Boolean(input.workflowResultTool) || context?.mcpApprovalConfig !== mcpApprovalConfig(config);
+    if (context && !context.materialized && needsMcpReload(promptConfig())) {
       // A thread that was never prompted has no rollout, so reloading it for
-      // the result turn's configuration would lose it. Release it and start
-      // the result turn on a fresh thread that carries that configuration.
+      // changed MCP approvals would lose it. Release it and start a fresh
+      // thread that carries the selected configuration.
       await this.lifecycle.detachThread(context);
       context = undefined;
     }
@@ -398,12 +419,13 @@ export class CodexRuntimePrompt {
     // Re-read after thread/start: updateConfig can be accepted while that RPC is
     // in flight, and turn/start must use the configuration that won that race.
     const turnConfig = promptConfig();
-    if (hadAttachedContext && input.workflowResultTool) {
+    if (hadAttachedContext && needsMcpReload(turnConfig)) {
       // app-server's turn/start protocol has no `config` field. Reload an
-      // already attached thread so the attempt-scoped MCP server and its narrow
-      // approval mode are applied before the result turn starts.
+      // already attached thread so MCP tools follow the selected reviewer and
+      // attempt-scoped workflow permissions before dispatch.
       context = await this.resumeThreadForPrompt(session.id, context, turnConfig);
     }
+    context.mcpApprovalConfig = mcpApprovalConfig(turnConfig);
     if (input.workflowResultTool && turnConfig.agentMcp) {
       // The turn can only finish by calling this tool. Without it the model
       // runs to the end and pastes its result as text, which the backend waits
@@ -678,12 +700,13 @@ export class CodexRuntimePrompt {
             assistantMessage.modelId = thread.model;
           }
         }
-        if (input.workflowResultTool && context === reboundContext) {
+        if (context === reboundContext && needsMcpReload(turnConfig)) {
           // Generation recovery resumes with the durable session config, which
-          // intentionally omits this one-turn approval. Reapply it before the
+          // omits prompt-scoped approval overrides. Reapply them before the
           // retry enters the ambiguous turn/start window.
           context = await this.resumeThreadForPrompt(session.id, context, turnConfig);
         }
+        context.mcpApprovalConfig = mcpApprovalConfig(turnConfig);
         // Close the overlap window before the first await below, exactly as the
         // main dispatch path does. Recovery leaves a re-attached thread `idle`
         // with `turnStartedAt` cleared, so this also restores the busy state a
@@ -890,7 +913,7 @@ export class CodexRuntimePrompt {
   }
 
   /**
-   * Applies a result turn's thread-scoped configuration to an attached thread.
+   * Applies the prompt's thread-scoped MCP configuration to an attached thread.
    * A plain `thread/resume` would rejoin the loaded thread and keep its old MCP
    * servers, so this reloads it (see `AppServerEngine.reloadThread`).
    */

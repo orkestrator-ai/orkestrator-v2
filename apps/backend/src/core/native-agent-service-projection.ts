@@ -26,6 +26,8 @@ import {
   type NativeAgentContextUsage,
   type NativeAgentNotice,
   isNativeInlineErrorMessageId,
+  nativeAgentApprovalModes,
+  resolveNativeAgentApprovalMode,
 } from "@orkestrator/protocol/native-agent";
 import {
   parseCoordinatorDelegatedPrompt,
@@ -3967,6 +3969,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         executionProfiles.some((profile) => profile.id === storedExecutionProfileId))
         ? storedExecutionProfileId
         : undefined;
+    const approvalModes = nativeAgentApprovalModes(input.agent, session.policy);
+    const selectedApprovalModeId = resolveNativeAgentApprovalMode(
+      input.agent,
+      session.policy,
+      providerControls?.approvalMode ?? session.controls?.approvalMode,
+    );
     return {
       models,
       ...(resolvedSelection.selectedModelId
@@ -4040,6 +4048,9 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       ...(providerComposer?.persistedDefaults === undefined
         ? {}
         : { persistedDefaults: providerComposer.persistedDefaults }),
+      ...(approvalModes.length > 0 && selectedApprovalModeId
+        ? { approvalModes, selectedApprovalModeId }
+        : {}),
     };
   }
 

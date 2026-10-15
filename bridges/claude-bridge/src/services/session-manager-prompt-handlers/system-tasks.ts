@@ -3,15 +3,24 @@ import type { BackgroundTaskSnapshot, SessionState } from "../../types/index.js"
 import { eventEmitter } from "../event-emitter.js";
 import {
   LIVE_BACKGROUND_TASK_STATUSES,
+  RUN_SCOPED_TASK_METADATA_RESET,
   boundBackgroundTaskHistory,
+  carriedTaskMetadata,
   closeQueryControlIfUnused,
   inheritBackgroundTaskHookRun,
   isHookRunningBackgroundTask,
   parkSettlingBackgroundTask,
+  shellCommandField,
   takeProvisionalBackgroundTask,
   takeSettlingBackgroundTask,
+  taskMessageMetadata,
 } from "../session-manager-background-tasks.js";
-import { persistedBackgroundTaskMessage, persistedTaskUsage } from "../session-manager-messages.js";
+import {
+  persistedBackgroundTaskMessage,
+  persistedTaskIdentifier,
+  persistedTaskName,
+  persistedTaskUsage,
+} from "../session-manager-messages.js";
 import { waitForContinuationAfterNotification } from "../session-manager-prompt-turn-lifecycle.js";
 import type { TurnState } from "../session-manager-prompt-turn.js";
 
@@ -39,6 +48,8 @@ interface TaskSystemMessage {
     description?: string;
     /** Agent SDK 0.3.296+: agent type, or `main-session`. */
     subagent_type?: unknown;
+    parent_task_id?: unknown;
+    ambient?: unknown;
   }>;
   patch?: {
     status?: BackgroundTaskSnapshot["status"];
@@ -55,6 +66,12 @@ function emitBackgroundTasks(turn: TurnState): void {
     sessionId: turn.sessionId,
     data: { backgroundTasks: turn.session.backgroundTasks },
   });
+}
+
+/** What an edge says about its task beyond its lifecycle, validated as on replay. */
+function taskEdgeMetadata(message: SDKMessage): ReturnType<typeof taskMessageMetadata> {
+  const parsed = persistedBackgroundTaskMessage({ message });
+  return parsed ? taskMessageMetadata(parsed) : {};
 }
 
 /** `task_started`, `task_progress` and `task_updated`: one run of a task changing state. */
@@ -89,6 +106,7 @@ export function handleTaskEdge(turn: TurnState, message: SDKMessage): void | "st
   const previous = resumedRun
     ? {
         ...stored,
+        ...RUN_SCOPED_TASK_METADATA_RESET,
         status: "running" as const,
         startedAt: Date.now(),
         endedAt: undefined,
@@ -125,7 +143,10 @@ export function handleTaskEdge(turn: TurnState, message: SDKMessage): void | "st
       previous && !LIVE_BACKGROUND_TASK_STATUSES.has(previous.status) && previous.usage
         ? previous.usage
         : (persistedTaskUsage(taskMessage.usage) ?? previous?.usage),
+    ...carriedTaskMetadata(previous),
+    ...taskEdgeMetadata(message),
   };
+  if (task.command === undefined) Object.assign(task, shellCommandField(session, task.toolUseId));
   inheritBackgroundTaskHookRun(previous, task);
   session.backgroundTasks = boundBackgroundTaskHistory({
     ...session.backgroundTasks,
@@ -207,6 +228,8 @@ export function handleTaskNotification(turn: TurnState, message: SDKMessage): vo
     outputFile: notification.output_file ?? previous?.outputFile,
     usage: notification.usage ?? previous?.usage,
     subagentType: previous?.subagentType,
+    ...carriedTaskMetadata(previous),
+    ...taskMessageMetadata(notification),
   };
   session.backgroundTasks = boundBackgroundTaskHistory({
     ...session.backgroundTasks,
@@ -282,6 +305,8 @@ export function handleBackgroundTasksChanged(turn: TurnState, message: SDKMessag
       typeof entry.subagent_type === "string" && entry.subagent_type.length > 0
         ? entry.subagent_type
         : previous?.subagentType;
+    const taskType = persistedTaskName(entry.task_type);
+    const parentTaskId = persistedTaskIdentifier(entry.parent_task_id);
     replacement[id] = {
       id,
       toolUseId: previous?.toolUseId,
@@ -293,6 +318,10 @@ export function handleBackgroundTasksChanged(turn: TurnState, message: SDKMessag
       startedAt: previous?.startedAt ?? Date.now(),
       ...(previous?.usage ? { usage: previous.usage } : {}),
       ...(subagentType ? { subagentType } : {}),
+      ...carriedTaskMetadata(previous),
+      ...(taskType ? { taskType } : {}),
+      ...(parentTaskId ? { parentTaskId } : {}),
+      ...(entry.ambient === true ? { ambient: true } : {}),
     };
     inheritBackgroundTaskHookRun(previous, replacement[id]!);
     // An id already owned by another live control keeps that owner:

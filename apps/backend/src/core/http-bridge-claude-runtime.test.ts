@@ -36,4 +36,50 @@ describe("normalizeClaudeBackgroundTasks", () => {
       { id: "long", status: "running" },
     ]);
   });
+
+  test("carries task metadata in neutral terms", () => {
+    const [task] = normalizeClaudeBackgroundTasks({
+      "shell-1": {
+        status: "killed",
+        taskType: "local_bash",
+        parentTaskId: "agent-1",
+        command: "bun test",
+        outputTail: "1 fail",
+        lastToolName: "Bash",
+        progressSummary: "  Running the suite  ",
+        pausedMs: 1500,
+        endReason: "worker_restart",
+        ambient: true,
+      },
+    })!;
+    expect(task).toMatchObject({
+      kind: "shell",
+      parentTaskId: "agent-1",
+      command: "bun test",
+      outputTail: "1 fail",
+      lastToolName: "Bash",
+      progressSummary: "Running the suite",
+      pausedMs: 1500,
+      endReason: "process-restart",
+      ambient: true,
+    });
+  });
+
+  test("names an unknown task kind other and drops unusable metadata", () => {
+    const [task] = normalizeClaudeBackgroundTasks({
+      odd: {
+        status: "running",
+        taskType: "dream",
+        parentTaskId: "bad\nid",
+        pausedMs: -1,
+        endReason: "boredom",
+        ambient: "yes",
+      },
+    })!;
+    expect(task?.kind).toBe("other");
+    expect(task?.parentTaskId).toBeUndefined();
+    expect(task?.pausedMs).toBeUndefined();
+    expect(task?.endReason).toBeUndefined();
+    expect(task?.ambient).toBeUndefined();
+  });
 });

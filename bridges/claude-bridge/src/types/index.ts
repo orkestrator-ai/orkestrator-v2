@@ -730,6 +730,14 @@ export interface SessionState {
    */
   backgroundTaskCandidates?: Map<string, ClaudeQueryControl>;
   /**
+   * Recent Bash commands by tool-use id, from the `PreToolUse` hook.
+   *
+   * No task message names a shell task's command, and a background
+   * subagent's tool calls never reach this stream, so this is what lets a
+   * task the CLI registers for one of those calls say what it runs. Bounded.
+   */
+  shellCommands?: Map<string, string>;
+  /**
    * Controls kept alive across a background-task notification.
    *
    * A terminal `task_notification` is injected back into the same root agent
@@ -890,6 +898,38 @@ export interface BackgroundTaskSnapshot {
    * hook; absent for shell and other non-agent tasks.
    */
   subagentType?: string;
+  /**
+   * The CLI's task kind: `local_bash`, `local_agent`, `local_workflow`,
+   * `remote_agent`, `mcp_task`, … From `task_started` or the level.
+   */
+  taskType?: string;
+  /**
+   * The subagent task whose agent launched this one. Absent when the main
+   * thread launched it, or the launcher is not itself a tracked task.
+   */
+  parentTaskId?: string;
+  /** The prompt an agent or workflow task was started with. */
+  prompt?: string;
+  /**
+   * The command a shell task runs. The CLI does not put it on any task
+   * message, so it is captured by the Bash `PreToolUse` hook; this is the
+   * only record of it for a command a background subagent ran.
+   */
+  command?: string;
+  /** Tail of a shell task's output, from its `PostToolUse` hook. */
+  outputTail?: string;
+  /** The workflow script's `meta.name`, for a `local_workflow` task. */
+  workflowName?: string;
+  /** Housekeeping the CLI asks hosts to keep out of the transcript. */
+  ambient?: boolean;
+  /** The tool the task's agent most recently ran, from `task_progress`. */
+  lastToolName?: string;
+  /** The live one-line status `task_progress` reports for the task. */
+  progressSummary?: string;
+  /** Total time the task spent paused, from `task_updated`. */
+  pausedMs?: number;
+  /** Why the task ended other than by completing, failing or being stopped. */
+  endReason?: "worker_restart";
 }
 
 export interface BackgroundTaskUsage {

@@ -883,9 +883,7 @@ function sameBackgroundTask(
     left?.status === right?.status &&
     left?.startedAt === right?.startedAt &&
     left?.settledAt === right?.settledAt &&
-    left?.error === right?.error &&
-    left?.summary === right?.summary &&
-    left?.outputFile === right?.outputFile &&
+    BACKGROUND_TASK_DETAIL_KEYS.every((key) => key === "usage" || left?.[key] === right?.[key]) &&
     left?.usage?.totalTokens === right?.usage?.totalTokens &&
     left?.usage?.toolUses === right?.usage?.toolUses &&
     left?.usage?.durationMs === right?.usage?.durationMs
@@ -911,19 +909,49 @@ function startedAtField(startedAt: string | undefined): { startedAt?: string } {
 
 type BackgroundTaskDetails = Pick<
   NativeBackgroundTask,
-  "error" | "summary" | "outputFile" | "usage" | "agentRole"
+  | "error"
+  | "summary"
+  | "outputFile"
+  | "usage"
+  | "agentRole"
+  | "kind"
+  | "parentTaskId"
+  | "prompt"
+  | "command"
+  | "outputTail"
+  | "workflowName"
+  | "lastToolName"
+  | "progressSummary"
+  | "pausedMs"
+  | "endReason"
 >;
+
+const BACKGROUND_TASK_DETAIL_KEYS = [
+  "error",
+  "summary",
+  "outputFile",
+  "usage",
+  "agentRole",
+  "kind",
+  "parentTaskId",
+  "prompt",
+  "command",
+  "outputTail",
+  "workflowName",
+  "lastToolName",
+  "progressSummary",
+  "pausedMs",
+  "endReason",
+] as const satisfies ReadonlyArray<keyof BackgroundTaskDetails>;
 
 /** What the task's record says beyond its lifecycle, carrying only fields it has. */
 function backgroundTaskDetails(task: BackgroundTaskDetails | undefined): BackgroundTaskDetails {
   if (!task) return {};
-  return {
-    ...(task.error ? { error: task.error } : {}),
-    ...(task.summary ? { summary: task.summary } : {}),
-    ...(task.outputFile ? { outputFile: task.outputFile } : {}),
-    ...(task.usage ? { usage: task.usage } : {}),
-    ...(task.agentRole ? { agentRole: task.agentRole } : {}),
-  };
+  const details: Record<string, unknown> = {};
+  for (const key of BACKGROUND_TASK_DETAIL_KEYS) {
+    if (task[key]) details[key] = task[key];
+  }
+  return details as BackgroundTaskDetails;
 }
 
 function backgroundTaskStartedAt(
@@ -996,6 +1024,16 @@ export interface ClaudeBackgroundTaskState {
   usage?: NativeBackgroundTask["usage"];
   /** Projection only; see the protocol summary's `agentRole`. */
   agentRole?: string;
+  kind?: NativeBackgroundTask["kind"];
+  parentTaskId?: string;
+  prompt?: string;
+  command?: string;
+  outputTail?: string;
+  workflowName?: string;
+  lastToolName?: string;
+  progressSummary?: string;
+  pausedMs?: number;
+  endReason?: NativeBackgroundTask["endReason"];
 }
 
 export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
@@ -1224,6 +1262,19 @@ export interface BackgroundTaskSnapshot {
   usage?: NativeBackgroundTask["usage"];
   /** See the protocol summary's `agentRole`. */
   agentRole?: string;
+  kind?: NativeBackgroundTask["kind"];
+  /** See the protocol summary's `parentTaskId`. */
+  parentTaskId?: string;
+  prompt?: string;
+  command?: string;
+  outputTail?: string;
+  workflowName?: string;
+  lastToolName?: string;
+  progressSummary?: string;
+  pausedMs?: number;
+  endReason?: NativeBackgroundTask["endReason"];
+  /** Housekeeping the provider asks hosts to keep out of the transcript. */
+  ambient?: boolean;
 }
 
 function backgroundTaskAgentStateFromStatus(status: NativeBackgroundTaskStatus): NativeAgentState {
@@ -1317,6 +1368,12 @@ function isLiveBackgroundTask(status: NativeBackgroundTaskStatus): boolean {
  * still gets a card here for the stop control. Once it settles, that row
  * already shows the finished command, and a second card would only repeat it
  * away from the text around it.
+ *
+ * A task an agent launched belongs to that agent's card, not the transcript:
+ * the agent's own commands are its work, and listing them beside it reads as
+ * work the conversation started. One whose parent has a card here is left to
+ * `childBackgroundTasksByParent`; one whose parent has none keeps its own row.
+ * Housekeeping the provider marks ambient gets no row at all.
  */
 export function rowlessBackgroundTaskMessages(
   tasks: readonly BackgroundTaskSnapshot[],
@@ -1335,12 +1392,15 @@ export function rowlessBackgroundTaskMessages(
     }
     return launchToolUseIds.has(task.toolUseId);
   };
-  const rows = tasks.filter(
-    (task) =>
-      !rendered.has(task.id) &&
-      (isLiveBackgroundTask(task.status) ||
-        (anchors.resolve(task.settledAt) !== undefined && !hasLaunchRow(task))),
+  const ownRow = (task: BackgroundTaskSnapshot): boolean =>
+    !rendered.has(task.id) &&
+    (isLiveBackgroundTask(task.status) ||
+      (anchors.resolve(task.settledAt) !== undefined && !hasLaunchRow(task)));
+  const nested = nestedBackgroundTaskIds(
+    tasks,
+    (task) => rendered.has(task.id) || (!task.ambient && ownRow(task)),
   );
+  const rows = tasks.filter((task) => !task.ambient && !nested.has(task.id) && ownRow(task));
   if (rows.length === 0) return EMPTY_ROWLESS_TASKS;
 
   return rows.map((task) =>
@@ -1365,6 +1425,89 @@ export function rowlessBackgroundTaskMessages(
       task.settledAt ?? messages.at(-1)?.createdAt ?? task.startedAt ?? new Date(0).toISOString(),
     ),
   );
+}
+
+/**
+ * The task's parent, when it has one in the snapshot that can hold it.
+ *
+ * A parent chain that leads back to the task is malformed data, and following
+ * it would have two cards each render the other inside itself; such a task
+ * simply has no parent here.
+ */
+function backgroundTaskParent<T extends Pick<BackgroundTaskSnapshot, "id" | "parentTaskId">>(
+  task: T,
+  byId: ReadonlyMap<string, T>,
+): T | undefined {
+  const parent = task.parentTaskId ? byId.get(task.parentTaskId) : undefined;
+  if (!parent) return undefined;
+  const seen = new Set([task.id]);
+  for (let ancestor: T | undefined = parent; ancestor;) {
+    if (seen.has(ancestor.id)) return undefined;
+    seen.add(ancestor.id);
+    ancestor = ancestor.parentTaskId ? byId.get(ancestor.parentTaskId) : undefined;
+  }
+  return parent;
+}
+
+/**
+ * Ids of the tasks that render inside their parent's card.
+ *
+ * A task nests when its parent is in the snapshot and has a card — its own, or
+ * a slot inside *its* parent — so an agent's agent's commands nest all the way
+ * down. `hasCard` says whether a task that does not nest has a card anyway.
+ */
+function nestedBackgroundTaskIds(
+  tasks: readonly BackgroundTaskSnapshot[],
+  hasCard: (task: BackgroundTaskSnapshot) => boolean,
+): Set<string> {
+  const byId = new Map(tasks.map((task) => [task.id, task]));
+  const shown = new Map<string, boolean>();
+  const nested = new Set<string>();
+  // Parent chains are acyclic once `backgroundTaskParent` has vetted them.
+  const isShown = (task: BackgroundTaskSnapshot): boolean => {
+    const known = shown.get(task.id);
+    if (known !== undefined) return known;
+    const parent = task.ambient ? undefined : backgroundTaskParent(task, byId);
+    const nests = parent !== undefined && isShown(parent);
+    if (nests) nested.add(task.id);
+    const result = nests || hasCard(task);
+    shown.set(task.id, result);
+    return result;
+  };
+  for (const task of tasks) isShown(task);
+  return nested;
+}
+
+/**
+ * Each task's child tasks, by parent id, oldest first.
+ *
+ * Every child of a parent in the snapshot is listed: whichever card shows the
+ * parent shows these with it, and `rowlessBackgroundTaskMessages` gives a row
+ * only to a child whose parent has no card at all.
+ */
+export function childBackgroundTasksByParent(
+  tasks: readonly BackgroundTaskSnapshot[],
+): ReadonlyMap<string, readonly NativeBackgroundTask[]> {
+  const byId = new Map(tasks.map((task) => [task.id, task]));
+  const children = new Map<string, NativeBackgroundTask[]>();
+  for (const task of tasks) {
+    const parentId = task.ambient ? undefined : backgroundTaskParent(task, byId)?.id;
+    if (!parentId) continue;
+    const list = children.get(parentId) ?? [];
+    list.push({
+      id: task.id,
+      status: task.status,
+      ...(task.description ? { description: task.description } : {}),
+      ...(task.startedAt ? { startedAt: task.startedAt } : {}),
+      ...(task.settledAt ? { settledAt: task.settledAt } : {}),
+      ...backgroundTaskDetails(task),
+    });
+    children.set(parentId, list);
+  }
+  for (const list of children.values()) {
+    list.sort((left, right) => (left.startedAt ?? "").localeCompare(right.startedAt ?? ""));
+  }
+  return children;
 }
 
 interface TranscriptBlockSegment {

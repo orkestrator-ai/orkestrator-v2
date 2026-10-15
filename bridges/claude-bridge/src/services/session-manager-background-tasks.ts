@@ -9,6 +9,7 @@ import type {
 import { eventEmitter } from "./event-emitter.js";
 import { debugLog } from "./logger.js";
 import { sessions } from "./session-manager-core.js";
+import type { BackgroundTaskSystemMessage } from "./session-manager-messages.js";
 
 type BackgroundTaskLaunch = {
   id: string;
@@ -121,6 +122,175 @@ export function inheritBackgroundTaskHookRun(
   if (isHookRunningBackgroundTask(previous)) hookRunningTasks.add(next);
 }
 
+type BackgroundTaskMetadata = Pick<
+  BackgroundTaskSnapshot,
+  | "taskType"
+  | "parentTaskId"
+  | "prompt"
+  | "command"
+  | "outputTail"
+  | "workflowName"
+  | "ambient"
+  | "lastToolName"
+  | "progressSummary"
+  | "pausedMs"
+  | "endReason"
+>;
+
+const BACKGROUND_TASK_METADATA_KEYS = [
+  "taskType",
+  "parentTaskId",
+  "prompt",
+  "command",
+  "outputTail",
+  "workflowName",
+  "ambient",
+  "lastToolName",
+  "progressSummary",
+  "pausedMs",
+  "endReason",
+] as const satisfies ReadonlyArray<keyof BackgroundTaskMetadata>;
+
+/**
+ * What a task record says beyond its lifecycle, carrying only fields it has.
+ *
+ * Every edge rebuilds the snapshot field by field, so each one spreads this to
+ * keep what an earlier edge (or hook) learned about the task.
+ */
+export function carriedTaskMetadata(
+  task: BackgroundTaskSnapshot | undefined,
+): BackgroundTaskMetadata {
+  if (!task) return {};
+  const carried: Record<string, unknown> = {};
+  for (const key of BACKGROUND_TASK_METADATA_KEYS) {
+    if (task[key] !== undefined) carried[key] = task[key];
+  }
+  return carried as BackgroundTaskMetadata;
+}
+
+/** Metadata that belongs to one run of a task, cleared when a resume starts another. */
+export const RUN_SCOPED_TASK_METADATA_RESET = {
+  outputTail: undefined,
+  lastToolName: undefined,
+  progressSummary: undefined,
+  pausedMs: undefined,
+  endReason: undefined,
+} as const satisfies BackgroundTaskMetadata;
+
+/** The metadata one parsed task message reports, carrying only fields it has. */
+export function taskMessageMetadata(message: BackgroundTaskSystemMessage): BackgroundTaskMetadata {
+  return {
+    ...(message.task_type ? { taskType: message.task_type } : {}),
+    ...(message.parent_task_id ? { parentTaskId: message.parent_task_id } : {}),
+    ...(message.prompt ? { prompt: message.prompt } : {}),
+    ...(message.workflow_name ? { workflowName: message.workflow_name } : {}),
+    ...(message.ambient ? { ambient: true } : {}),
+    ...(message.last_tool_name ? { lastToolName: message.last_tool_name } : {}),
+    // On every other subtype `summary` is the terminal report, not a status.
+    ...(message.subtype === "task_progress" && message.summary
+      ? { progressSummary: message.summary }
+      : {}),
+    ...(message.patch?.total_paused_ms !== undefined
+      ? { pausedMs: message.patch.total_paused_ms }
+      : {}),
+    ...(message.reason ? { endReason: message.reason } : {}),
+  };
+}
+
+const MAX_SHELL_COMMANDS = 256;
+const MAX_SHELL_COMMAND_LENGTH = 4_000;
+const SHELL_OUTPUT_TAIL_LENGTH = 2_000;
+
+function boundedShellText(text: string, keep: "head" | "tail", maxLength: number): string {
+  const cleaned = text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
+  if (cleaned.length <= maxLength) return cleaned.trim();
+  // `…` marks the cut so a bounded command is never mistaken for the whole one.
+  return keep === "head"
+    ? `${cleaned.slice(0, maxLength).trimEnd()}…`
+    : `…${cleaned.slice(-maxLength).trimStart()}`;
+}
+
+function backgroundTaskByToolUseId(
+  session: SessionState,
+  toolUseId: string,
+): BackgroundTaskSnapshot | undefined {
+  return Object.values(session.backgroundTasks ?? {}).find((task) => task.toolUseId === toolUseId);
+}
+
+function patchBackgroundTask(
+  session: SessionState,
+  task: BackgroundTaskSnapshot,
+  patch: Partial<BackgroundTaskSnapshot>,
+): void {
+  const next = { ...task, ...patch };
+  inheritBackgroundTaskHookRun(task, next);
+  session.backgroundTasks = { ...session.backgroundTasks, [task.id]: next };
+  emitBackgroundTaskSnapshot(session);
+}
+
+/**
+ * Remember the command one Bash call runs, so a task the CLI registers for it
+ * can say what it runs. Oldest entries go first past the bound.
+ */
+export function recordShellCommand(
+  session: SessionState,
+  toolUseId: string,
+  command: string,
+): void {
+  const bounded = boundedShellText(command, "head", MAX_SHELL_COMMAND_LENGTH);
+  if (!bounded) return;
+  const commands = (session.shellCommands ??= new Map());
+  commands.delete(toolUseId);
+  while (commands.size >= MAX_SHELL_COMMANDS) {
+    const oldest = commands.keys().next().value;
+    if (oldest === undefined) break;
+    commands.delete(oldest);
+  }
+  commands.set(toolUseId, bounded);
+  // The task edge normally follows the hook, but nothing orders the two.
+  const task = backgroundTaskByToolUseId(session, toolUseId);
+  if (task && task.command === undefined) patchBackgroundTask(session, task, { command: bounded });
+}
+
+/** The command a task's launching Bash call ran, when the hook saw it. */
+export function shellCommandField(
+  session: SessionState,
+  toolUseId: string | undefined,
+): { command?: string } {
+  const command = toolUseId ? session.shellCommands?.get(toolUseId) : undefined;
+  return command ? { command } : {};
+}
+
+/**
+ * Attach how a shell task's command ended to its task.
+ *
+ * A backgrounded call's result only says the command was moved to the
+ * background; its output is in the task's output file instead, so that result
+ * attaches nothing. A failed call's error names the exit code first.
+ */
+export function recordShellResult(
+  session: SessionState,
+  toolUseId: string,
+  result: { output?: string; failure?: string; interrupted?: boolean; backgrounded?: boolean },
+): void {
+  if (result.backgrounded) return;
+  session.shellCommands?.delete(toolUseId);
+  const task = backgroundTaskByToolUseId(session, toolUseId);
+  if (!task) return;
+  const [firstLine = "", ...rest] = (result.failure ?? "").split("\n");
+  const exitLine = /^exit code \d+/i.test(firstLine.trim()) ? firstLine.trim() : undefined;
+  const output =
+    result.failure !== undefined ? (exitLine ? rest.join("\n") : result.failure) : result.output;
+  const outputTail = output ? boundedShellText(output, "tail", SHELL_OUTPUT_TAIL_LENGTH) : "";
+  const patch: Partial<BackgroundTaskSnapshot> = {
+    ...(outputTail ? { outputTail } : {}),
+    ...(result.failure !== undefined && task.error === undefined
+      ? { error: exitLine ?? (result.interrupted ? "Interrupted" : "Command failed") }
+      : {}),
+  };
+  if (Object.keys(patch).length > 0) patchBackgroundTask(session, task, patch);
+}
+
 /** Publish a launch, preserving terminal records unless a start hook names a new run. */
 export function recordBackgroundTaskLaunch(
   session: SessionState,
@@ -146,6 +316,7 @@ export function recordBackgroundTaskLaunch(
   const previous = restarted
     ? {
         ...stored,
+        ...RUN_SCOPED_TASK_METADATA_RESET,
         startedAt: Date.now(),
         endedAt: undefined,
         error: undefined,
@@ -179,6 +350,7 @@ export function recordBackgroundTaskLaunch(
       outputFile: previous?.outputFile,
       usage: previous?.usage,
       subagentType: launch.subagentType ?? previous?.subagentType,
+      ...carriedTaskMetadata(previous),
     },
   });
   const task = session.backgroundTasks[launch.id]!;

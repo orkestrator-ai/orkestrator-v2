@@ -4,6 +4,7 @@ import type { NativeMessage } from "./native-message-types";
 import { buildPromptWithTranscriptAnnotations } from "./transcript-annotations";
 import {
   applyClaudeBackgroundTaskStates,
+  childBackgroundTasksByParent,
   coalesceAdjacentToolMessages,
   collectRenderedBackgroundTaskIds,
   dedupeStreamedNativeParts,
@@ -3980,5 +3981,115 @@ describe("coalesceAdjacentToolMessages", () => {
 
     expect(rows).toHaveLength(1);
     expect(rows[0]?.id).toBe("m1");
+  });
+});
+
+describe("tasks an agent launched", () => {
+  const agentCard: NativeMessage = {
+    id: "assistant-agent",
+    role: "assistant",
+    content: "",
+    createdAt: "2026-08-16T10:00:00.000Z",
+    parts: [
+      {
+        type: "task-group",
+        content: "Agent",
+        childTools: [],
+        task: {
+          type: "tool-invocation",
+          content: "Agent",
+          toolName: "Agent",
+          toolUseId: "toolu-agent",
+          backgroundTask: { id: "agent-1", status: "running" },
+        },
+      },
+    ],
+  };
+  const agent = { id: "agent-1", status: "running", toolUseId: "toolu-agent" } as const;
+  const shell = {
+    id: "shell-1",
+    status: "running",
+    description: "Run the suite",
+    parentTaskId: "agent-1",
+    kind: "shell",
+    command: "bun test",
+    startedAt: "2026-08-16T10:01:00.000Z",
+  } as const;
+
+  test("leaves a child of an agent with a card to that card", () => {
+    expect(rowlessBackgroundTaskMessages([agent, shell], [agentCard])).toHaveLength(0);
+    const children = childBackgroundTasksByParent([agent, shell]);
+    expect(children.get("agent-1")).toEqual([
+      {
+        id: "shell-1",
+        status: "running",
+        description: "Run the suite",
+        startedAt: "2026-08-16T10:01:00.000Z",
+        parentTaskId: "agent-1",
+        kind: "shell",
+        command: "bun test",
+      },
+    ]);
+  });
+
+  test("gives a child its own row when its parent has no card", () => {
+    // The parent is not in the snapshot at all, so nothing else can show it.
+    expect(rowlessBackgroundTaskMessages([shell], [agentCard])).toHaveLength(1);
+    expect(childBackgroundTasksByParent([shell]).size).toBe(0);
+  });
+
+  test("nests through a parent that is itself a rowless card", () => {
+    const orphanAgent = { id: "agent-2", status: "running", kind: "agent" } as const;
+    const child = { ...shell, id: "shell-2", parentTaskId: "agent-2" };
+    const grandchild = { ...shell, id: "shell-3", parentTaskId: "shell-2" };
+    const rows = rowlessBackgroundTaskMessages([orphanAgent, child, grandchild], [agentCard]);
+    expect(rows.map((row) => row.id)).toEqual(["background-task:agent-2"]);
+    const children = childBackgroundTasksByParent([orphanAgent, child, grandchild]);
+    expect(children.get("agent-2")?.map((task) => task.id)).toEqual(["shell-2"]);
+    expect(children.get("shell-2")?.map((task) => task.id)).toEqual(["shell-3"]);
+  });
+
+  test("gives ambient housekeeping no row and no slot", () => {
+    const ambient = { id: "watch", status: "running", ambient: true } as const;
+    const ambientChild = { ...shell, id: "shell-4", ambient: true };
+    expect(rowlessBackgroundTaskMessages([ambient, agent, ambientChild], [agentCard])).toHaveLength(
+      0,
+    );
+    expect(childBackgroundTasksByParent([agent, ambientChild]).size).toBe(0);
+  });
+
+  test("treats a parent cycle as no parent rather than nesting cards in each other", () => {
+    const first = { id: "a", status: "running", parentTaskId: "b" } as const;
+    const second = { id: "b", status: "running", parentTaskId: "a" } as const;
+    const selfParent = { id: "c", status: "running", parentTaskId: "c" } as const;
+    expect(rowlessBackgroundTaskMessages([first, second, selfParent], [])).toHaveLength(3);
+    expect(childBackgroundTasksByParent([first, second, selfParent]).size).toBe(0);
+  });
+
+  test("carries new snapshot details onto the launch row and re-decorates when they change", () => {
+    const launch: NativeMessage = {
+      ...agentCard,
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Agent",
+          toolName: "Agent",
+          toolUseId: "toolu-agent",
+          toolState: "success",
+        },
+      ],
+    };
+    const [first] = applyClaudeBackgroundTaskStates([launch], {
+      "agent-1": { ...agent, progressSummary: "Reading docs", lastToolName: "Read" },
+    });
+    expect(first?.parts[0]?.backgroundTask).toMatchObject({
+      progressSummary: "Reading docs",
+      lastToolName: "Read",
+    });
+    const [second] = applyClaudeBackgroundTaskStates([first!], {
+      "agent-1": { ...agent, progressSummary: "Writing the report", lastToolName: "Write" },
+    });
+    expect(second).not.toBe(first);
+    expect(second?.parts[0]?.backgroundTask?.progressSummary).toBe("Writing the report");
   });
 });

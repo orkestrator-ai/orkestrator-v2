@@ -1,11 +1,19 @@
-import type { HookCallback, HookInput, HookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  HookCallback,
+  HookCallbackMatcher,
+  HookInput,
+  HookJSONOutput,
+} from "@anthropic-ai/claude-agent-sdk";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
+import type { SessionState } from "../types/index.js";
 import { commandChangeHooks } from "./command-changes.js";
 import { eventEmitter } from "./event-emitter.js";
 import {
   LIVE_BACKGROUND_TASK_STATUSES,
   emitBackgroundTaskSnapshot,
   recordBackgroundTaskLaunch,
+  recordShellCommand,
+  recordShellResult,
   settleBackgroundTask,
 } from "./session-manager-background-tasks.js";
 import { sessions } from "./session-manager-core.js";
@@ -164,6 +172,48 @@ export function applyCommandChanges(
   if (session.latestTurnGeneration !== turn.turnGeneration) return;
   const refreshed = stream.refreshToolRows([toolUseId]);
   refreshSettledToolRows(session, sessionId, stream.toolTracker, [toolUseId], refreshed);
+}
+
+/**
+ * Bash hooks that record what a shell task runs and how it ended.
+ *
+ * The CLI names neither on any task message, and a background subagent's tool
+ * calls never reach this stream, so for a command such an agent runs these
+ * hooks are the only witness. They fire for every agent's calls, record into
+ * bounded state, and never change the call.
+ */
+export function shellTaskHooks(session: SessionState): {
+  PreToolUse: HookCallbackMatcher;
+  PostToolUse: HookCallbackMatcher;
+  PostToolUseFailure: HookCallbackMatcher;
+} {
+  const live = () => sessions.get(session.id) === session && !session.deleting;
+  const hook: HookCallback = async (input) => {
+    if (!live() || !("tool_use_id" in input) || !input.tool_use_id) return {};
+    if (input.hook_event_name === "PreToolUse") {
+      const command = (input.tool_input as { command?: unknown } | undefined)?.command;
+      if (typeof command === "string") recordShellCommand(session, input.tool_use_id, command);
+    } else if (input.hook_event_name === "PostToolUse") {
+      const response = input.tool_response as
+        | { stdout?: unknown; stderr?: unknown; backgroundTaskId?: unknown }
+        | undefined;
+      const output = [response?.stdout, response?.stderr]
+        .filter((text): text is string => typeof text === "string" && text.trim().length > 0)
+        .join("\n");
+      recordShellResult(session, input.tool_use_id, {
+        output,
+        backgrounded: typeof response?.backgroundTaskId === "string",
+      });
+    } else if (input.hook_event_name === "PostToolUseFailure") {
+      recordShellResult(session, input.tool_use_id, {
+        failure: input.error,
+        interrupted: input.is_interrupt === true,
+      });
+    }
+    return {};
+  };
+  const matcher: HookCallbackMatcher = { matcher: "^Bash$", hooks: [hook] };
+  return { PreToolUse: matcher, PostToolUse: matcher, PostToolUseFailure: matcher };
 }
 
 /** Command-change hooks that report each measurement to the turn `route` names. */

@@ -3,6 +3,7 @@ import { MarkdownLink } from "@/components/chat/MessageMarkdown";
 import { type Components } from "react-markdown";
 import {
   type NativeAgentActivityPart,
+  type NativeBackgroundTask,
   type NativeMessage as NativeMessageType,
   type NativeMessagePart,
 } from "@/lib/chat/native-message-types";
@@ -79,6 +80,16 @@ export const UserPromptEvidenceContext = createContext<StructuredReviewReport | 
 export const BackgroundTaskStopContext = createContext<
   ((taskId: string) => Promise<boolean>) | undefined
 >(undefined);
+/**
+ * Each background task's child tasks — the ones its agent launched — by
+ * parent id.
+ *
+ * Read by whichever card shows the parent, at whatever depth it renders, so it
+ * is supplied once around the transcript rather than threaded through parts.
+ */
+export const BackgroundTaskChildrenContext = createContext<
+  ReadonlyMap<string, readonly NativeBackgroundTask[]>
+>(new Map());
 export const AsyncQuestionResponseContext = createContext<{
   responses: readonly NativeAgentAsyncQuestionResponse[];
   respond?: (itemId: string, response: string) => Promise<void>;

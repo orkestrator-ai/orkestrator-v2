@@ -34,13 +34,17 @@ export class HttpBridgeTranscriptReader {
     private readonly fetchImpl: typeof fetch,
   ) {}
 
-  /** The legacy whole-transcript read (`/messages`). */
-  legacy(sessionId: string): Promise<LegacyTranscriptSnapshot> {
+  /**
+   * The legacy whole-transcript read (`/messages`), or only its newest `limit`
+   * messages from a bridge that serves `?limit=`.
+   */
+  legacy(sessionId: string, limit?: number): Promise<LegacyTranscriptSnapshot> {
     return readHttpBridgeLegacyTranscript({
       agent: this.agent,
       connection: this.connection,
       fetchImpl: this.fetchImpl,
       sessionId,
+      ...(limit === undefined ? {} : { limit }),
     });
   }
 

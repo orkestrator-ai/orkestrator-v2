@@ -7,11 +7,11 @@ produce them, bridges summarise them, the backend projects them, clients retain
 them, and workflows read them to detect progress. The goal is that an unchanged
 read does metadata work only, a changed read costs what changed, and history
 and large artifacts are fetched separately from the live window, without making
-background work depend on a mounted view. Most of this shipped in #875. What
-remains is one workflow consumer that still reads whole transcripts on a fast
-cadence, a Claude cold-hydration path that is not range-bounded, measurement
-gaps, frontend structure work gated on profiling, and real-stack qualification
-that was never run.
+background work depend on a mounted view. Most of this shipped in #875, and
+build-pipeline supervision no longer reads whole transcripts on every pass.
+What remains is a Claude cold-hydration path that is not range-bounded,
+measurement gaps, frontend structure work gated on profiling, and real-stack
+qualification that was never run.
 
 ## Current state
 
@@ -47,6 +47,15 @@ that was never run.
 - Workflows. Progress probes read a conditional window of the newest
   `PROGRESS_TRANSCRIPT_WINDOW_MESSAGES` (8) messages through
   `readTranscriptProgressSample` (`apps/backend/src/core/transcript-progress.ts`).
+  Build-pipeline stages, reviewers and the consolidation session look at a
+  session's transcript only at a persist boundary
+  (`DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS`, 5 s), when a turn ends or while
+  a stall warning shows, and read the whole body only when that probe moved
+  since the committed copy (`refreshMovedTranscript` in
+  `build-pipeline-service-supervisor.ts`; the baseline lives in
+  `build-pipeline-transcript-checkpoints.ts`). An unchanged session costs one
+  probe answered `unchanged` and no save. Bounded `messages({ limit })` reads
+  ask the bridge for its tail with `/messages?limit=`.
   Reviewer views use summary windows, detail references and pages
   (`multi-review-reviewer-transcript.ts`). Pipeline transcripts live in a
   chunk store (`build-pipeline-transcript-store.ts`,
@@ -72,32 +81,7 @@ that was never run.
 
 ### Code
 
-1. Stop the build-stage supervisor reading the whole transcript on every pass.
-   In `apps/backend/src/core/build-pipeline-service-supervisor.ts`, the branch
-   for a running stage (or an idle stage with background work pending) calls
-   `refreshTranscript` on every pass. That calls
-   `provider.messages(session.sdkSessionId)`, which for HTTP bridges is
-   `HttpBridgeProvider.messages`: a full legacy `/messages` body, sliced after
-   the fetch. Passes run every `BUILD_PIPELINE_PROGRESS_MS` (1.5 s,
-   `build-pipeline-context.ts`).
-   - Follow the consolidation path in `build-pipeline-review-fanout.ts`
-     ("Running sessions need a full snapshot only at the persist boundary").
-     Read the full body only when `shouldPersistTranscript` is due, when the
-     status leaves running, and at stage end. Between those points, detect
-     movement with `readTranscriptProgressSample`, which makes a conditional
-     `transcriptSnapshot` read of the newest messages when the provider has
-     one (every HTTP bridge does) and falls back to `messages({ limit })`
-     otherwise.
-   - The same result currently drives the stall warning: `transcriptChanged`
-     clears `stallWarning`. An unchanged probe must not clear it, and a
-     rejected probe means nothing was learned, not "no progress".
-   - Fix the stale comments that say a save rewrites the whole build-pipelines
-     file: the supervisor's running branch, `DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS`
-     in `build-pipeline-service-helpers.ts`, and the token-count comment in
-     `build-pipeline-review-fanout.ts`.
-   - Done when an active build stage issues no full transcript read between
-     persist boundaries, and stall warning and abandonment behave as before.
-2. Range-bound Claude cold hydration, or record that it cannot be done.
+1. Range-bound Claude cold hydration, or record that it cannot be done.
    `readPersistedSessionMessages`
    (`bridges/claude-bridge/src/services/session-manager-persistence.ts`) calls
    `sdk.getSessionMessages(id, { dir, includeSystemMessages: true })` with no
@@ -112,7 +96,7 @@ that was never run.
    chronological pass. If no true range read exists, record full hydration
    (single-flight through `readPersistedSessionMessagesOnce`) as the accepted
    cost.
-3. Close the measurement gaps.
+2. Close the measurement gaps.
    - Record phase timing for state and discovery reads. Today only transcript
      and direct-page reads report `sourceMs` and `normalizeMs`.
    - Add harness workloads for the batched activity sweep, the file-tree cache,
@@ -120,7 +104,7 @@ that was never run.
      currently come only from the owning test suites.
    - Add heap/RSS and event-loop-lag reporting; the harness reports counts and
      retained-byte estimates only.
-4. Decide what happens to the joined sync-v1 history fallback. All bundled
+3. Decide what happens to the joined sync-v1 history fallback. All bundled
    bridges serve v2 pages and OpenCode pages in-process, so the joined path now
    serves only an older bridge behind a newer backend. Keep it, cache its
    pages, or remove it after the support window (see
@@ -132,7 +116,7 @@ that was never run.
 
 ### Deferred until measured
 
-5. Frontend retained-history structure, only if browser profiling at an 8 MiB
+4. Frontend retained-history structure, only if browser profiling at an 8 MiB
    retained history shows material long tasks or input latency:
    - keep retained pages as immutable entries separate from the live window,
      and assemble display arrays only when membership, order or an entry
@@ -141,10 +125,10 @@ that was never run.
      `nativeAgentProjectionStore.ts` and `useNativeAgentSession.ts`;
    - derive search and annotation indexes by revision.
    Add no worker until repeated work is gone and transfer cost is measured.
-6. Bridge-to-backend part deltas. Bridges still send whole lightweight summary
+5. Bridge-to-backend part deltas. Bridges still send whole lightweight summary
    snapshots on change; patches cover only the backend-to-client hop. Measure
    that hop's bytes and CPU before designing an incremental bridge protocol.
-7. Per-message provider revisions. `native-agent-projection-entries.ts` still
+6. Per-message provider revisions. `native-agent-projection-entries.ts` still
    walks each provider row once per changed read to compare it with its kept
    copy (read-only, no encoding). Removing the walk needs a trustworthy
    per-message revision from every bridge.
@@ -171,7 +155,7 @@ credentials and platforms CI lacks, batch with
   only where the wrapper changes.
 - Browser long-task, input-latency and heap/RSS profiling at an 8 MiB
   retained history, including hidden and resumed documents. This is the gate
-  for item 5.
+  for item 4.
 - Activity-sweep p50/p95 for 1, 10 and 100 sessions against real bridges.
 - Re-measure display-tail cost and the maximum checkpoint age with workload
   `d` now that tails are SQLite rows.
@@ -203,9 +187,15 @@ credentials and platforms CI lacks, batch with
   generation, epoch or digest-format change is neither progress nor a new
   stall clock.
 - Pipeline viewers read the committed transcript copy, which changes only at
-  persist boundaries, so item 1 does not change what a user sees. The handoff
-  window (`transcriptCheckpoints.window`) and `recoverStructuredRequestId` read
-  the newest observed copy, so the stage-end full read must happen before them.
+  persist boundaries, so a stage reads the provider's whole transcript only
+  there, and only when a progress probe moved since that copy. The probe
+  always precedes the read, and its baseline is trusted only while the
+  committed copy is the read it gated, so a failed or deferred checkpoint is
+  read again. A failed probe teaches nothing: the whole read decides, and an
+  unchanged probe never clears a stall warning. The handoff window
+  (`transcriptCheckpoints.window`) and `recoverStructuredRequestId` read the
+  newest observed copy, so the pass that sees a turn end reads the whole
+  transcript whatever the probe says.
 - Reducing repeated source reads and serialisation comes before tuning wire
   size or adding transport complexity.
 - Accepted limitations, not todos:
@@ -218,12 +208,16 @@ credentials and platforms CI lacks, batch with
     500 did.
   - The Cursor cross-write encoding cache was declined: no trustworthy
     mutation key exists.
+  - Pipeline reads fall back to the whole body at each boundary for a provider
+    without the bounded snapshot surface and after a failed probe. A bridge
+    that predates `/transcript` answers the probe itself from `/messages`, so
+    a moved transcript costs it two whole reads at a boundary.
+  - `/messages?limit=` is advisory: a bridge that predates it answers its
+    whole window, and the backend keeps its own slice.
 
 ## Open questions
 
-- Should item 1 use the shared progress probe, or a dedicated source-token
-  check?
-- Do items 5, 6 and 7 justify their complexity once profiling exists?
+- Do items 4, 5 and 6 justify their complexity once profiling exists?
 
 ## Needs verification
 
@@ -231,7 +225,7 @@ credentials and platforms CI lacks, batch with
   September live run, is fixed. #874 (MCP headers in ACP `{name,value}` form)
   merged the same day and may cover it.
 - Whether the SDK's `limit`/`offset` avoids a full JSONL parse. Check current
-  docs through Context7 and the SDK source before item 2.
+  docs through Context7 and the SDK source before item 1.
 
 ## Related
 

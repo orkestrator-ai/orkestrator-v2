@@ -10,6 +10,7 @@ import {
   normalizeTranscriptFingerprint,
   transcriptFingerprint,
 } from "./build-pipeline-service-helpers.js";
+import type { KnownProgressSource, ProgressSample } from "./transcript-progress.js";
 
 /** Storage surface the supervisor's transcript checkpoints need. */
 export interface BuildPipelineTranscriptStorage {
@@ -28,6 +29,15 @@ interface PendingTranscript {
 }
 
 /**
+ * The progress probe a whole read was gated on, and that read's fingerprint.
+ * The probe was taken first, so the read is at least as new as the probe.
+ */
+interface ProbeBaseline {
+  sample: ProgressSample;
+  fingerprint: string;
+}
+
+/**
  * Newest provider transcripts observed since their last durable checkpoint.
  *
  * Bounded by the number of sessions that changed since their last checkpoint,
@@ -36,6 +46,8 @@ interface PendingTranscript {
  * differs from the provider, so the next observation re-detects the change.
  */
 const MAX_PENDING_TRANSCRIPTS = 256;
+/** Probe baselines are a few hundred bytes each; the cap only guards fan-in. */
+const MAX_PROBE_BASELINES = 256;
 /** Stored messages scanned when a legacy session's request identity must be recovered. */
 const RECOVERY_TAIL_MESSAGES = 64;
 
@@ -67,6 +79,13 @@ export interface TranscriptCheckpoint {
 export class BuildPipelineTranscriptCheckpoints {
   private readonly pending = new Map<string, PendingTranscript>();
 
+  /**
+   * Lets a pass skip the whole-transcript read when a bounded progress probe
+   * shows the provider has not moved since the copy readers already have.
+   * In memory only: after a restart the first pass reads the whole transcript.
+   */
+  private readonly probes = new Map<string, ProbeBaseline>();
+
   constructor(private readonly storage: BuildPipelineTranscriptStorage) {}
 
   private key(session: Pick<PipelineSession, "sessionKey" | "sdkSessionId">): string {
@@ -85,10 +104,22 @@ export class BuildPipelineTranscriptCheckpoints {
    * Records the provider's current transcript. Returns whether it differs from
    * the committed copy — the same "changed since persisted" signal the throttle
    * and stall clock have always used.
+   *
+   * `probe` is the progress sample taken just before this read. It becomes the
+   * baseline that {@link matchesProbe} compares later probes against.
    */
-  observe(session: PipelineSession, messages: readonly unknown[]): boolean {
+  observe(session: PipelineSession, messages: readonly unknown[], probe?: ProgressSample): boolean {
     const fingerprint = transcriptFingerprint(messages);
     const key = this.key(session);
+    if (probe) {
+      this.probes.delete(key);
+      this.probes.set(key, { sample: probe, fingerprint });
+      while (this.probes.size > MAX_PROBE_BASELINES) {
+        const oldest = this.probes.keys().next().value as string | undefined;
+        if (oldest === undefined) break;
+        this.probes.delete(oldest);
+      }
+    }
     if (fingerprint === this.committedFingerprint(session)) {
       this.pending.delete(key);
       return false;
@@ -99,6 +130,40 @@ export class BuildPipelineTranscriptCheckpoints {
       const oldest = this.pending.keys().next().value as string | undefined;
       if (oldest === undefined) break;
       this.pending.delete(oldest);
+    }
+    return true;
+  }
+
+  /** The source of the baseline probe, for a conditional (`unchanged`) probe read. */
+  knownProbe(session: PipelineSession): KnownProgressSource | undefined {
+    const baseline = this.probes.get(this.key(session));
+    const sourceToken = baseline?.sample.sourceToken;
+    return baseline && sourceToken ? { sourceToken, digest: baseline.sample.digest } : undefined;
+  }
+
+  /**
+   * Whether `sample` shows the provider has not moved since the committed copy.
+   *
+   * True only when the sample's digest equals the baseline probe's and the
+   * committed transcript is still the whole read that probe gated. A read that
+   * was observed but never committed (a throttled or failed save) leaves the
+   * committed fingerprint behind, so the next probe re-reads instead of
+   * trusting a copy readers do not have. A match adopts the sample's source
+   * token, so usage or title churn that moves the token without moving the
+   * transcript is answered `unchanged` from then on.
+   */
+  matchesProbe(session: PipelineSession, sample: ProgressSample): boolean {
+    const key = this.key(session);
+    const baseline = this.probes.get(key);
+    if (
+      !baseline ||
+      baseline.sample.digest !== sample.digest ||
+      baseline.fingerprint !== this.committedFingerprint(session)
+    ) {
+      return false;
+    }
+    if (sample.sourceToken !== baseline.sample.sourceToken) {
+      this.probes.set(key, { ...baseline, sample });
     }
     return true;
   }
@@ -131,7 +196,10 @@ export class BuildPipelineTranscriptCheckpoints {
   }
 
   forget(sessions: readonly Pick<PipelineSession, "sessionKey" | "sdkSessionId">[]): void {
-    for (const session of sessions) this.pending.delete(this.key(session));
+    for (const session of sessions) {
+      this.pending.delete(this.key(session));
+      this.probes.delete(this.key(session));
+    }
   }
 
   /**

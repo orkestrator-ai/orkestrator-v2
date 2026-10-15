@@ -46,6 +46,7 @@ import {
 import {
   messageWindow,
   parseFromIndex,
+  parseTailLimit,
   publicDispatch,
   publicSteerDispatch,
   publicQueue,
@@ -507,7 +508,11 @@ async function routeSession(
     return json(
       response,
       200,
-      messageWindow(state, parseFromIndex(url.searchParams.get("fromIndex"))),
+      messageWindow(
+        state,
+        parseFromIndex(url.searchParams.get("fromIndex")),
+        parseTailLimit(url.searchParams.get("limit")),
+      ),
     );
   }
   if (action === "transcript" && request.method === "GET") {

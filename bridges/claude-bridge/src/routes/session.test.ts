@@ -813,6 +813,46 @@ describe("session routes", () => {
       expect(res.status).toBe(404);
     });
 
+    test("serves only the newest messages for a tail limit", async () => {
+      mockGetSessionMessages.mockReturnValueOnce(
+        Array.from({ length: 5 }, (_, index) => ({
+          id: `msg-${index}`,
+          role: "assistant",
+          content: String(index),
+          parts: [],
+          timestamp: "2026-01-01T00:00:00Z",
+        })) as any,
+      );
+      const res = await app.request("/session/s-1/messages?limit=2");
+
+      expect(res.status).toBe(200);
+      const data = await jsonBody(res);
+      expect(data.messages.map((message: { id: string }) => message.id)).toEqual([
+        "msg-3",
+        "msg-4",
+      ]);
+      expect(data.messageWindow).toEqual({ truncated: true, omittedMessages: 3 });
+    });
+
+    test("serves the whole window for an unusable tail limit", async () => {
+      for (const limit of ["0", "-1", "01", "2.5", "abc"]) {
+        mockGetSessionMessages.mockReturnValueOnce(
+          Array.from({ length: 3 }, (_, index) => ({
+            id: `msg-${index}`,
+            role: "assistant",
+            content: String(index),
+            parts: [],
+            timestamp: "2026-01-01T00:00:00Z",
+          })) as any,
+        );
+        const res = await app.request(`/session/s-1/messages?limit=${limit}`);
+        expect(res.status).toBe(200);
+        const data = await jsonBody(res);
+        expect(data.messages).toHaveLength(3);
+        expect(data.messageWindow).toEqual({ truncated: false });
+      }
+    });
+
     test("maps a materialization refusal instead of returning a bodiless 500", async () => {
       mockGetSession.mockImplementationOnce(() => undefined);
       mockEnsurePersistedSession.mockImplementation(async () => {

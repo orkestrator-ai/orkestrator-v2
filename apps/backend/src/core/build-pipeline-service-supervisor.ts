@@ -93,6 +93,11 @@ import {
 } from "./build-pipeline-review-fanout.js";
 import { MultiReviewProgressTracker } from "./multi-review-progress.js";
 import {
+  hasProgressSnapshot,
+  readTranscriptProgressSample,
+  type ProgressSample,
+} from "./transcript-progress.js";
+import {
   probeReviewWorktree,
   probeReviewWorktreeOnce,
   type ReviewWorktreeProbeOptions,
@@ -147,8 +152,8 @@ export class BuildPipelineSupervisor {
           this.agents.settingsForSelection(pipeline, selection),
         settingsForSelections: (pipeline, selections) =>
           this.agents.settingsForSelections(pipeline, selections),
-        refreshTranscript: (session, provider, messages) =>
-          this.refreshTranscript(session, provider, messages),
+        refreshMovedTranscript: (session, provider, options) =>
+          this.refreshMovedTranscript(session, provider, options),
         shouldPersistTranscript: (session) => this.shouldPersistTranscript(session),
         targetBranch: async (pipeline) => {
           const repository = await this.ctx.storage.getRepositoryConfig(pipeline.projectId);
@@ -545,9 +550,18 @@ export class BuildPipelineSupervisor {
       status === "idle" &&
       (backgroundWorkLive === true || (retainedContinuationRequestIds?.length ?? 0) > 0);
     if (status === "running" || backgroundWorkPending) {
-      const transcriptChanged = await this.refreshTranscript(session, provider);
       const statusChanged = session.status !== "running";
       session.status = "running";
+      // Viewers read the committed copy, which only a save changes, so the
+      // transcript is looked at only when this pass may save it: a status
+      // change, the persist boundary, or a shown stall warning that movement
+      // must clear at once. Even then the whole body is read only when a
+      // bounded probe shows it moved since that committed copy.
+      const persistDue = this.shouldPersistTranscript(session);
+      const transcriptChanged =
+        statusChanged || persistDue || pipeline.stallWarning !== undefined
+          ? await this.refreshMovedTranscript(session, provider)
+          : false;
       const previousWarning = pipeline.stallWarning;
       if (transcriptChanged) {
         delete pipeline.stallWarning;
@@ -566,13 +580,12 @@ export class BuildPipelineSupervisor {
       }
       const warningChanged = previousWarning !== pipeline.stallWarning;
       // A status change is a state transition and always persists. A pure
-      // transcript delta is throttled: it arrives on every tick of a streaming
-      // turn, and each save rewrites the entire build-pipelines file.
-      if (
-        statusChanged ||
-        warningChanged ||
-        (transcriptChanged && this.shouldPersistTranscript(session))
-      ) {
+      // transcript delta waits for the persist boundary: a streaming turn moves
+      // on every tick, and each checkpoint writes the transcript's new chunks
+      // and this pipeline's control row. A pass that read nothing had no
+      // warning to clear, and its stall clock is younger than the persist
+      // interval, so no warning can appear on it either.
+      if (statusChanged || warningChanged || (transcriptChanged && persistDue)) {
         session.messagesPersistedAt = new Date().toISOString();
         await this.ctx.save(pipeline, record.revision);
       }
@@ -582,7 +595,13 @@ export class BuildPipelineSupervisor {
     const wasRunning = session.status === "running";
     session.status = "idle";
     delete pipeline.stallWarning;
-    const transcriptChanged = await this.refreshTranscript(session, provider);
+    // The pass that sees the turn end reads the whole transcript whatever the
+    // probe says, so the handoff window and request-id recovery below see the
+    // final copy. Later idle passes (a structured-result wait, PR detection)
+    // read it again only when the provider shows it moved.
+    const transcriptChanged = await this.refreshMovedTranscript(session, provider, {
+      force: wasRunning,
+    });
     delete pipeline.pendingPromptAttempt;
     delete pipeline.activePromptContext;
     if (wasRunning || transcriptChanged) {
@@ -997,6 +1016,7 @@ export class BuildPipelineSupervisor {
     session: PipelineSession,
     provider: BuildPipelineProvider,
     observedMessages?: readonly unknown[],
+    probe?: ProgressSample,
   ): Promise<boolean> {
     const messages = observedMessages
       ? Array.from(observedMessages)
@@ -1005,7 +1025,54 @@ export class BuildPipelineSupervisor {
     // commits it to the transcript store before the control record that
     // references it (plan step 16). "Changed" means changed since the last
     // committed checkpoint, so a throttled delta is re-detected until saved.
-    return this.ctx.transcriptCheckpoints.observe(session, messages);
+    return this.ctx.transcriptCheckpoints.observe(session, messages, probe);
+  }
+
+  /**
+   * {@link refreshTranscript}, but the whole transcript is read only when it
+   * may have moved since the committed copy.
+   *
+   * A bounded progress probe goes first: a conditional read of the newest
+   * messages, answered `unchanged` from the provider's source token without a
+   * body. When it matches the probe the committed copy was read under, nothing
+   * else is read and the answer is "unchanged". Otherwise — a moved probe, no
+   * baseline yet (a new session, a backend restart), or a probe that failed
+   * and so taught nothing — the whole transcript is read as before, and the
+   * probe becomes the new baseline. The probe always precedes the read, so a
+   * baseline never describes content newer than the copy it vouches for.
+   *
+   * `force` reads the whole transcript even when the probe matches (the pass
+   * that sees a turn end). `read` supplies the whole read, so a caller that
+   * shares one read per pass keeps sharing it. A provider without the bounded
+   * snapshot surface has no cheap probe and keeps reading the whole body.
+   */
+  async refreshMovedTranscript(
+    session: PipelineSession,
+    provider: BuildPipelineProvider,
+    options: { force?: boolean; read?: () => Promise<readonly unknown[]> } = {},
+  ): Promise<boolean> {
+    let whole: Promise<readonly unknown[]> | undefined;
+    const readWhole = () =>
+      (whole ??= options.read ? options.read() : provider.messages(session.sdkSessionId));
+    if (!hasProgressSnapshot(provider)) {
+      return this.refreshTranscript(session, provider, await readWhole());
+    }
+    const checkpoints = this.ctx.transcriptCheckpoints;
+    let probe: ProgressSample | undefined;
+    try {
+      probe = await readTranscriptProgressSample({
+        provider,
+        sessionId: session.sdkSessionId,
+        known: checkpoints.knownProbe(session),
+        // An oversized tail row is hashed from the exact tail; take it from the
+        // whole read this pass is about to need anyway.
+        fallbackRead: async () => Array.from(await readWhole()),
+      });
+    } catch {
+      // Nothing learned: the whole read below decides, as before the probe.
+    }
+    if (!options.force && probe && checkpoints.matchesProbe(session, probe)) return false;
+    return this.refreshTranscript(session, provider, await readWhole(), probe);
   }
 
   shouldPersistTranscript(session: PipelineSession): boolean {

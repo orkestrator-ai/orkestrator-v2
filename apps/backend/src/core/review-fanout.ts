@@ -748,7 +748,7 @@ export interface ReviewFanoutHost {
   /**
    * When false, token-count deltas stay in memory until the owner already has
    * another reason to save. Pipeline fan-out sets this so a streaming meter
-   * cannot rewrite the whole build-pipelines file on every poll.
+   * cannot write the pipeline's control row on every poll.
    */
   readonly persistReviewerUsageImmediately?: boolean;
   /**

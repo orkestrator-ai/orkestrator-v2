@@ -512,10 +512,13 @@ export const MAX_STRUCTURED_REPORT_REPAIR_ATTEMPTS = 3;
 /**
  * Minimum spacing between transcript-only snapshot writes for a running turn.
  *
- * Persisting the pipeline rewrites the whole build-pipelines file, so following
- * a streaming transcript at the tick rate turns every active build into a
- * continuous full-file rewrite. Status changes and phase transitions still
- * persist immediately; only a pure transcript delta is throttled.
+ * Each checkpoint writes the transcript's new chunks and this pipeline's
+ * control row, and the supervisor reads a session's whole transcript only at
+ * these boundaries (and only when a bounded probe shows it moved), so
+ * following a streaming transcript at the tick rate would turn every active
+ * build into continuous whole-transcript reads and writes. Status changes and
+ * phase transitions still persist immediately; only a pure transcript delta is
+ * throttled.
  */
 export const DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS = 5_000;
 export const DEFAULT_STALL_WARNING_MS = 2 * 5 * 60_000;

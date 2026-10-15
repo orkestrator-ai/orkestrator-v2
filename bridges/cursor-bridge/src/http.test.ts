@@ -988,6 +988,31 @@ describe("transcript reads", () => {
     expect(tail.baseIndex).toBe(1);
   });
 
+  test("serves only the newest messages for a tail limit", async () => {
+    const state = await createSession();
+    attachFake(state, { updates: [{ type: "text-delta", text: "reply" }] });
+    await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "ask", requestId: "r1" }),
+    });
+    await waitFor(() => state.messages.length >= 2);
+
+    const newest = (await (await call(`/session/${state.id}/messages?limit=1`)).json()) as {
+      messages: Array<{ id: string }>;
+      baseIndex: number;
+      messageWindow: { truncated: boolean; omittedMessages?: number };
+    };
+    expect(newest.messages.map((message) => message.id)).toEqual([state.messages.at(-1)!.id]);
+    expect(newest.baseIndex).toBe(1);
+    expect(newest.messageWindow).toMatchObject({ truncated: true, omittedMessages: 1 });
+
+    // An unusable limit keeps the whole retained window, as an older reader expects.
+    const whole = (await (await call(`/session/${state.id}/messages?limit=0`)).json()) as {
+      messages: unknown[];
+    };
+    expect(whole.messages).toHaveLength(2);
+  });
+
   test("an anchor below the retained window returns everything retained", async () => {
     const state = await createSession();
     state.droppedMessages = 10;

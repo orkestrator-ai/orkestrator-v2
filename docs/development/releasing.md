@@ -108,20 +108,60 @@ dispatched with **force**. For a new build it:
    | `APPLE_API_KEY_ID` | The key's id |
    | `APPLE_API_ISSUER` | The issuer id |
    | `NPM_TOKEN` | A granular npm token that can publish `orkestrator` |
-   | `ORKESTRATOR_RELEASE_SIGNING_KEY` | Optional until manifest signing is enabled: an Ed25519 PKCS#8 PEM |
+   | `ORKESTRATOR_RELEASE_SIGNING_KEY` | The **active** manifest signing key (see [Manifest signing keys](#manifest-signing-keys)). Required once `release-signing-keys.ts` lists keys |
 
 3. If a tag ruleset protects `v*`, let GitHub Actions create and delete
    `v*-unstable.*` tags.
 4. Enable the **Release unstable** workflow (scheduled workflows in a fork or a
    repository without recent activity start disabled).
 
-To turn manifest signing on later, generate a key
-(`openssl genpkey -algorithm ed25519`), store it as the secret and on the
-maintainer machines, add the output of
-`ORKESTRATOR_RELEASE_SIGNING_KEY=… bun scripts/release-requirements.ts public-key`
-(and a standby key) to `packages/protocol/src/release-signing-keys.ts`, and
-release that change. From then on every release must be signed; see
-"Integrity" in the architecture doc before doing this.
+### Manifest signing keys
+
+Releases sign `release-requirements.json` with Ed25519. It pins every provider
+binary an update installs, so the signature is what stops someone with write
+access to GitHub releases from swapping them. Two keys exist:
+
+- the **active** key signs every release. It is the
+  `ORKESTRATOR_RELEASE_SIGNING_KEY` Actions secret, and a maintainer keeps a
+  copy in the team password manager for local stable and beta releases;
+- the **standby** key signs nothing. It is kept offline only (the password
+  manager, plus an encrypted backup), never in CI.
+
+Turning signing on, once:
+
+1. Generate both keys on a maintainer machine. Each command writes an
+   owner-only PEM (it refuses to overwrite one) and prints the public key:
+
+   ```bash
+   bun scripts/release-requirements.ts keygen --out ~/orkestrator-release-active.pem
+   bun scripts/release-requirements.ts keygen --out ~/orkestrator-release-standby.pem
+   ```
+
+2. Store the active PEM as the `ORKESTRATOR_RELEASE_SIGNING_KEY` secret and in
+   the password manager; store the standby PEM in the password manager and the
+   offline backup. Then delete both files.
+3. List both printed public keys, active first, in
+   `packages/protocol/src/release-signing-keys.ts`, and merge that change.
+
+From the first release that embeds them, every later release must be signed:
+installs reject a manifest without a valid signature from a listed key.
+`release:desktop` refuses to start a publishing build without
+`ORKESTRATOR_RELEASE_SIGNING_KEY`, and checks that the key is one the build
+lists before it packages anything.
+
+Rotating, or replacing a leaked or lost active key:
+
+1. Make the standby key the active one: set it as the secret and give the
+   maintainers its PEM.
+2. Generate a new standby with `keygen`, and replace the old active public key
+   in `release-signing-keys.ts` with the new standby's.
+3. Release. Installs that only know the old pair accept that release, because
+   the standby key signed it, and learn the new pair from it.
+
+If the active key **leaked**, do this before anything else: until installs
+take the release that drops it, whoever holds it can sign manifests they
+accept. If **both** keys are lost, installs can no longer verify any update
+and must be updated by hand, which is why the standby lives offline.
 
 To rehearse a build without uploading or needing the tag, run
 `mise run release:desktop -- --no-publish`. Artifacts land in `release/`.

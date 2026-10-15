@@ -8,6 +8,8 @@
  *
  * Adding the first key is a one-way door for the installs that ship it; see
  * "Integrity" in docs/architecture/release-channels-and-updates.md. List the
- * active and a standby key so a rotation never strands an install.
+ * active key (the CI secret) first, then the offline standby key, so a
+ * rotation never strands an install. Generating, rotating and replacing them:
+ * docs/development/releasing.md, "Manifest signing keys".
  */
 export const RELEASE_SIGNING_PUBLIC_KEYS: readonly string[] = [];

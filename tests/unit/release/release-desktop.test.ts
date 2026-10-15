@@ -45,6 +45,7 @@ function harness(overrides: Partial<ReleaseRuntime> = {}) {
     prepareMacUpdateFeeds: () => ["release/latest-mac.yml"],
     tempDir: () => ({ path: "/tmp/release-test", cleanup: () => {} }),
     npmVersionExists: () => true,
+    trustedSigningKeys: [],
     ...overrides,
   };
   return { runtime, run, capture };
@@ -246,10 +247,28 @@ describe("desktop release commands", () => {
       "--out",
       "build/release-requirements.json.sig",
     ]);
+    expect(commands).toContainEqual([
+      "bun",
+      "scripts/release-requirements.ts",
+      "verify",
+      "--file",
+      "build/release-requirements.json",
+      "--signature",
+      "build/release-requirements.json.sig",
+    ]);
     expect(commands.at(-1)?.slice(-2)).toEqual([
       "build/release-requirements.json",
       "build/release-requirements.json.sig",
     ]);
+  });
+
+  test("a build that embeds signing keys refuses to publish unsigned, before side effects", () => {
+    const { runtime, run } = harness({ trustedSigningKeys: ["a".repeat(43) + "="] });
+    expect(() => runDesktopRelease(["build"], runtime)).toThrow("must be signed");
+    expect(run).not.toHaveBeenCalled();
+    // A local build that publishes nothing needs no key.
+    runDesktopRelease(["build", "--no-publish"], runtime);
+    expect(run).toHaveBeenCalled();
   });
 
   test.each(["2.21.0-rc.1", "2.21.0-alpha.1", "2.21.0+build"])(

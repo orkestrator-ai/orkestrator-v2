@@ -6,6 +6,7 @@
  *   bun scripts/release-requirements.ts verify --file <file> [--signature <file.sig>] [--commit <sha>]
  *   bun scripts/release-requirements.ts sign --file <file> --out <file.sig>
  *   bun scripts/release-requirements.ts public-key
+ *   bun scripts/release-requirements.ts keygen --out <private-key.pem>
  *
  * Every section is read from the code that owns the fact (storage migrations,
  * macOS permission probes, toolchain pins, container contract), so the
@@ -16,7 +17,7 @@
  * Signing uses ORKESTRATOR_RELEASE_SIGNING_KEY (an Ed25519 PKCS#8 PEM). See
  * docs/architecture/release-channels-and-updates.md.
  */
-import { createPrivateKey, createPublicKey, sign } from "node:crypto";
+import { createPrivateKey, createPublicKey, generateKeyPairSync, sign } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
@@ -272,6 +273,20 @@ export function rawPublicKeyBase64(key: ReturnType<typeof createPrivateKey>): st
 }
 
 /**
+ * Writes a new Ed25519 signing key (PKCS#8 PEM, owner-only, never over an
+ * existing file) and returns its public key in the embedded form.
+ */
+export function generateSigningKey(out: string): string {
+  const { privateKey } = generateKeyPairSync("ed25519");
+  mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
+  writeFileSync(out, privateKey.export({ format: "pem", type: "pkcs8" }), {
+    mode: 0o600,
+    flag: "wx",
+  });
+  return rawPublicKeyBase64(privateKey);
+}
+
+/**
  * Once this build embeds signing keys, a release without a valid signature is
  * refused: installs that ship those keys would refuse its manifest.
  */
@@ -323,12 +338,19 @@ async function main(args: string[]): Promise<void> {
     const key = signingKeyFromEnvironment();
     if (!key) throw new Error("ORKESTRATOR_RELEASE_SIGNING_KEY is not set");
     writeFileSync(out, signReleaseRequirements(readFileSync(file), key));
+  } else if (command === "keygen") {
+    const out = option(rest, "--out");
+    if (!out) throw new Error("usage: keygen --out <private-key.pem>");
+    const publicKey = generateSigningKey(out);
+    console.log(`Wrote ${out}. Its public key, for release-signing-keys.ts:\n${publicKey}`);
   } else if (command === "public-key") {
     const key = signingKeyFromEnvironment();
     if (!key) throw new Error("ORKESTRATOR_RELEASE_SIGNING_KEY is not set");
     console.log(rawPublicKeyBase64(key));
   } else {
-    throw new Error("usage: release-requirements.ts generate | verify | sign | public-key");
+    throw new Error(
+      "usage: release-requirements.ts generate | verify | sign | public-key | keygen",
+    );
   }
 }
 

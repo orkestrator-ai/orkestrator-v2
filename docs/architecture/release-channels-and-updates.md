@@ -308,22 +308,24 @@ manifest cannot drift from the code:
     npm artefact npm just verified is the release the user approved.
   - Desktop: the feed's `version` must equal the manifest's, and the
     Squirrel.Mac signature check binds the app to the Developer ID.
-- **Signature (recommended, needs a decision).** An Ed25519 detached
-  signature, `release-requirements.json.sig`, made with a release key held in
-  the CI secret `ORKESTRATOR_RELEASE_SIGNING_KEY` and on maintainer machines.
-  It is verified against public keys compiled into the app
-  (`packages/protocol/src/release-signing-keys.ts`; a list, to allow
-  rotation).
+- **Signature (decided: an active CI key plus an offline standby).** An
+  Ed25519 detached signature, `release-requirements.json.sig`, made with the
+  active release key, which is the CI secret `ORKESTRATOR_RELEASE_SIGNING_KEY`
+  and a maintainer copy. It is verified against public keys compiled into the
+  app (`packages/protocol/src/release-signing-keys.ts`): the active key and a
+  standby key that is kept offline and signs nothing until a rotation.
   - When the build embeds at least one key, a valid signature is **required**.
     Accepting an unsigned manifest would let anyone who can strip the file
     bypass the check.
-  - The code ships with an empty key list, which means checksum-only mode.
-  - Turning signing on is a one-way door: installs that require signatures
-    reject unsigned manifests. It should be decided together with
-    electron-builder 27's mandatory signed update manifests, which is the open
-    "update-manifest key management" question in
-    [dependency-upgrades.md](../todo/dependency-upgrades.md). One key policy
-    (custody, rotation, loss recovery) should cover both.
+  - Until the keys are generated and listed, the list is empty, which means
+    checksum-only mode. Turning signing on is a one-way door: from then on
+    every release must be signed, and `release:desktop` refuses to publish
+    without the key.
+  - Generation, custody, rotation and loss recovery are in
+    [releasing.md](../development/releasing.md#manifest-signing-keys).
+    electron-builder 27's mandatory signed update manifests
+    ([dependency-upgrades.md](../todo/dependency-upgrades.md)) should follow
+    the same policy.
 
 ### Diff and consent
 

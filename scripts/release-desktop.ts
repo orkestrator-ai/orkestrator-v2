@@ -25,6 +25,7 @@ import {
   RELEASE_REQUIREMENTS_ASSET,
   RELEASE_REQUIREMENTS_SIGNATURE_ASSET,
 } from "../packages/protocol/src/release-requirements.js";
+import { RELEASE_SIGNING_PUBLIC_KEYS } from "../packages/protocol/src/release-signing-keys.js";
 import { assertMacUpdateFeed, prepareMacUpdateFeeds } from "./mac-update-feed.js";
 
 const root = path.resolve(import.meta.dir, "..");
@@ -125,6 +126,8 @@ export type ReleaseRuntime = {
   tempDir(): { path: string; cleanup(): void };
   /** Whether `orkestrator@<version>` is on the npm registry. */
   npmVersionExists(version: string): boolean;
+  /** The public keys this build embeds (`release-signing-keys.ts`). */
+  trustedSigningKeys: readonly string[];
 };
 
 function npmVersionExists(version: string): boolean {
@@ -154,6 +157,7 @@ const defaultRuntime: ReleaseRuntime = {
     return { path: directory, cleanup: () => rmSync(directory, { recursive: true, force: true }) };
   },
   npmVersionExists,
+  trustedSigningKeys: RELEASE_SIGNING_PUBLIC_KEYS,
 };
 
 /** The release's channel, refused before any side effect when the version has none. */
@@ -194,6 +198,13 @@ function build(publish: boolean, runtime: ReleaseRuntime): void {
   if (publish) assertTaggedCheckout(tag, runtime.capture);
   const env = publish ? { ...runtime.env, GH_TOKEN: githubToken(runtime) } : runtime.env;
   const signed = Boolean(runtime.env.ORKESTRATOR_RELEASE_SIGNING_KEY?.trim());
+  // Installs that ship these keys refuse an unsigned manifest, so find out
+  // before a 20-minute build rather than at publish.
+  if (publish && runtime.trustedSigningKeys.length > 0 && !signed) {
+    fail(
+      "this build embeds release signing keys, so its release must be signed: set ORKESTRATOR_RELEASE_SIGNING_KEY",
+    );
+  }
 
   run(["bun", "install", "--frozen-lockfile"]);
   run(["mise", "run", "download:bun"]);
@@ -208,6 +219,16 @@ function build(publish: boolean, runtime: ReleaseRuntime): void {
       "--file",
       REQUIREMENTS_FILE,
       "--out",
+      REQUIREMENTS_SIGNATURE_FILE,
+    ]);
+    // A key the build does not embed would sign a release no install accepts.
+    run([
+      "bun",
+      "scripts/release-requirements.ts",
+      "verify",
+      "--file",
+      REQUIREMENTS_FILE,
+      "--signature",
       REQUIREMENTS_SIGNATURE_FILE,
     ]);
   }

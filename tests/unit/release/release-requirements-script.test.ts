@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
-import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createPrivateKey, generateKeyPairSync } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { MACOS_PERMISSION_CATALOGUE } from "../../../packages/protocol/src/macos-permissions";
@@ -21,6 +21,7 @@ import {
 import {
   buildReleaseRequirements,
   generateReleaseRequirements,
+  generateSigningKey,
   rawPublicKeyBase64,
   signReleaseRequirements,
   verifySignatureForRelease,
@@ -168,6 +169,22 @@ describe("signing", () => {
     await expect(
       verifySignatureForRelease(bytes, signReleaseRequirements(bytes, other), [key]),
     ).rejects.toThrow("does not verify");
+  });
+
+  test("keygen writes an owner-only key once and prints the public key to embed", async () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "release-keygen-"));
+    try {
+      const file = path.join(directory, "keys", "active.pem");
+      const publicKey = generateSigningKey(file);
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+      const privateKey = createPrivateKey(readFileSync(file, "utf8"));
+      expect(rawPublicKeyBase64(privateKey)).toBe(publicKey);
+      const signature = signReleaseRequirements(bytes, privateKey);
+      expect(await verifyReleaseRequirementsSignature(bytes, signature, [publicKey])).toBe(true);
+      expect(() => generateSigningKey(file)).toThrow();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
 

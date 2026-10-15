@@ -77,6 +77,7 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
  */
 const ENGINE_STORE_LAYOUTS: Record<string, StoreLayout> = {
   "storage-deletion-fences": { kind: "record" },
+  "storage-legacy-json-cleanups": { kind: "document" },
   ...NATIVE_AGENT_DISPLAY_TAIL_STORE_LAYOUTS,
   ...BUILD_PIPELINE_TRANSCRIPT_STORE_LAYOUTS,
 };
@@ -369,8 +370,8 @@ function itemIdentity(item: unknown): string {
  *   treated as removed;
  * - a value `next` cleared to `null` becomes `null`.
  *
- * Matched records and items recurse; other values (changed scalars, changed
- * types) keep their archived value. When nothing is removed the result is
+ * Matched records and items recurse; changed scalars keep their archived value.
+ * Incompatible containers are cleared. When nothing is removed the result is
  * `archived` itself, so `pruneRemovedContent(previous, next) !== previous`
  * tells whether a write from `previous` to `next` deleted anything.
  */
@@ -406,7 +407,78 @@ export function pruneRemovedContent(archived: unknown, next: unknown): unknown {
     }
     return changed ? kept : archived;
   }
+  // A container with an incompatible counterpart cannot be attributed. Keeping
+  // it could retain an entire deleted workspace in a malformed backup.
+  if (
+    isJsonRecord(archived) ||
+    Array.isArray(archived) ||
+    isJsonRecord(next) ||
+    Array.isArray(next)
+  ) {
+    return null;
+  }
   return archived;
+}
+
+export type LegacyJsonCleanup =
+  | { store: string; kind: "delete" }
+  | { store: string; kind: "prune"; next: unknown };
+
+const LEGACY_CLEANUPS_STORE = "storage-legacy-json-cleanups";
+const MAX_LEGACY_CLEANUPS = 1024;
+const MAX_LEGACY_CLEANUP_BYTES = 64 * 1024 * 1024;
+
+/** Commit cleanup intent with its mutation; no archive changes before commit. */
+export function commitWithLegacyJsonCleanup(
+  database: StorageDatabase,
+  dataDir: string,
+  mutate: () => void,
+  cleanups: LegacyJsonCleanup[] = [],
+): void {
+  // Finish failed work before allowing another mutation to obscure its evidence.
+  let scrubbedPending = false;
+  database.transaction(() => {
+    scrubbedPending = applyLegacyJsonCleanup(database, dataDir);
+    mutate();
+    if (cleanups.length === 0) return;
+    if (
+      cleanups.length > MAX_LEGACY_CLEANUPS ||
+      Buffer.byteLength(JSON.stringify(cleanups)) > MAX_LEGACY_CLEANUP_BYTES
+    ) {
+      throw new Error("Legacy JSON cleanup capacity exceeded");
+    }
+    // Private SQLite storage, never logs/receipts. Retain each intermediate
+    // pruning target: a later re-add must not undo an earlier privacy deletion.
+    database.writeStoreInTransaction(LEGACY_CLEANUPS_STORE, cleanups);
+  });
+  replayLegacyJsonCleanup(database, dataDir);
+  if (scrubbedPending) database.scrubDeletedContent();
+}
+
+/** Replays idempotently on reopen or the next write, even when it is unrelated. */
+export function replayLegacyJsonCleanup(database: StorageDatabase, dataDir: string): void {
+  if (!database.hasStore(LEGACY_CLEANUPS_STORE)) return;
+  database.transaction(() => applyLegacyJsonCleanup(database, dataDir));
+  // Pruning targets themselves can contain content removed by a later target.
+  database.scrubDeletedContent();
+}
+
+function applyLegacyJsonCleanup(database: StorageDatabase, dataDir: string): boolean {
+  // Serialize scrub + acknowledgement across backends. Otherwise an older
+  // scrub could overwrite a newer one after that backend has acknowledged it.
+  const cleanups = database.readStore(LEGACY_CLEANUPS_STORE)?.value as
+    | LegacyJsonCleanup[]
+    | undefined;
+  if (!cleanups) return false;
+  for (const cleanup of cleanups) {
+    scrubLegacyJsonStore(
+      dataDir,
+      cleanup.store,
+      cleanup.kind === "prune" ? (copy) => pruneRemovedContent(copy, cleanup.next) : undefined,
+    );
+  }
+  database.deleteStoreInTransaction(LEGACY_CLEANUPS_STORE);
+  return true;
 }
 
 function purgeExpiredLegacyJson(archiveRoot: string, now: number): void {
@@ -455,6 +527,12 @@ export function openBackendDatabase(
     }
   } catch (error) {
     console.warn("[Storage] Could not archive imported JSON store files:", error);
+  }
+  try {
+    replayLegacyJsonCleanup(database, dataDir);
+  } catch (error) {
+    database.close();
+    throw error;
   }
   return database;
 }

@@ -333,6 +333,18 @@ describe("retired JSON archive scrubbing", () => {
     expect(archived).toEqual(original);
   });
 
+  test.each([
+    [[{ secret: "deleted" }], { kept: {} }],
+    [{ secret: "deleted" }, []],
+    [{ nested: [{ secret: "deleted" }] }, { nested: {} }],
+    [{ nested: { secret: "deleted" } }, { nested: [] }],
+    [{ nested: { secret: "deleted" } }, { nested: "scalar" }],
+    ["malformed root", {}],
+  ])("clears incompatible archive shapes (%j -> %j)", (archived, next) => {
+    expect(JSON.stringify(pruneRemovedContent(archived, next))).not.toContain("deleted");
+    expect(pruneRemovedContent(archived, next)).not.toBe(archived);
+  });
+
   test("leaves a copy the transform does not change byte-identical", async () => {
     const directory = await dataDir();
     await writeJson(directory, "compose-drafts.json", { a: { text: "x" } });

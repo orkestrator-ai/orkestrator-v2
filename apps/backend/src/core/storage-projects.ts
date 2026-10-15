@@ -1,4 +1,3 @@
-import { scrubLegacyJsonStore } from "./storage-stores.js";
 import { MAX_LIFECYCLE_RECORD_BYTES } from "@orkestrator/protocol/container-lifecycle";
 import { parseResourceLimits } from "@orkestrator/protocol/container-resources";
 import * as shared from "./storage-shared.js";
@@ -471,7 +470,7 @@ export abstract class StorageProjects extends StorageBase {
     environmentId: string,
     removeEnvironment: boolean,
   ): Promise<void> {
-    scrubLegacyJsonStore(this.dataDir, "environments", (value) => {
+    this.scrubLegacyArchive("environments", (value) => {
       if (!Array.isArray(value)) throw new Error("Unattributable environment archive");
       return value
         .filter((entry) => !removeEnvironment || !isRecord(entry) || entry.id !== environmentId)

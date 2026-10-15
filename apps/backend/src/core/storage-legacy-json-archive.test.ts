@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { promises as fs } from "node:fs";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import syncFs, { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -11,6 +11,13 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import { createEnvironment, StorageService } from "./storage.js";
 import { LEGACY_JSON_DIRECTORY } from "./storage-stores.js";
+import { seedUnreadableStore } from "./storage-test-support.js";
+
+class ArchiveProbe extends StorageService {
+  committed(store: string): unknown {
+    return this.database.readStore(store)?.value;
+  }
+}
 
 const directories: string[] = [];
 const services: StorageService[] = [];
@@ -34,7 +41,7 @@ async function migrated(files: Record<string, unknown>) {
     await fs.writeFile(path.join(dataDir, file), raw);
     await fs.writeFile(path.join(dataDir, `${file}.bak.1`), raw);
   }
-  const storage = new StorageService(dataDir);
+  const storage = new ArchiveProbe(dataDir);
   services.push(storage);
   await storage.init();
   const [stamp] = await fs.readdir(path.join(dataDir, LEGACY_JSON_DIRECTORY));
@@ -185,6 +192,203 @@ describe("retired JSON archive", () => {
       );
       expect(draftCopy).not.toContain("ARCHIVED-DRAFT-71c0");
       expect(JSON.parse(draftCopy)).toEqual({ other: drafts.other });
+    }
+  });
+
+  test.each(["same mutation", "unrelated save", "restart"])(
+    "replays a failed coordinator prune on %s",
+    async (recovery) => {
+      const coordinators = {
+        version: COORDINATOR_WORKSPACE_VERSION,
+        revision: 0,
+        workspaces: {
+          "project-1": workspace("project-1", (id) => [
+            conversation(id, "main", "RETRY-SECRET", "main"),
+          ]),
+          "project-2": workspace("project-2"),
+        },
+        workflows: [],
+      };
+      const { storage, archive } = await migrated({ "coordinators.json": coordinators });
+      const originalRename = syncFs.renameSync;
+      let renames = 0;
+      const rename = spyOn(syncFs, "renameSync").mockImplementation((from, to) => {
+        if (++renames === 2) throw new Error("archive rename failed");
+        return originalRename(from, to);
+      });
+      try {
+        await expect(storage.mutateCoordinatorWorkspace("project-1", () => null)).rejects.toThrow(
+          "archive rename failed",
+        );
+        expect(
+          (storage.committed("coordinators") as typeof coordinators).workspaces["project-1"],
+        ).toBeUndefined();
+        // Directory enumeration order is unspecified: either copy may be first.
+        const copies = Object.values(await archiveFiles(archive));
+        expect(copies.filter((copy) => copy.includes("RETRY-SECRET"))).toHaveLength(1);
+      } finally {
+        rename.mockRestore();
+      }
+      if (recovery === "same mutation") {
+        // The workspace is already gone: the retried mutation does no write.
+        await storage.mutateCoordinatorWorkspace("project-1", () => null);
+      } else if (recovery === "unrelated save") {
+        await storage.saveLinearAuth("new-key");
+      } else {
+        storage.close();
+        const reopened = new ArchiveProbe(storage.getDataDir());
+        services.push(reopened);
+        await reopened.init();
+      }
+      for (const copy of Object.values(await archiveFiles(archive))) {
+        expect(copy).not.toContain("RETRY-SECRET");
+        expect(copy).toContain("project-2");
+      }
+      // Subsequent ordinary saves must not bring archived content back.
+      await storage.saveLinearAuth("another-key");
+      expect(Object.values(await archiveFiles(archive)).join("")).not.toContain("RETRY-SECRET");
+    },
+  );
+
+  test("replays failed whole-store deletion after reopening", async () => {
+    const { storage, archive } = await migrated({ "linear-auth.json": { apiKey: "DELETE-RETRY" } });
+    const original = syncFs.rmSync;
+    const remove = spyOn(syncFs, "rmSync").mockImplementation((file, options) => {
+      if (String(file).includes("linear-auth.json")) throw new Error("archive removal failed");
+      return original(file, options);
+    });
+    try {
+      await expect(storage.clearLinearAuth()).rejects.toThrow("archive removal failed");
+      expect(storage.committed("linear-auth")).toBeUndefined();
+    } finally {
+      remove.mockRestore();
+    }
+    storage.close();
+    const reopened = new ArchiveProbe(storage.getDataDir());
+    services.push(reopened);
+    await reopened.init();
+    expect(await archiveFiles(archive)).toEqual({});
+  });
+
+  test.each([false, true])(
+    "first saves preserve missing-store history and prune corrupt stores (corrupt=%s)",
+    async (corrupt) => {
+      const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-peer-archive-"));
+      directories.push(dataDir);
+      const first = new ArchiveProbe(dataDir);
+      services.push(first);
+      await first.init();
+      const environment = await first.addEnvironment(createEnvironment("project-1"));
+      first.close();
+      const peer = { peer: composeDraft("peer", environment.id, "UNIMPORTED-PEER") };
+      for (const suffix of ["", ".bak.1"]) {
+        await fs.writeFile(
+          path.join(dataDir, `compose-drafts.json${suffix}`),
+          JSON.stringify(peer),
+        );
+      }
+      const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+      const storage = new ArchiveProbe(dataDir);
+      services.push(storage);
+      try {
+        await storage.init();
+      } finally {
+        warn.mockRestore();
+      }
+      if (corrupt) seedUnreadableStore(dataDir, "compose-drafts.json");
+      // An initial write is addition evidence only; unreadability is different.
+      await storage.saveComposeDraft("local", "environment", environment.id, { text: "new" });
+      const [stamp] = await fs.readdir(path.join(dataDir, LEGACY_JSON_DIRECTORY));
+      for (const copy of Object.values(
+        await archiveFiles(path.join(dataDir, LEGACY_JSON_DIRECTORY, stamp!)),
+      )) {
+        expect(copy.includes("UNIMPORTED-PEER")).toBe(!corrupt);
+      }
+    },
+  );
+
+  test.each(["root", "nested"])(
+    "deletion clears incompatible %s archive containers",
+    async (shape) => {
+      const coordinators = {
+        version: COORDINATOR_WORKSPACE_VERSION,
+        revision: 0,
+        workspaces: { "project-1": workspace("project-1"), "project-2": workspace("project-2") },
+        workflows: [],
+      };
+      const { storage, archive } = await migrated({ "coordinators.json": coordinators });
+      const malformed =
+        shape === "root"
+          ? [{ title: "INCOMPATIBLE-SECRET" }]
+          : { ...coordinators, workspaces: [{ title: "INCOMPATIBLE-SECRET" }] };
+      await fs.writeFile(path.join(archive, "coordinators.json.bak.1"), JSON.stringify(malformed));
+      await storage.mutateCoordinatorWorkspace("project-1", () => null);
+      for (const copy of Object.values(await archiveFiles(archive)))
+        expect(copy).not.toContain("INCOMPATIBLE-SECRET");
+    },
+  );
+
+  test("routine environment saves preserve archive bytes before attributable attachment cleanup", async () => {
+    const environment = createEnvironment("project-1");
+    environment.initialPromptAttachments = [
+      { id: "a", name: "private.png", base64Data: "ENVIRONMENT-SECRET" },
+    ];
+    const { storage, archive } = await migrated({ "environments.json": [environment] });
+    const before = await archiveFiles(archive);
+    await storage.updateEnvironment(environment.id, { name: "renamed", status: "running" });
+    expect(await archiveFiles(archive)).toEqual(before);
+    await storage.updateEnvironment(environment.id, { initialPromptAttachments: null });
+    for (const copy of Object.values(await archiveFiles(archive))) {
+      expect(copy).not.toContain("ENVIRONMENT-SECRET");
+      expect(copy).toContain(environment.id);
+    }
+  });
+
+  test("queue transitions prune moved heads and acknowledged in-flight copies without rewriting other queues", async () => {
+    const environment = createEnvironment("project-1");
+    const queue = {
+      queueKey: "queue",
+      environmentId: environment.id,
+      revision: 1,
+      updatedAt: new Date().toISOString(),
+      messages: [
+        { id: "head", text: "QUEUED-SECRET" },
+        { id: "tail", text: "kept" },
+      ],
+    };
+    const completed = {
+      ...queue,
+      queueKey: "completed",
+      messages: [],
+      inFlight: {
+        message: { id: "sent", text: "IN-FLIGHT-SECRET" },
+        requestId: "sent",
+        reservedAt: new Date().toISOString(),
+      },
+    };
+    const { storage, archive } = await migrated({
+      "environments.json": [environment],
+      "prompt-queues.json": { queue, completed },
+    });
+    const reservation = await storage.reservePromptQueueHeadForDispatch("queue");
+    expect(reservation?.message).toEqual(queue.messages[0]);
+    // The archive retains its old shape; the head has left that location.
+    for (const suffix of ["", ".bak.1"]) {
+      const copy = await fs.readFile(path.join(archive, `prompt-queues.json${suffix}`), "utf8");
+      expect(copy).not.toContain("QUEUED-SECRET");
+      expect(copy).toContain("IN-FLIGHT-SECRET");
+      expect(copy).toContain("kept");
+    }
+    const beforeFence = await archiveFiles(archive);
+    await storage.markPromptQueueDispatchSubmitting("queue", "head");
+    await storage.markPromptQueueDispatchSubmitted("queue", "head");
+    expect(await archiveFiles(archive)).toEqual(beforeFence);
+    await storage.acknowledgePromptQueueDispatch("completed", "sent");
+    await storage.acknowledgePromptQueueDispatch("queue", "head");
+    for (const suffix of ["", ".bak.1"]) {
+      const copy = await fs.readFile(path.join(archive, `prompt-queues.json${suffix}`), "utf8");
+      expect(copy).not.toContain("IN-FLIGHT-SECRET");
+      expect(copy).toContain("kept");
     }
   });
 

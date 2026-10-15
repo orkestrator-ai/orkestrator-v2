@@ -3450,6 +3450,37 @@ describe("OpenCode model catalogue cache", () => {
     });
   });
 
+  test("persists the connected providers beside the catalogue", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const initial = await storage.cacheOpenCodeModelCatalog(projectId, models, [
+        "openrouter",
+        "openrouter",
+        " anthropic ",
+      ]);
+      expect(initial.connectedProviderIds).toEqual(["anthropic", "openrouter"]);
+      expect(Date.parse(initial.connectedProvidersCheckedAt ?? "")).not.toBeNaN();
+      expect(await storage.getOpenCodeModelCatalog(projectId)).toEqual(initial);
+
+      // The same models with new connectivity still rewrites the snapshot, but
+      // keeps the catalogue identity.
+      const reconnected = await storage.cacheOpenCodeModelCatalog(projectId, models, [
+        "openrouter",
+      ]);
+      expect(reconnected.connectedProviderIds).toEqual(["openrouter"]);
+      expect(reconnected.catalogVersion).toBe(initial.catalogVersion);
+      expect(reconnected.updatedAt).toBe(initial.updatedAt);
+
+      // A source without a connectivity report cannot erase the last one.
+      const widened = await storage.cacheOpenCodeModelCatalog(projectId, [
+        ...models,
+        { id: "openrouter/google/gemini", name: "Gemini", provider: "openrouter" },
+      ]);
+      expect(widened.models).toHaveLength(3);
+      expect(widened.connectedProviderIds).toEqual(["openrouter"]);
+      expect(widened.connectedProvidersCheckedAt).toBe(reconnected.connectedProvidersCheckedAt);
+    });
+  });
+
   test("isolates project catalogues in one scoped store", async () => {
     await withTemporaryStorage(async (storage) => {
       const first = await storage.cacheOpenCodeModelCatalog("project-a", models);

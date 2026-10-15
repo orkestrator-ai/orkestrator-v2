@@ -1206,7 +1206,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
             ? originalFix.fixWorktreeFingerprintAtStart
             : await this.worktreeFingerprint(pipeline)
           : undefined;
-      const { agent, model, effort, fastMode } = override?.settings
+      const { agent, model, effort, fastMode, modelSubstitution } = override?.settings
         ? await this.settingsForSelection(pipeline, override.settings)
         : await this.stepSettings(pipeline, sessionPhase);
       const provider = await this.provider(pipeline, agent);
@@ -1265,6 +1265,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         phase: sessionPhase,
         agent,
         ...(model ? { model } : {}),
+        ...(modelSubstitution ? { modelSubstitution } : {}),
         ...(effort ? { reasoningEffort: effort } : {}),
         ...(typeof fastMode === "boolean" ? { fastMode } : {}),
         origin: "build-pipeline",

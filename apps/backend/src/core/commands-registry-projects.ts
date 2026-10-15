@@ -22,6 +22,7 @@ import {
   isSelectableOpenCodeProvider,
   normalizeOpenCodeModelProviders,
   openCodeModelDisplayLabel,
+  openCodeModelProviderId,
   synthesizedOpenCodeAgentModel,
 } from "@orkestrator/protocol/native-agent";
 import type {
@@ -590,11 +591,15 @@ export function registerProjectCommands(
       const openCodeModelProviders = normalizeOpenCodeModelProviders(
         config.global.openCodeModelProviders,
       );
-      const openCodeModels = qualified.has("opencode")
-        ? ((await storage.getOpenCodeModelCatalog(projectId))?.models ?? []).filter((model) =>
-            isSelectableOpenCodeProvider(model.provider, openCodeModelProviders),
-          )
-        : [];
+      const openCodeSnapshot = qualified.has("opencode")
+        ? await storage.getOpenCodeModelCatalog(projectId)
+        : null;
+      const connectedProviderIds = openCodeSnapshot?.connectedProviderIds;
+      const openCodeModels = (openCodeSnapshot?.models ?? []).filter(
+        (model) =>
+          isSelectableOpenCodeProvider(model.provider, openCodeModelProviders) &&
+          (!connectedProviderIds || connectedProviderIds.includes(model.provider)),
+      );
       // Durable caches only. A coordinator has no bridge until a provider is
       // assigned, so there is nothing live to ask, and starting one to answer a
       // picker would materialize the very session the choice is meant to
@@ -675,25 +680,40 @@ export function registerProjectCommands(
     const openCodeModelProviders = normalizeOpenCodeModelProviders(
       config.global.openCodeModelProviders,
     );
-    const openCodeModels = (
-      (await storage.getOpenCodeModelCatalog(environment.projectId))?.models ?? []
-    ).filter((model) => isSelectableOpenCodeProvider(model.provider, openCodeModelProviders));
+    const openCodeSnapshot = await storage.getOpenCodeModelCatalog(environment.projectId);
     const runningOpenCodeBridge =
       environment.environmentType === "local"
         ? await peekLocalAgentBridge(environment.id, context, "opencode")
         : environment.containerId
           ? await peekContainerAgentBridge(environment.containerId, "opencode")
           : null;
+    const openCodeCatalogInput = {
+      environmentId: id,
+      agent: "opencode" as const,
+      logicalSessionKey: `model-catalog:${id}`,
+    };
     const liveOpenCodeModels =
       context.nativeAgents && runningOpenCodeBridge
-        ? await context.nativeAgents
-            .listModelCatalogForCache({
-              environmentId: id,
-              agent: "opencode",
-              logicalSessionKey: `model-catalog:${id}`,
-            })
-            .catch(() => [])
+        ? await context.nativeAgents.listModelCatalogForCache(openCodeCatalogInput).catch(() => [])
         : [];
+    // Read after the raw catalogue, whose read reports connectivity too.
+    const liveConnectedProviderIds =
+      context.nativeAgents && liveOpenCodeModels.length > 0
+        ? await context.nativeAgents
+            .connectedModelProviders(openCodeCatalogInput)
+            .catch(() => undefined)
+        : undefined;
+    // The live report, or the last one persisted with the durable catalogue
+    // when no bridge is running. Pickers only offer providers it lists, so a
+    // model this login cannot serve is never offered or preselected.
+    const connectedProviderIds = liveConnectedProviderIds ?? openCodeSnapshot?.connectedProviderIds;
+    const isConnectedOpenCodeModel = (modelId: string): boolean =>
+      !connectedProviderIds || connectedProviderIds.includes(openCodeModelProviderId(modelId));
+    const openCodeModels = (openCodeSnapshot?.models ?? []).filter(
+      (model) =>
+        isSelectableOpenCodeProvider(model.provider, openCodeModelProviders) &&
+        isConnectedOpenCodeModel(model.id),
+    );
     // Only the reads narrow. Persisting the filtered list instead would make the
     // allowlist durable, so widening it later would leave the launch dialogs —
     // which read this cache before any OpenCode server is ready — narrow until
@@ -712,11 +732,14 @@ export function registerProjectCommands(
               ? { supportsImageInput: model.supportsImageInput }
               : {}),
           })),
+          liveConnectedProviderIds,
         )
         .catch(() => undefined);
     }
-    const selectableLiveOpenCodeModels = liveOpenCodeModels.filter((model) =>
-      isSelectableOpenCodeModelId(model.id, openCodeModelProviders),
+    const selectableLiveOpenCodeModels = liveOpenCodeModels.filter(
+      (model) =>
+        isSelectableOpenCodeModelId(model.id, openCodeModelProviders) &&
+        isConnectedOpenCodeModel(model.id),
     );
     const [cursorFetch, grokFetch, piFetch] = await Promise.all([
       fetchAcpNormalizedModelsResult(
@@ -758,6 +781,7 @@ export function registerProjectCommands(
       if (favorite.platform !== "opencode") return [];
       if (cataloguedOpenCodeIds.has(favorite.modelId)) return [];
       if (!isSelectableOpenCodeModelId(favorite.modelId, openCodeModelProviders)) return [];
+      if (!isConnectedOpenCodeModel(favorite.modelId)) return [];
       const synthesized = synthesizedOpenCodeAgentModel(favorite.modelId);
       if (!synthesized) return [];
       cataloguedOpenCodeIds.add(favorite.modelId);

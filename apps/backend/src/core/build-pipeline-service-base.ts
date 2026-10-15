@@ -204,6 +204,7 @@ export abstract class BuildPipelineServiceBase implements KeyedWorkflowOwner {
   protected abstract settingsForSelection(
     pipeline: BuildPipeline,
     selection: BuildStepSelection,
+    options?: { modelFromDefaults?: boolean },
   ): Promise<BuildStepSelection>;
   protected abstract settingsForSelections(
     pipeline: BuildPipeline,

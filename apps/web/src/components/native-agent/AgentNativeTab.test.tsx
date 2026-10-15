@@ -4483,6 +4483,34 @@ describe("AgentNativeTab", () => {
     });
   });
 
+  test("tells the user when a new OpenCode session starts on a substituted model", async () => {
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["opencode"],
+      agentSettings: { platforms: { opencode: { model: "opencode/claude-sonnet-5" } } },
+    });
+    const message = "claude-sonnet-5 isn't available with your OpenCode login; using GPT-5.6 Luna.";
+    ensureNativeAgentSessionMock.mockImplementation(async (input) => ({
+      ...(await defaultEnsureNativeAgentSession(input)),
+      modelSubstitution: {
+        requestedModelId: "opencode/claude-sonnet-5",
+        modelId: "opencode-go/gpt-5.6-luna",
+        message,
+      },
+    }));
+
+    render(
+      <AgentNativeTab tabId="tab-opencode-substituted" data={freshTab("opencode")} isActive />,
+    );
+
+    await waitFor(() => expect(mockToastInfo).toHaveBeenCalledWith(message));
+    // The configured model is still what the tab asked for; the backend owns
+    // the substitution, so the saved choice survives a reconnect.
+    expect(ensureNativeAgentSessionMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      agent: "opencode",
+      model: "opencode/claude-sonnet-5",
+    });
+  });
+
   test("applies configured Claude SDK parameters to a new session", async () => {
     useConfigStore.getState().updateGlobalConfig({
       agentSettings: {

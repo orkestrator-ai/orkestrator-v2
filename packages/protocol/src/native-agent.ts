@@ -138,6 +138,19 @@ export interface AgentModelParameter {
   scope: "session" | "turn";
 }
 
+/**
+ * A configured default model replaced, for one resolution, by one the runtime
+ * can serve. The configuration itself is never rewritten.
+ */
+export interface NativeAgentModelSubstitution {
+  /** The configured model the runtime reports it cannot currently serve. */
+  requestedModelId: string;
+  /** The model used instead. */
+  modelId: string;
+  /** User-facing explanation of the substitution. */
+  message: string;
+}
+
 export interface AgentModelRef {
   platform: AgentPlatform;
   modelId: string;

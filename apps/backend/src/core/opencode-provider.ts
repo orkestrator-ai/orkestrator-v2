@@ -67,6 +67,7 @@ import {
 import {
   normalizeOpenCodeComposerCatalog,
   openCodeCatalogCacheKey,
+  openCodeModelSubstitution,
   selectOpenCodeComposerCatalog,
 } from "./opencode-model-catalog.js";
 import {
@@ -381,22 +382,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     return catalog;
   }
 
-  /**
-   * `promptAsync` returns before OpenCode resolves the requested model. When a
-   * provider is disconnected, OpenCode can therefore accept and persist only
-   * the user message, publish a transient error, and leave the session idle.
-   * Preflight the live connectivity snapshot so that failure is definitive and
-   * no apparently stuck turn is created.
-   *
-   * The preflight only ever *rejects* on the positive signal it exists for: a
-   * catalogue that was read successfully and that reports the selected model's
-   * provider as not connected. An unreadable catalogue — a thrown transport
-   * error, a timeout, an error envelope, or a build that does not serve
-   * `/provider` — is no evidence about the model, so dispatch proceeds. Failing
-   * closed there would let one flaky read on a *secondary* endpoint block every
-   * prompt, which is strictly worse than the stuck turn this guards against;
-   * `readComposerCatalog` tolerates the same call failing for the same reason.
-   */
+  /** See {@link preflightOpenCodeModel}; a successful read also refreshes the catalogue. */
   private async assertSelectedModelAvailable(model: string | undefined): Promise<void> {
     await preflightOpenCodeModel({
       client: this.client,
@@ -416,6 +402,18 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
 
   async modelCatalog(): Promise<AgentModel[]> {
     return (await this.readComposerCatalog(await this.allowedModelProviders(), true)).models;
+  }
+
+  /** Shares the read `rawModelCatalog` makes: connectivity is reported either way. */
+  async connectedModelProviders(): Promise<string[] | undefined> {
+    const catalog = await this.readComposerCatalog([], false, await this.allowedModelProviders());
+    return catalog.connectedProviderIds;
+  }
+
+  /** The effective default, from the same connected catalogue the picker reads. */
+  async substituteUnavailableModel(modelId: string) {
+    const catalog = await this.readComposerCatalog(await this.allowedModelProviders(), true);
+    return openCodeModelSubstitution(modelId, catalog);
   }
 
   async rawModelCatalog(): Promise<AgentModel[]> {

@@ -114,8 +114,21 @@ export async function resolveAllowedOpenCodeModelProviders(
 }
 
 /**
- * Reject only when OpenCode positively reports that the selected provider is
- * disconnected. Unreadable or missing secondary metadata cannot block a turn.
+ * `promptAsync` returns before OpenCode resolves the requested model. When a
+ * provider is disconnected, OpenCode can therefore accept and persist only
+ * the user message, publish a transient error, and leave the session idle.
+ * Preflight the live connectivity snapshot so that failure is definitive and
+ * no apparently stuck turn is created.
+ *
+ * The preflight only ever *rejects* on the positive signal it exists for: a
+ * catalogue that was read successfully and that reports the selected model's
+ * provider as not connected. An unreadable catalogue — a thrown transport
+ * error, a timeout, an error envelope, or a build that does not serve
+ * `/provider` — is no evidence about the model, so dispatch proceeds. Failing
+ * closed there would let one flaky read on a *secondary* endpoint block every
+ * prompt, which is strictly worse than the stuck turn this guards against;
+ * the provider's catalogue read tolerates the same call failing for the same
+ * reason.
  */
 export async function preflightOpenCodeModel(input: {
   client: OpencodeClient;

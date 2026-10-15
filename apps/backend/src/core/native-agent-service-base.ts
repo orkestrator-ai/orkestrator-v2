@@ -9,7 +9,10 @@ import {
   NativeAgentCommandCatalogueCache,
   commandCatalogueKey,
 } from "./native-agent-command-catalogue.js";
-import type { NativeAgentCommandRefreshOutcome } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentCommandRefreshOutcome,
+  NativeAgentModelSubstitution,
+} from "@orkestrator/protocol/native-agent";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
   coordinatorRuntimeUnavailableMessage,
@@ -60,6 +63,13 @@ type JsonSchema = shared.JsonSchema;
 type Environment = shared.Environment;
 type IncompleteTurnNotice = shared.IncompleteTurnNotice;
 type PersistedNativeAgentSession = shared.PersistedNativeAgentSession;
+/**
+ * An ensured session, plus the model substitution its creation made. The
+ * substitution is reported to the caller only and is never persisted.
+ */
+export type EnsuredNativeAgentSession = PersistedNativeAgentSession & {
+  modelSubstitution?: NativeAgentModelSubstitution;
+};
 type PersistedNativeAgentPendingDispatch = shared.PersistedNativeAgentPendingDispatch;
 type StorageService = shared.StorageService;
 type BridgeConnection = shared.BridgeConnection;
@@ -768,7 +778,7 @@ export abstract class NativeAgentServiceBase {
     }
   }
 
-  async ensureSession(input: EnsureNativeAgentSessionInput): Promise<PersistedNativeAgentSession> {
+  async ensureSession(input: EnsureNativeAgentSessionInput): Promise<EnsuredNativeAgentSession> {
     input = await this.trustedSessionInput(input);
     this.assertAcceptingWork();
     if (
@@ -846,6 +856,15 @@ export abstract class NativeAgentServiceBase {
      * session-create attempts with backoff, and every second of that stalled
      * activity, unread and deletion bookkeeping for *every* environment.
      */
+    /*
+     * A new session starts on a model the runtime can serve. The configured
+     * default can name a provider this login has not connected — OpenCode ships
+     * one — and storing it as the session's controls would outrank the
+     * runtime's own default and reject the first prompt. The substitute is
+     * stored on this session only; the configuration keeps the user's choice.
+     */
+    const modelSubstitution = await this.unavailableModelSubstitution(provider, input.model);
+    if (modelSubstitution) input = { ...input, model: modelSubstitution.modelId };
     const session = await this.storage.getOrCreateNativeAgentSession(
       {
         key,
@@ -863,7 +882,25 @@ export abstract class NativeAgentServiceBase {
       () => this.createProviderSession(provider, input),
     );
     void this.reconcileAgentInteractions().catch(() => undefined);
-    return session;
+    // A concurrent ensure may have created the session first, with its own
+    // controls; only report a substitution this session actually carries.
+    return modelSubstitution && session.controls?.modelId === modelSubstitution.modelId
+      ? { ...session, modelSubstitution }
+      : session;
+  }
+
+  private async unavailableModelSubstitution(
+    provider: NativeAgentRuntimeProvider,
+    modelId: string | undefined,
+  ): Promise<NativeAgentModelSubstitution | undefined> {
+    if (!modelId || !provider.substituteUnavailableModel) return undefined;
+    try {
+      return await provider.substituteUnavailableModel(modelId);
+    } catch {
+      // Connectivity is advisory here. Dispatch preflight still reports a
+      // model the runtime cannot serve.
+      return undefined;
+    }
   }
 
   async adoptSession(input: AdoptNativeAgentSessionInput): Promise<PersistedNativeAgentSession> {
@@ -1128,6 +1165,16 @@ export abstract class NativeAgentServiceBase {
       return (await provider.rawModelCatalog()).slice(0, 512);
     }
     return provider.modelCatalog ? (await provider.modelCatalog()).slice(0, 512) : [];
+  }
+
+  /**
+   * Providers the runtime reports as connected, for the durable catalogue
+   * snapshot. Undefined when the runtime does not report connectivity.
+   */
+  async connectedModelProviders(input: NativeAgentProjectionInput): Promise<string[] | undefined> {
+    this.assertProjectionInput(input);
+    const provider = await this.provider(input);
+    return provider.connectedModelProviders?.();
   }
 
   async dispatchIntent(input: DispatchNativeAgentPromptInput): Promise<NativeAgentDispatchOutcome> {

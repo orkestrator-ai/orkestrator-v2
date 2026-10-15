@@ -1145,6 +1145,39 @@ describe("native agent model catalogue command", () => {
     });
   });
 
+  // Before any bridge runs, the connectivity persisted with the durable
+  // catalogue is all a picker can know. A provider this login does not have
+  // must not be offered, as a cached row or as a favourite.
+  test("hides providers the persisted connectivity reports as disconnected", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.cacheOpenCodeModelCatalog(
+        "proj-1",
+        [
+          { id: "opencode/claude-sonnet-5", name: "Claude Sonnet 5", provider: "opencode" },
+          {
+            id: "opencode-go/deepseek-v4.1-flash",
+            name: "DeepSeek V4.1 Flash",
+            provider: "opencode-go",
+          },
+        ],
+        ["opencode-go"],
+      );
+      const config = await storage.loadConfig();
+      await storage.updateGlobalConfig({
+        ...config.global,
+        favoriteModels: [{ platform: "opencode", modelId: "opencode/big-pickle" }],
+      });
+
+      const models = (await invoke("get_native_agent_model_catalog", {
+        environmentId: "e1",
+      })) as Array<{ platform: string; id: string }>;
+
+      expect(
+        models.filter((model) => model.platform === "opencode").map((model) => model.id),
+      ).toEqual(["opencode-go/deepseek-v4.1-flash"]);
+    });
+  });
+
   test("does not duplicate a favourite the cached catalogue already lists", async () => {
     await withCommands(async (invoke, storage) => {
       await storage.cacheOpenCodeModelCatalog("proj-1", [

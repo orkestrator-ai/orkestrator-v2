@@ -29,6 +29,10 @@ import {
   type ProviderStatus,
 } from "./native-agent-provider.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
+import { openCodeFake } from "./agent-provider-test-support.js";
+import { OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE } from "./opencode-provider-list-test-fixtures.js";
+import { DEFAULT_OPENCODE_MODEL_ID } from "./storage-opencode-models.js";
+import { OpenCodeMessageIdCoordinator } from "@orkestrator/protocol/opencode-message-id";
 import { seedUnreadableStore } from "./storage-test-support.js";
 import { localAgentAccountIds } from "./agent-account-bridge-state.js";
 
@@ -477,6 +481,128 @@ describe("NativeAgentService", () => {
         ]);
       },
     );
+  });
+
+  // A login with only `opencode-go` connected, against the shipped default
+  // `opencode/claude-sonnet-5`. The configured default used to become the new
+  // session's controls, outranking OpenCode's own default, so the picker
+  // preselected a model the dispatch preflight then rejected.
+  test("starts a new OpenCode tab on the connected default when the configured one is not connected", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: { list: mock(async () => ({ data: OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE })) },
+    });
+    const provider = createNativeAgentProvider(
+      {
+        agent: "opencode",
+        baseUrl: "http://opencode.test",
+        authToken: "test-token",
+        directory: "/workspace",
+      },
+      {
+        openCodeClient: fake.client,
+        openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
+        autoAnswerRequests: false,
+      },
+    );
+
+    await withService(
+      {
+        prefix: "orkestrator-native-opencode-connected-default-",
+        provider: async () => provider,
+      },
+      async ({ storage, service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "opencode" as const,
+          logicalSessionKey: "env-env-1:tab-opencode",
+          origin: "interactive-native" as const,
+          interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+        };
+        const config = await storage.loadConfig();
+
+        const session = await service.ensureSession({
+          ...identity,
+          model: DEFAULT_OPENCODE_MODEL_ID,
+        });
+
+        expect(session.controls?.modelId).toBe("opencode-go/gpt-5.6-luna");
+        expect(session.modelSubstitution).toEqual({
+          requestedModelId: "opencode/claude-sonnet-5",
+          modelId: "opencode-go/gpt-5.6-luna",
+          message: "claude-sonnet-5 isn't available with your OpenCode login; using GPT-5.6 Luna.",
+        });
+        // Persisted controls only; the substitution is reported, not stored,
+        // and the user's configuration keeps their choice.
+        const stored = await storage.getNativeAgentSession(
+          nativeAgentSessionStorageKey("env-1", "opencode", identity.logicalSessionKey),
+        );
+        expect(stored).not.toHaveProperty("modelSubstitution");
+        expect(await storage.loadConfig()).toEqual(config);
+
+        // The picker preselects the connected model and offers nothing else.
+        const projection = await service.getProjection(identity);
+        expect(projection?.composer?.selectedModelId).toBe("opencode-go/gpt-5.6-luna");
+        expect(
+          projection?.composer?.models.every((model) => model.id.startsWith("opencode-go/")),
+        ).toBe(true);
+
+        // The first prompt carries the composer's model and dispatches.
+        await expect(
+          service.dispatchIntent({
+            ...identity,
+            prompt: "Please continue",
+            requestId: "request-1",
+            model: projection?.composer?.selectedModelId,
+          }),
+        ).resolves.toEqual({ outcome: "accepted", requestId: "request-1" });
+        expect(fake.promptCalls).toHaveLength(1);
+        expect(fake.promptCalls[0]?.model).toMatchObject({
+          providerID: "opencode-go",
+          modelID: "gpt-5.6-luna",
+        });
+      },
+    ).finally(() => provider.dispose?.());
+  });
+
+  test("keeps a configured OpenCode model whose provider is connected", async () => {
+    const fake = openCodeFake();
+    Object.assign(fake.client as object, {
+      provider: { list: mock(async () => ({ data: OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE })) },
+    });
+    const provider = createNativeAgentProvider(
+      {
+        agent: "opencode",
+        baseUrl: "http://opencode.test",
+        authToken: "test-token",
+        directory: "/workspace",
+      },
+      {
+        openCodeClient: fake.client,
+        openCodeMessageIdCoordinator: new OpenCodeMessageIdCoordinator(),
+        autoAnswerRequests: false,
+      },
+    );
+
+    await withService(
+      {
+        prefix: "orkestrator-native-opencode-connected-configured-",
+        provider: async () => provider,
+      },
+      async ({ service }) => {
+        const session = await service.ensureSession({
+          environmentId: "env-1",
+          agent: "opencode",
+          logicalSessionKey: "env-env-1:tab-opencode",
+          origin: "interactive-native",
+          interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+          model: "opencode-go/deepseek-v4.1-flash",
+        });
+
+        expect(session.controls?.modelId).toBe("opencode-go/deepseek-v4.1-flash");
+        expect(session.modelSubstitution).toBeUndefined();
+      },
+    ).finally(() => provider.dispose?.());
   });
 
   test("gives every provider creation site the live settings reader", async () => {

@@ -1,6 +1,7 @@
 # OpenCode defaults to a model whose provider is not connected
 
-Status: Active — found 2026-10-14 during live QA, not fixed.
+Status: Fixed 2026-10-15 (Fix points 1–3). Point 4, whether a fixed default
+should ship at all, is still open; see the recommendation under Resolution.
 
 **Severity: high.** A user whose OpenCode login covers only some of the
 allowlisted providers cannot send the first prompt in a new OpenCode tab, and
@@ -124,3 +125,84 @@ These will need deliberate updates:
 New tests should cover a login with only `opencode-go` connected: a new tab's
 first prompt dispatches, a build with no step model starts, and the picker
 does not preselect a disconnected model.
+
+## Resolution (2026-10-15)
+
+Re-checked against `523eb0da` before changing anything: every root cause above
+was still present (`openCodeCatalogDefault` still read
+`default.model`/`providerID`/`modelID`, and nothing substituted a disconnected
+default).
+
+1. **OpenCode's default is parsed as the SDK map.** `openCodeCatalogDefault`
+   (`apps/backend/src/core/opencode-model-catalog.ts`) reads
+   `{ [providerID]: modelID }` and takes the first entry whose provider is
+   allowlisted and, when OpenCode reported `connected`, connected. The map
+   carries no variant, so the catalogue no longer reports a
+   `selectedReasoningId`. Test mocks use the real shape, and
+   `opencode-provider-list-test-fixtures.ts` holds a trimmed live
+   `GET /provider` response from OpenCode 1.19.0 (credentials removed), typed
+   against the SDK's `ProviderListResponse`.
+2. **One effective default, substituted at resolution time.**
+   `openCodeModelSubstitution` replaces a configured model only when OpenCode
+   positively reports `connected` and the model's provider is absent. The
+   replacement is OpenCode's connected default, then the first connected
+   model. OpenCode exposes it as the optional provider capability
+   `substituteUnavailableModel`.
+   - Tabs: `NativeAgentServiceBase.ensureSession` substitutes before it stores
+     a new session's controls, so the picker preselects the substitute and the
+     first prompt dispatches. The result carries a transient
+     `modelSubstitution`, which the tab shows as a toast. It is not persisted.
+   - Builds: `resolveSelection` substitutes a model that came from the
+     configured defaults (no step model, or an unpinned step). A model the step
+     pinned is left alone. The stage records `PipelineSession.modelSubstitution`
+     and the stage rail shows its message.
+   - The saved configuration is never rewritten, so the user's choice returns
+     when the provider reconnects.
+3. **Connectivity is persisted.** `OpenCodeModelCatalogSnapshot` gained
+   `connectedProviderIds` and `connectedProvidersCheckedAt`.
+   `cacheOpenCodeModelCatalog` stores them when given and keeps the last report
+   when a source has none. `get_native_agent_model_catalog` persists the live
+   report with the raw catalogue, and returns only connected providers to
+   pickers: from the live bridge when one runs, otherwise from the persisted
+   report. That covers cached rows and synthesized favourites, in the
+   environment and coordinator branches. `get_opencode_model_catalog_cache`
+   passes the fields through, but the launch dialogs do not use them yet.
+
+Pinned tests, as changed:
+
+| Behaviour | Outcome |
+| --- | --- |
+| Shipped default `opencode/claude-sonnet-5` | Unchanged; point 4 not done |
+| Allowlist-only repointing to the shipped default | Unchanged; the saved config is deliberately not rewritten |
+| Raw catalogue unfiltered | Unchanged; connectivity is persisted beside it instead |
+| Allowlist-only catalogue command | Still holds with no connectivity report; new tests cover live and persisted connectivity |
+| Wrong `default` shape in mocks | Mocks moved to the SDK map, plus real-fixture tests |
+| Composer resolution order | Unchanged; the substitute is what reaches session controls |
+
+New tests for a login with only `opencode-go` connected:
+`native-agent-service-provider.test.ts` (new tab: substitution, picker
+preselection, first prompt dispatched on `opencode-go`),
+`build-pipeline-service-supervisor.test.ts` (build with no step model, pinned
+step model kept), `opencode-provider-runtime.test.ts` (parser and substitution
+on the real fixture), `commands-registry-coverage.test.ts` and
+`commands-state-sync.test.ts` (live and persisted connectivity), `storage.test.ts`
+(snapshot connectivity), `AgentNativeTab.test.tsx` (toast) and
+`build-pipeline.test.ts` (validator).
+
+### Point 4: recommendation
+
+Stop shipping a fixed `DEFAULT_OPENCODE_MODEL_ID`. Leave a fresh install's
+OpenCode model unset, and let unset mean the effective default above, which
+is now a real answer because `default` is parsed. Keep stored values as they
+are: a shipped default cannot be told apart from one the user chose, and
+substitution already covers it at resolution time. `selectableOpenCodeDefaultModel`
+should then fall back to unset rather than to the shipped id.
+
+### Left open
+
+- The launch dialogs (`get_opencode_model_catalog_cache`) receive the
+  persisted connectivity but do not mark or hide disconnected providers yet.
+- Fan-out reviewers and the consolidation session are substituted too, but
+  only stage sessions record `modelSubstitution` for display.
+- A pre-bridge picker hides a provider authenticated after the last bridge
+  reported connectivity, until a bridge reports again.

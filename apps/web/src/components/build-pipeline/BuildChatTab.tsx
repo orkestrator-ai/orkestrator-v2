@@ -1004,6 +1004,8 @@ export function BuildChatTab({
               false,
               displayNow,
             ),
+      // The configured model was unavailable, so the stage ran on another one.
+      detail: session.modelSubstitution ? { text: session.modelSubstitution.message } : null,
       autoDeclineCount,
       reportIssueCount: report?.issues.length,
       status,

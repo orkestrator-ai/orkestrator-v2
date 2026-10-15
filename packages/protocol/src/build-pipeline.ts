@@ -381,6 +381,12 @@ export interface PipelineSession {
   agent?: BuildPipelineAgent;
   /** Exact prompt-level selection, retained so ambiguous dispatch can retry faithfully. */
   model?: string;
+  /**
+   * Set when {@link model} replaced a configured default the runtime reported
+   * it cannot serve, such as an OpenCode provider this login has not
+   * connected. Shown on the stage so the substitution is never silent.
+   */
+  modelSubstitution?: import("./native-agent.js").NativeAgentModelSubstitution;
   reasoningEffort?: string;
   /** Fast/Normal choice retained for exact prompt recovery. */
   fastMode?: boolean;
@@ -1034,12 +1040,26 @@ export function isBuildStepConfigs(value: unknown): value is BuildStepConfigs {
   );
 }
 
+function isPipelineModelSubstitution(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isNonBlankString(value.requestedModelId) &&
+    value.requestedModelId.length <= 512 &&
+    isNonBlankString(value.modelId) &&
+    value.modelId.length <= 512 &&
+    isNonBlankString(value.message) &&
+    value.message.length <= 2048
+  );
+}
+
 function isPipelineSession(value: unknown): value is PipelineSession {
   if (!isRecord(value)) return false;
   return (
     SESSION_PHASES.has(value.phase as PipelineSessionPhase) &&
     (value.agent === undefined || AGENTS.has(value.agent as BuildPipelineAgent)) &&
     (value.model === undefined || isNonBlankString(value.model)) &&
+    (value.modelSubstitution === undefined ||
+      isPipelineModelSubstitution(value.modelSubstitution)) &&
     (value.reasoningEffort === undefined || isNonBlankString(value.reasoningEffort)) &&
     (value.fastMode === undefined || typeof value.fastMode === "boolean") &&
     ((value.origin === undefined && value.interactionPolicy === undefined) ||

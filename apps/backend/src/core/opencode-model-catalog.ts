@@ -1,4 +1,4 @@
-import type { AgentModel } from "@orkestrator/protocol/native-agent";
+import type { AgentModel, NativeAgentModelSubstitution } from "@orkestrator/protocol/native-agent";
 import {
   DEFAULT_OPENCODE_MODEL_PROVIDERS,
   isSelectableOpenCodeModelId,
@@ -44,6 +44,8 @@ function openCodeProviderModels(value: unknown): Record<string, unknown>[] {
 const MAX_OPENCODE_CATALOG_MODELS = 512;
 const MAX_OPENCODE_CATALOG_PROVIDERS = 128;
 const MAX_OPENCODE_PROVIDER_MODELS = 512;
+/** Bounds the default-map scan; OpenCode lists one entry per known provider. */
+const MAX_OPENCODE_CATALOG_PROVIDER_DEFAULTS = 4096;
 
 interface OpenCodeCatalogModelGroup {
   providerId: string;
@@ -145,36 +147,34 @@ function reserveOpenCodeDefaultSource(
   selected[selected.length - 1] = defaultSource;
 }
 
-function openCodeCatalogDefault(value: unknown): {
-  modelId?: string;
-  reasoningId?: string;
-} {
-  const catalog = asRecord(value);
-  const defaults = asRecord(catalog?.default);
-  if (!defaults) return {};
-  const nested = asRecord(defaults.model);
-  const providerId =
-    nonEmptyString(nested?.providerID) ??
-    nonEmptyString(defaults.providerID) ??
-    nonEmptyString(defaults.provider);
-  const modelId =
-    nonEmptyString(nested?.modelID) ??
-    nonEmptyString(defaults.modelID) ??
-    (typeof defaults.model === "string" ? defaults.model : null);
-  const qualified = modelId?.includes("/")
-    ? modelId
-    : providerId && modelId
-      ? `${providerId}/${modelId}`
-      : undefined;
-  return {
-    ...(qualified ? { modelId: qualified } : {}),
-    ...((nonEmptyString(nested?.variant) ?? nonEmptyString(defaults.variant))
-      ? {
-          reasoningId:
-            nonEmptyString(nested?.variant) ?? nonEmptyString(defaults.variant) ?? undefined,
-        }
-      : {}),
-  };
+/**
+ * OpenCode's own default model, as `providerID/modelID`.
+ *
+ * Both `provider.list` and `config.providers` report `default` as a map of
+ * provider id to that provider's default model id — one entry per provider
+ * OpenCode knows, connected or not. The first entry the allowlist admits and,
+ * when OpenCode reported connectivity, whose provider is connected is the one
+ * OpenCode can actually serve.
+ */
+function openCodeCatalogDefault(
+  value: unknown,
+  allowedProviders: readonly string[],
+  connectedProviderIds: readonly string[] | undefined,
+): string | undefined {
+  const defaults = asRecord(asRecord(value)?.default);
+  if (!defaults) return undefined;
+  const connected = connectedProviderIds ? new Set(connectedProviderIds) : null;
+  for (const [providerId, candidate] of Object.entries(defaults).slice(
+    0,
+    MAX_OPENCODE_CATALOG_PROVIDER_DEFAULTS,
+  )) {
+    const localId = nonEmptyString(candidate);
+    if (!localId || !providerId.trim()) continue;
+    if (connected && !connected.has(providerId)) continue;
+    const modelId = `${providerId}/${localId}`;
+    if (isSelectableOpenCodeModelId(modelId, allowedProviders)) return modelId;
+  }
+  return undefined;
 }
 
 /**
@@ -207,7 +207,6 @@ export function normalizeOpenCodeComposerCatalog(
 ): {
   models: AgentModel[];
   selectedModelId?: string;
-  selectedReasoningId?: string;
   /** Present when OpenCode authoritatively reported its connected providers. */
   connectedProviderIds?: string[];
 } {
@@ -249,11 +248,11 @@ export function normalizeOpenCodeComposerCatalog(
       ? accepted
       : [...accepted.filter(isPriority), ...accepted.filter((provider) => !isPriority(provider))]
   ).slice(0, MAX_OPENCODE_CATALOG_PROVIDERS);
-  const defaults = openCodeCatalogDefault(value);
-  const selectableDefaultModelId =
-    defaults.modelId && isSelectableOpenCodeModelId(defaults.modelId, allowedProviders)
-      ? defaults.modelId
-      : undefined;
+  const selectableDefaultModelId = openCodeCatalogDefault(
+    value,
+    allowedProviders,
+    connectedProviderIds,
+  );
   const defaultProviderId = selectableDefaultModelId
     ? openCodeModelProviderId(selectableDefaultModelId)
     : "";
@@ -363,9 +362,42 @@ export function normalizeOpenCodeComposerCatalog(
     models,
     ...(connectedProviderIds ? { connectedProviderIds } : {}),
     ...(selectedModelId ? { selectedModelId } : {}),
-    ...(selectedModelId && defaults.reasoningId
-      ? { selectedReasoningId: defaults.reasoningId }
-      : {}),
+  };
+}
+
+/**
+ * The effective OpenCode model for a configured default.
+ *
+ * `catalog` must be the connected, allowlisted catalogue. A configured model is
+ * replaced only on the positive signal that OpenCode reported its connected
+ * providers and the model's provider is not among them; an unreadable or
+ * connectivity-free catalogue keeps the configured model, so a flaky read can
+ * never redirect a turn. The replacement is OpenCode's own connected default,
+ * then the first connected model. With nothing connected there is nothing to
+ * substitute, and dispatch reports the disconnected model as before.
+ *
+ * This is a resolution-time answer only. Callers must not write it back to the
+ * user's configuration, so their choice returns once the provider reconnects.
+ */
+export function openCodeModelSubstitution(
+  configuredModelId: string | undefined,
+  catalog: {
+    readonly models: readonly AgentModel[];
+    readonly selectedModelId?: string;
+    readonly connectedProviderIds?: readonly string[];
+  },
+): NativeAgentModelSubstitution | undefined {
+  const requestedModelId = configuredModelId?.trim();
+  if (!requestedModelId || !catalog.connectedProviderIds) return undefined;
+  const providerId = openCodeModelProviderId(requestedModelId);
+  if (!providerId || catalog.connectedProviderIds.includes(providerId)) return undefined;
+  const replacement =
+    catalog.models.find((model) => model.id === catalog.selectedModelId) ?? catalog.models[0];
+  if (!replacement || replacement.id === requestedModelId) return undefined;
+  return {
+    requestedModelId,
+    modelId: replacement.id,
+    message: `${openCodeModelDisplayLabel(requestedModelId)} isn't available with your OpenCode login; using ${replacement.label}.`,
   };
 }
 

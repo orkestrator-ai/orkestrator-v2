@@ -65,6 +65,7 @@ import type {
   NativeAgentDiscoverySection,
   NativeAgentCommandIntent,
   NativeAgentCommandRefreshOutcome,
+  NativeAgentModelSubstitution,
 } from "@orkestrator/protocol/native-agent";
 
 /**
@@ -440,8 +441,11 @@ export async function ensureNativeAgentSession(input: {
   fastMode?: boolean;
   executionProfileId?: string;
   parameterValues?: Record<string, string | boolean>;
-}): Promise<PersistedNativeAgentSession> {
-  return invoke<PersistedNativeAgentSession>("ensure_native_agent_session", input);
+}): Promise<PersistedNativeAgentSession & { modelSubstitution?: NativeAgentModelSubstitution }> {
+  return invoke<PersistedNativeAgentSession & { modelSubstitution?: NativeAgentModelSubstitution }>(
+    "ensure_native_agent_session",
+    input,
+  );
 }
 
 export async function adoptNativeAgentSession(input: {

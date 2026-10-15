@@ -21,6 +21,7 @@ import type {
   NativeAgentAuthStatus,
   NativeAgentMcpServer,
   NativeAgentMcpServerAction,
+  NativeAgentModelSubstitution,
   NativeAgentReadiness,
   NativeAgentRateLimitWindow,
   NativeAgentResumeEntry,
@@ -652,6 +653,20 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
    * be offered by launch dialogs before another bridge starts.
    */
   rawModelCatalog?(): Promise<AgentModel[]>;
+  /**
+   * Providers the runtime reports as able to serve a prompt right now, or
+   * undefined when it does not report connectivity. Backend-only: it is
+   * persisted beside the durable catalogue so reads made before a bridge starts
+   * know which providers were connected.
+   */
+  connectedModelProviders?(): Promise<string[] | undefined>;
+  /**
+   * The model to run instead of a configured default the runtime positively
+   * reports it cannot serve. Undefined keeps the configured model. Callers
+   * substitute at resolution time and never write the answer back to the
+   * user's configuration.
+   */
+  substituteUnavailableModel?(modelId: string): Promise<NativeAgentModelSubstitution | undefined>;
   interactiveSnapshot?(sessionId: string): Promise<ProviderInteractiveSnapshot>;
   updateInteractiveControls?(
     sessionId: string,

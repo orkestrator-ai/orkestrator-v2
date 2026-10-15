@@ -711,6 +711,28 @@ export function useTerminal({
       // Publish the generation-local disposer before lifecycle registration.
       // Disconnect/identity changes can now cancel the output listener even if
       // the second listen call is still pending.
+      // A reconnected stream can mean the backend restarted and took this PTY
+      // with it. Reconciliation then redraws the saved history over a session
+      // that no longer exists, and every keystroke is refused. Drop the stale
+      // connection instead, so the owner's reconnect starts a replacement
+      // shell. Attach-only sessions are backend-owned and never replaced here.
+      const releaseIfSessionStopped = async (): Promise<void> => {
+        if (attachExistingOnly) return;
+        const status = await backend.getTerminalSession(id).catch(() => null);
+        if (disposed || !isCurrentConnect() || !isConnectedRef.current) return;
+        if (status?.running !== false || sessionIdRef.current !== id) return;
+        console.warn("[useTerminal] Terminal session stopped while the stream was down:", id);
+        connectGenerationRef.current += 1;
+        cleanupEventListener();
+        sessionIdRef.current = null;
+        isConnectedRef.current = false;
+        isConnectingRef.current = false;
+        setSessionId(null);
+        setBootstrapped(false);
+        setIsConnected(false);
+        setIsConnecting(false);
+      };
+
       unlistenRef.current = dispose;
       try {
         if (replayOutputBuffer) {
@@ -722,6 +744,7 @@ export function useTerminal({
               event,
               () => {
                 void reconcileSnapshot();
+                void releaseIfSessionStopped();
               },
               { signal: listenAbortController.signal },
             );

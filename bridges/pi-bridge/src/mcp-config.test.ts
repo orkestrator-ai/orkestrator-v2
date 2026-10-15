@@ -251,6 +251,29 @@ describe("Pi MCP config", () => {
     ]);
   });
 
+  test("reads an entry's shape the way Pi's validator does", async () => {
+    const root = await tempRoot("pi-mcp-shape-");
+    const agentDir = join(root, "agent");
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(
+      join(agentDir, "mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          // `type: "stdio"` wins over a URL, as in Pi.
+          both: { type: "stdio", url: "https://x.example/mcp", command: "local" },
+          // `auth` only means something to an HTTP server.
+          signed: { command: "run", auth: { provider: "github" } },
+        },
+      }),
+    );
+
+    const servers = await resolvePiMcpServers({ agentDir, cwd: root, projectResources: false });
+    const byId = new Map(servers.map((server) => [server.id, server]));
+    expect(byId.get("both")).toMatchObject({ transport: "stdio", command: "local" });
+    expect(byId.get("both")?.url).toBeUndefined();
+    expect(byId.get("signed")).toMatchObject({ transport: "stdio", command: "run" });
+  });
+
   test("keeps the reserved Orkestrator server when the cap is full", async () => {
     const root = await tempRoot("pi-mcp-cap-");
     const agentDir = join(root, "agent");

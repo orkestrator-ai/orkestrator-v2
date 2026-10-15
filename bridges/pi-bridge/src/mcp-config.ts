@@ -94,12 +94,13 @@ export function orkestratorMcpServer(
 /**
  * One `mcp.json` entry before the scopes merge.
  *
- * A `server` entry defines a server; `launch` is absent when the bridge cannot
- * start it (invalid, an unresolvable value, or a Pi provider `auth` the bridge
- * cannot supply), which still lets it shadow a same-named user entry the way
- * Pi's own loader does. An `override` entry (project only, since Pi 1.0.1) has
- * no `command`, `url` or `type` and changes only whether the user-level server
- * of the same name is enabled.
+ * A `server` entry is one Pi's own loader accepts; `launch` is absent when the
+ * bridge cannot start it (an unresolvable value, a blank command, or a Pi
+ * provider `auth` the bridge cannot supply), which still lets it shadow a
+ * same-named user entry the way Pi's own loader does. An entry Pi rejects is
+ * never returned, so it shadows nothing. An `override` entry (project only,
+ * since Pi 1.0.1) has no `command`, `url` or `type` and changes only whether
+ * the user-level server of the same name is enabled.
  */
 type McpConfigEntry =
   | { kind: "server"; id: string; enabled: boolean; hasAuth: boolean; launch?: ResolvedMcpServer }
@@ -131,6 +132,7 @@ export async function loadMcpConfigFile(
         if (scope !== "project" || Object.keys(value).some((key) => !MCP_OVERRIDE_KEYS.has(key))) {
           continue;
         }
+        if (!validSharedFields(value)) continue;
         entries.push({
           kind: "override",
           id,
@@ -138,6 +140,12 @@ export async function loadMcpConfigFile(
         });
         continue;
       }
+      const transport = acceptedTransport(value);
+      if (!transport) continue;
+      const hasAuth = transport === "http" && value.auth !== undefined;
+      // Pi refuses `auth` in a project file, so a repository cannot choose
+      // where a provider token goes.
+      if (scope === "project" && hasAuth) continue;
       entries.push({
         kind: "server",
         id,
@@ -145,14 +153,97 @@ export async function loadMcpConfigFile(
         // Pi's own (`pi mcp`, the `/mcp` manager), and both files are the same
         // `mcp.json`.
         enabled: value.disabled !== true && value.enabled !== false,
-        hasAuth: value.auth !== undefined,
-        launch: normalizeMcpServer(id, scope, value, env),
+        hasAuth,
+        launch: normalizeMcpServer(id, scope, transport, value, env),
       });
     }
     return entries;
   } catch {
     return [];
   }
+}
+
+/** Pi's exposures, with the older alias it still accepts. */
+const PI_EXPOSURES: ReadonlySet<unknown> = new Set([
+  "codemode",
+  "deferred",
+  "direct",
+  "hidden",
+  "codemode-deferred",
+]);
+
+/**
+ * Pi's checks on the keys a server and an override share. Pi rejects an entry
+ * that fails them, and does not apply an override that does.
+ */
+function validSharedFields(value: Record<string, unknown>): boolean {
+  if (value.enabled !== undefined && typeof value.enabled !== "boolean") return false;
+  if (value.exposure !== undefined && !PI_EXPOSURES.has(value.exposure)) return false;
+  return (
+    value.toolExposure === undefined ||
+    (isObject(value.toolExposure) &&
+      Object.values(value.toolExposure).every((exposure) => PI_EXPOSURES.has(exposure)))
+  );
+}
+
+/**
+ * The transport Pi's own validator (`validateMcpServerConfig` in
+ * `core/mcp-servers.js`) reads an entry as, or `undefined` when Pi rejects the
+ * entry. Two bridge extensions remain: a `transport` key spells the type, and
+ * `sse` connects over Streamable HTTP (Pi rejects it). `oauth` is not checked:
+ * the bridge never signs in.
+ */
+function acceptedTransport(value: Record<string, unknown>): McpTransport | undefined {
+  if (!validSharedFields(value)) return undefined;
+  if (value.description !== undefined && typeof value.description !== "string") return undefined;
+  if (value.timeout !== undefined && (typeof value.timeout !== "number" || !(value.timeout > 0))) {
+    return undefined;
+  }
+  const declared = typeof value.transport === "string" ? value.transport : value.type;
+  if (
+    typeof value.url === "string" &&
+    (declared === undefined ||
+      declared === "http" ||
+      declared === "streamable-http" ||
+      declared === "sse")
+  ) {
+    const url = httpUrl(value.url);
+    if (!url) return undefined;
+    if (value.headers !== undefined && !isStringRecord(value.headers)) return undefined;
+    if (value.auth !== undefined) {
+      if (!isObject(value.auth) || !nonEmptyString(value.auth.provider)) return undefined;
+      if (url.protocol !== "https:" && !PI_LOOPBACK_HOSTS.has(url.hostname)) return undefined;
+    }
+    return "http";
+  }
+  if (typeof value.command === "string" && (declared === undefined || declared === "stdio")) {
+    if (
+      value.args !== undefined &&
+      !(Array.isArray(value.args) && value.args.every((arg) => typeof arg === "string"))
+    ) {
+      return undefined;
+    }
+    if (value.env !== undefined && !isStringRecord(value.env)) return undefined;
+    if (value.cwd !== undefined && typeof value.cwd !== "string") return undefined;
+    return "stdio";
+  }
+  return undefined;
+}
+
+/** Hosts Pi lets `auth` reach over plain HTTP. */
+const PI_LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+function httpUrl(value: string): URL | undefined {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:" ? url : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
 }
 
 /** Pi's MCP namespace: names that differ only in `-` and `_` are one server. */
@@ -163,14 +254,14 @@ function mcpNamespace(id: string): string {
 /**
  * Merge user and project entries with Pi 1.0's rules (`extensions/mcp/config.js`):
  * a project server replaces the user server of the same name, an override
- * flips only its enabled state, a server whose name clashes with another in
- * `-`/`_` is rejected, and `auth` is refused in a project file.
+ * flips only its enabled state, and a server whose name clashes with another
+ * in `-`/`_` is rejected. (`auth` in a project file was refused on load.)
  */
 function mergeMcpConfigEntries(
   scopes: ReadonlyArray<{ scope: Exclude<McpScope, "orkestrator">; entries: McpConfigEntry[] }>,
 ): ResolvedMcpServer[] {
   const merged = new Map<string, { enabled: boolean; launch?: ResolvedMcpServer }>();
-  for (const { scope, entries } of scopes) {
+  for (const { entries } of scopes) {
     for (const entry of entries) {
       if (entry.kind === "override") {
         const base = merged.get(entry.id);
@@ -181,7 +272,7 @@ function mergeMcpConfigEntries(
       const clash = [...merged.keys()].some(
         (other) => other !== entry.id && mcpNamespace(other) === namespace,
       );
-      if (clash || (scope === "project" && entry.hasAuth)) continue;
+      if (clash) continue;
       // A Pi provider token is not something the bridge holds, so a user entry
       // that asks for one is kept (it can still be overridden) but not launched.
       const launch = entry.hasAuth ? undefined : entry.launch;
@@ -229,38 +320,34 @@ export function sanitizeMcpName(value: string): string | undefined {
   return /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(sanitized) ? sanitized : undefined;
 }
 
+/**
+ * The server the bridge starts for an entry Pi accepts as `transport`, or
+ * `undefined` when it cannot start one.
+ */
 function normalizeMcpServer(
   id: string,
   scope: Exclude<McpScope, "orkestrator">,
-  value: unknown,
+  transport: McpTransport,
+  value: Record<string, unknown>,
   env: NodeJS.ProcessEnv,
 ): ResolvedMcpServer | undefined {
-  if (!isObject(value)) return undefined;
-  const transport = readTransport(value);
   if (transport === "http") {
-    if (!nonBlank(value.url) || typeof value.url !== "string") return undefined;
-    try {
-      const url = new URL(value.url.trim());
-      if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
-      const headers = isStringRecord(value.headers, MAX_HEADER_ENTRIES)
-        ? resolveConfigValues(value.headers, env)
-        : undefined;
-      // A header that cannot be resolved would be sent as its literal template.
-      if (headers === null) return undefined;
-      return {
-        id,
-        scope,
-        transport: "http",
-        url: url.toString(),
-        ...(headers ? { headers } : {}),
-      };
-    } catch {
-      return undefined;
-    }
+    const url = typeof value.url === "string" ? httpUrl(value.url) : undefined;
+    if (!url) return undefined;
+    const headers = isStringRecord(value.headers, MAX_HEADER_ENTRIES)
+      ? resolveConfigValues(value.headers, env)
+      : undefined;
+    // A header that cannot be resolved would be sent as its literal template.
+    if (headers === null) return undefined;
+    return {
+      id,
+      scope,
+      transport: "http",
+      url: url.toString(),
+      ...(headers ? { headers } : {}),
+    };
   }
-  if (transport !== "stdio" || !nonBlank(value.command) || typeof value.command !== "string") {
-    return undefined;
-  }
+  if (!nonBlank(value.command) || typeof value.command !== "string") return undefined;
   const serverEnv = isStringRecord(value.env, 32) ? resolveConfigValues(value.env, env) : undefined;
   if (serverEnv === null) return undefined;
   return {
@@ -326,22 +413,10 @@ function resolveConfigValues(
   return resolved;
 }
 
-function readTransport(value: Record<string, unknown>): McpTransport | undefined {
-  const declared =
-    typeof value.transport === "string"
-      ? value.transport
-      : typeof value.type === "string"
-        ? value.type
-        : undefined;
-  if (declared === "streamable-http" || declared === "http" || declared === "sse") return "http";
-  if (declared === "stdio" || declared === undefined) {
-    if (nonBlank(value.url) && typeof value.url === "string") return "http";
-    if (nonBlank(value.command) && typeof value.command === "string") return "stdio";
-  }
-  return undefined;
-}
-
-function isStringRecord(value: unknown, maxEntries: number): value is Record<string, string> {
+function isStringRecord(
+  value: unknown,
+  maxEntries = Number.POSITIVE_INFINITY,
+): value is Record<string, string> {
   return (
     isObject(value) &&
     Object.keys(value).length <= maxEntries &&

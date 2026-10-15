@@ -25,7 +25,15 @@ import {
   type McpTargetCapabilities,
 } from "@orkestrator/protocol/mcp-management";
 
-import { PI_SERVERS_PER_FILE, PROVIDER_CODECS, piLoadBlock, piSanitizedName } from "./codecs.js";
+import {
+  PI_SERVERS_PER_FILE,
+  PROVIDER_CODECS,
+  piEntryShape,
+  piLaunchBlock,
+  piNamespace,
+  piSanitizedName,
+  piSavedEnabled,
+} from "./codecs.js";
 import { parseSource, type ParsedSource } from "./document.js";
 import type { McpSourceStore, SourceFileSnapshot } from "./source-store.js";
 import type { CanonicalDefinition, ContainerFileReader, NativeEntry, SourceSpec } from "./types.js";
@@ -58,6 +66,20 @@ export interface LoadedEntry {
   skipReason?: string;
   /** Disabled by a setting outside the entry (Grok's `disabled_mcp_servers`). */
   disabledReason?: string;
+  /** Pi: the entry Pi kept when it rejected this one for a `-`/`_` name clash. */
+  clashesWith?: LoadedEntry;
+  /**
+   * Pi: a project entry with no command or URL, which switches the user server
+   * of the same name instead of defining one. `base` is that server, once the
+   * files are merged.
+   */
+  piOverride?: { enabled?: boolean; base?: LoadedEntry };
+  /** Pi: the project override that set this server's `enabled`. */
+  piOverriddenBy?: LoadedEntry;
+  /** Pi: whether the server is on once project overrides apply. */
+  piEnabled?: boolean;
+  /** Pi: read, and hides lower entries, but Orkestrator's Pi sessions never start it. */
+  launchBlock?: string;
 }
 
 export interface LoadedCatalog {
@@ -344,43 +366,71 @@ function markGrokDisabledList(sources: readonly LoadedSource[], entries: LoadedE
 }
 
 /**
- * Mirror how the Pi bridge reads one file: it skips entries it cannot
- * normalize, stops after {@link PI_SERVERS_PER_FILE} accepted servers, and
- * lets the last of several entries with the same normalized name win.
+ * Mirror how the Pi bridge reads and merges its files (`loadMcpConfigFile`,
+ * `mergeMcpConfigEntries` and `resolvePiMcpServers` in
+ * pi-bridge/src/mcp-config.ts), which follow Pi's own loader:
+ *
+ * - Per file, entries Pi rejects are skipped and hide nothing; the rest, with
+ *   disabled entries and project overrides, count towards
+ *   {@link PI_SERVERS_PER_FILE}, and later entries are not read at all.
+ * - User entries come first. A project server replaces the user server with
+ *   the same name even when it is disabled or cannot start; a project
+ *   override only switches it on or off; and a server whose name differs from
+ *   an earlier one only in `-` and `_` is rejected.
+ * - Of the servers left on, the session starts as many as fit beside
+ *   Orkestrator's own connection.
  */
 function markPiLoadRules(entries: LoadedEntry[]): void {
   const bySource = new Map<LoadedSource, LoadedEntry[]>();
+  let reserved = 0;
   for (const entry of entries) {
-    if (entry.injected || entry.source.spec.provider !== "pi") continue;
+    if (entry.source.spec.provider !== "pi") continue;
+    if (entry.injected) {
+      if (entry.name === "orkestrator") reserved = 1;
+      continue;
+    }
     const list = bySource.get(entry.source) ?? [];
     list.push(entry);
     bySource.set(entry.source, list);
   }
-  for (const list of bySource.values()) {
-    let accepted = 0;
+  const read = new Map<LoadedSource, LoadedEntry[]>();
+  for (const [source, list] of bySource) {
+    const accepted: LoadedEntry[] = [];
     const groups = new Map<string, LoadedEntry[]>();
     for (const entry of list) {
-      entry.skipReason = piLoadBlock(entry.name, entry.raw);
       const id = piSanitizedName(entry.name);
-      if (id) {
+      if (accepted.length >= PI_SERVERS_PER_FILE) {
+        entry.skipReason = `Pi reads at most ${PI_SERVERS_PER_FILE} entries from one file, counting disabled entries and overrides; this entry is past the limit.`;
+      } else if (!id) {
+        entry.skipReason =
+          "Pi skips this entry: a server name must start with a letter and be at most 64 characters.";
+      } else if (id === "orkestrator") {
+        // Reported as hidden by Orkestrator's own connection.
+      } else if (!entry.raw) {
+        entry.skipReason = "Pi skips this entry: it is not an object.";
+      } else {
+        const shape = piEntryShape(entry.raw, source.spec.scope === "project");
+        if (shape.kind === "rejected") {
+          entry.skipReason = shape.reason;
+        } else {
+          if (shape.kind === "override") entry.piOverride = { enabled: shape.enabled };
+          else entry.launchBlock = piLaunchBlock(entry.raw, shape);
+          accepted.push(entry);
+        }
+      }
+      if (id && id !== "orkestrator") {
         const group = groups.get(id) ?? [];
         group.push(entry);
         groups.set(id, group);
       }
-      if (entry.skipReason || entry.raw?.disabled === true) continue;
-      if (id === "orkestrator") continue;
-      if (accepted >= PI_SERVERS_PER_FILE) {
-        entry.skipReason = `Pi loads at most ${PI_SERVERS_PER_FILE} servers from one file; this entry is past the limit.`;
-        continue;
-      }
-      accepted += 1;
     }
+    read.set(source, accepted);
     for (const [id, group] of groups) {
       if (group.length < 2) continue;
       const names = group.map((entry) => `"${entry.name}"`).join(", ");
       const used = [...group]
         .reverse()
-        .find((entry) => !entry.skipReason && entry.raw?.disabled !== true);
+        .find((entry) => accepted.includes(entry) && !entry.piOverride);
       for (const entry of group) {
         const which = !used
           ? "none of them is loaded"
@@ -393,6 +443,49 @@ function markPiLoadRules(entries: LoadedEntry[]): void {
       }
     }
   }
+  const merged = new Map<string, LoadedEntry>();
+  for (const [source, accepted] of read) {
+    if (source.spec.excludedReason) continue;
+    for (const entry of accepted) {
+      const id = piSanitizedName(entry.name)!;
+      if (entry.piOverride) {
+        const base = merged.get(id);
+        if (!base) {
+          entry.skipReason = `Pi skips this override: no user server is named "${entry.name}".`;
+          continue;
+        }
+        entry.piOverride.base = base;
+        if (entry.piOverride.enabled !== undefined) {
+          base.piEnabled = entry.piOverride.enabled;
+          base.piOverriddenBy = entry;
+        }
+        continue;
+      }
+      const namespace = piNamespace(entry.name);
+      const kept = [...merged.values()].find(
+        (other) => piSanitizedName(other.name) !== id && piNamespace(other.name) === namespace,
+      );
+      if (kept) {
+        entry.clashesWith = kept;
+        entry.skipReason =
+          `Pi treats "${entry.name}" and "${kept.name}"${kept.source === entry.source ? "" : ` in ${kept.source.spec.label}`} ` +
+          `as the same server and keeps "${kept.name}", which it reads first. Rename or remove one of them.`;
+        continue;
+      }
+      entry.piEnabled = piSavedEnabled(entry.raw!);
+      merged.set(id, entry);
+    }
+  }
+  const limit = PI_SERVERS_PER_FILE - reserved;
+  let started = 0;
+  for (const entry of merged.values()) {
+    if (!entry.piEnabled || entry.launchBlock) continue;
+    if (started >= limit) {
+      entry.launchBlock = `Orkestrator's Pi sessions start at most ${limit} servers besides Orkestrator's own; this one is past the limit.`;
+      continue;
+    }
+    started += 1;
+  }
 }
 
 /** The runtime identity two same-provider entries collide on. */
@@ -404,8 +497,8 @@ function identityOf(entry: LoadedEntry): string {
 
 function isCandidate(entry: LoadedEntry): boolean {
   if (entry.source.spec.excludedReason) return false;
-  // The Pi bridge skips a disabled entry entirely, so a lower one takes over.
-  if (entry.source.spec.provider === "pi" && entry.definition?.enabled === false) return false;
+  // A Pi override switches a server rather than defining one.
+  if (entry.piOverride) return false;
   if (entry.skipReason || entry.disabledReason) return false;
   return true;
 }
@@ -469,7 +562,9 @@ export function revealedBy(
   );
   remaining.sort(byPriority);
   const view = computeEffective(entries);
-  return view.winners.get(identity) === entry ? remaining[0] : undefined;
+  if (view.winners.get(identity) === entry && remaining[0]) return remaining[0];
+  // Pi rejected a `-`/`_` variant because this entry came first; it loads once this one goes.
+  return entries.find((candidate) => candidate.clashesWith === entry);
 }
 
 export function sameIdentityEntries(
@@ -484,6 +579,9 @@ export function sameIdentityEntries(
 const allowed: McpCapabilityFlag = { supported: true };
 const denied = (reason: string): McpCapabilityFlag => ({ supported: false, reason });
 
+const PI_OVERRIDE_EDIT_BLOCK =
+  "This project entry only overrides the user server of the same name (whether it is on, and Pi's tool exposure); change it in the file, or remove it.";
+
 /** Why a row cannot be edited, in priority order. */
 export function entryEditBlock(
   entry: LoadedEntry,
@@ -497,6 +595,7 @@ export function entryEditBlock(
   if (entry.source.file?.writeBlock) return entry.source.file.writeBlock;
   if (entry.issue) return entry.issue;
   if (entry.conflict) return entry.conflict;
+  if (entry.piOverride) return PI_OVERRIDE_EDIT_BLOCK;
   if (!entry.definition) return "The entry could not be read.";
   if (entry.definition.unsupportedReason) return entry.definition.unsupportedReason;
   if (entry.definition.invalidReason)
@@ -562,6 +661,66 @@ function secretCount(definition: CanonicalDefinition | null): number {
   return count;
 }
 
+type PiStatus = Pick<McpDefinitionSummary, "status" | "statusReason" | "shadowedBy">;
+
+/** What Orkestrator's Pi sessions do with the server an entry defines. */
+function piServerStatus(entry: LoadedEntry): PiStatus {
+  const by = entry.piOverriddenBy;
+  if (entry.piEnabled === false) {
+    return {
+      status: "disabled",
+      statusReason:
+        by && by.piOverride?.enabled === false
+          ? `Turned off in this project by the override in ${by.source.spec.label}.`
+          : "Disabled in the saved configuration.",
+    };
+  }
+  if (entry.launchBlock) return { status: "invalid", statusReason: entry.launchBlock };
+  if (by && entry.raw && !piSavedEnabled(entry.raw)) {
+    return {
+      status: "effective",
+      statusReason: `Turned on in this project by the override in ${by.source.spec.label}.`,
+    };
+  }
+  // An SSE entry runs over Streamable HTTP; the reason says why it is not editable.
+  return { status: "effective", statusReason: entry.definition?.unsupportedReason };
+}
+
+/** A Pi entry's status, following the bridge's load and merge ({@link markPiLoadRules}). */
+function piStatus(entry: LoadedEntry, winner: LoadedEntry | undefined): PiStatus {
+  if (entry.skipReason) {
+    let statusReason = entry.skipReason;
+    if (winner && winner !== entry && byPriority(entry, winner) < 0)
+      statusReason += ` The lower-priority entry in ${winner.source.spec.label} is used instead.`;
+    return { status: "invalid", statusReason };
+  }
+  const base = entry.piOverride?.base;
+  if (base) {
+    const target = `"${base.name}" in ${base.source.spec.label}`;
+    const change =
+      entry.piOverride?.enabled === false
+        ? `turns ${target} off in this project`
+        : entry.piOverride?.enabled === true
+          ? `turns ${target} on in this project`
+          : `changes only how Pi exposes the tools of ${target}, which Orkestrator's Pi sessions do not use`;
+    const result = piServerStatus(base);
+    return {
+      status: result.status,
+      statusReason:
+        `This override ${change}.` +
+        (result.status === "invalid" && result.statusReason ? ` ${result.statusReason}` : ""),
+    };
+  }
+  if (winner && winner !== entry) {
+    return {
+      status: "shadowed",
+      shadowedBy: winner.entryId,
+      statusReason: `Overridden by ${winner.source.spec.label}. ${PROVIDER_CODECS.pi.mergeNote}`,
+    };
+  }
+  return piServerStatus(entry);
+}
+
 export function summarizeEntries(
   catalog: LoadedCatalog,
   capabilities: McpTargetCapabilities,
@@ -598,6 +757,8 @@ export function summarizeEntries(
     } else if (entry.conflict) {
       status = "invalid";
       statusReason = entry.conflict;
+    } else if (entry.source.spec.provider === "pi") {
+      ({ status, statusReason, shadowedBy } = piStatus(entry, winner));
     } else if (definition.invalidReason) {
       status = "invalid";
       statusReason = definition.invalidReason;
@@ -607,23 +768,6 @@ export function summarizeEntries(
     } else if (entry.disabledReason) {
       status = "disabled";
       statusReason = entry.disabledReason;
-    } else if (entry.source.spec.provider === "pi" && definition.enabled === false) {
-      // Pi drops a disabled entry before resolving names, so it never shadows
-      // anything; whichever entry wins is used in its place.
-      status = "disabled";
-      if (winner && winner !== entry) {
-        statusReason =
-          byPriority(entry, winner) < 0
-            ? `Disabled; the lower-priority entry in ${winner.source.spec.label} is used instead.`
-            : `Disabled; ${winner.source.spec.label} also defines this name and takes priority.`;
-      } else {
-        statusReason = "Disabled in the saved configuration.";
-      }
-    } else if (entry.skipReason) {
-      status = "invalid";
-      statusReason = entry.skipReason;
-      if (winner && winner !== entry && byPriority(entry, winner) < 0)
-        statusReason += ` The lower-priority entry in ${winner.source.spec.label} is used instead.`;
     } else if (winner && winner !== entry) {
       status = "shadowed";
       shadowedBy = winner.entryId;
@@ -688,8 +832,15 @@ export function publicSource(source: LoadedSource): McpConfigSource {
     sharedWith: spec.sharedWith,
     trust: spec.trust,
     trustReason: spec.trustReason,
+    note:
+      spec.provider === "pi" && source.parsed?.subtree.length === 0 && source.parsed.entries.size
+        ? PI_BARE_MAP_NOTE
+        : undefined,
   };
 }
+
+const PI_BARE_MAP_NOTE =
+  "This file lists servers without the mcpServers wrapper. Orkestrator's Pi sessions read it, but Pi's own CLI ignores it, and `pi mcp add` would add a wrapper that hides these servers from Orkestrator too. Move them under mcpServers.";
 
 function mapSummary(map: Record<string, string>): McpMapEntrySummary[] {
   return Object.entries(map).map(([key, value]) =>

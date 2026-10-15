@@ -59,8 +59,8 @@ it reaches. Some rules of thumb:
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
 | High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 59 |
 | Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 232 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 243 |
-| **Total** | | **535** |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 247 |
+| **Total** | | **539** |
 
 ## Very high
 
@@ -667,6 +667,10 @@ it reaches. Some rules of thumb:
 - [ ] Add optional, non-exclusive review lenses as a shared-protocol enum ([multi-review-panel-value.md](multi-review-panel-value.md), deferred)
 - [ ] Add opt-in adaptive stopping with a minimum panel and a measured novelty rule ([multi-review-panel-value.md](multi-review-panel-value.md), deferred)
 - [ ] Revisit the default two-reviewer Multi Review panel ([multi-review-panel-value.md](multi-review-panel-value.md), deferred)
+- [ ] Show findings from a Multi Review reviewer that is still running, through a bounded partial-findings channel ([multi-review-flow-graph.md](multi-review-flow-graph.md))
+- [ ] Show queue position and expected start for queued Multi Review reviewers ([multi-review-flow-graph.md](multi-review-flow-graph.md))
+- [ ] Add a bounded transcript tail for the preparation, consolidation and Fix sessions in the flow graph inspector ([multi-review-flow-graph.md](multi-review-flow-graph.md))
+- [ ] Add flow graph zoom controls and keep zoom and pan between visits ([multi-review-flow-graph.md](multi-review-flow-graph.md))
 
 ### Coordinator and agent mail (low)
 
@@ -772,6 +776,7 @@ it reaches. Some rules of thumb:
 | **Multi Review** | | | | | |
 | [multi-review-scale-and-cost.md](multi-review-scale-and-cost.md) |  | 3 | 5 | 9 | 17 |
 | [multi-review-panel-value.md](multi-review-panel-value.md) |  | 1 | 4 | 5 | 10 |
+| [multi-review-flow-graph.md](multi-review-flow-graph.md) |  |  |  | 4 | 4 |
 | **Coordinator and agent mail** | | | | | |
 | [coordinator-read-only-adapters.md](coordinator-read-only-adapters.md) |  |  | 3 | 3 | 6 |
 | [coordinator-live-conformance.md](coordinator-live-conformance.md) |  | 4 | 6 |  | 10 |

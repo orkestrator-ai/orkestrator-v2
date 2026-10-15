@@ -17,6 +17,7 @@ import { StreamingTranscriptFixture } from "./StreamingTranscriptFixture";
 import { FullscreenSettingsFixture } from "./FullscreenSettingsFixture";
 import { GlobalSettingsFixture } from "./GlobalSettingsFixture";
 import { GitHubCliSetupFixture } from "./GitHubCliSetupFixture";
+import { MultiReviewFlowFixture } from "./MultiReviewFlowFixture";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { StrictMode, Suspense, lazy, createRef, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -1698,6 +1699,7 @@ function fixtureForPath() {
   if (window.location.pathname === "/multi-review-running-tile") {
     return <MultiReviewRunningTileFixture />;
   }
+  if (window.location.pathname === "/multi-review-flow") return <MultiReviewFlowFixture />;
   if (window.location.pathname === "/agent-launch") return <AgentLaunchDialogFixture />;
   if (window.location.pathname === "/review-launch") return <ReviewLaunchDialogFixture />;
   if (window.location.pathname === "/review-validation-output") {

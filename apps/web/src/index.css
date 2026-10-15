@@ -187,6 +187,16 @@
   --color-status-error: #ff7b72;
   --color-status-creating: #3b82f6;
 
+  /*
+   * Multi Review's flow graph. The canvas sits below the panel surface and the
+   * nodes above it, so neither can use `background` or `card`: the central
+   * panel rebinds both to the terminal background. `flow-edge` is the dashed
+   * line of a step that has not been reached.
+   */
+  --color-flow-canvas: #0b0d10;
+  --color-flow-node: #14161b;
+  --color-flow-edge: #3a3f4a;
+
   /* Sidebar */
   --sidebar-width: 280px;
   --sidebar-width-collapsed: 0px;

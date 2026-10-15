@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { runtimeSummary } from "./runtime-summary";
+import { formatRuntimeParts, runtimeParts, runtimeSummary } from "./runtime-summary";
 
 describe("runtimeSummary", () => {
   const now = Date.parse("2026-08-14T00:01:35.000Z");
@@ -31,5 +31,28 @@ describe("runtimeSummary", () => {
   test("rejects a missing or unparseable start", () => {
     expect(runtimeSummary({}, true, now)).toBeNull();
     expect(runtimeSummary({ startedAt: "soon" }, true, now)).toBeNull();
+  });
+
+  test("splits the line into parts for views that lay them out side by side", () => {
+    expect(
+      runtimeParts({ startedAt: "2026-08-14T00:01:28.000Z", tokenCount: 1_200 }, true, now),
+    ).toEqual({ elapsed: "7s", tokens: "1.2k", tokensPending: false, live: true });
+    expect(runtimeParts({ startedAt: "2026-08-14T00:01:28.000Z" }, true, now)).toEqual({
+      elapsed: "7s",
+      tokens: null,
+      tokensPending: true,
+      live: true,
+    });
+    // A recorded end wins over a stale running flag.
+    expect(
+      runtimeParts(
+        { startedAt: "2026-08-14T00:00:00.000Z", completedAt: "2026-08-14T00:00:30.000Z" },
+        true,
+        now,
+      ),
+    ).toEqual({ elapsed: "30s", tokens: null, tokensPending: false, live: false });
+    expect(
+      formatRuntimeParts({ elapsed: null, tokens: "500", tokensPending: false, live: false }),
+    ).toBe("500 tokens");
   });
 });

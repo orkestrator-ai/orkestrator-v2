@@ -34,11 +34,21 @@ owns each.
     backend therefore shows raw `{ info, parts }` envelopes as nearly empty
     rows. The reverse skew (old gateway tab, new backend) is benign for this.
   - The authenticated `/__orkestrator/status` route (`apps/backend/src/gateway-auth.ts`)
-    answers only `{ ok: true }`. The desktop (`backend-process.ts`,
-    `connection-manager.ts`), `apps/web-public/src/connection.ts` and the iOS
-    `GatewayConnectionValidator.swift` use it as a reachability probe. The
-    public CLI has its own schema handshake
+    now also carries the app version, the update protocol version, the update
+    host and an update summary ([`remote-gateway.md`](../architecture/remote-gateway.md),
+    "Status handshake and remote updates"); older backends answer only
+    `{ ok: true }`. The desktop (`backend-process.ts`, `connection-manager.ts`),
+    `apps/web-public/src/connection.ts` and the iOS
+    `GatewayConnectionValidator.swift` use it as a reachability probe, and the
+    desktop Connections page shows each remote's version from it. The public
+    CLI has its own schema handshake
     ([`public-cli.md`](../architecture/public-cli.md)).
+  - The update protocol (`update_*` commands, `/status`) is append-only and
+    outlives every other compatibility window, so any client can update an
+    older backend. A release's `compatibility.minClientVersion` refuses older
+    clients (`client-too-old`), so the order is always "update the client
+    first" ([`release-channels-and-updates.md`](../architecture/release-channels-and-updates.md),
+    "Mixed-version rules and sequencing").
 - **Dead prompt-queue claim path.** The backend `PromptQueueDrainer`
   (`prompt-queue-drainer.ts`) claims and dispatches through storage directly
   (`reservePromptQueueHeadForDispatch` and the dispatch acknowledgements). Left
@@ -143,9 +153,10 @@ supported:
 - **Renderer–backend skew.** Is the reminder enough? The alternatives are a
   renderer-side guard (detect a raw `{ info, parts }` envelope and say "update
   the backend" instead of rendering an empty row), or a version handshake.
-  `/__orkestrator/status` is authenticated, so it could carry the app version
-  and a protocol or capability revision without disclosing them to anonymous
-  callers, and every client already probes it.
+  `/__orkestrator/status` now carries the app version and the update protocol
+  revision; what is still open is whether a renderer should gate views on a
+  capability revision there, not only remind. The reminder can now offer
+  **Update backend** when the backend can install updates.
 
 ## Needs verification
 

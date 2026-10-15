@@ -57,10 +57,10 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 59 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 232 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 243 |
-| **Total** | | **535** |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 65 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 235 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 246 |
+| **Total** | | **547** |
 
 ## Very high
 
@@ -166,6 +166,15 @@ it reaches. Some rules of thumb:
 - [ ] Stop non-deleting sensitive saves rewriting the retired JSON archive with current values ([storage-service-repositories.md](storage-service-repositories.md))
 - [ ] Add storage guard tests: `saveJson` only under a lease, and no mixed `updateStore`/`saveJson` writers ([storage-service-repositories.md](storage-service-repositories.md))
 - [ ] Verify no store is written by both `updateStore` and a leased `saveJson` ([storage-service-repositories.md](storage-service-repositories.md), verify)
+
+### Release channels and updates (high)
+
+- [ ] Run the unstable workflow once after the one-time setup: signed and notarized macOS, Linux x64/arm64, prerelease never latest, npm and GHCR `unstable` ([release-channels-qualification.md](release-channels-qualification.md), qualification)
+- [ ] Qualify an end-to-end desktop update with a consent item on macOS and the Linux AppImage, now and on quit ([release-channels-qualification.md](release-channels-qualification.md), qualification)
+- [ ] Qualify the desktop rollback: a release whose backend fails to start restores the database snapshot and the previous app ([release-channels-qualification.md](release-channels-qualification.md), qualification)
+- [ ] Qualify `serve --supervised` under systemd and launchd: update, health check, rollback, interrupted cutover ([release-channels-qualification.md](release-channels-qualification.md), qualification)
+- [ ] Update a headless backend and a remote desktop app from another machine over Tailscale and check the remote's audit entry ([release-channels-qualification.md](release-channels-qualification.md), qualification)
+- [ ] Add the active release signing key as the `ORKESTRATOR_RELEASE_SIGNING_KEY` secret and store both keys before #1003 merges; the public keys are embedded ([release-channels-qualification.md](release-channels-qualification.md), setup)
 
 ### Cross-cutting (high)
 
@@ -422,6 +431,13 @@ it reaches. Some rules of thumb:
 - [ ] Move the 18 local-server bindings into `LocalServerRuntime` with injected spawn and terminate ([backend-runtime-state-ownership.md](backend-runtime-state-ownership.md))
 - [ ] Move the 9 environment-operation bindings into `EnvironmentOperations` or the lifecycle task tracker ([backend-runtime-state-ownership.md](backend-runtime-state-ownership.md))
 - [ ] Delete `commands-runtime-state.ts`, relocate its constants and drop it from the `no-mutable-exports` allowlist ([backend-runtime-state-ownership.md](backend-runtime-state-ownership.md))
+
+### Release channels and updates (medium)
+
+- [ ] Show a macOS permission added by an update as action needed on the client and as "New in" on the updated Mac ([release-channels-qualification.md](release-channels-qualification.md), qualification)
+- [ ] Qualify the published-image pull, manifest check, retag at install and retag back on any failure ([release-channels-qualification.md](release-channels-qualification.md), qualification)
+- [ ] Drive a 2.20.x remote from a new client and a new remote from a 2.20.x client ([release-channels-qualification.md](release-channels-qualification.md), qualification)
+- [x] Decide whether a remotely requested restart needs a grace period with a local veto on the remote: no veto; the remote shows who asked ([release-channels-qualification.md](release-channels-qualification.md), decision)
 
 ### Cross-cutting (medium)
 
@@ -695,6 +711,12 @@ it reaches. Some rules of thumb:
 - [ ] Check whether sibling `await import()` calls exist only to dodge an import cycle ([backend-runtime-state-ownership.md](backend-runtime-state-ownership.md))
 - [ ] Run the isolated browser agent tests for the terminal and local-server runtime steps ([backend-runtime-state-ownership.md](backend-runtime-state-ownership.md), qualification)
 
+### Release channels and updates (low)
+
+- [ ] Clear an action-needed notice when the desktop permission probe shows the grant ([release-channels-qualification.md](release-channels-qualification.md))
+- [ ] Report a supervisor crash-loop rollback as an update notice, not only a log line ([release-channels-qualification.md](release-channels-qualification.md))
+- [ ] Publish the CLI with npm provenance once `bun publish` supports it ([release-channels-qualification.md](release-channels-qualification.md), blocked)
+
 ### Cross-cutting (low)
 
 - [ ] Confirm runtime drift counters and advisory notices show and rehydrate in Agent Info on two platforms ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
@@ -788,3 +810,4 @@ it reaches. Some rules of thumb:
 | [test-suite-and-ci-health.md](test-suite-and-ci-health.md) | 1 | 1 | 4 | 11 | 17 |
 | [mobile-layout-gaps.md](mobile-layout-gaps.md) |  | 2 | 1 | 2 | 5 |
 | [dependency-upgrades.md](dependency-upgrades.md) |  |  | 3 | 7 | 10 |
+| [release-channels-qualification.md](release-channels-qualification.md) |  | 6 | 3 | 3 | 12 |

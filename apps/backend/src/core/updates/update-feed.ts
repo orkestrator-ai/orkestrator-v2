@@ -57,7 +57,7 @@ export const GITHUB_RELEASE_DOWNLOAD_HOSTS = [
   "release-assets.githubusercontent.com",
 ] as const;
 
-const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_SIGNATURE_BYTES = 1024;
 

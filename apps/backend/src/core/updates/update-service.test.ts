@@ -60,6 +60,7 @@ type Harness = {
   hostRequests(): UpdateHostRequest[];
   dataDir: string;
   channel: { value: unknown };
+  files: UpdateFiles;
 };
 
 async function harness(
@@ -73,6 +74,7 @@ async function harness(
     disabledReason?: string | null;
     dependencies?: UpdateDependencies;
     schema?: number;
+    files?: UpdateFiles;
   } = {},
 ): Promise<Harness> {
   const dataDir =
@@ -88,6 +90,7 @@ async function harness(
   const channel = { value: options.channel ?? ("stable" as unknown) };
   const currentVersion = options.currentVersion ?? "2.21.0";
   let sequence = 0;
+  const files = options.files ?? new UpdateFiles(dataDir);
   const service = new UpdateService({
     dataDir,
     currentVersion,
@@ -105,7 +108,7 @@ async function harness(
     automaticChecks: options.automaticChecks ?? false,
     disabledReason: options.disabledReason ?? null,
     dependencies: options.dependencies,
-    files: new UpdateFiles(dataDir),
+    files,
     now: () => new Date("2026-10-15T12:00:00.000Z"),
     randomId: () => `id-${++sequence}`,
     timers: timers.timers,
@@ -114,6 +117,7 @@ async function harness(
   await service.start();
   return {
     service,
+    files,
     feed,
     timers,
     events,
@@ -909,5 +913,102 @@ describe("host protocol", () => {
       host: { kind: "desktop", installKind: "mac-app", canInstall: true },
       updates: { channel: "stable", available: "2.22.0", jobPhase: null },
     });
+  });
+});
+
+async function readyForManualInstall(h: Harness) {
+  const session = await hostSession(h);
+  await h.service.startJob(
+    { ...startArgs(await availableUpdate(h)), restartPolicy: "manual" },
+    REQUESTER,
+  );
+  await flush();
+  report(h, session, h.hostRequests()[0]!, "succeeded");
+  await flush();
+  return { session, jobId: h.service.snapshot().job!.id };
+}
+
+describe("update failure boundaries", () => {
+  test("bundled self-update crosses a client floor while an independent client is blocked", async () => {
+    const h = await harness();
+    await hostSession(h);
+    const offer = await availableUpdate(h, "2.22.0", {
+      compatibility: { updateProtocol: 1, minClientVersion: "2.22.0", minBackendVersion: "2.20.0" },
+    });
+    const args = { ...startArgs(offer), client: REQUESTER.client! };
+    await expect(h.service.startJob(args, REQUESTER)).rejects.toThrow("blocked");
+    const started = await h.service.startJob(args, {
+      ...REQUESTER,
+      listener: "control",
+      identitySource: "local",
+    });
+    expect(started.job?.target.version).toBe("2.22.0");
+    h.service.stop();
+  });
+
+  test("admission fails closed when the job cannot be persisted", async () => {
+    const h = await harness();
+    await hostSession(h);
+    const args = startArgs(await availableUpdate(h));
+    h.files.writeState = () => {
+      throw new Error("disk full");
+    };
+    await expect(h.service.startJob(args, REQUESTER)).rejects.toThrow("persistence-failed");
+    expect(h.service.snapshot().job).toBeNull();
+    expect(h.files.readState().job).toBeNull();
+    expect(h.hostRequests()).toEqual([]);
+    h.service.stop();
+  });
+
+  test.each(["now", "on-quit"] as const)(
+    "%s never reaches host when install state cannot be persisted",
+    async (when) => {
+      const h = await harness();
+      const { jobId } = await readyForManualInstall(h);
+      const write = h.files.writeState.bind(h.files);
+      h.files.writeState = (state) => {
+        if (state.job?.phase === "installing" || state.job?.installWhen === "on-quit")
+          throw new Error("disk full");
+        write(state);
+      };
+      const install =
+        when === "now"
+          ? h.service.installNow(jobId, REQUESTER)
+          : h.service.installOnQuit(jobId, REQUESTER);
+      await expect(install).rejects.toThrow("persistence-failed");
+      expect(h.hostRequests().filter((request) => request.kind === "install")).toEqual([]);
+      expect(h.service.snapshot().job).toMatchObject({ phase: "ready", installWhen: null });
+      expect(h.files.readState().job).toMatchObject({ phase: "ready", installWhen: null });
+      h.service.stop();
+    },
+  );
+
+  test("a rejected request after restarting settles on the recovery deadline", async () => {
+    const h = await harness();
+    const { session, jobId } = await readyForManualInstall(h);
+    const installing = h.service.installNow(jobId, REQUESTER);
+    await flush();
+    const request = h.hostRequests().at(-1)!;
+    report(h, session, request, "progress", { progress: { percent: null, message: "restarting" } });
+    report(h, session, request, "failed", { error: { code: "lost", message: "connection lost" } });
+    await installing;
+    expect(h.service.snapshot().job?.phase).toBe("restarting");
+    h.timers.advance(RESTART_WAIT_MS);
+    expect(h.service.snapshot().job?.phase).toBe("rolled-back");
+    h.service.stop();
+  });
+
+  test("an outstanding on-quit request excludes install-now, including failure", async () => {
+    const h = await harness();
+    const { session, jobId } = await readyForManualInstall(h);
+    const arming = h.service.installOnQuit(jobId, REQUESTER);
+    await flush();
+    await expect(h.service.installNow(jobId, REQUESTER)).rejects.toThrow("not-ready");
+    report(h, session, h.hostRequests().at(-1)!, "failed", {
+      error: { code: "stage-failed", message: "failed" },
+    });
+    await arming;
+    expect(h.service.snapshot().job?.phase).toBe("failed");
+    h.service.stop();
   });
 });

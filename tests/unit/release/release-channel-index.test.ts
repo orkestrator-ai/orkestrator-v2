@@ -3,6 +3,7 @@ import { generateKeyPairSync, sign } from "node:crypto";
 import { parseReleaseChannelIndex } from "../../../packages/protocol/src/release-channels";
 import {
   buildReleaseChannelIndex,
+  computeReleaseChannelIndex,
   publishReleaseChannelIndex,
   pruneUnstableReleases,
   runChannelIndex,
@@ -135,6 +136,7 @@ function runtimeFor(
   const run = mock((_command: string[]) => {});
   const runtime: ChannelIndexRuntime = {
     capture: (command) => {
+      if (command.includes("--jq")) return COMMIT;
       if (command[1] === "api") {
         return JSON.stringify([
           releases.map((entry) => ({
@@ -193,8 +195,8 @@ describe("publishing", () => {
       await sha256Hex(manifestBytes("2.21.0")),
     );
     expect(index.channels.beta?.version).toBe("2.22.0-beta.1");
-    expect(run).toHaveBeenCalledTimes(1);
-    const upload = run.mock.calls[0]![0];
+    expect(run).toHaveBeenCalledTimes(3);
+    const upload = run.mock.calls[1]![0];
     expect(upload.slice(0, 6)).toEqual([
       "gh",
       "release",
@@ -225,9 +227,7 @@ describe("publishing", () => {
       indexRelease: { isPrerelease: true, isDraft: false },
       keys: [key],
     });
-    await expect(publishReleaseChannelIndex(unsigned.runtime)).rejects.toThrow(
-      "has no release-requirements.json.sig",
-    );
+    expect((await computeReleaseChannelIndex(unsigned.runtime)).channels.stable).toBeNull();
     const signedRelease = release("v2.21.0", {
       assets: ["release-requirements.json", "release-requirements.json.sig"],
     });
@@ -292,4 +292,57 @@ describe("pruning unstable releases", () => {
 test("refuses unknown commands", async () => {
   const { runtime } = runtimeFor([]);
   await expect(runChannelIndex(["publish", "--now"], runtime)).rejects.toThrow("usage:");
+});
+
+test("signed unstable publication tolerates legacy unsigned stable and beta", async () => {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const key = Buffer.from(publicKey.export({ format: "der", type: "spki" }).subarray(-32)).toString(
+    "base64",
+  );
+  const version = "2.22.0-unstable.20261015.1.gaaaaaaa";
+  const signed = release(`v${version}`, {
+    assets: ["release-requirements.json", "release-requirements.json.sig"],
+  });
+  const { runtime } = runtimeFor([release("v2.21.0"), release("v2.22.0-beta.1"), signed], {
+    keys: [key],
+    signatures: {
+      [signed.tagName]: sign(null, manifestBytes(version), privateKey).toString("base64"),
+    },
+  });
+  const index = await computeReleaseChannelIndex(runtime);
+  expect(index.channels.stable).toBeNull();
+  expect(index.channels.beta).toBeNull();
+  expect(index.channels.unstable?.version).toBe(version);
+});
+
+test("repository lock excludes a stale publisher and retry recomputes after the newer release", async () => {
+  const releases = [release("v2.21.0")];
+  const first = runtimeFor(releases, { indexRelease: { isPrerelease: true, isDraft: false } });
+  const second = runtimeFor(releases, { indexRelease: { isPrerelease: true, isDraft: false } });
+  let locked = false;
+  let competing: Promise<string> | undefined;
+  const instrument = (runtime: ChannelIndexRuntime, startCompetitor: boolean) => {
+    const run = runtime.run;
+    runtime.run = (command) => {
+      if (command.includes("POST")) {
+        if (locked) throw new Error("422 reference already exists");
+        locked = true;
+      } else if (command.includes("DELETE")) locked = false;
+      else if (command[2] === "upload" && startCompetitor) {
+        releases.push(release("v2.22.0"));
+        competing = publishReleaseChannelIndex(second.runtime);
+        // Observe rejection immediately, before the first upload releases the lock.
+        void competing.catch(() => undefined);
+      }
+      run(command);
+    };
+  };
+  instrument(first.runtime, true);
+  instrument(second.runtime, false);
+  await publishReleaseChannelIndex(first.runtime);
+  await expect(competing!).rejects.toThrow("Could not acquire");
+  expect(second.run).not.toHaveBeenCalled();
+  const latest = JSON.parse(await publishReleaseChannelIndex(second.runtime));
+  expect(latest.channels.stable.version).toBe("2.22.0");
+  expect(locked).toBe(false);
 });

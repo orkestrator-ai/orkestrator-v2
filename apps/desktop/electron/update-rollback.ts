@@ -134,6 +134,7 @@ export async function rollBackFailedUpdate(options: {
   dataDir: string;
   now: number;
   ops?: RollbackFileOps;
+  isQuitting?: () => boolean;
 }): Promise<RollbackResult> {
   const { marker, app } = options;
   const ops = options.ops ?? defaultRollbackFileOps;
@@ -145,25 +146,48 @@ export async function rollBackFailedUpdate(options: {
   }
   if (!marker.rollbackPath) return { rolledBack: false, reason: "no copy of the previous version" };
   if (!app) return { rolledBack: false, reason: "this install cannot be replaced in place" };
-  // The new version's migration snapshotted the database before changing it.
+  // Complete the copy before moving the live app or restoring its database.
+  // A missing rollback copy or partial ditto output leaves the live app intact.
+  const temporary = `${app.path}.restore-${options.now}`;
+  try {
+    await ops.copy(marker.rollbackPath, temporary, app.kind);
+  } catch (error) {
+    await ops.remove(temporary);
+    throw error;
+  }
   const snapshot = findPreMigrationSnapshot(options.dataDir, {
     since: Date.parse(marker.createdAt),
   });
-  if (snapshot) restoreDatabaseSnapshot(options.dataDir, snapshot.file);
-  if (app.kind === "mac-app") {
-    const aside = `${app.path}.failed-${options.now}`;
-    await ops.rename(app.path, aside);
-    try {
-      await ops.copy(marker.rollbackPath, app.path, app.kind);
-    } catch (error) {
-      await ops.rename(aside, app.path).catch(() => undefined);
-      throw error;
+  try {
+    if (options.isQuitting?.()) return { rolledBack: false, reason: "application is quitting" };
+    if (snapshot) restoreDatabaseSnapshot(options.dataDir, snapshot.file);
+    if (app.kind === "mac-app") {
+      const aside = `${app.path}.failed-${options.now}`;
+      await ops.rename(app.path, aside);
+      try {
+        await ops.rename(temporary, app.path);
+      } catch (error) {
+        await ops.rename(aside, app.path);
+        throw error;
+      }
+      await ops.remove(aside).catch(() => undefined);
+    } else {
+      await ops.rename(temporary, app.path);
     }
-    await ops.remove(aside).catch(() => undefined);
-  } else {
-    const temporary = `${app.path}.restore-${options.now}`;
-    await ops.copy(marker.rollbackPath, temporary, app.kind);
-    await ops.rename(temporary, app.path);
+  } finally {
+    await ops.remove(temporary);
   }
   return { rolledBack: true, restoredDatabase: snapshot !== null };
+}
+
+/** A failed startup can race a user quit or a backend that is still draining. */
+export async function runStartupRollback(options: {
+  isQuitting(): boolean;
+  stopBackend(): Promise<void>;
+  restore(): Promise<RollbackResult>;
+}): Promise<RollbackResult> {
+  if (options.isQuitting()) return { rolledBack: false, reason: "application is quitting" };
+  await options.stopBackend();
+  if (options.isQuitting()) return { rolledBack: false, reason: "application is quitting" };
+  return options.restore();
 }

@@ -9,8 +9,14 @@ import {
   requesterFrom,
 } from "./commands-registry-updates.js";
 import { UpdateFiles } from "./updates/update-files.js";
-import { UpdateService } from "./updates/update-service.js";
-import { createFakeFeed, createFakeTimers, manifestFor } from "./updates/update-test-support.js";
+import { OUTCOME_WAIT_MS, UpdateService } from "./updates/update-service.js";
+import type { UpdateStatusSnapshot } from "@orkestrator/protocol/updates";
+import {
+  createFakeFeed,
+  createFakeTimers,
+  flush,
+  manifestFor,
+} from "./updates/update-test-support.js";
 
 const CONTROL: InvocationOrigin = {
   listener: "control",
@@ -29,11 +35,12 @@ afterEach(() => {
     rmSync(directory, { recursive: true, force: true });
 });
 
-async function setup() {
-  const dataDir = mkdtempSync(path.join(os.tmpdir(), "update-commands-"));
+async function setup(existingDataDir?: string) {
+  const dataDir = existingDataDir ?? mkdtempSync(path.join(os.tmpdir(), "update-commands-"));
   directories.push(dataDir);
   const feed = createFakeFeed();
   await feed.publish(manifestFor("2.22.0"));
+  const timers = createFakeTimers();
   const service = new UpdateService({
     dataDir,
     currentVersion: "2.21.0",
@@ -47,7 +54,7 @@ async function setup() {
     storageSchemaVersion: () => 3,
     automaticChecks: false,
     files: new UpdateFiles(dataDir),
-    timers: createFakeTimers().timers,
+    timers: timers.timers,
     log: { info: () => undefined, warn: () => undefined },
   });
   await service.start();
@@ -59,7 +66,7 @@ async function setup() {
     args: Record<string, unknown> = {},
     origin?: InvocationOrigin,
   ) => commands.get(command)!(args, context, origin);
-  return { service, invoke, commands };
+  return { service, invoke, commands, timers, dataDir };
 }
 
 const REGISTRATION = {
@@ -71,6 +78,35 @@ const REGISTRATION = {
 };
 
 describe("update commands", () => {
+  test.each([null, "armed-job"])(
+    "accepts and preserves desktop armedJobId %j",
+    async (armedJobId) => {
+      const { invoke, service } = await setup();
+      await invoke(
+        "update_host_register",
+        {
+          registration: {
+            ...REGISTRATION,
+            hostKind: "desktop",
+            installKind: "mac-app",
+            armedJobId,
+          },
+        },
+        CONTROL,
+      );
+      expect(service.host.currentRegistration()?.armedJobId).toBe(armedJobId);
+      for (const invalid of ["", "x".repeat(201), 3, {}]) {
+        await expect(
+          invoke(
+            "update_host_register",
+            { registration: { ...REGISTRATION, armedJobId: invalid } },
+            CONTROL,
+          ),
+        ).rejects.toThrow("armedJobId");
+      }
+    },
+  );
+
   test("registers the client and host commands", async () => {
     const { commands } = await setup();
     expect([...commands.keys()].sort()).toEqual([
@@ -219,3 +255,68 @@ describe("requesters", () => {
     expect(() => parseClientInfo({ kind: "web", name: "x".repeat(121) })).toThrow("client.name");
   });
 });
+
+test.each([true, false])(
+  "command registration recovers armed install-on-quit (host retained=%s)",
+  async (retained) => {
+    const first = await setup();
+    const registration = {
+      ...REGISTRATION,
+      hostKind: "desktop",
+      installKind: "appimage",
+      armedJobId: null,
+      capabilities: { install: true, rollback: true, restart: ["now", "on-quit"] },
+    };
+    const reply = (await first.invoke("update_host_register", { registration }, CONTROL)) as {
+      hostSessionId: string;
+    };
+    const snapshot = (await first.invoke("update_check")) as UpdateStatusSnapshot;
+    await first.invoke(
+      "update_start",
+      {
+        targetVersion: snapshot.available!.version,
+        requirementsSha256: snapshot.available!.requirementsSha256,
+        approvedConsentIds: [],
+        restartPolicy: "manual",
+      },
+      CONTROL,
+    );
+    await flush();
+    const prepared = first.service.host.pending()[0]!;
+    await first.invoke(
+      "update_host_report",
+      {
+        hostSessionId: reply.hostSessionId,
+        requestId: prepared.requestId,
+        jobId: prepared.jobId,
+        status: "succeeded",
+      },
+      CONTROL,
+    );
+    await flush();
+    const arming = first.invoke("update_install_on_quit", { jobId: prepared.jobId }, CONTROL);
+    await flush();
+    const install = first.service.host.pending()[0]!;
+    await first.invoke(
+      "update_host_report",
+      {
+        hostSessionId: reply.hostSessionId,
+        requestId: install.requestId,
+        jobId: install.jobId,
+        status: "succeeded",
+      },
+      CONTROL,
+    );
+    await arming;
+    first.service.stop();
+    const recovered = await setup(first.dataDir);
+    await recovered.invoke(
+      "update_host_register",
+      { registration: { ...registration, armedJobId: retained ? prepared.jobId : null } },
+      CONTROL,
+    );
+    recovered.timers.advance(OUTCOME_WAIT_MS);
+    expect(recovered.service.snapshot().job?.phase).toBe(retained ? "ready" : "failed");
+    recovered.service.stop();
+  },
+);

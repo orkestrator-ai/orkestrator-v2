@@ -206,12 +206,14 @@ jobs:
           RELEASE_COMMIT: ${{ needs.validate-release.outputs.commit }}
           # A caller that publishes the release afterwards moves these itself,
           # so a channel tag never names a version no channel offers yet.
-          IMMUTABLE_ONLY: ${{ inputs.moving-tags == false && '--immutable-only' || '' }}
+          MOVING_TAGS: ${{ inputs.moving-tags }}
         shell: bash
         run: |
           set -euo pipefail
           flags=()
-          if [[ -n "$IMMUTABLE_ONLY" ]]; then flags+=("$IMMUTABLE_ONLY"); fi
+          if [[ "$MOVING_TAGS" == "false" ]]; then
+            flags+=(--immutable-only)
+          fi
           {
             echo "tags<<EOF"
             mise exec -- bun scripts/release-channel.ts container-tags "$RELEASE_VERSION" \

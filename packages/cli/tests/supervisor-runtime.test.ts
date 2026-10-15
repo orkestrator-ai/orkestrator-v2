@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { serviceCommands } from "../src/client/commands/service.js";
+import type { CommandContext, ParsedCommand } from "../src/client/spec.js";
 import { classifyInvocation } from "../src/client.js";
 import { installDirFor, packageRootIn, runtimeLayout } from "../src/supervisor/layout.js";
 import { acquireSupervisorLock, dataDirFromArgs } from "../src/supervisor/main.js";
@@ -214,4 +216,111 @@ describe("service units", () => {
       "/Users/u/Library/LaunchAgents/dev.orkestrator.backend.plist",
     );
   });
+});
+
+test("an initializing or malformed supervisor lock is never reclaimed", () => {
+  const lock = path.join(temp(), "supervisor.lock");
+  writeFileSync(lock, "");
+  expect(() => acquireSupervisorLock(lock)).toThrow("no valid owner");
+  expect(readFileSync(lock, "utf8")).toBe("");
+  rmSync(lock);
+  mkdirSync(`${lock}.guard`);
+  expect(() => acquireSupervisorLock(lock)).toThrow("being initialized");
+});
+
+test("two processes racing acquisition have exactly one owner", async () => {
+  const lock = path.join(temp(), "supervisor.lock");
+  const modulePath = new URL("../src/supervisor/main.ts", import.meta.url).pathname;
+  const code = `import { acquireSupervisorLock } from ${JSON.stringify(modulePath)};
+    try { const release = acquireSupervisorLock(process.argv[1]); console.log("owned");
+      await Bun.stdin.text(); release(); } catch { console.log("refused"); }`;
+  const children = Array.from({ length: 4 }, () =>
+    Bun.spawn([process.execPath, "--eval", code, lock], {
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    }),
+  );
+  try {
+    const replies = await Promise.all(
+      children.map(async (child) => {
+        const reader = child.stdout.getReader();
+        const first = await reader.read();
+        reader.releaseLock();
+        return new TextDecoder().decode(first.value).trim();
+      }),
+    );
+    expect(replies.filter((reply) => reply === "owned")).toHaveLength(1);
+    expect(replies.filter((reply) => reply === "refused")).toHaveLength(3);
+  } finally {
+    for (const child of children) child.stdin.end();
+    await Promise.all(children.map((child) => child.exited));
+  }
+});
+
+test("toolchain pointer can be read and restored under a symlinked data directory", async () => {
+  const root = temp();
+  const actual = path.join(root, "actual");
+  const dataDir = path.join(root, "alias");
+  mkdirSync(path.join(actual, "toolchains", "bin", "old"), { recursive: true });
+  symlinkSync(actual, dataDir);
+  const runtime = createSupervisorRuntime({
+    dataDir,
+    layout: runtimeLayout(dataDir),
+    bunPath: process.execPath,
+  });
+  const binDir = path.join(dataDir, "toolchains", "bin", "old");
+  await runtime.pointToolchainCurrent(binDir);
+  const before = await runtime.readToolchainCurrent();
+  expect(before).toBe(binDir);
+  await runtime.pointToolchainCurrent(before!);
+});
+
+test("unused supervisor sleep deadlines do not keep a process alive", async () => {
+  const modulePath = new URL("../src/supervisor/runtime.ts", import.meta.url).pathname;
+  const layoutPath = new URL("../src/supervisor/layout.ts", import.meta.url).pathname;
+  const code = `import { createSupervisorRuntime } from ${JSON.stringify(modulePath)};
+    import { runtimeLayout } from ${JSON.stringify(layoutPath)};
+    createSupervisorRuntime({ dataDir: "/unused", layout: runtimeLayout("/unused"), bunPath: process.execPath }).sleep(120000);`;
+  const child = Bun.spawn([process.execPath, "--eval", code], { stdout: "pipe", stderr: "pipe" });
+  const deadline = setTimeout(() => child.kill(), 2000);
+  try {
+    expect(await child.exited).toBe(0);
+  } finally {
+    clearTimeout(deadline);
+  }
+});
+
+test("service install resets an existing current and uses forwarded data-dir consistently", async () => {
+  const root = temp();
+  const dataDir = path.join(root, "data with spaces");
+  const layout = runtimeLayout(dataDir);
+  const runtime = createSupervisorRuntime({ dataDir, layout, bunPath: process.execPath });
+  const old = installDirFor(layout, "2.21.0");
+  const next = installDirFor(layout, "2.22.0");
+  fakeInstall(old, "2.21.0");
+  fakeInstall(next, "2.22.0");
+  await runtime.setCurrent(old);
+  const context = {
+    version: "2.22.0",
+    io: { env: { HOME: root, ORKESTRATOR_DATA_DIR: path.join(root, "wrong") } },
+  } as unknown as CommandContext;
+  const parsed = {
+    options: { manager: "systemd" },
+    rest: ["--data-dir", dataDir],
+  } as unknown as ParsedCommand;
+  const install = serviceCommands.find((command) => command.path[1] === "install")!;
+  const result = await install.run(context, parsed);
+  expect(await runtime.readCurrent()).toBe(next);
+  const details = result.result as { unitPath: string; dataDir: string };
+  expect(details.dataDir).toBe(dataDir);
+  const unit = readFileSync(details.unitPath, "utf8");
+  expect(unit).toContain(layout.current);
+  expect(unit).toContain(`ORKESTRATOR_DATA_DIR=${dataDir}`);
+  const release = acquireSupervisorLock(layout.lock);
+  try {
+    await expect(install.run(context, parsed)).rejects.toThrow("Another supervisor");
+  } finally {
+    release();
+  }
 });

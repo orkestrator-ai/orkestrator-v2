@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { defaultDataDir } from "../../../../../apps/backend/src/data-dir.js";
+import { acquireSupervisorLock, dataDirFromArgs } from "../../supervisor/main.js";
 import { validateServerArguments } from "../../../../../apps/backend/src/server-flags.js";
 import { launcherIn, packageRootIn, runtimeLayout } from "../../supervisor/layout.js";
 import {
@@ -25,19 +25,32 @@ function manager(parsed: ParsedCommand): ServiceManager {
 }
 
 function dataDirectory(context: CommandContext, parsed: ParsedCommand): string {
-  return path.resolve(
-    stringOption(parsed.options, "data-dir") ??
-      context.io.env.ORKESTRATOR_DATA_DIR ??
-      defaultDataDir(process.platform, context.io.env),
-  );
+  const explicit = stringOption(parsed.options, "data-dir");
+  const forwarded = dataDirFromArgs(parsed.rest, context.io.env);
+  if (
+    explicit &&
+    parsed.rest.some((arg) => arg === "--data-dir" || arg.startsWith("--data-dir=")) &&
+    path.resolve(explicit) !== forwarded
+  ) {
+    throw new CliError("invalid-input", "Conflicting --data-dir options");
+  }
+  return explicit ? path.resolve(explicit) : forwarded;
 }
 
 function serveArgs(parsed: ParsedCommand, dataDir: string): string[] {
   const args = parsed.rest.filter((arg) => arg !== "--supervised");
   const error = validateServerArguments(args);
   if (error) throw new CliError("invalid-input", error);
-  const hasDataDir = args.some((arg) => arg === "--data-dir" || arg.startsWith("--data-dir="));
-  return hasDataDir ? args : [...args, "--data-dir", dataDir];
+  const normalized: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (arg === "--data-dir") {
+      index += 1;
+      continue;
+    }
+    if (!arg.startsWith("--data-dir=")) normalized.push(arg);
+  }
+  return [...normalized, "--data-dir", dataDir];
 }
 
 function unitFor(context: CommandContext, parsed: ParsedCommand) {
@@ -51,7 +64,13 @@ function unitFor(context: CommandContext, parsed: ParsedCommand) {
     dataDir,
     serveArgs: serveArgs(parsed, dataDir),
   });
-  return { dataDir, layout, manager: selected, unit, unitPath: serviceUnitPath(selected) };
+  return {
+    dataDir,
+    layout,
+    manager: selected,
+    unit,
+    unitPath: serviceUnitPath(selected, context.io.env.HOME),
+  };
 }
 
 const OPTIONS: CommandSpec["options"] = [
@@ -105,8 +124,8 @@ export const serviceCommands: CommandSpec[] = [
       DESCRIPTION,
       "",
       "Installs this CLI's own version into <data-dir>/runtime/versions (verified by Bun",
-      "against the registry) when nothing is installed there yet, points `current` at it,",
-      "and writes the unit. It does not start the service: run the printed command.",
+      "against the registry), resets `current` to it,",
+      "and writes the unit. Stop an existing supervisor first. It does not start the service: run the printed command.",
     ].join("\n"),
     positionals: [],
     options: OPTIONS,
@@ -116,7 +135,8 @@ export const serviceCommands: CommandSpec[] = [
     async run(context, parsed) {
       const { dataDir, layout, manager: selected, unit, unitPath } = unitFor(context, parsed);
       const version = context.version;
-      if (!existsSync(layout.current)) {
+      const releaseLock = acquireSupervisorLock(layout.lock);
+      try {
         const { createSupervisorRuntime } = await import("../../supervisor/runtime.js");
         const runtime = createSupervisorRuntime({ dataDir, layout, bunPath: process.execPath });
         let installDir: string;
@@ -130,6 +150,8 @@ export const serviceCommands: CommandSpec[] = [
           );
         }
         await runtime.setCurrent(installDir);
+      } finally {
+        releaseLock();
       }
       mkdirSync(path.dirname(unitPath), { recursive: true });
       mkdirSync(path.join(dataDir, "logs"), { recursive: true, mode: 0o700 });

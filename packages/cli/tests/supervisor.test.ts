@@ -18,6 +18,7 @@ type BackendBehaviour = {
   reportsVersion?: string;
   /** Migrates the database to this schema version when it starts. */
   migratesTo?: number;
+  stopGate?: Promise<void>;
 };
 
 type FakeBackend = {
@@ -49,6 +50,7 @@ function harness(options: {
   stageGate?: Promise<void>;
   /** Pointing `current` at these install directories fails. */
   setCurrentFails?: string[];
+  configure?: (runtime: SupervisorRuntime) => void;
 }) {
   const clock = options.clock ?? { now: 1_000 };
   const log: string[] = [];
@@ -92,7 +94,9 @@ function harness(options: {
         exited,
         signal(signal) {
           backend.signals.push(signal);
-          backend.exit({ code: null, signal });
+          if (behaviour.stopGate)
+            void behaviour.stopGate.then(() => backend.exit({ code: null, signal }));
+          else backend.exit({ code: null, signal });
         },
       };
     },
@@ -158,6 +162,7 @@ function harness(options: {
       error: (message: string) => log.push(message),
     },
   };
+  options.configure?.(runtime);
   const supervisor = new Supervisor({
     ownPackageRoot: OWN_ROOT,
     ownVersion: options.ownVersion ?? "2.21.0",
@@ -167,6 +172,7 @@ function harness(options: {
   const running = supervisor.run();
   return {
     supervisor,
+    runtime,
     running,
     backends,
     log,
@@ -623,5 +629,139 @@ describe("updating", () => {
     expect(h.state?.lastInstall).toBeNull();
     h.supervisor.stop();
     await h.running;
+  });
+});
+
+describe("supervisor commit failure recovery", () => {
+  test.each(["previous", "commit"])(
+    "stops and drains replacement before restoring after %s write fails",
+    async (failure) => {
+      let release!: () => void;
+      const stopGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const h = harness({
+        behaviours: {
+          [OWN_ROOT]: { version: "2.21.0" },
+          [versionRoot("2.21.0")]: { version: "2.21.0" },
+          [versionRoot("2.22.0")]: { version: "2.22.0", migratesTo: 4, stopGate },
+        },
+        configure(runtime) {
+          if (failure === "previous")
+            runtime.setPrevious = async () => {
+              throw new Error("disk full");
+            };
+          else {
+            const write = runtime.writeState;
+            runtime.writeState = async (state) => {
+              if (state.pendingOutcome?.outcome === "succeeded") throw new Error("disk full");
+              await write(state);
+            };
+          }
+        },
+      });
+      try {
+        await until(() => h.backends.length > 0);
+        h.backends[0]!.pending.push(install("2.22.0"));
+        await until(() => h.backends[1]?.signals.includes("SIGTERM") === true);
+        expect(h.restored).toEqual([]);
+        expect(h.backends).toHaveLength(2);
+        release();
+        await until(() => h.backends.length === 3);
+        expect(h.restored).toHaveLength(1);
+        expect(h.current).toBe(installDir("2.21.0"));
+        expect(h.userVersion).toBe(3);
+      } finally {
+        release();
+        h.supervisor.stop();
+        await h.running;
+      }
+    },
+  );
+
+  test("restores current even when restoring the toolchain fails", async () => {
+    const h = harness({
+      behaviours: {
+        [OWN_ROOT]: { version: "2.21.0" },
+        [versionRoot("2.21.0")]: { version: "2.21.0" },
+        [versionRoot("2.22.0")]: { version: "2.22.0", reportsVersion: "wrong" },
+      },
+      configure(runtime) {
+        const point = runtime.pointToolchainCurrent;
+        runtime.pointToolchainCurrent = async (dir) => {
+          if (dir.endsWith("/old")) throw new Error("toolchain restore failed");
+          await point(dir);
+        };
+      },
+    });
+    try {
+      await until(() => h.backends.length > 0);
+      h.backends[0]!.pending.push(install("2.22.0"));
+      await until(() => h.backends.length === 3);
+      expect(h.current).toBe(installDir("2.21.0"));
+    } finally {
+      h.supervisor.stop();
+      await h.running;
+    }
+  });
+
+  test("retries an initially rejected host registration", async () => {
+    let attempts = 0;
+    const h = harness({
+      behaviours: { [OWN_ROOT]: { version: "2.21.0" } },
+      configure(runtime) {
+        const client = runtime.client;
+        runtime.client = (endpoint) => {
+          const original = client(endpoint);
+          return {
+            ...original,
+            async invoke<T>(command: string, args: Record<string, unknown>): Promise<T> {
+              if (command === "update_host_register" && ++attempts === 1)
+                throw new Error("temporarily unavailable");
+              return original.invoke<T>(command, args);
+            },
+          };
+        };
+      },
+    });
+    try {
+      await until(
+        () =>
+          h.backends[0]?.invokes.some((call) => call.command === "update_host_pending") === true,
+      );
+      expect(attempts).toBe(2);
+    } finally {
+      h.supervisor.stop();
+      await h.running;
+    }
+  });
+
+  test("failure clearing the delivered outcome keeps ownership of the healthy backend", async () => {
+    const h = harness({
+      behaviours: {
+        [OWN_ROOT]: { version: "2.21.0" },
+        [versionRoot("2.21.0")]: { version: "2.21.0" },
+        [versionRoot("2.22.0")]: { version: "2.22.0" },
+      },
+      configure(runtime) {
+        const write = runtime.writeState;
+        runtime.writeState = async (state) => {
+          if (state.lastInstall && !state.pendingOutcome)
+            throw new Error("disk full clearing outcome");
+          await write(state);
+        };
+      },
+    });
+    try {
+      await until(() => h.backends.length > 0);
+      h.backends[0]!.pending.push(install("2.22.0"));
+      await until(() => h.log.some((line) => line.includes("Updated to 2.22.0")));
+      expect(h.backends).toHaveLength(2);
+      expect(h.backends[1]!.signals).toEqual([]);
+      expect(h.current).toBe(installDir("2.22.0"));
+    } finally {
+      h.supervisor.stop();
+      await h.running;
+    }
   });
 });

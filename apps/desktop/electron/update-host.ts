@@ -148,6 +148,8 @@ export function createDesktopUpdateHost(options: DesktopUpdateHostOptions): Desk
       attempts: number;
     }
   >();
+  let operationTail: Promise<void> = Promise.resolve();
+  const cancelledJobs = new Set<string>();
   let download: { jobId: string; cancel(): void } | null = null;
   let updaterError: Error | null = null;
   /** The copy of this app the last successful prepare kept. */
@@ -266,7 +268,9 @@ export function createDesktopUpdateHost(options: DesktopUpdateHostOptions): Desk
     };
     updater.on("download-progress", onProgress);
     try {
+      if (cancelledJobs.has(request.jobId)) throw new Error("Update cancelled");
       const result = await updater.checkForUpdates();
+      if (cancelledJobs.has(request.jobId)) throw new Error("Update cancelled");
       const version = result?.updateInfo?.version;
       if (!result?.isUpdateAvailable || version !== request.target.version) {
         throw Object.assign(
@@ -279,6 +283,7 @@ export function createDesktopUpdateHost(options: DesktopUpdateHostOptions): Desk
       // electron-updater verifies the SHA-512 from the feed. Squirrel.Mac
       // checks the code signature when it stages the update, at install.
       await updater.downloadUpdate(token);
+      if (cancelledJobs.has(request.jobId)) throw new Error("Update cancelled");
       if (updaterError) throw updaterError;
       if (options.keepRollbackCopy) {
         // Before install, not after: a version that cannot start must find it.
@@ -293,6 +298,7 @@ export function createDesktopUpdateHost(options: DesktopUpdateHostOptions): Desk
           );
         }
       }
+      if (cancelledJobs.has(request.jobId)) throw new Error("Update cancelled");
       await report(request, "succeeded");
     } catch (error) {
       await report(request, "failed", { error: errorReport(error, "download-failed") });
@@ -378,13 +384,22 @@ export function createDesktopUpdateHost(options: DesktopUpdateHostOptions): Desk
   function handle(request: UpdateHostRequest): void {
     if (handled.has(request.requestId)) return;
     handled.add(request.requestId);
-    const run =
-      request.kind === "prepare"
-        ? prepare(request)
-        : request.kind === "install"
-          ? install(request)
-          : cancel(request);
-    void run.catch((error: unknown) => log.warn("[Updater] Update request failed:", error));
+    if (request.kind === "cancel") {
+      cancelledJobs.add(request.jobId);
+      if (download?.jobId === request.jobId) download.cancel();
+    }
+    // electron-updater shares one pending download promise. Drain a cancelled
+    // prepare before another request may change its feed, policy or listeners.
+    operationTail = operationTail
+      .then(async () => {
+        if (request.kind === "prepare") await prepare(request);
+        else if (request.kind === "install") await install(request);
+        else {
+          await cancel(request);
+          cancelledJobs.delete(request.jobId);
+        }
+      })
+      .catch((error: unknown) => log.warn("[Updater] Update request failed:", error));
   }
 
   function registration(): UpdateHostRegistration {

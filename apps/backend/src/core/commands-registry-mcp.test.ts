@@ -223,6 +223,7 @@ describe("MCP configuration evidence probe", () => {
               sources: { user: "absent" },
               observedAt: "2026-09-24T10:00:00.000Z",
               scope: "session",
+              staleServers: ["removed"],
               extra: "dropped",
             },
           };
@@ -235,6 +236,7 @@ describe("MCP configuration evidence probe", () => {
         sources: { user: "absent" },
         observedAt: "2026-09-24T10:00:00.000Z",
         scope: "session",
+        staleServers: ["removed"],
       },
     });
     expect(calls).toEqual([["env-1", "claude", "env-env-1:tab-1"]]);

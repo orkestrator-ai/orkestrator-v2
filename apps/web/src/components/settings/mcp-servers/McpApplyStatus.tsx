@@ -22,7 +22,8 @@ const STATE_TEXT: Record<McpApplyState, string> = {
   applied: "Saved and loaded",
   "pending-next-turn": "Saved; not loaded until the session's next message",
   "pending-reattach": "Saved; not loaded until the session reconnects",
-  "restart-required": "Saved; restart required to load it",
+  // Neutral on purpose: a removal needs the restart to unload, not to load.
+  "restart-required": "Saved; takes effect after a restart",
   "blocked-policy": "Saved; this session's policy excludes it",
   failed: "Saved, but applying failed",
   reconciling: "Saved; checking state after an interruption",

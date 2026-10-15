@@ -31,7 +31,7 @@ namespace), their per-file lock files and five-deep backup ladders.
   Their cross-process correctness comes from database leases instead: a
   per-canvas lease around every edit, a per-process liveness lease that
   startup recovery consults before interrupting anything, and a change signal
-  that makes the library rescan (`design-coordination.ts`).
+  that makes the library rescan (`design/coordination.ts`).
 - Terminal history: up to gigabytes of rolling output appended several times
   a second per terminal, which would churn the database and compete for its
   single write lock.

@@ -24,8 +24,8 @@ Two focused validation runs passed:
 ```sh
 mise run test:logged -- --name design-space-backend-audit -- \
   bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
-  ./src/core/design-service.test.ts ./src/core/design-renderer.test.ts \
-  ./src/core/commands-registry-design.test.ts ./src/core/design-mcp.test.ts \
+  ./src/core/design/service.test.ts ./src/core/design/renderer.test.ts \
+  ./src/core/commands-registry-design.test.ts ./src/core/design/mcp.test.ts \
   --parallel=1 --only-failures
 
 mise run test:logged -- --name design-space-web-audit -- \
@@ -72,7 +72,7 @@ Several important properties already exist:
 These are valuable safeguards, not areas to replace with renderer-only state
 or optimistic writes without reconciliation. See the
 [architecture guide](../architecture/design-canvas.md),
-[service](../../apps/backend/src/core/design-service.ts),
+[service](../../apps/backend/src/core/design/service.ts),
 [runtime](../../packages/protocol/src/design-runtime.ts), and
 [MCP authorization boundary](../../apps/backend/src/core/agent-tools.ts#L708).
 
@@ -204,11 +204,11 @@ revision, even if newer work exists.
 ### R4. Slow rendering delays writes to unrelated environments
 
 **Source-confirmed architecture; latency impact is unmeasured.**
-[DesignService](../../apps/backend/src/core/design-service.ts#L74) has one global
+[DesignService](../../apps/backend/src/core/design/service.ts#L74) has one global
 write queue. Its
-[mutation transaction](../../apps/backend/src/core/design-service.ts#L292)
+[mutation transaction](../../apps/backend/src/core/design/service.ts#L292)
 holds that queue while awaiting backend DOM rendering. The
-[renderer](../../apps/backend/src/core/design-renderer.ts#L44) also serializes
+[renderer](../../apps/backend/src/core/design/renderer.ts#L44) also serializes
 all work globally, including captures and inspection. Thus a style edit waiting
 behind captures can also block a simple geometry update in another environment.
 
@@ -239,14 +239,14 @@ within documented bounds, and subsequent rendering recovers.
 ### R5. Invalid rendered content and deleted canvases need explicit states
 
 **Source-confirmed.**
-[Frame creation and raw HTML replacement](../../apps/backend/src/core/design-service.ts#L261)
+[Frame creation and raw HTML replacement](../../apps/backend/src/core/design/service.ts#L261)
 validate schemas and byte sizes but do not run the runtime's DOM-element limit.
 A document can therefore be durably accepted and later fail rendering because
 it exceeds 5,000 elements. This is a validation mismatch, not a script-isolation
 bypass. Errors currently appear in a shared canvas alert, making the affected
 frame and recovery action unclear.
 
-Also, [canvas deletion](../../apps/backend/src/core/design-service.ts#L225)
+Also, [canvas deletion](../../apps/backend/src/core/design/service.ts#L225)
 removes the file and its replay hints without publishing a deletion event.
 An already-open client eventually encounters a missing-file error through
 polling; it has no typed deleted state. Previously rendered content can remain
@@ -273,7 +273,7 @@ editable, unexplained stale preview or an endless generic Refresh loop.
 
 **Product gap.** Revisions detect conflicts but do not provide user-accessible
 history. The
-[action inventory](../../apps/backend/src/core/design-tools.ts#L21) has no
+[action inventory](../../apps/backend/src/core/design/tools.ts#L21) has no
 frame deletion, frame duplication, canvas rename, or undo/restore action. Frame
 rename and canvas deletion exist as tools, but corresponding management
 controls are absent from the current canvas/launch UI.
@@ -302,7 +302,7 @@ is entirely disabled unless the renderer status is ready. This blocks its
 open/import paths as well as new generation. The error is exposed through a
 button title, and the status effect reruns on environment/hydration changes,
 not through an explicit Retry. Meanwhile,
-[renderer status](../../apps/backend/src/core/design-renderer.ts#L36) only
+[renderer status](../../apps/backend/src/core/design/renderer.ts#L36) only
 checks whether a candidate executable exists, not whether it launches.
 
 Keep the entry accessible and show a clear readiness panel with Retry and
@@ -450,11 +450,11 @@ background agent progress remains independent of viewport culling.
 ### E3. Reduce repeated disk, browser, and agent-context work
 
 **Source-confirmed costs; optimize after measurement.**
-Every [commit](../../apps/backend/src/core/design-service.ts#L165) validates,
+Every [commit](../../apps/backend/src/core/design/service.ts#L165) validates,
 serializes, writes, and syncs the whole document. Every
-[list](../../apps/backend/src/core/design-service.ts#L141) reads and parses each
+[list](../../apps/backend/src/core/design/service.ts#L141) reads and parses each
 canvas in the environment to return only ID/name/revision. Every
-[DOM operation](../../apps/backend/src/core/design-renderer.ts#L69) opens a new
+[DOM operation](../../apps/backend/src/core/design/renderer.ts#L69) opens a new
 browser context and renders the complete frame. MCP mutations return the full
 frame HTML; `export_canvas` returns the complete document for the agent to
 copy into a repository file.

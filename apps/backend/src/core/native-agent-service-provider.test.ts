@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import type { ProviderRegistry } from "./native-agent-provider-registry.js";
 
 import { promises as fs } from "node:fs";
 
@@ -170,10 +171,9 @@ function internals(service: NativeAgentService) {
       model?: string,
       effort?: string,
     ): Promise<BridgeConnection>;
-    providers: Map<string, AgentSessionProvider>;
+    providerRegistry: ProviderRegistry;
     activityRetryAt: Map<string, number>;
     activityAttempts: Map<string, number>;
-    absentBridgeUntil: Map<string, number>;
     observedSessionActivity: Map<
       string,
       { providerSessionId: string; state: ProviderActivityState }
@@ -694,7 +694,7 @@ describe("NativeAgentService", () => {
         });
         await service.reconcileAgentInteractions();
         current = unsupported.provider;
-        internals(service).providers.clear();
+        internals(service).providerRegistry.stateForTesting().providers.clear();
         await service.reconcileAgentInteractions();
         expect(service.getInteractionObservations()[0]).toMatchObject({
           providerState: "error",
@@ -939,10 +939,9 @@ describe("NativeAgentService", () => {
           });
           expect(opencode.agent).toBe("opencode");
           expect(invoke).toHaveBeenCalledTimes(3);
-          expect([...internals(service).providers.keys()].sort()).toEqual([
-            "env-1\u0000codex",
-            "env-1\u0000opencode",
-          ]);
+          expect(
+            [...internals(service).providerRegistry.stateForTesting().providers.keys()].sort(),
+          ).toEqual(["env-1\u0000codex", "env-1\u0000opencode"]);
         },
       );
     });
@@ -969,7 +968,7 @@ describe("NativeAgentService", () => {
           expect(replacement).not.toBe(first);
           expect(replacement.agent).toBe("cursor");
           expect(invoke).toHaveBeenCalledTimes(2);
-          expect(internals(service).providers.get("env-1\0cursor")).toBe(replacement);
+          expect(internals(service).providerRegistry.cached("env-1\0cursor")).toBe(replacement);
         },
       );
     });

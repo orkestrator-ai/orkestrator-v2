@@ -6,7 +6,7 @@ import { openRegistryWriter } from "./registry-writer-lease.js";
 import { shutdownContainerLogService } from "./container-log-service.js";
 import { shutdownOomEventWatcher, startOomEventWatcher } from "./container-oom-events.js";
 import { reconcileContainerOperations } from "./container-lifecycle-service.js";
-import { DesignService } from "./design-service.js";
+import { DesignService } from "./design/index.js";
 import { PreviewRuntime } from "./preview-runtime.js";
 import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";

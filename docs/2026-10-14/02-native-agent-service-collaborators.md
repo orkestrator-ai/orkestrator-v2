@@ -1,6 +1,9 @@
 # 02 — NativeAgentService: extract collaborators from the inheritance chain
 
-Status: Proposed (2026-10-14). Priority: second.
+Status: In progress. Step 1 (`ProviderRegistry`, `native-agent-provider-registry.ts`) done
+2026-10-15; it removed 6 of the base's 28 `abstract` declarations (22 remain). The
+other 12 the provider layer implements are lifecycle guards, session-create and
+the `queue*` parsers, which belong to later steps. Priority: second.
 
 ## Problem
 

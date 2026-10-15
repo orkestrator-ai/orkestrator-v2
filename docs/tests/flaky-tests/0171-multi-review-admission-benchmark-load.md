@@ -59,3 +59,13 @@ The logged rerun completed in 2.9 seconds. Aggregate failure evidence is in
 `/tmp/orkestrator-test-run.OloPu3/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 This supports the existing host-contention hypothesis; no benchmark assertion
 or backend behavior was changed.
+
+## Recurrence (2026-10-15, main merge validation)
+
+- **Failure:** admission took 328 ms against the unchanged less-than-310 ms assertion; the case took 746.27 ms.
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, with the testing guide's GNU host utilities preferred in PATH.
+- **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated Bun workers.
+- **Aggregate counts:** backend reported 7,731 passed, 39 skipped and 3 failed across 424 files; the root, bridge and protocol groups passed. The shutdown cleanup failure also reproduced alone and is not classified as a flake.
+- **Evidence:** `/tmp/orkestrator-test-run.yeOzQY/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Isolated rerun:** `mise run test:logged -- --name merge-review-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/multi-review-efficiency.bench.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 2.1 seconds.
+- **Assessment:** consistent with the existing host-contention hypothesis; no timing assertion or backend code was changed during conflict resolution.

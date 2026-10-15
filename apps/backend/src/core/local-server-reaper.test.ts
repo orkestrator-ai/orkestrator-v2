@@ -6,10 +6,12 @@ import {
   detachedProcessHandle,
   isPidAlive,
   parseProcessIdentity,
+  readHostTmuxSessions,
   reapOrphanedClaudeTmuxRuntimes,
   reapOrphanedLocalServers,
   type ProcessIdentity,
 } from "./local-server-reaper.js";
+import { CommandFailedError } from "./shell.js";
 import { claudeTmuxRuntimeRootPrefix, tmuxSessionName } from "./tmux.js";
 import type { Environment } from "./models.js";
 
@@ -542,6 +544,31 @@ describe("reapOrphanedClaudeTmuxRuntimes", () => {
       ]);
       expect(await fs.readdir(prefix)).toEqual([dead]);
     });
+  });
+
+  test("host session listing treats only tmux's no-server diagnostics as empty", async () => {
+    const failingWith = (error: Error) => async (command: string) => {
+      if (command === "ps") return { stdout: "1 /sbin/init\n", stderr: "" };
+      throw error;
+    };
+    for (const message of [
+      // No server has used this socket since /tmp was last cleared.
+      "error connecting to /private/tmp/tmux-501/default (No such file or directory)",
+      "error connecting to /tmp/tmux-501/default (Connection refused)",
+      "no server running on /tmp/tmux-501/default",
+      "no sessions",
+    ]) {
+      expect(await readHostTmuxSessions(failingWith(new CommandFailedError(message)))).toEqual([]);
+    }
+    for (const error of [
+      new CommandFailedError("", { timedOut: true }),
+      new CommandFailedError('Executable not found in $PATH: "tmux"', {
+        executableMissing: true,
+      }),
+      new CommandFailedError("error connecting to /tmp/tmux-501/default (Permission denied)"),
+    ]) {
+      await expect(readHostTmuxSessions(failingWith(error))).rejects.toBe(error);
+    }
   });
 
   test("reports retry pending when removing a successfully reaped root fails", async () => {

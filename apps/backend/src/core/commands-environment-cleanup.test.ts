@@ -20,6 +20,7 @@ import { setupTerminalSessionId } from "./commands-terminal.js";
 import type { PtyProcess } from "./pty.js";
 import { runCommand } from "./shell.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
+import { BackendRuntime } from "./backend-runtime.js";
 
 afterEach(() => closeEnvironmentCleanupStorage());
 
@@ -65,6 +66,7 @@ async function withDeleteCommand<T>(
     toolchainBinDir: "",
     worktreeDir,
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+    runtime: new BackendRuntime({ emit: () => undefined }),
     emit: () => undefined,
   } as CommandContext;
   const invokeDelete = async () => {

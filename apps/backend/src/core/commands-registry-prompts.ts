@@ -111,24 +111,6 @@ export function registerPromptCommands(
       asString(claimToken, "claimToken"),
     ),
   );
-  register(
-    "transfer_prompt_queue_message_to_compose_draft",
-    (
-      { queueKey, environmentId, messageId, draftKey, ownerType, ownerId, expectedDraftRevision },
-      { storage },
-    ) =>
-      storage.transferPromptQueueMessageToComposeDraft(
-        asString(queueKey, "queueKey"),
-        asString(environmentId, "environmentId"),
-        asString(messageId, "messageId"),
-        asString(draftKey, "draftKey"),
-        asString(ownerType, "ownerType") as "environment" | "project",
-        asString(ownerId, "ownerId"),
-        expectedDraftRevision === undefined
-          ? undefined
-          : asNumber(expectedDraftRevision, "expectedDraftRevision"),
-      ),
-  );
   register("retry_prompt_queue_dispatch", ({ queueKey }, { storage }) =>
     storage.retryPromptQueueDispatch(asString(queueKey, "queueKey")),
   );

@@ -50,7 +50,6 @@ import { coordinatorProviderAllowed } from "./coordinator-providers.js";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import { normalizeAgentPlatforms, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
-  syncDiffStatsTracking,
   asString,
   asRecord,
   assertOnlyKeys,
@@ -822,7 +821,7 @@ export function registerProjectCommands(
     await pruneTerminalHistoryStorage(storage.getDataDir());
     // A whole-config write can move any repository's baseline; see
     // `update_repository_config`.
-    void syncDiffStatsTracking(context).catch(() => undefined);
+    void context.runtime.diffStats.sync(context).catch(() => undefined);
   });
   register("get_desktop_connections", (_args, { storage }) => storage.getDesktopConnections());
   register("save_desktop_connections", ({ desktopConnections }, { storage }) => {
@@ -935,7 +934,7 @@ export function registerProjectCommands(
     // edit here retargets every environment in the project. Reconciling now
     // rather than waiting for the next environment poll means the badge follows
     // the setting the user just changed.
-    void syncDiffStatsTracking(context).catch(() => undefined);
+    void context.runtime.diffStats.sync(context).catch(() => undefined);
     return redactAppConfig(updated);
   });
   // No current renderer calls this: create dialogs resolve every agent control

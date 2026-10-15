@@ -139,8 +139,8 @@ part of creating this plan. Run each separately and retain its result.
 ```sh
 mise run test:logged -- --name design-backend -- \
   bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
-  ./src/core/design-service.test.ts ./src/core/design-renderer.test.ts \
-  ./src/core/commands-registry-design.test.ts ./src/core/design-mcp.test.ts \
+  ./src/core/design/service.test.ts ./src/core/design/renderer.test.ts \
+  ./src/core/commands-registry-design.test.ts ./src/core/design/mcp.test.ts \
   --parallel=1 --only-failures
 
 mise run test:logged -- --name design-web -- \

@@ -14,6 +14,7 @@ import {
   COORDINATOR_DELEGATION_FRAME_OPEN,
   COORDINATOR_DELEGATION_PRESENTATION,
 } from "@orkestrator/protocol/review-evidence-frames";
+import { BackendRuntime } from "./backend-runtime.js";
 
 describe("coordinator command registry", () => {
   let root: string;
@@ -53,6 +54,7 @@ describe("coordinator command registry", () => {
       resourceRoot: root,
       emit: () => undefined,
       environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+      runtime: new BackendRuntime({ emit: () => undefined }),
     };
   });
 

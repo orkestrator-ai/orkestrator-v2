@@ -4,8 +4,27 @@ import type {
   NativeAgentMcpServer,
   NativeAgentMcpServerAction,
 } from "@orkestrator/protocol/native-agent";
+import { isSelectableOpenCodeProvider } from "@orkestrator/protocol/native-agent";
 import { asRecord, assertSdkResponse, nonEmptyString } from "./agent-provider-runtime.js";
 import { readOpenCodeCommandInventory } from "./opencode-commands.js";
+
+const MAX_OPENCODE_AUTH_PROVIDERS = 128;
+const MAX_OPENCODE_HINT_PROVIDERS = 8;
+
+/** Names the allowlisted providers to connect, when the allowlist is narrow enough to list. */
+function openCodeSignInHint(
+  allowedProviders: readonly string[],
+  known: ReadonlyArray<{ id: string; label: string }>,
+): string {
+  const fallback = "Connect a provider from OpenCode settings.";
+  if (allowedProviders.length === 0 || allowedProviders.length > MAX_OPENCODE_HINT_PROVIDERS) {
+    return fallback;
+  }
+  const labels = allowedProviders.map(
+    (id) => known.find((provider) => provider.id.trim().toLowerCase() === id)?.label ?? id,
+  );
+  return `Connect ${labels.length === 1 ? labels[0] : `one of ${labels.join(", ")}`} from OpenCode settings.`;
+}
 
 /** SDK-backed discovery and account operations that are independent of session rendering. */
 export class OpenCodeCapabilities {
@@ -13,6 +32,7 @@ export class OpenCodeCapabilities {
     private readonly client: OpencodeClient,
     private readonly directory: string | undefined,
     private readonly requestOptions: () => { signal: AbortSignal },
+    private readonly allowedProviders: () => Promise<readonly string[]>,
   ) {}
 
   /** The effective, directory-scoped command inventory. Throws when unreadable. */
@@ -90,15 +110,29 @@ export class OpenCodeCapabilities {
   }
 
   async authStatus(): Promise<NativeAgentAuthStatus> {
-    const response = await this.client.provider.list(
-      { directory: this.directory },
-      this.requestOptions(),
-    );
+    const [response, allowedProviders] = await Promise.all([
+      this.client.provider.list({ directory: this.directory }, this.requestOptions()),
+      this.allowedProviders(),
+    ]);
     assertSdkResponse(response, "OpenCode provider status");
     const data = asRecord(response.data);
-    const connected = Array.isArray(data?.connected) ? data.connected : [];
-    const providers = Array.isArray(data?.all) ? data.all : [];
-    const normalized = providers.slice(0, 128).flatMap((candidate) => {
+    const connected = new Set(
+      (Array.isArray(data?.connected) ? data.connected : []).flatMap((candidate) => {
+        const id =
+          typeof candidate === "string"
+            ? nonEmptyString(candidate)?.trim()
+            : nonEmptyString(asRecord(candidate)?.id)?.trim();
+        return id ? [id] : [];
+      }),
+    );
+    // Derived from `connected` itself, never from the capped list below:
+    // OpenCode's `all` names every provider it knows about, so a connected one
+    // can sit past the cap. Signed-in means a picker-selectable provider is
+    // connected; the allowlist does not restrict dispatch of stored models.
+    const signedIn = [...connected].some((id) =>
+      isSelectableOpenCodeProvider(id, allowedProviders),
+    );
+    const known = (Array.isArray(data?.all) ? data.all : []).flatMap((candidate) => {
       const provider = asRecord(candidate);
       const id = nonEmptyString(provider?.id);
       if (!id) return [];
@@ -106,16 +140,24 @@ export class OpenCodeCapabilities {
         {
           id,
           label: nonEmptyString(provider?.name) ?? id,
-          state: connected.includes(id) ? ("signed-in" as const) : ("signed-out" as const),
+          state: connected.has(id) ? ("signed-in" as const) : ("signed-out" as const),
+          selectable: isSelectableOpenCodeProvider(id, allowedProviders),
         },
       ];
     });
+    // Connected providers first, then allowlisted ones, so the providers that
+    // matter survive the cap. A stable sort keeps OpenCode's order within each.
+    const rank = (provider: (typeof known)[number]) =>
+      (provider.state === "signed-in" ? 0 : 2) + (provider.selectable ? 0 : 1);
+    const providers = known
+      .map((provider, index) => ({ provider, index }))
+      .sort((a, b) => rank(a.provider) - rank(b.provider) || a.index - b.index)
+      .slice(0, MAX_OPENCODE_AUTH_PROVIDERS)
+      .map(({ provider: { selectable: _selectable, ...provider } }) => provider);
     return {
-      state: normalized.some((provider) => provider.state === "signed-in")
-        ? "signed-in"
-        : "needs-auth",
-      providers: normalized,
-      signIn: { kind: "none", hint: "Connect a provider from OpenCode settings." },
+      state: signedIn ? "signed-in" : "needs-auth",
+      providers,
+      signIn: { kind: "none", hint: openCodeSignInHint(allowedProviders, known) },
       signOut: false,
     };
   }

@@ -1802,6 +1802,9 @@ test("shutdown applies one deadline across lifecycle and local-operation drains"
   });
 
   let deletion: Promise<void> | undefined;
+  const design = (backend as unknown as { context: { design: { close(): Promise<void> } } }).context
+    .design;
+  const closeDesign = spyOn(design, "close");
   try {
     // An empty fixture worktree has no tmux runtime to clean up. That
     // best-effort warning is unrelated to shutdown coordination under test.
@@ -1814,14 +1817,21 @@ test("shutdown applies one deadline across lifecycle and local-operation drains"
     await expect(resolvesWithin(shutdown, 1_000)).resolves.toBe("resolved");
     expect(terminationAttempts).toBe(2);
     expect(commandTesting.getLocalServerProcess(`codex:${environmentId}`)).toBeUndefined();
+    expect(closeDesign).not.toHaveBeenCalled();
 
     releaseFirstTermination.resolve();
-    await expect(deletion).resolves.toBeUndefined();
+    // Await directly so a rejection reports its cause, not just a failed
+    // `.resolves` matcher (this previously hid a closed design coordinator).
+    expect(await deletion).toBeUndefined();
+    expect(await storage.getEnvironment(environmentId)).toBeNull();
+    await waitForCondition(() => closeDesign.mock.calls.length === 1, "deferred design close");
+    await closeDesign.mock.results[0]!.value;
   } finally {
     console.warn = originalWarn;
     releaseFirstTermination.resolve();
     await deletion?.catch(() => undefined);
     await backend.shutdown().catch(() => undefined);
+    closeDesign.mockRestore();
     commandTesting.resetLocalServerLifecycle();
     await fs.rm(dataDir, { recursive: true, force: true });
   }

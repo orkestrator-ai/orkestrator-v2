@@ -67,9 +67,9 @@ the repository's 2,000-line guideline.
 | --- | --- |
 | Shared document/event types | [design-canvas.ts](../../../../packages/protocol/src/design-canvas.ts) |
 | Sandboxed DOM runtime | [design-runtime.ts](../../../../packages/protocol/src/design-runtime.ts) |
-| Persistence and revision checks | [design-service.ts](../../../../apps/backend/src/core/design-service.ts) |
-| Headless Chromium lifecycle | [design-renderer.ts](../../../../apps/backend/src/core/design-renderer.ts) |
-| Validated actions and MCP inventory | [design-tools.ts](../../../../apps/backend/src/core/design-tools.ts) |
+| Persistence and revision checks | [design-service.ts](../../../../apps/backend/src/core/design/service.ts) |
+| Headless Chromium lifecycle | [design-renderer.ts](../../../../apps/backend/src/core/design/renderer.ts) |
+| Validated actions and MCP inventory | [design-tools.ts](../../../../apps/backend/src/core/design/tools.ts) |
 | UI command registration | [commands-registry-design.ts](../../../../apps/backend/src/core/commands-registry-design.ts) |
 | Canvas projection and mutations | [DesignCanvasTab.tsx](../../../../apps/web/src/components/design/DesignCanvasTab.tsx) |
 | Frame rendering and gestures | [DesignFrameView.tsx](../../../../apps/web/src/components/design/DesignFrameView.tsx) |

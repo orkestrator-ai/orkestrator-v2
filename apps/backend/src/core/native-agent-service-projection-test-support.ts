@@ -7,6 +7,7 @@
  * split from duplicating the stub provider and service fixture four times.
  */
 import { mock } from "bun:test";
+import type { ProviderRegistry } from "./native-agent-provider-registry.js";
 
 import { promises as fs } from "node:fs";
 
@@ -216,10 +217,9 @@ export function internals(service: NativeAgentService) {
       model?: string,
       effort?: string,
     ): Promise<BridgeConnection>;
-    providers: Map<string, AgentSessionProvider>;
+    providerRegistry: ProviderRegistry;
     activityRetryAt: Map<string, number>;
     activityAttempts: Map<string, number>;
-    absentBridgeUntil: Map<string, number>;
     observedSessionActivity: Map<
       string,
       { providerSessionId: string; state: ProviderActivityState }
@@ -249,7 +249,6 @@ export function internals(service: NativeAgentService) {
     projectionEpochs: Map<string, number>;
     projectionRefreshes: Map<string, Promise<unknown>>;
     progressiveTranscriptCache: Map<string, { token: string; value: unknown }>;
-    providerConnections: Map<string, string>;
     progressiveReads: Map<string, Promise<unknown>>;
     progressiveDirtyFollowUps: Map<string, number>;
     progressiveTrailing: Map<string, Promise<unknown>>;

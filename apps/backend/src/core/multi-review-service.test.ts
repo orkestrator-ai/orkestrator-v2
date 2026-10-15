@@ -63,6 +63,7 @@ import { createCommandRegistry } from "./commands-registry.js";
 import type { CommandContext } from "./commands-context.js";
 import { MultiReviewService, type MultiReviewServiceOptions } from "./multi-review-service.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
+import { BackendRuntime } from "./backend-runtime.js";
 
 const REVIEW_HEAD = "1111111111111111111111111111111111111111";
 const REVIEW_FINGERPRINT = "a".repeat(64);
@@ -4541,6 +4542,7 @@ test("MultiReviewService publishes a PR tab through the backend job command", as
       appRoot: "",
       resourceRoot: "",
       environmentLifecycleTasks: {},
+      runtime: new BackendRuntime({ emit: () => undefined }),
       nativeAgents: {
         ensureSession: async () => ({ providerSessionId: "provider-pr-tab" }),
         dispatchIntent: async (input: Record<string, unknown>) => {

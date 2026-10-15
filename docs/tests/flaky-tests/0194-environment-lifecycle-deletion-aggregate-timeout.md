@@ -61,3 +61,50 @@ test was skipped, loosened, or changed to conceal the failure.
 - **Hypothesis:** the aggregate deadline failures match earlier observations;
   unchanged owning files pass alone. Contention may contribute, but the root
   cause remains unconfirmed. No assertion, timeout or skip was changed.
+
+## Recurrence during version-reminder validation (2026-10-15)
+
+- **Original command:** the macOS GNU-tool PATH from the testing guide with
+  `mise run test:logged -- --name full-tests -- mise run test`.
+- **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1
+  slots; backend used two isolated Bun workers. Other worktrees and browser
+  checks also ran on the host.
+- **Tests:** `deletes the remote head branch during merged running container cleanup`
+  (5463.30 ms), `removes the environment even when remote branch deletion fails for a non-404 reason`
+  (5079.02 ms), and `retains the environment and process ownership when deletion cannot reap a server`
+  (6065.61 ms) each exceeded the five-second deadline.
+- **Backend counts:** 7692 passed, 39 skipped, 5 failed and one additional
+  error across 423 files in 340.15 seconds. The other failures were design
+  sync (case 0193) and shutdown; the shutdown failure reproduced alone.
+- **Isolated rerun:** `mise run test:logged -- --name lifecycle-rerun -- bun test
+  --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts
+  --parallel=1 --only-failures` passed unchanged in 23.3 seconds (exit 0).
+- **Evidence:** `/tmp/orkestrator-test-run.ZPe1mY/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
+  outer summary `/tmp/orkestrator-test-run.e91mPJ/summary.json`.
+- **Hypothesis:** the repeat timeout/pass pattern matches prior observations;
+  contention may contribute, but the cause remains unconfirmed. No assertion,
+  timeout or skip was changed.
+
+## Recurrence during cleanup follow-up merge validation (2026-10-15)
+
+- **Original command:** the testing guide's macOS GNU-tool PATH with
+  `mise run test:logged -- --name merge-tests -- mise run test`.
+- **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1 slots.
+- **Test:** `retains the environment and process ownership when deletion cannot reap a server`
+  exceeded the five-second deadline at 5962.33 ms.
+- **Backend counts:** 7716 passed, 39 skipped, 2 failed across 424 files in
+  355.67 seconds. The other failure was the shutdown deadline test; root,
+  bridge and protocol groups passed.
+- **Isolated rerun:** `mise run test:logged -- --name merge-lifecycle-isolated -- bun test
+  --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts
+  --parallel=1 --only-failures` passed unchanged in 28.8 seconds (exit 0).
+- **Evidence:** `/tmp/orkestrator-test-run.g8b6ma/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
+  outer summary `/tmp/orkestrator-test-run.VaL2oK/summary.json`.
+
+The shutdown deadline test also failed when its owning file
+(`apps/backend/src/core/index.test.ts`) was rerun alone after incorporating
+newer main changes (27 passed, 1 failed; 1.4 seconds; evidence
+`/tmp/orkestrator-test-run.gJpAGh`). That separate failure is reproducible and
+is not classified as a flake.
+
+The cause remains unconfirmed. No assertion, timeout or skip was changed.

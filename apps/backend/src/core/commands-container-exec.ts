@@ -8,7 +8,7 @@ import type { EnvironmentStatus } from "./models.js";
  * that module's own consumers import nothing from it but this function. Hosting
  * it there made each of them a back-edge into `commands-environment` and turned
  * the `commands-*` graph cyclic; a cycle in this group already had to be worked
- * around once (see the lazy scanner import in `commands-runtime-state`). This
+ * around once (the lazy scanner imports `DiffStatsTracking` replaced). This
  * module must therefore not import any other `commands-*` module.
  */
 export async function dockerExec(

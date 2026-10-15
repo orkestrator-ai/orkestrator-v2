@@ -1,13 +1,10 @@
 /**
- * Identity preservation for message snapshots.
+ * Structural equality for store writes.
  *
- * `setMessages` replaces a session's transcript with a fresh snapshot from the
- * server. The snapshot's objects are always new, but nearly all of them encode
- * exactly the message the store already holds — handing the fresh objects to
- * React would re-render every memoized row for a no-op poll. These helpers map
- * a merged snapshot back onto the existing objects wherever the data is
- * structurally identical, so unchanged rows keep their identity and an entirely
- * unchanged snapshot can be turned into a store no-op.
+ * Snapshots from the server always arrive as fresh objects, but nearly all of
+ * them encode exactly what the store already holds. Stores compare with
+ * `deepEqualJson` so an unchanged snapshot keeps its existing objects and
+ * becomes a no-op write instead of re-rendering every subscriber.
  */
 
 const MAX_DEEP_EQUAL_NODES = 100_000;
@@ -57,67 +54,4 @@ export function deepEqualJson(a: unknown, b: unknown): boolean {
     }
   }
   return true;
-}
-
-interface MessageLike {
-  id: string;
-  parts?: unknown[];
-  content?: string;
-}
-
-/** Cheap structural screen before paying for a deep compare. */
-function cheaplyDiffers(existing: MessageLike, incoming: MessageLike): boolean {
-  if (existing.content !== undefined || incoming.content !== undefined) {
-    if (existing.content !== incoming.content) return true;
-  }
-  const existingParts = existing.parts;
-  const incomingParts = incoming.parts;
-  if (Array.isArray(existingParts) !== Array.isArray(incomingParts)) return true;
-  if (Array.isArray(existingParts) && Array.isArray(incomingParts)) {
-    if (existingParts.length !== incomingParts.length) return true;
-  }
-  return false;
-}
-
-/**
- * Replace entries of `next` with the store's existing object whenever the two
- * are structurally identical, keyed by message id. Returns `existing` itself
- * when the result would be element-for-element identical to it, so callers can
- * treat a byte-identical snapshot as a no-op.
- */
-export function preserveMessageIdentities<TMessage extends { id: string }>(
-  existing: TMessage[],
-  next: TMessage[],
-): TMessage[] {
-  if (existing === next) return existing;
-  if (existing.length === 0) return next;
-
-  const existingById = new Map<string, TMessage[]>();
-  for (const message of existing) {
-    const matches = existingById.get(message.id);
-    if (matches) matches.push(message);
-    else existingById.set(message.id, [message]);
-  }
-
-  let changedAnything = false;
-  const result = next.map((incoming) => {
-    const previous = existingById.get(incoming.id)?.shift();
-    if (!previous) return incoming;
-    if (previous === incoming) return previous;
-    if (cheaplyDiffers(previous as MessageLike, incoming as MessageLike)) {
-      return incoming;
-    }
-    if (deepEqualJson(previous, incoming)) {
-      changedAnything = true;
-      return previous;
-    }
-    return incoming;
-  });
-
-  const sameAsExisting =
-    result.length === existing.length &&
-    result.every((message, index) => message === existing[index]);
-  if (sameAsExisting) return existing;
-
-  return changedAnything ? result : next;
 }

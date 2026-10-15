@@ -1,6 +1,7 @@
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { AgentToolConnection } from "./agent-tools.js";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
+import type { BackendRuntime } from "./backend-runtime.js";
 import type { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import type { JsonRecord, StorageService } from "./storage.js";
 import type { LoopedReviewService } from "./looped-review-service.js";
@@ -18,7 +19,7 @@ import type { ProjectGitService } from "./project-git-service.js";
 export type BackendEmit = (event: string, payload: unknown) => void;
 
 export type CommandContext = {
-  design?: import("./design-service.js").DesignService;
+  design?: import("./design/index.js").DesignService;
   previews?: import("./preview-runtime.js").PreviewRuntime;
   mcpManagement?: import("./mcp-management/service.js").McpManagementService;
   webAnnotations?: import("./web-annotation-service.js").WebAnnotationService;
@@ -34,6 +35,8 @@ export type CommandContext = {
   strictDockerOwner?: boolean;
   credentialSources?: ReadonlySet<AgentPlatform>;
   environmentLifecycleTasks: EnvironmentLifecycleTaskTracker;
+  /** State owned by this backend instance; reach it through the context at call time. */
+  runtime: BackendRuntime;
   /**
    * Exclusive right to mutate this registry's containers. Held by the backend
    * process; absent only in embedded command fixtures, which own a private

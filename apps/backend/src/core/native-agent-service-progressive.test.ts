@@ -466,7 +466,9 @@ describe("native agent progressive remainder", () => {
               if (value.identity) value.identity.providerSessionId = "provider-session-before";
             }
           } else {
-            internals(service).providerConnections.set("env-1\0codex", "generation-2");
+            internals(service)
+              .providerRegistry.stateForTesting()
+              .connections.set("env-1\0codex", "generation-2");
           }
           streaming = true;
           const next = await service.getTranscriptUpdate(input);

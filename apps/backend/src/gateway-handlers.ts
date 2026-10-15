@@ -28,12 +28,39 @@ import {
   parseEventSubscriptionFilter,
   getBearerToken,
   getCookie,
+  headerValueToString,
+  isLoopbackAddress,
 } from "./gateway-internals.js";
 import type {
   GatewayRequestMetrics,
   DrainAwareEventClientWriter,
   GatewayEventClient,
+  ListenerKind,
 } from "./gateway-internals.js";
+import type { InvocationOrigin } from "./core/commands-context.js";
+
+const MAX_TAILSCALE_LOGIN_CHARS = 320;
+
+/**
+ * Where an invoke came from. Tailscale Serve sets `Tailscale-User-Login` when
+ * it proxies a tailnet request to the loopback browser listener, so the header
+ * is kept only there; anywhere else a client could have set it itself.
+ */
+export function invocationOrigin(
+  request: IncomingMessage,
+  listenerKind: ListenerKind,
+): InvocationOrigin {
+  const remoteAddress = request.socket.remoteAddress ?? null;
+  const login = headerValueToString(request.headers["tailscale-user-login"])?.trim() ?? "";
+  const trusted =
+    listenerKind === "browser" &&
+    remoteAddress !== null &&
+    isLoopbackAddress(remoteAddress) &&
+    login.length > 0 &&
+    login.length <= MAX_TAILSCALE_LOGIN_CHARS &&
+    !/[\u0000-\u001f]/.test(login);
+  return { listener: listenerKind, remoteAddress, tailscaleUser: trusted ? login : null };
+}
 import { recurringWorkDiagnostics } from "./core/recurring-diagnostics.js";
 
 /** The invoke, event-stream, metrics and loopback-proxy routes. */
@@ -55,6 +82,7 @@ export class GatewayHandlers {
     request: IncomingMessage,
     response: ServerResponse,
     requestMetrics: GatewayRequestMetrics,
+    listenerKind: ListenerKind = "browser",
   ): Promise<void> {
     if (request.method !== "POST") {
       response.writeHead(405, { allow: "POST" });
@@ -106,7 +134,11 @@ export class GatewayHandlers {
     const startedAt = Date.now();
 
     try {
-      const result = await this.ctx.backend.invoke(command, safeArgs);
+      const result = await this.ctx.backend.invoke(
+        command,
+        safeArgs,
+        invocationOrigin(request, listenerKind),
+      );
       const responseBody = JSON.stringify({ result });
       this.ctx.metrics.recordInvoke(
         command,

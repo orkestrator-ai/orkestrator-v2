@@ -49,6 +49,7 @@ import { registerReviewWorkflowCommands } from "./commands-registry-reviews.js";
 import { registerServerCommands } from "./commands-registry-servers.js";
 import { registerSessionCommands } from "./commands-registry-sessions.js";
 import { registerSystemCommands } from "./commands-registry-system.js";
+import { registerUpdateCommands } from "./commands-registry-updates.js";
 import { registerHostFileCommands } from "./commands-host-files.js";
 import { registerTeardownCommands } from "./commands-registry-teardown.js";
 import { registerPublicApiCommands } from "./public-api/registry.js";
@@ -72,12 +73,12 @@ export function createCommandRegistry(
       commands.set(name, handler);
       return;
     }
-    commands.set(name, (args, context) => {
+    commands.set(name, (args, context, origin) => {
       const containerId = args.containerId;
       const namesContainer = typeof containerId === "string" && containerId.trim().length > 0;
       const bindsGeneration = args.expectedRuntimeGeneration !== undefined;
       // Commands that name no container stay synchronous.
-      if (!namesContainer && !bindsGeneration) return handler(args, context);
+      if (!namesContainer && !bindsGeneration) return handler(args, context, origin);
       return (async () => {
         // A handle minted for one runtime generation must not be connected to
         // a replacement: callers that bind to a generation send it back and
@@ -92,7 +93,7 @@ export function createCommandRegistry(
             trustExactAssociation: true,
           });
         }
-        return handler(args, context);
+        return handler(args, context, origin);
       })();
     });
   };
@@ -282,6 +283,7 @@ export function createCommandRegistry(
   registerGitHubCommands(register, dependencies);
   registerEnvironmentCommands(register, dependencies);
   registerSystemCommands(register);
+  registerUpdateCommands(register);
   registerHostFileCommands(register);
   registerDockerCommands(register, dependencies);
   registerServerCommands(register, dependencies);

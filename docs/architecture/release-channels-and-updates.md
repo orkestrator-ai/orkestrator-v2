@@ -406,7 +406,15 @@ backend and a headless one through the same commands.
   that failed. Nothing on the machine has changed: downloads stay in a cache
   and prefetched toolchains are additive.
 - `cancelled` is reachable from `approved`, `fetching-dependencies`,
-  `downloading` and `ready`.
+  `downloading` and `ready`. Cancelling tells the host to stop its download
+  and disarm an install on quit. The exception is a macOS app armed to
+  install on quit: Squirrel.Mac has already staged the update, and a staged
+  update installs on quit whatever electron-updater is told, so
+  `update_cancel` refuses it.
+- One job at a time: `update_start` holds an admission flag from its first
+  check until the job exists, so two concurrent starts cannot both pass. An
+  offer that a channel change made stale (its channel is no longer included,
+  or a check started before the change) is never installed.
 - A failure **from** `installing` onwards goes through rollback, ending in
   `rolled-back`. If even the old version cannot be restored, it ends in
   `failed` with `rollbackFailed: true`, the one state that needs a human.
@@ -452,9 +460,17 @@ and from the CLI.
 The `update-status` event carries `{ revision, snapshot }` and is pushed on
 every change. Following the transport invariants, the event is only an
 incremental update over `update_get_status`. A client rehydrates on mount and
-on every event-stream reconnect, and a revision gap triggers a re-read. That
-reconnect path is how a client watching a remote restart sees the final
-outcome.
+on every event-stream reconnect. That reconnect path is how a client watching
+a remote restart sees the final outcome.
+
+Every snapshot also carries a `generation`, one per backend process, because
+a restarted backend counts revisions from zero again. A client drops a
+snapshot (event or read) with its current generation and a lower revision, so
+a slow read cannot roll the state back past a newer event, and always applies
+one from another generation. Re-reads join the one in flight. In the desktop
+app, Electron main forwards the local backend's stream reconnect to every
+window (`local-update-resync`), because a window bound to a remote never sees
+that stream itself.
 
 ### Host protocol (backend ↔ Electron main / supervisor)
 
@@ -463,22 +479,36 @@ listener**: Electron main through `BackendHttpClient`, and the supervisor by
 parsing the backend's `orkestrator-backend-ready` line exactly as Electron
 does. The host protocol reuses that client, with no new socket or IPC:
 
-- `update_host_register { hostKind, protocolVersion: 1, hostVersion, platform, arch, installKind, capabilities }`
+- `update_host_register { hostKind, protocolVersion: 1, hostVersion, platform, arch, installKind, capabilities, armedJobId? }`
   returns `{ hostSessionId, pending }`. The host registers after every backend
-  start and after every event-stream reconnect.
+  start and after every event-stream reconnect. `armedJobId` names a job this
+  host process has armed to install on quit: after a backend-only restart it
+  tells a host that is still armed (the job keeps waiting) from one that
+  restarted without installing (the outcome timer starts).
 - The backend pushes `update-host-request { hostSessionId, request }`, where
   the request is `prepare`, `install` or `cancel`, with `requestId` and
   `jobId`. `update_host_pending` returns the same list for reconciliation, so
   a missed event is never fatal.
 - `update_host_report { hostSessionId, requestId, jobId, status, progress?, error?, result? }`
-  covers progress, success and failure. After a restart the **new** (or
-  rolled-back) host reports the outcome of the restart through the same
-  command.
+  covers progress, success and failure. A final report that does not arrive
+  (a reconnect replaced the session) is kept and re-sent when the next
+  registration still lists its request. After a restart the **new** (or
+  rolled-back) host reports the outcome of the restart with
+  `update_host_outcome`. A host whose install fails after it acknowledged
+  (Squirrel.Mac's staging, the AppImage swap) reports `install-failed` the
+  same way.
 
 The `update_host_*` commands are accepted **only on the control listener**
 (loopback). The gateway already distinguishes it (`listenerKind`, as used for
 `web-client-access`). A remote client therefore cannot impersonate a host or
-fake an install outcome.
+fake an install outcome. In the desktop app the renderer's generic invoke
+also reaches the control listener, so Electron main refuses `update_host_*`
+from a window and never forwards `update-host-request` events to windows.
+
+Once the host acknowledged an immediate install, the backend expects to go
+down with the restart. If it is still running 10 minutes later, the install
+did not happen, and the job ends `rolled-back` (`install-not-applied`) with
+nothing to undo.
 
 ### Remote protocol
 
@@ -709,9 +739,10 @@ running it. `orkestrator service print` writes the unit to stdout.
 ## Desktop host
 
 `apps/desktop/electron/update-host.ts` replaces the native-dialog controller.
-Eligibility is unchanged (`isAutoUpdateSupported`: packaged, production
-flavour, `app-update.yml`, AppImage on Linux,
-`ORKESTRATOR_DISABLE_AUTO_UPDATE`).
+Eligibility (`isAutoUpdateSupported`) is as before: packaged, production
+flavour, `app-update.yml`, AppImage on Linux, and
+`ORKESTRATOR_DISABLE_AUTO_UPDATE`. In addition, the AppImage's folder must be
+writable, because the swap renames the new file next to the old one.
 
 - **`prepare`.**
   1. Pin the generic feed to the tag, `checkForUpdates()`, and require
@@ -725,9 +756,15 @@ flavour, `app-update.yml`, AppImage on Linux,
 
      If the copy fails, the job fails before install (atomicity).
 - **`install`.** Write `pending-install.json` (`{ jobId, from, to, rollbackPath, startedAt }`),
-  then `quitAndInstall(true, true)`. Choosing **Later** sets
-  `autoInstallOnAppQuit`, and the marker is written at the same point.
-  Nothing is installed before consent: `autoDownload` is off, so a download
+  then `quitAndInstall(true, true)`. Its failures arrive as updater `error`
+  events, which the host reports as an `install-failed` outcome.
+- **Later** (install on quit) sets `autoInstallOnAppQuit` and calls
+  `downloadUpdate()` again. electron-updater stages an update with
+  Squirrel.Mac (macOS), or registers its quit handler (AppImage), only when a
+  download completes with that flag set; the file is cached from `prepare`,
+  so this completes at once. The marker is written at the same point. On
+  macOS the staged update can no longer be cancelled.
+- Nothing is installed before consent: `autoDownload` is off, so a download
   only ever starts from an approved job.
 - **After the restart** (early in `startApplication`):
   - If `app.getVersion() === to`: once the backend is ready and the first
@@ -770,6 +807,7 @@ when no window exists.
 | Download | network, SHA-512, feed version mismatch, npm integrity, package manifest mismatch | `failed (download)`; staging removed |
 | Rollback copy | disk full | `failed (download)` before install |
 | Install / restart | Squirrel did not apply; process exit; migration error | Rollback; `rolled-back` with reason |
+| Restart never happens | installer acknowledged, then failed silently or stalled | After 10 min the still-running backend ends the job `rolled-back` (`install-not-applied`) |
 | Health | no readiness line, `/status` not ok, wrong version, crash within the window | Rollback: database snapshot restore if migrated, symlinks or bundle restored, image retagged back, toolchain `current` restored |
 | Rollback | old version also unhealthy | `failed (rollbackFailed)`; the supervisor keeps retrying the old version; the desktop shows the startup error |
 

@@ -4,6 +4,11 @@ import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
 import { normalizeDebugLogRetentionDays } from "@orkestrator/protocol/debug-logging";
 import { normalizeNotificationSoundSettings } from "@orkestrator/protocol/notification-sounds";
 import {
+  DEFAULT_RELEASE_CHANNEL,
+  isReleaseChannel,
+  type ReleaseChannel,
+} from "@orkestrator/protocol/release-channels";
+import {
   COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION,
   coordinatorProviderTierSetting,
   normalizeCoordinatorProviderTierDefaultVersion,
@@ -542,6 +547,10 @@ export abstract class StorageConfig extends StorageProjects {
       // Written only by `setGitHubCliReminderDismissed`, likewise.
       if (config.global.githubCliReminderDismissed) validated.githubCliReminderDismissed = true;
       else delete validated.githubCliReminderDismissed;
+      // Written only by `setUpdateChannel`, likewise.
+      if (config.global.updateChannel !== undefined)
+        validated.updateChannel = config.global.updateChannel;
+      else delete validated.updateChannel;
       config.global = options.preserveCredentials
         ? {
             ...validated,
@@ -605,6 +614,28 @@ export abstract class StorageConfig extends StorageProjects {
       this.announce("config", "app");
       return config;
     });
+  }
+
+  /** The release channel updates come from; anything unrecognised reads as stable. */
+  async getUpdateChannel(): Promise<ReleaseChannel> {
+    const channel = (await this.loadConfig()).global.updateChannel;
+    return isReleaseChannel(channel) ? channel : DEFAULT_RELEASE_CHANNEL;
+  }
+
+  async setUpdateChannel(channel: ReleaseChannel): Promise<void> {
+    if (!isReleaseChannel(channel)) throw new Error("Expected a release channel");
+    await this.enqueueConfigMutation(async () => {
+      const config = await this.loadConfig();
+      config.global.updateChannel = channel;
+      await this.saveSensitiveJson(this.configFile(), config);
+      this.announce("config", "app");
+      return config;
+    });
+  }
+
+  /** `PRAGMA user_version` of the open database: what an older build must be able to read. */
+  storageSchemaVersion(): number {
+    return this.database.schemaVersion();
   }
 
   /** Turn the startup GitHub CLI reminder off, or back on. */

@@ -63,6 +63,7 @@ export class GatewayContext {
   readonly logger: Pick<Console, "debug" | "error" | "info" | "warn">;
   readonly allowNonTailscaleBind: boolean;
   readonly webClientControl: OrkestratorGatewayOptions["webClientControl"];
+  readonly status: OrkestratorGatewayOptions["status"];
   readonly allowedOrigins: string[];
   readonly compression: GatewayCompressionMode;
   readonly keepaliveMs: number;
@@ -129,6 +130,7 @@ export class GatewayContext {
     this.logger = options.logger ?? console;
     this.allowNonTailscaleBind = options.allowNonTailscaleBind ?? false;
     this.webClientControl = options.webClientControl;
+    this.status = options.status;
     this.compression = resolveGatewayCompressionMode(options.compression, this.env);
     this.keepaliveMs = options.keepaliveMs ?? KEEPALIVE_MS;
     this.proxyBodyIdleTimeoutMs =

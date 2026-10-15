@@ -26,7 +26,11 @@ import {
 } from "@orkestrator/protocol/gateway-token";
 
 export type BackendInvoker = {
-  invoke(command: string, args: Record<string, unknown>): Promise<unknown> | unknown;
+  invoke(
+    command: string,
+    args: Record<string, unknown>,
+    origin?: import("./core/commands-context.js").InvocationOrigin,
+  ): Promise<unknown> | unknown;
   /**
    * Whether `command` is in the registry. Metric labels are gated on this so a
    * rejected, network-supplied name can never be retained — testing the error
@@ -116,6 +120,12 @@ export interface OrkestratorGatewayOptions {
     setEnabled(enabled: boolean): Promise<WebClientStatus>;
     resetServe(): Promise<WebClientStatus>;
   };
+  /**
+   * What the authenticated `/__orkestrator/status` route reports beyond
+   * `{ ok: true }`: the version handshake and update summary clients use to
+   * tell what a remote runs and whether it can update itself.
+   */
+  status?: () => import("@orkestrator/protocol/updates").GatewayStatusPayload;
 }
 
 export const AUTH_COOKIE = "orkestrator_gateway_auth";
@@ -247,7 +257,7 @@ export const GATEWAY_METRIC_TOTAL_LABEL_BYTES = 8 * 1024;
  * timing breakdown both incomplete and different on every run.
  * `apps/backend/tests/gateway-support-extra.test.ts` pins these against the real registry.
  */
-export const GATEWAY_COMMAND_METRIC_MAP_LIMIT = 640;
+export const GATEWAY_COMMAND_METRIC_MAP_LIMIT = 768;
 export const GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES = 32 * 1024;
 export const GATEWAY_METRIC_SAMPLE_LIMIT = 32;
 export const MAX_CLIENT_METRICS_BODY_BYTES = 64 * 1024;

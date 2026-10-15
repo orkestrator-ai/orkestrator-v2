@@ -157,6 +157,10 @@ describe("preload API factory", () => {
       channel: "orkestrator:shell:open-external",
       args: ["https://example.com/docs"],
     });
+    await expect(api.updates.invoke("update_check")).resolves.toEqual<IpcEcho>({
+      channel: "orkestrator:updates:invoke",
+      args: ["update_check", {}],
+    });
     await expect(api.permissions.getMacOsStatus()).resolves.toEqual<IpcEcho>({
       channel: "orkestrator:permissions:macos-status",
       args: [],

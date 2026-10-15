@@ -133,6 +133,13 @@ export function createOrkestratorElectronApi(ipcRenderer: IpcRendererLike) {
       },
     },
 
+    updates: {
+      /** This app's update commands, always on the local backend. */
+      invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
+        return ipcRenderer.invoke("orkestrator:updates:invoke", command, args);
+      },
+    },
+
     permissions: {
       getMacOsStatus(): Promise<MacOsPermissionsStatus> {
         return ipcRenderer.invoke("orkestrator:permissions:macos-status");

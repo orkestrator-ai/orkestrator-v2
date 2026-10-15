@@ -388,12 +388,20 @@ export class GatewayAuth {
         response.end();
         return;
       }
-      jsonResponse(response, 200, { ok: true });
+      // Behind the auth gate, so disclosing the version leaks nothing to an
+      // anonymous caller. A status failure must not look like an outage.
+      let status: object = { ok: true };
+      try {
+        status = this.ctx.status?.() ?? status;
+      } catch (error) {
+        this.ctx.logger.warn("[Gateway] Status details unavailable:", error);
+      }
+      jsonResponse(response, 200, status);
       return;
     }
 
     if (url.pathname === `${API_PREFIX}/invoke`) {
-      await this.handlers.handleInvoke(request, response, requestMetrics);
+      await this.handlers.handleInvoke(request, response, requestMetrics, listenerKind);
       return;
     }
 

@@ -69,6 +69,8 @@
     "./release-channels": "./src/release-channels.ts",
     "./release-requirements": "./src/release-requirements.ts",
     "./release-signing-keys": "./src/release-signing-keys.ts",
+    "./update-job": "./src/update-job.ts",
+    "./updates": "./src/updates.ts",
     "./plan-usage": "./src/plan-usage.ts",
     "./pr-prompt": "./src/pr-prompt.ts",
     "./pr-monitor": "./src/pr-monitor.ts",

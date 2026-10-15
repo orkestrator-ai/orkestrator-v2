@@ -145,7 +145,7 @@ iOS, two machines) are the most common open gate. They are batched in
 
 | File | Summary |
 | --- | --- |
-| [mcp-management.md](todo/mcp-management.md) | Keep the per-provider MCP editor faithful to current pins (Pi 1.x rules, Claude retained runtime), close apply paths that stop at pending or restart, collect live evidence. |
+| [mcp-management.md](todo/mcp-management.md) | Keep the per-provider MCP editor faithful to current pins (Claude retained runtime), close apply paths that stop at pending or restart, collect live evidence. |
 | [mcp-environment-delivery.md](todo/mcp-environment-delivery.md) | Durable container-private MCP overlay, Cursor delivery, and truthful scope, network and auth behaviour outside the backend host. |
 
 ### Agent engines and provider SDKs

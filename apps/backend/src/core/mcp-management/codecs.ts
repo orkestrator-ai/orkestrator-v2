@@ -686,9 +686,25 @@ export const grokCodec: ProviderCodec = {
 
 // ---------------------------------------------------------------------------
 // Pi (bridge-owned client): `mcpServers.<name>` or a bare map in mcp.json
+//
+// Everything below mirrors `bridges/pi-bridge/src/mcp-config.ts`, which in turn
+// follows Pi's own loader (`dist/extensions/mcp/config.js` and
+// `validateMcpServerConfig` in `dist/core/mcp-servers.js`). The backend parity
+// test (`pi-mcp-parity.test.ts`) runs both over the same fixtures.
 // ---------------------------------------------------------------------------
 
-const PI_OWNED = ["transport", "type", "command", "args", "env", "url", "headers", "disabled"];
+const PI_OWNED = [
+  "transport",
+  "type",
+  "command",
+  "args",
+  "env",
+  "cwd",
+  "url",
+  "headers",
+  "enabled",
+  "disabled",
+];
 const PI_NAME = {
   pattern: "^[A-Za-z][A-Za-z0-9_-]{0,63}$",
   description:
@@ -704,51 +720,203 @@ export function piSanitizedName(value: string): string | undefined {
   return /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(sanitized) ? sanitized : undefined;
 }
 
-/** Servers the Pi bridge accepts from one file (`MAX_MCP_SERVERS` in pi-bridge/src/mcp-config.ts). */
+/** Pi's MCP namespace: names that differ only in `-` and `_` are one server (`mcpNamespace`). */
+export function piNamespace(value: string): string | undefined {
+  return piSanitizedName(value)?.replace(/-/g, "_");
+}
+
+/** Entries the Pi bridge reads from one file (`MAX_MCP_SERVERS` in pi-bridge/src/mcp-config.ts). */
 export const PI_SERVERS_PER_FILE = 64;
+
+/** Keys a Pi project override may set (`MCP_OVERRIDE_KEYS` in pi-bridge/src/mcp-config.ts). */
+const PI_OVERRIDE_KEYS: ReadonlySet<string> = new Set(["enabled", "exposure", "toolExposure"]);
+
+/** Hosts Pi lets `auth` reach over plain HTTP; URL.hostname retains IPv6 brackets. */
+const PI_LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/** Bridge variables a server never receives (`BRIDGE_SECRET_ENV` in pi-bridge/src/mcp-config.ts). */
+const PI_BRIDGE_SECRET_ENV: ReadonlySet<string> = new Set([
+  "ORKESTRATOR_AGENT_MCP_TOKEN",
+  "PI_BRIDGE_TOKEN",
+]);
 
 function nonBlank(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-/**
- * Why the Pi bridge silently skips an entry, mirroring `normalizeMcpServer` /
- * `readTransport` in pi-bridge/src/mcp-config.ts. `undefined` means Pi loads
- * it. A disabled entry is reported separately and is not a load failure.
- */
-export function piLoadBlock(name: string, raw: NativeEntry | null): string | undefined {
-  if (!piSanitizedName(name)) {
-    return "Pi skips this entry: a server name must start with a letter and be at most 64 characters.";
-  }
-  if (!raw) return "Pi skips this entry: it is not an object.";
-  const declared =
-    typeof raw.transport === "string"
-      ? raw.transport
-      : typeof raw.type === "string"
-        ? raw.type
-        : undefined;
-  let transport: "http" | "stdio" | undefined;
-  if (declared === "streamable-http" || declared === "http" || declared === "sse") {
-    transport = "http";
-  } else if (declared === "stdio" || declared === undefined) {
-    if (nonBlank(raw.url)) transport = "http";
-    else if (nonBlank(raw.command)) transport = "stdio";
-  } else {
-    return `Pi skips this entry: transport "${declared}" is not recognised.`;
-  }
-  if (transport === "http") {
-    if (!nonBlank(raw.url)) return "Pi skips this entry: a remote server needs a URL.";
-    try {
-      const url = new URL(raw.url.trim());
-      if (url.protocol !== "http:" && url.protocol !== "https:")
-        return "Pi skips this entry: the URL must start with http:// or https://.";
-    } catch {
-      return "Pi skips this entry: the URL is not valid.";
-    }
+function isStringMap(value: unknown): value is Record<string, string> {
+  return isRecord(value) && Object.values(value).every((item) => typeof item === "string");
+}
+
+function piHttpUrl(value: string): URL | undefined {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:" ? url : undefined;
+  } catch {
     return undefined;
   }
-  if (transport !== "stdio") return "Pi skips this entry: it has no command or URL.";
+}
+
+/** How Pi reads one entry of a file, before the user and project files merge. */
+export type PiEntryShape =
+  /** A project entry with no `command`, `url` or `type`: it switches the user server of that name. */
+  | { kind: "override"; enabled?: boolean }
+  | { kind: "server"; transport: "http" | "stdio"; hasAuth: boolean }
+  /** Pi rejects the entry: it neither loads nor hides a same-named entry. */
+  | { kind: "rejected"; reason: string };
+
+const rejected = (reason: string): PiEntryShape => ({ kind: "rejected", reason });
+
+/** Pi's exposures, with the older alias it still accepts (`PI_EXPOSURES` in the bridge). */
+const PI_EXPOSURES: ReadonlySet<unknown> = new Set([
+  "codemode",
+  "deferred",
+  "direct",
+  "hidden",
+  "codemode-deferred",
+]);
+
+/** Pi's checks on the keys a server and an override share (`validSharedFields` in the bridge). */
+function piSharedFieldsError(raw: NativeEntry): string | undefined {
+  if (raw.enabled !== undefined && typeof raw.enabled !== "boolean")
+    return "enabled must be true or false";
+  if (raw.exposure !== undefined && !PI_EXPOSURES.has(raw.exposure))
+    return "exposure must be codemode, deferred, direct or hidden";
+  if (
+    raw.toolExposure !== undefined &&
+    !(
+      isRecord(raw.toolExposure) &&
+      Object.values(raw.toolExposure).every((exposure) => PI_EXPOSURES.has(exposure))
+    )
+  ) {
+    return "toolExposure must map tool names to codemode, deferred, direct or hidden";
+  }
   return undefined;
+}
+
+/**
+ * Mirror of `acceptedTransport` and the override rules in `loadMcpConfigFile`
+ * (pi-bridge/src/mcp-config.ts), which follow Pi's own validator for the
+ * fields the bridge uses. `sse` and the `transport` key are bridge extensions.
+ */
+export function piEntryShape(raw: NativeEntry, project: boolean): PiEntryShape {
+  if (raw.command === undefined && raw.url === undefined && raw.type === undefined) {
+    if (!project) return rejected("Pi skips this entry: it has no command or URL.");
+    if (Object.keys(raw).some((key) => !PI_OVERRIDE_KEYS.has(key))) {
+      return rejected(
+        "Pi skips this entry: a project entry without a command or URL overrides the user server of the same name and can set only enabled, exposure and toolExposure.",
+      );
+    }
+    const error = piSharedFieldsError(raw);
+    if (error) return rejected(`Pi skips this override: ${error}.`);
+    return {
+      kind: "override",
+      ...(typeof raw.enabled === "boolean" ? { enabled: raw.enabled } : {}),
+    };
+  }
+  const error = piSharedFieldsError(raw);
+  if (error) return rejected(`Pi skips this entry: ${error}.`);
+  if (raw.description !== undefined && typeof raw.description !== "string")
+    return rejected("Pi skips this entry: description must be text.");
+  if (raw.timeout !== undefined && (typeof raw.timeout !== "number" || !(raw.timeout > 0)))
+    return rejected("Pi skips this entry: timeout must be a positive number of seconds.");
+  const declared = typeof raw.transport === "string" ? raw.transport : raw.type;
+  const remote = declared === "http" || declared === "streamable-http" || declared === "sse";
+  if (typeof raw.url === "string" && (declared === undefined || remote)) {
+    const url = piHttpUrl(raw.url);
+    if (!url)
+      return rejected("Pi skips this entry: the URL must be an http:// or https:// address.");
+    if (raw.headers !== undefined && !isStringMap(raw.headers))
+      return rejected("Pi skips this entry: every header value must be text.");
+    if (raw.auth !== undefined) {
+      if (!isRecord(raw.auth) || typeof raw.auth.provider !== "string" || !raw.auth.provider)
+        return rejected("Pi skips this entry: auth.provider must name a Pi sign-in provider.");
+      if (url.protocol !== "https:" && !PI_LOOPBACK_HOSTS.has(url.hostname))
+        return rejected(
+          "Pi skips this entry: auth needs an https:// URL, or http:// on localhost.",
+        );
+      if (project)
+        return rejected(
+          "Pi skips this entry: a project file cannot use auth, so a repository cannot choose where a sign-in token goes.",
+        );
+    }
+    return { kind: "server", transport: "http", hasAuth: raw.auth !== undefined };
+  }
+  if (typeof raw.command === "string" && (declared === undefined || declared === "stdio")) {
+    if (
+      raw.args !== undefined &&
+      !(Array.isArray(raw.args) && raw.args.every((arg) => typeof arg === "string"))
+    ) {
+      return rejected("Pi skips this entry: every argument must be text.");
+    }
+    if (raw.env !== undefined && !isStringMap(raw.env))
+      return rejected("Pi skips this entry: every environment value must be text.");
+    if (raw.cwd !== undefined && typeof raw.cwd !== "string")
+      return rejected("Pi skips this entry: the working directory must be text.");
+    return { kind: "server", transport: "stdio", hasAuth: false };
+  }
+  if (remote) return rejected("Pi skips this entry: a remote server needs a URL.");
+  if (declared === "stdio") return rejected("Pi skips this entry: a local server needs a command.");
+  if (declared !== undefined)
+    return rejected(`Pi skips this entry: transport "${String(declared)}" is not recognised.`);
+  return rejected("Pi skips this entry: it needs a command or a URL.");
+}
+
+const PI_CONFIG_VALUE_REFERENCE =
+  /\$(?:(\$)|(!)|\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g;
+
+/**
+ * Why the bridge can never resolve one header or environment value
+ * (`resolveConfigValue` in pi-bridge/src/mcp-config.ts). A variable that may
+ * simply be unset in the bridge's environment is not reported: the backend
+ * cannot see that environment.
+ */
+function piValueBlock(value: string): string | undefined {
+  if (value.startsWith("!")) {
+    return "Orkestrator's Pi sessions do not run `!command` values, so they do not start this server; Pi's own CLI does.";
+  }
+  for (const match of value.matchAll(PI_CONFIG_VALUE_REFERENCE)) {
+    const name = match[3] ?? match[4];
+    if (name && PI_BRIDGE_SECRET_ENV.has(name)) {
+      return `Orkestrator's Pi sessions never pass ${name} to an MCP server, so they do not start this one.`;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Why Orkestrator's Pi sessions accept an entry but never start it (the
+ * `launch`-less entries of `loadMcpConfigFile`). Such an entry still hides a
+ * same-named user entry, exactly as in Pi.
+ */
+export function piLaunchBlock(
+  raw: NativeEntry,
+  shape: Extract<PiEntryShape, { kind: "server" }>,
+): string | undefined {
+  const check = (values: unknown, max: number, field: string): string | undefined => {
+    if (!isStringMap(values)) return undefined;
+    if (Object.keys(values).length > max)
+      return `Orkestrator's Pi sessions accept at most ${max} ${field}, so they do not start this server; its definition still hides lower-priority entries.`;
+    for (const value of Object.values(values)) {
+      const block = piValueBlock(value);
+      if (block) return block;
+    }
+    return undefined;
+  };
+  if (shape.transport === "http") {
+    if (shape.hasAuth) {
+      return "Orkestrator's Pi sessions do not start a server that signs in with a Pi provider (auth); Pi's own CLI does. Send a header instead to use it here.";
+    }
+    return check(raw.headers, 16, "headers");
+  }
+  if (!nonBlank(raw.command))
+    return "The command is empty, so Orkestrator's Pi sessions cannot start this server.";
+  return check(raw.env, 32, "environment variables");
+}
+
+/** Pi's saved switch: `enabled: false` is Pi's own spelling, `disabled: true` the Claude and Cursor one. */
+export function piSavedEnabled(raw: NativeEntry): boolean {
+  return raw.enabled !== false && raw.disabled !== true;
 }
 
 export const piCodec: ProviderCodec = {
@@ -784,16 +952,17 @@ export const piCodec: ProviderCodec = {
     }
     if (typeof raw.url === "string") definition.url = raw.url;
     if (typeof raw.command === "string") definition.command = raw.command;
+    if (definition.transport === "stdio" && typeof raw.cwd === "string") definition.cwd = raw.cwd;
     if (definition.transport === "unknown" && !definition.unsupportedReason)
       definition.invalidReason = "No command or URL.";
-    definition.enabled = raw.disabled !== true;
+    definition.enabled = piSavedEnabled(raw);
     if (env.invalid || headers.invalid || args.invalid)
       definition.invalidReason ??= "Some values are not text.";
     return definition;
   },
   encode(definition, previous) {
     const out: NativeEntry = { ...previous };
-    for (const key of ["command", "args", "env", "url", "headers"]) delete out[key];
+    for (const key of ["command", "args", "env", "cwd", "url", "headers"]) delete out[key];
     const transportKey =
       previous && "transport" in previous
         ? "transport"
@@ -809,12 +978,17 @@ export const piCodec: ProviderCodec = {
       out.command = definition.command;
       assign(out, previous, "args", definition.args);
       assign(out, previous, "env", definition.env);
+      if (definition.cwd) out.cwd = definition.cwd;
     } else {
       out.url = definition.url;
       assign(out, previous, "headers", definition.headers);
     }
-    if (definition.enabled === false) out.disabled = true;
-    else delete out.disabled;
+    // Pi's own spelling, as `pi mcp` writes it: `enabled: false` to disable,
+    // no key to enable. Saving an entry migrates a `disabled` key, which Pi's
+    // CLI ignores.
+    delete out.disabled;
+    if (definition.enabled === false) out.enabled = false;
+    else delete out.enabled;
     return out;
   },
   validate(definition, name, isNewName) {
@@ -825,7 +999,8 @@ export const piCodec: ProviderCodec = {
       ...validateLimits(definition, { args: 32, env: 32, headers: 16 }, []),
     ];
   },
-  mergeNote: "A Pi project server replaces a user server with the same normalized name.",
+  mergeNote:
+    "A Pi project server replaces the user server of the same name, even when it is disabled or cannot start.",
 };
 
 export const PROVIDER_CODECS: Readonly<Record<AgentPlatform, ProviderCodec>> = Object.freeze({

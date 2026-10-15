@@ -250,6 +250,30 @@ describe("catalog states", () => {
     );
   });
 
+  test("an in-use row shows its reason, and a source shows its layout note", async () => {
+    install({
+      ...baseHandlers,
+      get_mcp_management_snapshot: () =>
+        snapshot({
+          sources: [
+            {
+              ...snapshot().sources[0]!,
+              note: "This file lists servers without the mcpServers wrapper.",
+            },
+          ],
+          definitions: [
+            definition({ statusReason: "Turned on in this project by the override in Project." }),
+          ],
+        }),
+    });
+    render(<ProviderMcpSettings />);
+    expect(await screen.findByRole("listitem", { name: "docs, In use" })).toBeTruthy();
+    expect(screen.getByText("Turned on in this project by the override in Project.")).toBeTruthy();
+    expect(
+      screen.getByText("This file lists servers without the mcpServers wrapper."),
+    ).toBeTruthy();
+  });
+
   test("a deep link naming a server highlights its row", async () => {
     install({
       ...baseHandlers,

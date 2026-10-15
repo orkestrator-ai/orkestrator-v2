@@ -452,7 +452,7 @@ pass `tabId`. There is no per-turn MCP attach, which is why OpenCode is
 unqualified for workflow-result *tools* — that is a different feature, not
 a mail gap.
 
-**Pi native.** Flags are on. The vendor SDK has no MCP client; the bridge
+**Pi native.** Flags are on. Pi's SDK sessions load no MCP client; the bridge
 owns one and registers Orkestrator tools through an inline extension.
 Terminal `pi` tabs are not mailboxes. Qualified for coordinator
 delegation.

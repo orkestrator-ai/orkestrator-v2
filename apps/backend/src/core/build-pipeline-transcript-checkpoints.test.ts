@@ -307,3 +307,96 @@ describe("build pipeline transcript checkpoints", () => {
     });
   });
 });
+
+describe("build pipeline transcript probe baselines", () => {
+  test("a probe matches only the baseline it gated, while that read is the committed copy", async () => {
+    await withStorage(async (storage) => {
+      const checkpoints = new BuildPipelineTranscriptCheckpoints(storage);
+      const live = session("probe");
+      const value = pipeline("p-probe", [live]);
+      const probe = { historyRevisionsTracked: true, digest: "digest-1", sourceToken: "token-1" };
+
+      expect(checkpoints.matchesProbe(live, probe)).toBe(false);
+      expect(checkpoints.knownProbe(live)).toBeUndefined();
+
+      expect(checkpoints.observe(live, messages(2, "probe"), probe)).toBe(true);
+      expect(checkpoints.knownProbe(live)).toEqual({
+        historyRevisionsTracked: true,
+        sourceToken: "token-1",
+        digest: "digest-1",
+      });
+      // Observed but not yet committed: readers do not have this copy.
+      expect(checkpoints.matchesProbe(live, probe)).toBe(false);
+
+      await save(storage, checkpoints, value);
+      expect(checkpoints.matchesProbe(live, probe)).toBe(true);
+      expect(
+        checkpoints.matchesProbe(live, {
+          historyRevisionsTracked: true,
+          digest: "digest-2",
+          sourceToken: "token-1",
+        }),
+      ).toBe(false);
+    });
+  });
+
+  test("a matching probe adopts its newer source token", async () => {
+    await withStorage(async (storage) => {
+      const checkpoints = new BuildPipelineTranscriptCheckpoints(storage);
+      const live = session("token");
+      await save(storage, checkpoints, pipeline("p-token", [live]));
+      checkpoints.observe(live, messages(1, "token"), {
+        historyRevisionsTracked: true,
+        digest: "digest",
+        sourceToken: "old",
+      });
+      await save(storage, checkpoints, pipeline("p-token", [live]), 1);
+
+      expect(
+        checkpoints.matchesProbe(live, {
+          historyRevisionsTracked: true,
+          digest: "digest",
+          sourceToken: "new",
+        }),
+      ).toBe(true);
+      expect(checkpoints.knownProbe(live)).toEqual({
+        historyRevisionsTracked: true,
+        sourceToken: "new",
+        digest: "digest",
+      });
+    });
+  });
+
+  test("a matching tail-only probe cannot certify a committed whole transcript", async () => {
+    await withStorage(async (storage) => {
+      const checkpoints = new BuildPipelineTranscriptCheckpoints(storage);
+      const live = session("legacy-probe");
+      const probe = { digest: "digest", sourceToken: "legacy-token" };
+      checkpoints.observe(live, messages(1, "legacy-probe"), probe);
+      await save(storage, checkpoints, pipeline("p-legacy-probe", [live]));
+      expect(checkpoints.matchesProbe(live, probe)).toBe(false);
+      expect(checkpoints.knownProbe(live)).toBeUndefined();
+    });
+  });
+
+  test("a probe without a source token gives no conditional read, and forget drops the baseline", async () => {
+    await withStorage(async (storage) => {
+      const checkpoints = new BuildPipelineTranscriptCheckpoints(storage);
+      const live = session("tokenless");
+      checkpoints.observe(live, messages(1, "tokenless"), {
+        historyRevisionsTracked: true,
+        digest: "digest",
+      });
+      await save(storage, checkpoints, pipeline("p-tokenless", [live]));
+      expect(checkpoints.knownProbe(live)).toBeUndefined();
+      expect(
+        checkpoints.matchesProbe(live, { historyRevisionsTracked: true, digest: "digest" }),
+      ).toBe(true);
+
+      checkpoints.forget([live]);
+      expect(
+        checkpoints.matchesProbe(live, { historyRevisionsTracked: true, digest: "digest" }),
+      ).toBe(false);
+    });
+  });
+});

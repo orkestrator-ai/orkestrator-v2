@@ -11,6 +11,7 @@ import type {
   NativeAgentReadiness,
   NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
+import { transcriptTailStart } from "@orkestrator/protocol/node/transcript-window";
 import { PROVIDER } from "./config.js";
 import { contextWindowForModelId } from "./models.js";
 import { mergeAccountWindows, peekPlanAccountWindows } from "./plan-usage.js";
@@ -75,10 +76,14 @@ export function publicStatus(state: SessionState, readiness?: NativeAgentReadine
   };
 }
 
-export function messageWindow(state: SessionState, fromIndex: number | null): JsonObject {
+export function messageWindow(
+  state: SessionState,
+  fromIndex: number | null,
+  tailMessages: number | null = null,
+): JsonObject {
   const start =
     fromIndex === null
-      ? 0
+      ? transcriptTailStart(state.messages.length, tailMessages)
       : Math.min(Math.max(fromIndex - state.droppedMessages, 0), state.messages.length);
   const baseIndex = state.droppedMessages + start;
   return {
@@ -102,6 +107,12 @@ export function messageWindow(state: SessionState, fromIndex: number | null): Js
  * window). See `parseTranscriptFromIndex` in the protocol package.
  */
 export { parseTranscriptFromIndex as parseFromIndex } from "@orkestrator/protocol/node/transcript-window";
+
+/**
+ * `limit` (the newest messages wanted) shares the same grammar; anything else
+ * is `null` (the retained window). See `parseTranscriptTailLimit`.
+ */
+export { parseTranscriptTailLimit as parseTailLimit } from "@orkestrator/protocol/node/transcript-window";
 
 /**
  * Liveness for the backend's activity sweep.

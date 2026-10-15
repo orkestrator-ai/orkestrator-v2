@@ -10,6 +10,7 @@ import type {
   NativeAgentContextUsage,
   NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
+import { transcriptTailStart } from "@orkestrator/protocol/node/transcript-window";
 import { approvalsEnabled, PROVIDER } from "./config.js";
 import { publicPiMcpServers } from "./mcp.js";
 import {
@@ -102,15 +103,22 @@ export function publicStatus(state: SessionState): JsonObject {
  * errored Pi turn as an empty failed tab and made the truncation notice
  * unreachable. This matches `acp-public.ts`.
  */
-export function messageWindow(state: SessionState, fromIndex: number | null): JsonObject {
+export function messageWindow(
+  state: SessionState,
+  fromIndex: number | null,
+  tailMessages: number | null = null,
+): JsonObject {
   const baseIndex = state.droppedMessages;
   // An anchor at or before the first retained message cannot be served
   // incrementally without silently skipping the evicted range, so the whole
-  // retained window goes back instead.
+  // retained window goes back instead. A tail read (no anchor) keeps only the
+  // newest `tailMessages`.
   const start =
-    fromIndex === null || fromIndex < baseIndex
-      ? 0
-      : Math.min(fromIndex - baseIndex, state.messages.length);
+    fromIndex === null
+      ? transcriptTailStart(state.messages.length, tailMessages)
+      : fromIndex < baseIndex
+        ? 0
+        : Math.min(fromIndex - baseIndex, state.messages.length);
   const omittedMessages = baseIndex + start;
   return {
     messages: state.messages.slice(start),
@@ -142,6 +150,12 @@ function publicTurnError(state: SessionState): string | undefined {
  * window). See `parseTranscriptFromIndex` in the protocol package.
  */
 export { parseTranscriptFromIndex as parseFromIndex } from "@orkestrator/protocol/node/transcript-window";
+
+/**
+ * `limit` (the newest messages wanted) shares the same grammar; anything else
+ * is `null` (the retained window). See `parseTranscriptTailLimit`.
+ */
+export { parseTranscriptTailLimit as parseTailLimit } from "@orkestrator/protocol/node/transcript-window";
 
 /**
  * Liveness for the backend's activity sweep.

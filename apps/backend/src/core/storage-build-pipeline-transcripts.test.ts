@@ -195,7 +195,7 @@ describe("build pipeline transcript migration", () => {
         expect(session.messages).toBeUndefined();
         expect(session.transcript).toMatchObject({ version: 1, complete: true });
         expect(session.messageRevision).toBe(3);
-        expect(session.messagesFingerprint).toStartWith("tf2:");
+        expect(session.messagesFingerprint).toStartWith("tf3:");
       }
       expect(pr!.messages).toBeUndefined();
       expect(pr!.transcript).toBeUndefined();

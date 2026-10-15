@@ -109,10 +109,14 @@ export type ProgressComparison =
 export interface KnownProgressSource {
   sourceToken: string;
   digest: string;
+  /** The sampled representation tracks revisions outside its tail window. */
+  historyRevisionsTracked?: boolean;
 }
 
 export interface ProgressSample {
   digest: string;
+  /** Only a summary with revised rows can certify a whole checkpoint unchanged. */
+  historyRevisionsTracked?: boolean;
   /** Present when the provider can answer the next sample conditionally. */
   sourceToken?: string;
 }
@@ -186,6 +190,7 @@ function windowProgressDigest(
       omittedParts,
       rows,
       ...(revised?.length ? [revised] : []),
+      ...(snapshot.historyReconciliationToken ? [snapshot.historyReconciliationToken] : []),
     ]),
   ).slice(0, DIGEST_CONTENT_HEX);
   return `${DIGEST_MARKER}${base}${content}`;
@@ -270,14 +275,23 @@ export async function readTranscriptProgressSample(input: {
       if (!known) throw new Error("Unexpected unchanged transcript without a known source");
       input.onRead?.("unchanged");
       const sourceToken = retainableToken(snapshot.sourceToken);
-      return { digest: known.digest, ...(sourceToken ? { sourceToken } : {}) };
+      return {
+        digest: known.digest,
+        ...(known.historyRevisionsTracked ? { historyRevisionsTracked: true } : {}),
+        ...(sourceToken ? { sourceToken } : {}),
+      };
     }
     if (!Array.isArray(snapshot.messages)) {
       throw new Error("The transcript progress snapshot was malformed");
     }
     input.onRead?.("snapshot");
     const sourceToken = retainableToken(snapshot.sourceToken);
-    const sourceTokenField = sourceToken ? { sourceToken } : {};
+    // In the v2 contract an absent revisedMessages means no revised rows.
+    // Raw/v1 windows have no such guarantee, even when their token matches.
+    const sampleMetadata = {
+      ...(sourceToken ? { sourceToken } : {}),
+      ...(snapshot.representation === "summary" ? { historyRevisionsTracked: true } : {}),
+    };
     if ((snapshot.omittedParts ?? 0) > 0 && snapshot.messages.length > 0) {
       // The byte target cut the tail row (the window's head is trimmed first,
       // so it is then the only row), and parts that can still move were not
@@ -290,10 +304,10 @@ export async function readTranscriptProgressSample(input: {
       input.onRead?.("fallback");
       return {
         digest: windowProgressDigest(snapshot, exact, 0, snapshot.revisedMessages),
-        ...sourceTokenField,
+        ...sampleMetadata,
       };
     }
-    return { digest: snapshotProgressDigest(snapshot), ...sourceTokenField };
+    return { digest: snapshotProgressDigest(snapshot), ...sampleMetadata };
   }
   const messages = await tailRead(input, PROGRESS_TRANSCRIPT_TAIL_MESSAGES);
   input.onRead?.("fallback");

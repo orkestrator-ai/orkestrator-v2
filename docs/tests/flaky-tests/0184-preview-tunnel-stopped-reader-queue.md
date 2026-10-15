@@ -73,3 +73,13 @@ not establish a root cause. No assertion, timeout or skip was changed.
 - **Isolated rerun:** `mise run test:logged -- --name merge-preview-tunnel -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/preview-tunnel-server.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 0.7 seconds.
 - **Evidence:** `/tmp/orkestrator-test-run.eJf1X8/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `/tmp/orkestrator-test-run.eJf1X8/summary.json`.
 - **Hypothesis:** this repeats the existing intermittent queue-sampling failure. The isolated pass does not establish its root cause. No assertion, timeout or skip was changed.
+
+## Recurrence during supervisor-transcript merge validation (2026-10-15)
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`; Bun 1.4.3.
+- **Worker configuration:** workspace/root/bridges/protocol used 4/1/2/1 slots; workspace allowed two packages with two Bun workers each.
+- **Failure:** expected `aggregateQueuedBytes <= 557056`; received `606770` at line 279 (313.04 ms).
+- **Suite counts:** backend: 8,036 total, 7,996 passed, 39 skipped, 1 failed across 436 files. Root/support, bridges and protocol passed; workspace reported 12 successful tasks out of 13.
+- **Isolated rerun:** `mise run test:logged -- --name merge-preview-tunnel-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/preview-tunnel-server.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 0.7 seconds.
+- **Evidence:** `/tmp/orkestrator-test-run.LW4SBd/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `/tmp/orkestrator-test-run.LW4SBd/summary.json`; outer wrapper: `/tmp/orkestrator-test-run.dDf2wg/merge-tests.log.gz`.
+- **Hypothesis:** this repeats the existing intermittent queue-sampling failure under aggregate load. The isolated pass does not establish its root cause. No assertion, timeout or skip was changed.

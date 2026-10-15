@@ -554,12 +554,13 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
 
   /** Legacy bounded message surface retained for older callers. */
   async messages(sessionId: string, options?: { limit?: number }): Promise<unknown[]> {
-    const messages = (await this.transcripts.legacy(sessionId)).messages;
     const limit = options?.limit;
-    if (limit === undefined) return messages;
-    if (!Number.isSafeInteger(limit) || limit <= 0) {
+    if (limit !== undefined && (!Number.isSafeInteger(limit) || limit <= 0)) {
       throw new RangeError(`${this.agent} transcript limit must be a positive integer`);
     }
+    const messages = (await this.transcripts.legacy(sessionId, limit)).messages;
+    // A bridge that predates `?limit=` answered its whole window.
+    if (limit === undefined) return messages;
     return messages.length > limit ? messages.slice(-limit) : messages;
   }
 

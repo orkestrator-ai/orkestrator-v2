@@ -61,6 +61,7 @@ import type {
 import { isJsonSchema } from "@orkestrator/protocol/structured-output";
 import {
   boundTranscriptResponse,
+  parseTranscriptTailLimit,
   type TranscriptWindowMetadata,
 } from "@orkestrator/protocol/node/transcript-window";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
@@ -82,10 +83,12 @@ export const MAX_CLAUDE_TRANSCRIPT_RESPONSE_BYTES = 16 * 1024 * 1024;
 
 export function boundClaudeTranscriptResponse(
   messages: MessagesResponse["messages"],
+  tailMessages?: number,
 ): MessagesResponse & { messageWindow: TranscriptWindowMetadata } {
   const { messages: bounded, messageWindow } = boundTranscriptResponse(
     messages,
     MAX_CLAUDE_TRANSCRIPT_RESPONSE_BYTES,
+    tailMessages === undefined ? {} : { tailMessages },
   );
   return { messages: bounded, messageWindow };
 }
@@ -575,7 +578,11 @@ session.get("/:id/messages", async (c) => {
     sessionData.persistedMessagesLoaded === false
       ? await hydratePersistedSessionMessages(id)
       : getSessionMessages(id);
-  return c.json(boundClaudeTranscriptResponse(messages));
+  // `?limit=` asks for the newest messages only, so a bounded tail read does
+  // not measure and encode the whole history. Unusable values send the whole
+  // window, as before the parameter existed.
+  const limit = parseTranscriptTailLimit(c.req.query("limit") ?? null);
+  return c.json(boundClaudeTranscriptResponse(messages, limit ?? undefined));
 });
 
 // `GET /:id/transcript` and its detail and page reads (`session-transcript.ts`).

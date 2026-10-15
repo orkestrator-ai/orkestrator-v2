@@ -538,3 +538,25 @@ test("a tracker-less clock moves only on a first sample or a change", () => {
   expect(applyProgressSample(fresh, v2, "2026-01-05T00:00:00.000Z")).toBe("baseline");
   expect(fresh).toEqual({ progressDigest: v2, progressAt: "2026-01-05T00:00:00.000Z" });
 });
+
+test("only summary samples certify history coverage, including conditional answers", async () => {
+  const provider = new SnapshotProvider();
+  const summary = await readTranscriptProgressSample({ provider, sessionId: "s1" });
+  expect(summary.historyRevisionsTracked).toBe(true);
+  const unchanged = await readTranscriptProgressSample({
+    provider,
+    sessionId: "s1",
+    known: { ...summary, sourceToken: summary.sourceToken! },
+  });
+  expect(unchanged).toEqual(summary);
+  provider.representation = undefined;
+  const legacy = await readTranscriptProgressSample({ provider, sessionId: "s1" });
+  expect(legacy.historyRevisionsTracked).toBeUndefined();
+});
+
+test("a revised-row overflow invalidates an otherwise identical summary probe", () => {
+  const base = { messages: [{ id: "tail" }], representation: "summary" as const };
+  const prior = snapshotProgressDigest({ ...base, historyReconciliationToken: "overflow-1" });
+  const next = snapshotProgressDigest({ ...base, historyReconciliationToken: "overflow-2" });
+  expect(compareProgressDigests(prior, next)).toBe("changed");
+});

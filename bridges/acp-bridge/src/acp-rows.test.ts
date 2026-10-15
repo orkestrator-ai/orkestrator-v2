@@ -265,6 +265,27 @@ describe("ACP transcript rows", () => {
     expect((messageWindow(state, null) as { baseIndex: number }).baseIndex).toBe(0);
   });
 
+  test("serves exactly the newest rows for a tail read, ignoring the mutated-row floor", () => {
+    const state = runningState();
+    send(state, call("build-1"));
+    send(state, text("Waiting."));
+    send(state, callUpdate("build-1", { status: "completed", rawOutput: "done" }));
+    const total = state.droppedMessages + state.messages.length;
+
+    const tail = messageWindow(state, null, 1) as {
+      baseIndex: number;
+      messages: BridgeMessage[];
+      messageWindow: { truncated: boolean; omittedMessages?: number };
+    };
+    expect(tail.messages.map((message) => message.id)).toEqual([state.messages.at(-1)!.id]);
+    expect(tail.baseIndex).toBe(total - 1);
+    expect(tail.messageWindow).toMatchObject({ truncated: true, omittedMessages: total - 1 });
+    // A limit larger than the history is the whole window.
+    expect((messageWindow(state, null, 99) as { baseIndex: number }).baseIndex).toBe(0);
+    // An anchor wins over a limit, keeping the incremental floor.
+    expect((messageWindow(state, total - 1, 1) as { baseIndex: number }).baseIndex).toBe(1);
+  });
+
   test("changes the progressive transcript token when an older row changes", () => {
     const state = runningState();
     send(state, call("build-1"));

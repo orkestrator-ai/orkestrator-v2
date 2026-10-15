@@ -52,10 +52,16 @@ export async function readHttpBridgeLegacyTranscript(input: {
   connection: BridgeConnection;
   fetchImpl: typeof fetch;
   sessionId: string;
+  /**
+   * Newest messages wanted. A bridge that predates `?limit=` ignores it and
+   * answers the whole window, so the caller keeps its own slice.
+   */
+  limit?: number;
 }): Promise<LegacyTranscriptSnapshot> {
+  const query = input.limit === undefined ? "" : `?limit=${input.limit}`;
   const response = await bridgeFetch(
     input.connection,
-    `/session/${encodeURIComponent(input.sessionId)}/messages`,
+    `/session/${encodeURIComponent(input.sessionId)}/messages${query}`,
     {},
     input.fetchImpl,
   );

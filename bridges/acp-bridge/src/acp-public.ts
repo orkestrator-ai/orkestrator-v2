@@ -1,11 +1,10 @@
+import { transcriptTailStart } from "@orkestrator/protocol/node/transcript-window";
 import { acpContextUsage } from "./usage.js";
 import {
-  MAX_STRUCTURED_RESULT_BYTES,
   MAX_STRUCTURED_RESULTS,
   MAX_PROMPT_JOURNAL,
   provider,
   publicRuntime,
-  type BridgeMessage,
   type JsonObject,
   type PromptJournalEntry,
   type SessionState,
@@ -112,14 +111,20 @@ export function publicContextUsage(state: SessionState) {
  * turn (`mutatedMessageFloor`). `baseIndex` says where it starts, so a client
  * merging by it replaces those rows rather than keeping a stale copy.
  */
-export function messageWindow(state: SessionState, fromIndex: number | null): JsonObject {
+export function messageWindow(
+  state: SessionState,
+  fromIndex: number | null,
+  tailMessages: number | null = null,
+): JsonObject {
   const requested =
     fromIndex === null || state.mutatedMessageFloor === undefined
       ? fromIndex
       : Math.min(fromIndex, state.mutatedMessageFloor);
+  // A tail read (no anchor) wants exactly the newest `tailMessages`; it merges
+  // nothing, so the mutated-row floor does not apply to it.
   const start =
     requested === null
-      ? 0
+      ? transcriptTailStart(state.messages.length, tailMessages)
       : Math.min(Math.max(requested - state.droppedMessages, 0), state.messages.length);
   return {
     messages: state.messages.slice(start),
@@ -144,6 +149,12 @@ export function messageWindow(state: SessionState, fromIndex: number | null): Js
  * window). See `parseTranscriptFromIndex` in the protocol package.
  */
 export { parseTranscriptFromIndex as parseFromIndex } from "@orkestrator/protocol/node/transcript-window";
+
+/**
+ * `limit` (the newest messages wanted) shares the same grammar; anything else
+ * is `null` (the retained window). See `parseTranscriptTailLimit`.
+ */
+export { parseTranscriptTailLimit as parseTailLimit } from "@orkestrator/protocol/node/transcript-window";
 
 export function publicApprovals(state: SessionState): unknown[] {
   return [...state.approvals.values()].map(({ id, title, options, requestedAt, expiresAt }) => ({

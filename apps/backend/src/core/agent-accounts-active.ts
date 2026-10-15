@@ -17,6 +17,7 @@ import { localServerProcesses } from "./commands-runtime-state.js";
 import {
   localAgentAccountIds,
   localAgentAccountTokenExpiry,
+  loginlessLocalBridges,
   staleLoginLocalBridges,
 } from "./agent-account-bridge-state.js";
 import {
@@ -88,7 +89,8 @@ export async function applyActiveAgentAccountEnvironment(
  * observed live work is left alone: replacing it would kill a running turn or
  * its background work, so it moves over once idle. A coordinator bridge that
  * was handed a short-lived token is replaced once a fresher login is available
- * or the token actually expires.
+ * or the token actually expires. One launched with no login at all is replaced
+ * once the account has a token, however the user signed in.
  */
 export async function localBridgeIsOnActiveAccount(
   key: string,
@@ -105,12 +107,17 @@ export async function localBridgeIsOnActiveAccount(
   // Signed in again since launch: the bridge's login is out of date even
   // though it is on the right account.
   if (launchedWith === active.accountId && !staleLoginLocalBridges.has(key)) {
+    if (kind === "claude" && loginlessLocalBridges.has(key)) {
+      // It answers "Not logged in" to everything; relaunching only helps once
+      // the account has a token to hand over.
+      const credentials = await readActiveClaudeCredentials(context, active);
+      if (!getClaudeOAuthAccessToken(credentials, Date.now() + TOKEN_REPLACEMENT_LEAD_MS)) {
+        return true;
+      }
+      return (await context.nativeAgents?.hasObservedLiveWork(environmentId, kind)) === true;
+    }
     if (tokenExpiresAt === undefined || !tokenLapsed) return true;
-    const credentials = active.home
-      ? await readAddedClaudeCredentials(active.home)
-      : context.runtimeFlavor === "agent-test"
-        ? undefined
-        : await readRuntimeHostClaudeCredentials();
+    const credentials = await readActiveClaudeCredentials(context, active);
     const freshExpiry = claudeCredentialExpiry(credentials);
     // A lapsed lead window is only a reason to relaunch when there is a
     // better token to hand over. Keep the existing bridge until actual expiry.
@@ -183,6 +190,18 @@ export async function readAddedClaudeCredentials(home: string): Promise<string |
   });
 }
 
+/** The active Claude login: the added account's, or the host's outside an agent-test profile. */
+async function readActiveClaudeCredentials(
+  context: CommandContext,
+  active: ResolvedAgentAccount,
+  readCredentials: (home: string) => Promise<string | undefined> = readAddedClaudeCredentials,
+): Promise<string | undefined> {
+  if (active.home) return readCredentials(active.home);
+  // An agent-test profile reads the host login only through its own grant,
+  // which `applyClaudeHostCredentialEnvironment` has already applied.
+  return context.runtimeFlavor === "agent-test" ? undefined : readRuntimeHostClaudeCredentials();
+}
+
 export async function readAddedCodexAuth(home: string): Promise<string | undefined> {
   return readCodexAuthFile(home);
 }
@@ -215,6 +234,8 @@ export interface CoordinatorAgentAccount {
   accountId: string;
   /** Set when the bridge runs on a short-lived access token rather than a login. */
   tokenExpiresAt?: number;
+  /** Set when there was no login to hand over, so the bridge will report signed out. */
+  loginless?: true;
 }
 
 /**
@@ -258,15 +279,10 @@ export async function applyCoordinatorClaudeAccount(
   ) {
     return { accountId: active.accountId };
   }
-  // An agent-test profile reads the host login only through its own grant,
-  // which `applyClaudeHostCredentialEnvironment` has already applied.
-  const credentials = active.home
-    ? await readCredentials(active.home)
-    : context.runtimeFlavor === "agent-test"
-      ? undefined
-      : await readRuntimeHostClaudeCredentials();
+  const credentials = await readActiveClaudeCredentials(context, active, readCredentials);
   const token = getClaudeOAuthAccessToken(credentials, Date.now() + TOKEN_REPLACEMENT_LEAD_MS);
-  if (!token) return { accountId: active.accountId };
+  // Signed out, or an access token that lapsed while nothing used the account.
+  if (!token) return { accountId: active.accountId, loginless: true };
   env.CLAUDE_CODE_OAUTH_TOKEN = token;
   const tokenExpiresAt = claudeCredentialExpiry(credentials);
   return { accountId: active.accountId, ...(tokenExpiresAt ? { tokenExpiresAt } : {}) };

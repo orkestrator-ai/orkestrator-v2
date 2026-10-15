@@ -1,17 +1,23 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import type { CommandContext } from "./commands-context.js";
+import * as commandFiles from "./commands-files.js";
 import { stopLocalServerUnlocked } from "./commands-local-server-lifecycle.js";
 import { __testing as commandTesting } from "./commands-testing.js";
 import { CoordinatorService } from "./coordinator-service.js";
 import { startLocalServerUnlocked } from "./commands-servers.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
 import { runCommand } from "./shell.js";
-import { localAgentAccountIds, staleLoginLocalBridges } from "./agent-account-bridge-state.js";
+import {
+  localAgentAccountIds,
+  localAgentAccountTokenExpiry,
+  loginlessLocalBridges,
+  staleLoginLocalBridges,
+} from "./agent-account-bridge-state.js";
 import { BackendRuntime } from "./backend-runtime.js";
 
 describe("Coordinator Codex server", () => {
@@ -28,6 +34,8 @@ describe("Coordinator Codex server", () => {
 
   beforeEach(async () => {
     commandTesting.resetLocalServerLifecycle();
+    cleanupContext = null;
+    cleanupRuntimeId = null;
     // Spawned processes canonicalize macOS's /var temporary-directory alias.
     // Build expected paths from the same canonical root they report.
     root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "ork-coordinator-server-")));
@@ -86,6 +94,9 @@ describe("Coordinator Codex server", () => {
     }
     commandTesting.resetLocalServerLifecycle();
     staleLoginLocalBridges.clear();
+    localAgentAccountIds.clear();
+    localAgentAccountTokenExpiry.clear();
+    loginlessLocalBridges.clear();
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
     if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
@@ -94,6 +105,109 @@ describe("Coordinator Codex server", () => {
       delete process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;
     else process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = previousCursorProjectSettings;
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  test("records loginless launches, clears them on release, and replaces an idle bridge after login", async () => {
+    const bridge = path.join(root, "bridges", "claude-bridge", "dist");
+    await fs.mkdir(bridge, { recursive: true });
+    await fs.writeFile(
+      path.join(bridge, "index.js"),
+      `
+const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
+const stop = () => { server.stop(true); process.exit(0); };
+process.on("SIGTERM", stop); process.on("SIGINT", stop);
+`,
+    );
+    await fs.rm(path.join(process.env.CLAUDE_CONFIG_DIR!, ".credentials.json"));
+    const project = await storage.addProject(createProject("remote", checkout));
+    const coordinator = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    await coordinator.assignConversationAgent(project.id, conversation.id, "claude");
+    let busy = false;
+    const context = {
+      storage,
+      coordinators: coordinator,
+      appRoot: root,
+      resourceRoot: root,
+      emit: () => undefined,
+      runtimeFlavor: "production",
+      environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+      runtime: new BackendRuntime({ emit: () => undefined }),
+      nativeAgents: { hasObservedLiveWork: async () => busy },
+    } as unknown as CommandContext;
+    const runtimeId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
+    const key = `claude:${runtimeId}`;
+    cleanupContext = context;
+    cleanupRuntimeId = runtimeId;
+    cleanupKind = "claude";
+    // Keep inherited credentials from disguising the fixture's signed-out state.
+    const credentials = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"];
+    const savedCredentials = credentials.map((name) => [name, process.env[name]] as const);
+    for (const name of credentials) delete process.env[name];
+    // Keep host credential discovery deterministic and away from the real Keychain.
+    const hostCredentialRead = spyOn(
+      commandFiles,
+      "readRuntimeHostClaudeCredentials",
+    ).mockImplementation(() =>
+      fs
+        .readFile(path.join(process.env.CLAUDE_CONFIG_DIR!, ".credentials.json"), "utf8")
+        .catch(() => undefined),
+    );
+    try {
+      const first = await startLocalServerUnlocked(runtimeId, context, "claude");
+      expect(first.wasRunning).toBe(false);
+      expect(loginlessLocalBridges.has(key)).toBe(true);
+      expect(localAgentAccountIds.get(key)).toBe("default");
+      await stopLocalServerUnlocked(runtimeId, context, "claude");
+      expect(commandTesting.getLocalServerProcess(key)).toBeUndefined();
+      expect(loginlessLocalBridges.has(key)).toBe(false);
+      expect(localAgentAccountIds.has(key)).toBe(false);
+
+      const signedOut = await startLocalServerUnlocked(runtimeId, context, "claude");
+      expect(loginlessLocalBridges.has(key)).toBe(true);
+      // A terminal login creates the file without sending a refresh event.
+      await fs.writeFile(
+        path.join(process.env.CLAUDE_CONFIG_DIR!, ".credentials.json"),
+        JSON.stringify({
+          claudeAiOauth: { accessToken: "new-login", expiresAt: Date.now() + 60 * 60_000 },
+        }),
+      );
+      busy = true;
+      const retained = await startLocalServerUnlocked(runtimeId, context, "claude");
+      expect(retained).toMatchObject({ pid: signedOut.pid, wasRunning: true });
+      expect(loginlessLocalBridges.has(key)).toBe(true);
+      busy = false;
+      const signedIn = await startLocalServerUnlocked(runtimeId, context, "claude");
+      expect(signedIn.wasRunning).toBe(false);
+      expect(signedIn.pid).not.toBe(signedOut.pid);
+      expect(loginlessLocalBridges.has(key)).toBe(false);
+      expect(staleLoginLocalBridges.has(key)).toBe(false);
+      const coordinatorHome = path.join(
+        storage.getDataDir(),
+        "coordinator-runtime",
+        snapshot.workspace.id,
+        "conversations",
+        conversation.id,
+        "claude-home",
+      );
+      expect(await fs.readFile(path.join(coordinatorHome, ".credentials.json"), "utf8")).toContain(
+        "new-login",
+      );
+      await stopLocalServerUnlocked(runtimeId, context, "claude");
+      expect(commandTesting.getLocalServerProcess(key)).toBeUndefined();
+      expect(loginlessLocalBridges.has(key)).toBe(false);
+    } finally {
+      hostCredentialRead.mockRestore();
+      for (const [name, value] of savedCredentials) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
   });
 
   test("a Claude coordinator gets its credential, its policy, and none of the user's config", async () => {

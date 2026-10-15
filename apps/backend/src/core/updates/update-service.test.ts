@@ -655,12 +655,16 @@ describe("running a job", () => {
 
   test("a job cancelled while its install step prepares is not installed", async () => {
     let release!: () => void;
+    let undone = 0;
     const h = await harness({
       dependencies: {
         beforeInstall: () =>
           new Promise<void>((resolve) => {
             release = resolve;
           }),
+        undoBeforeInstall: async () => {
+          undone += 1;
+        },
       },
     });
     const session = await hostSession(h);
@@ -678,6 +682,7 @@ describe("running a job", () => {
     await installing;
     expect(h.hostRequests().some((request) => request.kind === "install")).toBe(false);
     expect(h.service.snapshot().job?.phase).toBe("cancelled");
+    expect(undone).toBe(1);
   });
 
   test("cancelling an install armed for quit disarms the host; a macOS-staged one cannot be cancelled", async () => {
@@ -695,7 +700,7 @@ describe("running a job", () => {
     expect(mac.service.snapshot().job).toMatchObject({ phase: "ready", installWhen: "on-quit" });
   });
 
-  test("the image swap made at install is undone by a rollback", async () => {
+  test("the install step is undone by a rollback", async () => {
     const calls: string[] = [];
     const h = await harness({
       dependencies: {
@@ -710,7 +715,7 @@ describe("running a job", () => {
         beforeInstall: async (_manifest, job) => {
           calls.push(`tag ${job.dependencies?.image?.imageId}`);
         },
-        afterRollback: async (job) => {
+        undoBeforeInstall: async (job) => {
           calls.push(`tag ${job.dependencies?.image?.previousImageId}`);
         },
       },
@@ -727,6 +732,36 @@ describe("running a job", () => {
     await flush();
     expect(h.service.snapshot().job?.phase).toBe("rolled-back");
     expect(calls).toEqual(["tag sha256:new", "tag sha256:old"]);
+  });
+
+  test("the install step is undone by any end but success", async () => {
+    const tracked = () => {
+      const calls: string[] = [];
+      const dependencies: UpdateDependencies = {
+        beforeInstall: async () => {
+          calls.push("swap");
+        },
+        undoBeforeInstall: async () => {
+          calls.push("undo");
+        },
+      };
+      return { calls, dependencies };
+    };
+    const cancelled = tracked();
+    const h = await harness({ dependencies: cancelled.dependencies });
+    const { job } = await armedOnQuit(h, APPIMAGE_HOST);
+    expect(h.service.snapshot().job?.preparedInstall).toBe(true);
+    await h.service.cancel(job.id, REQUESTER);
+    await flush();
+    expect(cancelled.calls).toEqual(["swap", "undo"]);
+
+    const succeeded = tracked();
+    const done = await harness({ dependencies: succeeded.dependencies });
+    const { session, jobId } = await acknowledgedRestart(done);
+    done.service.hostOutcome({ hostSessionId: session, jobId, outcome: "succeeded" });
+    await flush();
+    expect(done.service.snapshot().job?.phase).toBe("succeeded");
+    expect(succeeded.calls).toEqual(["swap"]);
   });
 
   test("manual restart waits in ready; install now and install on quit", async () => {

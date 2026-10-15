@@ -29,6 +29,8 @@ export class ExternalToolchainError extends Error {
 }
 
 const NAME = /^[a-z][a-z0-9-]{0,31}$/;
+/** Entries of the toolchain root's own layout, which no tool may take over. */
+const RESERVED_NAMES: ReadonlySet<string> = new Set(["bin", "current"]);
 const VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,127}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const HOST =
@@ -176,6 +178,7 @@ function artifact(value: unknown, where: string): ToolchainArtifact {
   const source = record(value, where);
   if (typeof source.name !== "string" || !NAME.test(source.name))
     fail(`${where}.name`, "is not a tool name");
+  if (RESERVED_NAMES.has(source.name)) fail(`${where}.name`, "is reserved by the toolchain layout");
   if (typeof source.version !== "string" || !VERSION.test(source.version)) {
     fail(`${where}.version`, "is not a version");
   }

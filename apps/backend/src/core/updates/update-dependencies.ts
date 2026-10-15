@@ -6,7 +6,7 @@
  * Everything is additive until install. Binaries land in their own versioned
  * directories beside the running set and nothing is pruned; a pulled image is
  * only retagged as the default image right before handing over to the
- * installer, and retagged back if the update rolls back.
+ * installer, and retagged back if the update ends any way but success.
  */
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { CONTAINER_IMAGE_REPOSITORY } from "@orkestrator/protocol/release-channels";
@@ -77,7 +77,14 @@ export function createUpdateDependencies(options: UpdateDependencyOptions): Upda
     manifest: ReleaseRequirements,
   ): Promise<NonNullable<UpdateJobDependencies["image"]>> {
     const current = await options.docker.resolve(options.imageRef());
-    const pulledRef = `${manifest.container.image}:${manifest.container.tag}`;
+    // Becomes the default image, so only the release's own image qualifies,
+    // whatever the manifest names.
+    const pulledRef = `${CONTAINER_IMAGE_REPOSITORY}:${manifest.version}`;
+    if (`${manifest.container.image}:${manifest.container.tag}` !== pulledRef) {
+      throw new Error(
+        `The release names ${manifest.container.image}:${manifest.container.tag}, not ${pulledRef}`,
+      );
+    }
     await options.docker.pull(pulledRef);
     const pulled = await options.docker.resolve(pulledRef);
     if (pulled.kind !== "present") throw new Error(`${pulledRef} is not available after pulling`);
@@ -145,7 +152,7 @@ export function createUpdateDependencies(options: UpdateDependencyOptions): Upda
       const image = job.dependencies?.image;
       if (image) await options.docker.tag(image.imageId, options.imageRef());
     },
-    async afterRollback(job: UpdateJob) {
+    async undoBeforeInstall(job: UpdateJob) {
       const previous = job.dependencies?.image?.previousImageId;
       if (previous) await options.docker.tag(previous, options.imageRef());
     },

@@ -22,6 +22,11 @@ describe("external toolchain artifacts", () => {
 
   test.each([
     ["a name that is a path", (a: Record<string, any>) => ({ ...a, name: "../claude" })],
+    ["the toolchain layout's bin directory", (a: Record<string, any>) => ({ ...a, name: "bin" })],
+    [
+      "the toolchain layout's current link",
+      (a: Record<string, any>) => ({ ...a, name: "current" }),
+    ],
     [
       "plain HTTP",
       (a: Record<string, any>) => ({

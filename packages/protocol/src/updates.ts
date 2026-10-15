@@ -152,6 +152,11 @@ export type UpdateJob = {
   /** How the install was requested: now, or armed to run when the app quits. */
   installWhen: "now" | "on-quit" | null;
   dependencies: UpdateJobDependencies | null;
+  /**
+   * The install step ran on the old version (the default container image now
+   * points at the target's). Any end but success undoes it.
+   */
+  preparedInstall: boolean;
 };
 
 export type UpdateNoticeKind =

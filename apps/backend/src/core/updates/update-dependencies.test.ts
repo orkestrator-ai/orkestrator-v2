@@ -180,11 +180,11 @@ describe("the container image", () => {
       imageId: "sha256:new",
       previousImageId: "sha256:old",
     });
-    // Nothing is retagged until install, and a rollback retags the old image.
+    // Nothing is retagged until install, and undoing the install step retags the old image.
     expect(images.tagged).toEqual([]);
     const job = { dependencies: result } as UpdateJob;
     await dependencies.beforeInstall!(target(), job);
-    await dependencies.afterRollback!(job);
+    await dependencies.undoBeforeInstall!(job);
     expect(images.tagged).toEqual([
       ["sha256:new", "orkestrator-v2:latest"],
       ["sha256:old", "orkestrator-v2:latest"],
@@ -206,6 +206,30 @@ describe("the container image", () => {
     await expect(
       setup({ docker: images }).dependencies.prefetch!(target(), {} as UpdateJob, () => undefined),
     ).rejects.toThrow("reports version 2.23.0");
+  });
+
+  test("only pulls the release's own image", async () => {
+    const images = docker({
+      "orkestrator-v2:latest": {
+        id: "sha256:old",
+        manifest: imageManifest("2.21.0", {}),
+        digests: ["ghcr.io/orkestrator-ai/orkestrator-v2@sha256:abc"],
+      },
+    });
+    const elsewhere = target();
+    elsewhere.container = { ...elsewhere.container, image: "ghcr.io/someone-else/image" };
+    const otherTag = target();
+    otherTag.container = { ...otherTag.container, tag: "latest" };
+    for (const manifest of [elsewhere, otherTag]) {
+      await expect(
+        setup({ docker: images }).dependencies.prefetch!(
+          manifest,
+          {} as UpdateJob,
+          () => undefined,
+        ),
+      ).rejects.toThrow("not ghcr.io/orkestrator-ai/orkestrator-v2:2.22.0");
+    }
+    expect(images.pulled).toEqual([]);
   });
 
   test("never touches a locally built image", async () => {

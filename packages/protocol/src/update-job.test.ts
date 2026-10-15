@@ -41,6 +41,7 @@ function job(phase: UpdateJobPhase): UpdateJob {
     storageSchemaVersion: 3,
     installWhen: null,
     dependencies: null,
+    preparedInstall: false,
   };
 }
 

@@ -25,3 +25,16 @@ A timeout under aggregate load, the same shape as 0151 and 0155. The test runs
 several sequential confirmation switches inside one five-second budget. Keep
 open until a recurrence shows whether it needs a larger explicit timeout or a
 cheaper fixture.
+
+## Recurrence on 2026-10-15
+
+GitHub setup recovery validation timed out in the same case at 5166.09 ms under
+`mise run test`, with four workspace worker slots. Evidence is in
+`/tmp/orkestrator-test-run.9M60yV/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+The unchanged owning file passed alone (exit 0, 14.1 seconds):
+
+```bash
+mise run test:logged -- --name coordinator-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures
+```
+
+No coordinator implementation, assertion, timeout or skip was changed.

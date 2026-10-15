@@ -41,7 +41,7 @@ export function GitHubCliSetup({
   pollIntervalMs?: number;
 }) {
   const [status, setStatus] = useState<GitHubCliStatus | null>(null);
-  const [checking, setChecking] = useState(false);
+  const [checking, setChecking] = useState(true);
   const [login, setLogin] = useState<GitHubCliLoginProgress>({ state: "idle" });
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -52,11 +52,11 @@ export function GitHubCliSetup({
   }, [onStatusChange]);
 
   const refresh = useCallback(async () => {
-    setChecking(true);
     try {
       const next = await getGitHubCliStatus();
       if (!mounted.current) return;
       setStatus(next);
+      setError(null);
       onStatusChangeRef.current?.(next);
     } catch (cause) {
       if (mounted.current) setError(messageOf(cause));
@@ -65,8 +65,15 @@ export function GitHubCliSetup({
     }
   }, []);
 
+  const checkAgain = () => {
+    setChecking(true);
+    void refresh();
+  };
+
   useEffect(() => {
     mounted.current = true;
+    // refresh updates state only after the asynchronous status request settles.
+    // oxlint-disable-next-line react/set-state-in-effect
     void refresh();
     // A sign-in outlives this view: reopening it resumes the one running.
     void getGitHubCliLogin()
@@ -81,19 +88,29 @@ export function GitHubCliSetup({
 
   useEffect(() => {
     if (login.state !== "pending") return;
-    const timer = window.setTimeout(async () => {
+    let cancelled = false;
+    let timer: number;
+    const poll = async () => {
+      let pending = true;
       try {
         const next = await getGitHubCliLogin();
-        if (!mounted.current) return;
+        if (cancelled) return;
+        pending = next.state === "pending";
         setLogin(next);
-        if (next.state === "failed") setError(next.error ?? "The sign-in failed.");
-        if (next.state !== "pending") await refresh();
+        setError(null);
+        if (!pending) await refresh();
       } catch (cause) {
-        if (mounted.current) setError(messageOf(cause));
+        if (!cancelled) setError(messageOf(cause));
+      } finally {
+        if (!cancelled && pending) timer = window.setTimeout(poll, pollIntervalMs);
       }
-    }, pollIntervalMs);
-    return () => window.clearTimeout(timer);
-  }, [login, pollIntervalMs, refresh]);
+    };
+    timer = window.setTimeout(poll, pollIntervalMs);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [login.state, login.operationId, pollIntervalMs, refresh]);
 
   const run = async (operation: () => Promise<void>) => {
     setError(null);
@@ -128,14 +145,24 @@ export function GitHubCliSetup({
     });
 
   const signingIn = login.state === "pending";
+  const displayedError =
+    error ?? (login.state === "failed" ? (login.error ?? "The sign-in failed.") : null);
 
   let body: ReactNode;
   if (!status) {
     body = (
-      <p className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        Checking the GitHub CLI…
-      </p>
+      <div className="space-y-2">
+        {checking ? (
+          <p className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Checking the GitHub CLI…
+          </p>
+        ) : (
+          <Button type="button" size="sm" variant="ghost" onClick={checkAgain}>
+            Check again
+          </Button>
+        )}
+      </div>
     );
   } else if (!status.installed) {
     body = (
@@ -159,13 +186,7 @@ export function GitHubCliSetup({
             <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
             Install instructions
           </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            onClick={() => void refresh()}
-            disabled={checking}
-          >
+          <Button type="button" size="sm" variant="ghost" onClick={checkAgain} disabled={checking}>
             {checking ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
             Check again
           </Button>
@@ -263,10 +284,10 @@ export function GitHubCliSetup({
           </Button>
         </p>
       ) : null}
-      {error ? (
+      {displayedError ? (
         <p role="alert" className="flex items-start gap-2 text-xs text-destructive">
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          <span className="whitespace-pre-wrap">{error}</span>
+          <span className="whitespace-pre-wrap">{displayedError}</span>
         </p>
       ) : null}
     </div>

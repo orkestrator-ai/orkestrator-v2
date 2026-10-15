@@ -16,9 +16,9 @@ export const PINNED_TOOLCHAIN_VERSIONS = {
  * enabled. They are not agents: nothing selects them in the platform picker,
  * and the container image installs its own copies from the distribution.
  *
- * - `gh` backs PR detection, reviews and GitHub cloning. A host `gh` on PATH
- *   is never shadowed for those calls; this copy is the fallback, so a user
- *   without one can still sign in from the app.
+ * - `gh` backs PR detection, reviews and GitHub cloning. The managed copy is
+ *   preferred for those calls and sign-in; a host `gh` on PATH is used when
+ *   the managed copy is unavailable.
  */
 export const PINNED_SUPPORT_TOOL_VERSIONS = {
   gh: "2.102.0",

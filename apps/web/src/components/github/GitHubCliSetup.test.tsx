@@ -8,12 +8,14 @@ let login: GitHubCliLoginProgress;
 let loginResult: GitHubCliLoginProgress;
 /** Applied by the next sign-in poll: the backend finishing its work. */
 let onNextPoll: (() => void) | undefined;
+let statusError: Error | undefined;
 
 mock.module("@/lib/native/backend", () => ({
-  invoke: mock((command: string) => {
+  invoke: mock(async (command: string) => {
     calls.push(command);
     switch (command) {
       case "get_github_cli_status":
+        if (statusError) return Promise.reject(statusError);
         return Promise.resolve(status);
       case "get_github_cli_login": {
         const finish = onNextPoll;
@@ -73,9 +75,63 @@ describe("GitHubCliSetup", () => {
       userCode: "A1B2-C3D4",
     };
     onNextPoll = undefined;
+    statusError = undefined;
   });
 
   afterEach(() => cleanup());
+
+  test("recovers from an initial status failure with an explicit retry", async () => {
+    statusError = new Error("Status unavailable");
+    renderSetup();
+    expect((await screen.findByRole("alert")).textContent).toContain("Status unavailable");
+    expect(screen.queryByText("Checking the GitHub CLI…") === null).toBe(true);
+
+    statusError = undefined;
+    act(() => screen.getByRole("button", { name: "Check again" }).click());
+    expect(await screen.findByRole("button", { name: "Sign in to GitHub" })).toBeTruthy();
+    expect(screen.queryByRole("alert") === null).toBe(true);
+  });
+
+  test("continues polling after a transient rejection without remounting", async () => {
+    renderSetup();
+    await startSignIn();
+    onNextPoll = () => {
+      throw new Error("Poll unavailable");
+    };
+    expect((await screen.findByRole("alert")).textContent).toContain("Poll unavailable");
+
+    onNextPoll = () => {
+      login = { state: "succeeded", operationId: "login-1" };
+      status = { ...SIGNED_OUT, authenticated: true };
+    };
+    expect(await screen.findByText("The GitHub CLI is installed and signed in.")).toBeTruthy();
+    expect(screen.queryByRole("alert") === null).toBe(true);
+    const pollCount = calls.filter((command) => command === "get_github_cli_login").length;
+    await act(async () => {
+      await Bun.sleep(30);
+    });
+    expect(calls.filter((command) => command === "get_github_cli_login")).toHaveLength(pollCount);
+  });
+
+  test("stops polling on unmount and resumes backend progress on reopening", async () => {
+    const view = renderSetup();
+    await startSignIn();
+    view.unmount();
+    const pollCount = calls.filter((command) => command === "get_github_cli_login").length;
+    await act(async () => {
+      await Bun.sleep(30);
+    });
+    expect(calls.filter((command) => command === "get_github_cli_login")).toHaveLength(pollCount);
+
+    renderSetup();
+    expect(await screen.findByText("A1B2-C3D4")).toBeTruthy();
+    expect(calls.filter((command) => command === "start_github_cli_login")).toHaveLength(1);
+    onNextPoll = () => {
+      login = { state: "succeeded", operationId: "login-1" };
+      status = { ...SIGNED_OUT, authenticated: true };
+    };
+    expect(await screen.findByText("The GitHub CLI is installed and signed in.")).toBeTruthy();
+  });
 
   test("signs in with the device code and reports the signed-in state", async () => {
     const statuses: GitHubCliStatus[] = [];

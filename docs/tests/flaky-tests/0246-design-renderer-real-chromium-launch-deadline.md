@@ -1,6 +1,6 @@
 # Real-Chromium design renderer case misses its launch deadline on GitHub Actions
 
-- **ID:** 0244
+- **ID:** 0246
 - **Status:** open
 - **Date observed:** 2026-10-15
 - **Test:** `DesignRenderer with real Chromium > blocks authored scripts and remote images while capturing a PNG`

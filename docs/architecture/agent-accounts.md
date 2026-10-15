@@ -214,6 +214,13 @@ coordinator bridge is replaced if a fresher login is available, and otherwise
 once the token has expired. Coordinator bridges also move to a newly active
 account once idle, like other bridges.
 
+When there is no live token to hand over (signed out, or an access token that
+lapsed while nothing used the account), the bridge launches without one and
+answers "Not logged in". It is recorded in `loginlessLocalBridges`, and every
+later use checks the account again, so an idle bridge is replaced as soon as a
+token exists. This covers sign-ins Orkestrator is never told about, such as
+`claude auth login` in a terminal.
+
 ## Terminal tabs
 
 Local terminal tabs start with `CLAUDE_CONFIG_DIR`/`CODEX_HOME` pointing at

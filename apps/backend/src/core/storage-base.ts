@@ -18,8 +18,13 @@ import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { BACKUP_CHECK_INTERVAL_MS, takeHourlySnapshotIfDue } from "./storage-backups.js";
 import { StoreCorruptError, type RowUpdate, type StorageDatabase } from "./storage-database.js";
 import {
+  commitWithLegacyJsonCleanup,
+  type LegacyJsonCleanup,
   databaseStoreForPath,
+  hasLegacyJsonStore,
   openBackendDatabase,
+  pruneRemovedContent,
+  replayLegacyJsonCleanup,
   scrubLegacyJsonStore,
   storeLayout,
 } from "./storage-stores.js";
@@ -719,6 +724,8 @@ export abstract class StorageBase {
     const scope: AtomicStorageScope = {
       writes: new Map(),
       announcements: [],
+      archiveCleanups: [],
+      archiveTransforms: [],
       scrub: false,
       closed: false,
     };
@@ -730,16 +737,22 @@ export abstract class StorageBase {
     }
     const writes = [...scope.writes];
     if (writes.length > 0) {
-      this.database.transaction(() => {
-        for (const [store, value] of writes) {
-          if (value === DELETED_STORE) this.database.deleteStoreInTransaction(store);
-          else this.database.writeStoreInTransaction(store, value);
-        }
-      });
+      commitWithLegacyJsonCleanup(
+        this.database,
+        this.dataDir,
+        () => {
+          for (const [store, value] of writes) {
+            if (value === DELETED_STORE) this.database.deleteStoreInTransaction(store);
+            else this.database.writeStoreInTransaction(store, value);
+          }
+        },
+        scope.archiveCleanups,
+      );
       if (scope.scrub || writes.some(([, value]) => value === DELETED_STORE)) {
         this.database.scrubDeletedContent();
       }
     }
+    for (const transform of scope.archiveTransforms) transform();
     for (const announcement of scope.announcements) announcement();
     return result;
   }
@@ -913,6 +926,9 @@ export abstract class StorageBase {
     const run = async () => {
       const release = await this.acquireMutationLock(target, description, options);
       try {
+        // A retried deletion may now be a no-op. Finish its durable cleanup
+        // before invoking code that can return without another write.
+        replayLegacyJsonCleanup(this.database, this.dataDir);
         return await operation();
       } finally {
         await release();
@@ -1338,21 +1354,32 @@ export abstract class StorageBase {
     value: unknown,
     options: { backup?: boolean } = {},
   ): Promise<void> {
-    // The database file itself is private (0600).
-    if (this.saveStore(filePath, value)) {
-      const store = this.storeForFile(filePath)!;
-      // Environment copies have an attributable scrub at the deleting boundary.
-      if (store !== "environments") {
-        scrubLegacyJsonStore(this.dataDir, store, (archived) => {
-          if (!isRecord(archived) || !isRecord(value))
-            throw new Error("Unattributable sensitive archive");
-          return Object.fromEntries(
-            Object.keys(archived)
-              .filter((key) => key in value)
-              .map((key) => [key, value[key]]),
-          );
-        });
+    const store = this.storeForFile(filePath);
+    if (store !== null) {
+      // The retired JSON archive stays the pre-migration copy a downgrade
+      // restores from. A save that removes content prunes only that content
+      // from every archived copy; one that removes nothing leaves the archive
+      // untouched. Environment copies have an attributable scrub at the
+      // deleting boundary.
+      const archived = store !== "environments" && hasLegacyJsonStore(this.dataDir, store);
+      let previous: unknown = MISSING_PREVIOUS;
+      if (archived) {
+        try {
+          const snapshot = this.loadStoreStrict<unknown>(filePath);
+          previous = snapshot ? snapshot.value : MISSING_PREVIOUS;
+        } catch (error) {
+          if (!(error instanceof StoreCorruptError)) throw error;
+          previous = UNKNOWN_PREVIOUS;
+        }
       }
+      const cleanups: LegacyJsonCleanup[] =
+        archived &&
+        previous !== MISSING_PREVIOUS &&
+        (previous === UNKNOWN_PREVIOUS || pruneRemovedContent(previous, value) !== previous)
+          ? [{ store, kind: "prune", next: structuredClone(value) }]
+          : [];
+      // The intent and write share a commit, including inside atomically().
+      this.saveStore(filePath, value, cleanups);
       return;
     }
     await this.writeAtomic(
@@ -1365,20 +1392,31 @@ export abstract class StorageBase {
   }
 
   /** Writes a database store; `false` when `filePath` remains a file. */
-  private saveStore(filePath: string, value: unknown): boolean {
+  private saveStore(filePath: string, value: unknown, cleanups: LegacyJsonCleanup[] = []): boolean {
     const store = this.storeForFile(filePath);
     if (store === null) return false;
     const scope = this.openAtomicScope();
     if (scope) {
       scope.writes.set(store, structuredClone(value));
+      scope.archiveCleanups.push(...cleanups);
       return true;
     }
     recurringWorkMetrics.work("storage-write");
-    this.database.writeStore(store, value);
+    commitWithLegacyJsonCleanup(
+      this.database,
+      this.dataDir,
+      () => {
+        this.database.writeStoreInTransaction(store, value);
+      },
+      cleanups,
+    );
     return true;
   }
 
-  /** Removes a database store entirely, or the file that holds a file store. */
+  /**
+   * Removes a database store entirely, with every retired JSON copy of it, or
+   * the file that holds a file store.
+   */
   protected async deleteStore(filePath: string): Promise<void> {
     const store = this.storeForFile(filePath);
     if (store === null) {
@@ -1389,10 +1427,18 @@ export abstract class StorageBase {
     const scope = this.openAtomicScope();
     if (scope) {
       scope.writes.set(store, DELETED_STORE);
-      return;
+      scope.archiveCleanups.push({ store, kind: "delete" });
+    } else {
+      commitWithLegacyJsonCleanup(
+        this.database,
+        this.dataDir,
+        () => {
+          this.database.deleteStoreInTransaction(store);
+        },
+        [{ store, kind: "delete" }],
+      );
+      this.database.scrubDeletedContent();
     }
-    this.database.deleteStore(store);
-    this.database.scrubDeletedContent();
   }
 
   /**
@@ -1417,13 +1463,21 @@ export abstract class StorageBase {
     );
   }
 
+  /** Archive transforms share the deleting mutation's atomic commit boundary. */
+  protected scrubLegacyArchive(store: string, transform: (value: unknown) => unknown): void {
+    const scrub = () => scrubLegacyJsonStore(this.dataDir, store, transform);
+    const scope = this.openAtomicScope();
+    if (scope) scope.archiveTransforms.push(scrub);
+    else scrub();
+  }
+
   /** Rewrites every retained sensitive backup while preserving its record shape. */
   protected async transformSensitiveJsonBackups(
     filePath: string,
     transform: (records: Record<string, unknown>) => Record<string, unknown>,
   ): Promise<void> {
     if (this.storeForFile(filePath) !== null) {
-      scrubLegacyJsonStore(this.dataDir, this.storeForFile(filePath)!, (value) => {
+      this.scrubLegacyArchive(this.storeForFile(filePath)!, (value) => {
         if (!isRecord(value)) throw new Error("Unattributable legacy backup");
         return transform(value);
       });
@@ -1498,10 +1552,17 @@ export abstract class StorageBase {
 
 const DELETED_STORE: unique symbol = Symbol("deleted store");
 
+const MISSING_PREVIOUS: unique symbol = Symbol("missing previous value");
+
+/** A present but unreadable store: nothing shows what the save kept. */
+const UNKNOWN_PREVIOUS: unique symbol = Symbol("unknown previous value");
+
 type AtomicStorageScope = {
   /** Buffered new value per store, or {@link DELETED_STORE}. */
   writes: Map<string, unknown>;
   announcements: Array<() => void>;
+  archiveCleanups: LegacyJsonCleanup[];
+  archiveTransforms: Array<() => void>;
   /** A delete inside asked for the post-commit WAL scrub. */
   scrub: boolean;
   closed: boolean;

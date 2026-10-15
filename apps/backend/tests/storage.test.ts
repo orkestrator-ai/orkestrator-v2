@@ -2766,7 +2766,7 @@ describe("Electron StorageService", () => {
     const storage = new StorageService(dataDir);
     await storage.init();
     const database = (storage as unknown as { database: StorageDatabase }).database;
-    const writeStore = spyOn(database, "writeStore").mockImplementationOnce(() => {
+    const writeStore = spyOn(database, "writeStoreInTransaction").mockImplementationOnce(() => {
       throw new Error("disk full");
     });
 

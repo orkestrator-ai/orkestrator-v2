@@ -30,7 +30,7 @@ reliably green on `main`, and nothing requires it to be.
   38778314321) passed. It was the first green `lint.yml` run on `main` since
   2026-09-30 (run 36746796730). The runs since #999 surfaced three more
   failures, now addressed:
-  - **Real-Chromium design renderer** (flake 0244, open): the launch missed
+  - **Real-Chromium design renderer** (flake 0246, open): the launch missed
     its 15 s deadline on three of the four runs. The case now allows 45 s and
     prints Playwright's launch log on failure. A separate real-browser case
     uses the production 15 s budget and checks successful rendering or the
@@ -121,10 +121,10 @@ reliably green on `main`, and nothing requires it to be.
    row, create the ruleset below with
    `gh api -X POST repos/orkestrator-ai/orkestrator-v2/rulesets --input <file>`,
    then check it with `gh api repos/{owner}/{repo}/rulesets`. If a run fails
-   first, fix or register the failure and restart the count; the 0244 launch
+   first, fix or register the failure and restart the count; the 0246 launch
    log says why the real-Chromium case failed. The maintainer approved this
    ruleset on 2026-10-15. Track production-budget timeout warnings separately;
-   green functional runs alone do not resolve flake 0244:
+   green functional runs alone do not resolve flake 0246:
 
    ```json
    {
@@ -206,7 +206,7 @@ reliably green on `main`, and nothing requires it to be.
    criteria are met; the file now runs in well under a second. Flakes 0166
    (OpenCode probe deadline) and 0171 (Multi Review slow-reviewer benchmark)
    were resolved on 2026-10-15 with a controlled deadline and an ordering
-   check. Resolve 0244 (real-Chromium launch) as item 1 describes.
+   check. Resolve 0246 (real-Chromium launch) as item 1 describes.
 
 ### Qualification
 
@@ -293,7 +293,7 @@ reliably green on `main`, and nothing requires it to be.
   [0006](../tests/flaky-tests/0006-2026-09-08-coordinator-action-validation.md),
   [0166](../tests/flaky-tests/0166-opencode-probe-deadline-exit-code.md),
   [0171](../tests/flaky-tests/0171-multi-review-admission-benchmark-load.md),
-  [0244](../tests/flaky-tests/0244-design-renderer-real-chromium-launch-deadline.md).
+  [0246](../tests/flaky-tests/0246-design-renderer-real-chromium-launch-deadline.md).
 - [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md)
   for runs CI cannot do.
 - [environment-and-disk-cleanup.md](environment-and-disk-cleanup.md) for test

@@ -86,10 +86,15 @@ describe("NetworkWhitelistDialog", () => {
 
     const textarea = screen.getByRole("textbox", { name: "Allowed Domains" });
     fireEvent.change(textarea, { target: { value: "not a domain" } });
-    expect(screen.getByText("Invalid domain format: not a domain")).toBeTruthy();
+    expect(screen.getByText("Invalid domain or port: not a domain")).toBeTruthy();
     expect(
       (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled,
     ).toBe(true);
+    // An entry may name one port and protocol; the port must be in range.
+    fireEvent.change(textarea, { target: { value: "db.example.com:70000" } });
+    expect(screen.getByText("Invalid domain or port: db.example.com:70000")).toBeTruthy();
+    fireEvent.change(textarea, { target: { value: "db.example.com:5432\nexample.com:443/udp" } });
+    expect(screen.queryByText(/Invalid domain or port/) === null).toBe(true);
 
     fireEvent.change(textarea, {
       target: { value: " api.example.com \n\nregistry.example.org " },

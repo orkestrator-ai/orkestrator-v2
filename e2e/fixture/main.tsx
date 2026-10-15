@@ -1,3 +1,4 @@
+import { ClaudeInteractionsFixture } from "./ClaudeInteractionsFixture";
 import {
   AgentLaunchDialog,
   type AgentLaunchSelection,
@@ -1716,6 +1717,7 @@ function fixtureForPath() {
     return <NativeHydratingPreviewFixture />;
   }
   if (window.location.pathname === "/monaco-runtime") return <MonacoRuntimeFixture />;
+  if (window.location.pathname === "/claude-interactions") return <ClaudeInteractionsFixture />;
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;
   if (window.location.pathname === "/markdown-editor") return <MarkdownEditorFixture />;
   if (window.location.pathname === "/system-usage") return <SystemUsageFixture />;

@@ -316,6 +316,68 @@ esac
 });
 
 describe("pinned image identity", () => {
+  test("a policy 3 image creates a labelled tuple-aware container with the configured entries", async () => {
+    const dir = await tempDir("ork-policy3-create-");
+    cleanup.push(dir);
+    const entries = ["github.com:80", "service.example:443/udp", "service.example:5432"];
+    const environment = lifecycleEnvironment({ allowedDomains: entries });
+    const { context } = memoryLifecycleContext([environment], dir);
+    Object.assign(context, { runtimeFlavor: "agent-test", credentialSources: new Set() });
+    Object.assign(context.storage, {
+      getProject: async () => ({
+        id: "project-1",
+        gitUrl: "https://example.invalid/project.git",
+        localPath: null,
+      }),
+      loadConfig: async () => ({
+        version: "1.0.0",
+        global: { enabledAgentPlatforms: [] },
+        repositories: {},
+      }),
+    });
+    // Seed locally so creation is deterministic and makes no external request.
+    await fs.writeFile(
+      path.join(dir, "github-ranges.txt"),
+      "# github-ranges fixture\n203.0.113.0/24\n",
+    );
+    const tar = await tarOf(
+      "image-manifest.json",
+      validManifest({ capabilities: { "network-policy": 3, "network-refresh": 1 } }),
+    );
+    const { createDockerContainer } = await import("../src/core/commands-containers");
+    const originalPolicy = process.env.ORKESTRATOR_NETWORK_POLICY;
+    delete process.env.ORKESTRATOR_NETWORK_POLICY;
+    try {
+      await withDockerScript(
+        `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  context) printf 'unix:///var/run/docker.sock\\n' ;;
+  info) printf '{"OSType":"linux","OperatingSystem":"Debian","Architecture":"x86_64","SecurityOptions":[]}\\n' ;;
+  create) printf 'created-policy3\\n' ;;
+  cp) cat '${tar}' ;;
+  network) [ "$2" = inspect ] && { echo "network not found" >&2; exit 1; }; exit 0 ;;
+esac
+`,
+        async (log) => {
+          expect(await createDockerContainer(environment, context, { imageId: IMAGE_ID })).toBe(
+            "created-policy3",
+          );
+          const create = (await log.read())
+            .split("\n")
+            .find((line) => line.startsWith("create --name"));
+          expect(create).toContain("--label orkestrator-network-policy=3");
+          expect(create).toContain("-e ORKESTRATOR_NETWORK_POLICY=3");
+          expect(create).toContain(`-e ALLOWED_DOMAINS=${entries.join(",")}`);
+          expect(create).toContain("--network ork-");
+        },
+      );
+    } finally {
+      if (originalPolicy === undefined) delete process.env.ORKESTRATOR_NETWORK_POLICY;
+      else process.env.ORKESTRATOR_NETWORK_POLICY = originalPolicy;
+    }
+  });
+
   test("a create uses the id resolved at admission even after the tag moves", async () => {
     const dir = await tempDir("ork-pinned-image-");
     cleanup.push(dir);

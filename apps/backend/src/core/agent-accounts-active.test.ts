@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,9 +10,11 @@ import {
   localBridgeIsOnActiveAccount,
 } from "./agent-accounts-active.js";
 import type { CommandContext } from "./commands-context.js";
+import * as commandFiles from "./commands-files.js";
 import {
   localAgentAccountIds,
   localAgentAccountTokenExpiry,
+  loginlessLocalBridges,
 } from "./agent-account-bridge-state.js";
 import { prepareCoordinatorClaudeHome } from "./commands-servers.js";
 import { StorageService } from "./storage.js";
@@ -30,6 +32,7 @@ let root: string;
 let storage: StorageService;
 let liveWork = false;
 let context: CommandContext;
+let restoreHostCredentialRead: (() => void) | undefined;
 
 function accountHome(platform: "claude" | "codex"): string {
   return path.join(root, "data", "agent-accounts", platform, ACCOUNT_IDS[platform]);
@@ -77,15 +80,19 @@ beforeEach(async () => {
   } as unknown as CommandContext;
   localAgentAccountIds.clear();
   localAgentAccountTokenExpiry.clear();
+  loginlessLocalBridges.clear();
 });
 
 afterEach(async () => {
+  restoreHostCredentialRead?.();
+  restoreHostCredentialRead = undefined;
   for (const [key, value] of Object.entries(savedEnv)) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
   localAgentAccountIds.clear();
   localAgentAccountTokenExpiry.clear();
+  loginlessLocalBridges.clear();
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -163,7 +170,7 @@ describe("applyCoordinatorClaudeAccount", () => {
           },
         }),
     );
-    expect(soon.tokenExpiresAt).toBeUndefined();
+    expect(soon).toEqual({ accountId: ACCOUNT_IDS.claude, loginless: true });
   });
   test("copies the active account's credential file and replaces an earlier one", async () => {
     await activate("claude");
@@ -204,12 +211,71 @@ describe("applyCoordinatorClaudeAccount", () => {
       env,
       prepareCoordinatorClaudeHome,
     );
-    expect(account).toEqual({ accountId: "default" });
+    expect(account).toEqual({ accountId: "default", loginless: true });
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
   });
 });
 
 describe("localBridgeIsOnActiveAccount", () => {
+  test("refreshes a loginless host-account coordinator only when a usable login appears and work is idle", async () => {
+    // Exercise the ordinary runtime's host/Keychain boundary without reading
+    // the developer's credentials. No added account means active.home is absent.
+    const hostCredentialRead = spyOn(commandFiles, "readRuntimeHostClaudeCredentials");
+    restoreHostCredentialRead = () => hostCredentialRead.mockRestore();
+    hostCredentialRead.mockResolvedValue(undefined);
+    context.runtimeFlavor = "production";
+    const key = "claude:host-coordinator";
+    localAgentAccountIds.set(key, "default");
+    loginlessLocalBridges.add(key);
+
+    expect(await localBridgeIsOnActiveAccount(key, "claude", "host-coordinator", context)).toBe(
+      true,
+    );
+    expect(hostCredentialRead).toHaveBeenCalledTimes(1);
+
+    for (const remainingMs of [-60_000, 2 * 60_000]) {
+      hostCredentialRead.mockResolvedValue(
+        JSON.stringify({
+          claudeAiOauth: { accessToken: "host-token", expiresAt: Date.now() + remainingMs },
+        }),
+      );
+      expect(await localBridgeIsOnActiveAccount(key, "claude", "host-coordinator", context)).toBe(
+        true,
+      );
+    }
+
+    const expiresAt = Date.now() + 60 * 60_000;
+    hostCredentialRead.mockResolvedValue(
+      JSON.stringify({
+        claudeAiOauth: { accessToken: "host-token", refreshToken: "host-refresh", expiresAt },
+      }),
+    );
+    liveWork = true;
+    expect(await localBridgeIsOnActiveAccount(key, "claude", "host-coordinator", context)).toBe(
+      true,
+    );
+    liveWork = false;
+    expect(await localBridgeIsOnActiveAccount(key, "claude", "host-coordinator", context)).toBe(
+      false,
+    );
+
+    const env: NodeJS.ProcessEnv = {};
+    expect(
+      await applyCoordinatorClaudeAccount(
+        context,
+        path.join(root, "host-coordinator"),
+        env,
+        prepareCoordinatorClaudeHome,
+      ),
+    ).toEqual({
+      accountId: "default",
+      tokenExpiresAt: expiresAt,
+    });
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("host-token");
+    expect(JSON.stringify(env)).not.toContain("host-refresh");
+    expect(hostCredentialRead).toHaveBeenCalledTimes(6);
+  });
+
   test("keeps a bridge on the active account and replaces one on another only when idle", async () => {
     const key = "codex:env-1";
     expect(await localBridgeIsOnActiveAccount(key, "codex", "env-1", context)).toBe(true);
@@ -251,6 +317,28 @@ describe("localBridgeIsOnActiveAccount", () => {
         claudeAiOauth: { accessToken: "fresh-token", expiresAt: Date.now() + 60 * 60_000 },
       }),
     );
+    expect(await localBridgeIsOnActiveAccount(key, "claude", "coordinator-1", context)).toBe(false);
+  });
+
+  test("replaces an idle coordinator launched without a login once one appears", async () => {
+    await activate("claude");
+    const key = "claude:coordinator-1";
+    localAgentAccountIds.set(key, ACCOUNT_IDS.claude);
+    loginlessLocalBridges.add(key);
+    // Still signed out: a relaunch would not help.
+    expect(await localBridgeIsOnActiveAccount(key, "claude", "coordinator-1", context)).toBe(true);
+
+    // Signed in from a terminal, which Orkestrator is never told about.
+    await fs.mkdir(accountHome("claude"), { recursive: true });
+    await fs.writeFile(
+      path.join(accountHome("claude"), ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: { accessToken: "fresh-token", expiresAt: Date.now() + 60 * 60_000 },
+      }),
+    );
+    liveWork = true;
+    expect(await localBridgeIsOnActiveAccount(key, "claude", "coordinator-1", context)).toBe(true);
+    liveWork = false;
     expect(await localBridgeIsOnActiveAccount(key, "claude", "coordinator-1", context)).toBe(false);
   });
 });

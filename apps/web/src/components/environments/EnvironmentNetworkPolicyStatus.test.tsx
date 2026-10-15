@@ -52,6 +52,16 @@ describe("environment network policy status", () => {
     await screen.findByText(/40 allowed address ranges/);
     expect(screen.getByText(/1 domains did not resolve/)).toBeTruthy();
     expect(screen.getByText(/IPv6 blocked/)).toBeTruthy();
+    expect(screen.getByText(/reachable on\s+every port/)).toBeTruthy();
+  });
+
+  test("policy 3 states that allowed domains answer on HTTPS and the ports entries name", async () => {
+    install({ ...base, policyVersion: 3 });
+    render(<EnvironmentNetworkPolicyStatus environmentId="env-net" />);
+    await screen.findByText(/HTTPS \(port 443\) and on the ports their entries name/);
+    expect(screen.getByText(/40 allowed address and port rules/)).toBeTruthy();
+    expect(screen.queryByText(/allowed address ranges/) === null).toBe(true);
+    expect(screen.queryByText(/every port/) === null).toBe(true);
   });
 
   test("states a failed application and a legacy shared network", async () => {

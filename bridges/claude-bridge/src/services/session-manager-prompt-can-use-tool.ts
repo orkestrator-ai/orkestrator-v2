@@ -1,6 +1,7 @@
 import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 import type { PlanApprovalRequest, QuestionInfo, QuestionRequest } from "../types/index.js";
+import { claudeTurnPolicy } from "./claude-query-config.js";
 import { eventEmitter } from "./event-emitter.js";
 import { debugLog } from "./logger.js";
 import {
@@ -14,6 +15,9 @@ import {
   planApprovalResolvers,
   questionResolvers,
 } from "./session-manager-core.js";
+import { canAdmitInteraction } from "./session-manager-interaction-budget.js";
+import { claudeWorkflowResultTools } from "./claude-workflow-result-tools.js";
+import { requestClaudeToolApproval } from "./session-manager-parked-interactions.js";
 import type { TurnState } from "./session-manager-prompt-turn.js";
 
 function boundedPlan(content: unknown): Pick<PlanApprovalRequest, "plan" | "planTruncated"> {
@@ -59,6 +63,12 @@ export async function turnCanUseTool(
       expiresAt: Date.now() + QUESTION_TIMEOUT_MS,
     };
 
+    if (!canAdmitInteraction(questionRequest, "questions")) {
+      return {
+        behavior: "deny",
+        message: "Too many pending interactions. Answer an existing request first.",
+      };
+    }
     // Store the question
     pendingQuestions.set(questionId, questionRequest);
 
@@ -168,6 +178,12 @@ export async function turnCanUseTool(
       expiresAt: Date.now() + PLAN_APPROVAL_TIMEOUT_MS,
     };
 
+    if (!canAdmitInteraction(approvalRequest, "approvals")) {
+      return {
+        behavior: "deny",
+        message: "Too many pending interactions. Answer an existing request first.",
+      };
+    }
     // Store the approval request and set up the resolver BEFORE emitting,
     // so an instant response from the UI can never find a missing resolver.
     pendingPlanApprovals.set(approvalId, approvalRequest);
@@ -267,6 +283,27 @@ export async function turnCanUseTool(
       pendingPlanApprovals.delete(approvalId);
       planApprovalResolvers.delete(approvalId);
     }
+  }
+
+  // An `ask` policy means the user decides, and a `deny` policy refuses
+  // anything outside its allow list. Questions and plan approvals are handled
+  // above, so a denying session can still ask the user. Under `auto-approve`
+  // the mode already chose not to ask, so a tool that still reaches here runs.
+  if (
+    claudeWorkflowResultTools(turn.mcpServerNames).includes(toolName) &&
+    !session.executionPolicy?.toolPolicy?.deny?.includes(toolName)
+  ) {
+    return { behavior: "allow", updatedInput: input };
+  }
+  const approvals = claudeTurnPolicy(session.executionPolicy, turn.options?.readOnly)?.approvals;
+  if (approvals === "ask") {
+    return requestClaudeToolApproval(sessionId, toolName, input, permissionContext);
+  }
+  if (approvals === "deny") {
+    return {
+      behavior: "deny" as const,
+      message: `${toolName} is not allowed: this session's policy denies approvals.`,
+    };
   }
 
   // Allow this invocation only. SDK permission suggestions are durable

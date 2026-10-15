@@ -187,12 +187,14 @@ describe("OrkestratorBackend agent activity boot reset", () => {
         const storage = (backend as unknown as { context: { storage: StorageService } }).context
           .storage;
         const database = (storage as unknown as { database: StorageDatabase }).database;
-        const writeStore = database.writeStore.bind(database);
+        const writeStore = database.writeStoreInTransaction.bind(database);
         // Every write to the environments store fails; other stores still work.
-        const failing = spyOn(database, "writeStore").mockImplementation((store, value) => {
-          if (store === "environments") throw new Error("disk full");
-          return writeStore(store, value);
-        });
+        const failing = spyOn(database, "writeStoreInTransaction").mockImplementation(
+          (store, value) => {
+            if (store === "environments") throw new Error("disk full");
+            return writeStore(store, value);
+          },
+        );
         try {
           await expect(backend.init()).resolves.toBeUndefined();
           expect(failing.mock.calls.some(([store]) => store === "environments")).toBe(true);

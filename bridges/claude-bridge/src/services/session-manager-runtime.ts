@@ -32,6 +32,7 @@ import type { HeldSdkPrompt } from "./session-manager-persistence.js";
 import type { ClaudeRuntimeMcp } from "./session-manager-prompt-mcp-sync.js";
 import type { ToolTracker } from "./session-manager-messages.js";
 import {
+  claudePolicyPermissionMode,
   claudeSettingSources,
   claudeTurnPolicy,
   claudeWorkspaceCwd,
@@ -126,9 +127,9 @@ export function claudeLaunchProfile(
       typeof options?.parameterValues?.thinking === "string"
         ? options.parameterValues.thinking
         : "adaptive",
-    bypassCapable:
-      options?.permissionMode === "bypassPermissions" ||
-      (policy?.approvals !== "ask" && policy?.approvals !== "deny"),
+    // A prompt cannot lift an `ask` or `deny` policy into bypass mode (see
+    // `claudePermissionMode`), so only the policy decides.
+    bypassCapable: claudePolicyPermissionMode(policy) === "bypassPermissions",
     cwd: claudeWorkspaceCwd(),
     boundary: JSON.stringify({
       policy: policy ?? null,

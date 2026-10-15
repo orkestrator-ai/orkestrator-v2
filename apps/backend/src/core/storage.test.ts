@@ -2615,15 +2615,17 @@ describe("pane layout intent persistence", () => {
       environment.id = "env-layout-write-recovery";
       await storage.addEnvironment(environment);
       const database = databaseOf(storage);
-      const writeStore = database.writeStore.bind(database);
+      const writeStore = database.writeStoreInTransaction.bind(database);
       let failNext = true;
-      const spy = spyOn(database, "writeStore").mockImplementation((store, value, options) => {
-        if (store === "pane-layouts" && failNext) {
-          failNext = false;
-          throw new Error("disk full");
-        }
-        return writeStore(store, value, options);
-      });
+      const spy = spyOn(database, "writeStoreInTransaction").mockImplementation(
+        (store, value, options) => {
+          if (store === "pane-layouts" && failNext) {
+            failNext = false;
+            throw new Error("disk full");
+          }
+          return writeStore(store, value, options);
+        },
+      );
 
       try {
         await expect(

@@ -86,6 +86,7 @@ import {
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import { resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
 import { PLAN_USAGE_PLATFORMS } from "@orkestrator/protocol/plan-usage";
+import { ALLOWLIST_ENTRY_HINT } from "@orkestrator/protocol/network-allowlist";
 import { DEFAULT_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS } from "@orkestrator/protocol/claude-background-commands";
 import { AgentDefaultsPane } from "./agent/AgentDefaultsPane";
 import { MultiReviewDefaultsEditor } from "./agent/MultiReviewDefaultsEditor";
@@ -1619,7 +1620,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       <div>
         <h3 className="text-sm font-medium text-foreground">Network Whitelist</h3>
         <p className="text-xs text-muted-foreground mt-1">
-          Domains allowed in "Restricted" mode (one per line)
+          Domains allowed in "Restricted" mode. {ALLOWLIST_ENTRY_HINT}
         </p>
       </div>
       <Textarea

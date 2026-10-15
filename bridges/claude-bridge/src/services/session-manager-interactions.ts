@@ -2,72 +2,27 @@
 // Handles session state and interacts with Claude Agent SDK
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import type {
-  ImageBlockParam,
-  TextBlockParam,
-  ContentBlockParam,
-} from "@anthropic-ai/sdk/resources/messages/messages";
 import type {
   ModelInfo,
-  SessionState,
-  NormalizedMessage,
-  NormalizedPart,
-  ToolDiffMetadata,
-  QuestionInfo,
   QuestionRequest,
   PlanApprovalRequest,
-  PromptOptions,
+  ClaudeInteractionRequest,
+  ClaudeInteractionResponse,
   SessionInitData,
-  McpServerRuntimeStatus,
-  PluginRuntimeStatus,
-  SdkMessageBase,
-  SdkCompactBoundaryMessage,
-  SdkResultMessage,
-  SdkSystemMessage,
-  TaskListSnapshot,
-  MessagePatchEventData,
-  SessionUsageSnapshot,
-  BackgroundTaskSnapshot,
-  SessionRateLimitWindow,
-  StopBackgroundTaskResult,
 } from "../types/index.js";
-import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
-import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
 import { CLAUDE_FALLBACK_MODEL_CATALOG } from "@orkestrator/protocol/claude-model-catalog";
-import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
-import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
-import {
-  structuredOutputFailure,
-  type StructuredOutputResult,
-} from "@orkestrator/protocol/structured-output";
 import { eventEmitter } from "./event-emitter.js";
-import {
-  deleteSessionPreferences,
-  MAX_DISPATCHED_REQUEST_IDS,
-  readSessionPreferences,
-  sessionPreferencesUnavailable,
-  updateSessionPreferences,
-  type SessionPreferences,
-} from "./session-preferences.js";
-import { runtimeEnvironmentForAgentQuery } from "./runtime-env.js";
-import { debugLog, isDebugLoggingEnabled } from "./logger.js";
-import { applyDiffBudget, applyToolResultBudget } from "./part-budget.js";
-import { getMcpRuntimeConfig } from "./mcp-config.js";
-import { getPluginsForSdk } from "./plugin-config.js";
-import type { McpToolMetadata } from "../types/mcp.js";
-import { execFile, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { constants, existsSync, type Stats } from "node:fs";
-import { lstat, open, readFile, realpath } from "node:fs/promises";
-import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { debugLog } from "./logger.js";
+import { readFile } from "node:fs/promises";
 
-import * as core from "./session-manager-core.js";
+import { interactionKey } from "./session-manager-interaction-budget.js";
+import { isValidClaudeFormContent } from "./claude-elicitation-schema.js";
 import * as lifecycle from "./session-manager-lifecycle.js";
 import {
   claudeExecutableOptions,
   execFileText,
+  interactionResolvers,
+  pendingInteractions,
   pendingPlanApprovals,
   pendingQuestions,
   planApprovalResolvers,
@@ -75,8 +30,6 @@ import {
   sessions,
 } from "./session-manager-core.js";
 import { isPendingInteractionFor } from "./session-manager-lifecycle.js";
-type PromptDispatchState = lifecycle.PromptDispatchState;
-type PromptDispatchRecord = lifecycle.PromptDispatchRecord;
 /**
  * Answer a pending question
  * @param requestId - The question request ID
@@ -215,6 +168,47 @@ export function getPendingPlanApprovals(sessionId?: string): PlanApprovalRequest
     return approvals.filter((a) => isPendingInteractionFor(a, sessionId));
   }
   return approvals;
+}
+
+/**
+ * Answer a parked MCP elicitation or tool approval. The callback that parked
+ * it turns the answer into what the CLI expects.
+ */
+export function respondToInteraction(
+  requestId: string,
+  response: ClaudeInteractionResponse,
+  sessionId?: string,
+): boolean {
+  const matches = Array.from(pendingInteractions.values()).filter(
+    (entry) => entry.id === requestId && (sessionId === undefined || entry.sessionId === sessionId),
+  );
+  if (matches.length !== 1) return false;
+  const request = matches[0]!;
+  const key = interactionKey(request.sessionId, requestId);
+  const resolve = interactionResolvers.get(key);
+  if (!resolve) return false;
+  if (
+    response.action === "accept" &&
+    request.kind === "mcp-form" &&
+    !isValidClaudeFormContent(request.schema, response.content)
+  )
+    return false;
+  // Removed here rather than by the parking callback, which resumes a tick
+  // later: a read in between must not serve a card that is already answered.
+  pendingInteractions.delete(key);
+  interactionResolvers.delete(key);
+  resolve(response);
+  if (response.action === "cancel") lifecycle.abortSession(request.sessionId);
+  return true;
+}
+
+/** Parked MCP elicitations and tool approvals, for one session or all. */
+export function getPendingInteractions(sessionId?: string): ClaudeInteractionRequest[] {
+  const interactions = Array.from(pendingInteractions.values());
+  if (sessionId) {
+    return interactions.filter((interaction) => isPendingInteractionFor(interaction, sessionId));
+  }
+  return interactions;
 }
 
 /**

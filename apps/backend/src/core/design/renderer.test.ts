@@ -723,7 +723,7 @@ describe("DesignRenderer with real Chromium", () => {
         queued: 0,
         running: 0,
       });
-      console.warn(`[real Chromium] production launch timed out after ${launchTimeout} ms (0244)`);
+      console.warn(`[real Chromium] production launch timed out after ${launchTimeout} ms (0246)`);
     },
     DEFAULT_DESIGN_RENDER_BUDGETS.overallMs + 5_000,
   );

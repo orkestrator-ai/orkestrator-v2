@@ -46,7 +46,7 @@ describe("Claude coordinator read-only policy", () => {
     ]);
   });
 
-  test("the allowlist includes Orkestrator's tools, because dontAsk denies the rest", () => {
+  test("the allowlist includes Orkestrator's tools, because a deny policy refuses the rest", () => {
     const allowed = claudeReadOnlyAllowedTools({ agentMcpServerNames: ["orkestrator"] });
     expect(allowed).toContain("Read");
     expect(allowed).toContain("mcp__orkestrator__*");

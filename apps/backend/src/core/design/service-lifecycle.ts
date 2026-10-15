@@ -538,11 +538,13 @@ export async function purge(service: DesignService, environmentId: string, canva
 
 async function removeCanvasFiles(service: DesignService, canvasId: string) {
   service.coordination.beginLibraryChange(canvasId);
-  await service.store.remove(canvasId);
   await rm(service.store.historyDir(canvasId), { recursive: true, force: true });
   await rm(service.store.exportBackupDir(canvasId), { recursive: true, force: true });
   // Kept after a legacy migration for recovery; permanent removal ends that.
   await rm(service.store.legacyBackupFile(canvasId), { force: true });
+  // The root record is the sweep's durable cleanup identity. Keep it until
+  // every sidecar is gone so a failure or restart can still discover it.
+  await service.store.remove(canvasId);
   service.forget(canvasId);
   service.libraryRemoved(canvasId);
 }
@@ -613,6 +615,50 @@ export async function deleteEnvironment(
     for (const id of ids) await service.lane(id, () => removeCanvasFiles(service, id));
     return ids.length;
   });
+}
+
+/**
+ * Removes canvases whose environment is gone. Environment deletion fences and
+ * removes its canvases before the environment record goes, so a crash or
+ * failure in between leaves a fenced environment's files behind; older builds,
+ * or an environment removed another way, leave canvases whose owner is simply
+ * absent. `liveEnvironmentIds` must be the complete set: a caller that cannot
+ * list every environment must not sweep.
+ *
+ * A fenced owner's canvases go at once, since environment ids are never reused.
+ * An absent owner's canvas goes only once its file is older than `minAgeMs`, so
+ * it cannot race an environment created after the listing. A canvas whose
+ * owner cannot be read is kept.
+ */
+export async function sweepOrphanedCanvases(
+  service: DesignService,
+  liveEnvironmentIds: ReadonlySet<string>,
+  minAgeMs: number,
+): Promise<number> {
+  await service.refreshLibrary();
+  const now = service.now().getTime();
+  const orphaned = (entry: { environmentId: string; fileMtimeMs: number }) => {
+    if (!entry.environmentId) return false;
+    if (service.environmentDeleted(entry.environmentId)) return true;
+    return !liveEnvironmentIds.has(entry.environmentId) && now - entry.fileMtimeMs >= minAgeMs;
+  };
+  let removed = 0;
+  for (const entry of Array.from(service.library.entries.values())) {
+    if (!orphaned(entry)) continue;
+    const done = await service
+      .lane(entry.id, async () => {
+        // Another process may have changed or removed it since the scan.
+        await service.refreshLibrary();
+        const current = service.library.entries.get(entry.id);
+        if (!current || current.environmentId !== entry.environmentId || !orphaned(current))
+          return false;
+        await removeCanvasFiles(service, entry.id);
+        return true;
+      })
+      .catch(() => false);
+    if (done) removed += 1;
+  }
+  return removed;
 }
 
 /** Best-effort owner lookup for a record that cannot be parsed. */

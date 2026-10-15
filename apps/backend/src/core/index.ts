@@ -927,7 +927,7 @@ export class OrkestratorBackend {
       });
     }
     // Finishes cleanup that earlier deletions could not, and removes bridge
-    // state whose environment is gone. Background work: it never blocks the
+    // state and design canvases whose environment is gone. Background work: it never blocks the
     // gateway and never rejects.
     void runStartupEnvironmentCleanup(this.context);
     const reconcileTabTeardowns = this.commands.get("reconcile_tab_teardowns");

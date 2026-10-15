@@ -25,6 +25,7 @@ import {
   runStartupEnvironmentCleanup,
   scheduleEnvironmentCleanupReconcile,
   sweepAbandonedTempFiles,
+  sweepOrphanedDesignCanvases,
   sweepOrphanedEnvironmentBranches,
   sweepOrphanedEnvironmentState,
   sweepPreLedgerDiskState,
@@ -279,6 +280,36 @@ describe("orphaned environment state sweep", () => {
     await eventually(async () => !(await exists(orphan)));
     expect(await exists(live)).toBe(true);
     cancelScheduledEnvironmentCleanup(dataDir);
+  });
+
+  test("the design canvas sweep receives every environment and the orphan age", async () => {
+    const { context, storage } = await reconcileContext();
+    await storage.addEnvironment(environment("live"));
+    const calls: Array<{ live: string[]; minAgeMs: number }> = [];
+    context.design = {
+      sweepOrphanedCanvases: async (live: ReadonlySet<string>, minAgeMs: number) => {
+        calls.push({ live: [...live], minAgeMs });
+        return 2;
+      },
+    } as unknown as CommandContext["design"];
+    expect(await sweepOrphanedDesignCanvases(context)).toBe(2);
+    expect(calls).toEqual([{ live: ["live"], minAgeMs: ORPHANED_STATE_MIN_AGE_MS }]);
+  });
+
+  test("the design canvas sweep does not run when environments cannot be listed", async () => {
+    const { context, storage } = await reconcileContext();
+    let swept = false;
+    context.design = {
+      sweepOrphanedCanvases: async () => {
+        swept = true;
+        return 0;
+      },
+    } as unknown as CommandContext["design"];
+    storage.loadEnvironments = async () => {
+      throw new Error("unreadable");
+    };
+    await expect(sweepOrphanedDesignCanvases(context)).rejects.toThrow("unreadable");
+    expect(swept).toBe(false);
   });
 
   test("startup retries an orphan sweep after an owner lookup failure", async () => {

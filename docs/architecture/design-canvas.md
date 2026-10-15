@@ -133,7 +133,11 @@ the canvas lease against the record on disk. A lease waiter gives up after
 60 s (120 s for the global guard) with a retryable `capacity` failure. Admission:
 32 operations, 8 per canvas, 8 MiB decoded payload; 8 prepared per canvas;
 6 MiB per record. Environment deletion fences the environment before removing
-records, so a late render can never resurrect a design.
+records, so a late render can never resurrect a design. The backend's hourly
+orphan sweep (`sweepOrphanedDesignCanvases`) removes the canvases of a fenced
+environment whose deletion stopped before its files went, and, once their file
+is an hour old, canvases whose environment no longer exists. It never runs on a
+partial environment list, and keeps a record whose owner cannot be read.
 
 ## Renderer
 

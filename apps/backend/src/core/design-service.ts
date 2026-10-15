@@ -1850,6 +1850,15 @@ export class DesignService {
     return lifecycle.deleteEnvironment(this, environmentId);
   }
 
+  /** Removes canvases whose environment is gone; see {@link lifecycle.sweepOrphanedCanvases}. */
+  async sweepOrphanedCanvases(
+    liveEnvironmentIds: ReadonlySet<string>,
+    minAgeMs: number,
+  ): Promise<number> {
+    await this.initialize();
+    return lifecycle.sweepOrphanedCanvases(this, liveEnvironmentIds, minAgeMs);
+  }
+
   isTerminal(status: DesignOperationStatus) {
     return DESIGN_TERMINAL_STATES.includes(status.state);
   }

@@ -527,4 +527,36 @@ describe("design lifecycle: tombstones, restore, purge, duplicate and fencing", 
     expect((await service().get(canvasId, "env-1")).frames).toHaveLength(1);
     expect(await exists(service().store.historyDir(canvasId))).toBe(true);
   });
+
+  const canvasFiles = async (canvasId: string) =>
+    (await readdir(join(harness.dir, "design-canvases"), { recursive: true })).filter((file) =>
+      file.includes(canvasId),
+    );
+
+  test("the orphan sweep finishes a deletion that stopped after fencing", async () => {
+    const { canvasId } = await setup("env-1");
+    const kept = await setup("env-keep", "Kept");
+    // Deletion fences first; a crash before the files go leaves them behind
+    // while the environment record still exists.
+    service().coordination.fenceEnvironment("env-1");
+    const live = new Set(["env-1", "env-keep"]);
+    expect(await service().sweepOrphanedCanvases(live, 60 * 60_000)).toBe(1);
+    expect(await canvasFiles(canvasId)).toEqual([]);
+    expect(service().hasCanvases("env-1")).toBe(false);
+    expect((await service().get(kept.canvasId, "env-keep")).frames).toHaveLength(1);
+    expect(await service().sweepOrphanedCanvases(live, 60 * 60_000)).toBe(0);
+  });
+
+  test("the orphan sweep removes an absent environment's canvases once they are old enough", async () => {
+    const { canvasId } = await setup("env-gone");
+    const kept = await setup("env-keep", "Kept");
+    const live = new Set(["env-keep"]);
+    clock = Date.now();
+    expect(await service().sweepOrphanedCanvases(live, 60 * 60_000)).toBe(0);
+    expect(await canvasFiles(canvasId)).not.toEqual([]);
+    clock = Date.now() + 2 * 60 * 60_000;
+    expect(await service().sweepOrphanedCanvases(live, 60 * 60_000)).toBe(1);
+    expect(await canvasFiles(canvasId)).toEqual([]);
+    expect((await service().get(kept.canvasId, "env-keep")).frames).toHaveLength(1);
+  });
 });

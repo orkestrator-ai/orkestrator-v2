@@ -39,6 +39,17 @@ export interface NativeComposeDraft {
   /** In-flight first submission survives tab unmount; never persisted across a restart. */
   submissionPending?: boolean;
   submissionError?: string;
+  /** Pending send intent survives visibility unmounts, but never a renderer restart. */
+  heldSubmit?: {
+    text: string;
+    requestId?: string;
+    modeOverride?: "build" | "plan";
+    literal: boolean;
+    draftText: string;
+    heldAt: number;
+    platform: AgentPlatform;
+    sessionId?: string;
+  };
   /**
    * Renderer correlation for a dispatch whose acknowledgement may be lost.
    *

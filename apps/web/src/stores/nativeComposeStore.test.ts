@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import {
   nativeComposePersistenceStore,
+  nativeComposeDraftPersistValue,
   unassignedNativeComposePersistenceStore,
   useNativeComposeStore,
 } from "./nativeComposeStore";
@@ -8,6 +9,27 @@ import {
 describe("nativeComposeStore", () => {
   beforeEach(() => {
     useNativeComposeStore.setState({ drafts: new Map() });
+  });
+
+  test("held sends survive in memory without persisting send intent across a restart", () => {
+    const sessionKey = "env-env-1:tab-held";
+    const heldSubmit = {
+      text: "Send once ready",
+      draftText: "Send once ready",
+      literal: false,
+      heldAt: Date.now(),
+      platform: "codex" as const,
+      sessionId: "session-A",
+    };
+    const store = useNativeComposeStore.getState();
+    store.updateDraft(sessionKey, { text: heldSubmit.text, heldSubmit });
+    const draft = useNativeComposeStore.getState().drafts.get(sessionKey)!;
+    expect(draft.heldSubmit).toBe(heldSubmit);
+    expect(nativeComposeDraftPersistValue(draft).metadata).not.toHaveProperty("heldSubmit");
+    const metadata = nativeComposePersistenceStore.getState().draftMetadata?.get(sessionKey);
+    store.clearDraft(sessionKey);
+    nativeComposePersistenceStore.getState().setDraftMetadata?.(sessionKey, metadata);
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.heldSubmit).toBeUndefined();
   });
 
   test("round-trips a provider's own execution profile name", () => {

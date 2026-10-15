@@ -82,6 +82,10 @@ import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { useVirtuosoScrollState } from "../../apps/web/src/hooks/useVirtuosoScrollState";
 
+const NativeHeldSendFixture = lazy(async () => ({
+  default: (await import("./NativeHeldSendFixture")).NativeHeldSendFixture,
+}));
+
 const TerminalCornerToolbarFixture = lazy(async () => ({
   default: (await import("./TerminalCornerToolbarFixture")).TerminalCornerToolbarFixture,
 }));
@@ -1666,6 +1670,13 @@ function fixtureForPath() {
   }
   if (window.location.pathname === "/native-refresh-shimmer") {
     return <NativeRefreshShimmerFixture />;
+  }
+  if (window.location.pathname === "/native-held-send") {
+    return (
+      <Suspense fallback={null}>
+        <NativeHeldSendFixture />
+      </Suspense>
+    );
   }
   if (window.location.pathname === "/native-hydrating-preview") {
     return <NativeHydratingPreviewFixture />;

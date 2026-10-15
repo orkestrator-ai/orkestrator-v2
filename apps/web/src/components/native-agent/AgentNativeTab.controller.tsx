@@ -164,6 +164,10 @@ import { isClaudeNotLoggedInNotice } from "@/lib/claude-auth";
 /** Stable identity so the transcript decoration memo cannot churn. */
 const EMPTY_BACKGROUND_TASKS: Record<string, never> = {};
 const EMPTY_DISMISSED_NOTICE_IDS: string[] = [];
+/** How long a send made before the first session-state read may wait for it. */
+const HELD_SUBMIT_TIMEOUT_MS = 15_000;
+const HELD_SUBMIT_CONVERSATION_CHANGED =
+  "The conversation changed, so nothing was sent. Your message is still in the composer.";
 
 function nativeNoticeDismissalId(notice: NativeAgentNotice): string {
   const severity = notice.kind === "advisory" ? notice.severity : notice.kind;
@@ -336,11 +340,23 @@ export function SharedNativeAgentController({
   const forkLatchRef = useRef(false);
   const submitInFlightRef = useRef(false);
   const transcriptConfirmedRequestIdRef = useRef<string | null>(null);
-  const reconcileReplacedFixSession = useCallback(
+  const reconcileReplacedSession = useCallback(
     async (replacement: {
       requestedProviderSessionId: string;
       replacementProviderSessionId: string;
     }) => {
+      const key = createSessionKey(data.environmentId, tabId);
+      const composeStore = useNativeComposeStore.getState();
+      const held = nativeComposeDraft(composeStore, key).heldSubmit;
+      if (
+        held &&
+        (held.sessionId === undefined || held.sessionId === replacement.requestedProviderSessionId)
+      ) {
+        composeStore.updateDraft(key, {
+          heldSubmit: undefined,
+          submissionError: HELD_SUBMIT_CONVERSATION_CHANGED,
+        });
+      }
       if (!tabId.startsWith("multi-review-fix:")) return;
       const workflow = await recoverMultiReviewFixSession({
         environmentId: data.environmentId,
@@ -362,6 +378,7 @@ export function SharedNativeAgentController({
   const draft = useNativeComposeStore((state) =>
     nativeComposeDraft(state, createSessionKey(data.environmentId, tabId)),
   );
+  const heldSubmit = draft.heldSubmit;
   const {
     sessionKey,
     runtimeProjection: projection,
@@ -408,9 +425,7 @@ export function SharedNativeAgentController({
     defaultReasoningEffort: configuredReasoning,
     initialProviderSessionId: data.sessionId,
     requireExistingResumeSession: data.requireExistingResumeSession,
-    onResumeSessionReplaced: tabId.startsWith("multi-review-fix:")
-      ? reconcileReplacedFixSession
-      : undefined,
+    onResumeSessionReplaced: reconcileReplacedSession,
     onModelSubstituted: announceModelSubstitution,
     // A *new* mode-capable tab starts in build. Left undefined it would adopt
     // whatever mode the provider happens to report. A resumed session is
@@ -1002,7 +1017,7 @@ export function SharedNativeAgentController({
     turnStartedAt,
     completedElapsedSeconds,
   );
-  const canQueue = isRunning && adapter.capabilities.queue;
+  const canQueue = isRunning && (projection?.capabilities.queue ?? adapter.capabilities.queue);
   // Older mocked/legacy hook surfaces have no domain availability field; a
   // complete projection remains authoritative on that compatibility path.
   const sessionStateAuthoritative =
@@ -1221,6 +1236,13 @@ export function SharedNativeAgentController({
     )?.id;
   const selectedComposeProfileId = effectiveComposeProfileId ?? DEFAULT_EXECUTION_PROFILE_ID;
 
+  const settleHeldSubmit = useCallback(
+    (error?: string) => {
+      updateDraft(sessionKey, { heldSubmit: undefined, submissionError: error });
+    },
+    [sessionKey, updateDraft],
+  );
+
   const submit = useCallback(
     async (
       text: string,
@@ -1229,6 +1251,14 @@ export function SharedNativeAgentController({
       modeOverride?: "build" | "plan",
       submitOptions?: { literal?: boolean },
     ) => {
+      if (submitInFlightRef.current) return false;
+      // Claim the intent before validation or dispatch. A remount cannot replay
+      // it a second time, and every terminal validation return releases it.
+      settleHeldSubmit();
+      const reportSendError = (error: string | null) => {
+        setSendError(error);
+        updateDraft(sessionKey, { submissionError: error ?? undefined });
+      };
       const restoreComposerFocus = Boolean(
         inputContainerRef.current?.contains(document.activeElement),
       );
@@ -1246,7 +1276,7 @@ export function SharedNativeAgentController({
       );
       if (unsupportedAttachments.length > 0) {
         const names = unsupportedAttachments.map((attachment) => attachment.name).join(", ");
-        setSendError(
+        reportSendError(
           `${unsupportedAttachments.length === 1 ? "This attachment is" : "These attachments are"} not supported by the selected agent and model: ${names}. Remove ${unsupportedAttachments.length === 1 ? "it" : "them"} or choose a compatible model before sending.`,
         );
         return false;
@@ -1255,7 +1285,6 @@ export function SharedNativeAgentController({
       const submittedBrowserAnnotationIds = draft.annotations
         .filter((annotation) => annotation.source === "browser")
         .map((annotation) => annotation.id);
-      if (submitInFlightRef.current) return false;
       const literal = submitOptions?.literal === true;
       if (literal && draft.commandSelection) {
         updateDraft(sessionKey, { commandSelection: undefined });
@@ -1277,7 +1306,7 @@ export function SharedNativeAgentController({
             busy: isRunning,
           });
       if (commandSubmission.kind === "rejected") {
-        setSendError(commandSubmission.message);
+        reportSendError(commandSubmission.message);
         return false;
       }
       const rawCommand = commandSubmission.kind !== "prompt";
@@ -1298,7 +1327,10 @@ export function SharedNativeAgentController({
         rawCommand || preparedPrompt
           ? basePrompt
           : buildPromptWithTranscriptAnnotations(basePrompt, draft.annotations);
-      if (!userPrompt.trim()) return false;
+      if (!userPrompt.trim()) {
+        reportSendError("The message is empty, so nothing was sent.");
+        return false;
+      }
       if (
         !rawCommand &&
         !literal &&
@@ -1309,7 +1341,7 @@ export function SharedNativeAgentController({
           projection?.capabilities,
         )
       ) {
-        setSendError(
+        reportSendError(
           "Send a normal message first to complete the agent handoff; slash commands cannot carry transferred history.",
         );
         return false;
@@ -1328,18 +1360,18 @@ export function SharedNativeAgentController({
           );
       if (sessionAction) {
         if (sessionAction.error) {
-          setSendError(sessionAction.error);
+          reportSendError(sessionAction.error);
           return false;
         }
         if (submittedAttachments.length > 0) {
-          setSendError("/steer supports text only. Remove the attachments and retry.");
+          reportSendError("/steer supports text only. Remove the attachments and retry.");
           return false;
         }
         if (sendableTranscriptAnnotations(draft.annotations).length > 0) {
-          setSendError("/steer supports text only. Remove transcript annotations and retry.");
+          reportSendError("/steer supports text only. Remove transcript annotations and retry.");
           return false;
         }
-        setSendError(null);
+        reportSendError(null);
         submitInFlightRef.current = true;
         setIsSubmitting(true);
         try {
@@ -1356,7 +1388,7 @@ export function SharedNativeAgentController({
           // A definitive refusal was not sent; its message says to resend after
           // the turn, and the draft is restored below for exactly that.
           if (outcome.outcome !== "unknown") {
-            setSendError(
+            reportSendError(
               outcome.outcome === "rejected"
                 ? nativeAgentSteerRejectionMessage(outcome)
                 : outcome.outcome === "mismatch"
@@ -1365,7 +1397,7 @@ export function SharedNativeAgentController({
             );
           }
         } catch (error) {
-          setSendError(error instanceof Error ? error.message : String(error));
+          reportSendError(error instanceof Error ? error.message : String(error));
         } finally {
           submitInFlightRef.current = false;
           setIsSubmitting(false);
@@ -1382,12 +1414,12 @@ export function SharedNativeAgentController({
        */
       if (commandSubmission.kind === "compact") {
         if (recoverableDispatch || !sessionStateAuthoritative || sendLocked || isDispatching) {
-          setSendError(
+          reportSendError(
             `${commandSubmission.command.name} can't run right now. Wait until ${label} is idle and retry.`,
           );
           return false;
         }
-        setSendError(null);
+        reportSendError(null);
         submitInFlightRef.current = true;
         setIsSubmitting(true);
         try {
@@ -1398,12 +1430,12 @@ export function SharedNativeAgentController({
             return true;
           }
           if (outcome.outcome !== "unknown") {
-            setSendError(
+            reportSendError(
               `${label} did not compact the conversation. Retry once the current turn has finished.`,
             );
           }
         } catch (error) {
-          setSendError(error instanceof Error ? error.message : String(error));
+          reportSendError(error instanceof Error ? error.message : String(error));
         } finally {
           submitInFlightRef.current = false;
           setIsSubmitting(false);
@@ -1416,7 +1448,7 @@ export function SharedNativeAgentController({
       // `sendLocked` covers this too, but silently swallowing the keystroke would
       // leave the user pressing Enter at a composer that never responds.
       if (recoverableDispatch) {
-        setSendError(
+        reportSendError(
           actionableDispatch
             ? "Resolve the unconfirmed message above — retry or discard it — before sending another."
             : `Waiting for ${label} to confirm your last message before sending another.`,
@@ -1426,12 +1458,27 @@ export function SharedNativeAgentController({
       /*
        * The composer stays editable while a cached transcript is on screen, so
        * a draft can be written before the session state that authorizes
-       * sending has arrived. Dropping the keystroke silently there would be
-       * indistinguishable from a broken Enter key; the draft is preserved and
-       * the user is told to retry.
+       * sending has arrived. Nothing may be dispatched until that read lands,
+       * but making the user retry by hand turned a sub-second wait into a
+       * guessing game. The send is held instead and replayed through this same
+       * function once the read is authoritative; the draft stays in the
+       * composer until then. Prepared prompts own their own retry.
        */
       if (prompt && !sessionStateAuthoritative) {
-        setSendError(`Still reading the ${label} session. Nothing was sent — try again shortly.`);
+        if (preparedPrompt) return false;
+        reportSendError(null);
+        updateDraft(sessionKey, {
+          heldSubmit: {
+            text,
+            ...(requestId ? { requestId } : {}),
+            ...(modeOverride ? { modeOverride } : {}),
+            literal,
+            draftText: draft.text,
+            heldAt: Date.now(),
+            platform,
+            sessionId: projection?.sessionId ?? data.sessionId,
+          },
+        });
         return false;
       }
       if (!prompt || sendLocked || isDispatching) return false;
@@ -1442,7 +1489,7 @@ export function SharedNativeAgentController({
         ? undefined
         : (requestId ?? draft.requestId ?? crypto.randomUUID());
       if (dispatchRequestId) updateDraft(sessionKey, { requestId: dispatchRequestId });
-      setSendError(null);
+      reportSendError(null);
       transcriptConfirmedRequestIdRef.current = null;
       setOptimisticPrompt({
         text: userPrompt,
@@ -1532,15 +1579,15 @@ export function SharedNativeAgentController({
         const transportFailure = outcome.outcome === "unknown" && outcome.origin === "transport";
         if (transportFailure) setOptimisticPrompt(null);
         if (transportFailure) {
-          setSendError(
+          reportSendError(
             `The connection dropped before ${label} confirmed your last message. Retrying uses the same request id, so it cannot run twice.`,
           );
         } else if (outcome.outcome === "rejected") {
-          setSendError(outcome.error);
+          reportSendError(outcome.error);
         }
       } catch (error) {
         setOptimisticPrompt(null);
-        setSendError(error instanceof Error ? error.message : String(error));
+        reportSendError(error instanceof Error ? error.message : String(error));
       } finally {
         submitInFlightRef.current = false;
         setIsSubmitting(false);
@@ -1575,12 +1622,14 @@ export function SharedNativeAgentController({
       consumeTabAgentHandoff,
       consumeBrowserAnnotations,
       data.environmentId,
+      data.sessionId,
       discardProvisionalDraft,
       draft.attachments,
       draft.annotations,
       draft.commandSelection,
       draft.mentions,
       draft.requestId,
+      draft.text,
       enqueue,
       handoff.pendingHistory,
       isDispatching,
@@ -1596,6 +1645,7 @@ export function SharedNativeAgentController({
       selectedModel?.supportsImageInput,
       send,
       sendLocked,
+      settleHeldSubmit,
       serializeForLLM,
       sessionKey,
       sessionStateAuthoritative,
@@ -1969,9 +2019,9 @@ export function SharedNativeAgentController({
     tabId,
   ]);
 
+  const submissionError = sendError ?? draft.submissionError;
   const errorMessage =
-    sendError ??
-    draft.submissionError ??
+    submissionError ??
     transcriptError ??
     sessionStateError ??
     runtimeError ??
@@ -2001,6 +2051,85 @@ export function SharedNativeAgentController({
           : runtimeError || hasCompletedRead
             ? ("error" as const)
             : ("connecting" as const)));
+  // Visibility unmounts retain the intent in the compose store. Reconcile it
+  // before replay, including expiry while hidden and provider-session changes.
+  const sessionStateFailure = sessionStateError ?? runtimeError;
+  const heldSessionId = projection?.sessionId ?? data.sessionId;
+  useEffect(() => {
+    if (!heldSubmit) return;
+    // Effects and timers from an older render must never consume a newer send.
+    const isCurrent = () =>
+      nativeComposeDraft(useNativeComposeStore.getState(), sessionKey).heldSubmit === heldSubmit;
+    if (!isCurrent()) return;
+    if (draft.text !== heldSubmit.draftText) {
+      settleHeldSubmit();
+      return;
+    }
+    let refusal: string | undefined;
+    if (
+      heldSubmit.platform !== platform ||
+      (heldSubmit.sessionId !== undefined && heldSubmit.sessionId !== heldSessionId)
+    ) {
+      refusal = HELD_SUBMIT_CONVERSATION_CHANGED;
+    } else if (Date.now() >= heldSubmit.heldAt + HELD_SUBMIT_TIMEOUT_MS) {
+      refusal = `${label} did not respond in time, so nothing was sent. Try again.`;
+    } else if (!sessionStateAuthoritative && sessionStateFailure) {
+      refusal = `Couldn't read the ${label} session, so nothing was sent. Try again.`;
+    } else if (sessionStateAuthoritative) {
+      if (authenticationRequired) {
+        refusal = `Sign in to ${label} before sending. Nothing was sent.`;
+      } else if (phase === "blocked" || recoverableDispatch) {
+        refusal = `Resolve the blocked ${label} session before sending. Nothing was sent.`;
+      } else if (handoff.error) {
+        refusal =
+          "The transferred conversation could not be loaded, so nothing was sent. Try again.";
+      }
+    }
+    if (refusal) {
+      settleHeldSubmit(refusal);
+      return;
+    }
+    if (!sendLocked && !isDispatching) {
+      let cancelled = false;
+      queueMicrotask(() => {
+        if (cancelled || !isCurrent()) return;
+        void submit(heldSubmit.text, heldSubmit.requestId, false, heldSubmit.modeOverride, {
+          literal: heldSubmit.literal,
+        });
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+    // All transient gates share the original deadline, including handoff reads,
+    // busy non-queueable turns, cancellation, recovery and in-flight dispatch.
+    const timeout = window.setTimeout(
+      () => {
+        if (isCurrent()) {
+          settleHeldSubmit(`${label} did not respond in time, so nothing was sent. Try again.`);
+        }
+      },
+      Math.max(0, heldSubmit.heldAt + HELD_SUBMIT_TIMEOUT_MS - Date.now()),
+    );
+    return () => window.clearTimeout(timeout);
+  }, [
+    heldSubmit,
+    draft.text,
+    platform,
+    heldSessionId,
+    label,
+    sessionStateAuthoritative,
+    sessionStateFailure,
+    authenticationRequired,
+    phase,
+    recoverableDispatch,
+    handoff.error,
+    sendLocked,
+    isDispatching,
+    sessionKey,
+    settleHeldSubmit,
+    submit,
+  ]);
   useEffect(() => {
     const notices = (isActive ? (projection?.notices ?? []) : []).filter(
       (notice) =>
@@ -2308,13 +2437,22 @@ export function SharedNativeAgentController({
         <Loader2 className="size-3.5 animate-spin" />
         <span>Confirming delivery with {label}…</span>
       </div>
+    ) : heldSubmit ? (
+      <div
+        key="held-submit"
+        role="status"
+        className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+      >
+        <Loader2 className="size-3.5 animate-spin" />
+        <span>Connecting to {label}… your message sends as soon as the session is ready.</span>
+      </div>
     ) : null,
-    sendError && !authenticationRequired ? (
+    submissionError ? (
       <div
         key="send-error"
         className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
       >
-        <span>{sendError}</span>
+        <span>{submissionError}</span>
         {commandComposer.offerLiteralForDraft ? (
           <Button type="button" size="sm" variant="outline" onClick={sendDraftAsText}>
             Send as text
@@ -2493,6 +2631,9 @@ export function SharedNativeAgentController({
             onResume={(providerSessionId) => {
               setResumeDialogOpen(false);
               const sourceSessionId = projection?.sessionId;
+              if (heldSubmit && providerSessionId !== heldSessionId) {
+                settleHeldSubmit(HELD_SUBMIT_CONVERSATION_CHANGED);
+              }
               void resume(providerSessionId, {
                 modelId: composer?.selectedModelId,
                 reasoningId: composer?.selectedReasoningId,

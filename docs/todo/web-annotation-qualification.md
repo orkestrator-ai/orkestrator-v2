@@ -230,8 +230,8 @@ Partial evidence only; no milestone was signed off. Linux (Wayland, display
     Point it here.
   - The last "Known limitations" bullet of `web-page-annotations.md` says "See
     the gate records in step 14". Point it to "Last evidence" above.
-  - `docs/README.md` marks the feature "Real-stack gates pending" (catalogue
-    row); keep that until sign-off, then point it here.
+  - The `docs/README.md` catalogue row points here for the real-stack gates;
+    drop that pointer after sign-off.
 
 ## Replaces
 

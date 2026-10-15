@@ -273,9 +273,9 @@ baseline.
 ## Needs verification
 
 - Whether the opt-in suites still pass on main after #966, #967 and #969.
-- Whether `mise run test:agent:electron` starts cleanly. `docs/README.md` still
-  mentions a pre-existing Electron startup failure blocking design-canvas
-  runs, but #986 added an Electron spec on 2026-10-15.
+- Whether `mise run test:agent:electron` starts cleanly on the run host. An
+  earlier Electron startup failure that blocked design-canvas runs was fixed
+  (#840), and #986 added an Electron spec on 2026-10-15.
 - How much disk the `orkestrator-preview-svc-*` partitions take on a
   long-lived profile, which decides how urgent retention is.
 

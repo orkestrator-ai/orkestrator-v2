@@ -138,7 +138,7 @@ function DefinitionRow({
             {location}
           </p>
         ) : null}
-        {definition.statusReason && definition.status !== "effective" ? (
+        {definition.statusReason ? (
           <p className="text-xs text-muted-foreground">
             {definition.statusReason}
             {shadowedBy && shadowedBy.name !== definition.name ? ` (${shadowedBy.name})` : ""}
@@ -254,6 +254,7 @@ export function McpSourceList({
               {source.trust && source.trust !== "allowed" && source.trustReason ? (
                 <p className="text-xs text-amber-300">{source.trustReason}</p>
               ) : null}
+              {source.note ? <p className="text-xs text-amber-300">{source.note}</p> : null}
               {!source.writable && source.readOnlyReason && source.format !== "runtime" ? (
                 <p className="text-xs text-muted-foreground">{source.readOnlyReason}</p>
               ) : null}

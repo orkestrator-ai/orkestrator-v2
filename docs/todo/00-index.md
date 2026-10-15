@@ -56,17 +56,17 @@ it reaches. Some rules of thumb:
 
 | Score | Meaning | Items |
 | --- | --- | --- |
-| Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 5 |
+| Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 3 |
 | High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 58 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 235 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 234 |
 | Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 243 |
-| **Total** | | **541** |
+| **Total** | | **538** |
 
 ## Very high
 
 ### MCP (very high)
 
-- [ ] Bring the Pi MCP catalogue, codecs and capabilities in line with Pi 1.x bridge rules, plus a parity test ([mcp-management.md](mcp-management.md))
+- [x] Bring the Pi MCP catalogue, codecs and capabilities in line with Pi 1.x bridge rules, plus a parity test ([mcp-management.md](mcp-management.md))
 - [x] Report Claude MCP removal and rename on a retained runtime as restart-required, or retire the runtime ([mcp-management.md](mcp-management.md))
 
 ### Transcripts, observation and bandwidth (very high)
@@ -283,7 +283,7 @@ it reaches. Some rules of thumb:
 
 ### MCP (medium)
 
-- [ ] Update Pi terminal MCP and sign-in capabilities for Pi 1.2.0's built-in CLI MCP extension ([mcp-management.md](mcp-management.md))
+- [x] Update Pi terminal MCP and sign-in capabilities for Pi 1.2.0's built-in CLI MCP extension ([mcp-management.md](mcp-management.md))
 - [ ] Implement OpenCode MCP application with `applied` evidence and trace how its OAuth completes ([mcp-management.md](mcp-management.md))
 - [ ] Prove Codex reload reaches existing threads, add thread-level evidence, and page `mcpServerStatus/list` ([mcp-management.md](mcp-management.md))
 - [ ] Join saved MCP entries to live rows by native name plus target and runtime identity ([mcp-management.md](mcp-management.md))
@@ -293,7 +293,8 @@ it reaches. Some rules of thumb:
 - [ ] Qualify the read-only container MCP catalogue and remote-browser paths on the Docker real stack ([mcp-management.md](mcp-management.md), qualification)
 - [ ] Decide whether to keep or narrow the all-on MCP management rollout once the matrix is filled ([mcp-management.md](mcp-management.md), qualification)
 - [ ] Verify when running Claude account sessions see editor writes; warn that account-home servers are overwritten ([mcp-management.md](mcp-management.md), verify)
-- [ ] Decide which Pi disable spelling the editor writes and whether to migrate `disabled: true` entries ([mcp-management.md](mcp-management.md), decision)
+- [x] Decide which Pi disable spelling the editor writes and whether to migrate `disabled: true` entries ([mcp-management.md](mcp-management.md), decision)
+- [ ] Treat a host Pi project `mcp.json` as loaded when the environment's execution policy turns project resources on ([mcp-management.md](mcp-management.md))
 - [ ] Build a durable per-environment MCP overlay and enable container MCP writes ([mcp-environment-delivery.md](mcp-environment-delivery.md))
 - [ ] Stage `~/.cursor/mcp.json` into containers and retire Cursor's `blocked-policy` delivery branch ([mcp-environment-delivery.md](mcp-environment-delivery.md))
 - [ ] Show MCP execution location and allowlist warnings; gate container or remote sign-in on callback reachability ([mcp-environment-delivery.md](mcp-environment-delivery.md))
@@ -750,7 +751,7 @@ it reaches. Some rules of thumb:
 | [design-operation-recovery-edges.md](design-operation-recovery-edges.md) |  | 1 | 1 | 2 | 4 |
 | [design-agent-conversation-links.md](design-agent-conversation-links.md) |  |  | 5 | 3 | 8 |
 | **MCP** | | | | | |
-| [mcp-management.md](mcp-management.md) | 2 | 4 | 11 | 6 | 23 |
+| [mcp-management.md](mcp-management.md) |  | 4 | 10 | 6 | 20 |
 | [mcp-environment-delivery.md](mcp-environment-delivery.md) |  |  | 4 | 10 | 14 |
 | **Agent engines and provider SDKs** | | | | | |
 | [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md) |  | 2 | 8 | 2 | 12 |

@@ -1,7 +1,8 @@
 /**
  * Bridge-owned MCP client for Pi.
  *
- * Pi's vendor SDK has no MCP client. This module connects the servers a
+ * Pi's SDK sessions load no MCP client (only its CLI loads the built-in `mcp`
+ * extension). This module connects the servers a
  * session is allowed to launch, registers their tools through the same
  * `extensionFactories` path as the approval gate, and forgets every client
  * on detach. Agent MCP down is a notice, not a failed attach.

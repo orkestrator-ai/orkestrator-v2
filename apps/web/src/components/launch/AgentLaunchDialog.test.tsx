@@ -206,6 +206,67 @@ describe("AgentLaunchDialog", () => {
     expect(screen.getByText(/into release\/2\.10/)).toBeTruthy();
   });
 
+  test("launches into a target branch chosen in the dialog", () => {
+    const { onConfirm } = renderDialog({
+      editableTargetBranch: true,
+      targetBranchSuggestions: ["main", "develop"],
+    });
+
+    const field = screen.getByLabelText("Target branch") as HTMLInputElement;
+    expect(field.value).toBe("main");
+    fireEvent.change(field, { target: { value: " develop " } });
+
+    expect(screen.getByText(/into develop/)).toBeTruthy();
+    submit();
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ targetBranch: "develop" }));
+  });
+
+  test("refuses a target branch that is not a safe branch name", () => {
+    const { onConfirm } = renderDialog({ editableTargetBranch: true });
+
+    fireEvent.change(screen.getByLabelText("Target branch"), { target: { value: "main; rm" } });
+
+    const confirm = screen.getByRole("button", { name: "Create pull request" });
+    expect((confirm as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("Enter a valid branch name.")).toBeTruthy();
+    fireEvent.submit(confirm.closest("form")!);
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  test("blocks an unsafe configured default until it is edited", () => {
+    const { onConfirm } = renderDialog({
+      editableTargetBranch: true,
+      targetBranch: "main; unsafe",
+    });
+    const field = screen.getByLabelText("Target branch") as HTMLInputElement;
+    const confirm = screen.getByRole("button", {
+      name: "Create pull request",
+    }) as HTMLButtonElement;
+    expect(field.value).toBe("main; unsafe");
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+    expect(confirm.disabled).toBe(true);
+    fireEvent.submit(confirm.closest("form")!);
+    expect(onConfirm).not.toHaveBeenCalled();
+
+    fireEvent.change(field, { target: { value: "release/2.0" } });
+    expect(field.getAttribute("aria-invalid")).toBe("false");
+    expect(confirm.disabled).toBe(false);
+    submit();
+    expect(onConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({ targetBranch: "release/2.0" }),
+    );
+  });
+
+  test("resets an edited target branch on reopen", () => {
+    const { props, rerender } = renderDialog({ editableTargetBranch: true });
+
+    fireEvent.change(screen.getByLabelText("Target branch"), { target: { value: "develop" } });
+    rerender(<AgentLaunchDialog {...props} open={false} />);
+    rerender(<AgentLaunchDialog {...props} open />);
+
+    expect((screen.getByLabelText("Target branch") as HTMLInputElement).value).toBe("main");
+  });
+
   test("switches provider, model and effort together from the picker", () => {
     const { onConfirm } = renderDialog({
       preferredModels: { codex: "codex-a" },

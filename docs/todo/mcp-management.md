@@ -6,10 +6,9 @@ The MCP server editor ([`mcp-management.md`](../architecture/mcp-management.md))
 reads and writes each agent platform's own MCP files and reports saved state,
 runtime application and connection health separately. Its catalogue mirrors
 each provider's merge and acceptance rules, so it is only as truthful as that
-mirror. The remaining work brings the mirror back in line where bridges and
-pins have moved (Pi most of all), closes the apply paths that stop at
-"pending" or "restart required", and collects the live evidence the shipped
-behaviour has never had.
+mirror. The remaining work keeps the mirror in line as bridges and pins move,
+closes the apply paths that stop at "pending" or "restart required", and
+collects the live evidence the shipped behaviour has never had.
 
 ## Current state
 
@@ -30,14 +29,13 @@ behaviour has never had.
   `GET /session/:id/mcp`, provider `mcpServers?` / `mcpServerAction?`
   (`apps/backend/src/core/agent-provider-contract.ts`), rendered by
   `McpServersPanel` (`AgentInfoButton.panels.tsx`).
-- Since #891 and #935 the Pi bridge resolves `mcp.json` with Pi 1.x rules
-  (`loadMcpConfigFile`, `mergeMcpConfigEntries`, `mcpNamespace`,
-  `resolveConfigValue`, `MCP_OVERRIDE_KEYS` in
-  `bridges/pi-bridge/src/mcp-config.ts`). The backend mirror did not follow:
-  `markPiLoadRules`, `isCandidate` and `identityOf` in `catalog.ts`, `piCodec`,
-  `piLoadBlock` and `PI_OWNED` in `codecs.ts`, and `CWD_FLAG.pi`, `TERMINAL.pi`
-  and `SIGN_IN.pi` in `providers.ts` still encode the pre-1.0 rules, and
-  `service-pi.test.ts` asserts them.
+- The Pi catalogue mirrors the Pi bridge's loader, which follows Pi 1.x's own
+  (`markPiLoadRules` in `catalog.ts`, `piEntryShape` and `piLaunchBlock` in
+  `codecs.ts`). Two tests hold it there over shared fixtures:
+  `bridges/pi-bridge/src/mcp-config-upstream.test.ts` (bridge against the
+  pinned Pi's `loadMcpConfig`) and `pi-mcp-parity.test.ts` (catalogue against
+  the bridge). The rules are in
+  [`mcp-management.md`](../architecture/mcp-management.md).
 - Since #950 the Claude bridge keeps one CLI runtime per session. Each turn's
   query plan re-resolves the inline MCP set, and `prepareJoin`
   (`bridges/claude-bridge/src/services/session-manager-prompt-launch.ts`)
@@ -57,76 +55,33 @@ behaviour has never had.
 
 ### Code
 
-1. **Pi 1.x catalogue parity (regression).** Bring `catalog.ts`, `codecs.ts`
-   and `providers.ts` in line with `bridges/pi-bridge/src/mcp-config.ts`, and
-   rewrite the `service-pi.test.ts` cases that assert the old rules:
-   - `enabled: false` disables an entry exactly like `disabled: true`; it is
-     Pi's own spelling and the one `pi mcp` writes. Today `piCodec.decode`
-     reads only `disabled`, so an entry Pi disabled shows as enabled, and
-     because `enabled` is preserved as an unknown field, no editor action
-     clears it.
-   - A disabled project server now replaces the same-name user server; the
-     user entry no longer falls back. Fix the effective-row computation
-     (`isCandidate`) and the remove and disable previews.
-   - A project entry with no `command`, `url` or `type` that sets only
-     `enabled`, `exposure` or `toolExposure` is an override of the user entry.
-     Today the catalogue shows it invalid ("No command or URL").
-   - Names that differ only in `-` and `_` are one Pi namespace across both
-     scopes, and the later definition is rejected. Fold this into
-     `identityOf`, collision checks and add or rename validation.
-   - A user entry with `auth` is kept (it still shadows) but not launched; a
-     project entry with `auth` is refused.
-   - An entry with an unresolvable `$VAR` or `${VAR}`, a leading-`!` value or
-     a reference to `BRIDGE_SECRET_ENV` is not launched but still shadows. The
-     backend cannot see the bridge's environment, so label these as "may not
-     start" rather than invalid.
-   - The bridge's 64-entry cap counts every entry it reads from a file,
-     disabled entries and overrides included; `markPiLoadRules` counts only
-     enabled, loadable servers.
-   - `cwd` is supported with `~` expansion, so `CWD_FLAG.pi` is wrong.
-   - Prevent the next drift: a parity test that runs the bridge's
-     `resolvePiMcpServers` and the backend catalogue over the same fixtures,
-     or one shared implementation. Extend the Pi section of
-     [`upgrade-agents.md`](../development/upgrade-agents.md), which already
-     asks for the bridge loader to be re-read on each bump, to cover the
-     backend mirror too.
-2. **Pi terminal and sign-in capabilities.** Pi 1.2.0's CLI loads its
-   built-in `mcp` extension (`builtInExtensions` in the package's
-   `dist/main.js`); SDK sessions, and so the bridge, do not. Terminal Pi
-   therefore reads `<agentDir>/mcp.json` and trusted `<project>/.pi/mcp.json`
-   through its own loader (`dist/extensions/mcp/config.js`), which requires the
-   `mcpServers` wrapper (a bare map works only in the bridge), reads only
-   `enabled`, rejects `type: "sse"`, and has its own OAuth. Update
-   `TERMINAL.pi` (`readsNativeConfig` and its guidance, which says Pi
-   terminals have no MCP client) and the `SIGN_IN.pi` reason accordingly, and
-   label bare-map files.
-3. **Apply-path gaps** (`service.ts`, `apply.ts`). No runtime or session
+1. **Apply-path gaps** (`service.ts`, `apply.ts`). No runtime or session
    generation is recorded with an applied revision. Older Pi and Cursor
    bridges cannot be told apart (no bridge version is recorded), so their
    `pending-next-turn` never resolves. An external edit made after apply was
    scheduled is not flagged. `pageRuntimes` keeps at most
    `MCP_MANAGEMENT_LIMITS.runtimesPerOperation` (64), so a plan with more than
    64 Codex environments drops the rest.
-4. **OpenCode application.** Choose a directory-scoped reconcile or an
+2. **OpenCode application.** Choose a directory-scoped reconcile or an
    idle-gated server restart that keeps sessions, pending questions and the
    runtime-only `orkestrator` injection; add evidence so OpenCode can report
    `applied`. Trace how OAuth completes after `mcp.auth.start`
    (`apps/backend/src/core/opencode-capabilities.ts`); nothing calls
    `mcp.auth.callback`. Until then show external-authentication guidance.
-5. **Codex.** Prove that a reload reaches an existing thread at its next
+3. **Codex.** Prove that a reload reaches an existing thread at its next
    turn, then add thread-level `applied` evidence. `listMcpServers` in
    `bridges/codex-bridge/src/engine/app-server-engine.ts` reads one page
    (`limit: 100`) of `mcpServerStatus/list` and never follows `nextCursor`.
-6. **Grok.** Per-session ACP application is not implemented: user servers are
+4. **Grok.** Per-session ACP application is not implemented: user servers are
    not passed at session load, and the collision rules are undocumented.
    Inventory stays process-level; Grok 1.0.52's `server_status` carries
    `sessionId` (see `vendorMcpServerStatus` in
    `bridges/acp-bridge/src/acp-mcp-inventory.ts`), which may allow per-session
    correlation.
-7. **Saved-to-live row join.** Join saved entries to live runtime rows by
+5. **Saved-to-live row join.** Join saved entries to live runtime rows by
    exact native name plus target and runtime identity. `AgentInfoMcpSection`
    links by server name only (`manage(server.name)`).
-8. **Live-inventory polish.**
+6. **Live-inventory polish.**
    - Claude's no-control fallback in `readSessionMcpServers`
      (`bridges/claude-bridge/src/services/session-manager-catalog.ts`) uses
      `initData`, which `session-manager-prompt-handlers/init.ts` collapses to
@@ -135,17 +90,25 @@ behaviour has never had.
      `apps/web/src/components/layout/AgentInfoButton.tsx`.
    - Runtime `error` strings are length-bounded (2,000 characters) but not
      redacted (`normalizeMcp` in `session-manager-catalog.ts`).
-9. **Unmodelled layers.** Claude plugins, Cursor plugins and team settings,
-    OpenCode remote or organisation configuration and Codex profiles are
-    visible only in the live panel. Model one only where a passive reader
-    exists.
-10. **Replaced Claude server processes linger (blocked upstream).** On CLI
-    2.1.296, a `setMcpServers` call that changes a server's configuration
-    connects the new one but leaves the old process running, with its old
-    environment, until the CLI exits; a server loaded from a settings file and
-    then replaced the same way does too. Neither is offered to the model.
-    Report it to Anthropic, then add the old process's exit to
-    `session-manager-prompt-mcp-sync.live-probe.ts` once fixed.
+7. **Unmodelled layers.** Claude plugins, Cursor plugins and team settings,
+   OpenCode remote or organisation configuration and Codex profiles are
+   visible only in the live panel. Model one only where a passive reader
+   exists.
+8. **Host Pi project files under a project-resources override.** An
+   environment's execution policy can turn `projectResources` on for a host
+   environment (`native-agent-execution-policy.ts`), and the host Pi bridge
+   then loads `<worktree>/.pi/mcp.json`. The catalogue still marks that source
+   excluded on every host (the `pi` case of `providerSources` in
+   `providers.ts`) and apply reports it `blocked-policy` (`planRuntimes` in
+   `apply.ts`). Derive the host project trust from the environment's resolved
+   policy instead; check whether Cursor's project source has the same gap.
+9. **Replaced Claude server processes linger (blocked upstream).** On CLI
+   2.1.296, a `setMcpServers` call that changes a server's configuration
+   connects the new one but leaves the old process running, with its old
+   environment, until the CLI exits; a server loaded from a settings file and
+   then replaced the same way does too. Neither is offered to the model.
+   Report it to Anthropic, then add the old process's exit to
+   `session-manager-prompt-mcp-sync.live-probe.ts` once fixed.
 
 ### Qualification
 
@@ -205,7 +168,8 @@ Use temporary homes and harmless fixture servers; never the operator's files.
 - `strictMcpConfig` stays off for Claude: it would also drop plugin MCP
   servers, so the running-CLI sync cannot rely on it either.
 - Mirrored merge and acceptance rules must be re-traced on every pin upgrade.
-  The Pi drift is what happens otherwise.
+  For Pi the two parity tests fail when either side moves; the other
+  providers have no such guard yet.
 - Terminal sessions get guidance only; no command is injected.
 
 ### Alternatives considered
@@ -230,8 +194,6 @@ Use temporary homes and harmless fixture servers; never the operator's files.
 
 ## Open questions
 
-- Which Pi disable spelling should the editor write, and should existing
-  `disabled: true` entries be migrated (only through an explicit edit)?
 - OpenCode and Grok: offer an explicit, idle-gated "restart to apply", or
   keep guidance only? Is per-session Grok application worth it when
   restart-based evidence works?
@@ -272,16 +234,6 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   [ACP session setup](https://agentclientprotocol.com/protocol/v1/session-setup).
   For Pi, the `mcp.md` guide and `dist/extensions/mcp/config.js` inside
   `@earendil-works/pi-coding-agent`.
-- Living-doc drift to fix:
-  - [`mcp-management.md`](../architecture/mcp-management.md): the "Pi
-    disabled and skipped entries" and "Pi normalized-name collisions" rules
-    and Pi's `cwd` and saved-enable cells in the capabilities table predate
-    Pi 1.x, and the sources table should say a bare map works only in the
-    bridge.
-  - The Pi notes in `AGENTS.md` and the Pi section of
-    [`agent-engines.md`](../architecture/agent-engines.md) say "Pi's vendor
-    SDK has no MCP client". Pi 1.2.0 ships one in its CLI; only the bridge's
-    SDK sessions lack it.
 
 ## Replaces
 
@@ -303,7 +255,7 @@ Use temporary homes and harmless fixture servers; never the operator's files.
 - `docs/improvements/mcp/plan/08-opencode.md`
 - `docs/improvements/mcp/plan/09-cursor.md` (resume re-read probe)
 - `docs/improvements/mcp/plan/10-grok.md`
-- `docs/improvements/mcp/plan/11-pi.md` (its "done" status predates the Pi 1.x
+- `docs/improvements/mcp/plan/11-pi.md` (done: the catalogue follows the Pi 1.x
   bridge rules)
 - `docs/improvements/mcp/plan/12-ui-and-user-flows.md` (browser passes)
 - `docs/improvements/mcp/plan/14-validation-and-rollout.md` (matrix, live,

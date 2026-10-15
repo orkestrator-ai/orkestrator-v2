@@ -1,6 +1,6 @@
 # Duplicate agent-account login leaves an extra directory in the aggregate
 
-- **ID:** 0238
+- **ID:** 0239
 - **Status:** open
 - **Observed:** 2026-10-15, macOS, Bun 1.4.3.
 - **Test:** `agent accounts > the same login cannot be added twice`.

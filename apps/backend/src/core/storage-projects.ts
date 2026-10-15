@@ -748,12 +748,21 @@ export abstract class StorageProjects extends StorageBase {
         environment.containerId = updates.containerId ?? null;
       }
       if ("prUrl" in updates && (updates.prUrl == null || typeof updates.prUrl === "string")) {
+        if (environment.prUrl !== updates.prUrl || updates.prUrl == null) {
+          environment.prBaseBranch = null;
+        }
         environment.prUrl = updates.prUrl ?? null;
       }
       if ("prState" in updates) {
         if (updates.prState == null) environment.prState = null;
         else if (isOneOf(updates.prState, ["open", "merged", "closed"]))
           environment.prState = updates.prState;
+      }
+      if (
+        "prBaseBranch" in updates &&
+        (updates.prBaseBranch == null || typeof updates.prBaseBranch === "string")
+      ) {
+        environment.prBaseBranch = updates.prBaseBranch ?? null;
       }
       if ("hasMergeConflicts" in updates) {
         if (updates.hasMergeConflicts == null) environment.hasMergeConflicts = null;

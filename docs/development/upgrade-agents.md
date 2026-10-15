@@ -837,13 +837,27 @@ Dockerfile pins the same archive digests the manifest does.
    export, so the bridge re-implements the variable rules and deliberately does
    **not** run `!command` values: an entry that needs one is skipped, as Pi skips
    an entry it cannot resolve. The merge follows Pi 1.0's loader
-   (`dist/extensions/mcp/config.js`): a project override (no `command`, `url`
-   or `type`) flips only the user server's `enabled`, names that differ only in
-   `-`/`_` clash, and `auth: { provider }` is refused in a project file and,
-   in the user file, not launched (the bridge holds no Pi provider token).
-   Re-read that loader on each bump. Pi's built-in `mcp`, `codemode` and `tool-search`
-   extensions are loaded only by its CLI (`main.js`), never by an SDK session, so
-   they do not collide with the bridge's own `orkestrator-mcp` extension. Confirm
+   (`dist/extensions/mcp/config.js`): an entry Pi's validator
+   (`validateMcpServerConfig` in `dist/core/mcp-servers.js`) rejects hides
+   nothing, a project override (no `command`, `url` or `type`) flips only the
+   user server's `enabled`, names that differ only in `-`/`_` clash, and
+   `auth: { provider }` on an HTTP server is refused in a project file and, in
+   the user file, not launched (the bridge holds no Pi provider token).
+   Re-read that loader on each bump, then run both parity tests over the
+   shared fixtures in `src/testing/mcp-config-fixtures.ts`:
+   `src/mcp-config-upstream.test.ts` loads the pinned package's own
+   `loadMcpConfig` and fails when Pi's rules move (if the loader file itself
+   moves, find it again), and
+   `apps/backend/src/core/mcp-management/pi-mcp-parity.test.ts` holds the
+   backend MCP catalogue (`markPiLoadRules` in `catalog.ts`, `piEntryShape`
+   and `piLaunchBlock` in `codecs.ts`) to the bridge. A rule change goes into
+   the bridge, the backend mirror and a fixture together; a deliberate
+   difference from Pi gets a fixture with its `pi` reason. Pi's built-in
+   `mcp`, `codemode` and `tool-search` extensions are loaded only by its CLI
+   (`main.js`), never by an SDK session, so they do not collide with the
+   bridge's own `orkestrator-mcp` extension; a Pi terminal tab does load them,
+   which is why the MCP editor's Pi terminal guidance describes Pi's own
+   loader. Confirm
    that with `rg builtInExtensions node_modules/@earendil-works/pi-coding-agent/dist`
    on each bump.
 8. Rebuild the vendored bridge and run its suite. Like the Claude and Cursor SDK

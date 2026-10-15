@@ -24,6 +24,7 @@ Code loads them automatically when it reads a file there, other agents may not.
 | Coordinator qualification (`coordinator-providers.ts`) | [`docs/architecture/coordinator.md`](docs/architecture/coordinator.md#changing-qualification) |
 | Slash-command discovery or dispatch | [`docs/architecture/native-agent-commands.md`](docs/architecture/native-agent-commands.md) |
 | Agent SDK/CLI version bumps | [`docs/development/upgrade-agents.md`](docs/development/upgrade-agents.md) |
+| Release tooling, update service (`apps/backend/src/core/updates/`), desktop update host, `serve --supervised` | [`docs/architecture/release-channels-and-updates.md`](docs/architecture/release-channels-and-updates.md) and [`docs/development/releasing.md`](docs/development/releasing.md) |
 | Rendered UI or browser-visible behavior | [`docs/development/agent-testing.md`](docs/development/agent-testing.md) |
 | Writing or debugging tests, `mock.module()` | [`docs/development/testing-guide.md`](docs/development/testing-guide.md) |
 | Lint findings and disable directives | [`docs/development/linting.md`](docs/development/linting.md) |

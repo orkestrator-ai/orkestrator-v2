@@ -145,3 +145,16 @@ After the aggregate finished, the same GNU-tool PATH with
 passed the unchanged owning file, exit 0, in 7.0 seconds. The merge resolution
 only changes registry documentation. Host contention remains a hypothesis;
 no timeout, assertion or skip was changed.
+
+## Recurrence — 2026-10-15 (release channels review fixes)
+
+`mise run test:logged --name phase2-full -- mise run test` on
+`release-channels/02-in-app-update` at `a0a72225` timed out the staged-runtime
+test at 30006.44 ms while another worktree's full suite ran on the host. Root
+results were 3,016 passed, one skipped and one failed across 139 files
+(235.42 seconds). Evidence:
+`/tmp/orkestrator-test-run.fV54YD/phase2-full.log.gz`.
+
+`bun test tests/unit/pi-bridge-vendor.test.ts` passed the unchanged owning
+file alone (4 passed, 5.25 seconds). Host contention remains a hypothesis; no
+timeout, assertion or skip was changed.

@@ -1,0 +1,183 @@
+# Release channels and updates: qualification
+
+Checked against the `release-channels/04-remote-update` stack (#1003, #1004,
+#1005, #1007) on 2026-10-15, after its review fixes; not yet on `main`.
+
+Release channels, in-app updates and remote updates are implemented and unit
+tested with fakes for electron-updater, npm, Docker and process restarts
+([release-channels-and-updates.md](../architecture/release-channels-and-updates.md)).
+None of it has run against a real release, a signed build, or a real remote.
+Every item below needs evidence from a real run before the feature is
+announced. Until then, treat in-app updates as unqualified even though they
+are on by default for packaged production builds.
+
+## Current state
+
+- **Release tooling.**
+  - `release:desktop`, `release:publish`, `publish:cli` and
+    `scripts/release-channel-index.ts` are channel-aware and unit tested
+    against fake `gh`/`git`/`curl` runtimes.
+  - `.github/workflows/release-unstable.yml` and the `workflow_call` path of
+    `publish-container.yml` pass `actionlint` but have never run.
+  - The one-time setup in `releasing.md` (the `update-channels` prerelease,
+    the secrets, tag permissions) has not been done.
+- **Desktop updates.**
+  - The update host pins electron-updater to the resolved release with a
+    generic feed.
+  - It has been tested only against a fake updater. Squirrel.Mac staging,
+    the AppImage swap, `quitAndInstall(true, true)` and install-on-quit
+    (which calls `downloadUpdate()` a second time so electron-updater stages
+    the cached download) have not run. Neither has the `install-failed`
+    report for an updater `error` after the host acknowledged.
+  - The rollback copy (`ditto` of the `.app`, or a copy of the AppImage)
+    and the restore-after-failed-start path have been tested only on a
+    temporary directory.
+- **Headless supervisor.** `orkestrator serve --supervised` has been tested
+  only with a fake runtime, plus the real file operations in a temporary
+  directory. The real `bun add orkestrator@<version>` staging, the child
+  process handshake, the cutover and the generated systemd and launchd units
+  have not run.
+- **Remote updates.** `connections.invokeUpdate`, the `/status` handshake
+  and the audit origin have been tested only in process (gateway tests,
+  connection-manager tests with fake fetch). No update has been driven over
+  Tailscale. `Tailscale-User-Login` has never been observed through a real
+  `tailscale serve`.
+- **Container image.** The pull, verify and retag path has been tested only
+  with a fake Docker runtime.
+- **Signing.** The decision is made (an active CI key and an offline
+  standby), but the keys have not been generated, so
+  `RELEASE_SIGNING_PUBLIC_KEYS` is empty and updates run in checksum-only
+  mode.
+
+## Outstanding work
+
+### Setup
+
+- **Generate the manifest signing keys.** Follow
+  [releasing.md](../development/releasing.md#manifest-signing-keys): generate
+  the active and standby keys, add the active one as the
+  `ORKESTRATOR_RELEASE_SIGNING_KEY` secret, keep the standby offline, and
+  embed both public keys. From the next release on, every release must be
+  signed.
+
+### Qualification
+
+1. **First unstable run.**
+   - Do the one-time setup.
+   - Dispatch `release-unstable.yml`, then confirm all of these:
+     - the release commit and tag;
+     - the signed and notarized macOS build (`spctl -a -vv`, `stapler validate`);
+     - both Linux builds, including arm64 `fpm`;
+     - the prerelease that is never marked latest;
+     - `channels.json`;
+     - npm `orkestrator@unstable`;
+     - the GHCR `unstable` tag without `latest` moving.
+   - Re-run it to see the skip on an unchanged `main`.
+   - Then fail a build on purpose and confirm the draft and tag are cleaned
+     up.
+2. **End-to-end desktop update, macOS and Linux AppImage.**
+   - Install release N from the download, subscribe to unstable, publish
+     N+1, and check:
+     - the toast;
+     - the indicator;
+     - the consent dialog, with a manifest change seeded so it has a
+       consent item;
+     - download progress, restart, `succeeded` and the notice.
+   - Repeat with **Install when I quit**. On macOS, check that arming it
+     stages the update (Cancel is then refused) and that quitting installs
+     it. On the AppImage, check that quitting swaps the file, and that
+     cancelling an armed install means quitting no longer does.
+   - Break the install after the host acknowledged it (an update whose
+     signature Squirrel.Mac rejects at staging) and check the job ends
+     `rolled-back` with `install-failed` while the old version keeps running.
+   - Check a stable install of 2.20.x still follows `/releases/latest` and
+     ignores the prereleases.
+3. **Desktop rollback.**
+   - Publish an unstable build whose backend fails to start (for example,
+     a migration that throws).
+   - Check that the app restores the database snapshot, puts N back,
+     relaunches, and reports `rolled-back`.
+   - Check the rollback copy is deleted once the new version has started.
+   - Check Gatekeeper accepts the restored bundle.
+   - Check the new backend has exited before the database is restored, and
+     that an AppImage relaunches the restored file.
+   - Start the broken version a second time by hand and check it does not
+     roll back again (only the first launch after an update may).
+4. **Headless supervisor on Linux (systemd) and macOS (launchd).**
+   - Run `orkestrator service install -- --tailscale-serve` and start the
+     unit.
+   - Update from N to N+1 from another machine and check all of these:
+     - `bun add` staging and the package-manifest check;
+     - the toolchain `current` swap;
+     - the health check;
+     - pruning;
+     - the outcome reported to the new backend.
+   - Repeat with a broken N+1 and check the rollback: the database snapshot,
+     the toolchain and `current` restored, and the outcome on N.
+   - Kill the supervisor mid-cutover and check its recovery.
+   - Stop the service mid-cutover and check no backend is left running.
+   - Make staging fail at install (remove `versions/<target>` after prepare,
+     with the registry unreachable) and check the old backend keeps running.
+   - Start from a `bunx` bootstrap and check a rollback restores the staged
+     copy of the bootstrap version.
+5. **Remote update from the desktop app over Tailscale**, for both a headless
+   supervisor and a remote desktop app.
+   - Check the Connections row (version, channel, host kind, available
+     update).
+   - Check the consent dialog's remote wording.
+   - Check the client floor: a client below `minClientVersion` is refused.
+   - Check progress across the restart.
+   - Check the remote's audit entry has the right `tailscaleUser`.
+   - Check that a remote desktop app shows who asked for the update, and
+     that a headless backend logs it.
+6. **macOS permission added by an update.**
+   - Ship a build that probes a new permission.
+   - Update a remote Mac from another machine.
+   - Confirm the action-needed notice on the client, the "New in" label in
+     the remote's own permissions screen, and the TCC prompt there.
+7. **Published-image machine.**
+   - Update a machine running the GHCR image to a release that raises a
+     required image capability.
+   - Check the pull, the manifest check, the retag at install, and the
+     retag back on rollback and on a cancelled install on quit.
+8. **Mixed versions.**
+   - Drive an older (2.20.x) remote from a new client: version unknown,
+     with manual instructions.
+   - Drive a new remote from a 2.20.x client: no update UI, nothing breaks.
+
+### Code
+
+9. Clear an `action-needed-on-host` notice automatically once the desktop
+   permission probe shows the grant. Today it clears only when acknowledged.
+10. Report a crash-loop rollback by the supervisor (a freshly installed
+    version that keeps failing after it passed its health check) as a
+    notice. Today it is only logged.
+11. Give `bun publish` npm provenance once Bun supports it, or publish the
+    CLI with npm from CI.
+
+## Constraints and rationale
+
+- Nothing is downloaded before consent, and consent is bound to the
+  manifest's bytes (`requirementsSha256`).
+- The update job's state and audit log are files, not SQLite, so a
+  rollback's database restore cannot erase them.
+- Installer commands (`update_host_*`) are accepted only on the loopback
+  control listener, and Electron main never forwards them, or the
+  `update-host-request` events, from or to a window.
+- A failure before `installing` changes nothing. From `installing` on, every
+  failure must end in `rolled-back`, or in `failed` with `rollbackFailed`.
+
+## Decisions
+
+The open questions were decided on 2026-10-15; see "Decisions" in the
+[design doc](../architecture/release-channels-and-updates.md#decisions). Only
+the signing keys remain to do (see Setup).
+
+## Related
+
+- [release-channels-and-updates.md](../architecture/release-channels-and-updates.md)
+- [releasing.md](../development/releasing.md)
+- [mixed-version-compatibility.md](mixed-version-compatibility.md): the
+  `/status` handshake answers its renderer–backend skew question.
+- [dependency-upgrades.md](dependency-upgrades.md): electron-builder 27 and
+  the update-manifest key.

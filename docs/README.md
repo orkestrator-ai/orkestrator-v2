@@ -37,7 +37,8 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [design-canvas.md](architecture/design-canvas.md) | HTML/CSS canvas, recoverable operations, private records, history, sync, safe export, design MCP and .orkdes files. |
 | [control-mcp.md](architecture/control-mcp.md) | Control MCP operator guide. |
 | [mcp-management.md](architecture/mcp-management.md) | Per-provider MCP server management: sources, precedence, safe writes, secrets, apply states, evidence. |
-| [remote-gateway.md](architecture/remote-gateway.md) | Standalone backend, Tailscale Serve, flags, troubleshooting. |
+| [remote-gateway.md](architecture/remote-gateway.md) | Standalone backend, Tailscale Serve, flags, the status handshake, remote updates, troubleshooting. |
+| [release-channels-and-updates.md](architecture/release-channels-and-updates.md) | Stable/beta/unstable channels, feeds (GitHub, npm dist-tags, GHCR), the release requirements manifest and consent gate, the update service and host protocol, the headless supervisor, remote updates, rollback. Qualification: [release-channels-qualification.md](todo/release-channels-qualification.md). |
 | [public-cli.md](architecture/public-cli.md) | `orkestrator` client commands: backend selection, JSON/exit contract, request keys and retention, lifecycle waits, settings, sessions, request-specific completion, exec, scenarios. |
 | [event-snapshot-recovery.md](architecture/event-snapshot-recovery.md) | Which sequence each consumer may compare, revisioned view snapshots/outcomes, bounded client hydration, best-effort PR notifications, terminal input recovery. |
 | [web-page-annotations.md](architecture/web-page-annotations.md) | Preview notes, capture spool, backend threads, native dispatch, review, migration. Real-stack gates: [web-annotation-qualification.md](todo/web-annotation-qualification.md). |
@@ -67,7 +68,7 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [test-logs.md](development/test-logs.md) | Diagnostic-bounds rationale. Operator commands stay in `testing-guide.md`. |
 | [disk-usage.md](development/disk-usage.md) | Where Orkestrator work leaves disk state, who prunes each location, `disk:report`, `dev:prune`, Docker build-cache limit. |
 | [linting.md](development/linting.md) | oxfmt/oxlint configuration, exclusions, severity policy and disable-directive rules. |
-| [releasing.md](development/releasing.md) | Cutting a desktop release, CI secrets, artifact names, how the in-app updater decides to run, Linux/Omarchy notes. |
+| [releasing.md](development/releasing.md) | Cutting stable and beta releases, the nightly unstable workflow, one-time setup and CI secrets, artifact names, how in-app updates run, Linux/Omarchy notes. |
 | [container-qualification.md](development/container-qualification.md) | Real-Docker qualification: C01–C30 scenario matrix, live suites and how to run them, platform dimensions, benchmark harness and regression targets. |
 | [efficiency-harness.md](development/efficiency-harness.md) | Running `efficiency:baseline`: options, workloads a–j, counting method and limitations. |
 | [flaky-tests.md](development/flaky-tests.md) | Pointer to the flake registry in `tests/`. |
@@ -205,3 +206,4 @@ iOS, two machines) are the most common open gate. They are batched in
 | [test-suite-and-ci-health.md](todo/test-suite-and-ci-health.md) | Slow test owners, a skipped settings test, red CI on `main` and missing branch protection, deferred test-structure candidates. |
 | [mobile-layout-gaps.md](todo/mobile-layout-gaps.md) | Narrow-viewport defects: split panes remount at the mobile breakpoint; environment settings blocked by the projects drawer. |
 | [dependency-upgrades.md](todo/dependency-upgrades.md) | Non-agent dependency upgrades still pending: Electron 46, React Compiler lint warnings, update-signing decision, and upgrades blocked upstream or deferred. |
+| [release-channels-qualification.md](todo/release-channels-qualification.md) | Real-run evidence for release channels and updates: the first unstable CI run, signed desktop updates and rollback, the headless supervisor and its units, remote updates over Tailscale; the manifest signing-key decision. |

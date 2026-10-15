@@ -67,6 +67,17 @@ from before channels follow `/releases/latest` and so only ever see stable.
 `mise run release:channels` rebuilds the index on its own; it is derived from
 the published releases, so running it again is always safe.
 
+## Headless backends
+
+A headless backend updates itself only when it runs supervised:
+`orkestrator serve --supervised`, or the unit `orkestrator service install`
+writes. The supervisor installs `orkestrator@<version>` from npm into
+`<data-dir>/runtime/versions/`, checks the package carries the approved
+requirements manifest, and cuts over with a health check and rollback. A plain
+`orkestrator serve` reports that it has no installer and is updated by hand
+(`bunx orkestrator@<dist-tag> serve`). See
+[release-channels-and-updates.md](../architecture/release-channels-and-updates.md#headless-supervisor).
+
 ## Unstable builds
 
 `release-unstable.yml` runs nightly at 03:17 UTC and on `workflow_dispatch`.
@@ -272,3 +283,7 @@ accept it. Update both the plist floor and feed floor when support changes.
 - The unstable workflow has not run yet: the CI macOS signing and notarization
   path, the Linux arm64 `fpm` setup and the tag push from Actions are
   unqualified until its first green run.
+- Updates themselves (consent, desktop install and rollback, the headless
+  supervisor, remote updates) are tested only with fakes. The real-run
+  checklist is
+  [release-channels-qualification.md](../todo/release-channels-qualification.md).

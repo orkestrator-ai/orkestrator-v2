@@ -1,6 +1,7 @@
 # Release channels, in-app updates and remote updates
 
-Status: Design, being implemented in phases (see [Delivery](#delivery)).
+Status: Implemented in the stack #1003, #1004, #1005, #1007 and #1012
+(see [Delivery](#delivery)); not yet qualified on a real release.
 Outstanding qualification: [release-channels-qualification.md](../todo/release-channels-qualification.md).
 Release procedure: [releasing.md](../development/releasing.md).
 
@@ -558,11 +559,12 @@ A headless backend logs it.
 
 **Progress.** The remote backend emits `update-status` on its own event
 stream, which the client already subscribes to for the active connection. For
-a connection that is not active, the panel polls `update_get_status` every 2 s
-while a job is running. The poll is bounded and stops at a terminal phase.
+a connection that is not active, an open panel polls `update_get_status`
+every 15 s, and every 2 s while a job is running; polling stops when the
+panel closes. A poll never overlaps the one before it.
 While the remote restarts, the poll fails. The panel shows "restarting…" and
-keeps polling with backoff for up to 10 minutes, then reads the outcome from
-the new (or rolled-back) backend.
+keeps polling, backing off to every 30 s, for up to 10 minutes of failures,
+then reads the outcome from the new (or rolled-back) backend.
 
 **Audit.** Every `update_start`, cancel, install, outcome and channel change
 appends an entry on the **remote**:
@@ -744,7 +746,8 @@ reports progress every minute while it stages.
 7. **Crash-loop guard.** If a version installed less than 30 minutes ago
    crashes 3 times in 10 minutes, roll back automatically. After 30 minutes
    the install record is dropped: later failures are not the update's, and
-   restoring its database snapshot then would discard newer data.
+   restoring its database snapshot then would discard newer data. Today
+   this rollback is only logged, not reported as a notice.
 8. A stop (SIGTERM) that arrives during a cutover lets it finish, then stops
    whichever backend is running. A supervisor restarted mid-cutover rolls
    back on start, best effort, and still starts a backend if part of the
@@ -826,7 +829,7 @@ when no window exists.
 | Settings → Updates | New `GLOBAL_SETTINGS_SECTIONS` entry | Channel select with descriptions, current version/channel, last check, **Check now**, job progress and errors, recent audit entries, and **Install latest stable now** when waiting for a narrower channel (disabled with the floor reason) |
 | Connections settings | `ConnectionsSettings.tsx` rows | Version/channel pill and host kind per remote; **Update available** and **Update remote**; job progress; post-update notices; "update by hand" for host `none` or old backends |
 | Version reminder | `BackendVersionReminder` | Adds an **Update backend** action when the backend can install |
-| Post-update notices | Update panel; per-connection rows; the macOS permissions blocker on the machine itself | `action-needed-on-host` items (for example "grant Downloads folder access at that Mac"). On the machine itself, the existing blocker in `App.tsx` already probes the new version's `MACOS_PERMISSION_IDS`, and now labels the ones the update added. A notice clears when acknowledged, or when the desktop host's next probe shows the grant. |
+| Post-update notices | Update panel; per-connection rows; the macOS permissions blocker on the machine itself | `action-needed-on-host` items (for example "grant Downloads folder access at that Mac"). On the machine itself, the existing blocker in `App.tsx` already probes the new version's `MACOS_PERMISSION_IDS`, and now labels the ones the update added ("New in X"). A notice clears when acknowledged. |
 
 ## Failure and rollback semantics
 
@@ -851,11 +854,11 @@ item for `storage-migration` says so.
 
 | Phase | PR | Scope |
 | --- | --- | --- |
-| 1 | Channel model and release tooling | `release-channels.ts`, `release-requirements.ts` (schema, diff, signature verify), manifest generator, channel index builder, channel-aware `release:desktop` / `release:publish` / `publish:cli`, GHCR channel tags, `release-unstable.yml`, drift tests, this document |
-| 2 | Local in-app update | Backend update service, state machine, files, commands, host protocol; desktop update host; renderer indicator, consent dialog, Settings → Updates; channel setting |
-| 3 | Dependency pre-fetch | Toolchain installer accepts a validated target artefact set without pruning; container capability check and GHCR pull; job step before restart |
-| 4 | Remote update | `/status` handshake, connection summaries, connection-scoped update IPC, invocation origin and audit, supervisor and service units, desktop post-restart rollback, Connections UI, mixed-version checks |
-| 5 | Docs | `releasing.md`, the qualification todo, `00-index.md` lines |
+| 1 | #1003 Channel model and release tooling | `release-channels.ts`, `release-requirements.ts` (schema, diff, signature verify), manifest generator, channel index builder, channel-aware `release:desktop` / `release:publish` / `publish:cli`, GHCR channel tags, `release-unstable.yml`, drift tests, this document |
+| 2 | #1004 Local in-app update | Backend update service, state machine, files, commands, host protocol; desktop update host; renderer indicator, consent dialog, Settings → Updates; channel setting |
+| 3 | #1005 Dependency pre-fetch | Toolchain installer accepts a validated target artefact set without pruning; container capability check and GHCR pull; job step before restart |
+| 4 | #1007 Remote update | `/status` handshake, connection summaries, connection-scoped update IPC, invocation origin and audit, supervisor and service units, desktop post-restart rollback, Connections UI, mixed-version checks |
+| 5 | #1012 Docs | `releasing.md`, the qualification todo, `00-index.md` lines |
 
 ## Secrets and one-time setup
 
@@ -875,18 +878,28 @@ One-time steps (documented in `releasing.md`):
 3. Add the secrets above.
 4. Enable the workflow's schedule.
 
-## Open decisions
+## Decisions
 
-1. **Manifest signing key** (security, one-way door). Recommendation: one
-   Ed25519 release key in CI secrets and maintainer custody, with two embedded
-   public keys (active + standby) for rotation, decided together with
-   electron-builder 27's update-manifest key. Until then the system runs in
-   checksum-only mode.
-2. **Extra confirmation on the remote.** Recommendation: none beyond the
-   consent dialog, because connecting already grants agent execution. The
-   remote's own UI shows a "restarting for an update requested by …" notice. A
-   grace period with a local veto is a possible follow-up.
-3. **Unstable version format.** Uses `.<run>.g<sha>` instead of `.<sha>`
+Decided with the user on 2026-10-15, after the review fixes.
+
+1. **Manifest signing key:** an active Ed25519 key (the CI secret
+   `ORKESTRATOR_RELEASE_SIGNING_KEY`, plus a maintainer copy) and a standby
+   key kept offline, both embedded; signatures are mandatory once they are.
+   The keys still have to be generated and embedded
+   ([releasing.md](../development/releasing.md#manifest-signing-keys)).
+   electron-builder 27's update key should follow the same policy.
+2. **No veto on the remote.** Connecting already grants agent execution. The
+   remote is told instead: a desktop app shows who asked and from where, and a
+   headless backend logs it ([Remote protocol](#remote-protocol)).
+3. **Unstable version format:** `.<yyyymmdd>.<run>.g<sha7>`, not `.<sha>`
    ([why](#unstable-version-format)).
-4. **Rollback copy size on desktop.** Keeping one previous bundle costs
-   several hundred MB. Recommendation: keep it; atomicity was a requirement.
+4. **"Install when I quit" on macOS cannot be cancelled once armed.**
+   Squirrel.Mac stages the update when it is armed, so staging errors show up
+   at once, and a staged update installs on quit whatever electron-updater is
+   told afterwards. The UI hides Cancel for an armed install.
+5. **A headless supervisor always runs `current`,** even when its own package
+   is newer, so rollbacks and approved downgrades stick across restarts;
+   `orkestrator service install` resets it.
+6. **The desktop rollback copy lives only for the update.** It is kept before
+   install and deleted once the installed version reports its first start,
+   the only launch that may roll back.

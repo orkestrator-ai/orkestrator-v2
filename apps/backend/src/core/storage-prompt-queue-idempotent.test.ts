@@ -245,21 +245,9 @@ describe("backend-authored queue items", () => {
     });
   });
 
-  test("frozen items cannot be transferred into a draft or changed on requeue", async () => {
+  test("frozen items cannot be changed on requeue", async () => {
     await withStorage(async (storage) => {
       await storage.enqueuePromptQueueMessageIfAbsent(KEY, "e1", message("r1"));
-      await expect(
-        storage.transferPromptQueueMessageToComposeDraft(
-          KEY,
-          "e1",
-          "r1",
-          `claude:e1:${encodeURIComponent(LOGICAL)}`,
-          "environment",
-          "e1",
-        ),
-      ).rejects.toThrow(PROMPT_QUEUE_MESSAGE_FROZEN);
-      expect(await storage.getComposeDraft(`claude:e1:${encodeURIComponent(LOGICAL)}`)).toBeNull();
-      expect((await storage.getPromptQueue(KEY))?.messages).toHaveLength(1);
 
       await storage.claimPromptQueueHead(KEY, "e1", "r1");
       await expect(

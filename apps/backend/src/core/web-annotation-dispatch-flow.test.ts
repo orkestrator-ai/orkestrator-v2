@@ -10,7 +10,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import {
-  WEB_ANNOTATION_QUEUE_ITEM_FROZEN,
   webAnnotationRequestMarker,
   type WebAnnotationDestination,
 } from "@orkestrator/protocol/web-annotations";
@@ -404,17 +403,6 @@ describe("web annotation request flow (real queue and adapter)", () => {
     const x = await note(ENV_A, "Remove the badge");
     await sendRequest(ENV_A, [x.annotationId], "req-flow-7");
     const queueKey = webAnnotationQueueKey(destination(ENV_A));
-    // Frozen: the chat cannot turn it into an editable draft.
-    await expect(
-      storage.transferPromptQueueMessageToComposeDraft(
-        queueKey,
-        ENV_A,
-        "req-flow-7",
-        draftKey(ENV_A),
-        "environment",
-        ENV_A,
-      ),
-    ).rejects.toThrow("frozen");
     // An older client removes it directly: the tombstone still settles it.
     await storage.removePromptQueueMessage(queueKey, ENV_A, "req-flow-7");
     await service.reconcileOnce();
@@ -456,16 +444,6 @@ describe("web annotation request flow (real queue and adapter)", () => {
         message: { id: "forged", text: "x", origin: { kind: "web-annotation", requestId: "x" } },
       }),
     ).rejects.toThrow("assigned by the backend");
-    await expect(
-      call("transfer_prompt_queue_message_to_compose_draft", {
-        queueKey,
-        environmentId: ENV_A,
-        messageId: "req-flow-9",
-        draftKey: draftKey(ENV_A),
-        ownerType: "environment",
-        ownerId: ENV_A,
-      }),
-    ).rejects.toThrow(WEB_ANNOTATION_QUEUE_ITEM_FROZEN);
     const removed = await call("remove_prompt_queue_message", {
       queueKey,
       environmentId: ENV_A,

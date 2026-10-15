@@ -251,6 +251,29 @@ describe("Pi MCP config", () => {
     ]);
   });
 
+  test("preserves every header and environment variable at the map limits", async () => {
+    const root = await tempRoot("pi-mcp-map-limits-");
+    const headers = Object.fromEntries(Array.from({ length: 16 }, (_, i) => [`H${i}`, `h${i}`]));
+    const env = Object.fromEntries(Array.from({ length: 32 }, (_, i) => [`E${i}`, `e${i}`]));
+    await writeFile(
+      join(root, "mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          web: { url: "https://w.example/mcp", headers },
+          local: { command: "x", env },
+        },
+      }),
+    );
+    const servers = await resolvePiMcpServers({
+      agentDir: root,
+      cwd: root,
+      projectResources: false,
+      env: {},
+    });
+    expect(servers.find((server) => server.id === "web")?.headers).toEqual(headers);
+    expect(servers.find((server) => server.id === "local")?.env).toEqual(env);
+  });
+
   test("reads an entry's shape the way Pi's validator does", async () => {
     const root = await tempRoot("pi-mcp-shape-");
     const agentDir = join(root, "agent");

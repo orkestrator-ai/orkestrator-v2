@@ -21,6 +21,7 @@ const MAX_MCP_CONFIG_BYTES = 1024 * 1024;
 const MAX_MCP_SERVERS = 64;
 const MAX_MCP_NAME_LENGTH = 64;
 const MAX_HEADER_ENTRIES = 16;
+const MAX_ENV_ENTRIES = 32;
 const MAX_ARG_ENTRIES = 32;
 const ORKESTRATOR_HOSTS = new Set(["127.0.0.1", "localhost", "host.docker.internal"]);
 /**
@@ -230,7 +231,7 @@ function acceptedTransport(value: Record<string, unknown>): McpTransport | undef
   return undefined;
 }
 
-/** Hosts Pi lets `auth` reach over plain HTTP. */
+/** Hosts Pi lets `auth` reach over plain HTTP; URL.hostname retains IPv6 brackets. */
 const PI_LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 function httpUrl(value: string): URL | undefined {
@@ -334,6 +335,9 @@ function normalizeMcpServer(
   if (transport === "http") {
     const url = typeof value.url === "string" ? httpUrl(value.url) : undefined;
     if (!url) return undefined;
+    // Keep the accepted entry shadowing, but never launch with its headers dropped.
+    if (isStringRecord(value.headers) && Object.keys(value.headers).length > MAX_HEADER_ENTRIES)
+      return undefined;
     const headers = isStringRecord(value.headers, MAX_HEADER_ENTRIES)
       ? resolveConfigValues(value.headers, env)
       : undefined;
@@ -348,7 +352,11 @@ function normalizeMcpServer(
     };
   }
   if (!nonBlank(value.command) || typeof value.command !== "string") return undefined;
-  const serverEnv = isStringRecord(value.env, 32) ? resolveConfigValues(value.env, env) : undefined;
+  if (isStringRecord(value.env) && Object.keys(value.env).length > MAX_ENV_ENTRIES)
+    return undefined;
+  const serverEnv = isStringRecord(value.env, MAX_ENV_ENTRIES)
+    ? resolveConfigValues(value.env, env)
+    : undefined;
   if (serverEnv === null) return undefined;
   return {
     id,

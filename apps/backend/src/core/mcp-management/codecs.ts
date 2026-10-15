@@ -731,7 +731,7 @@ export const PI_SERVERS_PER_FILE = 64;
 /** Keys a Pi project override may set (`MCP_OVERRIDE_KEYS` in pi-bridge/src/mcp-config.ts). */
 const PI_OVERRIDE_KEYS: ReadonlySet<string> = new Set(["enabled", "exposure", "toolExposure"]);
 
-/** Hosts Pi lets `auth` reach over plain HTTP. */
+/** Hosts Pi lets `auth` reach over plain HTTP; URL.hostname retains IPv6 brackets. */
 const PI_LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 /** Bridge variables a server never receives (`BRIDGE_SECRET_ENV` in pi-bridge/src/mcp-config.ts). */
@@ -893,9 +893,10 @@ export function piLaunchBlock(
   raw: NativeEntry,
   shape: Extract<PiEntryShape, { kind: "server" }>,
 ): string | undefined {
-  const check = (values: unknown, max: number): string | undefined => {
-    // Like the bridge, a map past its bound is ignored rather than resolved.
-    if (!isStringMap(values) || Object.keys(values).length > max) return undefined;
+  const check = (values: unknown, max: number, field: string): string | undefined => {
+    if (!isStringMap(values)) return undefined;
+    if (Object.keys(values).length > max)
+      return `Orkestrator's Pi sessions accept at most ${max} ${field}, so they do not start this server; its definition still hides lower-priority entries.`;
     for (const value of Object.values(values)) {
       const block = piValueBlock(value);
       if (block) return block;
@@ -906,11 +907,11 @@ export function piLaunchBlock(
     if (shape.hasAuth) {
       return "Orkestrator's Pi sessions do not start a server that signs in with a Pi provider (auth); Pi's own CLI does. Send a header instead to use it here.";
     }
-    return check(raw.headers, 16);
+    return check(raw.headers, 16, "headers");
   }
   if (!nonBlank(raw.command))
     return "The command is empty, so Orkestrator's Pi sessions cannot start this server.";
-  return check(raw.env, 32);
+  return check(raw.env, 32, "environment variables");
 }
 
 /** Pi's saved switch: `enabled: false` is Pi's own spelling, `disabled: true` the Claude and Cursor one. */

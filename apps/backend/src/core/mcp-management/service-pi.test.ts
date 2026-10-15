@@ -39,6 +39,29 @@ async function hostPiSnapshot(user: unknown) {
 }
 
 describe("Pi catalog mirrors the bridge's loading rules", () => {
+  test("disabling a project replacement keeps the user entry shadowed", async () => {
+    const targetId = await containerPiTarget(
+      { mcpServers: { db: { command: "user-db" } } },
+      { mcpServers: { db: { command: "project-db" } } },
+    );
+    const before = await fixture.service.snapshot({ targetId });
+    const project = entry(before, "pi:project", "db");
+    expect(project.status).toBe("effective");
+    expect(entry(before, "pi:user", "db").status).toBe("shadowed");
+
+    // Container files are read-only in the editor; Pi's native manager can
+    // save this switch, which the next catalogue read must reconcile.
+    fixture.containerFiles.set(
+      "/workspace/.pi/mcp.json",
+      JSON.stringify({ mcpServers: { db: { command: "project-db", enabled: false } } }),
+    );
+    const after = await fixture.service.snapshot({ targetId });
+    expect(entry(after, "pi:project", "db").status).toBe("disabled");
+    expect(entry(after, "pi:user", "db").status).toBe("shadowed");
+    expect(entry(after, "pi:user", "db").shadowedBy).toBe(project.entryId);
+    expect(after.effective.db).toBe(project.entryId);
+  });
+
   test("a disabled project server replaces the user server, so neither runs", async () => {
     const targetId = await containerPiTarget(
       { mcpServers: { db: { command: "user-db" }, api: { command: "user-api" } } },
@@ -318,6 +341,29 @@ describe("Pi catalog mirrors the bridge's loading rules", () => {
 });
 
 describe("Pi adapter", () => {
+  test("Pi: disabling an entry reveals no fallback in the preview or saved catalogue", async () => {
+    const { targetId, snapshot } = await hostPiSnapshot({
+      mcpServers: { "foo-bar": { command: "a" }, foo_bar: { command: "b" } },
+    });
+    const winner = entry(snapshot, "pi:user", "foo-bar");
+    const request = mutation(targetId, {
+      kind: "set-enabled",
+      entryId: winner.entryId,
+      expectedRevision: revision(snapshot, "pi:user")!,
+      enabled: false,
+    });
+    const validation = await fixture.service.validate(request);
+    expect(validation.valid).toBe(true);
+    expect(validation.preview).not.toBeNull();
+    expect(validation.preview?.revealsEntryId).toBeUndefined();
+    await fixture.service.mutate(request);
+    const after = await fixture.service.snapshot({ targetId });
+    expect(entry(after, "pi:user", "foo-bar").status).toBe("disabled");
+    expect(after.effective["foo-bar"]).toBe(winner.entryId);
+    expect(entry(after, "pi:user", "foo_bar").status).toBe("invalid");
+    expect(after.effective.foo_bar).toBeUndefined();
+  });
+
   test("Pi: the editor writes enabled: false, clears either spelling, and migrates disabled", async () => {
     let { targetId, snapshot } = await hostPiSnapshot({
       mcpServers: {

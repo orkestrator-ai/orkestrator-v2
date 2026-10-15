@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolvePiMcpServers } from "./mcp-config.js";
+import { loadMcpConfigFile, resolvePiMcpServers } from "./mcp-config.js";
 import { PI_MCP_CONFIG_FIXTURES, type PiMcpConfigFixture } from "./testing/mcp-config-fixtures.js";
 
 /**
@@ -52,6 +52,20 @@ describe("the bridge follows Pi's own mcp.json loader", () => {
         env: fixture.env ?? {},
       });
       expect(bridge.map((server) => `${server.scope}:${server.id}`).sort()).toEqual(fixture.bridge);
+      for (const key of Object.keys(fixture.launchBlocked ?? {})) {
+        const [scope, id] = key.split(":");
+        const entries = await loadMcpConfigFile(
+          scope === "user" ? join(agentDir, "mcp.json") : join(cwd, ".pi", "mcp.json"),
+          scope === "user" ? "user" : "project",
+          fixture.env ?? {},
+        );
+        const entry = entries.find((entry) => entry.id === id);
+        expect(entry?.kind).toBe("server");
+        if (entry?.kind === "server") {
+          expect(entry.enabled).toBe(true);
+          expect(entry.hasAuth || entry.launch === undefined).toBe(true);
+        }
+      }
 
       const pi = loadMcpConfig({ agentDir, cwd, projectTrusted: true });
       const enabled = pi.servers

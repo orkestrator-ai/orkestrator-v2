@@ -20,6 +20,8 @@ export interface PiMcpConfigFixture {
   env?: Record<string, string>;
   /** `scope:id` of every server the bridge starts with project resources on, sorted. */
   bridge: string[];
+  /** Accepted but non-launching `scope:id` entries and catalogue reason fragments. */
+  launchBlocked?: Record<string, string>;
   /** Set where Pi's own loader enables something else: what, sorted, and why the bridge differs. */
   pi?: { enabled: string[]; why: string };
 }
@@ -34,6 +36,50 @@ function servers(count: number, entry: (index: number) => unknown): Record<strin
 }
 
 export const PI_MCP_CONFIG_FIXTURES: readonly PiMcpConfigFixture[] = [
+  {
+    name: "IPv6 loopback HTTP auth is retained and blocks a namespace fallback",
+    user: {
+      mcpServers: {
+        "local-auth": { url: "http://[::1]/mcp", auth: { provider: "github" } },
+        local_auth: { command: "fallback" },
+      },
+    },
+    bridge: [],
+    launchBlocked: { "user:local-auth": "signs in with a Pi provider" },
+    pi: {
+      enabled: ["user:local-auth"],
+      why: "Pi accepts IPv6 loopback auth; the bridge retains the entry but holds no Pi provider token.",
+    },
+  },
+  {
+    name: "header and environment maps at the bridge limits are preserved",
+    user: {
+      mcpServers: {
+        web: { url: "https://w.example/mcp", headers: configMap(16) },
+        local: { command: "x", env: configMap(32) },
+      },
+    },
+    bridge: ["user:local", "user:web"],
+  },
+  {
+    name: "oversized maps block launch and keep project definitions shadowing",
+    user: { mcpServers: { web: { command: "user-web" }, local: { command: "user-local" } } },
+    project: {
+      mcpServers: {
+        web: { url: "https://w.example/mcp", headers: configMap(17) },
+        local: { command: "x", env: configMap(33) },
+      },
+    },
+    bridge: [],
+    launchBlocked: {
+      "project:web": "at most 16 headers",
+      "project:local": "at most 32 environment variables",
+    },
+    pi: {
+      enabled: ["project:local", "project:web"],
+      why: "Pi's own loader has no map limits; the bridge keeps oversized entries but never drops their maps to launch them.",
+    },
+  },
   {
     name: "stdio and HTTP servers",
     user: {
@@ -250,3 +296,7 @@ export const PI_MCP_CONFIG_FIXTURES: readonly PiMcpConfigFixture[] = [
     bridge: Object.keys(servers(64, () => null)).map((name) => `user:${name}`),
   },
 ];
+
+function configMap(count: number): Record<string, string> {
+  return Object.fromEntries(Array.from({ length: count }, (_, index) => [`K${index}`, "value"]));
+}

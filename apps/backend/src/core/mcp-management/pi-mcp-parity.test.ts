@@ -9,7 +9,7 @@ import {
   type PiMcpConfigFixture,
 } from "../../../../../bridges/pi-bridge/src/testing/mcp-config-fixtures.js";
 import { piSanitizedName } from "./codecs.js";
-import { createFixture, targetIdFor, type Fixture } from "./test-support.js";
+import { createFixture, entry, targetIdFor, type Fixture } from "./test-support.js";
 
 /**
  * The catalogue mirrors the Pi bridge's loader (`markPiLoadRules`,
@@ -66,6 +66,28 @@ function catalogueStarts(snapshot: McpManagementSnapshot): string[] {
     .sort();
 }
 
+function assertLaunchBlocks(
+  snapshot: McpManagementSnapshot,
+  config: PiMcpConfigFixture,
+  projectResources: boolean,
+): void {
+  for (const [key, reason] of Object.entries(config.launchBlocked ?? {})) {
+    const [scope, id] = key.split(":");
+    if (scope === "project" && !projectResources) continue;
+    const row = entry(snapshot, `pi:${scope}`, id!);
+    expect(row.status).toBe("invalid");
+    expect(row.statusReason).toContain(reason);
+    // Launch-blocked entries are retained; rejected entries never own the name.
+    expect(snapshot.effective[row.name]).toBe(row.entryId);
+    for (const lower of snapshot.definitions.filter(
+      (candidate) => candidate.name === row.name && candidate.sourceId !== row.sourceId,
+    )) {
+      expect(lower.status).toBe("shadowed");
+      expect(lower.shadowedBy).toBe(row.entryId);
+    }
+  }
+}
+
 describe("the Pi catalogue starts exactly what the Pi bridge starts", () => {
   for (const config of PI_MCP_CONFIG_FIXTURES) {
     test(`container, project resources on: ${config.name}`, async () => {
@@ -79,6 +101,7 @@ describe("the Pi catalogue starts exactly what the Pi bridge starts", () => {
         targetId: await targetIdFor(fixture, "pi", "environment"),
       });
       expect(catalogueStarts(snapshot)).toEqual(await bridgeStarts(config, true));
+      assertLaunchBlocks(snapshot, config, true);
     });
 
     test(`host, project resources off: ${config.name}`, async () => {
@@ -90,6 +113,7 @@ describe("the Pi catalogue starts exactly what the Pi bridge starts", () => {
         targetId: await targetIdFor(fixture, "pi", "environment"),
       });
       expect(catalogueStarts(snapshot)).toEqual(await bridgeStarts(config, false));
+      assertLaunchBlocks(snapshot, config, false);
     });
   }
 });

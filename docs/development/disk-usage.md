@@ -2,9 +2,10 @@
 
 Environments, dev profiles, agent sessions, test runs and image builds all
 write to disk outside the repository. This page lists where that state
-collects, what prunes it, and what to run when a machine fills up. The design
-and the evidence behind it are in
-[orphaned-disk-state-cleanup.md](../plans/orphaned-disk-state-cleanup.md).
+collects, what prunes it, and what to run when a machine fills up. How
+environment deletion, its cleanup ledger and the orphan sweeps decide what to
+remove is in
+[environment-deletion.md](../architecture/environment-deletion.md).
 
 ## See what is using space
 
@@ -96,8 +97,8 @@ ignored files. The project home cannot be moved.
 | `~/.config/orkestrator-v2-dev/profiles/*` (Linux; `~/Library/Application Support/orkestrator-v2-dev` on macOS) | `dev`/`dev:test` start | Stopped profiles whose checkout no longer exists |
 | Worktrees a dev profile registered in an outside repository | `dev:reset`, `dev:prune`, start-up pruning | With the profile; branches only when merged |
 | `orkestrator-v2:dev-<hash>` images of a deleted checkout | Start-up pruning, `dev:prune` | With the last profile that used them |
-| Per-environment bridge state, worktrees, local branches | Environment deletion and its reconciler | See [environment-deletion-cleanup.md](../plans/environment-deletion-cleanup.md) |
-| Empty workspace directories, merged branches of deleted environments, abandoned store temp files | Backend start-up sweep | At start-up; branches at most daily per project |
+| Per-environment bridge state, worktrees, local branches, containers, volumes and networks | Environment deletion and its reconciler | At deletion; failed steps retried with backoff. See [environment-deletion.md](../architecture/environment-deletion.md) |
+| Orphaned bridge state, empty workspace directories, merged branches of deleted environments, abandoned store temp files | Backend orphan sweeps | At start-up and hourly; branches at most daily per project |
 | `<data dir>/legacy-json/<timestamp>/` (JSON stores archived by the one-time SQLite import) | Backend database open | 14 days after the import |
 | `<data dir>/backups/` (database snapshots) | The backend's snapshot rotation | Newest 6 hourly (taken only after a change), one about 1 and one about 3 days old, and 2 pre-migration kept; none older than 7 days |
 | Test temporary directories in the system temp dir | The next test run | Once the creating process has exited and the directory is over an hour old |

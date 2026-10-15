@@ -1,8 +1,8 @@
 # Event and snapshot recovery for event-led views
 
 Status: Living — sequence semantics, conditional snapshot contract, and bounded
-client hydration. Introduced by recurring-processes
-[step 11](../improvements/recurring-processes/plan/11-recovery-and-resource-bounds.md).
+client hydration. Recurring work that feeds these views is described in
+[recurring-work.md](recurring-work.md).
 
 An event-led view is a live event stream folded over an authoritative snapshot:
 the PR monitor mirror, environment diff statistics, the worktree snapshot

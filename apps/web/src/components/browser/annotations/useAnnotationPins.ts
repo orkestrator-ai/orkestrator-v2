@@ -1,5 +1,6 @@
 /**
- * Live pins and "Show on page" for one browser tab (plan step 10).
+ * Live pins and "Show on page" for one browser tab (see "Anchors and pins" in
+ * docs/architecture/web-page-annotations.md).
  *
  * Pins are drawn for at most `visiblePins` open notes of the current logical
  * page. Main clears them for every new document and emits

@@ -4,9 +4,9 @@ Status: living. Owner modules:
 [`agent-command-catalogue.ts`](../../packages/protocol/src/agent-command-catalogue.ts)
 (wire contract, bounds, intent parsing) and
 [`agent-slash-commands.ts`](../../packages/protocol/src/agent-slash-commands.ts)
-(lexical parsing, resolution, session-action collisions). Background and
-findings: [investigation](../improvements/slash-commands.md) and
-[implementation plan](../improvements/slash-commands/plan/00-index.md).
+(lexical parsing, resolution, session-action collisions). Outstanding work:
+[slash-command-catalogue.md](../todo/slash-command-catalogue.md) and
+[slash-command-qualification.md](../todo/slash-command-qualification.md).
 
 Every enabled row in the native composer's `/` menu must run exactly what it
 describes, through a tested executor, and a chosen command must never silently
@@ -155,10 +155,62 @@ The backend merges runtime actions into the provider list
 
 Deduplication is by identity, never by lower-cased display name.
 
-## Provider notes
+## Provider support
 
-Qualification evidence and the full support table are in the
-[qualification record](../improvements/slash-commands/qualification.md).
+Support was qualified from installed SDK declarations and source, then
+exercised through each integration's real execution path with transport-level
+fakes (bridge route tests, SDK client fakes, a spawned fake ACP agent). No live
+provider session or real browser has confirmed it, and the provider versions it
+was read from (2026-09-23: Claude Agent SDK 0.3.276, Codex app-server 0.155.0,
+OpenCode 1.18.31, Pi 0.85.1, Grok 1.0.34 with ACP SDK 1.4.0, Cursor SDK 1.0.31)
+have all since moved. Mocks do not confer support: a behaviour that could not be
+qualified is listed unavailable with a reason. Live qualification at current
+pins is tracked in
+[slash-command-qualification.md](../todo/slash-command-qualification.md).
+
+| Provider | Discovery | Names | Execution | Catalogue status |
+| --- | --- | --- | --- | --- |
+| Claude | Live `supportedCommands()`, replaced by `commands_changed`; init names as cold fallback; a config-parity probe | SDK spelling and SDK aliases; skills annotated, no `/skill:` rows | `provider-prompt`: canonical name plus verbatim arguments through the query | `ready` only from the session's own query or a push; probe and init lists are `stale` |
+| Codex skills | `skills/list` for the effective cwd | `$name`, alias `/skill:name` | `structured-skill`: `{type:"skill", name, path}` plus a text item | `SkillsListResponse.errors` make the list partial or stale |
+| Codex templates | Bounded scan of `.codex/prompts` and `~/.codex/prompts` | Relative path | `bridge-template`: `$ARGUMENTS` expansion only | Scan errors reported as truncation |
+| Codex built-ins | Bridge | `/help`, `/models` | `bridge-local` | — |
+| OpenCode | One `command.list({directory})` | Exact server key, case-sensitive, no aliases | `provider-command` via `session.command` with a reserved `messageID` | List errors fail the read; an empty list stays empty |
+| Pi | One builder over templates, skills and extensions (`sourceInfo` origin) | Template `/name`, skill `/skill:name`, extension invocation name | `provider-prompt` via `session.prompt({source:"rpc"})` | A persisted list is `stale` after restart |
+| Grok | ACP `available_commands_update` (push only) | Name as sent; `input.hint` as argument hint | `provider-prompt` via `session/prompt` | `ready` once this process received a list, even an empty one; restored rows are `stale` and not executable |
+| Cursor | None | — | — | `unsupported` |
+| Orkestrator | Backend | `/steer`, `/compact` | `session-action` | — |
+
+### Unavailable commands
+
+These are listed with a reason and never executed:
+
+| Provider | Commands | Reason |
+| --- | --- | --- |
+| Claude | `/clear`, `/model`, `/permissions`, `/resume` | `session-changing`: the bridge does not adopt the new conversation ID, and each turn re-applies model and permission mode |
+| Claude | Init `terminal_slash_commands`, `/login`, `/logout` | `requires-interactive-ui` |
+| Claude | `/config`, `/doctor`, `/exit`, `/ide`, `/quit`, `/statusline`, `/terminal-setup`, `/theme`, `/vim` | `unqualified` |
+| Codex | Duplicate skill names | `ambiguous` |
+| Codex | Disabled skills | `disabled` |
+| Codex | Templates named after a reserved command | `reserved-name` |
+| Codex | Templates containing `` !`…` `` | `requires-shell-execution` |
+| Codex | Templates with malformed frontmatter | `unsupported` |
+| OpenCode | TUI controls (`/exit`, `/themes`, `/editor`, …) | Not in the catalogue; typed spellings get an explanation |
+
+The Claude lists live in `bridges/claude-bridge/src/services/session-manager-commands.ts`.
+The bridge also refuses typed text naming any of them, so a failed backend
+catalogue read cannot let `/clear` reach the CLI.
+
+### Literal suppression
+
+| Provider | Mechanism | Limitation |
+| --- | --- | --- |
+| Claude, Grok | None in the SDK or ACP | The backend refuses a literal prompt whose leading token names a known command |
+| Codex | Bridge resolver bypassed | app-server does not interpret `/` text |
+| OpenCode | `promptAsync` instead of `session.command` | — |
+| Pi | `expandPromptTemplates: false` (covers extension commands, skills and templates) | Extension `input` handlers still run on every prompt. Pi always expands follow-ups, so a literal prompt Pi would read as a command is refused (409) while a turn runs instead of being queued |
+| Cursor | No commands | — |
+
+### Provider notes
 
 - **Claude**: rows are the SDK's own names; `/skill:` is never synthesized.
   Session-changing (`/clear`, `/model`, `/permissions`, `/resume`),
@@ -171,20 +223,40 @@ Qualification evidence and the full support table are in the
   disabled. `/help` and `/models` are bridge-local; reserved names cannot be
   shadowed by a template.
 - **OpenCode**: one directory-scoped `command.list`; `session.command` with
-  the exact server key. The command response arrives after the whole turn, so
-  acceptance is proven from the reserved `messageID`.
-- **Pi**: extensions win over skills and templates, as in the SDK. Literal
-  intent uses `expandPromptTemplates: false`, which cannot stop extension
-  `input` handlers. Refresh is deferred while a turn runs.
-- **Grok**: push-only inventory; a list restored from disk is `stale` and not
-  executable until Grok reports it again.
+  the exact server key. The command response arrives only after the whole
+  turn, and every failure maps to HTTP 400, so the provider does not abort it
+  on the prompt timeout: acceptance is proven from the reserved `messageID`,
+  and a missing answer is ambiguous, never a fallback prompt. OpenCode
+  substitutes `$ARGUMENTS` before running a template's `` !`cmd` `` spans
+  (observed in the 1.18.31 server). That is OpenCode's own template semantics
+  on its own server, so a user's arguments to such a command can reach a shell
+  there; Orkestrator adds no shell surface of its own.
+- **Pi**: extensions win over skills and templates, as in the SDK, and only
+  the effective winner is listed. Literal intent uses
+  `expandPromptTemplates: false`, which cannot stop extension `input` handlers.
+  `reload()` replaces the extension runner, including the approval gate, so
+  refresh answers `deferred` while a turn runs and reloads when idle.
+  Extension commands wait for idle and take no attachments.
+- **Grok**: push-only inventory. Grok may push its list before the session is
+  attached on the bridge, so the bridge buffers the latest list and applies it
+  on attach. A list restored from disk is `stale` and not executable until
+  Grok reports it again.
 - **Cursor**: `unsupported`; application actions such as `/steer` remain.
 
 ## Lifecycle
 
 The backend caches one catalogue per environment, provider, runtime
-generation and session, with status `loading`, `ready`, `stale`,
+generation and session (`NativeAgentCommandCatalogueCache`), with status `loading`, `ready`, `stale`,
 `unavailable` or `unsupported` projected as `slashCommandCatalogue` next to
 `slashCommands`. Failures keep the previous list as `stale` with a bounded
 error code and retry backoff; they never become `ready: []`. Selected
 commands are revalidated at dispatch, dequeue and retry.
+
+A session that has no provider session ID yet (a new tab before its first
+turn) is cached under the key `global`, and `HttpBridgeCatalogAdapter` reads
+the bridge's legacy global route directly: `/global/slash-commands` for Codex
+and Cursor, `/plugins/commands` for Claude, Pi and Grok. With a session ID it
+reads `GET /session/:id/commands` and falls back to the same legacy route only
+on a 404. Legacy rows are non-enhanced: they get a synthetic `legacy:` ID
+(`legacyCommandId`) and run as typed text, never as a selection. Retiring that surface is tracked in
+[slash-command-catalogue.md](../todo/slash-command-catalogue.md).

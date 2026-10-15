@@ -1,8 +1,8 @@
 # MCP server management
 
-Status: living. Implemented against the plan in
-[`docs/improvements/mcp/plan/`](../improvements/mcp/plan/00-index.md); the
-investigation is [`docs/improvements/mcp.md`](../improvements/mcp.md).
+Status: living. Outstanding work is in
+[mcp-management.md](../todo/mcp-management.md) and
+[mcp-environment-delivery.md](../todo/mcp-environment-delivery.md).
 
 Users add, edit, rename, remove and (where the provider has a saved switch)
 enable or disable the MCP servers each agent platform connects to, without

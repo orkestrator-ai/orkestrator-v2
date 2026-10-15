@@ -108,12 +108,9 @@ resolve, retarget or dispatch work.
    `web-annotation-migration-compat.test.ts`,
    `web-annotation-convergence.test.ts`, `lib/web-annotations/sync.ts`,
    `capture-commit.ts`, `compose-migration.ts`, and in
-   `components/browser/annotations/` `useAnnotationPins.ts`,
-   `useAnnotationCapture.ts`, `useAnnotationDraft.ts`, `useThreadHistory.ts`
-   and `format.ts`, and the header of `web-annotations-electron.spec.ts`. The
-   step 01 citation in `web-annotations.ts` (`WEB_ANNOTATION_REQUEST_TRANSITIONS`)
-   and the step 10 citation in `browser-preview-anchor-script.ts` point at
-   kept documents; add their paths.
+   `components/browser/annotations/` `useAnnotationCapture.ts`,
+   `useAnnotationDraft.ts`, `useThreadHistory.ts` and `format.ts`, and the
+   header of `web-annotations-electron.spec.ts`.
 
 ## Constraints and rationale
 
@@ -151,16 +148,8 @@ resolve, retarget or dispatch work.
   for no-touch status and interaction reads.
 - [composer-model-parameters.md](composer-model-parameters.md) for mode
   scope per provider.
-- [anchor resolution rules](../improvements/web-page-annotations/plan/10-anchors-navigation-and-stale-targets.md).
-- Living-doc drift to fix in
-  [web-page-annotations.md](../architecture/web-page-annotations.md):
-  - The Components table names `web-annotations-fixtures.ts` as if it sat
-    next to `web-annotations.ts`. It is
-    `packages/protocol/src/testing/web-annotations-fixtures.ts`.
-  - The first "Known limitations" bullet says the outcome is `unknown` when
-    status cannot be read "without hydrating the transcript". The code reads
-    status without starting a bridge (`observeProvider`), and the outcome is
-    `unknown` when no running bridge answers.
+- [web-page-annotations.md](../architecture/web-page-annotations.md)
+  §"Anchors and pins" and §"Request states".
 
 ## Replaces
 

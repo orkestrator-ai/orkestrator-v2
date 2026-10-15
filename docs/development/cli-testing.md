@@ -216,6 +216,43 @@ ork run get --request-id cli-qa:start --action session.start
 CLI scenarios (`mise run test:cli:scenarios`) test the CLI itself against
 disposable backends; see [testing-guide.md](testing-guide.md#cli-scenarios).
 
+## Coverage by layer
+
+Domain edge cases stay beside their owners: `apps/backend/src/core/public-api/*.test.ts`,
+`packages/protocol/src/public-api.test.ts` and `packages/cli/tests/client-*.test.ts`.
+A small set of packaged scenarios (`packages/cli/scenarios/cases.ts`, harness in
+`harness.ts`, runner `packages/cli/scripts/run-scenarios.ts`) proves the
+complete path, and `e2e/agent-testing/cli-ui.spec.ts` covers what the UI must
+show. Do not repeat every unit assertion through a slow subprocess. Before
+adding a test, check where its scenario class is already proved:
+
+| Scenario class | Where it is proved |
+| --- | --- |
+| Read-only client | `read-only` scenario; `cli-client.test.ts` (no backend initialised for help, version or errors) |
+| Local lifecycle | `local-lifecycle` scenario (base commit, worktree path, rename, fork, stop, delete, no worktrees left) |
+| Settings concurrency | `public-api-projects.test.ts` (stale revision, unrelated fields preserved, launch intent kept); `local-lifecycle` stale revision; CLI-set value seen in the browser in `cli-ui.spec.ts` |
+| Retry and retention | `retry-and-retention` scenario; `public-api-projects.test.ts` and `public-api-recovery.test.ts` (one execution, conflict, deleted-resource replay, retired namespace, corrupt store) |
+| Setup failure | `setup-failure` scenario; `public-api-launch.test.ts` (setup, then exactly one initial prompt) |
+| Lost prompt acknowledgement | `public-api-sessions.test.ts` (unknown dispatch parks, blocks other prompts, retries under the same key; discard stays unknown) |
+| Client exit | `client-exit` scenario (CLI killed mid-start; a second environment runs; the first settles) |
+| Fast or multiple turns | `public-api-sessions.test.ts` (own-request evidence only, independent sessions, consecutive runs) |
+| Backend or bridge restart | `public-api-recovery.test.ts`, `public-api-exec.test.ts` (dead-generation start interrupted, create settled from state, exec worker reconciled, not re-run) |
+| Pending interaction | `public-api-sessions.test.ts` with a controlled provider (exact answer; stale or malformed never approves; an answered question stops reporting input); live Claude in `cli-ui.spec.ts` (question rehydrates in an inactive, reloaded renderer; the UI answer completes the CLI run; a replayed answer is refused) |
+| Control race | `public-api-sessions.test.ts` (stop refuses an idle or mismatched run; steering refused where unsupported) |
+| Inactive UI | `cli-ui.spec.ts` (CLI changes reach an open and a reloaded renderer; a live Claude turn asks while another environment is shown, then the page reloads and the answer is given in the UI) |
+| Wrong profile or owner | `wrong-profile` scenario (missing explicit profile); `client-connections.test.ts` (stale descriptor, no fallback). The foreign-owner Docker decoy exists only in `browser-gateway.spec.ts` |
+| Transcript recovery | `public-api-launch.test.ts` (ordered bounded pages, older cursor); `public-api-sessions.test.ts` (routine reads never read transcripts) |
+| Following | `client-waits.test.ts` (JSONL once per message, gaps flagged). Following polls snapshots; there is no event stream |
+| Exec | `exec` scenario, local and container (exit passthrough, argv, cancel, delete during a run drains); `public-api-exec.test.ts` |
+| Live provider turn | `live-session` scenario (opt-in, `--provider`): one bounded turn with a file assertion and a follow-up |
+
+`setup-failure` and `client-exit` run locally only, so the container matrix has
+five credential-free cases. A fake backend that only exercises parsing does not
+count as gateway, backend or provider coverage. Do not claim Docker or live
+coverage from scripted adapters, or UI rehydration from API polling alone.
+Gaps and the qualification evidence log are in
+[cli-qualification.md](../todo/cli-qualification.md).
+
 ## Cleanup
 
 Delete the environments your test created (`ork environment delete ENV --wait

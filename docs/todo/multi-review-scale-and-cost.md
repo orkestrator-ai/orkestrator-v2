@@ -243,10 +243,9 @@ collected.
   | User cancellation | Whole owner | Drop queued work; decline or abort live sessions safely |
 
 - Budget values and why they were chosen (640 KiB consolidation, 1 MiB per
-  report, caps of 4/8/4/16, the 3 s running cadence) are in the kept
-  [baseline](../improvements/multi-review/plan/baseline.md), with the benchmark
-  reproduce command. Its cadence table describes `WorkflowDueScheduler`, not
-  the keyed supervisor that is now the default.
+  report, caps of 4/8/4/16, the 3 s running cadence), with the benchmark
+  reproduce command, are in
+  [`review-preparation.md`](../architecture/review-preparation.md#fan-out-budgets-and-benchmark).
 
 ## Open questions
 
@@ -254,8 +253,8 @@ collected.
   every commit re-checks the fence under the lock?
 - Should `WorkflowDueScheduler` survive as the keyed-scheduling rollback
   target, or go with the switch?
-- Is "rollout observation" still a gate? The baseline's "Rollout observations"
-  section was never filled. If the soak since 2026-09-24 is enough, remove the
+- Is "rollout observation" still a gate? The deleted baseline's "Rollout
+  observations" section was never filled. If the soak since 2026-09-24 is enough, remove the
   gates without a production metrics sink.
 
 ## Needs verification
@@ -277,9 +276,9 @@ collected.
   window for the transcript fallbacks.
 - [test-suite-and-ci-health.md](test-suite-and-ci-health.md): CI gates.
 - Flake [0171](../tests/flaky-tests/0171-multi-review-admission-benchmark-load.md).
-- [`review-preparation.md`](../architecture/review-preparation.md) stops at
-  sealing the review package. No living doc covers fan-out, supervision or
-  consolidation; the rationale above is its only home.
+- [`review-preparation.md`](../architecture/review-preparation.md) covers
+  preparation, sealing and the fan-out budgets. No living doc covers fan-out
+  supervision or consolidation; the rationale above is its only home.
 
 ## Replaces
 
@@ -296,3 +295,6 @@ collected.
 - `docs/improvements/multi-review/plan/07-progressive-reviewer-transcript-reads.md`
 - `docs/improvements/multi-review/plan/10-scale-validation-rollout-and-cleanup.md`
   (all but the quality and cache-hit items)
+- `docs/improvements/multi-review/plan/baseline.md` (budgets, rationale and
+  reproduce command moved to `review-preparation.md`; the 2026-09-23
+  before/after tables and the empty rollout log were dropped)

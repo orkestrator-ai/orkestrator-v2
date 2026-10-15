@@ -121,9 +121,61 @@ mapping; the last one performs the close. Teardowns are serialized per
 close racing the reconcile sweep) cannot both skip the provider close.
 `NativeAgentRuntimeProvider.closeSession` has the same non-destructive meaning
 for every caller (Multi Review included).
-New teardown intents carry a `retain-history-close:` session-id fence so an
-older backend reading them after a downgrade refuses them instead of replaying
-a DELETE. Step 09 of the inconsistency plan holds the caller inventory.
+New teardown intents carry a `retain-history-close:` session-id fence
+(`fenceRetainingCloseSessionId`, `packages/protocol/src/tab-teardown.ts`). A
+backend refuses an intent whose session id differs from the tab's mapping, and
+clears one with no mapping without a provider call, so an older backend reading
+a new intent after a downgrade never replays it as a DELETE. Intents written
+before the close route existed (a bare id) are replayed with the close route,
+never with the DELETE their writer would have sent. A downgrade does restore
+the old per-provider semantics for *new* closes (an old Claude bridge's DELETE
+deletes history), and history that pre-retention builds already deleted cannot
+be recovered.
+
+Claude's bridge re-adopts a closed rollout as an idle session when
+`/session/list` reconciles the SDK listing. That is history discovery, not a
+resurrected tab: the backend mapping is gone, so nothing polls or reopens it
+until the user resumes it.
+
+### Who calls close
+
+| Caller | Intent | Behaviour |
+| --- | --- | --- |
+| `teardown_tab` for a `*-native` tab | Close one tab | Bridges: `POST /session/:id/close`. OpenCode: `closeProviderSessionIfRunning` on the native agent service (never starts a server). Mapping retired on confirmation |
+| `reconcile_tab_teardowns` (startup and the 60-second sweep) | Finish an earlier tab close | Same close |
+| `reconcile_orphaned_tab_resources` (tabs no pane layout references, after a one-hour grace) | Release ownership nobody holds | Native tabs (including a startup agent session) go through `teardown_tab` |
+| `teardown_tab` for `terminal` / `claude-tmux` | Stop a terminal process | Kills the process; the tmux Claude CLI keeps its own JSONL |
+| `MultiReviewService` cleanup | Remove a finished workflow and its tabs | `provider.closeSession`, so reviewer and fix conversations are kept |
+| `close_coordinator_conversation` | Close a coordinator conversation | Stops the projection and that conversation's bridge, revokes its credentials, invalidates the mapping. No DELETE |
+| `delete_environment` | Remove an environment | Stops processes, removes mappings, worktree or container. No provider DELETE; history inside a removed container goes with it |
+| Native agent reconcile on an authoritative `missing` | Drop a mapping whose provider session is gone | Mapping only |
+
+Claude's `DELETE /session/:id` (SDK `deleteSession`) is the only destructive
+operation and nothing in the backend or renderer calls it.
+
+## What survives a restart
+
+"Bridge restart" means the bridge process dies and a successor starts on the
+same state directory; "backend restart" means the backend restarts while
+bridges keep running. Backend stores are rows in `orkestrator.sqlite`
+([storage.md](storage.md)).
+
+| Record | Owner | Bridge restart | Backend restart |
+| --- | --- | --- | --- |
+| Logical tab → provider session mapping | Backend `native-agent-sessions` store | Kept | Kept |
+| Tab teardown intent | Backend `environments` store, `tabTeardownIntents` | Kept | Kept; replayed by `reconcile_tab_teardowns` |
+| Parked prompt or steer with an unknown outcome | `pendingDispatch` on the native session record (`storage-native.ts`), with retry and discard controls | Kept | Kept |
+| Compose draft (text, attachments, metadata) | Backend `compose-drafts` store; the renderer copy is a cache | Kept | Kept |
+| Cursor session identity, prompt and steer journals, steer fence, rendered transcript | `CURSOR_BRIDGE_STATE_DIR/state.json` | Kept; unfinished prompts reload as `ambiguous`, transcripts may be shed with an explicit truncation base | Unaffected |
+| Cursor closing state | `closing` tombstones in `state.json` until the removal is published | Tombstone kept; close finished on start | Unaffected |
+| Cursor attach promise, dispatch claim, cancel handle, parked cancel | Bridge memory | Lost | Unaffected |
+| Pi session pointer, journals, rendered transcript | `PI_BRIDGE_STATE_DIR/state.json`; the conversation is Pi's own JSONL file | Kept | Unaffected |
+| Pi prompt claim and parked cancel | Bridge memory (`promptClaim`, `cancelRequestedClaim`) | Lost; an unfinished prompt reconciles through its ambiguous journal entry | Unaffected |
+| Codex thread registry and dispatch journal | `sessions/persistence.ts`, `sessions/dispatch-journal.ts`; the rollout belongs to `codex app-server` | Kept; `prepared` reads as unknown | Unaffected |
+| Claude session identity and dispatch journal | Bridge preferences file (`session-manager-persistence.ts`); the conversation is the SDK's `{sessionId}.jsonl` | Kept | Unaffected |
+| Grok session state and journal | `ACP_STATE_DIR`; unfinished entries reload as `ambiguous` | Kept | Unaffected |
+| OpenCode session and history | The OpenCode server; the backend holds registration and subscriptions in memory | No bridge | Registration lost; the session persists on the server |
+| Transcript cursor | Request state; bridges answer from `droppedMessages` plus the retained window | A restart changes the window; an invalid cursor falls back to the retained window | Unaffected |
 
 ## Claude Code
 
@@ -565,10 +617,13 @@ registered throughout, so a retry never sees an early `missing`: an attach
 that outlasts its wait, a child that does not exit, or a failed state write
 answers 503 pending and leaves the session fenced until a retry completes.
 `closing` is not persisted, so a bridge restart restores the session unfenced
-and the backend's retry closes it. ACP has no release call and no delete
-method: close stops work by terminating the CLI child, drops the bridge's own
-journal and usage for the session, and leaves Grok's store untouched, so
-`/session/list` + `session/load` reopen the conversation.
+and the backend's retry closes it. Before terminating the child, a session
+whose agent advertised `sessionCapabilities.close` is sent ACP `session/close`
+(best effort, bounded by `ACP_CLOSE_SESSION_WAIT_MS`). The spec makes that
+cancel-and-release, not delete; the bridge never sends `session/delete`, and
+Grok CLI 1.0.52 keeps the conversation listed and loadable after it. Close
+drops the bridge's own journal and usage for the session and leaves Grok's
+store untouched, so `/session/list` + `session/load` reopen the conversation.
 
 ## Pi
 

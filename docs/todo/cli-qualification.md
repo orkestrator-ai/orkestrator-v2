@@ -120,10 +120,11 @@ codes only).
     `readOpenCodeTurnTerminalError` in `opencode-turn-outcome.ts`); `run wait`
     exited 6 for up to ten seconds after a question was answered.
   - Not run: Pi, Cursor, Grok (bridges not packaged); macOS; Docker Desktop.
-  - Per-scenario commands, durations and artifact IDs are in the historical
-    table in
-    [`14-targeted-testing-and-qualification.md`](../improvements/cli-commands/plan/14-targeted-testing-and-qualification.md),
-    which also maps each scenario class to the test that proves it.
+  - Durations: live local runs 31 to 45 s; live container runs 35 to 90 s
+    (Claude under the restricted allowlist took 90 s). The per-run artifact
+    table was dropped with the plan; artifacts were git-ignored. Which test
+    proves each scenario class is in
+    [`cli-testing.md`](../development/cli-testing.md#coverage-by-layer).
 
 ## Constraints and rationale
 
@@ -144,7 +145,7 @@ codes only).
 - Should qualified providers be re-run after every agent SDK or binary
   upgrade? [`upgrade-agents.md`](../development/upgrade-agents.md) has no such
   step, and
-  [`dependency-upgrade-schedule-2026-10-13.md`](../development/dependency-upgrade-schedule-2026-10-13.md)
+  [`upgrade-agents.md` → Other dependencies](../development/upgrade-agents.md#other-dependencies)
   lists `test:cli:scenarios` only for bundled native dependencies. The shared
   question is in
   [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md).
@@ -164,14 +165,6 @@ codes only).
   [`cli-testing.md`](../development/cli-testing.md),
   [`testing-guide.md`](../development/testing-guide.md#cli-scenarios),
   [`agent-testing.md`](../development/agent-testing.md).
-- Living-doc drift to fix:
-  - `testing-guide.md` "CLI scenarios" says to record live results in the
-    kept historical evidence file; point it at this file's "Evidence log".
-  - `public-cli.md` "Targeted scenarios" mentions `--network full` and
-    `ORKESTRATOR_SCENARIO_MODEL` but not the Codex `CODEX_HOME` opt-in.
-  - `public-cli.md` says Pi, Cursor and Grok "need a full development
-    profile", but the scenario runner cannot target one, so there is no
-    documented way to qualify them.
 
 ## Replaces
 
@@ -183,3 +176,7 @@ codes only).
   (unqualified providers)
 - `docs/improvements/cli-commands/plan/15-packaging-documentation-and-rollout.md`
   (macOS packaging and Docker Desktop)
+- `docs/improvements/cli-commands/plan/14-targeted-testing-and-qualification.md`
+  (coverage-by-layer table moved to `cli-testing.md`; other-provider question
+  cards, the Docker decoy and measurement are items 3, 4 and 6 above; the
+  per-run evidence table was summarised into "Evidence log")

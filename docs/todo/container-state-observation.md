@@ -155,9 +155,10 @@ lose no exact recovery.
   (Docker status sampler), [container-platform-qualification.md](container-platform-qualification.md).
 - [Event and snapshot recovery](../architecture/event-snapshot-recovery.md)
   (worktree snapshot revisions).
-- [Recurring-work inventory](../imrovements/recurring-processes.md) (B18) and
-  [latency budgets and harness method](../improvements/recurring-processes/baseline/README.md).
-- [Container benchmarks](../improvements/containers/benchmarks.md).
+- [Recurring-work inventory](../architecture/recurring-work.md#inventory) (B18),
+  [latency budgets](../architecture/recurring-work.md#latency-budgets) and the
+  [harness method](../development/testing-guide.md#recurring-work-harness).
+- [Container benchmarks](../development/container-qualification.md#benchmarks).
 
 ## Replaces
 

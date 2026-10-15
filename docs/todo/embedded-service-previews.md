@@ -112,15 +112,15 @@ browser privacy tests.
   capabilities, advertised only on evidence.
 - Keep the iOS control WebView's nonpersistent store and privileged handlers
   separate from preview content.
-- The threat boundaries in the
-  [decision record](../improvements/browser/plan/01-decision-record.md) apply
-  unchanged: application code gets no control authority and no access to other
-  services.
+- The threat boundaries in
+  [browser-previews.md](../architecture/browser-previews.md) §"Security
+  boundaries" apply unchanged: application code gets no control authority and
+  no access to other services.
 
 ## Open questions
 
-- Is embedding worth the cost, given that top-level previews work? The
-  decision record leaves it optional.
+- Is embedding worth the cost, given that top-level previews work? It was
+  always planned as optional.
 - If only some browsers pass, is a per-platform embedded mode acceptable, or
   should the product stay top-level everywhere for consistency?
 - Should the iOS in-app view come before or after the web iframe?
@@ -142,5 +142,7 @@ browser privacy tests.
   (embedded web preview and iOS/WKWebView sections)
 - `docs/improvements/browser/plan/01-architecture-and-fixtures.md` (hosted
   embedding and Safari/WKWebView prototype row)
+- `docs/improvements/browser/plan/01-decision-record.md` (embedded modes stay
+  unadvertised until real-browser privacy tests pass)
 - `docs/improvements/browser/proposal.md` §3 (hosted-client embedding,
   partitioned cookies)

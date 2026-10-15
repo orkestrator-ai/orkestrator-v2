@@ -253,7 +253,7 @@ description = "Run the root unit tests"
 run = "bun test tests/unit"
 
 [tasks."efficiency:baseline"]
-description = "Run the efficiency counters harness (docs/improvements/efficiency/baseline)"
+description = "Run the efficiency counters harness (docs/development/efficiency-harness.md)"
 raw_args = true
 run = "bun scripts/efficiency/run.ts"
 

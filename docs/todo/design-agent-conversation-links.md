@@ -94,7 +94,7 @@ annotation, when it goes into a brand-new conversation.
   "Closing a native tab ends its conversation", and the dialog follows that.
   If that is the intended product rule, drop items 1–3 and keep 4 and 5. The
   caller inventory for close and retention is in
-  [`09-conversation-retention-and-close-semantics.md`](../improvements/inconsistencies/plan/09-conversation-retention-and-close-semantics.md).
+  [`agent-engines.md` → Who calls close](../architecture/agent-engines.md#who-calls-close).
 
 ## Related
 

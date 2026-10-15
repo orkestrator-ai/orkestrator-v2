@@ -108,8 +108,8 @@ and the real OpenCode SDK client for the event stream only.
 - Budgets (p95): pending approval visible within 2 s on an active view,
   background activity indicator within 4 s, turn completion or queued
   dispatch within 3 s. The backend's 4 s safety read keeps a lost event inside
-  the activity budget. Source: the
-  [recurring baseline](../improvements/recurring-processes/baseline/README.md).
+  the activity budget. Source:
+  [recurring-work.md](../architecture/recurring-work.md#latency-budgets).
 - Responsive phases (running, blocked, cancelling, recovering) never back off
   on the client.
 - A provider whose events stay incomplete keeps its fallback reads. Do not
@@ -133,8 +133,8 @@ and the real OpenCode SDK client for the event stream only.
 - [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md):
   interaction contract gaps per provider.
 - `../architecture/event-snapshot-recovery.md` ("Native observation
-  invalidations") and `../imrovements/recurring-processes.md` (inventory rows
-  C01 and B06 to B10).
+  invalidations") and `../architecture/recurring-work.md` (inventory rows
+  C01 and B06 to B10, the observation broker and the read coordinator).
 - Living-doc drift to fix:
   - `event-snapshot-recovery.md` titles the section "Native observation
     invalidations (step 07)"; drop the step label.
@@ -149,5 +149,5 @@ and the real OpenCode SDK client for the event stream only.
   cross-instance sharing, live providers, B08)
 - `docs/improvements/recurring-processes/plan/06-client-read-coordination.md`
   (task 8, Claude and Codex gating)
-- `docs/imrovements/recurring-processes.md` (kept; findings F05 and F06,
-  inventory rows C01 and B06 to B10)
+- `docs/imrovements/recurring-processes.md` (findings F05 and F06; inventory
+  rows C01 and B06 to B10 moved to `../architecture/recurring-work.md`)

@@ -1,5 +1,6 @@
 /**
- * Container performance baselines (containers plan step 13).
+ * Container performance baselines. The regression targets the report is
+ * compared against are in docs/development/container-qualification.md.
  *
  * Opt-in and slow: RUN_CONTAINER_BENCHMARKS=1 and
  * ORKESTRATOR_QUALIFICATION_IMAGE=<image>. Uses synthetic fixtures only, runs

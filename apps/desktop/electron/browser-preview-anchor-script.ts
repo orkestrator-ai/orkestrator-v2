@@ -1228,7 +1228,8 @@ export function browserPreviewAnchorKit() {
     }
     if (budget.exhausted) return tooComplex();
     if (ambiguousCount > 1) return result("ambiguous", "none", ambiguousCount);
-    // Only exactly one corroborated candidate may match (plan step 10, rule 3).
+    // Only exactly one corroborated candidate may match (rule 3 in
+    // docs/architecture/web-page-annotations.md, "Resolution rules").
     if (unverifiedCandidate) return result("ambiguous", "semantic-context", 1);
     if (staleCandidate) return result("stale", "none", 1);
     return result("missing", "none", 0);

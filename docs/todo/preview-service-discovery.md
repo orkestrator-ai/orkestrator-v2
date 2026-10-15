@@ -102,9 +102,7 @@ open port is never treated as proof of ownership.
 - [service-preview-rollout.md](service-preview-rollout.md) (transports,
   qualification and legacy route).
 - [browser-previews.md](../architecture/browser-previews.md) §"Registering
-  services" and §"Framework configuration".
-- [decision record](../improvements/browser/plan/01-decision-record.md)
-  ("Target scope" decision).
+  services" (target scope) and §"Framework configuration".
 
 ## Replaces
 

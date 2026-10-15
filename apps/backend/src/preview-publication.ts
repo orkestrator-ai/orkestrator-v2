@@ -107,8 +107,8 @@ function readForm(request: IncomingMessage): Promise<URLSearchParams> {
  * Orkestrator API, renderer, and agent bridges are never reachable through it.
  * Hosts are derived from the stable service identity, so a hostname is never
  * reused for a different service. DNS and the certificate are operator
- * provisioned (see the decision record); without them publication stays
- * unavailable and desktop transport is unaffected.
+ * provisioned (see docs/architecture/browser-previews.md); without them
+ * publication stays unavailable and desktop transport is unaffected.
  */
 export class PreviewPublicationManager implements PreviewPublicationPort {
   private server: Server | null = null;

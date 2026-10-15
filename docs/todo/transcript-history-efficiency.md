@@ -63,7 +63,7 @@ that was never run.
   install.
 - Measurement. `scripts/efficiency/` runs workloads `a` to `j` through
   `mise run efficiency:baseline` (usage and method:
-  [efficiency baseline](../improvements/efficiency/baseline/README.md)).
+  [efficiency-harness.md](../development/efficiency-harness.md)).
   `ProgressiveReadPhaseTimer` (`native-agent-progressive-metrics.ts`) splits
   transcript and direct-page reads into source, normalise and scheduler-wait
   phases.
@@ -309,8 +309,9 @@ credentials and platforms CI lacks, batch with
   deferred container watcher is in `container-state-observation.md`)
 - `docs/improvements/efficiency/plan/19-integration-and-rollout.md` (unrun
   qualification; remote rows are in `remote-client-bandwidth.md`)
-- `docs/improvements/efficiency/baseline/README.md` (kept; its "Not measured
-  here" list)
+- `docs/improvements/efficiency/baseline/README.md` (usage, method and
+  limitations moved to `../development/efficiency-harness.md`; its "Not
+  measured here" gaps are in the measurement and qualification items above)
 - `docs/improvements/efficiency/baseline/final-summary.json` (historical #875
   comparison)
 - `docs/improvements/efficiency/baseline/step-01-summary.json` (superseded by

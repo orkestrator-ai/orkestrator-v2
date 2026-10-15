@@ -163,15 +163,9 @@ that were left unavailable on purpose and need a decision.
   support-window policy and other compatibility paths awaiting retirement.
 - [cli-command-surface.md](cli-command-surface.md) for selected commands from
   the CLI.
-- [Qualification record](../improvements/slash-commands/qualification.md) for
-  the per-provider support, disabled-command and literal-suppression tables.
-- Living-doc drift to fix:
-  - [`native-agent-commands.md`](../architecture/native-agent-commands.md)
-    does not describe the pre-session read: with no provider session ID the
-    backend reads the legacy global route directly. It says only that a 404
-    falls back.
-  - `native-agent-commands.md` links two background documents that are being
-    deleted; link this file instead.
+- [`native-agent-commands.md`](../architecture/native-agent-commands.md#provider-support)
+  for the per-provider support, unavailable-command and literal-suppression
+  tables, and the pre-session legacy read ("Lifecycle").
 
 ## Replaces
 

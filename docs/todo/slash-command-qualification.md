@@ -12,9 +12,10 @@ Failures found here become code items in
 
 ## Current state
 
-- The per-provider support, disabled-command and literal-suppression tables are
-  in the [qualification record](../improvements/slash-commands/qualification.md),
-  dated 2026-09-23. Its pins are stale:
+- The per-provider support, unavailable-command and literal-suppression tables
+  are in [`native-agent-commands.md`](../architecture/native-agent-commands.md#provider-support).
+  They were qualified on 2026-09-23 from source and fakes, and the pins they were
+  read from are stale:
 
   | Provider | Recorded pin | Current pin |
   | --- | --- | --- |
@@ -65,8 +66,9 @@ Failures found here become code items in
    - Codex: what are the enabled, disabled and duplicate skill semantics? Does
      a cold `skills/list` work without resuming threads?
    - OpenCode: how long does a `session.command` response take (it answers only
-     after the whole turn), and do command agent and model defaults interact
-     correctly with explicit selections?
+     after the whole turn), do command agent and model defaults interact
+     correctly with explicit selections, and does the server still substitute
+     `$ARGUMENTS` before running a template's `` !`cmd` `` spans?
    - Pi 1.2.0: extension-before-template precedence, headless extension
      completion, whether `reload()` is still unsafe mid-turn, and the literal
      opt-out (`expandPromptTemplates: false`).
@@ -103,8 +105,10 @@ Failures found here become code items in
    Opening the picker must not trigger a provider process or filesystem scan
    per keystroke. Report measured numbers; do not set latency claims in
    advance.
-6. After a pass, re-date the qualification record's pins and update the owner
-   comments listed in [slash-command-catalogue.md](slash-command-catalogue.md).
+6. After a pass, update the qualification paragraph and tables in
+   `native-agent-commands.md` "Provider support" (pins, and drop the "no live
+   session" caveat for what passed), and the owner comments listed in
+   [slash-command-catalogue.md](slash-command-catalogue.md).
 
 ## Constraints and rationale
 
@@ -140,11 +144,6 @@ Failures found here become code items in
 - [`native-agent-commands.md`](../architecture/native-agent-commands.md),
   [`agent-testing.md`](../development/agent-testing.md),
   [`testing-guide.md`](../development/testing-guide.md).
-- Living-doc drift to fix: `native-agent-commands.md` "Provider notes" points
-  to the qualification record without saying it is pinned to versions that have
-  since changed, and it does not carry the security note that OpenCode
-  substitutes `$ARGUMENTS` before running a template's `` !`cmd` `` spans, so
-  user arguments can reach a shell on OpenCode's server.
 
 ## Replaces
 
@@ -156,3 +155,7 @@ Failures found here become code items in
   (inactive-environment scenario, containers, mixed versions, performance)
 - `docs/improvements/slash-commands/plan/10-grok-and-cursor.md` (the Grok
   `session/load` re-send probe)
+- `docs/improvements/slash-commands/qualification.md` (support, unavailable
+  and literal-suppression tables and design findings moved to
+  `native-agent-commands.md`; blocked live probes are items 1 and 2 above;
+  the branch validation run was dropped)

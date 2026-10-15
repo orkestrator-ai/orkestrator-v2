@@ -58,9 +58,9 @@ it reaches. Some rules of thumb:
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
 | High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 60 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 233 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 243 |
 | Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 249 |
-| **Total** | | **543** |
+| **Total** | | **553** |
 
 ## Very high
 
@@ -301,6 +301,19 @@ it reaches. Some rules of thumb:
 - [ ] Stage `~/.cursor/mcp.json` into containers and retire Cursor's `blocked-policy` delivery branch ([mcp-environment-delivery.md](mcp-environment-delivery.md))
 - [ ] Show MCP execution location and allowlist warnings; gate container or remote sign-in on callback reachability ([mcp-environment-delivery.md](mcp-environment-delivery.md))
 - [ ] Qualify that Pi and Cursor MCP delivery respects opt-outs, size bounds, symlink rules and modes ([mcp-environment-delivery.md](mcp-environment-delivery.md), qualification)
+
+### Control MCP (medium)
+
+- [ ] Add JSON Schema inputs, capabilities and confirmation classes for every public action, and test handlers against them ([control-mcp-voice-surface.md](control-mcp-voice-surface.md))
+- [ ] Dispatch public actions in-process from Control MCP under a per-credential authority, and scope `run.get` to it ([control-mcp-voice-surface.md](control-mcp-voice-surface.md))
+- [ ] Add named, scoped Control MCP operator credentials with profiles, and filter `tools/list` by credential ([control-mcp-voice-surface.md](control-mcp-voice-surface.md))
+- [ ] Add the Control MCP gateway (`find_actions`, `describe_action`, `run_action`, `run_status`) with confirmation tokens ([control-mcp-voice-surface.md](control-mcp-voice-surface.md))
+- [ ] Add the voice core tools with spoken result summaries, within an 8,000-byte `tools/list` budget ([control-mcp-voice-surface.md](control-mcp-voice-surface.md))
+- [ ] Add an `attention.list` public action and CLI command for proactive voice notifications ([control-mcp-voice-surface.md](control-mcp-voice-surface.md))
+- [ ] Rebase the operator MCP tools on public actions, and add `ticket.*` and `mail.*` public actions with CLI commands ([control-mcp-voice-surface.md](control-mcp-voice-surface.md))
+- [ ] Add a public-action, CLI and MCP parity test ([control-mcp-voice-surface.md](control-mcp-voice-surface.md))
+- [ ] Qualify a local realtime voice client end to end: latency, target resolution and token use ([control-mcp-voice-surface.md](control-mcp-voice-surface.md), qualification)
+- [ ] Decide MCP credential authority and storage, voice confirmation rules and hosted-voice access ([control-mcp-voice-surface.md](control-mcp-voice-surface.md), decision)
 
 ### Agent engines and provider SDKs (medium)
 
@@ -762,6 +775,7 @@ it reaches. Some rules of thumb:
 | **MCP** | | | | | |
 | [mcp-management.md](mcp-management.md) |  | 4 | 10 | 6 | 20 |
 | [mcp-environment-delivery.md](mcp-environment-delivery.md) |  |  | 4 | 10 | 14 |
+| [control-mcp-voice-surface.md](control-mcp-voice-surface.md) |  |  | 10 |  | 10 |
 | **Agent engines and provider SDKs** | | | | | |
 | [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md) |  | 3 | 9 | 4 | 16 |
 | [mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md) |  | 1 | 3 | 5 | 9 |

@@ -1,6 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { parseSync, visitorKeys, type Node } from "oxc-parser";
 
 const repoRoot = resolve(import.meta.dir, "../..");
@@ -142,9 +152,11 @@ interface ParsedFile {
   classes: ClassDecl[];
   /** Local binding -> where it was imported from. */
   imports: Map<string, { imported: string; source: string }>;
+  exports: Map<string, { local: string } | { imported: string; source: string }>;
+  exportAll: string[];
 }
 
-function sourceFiles(root: string): string[] {
+function sourceFiles(root: string, projectRoot: string): string[] {
   const out: string[] = [];
   const walk = (dir: string) => {
     for (const entry of readdirSync(dir)) {
@@ -159,7 +171,7 @@ function sourceFiles(root: string): string[] {
       out.push(full);
     }
   };
-  const start = join(repoRoot, root);
+  const start = join(projectRoot, root);
   if (existsSync(start)) walk(start);
   return out;
 }
@@ -181,7 +193,47 @@ function parseFile(file: string, source: string): ParsedFile {
   if (errors.length > 0) throw new Error(`${relative(repoRoot, file)}: ${errors[0]!.message}`);
   const classes: ClassDecl[] = [];
   const imports = new Map<string, { imported: string; source: string }>();
+  const exports: ParsedFile["exports"] = new Map();
+  const exportAll: string[] = [];
   const visit = (node: Node): void => {
+    if (node.type === "ExportNamedDeclaration") {
+      if (node.declaration?.type === "ClassDeclaration" && node.declaration.id) {
+        exports.set(node.declaration.id.name, { local: node.declaration.id.name });
+      }
+      for (const specifier of node.specifiers) {
+        const exported =
+          specifier.exported.type === "Identifier"
+            ? specifier.exported.name
+            : specifier.exported.value;
+        const local =
+          specifier.local.type === "Identifier" ? specifier.local.name : specifier.local.value;
+        exports.set(
+          exported,
+          node.source ? { imported: local, source: node.source.value } : { local },
+        );
+      }
+    }
+    if (node.type === "ExportAllDeclaration" && !node.exported) {
+      exportAll.push(node.source.value);
+    }
+    if (node.type === "ExportDefaultDeclaration") {
+      const declaration = node.declaration;
+      if (declaration.type === "Identifier") {
+        exports.set("default", { local: declaration.name });
+      } else if (declaration.type === "ClassDeclaration") {
+        exports.set("default", { local: declaration.id?.name ?? "default" });
+        if (!declaration.id) {
+          classes.push({
+            file,
+            name: "default",
+            superName:
+              declaration.superClass?.type === "Identifier"
+                ? declaration.superClass.name
+                : undefined,
+          });
+        }
+      }
+    }
     if (node.type === "ImportDeclaration") {
       for (const specifier of node.specifiers) {
         const imported =
@@ -209,11 +261,18 @@ function parseFile(file: string, source: string): ParsedFile {
     forEachChild(node, visit);
   };
   visit(program);
-  return { classes, imports };
+  return { classes, imports, exports, exportAll };
 }
 
-function resolveRelative(fromFile: string, spec: string): string | null {
-  const base = resolve(dirname(fromFile), spec).replace(/\.(?:m|c)?[jt]sx?$/, "");
+function resolveModule(fromFile: string, spec: string, projectRoot: string): string | null {
+  const webRoot = join(projectRoot, "apps/web");
+  const basePath = spec.startsWith(".")
+    ? resolve(dirname(fromFile), spec)
+    : spec.startsWith("@/") && fromFile.startsWith(webRoot + sep)
+      ? join(webRoot, "src", spec.slice(2))
+      : null;
+  if (!basePath) return null;
+  const base = basePath.replace(/\.(?:m|c)?[jt]sx?$/, "");
   for (const candidate of [".ts", ".tsx", "/index.ts", "/index.tsx"]) {
     if (existsSync(base + candidate)) return base + candidate;
   }
@@ -228,11 +287,12 @@ function key(decl: ClassDecl): string {
  * Every root-to-leaf path of project-class inheritance, base first. A class
  * with two subclasses yields two paths.
  */
-function findChains(): { names: string[]; leafFile: string }[] {
+function findChains(projectRoot = repoRoot): { names: string[]; leafFile: string }[] {
   const parsed = new Map<string, ParsedFile>();
-  for (const file of SCANNED_ROOTS.flatMap(sourceFiles)) {
+  for (const file of SCANNED_ROOTS.flatMap((root) => sourceFiles(root, projectRoot))) {
     const source = readFileSync(file, "utf8");
-    if (!/\bclass\b/.test(source)) continue;
+    // Barrels without classes still carry the superclass's export path.
+    if (!/\b(?:class|export)\b/.test(source)) continue;
     parsed.set(file, parseFile(file, source));
   }
 
@@ -240,6 +300,38 @@ function findChains(): { names: string[]; leafFile: string }[] {
   for (const { classes } of parsed.values()) {
     for (const decl of classes) byName.set(decl.name, [...(byName.get(decl.name) ?? []), decl]);
   }
+
+  const resolveExport = (
+    target: string,
+    name: string,
+    seen = new Set<string>(),
+  ): ClassDecl | undefined => {
+    const exportKey = `${target}#${name}`;
+    if (seen.has(exportKey)) return undefined;
+    seen.add(exportKey);
+    const file = parsed.get(target);
+    if (!file) return undefined;
+    const binding = file.exports.get(name);
+    if (binding) {
+      if ("local" in binding) {
+        const local = file.classes.find((decl) => decl.name === binding.local);
+        if (local) return local;
+        const imported = file.imports.get(binding.local);
+        const source = imported && resolveModule(target, imported.source, projectRoot);
+        return source && imported ? resolveExport(source, imported.imported, seen) : undefined;
+      }
+      const source = resolveModule(target, binding.source, projectRoot);
+      return source ? resolveExport(source, binding.imported, seen) : undefined;
+    }
+    if (name !== "default") {
+      for (const spec of file.exportAll) {
+        const source = resolveModule(target, spec, projectRoot);
+        const declaration = source ? resolveExport(source, name, seen) : undefined;
+        if (declaration) return declaration;
+      }
+    }
+    return undefined;
+  };
 
   const resolveSuper = (decl: ClassDecl): ClassDecl | undefined => {
     if (!decl.superName) return undefined;
@@ -249,17 +341,10 @@ function findChains(): { names: string[]; leafFile: string }[] {
     // Not declared here and not imported: a global such as `Error` or `Map`.
     const binding = file.imports.get(decl.superName);
     if (!binding) return undefined;
-    const isProjectImport =
-      binding.source.startsWith(".") || binding.source.startsWith("@orkestrator/");
-    if (!isProjectImport) return undefined;
-    if (binding.source.startsWith(".")) {
-      const target = resolveRelative(decl.file, binding.source);
-      const direct = target
-        ? parsed.get(target)?.classes.find((other) => other.name === binding.imported)
-        : undefined;
-      if (direct) return direct;
-    }
-    // Workspace package or barrel re-export: fall back to the unique declaration.
+    const target = resolveModule(decl.file, binding.source, projectRoot);
+    if (target) return resolveExport(target, binding.imported);
+    if (!binding.source.startsWith("@orkestrator/")) return undefined;
+    // Workspace package exports: fall back to the unique declaration.
     const candidates = byName.get(binding.imported) ?? [];
     if (candidates.length > 1) {
       throw new Error(
@@ -287,12 +372,145 @@ function findChains(): { names: string[]; leafFile: string }[] {
     for (let current = parentOf.get(key(decl)); current; current = parentOf.get(key(current))) {
       names.unshift(current.name);
     }
-    chains.push({ names, leafFile: relative(repoRoot, decl.file) });
+    chains.push({ names, leafFile: relative(projectRoot, decl.file) });
   }
   return chains.sort((a, b) => a.names.join().localeCompare(b.names.join()));
 }
 
 const chainKey = (classes: readonly string[]) => classes.join(" -> ");
+
+describe("inheritance resolver fixtures", () => {
+  const cases: Array<{
+    name: string;
+    files: Record<string, string>;
+    expectedNames: string[][];
+  }> = [
+    {
+      name: "relative named import",
+      files: {
+        "apps/web/src/lib/base.ts": "export class Base {}",
+        "apps/web/src/child.ts": "import { Base } from './lib/base'; class Child extends Base {}",
+      },
+      expectedNames: [["Base", "Child"]],
+    },
+    {
+      name: "web alias with a duplicate class name elsewhere",
+      files: {
+        "apps/web/src/lib/base.ts": "export class Base {}",
+        "apps/backend/src/base.ts": "export class Base {}",
+        "apps/web/src/child.ts": "import { Base } from '@/lib/base'; class Child extends Base {}",
+      },
+      expectedNames: [["Base", "Child"]],
+    },
+    {
+      name: "renamed import",
+      files: {
+        "apps/web/src/lib/base.ts": "export class Base {}",
+        "apps/web/src/child.ts":
+          "import { Base as Parent } from './lib/base.js'; class Child extends Parent {}",
+      },
+      expectedNames: [["Base", "Child"]],
+    },
+    {
+      name: "renamed barrel re-export through the web alias",
+      files: {
+        "apps/web/src/lib/base.ts": "export class Base {}",
+        "apps/web/src/lib/index.ts": "export { Base as Parent } from './base';",
+        "apps/web/src/child.ts":
+          "import { Parent as Renamed } from '@/lib'; class Child extends Renamed {}",
+      },
+      expectedNames: [["Base", "Child"]],
+    },
+    {
+      name: "star barrel re-export",
+      files: {
+        "apps/web/src/lib/base.ts": "export class Base {}",
+        "apps/web/src/lib/index.ts": "export * from './base';",
+        "apps/web/src/child.ts": "import { Base } from './lib'; class Child extends Base {}",
+      },
+      expectedNames: [["Base", "Child"]],
+    },
+    {
+      name: "barrel import followed by a local export",
+      files: {
+        "apps/web/src/lib/base.ts": "export class Base {}",
+        "apps/web/src/lib/index.ts": "import { Base } from './base'; export { Base as Parent };",
+        "apps/web/src/child.ts": "import { Parent } from '@/lib'; class Child extends Parent {}",
+      },
+      expectedNames: [["Base", "Child"]],
+    },
+    {
+      name: "named default class",
+      files: {
+        "apps/web/src/lib/base.ts": "export default class Base {}",
+        "apps/web/src/child.ts": "import Parent from '@/lib/base'; class Child extends Parent {}",
+      },
+      expectedNames: [["Base", "Child"]],
+    },
+    {
+      name: "default identifier re-exported by a barrel",
+      files: {
+        "apps/web/src/lib/base.ts": "class Base {} export default Base;",
+        "apps/web/src/lib/index.ts": "export { default as Parent } from './base';",
+        "apps/web/src/child.ts": "import { Parent } from '@/lib'; class Child extends Parent {}",
+      },
+      expectedNames: [["Base", "Child"]],
+    },
+    {
+      name: "anonymous default class",
+      files: {
+        "apps/web/src/lib/base.ts": "export default class {}",
+        "apps/web/src/child.ts": "import Parent from './lib/base'; class Child extends Parent {}",
+      },
+      expectedNames: [["default", "Child"]],
+    },
+    {
+      name: "built-ins and external imports stay allowed despite project name collisions",
+      files: {
+        "apps/web/src/lib/base.ts":
+          "export class Error {} export class Map {} export class EventEmitter {} export class Component {}",
+        "apps/web/src/child.ts":
+          "import { EventEmitter } from 'node:events'; import { Component } from 'react'; import * as React from 'react'; class BuiltinChild extends Error {} class MapChild extends Map {} class EventChild extends EventEmitter {} class ReactChild extends Component {} class NamespaceChild extends React.Component {}",
+      },
+      expectedNames: [],
+    },
+    {
+      name: "web alias does not apply to other applications",
+      files: {
+        "apps/web/src/lib/base.ts": "export class Base {}",
+        "apps/backend/src/child.ts":
+          "import { Base } from '@/lib/base'; class Child extends Base {}",
+      },
+      expectedNames: [],
+    },
+    {
+      name: "cyclic star barrels still resolve a reachable base",
+      files: {
+        "apps/web/src/lib/base.ts": "export class Base {}",
+        "apps/web/src/lib/index.ts": "export * from './cycle'; export * from './base';",
+        "apps/web/src/lib/cycle.ts": "export * from './index';",
+        "apps/web/src/child.ts": "import { Base } from '@/lib'; class Child extends Base {}",
+      },
+      expectedNames: [["Base", "Child"]],
+    },
+  ];
+
+  test.each(cases)("$name", ({ files, expectedNames }) => {
+    const root = mkdtempSync(join(tmpdir(), "inheritance-guard-"));
+    try {
+      for (const [path, source] of Object.entries(files)) {
+        const file = join(root, path);
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, source);
+      }
+      expect(findChains(root)).toEqual(
+        expectedNames.map((names) => ({ names, leafFile: "apps/web/src/child.ts" })),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("project-class inheritance chains", () => {
   const found = findChains();

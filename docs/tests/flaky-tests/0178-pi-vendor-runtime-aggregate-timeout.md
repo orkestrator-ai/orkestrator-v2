@@ -27,3 +27,32 @@
 `mise run test:logged -- --name full-suite -- mise run test` with the testing guide's GNU-tool PATH (root `--parallel=3`, component and isolated browser validation active) timed out the same staged-runtime test at 30000.72 ms. The root group reported 5059 passed, 24 skipped and 1 failed across 257 files. Evidence: `/tmp/orkestrator-test-run.5pnnuF/root-and-agent-support-tests.log.gz` (compressed when the aggregate completes).
 
 `mise run test:logged -- --name pi-vendor-recheck -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` with the same GNU-tool PATH passed alone (exit 0, 8.2 seconds). The OpenCode transcript and composer fixes do not change Pi runtime staging. Concurrent host load remains the hypothesis; no timeout or assertion was changed and no test was skipped.
+
+## Recurrence — 2026-10-15
+
+`mise run test:logged -- --name full-suite -- mise run test` timed out the same
+staged-runtime test at 30000.02ms. Workspace/root/bridges/protocol reserved
+4/1/2/1 slots; root used one isolated Bun worker. The root/support group
+reported 2,956 passed, 1 skipped and 6 failed across 135 files (214.13 seconds).
+Five shell-fixture failures passed when rerun with the testing guide's GNU-tool
+PATH; the initial aggregate used the host's default tool selection. Bridges
+and protocol lockfile groups passed. Evidence:
+`/tmp/orkestrator-test-run.l8GUXI/root-and-agent-support-tests.log.gz`.
+
+With the testing guide's GNU-tool PATH,
+`mise run test:logged -- --name pi-vendor-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+passed unchanged (4 tests, exit 0, 14.9 seconds). Other owning-file reruns were
+active for part of this interval. The inheritance-guard change does not alter
+Pi staging. Host contention remains a hypothesis; no timeout, assertion or skip
+was changed.
+
+The follow-up `mise run test:logged -- --name full-suite-gnu -- mise run test`
+with the testing guide's GNU-tool PATH repeated the Pi timeout at 30002.69ms.
+Its root group finished with 2,961 passed, 1 skipped and only this failure
+across 135 files (221.26 seconds); all five shell-fixture failures cleared.
+The protocol lockfile check passed. Workspace and bridge groups remained
+queued for host capacity for more than five minutes, so the redundant rerun
+was interrupted through the aggregate runner's signal handler. Those groups
+had already executed in the initial run. Evidence:
+`/tmp/orkestrator-test-run.IwbxBy/root-and-agent-support-tests.log.gz` and
+`/tmp/orkestrator-test-run.Vz2R6a/full-suite-gnu.log.gz`.

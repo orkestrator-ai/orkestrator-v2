@@ -4,7 +4,8 @@ Checked against the `release-channels/04-remote-update` stack (#1003, #1004,
 #1005, #1007) on 2026-10-15, after its review fixes; not yet on `main`.
 
 Release channels, in-app updates and remote updates are implemented and unit
-tested with fakes for electron-updater, npm, Docker and process restarts
+tested with fakes plus loopback integration tests for electron-updater, Bun
+registry staging and real backend process restarts
 ([release-channels-and-updates.md](../architecture/release-channels-and-updates.md)).
 None of it has run against a real release, a signed build, or a real remote.
 Every item below needs evidence from a real run before the feature is
@@ -24,19 +25,20 @@ are on by default for packaged production builds.
 - **Desktop updates.**
   - The update host pins electron-updater to the resolved release with a
     generic feed.
-  - It has been tested only against a fake updater. Squirrel.Mac staging,
-    the AppImage swap, `quitAndInstall(true, true)` and install-on-quit
-    (which calls `downloadUpdate()` a second time so electron-updater stages
-    the cached download) have not run. Neither has the `install-failed`
-    report for an updater `error` after the host acknowledged.
+  - A loopback generic-feed test uses the installed electron-updater to verify,
+    cache, arm, swap and restore a disposable AppImage. Squirrel.Mac staging,
+    signed release artifacts and `quitAndInstall(true, true)` still need real
+    packaged qualification. The `install-failed` report for an updater error
+    after acknowledgement has fake-updater regression coverage.
   - The rollback copy (`ditto` of the `.app`, or a copy of the AppImage)
     and the restore-after-failed-start path have been tested only on a
     temporary directory.
-- **Headless supervisor.** `orkestrator serve --supervised` has been tested
-  only with a fake runtime, plus the real file operations in a temporary
-  directory. The real `bun add orkestrator@<version>` staging, the child
-  process handshake, the cutover and the generated systemd and launchd units
-  have not run.
+- **Headless supervisor.** A loopback npm registry test stages fixture versions
+  with real `bun add`, runs the bundled backend, fails replacement health and
+  checks child exit before restoring SQLite, the current package and toolchain
+  pointers. It also covers concurrent lock ownership in separate processes.
+  Public npm artifacts and the generated systemd/launchd units still need real
+  release qualification.
 - **Remote updates.** `connections.invokeUpdate`, the `/status` handshake
   and the audit origin have been tested only in process (gateway tests,
   connection-manager tests with fake fetch). No update has been driven over
@@ -48,6 +50,26 @@ are on by default for packaged production builds.
   standby), but the keys have not been generated, so
   `RELEASE_SIGNING_PUBLIC_KEYS` is empty and updates run in checksum-only
   mode.
+
+## Review regression validation (2026-10-15)
+
+- `mise run test`, format checking, lint, typechecking, CLI scenarios and
+  `actionlint` passed. Focused regression checks also cover command-level armed
+  job recovery, persistence failures, overlapping requests, concurrent index
+  writers and signed/unsigned channel mixtures.
+- `mise run test:agent:electron` did not pass: four UI cases failed, one passed,
+  one platform case skipped and six dependent cases did not run. All three
+  owning files were rerun individually and still failed. The isolated profiles
+  show the **GitHub CLI Not Found** setup dialog, hiding the expected settings
+  and project controls; the terminal case also encounters an intercepting overlay.
+  These are repeatable fixture/setup failures, not classified as flakes. No
+  assertions were skipped or relaxed. Compressed evidence is in
+  `/tmp/orkestrator-test-run.tB41l4`, `/tmp/orkestrator-test-run.tP8JiS`,
+  `/tmp/orkestrator-test-run.9iTYEp` and `/tmp/orkestrator-test-run.KMkoWO`.
+- Browser-renderer, Docker and iOS scenario suites were omitted because this
+  change does not edit those areas. Signed macOS/Squirrel, public release and
+  remote-machine qualification below remains outstanding. The tests' disposable
+  backend processes and profiles were cleaned up by their owning harnesses.
 
 ## Outstanding work
 

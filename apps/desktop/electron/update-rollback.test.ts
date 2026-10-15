@@ -21,6 +21,7 @@ import {
   installedApp,
   keepRollbackCopy,
   rollBackFailedUpdate,
+  runStartupRollback,
   type RollbackFileOps,
 } from "./update-rollback.js";
 
@@ -268,5 +269,102 @@ describe("rolling back a failed update", () => {
     expect(await claimFirstLaunchAfterUpdate(markerFile, "2.22.0")).toBe(true);
     expect((await readPendingInstallMarker(markerFile))?.launched).toBe(true);
     expect(await claimFirstLaunchAfterUpdate(markerFile, "2.22.0")).toBe(false);
+  });
+});
+
+test("a partial macOS rollback copy leaves the live bundle and database intact", async () => {
+  const root = temp();
+  const app = path.join(root, "App.app");
+  mkdirSync(app);
+  writeFileSync(path.join(app, "version"), "live");
+  writeFileSync(path.join(root, "orkestrator.sqlite"), "current-db");
+  const copyOps: RollbackFileOps = {
+    ...ops,
+    async copy(_source, destination) {
+      mkdirSync(destination);
+      writeFileSync(path.join(destination, "partial"), "partial");
+      throw new Error("partial ditto failure");
+    },
+  };
+  await expect(
+    rollBackFailedUpdate({
+      marker: marker({ rollbackPath: "/backup/App.app" }),
+      appVersion: "2.22.0",
+      firstLaunch: true,
+      app: { kind: "mac-app", path: app },
+      dataDir: root,
+      now: 42,
+      ops: copyOps,
+    }),
+  ).rejects.toThrow("partial ditto failure");
+  expect(readFileSync(path.join(app, "version"), "utf8")).toBe("live");
+  expect(readFileSync(path.join(root, "orkestrator.sqlite"), "utf8")).toBe("current-db");
+  expect(existsSync(`${app}.restore-42`)).toBe(false);
+});
+
+describe("startup rollback orchestration", () => {
+  test("a user quit prevents restore both before startup failure and while stopping", async () => {
+    let quitting = true;
+    const calls: string[] = [];
+    const options = {
+      isQuitting: () => quitting,
+      async stopBackend() {
+        calls.push("stop");
+        quitting = true;
+      },
+      async restore() {
+        calls.push("restore");
+        return { rolledBack: true as const, restoredDatabase: true };
+      },
+    };
+    expect((await runStartupRollback(options)).rolledBack).toBe(false);
+    expect(calls).toEqual([]);
+    quitting = false;
+    expect((await runStartupRollback(options)).rolledBack).toBe(false);
+    expect(calls).toEqual(["stop"]);
+  });
+
+  test("restore waits for confirmed backend stop and errors prevent restore", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const calls: string[] = [];
+    const recovery = runStartupRollback({
+      isQuitting: () => false,
+      async stopBackend() {
+        await gate;
+        calls.push("stopped");
+      },
+      async restore() {
+        calls.push("restore");
+        return { rolledBack: true, restoredDatabase: true };
+      },
+    });
+    await Promise.resolve();
+    expect(calls).toEqual([]);
+    release();
+    await recovery;
+    expect(calls).toEqual(["stopped", "restore"]);
+    await expect(
+      runStartupRollback({
+        isQuitting: () => false,
+        async stopBackend() {
+          throw new Error("stop failed");
+        },
+        async restore() {
+          throw new Error("must not run");
+        },
+      }),
+    ).rejects.toThrow("stop failed");
+    await expect(
+      runStartupRollback({
+        isQuitting: () => false,
+        stopBackend: async () => undefined,
+        async restore() {
+          throw new Error("restore failed");
+        },
+      }),
+    ).rejects.toThrow("restore failed");
   });
 });

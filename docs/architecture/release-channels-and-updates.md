@@ -171,9 +171,11 @@ prerelease, so it can never become latest.
   require committing to a branch or enabling Pages.
 - It is **derived, never edited**. `scripts/release-channel-index.ts` lists
   the published releases, keeps those with a channel version, checks that each
-  has its `release-requirements.json`, and rebuilds the whole file. Concurrent
-  writers (a maintainer's `release:publish` and the nightly) therefore
-  converge, because each one recomputes from the same source of truth.
+  has its `release-requirements.json`, and rebuilds the whole file. All writers
+  take the exclusive repository ref `tags/update-channels-publish-lock` before
+  reading releases and release it after uploading. Contenders fail and must retry
+  with a fresh snapshot. If a publisher crashes, a maintainer removes the lock
+  ref after confirming that no publisher remains active.
 - `--clobber` replaces the asset, which leaves a short window when it does not
   exist. Clients treat a 404 or a parse failure as a failed check (retried
   next time), never as "no update".
@@ -258,9 +260,9 @@ Schema (version 1, `packages/protocol/src/release-requirements.ts`):
   },
   "permissions": {
     "macos": [
-      { "id": "desktop", "kind": "files-and-folders", "infoPlistKey": "NSDesktopFolderUsageDescription",
-        "usage": "Orkestrator searches project directories …", "requirement": "required",
-        "grantedAtMachine": true }
+      { "id": "desktop", "label": "Desktop folder", "settingsPane": "files-and-folders",
+        "infoPlistKey": "NSDesktopFolderUsageDescription",
+        "usage": "Orkestrator searches project directories …", "requirement": "required" }
     ]
   },
   "network": {
@@ -319,8 +321,12 @@ manifest cannot drift from the code:
     Accepting an unsigned manifest would let anyone who can strip the file
     bypass the check.
   - Both keys were generated on 2026-10-16 and are listed. That is a one-way
-    door: from the first release that ships them, every release must be
-    signed, and `release:desktop` refuses to publish without the key.
+    door: from the first release that ships them, every new release must be
+    signed. Index generation omits unsigned legacy releases per channel until a
+    signed release exists (or the legacy release is signed with the trusted
+    key); it never accepts an invalid signature. The macOS `release:desktop`
+    job owns the shared signature and refuses to publish without the key.
+    Linux builds never need the private key.
   - Generation, custody, rotation and loss recovery are in
     [releasing.md](../development/releasing.md#manifest-signing-keys).
     electron-builder 27's mandatory signed update manifests
@@ -341,7 +347,7 @@ stable (`category:key`, for example `macos-permission:downloads`).
 | `provider-binary` | version change | informational | no |
 | `storage-migration` | `schemaVersion` raised | yes (one-way; rollback restores the pre-update snapshot) | no |
 | `container-capability` | required image capability the local image lacks | yes | when the image is locally built (rebuild needed) |
-| `compatibility` | requester older than `minClientVersion` | **blocking** (update this client first) | — |
+| `compatibility` | independent requester older than `minClientVersion` | **blocking** (update this client first) | — |
 
 If the running version has no embedded manifest (2.20.x and earlier), the
 current side is `null`. The dialog then lists everything the target requires
@@ -450,13 +456,20 @@ and from the CLI.
 | Command | Purpose |
 | --- | --- |
 | `update_get_status` | `UpdateStatusSnapshot` (revision, current version/channel/host kind/capabilities, last check, `available` + diff, job, notices) |
-| `update_check` `{ force? }` | Run or join a check; returns the snapshot |
+| `update_check` `{}` | Run or join a check; returns the snapshot |
 | `update_set_channel` `{ channel }` | Persist the channel; returns the snapshot (with `waiting-for-channel` when narrower) |
-| `update_start` `{ targetVersion, requirementsSha256, approvedConsentIds, restartPolicy, allowDowngrade?, requester }` | Admit a job (refused unless consent, compatibility, host and floor checks pass) |
-| `update_install_now` `{ jobId }` | For a `ready` job with `restartPolicy: "manual"` |
+| `update_start` `{ targetVersion, requirementsSha256, approvedConsentIds, restartPolicy, allowDowngrade?, client? }` | Admit a job (refused unless consent, compatibility, host and floor checks pass) |
+| `update_install_now` `{ jobId, client? }` | For a `ready` job with `restartPolicy: "manual"` |
+| `update_install_on_quit` `{ jobId, client? }` | Arm a ready desktop job to install when the app quits |
 | `update_cancel` `{ jobId }` | Cancel a job that has not reached `installing` |
 | `update_acknowledge_notice` `{ noticeId }` | Dismiss a post-update notice |
 | `update_get_audit` `{ limit ≤ 200 }` | Recent audit entries |
+
+The optional `client` is declared kind/version/name metadata. The backend derives
+requester identity from the trusted invocation origin. A local control invocation
+for a desktop host's bundled self-update checks the replacement client's version,
+because that install replaces the client and backend together. Independently
+versioned remote clients retain the target's `minClientVersion` floor.
 
 The `update-status` event carries `{ revision, snapshot }` and is pushed on
 every change. Following the transport invariants, the event is only an
@@ -480,7 +493,7 @@ listener**: Electron main through `BackendHttpClient`, and the supervisor by
 parsing the backend's `orkestrator-backend-ready` line exactly as Electron
 does. The host protocol reuses that client, with no new socket or IPC:
 
-- `update_host_register { hostKind, protocolVersion: 1, hostVersion, platform, arch, installKind, capabilities, armedJobId? }`
+- `update_host_register { registration: { hostKind, protocolVersion: 1, hostVersion, installKind, capabilities, unavailableReason?, armedJobId? } }`
   returns `{ hostSessionId, pending }`. The host registers after every backend
   start and after every event-stream reconnect. `armedJobId` names a job this
   host process has armed to install on quit: after a backend-only restart it
@@ -490,7 +503,7 @@ does. The host protocol reuses that client, with no new socket or IPC:
   the request is `prepare`, `install` or `cancel`, with `requestId` and
   `jobId`. `update_host_pending` returns the same list for reconciliation, so
   a missed event is never fatal.
-- `update_host_report { hostSessionId, requestId, jobId, status, progress?, error?, result? }`
+- `update_host_report { hostSessionId, requestId, jobId, status, progress?, error? }`
   covers progress, success and failure. A final report that does not arrive
   (a reconnect replaced the session) is kept and re-sent when the next
   registration still lists its request. After a restart the **new** (or
@@ -518,7 +531,7 @@ Detecting the remote kind. The authenticated `/__orkestrator/status` route
 
 ```json
 { "ok": true, "appVersion": "2.21.0", "updateProtocol": 1,
-  "host": { "kind": "desktop", "installKind": "dmg-app", "canInstall": true },
+  "host": { "kind": "desktop", "installKind": "mac-app", "canInstall": true },
   "updates": { "channel": "stable", "available": "2.22.0", "jobPhase": null } }
 ```
 
@@ -696,9 +709,10 @@ Normal operation:
    package, even one older than the supervisor's own: a rollback and an
    approved downgrade both point it back. Without a `current`, run the
    supervisor's own package (the bootstrap). `orkestrator service install`
-   resets `current` to the package it runs from.
+   resets `current` to the package it runs from, with the supervisor stopped.
+   It takes the same lock, so it refuses to reset a running service.
 2. Spawn `bun <root>/bin/orkestrator.js serve <user flags> --control-host 127.0.0.1 --control-port 0`
-   as a child, with `ORKESTRATOR_UPDATE_HOST=supervisor`.
+   as a child with a loopback control listener.
 3. Parse the readiness line, then register as host.
 4. Restart on unexpected exit with exponential backoff (1 s to 60 s).
 5. On SIGTERM or SIGINT, forward the signal to the child, wait up to 60 s,

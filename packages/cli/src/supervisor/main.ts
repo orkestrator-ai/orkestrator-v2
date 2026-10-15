@@ -3,7 +3,16 @@
  * imports no backend code: the supervisor must stay small and keep working
  * against backends newer than itself.
  */
-import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeSync,
+  fstatSync,
+  statSync,
+} from "node:fs";
 import path from "node:path";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
 import { defaultDataDir } from "../../../../apps/backend/src/data-dir.js";
@@ -32,24 +41,55 @@ function processAlive(pid: number): boolean {
 /** One supervisor per data directory; a stale lock from a dead process is taken over. */
 export function acquireSupervisorLock(lockFile: string): () => void {
   mkdirSync(path.dirname(lockFile), { recursive: true, mode: 0o700 });
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  // Serialize creation and stale reclamation. Never reclaim this short-lived
+  // guard automatically: a process paused between mkdir and PID write is live.
+  const guard = `${lockFile}.guard`;
+  try {
+    mkdirSync(guard, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    throw new Error(
+      `Supervisor lock is being initialized (${guard}); retry, or remove the guard only after confirming its owner stopped`,
+    );
+  }
+  try {
     try {
-      const fd = openSync(lockFile, "wx", 0o600);
-      writeSync(fd, `${process.pid}\n`);
-      closeSync(fd);
-      return () => rmSync(lockFile, { force: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const owner = Number.parseInt(readFileSync(lockFile, "utf8"), 10);
-      if (Number.isInteger(owner) && owner > 0 && owner !== process.pid && processAlive(owner)) {
+      const text = readFileSync(lockFile, "utf8").trim();
+      const owner = /^\d+$/.test(text) ? Number(text) : NaN;
+      if (!Number.isSafeInteger(owner) || owner <= 0) {
+        throw new Error(
+          `Supervisor lock has no valid owner (${lockFile}); refusing unsafe reclamation`,
+        );
+      }
+      if (processAlive(owner)) {
         throw new Error(
           `Another supervisor (pid ${owner}) already runs this data directory (${path.dirname(path.dirname(lockFile))})`,
         );
       }
-      rmSync(lockFile, { force: true });
+      rmSync(lockFile);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
+    const fd = openSync(lockFile, "wx", 0o600);
+    let identity: ReturnType<typeof fstatSync>;
+    try {
+      writeSync(fd, `${process.pid}\n`);
+      identity = fstatSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    return () => {
+      // A delayed cleanup must never unlink a successor's lock.
+      try {
+        const current = statSync(lockFile);
+        if (current.ino === identity.ino && current.dev === identity.dev) rmSync(lockFile);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    };
+  } finally {
+    rmSync(guard, { recursive: true });
   }
-  throw new Error(`Could not take the supervisor lock ${lockFile}`);
 }
 
 export async function runSupervisor(

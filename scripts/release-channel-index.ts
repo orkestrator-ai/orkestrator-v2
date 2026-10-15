@@ -9,8 +9,8 @@
  * The index is derived, never edited: every run lists the published releases,
  * takes the newest of each channel, checks its requirements manifest, and
  * replaces the whole file on the fixed `update-channels` prerelease. Writers
- * that race (a maintainer's release:publish and the nightly) converge because
- * each recomputes from the same releases, and `generatedAt` is the newest
+ * use an exclusive repository ref before reading releases, so an older
+ * snapshot cannot overwrite a newer writer. `generatedAt` is the newest
  * publication time rather than the clock.
  */
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -197,7 +197,13 @@ export async function verifiedRequirementsDigest(
 export async function computeReleaseChannelIndex(
   runtime: ChannelIndexRuntime,
 ): Promise<ReleaseChannelIndex> {
-  const releases = listReleases(runtime);
+  // Signing rollout is per channel: unsigned legacy releases cannot be
+  // offered to a signed client, but must not prevent publishing other channels.
+  const releases = listReleases(runtime).filter(
+    (release) =>
+      runtime.signingKeys.length === 0 ||
+      release.assets.includes(RELEASE_REQUIREMENTS_SIGNATURE_ASSET),
+  );
   const digests = new Map<string, string>();
   for (const release of Object.values(selectChannelReleases(releases))) {
     if (release) digests.set(release.tagName, await verifiedRequirementsDigest(runtime, release));
@@ -235,9 +241,33 @@ function assertIndexReleaseIsSafe(runtime: ChannelIndexRuntime): void {
 
 export async function publishReleaseChannelIndex(runtime: ChannelIndexRuntime): Promise<string> {
   assertIndexReleaseIsSafe(runtime);
-  const text = serializeReleaseChannelIndex(await computeReleaseChannelIndex(runtime));
-  const directory = mkdtempSync(path.join(os.tmpdir(), "orkestrator-channels-"));
+  // GitHub creates a ref exclusively (409/422 if it already exists). All
+  // publishers, including maintainer machines, take the same repository lock.
+  const lockRef = "tags/update-channels-publish-lock";
+  const sha = runtime
+    .capture(["gh", "api", `repos/${RELEASE_REPOSITORY}/git/ref/heads/main`, "--jq", ".object.sha"])
+    .trim();
   try {
+    runtime.run([
+      "gh",
+      "api",
+      "--method",
+      "POST",
+      `repos/${RELEASE_REPOSITORY}/git/refs`,
+      "-f",
+      `ref=refs/${lockRef}`,
+      "-f",
+      `sha=${sha}`,
+    ]);
+  } catch {
+    fail(
+      `Could not acquire ${lockRef}; retry after the active index publisher finishes. If it crashed, remove that ref only after confirming no publisher is running.`,
+    );
+  }
+  let directory: string | null = null;
+  try {
+    const text = serializeReleaseChannelIndex(await computeReleaseChannelIndex(runtime));
+    directory = mkdtempSync(path.join(os.tmpdir(), "orkestrator-channels-"));
     const file = path.join(directory, RELEASE_CHANNEL_INDEX_ASSET);
     writeFileSync(file, text);
     runtime.run([
@@ -250,10 +280,17 @@ export async function publishReleaseChannelIndex(runtime: ChannelIndexRuntime): 
       "--clobber",
       file,
     ]);
+    return text;
   } finally {
-    rmSync(directory, { recursive: true, force: true });
+    if (directory) rmSync(directory, { recursive: true, force: true });
+    runtime.run([
+      "gh",
+      "api",
+      "--method",
+      "DELETE",
+      `repos/${RELEASE_REPOSITORY}/git/refs/${lockRef}`,
+    ]);
   }
-  return text;
 }
 
 /** Unstable releases (newest first) beyond the newest `keep`, never the indexed one. */

@@ -11,7 +11,6 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
-  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -118,12 +117,17 @@ export function childEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return next;
 }
 
-function spawnBackend(bunPath: string, packageRoot: string, args: readonly string[]): BackendChild {
+function spawnBackend(
+  bunPath: string,
+  packageRoot: string,
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+): BackendChild {
   const child = Bun.spawn([bunPath, launcherIn(packageRoot), "serve", ...args], {
     stdin: "ignore",
     stdout: "pipe",
     stderr: "inherit",
-    env: childEnvironment(process.env),
+    env: childEnvironment(env),
   });
   let resolveReady!: (endpoint: BackendEndpoint) => void;
   let rejectReady!: (error: Error) => void;
@@ -239,11 +243,17 @@ export function createSupervisorRuntime(options: {
   dataDir: string;
   layout: RuntimeLayout;
   bunPath: string;
+  env?: NodeJS.ProcessEnv;
   log?: Pick<Console, "info" | "warn" | "error">;
 }): SupervisorRuntime {
   const { layout, dataDir, bunPath } = options;
   const run = async (command: string[], cwd: string) => {
-    const child = Bun.spawn(command, { cwd, stdout: "pipe", stderr: "pipe", env: process.env });
+    const child = Bun.spawn(command, {
+      cwd,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: options.env ?? process.env,
+    });
     const timer = setTimeout(() => child.kill("SIGKILL"), STAGE_TIMEOUT_MS);
     const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
     clearTimeout(timer);
@@ -251,7 +261,8 @@ export function createSupervisorRuntime(options: {
       throw new Error(`\`${command.join(" ")}\` failed: ${stderr.trim().slice(-1500)}`);
   };
   return {
-    spawn: (packageRoot, args) => spawnBackend(bunPath, packageRoot, args),
+    spawn: (packageRoot, args) =>
+      spawnBackend(bunPath, packageRoot, args, options.env ?? process.env),
     client: backendClient,
     async stage(version, requirementsSha256) {
       const target = installDirFor(layout, version);
@@ -309,7 +320,8 @@ export function createSupervisorRuntime(options: {
     },
     async readToolchainCurrent() {
       try {
-        return realpathSync(currentToolchainBinDir(dataDir));
+        const current = currentToolchainBinDir(dataDir);
+        return path.resolve(path.dirname(current), await readlink(current));
       } catch {
         return null;
       }
@@ -343,7 +355,10 @@ export function createSupervisorRuntime(options: {
       }
     },
     now: () => Date.now(),
-    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    sleep: (ms) =>
+      new Promise((resolve) => {
+        setTimeout(resolve, ms).unref();
+      }),
     log: options.log ?? console,
   };
 }

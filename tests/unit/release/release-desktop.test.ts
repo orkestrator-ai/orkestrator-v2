@@ -262,6 +262,19 @@ describe("desktop release commands", () => {
     ]);
   });
 
+  test.each(["x64", "arm64"])(
+    "Linux %s needs no private key when manifest signing is enabled",
+    (arch) => {
+      const { runtime, run } = harness({
+        platform: "linux",
+        arch,
+        trustedSigningKeys: ["a".repeat(43) + "="],
+      });
+      expect(() => runDesktopRelease(["build"], runtime)).not.toThrow();
+      expect(run.mock.calls.some(([command]) => command.includes("sign"))).toBe(false);
+    },
+  );
+
   test("a build that embeds signing keys refuses to publish unsigned, before side effects", () => {
     const { runtime, run } = harness({ trustedSigningKeys: ["a".repeat(43) + "="] });
     expect(() => runDesktopRelease(["build"], runtime)).toThrow("must be signed");

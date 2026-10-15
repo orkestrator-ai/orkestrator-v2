@@ -87,6 +87,7 @@ import {
   discardRollbackCopies,
   keepRollbackCopy,
   rollBackFailedUpdate,
+  runStartupRollback,
 } from "./update-rollback.js";
 import {
   LOCAL_UPDATE_RESYNC_EVENT,
@@ -459,24 +460,30 @@ function currentInstalledApp() {
  * previous version reports the rollback from `pending-install.json`.
  */
 async function rollBackAfterFailedUpdate(failure: unknown): Promise<boolean> {
-  if (!app.isPackaged || !firstLaunchAfterUpdate) return false;
+  if (quitReopen.isQuitting() || !app.isPackaged || !firstLaunchAfterUpdate) return false;
   firstLaunchAfterUpdate = false;
   const markerFile = pendingInstallMarkerFile();
   const marker = await readPendingInstallMarker(markerFile);
   // The database goes back only once the new backend is gone: a readiness
   // timeout leaves it draining, and later startup failures leave it running.
-  await backendProcess.stopAndWait();
-  const result = await rollBackFailedUpdate({
-    marker,
-    appVersion: app.getVersion(),
-    firstLaunch: true,
-    app: currentInstalledApp(),
-    dataDir: app.getPath("userData"),
-    now: Date.now(),
+  const result = await runStartupRollback({
+    isQuitting: quitReopen.isQuitting,
+    stopBackend: () => backendProcess.stopAndWait(),
+    restore: () =>
+      rollBackFailedUpdate({
+        marker,
+        appVersion: app.getVersion(),
+        firstLaunch: true,
+        app: currentInstalledApp(),
+        dataDir: app.getPath("userData"),
+        now: Date.now(),
+        isQuitting: quitReopen.isQuitting,
+      }),
   }).catch((error: unknown) => ({
     rolledBack: false as const,
     reason: error instanceof Error ? error.message : String(error),
   }));
+  if (quitReopen.isQuitting()) return false;
   if (!result.rolledBack) {
     if (marker?.toVersion === app.getVersion()) {
       console.error(`[Updater] Could not roll back the failed update: ${result.reason}`);
@@ -977,6 +984,7 @@ if (isPrimaryInstance) {
     .whenReady()
     .then(startApplication)
     .catch(async (error: unknown) => {
+      if (quitReopen.isQuitting()) return;
       if (await rollBackAfterFailedUpdate(error)) return;
       handleStartupFailure({
         isQuitting: quitReopen.isQuitting,

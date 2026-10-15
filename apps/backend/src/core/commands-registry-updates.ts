@@ -148,6 +148,7 @@ function parseRegistration(value: unknown): UpdateHostRegistration {
       "installKind",
       "capabilities",
       "unavailableReason",
+      "armedJobId",
     ],
     "registration",
   );
@@ -185,6 +186,7 @@ function parseRegistration(value: unknown): UpdateHostRegistration {
       restart: capabilities.restart as Array<"now" | "on-quit">,
     },
     unavailableReason: optionalString(record.unavailableReason, "unavailableReason", 500),
+    armedJobId: optionalString(record.armedJobId, "armedJobId", MAX_ID_CHARS),
   };
 }
 

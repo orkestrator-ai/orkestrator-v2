@@ -164,8 +164,9 @@ export class Supervisor {
   }
 
   private async saveState(patch: Partial<SupervisorState>): Promise<void> {
-    this.state = { ...this.state, ...patch };
-    await this.runtime.writeState(this.state);
+    const next = { ...this.state, ...patch };
+    await this.runtime.writeState(next);
+    this.state = next;
   }
 
   /** For paths that must go on when the disk is full: the state stays in memory. */
@@ -173,6 +174,7 @@ export class Supervisor {
     try {
       await this.saveState(patch);
     } catch (error) {
+      this.state = { ...this.state, ...patch };
       this.runtime.log.error(`[Supervisor] Could not save the supervisor state: ${String(error)}`);
     }
   }
@@ -234,7 +236,7 @@ export class Supervisor {
     const child = this.runtime.spawn(root, this.args);
     const fail = async (reason: string): Promise<LaunchResult> => {
       child.signal("SIGKILL");
-      await Promise.race([child.exited, this.runtime.sleep(5_000)]);
+      await child.exited;
       return { ok: false, reason };
     };
     let endpoint: BackendEndpoint;
@@ -251,8 +253,14 @@ export class Supervisor {
     } catch (error) {
       return fail(`The backend ${error instanceof Error ? error.message : String(error)}`);
     }
-    const client = this.runtime.client(endpoint);
-    const version = await this.runtime.packageVersion(root);
+    let client: BackendClient;
+    let version: string | null;
+    try {
+      client = this.runtime.client(endpoint);
+      version = await this.runtime.packageVersion(root);
+    } catch (error) {
+      return fail(`Could not initialize the backend client: ${String(error)}`);
+    }
     if (health) {
       try {
         const status = await client.status();
@@ -310,7 +318,7 @@ export class Supervisor {
       // A job the backend no longer knows is not worth retrying forever.
       this.runtime.log.warn(`[Supervisor] Could not report the update outcome: ${String(error)}`);
     }
-    await this.saveState({ pendingOutcome: null });
+    await this.trySaveState({ pendingOutcome: null });
   }
 
   private async report(
@@ -383,6 +391,16 @@ export class Supervisor {
       void running.child.exited.then((exit) => finish({ kind: "exited", exit }));
       const poll = async () => {
         while (!done) {
+          if (!running.hostSessionId) {
+            try {
+              ({ hostSessionId: running.hostSessionId } = await running.client.invoke<{
+                hostSessionId: string;
+              }>("update_host_register", { registration: this.registration(running.version) }));
+              await this.deliverPendingOutcome(running);
+            } catch {
+              // A transient startup failure is retried at the bounded polling interval.
+            }
+          }
           if (running.hostSessionId) {
             try {
               const pending = await running.client.invoke<UpdateHostRequest[]>(
@@ -509,19 +527,25 @@ export class Supervisor {
     const started = await this.launch(toRoot, toInstallDir, { expectVersion: toVersion });
     if (started.ok) {
       const cutover = this.state.cutover!;
-      await this.runtime.setPrevious(cutover.fromInstallDir);
-      await this.saveState({
-        cutover: null,
-        pendingOutcome: { jobId: request.jobId, outcome: "succeeded" },
-        lastInstall: {
-          toRoot,
-          fromRoot: cutover.fromRoot,
-          fromInstallDir: cutover.fromInstallDir,
-          at: startedAt,
-          toolchainBefore: cutover.toolchainBefore,
-          userVersionBefore: cutover.userVersionBefore,
-        },
-      });
+      try {
+        await this.runtime.setPrevious(cutover.fromInstallDir);
+        await this.saveState({
+          cutover: null,
+          pendingOutcome: { jobId: request.jobId, outcome: "succeeded" },
+          lastInstall: {
+            toRoot,
+            fromRoot: cutover.fromRoot,
+            fromInstallDir: cutover.fromInstallDir,
+            at: startedAt,
+            toolchainBefore: cutover.toolchainBefore,
+            userVersionBefore: cutover.userVersionBefore,
+          },
+        });
+      } catch (error) {
+        // No database restore is safe until the replacement has really exited.
+        await this.stopChild(started.running.child);
+        throw error;
+      }
       await this.deliverPendingOutcome(started.running);
       const keep = [toInstallDir, ...(cutover.fromInstallDir ? [cutover.fromInstallDir] : [])];
       await this.runtime.prune(keep).catch(() => undefined);
@@ -539,6 +563,8 @@ export class Supervisor {
     userVersionBefore: number | null;
     startedAt: number;
   }): Promise<void> {
+    // Restore the restart pointer even if database or toolchain recovery fails.
+    await this.runtime.setCurrent(record.fromInstallDir);
     const now = this.runtime.readUserVersion();
     if (
       record.userVersionBefore !== null &&
@@ -551,7 +577,6 @@ export class Supervisor {
       );
     }
     if (record.toolchainBefore) await this.runtime.pointToolchainCurrent(record.toolchainBefore);
-    await this.runtime.setCurrent(record.fromInstallDir);
   }
 
   private async rollBack(

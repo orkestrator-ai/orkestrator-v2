@@ -5157,11 +5157,15 @@ describe("AgentNativeTab", () => {
       snapshot.bootstrapPrompt,
       "Queue this follow-up",
     );
-    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
-      ...(await defaultProjection(input)),
-      turn: { phase: "running" as const },
-      messages: [],
-    }));
+    getNativeAgentProjectionMock.mockImplementation(async (input) => {
+      const projection = await defaultProjection(input);
+      return {
+        ...projection,
+        capabilities: { ...projection.capabilities, queue: true },
+        turn: { phase: "running" as const },
+        messages: [],
+      };
+    });
     const tabId = "tab-handoff-queue";
     seedEnvTab({
       id: tabId,

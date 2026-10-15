@@ -79,6 +79,18 @@ export interface DispatchHandle {
  * observed to its end, a late refusal simply ends it. Until then every status
  * route reports running, because something can still reach Pi.
  */
+/**
+ * Pi refused the prompt in its preflight, before any run started: no model, a
+ * missing login, an extension's veto. Nothing ran, so this is a definite
+ * refusal carrying Pi's reason, never the outcome-unknown 500 a crash gets.
+ */
+export class PromptRefusedError extends Error {
+  override readonly name = "PromptRefusedError";
+  constructor(reason: unknown) {
+    super(errorText(reason));
+  }
+}
+
 export class PromptStartupTimeoutError extends Error {
   override readonly name = "PromptStartupTimeoutError";
   constructor(readonly timeoutMs: number) {
@@ -202,6 +214,7 @@ export async function dispatchPrompt(
     : undefined;
   // Pi's verdict and provider time belong to this turn's run alone.
   state.turnAborted = undefined;
+  state.turnError = undefined;
   state.currentTurnApiDurationMs = undefined;
   let run: Promise<void>;
   try {
@@ -270,8 +283,12 @@ export async function dispatchPrompt(
     diagnostics?.streamSettled("rejected");
     diagnostics?.close("send-failed");
     if (state.diagnostics === diagnostics) state.diagnostics = undefined;
-    await run;
-    throw new Error("Pi rejected the prompt");
+    throw new PromptRefusedError(
+      await run.then(
+        () => undefined,
+        (reason: unknown) => reason,
+      ),
+    );
   }
 
   diagnostics?.sent(state.id);
@@ -437,6 +454,7 @@ function abandonStartup(
         state.currentTurnUsage = undefined;
         state.currentTurnApiDurationMs = undefined;
         state.turnAborted = undefined;
+        state.turnError = undefined;
         state.turnStartedAt = undefined;
       }
       if (input.requestId) {
@@ -536,6 +554,11 @@ function finishTurn(state: SessionState, session: AgentSession, input: DispatchI
   // Pi's own verdict, not whether this bridge asked: an extension's
   // `ctx.abort()` or Pi's own abort cancels a run the bridge never touched.
   const cancelled = state.turnAborted === true;
+  // A run that resolved on a failed response did not answer; it failed.
+  if (!cancelled && state.turnError !== undefined) {
+    failTurn(state, session, new Error(state.turnError), input);
+    return;
+  }
   settleTurn(state, session);
   // A cancelled turn is not an error: someone asked for it, and the partial
   // transcript is the honest record of what ran. It is not a completed one
@@ -742,6 +765,7 @@ function recordUsage(state: SessionState, input: DispatchInput): void {
   state.currentTurnUsage = undefined;
   state.currentTurnApiDurationMs = undefined;
   state.turnAborted = undefined;
+  state.turnError = undefined;
   state.turnStartedAt = undefined;
 }
 

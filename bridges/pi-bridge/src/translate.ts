@@ -142,6 +142,7 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
     case "message_end":
       // The assistant message is final. A later delta belongs to a new one.
       state.openTextParts.clear();
+      if (turnFramesWelcome(state)) applyResponseOutcome(state, event.message);
       break;
     case "tool_execution_start":
       if (!turnFramesWelcome(state)) break;
@@ -651,6 +652,28 @@ function applyCompaction(state: SessionState, event: JsonObject): void {
   message.parts.push(part);
   chargeNewEntry(state, part);
   rowChanged(state, message);
+}
+
+/**
+ * Record whether the response that just ended failed.
+ *
+ * Pi reports a provider error, and a run that threw (an OAuth refresh that
+ * failed, say), as an assistant message with `stopReason: "error"`, and the
+ * run still resolves. Without this the turn would end idle and empty. Only the
+ * last response counts: Pi retries within the same run, so a later answer
+ * replaces an earlier failure.
+ */
+function applyResponseOutcome(state: SessionState, message: unknown): void {
+  if (!isObject(message) || message.role !== "assistant") return;
+  state.turnError =
+    message.stopReason === "error"
+      ? boundText(
+          nonBlank(message.errorMessage)
+            ? message.errorMessage.trim()
+            : "Pi ended the turn on a provider error.",
+          MAX_TOOL_TITLE_BYTES,
+        )
+      : undefined;
 }
 
 /** Open a retry row for the request that just failed. */

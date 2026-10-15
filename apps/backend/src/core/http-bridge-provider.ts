@@ -369,16 +369,12 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       // pipeline failure tells the user what to do instead of a bare status.
       const detail = asRecord(await response.json().catch(() => null));
       const detailText = nonEmptyString(detail?.error)?.trim() ?? "";
-      // Cursor uses 401 for a missing SDK credential as well as for bridge
-      // transport authentication. The former is an expected, user-actionable
-      // admission failure, so preserve the bridge's friendly instruction and
-      // do not expose the lowercase provider key or HTTP plumbing in the chat.
-      if (
-        this.agent === "cursor" &&
-        response.status === 401 &&
-        detailText &&
-        detail?.kind === "authentication-required"
-      ) {
+      // A bridge answers 401 both for a missing provider login and for its own
+      // transport token. Only the former carries `kind`, and it is an expected,
+      // user-actionable admission failure: keep the bridge's instruction and
+      // leave the provider key and HTTP plumbing out of the chat. Background
+      // work never shows the readiness banner, so this is its only notice.
+      if (response.status === 401 && detailText && detail?.kind === "authentication-required") {
         throw new PromptRejectedError(detailText);
       }
       // A selected command the bridge could no longer run was refused before
@@ -954,6 +950,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     }
     const claudeContextUsage = this.contextUsage(payload.contextUsage);
     const claudeTurnActivity = claudeTurnActivityFromPayload(payload);
+    const claudeReadiness = normalizeProviderReadiness(payload.readiness);
     const claudeNotices = snapshotNotices({
       transcriptTruncated: transcript.truncated,
       ...(runtime ? { runtime } : {}),
@@ -975,6 +972,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         ? { turnStartedAt: payload.turnStartedAt }
         : {}),
       ...(claudeTurnActivity ? { turnActivity: claudeTurnActivity } : {}),
+      ...(claudeReadiness ? { readiness: claudeReadiness } : {}),
       ...(claudeContextUsage ? { contextUsage: claudeContextUsage } : {}),
       ...(isNativeAgentExecutionPolicy(payload.policy) ? { policy: payload.policy } : {}),
       ...(normalizeProviderRateLimits(payload.rateLimits).length > 0

@@ -15,7 +15,10 @@
  * which providers are configured and how.
  */
 import { CATALOG_TIMEOUT_MS } from "./config.js";
-import type { NativeAgentAuthStatus } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentAuthStatus,
+  NativeAgentSignInRoute,
+} from "@orkestrator/protocol/native-agent";
 import { modelRuntime } from "./runtime.js";
 import { withTimeout } from "./timeout.js";
 
@@ -43,8 +46,14 @@ export class CredentialError extends Error {
 
 /** The message every "cannot run a turn" path shares, so it reads the same. */
 export const NOT_AUTHENTICATED_MESSAGE =
-  "Pi has no authenticated model provider. Sign in with /login in a Pi terminal tab, " +
-  "or set the provider's API key, then reopen this tab.";
+  "Pi has no signed-in model provider. Sign in with /login in a Pi terminal tab, " +
+  "or set the provider's API key.";
+
+/** Pi's login is its own interactive `/login`, so the route is always a terminal. */
+export const PI_SIGN_IN: NativeAgentSignInRoute = {
+  kind: "terminal",
+  hint: "Open a Pi terminal tab and run /login.",
+};
 
 let authProbeTimeoutMs = CATALOG_TIMEOUT_MS;
 
@@ -129,10 +138,7 @@ export async function authStatus(): Promise<BridgeAuthStatus> {
           ? "oauth"
           : "api-key",
     })),
-    signIn: {
-      kind: "terminal",
-      hint: "Open a Pi terminal tab and run /login.",
-    },
+    signIn: PI_SIGN_IN,
     signOut: false,
   };
 }
@@ -140,6 +146,39 @@ export async function authStatus(): Promise<BridgeAuthStatus> {
 /** Shorten the external auth probe budget for deterministic timeout tests. */
 export function setAuthProbeTimeoutForTests(timeoutMs?: number): void {
   authProbeTimeoutMs = timeoutMs ?? CATALOG_TIMEOUT_MS;
+}
+
+/**
+ * Diagnose a preflight refusal when the model's provider has no usable login.
+ *
+ * Pi checks credentials after running local extension commands and input
+ * handlers. Let it make that decision first, then use its auth checks
+ * (`hasConfiguredAuth`, else `checkAuth`) to give a refused model prompt an
+ * actionable 401 instead of a generic 422. Another provider may be signed in,
+ * so bridge-wide availability alone cannot answer this.
+ */
+export async function assertModelSignedIn(model: { provider: string } | undefined): Promise<void> {
+  // No model at all is Pi's own refusal to make.
+  if (!model) return;
+  const runtime = await modelRuntime();
+  if (runtime.hasConfiguredAuth(model.provider)) return;
+  const usable = await withTimeout(
+    runtime.checkAuth(model.provider),
+    authProbeTimeoutMs,
+    `Pi auth check for ${model.provider} timed out`,
+  ).then(
+    (check) => check !== undefined,
+    () => false,
+  );
+  if (usable) return;
+  const label = runtime.getProvider(model.provider)?.name || model.provider;
+  throw new CredentialError(
+    runtime.isUsingOAuth?.(model.provider)
+      ? `Pi's sign-in for ${label} failed: it may have expired, or the network is unavailable. ` +
+          `Run /login ${model.provider} in a Pi terminal tab, or choose another model.`
+      : `Pi has no credentials for ${label}. Sign in with /login ${model.provider} in a Pi ` +
+          `terminal tab, set the provider's API key, or choose another model.`,
+  );
 }
 
 /**

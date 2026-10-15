@@ -69,7 +69,11 @@ import {
   parseTranscriptTailLimit,
   type TranscriptWindowMetadata,
 } from "@orkestrator/protocol/node/transcript-window";
-import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import {
+  isNativeAgentExecutionPolicy,
+  type NativeAgentReadiness,
+} from "@orkestrator/protocol/native-agent";
+import { claudeReadiness } from "../services/claude-sign-in.js";
 import { effectiveExecutionPolicy } from "../services/read-only-policy.js";
 import { resolveUltracodeEffort } from "../services/ultracode.js";
 import { registerSessionCloseRoute } from "./session-close.js";
@@ -352,8 +356,16 @@ session.get("/:id", async (c) => {
     ...(sessionData.commandInventoryState
       ? { commandRevision: sessionData.commandInventoryState.revision }
       : {}),
+    // Bridge-wide: the login belongs to the process, not the session. Present
+    // only once Claude's own account read found no credential.
+    ...readinessField(),
   });
 });
+
+function readinessField(): { readiness?: NativeAgentReadiness } {
+  const readiness = claudeReadiness();
+  return readiness ? { readiness } : {};
+}
 
 /** Full context counting is reserved for an explicit usage-panel read. */
 session.get("/:id/usage", async (c) => {

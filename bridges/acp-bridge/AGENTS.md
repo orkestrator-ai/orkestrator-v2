@@ -34,3 +34,16 @@ Ids are reused across turns. A call missing from the current turn reattaches
 to an earlier turn's card only while that work still runs (an unsettled card,
 an active background subagent, or a call nested under one); otherwise it
 starts a card of its own in the current turn.
+
+## Sessions without a login
+
+Grok's `authenticate` waits on an interactive sign-in instead of failing when
+no login exists, so `acp-credentials.ts` checks for one first (a stored
+`auth.json`, `XAI_API_KEY`, or an auth-provider command) and refuses with a
+`CredentialError` (401, `kind: "authentication-required"`). A session created
+without a login is *deferred*: no agent, an empty `acpSessionId`, and its
+requested selection kept on its persisted composer. `spawnAndLoadSession`
+creates the ACP session with that selection on the first attach or prompt
+after a login exists, and `applyComposerPatch` only records a selection until
+then. Code that reads `acpSessionId` must treat the empty string as "not
+created yet", never as a session to load.

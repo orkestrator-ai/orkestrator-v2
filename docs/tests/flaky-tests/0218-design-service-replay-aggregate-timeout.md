@@ -57,3 +57,8 @@
 - **Hypothesis:** shared-host contention may contribute, as in earlier
   observations; the isolated pass does not establish the cause. No test or
   timeout was changed.
+
+Recurred on 2026-10-15 at 5012.03 ms in `mise run test` for the sign-in
+readiness change (no design code touched), alongside case 0247. The unchanged
+owning file passed alone three times in a row. Evidence:
+`/tmp/orkestrator-test-run.8FscOl/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.

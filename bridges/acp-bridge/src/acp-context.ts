@@ -25,6 +25,7 @@ import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import type { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
 import type { AcpTurnUsage } from "./usage.js";
 import { formatAcpRpcError } from "./acp-errors.js";
+import { assertAcpSignedIn } from "./acp-credentials.js";
 import type { GrokInterjectionJournalEntry } from "./grok-interjection.js";
 import type { AcpNormalizedSessionConfig } from "./session-config.js";
 import { AcpClientMethods, UnsupportedClientMethodError } from "./acp-client-methods.js";
@@ -1039,6 +1040,10 @@ export class AcpProcess {
     initialized: JsonObject,
     signal?: AbortSignal,
   ): Promise<void> {
+    // With no login at all, Grok's `authenticate` waits on an interactive
+    // sign-in instead of failing. Refuse before asking.
+    const env = { ...process.env, ...providerConfig.env };
+    await assertAcpSignedIn(provider, providerConfig.authMethodEnv, env);
     const meta = isObject(initialized._meta) ? initialized._meta : {};
     const required =
       initialized.authRequired === true ||
@@ -1046,7 +1051,7 @@ export class AcpProcess {
       meta.authRequired === true ||
       meta.requiresAuthentication === true;
     const configured = providerConfig.authMethodEnv
-      ? process.env[providerConfig.authMethodEnv]?.trim()
+      ? env[providerConfig.authMethodEnv]?.trim()
       : undefined;
     const shouldAuthenticate = required || providerConfig.requiresAuthenticate;
     const methodId =

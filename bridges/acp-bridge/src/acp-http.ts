@@ -1,8 +1,5 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { promises as fs } from "node:fs";
-import { homedir } from "node:os";
 import { type IncomingMessage, type ServerResponse } from "node:http";
-import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { gzip } from "node:zlib";
 import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
@@ -49,6 +46,7 @@ import {
   parseAgentMcpConnection,
   externalSessionToken,
   provider,
+  providerConfig,
   sessions,
   isObject,
   publicMcpConfigStatus,
@@ -90,6 +88,7 @@ import {
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import { dispatchAcpPrompt, promptStopReason, turnTerminalError } from "./acp-prompt.js";
 import { sessionActivityObservation } from "./acp-activity.js";
+import { acpReadiness, acpSignInMissing, acpSignInRoute } from "./acp-credentials.js";
 import {
   answerSessionActivityBatch,
   SESSION_ACTIVITY_BATCH_PATH,
@@ -117,21 +116,14 @@ export async function route(
     return json(response, 200, { ok: true });
   }
   if (url.pathname === "/global/auth" && request.method === "GET") {
-    const credentialPresent =
-      provider !== "grok" ||
-      (await fileExists(
-        process.env.GROK_AUTH_FILE?.trim() || join(homedir(), ".grok", "auth.json"),
-      ));
-    const signedIn = credentialPresent && agentRuntime.authenticated !== false;
+    const signedIn =
+      !(await acpSignInMissing(provider, providerConfig.authMethodEnv, {
+        ...process.env,
+        ...providerConfig.env,
+      })) && agentRuntime.authenticated !== false;
     return json(response, 200, {
       state: signedIn ? "signed-in" : "needs-auth",
-      signIn: {
-        kind: "terminal",
-        hint:
-          provider === "grok"
-            ? "Open a terminal and run grok login."
-            : "Sign in with the agent CLI.",
-      },
+      signIn: acpSignInRoute(provider),
       signOut: false,
     });
   }
@@ -305,6 +297,10 @@ export async function route(
   }
   if (action === "status" && request.method === "GET") {
     const contextUsage = publicContextUsage(state);
+    const readiness = await acpReadiness(provider, providerConfig.authMethodEnv, {
+      ...process.env,
+      ...providerConfig.env,
+    });
     return json(response, 200, {
       status: state.status,
       error: state.error,
@@ -317,6 +313,7 @@ export async function route(
       ...(contextUsage ? { contextUsage } : {}),
       ...publicCommandRevision(state),
       runtime: publicRuntime(state),
+      ...(readiness ? { readiness } : {}),
     });
   }
   if (action === "config" && request.method === "GET") {
@@ -907,14 +904,6 @@ export async function route(
   return json(response, 405, { error: "Method not allowed" });
 }
 
-async function fileExists(path: string): Promise<boolean> {
-  try {
-    await fs.access(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
 export function authenticated(request: IncomingMessage): boolean {
   const dedicated = request.headers[ACP_TOKEN_HEADER];
   const candidates = [

@@ -129,7 +129,7 @@ it reaches. Some rules of thumb:
 - [x] Park Claude `onElicitation` and `onUserDialog` requests as interactions instead of declining them ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
 - [ ] Check on each platform that the Agent Info policy summary matches the options the adapter received ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
 - [ ] Keep the Claude CLI open across idle turns with an idle detach instead of draining at turn end ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md))
-- [ ] Report `authentication-required` readiness on Claude, Pi, ACP and OpenCode; drop the Cursor-only 401 branch ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
+- [x] Report `authentication-required` readiness on Claude, Pi, ACP and OpenCode; drop the Cursor-only 401 branch ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
 - [ ] Confirm no auth response body carries a token or key except the login URL, and the URL is never logged ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)
 - [ ] Confirm close retains the conversation through the UI for Cursor, Pi, OpenCode and Grok ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
 

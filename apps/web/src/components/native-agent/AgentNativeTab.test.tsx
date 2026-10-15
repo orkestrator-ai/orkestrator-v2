@@ -1515,35 +1515,240 @@ describe("AgentNativeTab", () => {
     expect(screen.queryByRole("link", { name: "Open sign-in link" }) === null).toBe(true);
   });
 
-  test("routes provider-neutral authentication recovery to the active platform", async () => {
+  test("opens a Grok sign-in terminal from the route its readiness names", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      readiness: {
+        state: "authentication-required" as const,
+        message: "Grok Build isn't signed in.",
+        signIn: { kind: "terminal" as const, hint: "Open a terminal and run grok login." },
+      },
+    }));
+    const createTab = mock(() => true);
+    render(
+      <TerminalProvider>
+        <TerminalTabHarness createTab={createTab}>
+          <AgentNativeTab tabId="tab-grok-auth-required" data={identity("grok")} isActive />
+        </TerminalTabHarness>
+      </TerminalProvider>,
+    );
+
+    expect(await screen.findByText("Grok Build isn't signed in.")).toBeTruthy();
+    expect(screen.getByText("Open a terminal and run grok login.")).toBeTruthy();
+    // The tab is in a container, where the login is the container's own copy.
+    expect(screen.getByText(/lasts until it restarts/)).toBeTruthy();
+    expect(
+      (screen.getByTitle("Sign in to Grok Build before sending") as HTMLButtonElement).disabled,
+    ).toBe(true);
+    // Grok's settings cannot sign in, so they are not offered.
+    expect(screen.queryByRole("button", { name: "Open Grok Build settings" }) === null).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Sign in from a terminal" }));
+    expect(createTab).toHaveBeenCalledWith("plain", {
+      displayTitle: "Grok Build sign-in",
+      initialCommands: ["grok login"],
+    });
+    // The readiness named the route, so the account was never read.
+    expect(getNativeAgentAuthStatusMock).not.toHaveBeenCalled();
+  });
+
+  test("terminal login clears authoritative readiness while away and survives a renderer reload", async () => {
+    const locked = {
+      state: "authentication-required" as const,
+      message: "Grok Build isn't signed in.",
+      signIn: { kind: "terminal" as const, hint: "Open a terminal and run grok login." },
+    };
+    // Backend fixture: login changes only its authoritative projection. No
+    // event is delivered to the original tree while another environment is open.
+    let signedIn = false;
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      revision: signedIn ? 2 : 1,
+      readiness: input.environmentId === "env-1" && !signedIn ? locked : undefined,
+    }));
+    const createTab = mock(() => true);
+    const mount = (environmentId: string) =>
+      render(
+        <TerminalProvider>
+          <TerminalTabHarness createTab={createTab}>
+            <AgentNativeTab
+              tabId="tab-grok-login-cycle"
+              data={{ ...identity("grok"), environmentId }}
+              isActive
+            />
+          </TerminalTabHarness>
+        </TerminalProvider>,
+      );
+    useEnvironmentStore.setState({
+      environments: [
+        ...useEnvironmentStore.getState().environments,
+        {
+          id: "env-other",
+          projectId: "project-1",
+          name: "Other environment",
+          order: 1,
+          setupPhase: "ready",
+        } as never,
+      ],
+    });
+    const original = mount("env-1");
+    await screen.findByText(locked.message);
+    const input = screen.getByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "hello after login" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Sign in from a terminal" }));
+    expect(createTab).toHaveBeenCalledWith("plain", {
+      displayTitle: "Grok Build sign-in",
+      initialCommands: ["grok login"],
+    });
+    original.unmount();
+    const other = mount("env-other");
+    await waitFor(() =>
+      expect(
+        getNativeAgentProjectionMock.mock.calls.some(
+          ([input]) => input.environmentId === "env-other",
+        ),
+      ).toBe(true),
+    );
+    signedIn = true;
+    other.unmount();
+    const returned = mount("env-1");
+    await screen.findByTitle("Send");
+    await waitFor(() => expect(screen.queryByText(locked.message) === null).toBe(true));
+    expect(screen.queryByTitle("Sign in to Grok Build before sending") === null).toBe(true);
+    returned.unmount();
+    // Reload discards all renderer projections; the backend fixture still
+    // holds the successful login, so recovery cannot depend on a live event.
+    useNativeAgentProjectionStore.getState().reset();
+    getNativeAgentProjectionMock.mockClear();
+    mount("env-1");
+    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
+    await screen.findByTitle("Send");
+    await waitFor(() => expect(screen.queryByText(locked.message) === null).toBe(true));
+    fireEvent.input(screen.getByRole("textbox"), { target: { textContent: "hello after login" } });
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("button", { name: "Sign in from a terminal" }) === null).toBe(true);
+  });
+
+  test("asks an older bridge's auth status for the route and its hint", async () => {
     getNativeAgentAuthStatusMock.mockImplementation(async () => ({
-      state: "signed-out",
-      signIn: { kind: "terminal" },
+      state: "needs-auth",
+      signIn: { kind: "terminal", hint: "Open a Pi terminal tab and run /login." },
     }));
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       readiness: {
         state: "authentication-required" as const,
-        message: "Grok authentication is required.",
+        message: "Pi has no signed-in model provider.",
       },
     }));
-    let requestedSection: unknown;
-    const onSettings = (event: Event) => {
-      requestedSection = (event as CustomEvent<unknown>).detail;
-    };
-    window.addEventListener(GLOBAL_SETTINGS_REQUEST_EVENT, onSettings);
-    try {
-      render(<AgentNativeTab tabId="tab-grok-auth-required" data={identity("grok")} isActive />);
+    const createTab = mock(() => true);
+    render(
+      <TerminalProvider>
+        <TerminalTabHarness createTab={createTab}>
+          <AgentNativeTab
+            tabId="tab-pi-auth-required"
+            data={{ ...identity("pi"), containerId: undefined, isLocal: true }}
+            isActive
+          />
+        </TerminalTabHarness>
+      </TerminalProvider>,
+    );
 
-      expect(await screen.findByText("Grok authentication is required.")).toBeTruthy();
-      expect(
-        (screen.getByTitle("Sign in to Grok Build before sending") as HTMLButtonElement).disabled,
-      ).toBe(true);
-      fireEvent.click(await screen.findByRole("button", { name: "Open Grok Build settings" }));
-      expect(requestedSection).toBe("grok");
-    } finally {
-      window.removeEventListener(GLOBAL_SETTINGS_REQUEST_EVENT, onSettings);
-    }
+    expect(await screen.findByText("Open a Pi terminal tab and run /login.")).toBeTruthy();
+    expect(screen.queryByText(/lasts until it restarts/) === null).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Sign in from a terminal" }));
+    expect(createTab).toHaveBeenCalledWith("plain", {
+      displayTitle: "Pi sign-in",
+      initialCommands: ["pi"],
+    });
+    expect(getNativeAgentAuthStatusMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("offers inline sign-in straight from a browser-url readiness route", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      readiness: {
+        state: "authentication-required" as const,
+        message: "Sign in to Codex",
+        signIn: { kind: "browser-url" as const },
+      },
+    }));
+    render(<AgentNativeTab tabId="tab-codex-route" data={identity("codex")} isActive />);
+
+    expect(await screen.findByRole("button", { name: "Sign in to Codex" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Checking sign-in options…" }) === null).toBe(true);
+    expect(getNativeAgentAuthStatusMock).not.toHaveBeenCalled();
+  });
+
+  test("does not take an earlier Claude sign-in as the answer to a current lock", async () => {
+    // Yesterday's renewal finished before this lock was seen, so it says
+    // nothing about the login Claude is missing now.
+    accountLoginProgress = {
+      state: "succeeded",
+      platform: "claude",
+      mode: "reauthenticate",
+      completedAt: "2026-01-01T00:00:00.000Z",
+    };
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      readiness: {
+        state: "authentication-required" as const,
+        message: "Claude isn't signed in. Sign in to Claude to keep working.",
+      },
+    }));
+    render(<AgentNativeTab tabId="tab-claude-stale-renewal" data={identity("claude")} isActive />);
+
+    expect(await screen.findByRole("region", { name: "Sign in to Claude" })).toBeTruthy();
+    await waitFor(() => expect(getAgentAccountLoginMock).toHaveBeenCalled());
+    expect(screen.queryByText(/Signed in\. Resend your message/) === null).toBe(true);
+    expect(screen.getByRole("button", { name: "Sign in to Claude" })).toBeTruthy();
+  });
+
+  test("routes Claude's sign-in readiness to its own sign-in card, once", async () => {
+    accountLoginProgress = { state: "idle" };
+    const notice = "Not logged in · Please run /login";
+    const readiness = {
+      state: "authentication-required" as const,
+      message: "Claude isn't signed in. Sign in to Claude to keep working.",
+      signIn: { kind: "terminal" as const, hint: "Open a Claude terminal tab and run /login." },
+    };
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      readiness,
+    }));
+    const { unmount } = render(
+      <AgentNativeTab tabId="tab-claude-readiness" data={identity("claude")} isActive />,
+    );
+
+    expect(await screen.findByRole("region", { name: "Sign in to Claude" })).toBeTruthy();
+    expect(
+      (screen.getByTitle("Sign in to Claude before sending") as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(screen.queryByRole("button", { name: "Open Claude settings" }) === null).toBe(true);
+    expect(screen.queryByText("Open a Claude terminal tab and run /login.") === null).toBe(true);
+    unmount();
+
+    // Claude's own reply and the readiness ask for the same card.
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      readiness,
+      messages: [
+        {
+          id: "assistant-1",
+          role: "assistant" as const,
+          content: notice,
+          createdAt: "2026-09-03T14:45:00.000Z",
+          parts: [{ type: "text" as const, content: notice }],
+        },
+      ],
+    }));
+    render(
+      <AgentNativeTab tabId="tab-claude-readiness-reply" data={identity("claude")} isActive />,
+    );
+    await screen.findByRole("region", { name: "Sign in to Claude" });
+    expect(screen.getAllByRole("region", { name: "Sign in to Claude" })).toHaveLength(1);
   });
 
   test("an assigned Grok composer restores its image after a cold remount", async () => {

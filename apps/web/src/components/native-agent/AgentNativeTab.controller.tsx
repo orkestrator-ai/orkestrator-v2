@@ -165,6 +165,8 @@ import {
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import { isSetupBlocked } from "@/lib/setup-commands";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
+import { agentSettingsCanSignIn, agentTerminalSignInCommand } from "@/lib/agent-sign-in";
+import { useOptionalTerminalContext } from "@/contexts/TerminalContext";
 import { ClaudeAuthRecoveryCard } from "@/components/claude/ClaudeAuthRecoveryCard";
 import { isClaudeNotLoggedInNotice } from "@/lib/claude-auth";
 
@@ -839,17 +841,27 @@ export function SharedNativeAgentController({
   const authenticationReadiness =
     projection?.readiness?.state === "authentication-required" ? projection.readiness : null;
   const authenticationRequired = authenticationReadiness !== null;
-  // Asked only while sign-in is required: the account read is not free, so it
-  // is not part of the projection.
+  // A bridge that names its sign-in route answers it with the readiness. One
+  // that predates the route is asked through the account read, which is not
+  // free, so it is not part of the projection and runs only while required.
+  const readinessSignIn = authenticationReadiness?.signIn;
+  const signInReadNeeded = authenticationRequired && !readinessSignIn;
+  // When the lock was first seen. Claude's card only resumes a sign-in that
+  // finished after the failure it answers, and a lock carries no timestamp.
+  const [authRequiredSince, setAuthRequiredSince] = useState<string | null>(null);
+  if (authenticationRequired !== (authRequiredSince !== null)) {
+    setAuthRequiredSince(authenticationRequired ? () => new Date().toISOString() : null);
+  }
   const authReadKey = `${data.environmentId}\0${platform}\0${sessionKey}`;
   const [signInStatus, setSignInStatus] = useState<{
     key: string;
     kind: string | null;
+    hint?: string;
     state: "loading" | "ready" | "failed";
   } | null>(null);
   const [authReadAttempt, setAuthReadAttempt] = useState(0);
   useEffect(() => {
-    if (!authenticationRequired) return;
+    if (!signInReadNeeded) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let failures = 0;
@@ -863,7 +875,14 @@ export function SharedNativeAgentController({
         });
         if (cancelled) return;
         if (!status?.signIn?.kind) throw new Error("Sign-in options are unavailable");
-        setSignInStatus({ key: authReadKey, kind: status.signIn.kind, state: "ready" });
+        // A signed-in account's hint is about signing out.
+        const hint = status.state === "signed-in" ? undefined : status.signIn.hint;
+        setSignInStatus({
+          key: authReadKey,
+          kind: status.signIn.kind,
+          ...(hint ? { hint } : {}),
+          state: "ready",
+        });
       } catch {
         if (cancelled) return;
         setSignInStatus({ key: authReadKey, kind: null, state: "failed" });
@@ -875,21 +894,35 @@ export function SharedNativeAgentController({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [
-    authenticationRequired,
-    authReadKey,
-    authReadAttempt,
-    data.environmentId,
-    platform,
-    sessionKey,
-  ]);
-  const currentSignInStatus = signInStatus?.key === authReadKey ? signInStatus : null;
+  }, [signInReadNeeded, authReadKey, authReadAttempt, data.environmentId, platform, sessionKey]);
+  const currentSignInStatus = readinessSignIn
+    ? {
+        key: authReadKey,
+        kind: readinessSignIn.kind,
+        ...(readinessSignIn.hint ? { hint: readinessSignIn.hint } : {}),
+        state: "ready" as const,
+      }
+    : signInStatus?.key === authReadKey
+      ? signInStatus
+      : null;
   // Only confirmed terminal/none flows belong in settings. Pending and failed
   // reads cannot establish that inline sign-in is unsupported.
   const inlineSignInAvailable =
     currentSignInStatus?.kind === "browser-url" || currentSignInStatus?.kind === "device-code";
   const [signInPending, setSignInPending] = useState(false);
   const [signInUrl, setSignInUrl] = useState<string | null>(null);
+  // A sign-in that runs in the platform's own CLI opens where this agent runs:
+  // the environment's terminal is local for a local tab, inside the container
+  // otherwise.
+  const createTerminalTab = useOptionalTerminalContext()?.createTab ?? null;
+  const terminalSignInCommand = agentTerminalSignInCommand(platform);
+  const openTerminalSignIn = useCallback(() => {
+    if (!terminalSignInCommand) return;
+    createTerminalTab?.("plain", {
+      displayTitle: `${label} sign-in`,
+      initialCommands: [terminalSignInCommand],
+    });
+  }, [createTerminalTab, label, terminalSignInCommand]);
   // The desktop shell denies window.open and target=_blank, so links must go
   // through the app's own opener (Electron shell / browser client / backend).
   const openSignInUrl = useCallback(
@@ -2296,22 +2329,44 @@ export function SharedNativeAgentController({
         onDismiss={() => setDismissedPlanReviewId(latestAssistantMessage?.id ?? null)}
       />
     ) : null,
-    claudeNotLoggedInNotice !== null ? (
+    // Claude signs in again through the backend's `claude auth login`, which
+    // its card drives; the generic banner's routes do not reach it. One card,
+    // whichever of the readiness or Claude's own reply asked for it.
+    platform === "claude" && (authenticationRequired || claudeNotLoggedInNotice !== null) ? (
       <ClaudeAuthRecoveryCard
         key="claude-not-logged-in"
         placement="pinned"
-        error={claudeNotLoggedInNotice}
-        failureAt={latestAssistantMessage?.createdAt}
+        error={claudeNotLoggedInNotice ?? authenticationReadiness?.message ?? ""}
+        failureAt={
+          claudeNotLoggedInNotice !== null
+            ? latestAssistantMessage?.createdAt
+            : (authRequiredSince ?? undefined)
+        }
         containerId={data.containerId}
       />
     ) : null,
-    authenticationRequired ? (
+    authenticationRequired && platform !== "claude" ? (
       <div
         key="authentication-required"
         role="status"
         className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-100"
       >
-        <span>{authenticationReadiness.message}</span>
+        <div className="min-w-0 space-y-1">
+          <p>{authenticationReadiness.message}</p>
+          {currentSignInStatus?.state === "ready" && !inlineSignInAvailable ? (
+            <>
+              {currentSignInStatus.hint ? (
+                <p className="text-amber-100/70">{currentSignInStatus.hint}</p>
+              ) : null}
+              {terminalSignInCommand && data.containerId ? (
+                <p className="text-amber-100/70">
+                  A sign-in made in this container lasts until it restarts. Sign in on this computer
+                  to keep it.
+                </p>
+              ) : null}
+            </>
+          ) : null}
+        </div>
         {currentSignInStatus?.state !== "ready" ? (
           <Button
             type="button"
@@ -2355,7 +2410,12 @@ export function SharedNativeAgentController({
               </a>
             ) : null}
           </div>
-        ) : (
+        ) : terminalSignInCommand && createTerminalTab ? (
+          <Button type="button" size="sm" variant="outline" onClick={openTerminalSignIn}>
+            <LogIn className="mr-1.5 h-3.5 w-3.5" />
+            Sign in from a terminal
+          </Button>
+        ) : agentSettingsCanSignIn(platform) ? (
           <Button
             type="button"
             size="sm"
@@ -2365,7 +2425,7 @@ export function SharedNativeAgentController({
             <LogIn className="mr-1.5 h-3.5 w-3.5" />
             Open {label} settings
           </Button>
-        )}
+        ) : null}
       </div>
     ) : null,
     // The backend persists the request id before it reaches the provider — for

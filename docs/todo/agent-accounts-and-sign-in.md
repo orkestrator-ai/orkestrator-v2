@@ -7,10 +7,10 @@ in the app wherever the vendor has an API for it, and losing auth mid-turn
 should show in the tab, not as a spawn failure. Claude and Codex can also hold
 more than one login, switched globally per platform. The status type, the
 bridge routes, the per-session account card and multi-account switching all
-exist. Still missing: the turn-time `auth` notice, actionable needs-auth on
-four platforms, a session-free settings card, OpenCode sign-in and Codex
-sign-in cancel. A handful of account-switching gaps remain, mostly inside
-containers. How accounts work is in
+exist, and every platform reports a missing login before a send. Still
+missing: the turn-time `auth` notice, a session-free settings card, OpenCode
+sign-in and Codex sign-in cancel. A handful of account-switching gaps remain,
+mostly inside containers. How accounts work is in
 [agent-accounts.md](../architecture/agent-accounts.md).
 
 ## Current state
@@ -25,28 +25,35 @@ containers. How accounts work is in
   `POST /global/auth/logout` exist on Claude, Codex, Cursor, ACP and Pi, each
   with route tests.
   - Claude: `readClaudeAuthStatus` reads `accountInfo()` on a probe query
-    (`session-manager-catalog.ts`). It reports `signIn.kind: "terminal"` with
-    the hint "Open a Claude terminal tab and run /login."
+    (`claude-sign-in.ts`). It reports `signIn.kind: "terminal"` with the hint
+    "Open a Claude terminal tab and run /login."
   - Codex: `account/read`, `account/login/start` (`browser-url`) and
     `account/logout` (`bridges/codex-bridge/src/engine/app-server-engine.ts`).
   - Cursor: `Cursor.me` and the SDK credential (`credentials.ts`).
-  - Grok: the credential file plus `authenticateIfRequired` before
-    `session/new` (`acp-context.ts`). Sign-in is `terminal`.
+  - Grok: a stored login, `XAI_API_KEY` or an auth-provider command
+    (`acp-credentials.ts`), checked before `authenticateIfRequired`
+    (`acp-context.ts`). Sign-in is `terminal`.
   - Pi: per-provider `method` (`credentials.ts`). Sign-in is `terminal`, and
-    login stays out by design.
-  - OpenCode: per-provider state with `signIn.kind: "none"`.
+    login stays out by design. A prompt whose model's provider is signed out
+    is refused (401) before Pi is asked, and a turn Pi ends on a failed
+    response, such as an expired OAuth refresh, fails with Pi's error.
+  - OpenCode: per-provider state with `signIn.kind: "terminal"` and an
+    `opencode auth login` hint.
 - Renderer:
   - The per-session account card with sign-in and sign-out is in Agent Info
     (`AgentInfoButton.tsx`).
   - The settings pane has `AgentAccountsSection.tsx` (Claude and Codex
     accounts) and `CursorSdkSignIn.tsx`. Nothing in settings reads
     `NativeAgentAuthStatus` without a session.
-- Prompt admission: `readiness: { state: "authentication-required", message }`
-  (`NativeAgentReadiness`) comes only from Codex
-  (`app-server-runtime-sessions.ts`) and Cursor (`http.ts`). The backend
-  normalizes it with `normalizeProviderReadiness` (`http-bridge-transport.ts`),
-  and `AgentNativeTab.controller.tsx` renders it. `HttpBridgeProvider` keeps a
-  Cursor-only 401 `authentication-required` branch.
+- Prompt admission: every platform reports a confirmed missing login as
+  `readiness: { state: "authentication-required", message, signIn }`
+  (`NativeAgentReadiness`); how each one detects it is in
+  [agent-accounts.md](../architecture/agent-accounts.md#sign-in-readiness). An
+  expired login is not detectable ahead of a turn on Claude, Pi, Grok or
+  OpenCode and stays a turn error. The tab offers in-tab sign-in, a terminal
+  tab running the login command, or Claude's `ClaudeAuthRecoveryCard`.
+  `HttpBridgeProvider` passes any bridge's 401
+  `kind: "authentication-required"` refusal through unwrapped.
 - Turn-time auth: `NativeAgentNotice { kind: "auth" }` is defined, and the tab
   styles it as a warning, but nothing emits it. Claude `auth_status` becomes a
   runtime-health notice plus a status row (`handleAuthStatus`,
@@ -75,22 +82,17 @@ containers. How accounts work is in
    Claude `auth_status` (keep the status row) and from Codex
    `modelProvider/authRecoveryStarted|Completed`, and take those two off the
    ignore list. The renderer already styles the notice.
-2. **Actionable needs-auth everywhere.** Report
-   `readiness: authentication-required` on Claude, Pi, ACP and OpenCode when
-   their status is `needs-auth` or `expired`, as Codex and Cursor do.
-   `NativeAgentReadiness` carries only a message, so either name the sign-in
-   route in the message or add the `signIn` kind to the type. Once every bridge
-   reports readiness, drop the Cursor-only 401 branch in `HttpBridgeProvider`.
-3. **Claude sign-in route.** The bridge still says "run /login in a terminal
-   tab", but the backend already drives `claude auth login` for the active
-   account (`start_agent_account_login` with `reauthenticate: true`, surfaced by
-   `ClaudeAuthRecoveryCard`). Point Claude's needs-auth state, and the card in
-   item 4, at that flow.
-4. **Settings-pane auth card.** One card per enabled platform, read without a
+2. **Claude sign-in route.** The tab already answers Claude's
+   `authentication-required` readiness with `ClaudeAuthRecoveryCard`, which
+   drives the backend's `claude auth login` for the active account
+   (`start_agent_account_login` with `reauthenticate: true`). The bridge's
+   `signIn` hint still says "run /login in a terminal tab"; point it, and the
+   card in item 3, at that flow.
+3. **Settings-pane auth card.** One card per enabled platform, read without a
    session, from `NativeAgentAuthStatus`. For Claude and Codex it should sit
    with `AgentAccountsSection` rather than duplicate it, and Cursor's
    `CursorSdkSignIn` becomes that platform's card.
-5. **OpenCode in-app sign-in.** `beginSignIn` per provider:
+4. **OpenCode in-app sign-in.** `beginSignIn` per provider:
    - API key through `client.auth.set`, collected as a secret-input interaction
      (see [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md)),
      never a renderer form;
@@ -98,7 +100,7 @@ containers. How accounts work is in
      `provider.oauth.callback`.
 
    Neither is called today.
-6. **Codex cancel.** Send `account/login/cancel` when an in-tab sign-in is
+5. **Codex cancel.** Send `account/login/cancel` when an in-tab sign-in is
    abandoned. Nothing calls it today.
 
 ### Account switching gaps
@@ -130,19 +132,23 @@ Each was checked against the current code.
 ### Qualification
 
 - Each auth state from fixtures, visible in the per-session card and, after
-  item 4, in the settings card for every enabled platform.
+  item 3, in the settings card for every enabled platform.
 - A Codex sign-out then sign-in round trip on a fixture profile with
   `--credential-source codex`.
 - No token or key in any auth response body except the intended login `url`,
   and the URL itself is never logged.
-- After items 1 and 2: an expired Claude login mid-turn shows the `auth` notice
-  and an actionable readiness state, not a spawn failure.
+- After item 1: an expired Claude login mid-turn shows the `auth` notice and
+  the transcript sign-in card, not a spawn failure. A missing Claude login
+  (`readiness`) already locks the composer behind the sign-in card.
 
 ## Constraints and rationale
 
 - Pi login stays out by design (see
   [agent-engines.md](../architecture/agent-engines.md) § Pi). Its status stays
   read-only.
+- `authentication-required` readiness locks the composer, so a platform reports
+  it only for a confirmed missing login and leaves it out when unsure. A
+  terminal sign-in command comes from the renderer, never from a bridge.
 - Orkestrator stores no credential beyond what Cursor already stores. Account
   logins stay in each account's own directory or Keychain entry.
 - Credentials are never copied between account directories. Refresh tokens

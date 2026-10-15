@@ -469,6 +469,8 @@ async function routeSession(
         : {
             state: "authentication-required" as const,
             message: CURSOR_AUTHENTICATION_REQUIRED_MESSAGE,
+            // `/global/auth/login` returns the browser URL the tab opens.
+            signIn: { kind: "browser-url" as const },
           };
     return json(response, 200, publicStatus(state, readiness));
   }

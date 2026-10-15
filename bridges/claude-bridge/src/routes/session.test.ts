@@ -12,6 +12,8 @@ import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 // Rules" > "Snapshot-and-restore pattern".
 import * as realSessionManager from "../services/session-manager.js";
 const realSessionManagerSnapshot = { ...realSessionManager };
+import * as realClaudeSignIn from "../services/claude-sign-in.js";
+const realClaudeSignInSnapshot = { ...realClaudeSignIn };
 
 // --- Mock session-manager before importing the route ---
 
@@ -226,6 +228,14 @@ mock.module("../services/session-manager.js", () => ({
   assertClaudeRuntimeAccepts: mockAssertClaudeRuntimeAccepts,
 }));
 
+const mockClaudeReadiness = mock(
+  (): ReturnType<typeof realClaudeSignIn.claudeReadiness> => undefined,
+);
+mock.module("../services/claude-sign-in.js", () => ({
+  ...realClaudeSignInSnapshot,
+  claudeReadiness: mockClaudeReadiness,
+}));
+
 /**
  * Restore every persistence seam to its inert default.
  *
@@ -294,6 +304,7 @@ function jsonRequest(method: string, path: string, body?: unknown) {
 // files (e.g. services/session-manager-*.test.ts) see the real module.
 afterAll(() => {
   mock.module("../services/session-manager.js", () => realSessionManagerSnapshot);
+  mock.module("../services/claude-sign-in.js", () => realClaudeSignInSnapshot);
 });
 
 describe("session routes", () => {
@@ -517,6 +528,20 @@ describe("session routes", () => {
       expect(data.id).toBe("s-1");
       expect(data.turnStartedAt).toBe(turnStartedAt);
       expect(Object.hasOwn(data, "planMode")).toBe(false);
+    });
+
+    test("publishes sign-in readiness only once the account read found no login", async () => {
+      const unknown = await jsonBody(await app.request("/session/s-1"));
+      expect(Object.hasOwn(unknown, "readiness")).toBe(false);
+
+      const readiness = {
+        state: "authentication-required" as const,
+        message: "Claude isn't signed in. Sign in to Claude to keep working.",
+        signIn: { kind: "terminal" as const, hint: "Open a Claude terminal tab and run /login." },
+      };
+      mockClaudeReadiness.mockImplementationOnce(() => readiness);
+      const locked = await jsonBody(await app.request("/session/s-1"));
+      expect(locked.readiness).toEqual(readiness);
     });
 
     test("publishes the command inventory revision only when an inventory exists", async () => {

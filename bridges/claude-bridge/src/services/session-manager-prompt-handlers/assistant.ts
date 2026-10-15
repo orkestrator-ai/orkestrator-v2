@@ -7,6 +7,10 @@ import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/pro
 import { claudePlanWindowFromKind } from "@orkestrator/protocol/plan-usage";
 import type { SdkMessageBase, SessionState, SessionUsageSnapshot } from "../../types/index.js";
 import { sessionHealth } from "../../types/index.js";
+import {
+  noteClaudeAuthenticationFailure,
+  noteClaudeAuthenticationWorked,
+} from "../claude-sign-in.js";
 import { eventEmitter } from "../event-emitter.js";
 import { debugLog } from "../logger.js";
 import {
@@ -106,6 +110,12 @@ export function handleAssistantMessage(turn: TurnState, message: SDKMessage): vo
   const receivedAt = new Date().toISOString();
   const recordUnknownContentBlock = (blockType: string) =>
     sessionHealth(session).recordUnknown(`block:${blockType}`);
+  // Claude answers a turn it cannot run with a synthetic reply carrying this
+  // code ("Not logged in · Please run /login"). Re-read the account so a
+  // missing login locks the composer; any real answer proves one works.
+  const assistantError = (message as SDKAssistantMessage).error;
+  if (assistantError === "authentication_failed") noteClaudeAuthenticationFailure();
+  else if (!assistantError) noteClaudeAuthenticationWorked();
   const usageReport = (message as SDKAssistantMessage).usage_report;
   if (usageReport) {
     const usage = applyClaudeUsageReport(session, usageReport);

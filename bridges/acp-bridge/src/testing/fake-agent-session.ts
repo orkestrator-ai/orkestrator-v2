@@ -75,6 +75,15 @@ export function handleSessionMessage(message: JsonObject): boolean {
   if (message.method === "session/new" && typeof message.id === "number") {
     recordSessionRequest(message);
     if (rejectInvalidMcpServers(message)) return true;
+    const releaseFile = process.env.FAKE_ACP_NEW_RELEASE_FILE;
+    if (releaseFile && !existsSync(releaseFile)) {
+      const timer = setInterval(() => {
+        if (!existsSync(releaseFile)) return;
+        clearInterval(timer);
+        write({ jsonrpc: "2.0", id: message.id, result: sessionPayload() });
+      }, 10);
+      return true;
+    }
     write({ jsonrpc: "2.0", id: message.id, result: sessionPayload() });
     // Straight after the answer, as agents do: this lands before the bridge
     // has attached a handler for the session it has only just learned about.
@@ -204,6 +213,16 @@ export function handleSessionMessage(message: JsonObject): boolean {
     return true;
   }
   if (message.method === "session/set_model" && typeof message.id === "number") {
+    const failOnceFile = process.env.FAKE_ACP_FAIL_MODEL_ONCE_FILE;
+    if (failOnceFile && !existsSync(failOnceFile)) {
+      appendFileSync(failOnceFile, "failed\n");
+      write({
+        jsonrpc: "2.0",
+        id: message.id,
+        error: { code: -32603, message: "fake model configuration failure" },
+      });
+      return true;
+    }
     const params = isObject(message.params) ? message.params : {};
     const modelId =
       typeof params.modelId === "string" ? params.modelId : grokConfig.models.currentModelId;

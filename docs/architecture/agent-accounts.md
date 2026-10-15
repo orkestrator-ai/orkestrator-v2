@@ -155,8 +155,51 @@ from a terminal inside it.
 
 The UI is `ClaudeAuthRecoveryCard`. It shows under a Claude authentication
 error in the transcript, and pinned above the composer while Claude's `Not
-logged in · Please run /login` reply is the latest exchange. It reuses the
-settings pane's link-and-code panel and resumes a sign-in already running.
+logged in · Please run /login` reply is the latest exchange or Claude reports
+`authentication-required` readiness (below). It reuses the settings pane's
+link-and-code panel and resumes a sign-in already running.
+
+## Sign-in readiness
+
+Every platform reports a missing login before a send as
+`readiness: { state: "authentication-required", message, signIn }` on its
+session status (`NativeAgentReadiness`). The tab locks the send button and
+shows the message with the route `signIn` names: an in-tab sign-in for
+`browser-url` and `device-code` (Codex, Cursor), and otherwise the hint plus a
+terminal tab running the platform's login command (`agent-sign-in.ts`; the
+commands are fixed in the renderer, never taken from a bridge). Claude shows
+`ClaudeAuthRecoveryCard` instead. A bridge or backend that predates `signIn`
+leaves it out, and the tab then reads the platform's auth status for the route.
+
+Readiness is reported only when the login is confirmed missing, because it
+locks the composer: a missing value means unknown and never locks. Each
+platform re-reads its evidence cheaply, so a login made in a terminal unlocks
+the tab without a send.
+
+| Platform | Locked when | Cleared by |
+| --- | --- | --- |
+| Codex | `account/read` confirms a sign-out | the next account read |
+| Cursor | no stored or environment credential | each status read |
+| Claude | an `accountInfo()` probe finds no credential | a probe that finds one, at most every 30 s while locked; a replaced bridge |
+| Pi | the model catalogue read succeeds with no models | the next catalogue read, at most every 30 s |
+| Grok | no `$GROK_HOME/auth.json`, `XAI_API_KEY` or auth-provider command | each status read (a file check) |
+| OpenCode | OpenCode reports no allowed provider connected | the picker's catalogue read, cached 30 s |
+
+- Claude's probe spawns a CLI, so it runs only on an auth read or when Claude
+  answers a turn with `error: "authentication_failed"`. `accountInfo()`
+  reports a signed-out directory as `tokenSource: "none"` with
+  `apiProvider: "firstParty"`, and it cannot see an expired token, so an
+  expired login stays a turn error with the transcript card.
+- Grok's ACP `authenticate` does not fail without a login: it waits on an
+  interactive sign-in. The bridge refuses before asking, and a session created
+  without a login is deferred (no agent, empty `acpSessionId`) until the first
+  attach or prompt after one exists.
+- OpenCode's own `opencode` provider is connected with no login, so the default
+  allowlist never locks. `opencode auth login` reaches the running server
+  without a restart.
+- Background work never sees the banner. A bridge refusing a prompt for a
+  missing login answers 401 with `kind: "authentication-required"`, and the
+  backend passes that message through unwrapped on every platform.
 
 ## Plan usage
 

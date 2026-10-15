@@ -112,6 +112,7 @@ describe("authentication", () => {
       expect(status.readiness).toEqual({
         state: "authentication-required",
         message: CURSOR_AUTHENTICATION_REQUIRED_MESSAGE,
+        signIn: { kind: "browser-url" },
       });
 
       const prompt = await call(`/session/${state.id}/prompt`, {

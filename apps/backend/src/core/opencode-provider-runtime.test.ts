@@ -24,6 +24,7 @@ import {
   OPENCODE_PROVIDER_LIST_RESPONSE,
 } from "./opencode-provider-list-test-fixtures.js";
 import { openCodeHistoryServer } from "./opencode-history-test-support.js";
+import { OPENCODE_SIGN_IN_REQUIRED_MESSAGE } from "./opencode-capabilities.js";
 import { nativeCapabilities, nativeComposerControls } from "./native-agent-service-shared.js";
 import {
   DEFAULT_OPENCODE_MODEL_PROVIDERS,
@@ -1189,6 +1190,80 @@ describe("OpenCode provider runtime", () => {
     } finally {
       await provider.dispose?.();
     }
+  });
+
+  describe("sign-in readiness", () => {
+    const providerList = (connected: unknown) =>
+      mock(async () => ({
+        data: {
+          all: [
+            { id: "anthropic", name: "Anthropic", models: { sonnet: { name: "Sonnet" } } },
+            { id: "opencode", name: "OpenCode", models: { "kimi-k2.7": { name: "Kimi K2.7" } } },
+          ],
+          ...(connected === undefined ? {} : { connected }),
+        },
+      }));
+    const signInRequired = {
+      state: "authentication-required",
+      message: OPENCODE_SIGN_IN_REQUIRED_MESSAGE,
+      signIn: { kind: "terminal", hint: "Open a terminal and run opencode auth login." },
+    } as const;
+
+    test("reports sign-in required when no allowed provider is connected", async () => {
+      const fake = openCodeFake();
+      Object.assign(fake.client as object, { provider: { list: providerList(["opencode"]) } });
+      const provider = openCodeActivityProvider(fake, {
+        resolveOpenCodeModelProviders: () => ["anthropic"],
+      });
+      try {
+        expect((await provider.interactiveSnapshot?.("owned-session"))?.readiness).toEqual(
+          signInRequired,
+        );
+        expect((await provider.sessionStateSnapshot?.("owned-session"))?.readiness).toEqual(
+          signInRequired,
+        );
+      } finally {
+        await provider.dispose?.();
+      }
+    });
+
+    test.each([
+      ["an allowed provider is connected", ["anthropic"], ["anthropic"]],
+      // The managed pair's own provider is connected with no login at all.
+      ["the default allowlist is in force", ["opencode"], ["opencode", "opencode-go"]],
+      ["OpenCode did not report connectivity", undefined, ["anthropic"]],
+    ] as const)("leaves readiness unreported when %s", async (_name, connected, allowed) => {
+      const fake = openCodeFake();
+      Object.assign(fake.client as object, {
+        provider: { list: providerList(connected === undefined ? undefined : [...connected]) },
+      });
+      const provider = openCodeActivityProvider(fake, {
+        resolveOpenCodeModelProviders: () => [...allowed],
+      });
+      try {
+        expect((await provider.interactiveSnapshot?.("owned-session"))?.readiness).toBeUndefined();
+        expect((await provider.sessionStateSnapshot?.("owned-session"))?.readiness).toBeUndefined();
+      } finally {
+        await provider.dispose?.();
+      }
+    });
+
+    test("shares the picker's cached provider listing", async () => {
+      const fake = openCodeFake();
+      const list = providerList(["opencode"]);
+      Object.assign(fake.client as object, { provider: { list } });
+      const provider = openCodeActivityProvider(fake, {
+        resolveOpenCodeModelProviders: () => ["anthropic"],
+      });
+      try {
+        await provider.interactiveSnapshot?.("owned-session");
+        await provider.sessionStateSnapshot?.("owned-session");
+        await provider.sessionStateSnapshot?.("owned-session");
+        expect(list).toHaveBeenCalledTimes(1);
+      } finally {
+        await provider.dispose?.();
+      }
+    });
   });
 
   /** A catalogue whose unmanaged providers alone exceed the 512-model cap. */

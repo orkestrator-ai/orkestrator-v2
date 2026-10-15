@@ -644,12 +644,35 @@ export function useTerminal({
         return reconciliationPromise;
       };
 
+      // A reconnected stream or terminal-scoped desync can mean the backend
+      // restarted and took this PTY with it. Reconciliation then redraws saved
+      // history over a session that no longer exists, and every keystroke is
+      // refused. Drop the stale connection so the owner starts a replacement
+      // shell. Attach-only sessions are backend-owned and never replaced here.
+      const releaseIfSessionStopped = async (): Promise<void> => {
+        if (attachExistingOnly || disposed || !isCurrentConnect()) return;
+        const status = await backend.getTerminalSession(id).catch(() => null);
+        if (disposed || !isCurrentConnect() || !isConnectedRef.current) return;
+        if (status?.id !== id || status.running !== false || sessionIdRef.current !== id) return;
+        console.warn("[useTerminal] Terminal session stopped while the stream was down:", id);
+        connectGenerationRef.current += 1;
+        cleanupEventListener();
+        sessionIdRef.current = null;
+        isConnectedRef.current = false;
+        isConnectingRef.current = false;
+        setSessionId(null);
+        setBootstrapped(false);
+        setIsConnected(false);
+        setIsConnecting(false);
+      };
+
       const outputUnlisten = await listen<TerminalOutputPayload>(
         eventName,
         (event) => {
           const payload = event.payload;
           const data = decodeTerminalOutputPayload(payload);
           if (data === null) {
+            void releaseIfSessionStopped();
             return reconcileSnapshot();
           }
           const cursor = terminalOutputCursor(payload);
@@ -722,6 +745,7 @@ export function useTerminal({
               event,
               () => {
                 void reconcileSnapshot();
+                void releaseIfSessionStopped();
               },
               { signal: listenAbortController.signal },
             );

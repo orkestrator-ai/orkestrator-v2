@@ -75,10 +75,25 @@ export async function createPublicApiHarness(
     appRoot: root,
     resourceRoot: root,
     environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
-    runtime: new BackendRuntime({ emit: (event, payload) => context.emit(event, payload) }),
     worktreeDir: path.join(root, "worktrees"),
     ...options.context,
+    runtime: new BackendRuntime({ emit: (event, payload) => context.emit(event, payload) }),
   } as CommandContext;
+  let disposal: Promise<void> | undefined;
+  function dispose(): Promise<void> {
+    return (disposal ??= (async () => {
+      try {
+        await stopReconciler(storage);
+      } finally {
+        try {
+          await context.environmentLifecycleTasks.beginShutdown(5_000);
+        } finally {
+          context.runtime.shutdown();
+          storage.close();
+        }
+      }
+    })());
+  }
   const harness: PublicApiHarness = {
     dataDir,
     root,
@@ -113,7 +128,7 @@ export async function createPublicApiHarness(
       return { projectPath, originPath };
     },
     async restart() {
-      await stopReconciler(storage);
+      await dispose();
       return createPublicApiHarness({
         root,
         dataDir,
@@ -122,9 +137,11 @@ export async function createPublicApiHarness(
       });
     },
     async cleanup() {
-      await stopReconciler(storage);
-      await context.environmentLifecycleTasks.beginShutdown?.(5_000).catch(() => undefined);
-      await fs.rm(root, { recursive: true, force: true });
+      try {
+        await dispose();
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
     },
   };
   return harness;

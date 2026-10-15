@@ -24,6 +24,7 @@ with full history. Status lives in this index so a model can skip those files.
 
 | ID | Status | Test | File | Symptom | Case |
 | --- | --- | --- | --- | --- | --- |
+| 0212 | open | `missed events, expired replay and generation changes reset through changes()` | apps/backend/src/core/design-service.test.ts:81 | Five-second aggregate timeout at 6167.72ms, followed by a stopping-service teardown error; unchanged owning file passed alone in 4.0 seconds. | [0212-design-service-replay-aggregate-timeout.md](0212-design-service-replay-aggregate-timeout.md) |
 | 0211 | open | `persists safe cleanup failure details and permits a backend deletion retry` | apps/backend/tests/commands-integration.test.ts | Five-second aggregate timeout at 6336ms; unchanged owning file passed alone in 35.0 seconds. | [0211-cleanup-retry-aggregate-timeout.md](0211-cleanup-retry-aggregate-timeout.md) |
 | 0210 | open | `fake Codex app-server process > reports its version and rejects unsupported invocations` | bridges/codex-bridge/src/testing/fake-codex-app-server.test.ts | Five-second aggregate timeout; unchanged owning file passed alone in 0.2 seconds. | [0210-fake-codex-process-timeout.md](0210-fake-codex-process-timeout.md) |
 | 0209 | open | `real gateway saves a design and rehydrates another client's edits` | e2e/agent-testing/design-canvas.spec.ts:9 | Export dialog disappeared after resizing to 390px during the first design-only isolated run; unchanged owning spec passed on rerun. | [0209-design-export-dialog-viewport.md](0209-design-export-dialog-viewport.md) |

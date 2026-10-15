@@ -1477,7 +1477,6 @@ export class OrkestratorBackend {
         this.context.mcpManagement?.dispose();
         await this.controlMcp.stop();
         await this.agentTools.stop();
-        await this.context.design?.close();
         await Promise.race([
           this.webAnnotations.close().catch((error: unknown) => {
             console.warn(
@@ -1487,11 +1486,26 @@ export class OrkestratorBackend {
           }),
           new Promise<void>((resolve) => setTimeout(resolve, 5_000).unref?.()),
         ]);
-        // Last: closing checkpoints the WAL into the database file. A straggler
-        // that still reads storage reopens it lazily.
-        this.workflowResults.closeStorage();
-        closeEnvironmentCleanupStorage();
-        this.context.storage.close();
+        const closeLifecycleStorage = async () => {
+          await this.context.design?.close();
+          // Last: closing checkpoints the WAL into the database file.
+          this.workflowResults.closeStorage();
+          closeEnvironmentCleanupStorage();
+          this.context.storage.close();
+        };
+        if (this.environmentLifecycleTasks.pendingCount() > 0) {
+          // The quit deadline bounds waiting, not already-admitted deletion.
+          // Keep its design coordination and stores usable until it finishes;
+          // closing them now would strand the durable deletion tombstone.
+          void this.environmentLifecycleTasks
+            .whenDrained()
+            .then(closeLifecycleStorage)
+            .catch((error: unknown) => {
+              console.warn("[backend] Failed to close lifecycle storage:", error);
+            });
+        } else {
+          await closeLifecycleStorage();
+        }
       }
     })();
     this.shutdownPromise = attempt;

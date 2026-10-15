@@ -70,6 +70,11 @@ export class EnvironmentLifecycleTaskTracker {
     return this.tasks.size;
   }
 
+  /** Actual completion, even when the bounded shutdown drain has timed out. */
+  whenDrained(): Promise<void> {
+    return this.drain();
+  }
+
   private async drainWithin(timeoutMs: number): Promise<void> {
     if (this.tasks.size === 0) return;
     let timer: ReturnType<typeof setTimeout> | undefined;

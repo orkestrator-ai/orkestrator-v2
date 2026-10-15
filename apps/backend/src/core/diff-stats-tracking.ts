@@ -79,6 +79,7 @@ export class DiffStatsTracking {
   readonly containerGitFetchPolicy: ContainerGitFetchPolicy;
   readonly service: DiffStatsService;
   private syncGeneration = 0;
+  private stopped = false;
   private syncQueue: Promise<void> = Promise.resolve();
   private readonly removeFetchPolicyDiagnostics: () => void;
 
@@ -201,10 +202,12 @@ export class DiffStatsTracking {
    * environment permanently unwatched or a deleted one permanently watched.
    */
   async sync(context: Pick<CommandContext, "storage">): Promise<void> {
+    if (this.stopped) return;
     const generation = this.syncGeneration;
     const operation = this.syncQueue
       .catch(() => undefined)
       .then(async () => {
+        if (this.stopped || generation !== this.syncGeneration) return;
         const [environments, config] = await Promise.all([
           context.storage.loadEnvironments(),
           context.storage.loadConfig(),
@@ -271,6 +274,7 @@ export class DiffStatsTracking {
 
   /** Releases every diff watcher and timer; called on backend shutdown. */
   shutdown(): void {
+    this.stopped = true;
     this.invalidatePendingSync();
     this.service.shutdown();
     this.removeFetchPolicyDiagnostics();

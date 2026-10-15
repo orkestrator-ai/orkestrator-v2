@@ -4,7 +4,7 @@
  * The generic `write_local_file` / `write_container_file` writers overwrite
  * unconditionally (and the container one truncates the destination before the
  * payload has arrived). Export instead follows the destination write protocol
- * in docs/improvements/design-space/plan/05-safe-saving-and-export.md:
+ * described in docs/architecture/design-canvas.md:
  *
  * 1. validate a repository-relative `.orkdes` path (folders allowed);
  * 2. serialize Orkestrator writers per destination and pin parent directories;

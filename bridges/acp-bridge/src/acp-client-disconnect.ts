@@ -12,8 +12,8 @@
  * "close" fire for every disconnect shape the real-socket tests exercise
  * (full close, reset, half-close, partial body, proxy teardown, a stream that
  * had started writing, keep-alive reuse), at or before the moment the poll
- * would have seen it. See `docs/improvements/recurring-processes/plan/
- * 10-bridge-and-transport-lifecycle.md` for the evidence.
+ * would have seen it. `acp-client-disconnect.test.ts` holds the evidence
+ * (introduced with the recurring-work changes in #852).
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 

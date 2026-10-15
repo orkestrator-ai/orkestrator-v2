@@ -8,7 +8,7 @@ import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
  * Terminal input recovery in a real browser against the real backend: a write
  * whose response is lost fences the terminal, nothing incidental (a resize, an
  * environment switch) re-arms it, and "Resume input" does so without restarting
- * the shell. See docs/2026-10-14/terminal-input-recovery-plan.md.
+ * the shell. See docs/architecture/event-snapshot-recovery.md.
  */
 
 type Status = { status: string; browserUrl?: string; testProject?: string };

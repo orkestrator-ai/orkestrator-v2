@@ -67,9 +67,9 @@ const PINNED_CHAINS: ReadonlyArray<{ classes: readonly string[]; plan: string; r
       "StoragePublicOperations",
       "StorageService",
     ],
-    plan: "docs/2026-10-14/01-storage-json-file-store-and-repositories.md",
+    plan: "docs/todo/storage-service-repositories.md",
     reason:
-      "StorageService split by size into 14 layers; plan 01 replaces it with a JSON file store and per-domain repositories.",
+      "StorageService split by size into 14 layers; the todo replaces it with per-store repositories over a shared StorageContext.",
   },
   {
     classes: [
@@ -80,9 +80,9 @@ const PINNED_CHAINS: ReadonlyArray<{ classes: readonly string[]; plan: string; r
       "NativeAgentServiceReconciliation",
       "NativeAgentServiceProvider",
     ],
-    plan: "docs/2026-10-14/02-native-agent-service-collaborators.md",
+    plan: "docs/todo/native-agent-service-collaborators.md",
     reason:
-      "NativeAgentService (exported as NativeAgentServiceProvider) split into six layers; plan 02 turns them into collaborators.",
+      "NativeAgentService (exported as NativeAgentServiceProvider) split into six layers; the todo turns them into collaborators.",
   },
 ];
 

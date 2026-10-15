@@ -12,7 +12,7 @@ import { readStorageDatabaseStore } from "../packages/protocol/src/node/storage-
 /**
  * Read-only inventory of the disk state Orkestrator work leaves behind, with
  * the owner of each location and the command that cleans it. See
- * docs/plans/orphaned-disk-state-cleanup.md for why each location grows.
+ * docs/development/disk-usage.md for why each location grows.
  *
  * Nothing here deletes anything except the explicit `--fix legacy-turbo`,
  * which removes Turbo artifacts that no current Turbo version reads.

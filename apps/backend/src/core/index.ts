@@ -346,6 +346,7 @@ export class OrkestratorBackend {
       currentVersion: APP_VERSION,
       runtimeFlavor: options.runtimeFlavor ?? "production",
       storage,
+      dockerImage: options.dockerImage,
       emit: (event, payload) => options.emit(event, payload),
     });
     context.updates = this.updates;

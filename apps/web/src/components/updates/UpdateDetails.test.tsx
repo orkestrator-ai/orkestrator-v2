@@ -94,6 +94,7 @@ function job(overrides: Partial<UpdateJob> = {}): UpdateJob {
     actionsOnHost: [],
     storageSchemaVersion: 3,
     installWhen: null,
+    dependencies: null,
     ...overrides,
   };
 }

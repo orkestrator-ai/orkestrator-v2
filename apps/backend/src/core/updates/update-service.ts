@@ -42,6 +42,7 @@ import {
   type UpdateHostReport,
   type UpdateHostRequest,
   type UpdateJob,
+  type UpdateJobDependencies,
   type UpdateJobError,
   type UpdateJobStep,
   type UpdateNotice,
@@ -93,16 +94,18 @@ export class UpdateCommandError extends Error {
 }
 
 export type UpdateDependencies = {
-  /** The local default image, for the container-capability diff (phase 3). */
+  /** The local default image, for the container-capability diff. */
   inspectLocalImage?(): Promise<ReleaseRequirementsDiffContext["localImage"]>;
-  /** Fetches and verifies what the target needs before restarting (phase 3). */
+  /** Fetches and verifies what the target needs before restarting. */
   prefetch?(
     manifest: ReleaseRequirements,
     job: UpdateJob,
     report: (percent: number | null, message: string | null) => void,
-  ): Promise<void>;
+  ): Promise<UpdateJobDependencies>;
   /** Runs on the old version right before handing over to the host. */
   beforeInstall?(manifest: ReleaseRequirements, job: UpdateJob): Promise<void>;
+  /** Undoes `beforeInstall` once a rollback restored the old version. */
+  afterRollback?(job: UpdateJob): Promise<void>;
 };
 
 export type UpdateServiceOptions = {
@@ -540,6 +543,7 @@ export class UpdateService {
       actionsOnHost: actionsOnHost(diff),
       storageSchemaVersion: this.options.storageSchemaVersion(),
       installWhen: null,
+      dependencies: null,
     };
     this.jobManifest = target.manifest;
     this.audit("start", requester, {
@@ -583,10 +587,16 @@ export class UpdateService {
     try {
       if (!manifest) throw new Error("The target manifest is missing");
       this.apply(jobId, { type: "fetch-dependencies" });
-      await this.options.dependencies?.prefetch?.(manifest, this.job!, (percent, message) =>
-        this.progress(jobId, "dependencies", percent, message),
+      const dependencies = await this.options.dependencies?.prefetch?.(
+        manifest,
+        this.job!,
+        (percent, message) => this.progress(jobId, "dependencies", percent, message),
       );
       if (!this.isCurrent(jobId)) return;
+      if (dependencies) {
+        this.job = { ...this.job!, dependencies, updatedAt: this.at() };
+        this.changed(true);
+      }
       this.apply(jobId, { type: "download" });
       await this.sendToHost(
         {
@@ -696,6 +706,9 @@ export class UpdateService {
         );
       }
     } else if (action === "rolled-back") {
+      void this.options.dependencies?.afterRollback?.(job).catch((error: unknown) => {
+        this.log.warn("[Updates] Could not undo the update's container image:", error);
+      });
       this.notices.push(
         notice(
           "update-rolled-back",
@@ -777,6 +790,7 @@ export class UpdateService {
       fromVersion: job.fromVersion,
       restart: when,
       storageSchemaVersion: job.storageSchemaVersion,
+      toolchainBinDir: job.dependencies?.toolchainBinDir ?? null,
     };
     this.audit("install", requester, { detail: when === "on-quit" ? "on quit" : undefined });
     if (when === "on-quit") {

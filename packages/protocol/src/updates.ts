@@ -120,6 +120,14 @@ export type UpdateTarget = {
 
 export type UpdateJobError = { step: UpdateJobStep; code: string; message: string };
 
+/** What the job fetched before the restart, kept so a rollback can undo it. */
+export type UpdateJobDependencies = {
+  /** The target's activated provider binaries (`toolchains/bin/<hash>`). */
+  toolchainBinDir: string | null;
+  /** A pulled published image that replaces the default image at install. */
+  image: { pulledRef: string; imageId: string; previousImageId: string | null } | null;
+};
+
 export type UpdateJob = {
   id: string;
   fromVersion: string;
@@ -143,6 +151,7 @@ export type UpdateJob = {
   storageSchemaVersion: number | null;
   /** How the install was requested: now, or armed to run when the app quits. */
   installWhen: "now" | "on-quit" | null;
+  dependencies: UpdateJobDependencies | null;
 };
 
 export type UpdateNoticeKind =
@@ -286,6 +295,8 @@ export type UpdateHostRequest =
       fromVersion: string;
       restart: "now" | "on-quit";
       storageSchemaVersion: number | null;
+      /** Pre-fetched provider binaries the new version runs with (supervisor). */
+      toolchainBinDir: string | null;
     }
   | { kind: "cancel"; requestId: string; jobId: string };
 

@@ -40,6 +40,7 @@ function job(phase: UpdateJobPhase): UpdateJob {
     actionsOnHost: [],
     storageSchemaVersion: 3,
     installWhen: null,
+    dependencies: null,
   };
 }
 

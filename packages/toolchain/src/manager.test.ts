@@ -1768,6 +1768,37 @@ describe("pinned desktop toolchain cache", () => {
     await expect(lstat(unrelated)).resolves.toBeDefined();
   });
 
+  test("an update's pre-fetch (prune: false) never removes a superseded version", async () => {
+    const dataDir = await createDataDir();
+    const fetchImpl = createFetch();
+    const older = artifacts.map((artifact) => ({ ...artifact, version: "1.2.2" }));
+    await ensurePinnedToolchains({
+      dataDir,
+      artifacts: older,
+      fetchImpl,
+      skipExecutableProbeForTests: true,
+      skipVersionLeaseForTests: true,
+    });
+    const stale = new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000);
+    for (const artifact of older) {
+      await utimes(path.join(dataDir, "toolchains", artifact.name, "1.2.2"), stale, stale);
+    }
+
+    await ensurePinnedToolchains({
+      dataDir,
+      artifacts,
+      fetchImpl,
+      skipExecutableProbeForTests: true,
+      prune: false,
+    });
+
+    for (const artifact of artifacts) {
+      const toolDir = path.join(dataDir, "toolchains", artifact.name);
+      await expect(lstat(path.join(toolDir, "1.2.2"))).resolves.toBeDefined();
+      await expect(lstat(path.join(toolDir, artifact.version))).resolves.toBeDefined();
+    }
+  });
+
   test("refreshes the version directory timestamp used by retention pruning", async () => {
     const dataDir = await createDataDir();
     const fetchImpl = createFetch();

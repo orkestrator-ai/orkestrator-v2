@@ -1,6 +1,6 @@
 # ACP package stops publishing output in the aggregate
 
-- **ID:** 0258
+- **ID:** 0262
 - **Status:** open
 - **Date observed:** 2026-10-16
 - **Owner:** `bridges/acp-bridge` package suite (`test:bridge`); the aggregate output did not identify an individual active file.

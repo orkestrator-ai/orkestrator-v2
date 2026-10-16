@@ -731,6 +731,11 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       await this.storage.recordEnvironmentSessionCompletion(
         session.environmentId,
         new Date(this.now()).toISOString(),
+        state === "waiting"
+          ? "agent_waiting"
+          : state === "working"
+            ? "agent_ready"
+            : "agent_finished",
       );
     }
     if (stillApplicable && !stillApplicable()) return false;

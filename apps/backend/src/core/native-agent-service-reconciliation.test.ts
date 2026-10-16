@@ -1200,6 +1200,12 @@ describe("NativeAgentService", () => {
         activityState = "waiting";
         await service.reconcileAgentActivity();
 
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          agentActivityState: "waiting",
+          hasUnreadWork: true,
+          unreadReason: "agent_waiting",
+        });
+
         // Every announced transition is stamped by the observer: one lifetime
         // (`generation`) and a revision that advances by exactly one per
         // announcement, so a client can detect a missed one as a gap.
@@ -1262,7 +1268,11 @@ describe("NativeAgentService", () => {
         await service.reconcileAgentActivity();
         expect(observeActivity).toHaveBeenCalledWith("provider-1");
         expect(attention).toHaveBeenCalledTimes(1);
-        expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).toBe(true);
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          agentActivityState: "working",
+          hasUnreadWork: true,
+          unreadReason: "agent_question",
+        });
 
         await storage.setEnvironmentUnread("env-1", false);
         await service.reconcileAgentActivity();
@@ -1303,6 +1313,7 @@ describe("NativeAgentService", () => {
         expect(await storage.getEnvironment("env-1")).toMatchObject({
           agentActivityState: "working",
           hasUnreadWork: true,
+          unreadReason: "agent_ready",
         });
         expect(await service.hasObservedLiveWork("env-1", "claude")).toBe(true);
       },
@@ -1339,6 +1350,7 @@ describe("NativeAgentService", () => {
         expect(await storage.getEnvironment("env-1")).toMatchObject({
           agentActivityState: "working",
           hasUnreadWork: true,
+          unreadReason: "agent_ready",
         });
 
         // The bridge repeats `readyForInput: true` on every poll for as long as
@@ -1417,6 +1429,7 @@ describe("NativeAgentService", () => {
         expect(await storage.getEnvironment("env-1")).toMatchObject({
           agentActivityState: "idle",
           hasUnreadWork: true,
+          unreadReason: "agent_finished",
         });
       },
     );

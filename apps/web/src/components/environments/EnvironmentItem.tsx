@@ -3,6 +3,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { DesignEnvironmentDeletionNotice } from "@/components/design/DesignEnvironmentDeletionNotice";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import { EnvironmentAgentSummary } from "./EnvironmentAgentSummary";
+import { UnreadBellIcon } from "./UnreadBellIcon";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,7 +29,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  Bell,
   Trash2,
   Play,
   Square,
@@ -508,10 +508,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                     {isBuildEnvironment ? environment.name.replace(/^Build:\s*/, "") : displayName}
                   </span>
                   {hasUnreadActivity && (
-                    <Bell
-                      className="h-3 w-3 shrink-0 fill-amber-400/20 text-amber-400"
-                      aria-label="New completed activity"
-                    />
+                    <UnreadBellIcon className="h-3 w-3" aria-label="New completed activity" />
                   )}
                   {unreadMail > 0 && (
                     <span

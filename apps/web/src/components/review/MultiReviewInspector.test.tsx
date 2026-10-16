@@ -206,7 +206,7 @@ describe("ReviewerTranscriptTail", () => {
     const narrative = await within(tail).findByText("Found one issue.");
     expect(narrative.getAttribute("data-tail-kind")).toBe("say");
     expect(narrative.className).toContain("text-foreground");
-    expect(within(tail).queryByText("say")).toBeNull();
+    expect(within(tail).queryByText("say") === null).toBe(true);
     expect(within(tail).getByText("read")).toBeTruthy();
   });
 

@@ -1046,7 +1046,7 @@ describe("zoom and pan", () => {
     expect(viewport().style.height).not.toBe("");
 
     fireEvent.click(toggle());
-    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(toggle(), { key: "Escape" });
     expect(wrapper().hasAttribute("data-flow-fullscreen")).toBe(false);
   });
 
@@ -1077,12 +1077,52 @@ describe("zoom and pan", () => {
     fireEvent.click(screen.getByTestId("multi-review-fullscreen"));
     const wrapper = () => document.querySelector<HTMLElement>("[data-flow-layout]")!;
     expect(wrapper().hasAttribute("data-flow-fullscreen")).toBe(true);
-    const handled = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+    const handled = new KeyboardEvent("keydown", {
+      key: "Escape",
+      cancelable: true,
+      bubbles: true,
+    });
     handled.preventDefault();
     act(() => {
-      window.dispatchEvent(handled);
+      screen.getByTestId("multi-review-fullscreen").dispatchEvent(handled);
     });
     expect(wrapper().hasAttribute("data-flow-fullscreen")).toBe(true);
+  });
+
+  test("Escape from another pane or an inactive tab is not consumed", () => {
+    const props = panel(4);
+    const view = render(<MultiReviewFlowGraph {...props} isActive />);
+    fireEvent.click(screen.getByTestId("multi-review-fullscreen"));
+    const outside = new KeyboardEvent("keydown", {
+      key: "Escape",
+      cancelable: true,
+      bubbles: true,
+    });
+    act(() => {
+      document.body.dispatchEvent(outside);
+    });
+    expect(outside.defaultPrevented).toBe(false);
+    expect(document.querySelector("[data-flow-fullscreen]") !== null).toBe(true);
+
+    view.rerender(<MultiReviewFlowGraph {...props} isActive={false} />);
+    const inactive = new KeyboardEvent("keydown", {
+      key: "Escape",
+      cancelable: true,
+      bubbles: true,
+    });
+    act(() => {
+      screen.getByTestId("multi-review-fullscreen").dispatchEvent(inactive);
+    });
+    expect(inactive.defaultPrevented).toBe(false);
+    expect(document.querySelector("[data-flow-fullscreen]") !== null).toBe(true);
+
+    view.rerender(<MultiReviewFlowGraph {...props} isActive />);
+    const active = new KeyboardEvent("keydown", { key: "Escape", cancelable: true, bubbles: true });
+    act(() => {
+      screen.getByTestId("multi-review-fullscreen").dispatchEvent(active);
+    });
+    expect(active.defaultPrevented).toBe(true);
+    expect(document.querySelector("[data-flow-fullscreen]") === null).toBe(true);
   });
 
   test("the stacked layout has the same controls and bounds, with 44 px targets", () => {

@@ -425,6 +425,8 @@ export function MultiReviewFlowFixture() {
   const phase = (params.get("phase") ?? "reviewing") as FixturePhase;
   const count = Number(params.get("reviewers") ?? "4");
   const [workflow] = useState(() => multiReviewFlowWorkflow(phase, count));
+  const [isActive, setIsActive] = useState(true);
+  const paneControls = params.has("paneControls");
 
   useEffect(() => {
     useMultiReviewStore.getState().replaceWorkflow(workflow);
@@ -432,14 +434,24 @@ export function MultiReviewFlowFixture() {
   }, [workflow]);
 
   return (
-    <main className="h-screen bg-background text-foreground">
-      <MultiReviewTab
-        data={{ environmentId: workflow.environmentId, workflowId: workflow.id, isLocal: true }}
-        isActive
-        hydrateWorkflow={async () => workflow}
-        loadReviewerTranscript={fixtureTranscript}
-        loadStepTranscript={fixtureStepTranscript}
-      />
+    <main className="flex h-screen flex-col bg-background text-foreground">
+      {paneControls && (
+        <div>
+          <button onClick={() => setIsActive(!isActive)}>
+            {isActive ? "Activate other pane" : "Activate review pane"}
+          </button>
+          <input aria-label="Other pane input" />
+        </div>
+      )}
+      <div hidden={!isActive} data-testid="review-pane" className="min-h-0 flex-1">
+        <MultiReviewTab
+          data={{ environmentId: workflow.environmentId, workflowId: workflow.id, isLocal: true }}
+          isActive={isActive}
+          hydrateWorkflow={async () => workflow}
+          loadReviewerTranscript={fixtureTranscript}
+          loadStepTranscript={fixtureStepTranscript}
+        />
+      </div>
     </main>
   );
 }

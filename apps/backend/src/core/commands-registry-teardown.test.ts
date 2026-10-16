@@ -6,6 +6,7 @@ import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agen
 import {
   MULTI_REVIEW_WORKFLOW_VERSION,
   isMultiReviewWorkflow,
+  type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import {
   RETAINING_CLOSE_SESSION_ID_PREFIX,
@@ -145,7 +146,90 @@ async function mapTab(
 
 const retained = () => Response.json({ closed: true, retained: true });
 
+function ownedWorkflow(
+  owner: "preparationSession" | "reviewSession" | "fixSession" | "reviewer",
+): MultiReviewWorkflow {
+  const session = {
+    agent: "codex" as const,
+    model: "gpt-6",
+    sessionKey: `multi-review:multi-1:${owner}`,
+    providerSessionId: "owned-session",
+    requestIds: [],
+    status: "running" as const,
+    startedAt: new Date(0).toISOString(),
+  };
+  return {
+    version: MULTI_REVIEW_WORKFLOW_VERSION,
+    controller: "backend",
+    id: "multi-1",
+    environmentId: "e1",
+    projectId: "proj-1",
+    targetBranch: "main",
+    phase: "reviewing",
+    reviewers:
+      owner === "reviewer"
+        ? [
+            {
+              id: "reviewer-1",
+              agent: session.agent,
+              model: session.model,
+              providerSessionId: session.providerSessionId,
+              status: "running",
+              startedAt: session.startedAt,
+            },
+          ]
+        : [{ id: "reviewer-1", agent: "claude", model: "opus", status: "pending" }],
+    ...(owner === "reviewer" ? {} : { [owner]: session }),
+    fixModel: { agent: "codex", model: "gpt-6" },
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+    backendRevision: 1,
+  };
+}
+
 describe("tab close retains conversation history", () => {
+  for (const owner of ["preparationSession", "reviewSession", "fixSession", "reviewer"] as const) {
+    test(`closing an adopted ${owner} tab preserves its workflow owner`, async () => {
+      await withTeardown(retained, async ({ invoke, storage, calls, released }) => {
+        const workflow = ownedWorkflow(owner);
+        expect(isMultiReviewWorkflow(workflow)).toBe(true);
+        await storage.saveMultiReviewWorkflow(workflow.id, "e1", 1, workflow);
+        // Adopted fix tabs use arbitrary interactive tab IDs, not just a workflow prefix.
+        const tabId = "adopted-native-tab";
+        const key = await mapTab(storage, "codex", tabId, "owned-session");
+        await invoke("teardown_tab", { environmentId: "e1", tabId, kind: "codex-native" });
+        expect(calls).toEqual([]);
+        expect(released).toEqual([]);
+        expect(await storage.getNativeAgentSession(key)).toBeNull();
+        expect((await storage.getMultiReviewWorkflow(workflow.id))?.snapshot).toEqual(workflow);
+        expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
+      });
+    });
+
+    for (const reason of ["agent mismatch", "superseded session"] as const) {
+      test(`closing a ${owner} tab with ${reason} closes the unowned session`, async () => {
+        await withTeardown(retained, async ({ invoke, storage, calls, released }) => {
+          const workflow = ownedWorkflow(owner);
+          await storage.saveMultiReviewWorkflow(workflow.id, "e1", 1, workflow);
+          const agent = reason === "agent mismatch" ? "claude" : "codex";
+          const providerId = reason === "superseded session" ? "old-session" : "owned-session";
+          const key = await mapTab(storage, agent, "old-tab", providerId);
+          await invoke("teardown_tab", {
+            environmentId: "e1",
+            tabId: "old-tab",
+            kind: `${agent}-native`,
+          });
+          expect(calls.map((call) => [call.method, new URL(call.url).pathname])).toEqual([
+            ["POST", `/session/${providerId}/close`],
+          ]);
+          expect(released).toEqual([["e1", agent, providerId]]);
+          expect(await storage.getNativeAgentSession(key)).toBeNull();
+          expect((await storage.getMultiReviewWorkflow(workflow.id))?.snapshot).toEqual(workflow);
+        });
+      });
+    }
+  }
+
   test("a bridge close can finish after the legacy request budget", async () => {
     await withTeardown(
       async () => {

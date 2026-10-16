@@ -1437,6 +1437,7 @@ function MultiReviewOverviewTab({
             panelId={panelId}
             viewKey={workflow.id}
             fullscreenContainer={tabRoot}
+            isActive={isActive}
           />
           <div className="grid min-h-80 flex-1 grid-cols-1 @min-[900px]:grid-cols-[1.3fr_1fr]">
             <section

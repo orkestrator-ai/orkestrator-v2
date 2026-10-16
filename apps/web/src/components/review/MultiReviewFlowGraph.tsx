@@ -534,7 +534,10 @@ function scrollingAncestor(element: HTMLElement | null): HTMLElement | null {
  * (Radix marks it handled) only closes that. Moving in or out remounts the
  * graph, so focus that it drops goes back to the fullscreen button.
  */
-function useFlowFullscreen(wrapperRef: RefObject<HTMLDivElement | null>): [boolean, () => void] {
+function useFlowFullscreen(
+  wrapperRef: RefObject<HTMLDivElement | null>,
+  isActive: boolean,
+): [boolean, () => void] {
   const [fullscreen, setFullscreen] = useState(false);
   const changedRef = useRef(false);
   useLayoutEffect(() => {
@@ -547,16 +550,22 @@ function useFlowFullscreen(wrapperRef: RefObject<HTMLDivElement | null>): [boole
       ?.focus();
   }, [fullscreen, wrapperRef]);
   useEffect(() => {
-    if (!fullscreen) return;
+    if (!fullscreen || !isActive) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (
+        event.key !== "Escape" ||
+        event.defaultPrevented ||
+        !(event.target instanceof Node) ||
+        !wrapperRef.current?.contains(event.target)
+      )
+        return;
       event.preventDefault();
       changedRef.current = true;
       setFullscreen(false);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [fullscreen]);
+  }, [fullscreen, isActive, wrapperRef]);
   const toggle = useCallback(() => {
     changedRef.current = true;
     setFullscreen((current) => !current);
@@ -590,6 +599,8 @@ export interface MultiReviewFlowGraphProps {
    * fixed overlay to itself. Without one, fullscreen covers the window.
    */
   fullscreenContainer?: HTMLElement | null;
+  /** Hidden tabs must not consume keyboard events from another pane. */
+  isActive?: boolean;
 }
 
 /**
@@ -616,9 +627,10 @@ export function MultiReviewFlowGraph({
   viewKey,
   layout,
   fullscreenContainer,
+  isActive = true,
 }: MultiReviewFlowGraphProps) {
   const stackedWrapperRef = useRef<HTMLDivElement | null>(null);
-  const [fullscreen, toggleFullscreen] = useFlowFullscreen(stackedWrapperRef);
+  const [fullscreen, toggleFullscreen] = useFlowFullscreen(stackedWrapperRef, isActive);
   const overlayClass = fullscreenContainer ? "absolute inset-0 z-30" : "fixed inset-0 z-50";
   const present = (graph: ReactNode) =>
     fullscreen ? createPortal(graph, fullscreenContainer ?? document.body) : graph;

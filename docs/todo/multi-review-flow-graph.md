@@ -74,24 +74,20 @@ live findings on real providers and a few gaps found on the way.
   `interactive` or `completed`. Partial reports from failed or stopped
   reviewers are still not included, and findings are never read out of a
   transcript.
+- **Read-only Grok and Pi reviewers.** Their bridges gate tools themselves,
+  and a packaged review's reviewer turns are read-only, so neither let a
+  reviewer call its own result tools. The prompt now names the turn's attempt
+  (`workflowResultTool`, `workflowResultKey`) and both bridges let that
+  attempt's own tools through for calls naming its key: submit, validate,
+  status and `report_finding` ("Attempt tools in read-only turns" in
+  [agent-engines.md](../architecture/agent-engines.md#attempt-tools-in-read-only-turns-grok-pi)).
+  Consolidation and Fix turns on Grok or Pi do not declare their attempt yet.
 
 ## Outstanding work
 
 ### Code
 
-1. **Read-only Grok and Pi reviewers may not be able to submit their report.**
-   Found while making `report_finding` callable; not changed, because it is
-   outside that work and needs a live check first. In a packaged review every
-   reviewer turn is read-only. The ACP bridge then denies every permission
-   request (`approvals: "deny"` short-circuits `orkestratorToolPermissionOption`,
-   and `onPermission` cancels the rest), and Grok asks before every MCP call;
-   the Pi bridge's read-only gate in `requestToolApproval` blocks every tool but
-   `read`, `grep`, `find`, `ls` and coordinator mail. Neither exempts the
-   attempt's own `validate_workflow_result`, `submit_review_report` or
-   `get_workflow_result_status`, so on the code alone those reviewers would
-   end on the missing-result reminder. `report_finding` is exempted in both. If
-   a live run confirms it, exempt the attempt's result tools the same way.
-2. **Pi: confirm the bridge-owned MCP extension loads in a read-only session.**
+1. **Pi: confirm the bridge-owned MCP extension loads in a read-only session.**
    Read-only Pi sessions set `noExtensions` for project resources
    (`projectResourceDiscoveryOptions`). The bridge registers its Orkestrator
    tools through an inline `extensionFactories` entry, which should not be
@@ -99,6 +95,11 @@ live findings on real providers and a few gaps found on the way.
 
 ### Qualification
 
+- **Read-only Grok and Pi reviewers submit their report.** In a packaged review,
+  check that a Grok and a Pi reviewer each validate and submit
+  `submit_review_report` and the workflow consolidates their report. Grok's
+  permission request must carry the call's arguments (`rawInput`, or
+  `tool_input` under `use_tool`) for the key check to pass; confirm it does.
 - **`report_finding` on every provider.** Run a packaged Multi Review with one
   reviewer per provider (Claude, Codex, Cursor, Grok, OpenCode, Pi) and check
   that each reviewer calls the tool, that "Findings so far" fills in while it

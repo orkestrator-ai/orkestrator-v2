@@ -217,6 +217,64 @@ describe("report_finding on the Orkestrator MCP server", () => {
     });
   });
 
+  test("an attempt's result tools answer only for its own result key", async () => {
+    const reviewer = await attempt("review-report");
+    const other = await attempt("review-report");
+    const { url, token } = reviewer.connection;
+    const report = {
+      reviewScope: {
+        targetBranch: "main",
+        baseRef: "origin/main...HEAD",
+        commit: null,
+        filesReviewed: ["src/review.ts"],
+        filesSkipped: [],
+        filesLeftUncommitted: [],
+        commandsRun: [],
+        commandsNotRun: [],
+        limitations: [],
+      },
+      whatChanged: {
+        overview: "Change",
+        before: "Before",
+        after: "After",
+        keyCodeChanges: [],
+        userImpact: "Impact",
+      },
+      riskProfile: { changeTypes: ["ui"], riskAreas: [], overallRisk: "low", reasoning: "Small" },
+      testResults: { total: 0, passed: 0, failed: 0, notRun: 0, failures: [] },
+      strengths: [],
+      issues: [{ ...finding, alternativeFixes: null, reviewModels: null, reviewSourceIds: null }],
+      testCoverageGaps: [],
+      verdict: { ready: "with-fixes", reasoning: "One issue" },
+      summaryOfChange: "Change",
+      reviewSummary: "One finding",
+    };
+    for (const [name, args] of [
+      ["validate_workflow_result", { result: report }],
+      ["submit_review_report", { result: report }],
+      ["submit_review_report", { validatedDigest: "a".repeat(64) }],
+      ["get_workflow_result_status", {}],
+    ] as const) {
+      const crossed = await rpc(url, token, "tools/call", {
+        name,
+        arguments: { resultKey: other.resultKey, ...args },
+      });
+      expect(crossed.result).toMatchObject({
+        isError: true,
+        structuredContent: { ok: false, error: { code: "capability_denied" } },
+      });
+    }
+    // Its own key reaches its own slot.
+    const own = await rpc(url, token, "tools/call", {
+      name: "get_workflow_result_status",
+      arguments: { resultKey: reviewer.resultKey },
+    });
+    expect(own.result?.structuredContent).toMatchObject({
+      resultKey: reviewer.resultKey,
+      lifecycle: "open",
+    });
+  });
+
   test("the OpenCode broker checks the signed capability and the attempt's kind", async () => {
     const reviewer = await attempt("review-report", "opencode");
     const other = await attempt("review-report", "opencode");

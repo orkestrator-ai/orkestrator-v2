@@ -162,6 +162,72 @@ export const WORKFLOW_RESULT_VALIDATION_TOOL_NAME = "validate_workflow_result";
  */
 export const REPORT_FINDING_TOOL_NAME = "report_finding";
 
+/** Upper bound on a result key a bridge accepts in a prompt body. */
+export const WORKFLOW_RESULT_KEY_MAX_LENGTH = 128;
+
+/**
+ * The workflow-result attempt a turn runs for, as a bridge is told it: the
+ * attempt's submission tool and its result key. A bridge that knows it can let
+ * exactly that attempt's own tools through a read-only turn, and only when a
+ * call names that key. The attempt's capability still decides on the backend.
+ */
+export interface WorkflowResultTurn {
+  tool: string;
+  resultKey: string;
+}
+
+/**
+ * Reads the `workflowResultTool` / `workflowResultKey` pair of a prompt body.
+ * Both absent is an ordinary turn; one without the other, an unknown tool or a
+ * malformed key is a caller error.
+ */
+export function parseWorkflowResultTurn(
+  tool: unknown,
+  resultKey: unknown,
+): { ok: true; turn?: WorkflowResultTurn } | { ok: false; error: string } {
+  if (tool === undefined && resultKey === undefined) return { ok: true };
+  if (
+    typeof tool !== "string" ||
+    !WORKFLOW_RESULT_KINDS.some((kind) => WORKFLOW_RESULT_TOOL_NAMES[kind] === tool)
+  ) {
+    return { ok: false, error: "workflowResultTool must name a workflow result tool" };
+  }
+  if (
+    typeof resultKey !== "string" ||
+    resultKey.length === 0 ||
+    resultKey.length > WORKFLOW_RESULT_KEY_MAX_LENGTH ||
+    !/^[A-Za-z0-9_-]+$/.test(resultKey)
+  ) {
+    return { ok: false, error: "workflowResultKey must be a result key" };
+  }
+  return { ok: true, turn: { tool, resultKey } };
+}
+
+/**
+ * The Orkestrator tools a workflow-result turn's attempt server offers: its
+ * submission tool, validation and status, and `report_finding` for a reviewer.
+ */
+export function workflowResultTurnToolNames(turn: WorkflowResultTurn): readonly string[] {
+  return [
+    turn.tool,
+    WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
+    "get_workflow_result_status",
+    ...(turn.tool === WORKFLOW_RESULT_TOOL_NAMES["review-report"]
+      ? [REPORT_FINDING_TOOL_NAME]
+      : []),
+  ];
+}
+
+/** Whether a tool call's arguments name the turn's own result key. */
+export function callsOwnWorkflowResult(turn: WorkflowResultTurn, args: unknown): boolean {
+  return (
+    typeof args === "object" &&
+    args !== null &&
+    !Array.isArray(args) &&
+    (args as Record<string, unknown>).resultKey === turn.resultKey
+  );
+}
+
 /**
  * Guidance for a rejected tool call that never reached the backend. Shared by
  * the first-turn instruction and the reminder turn so the two cannot drift.

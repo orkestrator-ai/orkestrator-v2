@@ -290,7 +290,7 @@ test("a colliding Orkestrator tool name does not unlock a Pi built-in", async ()
   }
 });
 
-test("a read-only reviewer may report a finding under every approval policy", async () => {
+test("a read-only reviewer may use its own attempt's result tools under every approval policy", async () => {
   const { preparePiMcp, setPiMcpTransportForTests } = await import("./mcp.js");
   const { mkdir, mkdtemp, rm, writeFile } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");
@@ -298,18 +298,24 @@ test("a read-only reviewer may report a finding under every approval policy", as
   const root = await mkdtemp(join(tmpdir(), "pi-mcp-reviewer-"));
   const agentDir = join(root, "agent");
   await mkdir(agentDir, { recursive: true });
-  // Another server offering a tool of the same name is not the reviewer's.
+  // Another server offering tools of the same names is not the reviewer's.
   await writeFile(
     join(agentDir, "mcp.json"),
     JSON.stringify({ mcpServers: { docs: { command: "docs-mcp" } } }),
   );
+  const attemptTools = [
+    "validate_workflow_result",
+    "submit_review_report",
+    "get_workflow_result_status",
+    "report_finding",
+  ];
   setPiMcpTransportForTests({
     async connect(server) {
       return {
         tools:
           server.id === "orkestrator"
-            ? [{ name: "report_finding" }, { name: "get_workflow_result_status" }]
-            : [{ name: "report_finding" }],
+            ? [...attemptTools, "submit_fix_result"].map((name) => ({ name }))
+            : [{ name: "submit_review_report" }],
         async call() {
           return { content: [{ type: "text", text: "ok" }] };
         },
@@ -317,6 +323,9 @@ test("a read-only reviewer may report a finding under every approval policy", as
       };
     },
   });
+  const resultKey = "11111111-1111-4111-8111-111111111111";
+  const own = { resultKey };
+  const other = { resultKey: "22222222-2222-4222-8222-222222222222" };
   try {
     for (const approvals of ["auto-approve", "ask", "deny"] as const) {
       const state = newSessionState();
@@ -329,18 +338,37 @@ test("a read-only reviewer may report a finding under every approval policy", as
         networkAccess: "full",
       };
       state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "attempt-capability" };
+      state.workflowResultTurn = { tool: "submit_review_report", resultKey };
       await preparePiMcp(state, { agentDir, cwd: root, env: {} });
 
-      expect(await requestToolApproval(state, "finding", "report_finding", {})).toEqual({
-        block: false,
+      for (const tool of attemptTools) {
+        expect(await requestToolApproval(state, tool, tool, own)).toEqual({ block: false });
+        // Another reviewer's key is never this reviewer's to submit.
+        expect(await requestToolApproval(state, tool, tool, other)).toMatchObject({ block: true });
+      }
+      // A tool this attempt does not offer, the same name from another server,
+      // and the read-only gate itself all still hold.
+      expect(await requestToolApproval(state, "fix", "submit_fix_result", own)).toMatchObject({
+        block: true,
       });
-      // The read-only gate still holds for everything else.
-      expect(await requestToolApproval(state, "edit", "edit", {})).toMatchObject({ block: true });
       expect(
-        await requestToolApproval(state, "other", "mcp_docs_report_finding", {}),
+        await requestToolApproval(state, "other", "mcp_docs_submit_review_report", own),
       ).toMatchObject({ block: true });
-      expect(await requestToolApproval(state, "bash", "bash", {})).toMatchObject({ block: true });
+      expect(await requestToolApproval(state, "edit", "edit", {})).toMatchObject({ block: true });
       expect(state.approvals.size).toBe(0);
+
+      // A turn that declared no attempt is not a reviewer's.
+      state.workflowResultTurn = undefined;
+      expect(await requestToolApproval(state, "submit", "submit_review_report", own)).toMatchObject(
+        { block: true },
+      );
+      // An explicit deny still wins.
+      state.workflowResultTurn = { tool: "submit_review_report", resultKey };
+      state.policy = { ...state.policy, toolPolicy: { deny: ["submit_review_report"] } };
+      expect(await requestToolApproval(state, "submit", "submit_review_report", own)).toMatchObject(
+        { block: true },
+      );
+      state.approvals.clear();
     }
   } finally {
     setPiMcpTransportForTests();

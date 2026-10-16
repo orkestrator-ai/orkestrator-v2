@@ -1224,6 +1224,53 @@ describe("successful lifecycle routes", () => {
     }
   });
 
+  test("records the workflow-result attempt each turn declares, and refuses a malformed one", async () => {
+    const state = seedSession();
+    state.session = fakeAgentSession({});
+    setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
+    const resultKey = "11111111-1111-4111-8111-111111111111";
+    try {
+      for (const malformed of [
+        { workflowResultTool: "submit_review_report" },
+        { workflowResultTool: "rm -rf", workflowResultKey: resultKey },
+        { workflowResultTool: "submit_review_report", workflowResultKey: "not a key" },
+      ]) {
+        const response = await call(`/session/${state.id}/prompt`, {
+          method: "POST",
+          body: JSON.stringify({ prompt: "review", requestId: "req-malformed", ...malformed }),
+        });
+        expect(response.status).toBe(400);
+      }
+      expect(state.workflowResultTurn).toBeUndefined();
+
+      const review = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({
+          prompt: "review",
+          requestId: "req-review",
+          workflowResultTool: "submit_review_report",
+          workflowResultKey: resultKey,
+        }),
+      });
+      expect(review.status).toBe(202);
+      await waitFor(() => state.status === "idle");
+      expect(state.workflowResultTurn).toEqual({ tool: "submit_review_report", resultKey });
+
+      // The next ordinary turn is not that attempt's.
+      const ordinary = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "thanks", requestId: "req-ordinary" }),
+      });
+      expect(ordinary.status).toBe(202);
+      await waitFor(() => state.status === "idle");
+      expect(state.workflowResultTurn).toBeUndefined();
+    } finally {
+      await state.session?.dispose();
+      sessions.delete(state.id);
+      resetTestDependencies();
+    }
+  });
+
   test("forks through a new persisted Pi conversation", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pi-bridge-http-fork-"));
     const forkedFile = join(directory, "forked.jsonl");

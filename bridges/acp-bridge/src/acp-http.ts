@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { gzip } from "node:zlib";
 import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import { parseWorkflowResultTurn } from "@orkestrator/protocol/workflow-results";
 import {
   commandUnavailableResponse,
   readBridgePromptCommandFields,
@@ -504,6 +505,8 @@ export async function route(
     const commandFields = readBridgePromptCommandFields(body);
     if (!commandFields.ok) return json(response, 400, { error: commandFields.error });
     const selectedCommand = commandFields.command;
+    const workflowResult = parseWorkflowResultTurn(body.workflowResultTool, body.workflowResultKey);
+    if (!workflowResult.ok) return json(response, 400, { error: workflowResult.error });
     if (selectedCommand && schema) {
       return json(response, 400, {
         error: "A structured-output prompt cannot carry a command selection",
@@ -579,6 +582,7 @@ export async function route(
       // detached thread is reattached, and it is far cheaper than a spawn.
       promptContents = await readPromptContents(attachments, workingDirectory);
       storeAgentMcp(state, body.agentMcp);
+      state.workflowResultTurn = workflowResult.turn;
       if (typeof readOnly === "boolean") await setSessionReadOnly(state, readOnly);
       child = await ensureSessionProcess(state, clientSignal);
       if (

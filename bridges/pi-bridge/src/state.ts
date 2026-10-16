@@ -283,6 +283,12 @@ export interface SessionState {
    * back to the process env when this is absent after a restart.
    */
   agentMcp?: { url: string; token: string };
+  /**
+   * The workflow-result attempt the current turn runs for, from its prompt.
+   * Runtime-only and replaced by every prompt: it scopes the read-only and
+   * approval exemption for that attempt's own tools to this turn.
+   */
+  workflowResultTurn?: import("@orkestrator/protocol/workflow-results").WorkflowResultTurn;
   id: string;
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
   clientSessionKey?: string;

@@ -11,6 +11,9 @@ import {
   isWorkflowResultSubmissionState,
   normalizeWorkflowResultToolsSettings,
   workflowResultInstruction,
+  parseWorkflowResultTurn,
+  workflowResultTurnToolNames,
+  callsOwnWorkflowResult,
   workflowResultNoun,
   workflowResultSubmissionLabel,
   workflowResultToolName,
@@ -176,5 +179,48 @@ describe("provisional findings in the reviewer instruction", () => {
     expect(
       workflowResultInstruction("fix-result", resultKey, { provisionalFindings: true }),
     ).not.toContain("report_finding");
+  });
+});
+
+describe("a turn's declared workflow-result attempt", () => {
+  const resultKey = "11111111-1111-4111-8111-111111111111";
+
+  test("both fields absent is an ordinary turn; one without the other is malformed", () => {
+    expect(parseWorkflowResultTurn(undefined, undefined)).toEqual({ ok: true });
+    expect(parseWorkflowResultTurn("submit_review_report", resultKey)).toEqual({
+      ok: true,
+      turn: { tool: "submit_review_report", resultKey },
+    });
+    for (const [tool, key] of [
+      ["submit_review_report", undefined],
+      [undefined, resultKey],
+      ["send_message", resultKey],
+      ["submit_review_report", ""],
+      ["submit_review_report", "a key"],
+      ["submit_review_report", "k".repeat(129)],
+      ["submit_review_report", 42],
+    ]) {
+      expect(parseWorkflowResultTurn(tool, key).ok).toBe(false);
+    }
+  });
+
+  test("names the attempt's own tools, with report_finding for a reviewer only", () => {
+    expect(workflowResultTurnToolNames({ tool: "submit_review_report", resultKey })).toEqual([
+      "submit_review_report",
+      "validate_workflow_result",
+      "get_workflow_result_status",
+      "report_finding",
+    ]);
+    expect(workflowResultTurnToolNames({ tool: "submit_fix_result", resultKey })).not.toContain(
+      "report_finding",
+    );
+  });
+
+  test("a call is the attempt's own only when its arguments name the attempt's key", () => {
+    const turn = { tool: "submit_review_report", resultKey };
+    expect(callsOwnWorkflowResult(turn, { resultKey, result: {} })).toBe(true);
+    for (const args of [{ resultKey: "other" }, {}, undefined, [resultKey], resultKey]) {
+      expect(callsOwnWorkflowResult(turn, args)).toBe(false);
+    }
   });
 });

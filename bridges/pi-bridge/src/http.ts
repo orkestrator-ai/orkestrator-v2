@@ -23,6 +23,7 @@ import { assertModelSignedIn, authStatus, CredentialError } from "./credentials.
 import { publicApprovals, publicInteractions, resolveApproval } from "./interactions.js";
 import { listModels, refreshModels } from "./models.js";
 import { parseAgentMcpConnection } from "./mcp-config.js";
+import { parseWorkflowResultTurn } from "@orkestrator/protocol/workflow-results";
 import { mcpConnectionNeedsRefresh, publicPiMcpConfig, publicPiMcpServers } from "./mcp.js";
 import { persistBarrier, schedulePersist } from "./persistence.js";
 import {
@@ -1313,7 +1314,10 @@ async function handleAdmittedPrompt(
 
   if (body.readOnly !== undefined && typeof body.readOnly !== "boolean")
     throw new HttpError(400, "readOnly must be a boolean");
+  const workflowResult = parseWorkflowResultTurn(body.workflowResultTool, body.workflowResultKey);
+  if (!workflowResult.ok) throw new HttpError(400, workflowResult.error);
   storeAgentMcp(state, body.agentMcp);
+  state.workflowResultTurn = workflowResult.turn;
 
   // Claim the turn synchronously. `ensureSession` yields even on its attached
   // fast path, so a second request would otherwise pass both the duplicate and

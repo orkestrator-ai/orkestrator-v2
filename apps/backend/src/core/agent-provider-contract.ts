@@ -275,6 +275,12 @@ export interface ProviderSendOptions {
   reviewShellPolicy?: NativeAgentExecutionPolicy;
   /** Exact workflow-result MCP tool to expose for this turn, when present. */
   workflowResultTool?: string;
+  /**
+   * The result key of the attempt `workflowResultTool` belongs to. Bridges that
+   * gate tools themselves (Grok, Pi) let that attempt's tools through a
+   * read-only turn only for calls naming this key.
+   */
+  workflowResultKey?: string;
   requestId: string;
   attachments?: PromptAttachment[];
   images?: ProviderPromptImage[];

@@ -852,11 +852,44 @@ the read-only turns of a packaged review:
 | Codex | The attempt-scoped `orkestrator` server runs with `default_tools_approval_mode = "approve"` whenever a workflow result tool is set |
 | Cursor | Read-only sessions host every tool the Orkestrator server lists in-process; other sessions never ask |
 | OpenCode | `openCodeWorkflowResultTurnTools` / `openCodeWorkflowResultPermissionRules` unmask and allow it for a `submit_review_report` turn only |
-| Grok (ACP) | `reviewerFindingPermissionOption` (`acp-session.ts`) answers its permission request with the allow option under every policy, including a read-only turn's `deny`, when it names the Orkestrator server (same identity rules as the mail matcher, including Grok's `use_tool` wrapper). An explicit `toolPolicy` deny still wins |
-| Pi | `isOrkestratorReviewerFindingTool` (`mcp.ts`) exempts it from the read-only gate and from ask/deny in `requestToolApproval` |
+| Grok (ACP) | Exempt as one of the turn's own attempt tools; see "Attempt tools in read-only turns" below |
+| Pi | Exempt as one of the turn's own attempt tools; see "Attempt tools in read-only turns" below |
 
 None of these has been run against a real reviewer on its provider yet; see
 [multi-review-flow-graph.md](../todo/multi-review-flow-graph.md).
+
+### Attempt tools in read-only turns (Grok, Pi)
+
+The ACP (Grok) and Pi bridges gate tools themselves, and a packaged review's
+reviewer turns are read-only: the ACP bridge denies every permission request
+and Grok asks before every MCP call, and Pi's read-only gate blocks all but its
+reading built-ins. So the backend tells those two bridges which attempt a
+workflow-result turn runs for: the prompt body carries `workflowResultTool` and
+`workflowResultKey` next to the attempt's `agentMcp`
+(`bridgePromptBody`; the review fan-out sets the key to the reviewer's result
+key). The bridge keeps them for that turn only (`state.workflowResultTurn`,
+memory only, replaced by every prompt; a malformed pair is refused with 400
+before the turn is claimed).
+
+For that turn, and only for a call whose arguments name that result key
+(`callsOwnWorkflowResult`), the attempt's own tools are let through under every
+approval policy, including read-only: its submission tool,
+`validate_workflow_result`, `get_workflow_result_status`, and
+`report_finding` for a reviewer (`workflowResultTurnToolNames`).
+
+- **Grok:** `workflowResultPermissionOption` (`acp-session.ts`), called from
+  `onPermission` before the mail matcher, which is unchanged. Identity follows
+  the mail matcher (a server-qualified name, Grok's namespaced metadata, or
+  the tool `use_tool` wraps, whose arguments are read from `tool_input`); never
+  a bare name, a display title, or an `execute`/`edit` kind.
+- **Pi:** `isOwnWorkflowResultCall` (`mcp.ts`) in `requestToolApproval`: the
+  tool must come from the Orkestrator server's own registrations.
+
+An explicit `toolPolicy` deny still wins on both. A turn that declared no
+attempt (an ordinary, coordinator or older backend's turn) gets no exemption,
+and the backend still answers another key with `capability_denied`, because
+the attempt capability authorises only its own. Only the review fan-out
+declares the key today; consolidation and Fix turns on Grok or Pi do not yet.
 
 ### Provider qualification
 

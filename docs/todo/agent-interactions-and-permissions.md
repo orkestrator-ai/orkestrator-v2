@@ -94,8 +94,21 @@ per-bridge environment overrides that predate the execution policy.
     resources on, and the environment's network mode. The coordinator always
     gets `coordinator-read-only`, which cannot be overridden.
   - Overridable per environment (`executionPolicy` in
-    `EnvironmentSettingsDialog.tsx`). Shown in Agent Info through
-    `describeNativeAgentExecutionPolicy` (`AgentInfoButton.tsx`).
+    `EnvironmentSettingsDialog.tsx`). An override cannot claim a container a
+    host lacks, and a container session reports the network its firewall
+    enforces, which follows the environment (`reconcileContainerBoundary`).
+  - Shown in Agent Info through `describeNativeAgentExecutionPolicy`
+    (`AgentInfoButton.tsx`), which renders the policy's effects
+    (`nativeAgentPolicyEffects`, `packages/protocol/src/native-agent-policy-effects.ts`)
+    from the policy each bridge reports. A bridge reports what it applies:
+    Cursor, Pi, Grok, Codex and OpenCode rewrite an axis they cannot honour and
+    say why in `note` (`withoutProviderSandbox`, `codexReportedPolicy`,
+    `acpReportedPolicy`, `effectiveOpenCodePolicy`).
+  - Held to the adapters by the execution-policy conformance suite
+    (`tests/conformance/execution-policy/`). For each platform and ten policy
+    shapes it captures the options the SDK or CLI receives, decodes them into
+    the same effects and compares them with the summary. The only tolerated
+    differences are the stricter ones listed in `narrowings.ts`.
 - Deprecated overrides still read by the bridges, with a one-time deprecation
   warning:
   - Cursor: `CURSOR_BRIDGE_SANDBOX` and `CURSOR_BRIDGE_PROJECT_SETTINGS`
@@ -169,6 +182,21 @@ per-bridge environment overrides that predate the execution policy.
    `question.asked` replies) and move the tests that use it onto the journaled
    path. If a future owner wants provider-side answering, it should follow
    `agentInteractionPolicyAction` instead of always rejecting.
+6. **Codex project resources.** A Codex worker loads a trusted project's own
+   `.codex` configuration whatever `projectResources` says, so the bridge now
+   reports the axis as on with a note (`codexReportedPolicy`). Make it honour
+   `false` instead, by pinning the checkout untrusted for that thread as the
+   coordinator does process-wide, after checking live that a per-thread
+   `projects.<root>.trust_level` override takes effect. Then delete
+   `codexReportedPolicy` and let the suite prove it.
+7. **Read-only turns.** Claude, Cursor and Grok run a `readOnly` turn under the
+   coordinator policy but keep reporting the session's. Agent Info then
+   understates the turn's restrictions (never overstates them).
+8. **Codex `on-request` in a container.** Under an `auto-approve` policy a user
+   who picks `on-request` in a container gets a mode that never asks, because
+   Codex asks only at the edge of a sandbox the container keeps off. Under
+   `ask` the bridge now runs it as `untrusted`; decide whether the composer
+   should do the same, or describe the mode honestly there.
 
 ### Qualification
 
@@ -180,8 +208,10 @@ per-bridge environment overrides that predate the execution policy.
   without a card while a question still appears. Run a real coordinator turn
   that delegates and asks a question.
 - `mise run test:agent:docker` for the container cells on Cursor and Pi.
-- Host browser check that the Agent Info policy summary matches the options the
-  adapter actually received, on each platform.
+- On a real Claude CLI, confirm that a provider-sandboxed auto-approve session
+  can neither leave the sandbox (`allowUnsandboxedCommands: false`) nor reach a
+  domain off its allowlist when the network is restricted (`strictAllowlist`).
+  The conformance suite proves the options; only the CLI proves the behaviour.
 
 ## Constraints and rationale
 
@@ -208,8 +238,39 @@ per-bridge environment overrides that predate the execution policy.
   holds `.git` read-only, which stalls ordinary Git work in a worktree (#613).
   `ask` stays available as an override.
 - Key entry and other secrets go through an interaction, never a renderer form.
+- Agent Info's policy summary is checked against what each adapter actually
+  sends, not by a one-off look. The decisions behind that check:
+  - One semantic model (`NativeAgentPolicyEffects`: isolation, approvals,
+    project resources, network and what holds a network restriction) is both
+    what the summary renders and what each runner decodes the received options
+    into. No test compares summary strings.
+  - The summary describes the policy the bridge reports, and the bridge reports
+    what it applies. An axis an agent cannot honour is rewritten to the truth
+    with a `note`, at report time only, so no gate or persisted policy changes.
+    The alternative, a per-platform caveat table in the renderer, would have
+    put provider knowledge back in the web app.
+  - Runners capture the real hand-off (Claude's mocked `query()` options,
+    Codex's `thread/start` and `turn/start` requests plus its `-c` overrides,
+    Cursor's `Agent.create` options, Pi's loader options and approval gate,
+    Grok's command line and permission answers, OpenCode's `session.create`
+    rules). Approvals are observed behaviourally: each runner hands its gate an
+    action nothing pre-approved and records whether it asks, refuses or runs.
+  - An adapter may be stricter than its summary only where `narrowings.ts`
+    says so with a reason. The suite fails if a narrowing is looser, or if it
+    stops being observed, so an entry cannot outlive its cause.
+  - "Restricted network" means the agent's own commands. Hosted tools that
+    reach the internet without running a command here (web fetch, web search)
+    are a separate axis owned by the network-denial work.
+  - A provider sandbox that the model can leave unseen holds nothing, so
+    Claude only offers the way out (`allowUnsandboxedCommands`) when a person
+    approves it, and a restricted sandbox uses a strict allowlist.
 
 ## Open questions
+
+- Pi, Grok and OpenCode have no sandbox of their own, so a `provider` sandbox
+  or a restricted network on a host runs unsandboxed with full network access,
+  reported as such with a note. Should the backend refuse such a session, as
+  Cursor refuses `deny`, rather than run it?
 
 - Should Orkestrator expose "always allow" at all, given there is no revoke UI
   yet?
@@ -246,10 +307,6 @@ per-bridge environment overrides that predate the execution policy.
   for the Docker and provider runs.
 - [agent-engines.md](../architecture/agent-engines.md) "Execution policy".
 - Living-doc drift to fix:
-  - [agent-engines.md](../architecture/agent-engines.md) "Execution policy"
-    says interactive host sessions default to provider sandboxing and explicit
-    approvals. Since #613 they default to `sandbox: "none"` and
-    `approvals: "auto-approve"`.
   - [platform-inconsistencies.md](../architecture/platform-inconsistencies.md)
     still describes `ACP_APPROVE_PROJECT_MCPS` as a live switch.
 

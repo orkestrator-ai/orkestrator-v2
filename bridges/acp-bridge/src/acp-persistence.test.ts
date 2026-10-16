@@ -44,7 +44,14 @@ describe("ACP bridge", () => {
     const restored = (await nativeFetch(`${second.base}/session/${created.id}`, {
       headers: second.headers,
     }).then((response) => response.json())) as { policy?: unknown };
-    expect(restored.policy).toEqual(policy);
+    // Reported as applied (`acpReportedPolicy`): Grok has no sandbox, network
+    // or project-configuration option. The approval axis is what survives.
+    expect(restored.policy).toMatchObject({
+      ...policy,
+      sandbox: "none",
+      networkAccess: "full",
+      projectResources: true,
+    });
     expect(
       (
         await nativeFetch(`${second.base}/session/${created.id}/attach`, {
@@ -193,11 +200,10 @@ describe("ACP bridge", () => {
     }).then((response) => response.json())) as {
       policy: { approvals: string; projectResources: boolean; networkAccess: string };
     };
-    expect(restored.policy).toMatchObject({
-      approvals: "deny",
-      projectResources: false,
-      networkAccess: "restricted",
-    });
+    expect(restored.policy).toMatchObject({ approvals: "deny" });
+    // The fixture provider has no sandbox or network control either, so the
+    // restriction is reported as the note explains rather than claimed.
+    expect(restored.policy).toMatchObject({ sandbox: "none", networkAccess: "full" });
   });
 
   test("drops a persisted model id that is blank, oversized, or not a string", async () => {

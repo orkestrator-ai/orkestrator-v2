@@ -1,0 +1,106 @@
+import { describe, expect, test } from "bun:test";
+import {
+  appendNativeAgentPolicyNote,
+  describeNativeAgentExecutionPolicy,
+  nativeAgentPolicyEffects,
+  withoutProviderSandbox,
+  type NativeAgentExecutionPolicy,
+} from "./native-agent.js";
+
+const host: NativeAgentExecutionPolicy = {
+  id: "interactive-host",
+  sandbox: "none",
+  approvals: "auto-approve",
+  projectResources: false,
+  networkAccess: "full",
+};
+
+describe("nativeAgentPolicyEffects", () => {
+  test("names what holds a network restriction", () => {
+    expect(
+      nativeAgentPolicyEffects({ ...host, sandbox: "provider", networkAccess: "restricted" }),
+    ).toEqual({
+      isolation: "provider-sandbox",
+      approvals: "auto-approve",
+      projectResources: false,
+      network: "restricted",
+      networkHeldBy: "provider-sandbox",
+    });
+    expect(
+      nativeAgentPolicyEffects({ ...host, sandbox: "container", networkAccess: "restricted" })
+        .networkHeldBy,
+    ).toBe("container");
+    expect(nativeAgentPolicyEffects({ ...host, networkAccess: "restricted" }).networkHeldBy).toBe(
+      "toolset",
+    );
+    expect(nativeAgentPolicyEffects(host)).not.toHaveProperty("networkHeldBy");
+  });
+
+  test("the Agent Info summary is a function of the effects alone", () => {
+    expect(describeNativeAgentExecutionPolicy(host)).toBe(
+      "No sandbox, approvals off, project resources off, full network",
+    );
+    // A note, an id or a tool list changes no effect, so it changes no summary.
+    expect(
+      describeNativeAgentExecutionPolicy({
+        ...host,
+        id: "pipeline",
+        note: "caveat",
+        toolPolicy: { deny: ["shell"] },
+      }),
+    ).toBe(describeNativeAgentExecutionPolicy(host));
+    expect(
+      describeNativeAgentExecutionPolicy({
+        id: "interactive-container",
+        sandbox: "container",
+        approvals: "ask",
+        projectResources: true,
+        networkAccess: "restricted",
+      }),
+    ).toBe("Container sandbox, approvals on request, project resources on, restricted network");
+  });
+});
+
+describe("withoutProviderSandbox", () => {
+  test("reports an unsandboxed session and the network it really has", () => {
+    const applied = withoutProviderSandbox(
+      { ...host, sandbox: "provider", networkAccess: "restricted", note: "Backend note." },
+      { agent: "Pi", toolsetBlocksNetwork: false },
+    );
+    expect(applied).toMatchObject({ sandbox: "none", networkAccess: "full" });
+    expect(applied.note).toBe(
+      "Backend note. Pi has no sandbox of its own, so this session runs unsandboxed with full network access.",
+    );
+  });
+
+  test("keeps a restriction the toolset holds", () => {
+    const applied = withoutProviderSandbox(
+      { ...host, sandbox: "provider", approvals: "deny", networkAccess: "restricted" },
+      { agent: "OpenCode", toolsetBlocksNetwork: true },
+    );
+    expect(nativeAgentPolicyEffects(applied)).toMatchObject({
+      isolation: "none",
+      network: "restricted",
+      networkHeldBy: "toolset",
+    });
+  });
+
+  test("leaves a container and an already unsandboxed full-network session alone", () => {
+    const container: NativeAgentExecutionPolicy = {
+      ...host,
+      sandbox: "container",
+      networkAccess: "restricted",
+    };
+    expect(withoutProviderSandbox(container, { agent: "Pi", toolsetBlocksNetwork: false })).toBe(
+      container,
+    );
+    expect(withoutProviderSandbox(host, { agent: "Pi", toolsetBlocksNetwork: false })).toBe(host);
+  });
+
+  test("appending a note keeps the one already there", () => {
+    expect(appendNativeAgentPolicyNote({ ...host, note: "First." }, "Second.").note).toBe(
+      "First. Second.",
+    );
+    expect(appendNativeAgentPolicyNote(host, "Only.").note).toBe("Only.");
+  });
+});

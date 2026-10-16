@@ -344,7 +344,17 @@ export function claudeQueryOptions(
               enabled: true,
               autoAllowBashIfSandboxed:
                 policy.approvals === "auto-approve" && !claudeAsksForApproval(policy, options),
-              network: { allowLocalBinding: policy.networkAccess === "full" },
+              // The model may ask to run a command outside the sandbox, and
+              // that request goes to the permission system. With nobody to
+              // ask, it would be granted unseen and the sandbox would hold
+              // nothing, so the way out exists only when a person decides.
+              allowUnsandboxedCommands: claudeAsksForApproval(policy, options),
+              network: {
+                allowLocalBinding: policy.networkAccess === "full",
+                // Without it, a domain off the (empty) allowlist becomes a
+                // permission request, which an auto-approved session grants.
+                strictAllowlist: policy.networkAccess === "restricted",
+              },
             },
           }
         : {}),

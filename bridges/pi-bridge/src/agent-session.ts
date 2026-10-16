@@ -438,7 +438,7 @@ async function createPiAgentSession(state: SessionState): Promise<AgentSession> 
         // launcher opts in; host worktrees stay fail-closed. Read-only review
         // sessions also exclude project instructions and registrations because
         // an extension can replace an otherwise allow-listed built-in tool.
-        ...projectResourceDiscoveryOptions(state.policy?.projectResources, state.readOnly === true),
+        ...piResourceLoaderPolicy(state).discovery,
         extensionFactories: [
           { name: "orkestrator", factory: approvalExtension(state) },
           { name: "orkestrator-mcp", factory: piMcpExtension(state) },
@@ -448,7 +448,7 @@ async function createPiAgentSession(state: SessionState): Promise<AgentSession> 
       },
     });
     await services.resourceLoader.reload({
-      resolveProjectTrust: async () => state.policy?.projectResources === true,
+      resolveProjectTrust: async () => piResourceLoaderPolicy(state).projectTrusted,
     });
     const model = await resolveModelForSession(state.composer.selectedModelId);
     state.composer = await hydrateComposerForSession(
@@ -754,6 +754,20 @@ export function projectResourceDiscoveryOptions(
     // project resources are disabled. Package-only reviews are different: a
     // repository AGENTS.md is untrusted input outside the verified package.
     noContextFiles: readOnly,
+  };
+}
+
+/** What a session's resource loader discovers, and whether it trusts the project. */
+export function piResourceLoaderPolicy(state: Pick<SessionState, "policy" | "readOnly">): {
+  discovery: ReturnType<typeof projectResourceDiscoveryOptions>;
+  projectTrusted: boolean;
+} {
+  return {
+    discovery: projectResourceDiscoveryOptions(
+      state.policy?.projectResources,
+      state.readOnly === true,
+    ),
+    projectTrusted: state.policy?.projectResources === true,
   };
 }
 

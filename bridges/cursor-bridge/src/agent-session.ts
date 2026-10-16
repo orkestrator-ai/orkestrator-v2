@@ -622,13 +622,6 @@ export function resolveCursorExecutionPolicy(
     ...(resourcesOverride !== undefined ? { projectResources: resourcesOverride === "1" } : {}),
   };
   const notes = resolved.note ? [resolved.note] : [];
-  // Cursor's public SDK has no callback surface for interactive approvals.
-  // Report ask as the auto-reviewed mode it actually runs, while deny keeps
-  // autoReview disabled so any operation requiring escalation fails closed.
-  const approvals = resolved.approvals === "ask" ? "auto-approve" : resolved.approvals;
-  if (resolved.approvals === "ask") {
-    notes.push("Cursor SDK cannot surface interactive approvals; provider auto-review is used.");
-  }
   // Its public network control is the provider sandbox switch rather than an
   // independent network policy. Restricted requests therefore force that
   // sandbox on instead of claiming a restriction with an unsandboxed agent.
@@ -636,6 +629,18 @@ export function resolveCursorExecutionPolicy(
     resolved.networkAccess === "restricted" && resolved.sandbox === "none"
       ? "provider"
       : resolved.sandbox;
+  // Cursor's public SDK has no callback surface for interactive approvals.
+  // Report ask as the auto-approved mode it actually runs, while deny keeps
+  // autoReview disabled so any operation requiring escalation fails closed.
+  // Auto-review exists only inside the provider sandbox (`attach`).
+  const approvals = resolved.approvals === "ask" ? "auto-approve" : resolved.approvals;
+  if (resolved.approvals === "ask") {
+    notes.push(
+      sandbox === "provider"
+        ? "Cursor SDK cannot surface interactive approvals; provider auto-review is used."
+        : "Cursor SDK cannot surface interactive approvals, so this session runs without asking.",
+    );
+  }
   if (resolved.networkAccess === "restricted" && sandbox === "provider") {
     notes.push("Cursor enforces restricted network access through its provider sandbox.");
   } else if (resolved.networkAccess === "restricted" && sandbox === "container") {

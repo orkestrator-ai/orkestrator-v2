@@ -9,12 +9,17 @@ import {
   isNativeAgentMessagePatchList,
   type NativeAgentMessagePatch,
 } from "./native-agent-transcript-patch.js";
+import {
+  describeNativeAgentPolicyEffects,
+  nativeAgentPolicyEffects,
+} from "./native-agent-policy-effects.js";
 import type {
   NativeAgentRuntimeSteerJournal,
   NativeAgentSteerRejectedOutcome,
 } from "./native-agent-steer-rejection.js";
 
 export * from "./native-agent-steer-rejection.js";
+export * from "./native-agent-policy-effects.js";
 
 /** Provider-neutral identity for one native-agent tab. */
 export interface NativeAgentTabData {
@@ -1264,21 +1269,12 @@ export function isNativeAgentExecutionPolicy(value: unknown): value is NativeAge
   );
 }
 
-/** Stable, provider-neutral copy for the agent information panel. */
+/**
+ * Stable, provider-neutral copy for the agent information panel, rendered from
+ * the policy's effects so the conformance suite can hold every adapter to it.
+ */
 export function describeNativeAgentExecutionPolicy(policy: NativeAgentExecutionPolicy): string {
-  const sandbox =
-    policy.sandbox === "container"
-      ? "Container sandbox"
-      : policy.sandbox === "provider"
-        ? "Provider sandbox"
-        : "No sandbox";
-  const approvals =
-    policy.approvals === "ask"
-      ? "approvals on request"
-      : policy.approvals === "deny"
-        ? "approvals denied"
-        : "approvals off";
-  return `${sandbox}, ${approvals}, project rules ${policy.projectResources ? "on" : "off"}, ${policy.networkAccess} network`;
+  return describeNativeAgentPolicyEffects(nativeAgentPolicyEffects(policy));
 }
 
 export interface NativeAgentRateLimitWindow {

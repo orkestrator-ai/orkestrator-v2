@@ -37,6 +37,7 @@ import {
 } from "./history/rollout.js";
 
 import { AppServerRpcError, isMissingRolloutError } from "./app-server/errors.js";
+import { codexReportedPolicy } from "./codex-reported-policy.js";
 
 import { type StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
@@ -1544,7 +1545,7 @@ export class CodexRuntimeSessions {
         : {}),
       mode: session.config.mode,
       fastMode: session.config.serviceTier === "fast",
-      ...(session.config.policy ? { policy: session.config.policy } : {}),
+      ...(session.config.policy ? { policy: codexReportedPolicy(session.config.policy) } : {}),
       durable: await this.isSessionConfigPersisted(session),
     };
   }

@@ -1,4 +1,8 @@
-import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import {
+  appendNativeAgentPolicyNote,
+  withoutProviderSandbox,
+  type NativeAgentExecutionPolicy,
+} from "@orkestrator/protocol/native-agent";
 
 /**
  * Provider-neutral process authority, matching every other bridge.
@@ -41,4 +45,24 @@ export function effectiveTurnExecutionPolicy(input: {
   readOnly?: boolean;
 }): NativeAgentExecutionPolicy | undefined {
   return input.readOnly ? coordinatorProcessPolicy() : effectiveExecutionPolicy(input.policy);
+}
+
+/**
+ * The policy a session runs under, as Agent Info should describe it.
+ *
+ * The bridge hands the agent no sandbox, network or project-configuration
+ * option: Grok has no sandbox of its own and loads a project's MCP servers by
+ * its own folder trust. Approvals are the one axis the bridge holds, and only
+ * for a tool that asks, so even `deny` keeps nothing off the network.
+ */
+export function acpReportedPolicy(
+  policy: NativeAgentExecutionPolicy,
+  agent: string,
+): NativeAgentExecutionPolicy {
+  const applied = withoutProviderSandbox(policy, { agent, toolsetBlocksNetwork: false });
+  if (applied.projectResources) return applied;
+  return appendNativeAgentPolicyNote(
+    { ...applied, projectResources: true },
+    `${agent} loads a project's own configuration by its own folder trust, whatever this session's policy says.`,
+  );
 }

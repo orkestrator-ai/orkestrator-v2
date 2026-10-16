@@ -4,11 +4,13 @@ import {
   MAX_STRUCTURED_RESULTS,
   MAX_PROMPT_JOURNAL,
   provider,
+  providerConfig,
   publicRuntime,
   type JsonObject,
   type PromptJournalEntry,
   type SessionState,
 } from "./acp-context.js";
+import { acpReportedPolicy } from "./acp-policy.js";
 import { boundTranscript } from "./acp-transcript.js";
 import { schedulePersist } from "./acp-persist-writer.js";
 
@@ -27,7 +29,7 @@ export function publicSession(state: SessionState): JsonObject {
     revision: state.revision,
     sessionId: state.id,
     composer: state.sessionConfig.composer,
-    ...(state.policy ? { policy: state.policy } : {}),
+    ...(state.policy ? { policy: acpReportedPolicy(state.policy, providerConfig.name) } : {}),
     ...(contextUsage ? { contextUsage } : {}),
     ...publicCommandRevision(state),
     runtime: publicRuntime(state),

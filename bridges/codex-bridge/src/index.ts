@@ -29,6 +29,7 @@ import { registerCodexTranscriptRoutes } from "./transcript-routes.js";
 import { isCodexApprovalMode } from "./codex-approval-mode.js";
 import {
   generateSessionTitleWithCodexExec,
+  normalizeExplicitSessionTitle,
   shutdownSessionTitleGeneration,
 } from "./session-titles.js";
 import { AppServerRuntime, SESSION_CLOSING_ERROR } from "./app-server-runtime.js";
@@ -1778,9 +1779,9 @@ app.post("/session/:id/rewind-messages", async (c) => {
 
 app.post("/session/:id/title", async (c) => {
   const body = await c.req.json().catch(() => ({}));
-  const title = typeof body.title === "string" ? body.title.trim().slice(0, 512) : "";
+  const title = typeof body.title === "string" ? normalizeExplicitSessionTitle(body.title) : "";
   if (!title) return c.json({ error: "title is required" }, 400);
-  return (await appServerRuntime.setSessionTitle(c.req.param("id"), title))
+  return (await appServerRuntime.setSessionTitle(c.req.param("id"), body.title))
     ? c.json({ title })
     : c.json({ error: "Session not found" }, 404);
 });

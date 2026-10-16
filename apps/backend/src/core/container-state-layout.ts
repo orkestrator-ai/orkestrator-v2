@@ -175,7 +175,11 @@ export const PROVIDER_PRESERVATION: Record<
   },
   pi: { level: "full", limitations: null },
   cursor: { level: "full", limitations: null },
-  grok: { level: "full", limitations: null },
+  grok: {
+    level: "partial",
+    limitations:
+      "Session histories, the search index and the bridge session map are preserved. Grok's own worktree registry (worktrees.db) and opt-in memory-v2 directory are not preserved; provider resume after a rebuild is pending qualification.",
+  },
 };
 
 export function providerStatePreserved(provider: AgentPlatform): boolean {

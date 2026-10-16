@@ -312,8 +312,8 @@ preserved paths (`/usr`, `/opt`, the rest of the home) do not survive a new
 runtime; they must come from the image or project setup.
 
 `PROVIDER_PRESERVATION` is what the product may claim, and its limitation
-text reaches the user through the rebuild preview: Claude, Pi, Cursor and Grok
-are `full`; Codex and OpenCode are `partial` because of the paths above
+text reaches the user through the rebuild preview: Claude, Pi and Cursor
+are `full`; Codex, OpenCode and Grok are `partial` because of the paths above
 (Codex's relocated databases are also pending qualification). Resume after a rebuild is qualified only for the providers in
 `RESUME_QUALIFIED_PROVIDERS`. Named volumes are persistence, not backup: a
 Docker administrator can still remove them.

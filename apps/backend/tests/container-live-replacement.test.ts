@@ -59,7 +59,7 @@ afterAll(async () => {
     .filter(Boolean);
   if (networks.length > 0) await docker(["network", "rm", ...networks]).catch(() => undefined);
   if (dataDir) await fs.rm(dataDir, { recursive: true, force: true });
-});
+}, 120_000);
 
 function replacementContext(environment: Environment) {
   const fixture = memoryLifecycleContext([environment], dataDir);
@@ -69,6 +69,7 @@ function replacementContext(environment: Environment) {
     credentialSources: new Set(),
   });
   Object.assign(fixture.context.storage, {
+    loadAgentAccounts: async () => ({ version: 1, accounts: [], active: {} }),
     getProject: async () => ({
       id: "project-1",
       name: "Project",
@@ -104,15 +105,46 @@ const POPULATE = [
   "ln -s tracked.txt internal-link && ln -s /etc/hostname external-link",
   "mkdir -p /home/node/.claude/projects/p && printf '{\"t\":1}\\n' > /home/node/.claude/projects/p/s.jsonl",
   "mkdir -p /home/node/.codex/sessions/2026 && printf '{}\\n' > /home/node/.codex/sessions/2026/r.jsonl",
-  "printf 'sqlite-main' > /home/node/.codex/state_5.sqlite && printf 'wal' > /home/node/.codex/state_5.sqlite-wal",
-  "printf 'history' > /home/node/.codex/thread_history_1.sqlite",
-  'mkdir -p /home/node/.codex/orkestrator-bridge && printf \'{"threadId":"t"}\\n\' > /home/node/.codex/orkestrator-bridge/session-titles.jsonl',
+  'mkdir -p /home/node/.codex/orkestrator-bridge && printf \'{"threadId":"t","title":"Explicit title!","source":"explicit"}\\n\' > /home/node/.codex/orkestrator-bridge/session-titles.jsonl',
   "printf 'config' > /home/node/.codex/config.toml",
-  "mkdir -p /home/node/.local/share/opencode && printf 'db' > /home/node/.local/share/opencode/opencode.db",
+  "mkdir -p /home/node/.local/share/opencode",
   "printf 'snapshot' > /home/node/.local/share/opencode/other.bin",
   "mkdir -p /home/node/.grok/sessions/w/s && printf 'update' > /home/node/.grok/sessions/w/s/updates.jsonl",
   "printf '[]' > /home/node/.grok/active_sessions.json",
+  "printf 'worktree registry' > /home/node/.grok/worktrees.db",
+  "mkdir -p /home/node/.grok/memory-v2 && printf 'memory' > /home/node/.grok/memory-v2/sentinel",
 ].join("\n");
+
+/** Actual SQLite files, so the live copy proves they reopen at the relocated paths. */
+function sqlitePaths(relocated: boolean): string[] {
+  const codex = relocated ? "/home/node/.codex/orkestrator-sqlite" : "/home/node/.codex";
+  const opencode = relocated
+    ? "/home/node/.local/share/opencode/orkestrator-db"
+    : "/home/node/.local/share/opencode";
+  return [`${codex}/state_5.sqlite`, `${codex}/thread_history_1.sqlite`, `${opencode}/opencode.db`];
+}
+
+async function sqliteSnapshot(containerId: string, relocated: boolean): Promise<string> {
+  return docker([
+    "exec",
+    "-u",
+    "node",
+    containerId,
+    "bun",
+    "-e",
+    `
+    const { Database } = require("bun:sqlite");
+    const result = ${JSON.stringify(sqlitePaths(relocated))}.map(path => {
+      const db = new Database(path, { readonly: true, strict: true });
+      const integrity = db.query("PRAGMA integrity_check").values();
+      const rows = db.query("SELECT id, value FROM preservation ORDER BY id").values();
+      db.close();
+      return { integrity, rows };
+    });
+    console.log(JSON.stringify(result));
+  `,
+  ]);
+}
 
 const WORKSPACE_SNAPSHOT = [
   "cd /workspace",
@@ -130,15 +162,14 @@ const WORKSPACE_SNAPSHOT = [
 const STATE_SNAPSHOT = [
   "cat /home/node/.claude/projects/p/s.jsonl",
   "cat /home/node/.codex/sessions/2026/r.jsonl",
-  "cat /home/node/.codex/orkestrator-sqlite/state_5.sqlite; echo",
-  "cat /home/node/.codex/orkestrator-sqlite/state_5.sqlite-wal; echo",
-  "cat /home/node/.codex/orkestrator-sqlite/thread_history_1.sqlite; echo",
+  "test -s /home/node/.codex/orkestrator-sqlite/state_5.sqlite-wal && echo sqlite-wal",
   "cat /home/node/.codex/orkestrator-bridge/session-titles.jsonl",
-  "cat /home/node/.local/share/opencode/orkestrator-db/opencode.db; echo",
   "test ! -e /home/node/.local/share/opencode/orkestrator-db/other.bin && echo no-snapshot",
   "cat /home/node/.grok/sessions/w/s/updates.jsonl; echo",
   // A process registry, deliberately not preserved: it names dead PIDs.
   "test ! -e /home/node/.grok/active_sessions.json && echo no-registry",
+  "test ! -e /home/node/.grok/worktrees.db && echo no-worktrees",
+  "test ! -e /home/node/.grok/memory-v2 && echo no-memory",
 ].join(" && ");
 
 async function exec(containerId: string, script: string): Promise<string> {
@@ -181,6 +212,33 @@ async function createLegacyEnvironment(name: string) {
     },
   });
   await exec(containerId, POPULATE);
+  await docker([
+    "exec",
+    "-u",
+    "node",
+    containerId,
+    "bun",
+    "-e",
+    `
+    const { spawnSync } = require("node:child_process");
+    const { existsSync } = require("node:fs");
+    for (const path of ${JSON.stringify(sqlitePaths(false))}) {
+      // Simulate a stopped writer with committed rows still in its WAL. A
+      // normal last close checkpoints and deletes it, missing this copy path.
+      const script = [
+        'const { Database } = require("bun:sqlite");',
+        'const db = new Database(' + JSON.stringify(path) + ', { create: true });',
+        'db.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE preservation (id INTEGER PRIMARY KEY, value TEXT NOT NULL)");',
+        'db.query("INSERT INTO preservation VALUES (?, ?)").run(1, "retained sqlite data");',
+        'process.kill(process.pid, "SIGKILL");',
+      ].join("");
+      const child = spawnSync("bun", ["-e", script], { stdio: "ignore" });
+      if (child.signal !== "SIGKILL" || !existsSync(path + "-wal")) {
+        throw new Error("SQLite WAL fixture was not created");
+      }
+    }
+  `,
+  ]);
   return { fixture, environmentId: environment.id, containerId };
 }
 
@@ -197,6 +255,13 @@ describe("C14 legacy migration preserves the workspace and provider state", () =
       const { replaceRuntimePreservingState } = await import("../src/core/container-replacement");
       const { fixture, environmentId, containerId } = await createLegacyEnvironment("c14");
       const before = await exec(containerId, WORKSPACE_SNAPSHOT);
+      const databasesBefore = await sqliteSnapshot(containerId, false);
+      expect(JSON.parse(databasesBefore)).toEqual(
+        sqlitePaths(false).map(() => ({
+          integrity: [["ok"]],
+          rows: [[1, "retained sqlite data"]],
+        })),
+      );
 
       const outcome = await replaceRuntimePreservingState(
         { environmentId, expectedContainerId: containerId },
@@ -226,15 +291,15 @@ describe("C14 legacy migration preserves the workspace and provider state", () =
       expect(state.split("\n")).toEqual([
         '{"t":1}',
         "{}",
-        "sqlite-main",
-        "wal",
-        "history",
-        '{"threadId":"t"}',
-        "db",
+        "sqlite-wal",
+        '{"threadId":"t","title":"Explicit title!","source":"explicit"}',
         "no-snapshot",
         "update",
         "no-registry",
+        "no-worktrees",
+        "no-memory",
       ]);
+      expect(await sqliteSnapshot(outcome!.containerId, true)).toBe(databasesBefore);
       // Configuration and credentials are not carried over as durable state.
       expect(
         await exec(
@@ -262,6 +327,8 @@ describe("C14 volume rebuild copies the storage set before replacing the runtime
       );
       await docker(["start", migrated!.containerId]);
       await waitForContainerBoot(migrated!.containerId);
+      const stateBefore = await exec(migrated!.containerId, STATE_SNAPSHOT);
+      const databasesBefore = await sqliteSnapshot(migrated!.containerId, true);
       await exec(migrated!.containerId, "printf 'after-migration\\n' > /workspace/new.txt");
       const before = await exec(migrated!.containerId, WORKSPACE_SNAPSHOT);
       const firstSet = lifecycleOf(
@@ -285,6 +352,8 @@ describe("C14 volume rebuild copies the storage set before replacing the runtime
       await docker(["start", rebuilt!.containerId]);
       await waitForContainerBoot(rebuilt!.containerId);
       expect(await exec(rebuilt!.containerId, WORKSPACE_SNAPSHOT)).toBe(before);
+      expect(await exec(rebuilt!.containerId, STATE_SNAPSHOT)).toBe(stateBefore);
+      expect(await sqliteSnapshot(rebuilt!.containerId, true)).toBe(databasesBefore);
       expect(await exec(rebuilt!.containerId, "cat /workspace/new.txt")).toBe("after-migration");
       // Candidate writes never reach the retained set.
       await exec(rebuilt!.containerId, "printf 'x' > /workspace/candidate-only.txt");

@@ -23,3 +23,11 @@
 - **Disposition:** aggregate-only deadline failures recorded without changing
   assertions, deadlines or skips. Host contention is a hypothesis, not a proven
   cause.
+
+## Coordinator launch-defaults review validation — 2026-10-16
+
+Recurred in the full suite for `0d254a3a`; the unchanged owning file passed
+separately with one isolated Bun worker. Exact failures, suite counts,
+commands, durations and evidence are recorded in
+[0248](0248-backend-fixtures-launch-defaults-validation.md).
+No assertion, deadline or skip was changed.

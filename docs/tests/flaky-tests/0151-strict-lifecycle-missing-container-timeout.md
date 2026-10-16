@@ -21,3 +21,11 @@
 - **Failure artifacts:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.g2MjVi/root-and-agent-support-tests.log.gz`
 
 Observed while validating design-pane dividers; no lifecycle code changed.
+
+## Coordinator launch-defaults review validation — 2026-10-16
+
+Recurred in the full suite for `0d254a3a`; the unchanged owning file passed
+separately with one isolated Bun worker. Exact failures, suite counts,
+commands, durations and evidence are recorded in
+[0248](0248-backend-fixtures-launch-defaults-validation.md).
+No assertion, deadline or skip was changed.

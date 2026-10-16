@@ -79,3 +79,11 @@ mise run test:logged -- --name coordinator-repro -- bun test --cwd apps/backend 
 
 The matching timeout and isolated pass support the existing load hypothesis.
 No coordinator implementation, assertion, timeout or skip was changed.
+
+## Coordinator launch-defaults review validation — 2026-10-16
+
+Recurred in the full suite for `0d254a3a`; the unchanged owning file passed
+separately with one isolated Bun worker. Exact failures, suite counts,
+commands, durations and evidence are recorded in
+[0248](0248-backend-fixtures-launch-defaults-validation.md).
+No assertion, deadline or skip was changed.

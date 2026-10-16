@@ -71,3 +71,11 @@ with
 `mise run test:logged -- --name merge-cleanup-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`
 passed the unchanged owning file, exit 0, in 24.1 seconds. Host contention
 remains an unconfirmed hypothesis. No timeout, assertion or skip was changed.
+
+## Coordinator launch-defaults review validation — 2026-10-16
+
+Recurred in the full suite for `0d254a3a`; the unchanged owning file passed
+separately with one isolated Bun worker. Exact failures, suite counts,
+commands, durations and evidence are recorded in
+[0248](0248-backend-fixtures-launch-defaults-validation.md).
+No assertion, deadline or skip was changed.

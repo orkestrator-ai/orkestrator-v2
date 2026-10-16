@@ -175,3 +175,17 @@ across 137 files (250.74 seconds). Evidence:
 passed the unchanged owning file alone, exit 0, in 8.9 seconds. The question
 renderer fixes do not change runtime staging. Shared host contention remains
 an unconfirmed hypothesis; no timeout, assertion or skip was changed.
+
+## Recurrence — 2026-10-16 (unread-toast review fixes)
+
+`mise run test:logged -- --name non-ios -- mise run test` reserved 4/1/2/1
+workspace/root/bridge/protocol slots while component browser validation also
+ran. The staged-runtime test timed out at 30000.03 ms; the root group reported
+3,000 passed, one skipped and three failed across 137 files (311.74 s). The
+other two failures were Python-dependent copy fixtures. Evidence:
+`/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.6257an/root-and-agent-support-tests.log.gz`.
+
+`mise run test:logged -- --name pi-vendor-isolated -- bun test
+./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the
+unchanged owning file alone, exit 0, in 13.0 s. These unread-reason changes do
+not alter Pi staging. Host contention remains an unconfirmed hypothesis.

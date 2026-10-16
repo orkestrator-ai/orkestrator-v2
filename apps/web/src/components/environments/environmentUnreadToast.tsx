@@ -12,13 +12,17 @@ const UNREAD_REASON_COPY: Record<EnvironmentUnreadReason, UnreadReasonCopy> = {
     title: "Agent finished",
     description: "The agent completed its work.",
   },
+  agent_ready: {
+    title: "Agent ready for input",
+    description: "You can send another message while background work continues.",
+  },
   agent_waiting: {
     title: "Agent needs your input",
     description: "The agent stopped and is waiting for you to respond.",
   },
   agent_question: {
     title: "Agent asked a question",
-    description: "The agent needs an answer before it can continue.",
+    description: "The agent asked a question for you to answer.",
   },
   terminal_finished: {
     title: "Terminal agent finished",

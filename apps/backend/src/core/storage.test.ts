@@ -3403,6 +3403,21 @@ describe("environment completion and unread state", () => {
     });
   });
 
+  test("generic environment updates clear the persisted unread reason with the badge", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = await storage.addEnvironment(createEnvironment("project-1"));
+      await storage.setEnvironmentUnread(environment.id, true);
+      expect((await storage.getEnvironment(environment.id))?.unreadReason).toBe("marked_unread");
+
+      const updated = await storage.updateEnvironment(environment.id, { hasUnreadWork: false });
+      expect(updated.hasUnreadWork).toBe(false);
+      expect(updated).not.toHaveProperty("unreadReason");
+      const persisted = await storage.getEnvironment(environment.id);
+      expect(persisted?.hasUnreadWork).toBe(false);
+      expect(persisted).not.toHaveProperty("unreadReason");
+    });
+  });
+
   test("records what lit the badge and forgets it once the badge clears", async () => {
     await withTemporaryStorage(async (storage) => {
       const environment = await storage.addEnvironment(createEnvironment("project-1"));

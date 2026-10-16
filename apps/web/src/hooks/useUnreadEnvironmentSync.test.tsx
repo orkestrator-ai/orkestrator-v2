@@ -27,7 +27,7 @@ let setUnread: ReturnType<typeof spyOn>;
 beforeEach(() => {
   persistResolvers = [];
   useEnvironmentStore.setState({ environments: [environment()] });
-  useUIStore.setState({ selectedEnvironmentId: "env-1" });
+  useUIStore.setState({ selectedEnvironmentId: "env-1", projectBoardTab: "home" });
   setUnread = spyOn(backend, "setEnvironmentUnread").mockImplementation(
     () =>
       new Promise<Environment>((resolve) => {
@@ -70,20 +70,55 @@ describe("useUnreadEnvironmentSync", () => {
     });
   });
 
-  test("reconciles the badge from a current authoritative response", async () => {
+  test("restores the reason after a stale clear and silently clears again", async () => {
+    useEnvironmentStore.setState({
+      environments: [environment({ unreadReason: "agent_finished" })],
+    });
     renderHook(() => useUnreadEnvironmentSync());
-    await act(async () => {
-      persistResolvers[0]!(environment({ hasUnreadWork: true }));
-      await Promise.resolve();
+    expect(mockToast).toHaveBeenCalledTimes(1);
+    const newerActivityAt = "2026-09-15T09:00:00.000Z";
+    // A resource snapshot advances the activity token while the clear is in flight.
+    act(() => {
+      useEnvironmentStore.getState().updateEnvironment("env-1", {
+        lastActivityAt: newerActivityAt,
+      });
     });
+    const restored: Environment[] = [];
+    const unsubscribe = useEnvironmentStore.subscribe((state) => {
+      const current = state.getEnvironmentById("env-1");
+      if (current?.hasUnreadWork) restored.push({ ...current });
+    });
+    try {
+      await act(async () => {
+        persistResolvers[0]!(
+          environment({
+            hasUnreadWork: true,
+            unreadReason: "agent_question",
+            lastActivityAt: newerActivityAt,
+          }),
+        );
+        await Promise.resolve();
+      });
+    } finally {
+      unsubscribe();
+    }
 
+    expect(restored).toEqual([
+      expect.objectContaining({ hasUnreadWork: true, unreadReason: "agent_question" }),
+    ]);
     expect(setUnread).toHaveBeenCalledTimes(2);
-    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.hasUnreadWork).toBe(false);
+    expect(setUnread).toHaveBeenLastCalledWith("env-1", false, newerActivityAt);
+    expect(mockToast).toHaveBeenCalledTimes(1);
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")).toMatchObject({
+      hasUnreadWork: false,
+      unreadReason: undefined,
+    });
     await act(async () => {
-      persistResolvers[1]!(environment({ hasUnreadWork: false }));
+      persistResolvers[1]!(environment({ hasUnreadWork: false, lastActivityAt: newerActivityAt }));
       await Promise.resolve();
     });
     expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.hasUnreadWork).toBe(false);
+    expect(mockToast).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -140,12 +175,22 @@ describe("activation toast", () => {
   });
 });
 
-test("an obscured home keeps unread work until Home is visible", () => {
-  useEnvironmentStore.setState({ environments: [environment({ projectHome: true })] });
+test("an obscured home toasts and clears unread work only when Home becomes visible", () => {
+  useEnvironmentStore.setState({
+    environments: [
+      environment({ name: "project-home", projectHome: true, unreadReason: "agent_ready" }),
+    ],
+  });
   useUIStore.setState({ projectBoardTab: "kanban" });
   renderHook(() => useUnreadEnvironmentSync());
   expect(setUnread).not.toHaveBeenCalled();
+  expect(mockToast).not.toHaveBeenCalled();
   expect(useEnvironmentStore.getState().environments[0]?.hasUnreadWork).toBe(true);
   act(() => useUIStore.getState().setProjectBoardTab("home"));
   expect(setUnread).toHaveBeenCalledTimes(1);
+  expect(mockToast).toHaveBeenCalledTimes(1);
+  expect(mockToast.mock.calls[0]?.[0]).toBe("Agent ready for input");
+  expect(mockToast.mock.calls[0]?.[1]).toMatchObject({
+    description: "Project home: You can send another message while background work continues.",
+  });
 });

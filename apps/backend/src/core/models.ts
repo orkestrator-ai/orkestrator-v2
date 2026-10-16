@@ -231,6 +231,7 @@ export interface StartupAgentSessionSnapshot {
  * Content-free cause of an environment's unread badge.
  *
  * - `agent_finished`: an agent turn ended.
+ * - `agent_ready`: the composer is ready while background work continues.
  * - `agent_waiting`: an agent stopped to wait on the user (approval, plan, prompt).
  * - `agent_question`: an agent asked a question that needs an answer.
  * - `terminal_finished`: a terminal-hosted agent finished.
@@ -238,6 +239,7 @@ export interface StartupAgentSessionSnapshot {
  */
 export type EnvironmentUnreadReason =
   | "agent_finished"
+  | "agent_ready"
   | "agent_waiting"
   | "agent_question"
   | "terminal_finished"

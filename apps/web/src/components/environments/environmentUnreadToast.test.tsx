@@ -31,15 +31,28 @@ afterEach(() => {
 
 describe("showEnvironmentUnreadToast", () => {
   test("names what lit the bell, in the top right, keyed to the environment", () => {
-    showEnvironmentUnreadToast(environment({ unreadReason: "agent_question" }));
+    showEnvironmentUnreadToast(
+      environment({ unreadReason: "agent_question", agentActivityState: "working" }),
+    );
 
     const { title, options } = lastToast();
     expect(title).toBe("Agent asked a question");
     expect(options).toMatchObject({
       id: "environment-unread:env-1",
-      description: "Review: The agent needs an answer before it can continue.",
+      description: "Review: The agent asked a question for you to answer.",
       position: "top-right",
     });
+  });
+
+  test("composer readiness explains that background work is continuing", () => {
+    showEnvironmentUnreadToast(
+      environment({ unreadReason: "agent_ready", agentActivityState: "working" }),
+    );
+
+    expect(lastToast().title).toBe("Agent ready for input");
+    expect(lastToast().options.description).toBe(
+      "Review: You can send another message while background work continues.",
+    );
   });
 
   test("shows the same amber bell as the environment list", () => {
@@ -71,6 +84,7 @@ describe("describeUnreadReason", () => {
     const titles = (
       [
         "agent_finished",
+        "agent_ready",
         "agent_waiting",
         "agent_question",
         "terminal_finished",

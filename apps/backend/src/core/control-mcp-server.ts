@@ -4,8 +4,11 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
 import {
   COORDINATOR_ASYNC_CONTRACT,
+  COORDINATOR_LAUNCH_DEFAULTS_RULE,
   COORDINATOR_MAIL_ADDRESS,
 } from "@orkestrator/protocol/coordinator";
 import {
@@ -13,6 +16,7 @@ import {
   COORDINATOR_JOB_DELEGATION_INSTRUCTION,
   createCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
+import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { canonicalJson } from "@orkestrator/protocol/public-api";
 import { z } from "zod";
 import {
@@ -21,9 +25,12 @@ import {
   environmentSummary,
   launchEnvironmentCreateInput,
   launchOptions,
+  launchSelectionReport,
+  launchSettingsTiers,
   MAX_TRANSCRIPT_MESSAGES,
   nativeTab,
   paneTabs,
+  platformLaunchDefault,
   projectSummary,
   terminalSessionId,
   validateSelection,
@@ -291,6 +298,38 @@ function ticketDetail(task: JsonRecord): JsonRecord {
   };
 }
 
+/**
+ * What every model and effort field says about leaving it out.
+ *
+ * Coordinators used to fill these from `get_launch_options` on every call, so
+ * every worker ran a model and effort the user never chose. The schema text is
+ * what the model reads at the moment it decides, so the rule lives here too.
+ */
+const LAUNCH_DEFAULTS_GUIDANCE =
+  "Omit modelId and reasoningId to use the user's configured defaults; set them only when the user asks for a specific model or effort, or agrees to one the task needs.";
+const MODEL_ID_DESCRIPTION =
+  "Optional. Omit to use the user's configured default model. Set only when the user asks for a specific model.";
+const REASONING_ID_DESCRIPTION =
+  "Optional; requires modelId. Omit to use the user's configured default effort. Set only when the user asks for a specific effort.";
+const FAST_MODE_DESCRIPTION =
+  "Optional. Omit to use the user's configured speed. Set only when the user asks for one.";
+
+/** Turns the per-agent defaults into lookups for marking catalogue rows. */
+function launchDefaultsSummary(
+  tiers: Parameters<typeof platformLaunchDefault>[0],
+  enabledAgents: readonly AgentPlatform[],
+  models: readonly AgentModel[],
+): JsonRecord {
+  const configuredAgent = resolveDefaultAgent(tiers);
+  return {
+    agent: enabledAgents.includes(configuredAgent) ? configuredAgent : (enabledAgents[0] ?? null),
+    byAgent: Object.fromEntries(
+      enabledAgents.map((agent) => [agent, platformLaunchDefault(tiers, agent, models)]),
+    ),
+    guidance: LAUNCH_DEFAULTS_GUIDANCE,
+  };
+}
+
 const agentSelectionSchema = z.object({
   agent: z.enum(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
   model: z.string().trim().min(1).max(500),
@@ -404,10 +443,61 @@ async function createControlMcp(
         (coordinatorScope
           ? "Every launch_environment call requires baseBranch and baseCommit; copy the current values returned by get_launch_options. Prefer launch_multi_review for the complete environment Multi Review button action; start_multi_review is a backend-only recovery primitive. Use open_multi_review or open_multi_review_fix to focus saved work. "
           : "") +
-        "Reuse requestId when retrying mutations." +
+        "Reuse requestId when retrying mutations. " +
+        (coordinatorScope ? COORDINATOR_LAUNCH_DEFAULTS_RULE : LAUNCH_DEFAULTS_GUIDANCE) +
         (coordinatorScope ? ` ${COORDINATOR_ASYNC_CONTRACT}` : ""),
     },
   );
+
+  /**
+   * Launch options plus what an omitted model and effort resolve to.
+   *
+   * The defaults are advisory, so a settings read that fails returns the
+   * options unchanged instead of failing discovery.
+   */
+  const launchOptionsWithDefaults = async (
+    projectId: string,
+    environmentId?: string,
+  ): Promise<JsonRecord> => {
+    const options = await launchOptions(invoke, projectId, environmentId);
+    let defaults: JsonRecord;
+    try {
+      const environment = environmentId
+        ? await invoke<unknown>("get_environment", { environmentId })
+        : undefined;
+      const tiers = await launchSettingsTiers(
+        invoke,
+        projectId,
+        isRecord(environment) ? environment : undefined,
+      );
+      defaults = launchDefaultsSummary(tiers, options.enabledAgents, options.models);
+    } catch {
+      return options as unknown as JsonRecord;
+    }
+    const byAgent = defaults.byAgent as Partial<Record<AgentPlatform, { modelId: string | null }>>;
+    const models = options.models.map((model) => {
+      const defaultId = byAgent[model.platform]?.modelId;
+      return defaultId && (model.id === defaultId || model.aliases?.includes(defaultId))
+        ? { ...model, isDefault: true }
+        : model;
+    });
+    return { ...options, models, defaults };
+  };
+
+  /** The selection a launch will run, reported so an override is never silent. */
+  const selectionReport = async (
+    projectId: string,
+    environment: JsonRecord | undefined,
+    models: readonly AgentModel[],
+    input: { agent: AgentPlatform; modelId?: string; reasoningId?: string },
+  ): Promise<JsonRecord> => {
+    try {
+      const tiers = await launchSettingsTiers(invoke, projectId, environment);
+      return { selection: launchSelectionReport(tiers, models, input) };
+    } catch {
+      return {};
+    }
+  };
 
   server.registerTool(
     "list_projects",
@@ -429,7 +519,8 @@ async function createControlMcp(
     "get_launch_options",
     {
       title: "Get agent launch options",
-      description: "List enabled agents and validated model choices for a project.",
+      description:
+        "List enabled agents and validated model choices for a project. defaults names what a launch runs when modelId and reasoningId are omitted, and isDefault marks each agent's default model. Omit them to use these defaults.",
       inputSchema: z.object({
         projectId: z.string().trim().min(1).max(200),
         environmentId: z.string().trim().min(1).max(200).optional(),
@@ -437,8 +528,8 @@ async function createControlMcp(
       annotations: readAnnotations(),
     },
     async ({ projectId, environmentId }) => {
-      const options = await launchOptions(invoke, projectId, environmentId);
-      if (!coordinatorScope) return toolResult(options as unknown as JsonRecord);
+      const options = await launchOptionsWithDefaults(projectId, environmentId);
+      if (!coordinatorScope) return toolResult(options);
       // Discovery stays read-only: reuse the persisted coordinator snapshot
       // rather than running a lock-serialized, workspace-mutating git status.
       try {
@@ -450,12 +541,12 @@ async function createControlMcp(
         const status =
           workspace && isRecord(workspace.repositoryStatus) ? workspace.repositoryStatus : null;
         return toolResult({
-          ...(options as unknown as JsonRecord),
+          ...options,
           coordinatorBase: coordinatorLaunchBaseFromStatus(status),
         });
       } catch (error) {
         return toolResult({
-          ...(options as unknown as JsonRecord),
+          ...options,
           coordinatorBase: coordinatorLaunchBaseFromStatus(
             null,
             `Repository status is unavailable: ${
@@ -808,6 +899,7 @@ async function createControlMcp(
       title: "Launch an agent environment",
       description:
         "Create, configure, and start an autonomous coding agent that can execute commands, modify workspace files, and use allowed network access. " +
+        `${LAUNCH_DEFAULTS_GUIDANCE} The result's selection reports the model and effort that will run. ` +
         (coordinatorScope
           ? "Coordinator launches require baseBranch and baseCommit from get_launch_options. "
           : "") +
@@ -818,9 +910,15 @@ async function createControlMcp(
         environmentType: z.enum(["local", "containerized"]).default("local"),
         name: z.string().trim().min(1).max(200).optional(),
         agent: z.enum(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
-        modelId: z.string().trim().min(1).max(500).optional(),
-        reasoningId: z.string().trim().min(1).max(100).optional(),
-        fastMode: z.boolean().optional(),
+        modelId: z.string().trim().min(1).max(500).optional().describe(MODEL_ID_DESCRIPTION),
+        reasoningId: z
+          .string()
+          .trim()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe(REASONING_ID_DESCRIPTION),
+        fastMode: z.boolean().optional().describe(FAST_MODE_DESCRIPTION),
         conversationMode: z.enum(["plan", "build"]).default("build"),
         prompt: z.string().trim().min(1).max(MAX_PROMPT_LENGTH),
         networkAccessMode: z.enum(["restricted", "full"]).optional(),
@@ -870,7 +968,10 @@ async function createControlMcp(
         }
         assertCoordinatorLaunchBaseMatchesCheckout(input, repository);
       }
-      await validateSelection(invoke, input);
+      const options = await validateSelection(invoke, input);
+      // A new environment's own tier pins no model, so repository and app
+      // settings decide, exactly as the startup launch reads them.
+      const selection = await selectionReport(input.projectId, undefined, options.models, input);
       const createInput = launchEnvironmentCreateInput(input);
       const launch = coordinatorScope
         ? await invoke<unknown>("launch_coordinator_environment", {
@@ -916,6 +1017,7 @@ async function createControlMcp(
         environmentId: environment.id,
         tabId: "startup-agent",
         status: startError ? "created" : "accepted",
+        ...selection,
         ...(delegationOpened ? asyncDelegationResult() : {}),
         ...(isRecord(repository)
           ? {
@@ -936,14 +1038,21 @@ async function createControlMcp(
     {
       title: "Launch a job in an existing environment",
       description:
-        "Create a native-agent tab and exactly-once initial turn that can execute commands, modify workspace files, and use configured network access.",
+        "Create a native-agent tab and exactly-once initial turn that can execute commands, modify workspace files, and use configured network access. " +
+        `${LAUNCH_DEFAULTS_GUIDANCE} The result's selection reports the model and effort that will run.`,
       inputSchema: z.object({
         requestId: z.string().trim().min(1).max(256),
         environmentId: z.string().trim().min(1).max(200),
         agent: z.enum(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
-        modelId: z.string().trim().min(1).max(500).optional(),
-        reasoningId: z.string().trim().min(1).max(100).optional(),
-        fastMode: z.boolean().optional(),
+        modelId: z.string().trim().min(1).max(500).optional().describe(MODEL_ID_DESCRIPTION),
+        reasoningId: z
+          .string()
+          .trim()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe(REASONING_ID_DESCRIPTION),
+        fastMode: z.boolean().optional().describe(FAST_MODE_DESCRIPTION),
         conversationMode: z.enum(["plan", "build"]).default("build"),
         title: z.string().trim().min(1).max(200).optional(),
         prompt: z.string().trim().min(1).max(MAX_PROMPT_LENGTH),
@@ -962,7 +1071,7 @@ async function createControlMcp(
       if (!isRecord(environment) || typeof environment.projectId !== "string") {
         throw new Error(`Environment not found: ${input.environmentId}`);
       }
-      await validateSelection(invoke, {
+      const options = await validateSelection(invoke, {
         projectId: environment.projectId,
         environmentId: input.environmentId,
         agent: input.agent,
@@ -970,6 +1079,12 @@ async function createControlMcp(
         reasoningId: input.reasoningId,
         fastMode: input.fastMode,
       });
+      const selection = await selectionReport(
+        environment.projectId,
+        environment,
+        options.models,
+        input,
+      );
       const delegation = coordinatorScope
         ? createCoordinatorDelegatedPrompt(
             {
@@ -1003,7 +1118,11 @@ async function createControlMcp(
               requestId: input.requestId,
             })
           : false;
-      return toolResult({ ...job, ...(delegationOpened ? asyncDelegationResult() : {}) });
+      return toolResult({
+        ...job,
+        ...selection,
+        ...(delegationOpened ? asyncDelegationResult() : {}),
+      });
     },
   );
 
@@ -1209,14 +1328,19 @@ async function createControlMcp(
       {
         title: "Start a structured build pipeline",
         description:
-          "Start Orkestrator's durable build/review/verify/PR workflow in a disposable worker environment.",
+          "Start Orkestrator's durable build/review/verify/PR workflow in a disposable worker environment. It runs the Build button's saved defaults: the same build agent, Multi Review reviewers, preparation/consolidation, fix, verify, PR and conflict-resolution models. Omit agentType to use the saved build agent; set it only when the user asks for a specific agent.",
         inputSchema: z.object({
           requestId: z.string().trim().min(1).max(256),
           taskId: z.string().trim().min(1).max(200),
           environmentType: z.enum(["local", "containerized"]).default("local"),
           baseBranch: z.string().trim().min(1).max(500),
           baseCommit: z.string().regex(/^[0-9a-f]{40}$/i),
-          agentType: z.enum(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
+          agentType: z
+            .enum(["claude", "codex", "cursor", "grok", "opencode", "pi"])
+            .optional()
+            .describe(
+              "Optional. Omit to use the user's saved build agent. Set only when the user asks for a specific agent.",
+            ),
           taskTitle: z.string().trim().min(1).max(500),
           taskSnapshot: z.object({
             title: z.string().max(500),
@@ -1305,16 +1429,31 @@ async function createControlMcp(
       {
         title: "Start a multi-review",
         description:
-          "Low-level build-gated recovery primitive: starts backend work only and does NOT create/select a root tab or reproduce the UI button. Prefer launch_multi_review for a complete environment-level Multi Review action.",
+          "Low-level build-gated recovery primitive: starts backend work only and does NOT create/select a root tab or reproduce the UI button. Prefer launch_multi_review for a complete environment-level Multi Review action. Omit reviewers, reviewModel and fixModel to use the user's saved Multi Review defaults (saved auto-fix and auto-PR always apply); set them only when the user asks for specific models.",
         inputSchema: z.object({
           requestId: z.string().trim().min(1).max(256),
           buildPipelineId: z.string().trim().min(1).max(200),
           environmentId: z.string().trim().min(1).max(200),
           targetBranch: z.string().trim().min(1).max(500),
           reviewInstruction: z.string().max(100_000).optional(),
-          reviewers: z.array(agentSelectionSchema).min(1).max(32),
-          reviewModel: agentSelectionSchema.optional(),
-          fixModel: agentSelectionSchema,
+          reviewers: z
+            .array(agentSelectionSchema)
+            .min(1)
+            .max(32)
+            .optional()
+            .describe(
+              "Optional. Omit to use the user's saved reviewer rows. Set only when the user asks for specific reviewers.",
+            ),
+          reviewModel: agentSelectionSchema
+            .optional()
+            .describe(
+              "Optional. Omit to use the user's saved preparation/consolidation model. Set only when the user asks for one.",
+            ),
+          fixModel: agentSelectionSchema
+            .optional()
+            .describe(
+              "Optional. Omit to use the user's saved fix model. Set only when the user asks for one.",
+            ),
         }),
         annotations: {
           readOnlyHint: false,

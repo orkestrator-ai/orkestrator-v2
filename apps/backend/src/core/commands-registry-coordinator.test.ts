@@ -383,6 +383,7 @@ describe("coordinator command registry", () => {
       projectId: project.id,
       targetBranch: "main",
       reviewers: [{ agent: "claude", model: "opus" }],
+      reviewModel: { agent: "claude", model: "opus" },
       fixModel: { agent: "codex", model: "gpt-5.6" },
     };
     const recovered = {
@@ -415,6 +416,108 @@ describe("coordinator command registry", () => {
       ),
     ).resolves.toMatchObject({ id: "review-recovered" });
     expect(startReview).not.toHaveBeenCalled();
+  });
+
+  test("omitted build and Multi Review choices run the saved defaults", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    const head = (await runCommand("git", ["rev-parse", "HEAD"], { cwd: checkout })).stdout.trim();
+    const config = await storage.loadConfig();
+    await storage.updateGlobalConfig({
+      ...config.global,
+      enabledAgentPlatforms: ["claude", "codex"],
+      agentSettings: {
+        defaultAgent: "codex",
+        actionDefaults: {
+          review: { platform: "claude", model: "opus", reasoningEffort: "high" },
+          review2: { platform: "codex", model: "gpt-5.6" },
+          fixReviewIssues: { platform: "codex", model: "gpt-5.6", reasoningEffort: "medium" },
+        },
+        multiReview: { autoFix: true, reviewerCount: 2 },
+      },
+    });
+    const scope = {
+      projectId: project.id,
+      coordinatorId: snapshot.workspace.id,
+      conversationId: conversation.id,
+    };
+    const startBuild = mock(async () => ({ id: "pipeline-defaults", projectId: project.id }));
+    context.buildPipelines = { start: startBuild } as unknown as CommandContext["buildPipelines"];
+    await commands.get("start_coordinator_build_pipeline")!(
+      {
+        scope,
+        requestId: "build-defaults",
+        input: {
+          taskId: "task-1",
+          projectId: project.id,
+          taskTitle: "Task",
+          taskSnapshot: {
+            title: "Task",
+            description: "",
+            acceptanceCriteria: "",
+            comments: [],
+            images: [],
+          },
+          environmentType: "local",
+          delegationBaseBranch: "main",
+          delegationBaseCommit: head,
+        },
+      },
+      context,
+    );
+    const opus = { agent: "claude", model: "opus", reasoningEffort: "high" };
+    const fix = { agent: "codex", model: "gpt-5.6", reasoningEffort: "medium" };
+    expect(startBuild).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentType: "codex",
+        reviewers: [opus, { agent: "codex", model: "gpt-5.6" }],
+        reviewPreparation: opus,
+        steps: expect.objectContaining({ review: opus, address: fix, verify: fix }),
+      }),
+    );
+
+    const environment = createEnvironment(project.id, { name: "worker", environmentType: "local" });
+    environment.id = "worker-defaults";
+    await storage.addEnvironment(environment);
+    storage.getBuildPipeline = mock(async () => ({
+      snapshot: {
+        id: "pipeline-defaults",
+        projectId: project.id,
+        environmentId: environment.id,
+        phase: "complete",
+      },
+    })) as unknown as typeof storage.getBuildPipeline;
+    commands.set("get_native_agent_model_catalog", async () => [
+      { platform: "claude", id: "opus", label: "Opus", reasoning: [{ id: "high", label: "High" }] },
+      {
+        platform: "codex",
+        id: "gpt-5.6",
+        label: "GPT-5.6",
+        reasoning: [{ id: "medium", label: "Medium" }],
+      },
+    ]);
+    const startReview = mock(async () => ({ id: "review-defaults" }));
+    context.multiReviews = { start: startReview } as unknown as CommandContext["multiReviews"];
+    await commands.get("start_coordinator_multi_review")!(
+      {
+        scope,
+        requestId: "review-defaults",
+        buildPipelineId: "pipeline-defaults",
+        input: { environmentId: environment.id, projectId: project.id, targetBranch: "main" },
+      },
+      context,
+    );
+    expect(startReview).toHaveBeenCalledWith({
+      environmentId: environment.id,
+      projectId: project.id,
+      targetBranch: "main",
+      reviewers: [opus, { agent: "codex", model: "gpt-5.6" }],
+      reviewModel: opus,
+      fixModel: fix,
+      autoFix: true,
+      autoPr: false,
+    });
   });
 
   test("returns worker start errors and rejects cross-project coordinator mail", async () => {

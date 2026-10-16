@@ -62,3 +62,9 @@ Recurred on 2026-10-15 at 5012.03 ms in `mise run test` for the sign-in
 readiness change (no design code touched), alongside case 0247. The unchanged
 owning file passed alone three times in a row. Evidence:
 `/tmp/orkestrator-test-run.8FscOl/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+Recurred on 2026-10-16 at 5553.87 ms in `mise run test` for the coordinator
+launch-defaults change (no design code touched), with the same
+`Design service is stopping` teardown error. The unchanged owning file passed
+alone (10 pass, 0 fail). Evidence:
+`/tmp/orkestrator-test-run.26CkBR/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.

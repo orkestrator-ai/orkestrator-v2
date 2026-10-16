@@ -16,6 +16,12 @@ import { isStartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline"
 import { isStartMultiReviewInput } from "@orkestrator/protocol/multi-review";
 import { runCommand } from "./shell.js";
 import { registerCoordinatorReviewActions } from "./coordinator-review-actions.js";
+import {
+  buildPipelineInputWithDefaults,
+  multiReviewInputWithDefaults,
+  readLaunchModelCatalog,
+  savedLaunchSettings,
+} from "./coordinator-launch-defaults.js";
 import { CoordinatorViewRevisions } from "./coordinator-view-revisions.js";
 import { actionHash, requireCoordinatorConversation } from "./coordinator-action-scope.js";
 import {
@@ -135,7 +141,7 @@ export function registerCoordinatorCommands(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
-  registerCoordinatorReviewActions(register);
+  registerCoordinatorReviewActions(register, dependencies);
   const workflowStarts = new Map<string, Promise<unknown>>();
   const runWorkflowStart = <T>(key: string, operation: () => Promise<T>): Promise<T> => {
     const existing = workflowStarts.get(key);
@@ -655,6 +661,17 @@ export function registerCoordinatorCommands(
     const conversationId = asNonBlankString(identity.conversationId, "conversationId");
     await requireCoordinatorConversation(context, projectId, coordinatorId, conversationId);
     const stableRequestId = asNonBlankString(requestId, "requestId");
+    if (!record(input) || input.projectId !== projectId) {
+      throw new Error("Invalid scoped build pipeline request");
+    }
+    // Choices the coordinator left out run the Build button's saved defaults.
+    // The request hash below stays over the caller's payload, so a retry after
+    // the user edits their defaults still replays the original pipeline.
+    const requestedInput = input;
+    input = buildPipelineInputWithDefaults(
+      requestedInput,
+      savedLaunchSettings(await context.storage.loadConfig(), projectId),
+    );
     if (!isStartBuildPipelineInput(input) || input.projectId !== projectId) {
       throw new Error("Invalid scoped build pipeline request");
     }
@@ -679,7 +696,7 @@ export function registerCoordinatorCommands(
         input.delegationBaseCommit,
       );
     }
-    const payloadHash = actionHash(input);
+    const payloadHash = actionHash(requestedInput);
     return runWorkflowStart(`${coordinatorId}\0${stableRequestId}`, async () => {
       const receipt = await context.storage.reserveCoordinatorWorkflowAssociation({
         id: randomUUID(),
@@ -726,6 +743,29 @@ export function registerCoordinatorCommands(
       const conversationId = asNonBlankString(identity.conversationId, "conversationId");
       await requireCoordinatorConversation(context, projectId, coordinatorId, conversationId);
       const stableRequestId = asNonBlankString(requestId, "requestId");
+      if (!record(input) || input.projectId !== projectId) {
+        throw new Error("Invalid scoped multi-review request");
+      }
+      // Omitted model rows and auto-actions run the saved Multi Review defaults.
+      const requestedInput = input;
+      const environment =
+        typeof requestedInput.environmentId === "string"
+          ? await context.storage.getEnvironment(requestedInput.environmentId)
+          : null;
+      input = await multiReviewInputWithDefaults(
+        requestedInput,
+        savedLaunchSettings(
+          await context.storage.loadConfig(),
+          projectId,
+          environment?.projectId === projectId ? environment : undefined,
+        ),
+        () =>
+          readLaunchModelCatalog(
+            dependencies.commands.get("get_native_agent_model_catalog"),
+            String(requestedInput.environmentId),
+            context,
+          ),
+      );
       if (!isStartMultiReviewInput(input) || input.projectId !== projectId) {
         throw new Error("Invalid scoped multi-review request");
       }
@@ -742,7 +782,17 @@ export function registerCoordinatorCommands(
           "Multi-review can start only after the associated build pipeline completed successfully",
         );
       }
-      const payloadHash = actionHash({ input, buildPipelineId: requiredBuildPipelineId });
+      // The receipt covers the caller's payload so a retry replays after the
+      // user edits their defaults; crash recovery compares the resolved rows a
+      // saved workflow actually holds.
+      const payloadHash = actionHash({
+        input: requestedInput,
+        buildPipelineId: requiredBuildPipelineId,
+      });
+      const resolvedHash = actionHash({
+        input: multiReviewInputFromSnapshot(input),
+        buildPipelineId: requiredBuildPipelineId,
+      });
       return runWorkflowStart(`${coordinatorId}\0${stableRequestId}`, async () => {
         const receipt = await context.storage.reserveCoordinatorWorkflowAssociation({
           id: randomUUID(),
@@ -778,7 +828,7 @@ export function registerCoordinatorCommands(
             actionHash({
               input: multiReviewInputFromSnapshot(item.snapshot),
               buildPipelineId: requiredBuildPipelineId,
-            }) === payloadHash,
+            }) === resolvedHash,
         );
         const workflow = recovered?.snapshot ?? (await multiReviews.start(input));
         if (!record(workflow) || typeof workflow.id !== "string") {

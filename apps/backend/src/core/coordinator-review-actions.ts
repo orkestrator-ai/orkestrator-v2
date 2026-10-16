@@ -7,12 +7,17 @@ import {
   type MultiReviewActionResult,
   type StartMultiReviewInput,
 } from "@orkestrator/protocol/multi-review";
-import type { CommandRegistrar } from "./commands-registry-types.js";
+import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import type { CommandContext } from "./commands-context.js";
 import { conciseError } from "./commands-error-text.js";
 import { asNonBlankString, stripLoopedReviewSnapshotSecrets } from "./commands-helpers.js";
 import { actionHash, requireCoordinatorConversation } from "./coordinator-action-scope.js";
 import { openMultiReviewTab } from "./workflow-tab-actions.js";
+import {
+  multiReviewDefaultRows,
+  readLaunchModelCatalog,
+  savedLaunchSettings,
+} from "./coordinator-launch-defaults.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
 
 function requestAlias(
@@ -56,9 +61,13 @@ function result(
   };
 }
 
-export function registerCoordinatorReviewActions(register: CommandRegistrar): void {
+export function registerCoordinatorReviewActions(
+  register: CommandRegistrar,
+  dependencies?: Pick<RegistryDependencies, "commands">,
+): void {
   const running = new Map<string, Promise<unknown>>();
   let pendingCount = 0;
+
   // Serialize, rather than coalesce, so every retry still validates its payload.
   const serialize = async <T>(key: string, action: () => Promise<T>): Promise<T> => {
     if (pendingCount >= 256) throw new Error("Too many review actions; retry later");
@@ -87,6 +96,20 @@ export function registerCoordinatorReviewActions(register: CommandRegistrar): vo
       if (isProjectHomeEnvironment(environment))
         throw new Error("Coordinator credential cannot act on the project checkout");
       const config = await context.storage.loadConfig();
+      // Omitted model rows take the saved defaults the Multi Review button
+      // uses. The request hash below covers the caller's payload, not these
+      // rows, so a retry still replays after the user edits their defaults.
+      const defaults =
+        input.reviewers && input.reviewModel && input.fixModel
+          ? undefined
+          : multiReviewDefaultRows(
+              savedLaunchSettings(config, caller.projectId, environment),
+              await readLaunchModelCatalog(
+                dependencies?.commands.get("get_native_agent_model_catalog"),
+                environment.id,
+                context,
+              ),
+            );
       const instructionWasProvided = Object.hasOwn(input, "reviewInstruction");
       const start: StartMultiReviewInput = {
         environmentId: input.environmentId,
@@ -98,9 +121,9 @@ export function registerCoordinatorReviewActions(register: CommandRegistrar): vo
             ? input.reviewInstruction
             : undefined
           : config.global.reviewInstruction,
-        reviewers: input.reviewers,
-        reviewModel: input.reviewModel,
-        fixModel: input.fixModel,
+        reviewers: input.reviewers ?? defaults!.reviewers,
+        reviewModel: input.reviewModel ?? defaults!.reviewModel,
+        fixModel: input.fixModel ?? defaults!.fixModel,
         autoFix: input.autoFix ?? config.global.agentSettings?.multiReview?.autoFix ?? false,
         autoPr: input.autoPr ?? config.global.agentSettings?.multiReview?.autoPr ?? false,
       };

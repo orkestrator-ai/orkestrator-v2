@@ -21,6 +21,7 @@
     "./claude-background-commands": "./src/claude-background-commands.ts",
     "./claude-model-catalog": "./src/claude-model-catalog.ts",
     "./build-pipeline": "./src/build-pipeline.ts",
+    "./build-pipeline-defaults": "./src/build-pipeline-defaults.ts",
     "./connections": "./src/connections.ts",
     "./container-host-reachability": "./src/container-host-reachability.ts",
     "./container-lifecycle": "./src/container-lifecycle.ts",

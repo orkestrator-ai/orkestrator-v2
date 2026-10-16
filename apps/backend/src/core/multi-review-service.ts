@@ -108,6 +108,11 @@ import {
   clearReviewerAdmission,
   compactReviewerAdmissionQueue,
 } from "./review-fanout-admission.js";
+import {
+  ProvisionalFindingInbox,
+  dropProvisionalFindings,
+  type ProvisionalFindingSink,
+} from "./review-provisional-findings.js";
 import { ActivityReadCoalescer } from "./activity-read-coalescer.js";
 
 import {
@@ -386,6 +391,8 @@ function resetReviewerForRestart(
   // The next review pass queues it behind nothing: the scheduler admits in
   // panel order and assigns its place then.
   clearReviewerAdmission(reviewer);
+  // A fresh attempt reports its own findings.
+  dropProvisionalFindings(reviewer);
   reviewer.sessionKey = rotatedSessionKey(reviewerSessionKey(workflow.id, reviewer.id));
   delete reviewer.providerSessionId;
   delete reviewer.requestId;
@@ -578,6 +585,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   private readonly passTriggers = new Map<string, PollTrigger>();
   /** Elapsed-time gate for idle-result grace and bounded final-usage probes. */
   private readonly pollGate: ElapsedPollGate;
+  /** Findings live reviewers reported through `report_finding`, until a pass collects them. */
+  private readonly provisionalFindings: ProvisionalFindingInbox;
 
   constructor(
     private readonly storage: StorageService,
@@ -588,6 +597,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       options.progressProbeIntervalMs ?? DEFAULT_PROGRESS_PROBE_INTERVAL_MS,
     );
     this.activityReads = new ActivityReadCoalescer(options.activityReadCoalesceWindowMs);
+    this.provisionalFindings = new ProvisionalFindingInbox({
+      slotOpen: async (scope, resultKey) =>
+        (await this.options.workflowResults?.status(scope, resultKey))?.lifecycle === "open",
+      // Collected by the workflow's next pass, like an accepted result is.
+      wake: (environmentId) => this.wakeEnvironment(environmentId, "result-accepted"),
+    });
     this.keyed =
       options.keyedScheduling ??
       (options.adaptiveScheduling !== false && keyedSchedulingEnabled("multi-review"));
@@ -854,6 +869,14 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       step,
       knownSourceToken,
     );
+  }
+
+  /**
+   * Where `report_finding` calls land: the agent tools server lists the tool
+   * for a reviewer attempt this accepts, and hands each call to it.
+   */
+  provisionalFindingSink(): ProvisionalFindingSink {
+    return this.provisionalFindings;
   }
 
   /** The body behind one reviewer row's deferred `detailRef`, from its own session. */
@@ -1217,6 +1240,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           reviewer.status = "pending";
           delete reviewer.error;
           delete reviewer.report;
+          dropProvisionalFindings(reviewer);
           delete reviewer.providerSessionId;
           reviewer.sessionKey = rotatedSessionKey(reviewerSessionKey(workflow.id, reviewer.id));
           delete reviewer.requestId;
@@ -1315,6 +1339,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
             reviewer.status = "pending";
             delete reviewer.error;
+            dropProvisionalFindings(reviewer);
             delete reviewer.providerSessionId;
             reviewer.sessionKey = rotatedSessionKey(reviewerSessionKey(workflow.id, reviewer.id));
             delete reviewer.requestId;
@@ -2103,6 +2128,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
 
   /** Keeps the keyed index current after an authoritative read or durable write. */
   private noteRecord(workflowId: string, snapshot: unknown): void {
+    if (isMultiReviewWorkflow(snapshot)) this.provisionalFindings.track(snapshot);
+    else this.provisionalFindings.forget(workflowId);
     const supervisor = this.supervisor;
     if (!supervisor) return;
     if (!isMultiReviewWorkflow(snapshot)) {
@@ -2349,6 +2376,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     });
     workflow.updatedAt = nowIso();
     workflow.controllerFence = token;
+    // Once the review has run its course only accepted reports remain: the
+    // provisional findings of a reviewer that failed or was stopped were shown
+    // while the review could still use them.
+    if (workflow.phase === "interactive" || workflow.phase === "completed") {
+      for (const reviewer of workflow.reviewers) dropProvisionalFindings(reviewer);
+    }
     const saved = await this.storage.saveMultiReviewWorkflow(
       workflow.id,
       workflow.environmentId,
@@ -3341,6 +3374,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         this.resolveUnattendedInteractions(workflow, token, provider, providerSessionId),
       abandonSession: (selection, providerSessionId) =>
         this.abandonSession(workflow, selection, providerSessionId),
+      ...(this.options.workflowResults
+        ? {
+            takeProvisionalFindings: (reviewer: MultiReviewWorkflow["reviewers"][number]) =>
+              reviewer.requestId ? this.provisionalFindings.take(reviewer.requestId) : [],
+          }
+        : {}),
       captureReviewerUsage: true,
       progress: this.progress,
       stallWarningMs: this.stallWarningMs(),

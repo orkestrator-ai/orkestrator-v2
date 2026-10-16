@@ -289,3 +289,61 @@ test("a colliding Orkestrator tool name does not unlock a Pi built-in", async ()
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("a read-only reviewer may report a finding under every approval policy", async () => {
+  const { preparePiMcp, setPiMcpTransportForTests } = await import("./mcp.js");
+  const { mkdir, mkdtemp, rm, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "pi-mcp-reviewer-"));
+  const agentDir = join(root, "agent");
+  await mkdir(agentDir, { recursive: true });
+  // Another server offering a tool of the same name is not the reviewer's.
+  await writeFile(
+    join(agentDir, "mcp.json"),
+    JSON.stringify({ mcpServers: { docs: { command: "docs-mcp" } } }),
+  );
+  setPiMcpTransportForTests({
+    async connect(server) {
+      return {
+        tools:
+          server.id === "orkestrator"
+            ? [{ name: "report_finding" }, { name: "get_workflow_result_status" }]
+            : [{ name: "report_finding" }],
+        async call() {
+          return { content: [{ type: "text", text: "ok" }] };
+        },
+        async close() {},
+      };
+    },
+  });
+  try {
+    for (const approvals of ["auto-approve", "ask", "deny"] as const) {
+      const state = newSessionState();
+      state.readOnly = true;
+      state.policy = {
+        id: "pipeline",
+        sandbox: "none",
+        approvals,
+        projectResources: false,
+        networkAccess: "full",
+      };
+      state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "attempt-capability" };
+      await preparePiMcp(state, { agentDir, cwd: root, env: {} });
+
+      expect(await requestToolApproval(state, "finding", "report_finding", {})).toEqual({
+        block: false,
+      });
+      // The read-only gate still holds for everything else.
+      expect(await requestToolApproval(state, "edit", "edit", {})).toMatchObject({ block: true });
+      expect(
+        await requestToolApproval(state, "other", "mcp_docs_report_finding", {}),
+      ).toMatchObject({ block: true });
+      expect(await requestToolApproval(state, "bash", "bash", {})).toMatchObject({ block: true });
+      expect(state.approvals.size).toBe(0);
+    }
+  } finally {
+    setPiMcpTransportForTests();
+    await rm(root, { recursive: true, force: true });
+  }
+});

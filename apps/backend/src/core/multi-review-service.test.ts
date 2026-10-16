@@ -4516,6 +4516,138 @@ test("MultiReviewService reads a step's session tail only for the step using it"
   });
 });
 
+const reportedFinding = {
+  severity: "P1" as const,
+  confidence: 85,
+  category: "correctness" as const,
+  title: "Restart resets the shared clock",
+  file: "src/review.ts",
+  line: 12,
+  symbol: "restartStep",
+  description: "Restarting a step clears the runtime the shared session still uses.",
+  evidence: "restartStep deletes stepRuntimes",
+  suggestion: "Keep the previous runtime",
+  verification: "Restart a step and read its runtime",
+};
+
+test("MultiReviewService collects a live reviewer's reported findings on its next pass", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  await withService(
+    "env-live-findings",
+    provider,
+    async ({ service, storage, snapshot, workflowResults }) => {
+      const resultKey = randomUUID();
+      const timestamp = new Date().toISOString();
+      await workflowResults!.prepare({
+        resultKey,
+        kind: "review-report",
+        environmentId: "env-live-findings",
+        projectId: "project-1",
+        provider: "claude",
+      });
+      const workflow: MultiReviewWorkflow = {
+        version: 1,
+        controller: "backend",
+        id: "live-findings",
+        environmentId: "env-live-findings",
+        projectId: "project-1",
+        targetBranch: "main",
+        reviewers: [
+          {
+            id: "reviewer-1",
+            agent: "claude",
+            model: "opus",
+            status: "running",
+            sessionKey: "multi-review:live-findings:reviewer-1",
+            providerSessionId: "session-live",
+            requestId: resultKey,
+            dispatchState: "sent",
+            resultTransport: "tool-v1",
+            startedAt: timestamp,
+          },
+        ],
+        fixModel: { agent: "claude", model: "opus" },
+        phase: "reviewing",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        backendRevision: 0,
+        reviewWorktreeSnapshot: await captureReviewWorktreeSnapshot(
+          stableReviewInvoker,
+          "env-live-findings",
+          "Multi Review",
+        ),
+      };
+      await storage.createMultiReviewWorkflowIfNoActive(
+        workflow.id,
+        workflow.environmentId,
+        1,
+        workflow,
+      );
+      const sink = service.provisionalFindingSink();
+      const scope = { environmentId: "env-live-findings", projectId: "project-1" };
+      // Nothing is accepted before the backend has seen the reviewer live.
+      expect(sink.accepts(scope, resultKey)).toBe(false);
+
+      await service.advanceNow(workflow.id);
+      expect(sink.accepts(scope, resultKey)).toBe(true);
+      expect(await sink.report(scope, resultKey, reportedFinding)).toMatchObject({
+        ok: true,
+        duplicate: false,
+      });
+      expect((await snapshot(workflow.id))!.reviewers[0]!.provisionalFindings).toBeUndefined();
+
+      await service.advanceNow(workflow.id);
+      const stored = (await snapshot(workflow.id))!.reviewers[0]!;
+      expect(stored.provisionalFindings?.map((finding) => finding.issue)).toEqual([
+        reportedFinding,
+      ]);
+      // A retry after the pass recorded it is still the same finding.
+      expect(await sink.report(scope, resultKey, reportedFinding)).toMatchObject({
+        ok: true,
+        duplicate: true,
+      });
+      // Another reviewer's attempt key reaches nothing.
+      expect(await sink.report(scope, randomUUID(), reportedFinding)).toMatchObject({
+        ok: false,
+        error: { code: "not_accepting" },
+      });
+    },
+    { toolMode: true },
+  );
+});
+
+test("MultiReviewService keeps only accepted reports once the review has run its course", async () => {
+  const provider = new Provider();
+  await withService("env-findings-complete", provider, async ({ service, storage, snapshot }) => {
+    const workflowId = await seedLegacyFixingWorkflow(storage, "env-findings-complete");
+    // A reviewer that stopped before its report was accepted left findings behind.
+    await mutateStoredWorkflow(storage, workflowId, (workflow) => {
+      workflow.reviewers.push({
+        id: "reviewer-2",
+        agent: "claude",
+        model: "sonnet",
+        status: "cancelled",
+        provisionalFindings: [
+          {
+            id: "0123456789abcdef01234567",
+            reportedAt: new Date(0).toISOString(),
+            issue: reportedFinding,
+          },
+        ],
+      });
+    });
+    for (let pass = 0; pass < 6; pass += 1) {
+      await service.advanceNow(workflowId);
+      if ((await snapshot(workflowId))?.phase === "completed") break;
+    }
+    const completed = (await snapshot(workflowId))!;
+    expect(completed.phase).toBe("completed");
+    expect(completed.reviewers[1]).toMatchObject({ status: "cancelled" });
+    expect(completed.reviewers[1]).not.toHaveProperty("provisionalFindings");
+  });
+});
+
 test("MultiReviewService finishes a fix turn persisted before the interactive handoff", async () => {
   const provider = new Provider();
   await withService("env-legacy-fixing", provider, async ({ service, storage, snapshot }) => {

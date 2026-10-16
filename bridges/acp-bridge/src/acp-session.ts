@@ -4,6 +4,7 @@ import {
 } from "@orkestrator/protocol/agent-mail";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { WEB_ANNOTATION_TOOL_NAMES } from "@orkestrator/protocol/web-annotations";
+import { REPORT_FINDING_TOOL_NAME } from "@orkestrator/protocol/workflow-results";
 import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import {
@@ -701,6 +702,47 @@ export function orkestratorToolPermissionOption(
   return allowOptionId(params);
 }
 
+const REPORT_FINDING_TOOL_IDS = new Set([
+  `${ORKESTRATOR_MCP_SERVER_NAME}__${REPORT_FINDING_TOOL_NAME}`,
+  `mcp__${ORKESTRATOR_MCP_SERVER_NAME}__${REPORT_FINDING_TOOL_NAME}`,
+  `${ORKESTRATOR_MCP_SERVER_NAME}_${REPORT_FINDING_TOOL_NAME}`,
+  `${ORKESTRATOR_MCP_SERVER_NAME}/${REPORT_FINDING_TOOL_NAME}`,
+  `${ORKESTRATOR_MCP_SERVER_NAME}.${REPORT_FINDING_TOOL_NAME}`,
+]);
+
+/**
+ * The allow option of a Multi Review reviewer's `report_finding` call, under
+ * every approval policy including a read-only turn's `deny`.
+ *
+ * The tool exists only on a live reviewer's own attempt capability and records
+ * a provisional finding on that attempt in the backend: it reads and writes
+ * nothing in the workspace. Identity follows `orkestratorToolPermissionOption`:
+ * a server-qualified name, Grok's namespaced metadata, or the tool Grok's
+ * `use_tool` wraps; never a bare name or a display title.
+ */
+export function reviewerFindingPermissionOption(
+  params: JsonObject,
+  recordedInput?: unknown,
+): string | undefined {
+  const toolCall = isObject(params.toolCall) ? params.toolCall : undefined;
+  if (!toolCall || toolCall.kind === "execute" || toolCall.kind === "edit") return undefined;
+  const meta = isObject(toolCall._meta) ? toolCall._meta : undefined;
+  const xaiTool = meta && isObject(meta["x.ai/tool"]) ? meta["x.ai/tool"] : undefined;
+  const vendorName = xaiTool ? xaiTool.name : toolCall.name;
+  const name =
+    typeof vendorName === "string" && vendorName.trim() === GROK_USE_TOOL
+      ? wrappedToolName(toolCall.rawInput === undefined ? recordedInput : toolCall.rawInput)
+      : vendorName;
+  const namespaced =
+    xaiTool?.namespace === ORKESTRATOR_MCP_SERVER_NAME &&
+    typeof xaiTool.name === "string" &&
+    xaiTool.name.trim() === REPORT_FINDING_TOOL_NAME;
+  if (!namespaced && !(typeof name === "string" && REPORT_FINDING_TOOL_IDS.has(name.trim()))) {
+    return undefined;
+  }
+  return allowOptionId(params);
+}
+
 function allowOptionId(params: JsonObject): string | undefined {
   const options = Array.isArray(params.options) ? params.options.filter(isObject) : [];
   const allow =
@@ -862,6 +904,13 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
       ? { name: recorded.toolName, input: recorded.toolArgs }
       : undefined;
     const toolDenied = explicitlyDeniedPermissionTool(params, policy, recordedTool);
+    const findingAllow = toolDenied
+      ? undefined
+      : reviewerFindingPermissionOption(params, recorded?.toolArgs);
+    if (findingAllow) {
+      child.respond(requestId, { outcome: { outcome: "selected", optionId: findingAllow } });
+      return;
+    }
     const orkestratorAllow = toolDenied
       ? undefined
       : orkestratorToolPermissionOption(params, policy?.approvals, recorded?.toolArgs);

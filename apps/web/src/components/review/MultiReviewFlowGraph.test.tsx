@@ -1131,3 +1131,51 @@ describe("step transcript tails", () => {
     expect(loadStepTranscript.mock.calls.map((call) => call[1])).not.toContain("fix");
   });
 });
+
+describe("provisional findings", () => {
+  const reported = (title: string) => ({
+    id: title.replace(/\W/g, "").toLowerCase().padEnd(24, "0").slice(0, 24),
+    reportedAt: STARTED,
+    issue: { ...report.issues[0]!, title, file: "src/live.ts", line: 3 },
+  });
+
+  test("lists what live and failed reviewers reported, marked, beside confirmed findings", () => {
+    renderTab(
+      workflow({
+        reviewers: [
+          completed(0),
+          { ...running(1), provisionalFindings: [reported("Reported while running")] },
+          { ...failed(2), provisionalFindings: [reported("Reported before failing")] },
+        ],
+      }),
+    );
+    expect(screen.getByTestId("multi-review-findings-count").textContent).toBe(
+      "1 · from 1 reviewer · 2 provisional",
+    );
+    const rows = screen.getAllByRole("listitem");
+    const standing = (title: string) =>
+      within(rows.find((row) => row.textContent?.includes(title))!).queryByTestId(
+        "multi-review-finding-standing",
+      )?.textContent ?? null;
+    expect(standing("Shared finding")).toBeNull();
+    expect(standing("Reported while running")).toBe("provisional");
+    expect(standing("Reported before failing")).toBe("unconfirmed (reviewer failed)");
+
+    fireEvent.click(screen.getByRole("tab", { name: /^Reviewer 2 ·/ }));
+    expect(screen.getByTestId("multi-reviewer-provisional-reviewer-2").textContent).toBe(
+      "1 finding reported so far, provisional until the report is accepted",
+    );
+    fireEvent.click(screen.getByRole("tab", { name: /^Reviewer 3 ·/ }));
+    expect(screen.getByTestId("multi-reviewer-provisional-reviewer-3").textContent).toBe(
+      "1 finding reported before it failed, unconfirmed",
+    );
+  });
+
+  test("a backend without provisional findings shows confirmed reports only, as before", () => {
+    renderTab(workflow({ reviewers: [completed(0), running(1)] }));
+    expect(screen.getByTestId("multi-review-findings-count").textContent).toBe(
+      "1 · from 1 reviewer",
+    );
+    expect(screen.queryByTestId("multi-review-finding-standing") === null).toBe(true);
+  });
+});

@@ -16,6 +16,7 @@ import {
   openCodeWorkflowResultDenyPermissionRules,
   openCodeWorkflowResultPermissionRules,
   openCodeWorkflowResultToolId,
+  openCodeWorkflowResultTurnTools,
 } from "./opencode-provider-helpers.js";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
@@ -141,6 +142,8 @@ describe("OpenCode provider dispatch", () => {
       expect(actionFor(tail, openCodeWorkflowResultToolId("get_workflow_result_status"))).toBe(
         "allow",
       );
+      // A reviewer's turn may also report its findings as it goes.
+      expect(actionFor(tail, openCodeWorkflowResultToolId("report_finding"))).toBe("allow");
     } finally {
       await provider.dispose?.();
     }
@@ -1951,5 +1954,22 @@ describe("OpenCode provider dispatch", () => {
     } finally {
       await bare.dispose?.();
     }
+  });
+});
+
+describe("OpenCode workflow-result tool masks", () => {
+  test("only a reviewer's turn exposes report_finding, and ordinary turns hide it", () => {
+    const finding = openCodeWorkflowResultToolId("report_finding");
+    expect(openCodeWorkflowResultTurnTools("submit_review_report")[finding]).toBe(true);
+    expect(openCodeWorkflowResultTurnTools("submit_fix_result")[finding]).toBe(false);
+    expect(openCodeWorkflowResultTurnTools()[finding]).toBe(false);
+    const allowed = (tool: string) =>
+      openCodeWorkflowResultPermissionRules(tool).findLast((rule) => rule.permission === finding)
+        ?.action;
+    expect(allowed("submit_review_report")).toBe("allow");
+    expect(allowed("submit_consolidated_review")).toBe("deny");
+    expect(
+      openCodeWorkflowResultDenyPermissionRules().find((rule) => rule.permission === finding),
+    ).toEqual({ permission: finding, pattern: "*", action: "deny" });
   });
 });

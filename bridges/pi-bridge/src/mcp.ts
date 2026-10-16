@@ -9,6 +9,7 @@
  */
 import { COORDINATOR_CONTROL_TOOL_NAMES } from "@orkestrator/protocol/coordinator";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import { REPORT_FINDING_TOOL_NAME } from "@orkestrator/protocol/workflow-results";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join, resolve as resolvePath } from "node:path";
@@ -146,6 +147,19 @@ export function isOrkestratorMailTool(state: SessionState, toolName: string): bo
   return (
     runtimes.get(state)?.orkestratorToolNames.has(toolName) === true &&
     (AGENT_MAIL_TOOL_NAMES as readonly string[]).includes(toolName)
+  );
+}
+
+/**
+ * A Multi Review reviewer's `report_finding`. The backend lists it only on a
+ * live reviewer's own attempt capability, and it records a provisional finding
+ * there: it reads and writes nothing in the workspace. So a read-only review
+ * may call it under any approval policy, like a worker's mail.
+ */
+export function isOrkestratorReviewerFindingTool(state: SessionState, toolName: string): boolean {
+  return (
+    toolName === REPORT_FINDING_TOOL_NAME &&
+    runtimes.get(state)?.orkestratorToolNames.has(toolName) === true
   );
 }
 

@@ -113,6 +113,15 @@ function report(issues: ReviewIssue[]): StructuredReviewReport {
 
 const minutesAgo = (now: number, minutes: number) => new Date(now - minutes * 60_000).toISOString();
 
+/** A finding a reviewer reported through `report_finding` before its report. */
+function reported(issueValue: ReviewIssue, index: number, now: number) {
+  return {
+    id: index.toString(16).padStart(24, "a"),
+    reportedAt: minutesAgo(now, 1),
+    issue: issueValue,
+  };
+}
+
 export function multiReviewFlowWorkflow(
   phase: FixturePhase,
   reviewerCount: number,
@@ -163,6 +172,13 @@ export function multiReviewFlowWorkflow(
         startedAt,
         completedAt: minutesAgo(now, 2),
         tokenCount: 41_200,
+        provisionalFindings: [
+          reported(
+            issue("P1", "Fix tab id ignores a custom fix launch", "multi-review-service.ts", 2_471),
+            1,
+            now,
+          ),
+        ],
         error:
           "The reviewer session ended before it filed a report: the provider closed the stream after 3 retries (HTTP 529, overloaded)",
       };
@@ -194,6 +210,14 @@ export function multiReviewFlowWorkflow(
         dispatchState: "sent" as const,
         startedAt: minutesAgo(now, 2.8),
         tokenCount: 81_000,
+        provisionalFindings: [
+          reported(ISSUES[1]![0]!, 2, now),
+          reported(
+            issue("P2", "Zoom level label reads 99% after Fit", "MultiReviewFlowViewport.tsx", 88),
+            3,
+            now,
+          ),
+        ],
       };
     }
     return { ...base, status: "pending" as const };

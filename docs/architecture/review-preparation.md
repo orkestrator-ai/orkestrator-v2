@@ -164,6 +164,8 @@ independently of panel size, up to the 32-reviewer maximum:
 | Consolidation input | 640 KiB with every source ID kept; overflow fails before dispatch | `review-consolidation-evidence.ts` |
 | Reviewer-tab transcript snapshot | 500 messages and 2 MiB; unchanged polls carry no messages | `multi-review-reviewer-transcript.ts` |
 | Flow graph step-session tail (preparation, consolidation, Fix) | 100 messages and 256 KiB; unchanged polls carry no messages; polled only while the step is live and visible | `multi-review-step-transcript.ts` |
+| Provisional findings (`report_finding`) | 50 per reviewer, 16 KiB each, so together under one report's budget; staged in memory and written with the pass's observations | `review-provisional-findings.ts` |
+| Admission queue position | No write of its own: rides on the pass's safety commits and observational flush | `review-fanout-admission.ts` |
 
 Why these values:
 

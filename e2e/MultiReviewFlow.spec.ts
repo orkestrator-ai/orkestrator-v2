@@ -240,3 +240,16 @@ test("shows each queued reviewer's place in the admission queue", async ({ page 
   await expect(page.getByRole("tab", { name: /^Reviewer 8 ·/ })).toContainText("queued · #4 of 4");
   expect(overlapping(await nodeBoxes(page))).toEqual([]);
 });
+
+test("marks findings a running reviewer reported as provisional", async ({ page }) => {
+  await page.goto("/multi-review-flow?phase=reviewing&reviewers=4");
+  const count = page.getByTestId("multi-review-findings-count");
+  await expect(count).toContainText("provisional");
+  const row = page.getByRole("listitem").filter({ hasText: "Zoom level label reads 99%" });
+  await expect(row.getByTestId("multi-review-finding-standing")).toHaveText("provisional");
+  // A finding a completed report already has stays confirmed.
+  const confirmed = page
+    .getByRole("listitem")
+    .filter({ hasText: "Paused prepare step never clears validation stop flag" });
+  await expect(confirmed.getByTestId("multi-review-finding-standing")).toHaveCount(0);
+});

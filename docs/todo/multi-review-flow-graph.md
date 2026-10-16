@@ -1,14 +1,15 @@
 # Multi Review flow graph
 
-Checked against `main` at `a31e2c0a` (2026-10-15).
+Checked against `main` at `9906db30` (2026-10-16), plus the follow-ups that
+built zoom and pan, failed-node errors, step transcript tails, queue position
+and live findings.
 
 The Multi Review tab shows the workflow as a left-to-right flow graph: review
 package, then the reviewer panel, then consolidation, then Fix. An inspector
-sits below the graph. It shows the selected node's status and actions, a live
-transcript tail for reviewers, and the findings that completed reviewers have
-reported so far. The redesign only changed the layout: it reads data the backend
-already returns. The items below need data or state that the backend does not
-keep yet.
+sits below the graph. It shows the selected node's status and actions and a
+live transcript tail, and beside it the findings reviewers have reported so
+far. Every follow-up from the redesign is built. What is left is qualifying
+live findings on real providers and a few gaps found on the way.
 
 ## Current state
 
@@ -60,22 +61,73 @@ keep yet.
   There is deliberately no expected start time: nothing measures how long a
   provider takes to admit a reviewer.
 - **Findings so far.** `mergeReviewerFindings` lists the issues of completed
-  reviewers. An issue that several reviewers raised at the same file, line and
-  title is listed once. Partial reports from failed or stopped reviewers are not
-  included.
+  reviewers' accepted reports, plus what reviewers reported through the
+  `report_finding` MCP tool before a report was accepted
+  (`reviewer.provisionalFindings`; see "Provisional findings" in
+  [agent-engines.md](../architecture/agent-engines.md#provisional-findings-report_finding)).
+  An issue that several reviewers raised at the same file, line and title is
+  listed once, and a row an accepted report confirms is confirmed. Other rows
+  are marked "provisional" while their reviewer runs, or "unconfirmed (reviewer
+  failed)" / "(reviewer stopped)" once it ended without a report. The reviewer's
+  inspector says how many it reported. The accepted report replaces them,
+  consolidation never reads them, and they are removed once the workflow is
+  `interactive` or `completed`. Partial reports from failed or stopped
+  reviewers are still not included, and findings are never read out of a
+  transcript.
 
 ## Outstanding work
 
 ### Code
 
-1. **Findings from a reviewer that is still running.** A reviewer's report
-   arrives whole, when its result is accepted (`reviewer.report`), so the
-   findings column fills in one reviewer at a time. Live findings would need a
-   per-reviewer channel for partial findings. The backend would have to validate
-   it against the structured-review budgets, bound it, and drop it once the real
-   report lands. The renderer must never parse findings out of the provider
-   transcript; `toMultiReviewReviewerMessages` deliberately hides
-   schema-shaped text.
+1. **Read-only Grok and Pi reviewers may not be able to submit their report.**
+   Found while making `report_finding` callable; not changed, because it is
+   outside that work and needs a live check first. In a packaged review every
+   reviewer turn is read-only. The ACP bridge then denies every permission
+   request (`approvals: "deny"` short-circuits `orkestratorToolPermissionOption`,
+   and `onPermission` cancels the rest), and Grok asks before every MCP call;
+   the Pi bridge's read-only gate in `requestToolApproval` blocks every tool but
+   `read`, `grep`, `find`, `ls` and coordinator mail. Neither exempts the
+   attempt's own `validate_workflow_result`, `submit_review_report` or
+   `get_workflow_result_status`, so on the code alone those reviewers would
+   end on the missing-result reminder. `report_finding` is exempted in both. If
+   a live run confirms it, exempt the attempt's result tools the same way.
+2. **Pi: confirm the bridge-owned MCP extension loads in a read-only session.**
+   Read-only Pi sessions set `noExtensions` for project resources
+   (`projectResourceDiscoveryOptions`). The bridge registers its Orkestrator
+   tools through an inline `extensionFactories` entry, which should not be
+   affected, but no test covers it.
+
+### Qualification
+
+- **`report_finding` on every provider.** Run a packaged Multi Review with one
+  reviewer per provider (Claude, Codex, Cursor, Grok, OpenCode, Pi) and check
+  that each reviewer calls the tool, that "Findings so far" fills in while it
+  runs, that the accepted report replaces the provisional rows, and that a
+  reviewer stopped mid-run keeps its findings as unconfirmed. Repeat one
+  provider in a container environment, where the attempt server is reached at
+  `host.docker.internal`. Each bridge's auto-allow path has a unit test; none
+  has been run against a real model. Batch with
+  [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md).
+- **Zoom, pan and the error tooltip in the desktop app.** The browser suite
+  covers them in Chromium (`e2e/MultiReviewFlow.spec.ts`), including Ctrl +
+  wheel, but not a real trackpad pinch, or Safari's gesture events in the web
+  client.
+
+### Known limits (by design)
+
+- A finding staged by `report_finding` lives in memory until the next review
+  pass records it; one staged when the backend stops is lost. The report still
+  carries it.
+- A queue position is an observation, so the stored one can trail the
+  scheduler by one admission until the next commit.
+- No expected start time for queued reviewers: nothing measures how long a
+  provider takes to admit one.
+- The new reviewer fields (`admissionState`, `queuePosition`,
+  `provisionalFindings`) are additive, but the strict workflow validators of an
+  older backend or renderer reject a workflow that carries them. They exist
+  only while a review is running (admission fields while a reviewer is queued,
+  provisional findings until the report lands or the workflow completes), so a
+  downgrade or an old gateway tab is affected only for a workflow mid-review.
 
 ## Constraints and rationale
 
@@ -84,10 +136,14 @@ keep yet.
   state may come from the transcript tail.
 - Every new read needs explicit byte and count bounds, and must poll only for a
   visible, live node (AGENTS.md transport invariants 3 and 11).
+- Provisional findings are progress, never results: the renderer only shows
+  them, consolidation never reads them, and the accepted report wins. A tool a
+  read-only turn may call must touch nothing in the workspace; `report_finding`
+  writes only to its own attempt's record in the backend.
 
 ## Related
 
 - [multi-review-scale-and-cost.md](multi-review-scale-and-cost.md): admission,
-  reviewer transcripts and the deferred queue fields.
+  reviewer transcripts and the queue fields.
 - [multi-review-panel-value.md](multi-review-panel-value.md): consolidation and
   reviewer overlap, which the findings column makes visible.

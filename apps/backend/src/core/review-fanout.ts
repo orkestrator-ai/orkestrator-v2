@@ -28,6 +28,7 @@ import {
   reviewersSettled,
   usableReviewerReports,
   type ReviewerModelSelection,
+  type ReviewerProvisionalFinding,
   type ReviewerRecord,
   type ReviewWorktreeSnapshotRecord,
 } from "@orkestrator/protocol/review-fanout";
@@ -104,6 +105,10 @@ import {
   clearReviewerAdmission,
   projectReviewerAdmissionQueue,
 } from "./review-fanout-admission.js";
+import {
+  appendProvisionalFindings,
+  dropProvisionalFindings,
+} from "./review-provisional-findings.js";
 
 export const MAX_REVIEW_SCHEMA_REPAIR_ATTEMPTS = REVIEW_FANOUT_MAX_SCHEMA_REPAIR_ATTEMPTS;
 export const MAX_REVIEW_IDLE_RESULT_POLLS = REVIEW_FANOUT_MAX_IDLE_RESULT_POLLS;
@@ -686,6 +691,12 @@ export interface ReviewFanoutHost {
     schema: JsonSchema,
   ): Promise<void>;
   supportsToolResult?(selection: ReviewerModelSelection): boolean;
+  /**
+   * Findings this reviewer reported through `report_finding` since the last
+   * pass. A host that provides it offers the tool, and the reviewer's
+   * instruction mentions it.
+   */
+  takeProvisionalFindings?(reviewer: ReviewerRecord): ReviewerProvisionalFinding[];
   readResult?<T>(requestId: string): Promise<StructuredOutputResult<T> | null>;
   /** Bounded delivery state for one slot, projected into the saved record. */
   projectResult?(requestId: string): Promise<WorkflowResultSubmissionState | undefined>;
@@ -946,6 +957,13 @@ export class ReviewFanoutRunner {
         if (isReviewSnapshotError(error)) await this.abandonLiveReviewers(reviewers);
         throw error;
       }
+    }
+
+    // Findings reported since the last pass become observations of this one.
+    for (const { reviewer } of live) {
+      if (reviewer.status !== "running" || !reviewer.requestId) continue;
+      const reported = this.host.takeProvisionalFindings?.(reviewer) ?? [];
+      if (appendProvisionalFindings(reviewer, reported)) this.stageObservation();
     }
 
     let fatal: { error: unknown } | undefined;
@@ -1221,6 +1239,7 @@ export class ReviewFanoutRunner {
           reviewer.resultTransport === "tool-v1"
             ? `${prompt}\n\n${workflowResultInstruction("review-report", reviewer.requestId, {
                 capability: agentMcp?.workflowResultCapability,
+                provisionalFindings: host.takeProvisionalFindings !== undefined,
               })}`
             : prompt,
           {
@@ -1423,6 +1442,9 @@ export class ReviewFanoutRunner {
     reviewer.report = attributeReportFindings(parsed.data, reviewer);
     reviewer.status = "completed";
     reviewer.completedAt = nowIso();
+    // The accepted report is the reviewer's findings; the provisional ones it
+    // reported on the way were progress and are replaced, not merged.
+    dropProvisionalFindings(reviewer);
     delete reviewer.schemaRepairPrompt;
     delete reviewer.continuationPrompt;
     delete reviewer.idleResultPolls;

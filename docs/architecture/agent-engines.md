@@ -749,10 +749,11 @@ under so old records stay readable.
 
 **Tool mode (`tool-v1`).** The backend prepares a durable result slot, mints an
 attempt-scoped MCP capability, and attaches it to that one turn. The agent tool
-server publishes exactly two tools for that capability: one typed submission
-tool for the attempt's result kind, and `get_workflow_result_status`. No Kanban
-or mail tool is reachable through it, so a subagent cannot inherit anything
-broader. The turn carries no provider final-output schema, and the prompt states
+server publishes three tools for that capability: one typed submission tool for
+the attempt's result kind, `validate_workflow_result` and
+`get_workflow_result_status`. A live Multi Review reviewer's attempt also gets
+`report_finding` (see "Provisional findings" below). No Kanban or mail tool is
+reachable through it, so a subagent cannot inherit anything broader. The turn carries no provider final-output schema, and the prompt states
 that the tool instruction supersedes any earlier "final JSON only" guidance.
 
 **Legacy mode.** Review and pipeline attempts fall back to
@@ -802,6 +803,60 @@ seeing the rejection:
 
 The shared instruction and reminder text (`WORKFLOW_RESULT_MALFORMED_CALL_GUIDANCE`)
 names both directions of the brace fault and forbids shortening the report.
+
+### Provisional findings (`report_finding`)
+
+A Multi Review reviewer's report arrives whole, when its result is accepted.
+To let "Findings so far" fill in while reviewers work, a live reviewer's own
+attempt capability also carries `report_finding`: one finding per call, in the
+shape of one entry of the report's `issues`. The reviewer instruction
+(`workflowResultInstruction(..., { provisionalFindings: true })`) encourages,
+but does not require, reporting each finding as soon as the reviewer is
+confident in it, and says the submitted report must still list every one.
+
+- **Who may call it.** The tool is listed only on a `review-report` attempt the
+  backend is following as a running tool-mode reviewer of a review in
+  progress (`ProvisionalFindingInbox`, `review-provisional-findings.ts`, fed
+  from every Multi Review save and load). Each call must name the capability's
+  own result key, and the slot must still be `open`: a finished, superseded or
+  cancelled attempt is refused (`attempt_closed`), and so is any attempt the
+  inbox does not follow (`not_accepting`), such as a build-pipeline reviewer.
+  The OpenCode broker lists it for every broker session but checks the signed
+  one-attempt capability and the slot kind on every call, and only a reviewer's
+  turn unmasks it.
+- **Validation and bounds.** A finding must pass the structured-review issue
+  contract and its budgets (`STRUCTURED_REVIEW_MAX_*`), and stay within 16 KiB
+  encoded (`REVIEW_PROVISIONAL_FINDING_MAX_BYTES`). A reviewer keeps at most
+  50 (`REVIEW_PROVISIONAL_FINDINGS_MAX`); later calls are refused with
+  `limit_reached`, so the first ones are kept. Provider-authored provenance is
+  dropped. The id is a digest of the normalised finding, so a retry returns
+  the same receipt with `duplicate: true`.
+- **Storage.** A call is staged in memory and the workflow is woken; the next
+  review pass moves staged findings onto `reviewer.provisionalFindings` as an
+  observation, so they cost no write of their own and never wait for the
+  workflow's lock. A finding staged when the backend stops is lost, which is
+  acceptable for progress: the report still carries it.
+- **Lifetime.** The accepted report replaces them (`reviewer.report`). A
+  reviewer that fails or is stopped keeps them; the flow graph labels them
+  "unconfirmed (reviewer failed)" or "(reviewer stopped)". A restart or retry
+  drops them, and they are removed once the workflow reaches `interactive` or
+  `completed`. Consolidation reads accepted reports only
+  (`consolidationReports`), never provisional findings.
+
+How each provider lets a reviewer call it under its reviewer policy, including
+the read-only turns of a packaged review:
+
+| Provider | How |
+| --- | --- |
+| Claude | In `claudeWorkflowResultTools`: added to `allowedTools` and allowed by `canUseTool` before any policy decision; read-only turns already allow `mcp__orkestrator__*` |
+| Codex | The attempt-scoped `orkestrator` server runs with `default_tools_approval_mode = "approve"` whenever a workflow result tool is set |
+| Cursor | Read-only sessions host every tool the Orkestrator server lists in-process; other sessions never ask |
+| OpenCode | `openCodeWorkflowResultTurnTools` / `openCodeWorkflowResultPermissionRules` unmask and allow it for a `submit_review_report` turn only |
+| Grok (ACP) | `reviewerFindingPermissionOption` (`acp-session.ts`) answers its permission request with the allow option under every policy, including a read-only turn's `deny`, when it names the Orkestrator server (same identity rules as the mail matcher, including Grok's `use_tool` wrapper). An explicit `toolPolicy` deny still wins |
+| Pi | `isOrkestratorReviewerFindingTool` (`mcp.ts`) exempts it from the read-only gate and from ask/deny in `requestToolApproval` |
+
+None of these has been run against a real reviewer on its provider yet; see
+[multi-review-flow-graph.md](../todo/multi-review-flow-graph.md).
 
 ### Provider qualification
 

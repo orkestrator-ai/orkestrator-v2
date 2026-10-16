@@ -466,6 +466,26 @@ export function reviewerStatusLabel(
   }
 }
 
+/**
+ * What a reviewer has reported through `report_finding`, for its inspector.
+ * Null once its report is accepted, which replaces them.
+ */
+export function reviewerProvisionalSummary(
+  reviewer: MultiReviewWorkflow["reviewers"][number],
+): string | null {
+  const count = reviewer.provisionalFindings?.length ?? 0;
+  if (count === 0) return null;
+  const findings = `${count} ${count === 1 ? "finding" : "findings"}`;
+  if (reviewer.status === "running") {
+    return `${findings} reported so far, provisional until the report is accepted`;
+  }
+  if (reviewer.status === "failed") return `${findings} reported before it failed, unconfirmed`;
+  if (reviewer.status === "cancelled") {
+    return `${findings} reported before it was stopped, unconfirmed`;
+  }
+  return null;
+}
+
 export function findingCountLabel(count: number, singular: string): string {
   return `${count} ${count === 1 ? singular : `${singular}s`} found`;
 }

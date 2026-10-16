@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   WORKFLOW_RESULT_KINDS,
+  REPORT_FINDING_TOOL_NAME,
   WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
   workflowResultToolName,
 } from "@orkestrator/protocol/workflow-results";
@@ -223,6 +224,17 @@ describe("published MCP tool schemas are provider-portable", () => {
     design = new DesignService(dataDir, () => {}, createTestRenderer());
     workflowResults = new WorkflowResultService(dataDir);
     agentTools = new AgentToolsServer(storage, "127.0.0.1", workflowResults, design);
+    // A sink that takes every reviewer attempt, so `report_finding` is listed.
+    agentTools.setProvisionalFindingSink({
+      accepts: () => true,
+      report: async () => ({
+        ok: true,
+        findingId: "0".repeat(24),
+        duplicate: false,
+        provisionalCount: 1,
+        limit: 50,
+      }),
+    });
     await agentTools.start();
     // Registration never calls the host; only tools/list is exercised here.
     agentTools.setWebAnnotationToolHost({} as WebAnnotationToolHost);
@@ -295,6 +307,7 @@ describe("published MCP tool schemas are provider-portable", () => {
     expect(tools.map((tool) => tool.name)).toEqual(
       expect.arrayContaining([
         WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
+        REPORT_FINDING_TOOL_NAME,
         ...WORKFLOW_RESULT_KINDS.map(workflowResultToolName),
       ]),
     );
@@ -360,6 +373,10 @@ describe("published MCP tool schemas are provider-portable", () => {
       );
       const tools = await listTools(connection.url, connection.token);
       expect(tools.map((tool) => tool.name)).toContain(workflowResultToolName(kind));
+      // A reviewer's attempt also takes its provisional findings.
+      expect(tools.some((tool) => tool.name === REPORT_FINDING_TOOL_NAME)).toBe(
+        kind === "review-report",
+      );
       expectPortable(`orkestrator-workflow-result/${kind}`, tools);
     },
   );

@@ -28,7 +28,11 @@ import {
 } from "./MultiReviewReviewerTab";
 import { MultiReviewFlowStateIcon, type MultiReviewFlowNodeModel } from "./MultiReviewFlowGraph";
 import { reviewSeverityStyles } from "./StructuredReviewReportView";
-import type { MultiReviewFlowState, MultiReviewMergedFinding } from "./multi-review-flow";
+import {
+  provisionalFindingLabel,
+  type MultiReviewFlowState,
+  type MultiReviewMergedFinding,
+} from "./multi-review-flow";
 
 const PILL_CLASS: Record<MultiReviewFlowState, string> = {
   "not-started": "border-border text-muted-foreground",
@@ -501,12 +505,21 @@ export function StepTranscriptTail({
   );
 }
 
+const STANDING_TITLE = {
+  confirmed: "",
+  provisional: " · provisional",
+  failed: " · unconfirmed, reviewer failed",
+  stopped: " · unconfirmed, reviewer stopped",
+} as const;
+
 function ReviewerAvatar({ source }: { source: MultiReviewMergedFinding["sources"][number] }) {
   return (
     <span
-      title={`Reviewer ${source.index + 1} · ${source.agent} · ${source.model}`}
+      title={`Reviewer ${source.index + 1} · ${source.agent} · ${source.model}${STANDING_TITLE[source.standing]}`}
+      data-finding-standing={source.standing}
       className={cn(
         "-ml-1 grid size-[18px] place-items-center rounded-[5px] border-2 border-background bg-elevated font-mono text-[9.5px] font-bold first:ml-0",
+        source.standing !== "confirmed" && "border-dashed border-muted-foreground/60 opacity-75",
         PLATFORM_ICON_CLASS[source.agent],
       )}
     >
@@ -515,13 +528,29 @@ function ReviewerAvatar({ source }: { source: MultiReviewMergedFinding["sources"
   );
 }
 
-/** Issues the completed reviewers have reported, merged, with who raised each. */
+function findingCountSummary(
+  findings: readonly MultiReviewMergedFinding[],
+  reviewerCount: number,
+  provisionalCount: number,
+): string {
+  const confirmed = findings.length - provisionalCount;
+  const base = `${confirmed} · from ${reviewerCount} ${reviewerCount === 1 ? "reviewer" : "reviewers"}`;
+  return provisionalCount > 0 ? `${base} · ${provisionalCount} provisional` : base;
+}
+
+/**
+ * Issues the reviewers have reported, merged, with who raised each. Rows no
+ * accepted report confirms yet (reported through `report_finding`) are marked
+ * provisional, or unconfirmed once their reviewer ended without a report.
+ */
 export function MultiReviewFindingsPane({
   findings,
   reviewerCount,
+  provisionalCount = 0,
 }: {
   findings: MultiReviewMergedFinding[];
   reviewerCount: number;
+  provisionalCount?: number;
 }) {
   const headingId = useId();
   return (
@@ -531,46 +560,68 @@ export function MultiReviewFindingsPane({
           Findings so far
         </h2>
         <span className="text-xs text-muted-foreground" data-testid="multi-review-findings-count">
-          {findings.length} · from {reviewerCount} {reviewerCount === 1 ? "reviewer" : "reviewers"}
+          {findingCountSummary(findings, reviewerCount, provisionalCount)}
         </span>
       </div>
       {findings.length === 0 ? (
         <p className="text-xs text-muted-foreground">
           {reviewerCount === 0
-            ? "Findings appear here as each reviewer completes."
+            ? "Findings appear here as reviewers report them."
             : "The completed reviewers reported no issues."}
         </p>
       ) : (
         <ul className="max-h-96 min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          {findings.map((finding) => (
-            <li
-              key={finding.key}
-              className="flex items-start gap-2.5 border-t border-divider/70 py-2 first:border-t-0"
-            >
-              <span
-                className={cn(
-                  "mt-0.5 shrink-0 rounded-[5px] border px-1.5 text-[10.5px] leading-4",
-                  reviewSeverityStyles[finding.severity],
-                )}
+          {findings.map((finding) => {
+            const standing = provisionalFindingLabel(finding);
+            return (
+              <li
+                key={finding.key}
+                data-finding-provisional={finding.provisional ? "" : undefined}
+                className="flex items-start gap-2.5 border-t border-divider/70 py-2 first:border-t-0"
               >
-                {finding.severity}
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="text-[13px] font-medium break-words">{finding.title}</p>
-                <p className="truncate font-mono text-[11.5px] text-muted-foreground">
-                  {finding.line ? `${finding.file}:${finding.line}` : finding.file}
-                </p>
-              </div>
-              <span
-                className="mt-0.5 flex shrink-0"
-                aria-label={`Raised by ${finding.sources.map((source) => `Reviewer ${source.index + 1}`).join(", ")}`}
-              >
-                {finding.sources.map((source) => (
-                  <ReviewerAvatar key={source.reviewerId} source={source} />
-                ))}
-              </span>
-            </li>
-          ))}
+                <span
+                  className={cn(
+                    "mt-0.5 shrink-0 rounded-[5px] border px-1.5 text-[10.5px] leading-4",
+                    reviewSeverityStyles[finding.severity],
+                    finding.provisional && "border-dashed opacity-80",
+                  )}
+                >
+                  {finding.severity}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p
+                    className={cn(
+                      "text-[13px] font-medium break-words",
+                      finding.provisional && "text-foreground/80",
+                    )}
+                  >
+                    {finding.title}
+                  </p>
+                  <p className="flex min-w-0 items-baseline gap-2 font-mono text-[11.5px] text-muted-foreground">
+                    <span className="min-w-0 truncate">
+                      {finding.line ? `${finding.file}:${finding.line}` : finding.file}
+                    </span>
+                    {standing ? (
+                      <span
+                        data-testid="multi-review-finding-standing"
+                        className="shrink-0 rounded-[4px] border border-dashed border-muted-foreground/50 px-1 font-sans text-[10.5px] leading-4 text-muted-foreground"
+                      >
+                        {standing}
+                      </span>
+                    ) : null}
+                  </p>
+                </div>
+                <span
+                  className="mt-0.5 flex shrink-0"
+                  aria-label={`${finding.provisional ? "Reported provisionally" : "Raised"} by ${finding.sources.map((source) => `Reviewer ${source.index + 1}`).join(", ")}`}
+                >
+                  {finding.sources.map((source) => (
+                    <ReviewerAvatar key={source.reviewerId} source={source} />
+                  ))}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>

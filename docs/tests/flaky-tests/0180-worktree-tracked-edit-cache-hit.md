@@ -49,3 +49,13 @@ mise run test:logged -- --name worktree-isolated -- bun test --cwd apps/backend 
 ```
 
 No watcher implementation, assertion, timeout or skip was changed.
+
+## Recurrence on 2026-10-16
+
+`mise run test` on `multi-review-flow-graph-followups` (Multi Review flow
+graph follow-ups; no worktree-snapshot code changed) failed the same test in
+the workspace group, alongside cases 0248 and the deterministic
+`agent provider module boundaries` failure. Evidence is in
+`/tmp/orkestrator-test-run.zlamOL/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+The unchanged owning file passed alone (`bun test src/core/worktree-snapshots-git.test.ts`
+from `apps/backend`: 4 pass, 0 fail). No assertion, timeout or skip was changed.

@@ -325,6 +325,68 @@ describe("observation checkpoints", () => {
   });
 });
 
+describe("provisional findings", () => {
+  const provisional = {
+    id: "0123456789abcdef01234567",
+    reportedAt: "2026-10-16T00:01:00.000Z",
+    issue: {
+      severity: "P1" as const,
+      confidence: 80,
+      category: "correctness" as const,
+      title: "Clock resets on restart",
+      file: "src/a.ts",
+      line: 3,
+      symbol: "",
+      description: "Restart clears the runtime.",
+      evidence: "Seen in restartStep",
+      suggestion: "Keep it",
+      verification: "Restart a step",
+    },
+  };
+
+  test("a pass records what the reviewer reported, and the accepted report replaces it", async () => {
+    const reviewers = [sentReviewer(0)];
+    const h = harness(reviewers);
+    const staged = [provisional, provisional];
+    const asked: string[] = [];
+    h.host.takeProvisionalFindings = (reviewer) => {
+      asked.push(reviewer.id);
+      return staged.splice(0);
+    };
+
+    await h.runner().advanceReviewers(reviewers);
+    expect(asked).toEqual(["reviewer-1"]);
+    expect(reviewers[0]!.provisionalFindings).toEqual([provisional]);
+    // One observational write carries it, as it does every other observation.
+    expect(h.saves).toHaveLength(1);
+    expect(h.saves[0]![0]!.provisionalFindings).toEqual([provisional]);
+
+    h.providers.claude!.statusValue = "idle";
+    await h.runner().advanceReviewers(reviewers);
+    expect(reviewers[0]).toMatchObject({ status: "completed" });
+    expect(reviewers[0]!.report?.issues).toEqual([]);
+    expect(reviewers[0]).not.toHaveProperty("provisionalFindings");
+    expect(h.saves.at(-1)![0]).not.toHaveProperty("provisionalFindings");
+  });
+
+  test("a reviewer that fails keeps what it reported, unconfirmed", async () => {
+    const reviewers = [sentReviewer(0)];
+    const h = harness(reviewers);
+    h.host.takeProvisionalFindings = () => [provisional];
+    h.providers.claude!.messagesError = null;
+    h.providers.claude!.statusValue = "running";
+    await h.runner().advanceReviewers(reviewers);
+    reviewers[0]!.status = "failed";
+    reviewers[0]!.error = "Session ended";
+    // A settled reviewer is not asked again, and keeps its findings.
+    h.host.takeProvisionalFindings = () => {
+      throw new Error("a settled reviewer is never asked");
+    };
+    await h.runner().advanceReviewers(reviewers);
+    expect(reviewers[0]!.provisionalFindings).toEqual([provisional]);
+  });
+});
+
 describe("bounded concurrent admission", () => {
   test("session setup overlaps up to the admission cap, in configured order", async () => {
     const reviewers = Array.from({ length: 6 }, (_, index) => pendingReviewer(index));

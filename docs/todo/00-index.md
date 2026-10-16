@@ -667,7 +667,7 @@ it reaches. Some rules of thumb:
 - [ ] Add optional, non-exclusive review lenses as a shared-protocol enum ([multi-review-panel-value.md](multi-review-panel-value.md), deferred)
 - [ ] Add opt-in adaptive stopping with a minimum panel and a measured novelty rule ([multi-review-panel-value.md](multi-review-panel-value.md), deferred)
 - [ ] Revisit the default two-reviewer Multi Review panel ([multi-review-panel-value.md](multi-review-panel-value.md), deferred)
-- [ ] Show findings from a Multi Review reviewer that is still running, through a bounded partial-findings channel ([multi-review-flow-graph.md](multi-review-flow-graph.md))
+- [x] Show findings from a Multi Review reviewer that is still running, through a bounded partial-findings channel ([multi-review-flow-graph.md](multi-review-flow-graph.md))
 - [x] Show queue position for queued Multi Review reviewers (position only; no expected start) ([multi-review-flow-graph.md](multi-review-flow-graph.md))
 - [x] Add a bounded transcript tail for the preparation, consolidation and Fix sessions in the flow graph inspector ([multi-review-flow-graph.md](multi-review-flow-graph.md))
 - [x] Add flow graph zoom controls and keep zoom and pan between visits ([multi-review-flow-graph.md](multi-review-flow-graph.md))

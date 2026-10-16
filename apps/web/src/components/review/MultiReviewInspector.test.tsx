@@ -439,9 +439,16 @@ describe("MultiReviewFindingsPane", () => {
             file: "src/tab.tsx",
             line: 312,
             sources: [
-              { reviewerId: "r1", index: 0, agent: "claude", model: "opus" },
-              { reviewerId: "r2", index: 1, agent: "codex", model: "gpt-5.6" },
+              { reviewerId: "r1", index: 0, agent: "claude", model: "opus", standing: "confirmed" },
+              {
+                reviewerId: "r2",
+                index: 1,
+                agent: "codex",
+                model: "gpt-5.6",
+                standing: "confirmed",
+              },
             ],
+            provisional: false,
           },
           {
             key: "b",
@@ -449,7 +456,16 @@ describe("MultiReviewFindingsPane", () => {
             title: "Copy mismatch",
             file: "src/footer.tsx",
             line: null,
-            sources: [{ reviewerId: "r2", index: 1, agent: "codex", model: "gpt-5.6" }],
+            sources: [
+              {
+                reviewerId: "r2",
+                index: 1,
+                agent: "codex",
+                model: "gpt-5.6",
+                standing: "confirmed",
+              },
+            ],
+            provisional: false,
           },
         ]}
       />,
@@ -461,7 +477,9 @@ describe("MultiReviewFindingsPane", () => {
     );
     const [first, second] = screen.getAllByRole("listitem");
     expect(within(first!).getByText("P0").className).toContain(reviewSeverityStyles.P0);
-    expect(within(first!).getByText("src/tab.tsx:312").className).toContain("font-mono");
+    expect(within(first!).getByText("src/tab.tsx:312").closest("p")!.className).toContain(
+      "font-mono",
+    );
     expect(within(first!).getByLabelText("Raised by Reviewer 1, Reviewer 2")).toBeTruthy();
     expect(within(first!).getByTitle("Reviewer 1 · claude · opus").className).toContain(
       "text-orange-400",
@@ -469,9 +487,60 @@ describe("MultiReviewFindingsPane", () => {
     expect(within(second!).getByText("src/footer.tsx")).toBeTruthy();
   });
 
+  test("marks rows no accepted report confirms yet", () => {
+    render(
+      <MultiReviewFindingsPane
+        reviewerCount={1}
+        provisionalCount={2}
+        findings={[
+          {
+            key: "live",
+            severity: "P1",
+            title: "Reported while running",
+            file: "src/live.ts",
+            line: 4,
+            sources: [
+              {
+                reviewerId: "r2",
+                index: 1,
+                agent: "codex",
+                model: "gpt-5.6",
+                standing: "provisional",
+              },
+            ],
+            provisional: true,
+          },
+          {
+            key: "failed",
+            severity: "P2",
+            title: "Reported before a failure",
+            file: "src/failed.ts",
+            line: null,
+            sources: [
+              { reviewerId: "r3", index: 2, agent: "claude", model: "opus", standing: "failed" },
+            ],
+            provisional: true,
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByTestId("multi-review-findings-count").textContent).toBe(
+      "0 · from 1 reviewer · 2 provisional",
+    );
+    const [live, failed] = screen.getAllByRole("listitem");
+    expect(within(live!).getByTestId("multi-review-finding-standing").textContent).toBe(
+      "provisional",
+    );
+    expect(within(live!).getByLabelText("Reported provisionally by Reviewer 2")).toBeTruthy();
+    expect(within(live!).getByTitle("Reviewer 2 · codex · gpt-5.6 · provisional")).toBeTruthy();
+    expect(within(failed!).getByTestId("multi-review-finding-standing").textContent).toBe(
+      "unconfirmed (reviewer failed)",
+    );
+  });
+
   test("explains an empty list", () => {
     const view = render(<MultiReviewFindingsPane findings={[]} reviewerCount={0} />);
-    expect(screen.getByText("Findings appear here as each reviewer completes.")).toBeTruthy();
+    expect(screen.getByText("Findings appear here as reviewers report them.")).toBeTruthy();
     view.rerender(<MultiReviewFindingsPane findings={[]} reviewerCount={1} />);
     expect(screen.getByTestId("multi-review-findings-count").textContent).toBe(
       "0 · from 1 reviewer",

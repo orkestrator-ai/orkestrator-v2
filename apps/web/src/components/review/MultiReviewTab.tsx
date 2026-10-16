@@ -72,6 +72,7 @@ import {
   reviewerColumnLabel,
   reviewerProgressSummary,
   reviewerPendingLabel,
+  reviewerProvisionalSummary,
   reviewerStatusLabel,
   reviewerStatusNote,
   reviewerStatusWord,
@@ -1084,6 +1085,7 @@ function MultiReviewOverviewTab({
     const findings = reviewer.report
       ? `${findingCountLabel(reviewer.report.issues.length, "issue")}, ${findingCountLabel(reviewer.report.testCoverageGaps.length, "coverage gap")}`
       : undefined;
+    const provisional = reviewerProvisionalSummary(reviewer);
     return {
       node: {
         id: `reviewer:${reviewer.id}`,
@@ -1227,6 +1229,14 @@ function MultiReviewOverviewTab({
             loadTranscript={loadReviewerTranscript}
           />
           {findings ? <p className="text-xs text-muted-foreground">{findings}</p> : null}
+          {provisional ? (
+            <p
+              className="text-xs text-muted-foreground"
+              data-testid={`multi-reviewer-provisional-${reviewer.id}`}
+            >
+              {provisional}
+            </p>
+          ) : null}
         </div>
       ),
       activityAt: latestActivityAt(reviewer),
@@ -1254,7 +1264,7 @@ function MultiReviewOverviewTab({
     consolidation: consolidationView.node.state,
     fix: fixView.node.state,
   });
-  const { findings, reviewerCount } = mergeReviewerFindings(workflow.reviewers);
+  const { findings, reviewerCount, provisionalCount } = mergeReviewerFindings(workflow.reviewers);
   const elapsedSeconds = multiReviewElapsedSeconds(
     workflow,
     busy || views.some((view) => view.node.state === "running"),
@@ -1437,7 +1447,11 @@ function MultiReviewOverviewTab({
               {selected.body}
             </section>
             <div className="min-w-0 border-t border-divider px-4 py-4 sm:px-6 @min-[900px]:border-t-0 @min-[900px]:border-l">
-              <MultiReviewFindingsPane findings={findings} reviewerCount={reviewerCount} />
+              <MultiReviewFindingsPane
+                findings={findings}
+                reviewerCount={reviewerCount}
+                provisionalCount={provisionalCount}
+              />
             </div>
           </div>
           {workflow.consolidatedReport || workflow.fixResult ? (

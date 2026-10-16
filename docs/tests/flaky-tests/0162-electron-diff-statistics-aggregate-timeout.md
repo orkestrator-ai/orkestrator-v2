@@ -111,3 +111,8 @@ hypothesis; no timeout, assertion or skip was changed.
 - **Disposition:** aggregate-only deadline failures recorded without changing
   assertions, deadlines or skips. Host contention is a hypothesis, not a proven
   cause.
+
+Recurred on 2026-10-16 at 5059.21 ms (`enables git's scan caches on a newly
+created worktree`) in `mise run test` for the coordinator launch-defaults
+change (no diff code touched). The unchanged case passed alone. Evidence:
+`/tmp/orkestrator-test-run.k2ySO0/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.

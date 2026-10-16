@@ -259,7 +259,62 @@ describe("Orkestrator control MCP server", () => {
       )?.inputSchema?.required ?? [];
     for (const field of ["reviewers", "reviewModel", "fixModel"])
       expect(required("start_multi_review")).not.toContain(field);
-    expect(required("start_build_pipeline")).not.toContain("agentType");
+    // Build steps and reviewers are overridable, but the defaults are the stated norm.
+    for (const field of ["agentType", "steps", "reviewers", "reviewPreparation"])
+      expect(required("start_build_pipeline")).not.toContain(field);
+    const buildTool = definitions.find((tool) => tool.name === "start_build_pipeline") as
+      | {
+          description?: string;
+          inputSchema?: { properties?: Record<string, { description?: string }> };
+        }
+      | undefined;
+    expect(buildTool?.description).toContain(
+      "Override one only when the user has asked for a specific agent, model, effort or reviewer set",
+    );
+    expect(buildTool?.inputSchema?.properties?.steps?.description).toContain(
+      "omitted steps keep theirs",
+    );
+    overrides.set("start_coordinator_build_pipeline", () => ({
+      id: "pipeline-1",
+      projectId: "project-1",
+      environmentId: "env-1",
+      phase: "building",
+      agentType: "claude",
+      steps: {
+        build: { agent: "claude" },
+        review: { agent: "codex", model: "gpt-5.6" },
+        address: { agent: "codex" },
+      },
+      reviewers: [{ agent: "codex", model: "gpt-5.6" }],
+    }));
+    const build = await rpc(credential.url, credential.token, "tools/call", {
+      name: "start_build_pipeline",
+      arguments: {
+        requestId: "build-override",
+        taskId: "task-1",
+        baseBranch: "main",
+        baseCommit: "a".repeat(40),
+        taskTitle: "Task",
+        taskSnapshot: { title: "Task", description: "", acceptanceCriteria: "" },
+        steps: { build: { agent: "claude" }, review: { agent: "codex", model: "gpt-5.6" } },
+      },
+    });
+    expect(build.body.result?.isError).not.toBe(true);
+    expect(
+      invocations.findLast((entry) => entry.command === "start_coordinator_build_pipeline")?.args
+        .input,
+    ).toMatchObject({
+      steps: { build: { agent: "claude" }, review: { agent: "codex", model: "gpt-5.6" } },
+    });
+    expect(build.body.result?.structuredContent?.selection).toMatchObject({
+      agentType: "claude",
+      source: {
+        agentType: "requested",
+        steps: { build: "requested", review: "requested", address: "default" },
+        reviewers: "default",
+        reviewPreparation: "default",
+      },
+    });
     expect(definitions.find((tool) => tool.name === "start_multi_review")?.description).toContain(
       "does NOT create/select a root tab",
     );

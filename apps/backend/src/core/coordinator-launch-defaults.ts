@@ -209,9 +209,12 @@ export function buildPipelineInputWithDefaults(
       index === 0 && steps.review ? steps.review : reviewer,
     );
   const reviewPreparation = input.reviewPreparation ?? configured.reviewPreparation;
+  // A named build step decides the pipeline agent, as it does in the launcher.
+  const buildStep = explicitSteps.build as { agent?: unknown } | undefined;
   return {
     ...input,
     agentType:
+      buildStep?.agent ??
       input.agentType ??
       defaultBuildPipelineAgent(tiers, enabled ?? ["claude", "codex", "opencode"]),
     steps,

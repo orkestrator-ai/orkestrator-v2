@@ -15,3 +15,7 @@ Observed: 2026-10-14
 - Isolated rerun: `mise run test:logged -- --name fake-codex-isolated -- bun test ./bridges/codex-bridge/src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` passed unchanged in 0.2 seconds.
 
 Hypothesis: subprocess scheduling or startup delay under concurrent host load exceeded the fixed deadline. The test source was neither changed nor skipped.
+
+Recurred on 2026-10-16 at 5066.71 ms in `mise run test` for the coordinator
+launch-defaults change (no bridge code touched). The unchanged owning file
+passed alone (2 pass, 0 fail). Evidence: `/tmp/orkestrator-test-run.k2ySO0/bridges.log.gz`.

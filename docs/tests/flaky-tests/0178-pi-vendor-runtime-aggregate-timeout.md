@@ -161,3 +161,7 @@ passed the unchanged owning file (four tests, exit 0) in 7.8 seconds. These
 credential checks do not change Pi staging. Host contention remains an
 unconfirmed hypothesis; no timeout, assertion or skip was changed in the
 vendoring tests.
+
+Recurred on 2026-10-16 at 30000.02 ms in `mise run test` for the coordinator
+launch-defaults change (no Pi bridge code touched). The unchanged owning file
+passed alone (4 pass, 0 fail). Evidence: `/tmp/orkestrator-test-run.k2ySO0/root-and-agent-support-tests.log.gz`.

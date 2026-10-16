@@ -330,6 +330,47 @@ function launchDefaultsSummary(
   };
 }
 
+/**
+ * One build step's harness and model. Unlike a Multi Review row the model is
+ * optional: naming only an agent runs that agent's own saved model.
+ */
+const buildStepSchema = z
+  .object({
+    agent: z.enum(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
+    model: z.string().trim().min(1).max(500).optional(),
+    reasoningEffort: z.string().trim().min(1).max(100).optional(),
+    fastMode: z.boolean().optional(),
+  })
+  .strict();
+
+/** What a started build runs, and which choices the caller made. */
+function buildPipelineSelection(
+  record: JsonRecord,
+  input: {
+    agentType?: unknown;
+    steps?: Record<string, unknown>;
+    reviewers?: unknown;
+    reviewPreparation?: unknown;
+  },
+): JsonRecord {
+  const source = (requested: boolean) => (requested ? "requested" : "default");
+  const steps = isRecord(record.steps) ? record.steps : {};
+  return {
+    agentType: record.agentType ?? null,
+    steps,
+    reviewers: Array.isArray(record.reviewers) ? record.reviewers : [],
+    reviewPreparation: record.reviewPreparation ?? null,
+    source: {
+      agentType: source(input.agentType !== undefined || input.steps?.build !== undefined),
+      steps: Object.fromEntries(
+        Object.keys(steps).map((key) => [key, source(input.steps?.[key] !== undefined)]),
+      ),
+      reviewers: source(input.reviewers !== undefined),
+      reviewPreparation: source(input.reviewPreparation !== undefined),
+    },
+  };
+}
+
 const agentSelectionSchema = z.object({
   agent: z.enum(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
   model: z.string().trim().min(1).max(500),
@@ -1328,7 +1369,7 @@ async function createControlMcp(
       {
         title: "Start a structured build pipeline",
         description:
-          "Start Orkestrator's durable build/review/verify/PR workflow in a disposable worker environment. It runs the Build button's saved defaults: the same build agent, Multi Review reviewers, preparation/consolidation, fix, verify, PR and conflict-resolution models. Omit agentType to use the saved build agent; set it only when the user asks for a specific agent.",
+          "Start Orkestrator's durable build/review/verify/PR workflow in a disposable worker environment. Omit agentType, steps, reviewers and reviewPreparation to run the Build button's saved defaults: the same build agent, Multi Review reviewers, preparation/consolidation, fix, verify, PR and conflict-resolution models. Override one only when the user has asked for a specific agent, model, effort or reviewer set; any field you leave out keeps its saved default.",
         inputSchema: z.object({
           requestId: z.string().trim().min(1).max(256),
           taskId: z.string().trim().min(1).max(200),
@@ -1340,6 +1381,33 @@ async function createControlMcp(
             .optional()
             .describe(
               "Optional. Omit to use the user's saved build agent. Set only when the user asks for a specific agent.",
+            ),
+          steps: z
+            .object({
+              build: buildStepSchema.optional(),
+              review: buildStepSchema.optional(),
+              address: buildStepSchema.optional(),
+              verify: buildStepSchema.optional(),
+              pr: buildStepSchema.optional(),
+              "resolve-conflicts": buildStepSchema.optional(),
+            })
+            .strict()
+            .optional()
+            .describe(
+              "Optional per-step overrides. Each step you name replaces only that step's saved default; omitted steps keep theirs. Set only when the user asks for a specific agent, model or effort for a step.",
+            ),
+          reviewers: z
+            .array(buildStepSchema)
+            .min(1)
+            .max(32)
+            .optional()
+            .describe(
+              "Optional. Replaces the saved Multi Review reviewer rows for the review step. Omit to use them. Set only when the user asks for specific reviewers.",
+            ),
+          reviewPreparation: buildStepSchema
+            .optional()
+            .describe(
+              "Optional. Replaces the saved preparation/consolidation model for a multi-reviewer review step. Omit to use it. Set only when the user asks for one.",
             ),
           taskTitle: z.string().trim().min(1).max(500),
           taskSnapshot: z.object({
@@ -1381,7 +1449,10 @@ async function createControlMcp(
         });
         const record = normalizedWorkflow(workflow);
         if (!record) throw new Error("Build pipeline returned no result");
-        return toolResult({ workflow: workflowSummary(record) });
+        return toolResult({
+          workflow: workflowSummary(record),
+          selection: buildPipelineSelection(record, input),
+        });
       },
     );
 

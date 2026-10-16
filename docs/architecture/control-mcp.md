@@ -74,6 +74,8 @@ user asks for a specific choice. `get_launch_options` returns those defaults in
 `defaults` and marks each agent's default model with `isDefault: true`.
 `launch_environment` and `launch_job` report the resolved
 `selection: { agent, model, reasoning, source: "default" | "requested" }`.
+`start_build_pipeline` accepts optional `steps`, `reviewers` and
+`reviewPreparation` overrides and reports what it started the same way.
 [coordinator.md](coordinator.md#launch-defaults) lists what each omitted field
 resolves to.
 `launch_environment` sends a fingerprint of its creation intent with its

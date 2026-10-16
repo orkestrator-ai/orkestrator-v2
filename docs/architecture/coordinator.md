@@ -409,7 +409,19 @@ What an omitted choice resolves to:
 | `launch_environment`, `launch_job` | `modelId`, `reasoningId`, `fastMode` | The platform column across environment → repository → app settings, else the agent's own default (`defaultReasoningId` for effort) |
 | `launch_multi_review`, `start_multi_review` | `reviewers`, `reviewModel`, `fixModel` | The Multi Review button's rows: Review, Review 2, saved extra reviewers and reviewer count; Review preparation and Fix review issues, each falling back to Review |
 | `launch_multi_review`, `start_multi_review` | auto-fix and auto-PR (not exposed) | The saved Multi Review settings |
-| `start_build_pipeline` | `agentType` and every step | `buildPipelineConfiguredDefaults` (`packages/protocol/src/build-pipeline-defaults.ts`), the resolver the Build button uses |
+| `start_build_pipeline` | `agentType`, `steps`, `reviewers`, `reviewPreparation` | `buildPipelineConfiguredDefaults` (`packages/protocol/src/build-pipeline-defaults.ts`), the resolver the Build button uses |
+
+Every one of these can be overridden. A coordinator is told to override only
+when the user has asked for a specific model, agent, effort or reviewer set.
+Overrides layer the way the launchers do. For `start_build_pipeline`:
+
+- A named step replaces only that step, and a step that names only an agent runs
+  that agent's saved model.
+- `steps.build.agent` decides the pipeline agent.
+- Explicit `reviewers` replace the saved rows; otherwise an explicit
+  `steps.review` becomes Reviewer 1.
+
+Each Multi Review row field is replaced independently.
 
 Multi Review rows resolve in `apps/backend/src/core/coordinator-launch-defaults.ts`
 over the worker's model catalogue, mirroring the launch dialog: a stale saved
@@ -423,7 +435,9 @@ Every launch reports what will run. `launch_environment` and `launch_job` return
 `selection: { agent, model, reasoning, source }`, where `source` is `requested`
 if the call set `modelId` or `reasoningId` and `default` otherwise. `model` is
 null when no tier pins one and the agent picks its own. The Multi Review result
-reports its rows the same way. The environment and tab UI do not show a marker
+reports its rows the same way. `start_build_pipeline` reports the pipeline's
+`agentType`, `steps`, `reviewers` and `reviewPreparation`, with a per-step and
+per-field `source`. The environment and tab UI do not show a marker
 for overrides yet; that is a tracked follow-up.
 
 ## Complete application actions

@@ -477,6 +477,46 @@ describe("coordinator command registry", () => {
       }),
     );
 
+    // An explicit step replaces only that step; explicit reviewers replace the
+    // saved rows; the rest keeps its defaults.
+    await commands.get("start_coordinator_build_pipeline")!(
+      {
+        scope,
+        requestId: "build-overrides",
+        input: {
+          taskId: "task-2",
+          projectId: project.id,
+          taskTitle: "Task",
+          taskSnapshot: {
+            title: "Task",
+            description: "",
+            acceptanceCriteria: "",
+            comments: [],
+            images: [],
+          },
+          environmentType: "local",
+          delegationBaseBranch: "main",
+          delegationBaseCommit: head,
+          steps: { build: { agent: "claude" }, verify: { agent: "claude", model: "sonnet" } },
+          reviewers: [{ agent: "codex", model: "gpt-5.6" }],
+        },
+      },
+      context,
+    );
+    expect(startBuild).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        agentType: "claude",
+        reviewers: [{ agent: "codex", model: "gpt-5.6" }],
+        reviewPreparation: opus,
+        steps: expect.objectContaining({
+          build: { agent: "claude" },
+          review: opus,
+          address: fix,
+          verify: { agent: "claude", model: "sonnet" },
+        }),
+      }),
+    );
+
     const environment = createEnvironment(project.id, { name: "worker", environmentType: "local" });
     environment.id = "worker-defaults";
     await storage.addEnvironment(environment);

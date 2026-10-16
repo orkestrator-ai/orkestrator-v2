@@ -311,7 +311,7 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
  * user's configured default. Kept short: it is injected on every turn.
  */
 export const COORDINATOR_LAUNCH_DEFAULTS_RULE =
-  "Defaults: omit modelId, reasoningId, Multi Review model rows and the build agentType so environments, jobs, builds and Multi Reviews run the user's saved defaults. Set one only when the user asks for a specific model, agent or effort, or agrees to one the task needs.";
+  "Defaults: omit modelId, reasoningId, Multi Review model rows and build agentType, steps and reviewers so environments, jobs, builds and Multi Reviews run the user's saved defaults. Override one only when the user asks for a specific model, agent, effort or reviewers, or agrees to one the task needs.";
 
 /** The mail-store hold reason that keeps worker progress from waking anyone. */
 export const COORDINATOR_DELEGATION_HOLD_REASON = "delegation-running";

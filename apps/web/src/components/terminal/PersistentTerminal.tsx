@@ -43,6 +43,7 @@ import {
 } from "@/lib/terminal-utils";
 import {
   forceTerminalVisibilityRedraw,
+  hasLayoutBox,
   shouldTriggerEnvironmentVisibilityRedraw,
 } from "./persistent-terminal-redraw";
 import {
@@ -91,16 +92,12 @@ const SESSION_SNAPSHOT_RETRY_MAX_MS = 5000;
 const terminalInputDisposables = new WeakMap<object, { dispose: () => void }>();
 
 /**
- * Fits the terminal to its pane, unless the pane is not laid out.
- *
- * Split panes stay mounted below the mobile breakpoint, with every pane but
- * the visible one under `display: none`. There the fit addon reads the
- * container's computed `100%` width as 100px and would shrink the terminal,
- * and the PTY with it, to about ten columns. The pane's resize observer fits
- * it again once it is shown. Returns whether it fitted.
+ * Fits the terminal to its pane, unless the pane is not laid out (see
+ * `hasLayoutBox`); its resize observer fits it once it is. Returns whether it
+ * fitted.
  */
 function fitToLaidOutPane(fitAddon: { fit: () => void }, wrapper: HTMLElement | null): boolean {
-  if (!wrapper || wrapper.getClientRects().length === 0) return false;
+  if (!hasLayoutBox(wrapper)) return false;
   fitAddon.fit();
   return true;
 }
@@ -1693,6 +1690,7 @@ export function PersistentTerminal({
       terminal,
       fitAddon,
       resize: publishTerminalGeometry,
+      canFit: () => hasLayoutBox(terminalRef.current),
       isCancelled: () => cancelled,
     }).then((cleanup) => {
       redrawCleanup = cleanup;

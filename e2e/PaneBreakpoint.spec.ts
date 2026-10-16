@@ -149,8 +149,7 @@ for (const mode of ["moveBefore", "appendChild fallback"] as const) {
     );
     if (other === DESKTOP) await expectTerminalPaneKept();
 
-    // And back. The phone shows one pane at a time, so the shell pane is checked
-    // last: switching panes in the switcher resets a transcript on its own.
+    // And back. The phone shows one pane at a time, so the shell pane is checked last.
     await page.setViewportSize(start);
     await expect(view.composer).toBeFocused();
     await page.keyboard.type("!");
@@ -159,3 +158,54 @@ for (const mode of ["moveBefore", "appendChild fallback"] as const) {
     await expectTerminalPaneKept();
   });
 }
+
+test("switching panes on a phone keeps each pane's scroll position and the terminal's size", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "the pane switcher is phone-only");
+  await page.goto("/pane-breakpoint");
+  const transcript = page.locator('[data-pane-host="agent-pane"]').getByTestId("virtuoso-scroller");
+  const terminalRows = page.locator('[data-pane-host="terminal-pane"] .xterm-rows');
+  const terminalState = async () => (await page.evaluate(() => window.breakpointTerminalState!()))!;
+  const selectPane = (name: RegExp) => page.getByRole("tab", { name }).click();
+
+  // The shell pane starts hidden behind the Codex pane, yet its terminal is
+  // already fitted to the pane: hidden panes stay laid out at full size.
+  await expect(page.locator('[data-pane-host="terminal-pane"] .xterm')).toHaveCount(1);
+  // Fitted to the phone-width pane, not left at xterm's default 80 columns.
+  await expect.poll(async () => (await terminalState()).cols).toBeLessThan(80);
+  const hiddenSize = await terminalState();
+  expect(hiddenSize.cols).toBeGreaterThan(30);
+  await page.evaluate(
+    (count) =>
+      window.writeBreakpointTerminal!(
+        Array.from({ length: count }, (_, index) => `Breakpoint row ${index}\r\n`).join(""),
+      ),
+    TERMINAL_ROWS,
+  );
+  await page.evaluate((line) => window.scrollBreakpointTerminal!(line), TERMINAL_TOP_LINE);
+  const transcriptTop = await scrollTranscriptUp(page, transcript);
+
+  for (let round = 0; round < 2; round += 1) {
+    await selectPane(/Shell/);
+    await expect(page.getByRole("tab", { name: /Shell/ })).toHaveAttribute("aria-selected", "true");
+    await expect(async () => {
+      const shown = await terminalState();
+      expect([shown.cols, shown.rows]).toEqual([hiddenSize.cols, hiddenSize.rows]);
+      expect(shown.viewportY).toBe(TERMINAL_TOP_LINE);
+      expect(await terminalRows.locator(":scope > div").first().textContent()).toBe(
+        `Breakpoint row ${TERMINAL_TOP_LINE}`,
+      );
+    }).toPass();
+
+    await selectPane(/Codex/);
+    await expect.poll(() => firstVisibleMessage(transcript)).toBe(transcriptTop);
+    // Hidden again, the terminal keeps the size it has on screen.
+    const hidden = await terminalState();
+    expect([hidden.cols, hidden.rows, hidden.viewportY]).toEqual([
+      hiddenSize.cols,
+      hiddenSize.rows,
+      TERMINAL_TOP_LINE,
+    ]);
+  }
+});

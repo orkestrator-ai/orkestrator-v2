@@ -70,6 +70,8 @@ declare global {
     scrollBreakpointTerminal?: (line: number) => void;
     /** Where the shell pane's terminal is scrolled, and what its scrollback holds. */
     breakpointTerminalState?: () => {
+      cols: number;
+      rows: number;
       viewportY: number;
       baseY: number;
       firstLine: string;
@@ -212,12 +214,15 @@ function installBackend() {
     });
   window.scrollBreakpointTerminal = (line) => terminal()?.scrollToLine(line);
   window.breakpointTerminalState = () => {
-    const buffer = terminal()?.buffer.active;
-    if (!buffer) return null;
+    const instance = terminal();
+    const buffer = instance?.buffer.active;
+    if (!instance || !buffer) return null;
     const line = (index: number) => buffer.getLine(index)?.translateToString(true) ?? "";
     let last = buffer.length - 1;
     while (last > 0 && line(last) === "") last -= 1;
     return {
+      cols: instance.cols,
+      rows: instance.rows,
       viewportY: buffer.viewportY,
       baseY: buffer.baseY,
       firstLine: line(0),

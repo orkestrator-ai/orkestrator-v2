@@ -9,6 +9,12 @@ export interface AgentNativeTabProps {
   tabId: string;
   data: NativeAgentTabData;
   isActive: boolean;
+  /**
+   * Laid out but not on screen: the mobile pane switcher shows another pane
+   * over this tab's pane. The transcript keeps its scroll state engaged, so
+   * switching back is not an activation that re-locks it to the end.
+   */
+  hiddenByLayout?: boolean;
   ownsGlobalShortcuts?: boolean;
   initialPrompt?: string;
   isReviewTab?: boolean;

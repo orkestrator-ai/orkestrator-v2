@@ -86,6 +86,7 @@ export const PaneTree = memo(function PaneTree({
             containerId={containerId}
             environmentId={environmentId}
             isActive={isActive && (switcherPaneId === null || switcherPaneId === leaf.id)}
+            hiddenByLayout={isActive && switcherPaneId !== null && switcherPaneId !== leaf.id}
             activeDragId={activeDragId}
             dragOverPaneId={dragOverPaneId}
           />,

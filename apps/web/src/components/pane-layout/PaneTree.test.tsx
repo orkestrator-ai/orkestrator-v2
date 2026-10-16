@@ -121,8 +121,13 @@ function renderTree(node: PaneNode, activePaneId = "right") {
   };
 }
 
-// Panes the switcher hides are still mounted, so the lookup includes hidden ones.
-const pane = (id: string) => screen.getByRole("region", { name: `Pane ${id}`, hidden: true });
+// Panes the switcher hides are still mounted but have no accessible name, so
+// the lookup goes by label rather than by role.
+const pane = (id: string) => {
+  const element = document.querySelector<HTMLElement>(`section[aria-label="Pane ${id}"]`);
+  if (!element) throw new Error(`Pane ${id} is not mounted`);
+  return element;
+};
 const switcherPanel = (id: string) => document.getElementById(`mobile-pane-panel-${id}`);
 
 beforeEach(() => {
@@ -147,7 +152,7 @@ describe("PaneTree", () => {
 
     setMobile(true);
     expect(switcherPanel("right")?.contains(pane("right"))).toBe(true);
-    expect(switcherPanel("right")?.hidden).toBe(false);
+    expect(switcherPanel("right")?.hasAttribute("inert")).toBe(false);
     expect(screen.getByRole("dialog", { name: "Dialog in right" })).toBeTruthy();
     expectDomAbsent(screen.queryByTestId("resizable-group"));
 
@@ -177,7 +182,7 @@ describe("PaneTree", () => {
     fireEvent.click(screen.getByRole("tab", { name: /^3\./ }));
     expect(pane("left").dataset.active).toBe("false");
     expect(pane("bottom").dataset.active).toBe("true");
-    expect(switcherPanel("left")?.hidden).toBe(true);
+    expect(switcherPanel("left")?.hasAttribute("inert")).toBe(true);
 
     setMobile(false);
     expect(["left", "top", "bottom"].map((id) => pane(id).dataset.active)).toEqual([
@@ -198,7 +203,7 @@ describe("PaneTree", () => {
 
     rerenderTree(leaf("left"));
     expect(screen.getByRole("dialog", { name: "Dialog in left" })).toBeTruthy();
-    expectDomAbsent(screen.queryByRole("region", { name: "Pane right" }));
+    expectDomAbsent(document.querySelector('section[aria-label="Pane right"]'));
     expect(
       Array.from(document.querySelectorAll<HTMLElement>("[data-pane-host]")).map(
         (host) => host.dataset.paneHost,

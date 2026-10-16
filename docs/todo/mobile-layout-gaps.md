@@ -8,9 +8,9 @@ cross that breakpoint at any time, for example when it is narrowed, when a phone
 rotates or when split-screen starts. Crossing it must not throw away UI state,
 and every action has to stay reachable in the narrow layout. #988 fixed this for
 the app shell, stable per-pane hosts fixed it for split panes, and an app-level
-dialog host fixed environment settings opened from the projects drawer. What
-remains is a follow-up for panes the switcher hides, two small settings
-follow-ups, and real-device qualification.
+dialog host fixed environment settings opened from the projects drawer, and
+panes the mobile switcher hides now stay laid out. What remains is two small
+settings follow-ups and real-device qualification.
 
 ## Current state
 
@@ -48,15 +48,38 @@ follow-ups, and real-device qualification.
     native Codex pane crossing both ways, with `moveBefore` and with the
     fallback) and `e2e/CoordinatorPaneTree.spec.ts` (composer drafts and focus).
 - **Panes the switcher hides.** `MobilePaneSwitcher` keeps every pane mounted
-  and hides all but one with `display: none`.
-  - `PersistentTerminal` no longer fits a terminal that has no layout box
-    (`fitToLaidOutPane`). The fit addon used to read the hidden container's
-    computed `100%` width as 100px and shrink the terminal and its PTY to about
-    ten columns whenever its pane went hidden.
-  - Switching panes in the switcher still resets a native transcript's scroll:
-    one scrolled to message 28 showed message 53 after switching to the other
-    pane and back, with no breakpoint crossing. Virtuoso re-measures a scroller
-    that had no size. See the follow-up below.
+  and stacks them at full size (`absolute inset-0`). A hidden pane has inline
+  `visibility: hidden`, `opacity: 0` and `pointer-events: none`, plus `inert`,
+  so it keeps its layout box while staying out of the tab order and the
+  accessibility tree. It never gets `display: none` or the `hidden` attribute.
+  - `PaneTree` passes `hiddenByLayout` to the panes the switcher hides.
+    `PaneLeafContainer` then keeps the pane's active tab laid out, where it
+    used to hide an inactive pane's tab with `display: none`, while `isActive`
+    stays false (no shortcuts, not counted as on screen).
+  - `AgentNativeTab` re-locks its transcript to the end on every activation
+    (`stickToBottomOnActivation`). It passes `isActive || hiddenByLayout` to
+    `useVirtuosoScrollState`, so coming back from a pane switch keeps the
+    transcript where the user left it. Environment switches and tab switches
+    within a pane still re-lock it.
+  - A hidden terminal keeps the size its pane has on screen. Every fit in
+    `PersistentTerminal` goes through `fitToLaidOutPane`, and the environment
+    visibility redraw in `persistent-terminal-redraw.ts` takes a `canFit`
+    guard. Both use `hasLayoutBox`. A terminal with no layout box at all keeps
+    its size instead of being shrunk, with its PTY, to about ten columns: the
+    fit addon reads a `display: none` container's computed `100%` width as
+    100px.
+  - Before this, switching panes on a phone, with no breakpoint crossing,
+    jumped a native transcript from message 28 to 53, and a terminal hidden at
+    load stayed at xterm's default 80 columns until it was shown.
+  - Browser tabs still hide when inactive, because their native preview view
+    has to, and the design canvas still unmounts its content when inactive.
+  - Covered by `MobilePaneSwitcher.test.tsx` (laid out, `inert`, out of the
+    accessibility tree), `PaneLeafContainer.test.tsx` (the hidden pane's active
+    tab stays laid out but inactive), `PaneTree.test.tsx`,
+    `persistent-terminal-redraw.test.ts`, and the `mobile-chromium` case in
+    `e2e/PaneBreakpoint.spec.ts` that switches panes back and forth and checks
+    the transcript's first visible message, the terminal's columns, rows and
+    scroll line.
 - **Environment settings from the projects drawer.**
   - `MobileAppShellLayout` renders the sidebar inside a modal Radix `Dialog`
     (`mobile-projects-drawer`) without `forceMount`, so the drawer's rows
@@ -99,21 +122,12 @@ follow-ups, and real-device qualification.
 
 ### Code
 
-1. **Keep the panes the switcher hides laid out.** Hide inactive panes with
-   `visibility: hidden` layers (`invisible absolute inset-0`, plus `inert`)
-   instead of `display: none`, so a hidden pane keeps its size. That keeps a
-   native transcript's scroll offset across a pane switch, and also covers the
-   fit paths `fitToLaidOutPane` skips today, including the environment
-   visibility redraw in `persistent-terminal-redraw.ts`, which still fits a
-   terminal whose pane is hidden. Update the `hidden` assertions in
-   `MobilePaneSwitcher.test.tsx` and `PaneTree.test.tsx`. Done when switching
-   panes keeps the transcript's first visible message, in a browser spec.
-2. **Open the ActionBar's environment settings through `AppDialogHost`.** The
+1. **Open the ActionBar's environment settings through `AppDialogHost`.** The
    ActionBar still holds `envSettingsEnvironmentId` and renders its own copy
    of the dialog (`useActionBarController.ts`, `ActionBar.view.tsx`). Moving
    it onto `useAppDialogStore` leaves one host for the dialog. Its tests in
    `ActionBar.test.tsx` mock the dialog and would follow it to the host.
-3. **Return focus to the opener when fullscreen settings close.**
+2. **Return focus to the opener when fullscreen settings close.**
    `FullscreenSettingsLayout` is a `role="dialog"` portal without focus
    management, so closing any settings dialog leaves focus on `body`, on
    desktop and in the drawer flow alike. Done when closing returns focus to
@@ -182,6 +196,17 @@ follow-ups, and real-device qualification.
   dismissal respects its layer stack: while a row's menu is open above the
   drawer, a press outside closes only the menu. The backdrop's `onClick`
   bypassed that and closed the drawer on the click that ends a tap.
+- **Hidden panes are invisible layers, not removed boxes.** `display: none`
+  destroys a pane's layout box, which loses its scroll offsets and gives a
+  terminal nothing to fit to. Moving hidden panes offscreen would also keep
+  them laid out, but leaves them focusable and in the accessibility tree
+  unless they are made `inert` anyway. Inline styles rather than Tailwind
+  classes keep the hidden state checkable in happy-dom; `opacity: 0` hides
+  descendants that set `visibility: visible`. There is no `aria-hidden`:
+  `inert` and `visibility: hidden` already remove the pane from the
+  accessibility tree, and Chrome warns when `aria-hidden` lands on a pane that
+  still holds focus. The cost is that hidden panes keep laying out (painting
+  is skipped), as every pane does on desktop.
 - **xterm re-anchors on every resize.** A terminal's first visible line moves
   by a few lines on any resize, crossing or not (50 to 52 for 1024 px to
   800 px wide). The browser spec therefore checks that the terminal is still

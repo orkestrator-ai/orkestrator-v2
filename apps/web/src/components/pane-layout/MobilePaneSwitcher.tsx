@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 export interface MobilePaneOption {
   id: string;
@@ -19,6 +19,20 @@ export function selectMobilePaneId(
 ): string | undefined {
   return panes.some((pane) => pane.id === activePaneId) ? activePaneId : panes[0]?.id;
 }
+
+/**
+ * How the switcher hides a pane: laid out at full size underneath the visible
+ * one, never `display: none`. A pane without a layout box loses its scroll
+ * offsets (a virtualized transcript re-measures itself to its end) and a
+ * terminal in it would be fitted to nothing. Opacity also hides any descendant
+ * that sets `visibility: visible`; `inert` keeps the pane out of the tab order
+ * and the accessibility tree, as `visibility: hidden` alone already does.
+ */
+const HIDDEN_PANE_STYLE: CSSProperties = {
+  visibility: "hidden",
+  opacity: 0,
+  pointerEvents: "none",
+};
 
 /**
  * Mobile replacement for resize handles. Every pane stays mounted so terminal
@@ -71,8 +85,10 @@ export function MobilePaneSwitcher({
               id={`mobile-pane-panel-${pane.id}`}
               role="tabpanel"
               aria-labelledby={`mobile-pane-tab-${pane.id}`}
-              hidden={!selected}
-              className="h-full min-h-0"
+              inert={!selected}
+              data-state={selected ? "active" : "inactive"}
+              className="absolute inset-0 min-h-0"
+              style={selected ? undefined : HIDDEN_PANE_STYLE}
             >
               {renderPane(pane.id, selected)}
             </div>

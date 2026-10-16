@@ -303,6 +303,16 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "update_ticket",
 ] as const);
 
+/**
+ * The launch-selection rule every coordinator is told, verbatim.
+ *
+ * Coordinators otherwise fill every model and effort field `get_launch_options`
+ * lists, so each worker silently ran a more expensive selection than the
+ * user's configured default. Kept short: it is injected on every turn.
+ */
+export const COORDINATOR_LAUNCH_DEFAULTS_RULE =
+  "Defaults: omit modelId, reasoningId, Multi Review model rows and build agentType, steps and reviewers so environments, jobs, builds and Multi Reviews run the user's saved defaults. Override one only when the user asks for a specific model, agent, effort or reviewers, or agrees to one the task needs.";
+
 /** The mail-store hold reason that keeps worker progress from waking anyone. */
 export const COORDINATOR_DELEGATION_HOLD_REASON = "delegation-running";
 

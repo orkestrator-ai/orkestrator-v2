@@ -112,6 +112,11 @@ hypothesis; no timeout, assertion or skip was changed.
   assertions, deadlines or skips. Host contention is a hypothesis, not a proven
   cause.
 
+Recurred on 2026-10-16 at 5059.21 ms (`enables git's scan caches on a newly
+created worktree`) in `mise run test` for the coordinator launch-defaults
+change (no diff code touched). The unchanged case passed alone. Evidence:
+`/tmp/orkestrator-test-run.k2ySO0/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
 ## Mobile layout merge validation recurrence — 2026-10-16
 
 - **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, with the testing guide's GNU host utilities preferred in PATH, on `mobile-layout-gaps` while merging `origin/main`.
@@ -191,3 +196,25 @@ Aggregate backend counts for this observation: 8,341 passed, 40 skipped,
 - **Disposition:** isolated pass confirms an intermittent recurrence. Host
   contention remains a hypothesis; no implementation, assertion, timeout or
   skip changed.
+
+## Coordinator launch-defaults main merge — 2026-10-16
+
+`mise run test:logged -- --name merge-tests -- mise run test`, with the testing
+guide's GNU-tool PATH, reserved 4/1/2/1 workspace/root/bridges/protocol slots.
+Backend used two isolated Bun workers while another worktree's aggregate
+shared the host. Backend reported 8,413 passed, 40 skipped, five failed and
+one between-tests error across 8,458 tests in 450 files (364.58 seconds).
+The aggregate exited 1 after 453.6 seconds; protocol's separate timeout is
+recorded in [0256](0256-workspace-change-probe-aggregate-timeout.md).
+
+Three unchanged diff-statistics cases exceeded their 5000 ms budget:
+`serves the Files panel from the scan the badge already ran` (5530.23 ms),
+`does not mark the counts approximate for an ordinary worktree` (5245.14 ms),
+and `enables git's scan caches on a newly created worktree` (5249.96 ms).
+
+`mise run test:logged -- --name merge-commands-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`
+passed the entire unchanged owning file (exit 0, 27.1 seconds). Evidence:
+`/tmp/orkestrator-test-run.H7G9oK/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
+outer artifact `/tmp/orkestrator-test-run.e7nGed/merge-tests.log.gz`.
+Host contention remains an unconfirmed hypothesis; no assertion, timeout or
+skip changed.

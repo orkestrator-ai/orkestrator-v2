@@ -125,6 +125,8 @@ export interface AgentModel {
   supportsImageInput?: boolean;
   /** Alternate provider ids which select this same model. */
   aliases?: string[];
+  /** Concrete provider id behind a catalogue alias. */
+  resolvedModel?: string;
   /** Provider-neutral, model-specific controls rendered by the shared composer. */
   parameters?: AgentModelParameter[];
   /**

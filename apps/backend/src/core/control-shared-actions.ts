@@ -8,8 +8,14 @@
  * annotations and coordinator scope live in `control-mcp-server.ts`; public
  * envelopes, receipts and error codes live in `public-api/`.
  */
+import { resolveCatalogModelId } from "@orkestrator/protocol/model-id";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { normalizeAgentPlatforms } from "@orkestrator/protocol/agent-platforms";
+import {
+  resolveAgentPlatformSettings,
+  type AgentSettingsTier,
+  type AgentSettingsTiers,
+} from "@orkestrator/protocol/agent-settings";
 import { nativeAgentCapabilities, type AgentModel } from "@orkestrator/protocol/native-agent";
 import {
   claudeModelParameters,
@@ -356,7 +362,7 @@ export async function validateSelection(
     reasoningId?: string;
     fastMode?: boolean;
   },
-): Promise<void> {
+): Promise<{ enabledAgents: AgentPlatform[]; models: AgentModel[] }> {
   const options = await launchOptions(invoke, input.projectId, input.environmentId);
   if (!options.enabledAgents.includes(input.agent)) {
     throw new Error(`Agent platform is disabled: ${input.agent}`);
@@ -365,7 +371,7 @@ export async function validateSelection(
   if (input.fastMode === true && !nativeAgentCapabilities(input.agent).composer.speed) {
     throw new Error(`Fast mode is not available for ${input.agent}`);
   }
-  if (!input.modelId) return;
+  if (!input.modelId) return options;
   const model = options.models.find(
     (candidate) => candidate.platform === input.agent && candidate.id === input.modelId,
   );
@@ -376,6 +382,117 @@ export async function validateSelection(
   if (input.fastMode === true && model.supportsSpeed !== true) {
     throw new Error(`Fast mode is not available for ${input.modelId}`);
   }
+  return options;
+}
+
+/** The settings tiers a launch inherits, read the same way the startup launch reads them. */
+export async function launchSettingsTiers(
+  invoke: ControlMcpInvoker,
+  projectId: string,
+  environment?: JsonRecord,
+): Promise<AgentSettingsTiers> {
+  const [config, repository] = await Promise.all([
+    invoke<unknown>("get_config"),
+    invoke<unknown>("get_repository_config", { projectId }),
+  ]);
+  const global = isRecord(config) && isRecord(config.global) ? config.global : {};
+  return {
+    environment: isRecord(environment?.agentSettings)
+      ? (environment.agentSettings as AgentSettingsTier)
+      : undefined,
+    repository:
+      isRecord(repository) && isRecord(repository.agentSettings)
+        ? (repository.agentSettings as AgentSettingsTier)
+        : undefined,
+    global: isRecord(global.agentSettings)
+      ? (global.agentSettings as AgentSettingsTier)
+      : undefined,
+  };
+}
+
+function catalogModel(
+  models: readonly AgentModel[],
+  agent: AgentPlatform,
+  modelId: string,
+): AgentModel | undefined {
+  const offered = models.filter((model) => model.platform === agent);
+  const id = resolveCatalogModelId(agent, offered, modelId);
+  return offered.find((model) => model.id === id);
+}
+
+/** What a launch that names no model or reasoning level runs for one agent. */
+export interface PlatformLaunchDefault {
+  /** Null when no tier pins a model and the agent picks its own. */
+  modelId: string | null;
+  reasoningId: string | null;
+}
+
+/**
+ * The model and reasoning level an omitted selection resolves to.
+ *
+ * Mirrors the startup launch: the tier's model and effort, else the agent's
+ * own default. An unpinned Claude session runs the catalogue's `default`
+ * entry, so that is named when the catalogue offers it.
+ */
+export function platformLaunchDefault(
+  tiers: AgentSettingsTiers,
+  agent: AgentPlatform,
+  models: readonly AgentModel[],
+): PlatformLaunchDefault {
+  const settings = resolveAgentPlatformSettings(tiers, agent);
+  const modelId =
+    settings.model ??
+    (agent === "claude" && catalogModel(models, agent, "default") ? "default" : null);
+  const model = modelId ? catalogModel(models, agent, modelId) : undefined;
+  return {
+    modelId: model?.id ?? modelId,
+    reasoningId: settings.reasoningEffort ?? model?.defaultReasoningId ?? null,
+  };
+}
+
+/** The selection a launch will run, and whether the caller chose it. */
+export interface LaunchSelectionReport {
+  agent: AgentPlatform;
+  model: string | null;
+  reasoning: string | null;
+  source: "default" | "requested";
+}
+
+export function launchSelectionReport(
+  tiers: AgentSettingsTiers,
+  models: readonly AgentModel[],
+  input: { agent: AgentPlatform; modelId?: string; reasoningId?: string },
+  filterInheritedEffort = true,
+): LaunchSelectionReport {
+  const fallback = platformLaunchDefault(tiers, input.agent, models);
+  const source = input.modelId || input.reasoningId ? "requested" : "default";
+  if (!input.modelId) {
+    return {
+      agent: input.agent,
+      model: fallback.modelId,
+      reasoning: input.reasoningId ?? fallback.reasoningId,
+      source,
+    };
+  }
+  // Jobs filter inherited effort against a pinned model. Environment startup
+  // dispatches the configured effort directly, so its report disables filtering.
+  const model = catalogModel(models, input.agent, input.modelId);
+  const inherited = resolveAgentPlatformSettings(tiers, input.agent).reasoningEffort;
+  const inheritedOffered =
+    inherited !== undefined &&
+    (!filterInheritedEffort ||
+      !model ||
+      (model.reasoning ?? []).some(({ id }) => id === inherited));
+  return {
+    agent: input.agent,
+    model: input.modelId,
+    reasoning:
+      input.reasoningId ??
+      (inheritedOffered ? inherited : undefined) ??
+      model?.defaultReasoningId ??
+      null,
+    source,
+  };
 }
 
 export interface LaunchEnvironmentInput {

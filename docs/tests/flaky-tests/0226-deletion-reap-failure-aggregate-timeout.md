@@ -18,6 +18,14 @@
 - **Evidence:** `/tmp/orkestrator-test-run.AAEzu7/` and `/tmp/orkestrator-test-run.2uhUui/`.
 - **Hypothesis:** host contention, as in 0211 and 0214. Not confirmed.
 
+## Coordinator launch-defaults review validation — 2026-10-16
+
+Recurred in the full suite for `0d254a3a`; the unchanged owning file passed
+separately with one isolated Bun worker. Exact failures, suite counts,
+commands, durations and evidence are recorded in
+[0255](0255-backend-fixtures-launch-defaults-validation.md).
+No assertion, deadline or skip was changed.
+
 ## Observation during storage-read accounting merge (2026-10-16)
 
 - **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`.

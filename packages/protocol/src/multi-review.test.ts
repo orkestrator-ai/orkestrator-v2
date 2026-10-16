@@ -86,11 +86,19 @@ describe("multi review protocol", () => {
     expect(isLaunchMultiReviewActionInput({ ...input, autoPr: "true" })).toBe(false);
     expect(isLaunchMultiReviewActionInput({ ...input, reviewInstruction: "" })).toBe(true);
     expect(isLaunchMultiReviewActionInput({ ...input, reviewInstruction: "   " })).toBe(true);
+    // Omitted model rows are filled from saved defaults by the backend.
+    expect(isLaunchMultiReviewActionInput({ requestId: "button-1", environmentId: "env-1" })).toBe(
+      true,
+    );
+    const { reviewers: _reviewers, fixModel: _fixModel, ...withoutRows } = input;
+    expect(isLaunchMultiReviewActionInput(withoutRows)).toBe(true);
     for (const override of [
       { requestId: " " },
       { requestId: "x".repeat(257) },
       { reviewers: [] },
       { fixModel: { agent: "invalid", model: "default" } },
+      { reviewers: null },
+      { fixModel: null },
       { projectId: "forged" },
       { targetBranch: "--upload-pack=bad" },
       { reviewInstruction: "x".repeat(100_001) },

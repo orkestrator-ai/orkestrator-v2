@@ -780,3 +780,39 @@ test("an explicit auto-fix override wins over the saved default", async () => {
     outcome.workflow.id,
   );
 });
+
+test("omitted model rows use the saved Multi Review defaults and an explicit row still wins", async () => {
+  await storage.updateGlobalConfig({
+    ...(await storage.loadConfig()).global,
+    enabledAgentPlatforms: ["claude", "codex"],
+    agentSettings: {
+      actionDefaults: {
+        // Stale on purpose: only the environment's catalogue can correct it.
+        review: { platform: "codex", model: "retired-codex", reasoningEffort: "high" },
+        reviewPreparation: { platform: "claude", model: "opus" },
+      },
+    },
+  });
+  commands.set("get_native_agent_model_catalog", async () => [
+    {
+      platform: "codex",
+      id: "gpt-5.6-codex",
+      label: "GPT-5.6 Codex",
+      reasoning: [{ id: "high", label: "High" }],
+    },
+    { platform: "claude", id: "opus", label: "Opus", reasoning: [{ id: "high", label: "High" }] },
+  ]);
+  const review = { agent: "codex", model: "gpt-5.6-codex", reasoningEffort: "high" };
+  const outcome = (await commands.get("launch_coordinator_multi_review_action")!(
+    { scope, input: { environmentId, requestId: "defaults-1", fixModel: selection } },
+    context,
+  )) as MultiReviewActionResult;
+  expect(start).toHaveBeenCalledWith(
+    expect.objectContaining({
+      reviewers: [review, review],
+      reviewModel: { agent: "claude", model: "opus" },
+      fixModel: selection,
+    }),
+    outcome.workflow.id,
+  );
+});

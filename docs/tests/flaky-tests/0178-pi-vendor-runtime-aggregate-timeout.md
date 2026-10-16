@@ -193,3 +193,16 @@ passed the unchanged owning file (four tests, exit 0) in 11.3 seconds. The
 conflict resolutions preserve imports from both branches and do not change
 runtime staging. Shared host contention remains an unconfirmed hypothesis;
 no timeout, assertion or skip was changed.
+
+## Recurrence — 2026-10-16 (follow-up main merge)
+
+`mise run test:logged -- --name merge-tests -- mise run test` used
+4/1/2/1 workspace/root/bridge/protocol slots alongside browser validation on
+the shared host. The staged-runtime case timed out at 30004.03 ms; the root
+group reported 3,002 passed, one skipped and one failed across 137 files
+(286.40 seconds). The aggregate exited 1 after 496.0 seconds. Evidence:
+`/tmp/orkestrator-test-run.CtLQKC/root-and-agent-support-tests.log.gz`.
+
+`mise run test:logged -- --name merge-pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+passed the unchanged owning file, exit 0, in 14.6 seconds. Host contention
+remains an unconfirmed hypothesis; no timeout, assertion or skip changed.

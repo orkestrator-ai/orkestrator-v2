@@ -374,7 +374,9 @@ nested `{ path, body }` objects, and the question APIs
 to `opencode serve`; the renderer has no OpenCode client. Build-pipeline and
 Multi Review transcripts are stored raw and normalized for display on the way
 out (`apps/backend/src/core/opencode-display-transcript.ts`), so the renderer
-carries no OpenCode normalizer.
+carries no OpenCode normalizer. It only recognizes a raw envelope from a
+backend older than 2.19.17, to show an "update the backend" notice in its place
+([remote-gateway.md](remote-gateway.md#version-reminders)).
 
 Because the server is the vendor's rather than ours, the SSE event vocabulary is
 theirs too: `message.updated`, `message.part.updated`, `session.updated`,

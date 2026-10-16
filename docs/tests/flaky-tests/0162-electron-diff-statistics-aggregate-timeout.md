@@ -117,3 +117,23 @@ hypothesis; no timeout, assertion or skip was changed.
 - While the aggregate was active, `mise run test:logged -- --name commands-integration-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` timed out in `enables git's scan caches on a newly created worktree` at 5150.45 ms. The file reported 52 passed and three timeouts in 127.9 seconds.
 - After the aggregate finished, the unchanged owning file passed in 32.1 seconds with the same command and `--name commands-integration-final-rerun` (exit 0).
 - Evidence: `/tmp/orkestrator-test-run.3kSG12/commands-integration-rerun.log.gz`. No diff-statistics code, assertion, timeout or skip changed; host contention remains a hypothesis.
+
+## Follow-up main merge validation — 2026-10-16
+
+`mise run test:logged -- --name merge-tests -- mise run test` (4/1/2/1
+workspace/root/bridge/protocol slots) timed out in
+`refreshes a tracked environment on explicit request` at 5174.79 ms.
+Backend results were 8,325 passed, 40 skipped, three failed and two
+between-tests errors across 445 files (382.70 seconds). Evidence:
+`/tmp/orkestrator-test-run.CtLQKC/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+`mise run test:logged -- --name merge-commands-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`
+passed the diff-statistics case but did not pass the whole owning file:
+53 passed and two failed across 55 tests (101.42 seconds).
+`persists safe cleanup failure details and permits a backend deletion retry`
+timed out at 7862.39 ms, and
+`deletes an environment only after all three local server kinds exit`
+timed out at 6533.79 ms. Evidence:
+`/tmp/orkestrator-test-run.MHGIKo/merge-commands-owner.log.gz`.
+The owning-file rerun remains red, so this observation alone does not
+establish a new flake. No implementation, timeout, assertion or skip changed.

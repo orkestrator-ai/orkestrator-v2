@@ -21,7 +21,7 @@ import type { AppConfig, Environment, PortMapping, RepositoryConfig } from "../m
 import { defaultRepositoryConfig, isPortMapping } from "../storage-shared.js";
 import { requireEnvironment, requireProject } from "./actions-discovery.js";
 import { PublicActionError } from "./errors.js";
-import { invalid, onlyKeys, optionalString, requiredId } from "./input.js";
+import { invalid, onlyActionKeys, optionalString, requiredId } from "./input.js";
 import { environmentSettingsRevision, repositorySettingsRevision } from "./revisions.js";
 import type {
   MutationActionHandler,
@@ -260,7 +260,7 @@ const projectConfigGet: ReadActionHandler<{ projectId: string }> = {
   kind: "read",
   action: "project.config.get",
   parse(input) {
-    onlyKeys(input, ["projectId"]);
+    onlyActionKeys(input, "project.config.get");
     return { projectId: requiredId(input, "projectId") };
   },
   async run(input, context) {
@@ -288,7 +288,7 @@ const projectConfigSet: MutationActionHandler<SettingsPatch & { projectId: strin
   kind: "mutation",
   action: "project.config.set",
   parse(input) {
-    onlyKeys(input, ["projectId", "set", "unset", "expectedRevision"]);
+    onlyActionKeys(input, "project.config.set");
     const projectId = requiredId(input, "projectId");
     const patch = parsePatch("project", input);
     return {
@@ -414,7 +414,7 @@ const environmentConfigGet: ReadActionHandler<{ environmentId: string }> = {
   kind: "read",
   action: "environment.config.get",
   parse(input) {
-    onlyKeys(input, ["environmentId"]);
+    onlyActionKeys(input, "environment.config.get");
     return { environmentId: requiredId(input, "environmentId") };
   },
   async run(input, context) {
@@ -431,7 +431,7 @@ const environmentConfigSet: MutationActionHandler<SettingsPatch & { environmentI
   kind: "mutation",
   action: "environment.config.set",
   parse(input) {
-    onlyKeys(input, ["environmentId", "set", "unset", "expectedRevision"]);
+    onlyActionKeys(input, "environment.config.set");
     const environmentId = requiredId(input, "environmentId");
     const patch = parsePatch("environment", input);
     return {

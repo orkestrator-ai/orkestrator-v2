@@ -1055,8 +1055,10 @@ describe("TerminalContainer", () => {
 
         // With nothing inert, the arguments pass through untouched.
         pointerWithinMock.mockClear();
-        const reachable = { droppableContainers: [visible, unmounted] };
-        collisionDetection(reachable as never);
+        const reachable = { droppableContainers: [visible, unmounted] } as unknown as Parameters<
+          typeof collisionDetection
+        >[0];
+        collisionDetection(reachable);
         expect(pointerWithinMock.mock.calls[0]![0]).toBe(reachable);
       } finally {
         hiddenPane.remove();

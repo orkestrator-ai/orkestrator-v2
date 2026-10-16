@@ -11,6 +11,7 @@ import { createServer, type Server } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { MCP_CONFIG_REPORTING_VERSION } from "@orkestrator/protocol/mcp-management";
 import {
   detachAgent,
   ensureAgent,
@@ -438,6 +439,11 @@ describe("liveness routes", () => {
       state.lastAccessed = 0;
       const detached = await (await call(`/session/${state.id}/runtime-health`)).json();
       expect(detached.mcpConfig).toBeUndefined();
+      // Still marked: the backend must not read this bridge as an older one.
+      expect(detached.mcpConfigReporting).toBe(MCP_CONFIG_REPORTING_VERSION);
+      expect(
+        (await (await call(`/session/unknown-session/runtime-health`)).json()).mcpConfigReporting,
+      ).toBe(MCP_CONFIG_REPORTING_VERSION);
       // The read attached nothing and refreshed nothing.
       expect(state.agent).toBeNull();
       expect(state.lastAccessed).toBe(0);

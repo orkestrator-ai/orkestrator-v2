@@ -23,6 +23,14 @@ owns each.
     A dismissal lasts for the session, until either version changes. It warns
     only; it never blocks or translates anything. "Version reminders" in
     [`remote-gateway.md`](../architecture/remote-gateway.md) documents it.
+  - MCP apply runtimes may carry an optional `cancelReason`
+    (`superseded-external` / `superseded-local`, `packages/protocol/src/mcp-management.ts`)
+    when the saved change is no longer in its file. It is additive in both
+    directions: an older renderer ignores it and still offers "Retry apply",
+    which a current backend refuses with `revision-conflict` and a reason the
+    toast shows; a newer renderer on an older backend never sees it and keeps
+    Retry, which that backend re-plans as before. No compatibility path to
+    retire.
   - A newer renderer meets an older backend in two supported ways.
     `apps/web-public` (orkestrator.dev, deployed from `main`) lazy-loads the
     full web app (`PublicApp.tsx`) and connects to any user's backend. The
@@ -109,6 +117,7 @@ in code at `2459b05c`.
 | Deprecated execution-policy env overrides | `CURSOR_BRIDGE_SANDBOX`, `CURSOR_BRIDGE_PROJECT_SETTINGS` (`bridges/cursor-bridge/src/config.ts`); `PI_BRIDGE_REQUIRE_APPROVAL`, `PI_BRIDGE_PROJECT_RESOURCES` (`bridges/pi-bridge/src/config.ts`); `ACP_APPROVE_PROJECT_MCPS`, still set by `host-model-catalog-refresh.ts` but no longer read by the ACP bridge | [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md) |
 | Legacy `DELETE` close for bridges that predate `POST /session/:id/close`, and the `bridge-upgrade-required` restart notice for old Claude bridges | `closeBridgeSessionRetaining`, `LEGACY_DELETE_RETAINS_HISTORY` (`apps/backend/src/core/bridge-session-close.ts`) | [session-lifecycle-consistency.md](session-lifecycle-consistency.md) |
 | Bridges that predate `/transcript`: progressive reads fall back to the whole `/messages` body | `readHttpBridgeTranscriptSnapshot` (`apps/backend/src/core/http-bridge-progressive.ts`) | [transcript-history-efficiency.md](transcript-history-efficiency.md) (decided with the sync-v1 fallback) |
+| Bridges older than the MCP configuration report: an `mcpConfig` without the `mcpConfigReporting` marker still counts as reporting, and a body with neither gets the older-bridge apply outcome | `bridgeReportsMcpConfig` (`apps/backend/src/core/http-bridge-runtime-health.ts`), `olderBridgeOutcome` (`apps/backend/src/core/mcp-management/evidence.ts`) | [mcp-management.md](mcp-management.md) |
 | Build-pipeline downgrade export | `export_build_pipeline_for_downgrade` | This file (Code item 2) |
 | Renderer recognition of raw OpenCode envelopes from backends older than 2.19.17 (the "unrecognized" fallback stays) | The `opencode-envelope` entry of `LEGACY_TRANSCRIPT_SHAPES` (`apps/web/src/lib/chat/transcript-skew.ts`) | This file; retire once the window no longer covers backends older than 2.19.17 |
 

@@ -1580,7 +1580,7 @@ describe("MCP configuration evidence", () => {
       scope: "session" as const,
     };
     const stub = createProviderStub("claude");
-    const read = mock(async (_sessionId: string) => evidence);
+    const read = mock(async (_sessionId: string) => ({ state: "evidence" as const, evidence }));
     (stub.provider as { mcpConfigEvidence?: unknown }).mcpConfigEvidence = read;
     await withService(
       { prefix: "orkestrator-native-mcp-evidence-", provider: async () => stub.provider },
@@ -1597,6 +1597,11 @@ describe("MCP configuration evidence", () => {
           evidence,
         });
         expect(read).toHaveBeenCalledWith("provider-session-1");
+        // A bridge older than the report says so, rather than "nothing loaded".
+        read.mockImplementationOnce(async () => ({ state: "unsupported" }) as never);
+        expect(await service.mcpConfigEvidenceIfRunning("env-1", "claude", LOGICAL)).toEqual({
+          state: "unsupported",
+        });
         // Observation only: nothing was created, sent or re-attached.
         expect(stub.createSession).not.toHaveBeenCalled();
         expect(stub.send).not.toHaveBeenCalled();

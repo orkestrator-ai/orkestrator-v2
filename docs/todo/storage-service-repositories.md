@@ -51,9 +51,9 @@ lost-update bugs closed by the SQLite migration cannot come back.
   their lease through every caller: `saveEnvironments` (19 call paths),
   `saveAgentMailStore` (19), `savePromptQueueMutation`, `saveNamespaceRecords`,
   `indexWithCurrent` and `applyProjectUpdates`. `project-removal-fences` is
-  saved under the environment lease at both of its writers. The one unleased
-  save is `saveLinearAuth` (`storage-kanban.ts`), a blind overwrite that is its
-  store's only writer, listed in the test's `BLIND_WRITERS`.
+  saved under the environment lease at both of its writers. `saveLinearAuth`
+  and `clearLinearAuth` (`storage-kanban.ts`), the last unleased writers, now
+  take the `linear-auth.json` lease, so the guard has no exceptions.
 - The only `atomically` caller outside the base is `collectPublicOperations`
   (`storage-public-operations.ts`), which retires public-operation namespaces.
 - Concurrency coverage that exists: `storage-store-concurrency.test.ts` (16
@@ -196,9 +196,11 @@ Done when:
   whole-value write, because the scope buffers the value and commits it
   whole. `deleteStore` is outside the rules: it removes the store without
   reading it.
-- **`saveLinearAuth` stays unleased.** It reads nothing, so concurrent saves
-  are last-writer-wins, not a lost read-modify-write. The guard allows it only
-  while no leased or transactional writer shares its store.
+- **`saveLinearAuth` takes a lease rather than an allowlist entry.** It reads
+  nothing, so unleased it was only last-writer-wins, but an exception in the
+  guard would be the precedent for the next one. `saveLinearAuth` and
+  `clearLinearAuth` are both serialized on `linear-auth.json` (rare writes, so
+  the lease's cost is negligible), and the guard has no allowlist.
 - **The guard does not cover raw `StorageDatabase` writers outside the
   chain** (workflow results, environment cleanup ledger and sweeps, design
   canvas signals, native-agent display tails, web annotations, build-pipeline

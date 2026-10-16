@@ -152,8 +152,7 @@ rows that an unleased transaction committed after the save's read. An
 `updateStore` inside `atomically` counts as a whole-value write, since the scope
 buffers the value and commits it whole. `storage-writer-guards.test.ts` parses
 the `StorageService` chain and enforces all of this per store, following
-private and protected helpers to every caller. The one allowed unleased save is
-`saveLinearAuth`, a blind overwrite that is its store's only writer.
+private and protected helpers to every caller, with no exceptions.
 
 Whole-store reads are cached per store and revalidated against the committed
 revision on every read (one indexed lookup), which also observes other

@@ -61,20 +61,6 @@ const PRIMITIVES = new Set([
 /** Callbacks that run synchronously inside the call, in the caller's context. */
 const SYNCHRONOUS_CALLBACKS = new Set(["this.database.transaction"]);
 
-/**
- * Whole-value writers that hold no lease on purpose. Each must be the only
- * kind of writer of its store, and each entry must still match a writer.
- */
-const BLIND_WRITERS: BlindWriters = {
-  saveLinearAuth: {
-    store: "linearAuthFile",
-    reason:
-      "Replaces the whole credential without reading it, so concurrent saves are last-writer-wins rather than a lost read-modify-write; clearLinearAuth is a blind delete.",
-  },
-};
-
-type BlindWriters = Record<string, { store: string; reason: string }>;
-
 type SourceFile = { file: string; source: string };
 
 type ParsedFile = SourceFile & { program: Node; lineStarts: number[] };
@@ -117,7 +103,6 @@ type StoreSummary = {
   leases: string[];
   sites: number;
   paths: number;
-  blind: boolean;
 };
 
 type Analysis = {
@@ -241,10 +226,7 @@ function paramNames(fn: Node): string[] {
   });
 }
 
-function analyzeStorageWriters(
-  sources: SourceFile[],
-  options: { rootClass: string; blindWriters: BlindWriters },
-): Analysis {
+function analyzeStorageWriters(sources: SourceFile[], options: { rootClass: string }): Analysis {
   const files = sources.map(parse);
   const classes = new Map<string, ClassInfo>();
   for (const file of files) {
@@ -586,14 +568,12 @@ function analyzeStorageWriters(
     });
   }
 
-  const usedBlindWriters = new Set<string>();
   const stores = new Map<string, StoreSummary>();
   for (const store of new Set(sites.map((site) => site.store))) {
     const ofStore = sites.filter((site) => site.store === store);
     const whole = ofStore.filter((site) => site.kind === "whole");
     const transactional = ofStore.filter((site) => site.kind === "transactional");
     const leaseSets: Array<Set<string>> = [];
-    let blind = false;
     for (const site of whole) {
       for (const writePath of site.paths) {
         const route = writePath.via.length > 0 ? ` via ${writePath.via.join(" ← ")}` : "";
@@ -607,12 +587,6 @@ function analyzeStorageWriters(
           .map((lease) => lease.name);
         if (storeWide.length === 0) {
           const entry = writePath.entry;
-          const allowed = entry ? options.blindWriters[entry.name] : undefined;
-          if (allowed?.store === store) {
-            usedBlindWriters.add(entry!.name);
-            blind = true;
-            continue;
-          }
           const held = writePath.leases.map((lease) => lease.name).join(", ") || "none";
           violations.push(
             `${label}: no store-wide lease reaches this write from ${entry ? `${entry.className}.${entry.name}` : "its caller"} (leases held: ${held})`,
@@ -626,11 +600,6 @@ function analyzeStorageWriters(
     const common = leaseSets.length
       ? leaseSets.reduce((shared, held) => new Set([...shared].filter((name) => held.has(name))))
       : null;
-    if (blind && leaseSets.length > 0) {
-      violations.push(
-        `${store}: a blind writer shares the store with leased read-modify-writes, which can overwrite it`,
-      );
-    }
     if (common !== null && common.size === 0) {
       const detail = whole
         .flatMap((site) =>
@@ -657,15 +626,7 @@ function analyzeStorageWriters(
       leases: common ? [...common].sort() : [],
       sites: ofStore.length,
       paths: whole.reduce((total, site) => total + site.paths.length, 0),
-      blind,
     });
-  }
-  for (const name of Object.keys(options.blindWriters)) {
-    if (!usedBlindWriters.has(name)) {
-      violations.push(
-        `Blind writer ${name} no longer writes ${options.blindWriters[name]!.store} unleased; remove its entry`,
-      );
-    }
   }
 
   return { chain: chain.map((info) => info.name), sites, stores, violations };
@@ -696,10 +657,7 @@ function backendSourceFiles(dir = backendSrc): string[] {
 
 let storageAnalysis: Analysis | undefined;
 function analyzeStorageService(): Analysis {
-  storageAnalysis ??= analyzeStorageWriters(readStorageSources(), {
-    rootClass: "StorageService",
-    blindWriters: BLIND_WRITERS,
-  });
+  storageAnalysis ??= analyzeStorageWriters(readStorageSources(), { rootClass: "StorageService" });
   return storageAnalysis;
 }
 
@@ -731,7 +689,10 @@ describe("StorageService store writers", () => {
       kind: "whole",
       leases: ["previewSettingsFile"],
     });
-    expect(stores.get("linearAuthFile")).toMatchObject({ kind: "whole", blind: true });
+    expect(stores.get("linearAuthFile")).toMatchObject({
+      kind: "whole",
+      leases: ["linearAuthFile"],
+    });
     // Transactional stores, including a raw database writer resolved through
     // `buildPipelineStore()`.
     for (const store of [
@@ -804,10 +765,10 @@ describe("store writer analysis", () => {
       }
     }
   `;
-  const analyze = (body: string, blindWriters: BlindWriters = {}) =>
+  const analyze = (body: string) =>
     analyzeStorageWriters(
       [{ file: "fixture.ts", source: `${base}\nexport class Store extends Base {\n${body}\n}` }],
-      { rootClass: "Store", blindWriters },
+      { rootClass: "Store" },
     );
 
   test("accepts leased writes through wrappers, parameter targets and helpers", () => {
@@ -909,28 +870,6 @@ describe("store writer analysis", () => {
       expect.stringMatching(
         /^fixture\.ts:\d+ Store\.save: cannot resolve the store written by saveJson$/,
       ),
-    ]);
-  });
-
-  test("allows a listed blind writer only while it is the store's only writer", () => {
-    const blind = { saveAuth: { store: "bFile", reason: "blind overwrite" } };
-    expect(
-      analyze(`async saveAuth() { await this.saveSensitiveJson(this.bFile(), {}); }`, blind)
-        .violations,
-    ).toEqual([]);
-    expect(
-      analyze(
-        `
-          async saveAuth() { await this.saveSensitiveJson(this.bFile(), {}); }
-          async edit() { return this.enqueueOn(this.bFile(), async () => { await this.saveJson(this.bFile(), 1); }); }
-        `,
-        blind,
-      ).violations,
-    ).toEqual([
-      "bFile: a blind writer shares the store with leased read-modify-writes, which can overwrite it",
-    ]);
-    expect(analyze(`async other() {}`, blind).violations).toEqual([
-      "Blind writer saveAuth no longer writes bFile unleased; remove its entry",
     ]);
   });
 });

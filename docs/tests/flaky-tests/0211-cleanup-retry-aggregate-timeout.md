@@ -71,3 +71,17 @@ with
 `mise run test:logged -- --name merge-cleanup-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`
 passed the unchanged owning file, exit 0, in 24.1 seconds. Host contention
 remains an unconfirmed hypothesis. No timeout, assertion or skip was changed.
+
+## Recurrence — 2026-10-16 (gateway terminal fallback backoff)
+
+`mise run test` on `feat/gateway-terminal-fallback-backoff`, which changed no
+backend code, timed out this unchanged test at 7473.73 ms against its 5000 ms
+limit while other worktrees ran suites on the host. Backend results were 8,085
+passed, 40 skipped and 3 failed across 438 files (324.01 seconds); the other
+failures are case 0248 and the deterministic provider line-limit check.
+Evidence:
+`/tmp/orkestrator-test-run.3Pp4em/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+`mise run test:logged -- --name backend-cmd-integration-file -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`
+passed the unchanged owning file in 32.3 seconds. No timeout, assertion or skip
+was changed.

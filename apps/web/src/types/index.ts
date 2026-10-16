@@ -79,6 +79,14 @@ export interface ClaudeModelCatalogSnapshot {
   error?: string;
 }
 
+/** Content-free cause of an environment's unread badge; mirrors the backend model. */
+export type EnvironmentUnreadReason =
+  | "agent_finished"
+  | "agent_waiting"
+  | "agent_question"
+  | "terminal_finished"
+  | "marked_unread";
+
 export interface Environment {
   id: string;
   projectId: string;
@@ -197,6 +205,8 @@ export interface Environment {
    * a per-window guess.
    */
   hasUnreadWork?: boolean;
+  /** What most recently lit `hasUnreadWork`; absent for badges set before reasons existed. */
+  unreadReason?: EnvironmentUnreadReason;
   /** Backend-owned dedupe state; clients should not mutate it. */
   agentAttentionKeys?: string[];
   /**

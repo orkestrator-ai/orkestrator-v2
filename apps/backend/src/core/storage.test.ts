@@ -3402,6 +3402,69 @@ describe("environment completion and unread state", () => {
       ).rejects.toThrow("expectedLastActivityAt must be a string or null");
     });
   });
+
+  test("records what lit the badge and forgets it once the badge clears", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = await storage.addEnvironment(createEnvironment("project-1"));
+      const at = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString();
+      const reasonAfter = async (record: () => Promise<unknown>) => {
+        await record();
+        return (await storage.getEnvironment(environment.id))?.unreadReason;
+      };
+      const clear = () => storage.setEnvironmentUnread(environment.id, false);
+
+      expect(
+        await reasonAfter(() => storage.recordEnvironmentCompletion(environment.id, at(1_000))),
+      ).toBe("terminal_finished");
+      expect(await reasonAfter(clear)).toBeUndefined();
+
+      expect(
+        await reasonAfter(() =>
+          storage.recordEnvironmentSessionCompletion(environment.id, at(2_000), "agent_waiting"),
+        ),
+      ).toBe("agent_waiting");
+      expect(
+        await reasonAfter(() =>
+          storage.recordEnvironmentSessionCompletion(environment.id, at(3_000)),
+        ),
+      ).toBe("agent_finished");
+      expect(
+        await reasonAfter(() =>
+          storage.recordEnvironmentAgentAttention(environment.id, ["codex:q"], at(4_000)),
+        ),
+      ).toBe("agent_question");
+      await clear();
+
+      await storage.setEnvironmentAgentActivity(
+        environment.id,
+        "working",
+        at(5_000),
+        "native-agent",
+      );
+      expect(
+        await reasonAfter(() =>
+          storage.setEnvironmentAgentActivity(environment.id, "waiting", at(6_000), "native-agent"),
+        ),
+      ).toBe("agent_waiting");
+      await clear();
+      await storage.setEnvironmentAgentActivity(
+        environment.id,
+        "working",
+        at(7_000),
+        "native-agent",
+      );
+      expect(
+        await reasonAfter(() =>
+          storage.setEnvironmentAgentActivity(environment.id, "idle", at(8_000), "native-agent"),
+        ),
+      ).toBe("agent_finished");
+      await clear();
+
+      expect(await reasonAfter(() => storage.setEnvironmentUnread(environment.id, true))).toBe(
+        "marked_unread",
+      );
+    });
+  });
 });
 
 describe("Kanban point reads", () => {

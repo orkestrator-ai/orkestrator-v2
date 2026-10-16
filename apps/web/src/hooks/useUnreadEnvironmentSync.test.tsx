@@ -4,6 +4,7 @@ import * as backend from "@/lib/backend";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useUIStore } from "@/stores/uiStore";
 import type { Environment } from "@/types";
+import { mockToast, resetSonnerMocks } from "../../../../tests/mocks/sonner";
 import { useUnreadEnvironmentSync } from "./useUnreadEnvironmentSync";
 
 function environment(overrides: Partial<Environment> = {}): Environment {
@@ -37,6 +38,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetSonnerMocks();
   setUnread.mockRestore();
   useEnvironmentStore.setState({ environments: [] });
   useUIStore.setState({ selectedEnvironmentId: null });
@@ -82,6 +84,59 @@ describe("useUnreadEnvironmentSync", () => {
       await Promise.resolve();
     });
     expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.hasUnreadWork).toBe(false);
+  });
+});
+
+describe("activation toast", () => {
+  test("opening an environment with a bell shows why it rang", () => {
+    useEnvironmentStore.setState({
+      environments: [
+        environment({ hasUnreadWork: false }),
+        environment({ id: "env-2", name: "Fixes", unreadReason: "agent_waiting" }),
+      ],
+    });
+    renderHook(() => useUnreadEnvironmentSync());
+    expect(mockToast).not.toHaveBeenCalled();
+
+    act(() => useUIStore.setState({ selectedEnvironmentId: "env-2" }));
+
+    expect(mockToast).toHaveBeenCalledTimes(1);
+    expect(mockToast.mock.calls[0]?.[0]).toBe("Agent needs your input");
+    expect(mockToast.mock.calls[0]?.[1]).toMatchObject({ id: "environment-unread:env-2" });
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-2")).toMatchObject({
+      hasUnreadWork: false,
+      unreadReason: undefined,
+    });
+  });
+
+  test("work finishing in the environment already on screen clears without a toast", () => {
+    useEnvironmentStore.setState({ environments: [environment({ hasUnreadWork: false })] });
+    renderHook(() => useUnreadEnvironmentSync());
+
+    act(() => {
+      useEnvironmentStore.getState().updateEnvironment("env-1", {
+        hasUnreadWork: true,
+        unreadReason: "agent_finished",
+        lastActivityAt: "2026-09-15T09:00:00.000Z",
+      });
+    });
+
+    expect(setUnread).toHaveBeenCalledTimes(1);
+    expect(mockToast).not.toHaveBeenCalled();
+  });
+
+  test("a selection restored before environments load still toasts once they arrive", () => {
+    useEnvironmentStore.setState({ environments: [] });
+    renderHook(() => useUnreadEnvironmentSync());
+
+    act(() => {
+      useEnvironmentStore.setState({
+        environments: [environment({ unreadReason: "terminal_finished" })],
+      });
+    });
+
+    expect(mockToast).toHaveBeenCalledTimes(1);
+    expect(mockToast.mock.calls[0]?.[0]).toBe("Terminal agent finished");
   });
 });
 

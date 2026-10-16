@@ -14,6 +14,7 @@ import { isEmptyAgentSettings, normalizeAgentSettings } from "@orkestrator/proto
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { isTrustedUserPromptPresentation } from "@orkestrator/protocol/review-evidence-frames";
 import { withoutUrlCredentials } from "@orkestrator/protocol/git-remote-url";
+import type { EnvironmentUnreadReason } from "./models.js";
 import {
   AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS,
   AGENT_ACTIVITY_SOURCES,
@@ -822,6 +823,7 @@ export abstract class StorageProjects extends StorageBase {
         else if (typeof updates.hasUnreadWork === "boolean") {
           environment.hasUnreadWork = updates.hasUnreadWork;
         }
+        if (!environment.hasUnreadWork) delete environment.unreadReason;
       }
       if ("setupScriptsComplete" in updates) {
         if (updates.setupScriptsComplete == null) environment.setupScriptsComplete = false;
@@ -1262,7 +1264,10 @@ export abstract class StorageProjects extends StorageBase {
           ),
         ).toISOString();
       }
-      if (completionTransition) environment.hasUnreadWork = true;
+      if (completionTransition) {
+        environment.hasUnreadWork = true;
+        environment.unreadReason = nextAggregate === "waiting" ? "agent_waiting" : "agent_finished";
+      }
       // The lease itself must persist (its expiry is enforced from disk), but
       // the backup rotation is skipped: only volatile activity fields changed.
       await this.saveEnvironments(environments, { backup: completionTransition });
@@ -1391,6 +1396,7 @@ export abstract class StorageProjects extends StorageBase {
 
       environment.lastActivityAt = normalizedActivityAt;
       environment.hasUnreadWork = true;
+      environment.unreadReason = "terminal_finished";
       await this.saveEnvironments(environments);
       this.announce("environment", environmentId, environment.projectId);
       return environment;
@@ -1412,6 +1418,7 @@ export abstract class StorageProjects extends StorageBase {
   async recordEnvironmentSessionCompletion(
     environmentId: string,
     occurredAt: string,
+    reason: Extract<EnvironmentUnreadReason, "agent_finished" | "agent_waiting"> = "agent_finished",
   ): Promise<Environment> {
     if (!isAgentActivityTimestamp(occurredAt)) {
       throw new Error("occurredAt must be a valid ISO timestamp");
@@ -1436,6 +1443,7 @@ export abstract class StorageProjects extends StorageBase {
           : acceptedTime,
       ).toISOString();
       environment.hasUnreadWork = true;
+      environment.unreadReason = reason;
       await this.saveEnvironments(environments);
       this.announce("environment", environmentId, environment.projectId);
       return environment;
@@ -1489,6 +1497,7 @@ export abstract class StorageProjects extends StorageBase {
           : occurredTime;
       environment.lastActivityAt = new Date(acceptedTime).toISOString();
       environment.hasUnreadWork = true;
+      environment.unreadReason = "agent_question";
       await this.saveEnvironments(environments);
       this.announce("environment", environmentId, environment.projectId);
       return { environment, recorded: true };
@@ -1522,6 +1531,8 @@ export abstract class StorageProjects extends StorageBase {
       if (environment.hasUnreadWork === unread) return environment;
 
       environment.hasUnreadWork = unread;
+      if (unread) environment.unreadReason = "marked_unread";
+      else delete environment.unreadReason;
       await this.saveEnvironments(environments);
       this.announce("environment", environmentId, environment.projectId);
       return environment;

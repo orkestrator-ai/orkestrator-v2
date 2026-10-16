@@ -227,6 +227,22 @@ export interface StartupAgentSessionSnapshot {
   error?: string;
 }
 
+/**
+ * Content-free cause of an environment's unread badge.
+ *
+ * - `agent_finished`: an agent turn ended.
+ * - `agent_waiting`: an agent stopped to wait on the user (approval, plan, prompt).
+ * - `agent_question`: an agent asked a question that needs an answer.
+ * - `terminal_finished`: a terminal-hosted agent finished.
+ * - `marked_unread`: a client marked the environment unread.
+ */
+export type EnvironmentUnreadReason =
+  | "agent_finished"
+  | "agent_waiting"
+  | "agent_question"
+  | "terminal_finished"
+  | "marked_unread";
+
 export interface Environment {
   /** Monotonic fence for mail-triggered starts across explicit stop transitions. */
   stopGeneration?: number;
@@ -406,6 +422,8 @@ export interface Environment {
    * it clears the badge everywhere, because the work has now been seen.
    */
   hasUnreadWork?: boolean;
+  /** What most recently lit `hasUnreadWork`; cleared with it. */
+  unreadReason?: EnvironmentUnreadReason;
   /** Bounded content-free dedupe keys for agent events that requested attention. */
   agentAttentionKeys?: string[];
   /** Durable intent to open the configured agent once setup is ready. */

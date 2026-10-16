@@ -1,26 +1,29 @@
 # Container rebuild state preservation
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `9906db30` (2026-10-16).
 
 A preserving rebuild (`migrate` from a legacy writable layer, `rebuild` from
 volumes) copies `/workspace` and the resume-critical provider state into a new
-storage set and commits the new runtime in one write. Three providers still
-lose some state across a rebuild, and the inventory that says what survives
-was traced against agent versions that have since been upgraded several
-times. The legacy writable-layer, whole-home-mount and shared-network code
-paths also remain, behind rollout switches, with no retirement plan.
+storage set and commits the new runtime in one write. The provider-state
+inventory was re-traced against the current pins on 2026-10-16. Codex and
+OpenCode still drop some user-visible, non-resume state by explicit decision.
+The legacy writable-layer, whole-home-mount and shared-network code paths
+remain, behind rollout switches, with no retirement plan.
 
 ## Current state
 
 - `PROVIDER_STATE_LAYOUT` and `PROVIDER_PRESERVATION` in
   `apps/backend/src/core/container-state-layout.ts` define what is mounted by
-  sub-path from the `state` volume and what the product may claim. Claude, Pi
-  and Cursor are `full`; Codex, OpenCode and Grok are `partial`, and their
-  limitation text reaches the user through `rebuildPreview`. The module's
-  header cites the provider-state inventory in
-  [container-lifecycle.md](../architecture/container-lifecycle.md)
-  ("Provider state"), which records what each provider preserves and
-  excludes.
+  sub-path from the `state` volume and what the product may claim. Claude, Pi,
+  Cursor and Grok are `full`; Codex and OpenCode are `partial`, and their
+  limitation text reaches the user through `rebuildPreview`. The provider-state
+  inventory in [container-lifecycle.md](../architecture/container-lifecycle.md)
+  ("Provider state") records what each provider preserves and excludes.
+- `PROVIDER_STATE_TRACED_VERSIONS` in the same module names the versions the
+  layout was traced against. `apps/backend/tests/container-state-layout.test.ts`
+  fails when a manifest CLI pin or the `@cursor/sdk` pin moves away from it,
+  and [upgrading agents](../development/upgrade-agents.md#re-trace-preserved-provider-state)
+  says how to re-trace.
 - Storage selection is `selectStorageFormat` in
   `apps/backend/src/core/container-storage.ts`: `volume-v1` only when the
   image declares `persistent-workspace`, the daemon is Engine 26+
@@ -69,30 +72,17 @@ paths also remain, behind rollout switches, with no retirement plan.
 
 ### Code
 
-1. Close the partial-preservation gaps, or accept each one explicitly and keep
-   its limitation text:
-   - Codex: `session_index.jsonl` (thread names) at the Codex home root. The
-     Codex bridge reads it there (`bridges/codex-bridge/src/history/rollout.ts`),
-     so names drawn from it are lost after a rebuild.
-   - OpenCode: `snapshot/` (revert and diff history). `docker/entrypoint.sh`
-     seeds it from the host's OpenCode data with `copy_agent_directory_entries`,
-     so preserving it also needs a rule for host-seeded versus in-container
-     content.
-   - Grok: `active_sessions.json` and `worktrees.db` at the `~/.grok` root.
-
-   Each fix needs an explicit mount at the provider's real path (or a
-   provider-supported relocation variable, as with `CODEX_SQLITE_HOME` and
-   `OPENCODE_DB`), a `PROVIDER_STATE_LAYOUT` entry, a `PROVIDER_PRESERVATION`
-   update, the matching row of the "Provider state" table in
-   `container-lifecycle.md`, and a live C14 assertion
-   in `apps/backend/tests/container-live-replacement.test.ts`.
-2. Re-trace provider state paths after each agent upgrade. The inventory was
-   traced against the 2026-09-27 pins; #880, #888, #891, #935 and #964 have
-   upgraded agents since. `docs/development/upgrade-agents.md` has no step for
-   it; add one that checks every `PROVIDER_STATE_LAYOUT` path and the
-   relocated databases. The OpenCode 2.x move changes `OPENCODE_DB` semantics
-   and must update the `opencode/db` entry (`OPENCODE_DB_PATH`).
-3. Legacy retirement. This needs the decision under "Open questions" first.
+1. Stop seeding OpenCode `snapshot/`, `storage/` and `account.json` from the
+   host in `docker/entrypoint.sh` (the `/opencode-data` block), after
+   confirming with a live run that nothing reads them. The static trace of
+   1.19.0 found no reader for any of the copies: a snapshot directory is keyed by
+   `sha1(worktree path)`, which a host path never matches against
+   `/workspace/...`; `storage/` is a legacy store with no reader; and
+   `account.json` no longer appears in the binary (accounts live in the
+   database). Large snapshot stores are already skipped by the copy caps.
+   Re-check at the OpenCode 2.x move (see [opencode-v2.md](opencode-v2.md)),
+   which may change `OPENCODE_DB` semantics and the `opencode/db` entry.
+2. Legacy retirement. This needs the decision under "Open questions" first.
    Then:
    - provide an export or migration path for legacy writable-layer
      containers;
@@ -111,8 +101,9 @@ paths also remain, behind rollout switches, with no retirement plan.
 
 - Per-provider resume after a rebuild (C13) and a re-run of C14 are tracked in
   [container-platform-qualification.md](container-platform-qualification.md).
-  Each gap closed above needs its own live assertion before the preview
-  claims it.
+  C14 now also asserts a Codex `thread_history_1.sqlite` relocation, the Codex
+  bridge title index, a Grok session directory, and that Grok's
+  `active_sessions.json` is not carried over; none has run live yet.
 
 ## Constraints and rationale
 
@@ -144,6 +135,38 @@ paths also remain, behind rollout switches, with no retirement plan.
   lifecycle `revision`.
 - Scope: Docker CLI primitives behind a small backend service. No Kubernetes,
   no wholesale Docker SDK rewrite, no per-agent image matrix.
+- Provider state is classified per path as preserve (needed to resume, rewind
+  or fork, or a bridge map without which the host session id cannot be
+  resolved), accept losing (user-visible, named in the limitation text, makes
+  the provider `partial`) or drop (credentials, configuration, caches, logs,
+  process registries, host-seeded content). The 2026-10-16 re-trace (static:
+  pinned binaries' strings and bundled docs, no Docker) found every preserved
+  path still correct at Claude 2.1.296, Codex 0.162.1, OpenCode 1.19.0, Pi
+  1.2.0, `@cursor/sdk` 1.0.37 and Grok 1.0.52.
+- Re-tracing is forced, not just documented: a test pinned to the manifest
+  fails on every bump until `PROVIDER_STATE_TRACED_VERSIONS` is updated. It
+  proves the step was acknowledged, not that the trace was right; the upgrade
+  guide carries the per-provider checks.
+- Codex: `session_index.jsonl` is still written at the home root, and Codex
+  offers no variable to relocate it alone. A single-file mount would break as
+  soon as Codex replaced the file by rename, so it is accepted as lost.
+  A name set in Orkestrator now also goes into the bridge's own title index
+  (`orkestrator-bridge/session-titles.jsonl`, preserved), as generated titles
+  already did, so only a name set inside the Codex CLI is lost. Every
+  `*_N.sqlite` runtime database at 0.162.1 (state, thread history, goals,
+  queue, memories, logs) follows `CODEX_SQLITE_HOME` and matches the migrate
+  selection.
+- OpenCode: `snapshot/` (a per-project git directory used only for revert and
+  diff, recreated on demand and pruned after 7 days) and `tool-output/` are
+  accepted as lost rather than mounted. Preserving them would copy a
+  workspace-sized object store on every rebuild, for revert of turns that may
+  already be pruned. Sessions, messages and parts are entirely in the database
+  `OPENCODE_DB` relocates (still an absolute file path at 1.19.0).
+- Grok: `active_sessions.json` is a live-process registry and `worktrees.db`
+  tracks only worktrees Grok creates under its own home, which are not
+  preserved either. `session/load` needs only the session directory under
+  `~/.grok/sessions`. Both are dropped deliberately, so Grok is `full`.
+  `memory-v2/` is opt-in and off by default; it is not preserved.
 
 ## Open questions
 
@@ -157,12 +180,6 @@ paths also remain, behind rollout switches, with no retirement plan.
   generation, so a stale handle bound to the old generation through
   `expectedRuntimeGeneration` is refused?
 - Is a resumable copy journal worth its complexity for very large workspaces?
-
-## Needs verification
-
-- Whether Codex at the current pin still writes `session_index.jsonl` at the
-  home root, and Grok `active_sessions.json` and `worktrees.db` at the
-  `~/.grok` root. Only third-party binaries can confirm this.
 
 ## Related
 

@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { getTranscriptCatalogInvalidationCountForTesting } from "./history/rollout.js";
 import { BridgeSessionStore } from "./sessions/persistence.js";
+import { readPersistedSessionTitleEntries } from "./session-titles.js";
 import { CODEX_SIGN_IN_REQUIRED_MESSAGE } from "./engine/app-server-engine.js";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AGENT_INTERACTION_HOLD_CEILING_MS } from "@orkestrator/protocol/agent-interactions";
 
@@ -166,7 +167,7 @@ describe("same thread in two tabs", () => {
   test("closing one of two tabs leaves the shared turn running", async () => {
     const h = await harness({ "thread/resume": () => ({ thread: threadPayload("thread-7") }) });
     const a = await h.runtime.resumeSession({ threadId: "thread-7", mode: "build" });
-    const b = await h.runtime.resumeSession({ threadId: "thread-7", mode: "build" });
+    await h.runtime.resumeSession({ threadId: "thread-7", mode: "build" });
     await h.runtime.prompt(a!.sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
 
     expect(await h.runtime.deleteSession(a!.sessionId)).toBe(true);
@@ -1252,6 +1253,105 @@ describe("models", () => {
 });
 
 describe("titles", () => {
+  test.each([
+    "Fix this?!;:,-.",
+    '"Keep  these quotes"',
+    "x",
+    "Long explicit title ".repeat(20),
+    "a".repeat(512),
+    `${"a".repeat(510)}  truncated`,
+    `  ${"b".repeat(520)}  `,
+  ])("explicit title survives listing and restart exactly: %s", async (input) => {
+    const title = input.trim().slice(0, 512);
+    writeRolloutWithTurns("thread-1", []);
+    const h = await harness();
+    const first = await h.runtime.resumeSession({ threadId: "thread-1", mode: "build" });
+    const second = await h.runtime.resumeSession({ threadId: "thread-1", mode: "build" });
+    expect(await h.runtime.setSessionTitle(first!.sessionId, input)).toBe(true);
+    expect(h.child().requests.find((r) => r.method === "thread/name/set")?.params.name).toBe(title);
+    expect((await readPersistedSessionTitleEntries(codexHome)).get("thread-1")).toEqual({
+      title,
+      source: "explicit",
+    });
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    const records = await store.load();
+    for (const session of [first!, second!]) {
+      expect(records.find((record) => record.bridgeSessionId === session.sessionId)).toMatchObject({
+        title,
+        titleSource: "explicit",
+      });
+      expect(h.runtime.getStatus(session.sessionId)?.title).toBe(title);
+    }
+    expect((await h.runtime.listSessions()).sessions.find((s) => s.id === "thread-1")?.title).toBe(
+      title,
+    );
+    await h.runtime.stop();
+
+    // A rebuild omits Codex's root-level name index. Reconstruct from only
+    // the preserved rollout, bridge title index and bridge session registry.
+    expect(existsSync(join(codexHome, "session_index.jsonl"))).toBe(false);
+    const restarted = await harness();
+    for (const session of [first!, second!]) {
+      expect(restarted.runtime.getStatus(session.sessionId)?.title).toBe(title);
+      expect(restarted.runtime.getRegistry().getSession(session.sessionId)?.titleSource).toBe(
+        "explicit",
+      );
+      await restarted.runtime.getMessages(session.sessionId);
+      expect(restarted.runtime.getStatus(session.sessionId)?.title).toBe(title);
+    }
+    expect(
+      (await restarted.runtime.listSessions()).sessions.find((s) => s.id === "thread-1")?.title,
+    ).toBe(title);
+    await restarted.runtime.stop();
+  });
+
+  test("renaming also persists a restored tab that has never attached", async () => {
+    const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
+    await store.upsert(
+      store.toRecord({
+        bridgeSessionId: "inactive-tab",
+        threadId: "thread-1",
+        cwd: "/tmp/ws",
+        config: { mode: "build", sandbox: "danger-full-access" },
+        title: "Old title",
+        titleSource: "generated",
+      }),
+    );
+    const h = await harness();
+    const active = await h.runtime.resumeSession({ threadId: "thread-1", mode: "build" });
+    expect(await h.runtime.setSessionTitle(active!.sessionId, "New title!")).toBe(true);
+    expect(
+      (await store.load()).find((record) => record.bridgeSessionId === "inactive-tab"),
+    ).toMatchObject({
+      title: "New title!",
+      titleSource: "explicit",
+    });
+    expect(h.runtime.getStatus("inactive-tab")?.title).toBe("New title!");
+    await h.runtime.stop();
+    const restarted = await harness();
+    expect(restarted.runtime.getStatus("inactive-tab")?.title).toBe("New title!");
+    await restarted.runtime.stop();
+  });
+
+  test("an explicit rename is kept in the bridge index, which a rebuild preserves", async () => {
+    const h = await harness({
+      "thread/resume": () => ({ thread: threadPayload("thread-1") }),
+    });
+    const session = await h.runtime.resumeSession({ threadId: "thread-1", mode: "build" });
+
+    expect(await h.runtime.setSessionTitle(session!.sessionId, "Renamed in Orkestrator")).toBe(
+      true,
+    );
+
+    expect(h.child().requests.some((r) => r.method === "thread/name/set")).toBe(true);
+    // Codex's own name lives in session_index.jsonl at the home root, which a
+    // container rebuild drops; this index sits on the preserved state volume.
+    expect((await readPersistedSessionTitleEntries(codexHome)).get("thread-1")).toEqual({
+      title: "Renamed in Orkestrator",
+      source: "explicit",
+    });
+  });
+
   test("a generated title is dual-written to Codex and the bridge index", async () => {
     const h = await harness({}, { generateTitle: async () => "Generated Title" });
     const { sessionId } = h.runtime.createSession({ mode: "build" });

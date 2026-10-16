@@ -69,6 +69,16 @@ test("Docker fixture rebuild keeps running while another environment is open and
   await expect(page.getByText("Rebuild container and keep its files?")).toBeVisible({
     timeout: 30_000,
   });
+  const grokPreservation = page.getByRole("listitem").filter({ hasText: /^grok sessions/ });
+  await expect(grokPreservation).toContainText("partly:");
+  await expect(grokPreservation).toContainText("worktrees.db");
+  await expect(grokPreservation).toContainText("memory-v2");
+  await expect(page.getByRole("listitem").filter({ hasText: /^codex sessions/ })).toContainText(
+    "pending qualification",
+  );
+  await expect(page.getByRole("listitem").filter({ hasText: /^opencode sessions/ })).toContainText(
+    "earlier turns cannot be reverted",
+  );
   // The confirmation closes the settings; the rebuild runs in the backend.
   await page.getByRole("button", { name: "Rebuild", exact: true }).click();
 

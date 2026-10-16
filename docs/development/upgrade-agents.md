@@ -58,6 +58,9 @@ Still not enforced anywhere, by nature:
   [Grok (ACP)](#grok-acp).
 - **Whether a new SDK event or tool variant is rendered.** Every bridge degrades
   an unknown one to a plain card or drops it, which is safe but silent.
+- **Where a new version keeps its session state.** A test forces the
+  [re-trace](#re-trace-preserved-provider-state) on every bump, but only a
+  person can do it.
 
 Cursor's only agent pin is `@cursor/sdk`; see
 [Cursor (SDK bridge)](#cursor-sdk-bridge).
@@ -312,9 +315,65 @@ below.
    mise run docker:build
    ```
 
+7. [Re-trace preserved provider state](#re-trace-preserved-provider-state) for
+   the new version.
+
 The live verifier downloads large artifacts and requires network access. The
 ordinary unit tests validate manifest structure and downloader behavior without
 trusting the network.
+
+## Re-trace preserved provider state
+
+A preserving container rebuild keeps `/workspace` and only the provider paths
+listed in `PROVIDER_STATE_LAYOUT`
+(`apps/backend/src/core/container-state-layout.ts`). Everything else in a
+provider home is dropped with the old runtime. An upgrade that moves session
+state to a new file or database makes a rebuild lose it, and no ordinary test
+notices. So every agent bump re-checks the layout against the new version.
+
+`apps/backend/tests/container-state-layout.test.ts` enforces that this step
+happened: it fails until `PROVIDER_STATE_TRACED_VERSIONS` names every CLI pin
+in the manifest and the `@cursor/sdk` pin. It cannot check the trace itself.
+Update the traced version only after doing the steps below.
+
+1. List what the new version reads and writes in its home. This needs no
+   Docker and no sign-in. `mise run download:<tool>` puts the binary under the
+   app's toolchain directory (`~/Library/Application
+   Support/orkestrator-v2/toolchains/<tool>/<version>/` on macOS). Its path
+   strings match the Linux build's. Diff the result against the previous
+   version beside it.
+
+   | Provider | Where to look | What must still hold |
+   | --- | --- | --- |
+   | Claude | The "Application data" table in the Claude Code docs (`claude-directory`); `strings` on the binary for the directory names | Transcripts are under `~/.claude/projects` and rewind snapshots under `~/.claude/file-history`. Anything new the docs list as needed for "resume, continue, and rewind" must be preserved |
+   | Codex | `strings "$BIN" \| grep -E '_[0-9]+\.sqlite\|session_index\|archived_sessions\|CODEX_SQLITE_HOME'` | Rollouts are under `sessions/` and `archived_sessions/`. `CODEX_SQLITE_HOME` is still honoured, and every runtime database it relocates matches the `.codex/*.sqlite*` selection in `replacementCopyPlan`. Note any new versioned database name; `thread_history_1` and `goals_1` are examples |
+   | OpenCode | `strings "$BIN" \| grep -E 'OPENCODE_DB\|opencode\.db\|snapshot'` | `OPENCODE_DB` is still a full database path (`OPENCODE_DB_PATH`), sessions live only in that database, and `snapshot/` is still revert history rather than session state |
+   | Pi | The pinned bundle's own docs: `sessions.md` and `environment-variables.md` under its `docs` directory | Sessions default to `~/.pi/agent/sessions`. The bridge passes `PI_SESSION_DIR` to `SessionManager` itself |
+   | Cursor | `JsonlLocalAgentStore` and `getDefaultSdkStateRoot` in the bundled SDK | The store writes only under the root `cursor-bridge/src/sdk-runtime.ts` passes it, which sits under `CURSOR_BRIDGE_STATE_DIR` |
+   | Grok | The help docs the CLI writes to `~/.grok/docs` (sessions and storage chapters), `CHANGELOG.md`, and `strings` for `GROK_HOME` | `session/load` needs only `~/.grok/sessions/<cwd>/<id>/` (`updates.jsonl` is authoritative). `active_sessions.json` lists live processes only and `worktrees.db` tracks only Grok's own worktrees |
+
+2. Classify every location the new version writes as one of:
+   - **Preserve**: needed to resume, rewind or fork a session, or a bridge
+     journal or map without which the host's session id cannot be resolved.
+   - **Accept losing**: visible to the user but not needed to resume. Name it
+     in the provider's `PROVIDER_PRESERVATION` limitation text, which the
+     rebuild preview shows. A provider with any such path is `partial`.
+   - **Drop**: credentials, configuration, caches, logs, process registries,
+     and anything the entrypoint re-seeds from the host on every start.
+3. If a preserved path moved or a new one appeared, change these together:
+   - the `PROVIDER_STATE_LAYOUT` entry, plus any relocation variable
+     (`persistentStateExports`);
+   - the legacy-migration selection in `replacementCopyPlan`;
+   - the provider's row in the "Provider state" table in
+     [container-lifecycle.md](../architecture/container-lifecycle.md);
+   - a populate line and expectation in the C14 live test
+     (`apps/backend/tests/container-live-replacement.test.ts`).
+
+   Never mount a whole provider home, and never symlink a state path; see the
+   constraints in
+   [container-rebuild-state-preservation.md](../todo/container-rebuild-state-preservation.md).
+4. Set the provider's entry in `PROVIDER_STATE_TRACED_VERSIONS` to the new
+   version and update the "Traced against" line under "Provider state".
 
 ## Claude
 
@@ -1013,6 +1072,9 @@ trusting a green result.
 6. Smoke-test sign-in through the bridge's `--login` child, run a turn with tool
    calls and a diff, switch model and effort, cancel mid-turn, and check the
    inactive-environment path.
+7. [Re-trace preserved provider state](#re-trace-preserved-provider-state):
+   confirm the SDK's local agent store still writes only under the root
+   `cursorSdkStateDirectoryPath()` hands it.
 
 Sub-agent cards are the one behaviour to re-check by hand on every bump. The SDK
 reports children only through nested updates on the parent run, so a child is
@@ -1168,6 +1230,7 @@ bun test tests/unit/version-drift.test.ts \
   tests/unit/verify-toolchain-artifacts.test.ts \
   packages/toolchain/src/manager.test.ts \
   tests/unit/bridge-packaging.test.ts --parallel
+bun test --cwd apps/backend tests/container-state-layout.test.ts
 ```
 
 For a repository-wide agent upgrade, verify every pinned URL, archive digest,

@@ -174,6 +174,42 @@ describe("ReviewerTranscriptTail", () => {
     expect(within(tail).getByText("src/review.ts")).toBeTruthy();
   });
 
+  test("shows narrative in white without a keyword, and keeps keywords on steps", async () => {
+    useMultiReviewStore.getState().replaceWorkflow(workflowRevision(1));
+    const base = transcript();
+    const loadTranscript = mock(async () =>
+      transcript({
+        messages: [
+          ...base.messages,
+          {
+            id: "row-2",
+            role: "assistant",
+            content: "Found one issue.",
+            createdAt: CREATED_AT,
+            parts: [{ type: "text", content: "Found one issue." }],
+          },
+        ],
+      }),
+    );
+    render(
+      <ReviewerTranscriptTail
+        workflowId="multi-1"
+        reviewerId="reviewer-1"
+        hasSession
+        live={false}
+        isActive
+        loadTranscript={loadTranscript}
+      />,
+    );
+
+    const tail = screen.getByTestId("multi-review-transcript-tail");
+    const narrative = await within(tail).findByText("Found one issue.");
+    expect(narrative.getAttribute("data-tail-kind")).toBe("say");
+    expect(narrative.className).toContain("text-foreground");
+    expect(within(tail).queryByText("say")).toBeNull();
+    expect(within(tail).getByText("read")).toBeTruthy();
+  });
+
   test("does not read a reviewer that has no session yet, or while the tab is hidden", () => {
     const loadTranscript = mock(async () => transcript());
     const view = render(

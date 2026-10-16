@@ -1,6 +1,7 @@
 import {
   Fragment,
   useCallback,
+  useEffect,
   useId,
   useLayoutEffect,
   useRef,
@@ -8,7 +9,9 @@ import {
   type CSSProperties,
   type KeyboardEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   AlertCircle,
   AlertTriangle,
@@ -525,6 +528,42 @@ function scrollingAncestor(element: HTMLElement | null): HTMLElement | null {
   return null;
 }
 
+/**
+ * Fullscreen lays the graph over its container until the button or Escape
+ * leaves it. An Escape that a context menu, tooltip or dialog already handled
+ * (Radix marks it handled) only closes that. Moving in or out remounts the
+ * graph, so focus that it drops goes back to the fullscreen button.
+ */
+function useFlowFullscreen(wrapperRef: RefObject<HTMLDivElement | null>): [boolean, () => void] {
+  const [fullscreen, setFullscreen] = useState(false);
+  const changedRef = useRef(false);
+  useLayoutEffect(() => {
+    if (!changedRef.current) return;
+    changedRef.current = false;
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    wrapperRef.current
+      ?.querySelector<HTMLButtonElement>('[data-testid="multi-review-fullscreen"]')
+      ?.focus();
+  }, [fullscreen, wrapperRef]);
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      changedRef.current = true;
+      setFullscreen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [fullscreen]);
+  const toggle = useCallback(() => {
+    changedRef.current = true;
+    setFullscreen((current) => !current);
+  }, []);
+  return [fullscreen, toggle];
+}
+
 /** Room around the column when Fit sizes it: its zoom controls and a margin. */
 const STACKED_FIT_MARGIN_PX = 72;
 
@@ -545,6 +584,12 @@ export interface MultiReviewFlowGraphProps {
   viewKey: string;
   /** Forces a layout; otherwise the measured width decides. */
   layout?: "graph" | "stacked";
+  /**
+   * What fullscreen covers: a positioned element, the Multi Review tab. The
+   * graph is portaled into it, since an `@container` ancestor would confine a
+   * fixed overlay to itself. Without one, fullscreen covers the window.
+   */
+  fullscreenContainer?: HTMLElement | null;
 }
 
 /**
@@ -570,9 +615,17 @@ export function MultiReviewFlowGraph({
   panelId,
   viewKey,
   layout,
+  fullscreenContainer,
 }: MultiReviewFlowGraphProps) {
+  const stackedWrapperRef = useRef<HTMLDivElement | null>(null);
+  const [fullscreen, toggleFullscreen] = useFlowFullscreen(stackedWrapperRef);
+  const overlayClass = fullscreenContainer ? "absolute inset-0 z-30" : "fixed inset-0 z-50";
+  const present = (graph: ReactNode) =>
+    fullscreen ? createPortal(graph, fullscreenContainer ?? document.body) : graph;
   const [measureRef, measuredWidth] = useMeasuredWidth();
   const [measureViewportRef, viewportWidth] = useMeasuredWidth();
+  // In fullscreen the viewport takes the overlay's height rather than its own.
+  const [measureViewportHeight, viewportHeight] = useMeasuredHeight();
   const nodeRefs = useRef(new Map<string, HTMLButtonElement>());
   const order = [packageNode, ...reviewerNodes, consolidationNode, fixNode];
   const stacked =
@@ -587,19 +640,20 @@ export function MultiReviewFlowGraph({
     viewKey,
     measuredWidth: viewportWidth,
     content: { width: geometry.width, height: geometry.height },
+    fillHeight: fullscreen ? viewportHeight : null,
   });
   const { attachViewport } = flowViewport;
   const viewportRef = useCallback(
     (element: HTMLDivElement | null) => {
       measureViewportRef(element);
+      measureViewportHeight(element);
       attachViewport(element);
     },
-    [attachViewport, measureViewportRef],
+    [attachViewport, measureViewportHeight, measureViewportRef],
   );
   // The stacked column keeps a view of its own, under its own key, so each
   // layout restores what it was left at.
   const [columnRef, columnHeight] = useMeasuredHeight();
-  const stackedWrapperRef = useRef<HTMLDivElement | null>(null);
   // This outer element survives layout changes and never reserves a scrollbar
   // gutter. Only the inner viewport measurement determines graph geometry.
   const wrapperRef = useCallback(
@@ -615,7 +669,9 @@ export function MultiReviewFlowGraph({
     content: { width: measuredWidth ?? 0, height: columnHeight ?? 0 },
     layout: "stacked",
     fitHeight: () => {
-      const scroller = scrollingAncestor(stackedWrapperRef.current);
+      const wrapper = stackedWrapperRef.current;
+      // In fullscreen the column scrolls inside its own wrapper.
+      const scroller = fullscreen ? wrapper : scrollingAncestor(wrapper);
       const visible = scroller?.clientHeight ?? window.innerHeight;
       return visible > STACKED_FIT_MARGIN_PX ? visible - STACKED_FIT_MARGIN_PX : null;
     },
@@ -632,6 +688,10 @@ export function MultiReviewFlowGraph({
     // The column just got shorter; bring its top back into view.
     requestAnimationFrame(() => {
       const wrapper = stackedWrapperRef.current;
+      if (fullscreen && wrapper) {
+        wrapper.scrollTop = 0;
+        return;
+      }
       const scroller = scrollingAncestor(wrapper);
       if (!wrapper || !scroller) return;
       const offset = wrapper.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
@@ -713,11 +773,15 @@ export function MultiReviewFlowGraph({
     const { zoom, offset, panning, viewportHandlers } = stackedViewport;
     // Until the column is measured it renders unscaled, exactly as at 100%.
     const scaled = zoom !== 1 && measuredWidth !== null && columnHeight !== null;
-    return (
+    return present(
       <div
         ref={wrapperRef}
         data-flow-layout="stacked"
-        className={cn("relative border-b border-divider", canvasClass)}
+        data-flow-fullscreen={fullscreen ? "" : undefined}
+        className={cn(
+          fullscreen ? cn(overlayClass, "overflow-y-auto") : "relative border-b border-divider",
+          canvasClass,
+        )}
       >
         {/* Sticky, so the controls stay in reach while a long column scrolls. */}
         <div className="pointer-events-none sticky top-0 z-10 flex justify-end px-3 pt-3">
@@ -729,6 +793,8 @@ export function MultiReviewFlowGraph({
               onZoomIn={() => stackedViewport.zoomBy(1)}
               onReset={stackedViewport.resetZoom}
               onFit={fitStacked}
+              fullscreen={fullscreen}
+              onToggleFullscreen={toggleFullscreen}
             />
           </div>
         </div>
@@ -789,7 +855,7 @@ export function MultiReviewFlowGraph({
             </div>
           </div>
         </div>
-      </div>
+      </div>,
     );
   }
 
@@ -802,17 +868,25 @@ export function MultiReviewFlowGraph({
   });
   const { zoom, viewport, offset, panning, viewportHandlers } = flowViewport;
 
-  return (
+  return present(
     <div
       ref={wrapperRef}
       data-flow-layout="graph"
-      className={cn("relative shrink-0 border-b border-divider", canvasClass)}
+      data-flow-fullscreen={fullscreen ? "" : undefined}
+      className={cn(
+        fullscreen
+          ? cn(overlayClass, "flex flex-col")
+          : "relative shrink-0 border-b border-divider",
+        canvasClass,
+      )}
     >
       <div
         ref={viewportRef}
         data-flow-viewport=""
-        style={{ height: viewport.height }}
+        // Fullscreen leaves the height to the overlay, and measures it.
+        style={fullscreen ? undefined : { height: viewport.height }}
         className={cn(
+          fullscreen && "min-h-0 flex-1",
           // A stable gutter keeps the measured width, and so the layout, from
           // changing when zooming adds a scrollbar.
           "overflow-auto overscroll-contain [scrollbar-gutter:stable]",
@@ -903,7 +977,9 @@ export function MultiReviewFlowGraph({
         onZoomIn={() => flowViewport.zoomBy(1)}
         onReset={flowViewport.resetZoom}
         onFit={flowViewport.fit}
+        fullscreen={fullscreen}
+        onToggleFullscreen={toggleFullscreen}
       />
-    </div>
+    </div>,
   );
 }

@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import {
+  MULTI_REVIEW_WORKFLOW_VERSION,
+  isMultiReviewWorkflow,
+} from "@orkestrator/protocol/multi-review";
+import {
   RETAINING_CLOSE_SESSION_ID_PREFIX,
   fenceRetainingCloseSessionId,
   tabTeardownFailureKind,
@@ -395,6 +399,58 @@ describe("tab close retains conversation history", () => {
       expect(providerCloses).toEqual([["e1", "opencode", "shared-session"]]);
       expect(calls).toEqual([]);
       expect(await storage.getNativeAgentSession(second)).toBeNull();
+    });
+  });
+
+  test("closing a tab opened on a Multi Review session leaves it to the workflow", async () => {
+    await withTeardown(retained, async ({ invoke, storage, calls, released }) => {
+      const workflow = {
+        version: MULTI_REVIEW_WORKFLOW_VERSION,
+        controller: "backend",
+        id: "multi-1",
+        environmentId: "e1",
+        projectId: "proj-1",
+        targetBranch: "main",
+        phase: "preparing",
+        reviewers: [{ id: "reviewer-1", agent: "claude", model: "opus", status: "pending" }],
+        fixModel: { agent: "codex", model: "gpt-5.6" },
+        reviewSession: {
+          agent: "claude",
+          model: "opus",
+          sessionKey: "multi-review:multi-1:review",
+          providerSessionId: "review-session",
+          requestIds: [],
+          status: "running",
+          startedAt: new Date(0).toISOString(),
+        },
+        createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+        backendRevision: 1,
+      };
+      expect(isMultiReviewWorkflow(workflow)).toBe(true);
+      await storage.saveMultiReviewWorkflow("multi-1", "e1", 1, workflow);
+      const tab = await mapTab(storage, "claude", "multi-review-review:multi-1", "review-session");
+
+      await invoke("teardown_tab", {
+        environmentId: "e1",
+        tabId: "multi-review-review:multi-1",
+        kind: "claude-native",
+      });
+      // The supervisor's turn keeps running; only the tab's mapping goes.
+      expect(calls).toEqual([]);
+      expect(released).toEqual([]);
+      expect(await storage.getNativeAgentSession(tab)).toBeNull();
+
+      // Once the Multi Review is closed, nothing owns the session any more.
+      await storage.deleteMultiReviewWorkflow("multi-1");
+      await mapTab(storage, "claude", "multi-review-review:multi-1", "review-session");
+      await invoke("teardown_tab", {
+        environmentId: "e1",
+        tabId: "multi-review-review:multi-1",
+        kind: "claude-native",
+      });
+      expect(calls.map((call) => call.method)).toEqual(["POST"]);
+      expect(released).toEqual([["e1", "claude", "review-session"]]);
     });
   });
 

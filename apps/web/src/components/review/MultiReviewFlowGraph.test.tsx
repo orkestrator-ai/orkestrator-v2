@@ -17,6 +17,7 @@ import {
   type CreatableTabType,
   type CreateTabOptions,
 } from "@/contexts";
+import { ContextMenuItem } from "@/components/ui/context-menu";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { useMultiReviewFlowViewStore } from "@/stores/multiReviewFlowViewStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
@@ -996,6 +997,92 @@ describe("zoom and pan", () => {
     fireEvent.pointerUp(element, { pointerId: 2 });
     fireEvent.pointerMove(element, { pointerId: 2, clientX: 400, clientY: 0 });
     expect(element.scrollTop).toBe(300);
+  });
+
+  test("a press in a node's context menu selects its item instead of starting a pan", () => {
+    const restart = mock(() => undefined);
+    const props = panel(4);
+    render(
+      <MultiReviewFlowGraph
+        {...props}
+        packageNode={{
+          ...props.packageNode,
+          contextMenu: <ContextMenuItem onSelect={restart}>Restart</ContextMenuItem>,
+        }}
+      />,
+    );
+    const element = viewport();
+    const capture = mock((_pointerId: number) => undefined);
+    element.setPointerCapture = capture;
+    fireEvent.contextMenu(screen.getByRole("tab", { name: "package, complete" }));
+    const item = screen.getByRole("menuitem", { name: "Restart" });
+    // The menu is portaled out of the viewport, but React still bubbles its
+    // pointer events to the viewport's handlers.
+    fireEvent.pointerDown(item, { button: 0, pointerId: 3, pointerType: "mouse" });
+    expect(capture).not.toHaveBeenCalled();
+    fireEvent.click(item);
+    expect(restart).toHaveBeenCalledTimes(1);
+  });
+
+  test("fullscreen lays the graph over the window until the button or Escape leaves it", () => {
+    render(<MultiReviewFlowGraph {...panel(4)} />);
+    const wrapper = () => document.querySelector<HTMLElement>("[data-flow-layout]")!;
+    // Entering and leaving fullscreen moves the graph, so query it afresh.
+    const toggle = () => screen.getByTestId("multi-review-fullscreen");
+    expect(toggle().getAttribute("aria-label")).toBe("Fullscreen");
+    expect(wrapper().hasAttribute("data-flow-fullscreen")).toBe(false);
+
+    fireEvent.click(toggle());
+    expect(wrapper().hasAttribute("data-flow-fullscreen")).toBe(true);
+    expect(wrapper().className).toContain("fixed");
+    expect(toggle().getAttribute("aria-label")).toBe("Exit fullscreen");
+    // The move remounts the button; focus follows it.
+    expect(document.activeElement).toBe(toggle());
+    // The window, not the graph's own height, sizes the viewport.
+    expect(viewport().style.height).toBe("");
+
+    fireEvent.click(toggle());
+    expect(wrapper().hasAttribute("data-flow-fullscreen")).toBe(false);
+    expect(viewport().style.height).not.toBe("");
+
+    fireEvent.click(toggle());
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(wrapper().hasAttribute("data-flow-fullscreen")).toBe(false);
+  });
+
+  test("fullscreen covers the container it is given, outside any @container ancestor", () => {
+    const tab = document.createElement("div");
+    document.body.append(tab);
+    try {
+      render(
+        <div className="@container">
+          <MultiReviewFlowGraph {...panel(4)} fullscreenContainer={tab} />
+        </div>,
+      );
+      fireEvent.click(screen.getByTestId("multi-review-fullscreen"));
+      const wrapper = document.querySelector<HTMLElement>("[data-flow-fullscreen]")!;
+      expect(wrapper.parentElement).toBe(tab);
+      expect(wrapper.className).toContain("absolute");
+      expect(wrapper.className).toContain("inset-0");
+      fireEvent.click(screen.getByTestId("multi-review-fullscreen"));
+      expect(tab.childElementCount).toBe(0);
+      expect(document.querySelector(".\\@container [data-flow-layout]")).not.toBeNull();
+    } finally {
+      tab.remove();
+    }
+  });
+
+  test("an Escape another layer already handled leaves fullscreen alone", () => {
+    render(<MultiReviewFlowGraph {...panel(4)} layout="stacked" />);
+    fireEvent.click(screen.getByTestId("multi-review-fullscreen"));
+    const wrapper = () => document.querySelector<HTMLElement>("[data-flow-layout]")!;
+    expect(wrapper().hasAttribute("data-flow-fullscreen")).toBe(true);
+    const handled = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+    handled.preventDefault();
+    act(() => {
+      window.dispatchEvent(handled);
+    });
+    expect(wrapper().hasAttribute("data-flow-fullscreen")).toBe(true);
   });
 
   test("the stacked layout has the same controls and bounds, with 44 px targets", () => {

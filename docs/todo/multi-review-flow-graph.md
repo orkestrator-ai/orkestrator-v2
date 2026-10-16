@@ -22,9 +22,15 @@ live findings on real providers and a few gaps found on the way.
   column with straight connectors.
 - **Zoom and pan.** The graph sits in a scrolling viewport up to 720 px tall
   (`MultiReviewFlowViewport.tsx`, maths in `multi-review-flow-viewport.ts`).
-  −, the zoom level (which resets to 100%), + and Fit sit in its bottom-right
-  corner; zoom runs from 20% to 200%. Dragging the canvas, wheel and trackpad
-  scrolling pan it; Ctrl/⌘ + wheel, a trackpad pinch and a two-finger touch
+  −, the zoom level (which resets to 100%), +, Fit and Fullscreen sit in its
+  bottom-right corner; zoom runs from 20% to 200%. Fit only ever zooms out, so
+  it does nothing while the graph already fits. Fullscreen portals the graph
+  over the whole Multi Review tab (an `@container` ancestor would confine a
+  fixed overlay) and the viewport takes the tab's height; the button or an
+  Escape no menu or dialog handled leaves it. Dragging the canvas, wheel and
+  trackpad scrolling pan it, but a press that React bubbles up from a node's
+  portaled context menu never starts a drag, since capturing its pointer would
+  swallow the menu item's selection; Ctrl/⌘ + wheel, a trackpad pinch and a two-finger touch
   pinch zoom around the pointer, while a plain wheel is left to scrolling so
   the page still scrolls past the graph. A node reached from the keyboard is
   scrolled into view first. Zoom and pan are kept per workflow in
@@ -43,6 +49,8 @@ live findings on real providers and a few gaps found on the way.
   focus. Steps take the workflow error, or the Fix session's own once the fix
   is interactive.
 - **Inspector.** `MultiReviewInspector.tsx`. Every node has a transcript tail.
+  Each step is a keyword and its subject; narrative (`say`) lines drop the
+  keyword and read in white against the grey steps.
   A reviewer's reads `getMultiReviewReviewerTranscript`; preparation,
   consolidation and Fix read `getMultiReviewStepTranscript`
   (`get_multi_review_step_transcript`, `multi-review-step-transcript.ts`),

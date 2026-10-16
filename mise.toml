@@ -183,8 +183,8 @@ description = "Smoke-test the packed CLI"
 run = "bun run --cwd packages/cli smoke:pack"
 
 [tasks."publish:cli"]
-description = "Smoke-test and publish the CLI"
-run = ["mise run smoke:cli", "bun publish --cwd packages/cli --access public"]
+description = "Smoke-test and publish the CLI on its release channel's npm dist-tag"
+run = ["mise run smoke:cli", "bun scripts/release-cli.ts publish"]
 
 [tasks.preview]
 description = "Preview the production renderer"
@@ -341,6 +341,7 @@ run = [
   "bun install --frozen-lockfile",
   "mise run download:bun",
   "mise run build:all",
+  "mise run release:requirements",
   "bunx electron-builder --mac --dir",
   "bun scripts/install-packaged-app-mac.ts",
 ]
@@ -351,6 +352,7 @@ run = [
   "bun install --frozen-lockfile",
   "mise run download:bun",
   "mise run build:all",
+  "mise run release:requirements",
   "bunx electron-builder --linux --dir",
   "bun scripts/install-packaged-app-linux.ts",
 ]
@@ -361,6 +363,7 @@ run = [
   "bun install --frozen-lockfile",
   "mise run download:bun",
   "mise run build:all",
+  "mise run release:requirements",
   "bunx electron-builder --mac --config electron-builder.release.config.ts --publish never",
   "bun scripts/install-packaged-app-mac.ts",
 ]
@@ -373,4 +376,12 @@ run = "bun scripts/release-desktop.ts build"
 [tasks."release:publish"]
 description = "Publish the draft GitHub release once macOS and Linux are both uploaded"
 run = "bun scripts/release-desktop.ts publish"
+
+[tasks."release:requirements"]
+description = "Generate the release requirements manifest the desktop package embeds"
+run = "bun scripts/release-requirements.ts generate --out build/release-requirements.json"
+
+[tasks."release:channels"]
+description = "Rebuild and upload the release channel index (channels.json)"
+run = "bun scripts/release-channel-index.ts publish"
 

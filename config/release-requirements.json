@@ -1,0 +1,15 @@
+{
+  "$comment": "Hand-declared parts of release-requirements.json (scripts/release-requirements.ts). Raise a compatibility floor in the change that breaks the older peer; add an egress host in the change that first contacts it. See docs/architecture/release-channels-and-updates.md.",
+  "compatibility": {
+    "minClientVersion": "2.20.0",
+    "minBackendVersion": "2.20.0"
+  },
+  "egressHosts": [
+    { "host": "github.com", "purposes": ["updates"] },
+    { "host": "objects.githubusercontent.com", "purposes": ["updates"] },
+    { "host": "release-assets.githubusercontent.com", "purposes": ["updates"] },
+    { "host": "registry.npmjs.org", "purposes": ["updates"] },
+    { "host": "ghcr.io", "purposes": ["container-image"] },
+    { "host": "pkg-containers.githubusercontent.com", "purposes": ["container-image"] }
+  ]
+}

@@ -5,11 +5,12 @@ import {
   LOCAL_CONNECTION_ID,
   parseStoredDesktopConnections,
 } from "@orkestrator/protocol/connections";
-import type {
-  MacOsMissingPermission,
-  MacOsPermissionId,
-  MacOsPermissionsStatus,
-  MacOsPrivacySettingsPane,
+import {
+  describeMacOsPermission,
+  type MacOsMissingPermission,
+  type MacOsPermissionId,
+  type MacOsPermissionsStatus,
+  type MacOsPrivacySettingsPane,
 } from "@orkestrator/protocol/macos-permissions";
 
 const FULL_DISK_ACCESS_PROBE_PATH = "/Library/Application Support/com.apple.TCC";
@@ -26,41 +27,21 @@ export type MacOsPermissionsProbeOptions = {
   listDirectory?: (directory: string) => Promise<string[]>;
 };
 
-function folderProbe(id: MacOsPermissionId, label: string, pathValue: string): PermissionProbe {
-  return {
-    id,
-    label,
-    settingsPane: "files-and-folders",
-    required: true,
-    path: pathValue,
-  };
+function probe(id: MacOsPermissionId, pathValue: string): PermissionProbe {
+  return { ...describeMacOsPermission(id), path: pathValue };
 }
 
 function staticPermissionProbes(homeDirectory: string): PermissionProbe[] {
   return [
-    {
-      id: "full-disk-access",
-      label: "Full Disk Access",
-      settingsPane: "full-disk-access",
-      required: false,
-      path: FULL_DISK_ACCESS_PROBE_PATH,
-    },
-    folderProbe("desktop", "Desktop folder", path.join(homeDirectory, "Desktop")),
-    folderProbe("documents", "Documents folder", path.join(homeDirectory, "Documents")),
-    folderProbe("downloads", "Downloads folder", path.join(homeDirectory, "Downloads")),
-    folderProbe("music", "Music folder", path.join(homeDirectory, "Music")),
-    folderProbe("pictures", "Pictures folder", path.join(homeDirectory, "Pictures")),
-    folderProbe("movies", "Movies folder", path.join(homeDirectory, "Movies")),
-    folderProbe(
-      "icloud-drive",
-      "iCloud Drive",
-      path.join(homeDirectory, "Library", "Mobile Documents"),
-    ),
-    folderProbe(
-      "cloud-storage",
-      "Cloud Storage",
-      path.join(homeDirectory, "Library", "CloudStorage"),
-    ),
+    probe("full-disk-access", FULL_DISK_ACCESS_PROBE_PATH),
+    probe("desktop", path.join(homeDirectory, "Desktop")),
+    probe("documents", path.join(homeDirectory, "Documents")),
+    probe("downloads", path.join(homeDirectory, "Downloads")),
+    probe("music", path.join(homeDirectory, "Music")),
+    probe("pictures", path.join(homeDirectory, "Pictures")),
+    probe("movies", path.join(homeDirectory, "Movies")),
+    probe("icloud-drive", path.join(homeDirectory, "Library", "Mobile Documents")),
+    probe("cloud-storage", path.join(homeDirectory, "Library", "CloudStorage")),
   ];
 }
 
@@ -151,12 +132,7 @@ export async function probeMacOsPermissions({
   for (const candidate of photosCandidates) {
     await recordDeniedAccess(
       candidate,
-      {
-        id: "photos",
-        label: "Photos library",
-        settingsPane: "photos",
-        required: true,
-      },
+      describeMacOsPermission("photos"),
       readDirectory,
       missingIds,
       missing,
@@ -172,12 +148,7 @@ export async function probeMacOsPermissions({
   for (const candidate of mediaCandidates) {
     await recordDeniedAccess(
       candidate,
-      {
-        id: "media-library",
-        label: "Media Library",
-        settingsPane: "media-library",
-        required: true,
-      },
+      describeMacOsPermission("media-library"),
       readDirectory,
       missingIds,
       missing,

@@ -6,21 +6,44 @@
  *   bun scripts/release-desktop.ts publish
  *
  * `build` runs once per platform (macOS on a Mac, Linux on the Linux machine).
- * Each run uploads its artifacts and updater feed to the same draft release for
- * the `v<version>` tag. `publish` checks that every platform made it and then
- * makes the draft public, so users and installed apps never see a partial
- * release. `--no-publish` builds without touching git state or GitHub.
+ * Each run uploads its artifacts, updater feed and release requirements
+ * manifest to the same draft release for the `v<version>` tag. `publish`
+ * checks that every platform made it, that the uploaded manifest is the one
+ * this tagged checkout generates and that the npm package exists, then makes
+ * the draft public on its channel and rebuilds the channel index, so users and
+ * installed apps never see a partial release. `--no-publish` builds without
+ * touching git state or GitHub. Channels: docs/architecture/release-channels-and-updates.md.
  */
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import {
+  assertReleaseChannelVersion,
+  type ReleaseChannel,
+} from "../packages/protocol/src/release-channels.js";
+import {
+  RELEASE_REQUIREMENTS_ASSET,
+  RELEASE_REQUIREMENTS_SIGNATURE_ASSET,
+} from "../packages/protocol/src/release-requirements.js";
+import { RELEASE_SIGNING_PUBLIC_KEYS } from "../packages/protocol/src/release-signing-keys.js";
 import { assertMacUpdateFeed, prepareMacUpdateFeeds } from "./mac-update-feed.js";
 
 const root = path.resolve(import.meta.dir, "..");
 const REPOSITORY = "orkestrator-ai/orkestrator-v2";
 
 /** Artifact extensions a complete release has, and the feed each platform owns. */
-const REQUIRED_ASSET_SUFFIXES = [".dmg", ".zip", "latest-mac.yml", ".AppImage", ".pacman"] as const;
+const REQUIRED_ASSET_SUFFIXES = [
+  ".dmg",
+  ".zip",
+  "latest-mac.yml",
+  ".AppImage",
+  ".pacman",
+  RELEASE_REQUIREMENTS_ASSET,
+] as const;
 const LINUX_UPDATE_FEEDS = ["latest-linux.yml", "latest-linux-arm64.yml"] as const;
+/** Where the build writes the manifest; electron-builder copies it into resources. */
+export const REQUIREMENTS_FILE = `build/${RELEASE_REQUIREMENTS_ASSET}`;
+export const REQUIREMENTS_SIGNATURE_FILE = `build/${RELEASE_REQUIREMENTS_SIGNATURE_ASSET}`;
 
 function fail(message: string): never {
   throw new Error(message);
@@ -99,7 +122,25 @@ export type ReleaseRuntime = {
   releaseTag(): string;
   artifacts(): string[];
   prepareMacUpdateFeeds(): string[];
+  /** A fresh private directory; `cleanup` removes it. */
+  tempDir(): { path: string; cleanup(): void };
+  /** Whether `orkestrator@<version>` is on the npm registry. */
+  npmVersionExists(version: string): boolean;
+  /** The public keys this build embeds (`release-signing-keys.ts`). */
+  trustedSigningKeys: readonly string[];
 };
+
+function npmVersionExists(version: string): boolean {
+  const url = `https://registry.npmjs.org/orkestrator/${encodeURIComponent(version)}`;
+  const result = Bun.spawnSync(["curl", "-sS", "-o", os.devNull, "-w", "%{http_code}", url], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const status = result.stdout.toString().trim();
+  if (status === "200") return true;
+  if (status === "404") return false;
+  fail(`could not ask npm about orkestrator@${version} (HTTP ${status || "error"})`);
+}
 
 const defaultRuntime: ReleaseRuntime = {
   platform: process.platform,
@@ -111,7 +152,19 @@ const defaultRuntime: ReleaseRuntime = {
   releaseTag,
   artifacts: () => readdirSync(path.join(root, "release")),
   prepareMacUpdateFeeds: () => prepareMacUpdateFeeds(path.join(root, "release")),
+  tempDir: () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "orkestrator-release-"));
+    return { path: directory, cleanup: () => rmSync(directory, { recursive: true, force: true }) };
+  },
+  npmVersionExists,
+  trustedSigningKeys: RELEASE_SIGNING_PUBLIC_KEYS,
 };
+
+/** The release's channel, refused before any side effect when the version has none. */
+function releaseChannel(tag: string): ReleaseChannel {
+  if (!tag.startsWith("v")) fail(`release tag ${tag} must start with v`);
+  return assertReleaseChannelVersion(tag.slice(1));
+}
 
 function githubToken(runtime: ReleaseRuntime): string {
   const token =
@@ -141,12 +194,44 @@ function build(publish: boolean, runtime: ReleaseRuntime): void {
   }
 
   const tag = releaseTag();
+  releaseChannel(tag);
   if (publish) assertTaggedCheckout(tag, runtime.capture);
   const env = publish ? { ...runtime.env, GH_TOKEN: githubToken(runtime) } : runtime.env;
+  const signed = Boolean(runtime.env.ORKESTRATOR_RELEASE_SIGNING_KEY?.trim());
+  // Installs that ship these keys refuse an unsigned manifest, so find out
+  // before a 20-minute build rather than at publish.
+  if (publish && runtime.trustedSigningKeys.length > 0 && !signed) {
+    fail(
+      "this build embeds release signing keys, so its release must be signed: set ORKESTRATOR_RELEASE_SIGNING_KEY",
+    );
+  }
 
   run(["bun", "install", "--frozen-lockfile"]);
   run(["mise", "run", "download:bun"]);
   run(["mise", "run", "build:all"], { ...env, NODE_OPTIONS: "--max-old-space-size=4096" });
+  // Before packaging: electron-builder copies it into the app's resources.
+  run(["bun", "scripts/release-requirements.ts", "generate", "--out", REQUIREMENTS_FILE]);
+  if (signed) {
+    run([
+      "bun",
+      "scripts/release-requirements.ts",
+      "sign",
+      "--file",
+      REQUIREMENTS_FILE,
+      "--out",
+      REQUIREMENTS_SIGNATURE_FILE,
+    ]);
+    // A key the build does not embed would sign a release no install accepts.
+    run([
+      "bun",
+      "scripts/release-requirements.ts",
+      "verify",
+      "--file",
+      REQUIREMENTS_FILE,
+      "--signature",
+      REQUIREMENTS_SIGNATURE_FILE,
+    ]);
+  }
   run(
     [
       "bunx",
@@ -167,6 +252,25 @@ function build(publish: boolean, runtime: ReleaseRuntime): void {
     if (publish)
       run(["gh", "release", "upload", tag, "--repo", REPOSITORY, "--clobber", ...feeds], env);
   }
+  // Generation is deterministic, so every platform makes the same bytes; only
+  // the macOS build (required in every release) uploads them, so parallel CI
+  // jobs never race on one asset. `publish` re-derives and compares them.
+  if (publish && platform === "darwin") {
+    run(
+      [
+        "gh",
+        "release",
+        "upload",
+        tag,
+        "--repo",
+        REPOSITORY,
+        "--clobber",
+        REQUIREMENTS_FILE,
+        ...(signed ? [REQUIREMENTS_SIGNATURE_FILE] : []),
+      ],
+      env,
+    );
+  }
 
   const artifacts = runtime.artifacts().filter((name) => !name.includes("unpacked"));
   console.log(`\nBuilt ${tag}:\n  ${artifacts.join("\n  ")}`);
@@ -177,9 +281,56 @@ function build(publish: boolean, runtime: ReleaseRuntime): void {
   );
 }
 
+function verifyUploadedRequirements(
+  runtime: ReleaseRuntime,
+  tag: string,
+  names: readonly string[],
+): void {
+  const directory = runtime.tempDir();
+  try {
+    const signed = names.includes(RELEASE_REQUIREMENTS_SIGNATURE_ASSET);
+    const assets = [
+      RELEASE_REQUIREMENTS_ASSET,
+      ...(signed ? [RELEASE_REQUIREMENTS_SIGNATURE_ASSET] : []),
+    ];
+    for (const asset of assets) {
+      runtime.run([
+        "gh",
+        "release",
+        "download",
+        tag,
+        "--repo",
+        REPOSITORY,
+        "--pattern",
+        asset,
+        "--dir",
+        directory.path,
+        "--clobber",
+      ]);
+    }
+    // Re-derives the bytes from this tagged checkout, and requires a valid
+    // signature whenever this build embeds signing keys.
+    runtime.run([
+      "bun",
+      "scripts/release-requirements.ts",
+      "verify",
+      "--file",
+      path.join(directory.path, RELEASE_REQUIREMENTS_ASSET),
+      ...(signed
+        ? ["--signature", path.join(directory.path, RELEASE_REQUIREMENTS_SIGNATURE_ASSET)]
+        : []),
+    ]);
+  } finally {
+    directory.cleanup();
+  }
+}
+
 function publish(runtime: ReleaseRuntime): void {
   const { releaseTag, capture, run } = runtime;
   const tag = releaseTag();
+  const channel = releaseChannel(tag);
+  // The manifest check regenerates from the tree, so it must be the tag's.
+  assertTaggedCheckout(tag, capture);
   const release = JSON.parse(
     capture(["gh", "release", "view", tag, "--repo", REPOSITORY, "--json", "isDraft,assets"]),
   ) as { isDraft: boolean; assets: Array<{ name: string }> };
@@ -217,7 +368,15 @@ function publish(runtime: ReleaseRuntime): void {
     );
   }
 
-  const prerelease = tag.includes("-");
+  verifyUploadedRequirements(runtime, tag, names);
+  // The channel index must never point a headless backend at a version
+  // `bun add` cannot install.
+  if (!runtime.npmVersionExists(tag.slice(1))) {
+    fail(`orkestrator@${tag.slice(1)} is not on npm yet. Run \`mise run publish:cli\` first.`);
+  }
+
+  // Only stable is ever "latest": pre-channel clients follow /releases/latest.
+  const prerelease = channel !== "stable";
   run([
     "gh",
     "release",
@@ -229,7 +388,10 @@ function publish(runtime: ReleaseRuntime): void {
     `--prerelease=${prerelease}`,
     `--latest=${!prerelease}`,
   ]);
-  console.log(`\nPublished ${tag}: https://github.com/${REPOSITORY}/releases/tag/${tag}`);
+  console.log(
+    `\nPublished ${tag} on ${channel}: https://github.com/${REPOSITORY}/releases/tag/${tag}`,
+  );
+  run(["bun", "scripts/release-channel-index.ts", "publish"]);
 }
 
 export function runDesktopRelease(args: string[], runtime: ReleaseRuntime = defaultRuntime): void {

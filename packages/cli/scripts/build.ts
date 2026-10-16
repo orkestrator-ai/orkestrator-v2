@@ -60,3 +60,19 @@ for (const result of builds) {
     console.log(`${path.relative(packageRoot, artifact.path)} ${artifact.size} bytes`);
   }
 }
+
+// The backend diffs a target release's requirements against its own when
+// offering an update, and a supervised install checks the package it staged
+// against the manifest the user approved. Both read this copy. A subprocess
+// keeps the generator's backend imports out of this package's typecheck.
+const requirements = Bun.spawnSync(
+  [
+    process.execPath,
+    path.join(repositoryRoot, "scripts/release-requirements.ts"),
+    "generate",
+    "--out",
+    path.join(resourcesRoot, "release-requirements.json"),
+  ],
+  { cwd: repositoryRoot, stdout: "inherit", stderr: "inherit" },
+);
+if (requirements.exitCode !== 0) process.exit(requirements.exitCode ?? 1);

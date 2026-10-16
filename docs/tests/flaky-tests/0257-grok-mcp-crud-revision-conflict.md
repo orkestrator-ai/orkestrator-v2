@@ -1,6 +1,6 @@
 # Grok MCP CRUD revision conflict in the aggregate suite
 
-- **ID:** 0250
+- **ID:** 0257
 - **Status:** open
 - **Date observed:** 2026-10-16
 - **Test:** `Grok adapter > Grok: native TOML CRUD, compatibility sources read-only and below native`

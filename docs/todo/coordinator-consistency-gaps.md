@@ -23,10 +23,21 @@ dispatcher if queue and wake work.
 - **Waiting workers.** The toolbar chip ("Waiting on N workers",
   `awaitingWorkers` in `apps/web/src/components/projects/CoordinatorPanel.tsx`)
   lists workers with a running delegation. It does not mark a worker whose own
-  session is `waiting` on an approval or question as needing a person.
-- **Mail carriers.** Injected mail has no `data-mail-kind` (or any other kind
-  marker) in `apps/web/src`, so system notices and tab replies cannot be
-  styled apart.
+  session is `waiting` on an approval or question as needing a person. The
+  data now exists: a running delegation carries `waiting.since` from the
+  worker tab's own turn activity (written by status wakes), but that write
+  does not announce a coordinator change, so the chip would not refresh.
+- **Status wakes.** A coordinator is woken when work it started settles
+  (`coordinator-status-wakes.ts`, "Status wakes" in `coordinator.md`). A
+  coalescing status notice waits out its 10-second hold even when another
+  message to the same coordinator is dispatched meanwhile, so that pair costs
+  two wakes instead of one. A waiting notice says "input or an approval":
+  activity state does not say which.
+- **Mail carriers.** Each carrier's JSON payload carries a `kind` derived from
+  its authenticated sender (`agentMailKind`) and, for workflow notices, a
+  structured `notice` (resource, state, tone). The transcript renders every
+  carrier in a batched prompt as its own collapsible tile (`MailTile`) with
+  `data-mail-kind` and `data-mail-tone`.
 - **Open conversations.** `MAX_OPEN_COORDINATOR_CONVERSATIONS` is 16, main
   included (`coordinator-service.ts`). A conversation created by
   `createConversation` starts unassigned, and unassigned conversations count
@@ -60,14 +71,24 @@ dispatcher if queue and wake work.
    counter and budget to `list_environments`, but only if live runs in
    [coordinator-live-conformance.md](coordinator-live-conformance.md) show
    coordinators polling it.
-3. **Mail carrier kind.** Optionally add `data-mail-kind` to injected mail
-   carriers so `system` notices and `tab` replies can be styled apart. No new
-   message type.
-4. **Unused conversations.** When a new conversation is created, auto-close an
+3. **Unused conversations.** When a new conversation is created, auto-close an
    unassigned conversation whose draft is empty, so the 16-conversation limit
    cannot be filled with unused composers.
-5. **Favourites under `platformFilter`.** Hide, rather than show, favourites
+4. **Favourites under `platformFilter`.** Hide, rather than show, favourites
    for platforms the current conversation cannot use.
+5. **Waiting marker on the chip.** Mark delegated workers whose
+   `delegation.waiting` is set as needing a person in the "Waiting on N
+   workers" chip. Needs the status-wake bookkeeping to announce a
+   `coordinator` change when an episode starts or ends.
+6. **Coalesced notices ride along.** When the drain dispatches mail to a
+   coordinator, let status notices still inside their coalescing hold join that
+   batch rather than wake it again ten seconds later.
+7. **Find inside collapsed mail tiles.** Transcript find counts matches in a
+   collapsed tile's whole body but only the first three lines are visible;
+   expand the tile when the current match is in the clipped part.
+8. **Approval or question.** Say in a waiting notice whether the worker is
+   blocked on an approval or a question, from the pending interaction rather
+   than the activity state.
 
 ### Product surfaces kept off the parity path
 
@@ -84,7 +105,9 @@ its own authority and idempotency design before it is exposed.
 
 - No delegation-age timer ("still running after N hours"). The toolbar chip
   already shows the wait, and an unsolicited timer is exactly the kind of
-  update the async contract removes.
+  update the async contract removes. Status wakes keep to this: each one is an
+  observed state change, and the 20-second waiting debounce only suppresses
+  waits too short to matter; it never reports elapsed time.
 - If a "waiting worker" marker is added, it must come from the worker tab's
   own session phase, never from the environment-wide aggregate. The
   architecture refuses to infer tab-level attention from environment status.

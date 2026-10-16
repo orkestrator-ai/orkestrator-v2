@@ -10,3 +10,12 @@
 - **Isolated rerun:** `mise run test:logged -- --name codex-lifecycle-isolation -- bun test ./bridges/codex-bridge/src/app-server-runtime-lifecycle.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 1.6 seconds.
 - **Evidence:** `/tmp/orkestrator-test-run.VSQjnP/bridges.log` (compressed after aggregate completion).
 - **Hypothesis:** timer delivery under concurrent host load exceeded the test's short observation window. The tmux socket cleanup change does not modify bridge lifecycle code. The cause remains unconfirmed; no assertion, timeout or skip was changed.
+
+## Recurrence — 2026-10-16
+
+- **Change:** Multi Review graph breakpoint/zoom containment and transcript-tail freshness, plus read-only Pi SDK and concurrent finding-cap regression coverage; no Codex lifecycle code changed.
+- **Command:** `mise run test:logged -- --name full-suite -- mise run test`.
+- **Failure:** the same assertion at line 907 observed one restart after 80 ms (140.71 ms test duration). The shared host was running other worktrees; this run reserved 4/1/2/1 workspace/root/bridge/protocol slots and used one isolated worker per bridge.
+- **Owning-file rerun:** `mise run test:logged -- --name codex-lifecycle-rerun -- bun test ./bridges/codex-bridge/src/app-server-runtime-lifecycle.test.ts --parallel=1 --only-failures` passed unchanged in 2.5 seconds (exit 0).
+- **Evidence:** `/tmp/orkestrator-test-run.1PZf4j/bridges.log.gz` after aggregate finalization.
+- The timer-delivery hypothesis remains unconfirmed; no assertion, timeout or skip was changed.

@@ -48,6 +48,11 @@ import {
 import { DropZoneOverlay } from "@/components/pane-layout/DropZoneOverlay";
 import { MobilePaneSwitcher } from "@/components/pane-layout/MobilePaneSwitcher";
 import { TAB_STRIP_CLASS, TabShell } from "@/components/pane-layout/TabShell";
+import {
+  useStablePaneHosts,
+  type StablePaneHosts,
+} from "@/components/pane-layout/useStablePaneHosts";
+import { MOBILE_SHELL_MEDIA_QUERY } from "@/components/layout/MobileAppShellLayout";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 
 /**
@@ -56,7 +61,9 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
  * The same interaction as an environment's panes — drag a tab onto another
  * strip to move it, onto a pane edge to split — built from the same drop zones,
  * collision rules, and drag-end decisions. Only the tab and pane contents come
- * from the coordinator page.
+ * from the coordinator page. Like `PaneTree`, each group renders once into a
+ * stable host that the layout only positions, so crossing the mobile breakpoint
+ * or splitting a group keeps conversation drafts and scroll positions.
  */
 
 interface CoordinatorPaneTreeProps {
@@ -77,6 +84,7 @@ interface PaneTreeContextValue extends Omit<CoordinatorPaneTreeProps, "layout"> 
   isSplit: boolean;
   activeDragId: string | null;
   dragOverPaneId: string | null;
+  slot: StablePaneHosts["slot"];
 }
 
 const PaneTreeContext = createContext<PaneTreeContextValue | null>(null);
@@ -93,6 +101,8 @@ export function CoordinatorPaneTree({ layout, ...props }: CoordinatorPaneTreePro
   // Pointer only: the keyboard sensor claims Enter and Space, which select a tab here.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
   const { onLayoutChange } = props;
+  const leaves = useMemo(() => collectCoordinatorLeaves(layout.root), [layout.root]);
+  const hosts = useStablePaneHosts(useMemo(() => leaves.map((leaf) => leaf.id), [leaves]));
 
   const handleDragStart = useCallback((event: DragStartEvent) => {
     setActiveDragId(String(event.active.id));
@@ -163,6 +173,7 @@ export function CoordinatorPaneTree({ layout, ...props }: CoordinatorPaneTreePro
     isSplit: layout.root.kind === "split",
     activeDragId,
     dragOverPaneId,
+    slot: hosts.slot,
   };
 
   return (
@@ -175,22 +186,25 @@ export function CoordinatorPaneTree({ layout, ...props }: CoordinatorPaneTreePro
       onDragCancel={handleDragCancel}
     >
       <PaneTreeContext.Provider value={context}>
+        {hosts.park}
         <PaneNodeView node={layout.root} />
+        {leaves.map((leaf) => hosts.portal(leaf.id, <PaneLeafView pane={leaf} />))}
       </PaneTreeContext.Provider>
     </DndContext>
   );
 }
 
 function PaneNodeView({ node }: { node: CoordinatorPaneNode }) {
-  return node.kind === "leaf" ? <PaneLeafView pane={node} /> : <PaneSplitView split={node} />;
+  const { slot } = usePaneTree();
+  return node.kind === "leaf" ? slot(node.id) : <PaneSplitView split={node} />;
 }
 
 /** Debounce delay for persisting sizes while a divider is dragged (ms). */
 const RESIZE_DEBOUNCE_MS = 100;
 
 function PaneSplitView({ split }: { split: CoordinatorPaneSplit }) {
-  const { activePaneId, onFocusPane, onLayoutChange, conversationLabel } = usePaneTree();
-  const isMobile = useMediaQuery("(max-width: 767px)");
+  const { activePaneId, onFocusPane, onLayoutChange, conversationLabel, slot } = usePaneTree();
+  const isMobile = useMediaQuery(MOBILE_SHELL_MEDIA_QUERY);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [first, second] = split.children;
   const firstPanelId = `panel-${first.id}`;
@@ -220,7 +234,6 @@ function PaneSplitView({ split }: { split: CoordinatorPaneSplit }) {
 
   if (isMobile) {
     const panes = collectCoordinatorLeaves(split);
-    const paneById = new Map(panes.map((pane) => [pane.id, pane]));
     return (
       <MobilePaneSwitcher
         panes={panes.map((pane) => ({
@@ -231,7 +244,7 @@ function PaneSplitView({ split }: { split: CoordinatorPaneSplit }) {
         }))}
         activePaneId={activePaneId}
         onSelect={onFocusPane}
-        renderPane={(paneId) => <PaneLeafView pane={paneById.get(paneId)!} />}
+        renderPane={(paneId) => slot(paneId)}
       />
     );
   }

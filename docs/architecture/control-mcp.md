@@ -68,6 +68,16 @@ Discovery summaries, native-tab resolution, launch options and selection
 validation live in `apps/backend/src/core/control-shared-actions.ts`, shared
 with the public CLI contract ([public-cli.md](public-cli.md)); this adapter
 keeps its tool formatting, annotations and coordinator scope.
+Model, effort and agent fields are optional. Leaving them out runs the user's
+saved defaults, and the tool descriptions tell callers to set them only when the
+user asks for a specific choice. `get_launch_options` returns those defaults in
+`defaults` and marks each agent's default model with `isDefault: true`.
+`launch_environment` and `launch_job` report the resolved
+`selection: { agent, model, reasoning, source: "default" | "requested" }`.
+`start_build_pipeline` accepts optional `steps`, `reviewers` and
+`reviewPreparation` overrides and reports what it started the same way.
+[coordinator.md](coordinator.md#launch-defaults) lists what each omitted field
+resolves to.
 `launch_environment` sends a fingerprint of its creation intent with its
 `requestId`: retrying with the same content returns the same environment, and
 reusing a `requestId` for a different launch is rejected rather than silently
@@ -116,9 +126,14 @@ Authenticated same-project coordinator messages and worker replies are eligible
 for idle delivery even when the ordinary external/peer default is inbox-only.
 This exception is role-checked server-side, remains subject to pause/mute,
 activity, approval, draft, incarnation, queue, and hop limits, and never treats
-an injection receipt as proof that a task completed. Backend workflow completion
+an injection receipt as proof that a task completed. Backend workflow
 notifications use a distinct authenticated system origin and a stable outbox
-message ID so restart reconciliation cannot lose or duplicate them.
+message ID so restart reconciliation cannot lose or duplicate them. Besides
+completion, a coordinator is sent a status notice when work it started settles
+— a Multi Review ready to address or fixed, a build paused on an error, a
+stall, a delegated tab waiting on input — and the tools that start a workflow
+say so in their result (`delivery: "async"`); see
+[`coordinator.md`](coordinator.md#status-wakes).
 
 Agent launches, prompt dispatches, agent messages, ticket creation, and comment
 appends use a caller-provided `requestId`. Reuse the same ID only when retrying

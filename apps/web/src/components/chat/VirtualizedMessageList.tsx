@@ -1,3 +1,4 @@
+import { ChatFindActiveContext } from "./chat-find-context";
 import {
   type ReactNode,
   type RefObject,
@@ -258,7 +259,7 @@ export function VirtualizedMessageList<TMessage>({
         matchCountsByItem.set(match.itemIndex, (matchCountsByItem.get(match.itemIndex) ?? 0) + 1);
       }
 
-      rows.forEach((row) => {
+      for (const row of rows) {
         const itemIndex = Number(row.dataset.chatMessageIndex);
         const activeOccurrenceIndex =
           chatFind.currentMatch?.itemIndex === itemIndex
@@ -271,10 +272,28 @@ export function VirtualizedMessageList<TMessage>({
         );
         allRanges.push(...rowRanges.ranges);
         activeRange ??= rowRanges.activeRange;
-      });
+      }
 
       cssHighlights.set(matchHighlightName, new Highlight(...allRanges));
       cssHighlights.set(currentHighlightName, new Highlight(...(activeRange ? [activeRange] : [])));
+
+      // The selected row may contain a long report. Reveal the occurrence,
+      // including text well below the row's initial scroll position.
+      if (activeRange) {
+        const node = activeRange.startContainer;
+        const element = node instanceof Element ? node : node.parentElement;
+        const scroller = element?.closest<HTMLElement>("[data-virtuoso-scroller]");
+        if (scroller) {
+          const matchRect = activeRange.getBoundingClientRect();
+          const viewport = scroller.getBoundingClientRect();
+          if (matchRect.top < viewport.top || matchRect.bottom > viewport.bottom) {
+            scroller.scrollBy({
+              top: matchRect.top - viewport.top - (viewport.height - matchRect.height) / 2,
+              behavior: "instant",
+            });
+          }
+        }
+      }
 
       // Virtuoso may need more than one paint to materialize a distant row.
       if (!activeRange && attempts < 5) {
@@ -346,15 +365,17 @@ export function VirtualizedMessageList<TMessage>({
                   "bg-sky-500/10 outline outline-2 outline-offset-[-2px] outline-sky-500/50",
               )}
             >
-              {renderMessage(
-                index,
-                data,
-                resolvePreviousMessage
-                  ? resolvePreviousMessage(messages, index)
-                  : index > 0
-                    ? (messages[index - 1] ?? null)
-                    : null,
-              )}
+              <ChatFindActiveContext value={isCurrentFindMessage}>
+                {renderMessage(
+                  index,
+                  data,
+                  resolvePreviousMessage
+                    ? resolvePreviousMessage(messages, index)
+                    : index > 0
+                      ? (messages[index - 1] ?? null)
+                      : null,
+                )}
+              </ChatFindActiveContext>
             </div>
           );
         }}

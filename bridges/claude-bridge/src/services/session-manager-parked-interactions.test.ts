@@ -499,6 +499,30 @@ describe("a deny policy", () => {
   });
 });
 
+test("a read-only reviewer turn may report provisional findings", async () => {
+  mockGetMcpServerNames.mockImplementationOnce(async () => new Set(["orkestrator"]));
+  mockGetMcpServersForSdk.mockImplementationOnce(async () => ({
+    orkestrator: { type: "http", url: "http://localhost/mcp" },
+  }));
+  const session = createSession("workflow-read-only-finding");
+  track(session.id);
+  session.executionPolicy = DENY_POLICY;
+  const prompt = sendPrompt(session.id, "review", { readOnly: true, permissionMode: "dontAsk" });
+  const call = await nextQueryCall();
+  const tool = "mcp__orkestrator__report_finding";
+  expect(
+    await call.options.canUseTool!(tool, { resultKey: "key" }, context("report_finding")),
+  ).toMatchObject({ behavior: "allow" });
+  // Anything else that reaches the callback in a read-only turn is still refused.
+  expect(
+    await call.options.canUseTool!("Write", { file_path: "a.ts" }, context("Write")),
+  ).toMatchObject({ behavior: "deny" });
+  expect(getPendingInteractions(session.id)).toHaveLength(0);
+  call.push({ type: "result", subtype: "success" });
+  call.finish();
+  await prompt;
+});
+
 for (const policy of [ASK_POLICY, DENY_POLICY]) {
   test(`${policy.approvals} allows injected workflow results without parking`, async () => {
     mockGetMcpServerNames.mockImplementationOnce(async () => new Set(["orkestrator"]));
@@ -515,6 +539,7 @@ for (const policy of [ASK_POLICY, DENY_POLICY]) {
       "submit_fix_result",
       "validate_workflow_result",
       "get_workflow_result_status",
+      "report_finding",
     ]) {
       const tool = `mcp__orkestrator__${name}`;
       expect(call.options.allowedTools).toContain(tool);

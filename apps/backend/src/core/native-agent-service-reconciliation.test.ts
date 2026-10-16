@@ -1,3 +1,4 @@
+import { launchSelectionReport } from "./control-shared-actions.js";
 import { describe, expect, mock, test } from "bun:test";
 import type { ProviderRegistry } from "./native-agent-provider-registry.js";
 
@@ -3405,6 +3406,56 @@ describe("NativeAgentService", () => {
             context1m: true,
             chrome: true,
           });
+        },
+      );
+    });
+
+    test("environment launch report matches startup dispatch for unsupported inherited effort", async () => {
+      const models = [
+        {
+          platform: "codex" as const,
+          id: "mini",
+          label: "Mini",
+          reasoning: [{ id: "low", label: "Low" }],
+          defaultReasoningId: "low",
+        },
+      ];
+      const { provider, send } = createProviderStub("codex", { modelCatalog: async () => models });
+      await withService(
+        {
+          prefix: "ork-launch-report-effort-",
+          environment: {
+            pendingAgentLaunch: true,
+            initialAgentPlatform: "codex",
+            initialAgentModel: "mini",
+            initialPrompt: "Work",
+          },
+          provider: async () => provider,
+        },
+        async ({ storage, service }) => {
+          const agentSettings = {
+            platforms: { codex: { mode: "native" as const, reasoningEffort: "high" as const } },
+          };
+          await storage.updateRepositoryConfig("project-1", {
+            defaultBranch: "main",
+            prBaseBranch: "main",
+            agentSettings,
+          });
+          const selection = launchSelectionReport(
+            { repository: agentSettings },
+            models,
+            { agent: "codex", modelId: "mini" },
+            false,
+          );
+          await service.reconcileInitialLaunch("env-1");
+          expect(send).toHaveBeenCalledWith(
+            "provider-session",
+            "Work",
+            expect.objectContaining({
+              model: selection.model,
+              effort: selection.reasoning,
+            }),
+          );
         },
       );
     });

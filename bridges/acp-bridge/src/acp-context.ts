@@ -20,6 +20,7 @@ import type {
   NativeAgentTurnUsage,
 } from "@orkestrator/protocol/native-agent";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { WorkflowResultTurn } from "@orkestrator/protocol/workflow-results";
 import type { InteractionDeadline } from "@orkestrator/protocol/agent-interaction-deadline";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
@@ -389,6 +390,12 @@ export interface SessionState {
    * write the bearer token. Env is the fallback when this is absent.
    */
   agentMcp?: AgentMcpConnection;
+  /**
+   * The workflow-result attempt the current turn runs for, from its prompt.
+   * Memory only and replaced by every prompt: it scopes the read-only
+   * exemption for that attempt's own tools to this turn.
+   */
+  workflowResultTurn?: WorkflowResultTurn;
   /** Fingerprint of the MCP connection the live child was started with. */
   attachedMcpKey?: string;
   /**

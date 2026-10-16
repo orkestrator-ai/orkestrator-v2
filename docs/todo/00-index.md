@@ -57,10 +57,10 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 60 |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 45 |
 | Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 243 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 250 |
-| **Total** | | **554** |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 254 |
+| **Total** | | **543** |
 
 ## Very high
 
@@ -119,7 +119,7 @@ it reaches. Some rules of thumb:
 
 ### MCP (high)
 
-- [ ] Close MCP apply-path gaps: runtime generations, bridge versions, external edits and the 64-runtime cap ([mcp-management.md](mcp-management.md))
+- [x] Close MCP apply-path gaps: runtime generations, bridge versions, external edits and the 64-runtime cap ([mcp-management.md](mcp-management.md))
 - [ ] Run live MCP apply probes for every provider, proving a call to a removed tool actually fails ([mcp-management.md](mcp-management.md), qualification)
 - [ ] Fill the MCP provider completion matrix for every writable scope and lifecycle case ([mcp-management.md](mcp-management.md), qualification)
 - [ ] Qualify MCP apply for inactive environments across reload, dropped streams and bridge generation changes ([mcp-management.md](mcp-management.md), qualification)
@@ -157,24 +157,27 @@ it reaches. Some rules of thumb:
 
 ### Coordinator and agent mail (high)
 
-- [ ] Add an opt-in live coordinator suite that assigns each qualified platform on the fixture project ([coordinator-live-conformance.md](coordinator-live-conformance.md))
-- [ ] Add the live read-only scenario: hash the tree, attempt each mutation, assert unchanged and discovery works ([coordinator-live-conformance.md](coordinator-live-conformance.md))
+- [x] Add an opt-in live coordinator suite that assigns each qualified platform on the fixture project ([coordinator-live-conformance.md](coordinator-live-conformance.md))
+- [x] Add the live read-only scenario: hash the tree, attempt each mutation, assert unchanged and discovery works ([coordinator-live-conformance.md](coordinator-live-conformance.md))
 - [ ] Run the live read-only and async coordinator scenarios on all six platforms ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
 - [ ] Run the worker-mail family scenario once per qualified platform with default messaging settings ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
+- [ ] Run the status-wake scenario live per platform: review ready, fix done and completed, build completed, worker waiting, seven reviews in one wake ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
+- [ ] Check mail tiles render from each platform's echoed carrier, single and batched, in a real coordinator transcript ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
+- [ ] Stop a Codex coordinator reaching the network through hosted `web_search`, or record why the `network` deny allows it ([coordinator-live-conformance.md](coordinator-live-conformance.md))
 
 ### Backend structure (high)
 
 - [x] Stop non-deleting sensitive saves rewriting the retired JSON archive with current values ([storage-service-repositories.md](storage-service-repositories.md))
-- [ ] Add storage guard tests: `saveJson` only under a lease, and no mixed `updateStore`/`saveJson` writers ([storage-service-repositories.md](storage-service-repositories.md))
-- [ ] Verify no store is written by both `updateStore` and a leased `saveJson` ([storage-service-repositories.md](storage-service-repositories.md), verify)
+- [x] Add storage guard tests: `saveJson` only under a lease, and no mixed `updateStore`/`saveJson` writers ([storage-service-repositories.md](storage-service-repositories.md))
+- [x] Verify no store is written by both `updateStore` and a leased `saveJson` ([storage-service-repositories.md](storage-service-repositories.md), verify)
 
 ### Cross-cutting (high)
 
 - [ ] Qualify Codex sub-agent cards on a fixture profile: one card per child, recovery after reload and restart ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
 - [x] Decide and implement a renderer-backend skew guard for raw OpenCode envelopes from older backends ([mixed-version-compatibility.md](mixed-version-compatibility.md))
 - [x] Fix flake 0166 (OpenCode probe deadline), which recurred on 2026-10-15 ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
-- [ ] Keep split panes mounted across the mobile breakpoint through stable per-pane hosts ([mobile-layout-gaps.md](mobile-layout-gaps.md))
-- [ ] Move the environment settings dialog out of the drawer row so it is usable on mobile ([mobile-layout-gaps.md](mobile-layout-gaps.md))
+- [x] Keep split panes mounted across the mobile breakpoint through stable per-pane hosts ([mobile-layout-gaps.md](mobile-layout-gaps.md))
+- [x] Move the environment settings dialog out of the drawer row so it is usable on mobile ([mobile-layout-gaps.md](mobile-layout-gaps.md))
 
 ## Medium
 
@@ -416,6 +419,8 @@ it reaches. Some rules of thumb:
 - [ ] Confirm Grok Orkestrator mail tools auto-allow under both naming forms on the pinned Grok build ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
 - [ ] Verify Cursor and Grok mailbox identity, injection, coordinator wake, resume and token rotation live ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
 - [ ] Decide whether Wake peers stays off by default and align `agent-messaging.md` with the code ([coordinator-live-conformance.md](coordinator-live-conformance.md), decision)
+- [ ] Find out why a Grok coordinator's turn ends at its first denied tool in the live read-only run ([coordinator-live-conformance.md](coordinator-live-conformance.md), verify)
+- [ ] Let agent-test profiles authorize Pi's host login so the live coordinator suite can qualify Pi ([coordinator-live-conformance.md](coordinator-live-conformance.md))
 - [ ] Auto-close an unassigned, empty-draft coordinator conversation when a new one is created ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md))
 
 ### Backend structure (medium)
@@ -424,7 +429,7 @@ it reaches. Some rules of thumb:
 - [ ] Extract the leaf storage repositories: preview services, agent mail, Kanban, drafts, public operations ([storage-service-repositories.md](storage-service-repositories.md))
 - [ ] Extract the entangled storage repositories, replacing abstract hooks with constructor dependencies ([storage-service-repositories.md](storage-service-repositories.md))
 - [ ] Delete the empty storage `extends` chain and `StorageBase`, and remove the pinned chain entry ([storage-service-repositories.md](storage-service-repositories.md))
-- [ ] Verify every `saveJson` call site is under a lease, beyond the text-sweep match ([storage-service-repositories.md](storage-service-repositories.md), verify)
+- [x] Verify every `saveJson` call site is under a lease, beyond the text-sweep match ([storage-service-repositories.md](storage-service-repositories.md), verify)
 - [ ] Extract `CatalogCache` (model and command catalogue caches) from `NativeAgentService` ([native-agent-service-collaborators.md](native-agent-service-collaborators.md))
 - [ ] Extract `TranscriptProjection` state and most of `native-agent-service-projection.ts` ([native-agent-service-collaborators.md](native-agent-service-collaborators.md))
 - [ ] Extract `InteractionTracker` from the native agent service layers ([native-agent-service-collaborators.md](native-agent-service-collaborators.md))
@@ -459,6 +464,7 @@ it reaches. Some rules of thumb:
 - [ ] Add `BackendProcess.launch` tests for readiness timeout, invalid auth file and startup races ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [ ] Test `main.ts` window and connection bookkeeping, including the `useConnection` rollback ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [ ] Add a breakpoint-crossing browser spec and check both mobile fixes in a real narrow browser ([mobile-layout-gaps.md](mobile-layout-gaps.md), qualification)
+- [x] Keep the panes the mobile switcher hides laid out, so a pane switch keeps the transcript's scroll ([mobile-layout-gaps.md](mobile-layout-gaps.md))
 - [ ] Upgrade Electron 44 → 46 before 44 loses support on 2027-03-02; re-test annotation masking on a HiDPI display ([dependency-upgrades.md](dependency-upgrades.md))
 - [ ] Burn down the React Compiler lint warnings in `apps/web` and raise each rule back to `error` at zero ([dependency-upgrades.md](dependency-upgrades.md))
 - [ ] Decide how to manage the update-manifest signing key before electron-builder 27 ([dependency-upgrades.md](dependency-upgrades.md), decision)
@@ -567,6 +573,7 @@ it reaches. Some rules of thumb:
 ### MCP (low)
 
 - [ ] Implement per-session Grok ACP MCP application and document its collision rules ([mcp-management.md](mcp-management.md))
+- [ ] Re-check external MCP edits for OpenCode, container and post-reload Codex runtimes, which no pass polls ([mcp-management.md](mcp-management.md))
 - [ ] Stop Claude's no-control MCP fallback collapsing server status to connected or failed ([mcp-management.md](mcp-management.md))
 - [ ] Replace the count-only MCP metric tiles for Claude and OpenCode in `AgentInfoButton` ([mcp-management.md](mcp-management.md))
 - [ ] Model plugin, team, remote and profile MCP layers only where a passive reader exists ([mcp-management.md](mcp-management.md))
@@ -680,34 +687,40 @@ it reaches. Some rules of thumb:
 - [ ] Design a backend-owned, content-addressed review evidence store with read-only mounts ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), deferred)
 - [ ] Add provider batch status observation once a bridge exposes batch settlement status ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), deferred)
 - [ ] Add hierarchical map/reduce consolidation only if real workflows exceed the 640 KiB budget ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), deferred)
-- [ ] Add `admissionState` / `queuedAt` reviewer fields only if queue time becomes user-visible ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), deferred)
+- [ ] Add a `queuedAt` reviewer field only if queue time becomes user-visible; `admissionState` shipped with the queue position ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), deferred)
 - [ ] Skip identical Multi Review renderer refetches using per-workflow revisions in resource-change events ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), deferred)
 - [ ] Verify whether any real-provider consolidation comparison was ever run ([multi-review-panel-value.md](multi-review-panel-value.md), verify)
 - [ ] Add Quick, Balanced and Thorough Multi Review presets that expand into editable reviewer rows ([multi-review-panel-value.md](multi-review-panel-value.md), deferred)
 - [ ] Add optional, non-exclusive review lenses as a shared-protocol enum ([multi-review-panel-value.md](multi-review-panel-value.md), deferred)
 - [ ] Add opt-in adaptive stopping with a minimum panel and a measured novelty rule ([multi-review-panel-value.md](multi-review-panel-value.md), deferred)
 - [ ] Revisit the default two-reviewer Multi Review panel ([multi-review-panel-value.md](multi-review-panel-value.md), deferred)
-- [ ] Show findings from a Multi Review reviewer that is still running, through a bounded partial-findings channel ([multi-review-flow-graph.md](multi-review-flow-graph.md))
-- [ ] Show queue position and expected start for queued Multi Review reviewers ([multi-review-flow-graph.md](multi-review-flow-graph.md))
-- [ ] Add a bounded transcript tail for the preparation, consolidation and Fix sessions in the flow graph inspector ([multi-review-flow-graph.md](multi-review-flow-graph.md))
-- [ ] Add flow graph zoom controls and keep zoom and pan between visits ([multi-review-flow-graph.md](multi-review-flow-graph.md))
+- [x] Show findings from a Multi Review reviewer that is still running, through a bounded partial-findings channel ([multi-review-flow-graph.md](multi-review-flow-graph.md))
+- [x] Show queue position for queued Multi Review reviewers (position only; no expected start) ([multi-review-flow-graph.md](multi-review-flow-graph.md))
+- [x] Add a bounded transcript tail for the preparation, consolidation and Fix sessions in the flow graph inspector ([multi-review-flow-graph.md](multi-review-flow-graph.md))
+- [x] Add flow graph zoom controls and keep zoom and pan between visits ([multi-review-flow-graph.md](multi-review-flow-graph.md))
 
 ### Coordinator and agent mail (low)
 
 - [ ] Add an argv0 deny for `sleep` on the Codex coordinator profile if live runs show Codex using it ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md))
+- [ ] Check the Claude coordinator's permission mode: `coordinator.md` says `dontAsk`, but live sessions start in plan mode ([coordinator-live-conformance.md](coordinator-live-conformance.md), verify)
 - [ ] Raise Grok above `advisory` only after adding a real read-only gate in the ACP bridge ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md), deferred)
 - [ ] Raise the Cursor coordinator tier only once a probe can prove a denied tool did not run ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md), blocked)
 - [ ] Extend the coordinator poll guard to `list_environments` if live runs show coordinators polling it ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md))
-- [ ] Add an optional `data-mail-kind` to injected mail carriers so system and tab mail style apart ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md))
+- [x] Add an optional `data-mail-kind` to injected mail carriers so system and tab mail style apart ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md))
 - [ ] Hide coordinator favourites for platforms the conversation cannot use under `platformFilter` ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md))
 - [ ] Verify how the coordinator favourites view renders a favourite whose platform is filtered out ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md), verify)
 - [ ] Decide whether the sidebar working/waiting icon moves from `agentActivityState` onto the agent registry ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md), decision)
 - [ ] Design copying uncommitted root changes into a worker as a user-selected patch ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md), deferred)
 - [ ] Design coordinator MCP for terminal, browser, pane editing, reviewer subtabs, looped review and feature plans ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md), deferred)
+- [ ] Mark delegated workers waiting on input in the "Waiting on N workers" chip from `delegation.waiting` ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md))
+- [ ] Let status notices inside their coalescing hold join a batch already being dispatched to the coordinator ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md))
+- [ ] Expand a collapsed mail tile when transcript find lands on text it clips ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md))
+- [ ] Say whether a waiting worker needs an approval or an answer in its status notice ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md))
 
 ### Backend structure (low)
 
 - [ ] Move protected-member test casts onto repository APIs as each store moves ([storage-service-repositories.md](storage-service-repositories.md), qualification)
+- [ ] Extend the storage writer guard to raw `StorageDatabase` writers outside the `StorageService` chain ([storage-service-repositories.md](storage-service-repositories.md))
 - [ ] Move the six `queue*` parsers into a module of pure functions ([native-agent-service-collaborators.md](native-agent-service-collaborators.md))
 - [ ] Split `applyPartialAssistantMessage` into one function per `stream_event` type ([claude-bridge-prompt-stream-state.md](claude-bridge-prompt-stream-state.md))
 - [ ] Move the three plan-mode flags from `PromptStreamState` to `TurnState` and fix the stale comment ([claude-bridge-prompt-stream-state.md](claude-bridge-prompt-stream-state.md))
@@ -740,6 +753,8 @@ it reaches. Some rules of thumb:
 - [ ] Split backend `test:workspace` into source and `dist`-consuming tests if Turbo summaries justify it ([test-suite-and-ci-health.md](test-suite-and-ci-health.md), deferred)
 - [ ] Rotate a real phone or iOS simulator with a split and a terminal pane open ([mobile-layout-gaps.md](mobile-layout-gaps.md), qualification)
 - [ ] Verify the mobile environment-settings defect still reproduces in a real narrow browser ([mobile-layout-gaps.md](mobile-layout-gaps.md), verify)
+- [ ] Open the ActionBar's environment settings through `AppDialogHost`, leaving one host for the dialog ([mobile-layout-gaps.md](mobile-layout-gaps.md))
+- [ ] Return focus to the opener when a fullscreen settings dialog closes ([mobile-layout-gaps.md](mobile-layout-gaps.md))
 - [ ] Drop `tsx` from claude-bridge and codex-bridge in favour of `bun --watch` ([dependency-upgrades.md](dependency-upgrades.md))
 - [ ] Move to electron-builder 27 / electron-updater 7 once 27 is stable ([dependency-upgrades.md](dependency-upgrades.md), blocked)
 - [ ] Move to `marked` 18 once `@tiptap/markdown` accepts it ([dependency-upgrades.md](dependency-upgrades.md), blocked)
@@ -776,7 +791,7 @@ it reaches. Some rules of thumb:
 | [design-operation-recovery-edges.md](design-operation-recovery-edges.md) |  | 1 | 1 | 2 | 4 |
 | [design-agent-conversation-links.md](design-agent-conversation-links.md) |  |  | 5 | 3 | 8 |
 | **MCP** | | | | | |
-| [mcp-management.md](mcp-management.md) |  | 4 | 10 | 6 | 20 |
+| [mcp-management.md](mcp-management.md) |  | 3 | 10 | 7 | 20 |
 | [mcp-environment-delivery.md](mcp-environment-delivery.md) |  |  | 4 | 10 | 14 |
 | [control-mcp-voice-surface.md](control-mcp-voice-surface.md) |  |  | 9 |  | 9 |
 | **Agent engines and provider SDKs** | | | | | |
@@ -800,10 +815,10 @@ it reaches. Some rules of thumb:
 | [multi-review-flow-graph.md](multi-review-flow-graph.md) |  |  |  | 4 | 4 |
 | **Coordinator and agent mail** | | | | | |
 | [coordinator-read-only-adapters.md](coordinator-read-only-adapters.md) |  |  | 3 | 3 | 6 |
-| [coordinator-live-conformance.md](coordinator-live-conformance.md) |  | 4 | 6 |  | 10 |
-| [coordinator-consistency-gaps.md](coordinator-consistency-gaps.md) |  |  | 1 | 7 | 8 |
+| [coordinator-live-conformance.md](coordinator-live-conformance.md) |  | 7 | 8 | 1 | 16 |
+| [coordinator-consistency-gaps.md](coordinator-consistency-gaps.md) |  |  | 1 | 11 | 12 |
 | **Backend structure** | | | | | |
-| [storage-service-repositories.md](storage-service-repositories.md) |  | 3 | 5 | 1 | 9 |
+| [storage-service-repositories.md](storage-service-repositories.md) |  | 3 | 5 | 2 | 10 |
 | [native-agent-service-collaborators.md](native-agent-service-collaborators.md) |  |  | 5 | 1 | 6 |
 | [claude-bridge-prompt-stream-state.md](claude-bridge-prompt-stream-state.md) |  |  | 1 | 3 | 4 |
 | [backend-core-domain-folders.md](backend-core-domain-folders.md) |  |  | 4 | 3 | 7 |
@@ -812,5 +827,5 @@ it reaches. Some rules of thumb:
 | [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md) |  | 1 | 10 | 3 | 14 |
 | [mixed-version-compatibility.md](mixed-version-compatibility.md) |  | 1 | 2 | 3 | 6 |
 | [test-suite-and-ci-health.md](test-suite-and-ci-health.md) | 1 | 1 | 4 | 11 | 17 |
-| [mobile-layout-gaps.md](mobile-layout-gaps.md) |  | 2 | 1 | 2 | 5 |
+| [mobile-layout-gaps.md](mobile-layout-gaps.md) |  |  | 1 | 4 | 5 |
 | [dependency-upgrades.md](dependency-upgrades.md) |  |  | 3 | 7 | 10 |

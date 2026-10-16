@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { gzip } from "node:zlib";
 import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import { parseWorkflowResultTurn } from "@orkestrator/protocol/workflow-results";
 import {
   commandUnavailableResponse,
   readBridgePromptCommandFields,
@@ -56,6 +57,7 @@ import {
   type JsonObject,
   type SessionState,
 } from "./acp-context.js";
+import { MCP_CONFIG_REPORTING_VERSION } from "@orkestrator/protocol/mcp-management";
 import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
 import {
   bridgeTranscriptRouteBody,
@@ -225,7 +227,12 @@ export async function route(
     // Same reasoning: a 404 here would read as "this bridge predates the
     // route" and fail the environment. Health is optional metadata, so an
     // unknown session answers empty rather than failing.
-    if (match[2] === "runtime-health") return json(response, 200, emptyRuntimeHealth());
+    if (match[2] === "runtime-health") {
+      return json(response, 200, {
+        ...emptyRuntimeHealth(),
+        mcpConfigReporting: MCP_CONFIG_REPORTING_VERSION,
+      });
+    }
     // The enhanced catalogue contract: an unknown session is answered in band.
     if (match[2] === "commands" && request.method === "GET") {
       return json(response, 200, commandCatalogue(undefined));
@@ -365,6 +372,7 @@ export async function route(
     return json(response, 200, {
       summary: publicRuntime(state),
       ...state.health.snapshot(),
+      mcpConfigReporting: MCP_CONFIG_REPORTING_VERSION,
       mcpConfig: await publicMcpConfigStatus(),
     });
   }
@@ -522,6 +530,8 @@ export async function route(
     const commandFields = readBridgePromptCommandFields(body);
     if (!commandFields.ok) return json(response, 400, { error: commandFields.error });
     const selectedCommand = commandFields.command;
+    const workflowResult = parseWorkflowResultTurn(body.workflowResultTool, body.workflowResultKey);
+    if (!workflowResult.ok) return json(response, 400, { error: workflowResult.error });
     if (selectedCommand && schema) {
       return json(response, 400, {
         error: "A structured-output prompt cannot carry a command selection",
@@ -597,6 +607,7 @@ export async function route(
       // detached thread is reattached, and it is far cheaper than a spawn.
       promptContents = await readPromptContents(attachments, workingDirectory);
       storeAgentMcp(state, body.agentMcp);
+      state.workflowResultTurn = workflowResult.turn;
       if (typeof readOnly === "boolean") await setSessionReadOnly(state, readOnly);
       child = await ensureSessionProcess(state, clientSignal);
       if (

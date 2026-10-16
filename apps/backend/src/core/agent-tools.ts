@@ -18,6 +18,7 @@ import {
   registerWorkflowResultTools,
 } from "./workflow-result-tools.js";
 import type { WebAnnotationToolHost } from "./web-annotation-contracts.js";
+import type { ProvisionalFindingSink } from "./review-provisional-findings.js";
 import { registerWebAnnotationTools, WebAnnotationToolLimiter } from "./web-annotation-tools.js";
 
 const MAX_MCP_REQUEST_BYTES = 512 * 1024;
@@ -251,6 +252,7 @@ async function createAgentToolServer(
   consumeRateLimit: (kind: AgentMessagingRateLimitKind) => void,
   workflowResults?: WorkflowResultService,
   webAnnotations?: { host: WebAnnotationToolHost; limiter: WebAnnotationToolLimiter } | null,
+  provisionalFindings?: ProvisionalFindingSink | null,
 ): Promise<McpServer> {
   if (scope.workflowResultBroker) {
     const server = new McpServer(
@@ -261,10 +263,12 @@ async function createAgentToolServer(
       },
     );
     if (!workflowResults) throw new Error("Workflow result tools are unavailable");
-    registerWorkflowResultBrokerTools(server, workflowResults, {
-      environmentId: scope.environmentId,
-      projectId: scope.projectId,
-    });
+    registerWorkflowResultBrokerTools(
+      server,
+      workflowResults,
+      { environmentId: scope.environmentId, projectId: scope.projectId },
+      provisionalFindings,
+    );
     return server;
   }
   if (scope.workflowResultKey) {
@@ -282,11 +286,12 @@ async function createAgentToolServer(
     };
     const binding = await workflowResults.binding(callerScope, scope.workflowResultKey);
     if (!binding) throw new Error("Workflow result capability is unavailable");
-    registerWorkflowResultTools(server, workflowResults, {
-      ...callerScope,
-      workflowResultKey: scope.workflowResultKey,
-      kind: binding.kind,
-    });
+    registerWorkflowResultTools(
+      server,
+      workflowResults,
+      { ...callerScope, workflowResultKey: scope.workflowResultKey, kind: binding.kind },
+      provisionalFindings,
+    );
     return server;
   }
   const messagingEnabled = (await storage.loadConfig()).global.agentMessaging?.enabled === true;
@@ -514,6 +519,7 @@ export class AgentToolsServer {
   private readonly mailRateWindows = new Map<string, number[]>();
   private webAnnotationToolHost: WebAnnotationToolHost | null = null;
   private readonly webAnnotationToolLimiter = new WebAnnotationToolLimiter();
+  private provisionalFindingSink: ProvisionalFindingSink | null = null;
 
   constructor(
     private readonly storage: StorageService,
@@ -671,6 +677,11 @@ export class AgentToolsServer {
     this.webAnnotationToolHost = host;
   }
 
+  /** Where Multi Review reviewers' `report_finding` calls go. */
+  setProvisionalFindingSink(sink: ProvisionalFindingSink | null): void {
+    this.provisionalFindingSink = sink;
+  }
+
   hasWebAnnotationTools(): boolean {
     return this.webAnnotationToolHost !== null;
   }
@@ -810,6 +821,7 @@ export class AgentToolsServer {
                 this.webAnnotationToolHost
                   ? { host: this.webAnnotationToolHost, limiter: this.webAnnotationToolLimiter }
                   : null,
+                this.provisionalFindingSink,
               ),
         { legacy: "stateless" },
       );

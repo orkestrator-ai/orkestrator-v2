@@ -72,6 +72,12 @@ with
 passed the unchanged owning file, exit 0, in 24.1 seconds. Host contention
 remains an unconfirmed hypothesis. No timeout, assertion or skip was changed.
 
+## Recurrence during Multi Review validation diagnostics (2026-10-16)
+
+- While the aggregate was active, `mise run test:logged -- --name commands-integration-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` timed out in the unchanged cleanup-retry case at 6750.13 ms. The file reported 52 passed and three timeouts in 127.9 seconds.
+- After the aggregate finished, the same owning-file command with `--name commands-integration-final-rerun` passed unchanged in 32.1 seconds (exit 0).
+- Evidence: `/tmp/orkestrator-test-run.3kSG12/commands-integration-rerun.log.gz`. No cleanup implementation, assertion, timeout or skip changed; host contention remains a hypothesis.
+
 ## Recurrence — 2026-10-16 (gateway terminal fallback backoff)
 
 `mise run test` on `feat/gateway-terminal-fallback-backoff`, which changed no

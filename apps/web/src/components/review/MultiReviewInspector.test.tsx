@@ -2,13 +2,18 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import type {
   MultiReviewReviewerTranscript,
+  MultiReviewStepKind,
+  MultiReviewStepTranscript,
   MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
+import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import {
   MultiReviewFindingsPane,
   ReviewerTranscriptTail,
+  StepTranscriptTail,
   transcriptTailLines,
 } from "./MultiReviewInspector";
 import { reviewSeverityStyles } from "./StructuredReviewReportView";
@@ -212,6 +217,267 @@ describe("ReviewerTranscriptTail", () => {
   });
 });
 
+function stepTranscript(
+  overrides: Partial<MultiReviewStepTranscript> = {},
+): MultiReviewStepTranscript {
+  return {
+    workflowId: "multi-1",
+    step: "consolidate",
+    workflowPhase: "consolidating",
+    session: "own",
+    agent: "codex",
+    model: "gpt-6",
+    sessionStatus: "running",
+    startedAt: CREATED_AT,
+    transcript: "snapshot",
+    sourceToken: "step-token-1",
+    messages: [
+      {
+        id: "s1",
+        role: "user",
+        content: "Consolidate the reviewer reports",
+        createdAt: CREATED_AT,
+        parts: [{ type: "text", content: "Consolidate the reviewer reports" }],
+      },
+      {
+        id: "s2",
+        role: "assistant",
+        content: "Read",
+        createdAt: CREATED_AT,
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "Read",
+            toolName: "Read",
+            toolArgs: { file_path: "reports/reviewer-1.json" },
+            toolUseId: "tool-1",
+            toolState: "success",
+          },
+        ],
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function renderStepTail(
+  loadTranscript: (
+    workflowId: string,
+    step: MultiReviewStepKind,
+    options?: { knownSourceToken?: string },
+  ) => Promise<MultiReviewStepTranscript>,
+  props: Partial<Parameters<typeof StepTranscriptTail>[0]> = {},
+) {
+  return render(
+    <StepTranscriptTail
+      workflowId="multi-1"
+      step="consolidate"
+      access={{ kind: "own" }}
+      live
+      isActive
+      loadTranscript={loadTranscript}
+      {...props}
+    />,
+  );
+}
+
+describe("StepTranscriptTail", () => {
+  afterEach(() => resetReadCoordinatorForTests());
+
+  test("reads the step's tail on selection and every checkpoint, echoing its token", async () => {
+    useMultiReviewStore.getState().replaceWorkflow(workflowRevision(1));
+    const loadTranscript = mock(
+      async (
+        _workflowId: string,
+        _step: MultiReviewStepKind,
+        options?: { knownSourceToken?: string },
+      ) =>
+        options?.knownSourceToken === "step-token-1"
+          ? stepTranscript({ transcript: "unchanged", messages: [] })
+          : stepTranscript(),
+    );
+    renderStepTail(loadTranscript);
+
+    const tail = screen.getByRole("log", { name: "Latest consolidation activity" });
+    expect(await within(tail).findByText("reports/reviewer-1.json")).toBeTruthy();
+    // The workflow's own prompt is not the step's output.
+    expect(within(tail).queryByText(/Consolidate the reviewer reports/) === null).toBe(true);
+    expect(loadTranscript.mock.calls[0]).toEqual([
+      "multi-1",
+      "consolidate",
+      { knownSourceToken: undefined },
+    ]);
+
+    act(() => useMultiReviewStore.getState().replaceWorkflow(workflowRevision(2)));
+    await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(2));
+    expect(loadTranscript.mock.calls[1]?.[2]).toEqual({ knownSourceToken: "step-token-1" });
+    expect(within(tail).getByText("reports/reviewer-1.json")).toBeTruthy();
+  });
+
+  for (const trigger of ["completion", "reactivation"] as const) {
+    test(`reads a fresh tail after ${trigger} during a pending read`, async () => {
+      useMultiReviewStore.getState().replaceWorkflow(workflowRevision(1));
+      let resolve!: (value: MultiReviewStepTranscript) => void;
+      const pending = new Promise<MultiReviewStepTranscript>((done) => {
+        resolve = done;
+      });
+      const final = stepTranscript({
+        sourceToken: "final-token",
+        messages: [message("final", [{ type: "text", content: "Consolidation finished." }])],
+      });
+      const loadTranscript = mock(
+        async (
+          _workflowId: string,
+          _step: MultiReviewStepKind,
+          _options?: { knownSourceToken?: string },
+        ) => (loadTranscript.mock.calls.length === 1 ? pending : final),
+      );
+      const view = renderStepTail(loadTranscript);
+      await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(1));
+      const show = (isActive: boolean) =>
+        view.rerender(
+          <StepTranscriptTail
+            workflowId="multi-1"
+            step="consolidate"
+            access={{ kind: "own" }}
+            live={false}
+            isActive={isActive}
+            loadTranscript={loadTranscript}
+          />,
+        );
+      if (trigger === "completion") {
+        act(() => {
+          useMultiReviewStore.getState().replaceWorkflow(workflowRevision(2));
+          useMultiReviewStore.getState().replaceWorkflow(workflowRevision(3));
+        });
+        show(true);
+      } else {
+        show(false);
+        show(true);
+      }
+      expect(loadTranscript).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        resolve(stepTranscript());
+        await pending;
+      });
+      await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(2));
+      expect(loadTranscript.mock.calls[1]?.[2]).toEqual({ knownSourceToken: "step-token-1" });
+      expect(await screen.findByText("Consolidation finished.")).toBeTruthy();
+    });
+  }
+
+  test("polls only while the step is live, visible and its tab active", async () => {
+    const { clock, document: fakeDocument } = installFakeReadCoordinator();
+    const loadTranscript = mock(async () => stepTranscript());
+    const view = renderStepTail(loadTranscript);
+    await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(1));
+
+    await act(() => clock.advance(4_000));
+    expect(loadTranscript).toHaveBeenCalledTimes(2);
+
+    // Hidden window: the coordinator stops polling.
+    act(() => fakeDocument.setVisibility("hidden"));
+    await act(() => clock.advance(12_000));
+    const whileHidden = loadTranscript.mock.calls.length;
+    await act(() => clock.advance(12_000));
+    expect(loadTranscript).toHaveBeenCalledTimes(whileHidden);
+    act(() => fakeDocument.setVisibility("visible"));
+
+    // A settled step stops polling; its last checkpoint already read it.
+    view.rerender(
+      <StepTranscriptTail
+        workflowId="multi-1"
+        step="consolidate"
+        access={{ kind: "own" }}
+        live={false}
+        isActive
+        loadTranscript={loadTranscript}
+      />,
+    );
+    await act(() => clock.advance(1));
+    const settled = loadTranscript.mock.calls.length;
+    await act(() => clock.advance(20_000));
+    expect(loadTranscript).toHaveBeenCalledTimes(settled);
+
+    // An inactive tab reads nothing at all.
+    view.rerender(
+      <StepTranscriptTail
+        workflowId="multi-1"
+        step="consolidate"
+        access={{ kind: "own" }}
+        live
+        isActive={false}
+        loadTranscript={loadTranscript}
+      />,
+    );
+    await act(() => clock.advance(20_000));
+    expect(loadTranscript).toHaveBeenCalledTimes(settled);
+  });
+
+  test("does not read a session another step is using, and says which", () => {
+    const loadTranscript = mock(async () => stepTranscript());
+    renderStepTail(loadTranscript, { access: { kind: "other-step", step: "fix" } });
+    expect(
+      screen.getByText(
+        "This step's session is now running Fix. Open session to read the whole conversation.",
+      ),
+    ).toBeTruthy();
+    cleanup();
+    renderStepTail(loadTranscript, { step: "fix", access: { kind: "none" } });
+    expect(screen.getByText("The transcript appears here once this step starts.")).toBeTruthy();
+    expect(loadTranscript).not.toHaveBeenCalled();
+  });
+
+  test("shows the backend's word when the session moved on since the snapshot", async () => {
+    renderStepTail(
+      mock(async () => stepTranscript({ session: "other-step", sessionStep: "fix", messages: [] })),
+    );
+    expect(
+      await screen.findByText(
+        "This step's session is now running Fix. Open session to read the whole conversation.",
+      ),
+    ).toBeTruthy();
+  });
+
+  test("hides schema-shaped output the way a reviewer's is hidden", async () => {
+    const plan = JSON.stringify({ headRef: "a".repeat(40), commands: [], limitations: [] });
+    const answer = stepTranscript({
+      step: "prepare",
+      messages: [
+        {
+          id: "p1",
+          role: "assistant",
+          content: plan,
+          createdAt: CREATED_AT,
+          parts: [{ type: "text", content: "Discovering the validation commands." }],
+        },
+        {
+          id: "p2",
+          role: "assistant",
+          content: plan,
+          createdAt: CREATED_AT,
+          parts: [{ type: "text", content: plan }],
+        },
+        {
+          id: "p3",
+          role: "assistant",
+          content: "",
+          createdAt: CREATED_AT,
+          parts: [{ type: "text", content: '{"reviewScope": {"targetBranch": "main", "filesRev' }],
+        },
+      ],
+    });
+    renderStepTail(
+      mock(async () => answer),
+      { step: "prepare" },
+    );
+    const tail = screen.getByRole("log", { name: "Latest review package generation activity" });
+    expect(await within(tail).findByText("Discovering the validation commands.")).toBeTruthy();
+    expect(tail.textContent).not.toContain("headRef");
+    expect(tail.textContent).not.toContain("reviewScope");
+  });
+});
+
 describe("MultiReviewFindingsPane", () => {
   test("lists each finding with its severity, location and the reviewers that raised it", () => {
     render(
@@ -225,9 +491,16 @@ describe("MultiReviewFindingsPane", () => {
             file: "src/tab.tsx",
             line: 312,
             sources: [
-              { reviewerId: "r1", index: 0, agent: "claude", model: "opus" },
-              { reviewerId: "r2", index: 1, agent: "codex", model: "gpt-5.6" },
+              { reviewerId: "r1", index: 0, agent: "claude", model: "opus", standing: "confirmed" },
+              {
+                reviewerId: "r2",
+                index: 1,
+                agent: "codex",
+                model: "gpt-5.6",
+                standing: "confirmed",
+              },
             ],
+            provisional: false,
           },
           {
             key: "b",
@@ -235,7 +508,16 @@ describe("MultiReviewFindingsPane", () => {
             title: "Copy mismatch",
             file: "src/footer.tsx",
             line: null,
-            sources: [{ reviewerId: "r2", index: 1, agent: "codex", model: "gpt-5.6" }],
+            sources: [
+              {
+                reviewerId: "r2",
+                index: 1,
+                agent: "codex",
+                model: "gpt-5.6",
+                standing: "confirmed",
+              },
+            ],
+            provisional: false,
           },
         ]}
       />,
@@ -247,7 +529,9 @@ describe("MultiReviewFindingsPane", () => {
     );
     const [first, second] = screen.getAllByRole("listitem");
     expect(within(first!).getByText("P0").className).toContain(reviewSeverityStyles.P0);
-    expect(within(first!).getByText("src/tab.tsx:312").className).toContain("font-mono");
+    expect(within(first!).getByText("src/tab.tsx:312").closest("p")!.className).toContain(
+      "font-mono",
+    );
     expect(within(first!).getByLabelText("Raised by Reviewer 1, Reviewer 2")).toBeTruthy();
     expect(within(first!).getByTitle("Reviewer 1 · claude · opus").className).toContain(
       "text-orange-400",
@@ -255,9 +539,60 @@ describe("MultiReviewFindingsPane", () => {
     expect(within(second!).getByText("src/footer.tsx")).toBeTruthy();
   });
 
+  test("marks rows no accepted report confirms yet", () => {
+    render(
+      <MultiReviewFindingsPane
+        reviewerCount={1}
+        provisionalCount={2}
+        findings={[
+          {
+            key: "live",
+            severity: "P1",
+            title: "Reported while running",
+            file: "src/live.ts",
+            line: 4,
+            sources: [
+              {
+                reviewerId: "r2",
+                index: 1,
+                agent: "codex",
+                model: "gpt-5.6",
+                standing: "provisional",
+              },
+            ],
+            provisional: true,
+          },
+          {
+            key: "failed",
+            severity: "P2",
+            title: "Reported before a failure",
+            file: "src/failed.ts",
+            line: null,
+            sources: [
+              { reviewerId: "r3", index: 2, agent: "claude", model: "opus", standing: "failed" },
+            ],
+            provisional: true,
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByTestId("multi-review-findings-count").textContent).toBe(
+      "0 · from 1 reviewer · 2 provisional",
+    );
+    const [live, failed] = screen.getAllByRole("listitem");
+    expect(within(live!).getByTestId("multi-review-finding-standing").textContent).toBe(
+      "provisional",
+    );
+    expect(within(live!).getByLabelText("Reported provisionally by Reviewer 2")).toBeTruthy();
+    expect(within(live!).getByTitle("Reviewer 2 · codex · gpt-5.6 · provisional")).toBeTruthy();
+    expect(within(failed!).getByTestId("multi-review-finding-standing").textContent).toBe(
+      "unconfirmed (reviewer failed)",
+    );
+  });
+
   test("explains an empty list", () => {
     const view = render(<MultiReviewFindingsPane findings={[]} reviewerCount={0} />);
-    expect(screen.getByText("Findings appear here as each reviewer completes.")).toBeTruthy();
+    expect(screen.getByText("Findings appear here as reviewers report them.")).toBeTruthy();
     view.rerender(<MultiReviewFindingsPane findings={[]} reviewerCount={1} />);
     expect(screen.getByTestId("multi-review-findings-count").textContent).toBe(
       "0 · from 1 reviewer",

@@ -251,12 +251,21 @@ export function severityCounts(
   return counts;
 }
 
+/**
+ * How far a source stands behind a finding. `confirmed` is in an accepted
+ * report. The rest come from `report_finding` before any report was accepted:
+ * `provisional` while the reviewer runs, `failed` or `stopped` once it ended
+ * without one.
+ */
+export type MultiReviewFindingStanding = "confirmed" | "provisional" | "failed" | "stopped";
+
 export interface MultiReviewFindingSource {
   reviewerId: string;
   /** Zero-based panel position; the UI shows it one-based. */
   index: number;
   agent: Reviewer["agent"];
   model: string;
+  standing: MultiReviewFindingStanding;
 }
 
 export interface MultiReviewMergedFinding {
@@ -266,6 +275,8 @@ export interface MultiReviewMergedFinding {
   file: string;
   line: number | null;
   sources: MultiReviewFindingSource[];
+  /** No accepted report has it yet: every source reported it provisionally. */
+  provisional: boolean;
 }
 
 function findingKey(issue: { file: string; line: number | null; title: string }): string {
@@ -273,57 +284,104 @@ function findingKey(issue: { file: string; line: number | null; title: string })
   return `${issue.file}\u0000${issue.line ?? ""}\u0000${title}`;
 }
 
+function provisionalStanding(status: Reviewer["status"]): MultiReviewFindingStanding | null {
+  if (status === "running") return "provisional";
+  if (status === "failed") return "failed";
+  if (status === "cancelled") return "stopped";
+  return null;
+}
+
 /**
- * The issues completed reviewers have reported so far, with an issue that
- * several reviewers raised at the same place under the same title listed once.
- * This is a reading aid before consolidation, not consolidation: reviewers
- * that word the same finding differently stay separate rows.
+ * The findings reviewers have reported so far, with an issue several raised at
+ * the same place under the same title listed once. This is a reading aid
+ * before consolidation, not consolidation: reviewers that word the same
+ * finding differently stay separate rows.
+ *
+ * Completed reviewers contribute their accepted reports. A reviewer still
+ * running contributes what it reported through `report_finding`, and so does
+ * one that failed or was stopped before a report was accepted; those rows are
+ * marked as not confirmed by any report. Findings are never read out of a
+ * transcript.
  */
 export function mergeReviewerFindings(reviewers: readonly Reviewer[]): {
   findings: MultiReviewMergedFinding[];
+  /** Completed reviewers whose accepted reports are counted. */
   reviewerCount: number;
+  /** Rows no accepted report confirms yet. */
+  provisionalCount: number;
 } {
   const merged = new Map<string, MultiReviewMergedFinding>();
   let reviewerCount = 0;
-  reviewers.forEach((reviewer, index) => {
-    if (reviewer.status !== "completed" || !reviewer.report) return;
-    reviewerCount += 1;
-    const source: MultiReviewFindingSource = {
-      reviewerId: reviewer.id,
-      index,
-      agent: reviewer.agent,
-      model: reviewer.model,
-    };
-    for (const issue of reviewer.report.issues) {
-      const key = findingKey(issue);
-      const existing = merged.get(key);
-      if (!existing) {
-        merged.set(key, {
-          key,
-          severity: issue.severity,
-          title: issue.title,
-          file: issue.file,
-          line: issue.line,
-          sources: [source],
-        });
-        continue;
-      }
-      if (SEVERITY_RANK[issue.severity] < SEVERITY_RANK[existing.severity]) {
-        existing.severity = issue.severity;
-      }
-      if (!existing.sources.some((known) => known.reviewerId === reviewer.id)) {
-        existing.sources.push(source);
-      }
+  const add = (
+    issue: { severity: ReviewSeverity; title: string; file: string; line: number | null },
+    source: MultiReviewFindingSource,
+  ) => {
+    const key = findingKey(issue);
+    const existing = merged.get(key);
+    const confirmed = source.standing === "confirmed";
+    if (!existing) {
+      merged.set(key, {
+        key,
+        severity: issue.severity,
+        title: issue.title,
+        file: issue.file,
+        line: issue.line,
+        sources: [source],
+        provisional: !confirmed,
+      });
+      return;
     }
+    // A confirmed report decides the severity; provisional ones only until then.
+    if (confirmed && existing.provisional) {
+      existing.severity = issue.severity;
+      existing.provisional = false;
+    } else if (
+      confirmed === !existing.provisional &&
+      SEVERITY_RANK[issue.severity] < SEVERITY_RANK[existing.severity]
+    ) {
+      existing.severity = issue.severity;
+    }
+    const known = existing.sources.findIndex((entry) => entry.reviewerId === source.reviewerId);
+    if (known < 0) existing.sources.push(source);
+    else if (confirmed) existing.sources[known] = source;
+  };
+  reviewers.forEach((reviewer, index) => {
+    const base = { reviewerId: reviewer.id, index, agent: reviewer.agent, model: reviewer.model };
+    if (reviewer.status === "completed" && reviewer.report) {
+      reviewerCount += 1;
+      for (const issue of reviewer.report.issues) add(issue, { ...base, standing: "confirmed" });
+      return;
+    }
+    const standing = provisionalStanding(reviewer.status);
+    if (!standing) return;
+    for (const finding of reviewer.provisionalFindings ?? [])
+      add(finding.issue, { ...base, standing });
   });
   const findings = [...merged.values()].sort(
     (left, right) =>
       SEVERITY_RANK[left.severity] - SEVERITY_RANK[right.severity] ||
+      Number(left.provisional) - Number(right.provisional) ||
       right.sources.length - left.sources.length ||
       left.file.localeCompare(right.file) ||
       (left.line ?? 0) - (right.line ?? 0),
   );
-  return { findings, reviewerCount };
+  return {
+    findings,
+    reviewerCount,
+    provisionalCount: findings.filter((finding) => finding.provisional).length,
+  };
+}
+
+/**
+ * The words a provisional row carries: still `provisional` while any of its
+ * reviewers runs, `unconfirmed` once every one ended without a report.
+ */
+export function provisionalFindingLabel(finding: MultiReviewMergedFinding): string | null {
+  if (!finding.provisional) return null;
+  if (finding.sources.some((source) => source.standing === "provisional")) return "provisional";
+  return finding.sources.some((source) => source.standing === "failed")
+    ? "unconfirmed (reviewer failed)"
+    : "unconfirmed (reviewer stopped)";
 }
 
 // ---------------------------------------------------------------------------

@@ -30,7 +30,7 @@ import {
   MAX_TOOL_ARGUMENT_BYTES,
   workingDirectory,
 } from "./config.js";
-import { isOrkestratorMailTool, isOrkestratorMcpTool } from "./mcp.js";
+import { isOrkestratorMailTool, isOrkestratorMcpTool, isOwnWorkflowResultCall } from "./mcp.js";
 import { schedulePersist } from "./persistence.js";
 import {
   isObject,
@@ -63,7 +63,8 @@ export async function requestToolApproval(
 ): Promise<ToolCallDecision> {
   const coordinatorMail =
     state.policy?.id === "coordinator-read-only" && isOrkestratorMcpTool(state, toolName);
-  if (state.readOnly && !READ_ONLY_TOOLS.has(toolName) && !coordinatorMail) {
+  const ownAttempt = isOwnWorkflowResultCall(state, toolName, input);
+  if (state.readOnly && !READ_ONLY_TOOLS.has(toolName) && !coordinatorMail && !ownAttempt) {
     return {
       block: true,
       reason:
@@ -79,7 +80,7 @@ export async function requestToolApproval(
   }
   const approvals = state.policy?.approvals ?? (approvalsEnabled() ? "ask" : "auto-approve");
   if (approvals === "auto-approve") return { block: false };
-  if (READ_ONLY_TOOLS.has(toolName) || coordinatorMail) return { block: false };
+  if (READ_ONLY_TOOLS.has(toolName) || coordinatorMail || ownAttempt) return { block: false };
   // A worker can always report back: its mail tools never wait on a person.
   if (isOrkestratorMailTool(state, toolName)) return { block: false };
   if (approvals === "deny") {

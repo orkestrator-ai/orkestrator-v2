@@ -124,6 +124,28 @@ mise run test:logged -- --name coordinator-repro -- bun test --cwd apps/backend 
 The matching timeout and isolated pass support the existing load hypothesis.
 No coordinator implementation, assertion, timeout or skip was changed.
 
+## Recurrence during Multi Review follow-up validation (2026-10-16)
+
+- **Aggregate:** `mise run test:logged -- --name full-suite -- mise run test`, with 4/1/2/1 workspace/root/bridge/protocol slots. The unchanged case timed out at 5262.85 ms; late fixture work also reported a disk I/O error.
+- **Rerun during the aggregate:** `mise run test:logged -- --name coordinator-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` also timed out (5115.92 ms; 47 passed, one failed, one late SQLite error; 30.6 seconds). Evidence: `/tmp/orkestrator-test-run.lxE56B/coordinator-rerun.log.gz`.
+- **After the aggregate:** the same owning-file command with `--name coordinator-final-rerun` passed unchanged in 16.8 seconds (exit 0).
+- **Aggregate evidence:** `/tmp/orkestrator-test-run.1PZf4j/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`. No coordinator implementation, assertion, timeout or skip changed. Host contention remains a hypothesis.
+
+## Recurrence — 2026-10-16 (follow-up main merge)
+
+`mise run test:logged -- --name merge-tests -- mise run test` used
+4/1/2/1 workspace/root/bridge/protocol slots alongside browser validation.
+The bound-discard case timed out at 5219.73 ms. The same owning file also
+timed out in `project coordinator > fetch covers every configured remote and a dirty submodule needs enhanced confirmation`
+at 5260.73 ms. Backend results were 8,325 passed, 40 skipped, three failed
+and two between-tests errors across 445 files (382.70 seconds). The other
+failed case was the diff-statistics timeout tracked in 0162. Evidence:
+`/tmp/orkestrator-test-run.CtLQKC/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+`mise run test:logged -- --name merge-coordinator-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`
+passed the unchanged owning file, exit 0, in 17.5 seconds. Host contention
+remains an unconfirmed hypothesis; no timeout, assertion or skip changed.
+
 ## Recurrence on 2026-10-16 during the storage writer guards merge
 
 `mise run test:logged -- --name merge-tests -- mise run test` ran the backend

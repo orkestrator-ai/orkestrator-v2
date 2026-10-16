@@ -37,6 +37,7 @@ import {
   composeWebAnnotationDispatchText,
 } from "./web-annotation-brief.js";
 import type { WebAnnotationToolHost } from "./web-annotation-contracts.js";
+import type { ProvisionalFindingSink } from "./review-provisional-findings.js";
 import {
   createMcpRuntimeProbe,
   mcpRolloutLoader,
@@ -644,6 +645,13 @@ export class OrkestratorBackend {
       },
     );
     context.multiReviews = this.multiReviews;
+    // Live reviewers' `report_finding` calls reach the review through the
+    // agent tools server, which lists the tool only for a reviewer it accepts.
+    (
+      this.agentTools as {
+        setProvisionalFindingSink?: (sink: ProvisionalFindingSink | null) => void;
+      }
+    ).setProvisionalFindingSink?.(this.multiReviews.provisionalFindingSink());
     this.featurePlanning = new FeaturePlanningService(
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {

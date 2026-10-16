@@ -6,7 +6,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentSession, ModelRuntime } from "@earendil-works/pi-coding-agent";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { MCP_CONFIG_REPORTING_VERSION } from "@orkestrator/protocol/mcp-management";
 import { testApprovalDeadline } from "./testing/approval-fixtures.js";
 
@@ -555,6 +555,148 @@ describe("successful lifecycle routes", () => {
       clientSessionKeys.delete(state.clientSessionKey);
       await rm(directory, { recursive: true, force: true });
       resetTestDependencies();
+    }
+  });
+
+  test("a real read-only SDK session declares and executes inline attempt MCP tools", async () => {
+    const { ModelRuntime: SdkModelRuntime } = await import("./pi-sdk.js");
+    const { closeSession } = await import("./agent-session.js");
+    const { setPiMcpTransportForTests } = await import("./mcp.js");
+    const { workflowResultToolName, workflowResultTurnToolNames } =
+      await import("@orkestrator/protocol/workflow-results");
+    const directory = await mkdtemp(join(tmpdir(), "pi-http-real-read-only-"));
+    const previousAgentDir = process.env.PI_AGENT_DIR;
+    const previousSessionDir = process.env.PI_SESSION_DIR;
+    process.env.PI_AGENT_DIR = directory;
+    process.env.PI_SESSION_DIR = directory;
+    const turn = { tool: workflowResultToolName("review-report"), resultKey: "sdk-attempt" };
+    const tools = workflowResultTurnToolNames(turn);
+    const calls: Array<{ name: string; args: unknown }> = [];
+    let state: ReturnType<typeof newSessionState> | undefined;
+    setAgentSessionTestHooks(undefined);
+    try {
+      // Real SDK/runtime, isolated credentials and no model or catalogue network
+      // requests. Only the remote MCP transport is deterministic in this test.
+      const runtime = await SdkModelRuntime.create({
+        authPath: join(directory, "auth.json"),
+        modelsPath: join(directory, "models.json"),
+        allowModelNetwork: false,
+      });
+      await runtime.setRuntimeApiKey("anthropic", "test-only-no-provider-requests");
+      setModelRuntimeFactoryForTests(async () => runtime);
+      refreshModels();
+      setPiMcpTransportForTests({
+        connect: async () => ({
+          tools: tools.map((name) => ({
+            name,
+            inputSchema: {
+              type: "object",
+              properties: { resultKey: { type: "string" } },
+              required: ["resultKey"],
+            },
+          })),
+          call: async (name, args) => {
+            calls.push({ name, args });
+            return { content: [{ type: "text", text: "attempt accepted" }] };
+          },
+          close: async () => {},
+        }),
+      });
+      const created = await call("/session/create", {
+        method: "POST",
+        body: JSON.stringify({
+          clientSessionKey: "sdk-read-only",
+          readOnly: true,
+          agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "sdk-attempt-token" },
+        }),
+      });
+      expect(created.status).toBe(201);
+      state = sessions.get((await created.json()).sessionId)!;
+      const attached = await call(`/session/${state.id}/attach`, { method: "POST", body: "{}" });
+      expect(attached.status).toBe(200);
+      const session = state.session!;
+      expect(state.readOnly).toBe(true);
+      expect(session.getActiveToolNames()).toEqual(expect.arrayContaining([...tools]));
+      const { createAssistantMessageEventStream } = await import("@earendil-works/pi-ai");
+      let responses = 0;
+      // Drive the real SDK loop and its tool_call hooks, substituting only the
+      // model stream. No provider request or paid inference is needed.
+      session.agent.streamFunction = (model) => {
+        const first = responses++ === 0;
+        const response: AssistantMessage = {
+          role: "assistant",
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          timestamp: Date.now(),
+          stopReason: first ? "toolUse" : "stop",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          content: first
+            ? [
+                ...tools.map((name) => ({
+                  type: "toolCall" as const,
+                  id: `sdk-${name}`,
+                  name,
+                  arguments: { resultKey: turn.resultKey },
+                })),
+                {
+                  type: "toolCall",
+                  id: "wrong-attempt",
+                  name: "report_finding",
+                  arguments: { resultKey: "another-attempt" },
+                },
+              ]
+            : [{ type: "text", text: "Finished." }],
+        };
+        const stream = createAssistantMessageEventStream();
+        stream.push({ type: "done", reason: first ? "toolUse" : "stop", message: response });
+        stream.end(response);
+        return stream;
+      };
+      const prompted = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({
+          prompt: "Review the supplied package.",
+          workflowResultTool: turn.tool,
+          workflowResultKey: turn.resultKey,
+        }),
+      });
+      expect(prompted.status).toBe(202);
+      await session.agent.waitForIdle();
+      expect(calls).toEqual(tools.map((name) => ({ name, args: { resultKey: turn.resultKey } })));
+      const results = session.agent.state.messages.filter(
+        (message) => message.role === "toolResult",
+      );
+      expect(results).toHaveLength(tools.length + 1);
+      expect(results.find((result) => result.toolCallId === "wrong-attempt")).toMatchObject({
+        isError: true,
+      });
+      for (const name of tools) {
+        expect(results.find((result) => result.toolCallId === `sdk-${name}`)).toMatchObject({
+          isError: false,
+          content: [{ type: "text", text: "attempt accepted" }],
+        });
+      }
+    } finally {
+      if (state) {
+        await closeSession(state);
+        sessions.delete(state.id);
+        if (state.clientSessionKey) clientSessionKeys.delete(state.clientSessionKey);
+      }
+      setPiMcpTransportForTests();
+      resetTestDependencies();
+      if (previousAgentDir === undefined) delete process.env.PI_AGENT_DIR;
+      else process.env.PI_AGENT_DIR = previousAgentDir;
+      if (previousSessionDir === undefined) delete process.env.PI_SESSION_DIR;
+      else process.env.PI_SESSION_DIR = previousSessionDir;
+      await rm(directory, { recursive: true, force: true });
     }
   });
 
@@ -1221,6 +1363,53 @@ describe("successful lifecycle routes", () => {
       expect(state.readOnly).toBe(false);
       expect(disposedReadOnly).toBe(1);
       expect(creations).toBe(2);
+    } finally {
+      await state.session?.dispose();
+      sessions.delete(state.id);
+      resetTestDependencies();
+    }
+  });
+
+  test("records the workflow-result attempt each turn declares, and refuses a malformed one", async () => {
+    const state = seedSession();
+    state.session = fakeAgentSession({});
+    setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
+    const resultKey = "11111111-1111-4111-8111-111111111111";
+    try {
+      for (const malformed of [
+        { workflowResultTool: "submit_review_report" },
+        { workflowResultTool: "rm -rf", workflowResultKey: resultKey },
+        { workflowResultTool: "submit_review_report", workflowResultKey: "not a key" },
+      ]) {
+        const response = await call(`/session/${state.id}/prompt`, {
+          method: "POST",
+          body: JSON.stringify({ prompt: "review", requestId: "req-malformed", ...malformed }),
+        });
+        expect(response.status).toBe(400);
+      }
+      expect(state.workflowResultTurn).toBeUndefined();
+
+      const review = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({
+          prompt: "review",
+          requestId: "req-review",
+          workflowResultTool: "submit_review_report",
+          workflowResultKey: resultKey,
+        }),
+      });
+      expect(review.status).toBe(202);
+      await waitFor(() => state.status === "idle");
+      expect(state.workflowResultTurn).toEqual({ tool: "submit_review_report", resultKey });
+
+      // The next ordinary turn is not that attempt's.
+      const ordinary = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "thanks", requestId: "req-ordinary" }),
+      });
+      expect(ordinary.status).toBe(202);
+      await waitFor(() => state.status === "idle");
+      expect(state.workflowResultTurn).toBeUndefined();
     } finally {
       await state.session?.dispose();
       sessions.delete(state.id);

@@ -345,3 +345,114 @@ describe("NativeAgentQuestionCard", () => {
     expect(onResolve.mock.calls[0]?.[0].answer).toBeUndefined();
   });
 });
+
+describe("NativeAgentQuestionCard countdown pause", () => {
+  const CEILING = 24 * 60 * 60_000;
+
+  function timed(hold: AgentInteractionRequest["hold"], expiresAt = Date.now() + 4 * 60_000) {
+    return {
+      ...request([question({ id: "q0", options: TWO_OPTIONS })]),
+      expiresAt,
+      hold,
+    };
+  }
+
+  function outcome(result: AgentInteractionApplyOutcome["result"]): AgentInteractionApplyOutcome {
+    return { ...applied(), result };
+  }
+
+  test("a paused question shows Paused when it mounts, as it does after a reload", () => {
+    const heldAt = Date.now();
+    render(
+      <NativeAgentQuestionCard
+        interaction={timed({ available: true, heldAt }, heldAt + CEILING)}
+        onResolve={async () => applied()}
+        onHold={async () => applied()}
+      />,
+    );
+    const toggle = screen.getByRole("button", { name: "Resume countdown" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    expect(toggle.textContent).toBe("Paused");
+  });
+
+  test("clicking the countdown asks the agent to pause, then shows the paused state", async () => {
+    let finish!: (value: AgentInteractionApplyOutcome) => void;
+    const onHold = mock(
+      (_held: boolean) =>
+        new Promise<AgentInteractionApplyOutcome>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const { rerender } = render(
+      <NativeAgentQuestionCard
+        interaction={timed({ available: true })}
+        onResolve={async () => applied()}
+        onHold={onHold}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Pause countdown, \d:\d\d left$/ }));
+    expect(onHold).toHaveBeenCalledWith(true);
+    // Shown as paused while the request is on its way, but not clickable twice.
+    const pending = screen.getByRole("button", { name: "Resume countdown" }) as HTMLButtonElement;
+    expect(pending.disabled).toBe(true);
+
+    const heldAt = Date.now();
+    rerender(
+      <NativeAgentQuestionCard
+        interaction={timed({ available: true, heldAt }, heldAt + CEILING)}
+        onResolve={async () => applied()}
+        onHold={onHold}
+      />,
+    );
+    finish(applied());
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Resume countdown" }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Resume countdown" }));
+    expect(onHold).toHaveBeenLastCalledWith(false);
+  });
+
+  test("a refused pause says so and leaves the countdown running", async () => {
+    render(
+      <NativeAgentQuestionCard
+        interaction={timed({ available: true })}
+        onResolve={async () => applied()}
+        onHold={async () => outcome("rejected")}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Pause countdown/ }));
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "This countdown can't be paused right now.",
+    );
+    expect(screen.getByRole("button", { name: /^Pause countdown/ })).toBeTruthy();
+  });
+
+  test("a request that went away meanwhile is not reported as an error", async () => {
+    const onHold = mock(async () => outcome("stale"));
+    render(
+      <NativeAgentQuestionCard
+        interaction={timed({ available: true })}
+        onResolve={async () => applied()}
+        onHold={onHold}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Pause countdown/ }));
+    await waitFor(() => expect(onHold).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByRole("alert") === null).toBe(true));
+  });
+
+  test("a countdown from an older bridge cannot be clicked, and says why", () => {
+    render(
+      <NativeAgentQuestionCard
+        interaction={timed({ available: false, reason: "bridge-outdated" })}
+        onResolve={async () => applied()}
+        onHold={async () => applied()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /countdown/ }) === null).toBe(true);
+    expect(screen.getByText(/Restart this environment to update it\./)).toBeTruthy();
+  });
+});

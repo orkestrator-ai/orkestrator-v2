@@ -1,4 +1,5 @@
-import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
+import { PUBLIC_API_LIMITS, type PublicActionName } from "@orkestrator/protocol/public-api";
+import { publicActionInputKeys } from "@orkestrator/protocol/public-api-inputs";
 import { decodePublicSessionId } from "@orkestrator/protocol/public-api-resources";
 import { PublicActionError } from "./errors.js";
 
@@ -12,6 +13,11 @@ export function onlyKeys(input: Record<string, unknown>, allowed: readonly strin
   for (const key of Object.keys(input)) {
     if (!allowed.includes(key)) throw invalid(`Unknown input field: ${key.slice(0, 64)}`);
   }
+}
+
+/** Refuses keys outside `action`'s input schema (`PUBLIC_ACTION_INPUTS`). */
+export function onlyActionKeys(input: Record<string, unknown>, action: PublicActionName): void {
+  onlyKeys(input, publicActionInputKeys(action));
 }
 
 export function requiredString(

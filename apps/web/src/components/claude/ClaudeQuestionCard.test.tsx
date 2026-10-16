@@ -536,3 +536,20 @@ describe("ClaudeQuestionCard", () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("ClaudeQuestionCard countdown in terminal mode", () => {
+  test("shows the countdown but explains that terminal mode cannot pause it yet", () => {
+    render(
+      <ClaudeQuestionCard
+        question={{ ...singleQuestionWithOptions(), expiresAt: Date.now() + 2 * 60_000 }}
+        onSubmitAnswers={onSubmitAnswers}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /countdown/ }) === null).toBe(true);
+    const countdown = screen.getByLabelText(/^Time remaining \d:\d\d$/);
+    expect(countdown.tabIndex).toBe(0);
+    expect(document.getElementById(countdown.getAttribute("aria-describedby")!)?.textContent).toBe(
+      "Pausing the countdown isn't available in terminal mode yet.",
+    );
+  });
+});

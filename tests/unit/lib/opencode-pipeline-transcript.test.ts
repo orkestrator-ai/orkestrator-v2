@@ -6,9 +6,13 @@
  * normalizer produced for the same input.
  */
 import { describe, expect, test } from "bun:test";
+import type { MultiReviewReviewerTranscript } from "@orkestrator/protocol/multi-review";
 import { toPipelineTranscript } from "@/components/build-pipeline/pipeline-transcript";
+import { toMultiReviewReviewerMessages } from "@/components/review/MultiReviewReviewerTab";
 import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
+import { classifyTranscriptEntry } from "@/lib/chat/transcript-skew";
 import {
+  isOpenCodeTranscriptEnvelope,
   normalizeOpenCodeDisplayEntries,
   normalizeOpenCodeDisplayEntry,
 } from "../../../apps/backend/src/core/opencode-display-transcript";
@@ -400,5 +404,111 @@ describe("normalizeOpenCodeDisplayEntry", () => {
       content: "",
       parts: [],
     });
+  });
+});
+
+/*
+ * The renderer's skew guard against the backend's own normalizer. A backend
+ * older than 2.19.17 serves these transcripts as stored, in OpenCode's raw
+ * `{ info, parts }` envelope; a current one normalizes each entry on the way
+ * out. The renderer must flag every entry of the first kind and none of the
+ * second, or a current backend would show "update the backend" notices.
+ */
+
+/** Stored OpenCode entries, including the awkward ones the normalizer must survive. */
+const STORED: Array<Record<string, unknown>> = [
+  {
+    info: { id: "user-1", role: "user", time: { created: 1_800_000_000_000 } },
+    parts: [{ id: "p0", type: "text", text: "Review the change" }],
+  },
+  {
+    info: { id: "assistant-1", role: "assistant", time: { created: 1_800_000_001_000 } },
+    parts: [
+      { id: "p1", type: "reasoning", text: "Reading the diff" },
+      {
+        id: "p2",
+        type: "tool",
+        tool: "bash",
+        state: { status: "completed", input: { command: "git diff" }, output: "diff" },
+      },
+      { id: "p3", type: "text", text: "Looks correct." },
+    ],
+  },
+  // A failed message with no parts: the normalizer shows its error.
+  {
+    info: {
+      id: "assistant-2",
+      role: "assistant",
+      time: { created: 1_800_000_002_000 },
+      error: { name: "APIError", data: { message: "Provider unavailable" } },
+    },
+    parts: [],
+  },
+  // No id, no time, nothing visible.
+  { info: { role: "assistant" }, parts: [] },
+  // Parts the normalizer cannot read.
+  { info: { id: "assistant-3", role: "assistant" }, parts: [{ text: 1 }, null] },
+  {
+    info: { id: "assistant-4", role: "user" },
+    get parts(): unknown {
+      throw new Error("unreadable");
+    },
+  },
+];
+
+function reviewerSnapshot(messages: unknown[]): MultiReviewReviewerTranscript {
+  return {
+    workflowId: "workflow-1",
+    reviewerId: "reviewer-1",
+    workflowPhase: "reviewing",
+    agent: "opencode",
+    model: "model",
+    status: "running",
+    messages,
+    startedAt: FALLBACK,
+  };
+}
+
+describe("OpenCode transcripts across the renderer–backend version boundary", () => {
+  test("flags exactly what the backend normalizer treats as an envelope", () => {
+    for (const entry of STORED) {
+      expect(isOpenCodeTranscriptEnvelope(entry)).toBe(true);
+      expect(classifyTranscriptEntry(entry)).toBe("opencode-envelope");
+    }
+  });
+
+  test("flags nothing a current backend serves", () => {
+    const served = normalizeOpenCodeDisplayEntries(STORED);
+    for (const entry of served) {
+      expect(classifyTranscriptEntry(entry as Record<string, unknown>)).toBe("display");
+    }
+    const transcript = toPipelineTranscript(served, "opencode", FALLBACK);
+    expect(transcript.some((message) => message.id.startsWith("transcript-skew:"))).toBe(false);
+    expect(transcript.map((message) => message.content).join("\n")).toContain("Looks correct.");
+  });
+
+  test("shows one notice for a build stage served by an older backend", () => {
+    expect(toPipelineTranscript(STORED, "opencode", FALLBACK)).toEqual([
+      expect.objectContaining({
+        id: "transcript-skew:opencode-envelope:user-1",
+        role: "system",
+        content: expect.stringContaining(`${STORED.length} OpenCode messages not shown.`),
+      }),
+    ]);
+  });
+
+  test("keeps the notice through the Multi Review reviewer filters", () => {
+    const messages = toMultiReviewReviewerMessages(reviewerSnapshot(STORED));
+    expect(messages.map((message) => message.id)).toEqual([
+      "transcript-skew:opencode-envelope:user-1",
+    ]);
+    expect(messages[0]!.content).toContain(
+      "Update Orkestrator on the computer running the backend",
+    );
+
+    const current = toMultiReviewReviewerMessages(
+      reviewerSnapshot(normalizeOpenCodeDisplayEntries(STORED)),
+    );
+    expect(current.some((message) => message.id.startsWith("transcript-skew:"))).toBe(false);
   });
 });

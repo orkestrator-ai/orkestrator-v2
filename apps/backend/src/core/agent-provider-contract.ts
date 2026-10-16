@@ -110,6 +110,15 @@ export interface AgentInteractionProviderCapability {
     resolution: AgentInteractionResolution,
   ): Promise<AgentInteractionApplyOutcome>;
   watchInteractions?(sessionId: string, onRevision: (revision: number) => void): () => void;
+  /**
+   * Pause (`held`) or resume a request's deadline where it is enforced.
+   * Absent where no provider deadline exists to pause (OpenCode).
+   */
+  holdInteraction?(
+    sessionId: string,
+    interactionId: string,
+    held: boolean,
+  ): Promise<AgentInteractionApplyOutcome>;
 }
 
 export class PromptRejectedError extends Error {

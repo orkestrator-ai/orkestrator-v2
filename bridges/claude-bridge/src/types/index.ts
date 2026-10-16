@@ -5,6 +5,7 @@ import type { TranscriptWindowMetadata } from "@orkestrator/protocol/node/transc
 
 import type { TaskListSnapshot, TaskRegistry } from "@orkestrator/protocol/task-list";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
+import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interactions";
 
 export type {
   JsonSchema,
@@ -980,8 +981,14 @@ export interface QuestionRequest {
   sessionId: string;
   questions: QuestionInfo[];
   toolUseId?: string;
-  /** Absolute time when the bridge will deny the unanswered request. */
+  /** When the bridge parked it; the backend's `createdAt`. */
+  requestedAt: number;
+  /**
+   * Absolute time when the bridge will deny the unanswered request; the
+   * pause ceiling while the user has paused it.
+   */
   expiresAt: number;
+  hold?: AgentInteractionHold;
 }
 
 /** Plan approval request from Claude (when ExitPlanMode is called) */
@@ -993,8 +1000,14 @@ export interface PlanApprovalRequest {
   plan?: string;
   /** The plan exceeded the interaction transport limit and cannot be approved safely. */
   planTruncated?: boolean;
-  /** Absolute time when the bridge will deny the unanswered request. */
+  /** When the bridge parked it; the backend's `createdAt`. */
+  requestedAt: number;
+  /**
+   * Absolute time when the bridge will deny the unanswered request; the
+   * pause ceiling while the user has paused it.
+   */
   expiresAt: number;
+  hold?: AgentInteractionHold;
 }
 
 /**
@@ -1012,9 +1025,11 @@ interface ClaudeInteractionRequestBase {
   requestedAt: number;
   /**
    * Absolute time when the bridge settles the unanswered request: an
-   * elicitation is cancelled, a tool call denied.
+   * elicitation is cancelled, a tool call denied. The pause ceiling while the
+   * user has paused it.
    */
   expiresAt: number;
+  hold?: AgentInteractionHold;
 }
 
 export interface ClaudeElicitationRequest extends ClaudeInteractionRequestBase {
@@ -1065,7 +1080,7 @@ export type ClaudeInteractionResponse =
  */
 export type ClaudeInteractionOutcome =
   | ClaudeInteractionResponse
-  | { action: "timeout" }
+  | { action: "timeout"; message: string }
   | { action: "withdrawn" };
 
 /** SSE event types */

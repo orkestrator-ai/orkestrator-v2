@@ -5,7 +5,7 @@ import {
   type PublicActionName,
 } from "@orkestrator/protocol/public-api";
 import { PublicActionError } from "./errors.js";
-import { invalid, onlyKeys } from "./input.js";
+import { invalid, onlyActionKeys } from "./input.js";
 import { toReceipt, type PublicOperationRecord } from "./operation-ledger.js";
 import { decodePublicSessionId } from "@orkestrator/protocol/public-api-resources";
 import { reconcileOperation } from "./reconciler.js";
@@ -53,7 +53,7 @@ const runGet: ReadActionHandler<RunGetInput> = {
   kind: "read",
   action: "run.get",
   parse(input) {
-    onlyKeys(input, ["operationId", "requestId", "action", "namespace"]);
+    onlyActionKeys(input, "run.get");
     if (input.operationId !== undefined) {
       if (typeof input.operationId !== "string") throw invalid("operationId must be a string");
       if (
@@ -160,7 +160,7 @@ const runRetry: MutationActionHandler<{ operationId: string }> = {
   kind: "mutation",
   action: "run.retry",
   parse(input) {
-    onlyKeys(input, ["operationId"]);
+    onlyActionKeys(input, "run.retry");
     const operationId = typeof input.operationId === "string" ? input.operationId : "";
     if (!operationId) throw invalid("operationId is required");
     return { value: { operationId }, scope: `operation:${operationId}`, intent: {} };
@@ -258,7 +258,7 @@ const runDiscard: MutationActionHandler<{ operationId: string }> = {
   kind: "mutation",
   action: "run.discard",
   parse(input) {
-    onlyKeys(input, ["operationId"]);
+    onlyActionKeys(input, "run.discard");
     const operationId = typeof input.operationId === "string" ? input.operationId : "";
     if (!operationId) throw invalid("operationId is required");
     return { value: { operationId }, scope: `operation:${operationId}`, intent: {} };

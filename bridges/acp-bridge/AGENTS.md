@@ -47,3 +47,12 @@ creates the ACP session with that selection on the first attach or prompt
 after a login exists, and `applyComposerPatch` only records a selection until
 then. Code that reads `acpSessionId` must treat the empty string as "not
 created yet", never as a session to load.
+
+## Parked request deadlines
+
+- **A pause only moves the deadline.** `POST .../approvals/:id/hold` and
+  `.../interactions/:id/hold` re-arm the request's `InteractionDeadline`
+  (`acp-interaction-hold.ts`), capped by the in-flight `session/prompt`
+  timeout (`promptDeadlineAt`) and, for a question, Grok's own
+  `GROK_ASK_USER_QUESTION_TIMEOUT_SECS`. Expiry still cancels; a hold never
+  answers the request.

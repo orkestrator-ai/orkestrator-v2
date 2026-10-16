@@ -57,10 +57,10 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 60 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 234 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 248 |
-| **Total** | | **543** |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 48 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 244 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 251 |
+| **Total** | | **544** |
 
 ## Very high
 
@@ -115,7 +115,7 @@ it reaches. Some rules of thumb:
 
 - [ ] Run a live Claude and Codex design-tool cycle, including Ask agent, handoff and an environment switch ([design-canvas-qualification.md](design-canvas-qualification.md), qualification)
 - [ ] Verify whether the open design flakes, especially the extra event in 0215, reflect ordering bugs ([design-canvas-qualification.md](design-canvas-qualification.md), verify)
-- [ ] Reject a reused design `correlationId` with different input on settled receipts in `submit` and `findCreate` ([design-operation-recovery-edges.md](design-operation-recovery-edges.md))
+- [x] Reject a reused design `correlationId` with different input on settled receipts in `submit` and `findCreate` ([design-operation-recovery-edges.md](design-operation-recovery-edges.md))
 
 ### MCP (high)
 
@@ -128,6 +128,7 @@ it reaches. Some rules of thumb:
 
 - [x] Park Claude `onElicitation` and `onUserDialog` requests as interactions instead of declining them ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
 - [ ] Check on each platform that the Agent Info policy summary matches the options the adapter received ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
+- [ ] Qualify a paused question and approval on each provider's real CLI past ten minutes, then answer ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
 - [ ] Keep the Claude CLI open across idle turns with an idle detach instead of draining at turn end ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md))
 - [x] Report `authentication-required` readiness on Claude, Pi, ACP and OpenCode; drop the Cursor-only 401 branch ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
 - [ ] Confirm no auth response body carries a token or key except the login URL, and the URL is never logged ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)
@@ -140,8 +141,8 @@ it reaches. Some rules of thumb:
 - [ ] Qualify Claude inactive-tab and background-task runs against content-revision tokens ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [ ] Qualify cold restart: display tails and pipeline histories reconcile, including a mid-dispatch restart ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [ ] Qualify idle observation live per provider: missed final event, approvals, sub-agents, reconnect, hidden ([native-agent-idle-observation.md](native-agent-idle-observation.md), qualification)
-- [ ] Back off gateway terminal fallback reconnect timers with `ReconnectBackoff`, resetting after healthy streams ([client-reconnect-and-freshness.md](client-reconnect-and-freshness.md))
-- [ ] Fix `storageReads` = 0 since #969 by charging cached row reads, and add a test asserting it ([recurring-work-qualification.md](recurring-work-qualification.md))
+- [x] Back off gateway terminal fallback reconnect timers with `ReconnectBackoff`, resetting after healthy streams ([client-reconnect-and-freshness.md](client-reconnect-and-freshness.md))
+- [x] Fix `storageReads` = 0 since #969 by charging cached row reads, and add a test asserting it ([recurring-work-qualification.md](recurring-work-qualification.md))
 - [ ] Run the live isolated-profile recurring-work qualification: 10 environments, clients, outage, CPU/RSS ([recurring-work-qualification.md](recurring-work-qualification.md), qualification)
 - [ ] Qualify PR monitoring against live GitHub: terminal discovery, reopen, admission delay and rate limits ([recurring-work-qualification.md](recurring-work-qualification.md), qualification)
 - [ ] Qualify recursive `fs.watch` worktree watching, Electron and Docker Desktop on macOS ([recurring-work-qualification.md](recurring-work-qualification.md), qualification)
@@ -171,7 +172,7 @@ it reaches. Some rules of thumb:
 ### Cross-cutting (high)
 
 - [ ] Qualify Codex sub-agent cards on a fixture profile: one card per child, recovery after reload and restart ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
-- [ ] Decide and implement a renderer-backend skew guard for raw OpenCode envelopes from older backends ([mixed-version-compatibility.md](mixed-version-compatibility.md))
+- [x] Decide and implement a renderer-backend skew guard for raw OpenCode envelopes from older backends ([mixed-version-compatibility.md](mixed-version-compatibility.md))
 - [x] Fix flake 0166 (OpenCode probe deadline), which recurred on 2026-10-15 ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [ ] Keep split panes mounted across the mobile breakpoint through stable per-pane hosts ([mobile-layout-gaps.md](mobile-layout-gaps.md))
 - [ ] Move the environment settings dialog out of the drawer row so it is usable on mobile ([mobile-layout-gaps.md](mobile-layout-gaps.md))
@@ -302,10 +303,25 @@ it reaches. Some rules of thumb:
 - [ ] Show MCP execution location and allowlist warnings; gate container or remote sign-in on callback reachability ([mcp-environment-delivery.md](mcp-environment-delivery.md))
 - [ ] Qualify that Pi and Cursor MCP delivery respects opt-outs, size bounds, symlink rules and modes ([mcp-environment-delivery.md](mcp-environment-delivery.md), qualification)
 
+### Control MCP (medium)
+
+- [x] Add JSON Schema inputs, capabilities and confirmation classes for every public action, and test handlers against them ([control-mcp-voice-surface.md](control-mcp-voice-surface.md))
+- [ ] Dispatch public actions in-process from Control MCP under a per-credential authority, and scope `run.get` to it ([control-mcp-voice-surface.md](control-mcp-voice-surface.md))
+- [ ] Add named, scoped Control MCP operator credentials with profiles, and filter `tools/list` by credential ([control-mcp-voice-surface.md](control-mcp-voice-surface.md))
+- [ ] Add the Control MCP gateway (`find_actions`, `describe_action`, `run_action`, `run_status`) with confirmation tokens ([control-mcp-voice-surface.md](control-mcp-voice-surface.md))
+- [ ] Add the voice core tools with spoken result summaries, within an 8,000-byte `tools/list` budget ([control-mcp-voice-surface.md](control-mcp-voice-surface.md))
+- [ ] Add an `attention.list` public action and CLI command for proactive voice notifications ([control-mcp-voice-surface.md](control-mcp-voice-surface.md))
+- [ ] Rebase the operator MCP tools on public actions, and add `ticket.*` and `mail.*` public actions with CLI commands ([control-mcp-voice-surface.md](control-mcp-voice-surface.md))
+- [ ] Add a public-action, CLI and MCP parity test ([control-mcp-voice-surface.md](control-mcp-voice-surface.md))
+- [ ] Qualify a local realtime voice client end to end: latency, target resolution and token use ([control-mcp-voice-surface.md](control-mcp-voice-surface.md), qualification)
+- [x] Decide MCP credential authority and storage, and voice confirmation rules ([control-mcp-voice-surface.md](control-mcp-voice-surface.md), decision)
+- [ ] Decide hosted-voice access (local relay only, or the remote gateway) for Control MCP ([control-mcp-voice-surface.md](control-mcp-voice-surface.md), decision)
+
 ### Agent engines and provider SDKs (medium)
 
 - [ ] Decide Claude `permission-grant` amendments and add a permission-rule list and revoke surface first ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
 - [ ] Derive Grok approval kinds from ACP `toolCall.kind` (execute as command, edit as file-change) ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
+- [ ] Pause countdowns in Claude tmux mode (hook-script hold sidecar, hook `timeout` above the ceiling) ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
 - [ ] Retire the Cursor, Pi and ACP policy env overrides and make `cursorMcpServers` follow the session policy ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
 - [ ] Raise and answer an MCP elicitation in the browser, reload mid-question, and confirm it rehydrates ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
 - [ ] Run the Docker agent suite for the Cursor and Pi container execution-policy cells ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
@@ -373,7 +389,8 @@ it reaches. Some rules of thumb:
 - [ ] Qualify `HostSuspendDetector` with a real host suspend and resume ([recurring-work-qualification.md](recurring-work-qualification.md), qualification)
 - [ ] Soak add, remove, stop and restart cycles; confirm counts return to baseline with no guard lines ([recurring-work-qualification.md](recurring-work-qualification.md), qualification)
 - [ ] Qualify two clients with one disconnected, restarts at durable boundaries, and an older backend ([recurring-work-qualification.md](recurring-work-qualification.md), qualification)
-- [ ] Verify that `cache-hit` attribution fully explains `storageReads` = 0 by reporting `storage-stat` ([recurring-work-qualification.md](recurring-work-qualification.md), verify)
+- [x] Verify that `cache-hit` attribution fully explains `storageReads` = 0 by reporting `storage-stat` ([recurring-work-qualification.md](recurring-work-qualification.md), verify)
+- [ ] Charge `StorageDatabase.rows()` reads and workflow-result index hits as storage reads or stats ([recurring-work-qualification.md](recurring-work-qualification.md))
 
 ### Multi Review (medium)
 
@@ -573,6 +590,8 @@ it reaches. Some rules of thumb:
 
 - [ ] Set Claude `askUserQuestion.previewFormat` once the question card's plain or html mode is decided ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
 - [ ] Delete the unused OpenCode `autoAnswerRequests` branch and move its tests onto the journaled path ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
+- [ ] Let a Grok pause outlive the 30-minute turn deadline and Grok's own question timeout ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
+- [ ] Show `hold` in `session interactions list` and add a CLI and public API hold action ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
 - [ ] Read the Claude model catalogue from `initializationResult()` on the live runtime, not a throwaway query ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md))
 - [ ] Use `startup()` / `WarmQuery` to warm the first Claude turn in an environment, and measure it ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md))
 - [ ] Add Cursor `SendOptions.local.force` for wedged agents only if `recoverActiveRun` shows them ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md))
@@ -650,6 +669,7 @@ it reaches. Some rules of thumb:
 - [ ] Lengthen the design canvas cursor check interval after missed-final-hint recovery is qualified ([recurring-work-qualification.md](recurring-work-qualification.md), deferred)
 - [ ] Share one visible display clock between `useElapsedTimer` and `usePromptDeadline` ([recurring-work-qualification.md](recurring-work-qualification.md), deferred)
 - [ ] Avoid the validation reader's in-environment `bun` spawn on every poll ([recurring-work-qualification.md](recurring-work-qualification.md), deferred)
+- [ ] Read one feature plan's row in the keyed planning pass instead of decoding the whole store ([recurring-work-qualification.md](recurring-work-qualification.md), deferred)
 - [ ] Demand-gate interactive tmux capture (B19, `tmux-interactive.ts`) ([recurring-work-qualification.md](recurring-work-qualification.md), deferred)
 - [ ] Split the validation worker's 500 ms liveness write from result writes (B20) with crash-recovery proof ([recurring-work-qualification.md](recurring-work-qualification.md), deferred)
 - [ ] Bring `RECURRING_JOB_CATALOGUE` and the recurring harness limitation text back in line with the code (L07, C13, `coordinator-repair`) ([recurring-work-qualification.md](recurring-work-qualification.md))
@@ -762,8 +782,9 @@ it reaches. Some rules of thumb:
 | **MCP** | | | | | |
 | [mcp-management.md](mcp-management.md) |  | 4 | 10 | 6 | 20 |
 | [mcp-environment-delivery.md](mcp-environment-delivery.md) |  |  | 4 | 10 | 14 |
+| [control-mcp-voice-surface.md](control-mcp-voice-surface.md) |  |  | 9 |  | 9 |
 | **Agent engines and provider SDKs** | | | | | |
-| [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md) |  | 2 | 8 | 2 | 12 |
+| [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md) |  | 3 | 9 | 4 | 16 |
 | [mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md) |  | 1 | 3 | 5 | 9 |
 | [session-titles-and-history.md](session-titles-and-history.md) |  |  | 4 | 4 | 8 |
 | [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md) |  | 2 | 8 | 5 | 15 |
@@ -776,7 +797,7 @@ it reaches. Some rules of thumb:
 | [remote-client-bandwidth.md](remote-client-bandwidth.md) |  |  | 4 | 9 | 13 |
 | [native-agent-idle-observation.md](native-agent-idle-observation.md) |  | 1 | 3 | 2 | 6 |
 | [client-reconnect-and-freshness.md](client-reconnect-and-freshness.md) |  | 1 | 6 | 2 | 9 |
-| [recurring-work-qualification.md](recurring-work-qualification.md) |  | 5 | 9 | 18 | 32 |
+| [recurring-work-qualification.md](recurring-work-qualification.md) |  | 5 | 10 | 19 | 34 |
 | **Multi Review** | | | | | |
 | [multi-review-scale-and-cost.md](multi-review-scale-and-cost.md) |  | 3 | 5 | 9 | 17 |
 | [multi-review-panel-value.md](multi-review-panel-value.md) |  | 1 | 4 | 5 | 10 |

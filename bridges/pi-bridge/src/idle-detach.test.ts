@@ -8,6 +8,7 @@ import { IDLE_DETACH_MS, settleIdleDetaches, sweepIdleSessions } from "./idle-de
 import { refreshModels } from "./models.js";
 import { setModelRuntimeFactoryForTests } from "./runtime.js";
 import { clientSessionKeys, type PendingApproval, type SessionState, sessions } from "./state.js";
+import { testApprovalDeadline } from "./testing/approval-fixtures.js";
 
 const NOW = 50 * IDLE_DETACH_MS;
 let sessionDirectory: string;
@@ -76,7 +77,7 @@ function parkedApproval(): PendingApproval {
     toolName: "bash",
     input: {},
     createdAt: NOW,
-    expiresAt: NOW + 60_000,
+    deadline: testApprovalDeadline(NOW),
     settle: () => undefined,
   };
 }

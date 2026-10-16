@@ -161,3 +161,35 @@ passed the unchanged owning file (four tests, exit 0) in 7.8 seconds. These
 credential checks do not change Pi staging. Host contention remains an
 unconfirmed hypothesis; no timeout, assertion or skip was changed in the
 vendoring tests.
+
+## Recurrence — 2026-10-16 (question transcript review fixes)
+
+`mise run test:logged -- --name full-suite -- mise run test` reserved
+4/1/2/1 workspace/root/bridge/protocol slots while component and isolated
+browser validation also ran. The staged-runtime test timed out at 30000.61 ms;
+the root/support group reported 2,998 passed, one skipped and one failed
+across 137 files (250.74 seconds). Evidence:
+`/tmp/orkestrator-test-run.0igieQ/root-and-agent-support-tests.log.gz`.
+
+`mise run test:logged -- --name pi-vendor-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+passed the unchanged owning file alone, exit 0, in 8.9 seconds. The question
+renderer fixes do not change runtime staging. Shared host contention remains
+an unconfirmed hypothesis; no timeout, assertion or skip was changed.
+
+
+## Recurrence — 2026-10-16 (live coordinator suite main merge)
+
+`mise run test:logged -- --name merge-tests -- mise run test` reserved
+4/1/2/1 workspace/root/bridge/protocol slots on the shared 18-slot host.
+Workspace and bridges waited 110.9 and 63.7 seconds for capacity. The same
+`Pi bridge runtime vendoring > loads Pi's supported SDK from the staged runtime closure`
+test in `tests/unit/pi-bridge-vendor.test.ts` timed out at 30003.15 ms.
+Root results were 3,003 passed, one skipped and one failed across 137 files
+(255.76 seconds). Bridges and protocol verification passed. Evidence:
+`/tmp/orkestrator-test-run.3yIsw1/root-and-agent-support-tests.log.gz`.
+
+`mise run test:logged -- --name merge-pi-vendor-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+passed the unchanged owning file alone (four tests, exit 0) in 25.1 seconds,
+while workspace validation was still running. The conflict resolution changes
+only todo summary counts. Shared host contention remains an unconfirmed
+hypothesis; no timeout, assertion or skip was changed.

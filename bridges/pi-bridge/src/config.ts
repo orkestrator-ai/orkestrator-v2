@@ -189,14 +189,14 @@ export const COMPOSER_HYDRATION_WAIT_MS = 1_500;
  *
  * Denial, never approval: an unanswered prompt is a prompt nobody saw, and
  * running the command anyway would execute something the user never read.
+ * The user may pause it from the card; resuming restarts this whole window.
  */
 export function approvalTimeoutMs(): number {
   return parseBoundedInteger(
     process.env.PI_BRIDGE_APPROVAL_TIMEOUT_MS,
     5 * 60 * 1000,
-    // Floored at a second rather than at a realistic human budget: the only
-    // caller that lowers it is a test proving the timeout denies, and a test
-    // that has to wait five minutes to prove that is a test nobody runs.
+    // Floored at a second, a sanity bound rather than a realistic human
+    // budget. Tests prove the denial on a fake clock instead of lowering it.
     1_000,
     60 * 60 * 1000,
   );

@@ -83,3 +83,24 @@ not establish a root cause. No assertion, timeout or skip was changed.
 - **Isolated rerun:** `mise run test:logged -- --name merge-preview-tunnel-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/preview-tunnel-server.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 0.7 seconds.
 - **Evidence:** `/tmp/orkestrator-test-run.LW4SBd/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `/tmp/orkestrator-test-run.LW4SBd/summary.json`; outer wrapper: `/tmp/orkestrator-test-run.dDf2wg/merge-tests.log.gz`.
 - **Hypothesis:** this repeats the existing intermittent queue-sampling failure under aggregate load. The isolated pass does not establish its root cause. No assertion, timeout or skip was changed.
+
+## Recurrence during live coordinator suite main merge (2026-10-16)
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`.
+- **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1
+  slots; backend used two isolated Bun workers on a shared 18-slot host.
+- **Suite counts:** backend 8,280 passed, 40 skipped, four failed and two
+  between-tests errors across 441 files (452.96 seconds). The aggregate exited
+  1 after 600.8 seconds. All other workspace packages and the bridge/protocol
+  groups passed; root had the Pi staged-runtime timeout tracked as 0178.
+- **Evidence:** `/tmp/orkestrator-test-run.3yIsw1/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
+  outer artifact `/tmp/orkestrator-test-run.i4Amls/merge-tests.log.gz`.
+
+- **Failure:** `PreviewTunnelServer > a stopped reader cannot grow the queue without bound`
+  in `apps/backend/src/preview-tunnel-server.test.ts` expected queued bytes
+  `<= 557056` but received `574286` at line 279 (325.80 ms).
+- **Isolated rerun:** `mise run test:logged -- --name merge-preview-tunnel-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/preview-tunnel-server.test.ts --parallel=1 --only-failures`
+  passed the unchanged owning file in 2.1 seconds, exit 0.
+- **Hypothesis:** this repeats the intermittent queue-sampling failure under
+  aggregate load; its root cause remains unconfirmed. No test, timeout,
+  assertion or skip was changed.

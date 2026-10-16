@@ -531,10 +531,11 @@ async function createControlMcp(
     environment: JsonRecord | undefined,
     models: readonly AgentModel[],
     input: { agent: AgentPlatform; modelId?: string; reasoningId?: string },
+    filterInheritedEffort = true,
   ): Promise<JsonRecord> => {
     try {
       const tiers = await launchSettingsTiers(invoke, projectId, environment);
-      return { selection: launchSelectionReport(tiers, models, input) };
+      return { selection: launchSelectionReport(tiers, models, input, filterInheritedEffort) };
     } catch {
       return {};
     }
@@ -940,7 +941,7 @@ async function createControlMcp(
       title: "Launch an agent environment",
       description:
         "Create, configure, and start an autonomous coding agent that can execute commands, modify workspace files, and use allowed network access. " +
-        `${LAUNCH_DEFAULTS_GUIDANCE} The result's selection reports the model and effort that will run. ` +
+        `${LAUNCH_DEFAULTS_GUIDANCE} The result's selection reports the model and effort; advisory selections are pending startup. ` +
         (coordinatorScope
           ? "Coordinator launches require baseBranch and baseCommit from get_launch_options. "
           : "") +
@@ -1012,7 +1013,6 @@ async function createControlMcp(
       const options = await validateSelection(invoke, input);
       // A new environment's own tier pins no model, so repository and app
       // settings decide, exactly as the startup launch reads them.
-      const selection = await selectionReport(input.projectId, undefined, options.models, input);
       const createInput = launchEnvironmentCreateInput(input);
       const launch = coordinatorScope
         ? await invoke<unknown>("launch_coordinator_environment", {
@@ -1036,6 +1036,57 @@ async function createControlMcp(
       if (!isRecord(environment) || typeof environment.id !== "string") {
         throw new Error("Environment creation returned no environment");
       }
+      // Startup publishes the accepted controls durably. Replays report those
+      // controls, rather than resolving the current settings again. Until then
+      // defaults are advisory because reconciliation has not selected them yet.
+      let startup = isRecord(environment.startupAgentSession)
+        ? environment.startupAgentSession
+        : undefined;
+      if (!startup) {
+        try {
+          const session = await invoke<unknown>("get_native_agent_session", {
+            environmentId: environment.id,
+            agent: input.agent,
+            logicalSessionKey: `env-${environment.id}:startup-agent`,
+          });
+          if (isRecord(session) && isRecord(session.controls)) {
+            startup = {
+              agent: session.agent,
+              model: session.controls.modelId,
+              reasoningEffort: session.controls.reasoningId,
+            };
+          }
+        } catch {
+          // A pending startup may not have published a native session yet.
+        }
+      }
+      const selection = startup
+        ? {
+            selection: {
+              agent: startup.agent,
+              model: startup.model ?? null,
+              reasoning: startup.reasoningEffort ?? null,
+              source: input.modelId || input.reasoningId ? "requested" : "default",
+            },
+          }
+        : await selectionReport(
+            input.projectId,
+            environment,
+            options.models,
+            {
+              ...input,
+              modelId:
+                typeof environment.initialAgentModel === "string"
+                  ? environment.initialAgentModel
+                  : input.modelId,
+              reasoningId:
+                typeof environment.initialReasoningEffort === "string"
+                  ? environment.initialReasoningEffort
+                  : input.reasoningId,
+            },
+            false,
+          );
+      if (!startup && isRecord(selection.selection)) selection.selection.advisory = true;
       let startError =
         isRecord(launch) && typeof launch.startError === "string" ? launch.startError : undefined;
       if (

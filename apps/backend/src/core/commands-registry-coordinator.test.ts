@@ -325,7 +325,7 @@ describe("coordinator command registry", () => {
     ).rejects.toThrow("completed successfully");
   });
 
-  test("deduplicates build starts and recovers a persisted multi-review", async () => {
+  test("deduplicates concurrent build starts", async () => {
     const project = await storage.addProject(createProject("remote", checkout));
     const snapshot = await coordinator.ensure(project.id);
     const conversation = snapshot.workspace.conversations[0]!;
@@ -371,52 +371,71 @@ describe("coordinator command registry", () => {
     expect(await storage.listCoordinatorWorkflowAssociations(project.id)).toContainEqual(
       expect.objectContaining({ kind: "build-pipeline", resourceId: "pipeline-1", pending: false }),
     );
-
-    const environment = createEnvironment(project.id, {
-      name: "worker",
-      environmentType: "local",
-    });
-    environment.id = "worker-1";
-    await storage.addEnvironment(environment);
-    const reviewInput = {
-      environmentId: environment.id,
-      projectId: project.id,
-      targetBranch: "main",
-      reviewers: [{ agent: "claude", model: "opus" }],
-      reviewModel: { agent: "claude", model: "opus" },
-      fixModel: { agent: "codex", model: "gpt-5.6" },
-    };
-    const recovered = {
-      ...reviewInput,
-      id: "review-recovered",
-      createdAt: new Date(Date.now() + 1_000).toISOString(),
-    };
-    storage.getBuildPipeline = mock(async () => ({
-      snapshot: {
-        id: "pipeline-1",
-        projectId: project.id,
-        environmentId: environment.id,
-        phase: "complete",
-      },
-    })) as unknown as typeof storage.getBuildPipeline;
-    storage.listMultiReviewWorkflows = mock(async () => [
-      { snapshot: recovered },
-    ]) as unknown as typeof storage.listMultiReviewWorkflows;
-    const startReview = mock(async () => ({ id: "unexpected-review" }));
-    context.multiReviews = { start: startReview } as unknown as CommandContext["multiReviews"];
-    await expect(
-      commands.get("start_coordinator_multi_review")!(
-        {
-          scope,
-          requestId: "review-recovery",
-          buildPipelineId: "pipeline-1",
-          input: reviewInput,
-        },
-        context,
-      ),
-    ).resolves.toMatchObject({ id: "review-recovered" });
-    expect(startReview).not.toHaveBeenCalled();
   });
+
+  for (const phase of ["preparing", "complete"]) {
+    test(`recovers a ${phase} review after receipt failure and defaults change`, async () => {
+      const project = await storage.addProject(createProject("remote", checkout));
+      const snapshot = await coordinator.ensure(project.id);
+      const scope = {
+        projectId: project.id,
+        coordinatorId: snapshot.workspace.id,
+        conversationId: snapshot.workspace.conversations[0]!.id,
+      };
+      const environment = createEnvironment(project.id, {
+        name: "worker",
+        environmentType: "local",
+      });
+      await storage.addEnvironment(environment);
+      storage.getBuildPipeline = mock(async () => ({
+        snapshot: {
+          projectId: project.id,
+          environmentId: environment.id,
+          phase: "complete",
+        },
+      })) as unknown as typeof storage.getBuildPipeline;
+      let saved: Record<string, unknown> | undefined;
+      const start = mock(async (input: Record<string, unknown>, id?: string) => {
+        saved = { ...input, id, phase };
+        await storage.createMultiReviewWorkflowIfNoActive(id!, environment.id, 1, saved);
+        return saved;
+      });
+      context.multiReviews = { start } as unknown as CommandContext["multiReviews"];
+      const complete = storage.completeCoordinatorWorkflowAssociation.bind(storage);
+      let fail = true;
+      storage.completeCoordinatorWorkflowAssociation = async (...args) => {
+        if (fail) {
+          fail = false;
+          throw new Error("receipt write failed");
+        }
+        return complete(...args);
+      };
+      const args = {
+        scope,
+        requestId: "crash-retry",
+        buildPipelineId: "build-1",
+        input: { projectId: project.id, environmentId: environment.id, targetBranch: "main" },
+      };
+      const launch = commands.get("start_coordinator_multi_review")!;
+      await expect(launch(args, context)).rejects.toThrow("receipt write failed");
+      const config = await storage.loadConfig();
+      await storage.updateGlobalConfig({
+        ...config.global,
+        agentSettings: {
+          actionDefaults: { review: { platform: "claude", model: "changed-model" } },
+          multiReview: { reviewerCount: 4 },
+        },
+      });
+      commands.set("get_native_agent_model_catalog", () => {
+        throw new Error("changed catalogue unavailable");
+      });
+      expect(await launch(args, context)).toEqual(saved);
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(await storage.listCoordinatorWorkflowAssociations(project.id)).toContainEqual(
+        expect.objectContaining({ resourceId: saved!.id, pending: false }),
+      );
+    });
+  }
 
   test("omitted build and Multi Review choices run the saved defaults", async () => {
     const project = await storage.addProject(createProject("remote", checkout));
@@ -506,11 +525,11 @@ describe("coordinator command registry", () => {
     expect(startBuild).toHaveBeenLastCalledWith(
       expect.objectContaining({
         agentType: "claude",
-        reviewers: [{ agent: "codex", model: "gpt-5.6" }],
-        reviewPreparation: opus,
+        reviewers: undefined,
+        reviewPreparation: undefined,
         steps: expect.objectContaining({
           build: { agent: "claude" },
-          review: opus,
+          review: { agent: "codex", model: "gpt-5.6" },
           address: fix,
           verify: { agent: "claude", model: "sonnet" },
         }),
@@ -548,16 +567,19 @@ describe("coordinator command registry", () => {
       },
       context,
     );
-    expect(startReview).toHaveBeenCalledWith({
-      environmentId: environment.id,
-      projectId: project.id,
-      targetBranch: "main",
-      reviewers: [opus, { agent: "codex", model: "gpt-5.6" }],
-      reviewModel: opus,
-      fixModel: fix,
-      autoFix: true,
-      autoPr: false,
-    });
+    expect(startReview).toHaveBeenCalledWith(
+      {
+        environmentId: environment.id,
+        projectId: project.id,
+        targetBranch: "main",
+        reviewers: [opus, { agent: "codex", model: "gpt-5.6" }],
+        reviewModel: opus,
+        fixModel: fix,
+        autoFix: true,
+        autoPr: false,
+      },
+      expect.any(String),
+    );
   });
 
   test("returns worker start errors and rejects cross-project coordinator mail", async () => {

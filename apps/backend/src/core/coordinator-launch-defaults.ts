@@ -21,6 +21,7 @@
  * Build pipelines use the shared `buildPipelineConfiguredDefaults`, the same
  * resolver the Build button uses.
  */
+import { resolveCatalogModelId } from "@orkestrator/protocol/model-id";
 import {
   resolveActionDefault,
   type ActionDefaultKey,
@@ -88,22 +89,21 @@ function concreteRow(
   const offered = catalog.filter(
     (model) => model.platform === preference.agent && model.connected !== false,
   );
-  const matches = (model: AgentModel, id: string) =>
-    model.id === id || model.aliases?.includes(id) === true;
-  const preferred = preference.model
-    ? offered.find((model) => matches(model, preference.model!))
-    : undefined;
+  const preferredId = resolveCatalogModelId(preference.agent, offered, preference.model);
+  const preferred = offered.find((model) => model.id === preferredId);
   // With no catalogue for this platform there is nothing to correct a saved
   // model against, so it is kept rather than replaced by a placeholder.
   const selected = preferred ?? offered[0];
-  const model = selected?.id ?? preference.model ?? "default";
+  const unavailable = catalog.some((model) => model.platform === preference.agent) && !selected;
+  const model = selected?.id ?? (unavailable ? "default" : preference.model) ?? "default";
   const effort = preference.reasoningEffort;
   const keepsEffort =
     effort !== undefined &&
     effort !== "default" &&
-    (!selected || (selected.reasoning ?? []).some(({ id }) => id === effort));
+    ((!selected && !unavailable) || (selected?.reasoning ?? []).some(({ id }) => id === effort));
   const keepsSpeed =
-    typeof preference.fastMode === "boolean" && (!selected || selected.supportsSpeed === true);
+    typeof preference.fastMode === "boolean" &&
+    ((!selected && !unavailable) || selected?.supportsSpeed === true);
   return {
     agent: preference.agent,
     model,
@@ -208,7 +208,10 @@ export function buildPipelineInputWithDefaults(
     configured.reviewers.map((reviewer, index) =>
       index === 0 && steps.review ? steps.review : reviewer,
     );
-  const reviewPreparation = input.reviewPreparation ?? configured.reviewPreparation;
+  if (Array.isArray(reviewers) && reviewers.length > 0) steps.review = reviewers[0];
+  const reviewPreparation =
+    input.reviewPreparation ??
+    (Array.isArray(reviewers) && reviewers.length > 1 ? configured.reviewPreparation : undefined);
   // A named build step decides the pipeline agent, as it does in the launcher.
   const buildStep = explicitSteps.build as { agent?: unknown } | undefined;
   return {
@@ -218,8 +221,8 @@ export function buildPipelineInputWithDefaults(
       input.agentType ??
       defaultBuildPipelineAgent(tiers, enabled ?? ["claude", "codex", "opencode"]),
     steps,
-    reviewers,
-    ...(reviewPreparation ? { reviewPreparation } : {}),
+    reviewers: Array.isArray(reviewers) && reviewers.length === 1 ? undefined : reviewers,
+    reviewPreparation,
   };
 }
 

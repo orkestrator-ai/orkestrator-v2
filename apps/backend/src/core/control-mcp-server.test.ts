@@ -962,7 +962,13 @@ describe("Orkestrator control MCP server", () => {
       environmentId: "env-new",
       tabId: "startup-agent",
       status: "accepted",
-      selection: { agent: "codex", model: "gpt-5.6-codex", reasoning: "high", source: "requested" },
+      selection: {
+        agent: "codex",
+        model: "gpt-5.6-codex",
+        reasoning: "high",
+        source: "requested",
+        advisory: true,
+      },
     });
     expect(invocations.find(({ command }) => command === "create_environment")?.args).toMatchObject(
       {
@@ -1145,10 +1151,130 @@ describe("Orkestrator control MCP server", () => {
       model: "gpt-5.6-codex",
       reasoning: "high",
       source: "default",
+      advisory: true,
     });
     const created = invocations.find(({ command }) => command === "create_environment");
     expect(created?.args.initialAgentModel).toBeUndefined();
     expect(created?.args.initialReasoningEffort).toBeUndefined();
+  });
+
+  test("environment replay reports persisted startup controls after defaults change", async () => {
+    const accepted = { id: "env-replayed", projectId: "project-1", status: "running" };
+    overrides.set("create_environment", () => accepted);
+    overrides.set("get_native_agent_session", () => ({
+      agent: "codex",
+      controls: { modelId: "original-model", reasoningId: "high" },
+    }));
+    const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
+    const launch = () =>
+      rpc(descriptor.url, descriptor.token, "tools/call", {
+        name: "launch_environment",
+        arguments: {
+          requestId: "replay-defaults",
+          projectId: "project-1",
+          agent: "codex",
+          prompt: "Work",
+        },
+      });
+    const first = await launch();
+    overrides.set("get_repository_config", () => ({
+      agentSettings: { platforms: { codex: { model: "new-model", reasoningEffort: "low" } } },
+    }));
+    const replay = await launch();
+    expect(replay.body.result?.structuredContent?.selection).toEqual(
+      first.body.result?.structuredContent?.selection,
+    );
+    expect(replay.body.result?.structuredContent?.selection).toEqual({
+      agent: "codex",
+      model: "original-model",
+      reasoning: "high",
+      source: "default",
+    });
+    // The transient startup snapshot is authoritative too, including terminal launches.
+    overrides.set("create_environment", () => ({
+      ...accepted,
+      startupAgentSession: {
+        agent: "codex",
+        model: "terminal-model",
+        reasoningEffort: "medium",
+        style: "terminal",
+      },
+    }));
+    expect((await launch()).body.result?.structuredContent?.selection).toMatchObject({
+      model: "terminal-model",
+      reasoning: "medium",
+    });
+  });
+
+  test("environment effort report matches startup's unfiltered inherited effort", async () => {
+    overrides.set("get_repository_config", () => ({
+      agentSettings: { platforms: { codex: { reasoningEffort: "high" } } },
+    }));
+    overrides.set("get_native_agent_model_catalog", () => [
+      {
+        platform: "codex",
+        id: "mini",
+        label: "Mini",
+        reasoning: [{ id: "low", label: "Low" }],
+        defaultReasoningId: "low",
+      },
+    ]);
+    overrides.set("create_environment", () => ({
+      id: "env-new",
+      projectId: "project-1",
+      status: "creating",
+    }));
+    const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
+    const result = await rpc(descriptor.url, descriptor.token, "tools/call", {
+      name: "launch_environment",
+      arguments: {
+        requestId: "effort",
+        projectId: "project-1",
+        agent: "codex",
+        modelId: "mini",
+        prompt: "Work",
+      },
+    });
+    expect(result.body.result?.structuredContent?.selection).toEqual({
+      agent: "codex",
+      model: "mini",
+      reasoning: "high",
+      source: "requested",
+      advisory: true,
+    });
+    const created = invocations.find(({ command }) => command === "create_environment")!;
+    expect(created.args.initialAgentModel).toBe("mini");
+    // Startup resolves this absent override directly from the repository tier.
+    expect(created.args.initialReasoningEffort).toBeUndefined();
+  });
+
+  test("settings failures omit advisory defaults and selection without failing launch", async () => {
+    overrides.set("get_repository_config", () => {
+      throw new Error("settings unavailable");
+    });
+    overrides.set("create_environment", () => ({
+      id: "env-new",
+      projectId: "project-1",
+      status: "creating",
+    }));
+    const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
+    const options = await rpc(descriptor.url, descriptor.token, "tools/call", {
+      name: "get_launch_options",
+      arguments: { projectId: "project-1" },
+    });
+    expect(options.body.result?.isError).not.toBe(true);
+    expect(options.body.result?.structuredContent?.defaults).toBeUndefined();
+    const launch = await rpc(descriptor.url, descriptor.token, "tools/call", {
+      name: "launch_environment",
+      arguments: {
+        requestId: "unreadable",
+        projectId: "project-1",
+        agent: "codex",
+        prompt: "Work",
+      },
+    });
+    expect(launch.body.result?.isError).not.toBe(true);
+    expect(launch.body.result?.structuredContent?.selection).toBeUndefined();
   });
 
   test("reports a created environment when background start admission fails", async () => {

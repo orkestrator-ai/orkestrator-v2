@@ -8,6 +8,7 @@
  * annotations and coordinator scope live in `control-mcp-server.ts`; public
  * envelopes, receipts and error codes live in `public-api/`.
  */
+import { resolveCatalogModelId } from "@orkestrator/protocol/model-id";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { normalizeAgentPlatforms } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -414,10 +415,9 @@ function catalogModel(
   agent: AgentPlatform,
   modelId: string,
 ): AgentModel | undefined {
-  return models.find(
-    (model) =>
-      model.platform === agent && (model.id === modelId || model.aliases?.includes(modelId)),
-  );
+  const offered = models.filter((model) => model.platform === agent);
+  const id = resolveCatalogModelId(agent, offered, modelId);
+  return offered.find((model) => model.id === id);
 }
 
 /** What a launch that names no model or reasoning level runs for one agent. */
@@ -445,7 +445,7 @@ export function platformLaunchDefault(
     (agent === "claude" && catalogModel(models, agent, "default") ? "default" : null);
   const model = modelId ? catalogModel(models, agent, modelId) : undefined;
   return {
-    modelId,
+    modelId: model?.id ?? modelId,
     reasoningId: settings.reasoningEffort ?? model?.defaultReasoningId ?? null,
   };
 }
@@ -462,6 +462,7 @@ export function launchSelectionReport(
   tiers: AgentSettingsTiers,
   models: readonly AgentModel[],
   input: { agent: AgentPlatform; modelId?: string; reasoningId?: string },
+  filterInheritedEffort = true,
 ): LaunchSelectionReport {
   const fallback = platformLaunchDefault(tiers, input.agent, models);
   const source = input.modelId || input.reasoningId ? "requested" : "default";
@@ -473,13 +474,15 @@ export function launchSelectionReport(
       source,
     };
   }
-  // A pinned model keeps an inherited effort only when it offers it, the same
-  // rule `launch_control_job` applies before dispatch.
+  // Jobs filter inherited effort against a pinned model. Environment startup
+  // dispatches the configured effort directly, so its report disables filtering.
   const model = catalogModel(models, input.agent, input.modelId);
   const inherited = resolveAgentPlatformSettings(tiers, input.agent).reasoningEffort;
   const inheritedOffered =
     inherited !== undefined &&
-    (!model || (model.reasoning ?? []).some(({ id }) => id === inherited));
+    (!filterInheritedEffort ||
+      !model ||
+      (model.reasoning ?? []).some(({ id }) => id === inherited));
   return {
     agent: input.agent,
     model: input.modelId,

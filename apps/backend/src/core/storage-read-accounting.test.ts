@@ -79,4 +79,28 @@ describe("storage read accounting", () => {
     other.close();
     storage.close();
   });
+
+  test("reusing live pipeline tags in a transcript sweep is a storage stat", async () => {
+    const { storage, dataDir } = await storageIn();
+    await storage.saveBuildPipeline("p1", "proj-1", "", 1, { id: "p1", phase: "building" });
+    // The first sweep decodes the control store into the live-tag cache.
+    expect(
+      await unitsDuring("build-supervisor-tick", () => storage.sweepBuildPipelineTranscripts()),
+    ).toEqual({ "storage-read": 1 });
+
+    // A warm sweep: one stat for the live-tag hit, one for the repair pass
+    // diffing its quota totals write against the committed row.
+    expect(
+      await unitsDuring("build-supervisor-tick", () => storage.sweepBuildPipelineTranscripts()),
+    ).toEqual({ "storage-stat": 2 });
+
+    // Another process's write: the live tags are decoded again.
+    const { storage: other } = await storageIn(dataDir);
+    await other.saveBuildPipeline("p2", "proj-1", "", 1, { id: "p2", phase: "building" });
+    expect(
+      await unitsDuring("build-supervisor-tick", () => storage.sweepBuildPipelineTranscripts()),
+    ).toEqual({ "storage-read": 1, "storage-stat": 1 });
+    other.close();
+    storage.close();
+  });
 });

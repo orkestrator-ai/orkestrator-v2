@@ -12,6 +12,8 @@ interface ForceTerminalVisibilityRedrawOptions {
   terminal: TerminalViewportLike;
   fitAddon: FitAddonLike;
   resize: (cols: number, rows: number) => Promise<void>;
+  /** False while the terminal has no layout box; see `hasLayoutBox`. */
+  canFit?: () => boolean;
   isCancelled?: () => boolean;
   requestAnimationFrameFn?: (callback: FrameRequestCallback) => number;
   setTimeoutFn?: typeof setTimeout;
@@ -30,6 +32,17 @@ interface ShouldTriggerVisibilityRedrawOptions {
   isActive: boolean;
   terminalIsOpened: boolean;
   isConnected: boolean;
+}
+
+/**
+ * Whether an element has a layout box a terminal can be fitted to.
+ *
+ * Under `display: none` the fit addon reads the container's computed `100%`
+ * width as 100px and would shrink the terminal, and the PTY with it, to about
+ * ten columns. A terminal without a box keeps its size until it has one again.
+ */
+export function hasLayoutBox(element: Element | null | undefined): boolean {
+  return Boolean(element && element.getClientRects().length > 0);
 }
 
 /**
@@ -76,6 +89,7 @@ export async function forceTerminalVisibilityRedraw({
   terminal,
   fitAddon,
   resize,
+  canFit = () => true,
   isCancelled = () => false,
   requestAnimationFrameFn = requestAnimationFrame,
   setTimeoutFn = setTimeout,
@@ -93,8 +107,10 @@ export async function forceTerminalVisibilityRedraw({
     },
   };
 
+  // Without a layout box the bounce below still runs, at the size the PTY
+  // already has, so a TUI redraws without being resized to nothing.
   const refreshViewport = () => {
-    fitAddon.fit();
+    if (canFit()) fitAddon.fit();
     if (terminal.rows > 0) {
       terminal.refresh(0, terminal.rows - 1);
     }

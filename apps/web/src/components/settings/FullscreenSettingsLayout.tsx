@@ -90,6 +90,23 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
     prevRequestRef.current = sectionRequest;
   }, [open, defaultId, sectionRequest]);
 
+  // A modal takes focus when it opens, so the keyboard starts inside it rather
+  // than on the control underneath that opened it, and hands it back to that
+  // control when it closes. Focus another owner already placed is left alone.
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const opener = document.activeElement;
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.contains(opener)) dialog.focus({ preventScroll: true });
+    return () => {
+      const focusWasLost = !document.activeElement || document.activeElement === document.body;
+      if (focusWasLost && opener instanceof HTMLElement && opener.isConnected) {
+        opener.focus({ preventScroll: true });
+      }
+    };
+  }, [open]);
+
   // Handle Escape key
   useEffect(() => {
     if (!open) return;
@@ -110,11 +127,13 @@ export function FullscreenSettingsLayout<TSection extends string = string>({
     <OverlayPortalLayer className={Z_FULLSCREEN_POPOVER}>
       <SettingsHeaderActionsContext.Provider value={headerActionsTarget}>
         <div
+          ref={dialogRef}
           role="dialog"
           aria-modal="true"
           aria-label={title}
+          tabIndex={-1}
           className={cn(
-            "fixed inset-0 flex flex-col bg-background md:top-[var(--desktop-title-bar-height)] md:flex-row [&_input]:bg-input-surface [&_textarea]:bg-input-surface [&_[data-slot=select-trigger]]:bg-input-surface",
+            "fixed inset-0 flex flex-col bg-background outline-none md:top-[var(--desktop-title-bar-height)] md:flex-row [&_input]:bg-input-surface [&_textarea]:bg-input-surface [&_[data-slot=select-trigger]]:bg-input-surface",
             Z_FULLSCREEN_SURFACE,
           )}
         >

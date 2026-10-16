@@ -62,7 +62,6 @@ interface SortableProjectGroupProps {
   onStopEnvironment: (environmentId: string) => void;
   onRestartEnvironment: (environmentId: string) => void;
   onForkEnvironment?: (environmentId: string, environmentType: EnvironmentType) => void;
-  onUpdateEnvironment?: (environment: Environment) => void;
   onCreateEnvironment: () => void;
   /** Opens the folder composer for this project. */
   onAddToFolder?: () => void;
@@ -89,7 +88,6 @@ export function SortableProjectGroup({
   onStopEnvironment,
   onRestartEnvironment,
   onForkEnvironment,
-  onUpdateEnvironment,
   onCreateEnvironment,
   onAddToFolder,
   onRemoveFromFolder,
@@ -332,7 +330,6 @@ export function SortableProjectGroup({
                     onStop={onStopEnvironment}
                     onRestart={onRestartEnvironment}
                     onFork={onForkEnvironment}
-                    onUpdate={onUpdateEnvironment}
                     isMultiSelectMode={isMultiSelectMode}
                     isChecked={selectedEnvironmentIds.includes(environment.id)}
                   />

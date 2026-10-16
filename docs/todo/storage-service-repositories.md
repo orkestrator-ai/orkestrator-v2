@@ -37,14 +37,23 @@ lost-update bugs closed by the SQLite migration cannot come back.
 - Revision checks exist but are unused for leased writes.
   `StorageDatabase.writeStore` accepts `expectedRevision` and throws
   `StoreConflictError` on a mismatch, but `saveStore` never passes one.
-- Every `saveJson`/`saveSensitiveJson` call found by a text sweep sits inside a
-  `serializeMutation` wrapper, directly or through a helper whose callers hold
-  the lease: `saveEnvironments` (`storage-projects.ts`),
-  `savePromptQueueMutation` (`storage-native.ts`), `saveAgentMailStore`
-  (`storage-agent-mail.ts`), `saveNamespaceRecords` and `applyProjectUpdates`
-  (`storage-public-operations.ts`). The one unguarded call is `saveLinearAuth`
-  (`storage-kanban.ts`), a blind overwrite rather than a read-modify-write.
-  No test enforces any of this.
+- `storage-writer-guards.test.ts` enforces the write rules per store (checked
+  against `main` at `9906db30`, 2026-10-16). It parses the `StorageService`
+  chain with `oxc-parser`, follows lease wrappers and private or protected
+  helpers to every caller, and fails when a `saveJson`/`saveSensitiveJson`
+  holds no store-wide lease, when the whole-value writers of one store share
+  no lease, or when a store has both whole-value and `updateStore`/
+  `updateStoreRow` writers. Its last test fails when a backend class outside
+  the chain calls those primitives, so an extracted repository cannot drop
+  out of the scan unnoticed.
+- What the guard found on `9906db30`: 22 stores have only leased whole-value
+  writers and 9 have only transactional ones; none has both. Helpers reach
+  their lease through every caller: `saveEnvironments` (19 call paths),
+  `saveAgentMailStore` (19), `savePromptQueueMutation`, `saveNamespaceRecords`,
+  `indexWithCurrent` and `applyProjectUpdates`. `project-removal-fences` is
+  saved under the environment lease at both of its writers. The one unleased
+  save is `saveLinearAuth` (`storage-kanban.ts`), a blind overwrite that is its
+  store's only writer, listed in the test's `BLIND_WRITERS`.
 - The only `atomically` caller outside the base is `collectPublicOperations`
   (`storage-public-operations.ts`), which retires public-operation namespaces.
 - Concurrency coverage that exists: `storage-store-concurrency.test.ts` (16
@@ -67,31 +76,26 @@ Each step is its own PR and keeps behaviour identical. **Every step must update
 the storage entry in `PINNED_CHAINS` in `tests/unit/inheritance-chains.test.ts`**:
 remove the classes the step took out of the chain, and keep `plan` pointing at
 this file for as long as the chain exists. When the last step removes the
-chain, remove the entry, and delete this file in the same change.
+chain, remove the entry, and delete this file in the same change. **Every step
+must also keep `storage-writer-guards.test.ts` scanning every class that
+writes stores**: once a repository leaves the chain, add it to the scan (and
+teach the scan its `StorageContext` primitive names) instead of letting the
+"outside the chain" test be relaxed.
 
-1. **Guard tests first**, while every write path is in view:
-   - a static test that `saveJson(` and `saveSensitiveJson(` appear only
-     inside a `serializeMutation` or `enqueue*Mutation` callback, or in one of
-     the allowlisted helpers above (plus `saveLinearAuth`);
-   - and either a test that rejects any store written by both `updateStore`
-     and `saveJson`, or a change so that `saveStore` passes the revision seen
-     at load time. With the revision, a mixed write throws `StoreConflictError`
-     instead of silently deleting the other writer's row. That needs `loadJson`
-     to record the revision per atomic scope.
-2. **Introduce `StorageContext`.** Move the database handle, atomic scope,
+1. **Introduce `StorageContext`.** Move the database handle, atomic scope,
    mutation tails, the store primitives, `resourceGeneration`, change
    observers, `announce` and `scopedChanges` into one object the facade owns.
    `StorageBase` forwards to it. Write the full lease order on
    `StorageContext.serialize`: projects → environments → others, and per-key
    work fence → native session lease → leaf leases.
-3. **Extract the leaf repositories**, one layer per PR, each with
+2. **Extract the leaf repositories**, one layer per PR, each with
    `StorageService` delegating to it:
    - preview services;
    - agent mail;
    - Kanban, except `setAllEnvironmentStatusesForContainer`;
    - drafts (file drafts, handoffs);
    - public operations.
-4. **Extract the entangled repositories**, replacing each abstract hook with a
+3. **Extract the entangled repositories**, replacing each abstract hook with a
    constructor dependency:
    - projects and environments (project removal fences,
      `deleteComposeDraftsByProject`);
@@ -101,7 +105,7 @@ chain, remove the entry, and delete this file in the same change.
    - build pipelines. `BuildPipelineService` already calls
      `storage.getBuildPipeline` and `storage.saveBuildPipeline` directly
      (`build-pipeline-context.ts`).
-5. **Delete the empty chain.** `StorageService` becomes a plain class holding
+4. **Delete the empty chain.** `StorageService` becomes a plain class holding
    the repositories, and `StorageBase` goes away.
 
 Target shape:
@@ -127,11 +131,8 @@ Done when:
 
 - `StorageService` has no `extends`, `StorageBase` is gone, and the pinned
   entry is removed from `inheritance-chains.test.ts`;
-- every database-store write goes through `updateStore`/`updateStoreRow`, or
-  through `saveJson` inside a `serializeMutation` callback, and a guard test
-  enforces it;
-- no store is written by both `updateStore` and `saveJson`, or `saveStore`
-  enforces `expectedRevision`.
+- `storage-writer-guards.test.ts` still passes and scans every repository
+  that writes stores.
 
 ### Qualification
 
@@ -154,7 +155,7 @@ Done when:
 - A lease only excludes other lease holders. Mixing an unleased `updateStore`
   writer with a leased `saveJson` writer on one store loses updates, because
   `saveJson` writes the whole value as a row diff against the current rows.
-  That is why the guard in step 1 comes first.
+  `storage-writer-guards.test.ts` rejects any store that mixes them.
 - Lease targets, labels and timeouts move with their repository unchanged.
   Three leases are held across external I/O on purpose: native agent sessions,
   project creation and GitHub completion comment posting.
@@ -171,13 +172,47 @@ Done when:
   (`apps/desktop/electron/agent-platform-selection.ts`), which runs for
   agent-test profiles before the backend starts. A desktop writer added while
   a backend runs would not be covered by the lease.
+- **The writer guard is static and test-only.** A runtime check (an
+  `AsyncLocalStorage` of held leases asserted in `saveStore`, plus per-store
+  writer kinds) would only see the paths tests exercise, would need the
+  `saveStore`/`saveSensitiveJson` code another change is editing, and can only
+  tell that *some* lease is held, not that every writer of the store holds the
+  same one. The static scan sees every call site, costs nothing at run time,
+  and checks the stronger property. If `StorageContext` makes the save
+  primitive a single choke point, a test-build assertion there is a cheap
+  second net; it is not needed for correctness.
+- **Mixed writers are rejected, not detected at run time.** The alternative
+  was to have `saveStore` pass the revision `loadJson` saw, so a racing
+  writer throws `StoreConflictError` instead of being overwritten. That needs
+  per-lease-scope revision tracking in `loadJson`/`saveJson` and turns a code
+  rule into production failures. With no mixed writer present, the guard
+  keeps it that way at no run-time cost.
+- **Guard rules.** A lease target built from a key
+  (`native-agent-session-leases/<hash>`, `project-creation-locks/<hash>`)
+  does not count as store-wide. Code between the lease callback and the write
+  may not start another function (a `forEach` callback could outlive the
+  lease), and a helper used as a value (`this.helper` without a call) fails
+  the scan. An `updateStore` reached from inside `atomically` counts as a
+  whole-value write, because the scope buffers the value and commits it
+  whole. `deleteStore` is outside the rules: it removes the store without
+  reading it.
+- **`saveLinearAuth` stays unleased.** It reads nothing, so concurrent saves
+  are last-writer-wins, not a lost read-modify-write. The guard allows it only
+  while no leased or transactional writer shares its store.
+- **The guard does not cover raw `StorageDatabase` writers outside the
+  chain** (workflow results, environment cleanup ledger and sweeps, design
+  canvas signals, native-agent display tails, web annotations, build-pipeline
+  transcripts, legacy-cleanup bookkeeping). On `9906db30` each writes only
+  stores of its own, none of which the chain writes, but nothing enforces
+  that. The schema migrations (legacy JSON import, record-shape upgrades) do
+  rewrite chain stores, inside the migration transaction at open and before
+  any writer runs.
 
-## Needs verification
+## Follow-ups
 
-- That every `saveJson` call site is really under a lease. The sweep matched
-  enclosing-method text, not call graphs; the guard test in step 1 settles it.
-- That no store is currently written by both `updateStore` and a leased
-  `saveJson`.
+- Extend the writer guard to raw `StorageDatabase` writers outside the chain:
+  resolve their store-name constants and fail when one writes a store the
+  chain writes.
 
 ## Related
 
@@ -189,11 +224,6 @@ Done when:
   means the move is done once.
 - [`storage.md`](../architecture/storage.md) ("Concurrency"), `AGENTS.md`
   ("Storage rules", "Splitting large classes").
-- Living-doc drift to fix in `storage.md` "Concurrency": the `atomically`
-  bullet still names "the prompt queue to compose-draft transfer" as a user.
-  #980 removed that transfer; the remaining caller is the public-operation
-  namespace retirement (`collectPublicOperations`). The section also does not
-  state the mixed-write hazard described above.
 
 ## Replaces
 

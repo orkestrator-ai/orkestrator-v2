@@ -191,7 +191,7 @@ iOS, two machines) are the most common open gate. They are batched in
 
 | File | Summary |
 | --- | --- |
-| [storage-service-repositories.md](todo/storage-service-repositories.md) | Replace the `StorageService` inheritance chain with per-store repositories over a shared `StorageContext`, guard tests first. Pinned by `tests/unit/inheritance-chains.test.ts`. |
+| [storage-service-repositories.md](todo/storage-service-repositories.md) | Replace the `StorageService` inheritance chain with per-store repositories over a shared `StorageContext`, keeping the store writer guard (`storage-writer-guards.test.ts`) passing. Pinned by `tests/unit/inheritance-chains.test.ts`. |
 | [native-agent-service-collaborators.md](todo/native-agent-service-collaborators.md) | Turn the six-layer `NativeAgentService` chain into a class composed of collaborators. Pinned by `tests/unit/inheritance-chains.test.ts`. |
 | [claude-bridge-prompt-stream-state.md](todo/claude-bridge-prompt-stream-state.md) | Direct tests for `createPromptStreamState`, then split its delta handler and move the plan-mode flags to `TurnState`. |
 | [backend-core-domain-folders.md](todo/backend-core-domain-folders.md) | Move `apps/backend/src/core/` prefix groups into lint-enforced domain folders, one domain per PR. |

@@ -6,9 +6,9 @@ import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
  * provider home's credentials, configuration, caches and host binaries stay in
  * the container layer and are never part of the preserved set.
  *
- * Traced against the pinned providers; the inventory of what each provider
- * preserves and excludes is in docs/architecture/container-lifecycle.md
- * ("Provider state").
+ * Traced against the versions in `PROVIDER_STATE_TRACED_VERSIONS`; the
+ * inventory of what each provider preserves and excludes is in
+ * docs/architecture/container-lifecycle.md ("Provider state").
  * The bridge's own state is preserved with each provider's transcripts: for
  * Codex, Cursor, Grok and Pi the host's provider session id cannot be resolved
  * without it.
@@ -24,6 +24,22 @@ export interface ProviderStateEntry {
   /** Whether a SQLite database lives here (writers must stop before a copy). */
   sqlite: boolean;
 }
+
+/**
+ * The provider versions whose on-disk state this layout was last traced
+ * against: the CLI for every provider but Cursor, whose state is written by
+ * `@cursor/sdk` in the bridge. A test fails when a pin moves away from these,
+ * so an upgrade cannot land until the paths below are re-traced
+ * (docs/development/upgrade-agents.md, "Re-trace preserved provider state").
+ */
+export const PROVIDER_STATE_TRACED_VERSIONS: Record<AgentPlatform, string> = {
+  claude: "2.1.296",
+  codex: "0.162.1",
+  opencode: "1.19.0",
+  pi: "1.2.0",
+  cursor: "1.0.37",
+  grok: "1.0.52",
+};
 
 /** Codex runtime databases on persistent storage (`CODEX_SQLITE_HOME`). */
 export const CODEX_SQLITE_HOME = "/home/node/.codex/orkestrator-sqlite";
@@ -71,7 +87,7 @@ export const PROVIDER_STATE_LAYOUT: readonly ProviderStateEntry[] = [
     provider: "codex",
     subdir: "codex/orkestrator-bridge",
     containerPath: "/home/node/.codex/orkestrator-bridge",
-    holds: "Codex bridge session registry and dispatch journal",
+    holds: "Codex bridge session registry, title index and dispatch journal",
     sqlite: false,
   },
   {
@@ -150,20 +166,16 @@ export const PROVIDER_PRESERVATION: Record<
   codex: {
     level: "partial",
     limitations:
-      "Rollouts, archived rollouts and the bridge session map are preserved. The thread-name index at the Codex home root is not; the relocated runtime databases are pending qualification against the pinned Codex.",
+      "Rollouts, archived rollouts, the runtime databases and the bridge session map and title index are preserved. Codex's own thread-name index at its home root is not, so a name set inside the Codex CLI rather than in Orkestrator is lost; the relocated runtime databases are pending qualification against the pinned Codex.",
   },
   opencode: {
     level: "partial",
     limitations:
-      "The session database is preserved. Revert/diff snapshots are not, so earlier turns cannot be reverted after a rebuild.",
+      "The session database is preserved. Revert/diff snapshots and full copies of truncated tool output are not, so earlier turns cannot be reverted after a rebuild.",
   },
   pi: { level: "full", limitations: null },
   cursor: { level: "full", limitations: null },
-  grok: {
-    level: "partial",
-    limitations:
-      "Session histories and the bridge session map are preserved. Active-session and worktree registries at the Grok home root are not; pending qualification against the pinned Grok.",
-  },
+  grok: { level: "full", limitations: null },
 };
 
 export function providerStatePreserved(provider: AgentPlatform): boolean {

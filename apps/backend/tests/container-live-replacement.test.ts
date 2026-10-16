@@ -105,9 +105,13 @@ const POPULATE = [
   "mkdir -p /home/node/.claude/projects/p && printf '{\"t\":1}\\n' > /home/node/.claude/projects/p/s.jsonl",
   "mkdir -p /home/node/.codex/sessions/2026 && printf '{}\\n' > /home/node/.codex/sessions/2026/r.jsonl",
   "printf 'sqlite-main' > /home/node/.codex/state_5.sqlite && printf 'wal' > /home/node/.codex/state_5.sqlite-wal",
+  "printf 'history' > /home/node/.codex/thread_history_1.sqlite",
+  'mkdir -p /home/node/.codex/orkestrator-bridge && printf \'{"threadId":"t"}\\n\' > /home/node/.codex/orkestrator-bridge/session-titles.jsonl',
   "printf 'config' > /home/node/.codex/config.toml",
   "mkdir -p /home/node/.local/share/opencode && printf 'db' > /home/node/.local/share/opencode/opencode.db",
   "printf 'snapshot' > /home/node/.local/share/opencode/other.bin",
+  "mkdir -p /home/node/.grok/sessions/w/s && printf 'update' > /home/node/.grok/sessions/w/s/updates.jsonl",
+  "printf '[]' > /home/node/.grok/active_sessions.json",
 ].join("\n");
 
 const WORKSPACE_SNAPSHOT = [
@@ -128,8 +132,13 @@ const STATE_SNAPSHOT = [
   "cat /home/node/.codex/sessions/2026/r.jsonl",
   "cat /home/node/.codex/orkestrator-sqlite/state_5.sqlite; echo",
   "cat /home/node/.codex/orkestrator-sqlite/state_5.sqlite-wal; echo",
+  "cat /home/node/.codex/orkestrator-sqlite/thread_history_1.sqlite; echo",
+  "cat /home/node/.codex/orkestrator-bridge/session-titles.jsonl",
   "cat /home/node/.local/share/opencode/orkestrator-db/opencode.db; echo",
   "test ! -e /home/node/.local/share/opencode/orkestrator-db/other.bin && echo no-snapshot",
+  "cat /home/node/.grok/sessions/w/s/updates.jsonl; echo",
+  // A process registry, deliberately not preserved: it names dead PIDs.
+  "test ! -e /home/node/.grok/active_sessions.json && echo no-registry",
 ].join(" && ");
 
 async function exec(containerId: string, script: string): Promise<string> {
@@ -219,8 +228,12 @@ describe("C14 legacy migration preserves the workspace and provider state", () =
         "{}",
         "sqlite-main",
         "wal",
+        "history",
+        '{"threadId":"t"}',
         "db",
         "no-snapshot",
+        "update",
+        "no-registry",
       ]);
       // Configuration and credentials are not carried over as durable state.
       expect(

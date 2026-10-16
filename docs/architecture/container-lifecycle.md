@@ -290,14 +290,20 @@ their provider's transcripts, because the host's provider session id cannot
 be resolved without them, and an ambiguous dispatch survives reconstruction
 as unknown rather than unsent.
 
+Traced against the versions in `PROVIDER_STATE_TRACED_VERSIONS` (Claude CLI
+2.1.296, Codex 0.162.1, OpenCode 1.19.0, Pi 1.2.0, `@cursor/sdk` 1.0.37, Grok
+1.0.52), by reading the pinned binaries' strings and bundled docs. A pin bump
+fails `apps/backend/tests/container-state-layout.test.ts` until the layout is
+re-traced ([upgrading agents](../development/upgrade-agents.md#re-trace-preserved-provider-state)).
+
 | Provider | Preserved (`state` sub-directory → mount) | Not preserved |
 | --- | --- | --- |
 | Claude | `claude/projects` → `~/.claude/projects` (SDK transcripts); `claude/file-history` → `~/.claude/file-history` (rewind); `claude/orkestrator` → `~/.claude/orkestrator` (bridge dispatch and steer journals, preferences) | `.credentials.json`, settings, `commands`/`agents`/`plugins`, caches, `~/.claude.json` |
-| Codex | `codex/sessions`, `codex/archived_sessions` (rollouts, fork lineage); `codex/orkestrator-bridge` (session map, dispatch journal); `codex/sqlite` at `CODEX_SQLITE_HOME` (runtime databases) | `session_index.jsonl` (thread names, at the home root), `auth.json`, `config.toml`, caches, logs |
-| OpenCode | `opencode/db` via `OPENCODE_DB` (session database) | `snapshot/` (revert and diff history, seeded from the host by the entrypoint), `auth.json`, configuration, plugins, mise installs under `~/.local/share` |
+| Codex | `codex/sessions`, `codex/archived_sessions` (rollouts, fork lineage); `codex/orkestrator-bridge` (session map, dispatch journal, the title index that keeps names set in Orkestrator); `codex/sqlite` at `CODEX_SQLITE_HOME` (every `*_N.sqlite` runtime database: state, thread history, goals, queue, memories, logs) | `session_index.jsonl` (Codex's own thread names, at the home root; only a name set in the Codex CLI itself is lost), `history.jsonl` (prompt recall), `shell_snapshots`, `auth.json`, `config.toml`, caches |
+| OpenCode | `opencode/db` via `OPENCODE_DB` (session database: sessions, messages, parts, todos, permissions) | `snapshot/` (revert and diff git directory, recreated on demand), `tool-output/` (full copies of truncated tool output), legacy `storage/`, the TUI state under `~/.local/state/opencode`, `auth.json`, configuration, plugins, mise installs under `~/.local/share` |
 | Pi | `pi/sessions` → `~/.pi/agent/sessions` (`PI_SESSION_DIR`); `pi/bridge-state` → `/tmp/orkestrator-pi-state` | `auth.json`, `models.json`, settings, extensions, themes |
 | Cursor | `cursor/bridge-state` → `/tmp/orkestrator-cursor-sdk-state` (SDK agent store and bridge journals) | `/tmp/orkestrator-ai/cursor-sdk-auth.json`, API-key files, `~/.cursor` auxiliaries |
-| Grok | `grok/sessions` → `~/.grok/sessions` (histories and search index); `grok/bridge-state` → `/tmp/orkestrator-acp-state` | `active_sessions.json`, `worktrees.db`, `auth.json`, configuration |
+| Grok | `grok/sessions` → `~/.grok/sessions` (per-cwd session directories, which hold everything `session/load` reads, and the rebuildable search index); `grok/bridge-state` → `/tmp/orkestrator-acp-state` | `active_sessions.json` (live-process registry), `worktrees.db` (registry of Grok's own worktrees, which live outside the preserved set), opt-in `memory-v2/`, `auth.json`, configuration |
 
 SQLite stores (Codex runtime databases, OpenCode's database, Grok's search
 index) keep their `-wal` and `-shm` files beside them on the volume, and are
@@ -306,10 +312,9 @@ preserved paths (`/usr`, `/opt`, the rest of the home) do not survive a new
 runtime; they must come from the image or project setup.
 
 `PROVIDER_PRESERVATION` is what the product may claim, and its limitation
-text reaches the user through the rebuild preview: Claude, Pi and Cursor are
-`full`; Codex, OpenCode and Grok are `partial` because of the paths above
-(Codex's relocated databases and Grok's index are also pending
-qualification). Resume after a rebuild is qualified only for the providers in
+text reaches the user through the rebuild preview: Claude, Pi, Cursor and Grok
+are `full`; Codex and OpenCode are `partial` because of the paths above
+(Codex's relocated databases are also pending qualification). Resume after a rebuild is qualified only for the providers in
 `RESUME_QUALIFIED_PROVIDERS`. Named volumes are persistence, not backup: a
 Docker administrator can still remove them.
 

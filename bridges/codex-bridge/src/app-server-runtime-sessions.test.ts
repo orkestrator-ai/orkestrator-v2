@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { getTranscriptCatalogInvalidationCountForTesting } from "./history/rollout.js";
 import { BridgeSessionStore } from "./sessions/persistence.js";
+import { readPersistedSessionTitleEntries } from "./session-titles.js";
 import { CODEX_SIGN_IN_REQUIRED_MESSAGE } from "./engine/app-server-engine.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -1251,6 +1252,25 @@ describe("models", () => {
 });
 
 describe("titles", () => {
+  test("an explicit rename is kept in the bridge index, which a rebuild preserves", async () => {
+    const h = await harness({
+      "thread/resume": () => ({ thread: threadPayload("thread-1") }),
+    });
+    const session = await h.runtime.resumeSession({ threadId: "thread-1", mode: "build" });
+
+    expect(await h.runtime.setSessionTitle(session!.sessionId, "Renamed in Orkestrator")).toBe(
+      true,
+    );
+
+    expect(h.child().requests.some((r) => r.method === "thread/name/set")).toBe(true);
+    // Codex's own name lives in session_index.jsonl at the home root, which a
+    // container rebuild drops; this index sits on the preserved state volume.
+    expect((await readPersistedSessionTitleEntries(codexHome)).get("thread-1")).toEqual({
+      title: "Renamed in Orkestrator",
+      source: "explicit",
+    });
+  });
+
   test("a generated title is dual-written to Codex and the bridge index", async () => {
     const h = await harness({}, { generateTitle: async () => "Generated Title" });
     const { sessionId } = h.runtime.createSession({ mode: "build" });

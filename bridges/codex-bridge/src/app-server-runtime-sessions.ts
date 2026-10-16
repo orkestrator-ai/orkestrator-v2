@@ -35,6 +35,7 @@ import {
   hydrateMessagesFromPersistedSession,
   invalidateTranscriptCatalogCache,
 } from "./history/rollout.js";
+import { persistSessionTitle } from "./session-titles.js";
 
 import { AppServerRpcError, isMissingRolloutError } from "./app-server/errors.js";
 
@@ -1017,7 +1018,14 @@ export class CodexRuntimeSessions {
     if (!session) return false;
     session.title = title;
     session.titleSource = "explicit";
-    if (session.threadId) await this.ctx.options.engine.setThreadName(session.threadId, title);
+    if (session.threadId) {
+      await this.ctx.options.engine.setThreadName(session.threadId, title);
+      // Codex keeps the name in `session_index.jsonl` at its home root, which a
+      // container rebuild does not preserve; the bridge index is preserved.
+      await persistSessionTitle(this.ctx.options.codexHome, session.threadId, title, {
+        source: "explicit",
+      }).catch(() => undefined);
+    }
     return true;
   }
 

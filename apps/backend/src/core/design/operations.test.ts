@@ -6,7 +6,7 @@ import {
   type DesignOperationDescriptor,
   type DesignOperationStatus,
 } from "@orkestrator/protocol/design-operations";
-import { isDesignError } from "./errors.js";
+import { isDesignError, type DesignError } from "./errors.js";
 import { validate as validateFrame } from "./validation.js";
 import type { DesignService } from "./service.js";
 import {
@@ -548,7 +548,37 @@ describe("design operations: prepare, execute, status and cancel", () => {
     expect(elsewhere.canvasId).not.toBe(a.canvasId);
     expect((await service().execute("env-1", a.canvasId, a.token)).state).toBe("committed");
     await expect(service().prepare("env-1", "user", descriptor)).rejects.toThrow("settled");
+    // Once settled, different input is named as such rather than as a replay.
+    await expect(
+      service().prepare("env-1", "user", {
+        ...descriptor,
+        input: { kind: "create_canvas", name: "Different" },
+      }),
+    ).rejects.toThrow("different edit");
     expect(await service().list("env-1")).toHaveLength(1);
+  });
+
+  test("a settled correlation id refuses different input at preparation", async () => {
+    const { canvasId, frameId } = await setup();
+    const descriptor = { ...move(canvasId, frameId, 1, 10), correlationId: "settled-1" };
+    const prepared = await service().prepare("env-1", "user", descriptor);
+    expect((await service().execute("env-1", canvasId, prepared.token)).state).toBe("committed");
+    const settled = service().prepare("env-1", "user", descriptor);
+    await expect(settled).rejects.toThrow("already has a settled operation");
+    await expect(settled.catch((error: DesignError) => error.failure)).resolves.toMatchObject({
+      code: "invalid-input",
+      details: { token: prepared.token },
+    });
+    const changed = service().prepare("env-1", "user", {
+      ...move(canvasId, frameId, 1, 99),
+      correlationId: "settled-1",
+    });
+    await expect(changed).rejects.toThrow("different edit");
+    await expect(changed.catch((error: DesignError) => error.failure)).resolves.toMatchObject({
+      code: "invalid-input",
+      retry: "never",
+      details: { token: prepared.token },
+    });
   });
 
   test("predecessor substitution only chains a committed predecessor from the same client", async () => {

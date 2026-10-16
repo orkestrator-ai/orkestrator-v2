@@ -21,6 +21,7 @@ import {
   type DesignPendingExport,
   type DesignSessionLink,
 } from "@orkestrator/protocol/design-operations";
+import { canonicalJson } from "@orkestrator/protocol/public-api";
 import { DesignError } from "./errors.js";
 import { canvasSchema, designId } from "./schemas.js";
 
@@ -98,6 +99,12 @@ export interface DesignPrivateRecord {
   frames: Record<string, DesignFrameMeta>;
   changes: DesignChangeDescriptor[];
   receipts: DesignOperationStatus[];
+  /**
+   * {@link intentDigest} of each retained receipt that has a correlation id,
+   * keyed by token. Private to the backend so a receipt's wire shape never
+   * changes; absent for receipts written before digests were kept.
+   */
+  receiptDigests?: Record<string, string>;
   history: DesignHistoryManifest;
   export?: DesignExportAssociation;
   pendingExport?: DesignPendingExport;
@@ -131,6 +138,7 @@ const recordSchema = z
     frames: z.record(z.string(), z.unknown()),
     changes: z.array(z.unknown()).max(DESIGN_LIMITS.changeDescriptors),
     receipts: z.array(z.unknown()).max(DESIGN_LIMITS.receiptsPerCanvas),
+    receiptDigests: z.record(z.string(), z.unknown()).optional(),
     history: z.object({ entries: z.array(z.unknown()).max(512), bytes: z.number().nonnegative() }),
     export: z.unknown().optional(),
     pendingExport: z.unknown().optional(),
@@ -585,16 +593,76 @@ export class DesignRecordStore {
   }
 }
 
-/** Keeps terminal receipts within the count and byte budget, oldest first. */
+/**
+ * What a correlation id is bound to: the whole validated descriptor, key order
+ * ignored, so a retry that serializes the same edit differently still matches.
+ * Unlike the token's `digest`, it leaves out the canvas a create reserved.
+ */
+export function intentDigest(descriptor: DesignOperationDescriptor): string {
+  return createHash("sha256").update(canonicalJson(descriptor)).digest("hex");
+}
+
+/** Settles a terminal receipt into the record, keeping its intent digest. */
+export function addReceipt(
+  record: DesignPrivateRecord,
+  receipt: DesignOperationStatus,
+  descriptor: DesignOperationDescriptor,
+): void {
+  record.receipts.push(receipt);
+  if (receipt.correlationId)
+    record.receiptDigests = { ...record.receiptDigests, [receipt.token]: intentDigest(descriptor) };
+  pruneReceipts(record);
+}
+
+/** The intent digest a receipt was settled with, when one was kept. */
+export function receiptDigest(record: DesignPrivateRecord, token: string): string | undefined {
+  const digest = record.receiptDigests?.[token];
+  return typeof digest === "string" ? digest : undefined;
+}
+
+/**
+ * Whether a settled receipt answers a retry of `descriptor` (same key, same
+ * input). With no kept digest (a receipt from before digests were kept) only
+ * the fields the receipt carries are compared, so an identical retry still
+ * replays.
+ */
+export function settledMatches(
+  receipt: DesignOperationStatus,
+  stored: string | undefined,
+  descriptor: DesignOperationDescriptor,
+): boolean {
+  if (stored !== undefined) return stored === intentDigest(descriptor);
+  return (
+    receipt.kind === descriptor.input.kind &&
+    canonicalJson(receipt.base) === canonicalJson(descriptor.preconditions) &&
+    receipt.gestureId === descriptor.gestureId &&
+    receipt.clientId === descriptor.clientId
+  );
+}
+
+/** Keeps terminal receipts and their digests within the count and byte budget, oldest first. */
 export function pruneReceipts(record: DesignPrivateRecord): void {
   const limitCount = DESIGN_LIMITS.receiptsPerCanvas;
   const limitBytes = DESIGN_LIMITS.receiptBytesPerCanvas;
   while (record.receipts.length > limitCount) record.receipts.shift();
-  let bytes = Buffer.byteLength(JSON.stringify(record.receipts));
+  const digests: Record<string, string> = {};
+  for (const receipt of record.receipts) {
+    const digest = receiptDigest(record, receipt.token);
+    if (digest) digests[receipt.token] = digest;
+  }
+  let bytes =
+    Buffer.byteLength(JSON.stringify(record.receipts)) + Buffer.byteLength(JSON.stringify(digests));
   while (bytes > limitBytes && record.receipts.length > 1) {
     const removed = record.receipts.shift()!;
     bytes -= Buffer.byteLength(JSON.stringify(removed)) + 1;
+    const digest = digests[removed.token];
+    if (digest) {
+      bytes -= Buffer.byteLength(JSON.stringify({ [removed.token]: digest })) - 1;
+      delete digests[removed.token];
+    }
   }
+  if (Object.keys(digests).length) record.receiptDigests = digests;
+  else delete record.receiptDigests;
 }
 
 export function pushChange(record: DesignPrivateRecord, change: DesignChangeDescriptor): void {

@@ -80,6 +80,17 @@ Edits are **recoverable operations** (`design/service.ts`,
    incarnation. A repeated prepare with the same correlation id returns the
    same token. Creating a canvas reserves its identity and quota in a
    provisional record.
+
+   A correlation id is bound to an intent digest of the whole validated
+   descriptor (canonical JSON, so key order does not matter) while pending
+   and after it settles; the record keeps a private digest per correlated
+   receipt, inside the receipt budget. The same id with the same descriptor
+   replays (a pending token, or the stored receipt through
+   `submit_operation`); the same id with a different descriptor fails
+   `invalid-input` ("already used for a different edit", `details.token`,
+   retry `never`) and runs nothing. A receipt settled before digests were
+   kept is compared on the fields it carries (kind, preconditions, gesture
+   and client ids).
 2. **Execute** runs a token once. The computation reads an immutable snapshot;
    Chromium work happens with no lock held. The result is re-verified against
    the latest record (revisions, structure identity, deletion) under the

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { FakeIntervals } from "@orkestrator/protocol/testing/fake-intervals";
+import { testApprovalDeadline } from "./testing/approval-fixtures.js";
 
 // `config.ts` reads its environment once, at import, so everything below is
 // loaded after this suite's environment is in place.
@@ -88,7 +89,7 @@ describe("Pi bridge server lifecycle", () => {
       toolName: "bash",
       input: {},
       createdAt: Date.now(),
-      expiresAt: Date.now() + 60_000,
+      deadline: testApprovalDeadline(),
       settle: (decision) => {
         approvalDecisions.push(decision);
         waiting.approvals.delete("approval-1");

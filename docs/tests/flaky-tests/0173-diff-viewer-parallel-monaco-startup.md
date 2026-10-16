@@ -21,7 +21,7 @@ The fixture uses the real Monaco editor, whose startup may take longer under par
 fixture-server ownership guard; no diff viewer code changed) failed the two
 mobile cases `the diff header fits a phone and the editor uses the full width`
 and `the new file state renders accessibly on a phone`, with 254 passed, 61
-skipped and 3 failed across 318 cases (2.8 m); the third failure was case 0248.
+skipped and 3 failed across 318 cases (2.8 m); the third failure was case 0249.
 The failure text was not kept. `bunx playwright test --config
 e2e/playwright.config.ts e2e/DiffViewerMobile.spec.ts e2e/MultiReviewFlow.spec.ts
 --workers=1` passed (21 passed, 5 skipped), and a repeat of the full browser

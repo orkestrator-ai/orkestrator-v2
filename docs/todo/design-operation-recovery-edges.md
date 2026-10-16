@@ -1,6 +1,7 @@
 # Design operation recovery edges
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `2459b05c` (2026-10-15); the correlation-id item
+was re-checked and closed against `9906db30` (2026-10-16).
 
 Design edits are recoverable operations: every submitted edit should end in a
 truthful terminal outcome and never run twice
@@ -8,19 +9,24 @@ truthful terminal outcome and never run twice
 client that loses a response reconciles by reading status, so the status it
 reads must be exact. Three edges give a less precise outcome than that
 promise, and one renderer edge can leave a hung Chromium process running.
+(A fourth edge, a reused correlation id with different input replaying a
+settled receipt, is fixed; see "Constraints and rationale".)
 
 ## Current state
 
-- `submit_operation` (the `submit` closure in `designActions`,
-  `apps/backend/src/core/design/tools.ts`) looks up a settled receipt by
-  `correlationId` and returns `compactStatus(settled)` without comparing the
-  input. `create_canvas` does the same through `findCreate`
-  (`core/design/service-lifecycle.ts`). Terminal receipts
-  (`DesignOperationStatus` in `packages/protocol/src/design-operations.ts`)
-  carry no descriptor digest. Pending entries do, so `DesignService.prepare`
-  already rejects a pending entry whose `descriptorDigest` differs ("This
-  correlation id was already used for a different edit"), but not a settled
-  one.
+- A correlation id is bound to its input while pending and once settled.
+  `intentDigest` (`core/design/records.ts`) hashes the canonical JSON of the
+  validated descriptor; the record keeps it per correlated receipt in the
+  private `receiptDigests` index (`addReceipt`, pruned with the receipts by
+  `pruneReceipts`). `submit` in `core/design/tools.ts`, `prepare` in
+  `core/design/service.ts` and `prepareCreate`/`findCreate` in
+  `core/design/service-lifecycle.ts` all apply `settledMatches`; a mismatch
+  throws `reusedCorrelation` (`core/design/errors.ts`). Tests:
+  `mcp.test.ts` ("submit_operation is idempotent by correlationId…", "a
+  receipt settled before digests were kept…"), `operations.test.ts` ("a
+  settled correlation id refuses different input at preparation", "a create
+  prepared twice…", "a correlation id binds style order but not other key
+  order") and `records.test.ts` (digest pruning, key and style order).
 - Restart recovery (`recoverPendingFor` in `core/design/service.ts`) writes
   `interrupted` receipts only for migrated records. On a never-migrated legacy
   canvas (`loaded.legacy`) it rewrites the pending file without the dead
@@ -42,31 +48,31 @@ promise, and one renderer edge can leave a hung Chromium process running.
 
 ### Code
 
-1. **Reject a reused correlation id with different input.** Keep a bounded
-   descriptor digest on terminal receipts (inside the existing 128-receipt,
-   128 KiB budget), or a digest index keyed by `correlationId`. Compare it in
-   `submit` and `findCreate`, and return `invalid-input` with the same message
-   `prepare` uses when it differs. An identical retry must stay idempotent,
-   and `find_operation` keeps returning the stored receipt.
-2. **Report restart interruptions on legacy canvases.** Give pending entries
+1. **Report restart interruptions on legacy canvases.** Give pending entries
    on never-migrated canvases the same outcome as migrated ones: either write
    `interrupted` receipts (which needs a migration on that path, since a
    legacy document has nowhere to keep receipts) or have `status()` report
    `interrupted` for a dead-owner token on a legacy canvas. Done when "the
    backend restarted before commit" is distinguishable from "expired" on both
    paths.
-3. **Make an interrupted duplicate truthful.** Reproduce the crash between the
+2. **Make an interrupted duplicate truthful.** Reproduce the crash between the
    copy commit and the source receipt in `lifecycle.test.ts` with the storage
    fault hooks. On recovery, either detect the deterministic destination and
    record the source operation as `committed` with `createdCanvasId`, or
    document why an `interrupted` outcome beside an existing copy is harmless
    (the deterministic id already stops a second copy).
-4. **Prove or fix renderer termination.** Write a fault test showing whether a
+3. **Prove or fix renderer termination.** Write a fault test showing whether a
    hung `browser.close()` leaves a Chromium process behind. If it does, launch
    through a handle that exposes the process (`chromium.launchServer()` plus a
    connection, or a dedicated render worker process under a supervisor with
    the repository fatal-rejection guard). Choose from the demonstrated fault,
    not from assumptions about the API.
+4. **Retire the pre-digest receipt fallback** (low; no index line). Receipts
+   settled before `receiptDigests` existed are compared on kind,
+   preconditions, gesture and client ids only, so a reused id that changes
+   only the input body still replays them. They age out of the 128-receipt
+   window; once a release has shipped long enough, drop the fallback in
+   `settledMatches` and treat a missing digest as "replay only".
 
 ## Constraints and rationale
 
@@ -78,9 +84,47 @@ promise, and one renderer edge can leave a hung Chromium process running.
 - Legacy one-shot adapters (`design_action`, the per-action MCP tools) keep
   their original response shapes.
 - Never-migrated legacy documents are read directly until their first real
-  edit, and reading never migrates. A fix for item 2 must not migrate on read.
+  edit, and reading never migrates. A fix for item 1 must not migrate on read.
 - Renderer recovery fails a dead generation's jobs exactly once and never
   reruns a semantic edit in a new generation.
+- **Correlation ids follow the public API's request-key rule** (compare
+  `intentFingerprint` in `core/public-api/operation-ledger.ts`): same key and
+  same input replays; same key and different input is refused and runs
+  nothing.
+  - *Fingerprint:* the whole validated descriptor (`canvasId`, `input`,
+    `preconditions`, `predecessor`, `gestureId`, `clientId`,
+    `correlationId`) as canonical JSON, so a retry that regenerates the call
+    with another key order still matches. `styles` maps (top level and in a
+    batch) keep their order as entry lists, because `applyStyles` sets them
+    in order and a shorthand before or after its longhand gives a different
+    result.
+    Environment and canvas scope come from where the receipt is looked up.
+    It is separate from the token's `digest`, which binds environment,
+    canvas and descriptor bytes and is re-verified at execute; changing that
+    would invalidate pending entries across an upgrade.
+  - *Error:* `invalid-input`, retry `never`, message "This correlation id was
+    already used for a different edit", `details.token` naming the original
+    operation. No new failure code: `conflict` means "refresh and retry",
+    which would loop on the same id, and a protocol code would need renderer
+    mapping for a path the renderer never takes.
+  - *Pending:* `prepare` compares intent digests of the stored and incoming
+    descriptors (no stored value needed), so pending and settled agree.
+  - *Settled:* `submit_operation` replays the stored receipt only on a match;
+    `prepare` keeps refusing any settled id but names a mismatch as "different
+    edit". `find_operation` and `operation_status` are unchanged.
+  - *Storage:* a backend-private `receiptDigests` map on the record keyed by
+    token, not a field on the receipt, so `DesignOperationStatus` and every
+    response stay byte-identical. It is counted inside the 128 KiB receipt
+    budget and pruned with its receipts. Records are parsed with
+    `passthrough`, so an older backend sharing the directory keeps the map;
+    receipts it writes simply have no digest and use the fallback below.
+  - *Older receipts:* with no digest, kind, preconditions, gesture and client
+    ids are compared; an identical retry still replays.
+  - *Clients:* the renderer never reuses an id for new input (a new intent,
+    `resume` and `runDesignLifecycle` mint fresh ids) and uses
+    prepare/execute, not `submit_operation`, so its retry paths are
+    unaffected. Only an MCP agent that reuses an id for a different edit sees
+    the new error, where it used to get the old receipt as if it had run.
 
 ## Related
 

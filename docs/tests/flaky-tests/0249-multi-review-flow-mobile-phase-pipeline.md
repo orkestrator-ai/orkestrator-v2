@@ -1,6 +1,6 @@
 # Multi Review flow phase pipeline case fails in the parallel browser suite
 
-- **ID:** 0248
+- **ID:** 0249
 - **Status:** open
 - **Date observed:** 2026-10-16
 - **Test:** `[mobile-chromium] renders every phase as a pipeline without overlapping nodes`

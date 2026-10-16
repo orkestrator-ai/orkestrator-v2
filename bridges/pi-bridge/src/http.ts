@@ -62,6 +62,7 @@ import {
   publicStatus,
   publicSessionReference,
 } from "./public.js";
+import { MCP_CONFIG_REPORTING_VERSION } from "@orkestrator/protocol/mcp-management";
 import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
 import {
   bridgeTranscriptRouteBody,
@@ -447,7 +448,12 @@ async function routeSession(
     // Same reasoning: a 404 here would read as "this bridge predates the
     // route" and fail the environment. Health is optional metadata, so an
     // unknown session answers empty rather than failing.
-    if (action === "runtime-health") return json(response, 200, emptyRuntimeHealth());
+    if (action === "runtime-health") {
+      return json(response, 200, {
+        ...emptyRuntimeHealth(),
+        mcpConfigReporting: MCP_CONFIG_REPORTING_VERSION,
+      });
+    }
     // Close is idempotent and answered in band for the same reason: 404/405
     // from this route must only ever mean "this bridge predates it".
     if (action === "close" && !subject && request.method === "POST") {
@@ -566,6 +572,9 @@ async function routeSession(
     return json(response, 200, {
       summary: publicRuntime(state),
       ...state.health.snapshot(),
+      // On every body, so the backend can tell this bridge from one too old
+      // to report which MCP configuration it loaded.
+      mcpConfigReporting: MCP_CONFIG_REPORTING_VERSION,
       ...(mcpConfig ? { mcpConfig } : {}),
     });
   }

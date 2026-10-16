@@ -23,3 +23,24 @@
 
 The cause remains unconfirmed. The merge resolutions only changed
 documentation; no assertion, timeout or skip was changed.
+
+## Recurrence on 2026-10-16
+
+`mise run test` on the OpenCode skew-guard branch (base `9906db30`, no
+backend source changed) failed this case and two sibling MCP cases with the
+same "The configuration changed since it was loaded" revision conflict:
+
+- `rename through the service > a rename preview warns about a Claude project
+  approval naming the old server` (`service-rename.test.ts`, 15.00 ms);
+- `project-scope CRUD > claude: the private local map is edited inside
+  ~/.claude.json only` (`service-sources.test.ts`, 6.41 ms);
+- this case (`service.test.ts`, 4.37 ms).
+
+Backend counts: 8,084 passed, 40 skipped, 4 failed. The fourth failure was
+`agent provider module boundaries > keeps every provider implementation module
+within 1,500 lines`, which is deterministic on `main` (`http-bridge-provider.ts`
+has 1,505 lines since #1016) and not a flake. Other machine environments were
+running suites at the same time. Each MCP owning file passed alone with
+`bun test --cwd apps/backend <file>`: `service.test.ts` 23 passed,
+`service-rename.test.ts` 2 passed, `service-sources.test.ts` 13 passed.
+Evidence: `/tmp/orkestrator-test-run.0CVlWk/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.

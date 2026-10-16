@@ -10,7 +10,8 @@
  * the configured reviewer order even though completion order is not.
  *
  * The pool owns no state beyond one pass. It never retries and never swallows:
- * a task's own error handling decides what a failure means.
+ * a task's own error handling decides what a failure means. It reports its
+ * queue as it changes, so the caller can show each waiting task's place.
  */
 
 /** Conservative default number of reviewers set up at once. */
@@ -64,11 +65,16 @@ export interface BoundedTaskStats {
  * starting new work — the caller uses it after a workflow-fatal error or a lost
  * fence — while tasks already running are allowed to settle, because an
  * in-flight provider call cannot be recalled.
+ *
+ * `onQueue` receives the tasks still waiting, in the order they will be
+ * offered a slot: once before anything starts, then each time a task leaves
+ * the queue. It is called synchronously, before a started task runs.
  */
-export async function runBoundedTasks(
-  tasks: readonly BoundedTask[],
+export async function runBoundedTasks<T extends BoundedTask>(
+  tasks: readonly T[],
   limits: ReviewFanoutConcurrency,
   shouldStart: () => boolean = () => true,
+  onQueue?: (waiting: readonly T[]) => void,
 ): Promise<BoundedTaskStats> {
   const queue = Array.from(tasks);
   const activeByPool: Record<BoundedTask["pool"], number> = { admission: 0, observation: 0 };
@@ -84,8 +90,16 @@ export async function runBoundedTasks(
     const poolLimit = (pool: BoundedTask["pool"]) =>
       pool === "admission" ? limits.admission : limits.observation;
 
+    let reported = -1;
+    const report = () => {
+      if (!onQueue || queue.length === reported) return;
+      reported = queue.length;
+      onQueue(queue.slice());
+    };
+
     const pump = (): void => {
       if (!shouldStart()) queue.length = 0;
+      report();
       for (let index = 0; index < queue.length;) {
         const task = queue[index]!;
         const groupActive = activeByGroup.get(task.group) ?? 0;
@@ -94,6 +108,7 @@ export async function runBoundedTasks(
           continue;
         }
         queue.splice(index, 1);
+        report();
         active += 1;
         activeByPool[task.pool] += 1;
         activeByGroup.set(task.group, groupActive + 1);
@@ -123,6 +138,7 @@ export async function runBoundedTasks(
         // Restart the scan: starting a task may have exhausted a limit.
         index = 0;
         if (!shouldStart()) queue.length = 0;
+        report();
       }
       if (active === 0 && queue.length === 0) resolve(stats);
     };

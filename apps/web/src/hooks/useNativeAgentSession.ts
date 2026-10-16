@@ -51,6 +51,7 @@ import {
   refreshNativeAgentModels,
   removePromptQueueMessage,
   resolveNativeAgentInteraction,
+  holdNativeAgentInteraction,
   resumeNativeAgentSession,
   retryPromptQueueDispatch,
   retryNativeAgentDispatch,
@@ -2996,6 +2997,21 @@ export function useNativeAgentSession<TMessage = unknown>({
     [identity, refresh],
   );
 
+  // A pause moves the deadline where the agent enforces it; the refresh brings
+  // the moved deadline back, so every client shows the same state.
+  const holdInteraction = useCallback(
+    async (interactionId: string, held: boolean): Promise<AgentInteractionApplyOutcome> => {
+      const outcome = await holdNativeAgentInteraction({
+        ...identity,
+        interactionId,
+        held,
+      });
+      await refresh();
+      return outcome;
+    },
+    [identity, refresh],
+  );
+
   const queueKey = useMemo(() => `${platform}\0${sessionKey}`, [platform, sessionKey]);
   const enqueue = useCallback(
     async (prompt: string, options: NativeAgentSendOptions = {}) => {
@@ -3419,6 +3435,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     dismissSuggestedPrompt,
     updateControls,
     resolveInteraction,
+    holdInteraction,
     enqueue,
     removeQueued,
     moveQueued,

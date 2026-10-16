@@ -1,3 +1,4 @@
+import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interactions";
 import type { EngineGeneration } from "../engine/types.js";
 
 export type InteractionMethod = "item/tool/requestUserInput" | "mcpServer/elicitation/request";
@@ -43,7 +44,10 @@ export interface InteractionRequest {
    * activity at `waiting`.
    */
   isBlocking: boolean;
+  /** Absent for a question that waits indefinitely; moves on pause and resume. */
   expiresAt?: number;
+  /** Pause state of the deadline; present exactly when `expiresAt` is. */
+  hold?: AgentInteractionHold;
   autoResolutionMs?: number;
   questions?: InteractionQuestion[];
   serverName?: string;

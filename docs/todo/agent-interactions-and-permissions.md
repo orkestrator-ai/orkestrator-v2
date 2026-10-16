@@ -96,6 +96,25 @@ per-bridge environment overrides that predate the execution policy.
   - Overridable per environment (`executionPolicy` in
     `EnvironmentSettingsDialog.tsx`). Shown in Agent Info through
     `describeNativeAgentExecutionPolicy` (`AgentInfoButton.tsx`).
+- Pausing a countdown. Clicking the timer on a native question, plan, command,
+  file or permission card pauses the deadline where it is enforced, and
+  clicking again restarts a fresh window:
+  - Every bridge timer is an `InteractionDeadline`
+    (`packages/protocol/src/agent-interaction-deadline.ts`). A pause re-arms it
+    at `AGENT_INTERACTION_HOLD_CEILING_MS` (24 h) or the provider's own sooner
+    limit, so an unanswered request is still declined in the end and older
+    backends, which require a deadline, keep the card.
+  - Bridges publish `hold` (`AgentInteractionHold`) beside `expiresAt` and serve
+    `POST /session/:id/{family}/:requestId/hold` with `{ held }`. The backend
+    calls it through `holdInteraction` (`http-bridge-interactions.ts`) and the
+    `hold_native_agent_interaction` command. A bridge that publishes no `hold`
+    is mapped to `bridge-outdated`: the countdown shows but is not clickable.
+  - Limits: Grok pauses only until its turn deadline (`ACP_PROMPT_TIMEOUT_MS`)
+    and, for questions, its own `ask_user_question` timeout; Pi until its turn
+    budget; a Codex question with `autoResolutionMs` until then; MCP prompts
+    pause but warn that their server may stop waiting first. OpenCode publishes
+    no deadline, so there is nothing to pause.
+  - Claude in tmux shows the countdown as not pausable yet (item 7).
 - Deprecated overrides still read by the bridges, with a one-time deprecation
   warning:
   - Cursor: `CURSOR_BRIDGE_SANDBOX` and `CURSOR_BRIDGE_PROJECT_SETTINGS`
@@ -170,7 +189,34 @@ per-bridge environment overrides that predate the execution policy.
    path. If a future owner wants provider-side answering, it should follow
    `agentInteractionPolicyAction` instead of always rejecting.
 
+7. **Pause in Claude tmux mode.** The deadline there is the `sleep` in the hook
+   script (`tmux-hooks.ts` `hookScript`), and Claude Code kills a command hook
+   after its own 600 s default. Pausing needs: a hold sidecar the script's wait
+   loop honours (re-arming on resume), a `timeout` on the PreToolUse,
+   PermissionRequest and Elicitation hooks above the hold ceiling,
+   `parseBlockingHookTiming` accepting a moved deadline, a backend command, and
+   re-emitting the hook event (blocking ids are emitted once today). Cards then
+   drop `TMUX_PROMPT_DEADLINE`. Detect an installed script that predates the
+   sidecar and keep its countdown unpausable.
+8. **Pause Grok past its own limits.** A Grok pause ends at the 30-minute turn
+   deadline, and a question also at Grok's `ask_user_question` timeout. Lifting
+   that means pausing the bridge's `session/prompt` timeout while a request is
+   held and raising Grok's question timeout to match; the bridge also does not
+   read Grok's `config.toml` `[toolset.ask_user_question]`, so a shorter value
+   set there is not reflected in the published limit.
+9. **Pause from the public CLI and API.** `session interactions list` shows the
+   moved `expiresAt` but not `hold`, and there is no hold action. Add `hold` to
+   the listing and a `session.interaction.hold` action that calls
+   `hold_native_agent_interaction`.
+
 ### Qualification
+
+- Live pause on each provider: pause a Claude question, a Claude tool approval
+  under `ask`, a Codex command approval, a Grok permission and a Pi approval;
+  leave each paused past ten minutes, then answer it and confirm the turn
+  continues with that answer. Only the Claude bridge is covered end to end, by
+  `e2e/ClaudeInteractions.spec.ts` against a fake SDK; no real CLI has been
+  left waiting longer than the old five minutes.
 
 - Browser: raise an MCP elicitation (Codex or Claude), answer it, reload
   mid-question, and confirm it rehydrates from `/session/:id/interactions`. On

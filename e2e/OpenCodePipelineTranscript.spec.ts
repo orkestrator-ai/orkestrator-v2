@@ -63,3 +63,21 @@ test("OpenCode pipeline/reviewer envelopes render as thinking and timed tool row
   ).toBeVisible();
   await expect(transcript.getByTitle("Ran for 12s")).toBeVisible();
 });
+
+test("raw OpenCode envelopes from a backend older than 2.19.17 render as one update notice", async ({
+  page,
+}) => {
+  // What an older backend served: the stored envelopes, never normalized.
+  await page.route("**/fixture-opencode-display-transcript", (route) =>
+    route.fulfill({ json: raw }),
+  );
+  await page.goto("/opencode-pipeline-transcript");
+  const transcript = page.getByRole("region", { name: "Pipeline transcript" });
+  await expect(
+    transcript.getByText(
+      /^1 OpenCode message not shown\. The backend runs an Orkestrator version older than 2\.19\.17/,
+    ),
+  ).toBeVisible();
+  await expect(transcript.getByText("The build and reviewer checks passed.")).toHaveCount(0);
+  await expect(transcript.getByText("RAW_ENVELOPE_ONLY")).toHaveCount(0);
+});

@@ -324,6 +324,11 @@ the next drain; ambiguous rows are never cleared through this path.
 
 The tool *names* overlap. The credentials do not.
 
+A fourth, narrower surface is the attempt-scoped workflow-result server: one
+backend-owned turn's result tools, plus `report_finding` for a live Multi
+Review reviewer. It carries no mail or ticket tools; see "Workflow results
+through tool calls" in [agent-engines.md](agent-engines.md).
+
 ### Agent Tools MCP — tab identity
 
 `apps/backend/src/core/agent-tools.ts` + `agent-tools-messaging.ts`.

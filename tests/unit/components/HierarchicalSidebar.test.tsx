@@ -13,6 +13,7 @@ import {
   useProjectStore,
 } from "@/stores";
 import type { Environment, Project } from "@/types";
+import { useAppDialogStore } from "@/stores/appDialogStore";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import {
   dispatchResourceChange,
@@ -25,14 +26,12 @@ import * as realUseProjects from "@/hooks/useProjects";
 import * as realUseEnvironments from "@/hooks/useEnvironments";
 import * as realUseEnvironmentDiffStats from "@/hooks/useEnvironmentDiffStats";
 import * as realBackend from "@/lib/backend";
-import * as realEnvironmentSettingsDialog from "@/components/environments/EnvironmentSettingsDialog";
 
 const realDndCoreSnapshot = { ...realDndCore };
 const realUseProjectsSnapshot = { ...realUseProjects };
 const realUseEnvironmentsSnapshot = { ...realUseEnvironments };
 const realUseEnvironmentDiffStatsSnapshot = { ...realUseEnvironmentDiffStats };
 const realBackendSnapshot = { ...realBackend };
-const realEnvironmentSettingsDialogSnapshot = { ...realEnvironmentSettingsDialog };
 
 const project: Project = {
   id: "project-1",
@@ -149,31 +148,9 @@ mock.module("@/lib/backend", () => ({
   updateEnvironmentAgentSettings: updateEnvironmentAgentSettingsMock,
 }));
 
-mock.module("@/components/environments/EnvironmentSettingsDialog", () => ({
-  EnvironmentSettingsDialog: ({
-    open,
-    environment,
-    onUpdate,
-  }: {
-    open: boolean;
-    environment: Environment;
-    onUpdate: (environment: Environment) => void;
-  }) =>
-    open
-      ? createElement(
-          "button",
-          {
-            onClick: () => onUpdate({ ...environment, name: "Updated from settings" }),
-          },
-          "Apply settings update",
-        )
-      : null,
-}));
-
 const {
   HierarchicalSidebar,
   animateActivityRowMovement,
-  createEnvironmentUpdateHandler,
   createProjectUpdateHandler,
   deleteProjectAndEnvironments,
   forkSidebarEnvironment,
@@ -188,10 +165,6 @@ afterAll(() => {
   mock.module("@/hooks/useEnvironments", () => realUseEnvironmentsSnapshot);
   mock.module("@/hooks/useEnvironmentDiffStats", () => realUseEnvironmentDiffStatsSnapshot);
   mock.module("@/lib/backend", () => realBackendSnapshot);
-  mock.module(
-    "@/components/environments/EnvironmentSettingsDialog",
-    () => realEnvironmentSettingsDialogSnapshot,
-  );
   restoreMatchMedia();
 });
 
@@ -596,7 +569,7 @@ describe("HierarchicalSidebar", () => {
     expect(useUIStore.getState().selectedEnvironmentId).toBe("env-waiting");
   });
 
-  test("persists environment updates initiated from an activity row", async () => {
+  test("requests the settings dialog from an activity row", async () => {
     environmentsValue = [
       {
         ...createdEnvironment,
@@ -610,15 +583,12 @@ describe("HierarchicalSidebar", () => {
 
     fireEvent.contextMenu(screen.getByRole("button", { name: /Settings environment/ }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Settings" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Apply settings update" }));
 
-    expect(updateEnvironmentMock).toHaveBeenCalledWith(
-      "env-settings",
-      expect.objectContaining({
-        id: "env-settings",
-        name: "Updated from settings",
-      }),
-    );
+    // `AppDialogHost` renders the dialog and writes its changes to the store.
+    expect(useAppDialogStore.getState().request).toEqual({
+      kind: "environment-settings",
+      environmentId: "env-settings",
+    });
   });
 
   test("forks an environment from the activity-row context menu", async () => {
@@ -2053,14 +2023,6 @@ describe("HierarchicalSidebar", () => {
     await handler(updatedProject);
 
     expect(updateProjectMock).toHaveBeenCalledWith(updatedProject);
-  });
-
-  test("forwards environment changes through the environment hook contract", () => {
-    const handler = createEnvironmentUpdateHandler(updateEnvironmentMock);
-
-    handler(createdEnvironment);
-
-    expect(updateEnvironmentMock).toHaveBeenCalledWith(createdEnvironment.id, createdEnvironment);
   });
 
   test("deletes a project through its confirmation dialog", async () => {

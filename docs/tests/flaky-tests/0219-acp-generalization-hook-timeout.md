@@ -27,3 +27,20 @@
 - **Package rerun:** `mise run test:logged -- --name acp-bridge-recheck --
   bun run --cwd bridges/acp-bridge test:bridge` passed unchanged in
   107.4 seconds.
+
+## Recurrence on 2026-10-16 during the storage writer guards merge
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`.
+- **Worker configuration:** ACP `--parallel=1`, up to two bridge packages in
+  Turbo, with other worktree validations active on the shared host.
+- **Failure:** the same test at `acp-generalization.test.ts:60` reported
+  `a beforeEach/afterEach hook timed out for this test` after 60,003.57 ms.
+- **Suite counts:** ACP 567 passed, 3 skipped, 1 failed across 571 tests in
+  36 files (148.66 seconds); the other four bridge package tasks passed.
+- **Evidence:** `/tmp/orkestrator-test-run.Q27xqQ/bridges.log.gz`.
+- **Isolated rerun:** `mise run test:logged -- --name merge-acp-isolated --
+  bun test --cwd bridges/acp-bridge --preload ../../tests/setup-node.ts
+  ./src/acp-generalization.test.ts --parallel=1 --only-failures` passed unchanged
+  (3 tests; logged command 0.9 seconds).
+- **Hypothesis:** consistent with the existing shared-fixture cleanup timeout
+  under aggregate load. No test or product code was changed for this recurrence.

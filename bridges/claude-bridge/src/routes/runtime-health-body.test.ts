@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { MCP_CONFIG_REPORTING_VERSION } from "@orkestrator/protocol/mcp-management";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import type { SessionState } from "../types/index.js";
 import { sessionRuntimeHealthBody } from "./runtime-health-body.js";
@@ -22,18 +23,27 @@ function session(overrides: Partial<SessionState> = {}): SessionState {
 }
 
 describe("sessionRuntimeHealthBody", () => {
-  test("an unknown session answers the empty shared shape", () => {
-    expect(sessionRuntimeHealthBody(undefined)).toEqual({ summary: {}, notices: [] });
+  test("an unknown session answers the empty shared shape, marked as reporting", () => {
+    expect(sessionRuntimeHealthBody(undefined)).toEqual({
+      summary: {},
+      notices: [],
+      mcpConfigReporting: MCP_CONFIG_REPORTING_VERSION,
+    });
   });
 
-  test("a session before its first query carries no MCP revision", () => {
-    expect(sessionRuntimeHealthBody(session())).toEqual({ summary: {}, notices: [] });
+  test("a session before its first query carries no MCP revision, only the marker", () => {
+    expect(sessionRuntimeHealthBody(session())).toEqual({
+      summary: {},
+      notices: [],
+      mcpConfigReporting: MCP_CONFIG_REPORTING_VERSION,
+    });
   });
 
   test("carries the MCP revision beside the shared shape, with or without health", () => {
     expect(sessionRuntimeHealthBody(session({ mcpConfigRevision: revision }))).toEqual({
       summary: {},
       notices: [],
+      mcpConfigReporting: MCP_CONFIG_REPORTING_VERSION,
       mcpConfig: revision,
     });
     const health = new RuntimeHealthRecorder();

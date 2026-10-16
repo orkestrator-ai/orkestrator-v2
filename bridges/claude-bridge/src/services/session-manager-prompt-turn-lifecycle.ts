@@ -15,7 +15,10 @@ import {
   retainQueryControl,
 } from "./session-manager-background-tasks.js";
 import { applySessionPlanMode, recordStructuredOutput, sessions } from "./session-manager-core.js";
-import { recordPromptDispatch } from "./session-manager-lifecycle.js";
+import {
+  recordPromptDispatch,
+  sessionHasPendingInteractions,
+} from "./session-manager-lifecycle.js";
 import { MAX_RESULT_INPUT_UUIDS } from "./session-manager-messages.js";
 import type { TurnState } from "./session-manager-prompt-turn.js";
 import { drainClaudeRuntime } from "./session-manager-runtime.js";
@@ -265,6 +268,13 @@ export function armContinuationWatchdog(turn: TurnState) {
       // reason to hold stdin open — closing it here would kill that task.
       // The control is reachable through `backgroundTaskControls` while
       // that is true, so only the bound needs re-arming.
+      armContinuationWatchdog(turn);
+      return;
+    }
+    if (sessionHasPendingInteractions(sessionId)) {
+      // A card waiting on the user is not silence: the continuation is blocked
+      // on them, possibly for a pause far longer than this bound. The card's
+      // own deadline settles it, and the frames that follow re-arm this.
       armContinuationWatchdog(turn);
       return;
     }

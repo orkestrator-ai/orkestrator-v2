@@ -11,6 +11,7 @@ import type {
   NativeAgentSessionProjection,
 } from "@orkestrator/protocol/native-agent";
 import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
+import { publicActionNestedKeys } from "@orkestrator/protocol/public-api-inputs";
 import {
   encodePublicSessionId,
   nativeTabLogicalSessionKey,
@@ -23,6 +24,7 @@ import { PublicActionError } from "./errors.js";
 import {
   invalid,
   oneOf,
+  onlyActionKeys,
   onlyKeys,
   optionalBoolean,
   optionalInteger,
@@ -120,7 +122,7 @@ const sessionStop: MutationActionHandler<TargetInput> = {
   kind: "mutation",
   action: "session.stop",
   parse(input) {
-    onlyKeys(input, ["sessionId", "expectedOperationId"]);
+    onlyActionKeys(input, "session.stop");
     const target = sessionTarget(input);
     const expectedOperationId = optionalString(input, "expectedOperationId", 100);
     return {
@@ -187,7 +189,7 @@ const sessionSteer: MutationActionHandler<TargetInput & { text: string }> = {
   kind: "mutation",
   action: "session.steer",
   parse(input) {
-    onlyKeys(input, ["sessionId", "text", "expectedOperationId"]);
+    onlyActionKeys(input, "session.steer");
     const target = sessionTarget(input);
     const text = textInput(
       input,
@@ -285,7 +287,7 @@ const sessionConfigGet: ReadActionHandler<TargetInput> = {
   kind: "read",
   action: "session.config.get",
   parse(input) {
-    onlyKeys(input, ["sessionId"]);
+    onlyActionKeys(input, "session.config.get");
     return sessionTarget(input);
   },
   async run(input, context) {
@@ -322,7 +324,7 @@ const sessionConfigSet: MutationActionHandler<TargetInput & { update: Record<str
   kind: "mutation",
   action: "session.config.set",
   parse(input) {
-    onlyKeys(input, ["sessionId", "model", "reasoning", "fastMode", "mode"]);
+    onlyActionKeys(input, "session.config.set");
     const target = sessionTarget(input);
     const update: Record<string, unknown> = {};
     const model = optionalString(input, "model", 500);
@@ -397,7 +399,7 @@ const sessionHistory: ReadActionHandler<TargetInput> = {
   kind: "read",
   action: "session.history",
   parse(input) {
-    onlyKeys(input, ["sessionId"]);
+    onlyActionKeys(input, "session.history");
     return sessionTarget(input);
   },
   async run(input, context) {
@@ -429,7 +431,7 @@ const sessionResume: MutationActionHandler<TargetInput & { historyId: string }> 
   kind: "mutation",
   action: "session.resume",
   parse(input) {
-    onlyKeys(input, ["sessionId", "historyId"]);
+    onlyActionKeys(input, "session.resume");
     const target = sessionTarget(input);
     const historyId = requiredString(input, "historyId", 500);
     return {
@@ -482,7 +484,7 @@ const sessionFork: MutationActionHandler<TargetInput & { messageId?: string }> =
   kind: "mutation",
   action: "session.fork",
   parse(input) {
-    onlyKeys(input, ["sessionId", "messageId"]);
+    onlyActionKeys(input, "session.fork");
     const target = sessionTarget(input);
     const messageId = optionalString(input, "messageId", 500);
     return {
@@ -613,7 +615,7 @@ const sessionInteractions: ReadActionHandler<TargetInput> = {
   kind: "read",
   action: "session.interactions",
   parse(input) {
-    onlyKeys(input, ["sessionId"]);
+    onlyActionKeys(input, "session.interactions");
     return sessionTarget(input);
   },
   async run(input, context) {
@@ -638,14 +640,7 @@ const interactionResolve: MutationActionHandler<ResolveInput> = {
   kind: "mutation",
   action: "session.interaction.resolve",
   parse(input) {
-    onlyKeys(input, [
-      "sessionId",
-      "interactionId",
-      "expectedRevision",
-      "action",
-      "answers",
-      "feedback",
-    ]);
+    onlyActionKeys(input, "session.interaction.resolve");
     const target = sessionTarget(input);
     const interactionId = requiredString(input, "interactionId", 512);
     const expectedRevision = optionalInteger(input, "expectedRevision", 0, Number.MAX_SAFE_INTEGER);
@@ -666,7 +661,7 @@ const interactionResolve: MutationActionHandler<ResolveInput> = {
         if (!raw || typeof raw !== "object" || Array.isArray(raw))
           throw invalid("answers must contain objects");
         const answer = raw as Record<string, unknown>;
-        onlyKeys(answer, ["questionId", "optionIds", "freeText"]);
+        onlyKeys(answer, publicActionNestedKeys("session.interaction.resolve", "answers"));
         const questionId = requiredString(answer, "questionId", 512);
         const optionIds = answer.optionIds;
         if (

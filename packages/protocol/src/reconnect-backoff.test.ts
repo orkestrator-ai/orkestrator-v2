@@ -115,6 +115,32 @@ describe("ReconnectBackoff", () => {
     expect(backoff.failures).toBe(4);
   });
 
+  test("a deliberate disconnect ends the health interval without counting a failure", () => {
+    const { backoff, advance } = tracker();
+    backoff.nextDelayMs();
+    backoff.nextDelayMs();
+
+    // Up briefly, then replaced: the replacement's wait to connect is not uptime.
+    backoff.connected();
+    advance(5_000);
+    backoff.disconnected();
+    expect(backoff.failures).toBe(2);
+    advance(26_000);
+    expect(backoff.nextDelayMs()).toBe(4_000);
+  });
+
+  test("a deliberate disconnect after a healthy interval still resets the ladder", () => {
+    const { backoff, advance } = tracker();
+    backoff.nextDelayMs();
+    backoff.nextDelayMs();
+
+    backoff.connected();
+    advance(30_000);
+    backoff.disconnected();
+    expect(backoff.failures).toBe(0);
+    expect(backoff.nextDelayMs()).toBe(1_000);
+  });
+
   test("reset forgets history", () => {
     const { backoff } = tracker();
     backoff.nextDelayMs();

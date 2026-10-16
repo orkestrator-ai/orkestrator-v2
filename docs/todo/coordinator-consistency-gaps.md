@@ -24,9 +24,11 @@ dispatcher if queue and wake work.
   `awaitingWorkers` in `apps/web/src/components/projects/CoordinatorPanel.tsx`)
   lists workers with a running delegation. It does not mark a worker whose own
   session is `waiting` on an approval or question as needing a person.
-- **Mail carriers.** Injected mail has no `data-mail-kind` (or any other kind
-  marker) in `apps/web/src`, so system notices and tab replies cannot be
-  styled apart.
+- **Mail carriers.** Each carrier's JSON payload carries a `kind` derived from
+  its authenticated sender (`agentMailKind`) and, for workflow notices, a
+  structured `notice` (resource, state, tone). The transcript renders every
+  carrier in a batched prompt as its own collapsible tile (`MailTile`) with
+  `data-mail-kind` and `data-mail-tone`.
 - **Open conversations.** `MAX_OPEN_COORDINATOR_CONVERSATIONS` is 16, main
   included (`coordinator-service.ts`). A conversation created by
   `createConversation` starts unassigned, and unassigned conversations count
@@ -60,13 +62,10 @@ dispatcher if queue and wake work.
    counter and budget to `list_environments`, but only if live runs in
    [coordinator-live-conformance.md](coordinator-live-conformance.md) show
    coordinators polling it.
-3. **Mail carrier kind.** Optionally add `data-mail-kind` to injected mail
-   carriers so `system` notices and `tab` replies can be styled apart. No new
-   message type.
-4. **Unused conversations.** When a new conversation is created, auto-close an
+3. **Unused conversations.** When a new conversation is created, auto-close an
    unassigned conversation whose draft is empty, so the 16-conversation limit
    cannot be filled with unused composers.
-5. **Favourites under `platformFilter`.** Hide, rather than show, favourites
+4. **Favourites under `platformFilter`.** Hide, rather than show, favourites
    for platforms the current conversation cannot use.
 
 ### Product surfaces kept off the parity path

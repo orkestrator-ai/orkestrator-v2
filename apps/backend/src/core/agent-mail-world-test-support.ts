@@ -14,7 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { COORDINATOR_MAIL_ADDRESS, coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
-import type { AgentMailMessage } from "@orkestrator/protocol/agent-mail";
+import type { AgentMailMessage, AgentMailNotice } from "@orkestrator/protocol/agent-mail";
 import { AgentMailService } from "./agent-mail-service.js";
 import { CoordinatorService } from "./coordinator-service.js";
 import { runCommand } from "./shell.js";
@@ -33,6 +33,16 @@ export type MailActor = {
 type Address = MailActor | typeof COORDINATOR_MAIL_ADDRESS | { environmentId: string };
 
 const BASE_COMMIT = "a".repeat(40);
+
+/** One carrier's JSON payload, the structured part of an injected mail prompt. */
+export type DeliveredCarrier = {
+  kind?: string;
+  from: { kind: string };
+  messageId: string;
+  subject?: string;
+  notice?: AgentMailNotice;
+  body: string;
+};
 
 export class MailWorld {
   private readonly busy = new Set<string>();
@@ -325,13 +335,18 @@ export class MailWorld {
 
   /** Every message body delivered to this actor, in order, across all its turns. */
   received(actor: MailActor): string[] {
+    return this.carriers(actor).flatMap((turn) => turn.map((carrier) => carrier.body));
+  }
+
+  /** Each wake's carriers, as the agent's transcript would echo them. */
+  carriers(actor: MailActor): DeliveredCarrier[][] {
     const prompts = this.prompts.get(`${actor.environmentId}\0${actor.logicalSessionKey}`) ?? [];
-    return prompts.flatMap((prompt) =>
+    return prompts.map((prompt) =>
       [
         ...prompt.matchAll(
           /<orkestrator-peer-payload-json>\n([\s\S]*?)\n<\/orkestrator-peer-payload-json>/g,
         ),
-      ].map((match) => (JSON.parse(match[1]!) as { body: string }).body),
+      ].map((match) => JSON.parse(match[1]!) as DeliveredCarrier),
     );
   }
 

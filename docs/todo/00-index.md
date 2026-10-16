@@ -678,7 +678,7 @@ it reaches. Some rules of thumb:
 - [ ] Raise Grok above `advisory` only after adding a real read-only gate in the ACP bridge ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md), deferred)
 - [ ] Raise the Cursor coordinator tier only once a probe can prove a denied tool did not run ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md), blocked)
 - [ ] Extend the coordinator poll guard to `list_environments` if live runs show coordinators polling it ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md))
-- [ ] Add an optional `data-mail-kind` to injected mail carriers so system and tab mail style apart ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md))
+- [x] Add an optional `data-mail-kind` to injected mail carriers so system and tab mail style apart ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md))
 - [ ] Hide coordinator favourites for platforms the conversation cannot use under `platformFilter` ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md))
 - [ ] Verify how the coordinator favourites view renders a favourite whose platform is filtered out ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md), verify)
 - [ ] Decide whether the sidebar working/waiting icon moves from `agentActivityState` onto the agent registry ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md), decision)

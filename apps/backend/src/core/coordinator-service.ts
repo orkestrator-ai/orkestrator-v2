@@ -658,6 +658,16 @@ export class CoordinatorService {
             subject: `${association.kind === "build-pipeline" ? "Build pipeline" : "Multi-review"} ${phase}`,
             body: `Authoritative workflow ${association.resourceId} reached ${phase}. Inspect the workflow through Orkestrator controls before deciding what to do next.`,
           },
+          {
+            notice: {
+              resource: {
+                kind: association.kind === "build-pipeline" ? "build-pipeline" : "multi-review",
+                id: association.resourceId,
+              },
+              state: phase,
+              tone: phase === "failed" ? "failure" : phase === "cancelled" ? "info" : "success",
+            },
+          },
         );
         await this.storage.markCoordinatorWorkflowNotified(association.id, revision);
       }
@@ -881,6 +891,24 @@ export class CoordinatorService {
                   }.`
                 : "") +
               ` Inspect the environment through Orkestrator controls before deciding what to do next.`,
+          },
+          {
+            notice: {
+              resource: {
+                kind: "agent-tab",
+                id: delegation.workerTabId,
+                environmentId: association.resourceId,
+                tabId: delegation.workerTabId,
+                label,
+              },
+              state: delegation.state,
+              tone:
+                delegation.state === "completed"
+                  ? "success"
+                  : delegation.state === "failed"
+                    ? "failure"
+                    : "info",
+            },
           },
         );
       }

@@ -262,6 +262,18 @@ cannot close the tag. The wrapper states trust, tells the model to use
 `reply_message` / `ack_message`, and says paths refer to the sender’s
 filesystem.
 
+The JSON payload is also the transcript's structured marker. Besides `from`,
+`subject` and `body` it carries `kind` (`message`, `coordinator`, `user`,
+`external` or `notice`), which `agentMailKind` derives from the authenticated
+sender and trust, so a tab cannot make its mail look like a workflow notice. A
+workflow notice (`from.kind === "system"`) may also carry `notice`: the
+resource it reports on (`agent-tab`, `multi-review`, `build-pipeline`, with
+ids and a label), a lower-case `state` (`completed`, `failed`, `waiting`,
+`ready`…) and a `tone` (`success`, `failure`, `attention`, `info`). The store
+persists it on the message (`AgentMailMessage.notice`, only for system senders,
+checked by `normalizeAgentMailNotice`), so `read_messages` and `get_message`
+return it too.
+
 **Presence.** Native inject uses `mailInjectPresence` (queue, compose draft,
 pending dispatch, environment readiness, then turn activity). Drain admits
 `idle` and `unknown` (never-prompted tab). The dispatch fence rechecks the
@@ -354,6 +366,7 @@ policy is. Mute, explicit Off, pause, hop budget, and `canInject` still apply.
 
 | Surface | Location | Notes |
 | --- | --- | --- |
+| Transcript | `MailTile` (`apps/web/src/components/chat/`) | Each injected message is a collapsed tile: an icon for its kind or notice tone, sender, subject and about three clamped lines of the body. The header is a button (`aria-expanded`); clicking it, or the clipped preview, expands the Markdown body, and the choice survives remounts and paging for the session. A batched prompt becomes one tile per message |
 | Settings | Settings → Messaging | `enabled`, `paused`, `allowCrossProject`, `wakePeers`, `autonomousWakeBudget`, `hourlyWakeLimit`, `defaultInjectPolicy` (`off` / `idle`), `retentionDays` |
 | Global inbox | `AgentMailButton` | Compose, sent, seen; destinations filtered to `canPull` |
 | Per-tab banner | `AgentMailBanner` | Pending, failed, pull-only, budget or hourly-limit held; retry / resume / discard |
@@ -576,5 +589,6 @@ capability row says so.
 | Delegation = MCP ∧ inject | `apps/backend/src/core/coordinator-providers.ts` |
 | UI commands | `apps/backend/src/core/commands-registry-mail.ts` |
 | Settings / inbox / banner | `apps/web/src/components/settings/MessagingSettings.tsx`, `apps/web/src/components/agent-mail/` |
+| Transcript tiles | `apps/web/src/lib/chat/client-only-messages.ts` (carrier → rows), `apps/web/src/components/chat/MailTile.tsx` |
 | Main / side coordinator, respawn | `apps/backend/src/core/coordinator-service.ts`, `packages/protocol/src/coordinator.ts` |
 | Multi-actor scenarios | `apps/backend/src/core/agent-mail-scenarios.test.ts` on `agent-mail-world-test-support.ts` |

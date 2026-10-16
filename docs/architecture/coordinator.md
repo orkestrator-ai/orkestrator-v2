@@ -342,6 +342,13 @@ renders them into a single carrier in send order (bounded at 10 messages and
 128 KiB), and settles them together. A worker that finishes without reporting
 still wakes its coordinator, with a system notice saying so.
 
+In the coordinator's transcript every delivered message — a worker's report,
+a peer's mail or a workflow notice — is a collapsed mail tile rather than the
+full text, so a long report no longer takes over the view. The tile's icon and
+tone come from the carrier's structured `kind` and `notice`, never from the
+prose, and a batched wake shows one tile per message (see
+[`agent-messaging.md`](agent-messaging.md#how-a-message-moves), "Carrier").
+
 A follow-up message to a worker that is still on an earlier request joins that
 delegation instead of opening a second one: the open delegation does not close
 while the follow-up is undelivered, so the worker reads it in its next turn and

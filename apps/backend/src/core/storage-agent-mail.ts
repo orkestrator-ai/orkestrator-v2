@@ -19,6 +19,7 @@ import {
   agentMailboxId,
   isAgentMailBudgetHeld,
   classifyAgentMailRoute,
+  normalizeAgentMailNotice,
   normalizeAgentMessagingSettings,
   resolveTabDisplayName,
   type AgentMailMailboxSnapshot,
@@ -26,6 +27,7 @@ import {
   type AgentMailInboxSnapshot,
   type AgentMailMessage,
   type AgentMailMessageSummary,
+  type AgentMailNotice,
   type AgentMailSendInput,
   type AgentMailSummarySnapshot,
   type AgentMailTrust,
@@ -1246,9 +1248,14 @@ export class StorageAgentMail extends StorageDrafts {
   async sendAgentMail(
     sender: AgentMailSender,
     input: AgentMailSendInput,
-    options: { newDelegation?: boolean } = {},
+    options: {
+      newDelegation?: boolean;
+      /** Structured facts for a workflow notice; ignored for any other sender. */
+      notice?: AgentMailNotice;
+    } = {},
   ): Promise<AgentMailMessage> {
     const requestId = input.requestId.trim();
+    const notice = sender.kind === "system" ? normalizeAgentMailNotice(options.notice) : null;
     if (!requestId || requestId.length > AGENT_MAIL_MAX_REQUEST_ID_LENGTH)
       throw new Error("requestId must be 1-256 characters");
     const bodyBytes = Buffer.byteLength(input.body, "utf8");
@@ -1598,6 +1605,7 @@ export class StorageAgentMail extends StorageDrafts {
             }
           : {}),
         ...(route ? { route } : {}),
+        ...(notice ? { notice } : {}),
         placement: shouldScheduleInject
           ? "pending-inject"
           : heldForDelegation || heldForLoopBudget || heldForHourlyLimit
@@ -1724,6 +1732,19 @@ export class StorageAgentMail extends StorageDrafts {
           body: hourly
             ? `Mail from worker ${worker} (environment ${message.from.environmentId}) reached the hourly message limit for this conversation and is being held. It is delivered automatically as the hour passes. Read it now with read_messages if it cannot wait.`
             : `Mail from worker ${worker} (environment ${message.from.environmentId}) used up its unattended message budget and is being held. Read it with read_messages, then send the worker a new request (which starts a new budget) or ask the user to resume delivery.`,
+        },
+        {
+          notice: {
+            resource: {
+              kind: "agent-tab",
+              id: message.from.tabId,
+              environmentId: message.from.environmentId,
+              tabId: message.from.tabId,
+              ...(message.from.title ? { label: message.from.title } : {}),
+            },
+            state: "mail-held",
+            tone: "attention",
+          },
         },
       );
     } catch (error) {

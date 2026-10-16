@@ -273,10 +273,114 @@ export interface AgentMailMessage {
   ackedAt?: string;
   userSeenAt?: string;
   discardedAt?: string;
+  /** Structured facts behind a workflow notice; only `system` senders carry one. */
+  notice?: AgentMailNotice;
   revision: number;
 }
 
 export type AgentMailMessageSummary = Omit<AgentMailMessage, "body">;
+
+/**
+ * What a carrier holds, so a transcript can present it without reading prose.
+ *
+ * Derived from the authenticated sender at render time, never chosen by it: a
+ * tab cannot make its mail look like a workflow notice or a coordinator.
+ */
+export const AGENT_MAIL_KINDS = ["message", "coordinator", "user", "external", "notice"] as const;
+export type AgentMailKind = (typeof AGENT_MAIL_KINDS)[number];
+
+export function agentMailKind(message: Pick<AgentMailMessage, "from" | "trust">): AgentMailKind {
+  if (
+    message.from.kind === "external" ||
+    message.trust === "external" ||
+    message.trust === "cross-project"
+  ) {
+    return "external";
+  }
+  if (message.from.kind === "system") return "notice";
+  if (message.from.kind === "coordinator") return "coordinator";
+  if (message.from.kind === "user") return "user";
+  return "message";
+}
+
+/** How a reader should weigh a notice: it worked, it broke, it needs someone, or it is news. */
+export const AGENT_MAIL_NOTICE_TONES = ["success", "failure", "attention", "info"] as const;
+export type AgentMailNoticeTone = (typeof AGENT_MAIL_NOTICE_TONES)[number];
+
+/** The kinds of work a notice can report on. */
+export const AGENT_MAIL_NOTICE_RESOURCES = ["agent-tab", "multi-review", "build-pipeline"] as const;
+export type AgentMailNoticeResource = (typeof AGENT_MAIL_NOTICE_RESOURCES)[number];
+
+const AGENT_MAIL_NOTICE_MAX_ID_LENGTH = 256;
+const AGENT_MAIL_NOTICE_MAX_LABEL_LENGTH = 120;
+const AGENT_MAIL_NOTICE_STATE = /^[a-z][a-z0-9-]{0,47}$/;
+
+/**
+ * Structured facts behind a workflow notice: which resource it is about, the
+ * state it reached, and how to weigh it. The body stays the readable account;
+ * this is what lets a transcript pick an icon, and an agent filter, without
+ * parsing that prose.
+ */
+export interface AgentMailNotice {
+  resource: {
+    kind: AgentMailNoticeResource;
+    id: string;
+    environmentId?: string;
+    tabId?: string;
+    /** Human-facing name, such as the environment name. */
+    label?: string;
+  };
+  /** Lower-case machine state: `completed`, `failed`, `waiting`, `ready`… */
+  state: string;
+  tone: AgentMailNoticeTone;
+}
+
+function boundedNoticeString(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed && trimmed.length <= maxLength ? trimmed : undefined;
+}
+
+/**
+ * A notice with every field checked and bounded, or null.
+ *
+ * Carriers are read back out of provider transcripts, so the renderer treats
+ * this like any other untrusted input; the store applies the same check before
+ * persisting one.
+ */
+export function normalizeAgentMailNotice(value: unknown): AgentMailNotice | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const resource = record.resource;
+  if (!resource || typeof resource !== "object" || Array.isArray(resource)) return null;
+  const source = resource as Record<string, unknown>;
+  const kind = AGENT_MAIL_NOTICE_RESOURCES.find((candidate) => candidate === source.kind);
+  const tone = AGENT_MAIL_NOTICE_TONES.find((candidate) => candidate === record.tone);
+  const id = boundedNoticeString(source.id, AGENT_MAIL_NOTICE_MAX_ID_LENGTH);
+  if (
+    !kind ||
+    !tone ||
+    !id ||
+    typeof record.state !== "string" ||
+    !AGENT_MAIL_NOTICE_STATE.test(record.state)
+  ) {
+    return null;
+  }
+  const environmentId = boundedNoticeString(source.environmentId, AGENT_MAIL_NOTICE_MAX_ID_LENGTH);
+  const tabId = boundedNoticeString(source.tabId, AGENT_MAIL_NOTICE_MAX_ID_LENGTH);
+  const label = boundedNoticeString(source.label, AGENT_MAIL_NOTICE_MAX_LABEL_LENGTH);
+  return {
+    resource: {
+      kind,
+      id,
+      ...(environmentId ? { environmentId } : {}),
+      ...(tabId ? { tabId } : {}),
+      ...(label ? { label } : {}),
+    },
+    state: record.state,
+    tone,
+  };
+}
 
 export interface MailboxDescriptor {
   mailboxId: string;
@@ -485,13 +589,18 @@ export function escapeAgentMailJson(value: unknown): string {
 }
 
 export function renderAgentMailCarrier(message: AgentMailMessage): string {
+  const notice = message.from.kind === "system" ? normalizeAgentMailNotice(message.notice) : null;
   const payload = escapeAgentMailJson({
+    // The transcript's marker for what this is. Readers that predate it fall
+    // back to `from.kind`, which it is derived from.
+    kind: agentMailKind(message),
     from: message.from,
     to: { environmentId: message.toEnvironmentId, tabId: message.toTabId },
     trust: message.trust,
     messageId: message.id,
     threadId: message.threadId,
     ...(message.subject ? { subject: message.subject } : {}),
+    ...(notice ? { notice } : {}),
     body: message.body,
   });
   const warning =

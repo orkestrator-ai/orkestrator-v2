@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { AGENT_PLATFORMS } from "./agent-platforms.js";
 import {
+  agentMailKind,
   agentMailRouteWakes,
+  normalizeAgentMailNotice,
   normalizeAgentMessagingSettings,
   classifyAgentMailRoute,
   agentMailCapabilities,
@@ -95,6 +97,109 @@ describe("agent mail protocol", () => {
     expect(carrier).not.toContain("reply_message");
     expect(carrier).toContain("Respond to the sender in this current turn");
     expect(carrier).toContain('"to":{"environmentId":"e1","tabId":"t1"}');
+  });
+
+  test("marks each carrier with a kind derived from its authenticated sender", () => {
+    const base = {
+      version: 1,
+      id: "m3",
+      threadId: "m3",
+      requestId: "r3",
+      createdAt: new Date(0).toISOString(),
+      toEnvironmentId: "coordinator:c:v",
+      toTabId: "t",
+      toIncarnationId: "i",
+      body: "Body",
+      bodyBytes: 4,
+      trust: "same-project",
+      injectDepth: 0,
+      threadDepth: 0,
+      placement: "injected",
+      revision: 1,
+    } satisfies Omit<AgentMailMessage, "from">;
+    const notice = {
+      resource: { kind: "build-pipeline", id: "pipeline-1" },
+      state: "complete",
+      tone: "success",
+    } as const;
+    const payload = (message: AgentMailMessage) =>
+      JSON.parse(
+        renderAgentMailCarrier(message)
+          .split("<orkestrator-peer-payload-json>\n")[1]!
+          .split("\n</orkestrator-peer-payload-json>")[0]!,
+      ) as Record<string, unknown>;
+
+    const system = payload({
+      ...base,
+      from: { kind: "system", projectId: "p", source: "workflow", resourceId: "pipeline-1" },
+      notice,
+    });
+    expect(system.kind).toBe("notice");
+    expect(system.notice).toEqual(notice);
+
+    // Only a workflow can carry notice facts; a tab's message never shows one.
+    const tab = payload({
+      ...base,
+      from: {
+        kind: "tab",
+        projectId: "p",
+        environmentId: "e",
+        tabId: "t",
+        incarnationId: "i",
+        agent: "codex",
+        title: null,
+      },
+      notice,
+    });
+    expect(tab.kind).toBe("message");
+    expect(tab.notice).toBeUndefined();
+
+    expect(agentMailKind({ from: { kind: "user" }, trust: "user" })).toBe("user");
+    expect(
+      agentMailKind({
+        from: { kind: "system", projectId: "p", source: "workflow", resourceId: "r" },
+        trust: "cross-project",
+      }),
+    ).toBe("external");
+  });
+
+  test("normalizes notices to bounded, known values", () => {
+    expect(
+      normalizeAgentMailNotice({
+        resource: { kind: "agent-tab", id: " tab ", environmentId: "env", label: "worker" },
+        state: "waiting",
+        tone: "attention",
+        extra: "dropped",
+      }),
+    ).toEqual({
+      resource: { kind: "agent-tab", id: "tab", environmentId: "env", label: "worker" },
+      state: "waiting",
+      tone: "attention",
+    });
+    expect(
+      normalizeAgentMailNotice({
+        resource: { kind: "agent-tab", id: "t" },
+        state: "x",
+        tone: "loud",
+      }),
+    ).toBeNull();
+    expect(
+      normalizeAgentMailNotice({ resource: { kind: "ticket", id: "t" }, state: "x", tone: "info" }),
+    ).toBeNull();
+    expect(
+      normalizeAgentMailNotice({
+        resource: { kind: "agent-tab", id: "t" },
+        state: "<script>",
+        tone: "info",
+      }),
+    ).toBeNull();
+    expect(
+      normalizeAgentMailNotice({
+        resource: { kind: "agent-tab", id: "t", label: "x".repeat(500) },
+        state: "ready",
+        tone: "info",
+      })?.resource,
+    ).toEqual({ kind: "agent-tab", id: "t" });
   });
 
   test("resolves the shared tab naming precedence", () => {

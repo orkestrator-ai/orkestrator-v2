@@ -50,7 +50,13 @@ import {
   type CurrentSourceState,
   type RuntimeGenerations,
 } from "./evidence.js";
-import { noteOnce, retireSuperseded, sourceDrift, type Supersession } from "./external-edits.js";
+import {
+  heldRuntimes,
+  noteOnce,
+  retireSuperseded,
+  sourceDrift,
+  type Supersession,
+} from "./external-edits.js";
 import { renameReferenceWarnings } from "./references.js";
 import { McpRolloutGate } from "./rollout.js";
 import {
@@ -411,7 +417,11 @@ export class McpManagementService {
       if ((source.file?.revision ?? null) !== expected) throw mcpFailure("revision-conflict");
       // Limits are checked before the record exists: a refused change is not an operation.
       const next = nextSourceText(prepared);
-      const savedEntriesDigest = await this.serverListDigest(parsedOrUndefined(spec, next));
+      const savedParsed = parsedOrUndefined(spec, next);
+      const savedEntriesDigest = await this.serverListDigest(
+        savedParsed?.entries,
+        savedParsed?.entryIssues,
+      );
       const created = nowIso(this.now);
       const operation: StoredOperation = {
         snapshot: {
@@ -1044,6 +1054,7 @@ export class McpManagementService {
       const startingStates = runtimes.map((runtime) => runtime.state);
       const queuedAt = Date.parse(stored.recovery.applyQueuedAt ?? stored.snapshot.updatedAt);
       let superseded: Supersession | undefined;
+      let merged: string | undefined;
       const outcome = await advanceCodexRuntimes(
         this.options.probe,
         planned,
@@ -1053,11 +1064,14 @@ export class McpManagementService {
           const drift = sourceDrift(stored, await this.currentSource(stored));
           if (drift.kind === "superseded") {
             superseded = { reason: drift.reason, cancelReason: drift.cancelReason };
+          } else if (drift.kind === "merged") {
+            // The reload goes ahead and loads the file as it is now.
+            merged = drift.note;
           }
           return superseded;
         },
       );
-      if (!outcome.changed) continue;
+      if (!outcome.changed && !merged) continue;
       // A reload's outcome was observed against the process it reached.
       const observed = new Map<number, string>();
       const generations = await this.runtimeGenerations().catch(() => undefined);
@@ -1079,9 +1093,15 @@ export class McpManagementService {
         return generation ? { ...updated, generation } : updated;
       });
       stored.snapshot.apply.runtimes = next;
+      const reloaded = new Set(outcome.reloaded);
+      for (const record of stored.recovery.runtimes ?? []) {
+        if (reloaded.has(record.runtimeId)) record.reloaded = true;
+      }
+      if (merged) noteOnce(stored.snapshot, merged);
       // The change is gone for every runtime still waiting on it, not only
-      // the queued ones that were about to reload.
-      if (superseded) retireSuperseded(next, superseded, nowIso(this.now));
+      // the queued ones that were about to reload. An app-server that already
+      // reloaded it keeps it until its next reload.
+      if (superseded) retireSuperseded(next, superseded, nowIso(this.now), heldRuntimes(stored));
       await this.finishApplyUpdate(stored);
     }
     // Proof of adoption for runtimes that apply on their own boundary.
@@ -1092,7 +1112,8 @@ export class McpManagementService {
    * The saved source file as it is now: the digest of its bytes, whether the
    * operation's change is still in it, and whether its server list is the one
    * the save left, or one a later save of the same file left. Host files only
-   * — evidence is only awaited from local runtimes — and read-only.
+   * — evidence is only awaited from local runtimes — and read-only. A deleted
+   * file holds no servers; an unreadable one is unknown.
    */
   private async currentSource(stored: StoredOperation): Promise<CurrentSourceState | undefined> {
     const target = await resolveTarget(stored.snapshot.targetId, this.options.storage);
@@ -1102,9 +1123,12 @@ export class McpManagementService {
     );
     if (!spec || spec.format === "runtime") return undefined;
     const source = (await loadCatalog(this.store, [spec])).sources[0];
-    const digest = source?.file?.contentDigest;
-    if (!source?.parsed || !digest) return undefined;
-    const entriesDigest = await this.serverListDigest(source.parsed);
+    const absent = source?.state === "absent";
+    // No bridge reports `absent` as evidence, so it never proves a save.
+    const digest = absent ? ABSENT_REVISION : source?.file?.contentDigest;
+    const entries = absent ? new Map<string, unknown>() : source?.parsed?.entries;
+    if (!entries || !digest) return undefined;
+    const entriesDigest = await this.serverListDigest(entries, source?.parsed?.entryIssues);
     // Records are kept in the order they were created.
     const operations = this.operations.list();
     const position = operations.findIndex(
@@ -1125,18 +1149,21 @@ export class McpManagementService {
       );
     return {
       digest,
-      landed: await this.changeLanded(stored, source.parsed.entries),
+      landed: await this.changeLanded(stored, entries),
       ...(entriesDigest ? { entriesDigest } : {}),
       ...(replacedBySave ? { replacedBySave } : {}),
     };
   }
 
-  /** Keyed digest of a parsed source's server list, ignoring the rest of the file. */
-  private async serverListDigest(parsed: ParsedSource | undefined): Promise<string | undefined> {
-    if (!parsed) return undefined;
+  /** Keyed digest of a source's server list, ignoring the rest of the file. */
+  private async serverListDigest(
+    entries: ReadonlyMap<string, unknown> | undefined,
+    issues: ReadonlyMap<string, unknown> = new Map(),
+  ): Promise<string | undefined> {
+    if (!entries) return undefined;
     return this.operations.entryDigest({
-      entries: Object.fromEntries(parsed.entries),
-      issues: Array.from(parsed.entryIssues.keys()).sort(),
+      entries: Object.fromEntries(entries),
+      issues: Array.from(issues.keys()).sort(),
     });
   }
 

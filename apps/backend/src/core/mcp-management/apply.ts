@@ -197,11 +197,22 @@ export function pageRuntimes<T extends Pick<McpRuntimeApplyEntry, "environmentId
  * tracks, and the scheduler advances all of them; only the listing is cut to
  * `runtimesPerOperation`. The rest are counted in `omitted` with their states
  * in `omittedStates`, beside any runtimes planning could not track at all.
+ * `omittedStates` carries no `cancelReason`, so a superseded runtime is always
+ * listed when there is one: it is what tells a client a retry is refused.
  */
 export function publicApply(apply: McpOperationSnapshot["apply"]): McpOperationSnapshot["apply"] {
   const limit = MCP_MANAGEMENT_LIMITS.runtimesPerOperation;
   if (apply.runtimes.length <= limit) return apply;
   const page = pageRuntimes(apply.runtimes, limit, () => true);
+  const superseded = (runtime: McpRuntimeApplyEntry) =>
+    runtime.state === "cancelled" && runtime.cancelReason !== undefined;
+  const hidden = page.rest.find(superseded);
+  if (hidden && !page.runtimes.some(superseded)) {
+    // Swap it for the last listed runtime, keeping the original order.
+    const listed = new Set([...page.runtimes.slice(0, -1), hidden]);
+    page.runtimes = apply.runtimes.filter((runtime) => listed.has(runtime));
+    page.rest = apply.runtimes.filter((runtime) => !listed.has(runtime));
+  }
   const omittedStates: Partial<Record<McpApplyState, number>> = {};
   for (const runtime of page.rest) {
     omittedStates[runtime.state] = (omittedStates[runtime.state] ?? 0) + 1;
@@ -339,8 +350,9 @@ export const CODEX_APPLY_WAIT_MS = 30 * 60_000;
 const CODEX_RELOAD_TIMEOUT_MS = 30_000;
 
 /**
- * Advance queued Codex runtimes. Returns the updated list and whether any are
- * still waiting. One reload per environment covers every thread in it.
+ * Advance queued Codex runtimes. Returns the updated list, whether any are
+ * still waiting, and the ids of those whose app-server reloaded. One reload
+ * per environment covers every thread in it.
  *
  * `refusal` is asked once, just before the first reload, whether the change
  * still applies; a supersession cancels the queued runtimes, with its reason
@@ -352,19 +364,25 @@ export async function advanceCodexRuntimes(
   queuedAt: number,
   nowMs: number,
   refusal?: () => Promise<Supersession | undefined>,
-): Promise<{ runtimes: PlannedRuntime[]; waiting: boolean; changed: boolean }> {
+): Promise<{
+  runtimes: PlannedRuntime[];
+  waiting: boolean;
+  changed: boolean;
+  reloaded: string[];
+}> {
   const now = new Date(nowMs).toISOString();
   const queued = runtimes.filter(
     (runtime) =>
       runtime.agent === "codex" && (runtime.state === "queued" || runtime.state === "applying"),
   );
-  if (!queued.length) return { runtimes, waiting: false, changed: false };
+  if (!queued.length) return { runtimes, waiting: false, changed: false, reloaded: [] };
   const environments = new Map(
     (await probe.environments()).map((environment) => [environment.id, environment]),
   );
   const sessions = await probe.sessions();
   let waiting = false;
   let changed = false;
+  const reloaded: string[] = [];
   const byEnvironment = new Map<string, PlannedRuntime[]>();
   for (const runtime of queued) {
     const list = byEnvironment.get(runtime.environmentId!) ?? [];
@@ -450,10 +468,11 @@ export async function advanceCodexRuntimes(
             ? "Codex reloaded its MCP configuration; each thread uses it from its next turn."
             : "Codex is not running; it reads the saved configuration when it next starts.",
         );
+        if (outcome === "reloaded") reloaded.push(...list.map((runtime) => runtime.runtimeId));
       }
     } catch {
       set(list, "failed", "Codex did not accept the reload request; retry apply.");
     }
   }
-  return { runtimes, waiting, changed };
+  return { runtimes, waiting, changed, reloaded };
 }

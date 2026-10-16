@@ -61,6 +61,8 @@ export interface OperationRecovery {
     bridgePid?: number;
     /** The runtime's generation when apply was planned (see `RuntimeGenerations`). */
     generation?: string;
+    /** Codex's app-server reloaded with this change and holds it until its next reload. */
+    reloaded?: boolean;
   }>;
   applyQueuedAt?: string;
 }

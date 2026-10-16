@@ -286,6 +286,80 @@ describe("apply status", () => {
   });
 });
 
+describe("actions for sessions past the listed page", () => {
+  test("a queued session that is only counted still offers Cancel apply", async () => {
+    install({ cancel_mcp_apply: () => operation() });
+    render(
+      <McpApplyStatus
+        operations={[
+          operation({
+            operationId: "op-hidden-queued",
+            apply: {
+              state: "queued",
+              runtimes: [runtime("a", "pending-next-turn")],
+              omitted: 1,
+              omittedStates: { queued: 1 },
+            },
+          }),
+        ]}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Cancel apply" }));
+    await waitFor(() => expect(callsOf("cancel_mcp_apply").length).toBe(1));
+    expect(callsOf("cancel_mcp_apply")[0]).toEqual({ operationId: "op-hidden-queued" });
+  });
+
+  test.each(["failed", "cancelled"] as const)(
+    "a %s session that is only counted still offers Retry apply",
+    async (state) => {
+      install({ apply_mcp_configuration: () => operation() });
+      render(
+        <McpApplyStatus
+          operations={[
+            operation({
+              operationId: "op-hidden-retry",
+              apply: {
+                state,
+                runtimes: [runtime("a", "pending-next-turn")],
+                omitted: 1,
+                omittedStates: { [state]: 1 },
+              },
+            }),
+          ]}
+        />,
+      );
+      expectDomAbsent(screen.queryByRole("button", { name: "Cancel apply" }), "cancel apply");
+      fireEvent.click(screen.getByRole("button", { name: "Retry apply" }));
+      await waitFor(() => expect(callsOf("apply_mcp_configuration").length).toBe(1));
+      expect(callsOf("apply_mcp_configuration")[0]).toEqual({ operationId: "op-hidden-retry" });
+    },
+  );
+
+  test("a listed superseded session withholds Retry for counted failures too", () => {
+    render(
+      <McpApplyStatus
+        operations={[
+          operation({
+            apply: {
+              state: "cancelled",
+              runtimes: [
+                {
+                  ...runtime("a", "cancelled", "The file no longer holds it."),
+                  cancelReason: "superseded-external",
+                },
+              ],
+              omitted: 3,
+              omittedStates: { cancelled: 2, failed: 1 },
+            },
+          }),
+        ]}
+      />,
+    );
+    expectDomAbsent(screen.queryByRole("button", { name: "Retry apply" }), "retry apply");
+    expect(screen.getByText(/Nothing to retry/)).toBeTruthy();
+  });
+});
+
 describe("catalog states", () => {
   test("an empty target says so instead of showing nothing", async () => {
     install({

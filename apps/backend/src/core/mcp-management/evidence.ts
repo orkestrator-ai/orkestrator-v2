@@ -58,7 +58,7 @@ import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { McpApplyState, McpRuntimeApplyEntry } from "@orkestrator/protocol/mcp-management";
 
 import type { RuntimeProbe } from "./apply.js";
-import { noteOnce, retireSuperseded, sourceDrift } from "./external-edits.js";
+import { heldRuntimes, noteOnce, retireSuperseded, sourceDrift } from "./external-edits.js";
 import type { StoredOperation } from "./operations-store.js";
 
 export const EVIDENCE_WINDOW_MS = 24 * 60 * 60_000;
@@ -483,7 +483,8 @@ export class EvidenceScheduler {
       const drift = sourceDrift(stored, await current(stored));
       if (stored.snapshot.apply.runtimes !== runtimes) continue;
       if (drift.kind === "superseded") {
-        if (retireSuperseded(runtimes, drift, new Date(this.deps.now()).toISOString())) {
+        const now = new Date(this.deps.now()).toISOString();
+        if (retireSuperseded(runtimes, drift, now, heldRuntimes(stored))) {
           changed.add(stored);
         }
       } else if (drift.kind === "merged" && noteOnce(stored.snapshot, drift.note)) {

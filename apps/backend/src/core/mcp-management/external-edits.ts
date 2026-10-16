@@ -59,7 +59,10 @@ export type SourceDrift =
   | { kind: "merged"; note: string }
   | ({ kind: "superseded" } & Supersession);
 
-/** Apply the rule above. An unreadable or unknown source says nothing. */
+/**
+ * Apply the rule above. An unreadable or unknown source says nothing; a
+ * deleted one holds no servers, so only a removal is still in it.
+ */
 export function sourceDrift(
   stored: StoredOperation,
   current: CurrentSourceState | undefined,
@@ -87,18 +90,33 @@ export function sourceDrift(
 }
 
 /**
+ * Runtimes whose running process already loaded the change, though each
+ * thread only uses it from its next turn: a Codex app-server that reloaded it
+ * keeps it until its next reload, so there is nothing to cancel for them.
+ */
+export function heldRuntimes(stored: StoredOperation): ReadonlySet<string> {
+  return new Set(
+    (stored.recovery.runtimes ?? [])
+      .filter((record) => record.reloaded)
+      .map((record) => record.runtimeId),
+  );
+}
+
+/**
  * Retire every runtime still waiting for a superseded change. Returns whether
- * anything changed. Applied runtimes keep their state: they did load it. The
- * `cancelReason` tells the UI a retry would only be refused.
+ * anything changed. Applied runtimes keep their state: they did load it, and
+ * so do the `held` ones (see `heldRuntimes`). The `cancelReason` tells the UI
+ * a retry would only be refused.
  */
 export function retireSuperseded(
   runtimes: McpOperationSnapshot["apply"]["runtimes"],
   superseded: Supersession,
   now: string,
+  held: ReadonlySet<string> = new Set(),
 ): boolean {
   let changed = false;
   for (const runtime of runtimes) {
-    if (!STILL_TO_TAKE_EFFECT.has(runtime.state)) continue;
+    if (!STILL_TO_TAKE_EFFECT.has(runtime.state) || held.has(runtime.runtimeId)) continue;
     runtime.state = "cancelled";
     runtime.reason = superseded.reason;
     runtime.cancelReason = superseded.cancelReason;

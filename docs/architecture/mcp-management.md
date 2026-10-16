@@ -294,7 +294,11 @@ evidence. Only the snapshot is paged: an operation lists 64
 and counts the rest in `omitted` with their states in `omittedStates`. Past
 256, planning keeps one queued runtime per environment first and the remainder
 is not scheduled; it is the part of `omitted` that `omittedStates` does not
-account for, and the UI shows it as "not tracked" with what that means.
+account for, and the UI shows it as "not tracked" with what that means. The UI
+offers "Cancel apply" and "Retry apply" from `omittedStates` too, so queued or
+failed runtimes off the page stay actionable. `omittedStates` carries no
+`cancelReason`, so the page always lists a superseded runtime when the
+operation has one.
 
 **Bridges older than the MCP configuration report.** Current Claude, Cursor,
 Pi and ACP bridges put `mcpConfigReporting: 1` in every
@@ -391,7 +395,9 @@ the server list the save left (`savedEntriesDigest`), so edits are compared
 over the parsed server map, not the bytes (Claude's bookkeeping in
 `~/.claude.json` is not an edit). Each evidence pass re-reads the source of
 every operation it polled, a queued Codex reload re-reads it before reloading,
-and `apply_mcp_configuration` re-reads it before planning:
+and `apply_mcp_configuration` re-reads it before planning. A deleted source
+holds no servers, so only a removal is still in it; an unreadable one is
+unknown and changes nothing:
 
 - **Unchanged:** nothing to say.
 - **Merged:** the server list changed but the change is still in it. Applying
@@ -402,7 +408,9 @@ and `apply_mcp_configuration` re-reads it before planning:
   waiting for it (`queued`, `pending-next-turn`, `pending-reattach`,
   `restart-required`) becomes `cancelled` with the reason ("changed outside
   Orkestrator", or "a later change saved here replaced this one"); runtimes
-  already `applied` keep it, because they loaded the saved bytes. Applying it
+  already `applied` keep it, because they loaded the saved bytes, and so do
+  Codex runtimes whose app-server already reloaded it (recorded as `reloaded`
+  in recovery), because that process holds the change until its next reload. Applying it
   again is refused with `revision-conflict` and that reason. Apply never
   rewrites the file, so an obsolete revision is never re-materialized. Those
   runtimes also carry `cancelReason` (`superseded-external` or

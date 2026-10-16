@@ -146,9 +146,12 @@ function OperationCard({
   const [busy, setBusy] = useState(false);
   const saved = operation.phase === "saved";
   const runtimes = operation.apply.runtimes;
-  const waiting = runtimes.some((runtime) => runtime.state === "queued");
+  // Unlisted sessions are still tracked, so their states offer actions too.
+  const hidden = operation.apply.omittedStates ?? {};
+  const waiting = runtimes.some((runtime) => runtime.state === "queued") || !!hidden.queued;
   // The file no longer holds this change, so the backend refuses to apply it
-  // again; an older backend never sets the reason and keeps Retry.
+  // again; an older backend never sets the reason and keeps Retry. The backend
+  // always lists a superseded session when it has one.
   const superseded = runtimes.some(
     (runtime) => runtime.state === "cancelled" && runtime.cancelReason !== undefined,
   );
@@ -158,6 +161,8 @@ function OperationCard({
     saved &&
     !superseded &&
     (runtimes.some((runtime) => runtime.state === "failed" || runtime.state === "cancelled") ||
+      !!hidden.failed ||
+      !!hidden.cancelled ||
       (!runtimes.length && operation.apply.state === "failed"));
   const applicable =
     !applyBlockedReason &&

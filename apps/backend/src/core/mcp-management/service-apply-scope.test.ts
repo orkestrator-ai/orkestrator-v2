@@ -8,9 +8,10 @@ import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import {
   MCP_MANAGEMENT_LIMITS,
   mcpManagementErrorFromUnknown,
+  type McpRuntimeApplyEntry,
 } from "@orkestrator/protocol/mcp-management";
 
-import { COORDINATOR_BLOCKED, ENVIRONMENT_DELETED } from "./apply.js";
+import { COORDINATOR_BLOCKED, ENVIRONMENT_DELETED, publicApply } from "./apply.js";
 import { EVIDENCE_READS_PER_TICK } from "./evidence.js";
 import {
   createFixture,
@@ -171,6 +172,25 @@ describe("apply scope", () => {
       operationId: result.operation.operationId,
     });
     expect(proven.apply.omittedStates).toEqual({ applied: 1 });
+  });
+
+  test("a superseded runtime past the page is listed, so clients withhold Retry", () => {
+    const limit = MCP_MANAGEMENT_LIMITS.runtimesPerOperation;
+    const last = limit + 1;
+    const runtimes = Array.from({ length: limit + 2 }, (_, index): McpRuntimeApplyEntry => ({
+      runtimeId: `r-${index}`,
+      environmentId: "env-1",
+      label: `r-${index}`,
+      updatedAt: "2026-09-23T12:00:00Z",
+      ...(index === last
+        ? { state: "cancelled", cancelReason: "superseded-external" }
+        : { state: "failed" }),
+    }));
+    const paged = publicApply({ state: "failed", runtimes, omitted: 0 });
+    expect(paged.runtimes).toHaveLength(limit);
+    expect(paged.runtimes.at(-1)).toMatchObject({ runtimeId: `r-${last}` });
+    expect(paged.omitted).toBe(2);
+    expect(paged.omittedStates).toEqual({ failed: 2 });
   });
 
   test("past what one apply tracks, the rest are counted as not scheduled", async () => {

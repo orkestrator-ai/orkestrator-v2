@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -36,14 +36,24 @@ afterEach(() => {
 const KEY = "env-env-1:tab-a";
 const CLAUDE = "home/.claude.json";
 
-function session(agent: AgentPlatform, key = KEY) {
+function session(agent: AgentPlatform, key = KEY, environmentId = "env-1") {
   fixture.sessions.push({
-    environmentId: "env-1",
+    environmentId,
     agent,
     logicalSessionKey: key,
     pendingDispatch: false,
     coordinator: false,
   });
+}
+
+function environment(id: string) {
+  const worktree = path.join(fixture.root, `worktree-${id}`);
+  mkdirSync(worktree, { recursive: true });
+  fixture.extraEnvironments.push({ ...fixture.environment, id, name: id, worktreePath: worktree });
+}
+
+function unlink(relative: string): void {
+  rmSync(path.join(fixture.root, relative));
 }
 
 async function saveAndApply(provider: AgentPlatform, sourceId: string, name = "fixture") {
@@ -184,6 +194,29 @@ describe("a change removed after it was saved", () => {
     });
   });
 
+  test("a Codex app-server that already reloaded it keeps its state", async () => {
+    environment("env-2");
+    session("codex");
+    session("codex", "env-env-2:tab-b", "env-2");
+    fixture.activity.set("env-2:codex:env-env-2:tab-b", "working");
+    const saved = await saveAndApply("codex", "codex:user");
+    await fixture.service.tick();
+    expect(fixture.reloads).toEqual(["env-1"]);
+    fixture.write("home/.codex/config.toml", "");
+    fixture.activity.set("env-2:codex:env-env-2:tab-b", "idle");
+    await fixture.service.tick();
+    expect(fixture.reloads).toEqual(["env-1"]);
+    const states = (await operation(saved.operationId)).apply.runtimes.map((runtime) => [
+      runtime.environmentId,
+      runtime.state,
+      runtime.cancelReason,
+    ]);
+    expect(states).toEqual([
+      ["env-1", "pending-next-turn", undefined],
+      ["env-2", "cancelled", "superseded-external"],
+    ]);
+  });
+
   test("restoring the change outside Orkestrator lets it apply again, without the reason", async () => {
     session("claude");
     const saved = await saveAndApply("claude", "claude:user");
@@ -197,6 +230,64 @@ describe("a change removed after it was saved", () => {
     const replanned = await fixture.service.apply({ operationId: saved.operationId });
     expect(replanned.apply.runtimes[0]!.state).toBe("pending-next-turn");
     expect(replanned.apply.runtimes[0]!.cancelReason).toBeUndefined();
+  });
+});
+
+describe("a source file deleted after the save", () => {
+  test("waiting runtimes are retired, and applying again is refused", async () => {
+    session("claude");
+    const saved = await saveAndApply("claude", "claude:user");
+    unlink(CLAUDE);
+    await fixture.service.tick();
+    expect((await operation(saved.operationId)).apply.runtimes[0]).toMatchObject({
+      state: "cancelled",
+      reason: CHANGED_OUTSIDE_REASON,
+      cancelReason: "superseded-external",
+    });
+    const refused = await fixture.service
+      .apply({ operationId: saved.operationId })
+      .catch((error: unknown) => error);
+    expect(mcpManagementErrorFromUnknown(refused)?.code).toBe("revision-conflict");
+  });
+
+  test("a queued Codex reload is cancelled instead of run", async () => {
+    session("codex");
+    fixture.activity.set(`env-1:codex:${KEY}`, "working");
+    const saved = await saveAndApply("codex", "codex:user");
+    await fixture.service.tick();
+    unlink("home/.codex/config.toml");
+    fixture.activity.set(`env-1:codex:${KEY}`, "idle");
+    await fixture.service.tick();
+    expect(fixture.reloads).toEqual([]);
+    expect((await operation(saved.operationId)).apply.runtimes[0]).toMatchObject({
+      state: "cancelled",
+      cancelReason: "superseded-external",
+    });
+  });
+
+  test("a removal is still in it, so it keeps applying", async () => {
+    session("claude");
+    const added = await saveAndApply("claude", "claude:user");
+    const snapshot = await fixture.service.snapshot({ targetId: added.targetId });
+    const removal = await fixture.service.mutate(
+      mutation(
+        added.targetId,
+        {
+          kind: "remove",
+          entryId: entry(snapshot, "claude:user", "fixture").entryId,
+          expectedRevision: revision(snapshot, "claude:user")!,
+        },
+        "save-and-apply",
+      ),
+    );
+    pauseScheduler(fixture);
+    unlink(CLAUDE);
+    await fixture.service.tick();
+    const kept = await operation(removal.operation.operationId);
+    expect(kept.apply.runtimes[0]!.state).toBe("pending-next-turn");
+    expect(kept.apply.runtimes[0]!.cancelReason).toBeUndefined();
+    const again = await fixture.service.apply({ operationId: removal.operation.operationId });
+    expect(again.apply.runtimes[0]!.state).toBe("pending-next-turn");
   });
 });
 
@@ -257,6 +348,21 @@ describe("a change still in a file that changed after it was saved", () => {
     await saveAndApply("claude", "claude:user", "second");
     await fixture.service.tick();
     expect((await operation(saved.operationId)).message).toBeUndefined();
+  });
+
+  test("a queued Codex reload goes ahead and says the file changed", async () => {
+    session("codex");
+    fixture.activity.set(`env-1:codex:${KEY}`, "working");
+    const saved = await saveAndApply("codex", "codex:user");
+    await fixture.service.tick();
+    const config = fixture.read("home/.codex/config.toml");
+    fixture.write("home/.codex/config.toml", `${config}\n[mcp_servers.other]\ncommand = "y"\n`);
+    fixture.activity.set(`env-1:codex:${KEY}`, "idle");
+    await fixture.service.tick();
+    expect(fixture.reloads).toEqual(["env-1"]);
+    const reloaded = await operation(saved.operationId);
+    expect(reloaded.message).toBe(MERGED_NOTE);
+    expect(reloaded.apply.runtimes[0]!.state).toBe("pending-next-turn");
   });
 
   test("applying it again goes ahead and says the file changed", async () => {

@@ -175,7 +175,12 @@ export class OrkestratorBackend {
     AgentToolsServer,
     "connection" | "revokeEnvironment" | "start" | "stop"
   > &
-    Partial<Pick<AgentToolsServer, "revokeTab" | "workflowResultConnection" | "servicePort">>;
+    Partial<
+      Pick<
+        AgentToolsServer,
+        "revokeTab" | "workflowResultConnection" | "servicePort" | "issueStateSignal"
+      >
+    >;
   private readonly controlMcp: Pick<
     ControlMcpServer,
     | "getInfo"
@@ -203,7 +208,12 @@ export class OrkestratorBackend {
       claudeTmuxRuntimes?: typeof reapOrphanedClaudeTmuxRuntimes;
     };
     agentTools?: Pick<AgentToolsServer, "connection" | "revokeEnvironment" | "start" | "stop"> &
-      Partial<Pick<AgentToolsServer, "revokeTab" | "workflowResultConnection">>;
+      Partial<
+        Pick<
+          AgentToolsServer,
+          "revokeTab" | "workflowResultConnection" | "servicePort" | "issueStateSignal"
+        >
+      >;
     controlMcp?: Pick<
       ControlMcpServer,
       | "getInfo"

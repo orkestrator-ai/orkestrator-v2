@@ -276,7 +276,8 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
     "skip-while-running",
     "storage-reconcile",
   ),
-  // Per tracked container, every second, trailing rerun on overlap.
+  // Per tracked container, every second, trailing rerun on overlap. With the
+  // `claude-state-signal` doorbell: a read per ring plus a 30 s safety read.
   "tmux-poll": backend("B18", "interval", "progress", 1_000, "trailing-rerun", "next-tick"),
   "tmux-interactive-capture": backend(
     "B19",

@@ -255,3 +255,19 @@ export function bridgeMcpConfigEvidence(payload: unknown): ProviderMcpConfigEvid
   const staleServers = mcpStaleServers(config.staleServers);
   return { sources, observedAt, scope: "session", ...(staleServers ? { staleServers } : {}) };
 }
+
+/**
+ * Whether the bridge that wrote a runtime-health body reports MCP
+ * configuration at all: it carries the `mcpConfigReporting` marker, which
+ * current bridges send for every session, or an `mcpConfig` of any shape,
+ * which bridges between the first report and the marker send once something
+ * loaded. Neither means the bridge is older than the report.
+ */
+export function bridgeReportsMcpConfig(payload: unknown): boolean {
+  const body = asRecord(payload);
+  if (!body) return false;
+  return (
+    (typeof body.mcpConfigReporting === "number" && body.mcpConfigReporting >= 1) ||
+    asRecord(body.mcpConfig) !== null
+  );
+}

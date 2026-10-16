@@ -39,6 +39,26 @@ mise run test:logged -- --name coordinator-isolated -- bun test --cwd apps/backe
 
 No coordinator implementation, assertion, timeout or skip was changed.
 
+## MCP apply-path merge validation recurrence on 2026-10-16
+
+Merging `origin/main` into `mcp-apply-path-gaps` and running
+`mise run test:logged -- --name merge-suite -- mise run test` reproduced the
+same five-second timeout at 5184.28 ms. The pending nested-repository assertion
+then rejected with `disk I/O error` after fixture cleanup. The backend reported
+8,319 passed, 40 skipped, one failed and one unhandled error. The other workspace
+packages, root, bridges and protocol check passed. The workspace group took
+447.0 seconds. Evidence:
+`/tmp/orkestrator-test-run.U853xk/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+After the aggregate finished, the unchanged owning file passed alone (exit 0,
+18.5 seconds):
+
+```bash
+mise run test:logged -- --name merge-coordinator-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures
+```
+
+No coordinator implementation, assertion, timeout or skip was changed.
+
 ## Merge validation recurrence on 2026-10-16
 
 `mise run test:logged -- --name merge-tests -- mise run test` on

@@ -747,11 +747,18 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
    * Which saved MCP configuration the session's live runtime was built from,
    * read from the same no-touch `/session/:id/runtime-health` route. Backend
    * only: the digests are unkeyed hashes of files that can hold secrets, so
-   * this never feeds a projection. `undefined` when the bridge reports none —
-   * an older bridge, or nothing loaded yet.
+   * this never feeds a projection. `unsupported` is a bridge too old to
+   * report; `none` is a current bridge with nothing loaded yet, or a failed read.
    */
-  mcpConfigEvidence?(sessionId: string): Promise<ProviderMcpConfigEvidence | undefined>;
+  mcpConfigEvidence?(sessionId: string): Promise<ProviderMcpConfigReport>;
 }
+
+/** One `/runtime-health` read, as MCP apply evidence. */
+export type ProviderMcpConfigReport =
+  | { state: "evidence"; evidence: ProviderMcpConfigEvidence }
+  | { state: "none" }
+  /** The bridge answered without the MCP configuration report: it predates it. */
+  | { state: "unsupported" };
 
 /** See {@link NativeAgentRuntimeProvider.mcpConfigEvidence}. */
 export interface ProviderMcpConfigEvidence {
@@ -773,10 +780,7 @@ export interface ProviderMcpConfigEvidence {
   staleServers?: string[];
 }
 
-export type ProviderMcpConfigEvidenceRead =
-  | { state: "evidence"; evidence: ProviderMcpConfigEvidence }
-  | { state: "none" }
-  | { state: "not-running" };
+export type ProviderMcpConfigEvidenceRead = ProviderMcpConfigReport | { state: "not-running" };
 
 export interface ProviderCommandCatalogue {
   /** Descriptors carry execution identity negotiated with this provider. */

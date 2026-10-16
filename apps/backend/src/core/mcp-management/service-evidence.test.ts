@@ -18,10 +18,12 @@ import {
   STILL_LOADED_REASON,
   type RuntimeEvidenceRead,
 } from "./evidence.js";
+import { CHANGED_OUTSIDE_REASON } from "./external-edits.js";
 import {
   createFixture,
   entry,
   mutation,
+  pauseScheduler,
   revision,
   targetIdFor,
   type Fixture,
@@ -188,7 +190,7 @@ describe("Claude evidence", () => {
     expect(await stateOf(operation.operationId)).toEqual(["pending-next-turn"]);
   });
 
-  test("a later revision still carrying the change counts; one without it does not", async () => {
+  test("a later revision still carrying the change counts; one without it is superseded", async () => {
     session("claude");
     const operation = await saveAndApply("claude", "claude:user");
     // Claude rewrites ~/.claude.json for its own bookkeeping after the save.
@@ -211,9 +213,10 @@ describe("Claude evidence", () => {
     });
     await fixture.service.tick();
     const secondStates = await fixture.service.getOperation({ operationId: second.operationId });
+    // Never applied: the file no longer holds the change, so nothing is left to wait for.
     expect(
-      secondStates.apply.runtimes.find((runtime) => runtime.runtimeId.endsWith("tab-b"))?.state,
-    ).toBe("pending-next-turn");
+      secondStates.apply.runtimes.find((runtime) => runtime.runtimeId.endsWith("tab-b")),
+    ).toMatchObject({ state: "cancelled", reason: CHANGED_OUTSIDE_REASON });
   });
 
   test("a project save is proven by the project digest, not the user one", async () => {
@@ -508,6 +511,9 @@ describe("bounds and scope", () => {
     const keys = Array.from({ length: EVIDENCE_READS_PER_TICK + 3 }, (_, index) => `tab-${index}`);
     for (const key of keys) session("claude", key);
     const operation = await saveAndApply("claude", "claude:user");
+    // Count only the passes this test runs: the immediate background pass
+    // apply arms could otherwise start inside one tick and finish in the next.
+    pauseScheduler(fixture);
     await fixture.service.tick();
     expect(fixture.evidenceReads.length).toBe(EVIDENCE_READS_PER_TICK);
 

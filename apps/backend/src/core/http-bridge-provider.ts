@@ -24,7 +24,7 @@ import {
   PromptRejectedError,
   ProviderSessionFailedError,
   ProviderUnavailableError,
-  type ProviderMcpConfigEvidence,
+  type ProviderMcpConfigReport,
   type ProviderRuntimeHealth,
   ProviderUnreachableError,
 } from "./agent-provider-contract.js";
@@ -604,7 +604,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   /** Backend-only MCP apply evidence; see `http-bridge-mcp-evidence.ts`. */
-  mcpConfigEvidence(sessionId: string): Promise<ProviderMcpConfigEvidence | undefined> {
+  mcpConfigEvidence(sessionId: string): Promise<ProviderMcpConfigReport> {
     const { connection, fetchImpl, agent } = this;
     return readBridgeMcpConfigEvidence({ connection, fetchImpl, agent, sessionId });
   }

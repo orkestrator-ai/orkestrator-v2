@@ -22,3 +22,20 @@
 - **Hypothesis:** the sweep could not reach the fake bridge's local port under
   host load, so reconciliation failed before sending; not established.
 - **Changes:** recorded evidence only; no test, timeout, assertion or skip changed.
+
+## Recurrence on the MCP apply-path gaps branch
+
+On 2026-10-16, `mise run test` failed two other cases of the same suite:
+`activity sweep over the batch route > 10 sessions cost 1 request(s) and touch
+nothing` (11.44 ms) and `> a failing batch route is bypassed for one sweep
+only` (7.93 ms), with the same `ProviderUnavailableError` and
+`ProviderUnreachableError` reconciliation logs. The change touched no
+activity-sweep code. The unchanged owning file passed alone three times in a
+row (7 pass each):
+
+```bash
+bun test src/core/native-agent-service-activity-batch.test.ts
+```
+
+Several other worktrees were running suites on the host at the same time.
+Recorded evidence only; no test changed.

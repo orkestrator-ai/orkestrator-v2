@@ -78,6 +78,7 @@ export function createMcpRuntimeProbe(context: CommandContext): RuntimeProbe {
           environmentId: session.environmentId,
           agent: session.agent as AgentPlatform,
           logicalSessionKey: session.logicalSessionKey,
+          providerSessionId: session.providerSessionId,
           pendingDispatch: !!session.pendingDispatch,
           coordinator: session.executionPolicy === "coordinator-read-only",
           projectResources: session.policy?.projectResources,

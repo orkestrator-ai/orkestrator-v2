@@ -100,7 +100,7 @@ it reaches. Some rules of thumb:
 ### CLI and slash commands (high)
 
 - [ ] Re-run CLI credential-free, container and live Claude, Codex and OpenCode matrices at current main ([cli-qualification.md](cli-qualification.md), qualification)
-- [ ] Verify whether a new Claude tab shows legacy `BUILTIN_COMMANDS` rows in the picker before its first query ([slash-command-catalogue.md](slash-command-catalogue.md), verify)
+- [x] Verify whether a new Claude tab shows legacy `BUILTIN_COMMANDS` rows in the picker before its first query ([slash-command-catalogue.md](slash-command-catalogue.md), verify)
 - [ ] Run live slash-command probes for every provider at current pins in a disposable isolated profile ([slash-command-qualification.md](slash-command-qualification.md), qualification)
 - [ ] Run the inactive-environment slash-command browser scenario, including restarts at dispatch boundaries ([slash-command-qualification.md](slash-command-qualification.md), qualification)
 
@@ -238,11 +238,11 @@ it reaches. Some rules of thumb:
 - [ ] Check CLI-started question and approval cards in the browser for providers other than Claude ([cli-qualification.md](cli-qualification.md), qualification)
 - [ ] Add a CLI scenario with a foreign-owner Docker decoy and assert no fallback or mutation ([cli-qualification.md](cli-qualification.md), qualification)
 - [ ] Verify the CLI credential-free scenario matrix still passes at `2459b05c` ([cli-qualification.md](cli-qualification.md), verify)
-- [ ] Retire the legacy slash catalogue routes and stop pre-session tabs showing guessed rows ([slash-command-catalogue.md](slash-command-catalogue.md))
+- [ ] Retire the legacy slash catalogue routes and stop the old-bridge 404 fallback showing guessed rows ([slash-command-catalogue.md](slash-command-catalogue.md))
 - [ ] Label UI-dependent Pi extension commands unavailable or return a bounded unsupported-interaction result ([slash-command-catalogue.md](slash-command-catalogue.md))
 - [ ] Check slash picker source groups, keyboard order and catalogue refresh on Claude, Pi and Grok in a browser ([slash-command-catalogue.md](slash-command-catalogue.md), qualification)
 - [ ] Collect legacy-route use counts and run a mixed-version check before deleting legacy catalogue routes ([slash-command-catalogue.md](slash-command-catalogue.md), qualification)
-- [ ] Verify whether a Grok tab reads the catalogue without a session ID and fails on `/plugins/commands` ([slash-command-catalogue.md](slash-command-catalogue.md), verify)
+- [x] Verify whether a Grok tab reads the catalogue without a session ID and fails on `/plugins/commands` ([slash-command-catalogue.md](slash-command-catalogue.md), verify)
 - [ ] Verify whether old-backend/new-bridge and old/new renderer catalogue projections are tested ([slash-command-catalogue.md](slash-command-catalogue.md), verify)
 - [ ] Check that slash skill and template paths resolve inside the provider's container environment ([slash-command-qualification.md](slash-command-qualification.md), qualification)
 - [ ] Run the slash-command mixed-version matrix across backend, bridge and renderer versions ([slash-command-qualification.md](slash-command-qualification.md), qualification)

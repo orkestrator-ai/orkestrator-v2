@@ -44,3 +44,13 @@
   passed the unchanged file in 32.0 seconds (exit 0).
 - **Disposition:** recurrence confirmed by the isolated pass; shared-host
   contention remains a hypothesis. No test, timeout or skip was changed.
+
+## Recurrence — 2026-10-16 (live coordinator branch second main merge)
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`.
+- **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated Bun workers. Other worktrees were validating on the same host.
+- **Failure:** `deletes an environment only after all three local server kinds exit` timed out at 5083.07 ms.
+- **Suite counts:** backend 8,342 passed, 40 skipped and four failed across 445 files (599.23 seconds). All other workspace packages, root, bridges and protocol passed; aggregate exited 1 after 622.4 seconds.
+- **Evidence:** `/tmp/orkestrator-test-run.zOMprl/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer artifact `/tmp/orkestrator-test-run.TYkzGQ/merge-tests.log.gz`.
+- **Isolated rerun:** `mise run test:logged -- --name merge-local-server-isolated -- bun test --cwd apps/backend ./tests/commands-integration.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed the unchanged owning file (exit 0) in 60.0 seconds. Each owning file ran in its own process; other focused reruns were active on the host.
+- **Disposition:** intermittent failure confirmed by the owning-file pass; shared-host contention remains an unconfirmed hypothesis. No product code, assertion, timeout or skip was changed.

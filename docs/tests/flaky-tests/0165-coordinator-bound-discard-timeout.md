@@ -123,3 +123,34 @@ mise run test:logged -- --name coordinator-repro -- bun test --cwd apps/backend 
 
 The matching timeout and isolated pass support the existing load hypothesis.
 No coordinator implementation, assertion, timeout or skip was changed.
+
+## Recurrence on 2026-10-16 during the storage writer guards merge
+
+`mise run test:logged -- --name merge-tests -- mise run test` ran the backend
+with two isolated workers within a four-slot workspace group while other
+worktree validations shared the host. `project coordinator > bound discard
+confirmations refuse stale, sequencer, nested, and failed switches` exceeded
+the five-second deadline at 5,165.84 ms.
+
+`mise run test:logged -- --name merge-coordinator-isolated -- bun test
+--cwd apps/backend --preload ../../tests/setup-node.ts
+./src/core/coordinator-service.test.ts --parallel=1 --only-failures` passed the
+unchanged owning file in 18.6 seconds. Evidence and aggregate package counts
+are retained in
+`/tmp/orkestrator-test-run.Q27xqQ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+The existing load hypothesis remains unconfirmed; no assertion, timeout or
+skip was changed.
+
+Aggregate backend counts for this observation: 8,341 passed, 40 skipped,
+5 failed and 3 between-tests errors across 8,386 tests in 445 files
+(391.37 seconds). The other failures are recorded in 0162, 0165 and 0248.
+
+## Recurrence — 2026-10-16 (live coordinator branch second main merge)
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`.
+- **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated Bun workers. Other worktrees were validating on the same host.
+- **Failure:** `bound discard confirmations refuse stale, sequencer, nested, and failed switches` timed out after 5221.93 ms.
+- **Suite counts:** backend 8,342 passed, 40 skipped and four failed across 445 files (599.23 seconds). All other workspace packages, root, bridges and protocol passed; aggregate exited 1 after 622.4 seconds.
+- **Evidence:** `/tmp/orkestrator-test-run.zOMprl/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer artifact `/tmp/orkestrator-test-run.TYkzGQ/merge-tests.log.gz`.
+- **Isolated rerun:** `mise run test:logged -- --name merge-coordinator-isolated -- bun test --cwd apps/backend ./src/core/coordinator-service.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed the unchanged owning file (exit 0) in 22.0 seconds. Each owning file ran in its own process; other focused reruns were active on the host.
+- **Disposition:** intermittent failure confirmed by the owning-file pass; the cause remains unconfirmed. No product code, assertion, timeout or skip was changed.

@@ -111,3 +111,24 @@ hypothesis; no timeout, assertion or skip was changed.
 - **Disposition:** aggregate-only deadline failures recorded without changing
   assertions, deadlines or skips. Host contention is a hypothesis, not a proven
   cause.
+
+## Recurrence on 2026-10-16 during the storage writer guards merge
+
+`mise run test:logged -- --name merge-tests -- mise run test` ran the backend
+with two isolated workers within a four-slot workspace group while other
+worktree validations shared the host. `computes counts for a tracked local
+environment and announces them` (6,028.62 ms) and `serves the Files panel from
+the scan the badge already ran` (5,732.82 ms) exceeded the five-second deadline.
+
+`mise run test:logged -- --name merge-diff-statistics-isolated -- bun test
+--cwd apps/backend --preload ../../tests/setup-node.ts
+./tests/commands-integration.test.ts --parallel=1 --only-failures` passed the
+unchanged owning file in 53.8 seconds. Evidence and aggregate package counts
+are retained in
+`/tmp/orkestrator-test-run.Q27xqQ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+The existing load hypothesis remains unconfirmed; no assertion, timeout or
+skip was changed.
+
+Aggregate backend counts for this observation: 8,341 passed, 40 skipped,
+5 failed and 3 between-tests errors across 8,386 tests in 445 files
+(391.37 seconds). The other failures are recorded in 0162, 0165 and 0248.

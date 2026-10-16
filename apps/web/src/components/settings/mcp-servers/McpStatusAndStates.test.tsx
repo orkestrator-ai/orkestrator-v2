@@ -201,6 +201,54 @@ describe("apply status", () => {
     expect(callsOf("mutate_mcp_definition").length).toBe(0);
   });
 
+  test.each(["superseded-external", "superseded-local"] as const)(
+    "a runtime cancelled as %s offers no retry, only how to save it again",
+    (cancelReason) => {
+      render(
+        <McpApplyStatus
+          operations={[
+            operation({
+              apply: {
+                state: "cancelled",
+                runtimes: [
+                  { ...runtime("a", "cancelled", "The file no longer holds it."), cancelReason },
+                  runtime("b", "failed"),
+                ],
+                omitted: 0,
+              },
+            }),
+          ]}
+        />,
+      );
+      // A failed runtime beside it does not bring Retry back: the change itself is gone.
+      expectDomAbsent(screen.queryByRole("button", { name: "Retry apply" }), "retry apply");
+      expect(
+        screen.getByText(/Nothing to retry: the file no longer holds this change/),
+      ).toBeTruthy();
+      expect(screen.getByText(/save the change again/)).toBeTruthy();
+    },
+  );
+
+  test("any other cancellation keeps Retry and shows no hint", () => {
+    render(
+      <McpApplyStatus
+        operations={[
+          operation({
+            apply: {
+              state: "cancelled",
+              runtimes: [
+                runtime("a", "cancelled", "Cancelled; the saved configuration is unchanged."),
+              ],
+              omitted: 0,
+            },
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Retry apply" })).toBeTruthy();
+    expectDomAbsent(screen.queryByText(/Nothing to retry/), "superseded hint");
+  });
+
   test("cancel apply cancels the queued operation, keeping what was saved", async () => {
     install({ cancel_mcp_apply: () => operation() });
     render(

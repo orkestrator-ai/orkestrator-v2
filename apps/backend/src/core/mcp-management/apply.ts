@@ -28,6 +28,7 @@ import {
 } from "@orkestrator/protocol/mcp-management";
 
 import { awaitsEvidenceIn, withTimeout, type RuntimeEvidenceRead } from "./evidence.js";
+import type { Supersession } from "./external-edits.js";
 
 export interface ApplyEnvironment {
   id: string;
@@ -342,14 +343,15 @@ const CODEX_RELOAD_TIMEOUT_MS = 30_000;
  * still waiting. One reload per environment covers every thread in it.
  *
  * `refusal` is asked once, just before the first reload, whether the change
- * still applies; a reason cancels the queued runtimes instead of reloading.
+ * still applies; a supersession cancels the queued runtimes, with its reason
+ * and `cancelReason`, instead of reloading.
  */
 export async function advanceCodexRuntimes(
   probe: RuntimeProbe,
   runtimes: PlannedRuntime[],
   queuedAt: number,
   nowMs: number,
-  refusal?: () => Promise<string | undefined>,
+  refusal?: () => Promise<Supersession | undefined>,
 ): Promise<{ runtimes: PlannedRuntime[]; waiting: boolean; changed: boolean }> {
   const now = new Date(nowMs).toISOString();
   const queued = runtimes.filter(
@@ -369,12 +371,19 @@ export async function advanceCodexRuntimes(
     list.push(runtime);
     byEnvironment.set(runtime.environmentId!, list);
   }
-  let refused: Promise<string | undefined> | undefined;
-  const set = (list: PlannedRuntime[], state: McpApplyState, reason: string) => {
+  let refused: Promise<Supersession | undefined> | undefined;
+  const set = (
+    list: PlannedRuntime[],
+    state: McpApplyState,
+    reason: string,
+    cancelReason?: Supersession["cancelReason"],
+  ) => {
     for (const runtime of list) {
       if (runtime.state !== state || runtime.reason !== reason) changed = true;
       runtime.state = state;
       runtime.reason = reason;
+      if (cancelReason) runtime.cancelReason = cancelReason;
+      else delete runtime.cancelReason;
       runtime.updatedAt = now;
     }
   };
@@ -417,9 +426,9 @@ export async function advanceCodexRuntimes(
     // The file may have changed since the save; a reload would then load a
     // configuration that no longer carries this change.
     refused ??= (refusal?.() ?? Promise.resolve(undefined)).catch(() => undefined);
-    const reason = await refused;
-    if (reason) {
-      set(list, "cancelled", reason);
+    const superseded = await refused;
+    if (superseded) {
+      set(list, "cancelled", superseded.reason, superseded.cancelReason);
       continue;
     }
     set(list, "applying", "Reloading Codex's MCP configuration.");

@@ -147,10 +147,16 @@ function OperationCard({
   const saved = operation.phase === "saved";
   const runtimes = operation.apply.runtimes;
   const waiting = runtimes.some((runtime) => runtime.state === "queued");
+  // The file no longer holds this change, so the backend refuses to apply it
+  // again; an older backend never sets the reason and keeps Retry.
+  const superseded = runtimes.some(
+    (runtime) => runtime.state === "cancelled" && runtime.cancelReason !== undefined,
+  );
   // Cancelling is always allowed; starting an apply is not while gated.
   const retryable =
     !applyBlockedReason &&
     saved &&
+    !superseded &&
     (runtimes.some((runtime) => runtime.state === "failed" || runtime.state === "cancelled") ||
       (!runtimes.length && operation.apply.state === "failed"));
   const applicable =
@@ -245,6 +251,12 @@ function OperationCard({
           ) : null}
         </span>
       </div>
+      {saved && superseded ? (
+        <p className="mt-1 text-muted-foreground">
+          Nothing to retry: the file no longer holds this change. Open the server again to review
+          it, or save the change again.
+        </p>
+      ) : null}
       {saved && operation.affectedEnvironments?.length ? (
         <p className="mt-1 break-words text-muted-foreground">
           Environments:{" "}

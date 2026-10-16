@@ -100,7 +100,11 @@ describe("a change removed after it was saved", () => {
     const retired = await operation(saved.operationId);
     expect(retired.apply.state).toBe("cancelled");
     for (const runtime of retired.apply.runtimes) {
-      expect(runtime).toMatchObject({ state: "cancelled", reason: CHANGED_OUTSIDE_REASON });
+      expect(runtime).toMatchObject({
+        state: "cancelled",
+        reason: CHANGED_OUTSIDE_REASON,
+        cancelReason: "superseded-external",
+      });
     }
     // Nothing is left to wait for, so the bridges are not read again.
     const reads = fixture.evidenceReads.length;
@@ -125,6 +129,7 @@ describe("a change removed after it was saved", () => {
     expect((await operation(saved.operationId)).apply.runtimes[0]).toMatchObject({
       state: "cancelled",
       reason: REPLACED_BY_SAVE_REASON,
+      cancelReason: "superseded-local",
     });
   });
 
@@ -139,10 +144,11 @@ describe("a change removed after it was saved", () => {
     const states = (await operation(saved.operationId)).apply.runtimes.map((runtime) => [
       runtime.runtimeId.endsWith("tab-a") ? "tab-a" : "tab-b",
       runtime.state,
+      runtime.cancelReason,
     ]);
     expect(states).toEqual([
-      ["tab-a", "applied"],
-      ["tab-b", "cancelled"],
+      ["tab-a", "applied", undefined],
+      ["tab-b", "cancelled", "superseded-external"],
     ]);
   });
 
@@ -174,7 +180,41 @@ describe("a change removed after it was saved", () => {
     expect((await operation(saved.operationId)).apply.runtimes[0]).toMatchObject({
       state: "cancelled",
       reason: CHANGED_OUTSIDE_REASON,
+      cancelReason: "superseded-external",
     });
+  });
+
+  test("restoring the change outside Orkestrator lets it apply again, without the reason", async () => {
+    session("claude");
+    const saved = await saveAndApply("claude", "claude:user");
+    const original = fixture.read(CLAUDE);
+    editClaude((document) => delete document.mcpServers.fixture);
+    await fixture.service.tick();
+    expect((await operation(saved.operationId)).apply.runtimes[0]!.cancelReason).toBe(
+      "superseded-external",
+    );
+    fixture.write(CLAUDE, original);
+    const replanned = await fixture.service.apply({ operationId: saved.operationId });
+    expect(replanned.apply.runtimes[0]!.state).toBe("pending-next-turn");
+    expect(replanned.apply.runtimes[0]!.cancelReason).toBeUndefined();
+  });
+});
+
+describe("cancellations a retry can still apply", () => {
+  test("a user cancel and a newer apply's supersession carry no cancel reason", async () => {
+    session("codex");
+    fixture.activity.set(`env-1:codex:${KEY}`, "working");
+    const cancelled = await saveAndApply("codex", "codex:user");
+    const byUser = await fixture.service.cancelApply({ operationId: cancelled.operationId });
+    expect(byUser.apply.runtimes[0]!.state).toBe("cancelled");
+    expect(byUser.apply.runtimes[0]!.cancelReason).toBeUndefined();
+
+    const first = await saveAndApply("codex", "codex:user", "first");
+    await saveAndApply("codex", "codex:user", "second");
+    const covered = (await operation(first.operationId)).apply.runtimes[0]!;
+    expect(covered.state).toBe("cancelled");
+    expect(covered.reason).toContain("Superseded by a newer change");
+    expect(covered.cancelReason).toBeUndefined();
   });
 });
 

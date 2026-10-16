@@ -50,7 +50,7 @@ import {
   type CurrentSourceState,
   type RuntimeGenerations,
 } from "./evidence.js";
-import { noteOnce, retireSuperseded, sourceDrift } from "./external-edits.js";
+import { noteOnce, retireSuperseded, sourceDrift, type Supersession } from "./external-edits.js";
 import { renameReferenceWarnings } from "./references.js";
 import { McpRolloutGate } from "./rollout.js";
 import {
@@ -1043,7 +1043,7 @@ export class McpManagementService {
       });
       const startingStates = runtimes.map((runtime) => runtime.state);
       const queuedAt = Date.parse(stored.recovery.applyQueuedAt ?? stored.snapshot.updatedAt);
-      let superseded: string | undefined;
+      let superseded: Supersession | undefined;
       const outcome = await advanceCodexRuntimes(
         this.options.probe,
         planned,
@@ -1051,7 +1051,9 @@ export class McpManagementService {
         this.now(),
         async () => {
           const drift = sourceDrift(stored, await this.currentSource(stored));
-          if (drift.kind === "superseded") superseded = drift.reason;
+          if (drift.kind === "superseded") {
+            superseded = { reason: drift.reason, cancelReason: drift.cancelReason };
+          }
           return superseded;
         },
       );
@@ -1355,6 +1357,10 @@ function publicRuntime(
     updatedAt: runtime.updatedAt,
     ...(runtime.savedRevision ? { savedRevision: runtime.savedRevision } : {}),
     ...(runtime.generation ? { generation: runtime.generation } : {}),
+    // Only a cancellation carries one; a replanned runtime starts without it.
+    ...(runtime.state === "cancelled" && runtime.cancelReason
+      ? { cancelReason: runtime.cancelReason }
+      : {}),
   };
 }
 

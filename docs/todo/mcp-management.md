@@ -208,7 +208,10 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   bookkeeping rewrites of `~/.claude.json` are not edits. A superseded change
   retires its waiting runtimes as `cancelled` (the state "superseded by a
   newer change" already uses) and refuses re-apply with `revision-conflict`;
-  apply never rewrites the file, so there is nothing to re-materialize.
+  apply never rewrites the file, so there is nothing to re-materialize. An
+  optional `cancelReason` (`superseded-external` / `superseded-local`) on
+  those runtimes is what hides "Retry apply"; it is additive, so a new apply
+  state was not needed for that either.
 - **Fan-out is tracked, not dropped**: 256 runtimes per operation are
   scheduled and advanced, and only the snapshot is paged to 64, so wire and
   UI bounds are unchanged. Stored operations grow (about 0.5 KiB per tracked

@@ -483,7 +483,7 @@ export class EvidenceScheduler {
       const drift = sourceDrift(stored, await current(stored));
       if (stored.snapshot.apply.runtimes !== runtimes) continue;
       if (drift.kind === "superseded") {
-        if (retireSuperseded(runtimes, drift.reason, new Date(this.deps.now()).toISOString())) {
+        if (retireSuperseded(runtimes, drift, new Date(this.deps.now()).toISOString())) {
           changed.add(stored);
         }
       } else if (drift.kind === "merged" && noteOnce(stored.snapshot, drift.note)) {

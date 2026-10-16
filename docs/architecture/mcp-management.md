@@ -404,7 +404,11 @@ and `apply_mcp_configuration` re-reads it before planning:
   Orkestrator", or "a later change saved here replaced this one"); runtimes
   already `applied` keep it, because they loaded the saved bytes. Applying it
   again is refused with `revision-conflict` and that reason. Apply never
-  rewrites the file, so an obsolete revision is never re-materialized.
+  rewrites the file, so an obsolete revision is never re-materialized. Those
+  runtimes also carry `cancelReason` (`superseded-external` or
+  `superseded-local`), which no other cancellation sets, so the UI offers no
+  "Retry apply" for the operation and says to open the server again or save
+  the change again instead.
 
 Operations whose runtimes no pass polls (OpenCode and container
 `restart-required`, Codex after its reload) are only re-checked when applied

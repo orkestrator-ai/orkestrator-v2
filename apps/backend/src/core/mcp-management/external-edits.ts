@@ -21,7 +21,11 @@
  * not a change: the comparison is over the parsed server map, not the bytes.
  */
 
-import type { McpApplyState, McpOperationSnapshot } from "@orkestrator/protocol/mcp-management";
+import type {
+  McpApplyCancelReason,
+  McpApplyState,
+  McpOperationSnapshot,
+} from "@orkestrator/protocol/mcp-management";
 
 import type { CurrentSourceState } from "./evidence.js";
 import type { StoredOperation } from "./operations-store.js";
@@ -44,10 +48,16 @@ export const REPLACED_BY_SAVE_REASON =
 export const MERGED_NOTE =
   "The server list in this file was also changed outside Orkestrator after this save. This change is still in it, and sessions load the file as it is now, outside changes included.";
 
+/** A change the file no longer holds: why, for people and for the UI. */
+export interface Supersession {
+  reason: string;
+  cancelReason: McpApplyCancelReason;
+}
+
 export type SourceDrift =
   | { kind: "unchanged" }
   | { kind: "merged"; note: string }
-  | { kind: "superseded"; reason: string };
+  | ({ kind: "superseded" } & Supersession);
 
 /** Apply the rule above. An unreadable or unknown source says nothing. */
 export function sourceDrift(
@@ -56,10 +66,13 @@ export function sourceDrift(
 ): SourceDrift {
   if (!current) return { kind: "unchanged" };
   if (!current.landed) {
-    return {
-      kind: "superseded",
-      reason: current.replacedBySave ? REPLACED_BY_SAVE_REASON : CHANGED_OUTSIDE_REASON,
-    };
+    return current.replacedBySave
+      ? { kind: "superseded", reason: REPLACED_BY_SAVE_REASON, cancelReason: "superseded-local" }
+      : {
+          kind: "superseded",
+          reason: CHANGED_OUTSIDE_REASON,
+          cancelReason: "superseded-external",
+        };
   }
   const saved = stored.recovery.savedEntriesDigest;
   if (
@@ -75,18 +88,20 @@ export function sourceDrift(
 
 /**
  * Retire every runtime still waiting for a superseded change. Returns whether
- * anything changed. Applied runtimes keep their state: they did load it.
+ * anything changed. Applied runtimes keep their state: they did load it. The
+ * `cancelReason` tells the UI a retry would only be refused.
  */
 export function retireSuperseded(
   runtimes: McpOperationSnapshot["apply"]["runtimes"],
-  reason: string,
+  superseded: Supersession,
   now: string,
 ): boolean {
   let changed = false;
   for (const runtime of runtimes) {
     if (!STILL_TO_TAKE_EFFECT.has(runtime.state)) continue;
     runtime.state = "cancelled";
-    runtime.reason = reason;
+    runtime.reason = superseded.reason;
+    runtime.cancelReason = superseded.cancelReason;
     runtime.updatedAt = now;
     changed = true;
   }

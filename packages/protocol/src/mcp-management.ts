@@ -468,6 +468,16 @@ export const MCP_APPLY_STATES = [
 ] as const;
 export type McpApplyState = (typeof MCP_APPLY_STATES)[number];
 
+/**
+ * Why a runtime is `cancelled`, when retrying cannot help: the file no longer
+ * holds the change, because it was edited outside Orkestrator
+ * (`superseded-external`) or a later save here replaced it
+ * (`superseded-local`). Applying such a change again is refused. Absent for
+ * every other cancellation, which a retry can still apply.
+ */
+export const MCP_APPLY_CANCEL_REASONS = ["superseded-external", "superseded-local"] as const;
+export type McpApplyCancelReason = (typeof MCP_APPLY_CANCEL_REASONS)[number];
+
 export interface McpRuntimeApplyEntry {
   runtimeId: string;
   environmentId: string | null;
@@ -477,6 +487,8 @@ export interface McpRuntimeApplyEntry {
   updatedAt: string;
   /** Saved source revision this runtime entry is adopting. */
   savedRevision?: string;
+  /** Set only on a `cancelled` runtime that a retry cannot apply. */
+  cancelReason?: McpApplyCancelReason;
   /**
    * Runtime generation the state was observed against, when the backend knows
    * it: an opaque label of the provider bridge process and provider session

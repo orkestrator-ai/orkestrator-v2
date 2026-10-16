@@ -23,6 +23,14 @@ owns each.
     A dismissal lasts for the session, until either version changes. It warns
     only; it never blocks or translates anything. "Version reminders" in
     [`remote-gateway.md`](../architecture/remote-gateway.md) documents it.
+  - MCP apply runtimes may carry an optional `cancelReason`
+    (`superseded-external` / `superseded-local`, `packages/protocol/src/mcp-management.ts`)
+    when the saved change is no longer in its file. It is additive in both
+    directions: an older renderer ignores it and still offers "Retry apply",
+    which a current backend refuses with `revision-conflict` and a reason the
+    toast shows; a newer renderer on an older backend never sees it and keeps
+    Retry, which that backend re-plans as before. No compatibility path to
+    retire.
   - A newer renderer meets an older backend in two supported ways.
     `apps/web-public` (orkestrator.dev, deployed from `main`) lazy-loads the
     full web app (`PublicApp.tsx`) and connects to any user's backend. The

@@ -124,6 +124,14 @@ mise run test:logged -- --name coordinator-repro -- bun test --cwd apps/backend 
 The matching timeout and isolated pass support the existing load hypothesis.
 No coordinator implementation, assertion, timeout or skip was changed.
 
+## Coordinator launch-defaults review validation — 2026-10-16
+
+Recurred in the full suite for `0d254a3a`; the unchanged owning file passed
+separately with one isolated Bun worker. Exact failures, suite counts,
+commands, durations and evidence are recorded in
+[0255](0255-backend-fixtures-launch-defaults-validation.md).
+No assertion, deadline or skip was changed.
+
 ## Recurrence during Multi Review follow-up validation (2026-10-16)
 
 - **Aggregate:** `mise run test:logged -- --name full-suite -- mise run test`, with 4/1/2/1 workspace/root/bridge/protocol slots. The unchanged case timed out at 5262.85 ms; late fixture work also reported a disk I/O error.

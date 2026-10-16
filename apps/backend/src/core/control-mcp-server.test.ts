@@ -143,6 +143,9 @@ describe("Orkestrator control MCP server", () => {
         case "get_agent_model_catalog_cache":
           result = { schemaVersion: 1 };
           break;
+        case "get_repository_config":
+          result = {};
+          break;
         case "get_opencode_model_catalog_cache":
           result = null;
           break;
@@ -377,6 +380,83 @@ describe("Orkestrator control MCP server", () => {
     expect(definitions.find((tool) => tool.name === "launch_multi_review")?.description).toContain(
       "Preferred complete Multi Review button action",
     );
+    const multiReviewTool = definitions.find((tool) => tool.name === "launch_multi_review") as
+      | { description?: string; inputSchema?: { required?: string[] } }
+      | undefined;
+    // Omitted model rows use the saved defaults, the same as the button.
+    expect(multiReviewTool?.description).toContain(
+      "Omit reviewers, reviewModel and fixModel to use the user's saved Multi Review defaults",
+    );
+    expect(multiReviewTool?.inputSchema?.required).toEqual(["requestId", "environmentId"]);
+    const required = (name: string) =>
+      (
+        definitions.find((tool) => tool.name === name) as
+          | { inputSchema?: { required?: string[] } }
+          | undefined
+      )?.inputSchema?.required ?? [];
+    for (const field of ["reviewers", "reviewModel", "fixModel"])
+      expect(required("start_multi_review")).not.toContain(field);
+    // Build steps and reviewers are overridable, but the defaults are the stated norm.
+    for (const field of ["agentType", "steps", "reviewers", "reviewPreparation"])
+      expect(required("start_build_pipeline")).not.toContain(field);
+    const buildTool = definitions.find((tool) => tool.name === "start_build_pipeline") as
+      | {
+          description?: string;
+          inputSchema?: { properties?: Record<string, { description?: string }> };
+        }
+      | undefined;
+    expect(buildTool?.description).toContain(
+      "Override one only when the user has asked for a specific agent, model, effort or reviewer set",
+    );
+    expect(buildTool?.inputSchema?.properties?.steps?.description).toContain(
+      "omitted steps keep theirs",
+    );
+    overrides.set("start_coordinator_build_pipeline", () => ({
+      id: "pipeline-1",
+      projectId: "project-1",
+      environmentId: "env-1",
+      phase: "building",
+      agentType: "claude",
+      steps: {
+        build: { agent: "claude" },
+        review: { agent: "codex", model: "gpt-5.6" },
+        address: { agent: "codex" },
+      },
+      reviewers: [{ agent: "codex", model: "gpt-5.6" }],
+    }));
+    const build = await rpc(credential.url, credential.token, "tools/call", {
+      name: "start_build_pipeline",
+      arguments: {
+        requestId: "build-override",
+        taskId: "task-1",
+        baseBranch: "main",
+        baseCommit: "a".repeat(40),
+        taskTitle: "Task",
+        taskSnapshot: { title: "Task", description: "", acceptanceCriteria: "" },
+        steps: { build: { agent: "claude" }, review: { agent: "codex", model: "gpt-5.6" } },
+      },
+    });
+    expect(build.body.result?.isError).not.toBe(true);
+    expect(
+      invocations.findLast((entry) => entry.command === "start_coordinator_build_pipeline")?.args
+        .input,
+    ).toMatchObject({
+      steps: { build: { agent: "claude" }, review: { agent: "codex", model: "gpt-5.6" } },
+    });
+    expect(build.body.result?.structuredContent?.selection).toMatchObject({
+      agentType: "claude",
+      source: {
+        agentType: "requested",
+        steps: { build: "requested", review: "requested", address: "default" },
+        reviewers: "default",
+        reviewPreparation: "default",
+      },
+    });
+    expect(build.body.result?.structuredContent).toMatchObject({
+      delivery: "async",
+      wake: COORDINATOR_WORKFLOW_STATUS_WAKE,
+      nextStep: "Finish your turn now. Do not poll.",
+    });
     expect(definitions.find((tool) => tool.name === "start_multi_review")?.description).toContain(
       "does NOT create/select a root tab",
     );
@@ -444,6 +524,46 @@ describe("Orkestrator control MCP server", () => {
       wake: COORDINATOR_WORKFLOW_STATUS_WAKE,
       nextStep: "Finish your turn now. Do not poll.",
     });
+
+    expect(button.body.result?.structuredContent?.selection).toMatchObject({
+      source: { reviewers: "requested", reviewModel: "default", fixModel: "requested" },
+    });
+    // Leaving every model row out hands the choice to the saved defaults.
+    overrides.set("launch_coordinator_multi_review_action", () => ({
+      outcome: "opened",
+      reused: false,
+      workflow: {
+        id: "review-defaults",
+        projectId: "project-1",
+        environmentId: "env-1",
+        phase: "preparing",
+        reviewers: [{ id: "reviewer-0", agent: "claude", model: "default", status: "pending" }],
+        reviewModel: { agent: "claude", model: "default" },
+        fixModel: { agent: "claude", model: "default", reasoningEffort: "high" },
+      },
+      ui: { status: "opened" },
+    }));
+    const defaulted = await rpc(credential.url, credential.token, "tools/call", {
+      name: "launch_multi_review",
+      arguments: { requestId: "launch-review-defaults", environmentId: "env-1" },
+    });
+    expect(defaulted.body.result?.isError).not.toBe(true);
+    expect(defaulted.body.result?.structuredContent).toMatchObject({
+      delivery: "async",
+      wake: COORDINATOR_WORKFLOW_STATUS_WAKE,
+      nextStep: "Finish your turn now. Do not poll.",
+    });
+    expect(defaulted.body.result?.structuredContent?.selection).toEqual({
+      reviewers: [{ agent: "claude", model: "default" }],
+      reviewModel: { agent: "claude", model: "default" },
+      fixModel: { agent: "claude", model: "default", reasoningEffort: "high" },
+      source: { reviewers: "default", reviewModel: "default", fixModel: "default" },
+    });
+    expect(
+      invocations.findLast((entry) => entry.command === "launch_coordinator_multi_review_action")
+        ?.args.input,
+    ).toEqual({ requestId: "launch-review-defaults", environmentId: "env-1" });
+    overrides.delete("launch_coordinator_multi_review_action");
     expect(
       invocations.find((entry) => entry.command === "launch_coordinator_multi_review_action")?.args,
     ).toMatchObject({
@@ -1014,6 +1134,13 @@ describe("Orkestrator control MCP server", () => {
       environmentId: "env-new",
       tabId: "startup-agent",
       status: "accepted",
+      selection: {
+        agent: "codex",
+        model: "gpt-5.6-codex",
+        reasoning: "high",
+        source: "requested",
+        advisory: true,
+      },
     });
     expect(invocations.find(({ command }) => command === "create_environment")?.args).toMatchObject(
       {
@@ -1055,6 +1182,271 @@ describe("Orkestrator control MCP server", () => {
     expect(
       invocations.filter(({ command }) => command === "start_environment_background"),
     ).toHaveLength(1);
+  });
+
+  test("get_launch_options marks what an omitted model and effort resolve to", async () => {
+    overrides.set("get_config", () => ({
+      global: {
+        enabledAgentPlatforms: ["codex"],
+        agentSettings: { platforms: { codex: { model: "gpt-5.6-codex" } } },
+      },
+    }));
+    overrides.set("get_native_agent_model_catalog", () => [
+      {
+        id: "gpt-5.6-codex",
+        label: "GPT-5.6 Codex",
+        platform: "codex",
+        reasoning: [
+          { id: "medium", label: "Medium" },
+          { id: "high", label: "High" },
+        ],
+        defaultReasoningId: "medium",
+      },
+      {
+        id: "gpt-5.6-mini",
+        label: "GPT-5.6 Mini",
+        platform: "codex",
+        reasoning: [{ id: "low", label: "Low" }],
+        defaultReasoningId: "low",
+      },
+    ]);
+    const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
+    const listed = await rpc(descriptor.url, descriptor.token, "tools/call", {
+      name: "get_launch_options",
+      arguments: { projectId: "project-1" },
+    });
+    const options = listed.body.result?.structuredContent as {
+      enabledAgents: string[];
+      models: Array<{ id: string; isDefault?: boolean }>;
+      defaults: { agent: string; byAgent: Record<string, unknown>; guidance: string };
+    };
+    expect(options.enabledAgents).toEqual(["codex"]);
+    expect(options.defaults).toMatchObject({
+      agent: "codex",
+      byAgent: { codex: { modelId: "gpt-5.6-codex", reasoningId: "medium" } },
+    });
+    expect(options.defaults.guidance).toContain("Omit modelId and reasoningId");
+    expect(options.models.map(({ id, isDefault }) => [id, isDefault === true])).toEqual([
+      ["gpt-5.6-codex", true],
+      ["gpt-5.6-mini", false],
+    ]);
+  });
+
+  test("reports whether a launch runs the defaults or a requested selection", async () => {
+    overrides.set("get_config", () => ({
+      global: {
+        enabledAgentPlatforms: ["codex"],
+        agentMessaging: { enabled: true },
+        agentSettings: { platforms: { codex: { model: "gpt-5.6-codex" } } },
+      },
+    }));
+    // The repository tier is read too, the way the startup launch reads it.
+    overrides.set("get_repository_config", () => ({
+      agentSettings: { platforms: { codex: { reasoningEffort: "high" } } },
+    }));
+    overrides.set("get_native_agent_model_catalog", () => [
+      {
+        id: "gpt-5.6-codex",
+        label: "GPT-5.6 Codex",
+        platform: "codex",
+        reasoning: [
+          { id: "medium", label: "Medium" },
+          { id: "high", label: "High" },
+        ],
+        defaultReasoningId: "medium",
+      },
+      {
+        id: "gpt-5.6-mini",
+        label: "GPT-5.6 Mini",
+        platform: "codex",
+        reasoning: [{ id: "low", label: "Low" }],
+        defaultReasoningId: "low",
+      },
+    ]);
+    overrides.set("create_environment", () => ({
+      id: "env-new",
+      projectId: "project-1",
+      status: "creating",
+    }));
+    const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
+    const job = (arguments_: Record<string, unknown>) =>
+      rpc(descriptor.url, descriptor.token, "tools/call", {
+        name: "launch_job",
+        arguments: {
+          requestId: crypto.randomUUID(),
+          environmentId: "env-1",
+          agent: "codex",
+          prompt: "Do work.",
+          ...arguments_,
+        },
+      });
+
+    const defaulted = await job({});
+    expect(defaulted.body.result?.structuredContent?.selection).toEqual({
+      agent: "codex",
+      model: "gpt-5.6-codex",
+      reasoning: "high",
+      source: "default",
+    });
+    // Nothing is pinned on the launch, so the backend's own resolution applies.
+    const defaultedLaunch = invocations.findLast(({ command }) => command === "launch_control_job");
+    expect(defaultedLaunch?.args.modelId).toBeUndefined();
+    expect(defaultedLaunch?.args.reasoningId).toBeUndefined();
+
+    // A pinned model that does not offer the inherited effort runs its own default.
+    const otherModel = await job({ modelId: "gpt-5.6-mini" });
+    expect(otherModel.body.result?.structuredContent?.selection).toEqual({
+      agent: "codex",
+      model: "gpt-5.6-mini",
+      reasoning: "low",
+      source: "requested",
+    });
+    const pinned = await job({ modelId: "gpt-5.6-codex", reasoningId: "medium" });
+    expect(pinned.body.result?.structuredContent?.selection).toEqual({
+      agent: "codex",
+      model: "gpt-5.6-codex",
+      reasoning: "medium",
+      source: "requested",
+    });
+
+    const environment = await rpc(descriptor.url, descriptor.token, "tools/call", {
+      name: "launch_environment",
+      arguments: {
+        requestId: "environment-defaults",
+        projectId: "project-1",
+        agent: "codex",
+        prompt: "Build it.",
+      },
+    });
+    expect(environment.body.result?.structuredContent?.selection).toEqual({
+      agent: "codex",
+      model: "gpt-5.6-codex",
+      reasoning: "high",
+      source: "default",
+      advisory: true,
+    });
+    const created = invocations.find(({ command }) => command === "create_environment");
+    expect(created?.args.initialAgentModel).toBeUndefined();
+    expect(created?.args.initialReasoningEffort).toBeUndefined();
+  });
+
+  test("environment replay reports persisted startup controls after defaults change", async () => {
+    const accepted = { id: "env-replayed", projectId: "project-1", status: "running" };
+    overrides.set("create_environment", () => accepted);
+    overrides.set("get_native_agent_session", () => ({
+      agent: "codex",
+      controls: { modelId: "original-model", reasoningId: "high" },
+    }));
+    const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
+    const launch = () =>
+      rpc(descriptor.url, descriptor.token, "tools/call", {
+        name: "launch_environment",
+        arguments: {
+          requestId: "replay-defaults",
+          projectId: "project-1",
+          agent: "codex",
+          prompt: "Work",
+        },
+      });
+    const first = await launch();
+    overrides.set("get_repository_config", () => ({
+      agentSettings: { platforms: { codex: { model: "new-model", reasoningEffort: "low" } } },
+    }));
+    const replay = await launch();
+    expect(replay.body.result?.structuredContent?.selection).toEqual(
+      first.body.result?.structuredContent?.selection,
+    );
+    expect(replay.body.result?.structuredContent?.selection).toEqual({
+      agent: "codex",
+      model: "original-model",
+      reasoning: "high",
+      source: "default",
+    });
+    // The transient startup snapshot is authoritative too, including terminal launches.
+    overrides.set("create_environment", () => ({
+      ...accepted,
+      startupAgentSession: {
+        agent: "codex",
+        model: "terminal-model",
+        reasoningEffort: "medium",
+        style: "terminal",
+      },
+    }));
+    expect((await launch()).body.result?.structuredContent?.selection).toMatchObject({
+      model: "terminal-model",
+      reasoning: "medium",
+    });
+  });
+
+  test("environment effort report matches startup's unfiltered inherited effort", async () => {
+    overrides.set("get_repository_config", () => ({
+      agentSettings: { platforms: { codex: { reasoningEffort: "high" } } },
+    }));
+    overrides.set("get_native_agent_model_catalog", () => [
+      {
+        platform: "codex",
+        id: "mini",
+        label: "Mini",
+        reasoning: [{ id: "low", label: "Low" }],
+        defaultReasoningId: "low",
+      },
+    ]);
+    overrides.set("create_environment", () => ({
+      id: "env-new",
+      projectId: "project-1",
+      status: "creating",
+    }));
+    const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
+    const result = await rpc(descriptor.url, descriptor.token, "tools/call", {
+      name: "launch_environment",
+      arguments: {
+        requestId: "effort",
+        projectId: "project-1",
+        agent: "codex",
+        modelId: "mini",
+        prompt: "Work",
+      },
+    });
+    expect(result.body.result?.structuredContent?.selection).toEqual({
+      agent: "codex",
+      model: "mini",
+      reasoning: "high",
+      source: "requested",
+      advisory: true,
+    });
+    const created = invocations.find(({ command }) => command === "create_environment")!;
+    expect(created.args.initialAgentModel).toBe("mini");
+    // Startup resolves this absent override directly from the repository tier.
+    expect(created.args.initialReasoningEffort).toBeUndefined();
+  });
+
+  test("settings failures omit advisory defaults and selection without failing launch", async () => {
+    overrides.set("get_repository_config", () => {
+      throw new Error("settings unavailable");
+    });
+    overrides.set("create_environment", () => ({
+      id: "env-new",
+      projectId: "project-1",
+      status: "creating",
+    }));
+    const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
+    const options = await rpc(descriptor.url, descriptor.token, "tools/call", {
+      name: "get_launch_options",
+      arguments: { projectId: "project-1" },
+    });
+    expect(options.body.result?.isError).not.toBe(true);
+    expect(options.body.result?.structuredContent?.defaults).toBeUndefined();
+    const launch = await rpc(descriptor.url, descriptor.token, "tools/call", {
+      name: "launch_environment",
+      arguments: {
+        requestId: "unreadable",
+        projectId: "project-1",
+        agent: "codex",
+        prompt: "Work",
+      },
+    });
+    expect(launch.body.result?.isError).not.toBe(true);
+    expect(launch.body.result?.structuredContent?.selection).toBeUndefined();
   });
 
   test("reports a created environment when background start admission fails", async () => {
@@ -1491,6 +1883,25 @@ describe("Orkestrator control MCP server", () => {
     expect(launchTool?.inputSchema?.properties?.baseBranch?.description).toContain(
       "coordinatorBase.baseBranch",
     );
+    // Leaving the model and effort out is the stated default, on the tool and
+    // on each field, so a coordinator does not fill them in by habit.
+    for (const name of ["launch_environment", "launch_job"]) {
+      const tool = listed.body.result?.tools?.find((candidate) => candidate.name === name) as
+        | {
+            description?: string;
+            inputSchema?: { properties?: Record<string, { description?: string }> };
+          }
+        | undefined;
+      expect(tool?.description).toContain(
+        "Omit modelId and reasoningId to use the user's configured defaults",
+      );
+      expect(tool?.inputSchema?.properties?.modelId?.description).toContain(
+        "Omit to use the user's configured default model",
+      );
+      expect(tool?.inputSchema?.properties?.reasoningId?.description).toContain(
+        "Omit to use the user's configured default effort",
+      );
+    }
 
     const gitStatusBeforeLaunchOptions = invocations.filter(
       ({ command }) => command === "get_project_git_status",

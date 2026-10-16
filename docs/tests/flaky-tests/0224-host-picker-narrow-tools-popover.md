@@ -94,3 +94,40 @@ transport recovery on branch `terminal-input-issue-ccc06ff4761a-r1`:
 
 The terminal changes do not modify project selection or the tools popover.
 No existing assertions were skipped or weakened.
+
+## Coordinator launch-defaults review validation — 2026-10-16
+
+On `0d254a3a`, the complete owning-file rerun reproduced the same narrow
+host-picker timeout at line 238:
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-launch-defaults-history-rerun mise run test:logged -- --name browser-gateway-isolated-rerun -- mise run test:agent:browser -- e2e/agent-testing/browser-gateway.spec.ts
+```
+
+Result: 10 passed, 5 skipped, 1 failed; 157.4 seconds, one Playwright worker.
+Evidence: `/tmp/orkestrator-test-run.v5zz3s/browser-gateway-isolated-rerun.log.gz`
+and `output/agent-testing/qa-launch-defaults-history-rerun/browser/`.
+The profile used `dev:test --fixture --no-agent-credentials --agent-platforms codex`.
+
+The preceding full isolated browser suite used
+`mise run test:logged -- --name isolated-browser -- mise run test:agent:browser:isolated`
+on profile `qa-browser-96d6e8a6-ca0`: 24 passed, 14 skipped, 1 failed,
+506.9 seconds including startup and cleanup. Its narrow host-picker case passed;
+the failure instead occurred in `real browser gateway exercises an authoritative
+local environment` at line 581: the terminal snapshot already held
+`background-done`, but the immediate history-page read did not contain it.
+Evidence: `/tmp/orkestrator-test-run.cjrgnN/isolated-browser.log.gz` and
+`output/agent-testing/qa-browser-96d6e8a6-ca0/browser/`.
+
+That terminal scenario passed separately (one test, exit 0, 8.9 seconds):
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-launch-defaults-history-rerun mise run test:logged -- --name terminal-history-rerun -- mise run test:agent:browser -- e2e/agent-testing/browser-gateway.spec.ts --grep 'real browser gateway exercises an authoritative local environment'
+```
+
+It also passed in the complete owning-file rerun above, whose only failure
+was the known host-picker case. This does not establish a new file-wide passing
+rerun for classifying the terminal-history observation as a separate flake.
+The snapshot and history read may observe different persistence progress; the
+cause remains unconfirmed. No terminal, picker, assertion, deadline or skip was
+changed. Both profiles were stopped and reset after validation.

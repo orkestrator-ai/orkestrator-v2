@@ -116,3 +116,32 @@ package: Cursor 721 passed, 0 failed, and all five bridge tasks completed in
 77.4 s. The run's only failure was the unrelated agent-account directory
 assertion tracked in case 0238. Evidence:
 `/private/tmp/orkestrator-test-run.HeXNK8/bridges.log.gz` and `summary.json`.
+
+## Recurrence — 2026-10-16 (mail tiles and launch-defaults main merge)
+
+`mise run test:logged -- --name mail-wakes-latest-tests -- mise run test`
+used the testing guide's GNU-tool PATH and reserved 4/1/2/1
+workspace/root/bridge/protocol slots. Each bridge used one isolated Bun worker.
+The Cursor HTTP file reported four ten-second beforeEach/afterEach hook
+timeouts:
+
+- `authentication > reports an authenticated credential as ready`: 10004.19 ms.
+- `authentication > an attached agent is ready without reading credentials`: 10004.03 ms.
+- `session creation > returns the shared session projection`: 10002.30 ms.
+- `session creation > records the read-only boundary before the session is attached`: 10002.18 ms.
+
+A connection-refused error at `src/http.test.ts:158` also appeared between
+tests. Cursor reported 718 passed and four failed across 39 files (53.59
+seconds); all four other bridge packages passed. The bridge group finished in
+99.8 seconds. The aggregate exited 1 after 319.4 seconds; workspace, root
+and protocol groups passed. Evidence:
+`/tmp/orkestrator-test-run.Oe72br/bridges.log.gz`;
+outer artifact `/tmp/orkestrator-test-run.NMr6us/mail-wakes-latest-tests.log.gz`.
+
+`mise run test:logged -- --name mail-wakes-cursor-http-isolated -- bun test --cwd bridges/cursor-bridge ./src/http.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+passed the unchanged owning file (exit 0) in 1.4 seconds after the bridge group
+finished, while the aggregate workspace and root groups were still running.
+The isolated pass confirms an intermittent recurrence. A fixture setup or
+cleanup timeout cascading into later cases is consistent with earlier
+observations, but the underlying cause remains unconfirmed. No implementation,
+assertion, timeout or skip changed in the Cursor bridge.

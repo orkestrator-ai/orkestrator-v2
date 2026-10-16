@@ -27,3 +27,7 @@ the aggregate completes).
 `mise run test:logged -- --name review-codex-fixture-recheck -- bun test ./bridges/codex-bridge/src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures`
 passed unchanged alone in 0.4 seconds. No assertion or timeout was changed.
 Concurrent host contention remains an unconfirmed hypothesis.
+
+Recurred on 2026-10-16 at 5066.71 ms in `mise run test` for the coordinator
+launch-defaults change (no bridge code touched). The unchanged owning file
+passed alone (2 pass, 0 fail). Evidence: `/tmp/orkestrator-test-run.k2ySO0/bridges.log.gz`.

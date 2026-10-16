@@ -484,16 +484,74 @@ timer lost to a restart, or bookkeeping that never landed.
 `COORDINATOR_WORKFLOW_STATUS_WAKE`, so the model is told it will be woken
 rather than left to poll `get_multi_review`.
 
+## Launch defaults
+
+Coordinator-launched work runs the user's saved defaults unless the user asks
+for something else. Coordinators used to copy a model and effort from
+`get_launch_options` into every call, so each worker silently ran a more
+expensive selection than the configured default. The rule is now stated in
+three places that agree:
+
+- `COORDINATOR_LAUNCH_DEFAULTS_RULE` (`packages/protocol/src/coordinator.ts`)
+  is a single line in the coordinator context prompt and the Control MCP server
+  instructions.
+- The descriptions of `launch_environment`, `launch_job`, `launch_multi_review`,
+  `start_multi_review` and `start_build_pipeline`, and of each model, effort and
+  agent field, say that omitting the field uses the saved default.
+- `get_launch_options` returns `defaults` (`agent`, per-agent
+  `byAgent[agent] = { modelId, reasoningId }`, `guidance`) and marks each
+  agent's default catalogue row with `isDefault: true`.
+
+What an omitted choice resolves to:
+
+| Tool | Omitted | Resolves to |
+| --- | --- | --- |
+| `launch_environment`, `launch_job` | `modelId`, `reasoningId`, `fastMode` | The platform column across environment → repository → app settings, else the agent's own default (`defaultReasoningId` for effort) |
+| `launch_multi_review`, `start_multi_review` | `reviewers`, `reviewModel`, `fixModel` | The Multi Review button's rows: Review, Review 2, saved extra reviewers and reviewer count; Review preparation and Fix review issues, each falling back to Review |
+| `launch_multi_review`, `start_multi_review` | auto-fix and auto-PR (not exposed) | The saved Multi Review settings |
+| `start_build_pipeline` | `agentType`, `steps`, `reviewers`, `reviewPreparation` | `buildPipelineConfiguredDefaults` (`packages/protocol/src/build-pipeline-defaults.ts`), the resolver the Build button uses |
+
+Every one of these can be overridden. A coordinator is told to override only
+when the user has asked for a specific model, agent, effort or reviewer set.
+Overrides layer the way the launchers do. For `start_build_pipeline`:
+
+- A named step replaces only that step, and a step that names only an agent runs
+  that agent's saved model.
+- `steps.build.agent` decides the pipeline agent.
+- Explicit `reviewers` replace the saved rows; otherwise an explicit
+  `steps.review` becomes Reviewer 1.
+
+Each Multi Review row field is replaced independently.
+
+Multi Review rows resolve in `apps/backend/src/core/coordinator-launch-defaults.ts`
+over the worker's model catalogue, mirroring the launch dialog: a stale saved
+model falls back to the first connected catalogue model, and an effort or speed
+is kept only when the chosen model offers it. When a platform has no catalogue,
+the saved model id is kept. The request hash covers the caller's payload, not
+the resolved rows, so retrying with the same `requestId` after the user edits
+their defaults replays the original work.
+
+Every launch reports what will run. `launch_environment` and `launch_job` return
+`selection: { agent, model, reasoning, source }`, where `source` is `requested`
+if the call set `modelId` or `reasoningId` and `default` otherwise. `model` is
+null when no tier pins one and the agent picks its own. The Multi Review result
+reports its rows the same way. `start_build_pipeline` reports the pipeline's
+`agentType`, `steps`, `reviewers` and `reviewPreparation`, with a per-step and
+per-field `source`. The environment and tab UI do not show a marker
+for overrides yet; that is a tracked follow-up.
+
 ## Complete application actions
 
 Use `launch_multi_review` for an environment's **Multi Review** button. Pass a
-stable `requestId`, the environment ID, and the same `reviewers` and `fixModel`
-rows accepted by the launch dialog (`agent`, `model`, optional
-`reasoningEffort`). `get_launch_options` supplies available model choices.
-The caller chooses the rows explicitly; this API does not invent reviewer
-defaults. Omitted `targetBranch` and `reviewInstruction` use the repository's
-PR base branch (falling back to `main`) and the global review instruction.
-An empty instruction explicitly clears the instruction for this launch.
+stable `requestId` and the environment ID. Omitted `reviewers`, `reviewModel`
+and `fixModel` use the saved Multi Review defaults exactly as the button does
+(see [Launch defaults](#launch-defaults)); explicit rows (`agent`, `model`,
+optional `reasoningEffort`) replace them one field at a time. Omitted
+`targetBranch` and `reviewInstruction` use the repository's PR base branch
+(falling back to `main`) and the global review instruction. An empty
+instruction explicitly clears the instruction for this launch. The result's
+`selection` lists the rows the saved review runs and, per field, whether they
+were `requested` or `default`.
 
 This action has no build-pipeline prerequisite. It reopens an active review
 regardless of the new selections, or reserves an immutable workflow ID and

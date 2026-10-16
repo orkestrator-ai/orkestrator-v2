@@ -22,6 +22,14 @@
 
 Observed while validating design-pane dividers; no lifecycle code changed.
 
+## Coordinator launch-defaults review validation — 2026-10-16
+
+Recurred in the full suite for `0d254a3a`; the unchanged owning file passed
+separately with one isolated Bun worker. Exact failures, suite counts,
+commands, durations and evidence are recorded in
+[0255](0255-backend-fixtures-launch-defaults-validation.md).
+No assertion, deadline or skip was changed.
+
 ## Recurrence during live coordinator suite main merge (2026-10-16)
 
 - **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`.

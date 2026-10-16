@@ -63,6 +63,20 @@ readiness change (no design code touched), alongside case 0247. The unchanged
 owning file passed alone three times in a row. Evidence:
 `/tmp/orkestrator-test-run.8FscOl/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 
+Recurred on 2026-10-16 at 5553.87 ms in `mise run test` for the coordinator
+launch-defaults change (no design code touched), with the same
+`Design service is stopping` teardown error. The unchanged owning file passed
+alone (10 pass, 0 fail). Evidence:
+`/tmp/orkestrator-test-run.26CkBR/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+## Coordinator launch-defaults review validation — 2026-10-16
+
+Recurred in the full suite for `0d254a3a`; the unchanged owning file passed
+separately with one isolated Bun worker. Exact failures, suite counts,
+commands, durations and evidence are recorded in
+[0255](0255-backend-fixtures-launch-defaults-validation.md).
+No assertion, deadline or skip was changed.
+
 ## Observation during live coordinator suite main merge (2026-10-16)
 
 - **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`.

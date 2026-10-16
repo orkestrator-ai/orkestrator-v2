@@ -2,7 +2,9 @@ import { defineConfig } from "@playwright/test";
 import path from "node:path";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
-const baseURL = "http://127.0.0.1:1422";
+// Override to run beside another checkout's fixture server on the default port.
+const port = Number.parseInt(process.env.ORKESTRATOR_E2E_PORT ?? "1422", 10);
+const baseURL = `http://127.0.0.1:${port}`;
 
 export default defineConfig({
   testDir: import.meta.dirname,
@@ -14,10 +16,10 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   reporter: "line",
+  globalSetup: "./fixture-server-owner.ts",
   outputDir: path.join(repositoryRoot, "output/playwright/test-results"),
   webServer: {
-    command:
-      "bunx vite ../../e2e/fixture --config vite.config.ts --host 127.0.0.1 --port 1422 --strictPort",
+    command: `bunx vite ../../e2e/fixture --config vite.config.ts --host 127.0.0.1 --port ${port} --strictPort`,
     cwd: path.join(repositoryRoot, "apps/web"),
     url: baseURL,
     reuseExistingServer: !process.env.CI,

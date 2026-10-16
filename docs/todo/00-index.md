@@ -58,9 +58,9 @@ it reaches. Some rules of thumb:
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
 | High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 59 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 242 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 250 |
-| **Total** | | **552** |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 243 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 251 |
+| **Total** | | **554** |
 
 ## Very high
 
@@ -142,7 +142,7 @@ it reaches. Some rules of thumb:
 - [ ] Qualify cold restart: display tails and pipeline histories reconcile, including a mid-dispatch restart ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [ ] Qualify idle observation live per provider: missed final event, approvals, sub-agents, reconnect, hidden ([native-agent-idle-observation.md](native-agent-idle-observation.md), qualification)
 - [x] Back off gateway terminal fallback reconnect timers with `ReconnectBackoff`, resetting after healthy streams ([client-reconnect-and-freshness.md](client-reconnect-and-freshness.md))
-- [ ] Fix `storageReads` = 0 since #969 by charging cached row reads, and add a test asserting it ([recurring-work-qualification.md](recurring-work-qualification.md))
+- [x] Fix `storageReads` = 0 since #969 by charging cached row reads, and add a test asserting it ([recurring-work-qualification.md](recurring-work-qualification.md))
 - [ ] Run the live isolated-profile recurring-work qualification: 10 environments, clients, outage, CPU/RSS ([recurring-work-qualification.md](recurring-work-qualification.md), qualification)
 - [ ] Qualify PR monitoring against live GitHub: terminal discovery, reopen, admission delay and rate limits ([recurring-work-qualification.md](recurring-work-qualification.md), qualification)
 - [ ] Qualify recursive `fs.watch` worktree watching, Electron and Docker Desktop on macOS ([recurring-work-qualification.md](recurring-work-qualification.md), qualification)
@@ -171,7 +171,7 @@ it reaches. Some rules of thumb:
 ### Cross-cutting (high)
 
 - [ ] Qualify Codex sub-agent cards on a fixture profile: one card per child, recovery after reload and restart ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
-- [ ] Decide and implement a renderer-backend skew guard for raw OpenCode envelopes from older backends ([mixed-version-compatibility.md](mixed-version-compatibility.md))
+- [x] Decide and implement a renderer-backend skew guard for raw OpenCode envelopes from older backends ([mixed-version-compatibility.md](mixed-version-compatibility.md))
 - [x] Fix flake 0166 (OpenCode probe deadline), which recurred on 2026-10-15 ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [ ] Keep split panes mounted across the mobile breakpoint through stable per-pane hosts ([mobile-layout-gaps.md](mobile-layout-gaps.md))
 - [ ] Move the environment settings dialog out of the drawer row so it is usable on mobile ([mobile-layout-gaps.md](mobile-layout-gaps.md))
@@ -388,7 +388,8 @@ it reaches. Some rules of thumb:
 - [ ] Qualify `HostSuspendDetector` with a real host suspend and resume ([recurring-work-qualification.md](recurring-work-qualification.md), qualification)
 - [ ] Soak add, remove, stop and restart cycles; confirm counts return to baseline with no guard lines ([recurring-work-qualification.md](recurring-work-qualification.md), qualification)
 - [ ] Qualify two clients with one disconnected, restarts at durable boundaries, and an older backend ([recurring-work-qualification.md](recurring-work-qualification.md), qualification)
-- [ ] Verify that `cache-hit` attribution fully explains `storageReads` = 0 by reporting `storage-stat` ([recurring-work-qualification.md](recurring-work-qualification.md), verify)
+- [x] Verify that `cache-hit` attribution fully explains `storageReads` = 0 by reporting `storage-stat` ([recurring-work-qualification.md](recurring-work-qualification.md), verify)
+- [ ] Charge `StorageDatabase.rows()` reads and workflow-result index hits as storage reads or stats ([recurring-work-qualification.md](recurring-work-qualification.md))
 
 ### Multi Review (medium)
 
@@ -666,6 +667,7 @@ it reaches. Some rules of thumb:
 - [ ] Lengthen the design canvas cursor check interval after missed-final-hint recovery is qualified ([recurring-work-qualification.md](recurring-work-qualification.md), deferred)
 - [ ] Share one visible display clock between `useElapsedTimer` and `usePromptDeadline` ([recurring-work-qualification.md](recurring-work-qualification.md), deferred)
 - [ ] Avoid the validation reader's in-environment `bun` spawn on every poll ([recurring-work-qualification.md](recurring-work-qualification.md), deferred)
+- [ ] Read one feature plan's row in the keyed planning pass instead of decoding the whole store ([recurring-work-qualification.md](recurring-work-qualification.md), deferred)
 - [ ] Demand-gate interactive tmux capture (B19, `tmux-interactive.ts`) ([recurring-work-qualification.md](recurring-work-qualification.md), deferred)
 - [ ] Split the validation worker's 500 ms liveness write from result writes (B20) with crash-recovery proof ([recurring-work-qualification.md](recurring-work-qualification.md), deferred)
 - [ ] Bring `RECURRING_JOB_CATALOGUE` and the recurring harness limitation text back in line with the code (L07, C13, `coordinator-repair`) ([recurring-work-qualification.md](recurring-work-qualification.md))
@@ -792,7 +794,7 @@ it reaches. Some rules of thumb:
 | [remote-client-bandwidth.md](remote-client-bandwidth.md) |  |  | 4 | 9 | 13 |
 | [native-agent-idle-observation.md](native-agent-idle-observation.md) |  | 1 | 3 | 2 | 6 |
 | [client-reconnect-and-freshness.md](client-reconnect-and-freshness.md) |  | 1 | 6 | 2 | 9 |
-| [recurring-work-qualification.md](recurring-work-qualification.md) |  | 5 | 9 | 18 | 32 |
+| [recurring-work-qualification.md](recurring-work-qualification.md) |  | 5 | 10 | 19 | 34 |
 | **Multi Review** | | | | | |
 | [multi-review-scale-and-cost.md](multi-review-scale-and-cost.md) |  | 3 | 5 | 9 | 17 |
 | [multi-review-panel-value.md](multi-review-panel-value.md) |  | 1 | 4 | 5 | 10 |

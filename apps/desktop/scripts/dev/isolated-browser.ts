@@ -112,10 +112,24 @@ export function isolatedProfileArguments(extra: readonly string[] = []): string[
   return args;
 }
 
+/** A Playwright suite other than the browser agent suite, run in the same disposable profile. */
+export interface IsolatedSuite {
+  /** Names the suite in progress lines. */
+  label: string;
+  /** Playwright config, relative to the repository root. */
+  config: string;
+  /** Applied over the runner's defaults, for example the suite's own opt-in. */
+  env?: Record<string, string>;
+}
+
 export interface IsolatedBrowserOptions {
   design?: boolean;
   /** Extra `dev:test` flags; see {@link isolatedProfileArguments}. */
   profileArgs?: readonly string[];
+  /** Runs this suite instead of the browser agent suite. */
+  suite?: IsolatedSuite;
+  /** The disposable profile's name; generated when absent. */
+  profile?: string;
   signal?: AbortSignal;
   root?: string;
   env?: NodeJS.ProcessEnv;
@@ -127,7 +141,7 @@ export interface IsolatedBrowserOptions {
 /** A foreground launcher is started concurrently, never awaited as a setup command. */
 export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): Promise<number> {
   const profileArgs = isolatedProfileArguments(options.profileArgs);
-  const profile = `qa-browser-${randomUUID().slice(0, 12)}`;
+  const profile = options.profile ?? `qa-browser-${randomUUID().slice(0, 12)}`;
   const root = options.root ?? repositoryRoot;
   const runtimeProfile = resolveRuntimeProfile({
     repositoryRoot: root,
@@ -149,6 +163,7 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
     ORKESTRATOR_TEST_SCHEDULER_DIR: path.join(runtimeProfile.profileRoot, "test-scheduler"),
     ORKESTRATOR_TEST_HOST_WORKERS: "2",
     ORKESTRATOR_TEST_HOST_MEMORY_MIB: "2048",
+    ...options.suite?.env,
   };
   const startupTimeout = options.startupTimeoutMs ?? 120_000;
   const testTimeout = options.testTimeoutMs ?? 900_000;
@@ -216,7 +231,7 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
     options.signal?.throwIfAborted();
     if (launcher.finished) throw new Error("Isolated profile exited before browser tests");
     console.log(
-      `Profile ${profile} ready; running ${options.design ? "design canvas" : "browser agent"} tests`,
+      `Profile ${profile} ready; running ${options.suite?.label ?? (options.design ? "design canvas" : "browser agent")} tests`,
     );
     tests = launch(
       "bunx",
@@ -224,8 +239,8 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
         "playwright",
         "test",
         "--config",
-        "e2e/agent-testing/playwright.browser.config.ts",
-        ...(options.design ? ["e2e/agent-testing/design-canvas.spec.ts"] : []),
+        options.suite?.config ?? "e2e/agent-testing/playwright.browser.config.ts",
+        ...(options.design && !options.suite ? ["e2e/agent-testing/design-canvas.spec.ts"] : []),
         "--workers=1",
       ],
       { root, env, timeoutMs: testTimeout, signal: options.signal },

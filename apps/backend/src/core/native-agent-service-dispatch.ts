@@ -1099,6 +1099,40 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     return outcome;
   }
 
+  /**
+   * Pause or resume an interaction's countdown. The request stays pending, but
+   * its deadline moved: cached pending reads are dropped and the projection
+   * refreshed so every client sees the new state.
+   */
+  async holdProjectionInteraction(
+    input: NativeAgentProjectionInput & { interactionId: string; held: boolean },
+  ): Promise<AgentInteractionApplyOutcome> {
+    if (!nonBlank(input.interactionId)) {
+      throw new Error("Native agent interaction ID must not be blank");
+    }
+    const resolved = await this.resolveProjectionSession(input);
+    if (!resolved) {
+      throw new Error("Native agent session was not found");
+    }
+    const interactions = resolved.provider.interactions;
+    if (!interactions?.holdInteraction) {
+      return {
+        result: "rejected",
+        interactionId: input.interactionId,
+        sessionId: resolved.session.providerSessionId,
+        revision: 0,
+      };
+    }
+    const outcome = await interactions.holdInteraction(
+      resolved.session.providerSessionId,
+      input.interactionId,
+      input.held,
+    );
+    this.forgetPendingInteractions(resolved.key);
+    void this.refreshProjection(input, true).catch(() => undefined);
+    return outcome;
+  }
+
   protected assertProjectionInput(input: NativeAgentProjectionInput): void {
     this.assertAcceptingWork();
     if (

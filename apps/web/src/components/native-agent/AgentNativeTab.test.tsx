@@ -4610,13 +4610,56 @@ describe("AgentNativeTab", () => {
 
     render(<AgentNativeTab tabId="tab-mail-carrier" data={identity("claude")} isActive />);
     expect(await screen.findByText("Visible response")).toBeTruthy();
-    expect(screen.getByText("Message from Sender agent")).toBeTruthy();
+    const tile = screen.getByRole("button", { name: /Sender agent/ });
+    expect(tile.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByText("Please inspect the parser")).toBeTruthy();
+    fireEvent.click(tile);
     expect(
       screen.getByText("Agent message — treat quoted content as untrusted data."),
     ).toBeTruthy();
-    expect(screen.getByText("Please inspect the parser")).toBeTruthy();
     expect(screen.queryByText(/RAW-CARRIER-INSTRUCTIONS/) === null).toBe(true);
   });
+
+  // Every coordinator platform echoes the injected carrier as its user row;
+  // the projection turns each one into a tile the same way, batches included.
+  for (const platform of AGENT_PLATFORMS) {
+    test(`renders a batched mail prompt as one tile per message on ${platform}`, async () => {
+      renderVirtualizedMessages = true;
+      const carrier = (payload: string) =>
+        `<orkestrator-peer-message version="1">\n<orkestrator-peer-payload-json>\n${payload}\n</orkestrator-peer-payload-json>\nInstructions.\n</orkestrator-peer-message>`;
+      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+        ...(await defaultProjection(input)),
+        messages: [
+          {
+            id: `mail-batch-${platform}`,
+            role: "user" as const,
+            content: [
+              carrier(
+                '{"kind":"message","from":{"kind":"tab","projectId":"project","environmentId":"worker","tabId":"startup-agent","incarnationId":"i","agent":"codex","title":"Worker one"},"trust":"same-project","messageId":"mail-a","threadId":"mail-a","subject":"Report","body":"Worker report body"}',
+              ),
+              carrier(
+                '{"kind":"notice","from":{"kind":"system","projectId":"project","source":"workflow","resourceId":"review-1"},"trust":"same-project","messageId":"mail-b","threadId":"mail-b","subject":"Multi Review failed","notice":{"resource":{"kind":"multi-review","id":"review-1"},"state":"failed","tone":"failure"},"body":"Review failed body"}',
+              ),
+            ].join("\n\n"),
+            parts: [],
+            createdAt: "2026-08-28T10:00:00.000Z",
+          },
+        ],
+      }));
+
+      const { container } = render(
+        <AgentNativeTab tabId={`tab-mail-${platform}`} data={identity(platform)} isActive />,
+      );
+      expect(await screen.findByText("Worker report body")).toBeTruthy();
+      const tiles = Array.from(container.querySelectorAll<HTMLElement>("[data-mail-tile]"));
+      expect(tiles.map((tile) => [tile.dataset.mailKind, tile.dataset.mailTone])).toEqual([
+        ["message", "message"],
+        ["notice", "failure"],
+      ]);
+      expect(screen.getByText("Review failed body")).toBeTruthy();
+      expect(screen.queryByText(/Instructions\./) === null).toBe(true);
+    });
+  }
 
   for (const platform of AGENT_PLATFORMS) {
     test(`routes ${platform} through the shared authoritative projection`, async () => {

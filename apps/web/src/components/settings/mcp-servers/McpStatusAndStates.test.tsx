@@ -7,7 +7,7 @@ import { requestMcpServerSettings } from "@/lib/mcp-settings-navigation";
 import { mockToastError } from "../../../../../../tests/mocks/sonner";
 import { expectDomAbsent } from "../../../../../../tests/bounded-test-diagnostics";
 
-import { McpApplyStatus, partialOutcomeText } from "./McpApplyStatus";
+import { McpApplyStatus, omittedText, partialOutcomeText } from "./McpApplyStatus";
 import {
   baseHandlers,
   callsOf,
@@ -88,9 +88,64 @@ describe("apply status", () => {
 
   test("partialOutcomeText counts omitted sessions and is silent when all agree", () => {
     expect(partialOutcomeText([runtime("a", "applied"), runtime("b", "applied")])).toBeNull();
-    expect(partialOutcomeText([runtime("a", "applied"), runtime("b", "queued")], 3)).toBe(
-      "Saved; loaded in 1 of 5 sessions, 1 waiting",
+    expect(
+      partialOutcomeText([runtime("a", "applied"), runtime("b", "queued")], 3, { queued: 3 }),
+    ).toBe("Saved; loaded in 1 of 5 sessions, 4 waiting");
+    // Unlisted sessions in the same state as every listed one: still one state.
+    expect(partialOutcomeText([runtime("a", "applied")], 2, { applied: 2 })).toBeNull();
+    // An unlisted session that is still waiting makes the outcome partial.
+    expect(partialOutcomeText([runtime("a", "applied")], 2, { applied: 1, queued: 1 })).toBe(
+      "Saved; loaded in 2 of 3 sessions, 1 waiting",
     );
+  });
+
+  test("sessions past what one apply tracks are named, never folded into loaded", () => {
+    // Without per-state counts every omitted session is untracked (an older backend dropped them).
+    expect(partialOutcomeText([runtime("a", "applied")], 3)).toBe(
+      "Saved; loaded in 1 of 4 sessions, 3 not tracked",
+    );
+    expect(omittedText(70, { applied: 60, "pending-next-turn": 4 })).toBe(
+      "…and 70 more: 60 loaded, 4 waiting, 6 not tracked",
+    );
+    expect(omittedText(2, { failed: 1, "restart-required": 1 })).toBe(
+      "…and 2 more: 1 failed, 1 need attention",
+    );
+    render(
+      <McpApplyStatus
+        operations={[
+          operation({
+            apply: {
+              state: "applied",
+              runtimes: [runtime("a", "applied")],
+              omitted: 5,
+              omittedStates: { applied: 3 },
+            },
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByText("Saved; loaded in 4 of 6 sessions, 2 not tracked")).toBeTruthy();
+    expect(screen.getByText("…and 5 more: 3 loaded, 2 not tracked")).toBeTruthy();
+    expect(screen.getByText(/were not scheduled/)).toBeTruthy();
+  });
+
+  test("an operation whose unlisted sessions are all tracked does not claim any were dropped", () => {
+    render(
+      <McpApplyStatus
+        operations={[
+          operation({
+            apply: {
+              state: "pending-next-turn",
+              runtimes: [runtime("a", "pending-next-turn")],
+              omitted: 2,
+              omittedStates: { "pending-next-turn": 2 },
+            },
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByText("…and 2 more: 2 waiting")).toBeTruthy();
+    expectDomAbsent(screen.queryByText(/not tracked|were not scheduled/), "untracked claim");
   });
 
   test("loaded is not presented as connected: health points at the live panel", () => {
@@ -146,6 +201,54 @@ describe("apply status", () => {
     expect(callsOf("mutate_mcp_definition").length).toBe(0);
   });
 
+  test.each(["superseded-external", "superseded-local"] as const)(
+    "a runtime cancelled as %s offers no retry, only how to save it again",
+    (cancelReason) => {
+      render(
+        <McpApplyStatus
+          operations={[
+            operation({
+              apply: {
+                state: "cancelled",
+                runtimes: [
+                  { ...runtime("a", "cancelled", "The file no longer holds it."), cancelReason },
+                  runtime("b", "failed"),
+                ],
+                omitted: 0,
+              },
+            }),
+          ]}
+        />,
+      );
+      // A failed runtime beside it does not bring Retry back: the change itself is gone.
+      expectDomAbsent(screen.queryByRole("button", { name: "Retry apply" }), "retry apply");
+      expect(
+        screen.getByText(/Nothing to retry: the file no longer holds this change/),
+      ).toBeTruthy();
+      expect(screen.getByText(/save the change again/)).toBeTruthy();
+    },
+  );
+
+  test("any other cancellation keeps Retry and shows no hint", () => {
+    render(
+      <McpApplyStatus
+        operations={[
+          operation({
+            apply: {
+              state: "cancelled",
+              runtimes: [
+                runtime("a", "cancelled", "Cancelled; the saved configuration is unchanged."),
+              ],
+              omitted: 0,
+            },
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Retry apply" })).toBeTruthy();
+    expectDomAbsent(screen.queryByText(/Nothing to retry/), "superseded hint");
+  });
+
   test("cancel apply cancels the queued operation, keeping what was saved", async () => {
     install({ cancel_mcp_apply: () => operation() });
     render(
@@ -180,6 +283,80 @@ describe("apply status", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry apply" }));
     await waitFor(() => expect(mockToastError).toHaveBeenCalled());
     expect(String(mockToastError.mock.calls[0]?.[0])).toContain("Reference: corr-apply");
+  });
+});
+
+describe("actions for sessions past the listed page", () => {
+  test("a queued session that is only counted still offers Cancel apply", async () => {
+    install({ cancel_mcp_apply: () => operation() });
+    render(
+      <McpApplyStatus
+        operations={[
+          operation({
+            operationId: "op-hidden-queued",
+            apply: {
+              state: "queued",
+              runtimes: [runtime("a", "pending-next-turn")],
+              omitted: 1,
+              omittedStates: { queued: 1 },
+            },
+          }),
+        ]}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Cancel apply" }));
+    await waitFor(() => expect(callsOf("cancel_mcp_apply").length).toBe(1));
+    expect(callsOf("cancel_mcp_apply")[0]).toEqual({ operationId: "op-hidden-queued" });
+  });
+
+  test.each(["failed", "cancelled"] as const)(
+    "a %s session that is only counted still offers Retry apply",
+    async (state) => {
+      install({ apply_mcp_configuration: () => operation() });
+      render(
+        <McpApplyStatus
+          operations={[
+            operation({
+              operationId: "op-hidden-retry",
+              apply: {
+                state,
+                runtimes: [runtime("a", "pending-next-turn")],
+                omitted: 1,
+                omittedStates: { [state]: 1 },
+              },
+            }),
+          ]}
+        />,
+      );
+      expectDomAbsent(screen.queryByRole("button", { name: "Cancel apply" }), "cancel apply");
+      fireEvent.click(screen.getByRole("button", { name: "Retry apply" }));
+      await waitFor(() => expect(callsOf("apply_mcp_configuration").length).toBe(1));
+      expect(callsOf("apply_mcp_configuration")[0]).toEqual({ operationId: "op-hidden-retry" });
+    },
+  );
+
+  test("a listed superseded session withholds Retry for counted failures too", () => {
+    render(
+      <McpApplyStatus
+        operations={[
+          operation({
+            apply: {
+              state: "cancelled",
+              runtimes: [
+                {
+                  ...runtime("a", "cancelled", "The file no longer holds it."),
+                  cancelReason: "superseded-external",
+                },
+              ],
+              omitted: 3,
+              omittedStates: { cancelled: 2, failed: 1 },
+            },
+          }),
+        ]}
+      />,
+    );
+    expectDomAbsent(screen.queryByRole("button", { name: "Retry apply" }), "retry apply");
+    expect(screen.getByText(/Nothing to retry/)).toBeTruthy();
   });
 });
 

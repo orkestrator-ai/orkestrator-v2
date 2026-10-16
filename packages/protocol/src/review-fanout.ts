@@ -16,7 +16,14 @@
  * or not this process is alive to watch it.
  */
 import { isAgentPlatform, type AgentPlatform } from "./agent-platforms.js";
-import { isStructuredReviewReport, type StructuredReviewReport } from "./structured-review.js";
+import {
+  STRUCTURED_REVIEW_MAX_TEXT_BYTES,
+  isStructuredReviewReport,
+  safeParseStructuredReviewFindings,
+  utf8Bytes,
+  type ReviewIssue,
+  type StructuredReviewReport,
+} from "./structured-review.js";
 import { isWorkflowResultSubmissionState } from "./workflow-results.js";
 import {
   isNativeAgentModelSubstitution,
@@ -45,6 +52,37 @@ export type ReviewerStatus = "pending" | "running" | "completed" | "failed" | "c
 /** How far a prompt got before the process could have died mid-flight. */
 export type ReviewDispatchState = "prepared" | "dispatching" | "sent";
 
+/**
+ * Findings one reviewer may report through `report_finding` while it runs.
+ * Later calls are refused, so the first ones reported are the ones kept.
+ */
+export const REVIEW_PROVISIONAL_FINDINGS_MAX = 50;
+/**
+ * Encoded bytes of one provisional finding: one prose field's budget, so a
+ * reviewer's provisional findings together stay inside one report's budget.
+ */
+export const REVIEW_PROVISIONAL_FINDING_MAX_BYTES = STRUCTURED_REVIEW_MAX_TEXT_BYTES;
+
+/**
+ * A finding a running reviewer reported before its report was accepted.
+ *
+ * It is progress, not a result: the user sees it marked provisional, it never
+ * reaches consolidation, and the accepted report replaces all of them.
+ */
+export interface ReviewerProvisionalFinding {
+  /** Digest of the finding, so a retried call cannot add it twice. */
+  id: string;
+  reportedAt: string;
+  issue: ReviewIssue;
+}
+
+/**
+ * Where a pending reviewer stands in the admission queue: `queued` while it
+ * waits for an admission slot, `admitting` while its session is created and
+ * its prompt sent.
+ */
+export type ReviewerAdmissionState = "queued" | "admitting";
+
 export interface ReviewerRecord extends ReviewerModelSelection {
   id: string;
   status: ReviewerStatus;
@@ -66,6 +104,17 @@ export interface ReviewerRecord extends ReviewerModelSelection {
    * cannot serve, so the reviewer's row can say so.
    */
   modelSubstitution?: NativeAgentModelSubstitution;
+  /**
+   * The scheduler's view of a `pending` reviewer during a review pass. It is
+   * an observation, staged and written with the pass's other observations,
+   * and absent once the reviewer leaves `pending`.
+   */
+  admissionState?: ReviewerAdmissionState;
+  /**
+   * One-based place among the queued reviewers, in the order the scheduler
+   * will start them. Set only while {@link admissionState} is `queued`.
+   */
+  queuePosition?: number;
   sessionKey?: string;
   providerSessionId?: string;
   requestId?: string;
@@ -98,6 +147,12 @@ export interface ReviewerRecord extends ReviewerModelSelection {
   stalledSince?: string;
   report?: StructuredReviewReport;
   error?: string;
+  /**
+   * Findings reported through `report_finding` while the reviewer runs, oldest
+   * first. Dropped when its report is accepted; kept, unconfirmed, when it
+   * fails or is stopped.
+   */
+  provisionalFindings?: ReviewerProvisionalFinding[];
   /** Cumulative tokens consumed by this reviewer's provider session. */
   tokenCount?: number;
   /** Bounded terminal polls while a provider reconciles its exact cumulative total. */
@@ -240,6 +295,8 @@ const REVIEWER_KEYS = [
   "status",
   "modelUnpinned",
   "modelSubstitution",
+  "admissionState",
+  "queuePosition",
   "sessionKey",
   "providerSessionId",
   "requestId",
@@ -248,6 +305,7 @@ const REVIEWER_KEYS = [
   "resultSubmission",
   "idleResultPolls",
   "report",
+  "provisionalFindings",
   "schemaRepairAttempts",
   "schemaRepairPrompt",
   "continuationPrompt",
@@ -276,6 +334,13 @@ export function isReviewerRecord(value: unknown): value is ReviewerRecord {
     (value.modelUnpinned === undefined || typeof value.modelUnpinned === "boolean") &&
     (value.modelSubstitution === undefined ||
       isNativeAgentModelSubstitution(value.modelSubstitution)) &&
+    (value.admissionState === undefined ||
+      value.admissionState === "queued" ||
+      value.admissionState === "admitting") &&
+    (value.queuePosition === undefined ||
+      (Number.isSafeInteger(value.queuePosition) &&
+        (value.queuePosition as number) >= 1 &&
+        (value.queuePosition as number) <= REVIEW_FANOUT_MAX_REVIEWERS)) &&
     (value.sessionKey === undefined || nonBlank(value.sessionKey)) &&
     (value.providerSessionId === undefined || nonBlank(value.providerSessionId)) &&
     (value.requestId === undefined || nonBlank(value.requestId)) &&
@@ -301,7 +366,50 @@ export function isReviewerRecord(value: unknown): value is ReviewerRecord {
     optionalDate(value.stalledSince) &&
     optionalDate(value.startedAt) &&
     optionalDate(value.completedAt) &&
-    (value.report === undefined || isStructuredReviewReport(value.report))
+    (value.report === undefined || isStructuredReviewReport(value.report)) &&
+    (value.provisionalFindings === undefined ||
+      isReviewerProvisionalFindingList(value.provisionalFindings))
+  );
+}
+
+const PROVISIONAL_FINDING_ID = /^[0-9a-f]{24}$/;
+
+/** One finding as `report_finding` accepts it: an issue within its byte bound. */
+export function isProvisionalReviewIssue(value: unknown): value is ReviewIssue {
+  if (!record(value) || value.reviewModels !== undefined || value.reviewSourceIds !== undefined) {
+    return false;
+  }
+  let encoded: string | undefined;
+  try {
+    encoded = JSON.stringify(value);
+  } catch {
+    return false;
+  }
+  return (
+    encoded !== undefined &&
+    utf8Bytes(encoded) <= REVIEW_PROVISIONAL_FINDING_MAX_BYTES &&
+    safeParseStructuredReviewFindings({ issues: [value], testCoverageGaps: [] }).success
+  );
+}
+
+export function isReviewerProvisionalFinding(value: unknown): value is ReviewerProvisionalFinding {
+  return (
+    record(value) &&
+    hasOnlyKeys(value, ["id", "reportedAt", "issue"]) &&
+    typeof value.id === "string" &&
+    PROVISIONAL_FINDING_ID.test(value.id) &&
+    typeof value.reportedAt === "string" &&
+    Number.isFinite(Date.parse(value.reportedAt)) &&
+    isProvisionalReviewIssue(value.issue)
+  );
+}
+
+function isReviewerProvisionalFindingList(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length <= REVIEW_PROVISIONAL_FINDINGS_MAX &&
+    value.every(isReviewerProvisionalFinding) &&
+    new Set(value.map((finding: ReviewerProvisionalFinding) => finding.id)).size === value.length
   );
 }
 

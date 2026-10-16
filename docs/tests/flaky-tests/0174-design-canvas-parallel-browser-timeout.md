@@ -16,6 +16,31 @@
 
 The design canvas test appears sensitive to the suite's six-worker parallel load. The design canvas code did not change in this task; investigate the timeout under controlled parallel load.
 
+
+## Mobile layout follow-up main merge recurrence — 2026-10-16
+
+- **Original command:** `ORKESTRATOR_E2E_PORT=52464 CI=1 mise run test:logged -- --name merge-latest-browser -- mise run test:browser`
+  while merging `origin/main` into `mobile-layout-gaps`.
+- **Worker configuration:** nine Playwright workers alongside the repository
+  suite and other validations on the shared host.
+- **Suite counts:** 310 passed, 69 skipped and three failed across 382 cases
+  (5.2 minutes). The other failures are recorded in 0173.
+- **Failure:** The desktop case `canvas edits, script isolation, missed events, conflict and reload` exhausted its 30000 ms budget at `page.reload()` (line 190).
+- **Owning-file rerun:** `ORKESTRATOR_E2E_PORT=52464 CI=1 mise run test:logged -- --name merge-latest-browser-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts e2e/DiffViewerMobile.spec.ts --workers=1`
+  passed both unchanged owning files (exit 0, 51.6 seconds).
+- **Evidence:** `/tmp/orkestrator-test-run.r2KR91/merge-latest-browser.log.gz`.
+- **Disposition:** parallel-only recurrence matching the existing case. Host
+  contention remains a hypothesis; no assertion, timeout or skip changed.
+
+## Unread-toast main merge recurrence — 2026-10-16
+
+- **Original command:** `mise run test:logged -- --name merge-browser -- mise run test:browser`, nine Playwright workers alongside the full non-iOS suite and isolated browser checks.
+- **Failure:** The desktop `canvas edits, script isolation, missed events, conflict and reload` case exceeded its 30000 ms deadline.
+- **Suite counts:** 320 passed, 69 skipped, three failed across 392 cases (294.6 s).
+- **Owning-file rerun:** `mise run test:logged -- --name merge-design-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1` passed the unchanged file in 23.7 s (exit 0).
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.o1XC99/merge-browser.log.gz`.
+- **Disposition:** confirmed recurrence. Earlier overlapping focused browser invocations shared an output directory and are discarded as invalid evidence; the successful rerun ran sequentially. Host contention remains an unconfirmed hypothesis.
+
 ## Ordering review (2026-10-16)
 
 Reviewed with the backend design flakes 0193, 0215 and 0218, which were test

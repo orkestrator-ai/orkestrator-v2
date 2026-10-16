@@ -4,6 +4,7 @@ import { BridgeSessionStore } from "./sessions/persistence.js";
 import { CODEX_SIGN_IN_REQUIRED_MESSAGE } from "./engine/app-server-engine.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { AGENT_INTERACTION_HOLD_CEILING_MS } from "@orkestrator/protocol/agent-interactions";
 
 import {
   NO_RESPONSE,
@@ -2479,6 +2480,79 @@ describe("interactions", () => {
     expect(
       h.runtime.respondToInteraction(sessionId, listed.interactionId, { action: "accept" }),
     ).toBe("applied");
+  });
+
+  test("a paused MCP elicitation is listed with its moved deadline and upstream caveat", async () => {
+    const { h, sessionId } = await elicitationSession({
+      serverName: "deploy",
+      mode: "form",
+      message: "Pick a region",
+      requestedSchema: { type: "object" },
+    });
+    const listed = h.runtime.listInteractions(sessionId)[0]!;
+    const requested = h.events.find((event) => event.type === "session.interaction-requested");
+    expect((requested!.data!.interaction as { hold?: unknown }).hold).toEqual({
+      available: true,
+      reason: "upstream-may-expire",
+    });
+    expect(listed.hold).toEqual({ available: true, reason: "upstream-may-expire" });
+
+    const paused = h.runtime.holdInteraction(sessionId, listed.interactionId, true);
+    expect(paused.status).toBe("applied");
+    if (paused.status !== "applied") throw new Error("pause was not applied");
+    const heldAt = paused.hold.heldAt!;
+    expect(paused).toEqual({
+      status: "applied",
+      expiresAt: heldAt + AGENT_INTERACTION_HOLD_CEILING_MS,
+      hold: { available: true, heldAt, reason: "upstream-may-expire" },
+    });
+    // `GET /session/:id/interactions` reads this; the backend polls it.
+    expect(h.runtime.listInteractions(sessionId)[0]).toMatchObject({
+      requestedAt: listed.requestedAt,
+      expiresAt: paused.expiresAt,
+      hold: paused.hold,
+    });
+    expect(h.runtime.holdInteraction(sessionId, listed.interactionId, true).status).toBe(
+      "unchanged",
+    );
+    await h.drain();
+    expect(h.child().stdin.lines.join("")).not.toContain('"action"');
+  });
+
+  test("an auto-resolving question publishes its provider limit", async () => {
+    const { h, sessionId } = await askingSession({
+      ...QUESTION_PARAMS,
+      autoResolutionMs: 3_600_000,
+    });
+    const listed = h.runtime.listInteractions(sessionId)[0]!;
+    expect(listed.hold).toEqual({ available: true, reason: "provider-limit" });
+
+    const paused = h.runtime.holdInteraction(sessionId, listed.interactionId, true);
+    expect(paused).toEqual({
+      status: "applied",
+      expiresAt: listed.requestedAt + 3_600_000,
+      hold: { available: true, heldAt: expect.any(Number), reason: "provider-limit" },
+    });
+    expect(h.runtime.listInteractions(sessionId)[0]!.expiresAt).toBe(
+      listed.requestedAt + 3_600_000,
+    );
+  });
+
+  test("a blocking question has no hold and cannot be paused", async () => {
+    const { h, sessionId } = await askingSession({ ...QUESTION_PARAMS, isBlocking: true });
+    const listed = h.runtime.listInteractions(sessionId)[0]!;
+    expect(listed.expiresAt).toBeUndefined();
+    expect(listed.hold).toBeUndefined();
+
+    expect(h.runtime.holdInteraction(sessionId, listed.interactionId, true)).toEqual({
+      status: "unavailable",
+    });
+    const other = h.runtime.createSession({ mode: "build" });
+    expect(h.runtime.holdInteraction(other.sessionId, listed.interactionId, true)).toEqual({
+      status: "wrong-session",
+    });
+    expect(h.runtime.holdInteraction(sessionId, "ask-nope", true)).toEqual({ status: "unknown" });
+    expect(h.runtime.listInteractions(sessionId)).toHaveLength(1);
   });
 
   test("a card the router has already forgotten is dropped, not served forever", async () => {

@@ -58,6 +58,52 @@ fixture shutdown. No test was skipped, loosened, or changed to conceal the failu
   observations; the isolated pass does not establish the cause. No test or
   timeout was changed.
 
+## Observation during storage-read accounting merge (2026-10-16)
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`.
+- **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1
+  slots; backend used two isolated Bun workers. Other worktrees were validating
+  on the same host; workspace admission waited 286.5 seconds.
+- **Suite counts:** backend 8,280 passed, 40 skipped, four failed and one
+  between-tests error across 441 files (454.79 seconds). The other workspace
+  packages, root, bridges and protocol groups passed. The aggregate exited 1
+  after 777.1 seconds.
+- **Evidence:** `/tmp/orkestrator-test-run.gwCPHc/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
+  outer artifact `/tmp/orkestrator-test-run.gxKAtN/merge-tests.log.gz`.
+- **Failure:** the same gap-reset case timed out at 5055.49 ms, followed by
+  `DesignError: Design service is stopping` during teardown.
+- **Isolated rerun:** `mise run test:logged -- --name merge-design-sync -- bun test
+  --cwd apps/backend --preload ../../tests/setup-node.ts
+  ./src/core/design/sync.test.ts --parallel=1 --only-failures`
+  also failed: five passed, one failed and one between-tests error across six
+  tests (7.8 seconds); the case timed out at 5083.19 ms with the same teardown
+  error. Artifact: `/tmp/orkestrator-test-run.2p6S3z`.
+- **Disposition:** this observation does not establish an aggregate-only flake:
+  the timeout reproduced alone while other host workloads remained active.
+  Its cause is unresolved. No test, timeout or skip was changed.
+
+
+## Mobile layout follow-up main merge — 2026-10-16
+
+- **Original command:** `mise run test:logged -- --name merge-latest-tests -- mise run test`
+  with the testing guide's GNU-tool PATH, merging `origin/main` at `222599b0`
+  into `mobile-layout-gaps`.
+- **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1
+  slots; backend used two isolated workers alongside other host validations.
+- **Suite counts:** backend 8,380 passed, 40 skipped and ten failed across
+  8,430 tests in 449 files (556.88 seconds). Root had three failures; other
+  workspace packages, bridges and protocol verification passed. Aggregate
+  exited 1 after 671.2 seconds.
+- **Failure:** `design incremental sync > gaps reset: expired range, future cursor and a new generation` timed out at 5018.73 ms against its 5000 ms limit, followed by a stopping-service teardown error.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-latest-sync-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/design/sync.test.ts --parallel=1 --only-failures`
+  with the same GNU-tool PATH passed the unchanged owning file (exit 0,
+  1.3 seconds).
+- **Evidence:** `/tmp/orkestrator-test-run.hmA9t0/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
+  outer artifact `/tmp/orkestrator-test-run.1X6sCk/merge-latest-tests.log.gz`.
+- **Disposition:** isolated pass confirms an intermittent recurrence. Host
+  contention remains an unconfirmed hypothesis; no implementation, assertion,
+  timeout or skip changed.
+
 ## Resolution (2026-10-16)
 
 Not an ordering bug. The case is a sequential loop with no concurrency:

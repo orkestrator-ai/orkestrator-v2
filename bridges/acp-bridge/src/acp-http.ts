@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { gzip } from "node:zlib";
 import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
 import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import { parseWorkflowResultTurn } from "@orkestrator/protocol/workflow-results";
 import {
   commandUnavailableResponse,
   readBridgePromptCommandFields,
@@ -56,6 +57,7 @@ import {
   type JsonObject,
   type SessionState,
 } from "./acp-context.js";
+import { MCP_CONFIG_REPORTING_VERSION } from "@orkestrator/protocol/mcp-management";
 import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
 import {
   bridgeTranscriptRouteBody,
@@ -96,6 +98,7 @@ import {
 import { schedulePersist } from "./acp-persist-writer.js";
 import { structuredPromptInstruction } from "./acp-prompt.js";
 import { primeCommandChanges, settleCommandChangeWindows } from "./acp-command-changes.js";
+import { holdParkedRequest, type AcpHoldFamily } from "./acp-interaction-hold.js";
 
 const TRANSCRIPT_GENERATION = randomBytes(16).toString("hex");
 
@@ -210,7 +213,7 @@ export async function route(
     return json(response, answer.status, answer.body);
   }
   const match =
-    /^\/session\/([^/]+)(?:\/(close|messages|transcript(?:\/(?:detail|page))?|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions(?:\/[^/]+)?|config|commands(?:\/refresh)?|mcp|approvals(?:\/[^/]+)?|runtime-health))?$/.exec(
+    /^\/session\/([^/]+)(?:\/(close|messages|transcript(?:\/(?:detail|page))?|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions(?:\/[^/]+(?:\/hold)?)?|config|commands(?:\/refresh)?|mcp|approvals(?:\/[^/]+(?:\/hold)?)?|runtime-health))?$/.exec(
       url.pathname,
     );
   if (!match) return json(response, 404, { error: "Not found" });
@@ -224,7 +227,12 @@ export async function route(
     // Same reasoning: a 404 here would read as "this bridge predates the
     // route" and fail the environment. Health is optional metadata, so an
     // unknown session answers empty rather than failing.
-    if (match[2] === "runtime-health") return json(response, 200, emptyRuntimeHealth());
+    if (match[2] === "runtime-health") {
+      return json(response, 200, {
+        ...emptyRuntimeHealth(),
+        mcpConfigReporting: MCP_CONFIG_REPORTING_VERSION,
+      });
+    }
     // The enhanced catalogue contract: an unknown session is answered in band.
     if (match[2] === "commands" && request.method === "GET") {
       return json(response, 200, commandCatalogue(undefined));
@@ -364,6 +372,7 @@ export async function route(
     return json(response, 200, {
       summary: publicRuntime(state),
       ...state.health.snapshot(),
+      mcpConfigReporting: MCP_CONFIG_REPORTING_VERSION,
       mcpConfig: await publicMcpConfigStatus(),
     });
   }
@@ -430,6 +439,23 @@ export async function route(
       interactions: publicInteractions(state),
       revision: state.revision,
     });
+  // Pause or resume a parked request's countdown. Matched before the answer
+  // routes below, which would otherwise read `<id>/hold` as an id. A hold
+  // never answers the request; a closing session was refused above.
+  const holdTarget = action ? /^(approvals|interactions)\/([^/]+)\/hold$/.exec(action) : null;
+  if (holdTarget && request.method === "POST") {
+    const body = await readJson(request);
+    if (typeof body.held !== "boolean") {
+      return json(response, 400, { error: "held must be a boolean" });
+    }
+    const answer = holdParkedRequest(
+      state,
+      holdTarget[1] as AcpHoldFamily,
+      decodePathSegment(holdTarget[2]!),
+      body.held,
+    );
+    return json(response, answer.status, answer.body);
+  }
   if (action?.startsWith("approvals/") && request.method === "POST") {
     const approval = state.approvals.get(decodeURIComponent(action.slice("approvals/".length)));
     if (!approval) return json(response, 404, { error: "Approval not found" });
@@ -504,6 +530,8 @@ export async function route(
     const commandFields = readBridgePromptCommandFields(body);
     if (!commandFields.ok) return json(response, 400, { error: commandFields.error });
     const selectedCommand = commandFields.command;
+    const workflowResult = parseWorkflowResultTurn(body.workflowResultTool, body.workflowResultKey);
+    if (!workflowResult.ok) return json(response, 400, { error: workflowResult.error });
     if (selectedCommand && schema) {
       return json(response, 400, {
         error: "A structured-output prompt cannot carry a command selection",
@@ -579,6 +607,7 @@ export async function route(
       // detached thread is reattached, and it is far cheaper than a spawn.
       promptContents = await readPromptContents(attachments, workingDirectory);
       storeAgentMcp(state, body.agentMcp);
+      state.workflowResultTurn = workflowResult.turn;
       if (typeof readOnly === "boolean") await setSessionReadOnly(state, readOnly);
       child = await ensureSessionProcess(state, clientSignal);
       if (
@@ -977,6 +1006,15 @@ export function applyOriginPolicy(request: IncomingMessage, response: ServerResp
   );
   response.end();
   return false;
+}
+
+/** A percent-decoded path segment, or undefined when its escapes are malformed. */
+function decodePathSegment(segment: string): string | undefined {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return undefined;
+  }
 }
 
 function storeAgentMcp(state: SessionState, value: unknown): void {

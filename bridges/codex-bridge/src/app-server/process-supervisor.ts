@@ -351,6 +351,27 @@ export class AppServerSupervisor {
     return generation.client.request<T>(method, params, options);
   }
 
+  /** Send only to a previously verified live child; never lazily replace it. */
+  requestOnGeneration<T = unknown>(
+    expected: EngineGeneration,
+    method: string,
+    params?: unknown,
+    options: { timeoutMs?: number } = {},
+  ): Promise<T> {
+    if (
+      this.drainPromise ||
+      this.stopping ||
+      !this.isReady() ||
+      !this.current ||
+      this.current.id !== expected
+    ) {
+      return Promise.reject(
+        new AppServerUnavailableError("unavailable", "Verified generation is no longer ready"),
+      );
+    }
+    return this.current.client.request<T>(method, params, options);
+  }
+
   /**
    * Issues a request on the current generation only if one is already ready.
    * Never starts, restarts or waits for a child: `null` means nothing is

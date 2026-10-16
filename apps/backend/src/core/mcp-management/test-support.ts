@@ -38,6 +38,8 @@ export interface Fixture {
   evidence: Map<string, RuntimeEvidenceRead | Error>;
   /** Every evidence read, in order, as `environmentId:agent:logicalSessionKey`. */
   evidenceReads: string[];
+  /** Runs inside each evidence read, before it answers (a runtime replaced mid-read). */
+  evidenceHook: { onRead?: (id: string) => void };
   /** Stored rollout settings the service reads (`global.mcpManagement`). */
   rollout: { value: unknown };
   environment: Record<string, unknown>;
@@ -70,6 +72,7 @@ export function createFixture(
   const rollout = { value: undefined as unknown };
   const evidence = new Map<string, RuntimeEvidenceRead | Error>();
   const evidenceReads: string[] = [];
+  const evidenceHook: { onRead?: (id: string) => void } = {};
   const now = { value: Date.parse("2026-09-23T12:00:00Z") };
   const containerFiles = new Map<string, string>();
   const environment: Record<string, unknown> = {
@@ -116,6 +119,7 @@ export function createFixture(
     mcpConfigEvidence: async (environmentId, agent, key) => {
       const id = `${environmentId}:${agent}:${key}`;
       evidenceReads.push(id);
+      evidenceHook.onRead?.(id);
       const answer = evidence.get(id);
       if (answer instanceof Error) throw answer;
       return answer ?? { state: "none" };
@@ -161,6 +165,7 @@ export function createFixture(
     reloadOutcome,
     evidence,
     evidenceReads,
+    evidenceHook,
     rollout,
     environment,
     extraEnvironments,
@@ -223,4 +228,15 @@ export function entry(snapshot: McpManagementSnapshot, sourceId: string, name: s
   );
   if (!found) throw new Error(`no ${name} in ${sourceId}`);
   return found;
+}
+
+/**
+ * Stop the service's own timer, so only the test's explicit `tick()` calls
+ * run passes. Apply arms an immediate background pass, which could otherwise
+ * start inside one explicit tick and finish inside the next.
+ */
+export function pauseScheduler(fixture: Fixture): void {
+  const service = fixture.service as unknown as { timer: ReturnType<typeof setTimeout> | null };
+  if (service.timer) clearTimeout(service.timer);
+  service.timer = null;
 }

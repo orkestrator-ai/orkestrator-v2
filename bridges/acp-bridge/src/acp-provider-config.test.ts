@@ -25,6 +25,55 @@ describe("ACP provider configuration", () => {
     ]);
   });
 
+  test("switches Grok's web tools off when the network is denied", () => {
+    const config = loadAcpProviderConfig({ ACP_PROVIDER: "grok", ACP_AGENT_PATH: "/bin/grok" });
+    // `--disable-web-search` is top-level; `--no-leader` belongs to `agent`, and
+    // keeps a configured shared leader (which ignores the flag) out of the way.
+    expect(
+      providerArgv(config, {
+        model: "grok-code",
+        effort: "high",
+        approvals: "deny",
+        denyNetwork: true,
+      }),
+    ).toEqual([
+      "--disable-web-search",
+      "agent",
+      "--no-leader",
+      "--model",
+      "grok-code",
+      "--reasoning-effort",
+      "high",
+      "stdio",
+    ]);
+    expect(providerArgv(config, { denyNetwork: false })).not.toContain("--disable-web-search");
+  });
+
+  test("keys the network flags by provider id, so the backend's record cannot drop them", () => {
+    // The backend serializes its own Grok record into ACP_PROVIDER_CONFIG, which
+    // replaces the built-in one; the flags must not depend on that record.
+    const serialized = loadAcpProviderConfig({
+      ACP_PROVIDER_CONFIG: JSON.stringify({
+        id: "grok",
+        executable: "grok",
+        argv: ["--always-approve", "agent", "{{model}}", "{{effort}}", "stdio"],
+      }),
+    });
+    expect(providerArgv(serialized, { approvals: "deny", denyNetwork: true })).toEqual([
+      "--disable-web-search",
+      "agent",
+      "--no-leader",
+      "stdio",
+    ]);
+
+    // A provider this bridge knows no flag for is left as configured: it has no
+    // tool to switch off that the bridge could name.
+    const generic = loadAcpProviderConfig({
+      ACP_PROVIDER_CONFIG: JSON.stringify({ id: "gemini", executable: "gemini", argv: ["--acp"] }),
+    });
+    expect(providerArgv(generic, { denyNetwork: true })).toEqual(["--acp"]);
+  });
+
   test("loads a generic ACP agent entirely from a config record", () => {
     const config = loadAcpProviderConfig({
       ACP_PROVIDER_CONFIG: JSON.stringify({

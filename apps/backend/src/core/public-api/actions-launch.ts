@@ -55,14 +55,7 @@ const environmentLaunch: MutationActionHandler<LaunchInput> = {
   kind: "mutation",
   action: "environment.launch",
   parse(input) {
-    const base = parseCreateEnvironment(input, [
-      "agent",
-      "model",
-      "reasoning",
-      "fastMode",
-      "mode",
-      "prompt",
-    ]);
+    const base = parseCreateEnvironment(input, "environment.launch");
     const selection = parseAgentSelection(input);
     const prompt = textInput(
       input,

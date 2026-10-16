@@ -508,6 +508,28 @@ export class StorageService extends StoragePublicOperations {
     });
   }
 
+  /**
+   * Serialized read-modify-write of one association's bookkeeping.
+   *
+   * `mutate` edits the stored record in place and returns whether it changed;
+   * nothing is written otherwise. Status-wake bookkeeping is backend-only, so
+   * this does not announce a coordinator change to clients.
+   */
+  async updateCoordinatorWorkflowAssociation(
+    associationId: string,
+    mutate: (association: CoordinatorWorkflowAssociation) => boolean,
+  ): Promise<CoordinatorWorkflowAssociation | null> {
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const association = store.workflows.find((item) => item.id === associationId);
+      if (!association) return null;
+      if (!mutate(association)) return association;
+      store.revision += 1;
+      await this.saveSensitiveJson(this.coordinatorsFile(), store);
+      return association;
+    });
+  }
+
   async markCoordinatorWorkflowNotified(associationId: string, revision: number): Promise<void> {
     await this.enqueueCoordinatorMutation(async () => {
       const store = await this.loadCoordinatorStore();
@@ -568,6 +590,7 @@ export class StorageService extends StoragePublicOperations {
       // conversation-scoped idempotency key prevents duplicate delivery here.
       delete association.lastNotifiedRevision;
       delete association.terminalNotifiedAt;
+      delete association.statusNotice;
       store.revision += 1;
       await this.saveSensitiveJson(this.coordinatorsFile(), store);
       this.announce("coordinator", association.projectId, association.projectId);

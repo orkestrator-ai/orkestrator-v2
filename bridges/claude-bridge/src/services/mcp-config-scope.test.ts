@@ -114,6 +114,31 @@ describe("getMcpRuntimeConfig scope and revision", () => {
     expect(names.size).toBe(0);
   });
 
+  test("a researching coordinator adds only the launcher's remote research servers", async () => {
+    const research = {
+      ORKESTRATOR_COORDINATOR_WEB_RESEARCH: "search-and-mcp",
+      ORKESTRATOR_COORDINATOR_RESEARCH_MCP: JSON.stringify([
+        { name: "context7", url: "https://mcp.context7.com/mcp" },
+        { name: "local", url: "http://127.0.0.1:9000/mcp" },
+      ]),
+    };
+    const { servers, names } = await getMcpRuntimeConfig(cwd, research, undefined, "none");
+    // The checkout's and the user's configured servers still stay out.
+    expect(servers).toEqual({ context7: { type: "http", url: "https://mcp.context7.com/mcp" } });
+    expect([...names]).toEqual(["context7"]);
+
+    // Search alone loads none, and an ordinary session never consults the list.
+    const searchOnly = await getMcpRuntimeConfig(
+      cwd,
+      { ...research, ORKESTRATOR_COORDINATOR_WEB_RESEARCH: "search" },
+      undefined,
+      "none",
+    );
+    expect(searchOnly.servers).toEqual({});
+    const worker = await getMcpRuntimeConfig(cwd, research, undefined, "all");
+    expect(Object.keys(worker.servers)).not.toContain("context7");
+  });
+
   test("all sources report the digest of the exact bytes read", async () => {
     const { servers, revision } = await getMcpRuntimeConfig(cwd, {}, undefined, "all");
 

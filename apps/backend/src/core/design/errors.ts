@@ -45,6 +45,15 @@ export class DesignError extends Error {
   }
 }
 
+/** A correlation id reused for different input: never replayed, never retried. */
+export function reusedCorrelation(token: string): DesignError {
+  return new DesignError(
+    "invalid-input",
+    "This correlation id was already used for a different edit",
+    { details: { token } },
+  );
+}
+
 export function designConflict(
   expected: number,
   current: number,

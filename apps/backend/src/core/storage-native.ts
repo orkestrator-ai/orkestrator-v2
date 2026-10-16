@@ -438,6 +438,54 @@ export abstract class StorageNative extends StorageReviews {
     });
   }
 
+  /** Trusted service boundary only: retain the conversation while research settings change. */
+  async transitionCoordinatorResearchPolicy(
+    expected: PersistedNativeAgentSession,
+    policy: NonNullable<PersistedNativeAgentSession["policy"]>,
+    owner: NonNullable<PersistedNativeAgentSession["owner"]>,
+  ): Promise<void> {
+    await this.enqueueNativeAgentSessionMutation(expected.key, async () => {
+      await this.assertEnvironmentAcceptsBackgroundState(
+        expected.environmentId,
+        "Native agent session",
+      );
+      const loaded = await this.loadNativeAgentSessions();
+      this.assertReadableNativeAgentSession(loaded, expected.key);
+      const current = loaded.sessions[expected.key];
+      const alreadyApplied =
+        current &&
+        JSON.stringify(current.policy) === JSON.stringify(policy) &&
+        JSON.stringify(current.owner) === JSON.stringify(owner) &&
+        current.executionPolicy === "coordinator-read-only";
+      if (
+        !current ||
+        current.origin !== "coordinator" ||
+        owner.kind !== "coordinator" ||
+        (current.owner !== undefined && current.owner.kind !== "coordinator") ||
+        current.providerSessionId !== expected.providerSessionId ||
+        current.environmentId !== expected.environmentId ||
+        current.agent !== expected.agent ||
+        current.logicalSessionKey !== expected.logicalSessionKey ||
+        (!alreadyApplied &&
+          (current.executionPolicy !== expected.executionPolicy ||
+            JSON.stringify(current.owner) !== JSON.stringify(expected.owner) ||
+            JSON.stringify(current.policy) !== JSON.stringify(expected.policy)))
+      ) {
+        throw new Error("Native agent session changed during coordinator research transition");
+      }
+      if (alreadyApplied) return;
+      const updated: PersistedNativeAgentSession = {
+        ...current,
+        policy,
+        owner,
+        executionPolicy: "coordinator-read-only",
+        updatedAt: nowIso(),
+      };
+      await this.saveNativeAgentSession(expected.key, updated);
+      this.announceNativeAgentRecord(updated);
+    });
+  }
+
   async adoptNativeAgentSession(
     input: Pick<
       PersistedNativeAgentSession,

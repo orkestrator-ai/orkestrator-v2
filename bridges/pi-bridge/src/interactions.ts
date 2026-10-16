@@ -19,13 +19,18 @@
  */
 import { randomBytes } from "node:crypto";
 import {
+  InteractionDeadline,
+  type InteractionDeadlineHoldResult,
+} from "@orkestrator/protocol/agent-interaction-deadline";
+import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interactions";
+import {
   approvalTimeoutMs,
   approvalsEnabled,
   MAX_PENDING_APPROVALS,
   MAX_TOOL_ARGUMENT_BYTES,
   workingDirectory,
 } from "./config.js";
-import { isOrkestratorMailTool, isOrkestratorMcpTool } from "./mcp.js";
+import { isOrkestratorMailTool, isOrkestratorMcpTool, isOwnWorkflowResultCall } from "./mcp.js";
 import { schedulePersist } from "./persistence.js";
 import {
   isObject,
@@ -58,7 +63,8 @@ export async function requestToolApproval(
 ): Promise<ToolCallDecision> {
   const coordinatorMail =
     state.policy?.id === "coordinator-read-only" && isOrkestratorMcpTool(state, toolName);
-  if (state.readOnly && !READ_ONLY_TOOLS.has(toolName) && !coordinatorMail) {
+  const ownAttempt = isOwnWorkflowResultCall(state, toolName, input);
+  if (state.readOnly && !READ_ONLY_TOOLS.has(toolName) && !coordinatorMail && !ownAttempt) {
     return {
       block: true,
       reason:
@@ -74,7 +80,7 @@ export async function requestToolApproval(
   }
   const approvals = state.policy?.approvals ?? (approvalsEnabled() ? "ask" : "auto-approve");
   if (approvals === "auto-approve") return { block: false };
-  if (READ_ONLY_TOOLS.has(toolName) || coordinatorMail) return { block: false };
+  if (READ_ONLY_TOOLS.has(toolName) || coordinatorMail || ownAttempt) return { block: false };
   // A worker can always report back: its mail tools never wait on a person.
   if (isOrkestratorMailTool(state, toolName)) return { block: false };
   if (approvals === "deny") {
@@ -87,13 +93,12 @@ export async function requestToolApproval(
   }
 
   const id = randomBytes(12).toString("hex");
-  const now = Date.now();
   return new Promise<ToolCallDecision>((resolve) => {
     let settled = false;
     const settle = (decision: "allow" | "deny", reason?: string) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      deadline.settle();
       state.approvals.delete(id);
       state.revision += 1;
       resolve(
@@ -103,25 +108,28 @@ export async function requestToolApproval(
       );
     };
 
-    // Read per call rather than at import, so a bridge started with a
-    // different budget — or a test proving the denial — gets the value that is
-    // actually configured rather than whichever one loaded first.
-    const timeoutMs = approvalTimeoutMs();
-    const timer = setTimeout(
-      () => settle("deny", "The approval request expired before it was answered."),
-      timeoutMs,
-    );
-    // Unref'd so a parked approval cannot by itself hold the process open; the
-    // turn awaiting it is what keeps the bridge alive, and shutdown denies.
-    timer.unref();
+    const deadline = new InteractionDeadline({
+      onExpire: () => settle("deny", "The approval request expired before it was answered."),
+      // Read per call rather than at import, so a bridge started with a
+      // different budget — or a test proving the denial — gets the value that
+      // is actually configured rather than whichever one loaded first. A
+      // resume restarts this same window.
+      windowMs: approvalTimeoutMs(),
+      // The turn's own budget denies whatever is still parked when it runs
+      // out, so a pause can never hold past it — and says so.
+      providerLimitAt: () => state.turnDeadlineAt,
+      // Unref'd so a parked approval cannot by itself hold the process open;
+      // the turn awaiting it is what keeps the bridge alive, and shutdown denies.
+      unref: true,
+    });
 
     state.approvals.set(id, {
       id,
       toolCallId,
       toolName,
       input: isObject(input) ? input : {},
-      createdAt: now,
-      expiresAt: now + timeoutMs,
+      createdAt: deadline.requestedAt,
+      deadline,
       settle,
     });
     state.revision += 1;
@@ -146,6 +154,42 @@ export function resolveApproval(
   if (!pending) return false;
   pending.settle(decision, reason);
   return true;
+}
+
+export type ApprovalHoldOutcome =
+  | { result: "missing" }
+  | {
+      result: InteractionDeadlineHoldResult;
+      expiresAt: number;
+      hold: AgentInteractionHold;
+    };
+
+/**
+ * Pause (`held`) or resume one parked approval's countdown.
+ *
+ * Only ever moves the deadline; it never answers the call. A pause re-arms the
+ * timer at the hold ceiling or the turn's own budget, whichever is sooner, and
+ * expiry there still denies. `missing` names an id that is no longer parked.
+ */
+export function holdApproval(
+  state: SessionState,
+  approvalId: string,
+  held: boolean,
+): ApprovalHoldOutcome {
+  const pending = state.approvals.get(approvalId);
+  if (!pending) return { result: "missing" };
+  const result = pending.deadline.setHeld(held);
+  if (result === "applied") {
+    // The published `expiresAt` and `hold` moved, which is what the
+    // snapshot's revision tells a reader.
+    state.revision += 1;
+    schedulePersist();
+  }
+  return {
+    result,
+    expiresAt: pending.deadline.expiresAt,
+    hold: pending.deadline.hold(),
+  };
 }
 
 /**
@@ -176,7 +220,10 @@ export function publicApprovals(state: SessionState): JsonObject {
     const base = {
       approvalId: pending.id,
       requestedAt: pending.createdAt,
-      expiresAt: pending.expiresAt,
+      // The deadline as it stands: the hold ceiling while paused, a fresh
+      // window after a resume.
+      expiresAt: pending.deadline.expiresAt,
+      hold: pending.deadline.hold(),
       reason: `Pi requested to run the ${pending.toolName} tool.`,
     };
     if (pending.toolName === "bash" || pending.toolName === "powershell") {

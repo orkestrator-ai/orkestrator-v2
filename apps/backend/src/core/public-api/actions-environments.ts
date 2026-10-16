@@ -5,7 +5,7 @@ import { runWithContinuation } from "./background.js";
 import { PublicActionError } from "./errors.js";
 import {
   invalid,
-  onlyKeys,
+  onlyActionKeys,
   optionalBoolean,
   optionalString,
   oneOf,
@@ -119,17 +119,9 @@ interface CreateInput {
 
 export function parseCreateEnvironment(
   input: Record<string, unknown>,
-  extraKeys: string[] = [],
+  action: "environment.create" | "environment.launch" = "environment.create",
 ): CreateInput {
-  onlyKeys(input, [
-    "projectId",
-    "type",
-    "name",
-    "baseBranch",
-    "baseCommit",
-    "networkAccessMode",
-    ...extraKeys,
-  ]);
+  onlyActionKeys(input, action);
   const baseBranch = optionalString(input, "baseBranch", 500)?.trim();
   const baseCommit = optionalString(input, "baseCommit", 40)?.toLowerCase();
   if ((baseBranch ? 1 : 0) + (baseCommit ? 1 : 0) === 1) {
@@ -231,7 +223,7 @@ function lifecycleHandler(
     kind: "mutation",
     action: `environment.${verb}`,
     parse(input) {
-      onlyKeys(input, verb === "recreate" ? ["environmentId", "discard"] : ["environmentId"]);
+      onlyActionKeys(input, `environment.${verb}`);
       const environmentId = requiredId(input, "environmentId");
       if (verb !== "recreate") {
         return { value: { environmentId }, scope: `environment:${environmentId}`, intent: {} };
@@ -325,7 +317,7 @@ const environmentFork: MutationActionHandler<{
   kind: "mutation",
   action: "environment.fork",
   parse(input) {
-    onlyKeys(input, ["environmentId", "type"]);
+    onlyActionKeys(input, "environment.fork");
     const environmentId = requiredId(input, "environmentId");
     const type = requiredOneOf(input, "type", ["local", "container"] as const);
     return {
@@ -365,7 +357,7 @@ const environmentRename: MutationActionHandler<{ environmentId: string; name: st
   kind: "mutation",
   action: "environment.rename",
   parse(input) {
-    onlyKeys(input, ["environmentId", "name"]);
+    onlyActionKeys(input, "environment.rename");
     const environmentId = requiredId(input, "environmentId");
     const name = optionalString(input, "name", PUBLIC_API_LIMITS.nameMaxChars)?.trim();
     if (!name) throw invalid("name is required");

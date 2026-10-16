@@ -120,6 +120,7 @@ async function boot(
   if (attachmentRoot) await mkdir(attachmentRoot, { recursive: true, mode: 0o700 });
   const configOverrides = options.coordinator
     ? codexAppServerConfigOverrides({
+        ...options.extraEnv,
         ORKESTRATOR_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
         CODEX_BRIDGE_PERMISSION_PROFILE: "coordinator-live-attachment",
         CODEX_BRIDGE_READABLE_RUNTIME_ROOT: workspace,
@@ -739,6 +740,73 @@ describeLive("live config side effects", () => {
     } finally {
       await session.stop();
       await probe.stop();
+    }
+  }, 60_000);
+
+  test("coordinator research MCP survives a thread-scoped Orkestrator replacement", async () => {
+    const research = startLegacyEraMcpProbe();
+    const controls = await startMcpMutationProbe("Bearer scoped-control");
+    const session = await boot({
+      coordinator: true,
+      extraEnv: {
+        ORKESTRATOR_COORDINATOR_WEB_RESEARCH: "search-and-mcp",
+        ORKESTRATOR_COORDINATOR_RESEARCH_MCP: JSON.stringify([
+          { name: "research", url: "https://research.example/mcp" },
+        ]),
+        ORKESTRATOR_AGENT_MCP_URL: controls.url,
+        ORKESTRATOR_AGENT_MCP_TOKEN: "inherited-control",
+      },
+      // Only the probe transport changes: production accepts HTTPS research
+      // endpoints; this deterministic local fixture serves the same protocol.
+      extraArgs: ["-c", `mcp_servers.research.url=${JSON.stringify(research.url)}`],
+    });
+    try {
+      await handshake(session);
+      const started = await session.client.request<{ thread: { id: string } }>("thread/start", {
+        cwd: session.workspace,
+        approvalPolicy: "never",
+        config: {
+          "mcp_servers.orkestrator": {
+            url: controls.url,
+            http_headers: { Authorization: "Bearer scoped-control" },
+            required: true,
+            startup_timeout_sec: 10,
+            default_tools_approval_mode: "approve",
+          },
+        },
+      });
+      expect(await controls.authorized).toBe("Bearer scoped-control");
+      const deadline = Date.now() + 15_000;
+      let servers: Array<{ name: string; tools: Record<string, unknown> }> = [];
+      do {
+        const status = await session.client.request<{ data: typeof servers }>(
+          "mcpServerStatus/list",
+          { threadId: started.thread.id },
+        );
+        servers = status.data;
+        if (
+          servers.some(
+            (server) => server.name === "research" && Object.keys(server.tools).length > 0,
+          )
+        )
+          break;
+        await Bun.sleep(50);
+      } while (Date.now() < deadline);
+      expect(
+        servers.some(
+          (server) => server.name === "research" && Object.keys(server.tools).length > 0,
+        ),
+      ).toBe(true);
+      expect(
+        servers.some(
+          (server) => server.name === "orkestrator" && Object.keys(server.tools).length > 0,
+        ),
+      ).toBe(true);
+      expect(research.methods).toContain("tools/list");
+    } finally {
+      await session.stop();
+      await research.stop();
+      await controls.stop();
     }
   }, 60_000);
 

@@ -1282,11 +1282,16 @@ describe("project coordinator", () => {
       createdAt: new Date().toISOString(),
     });
     await coordinator.reconcileWorkflowNotifications();
+    // Scheduled, inside the short window that lets notices landing together
+    // share one wake.
     expect(
-      (await storage.listPendingAgentMailInjects()).some(
-        ({ mailbox }) => mailbox.tabId === first.tabId,
-      ),
-    ).toBe(true);
+      (
+        await storage.getAgentMailMailbox(
+          coordinatorRuntimeId(initial.workspace.id, first.id),
+          first.tabId,
+        )
+      ).messages.map((message) => [message.placement, message.notice?.state]),
+    ).toEqual([["pending-inject", "completed"]]);
 
     await coordinator.closeConversation(project.id, first.id);
     await storage.synchronizeAgentMailboxes();

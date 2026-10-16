@@ -1,7 +1,13 @@
 import type { HookCallback, HookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
-import type {
-  NativeAgentCapability,
-  NativeAgentExecutionPolicy,
+import {
+  coordinatorCapabilityPolicy,
+  coordinatorResearchMcpServersFromEnv,
+  coordinatorWebResearchFromEnv,
+} from "@orkestrator/protocol/coordinator-web-research";
+import {
+  nativeAgentPolicyDeniesWebSearch,
+  type NativeAgentCapability,
+  type NativeAgentExecutionPolicy,
 } from "@orkestrator/protocol/native-agent";
 
 /**
@@ -20,7 +26,11 @@ const CAPABILITY_TOOLS: ReadonlyMap<NativeAgentCapability, readonly string[]> = 
   // Shell itself stays available for reads; the hook is what separates a
   // `git log` from a `git commit`, which no tool-name rule can express.
   ["shell.mutate", []],
+  // WebSearch runs on Anthropic's servers and WebFetch from the CLI process,
+  // so the sandbox's network allowlist reaches neither. A `network` denial
+  // takes both, unless the policy's `allow` names `web.search`.
   ["network", ["WebFetch", "WebSearch"]],
+  ["web.search", ["WebSearch"]],
 ]);
 
 /** Tools a read-only coordinator turn may use, before MCP is added. */
@@ -320,7 +330,25 @@ export function claudeDeniedTools(policy: NativeAgentExecutionPolicy | undefined
   for (const capability of denied) {
     for (const tool of CAPABILITY_TOOLS.get(capability) ?? []) tools.add(tool);
   }
+  if (!nativeAgentPolicyDeniesWebSearch(policy)) tools.delete("WebSearch");
   return [...tools];
+}
+
+/**
+ * `disallowedTools` for a turn that is not a read-only coordinator turn.
+ *
+ * The override's own names, plus Claude's names for every capability the
+ * policy denies. A policy that denies `network` therefore loses WebFetch and
+ * WebSearch whatever its id: WebSearch runs on Anthropic's servers, so the
+ * command sandbox's network allowlist never sees it. Without a capability
+ * denial this is exactly `toolPolicy.deny`, so ordinary sessions are unchanged.
+ */
+export function claudeDisallowedTools(
+  policy: NativeAgentExecutionPolicy | undefined,
+): string[] | undefined {
+  const denied = claudeDeniedTools(policy);
+  if (denied.length === 0) return policy?.toolPolicy?.deny;
+  return [...new Set([...(policy?.toolPolicy?.deny ?? []), ...denied])];
 }
 
 /**
@@ -334,10 +362,16 @@ export function claudeDeniedTools(policy: NativeAgentExecutionPolicy | undefined
  */
 export function claudeReadOnlyAllowedTools(options: {
   agentMcpServerNames?: readonly string[];
+  /** The turn's policy; WebSearch is allowed only when it is not denied. */
+  policy?: NativeAgentExecutionPolicy;
+  /** Remote research servers the launcher named and the session loaded. */
+  researchMcpServerNames?: readonly string[];
 }): string[] {
   return [
     ...READ_ONLY_TOOLS,
+    ...(options.policy && !nativeAgentPolicyDeniesWebSearch(options.policy) ? ["WebSearch"] : []),
     ...(options.agentMcpServerNames ?? []).map((name) => `mcp__${name}__*`),
+    ...(options.researchMcpServerNames ?? []).map((name) => `mcp__${name}__*`),
   ];
 }
 
@@ -445,9 +479,17 @@ function deny(reason: string): HookJSONOutput {
  * and a hook denial is final — which is what makes this, rather than
  * `canUseTool`, the place the boundary can actually be held.
  */
-export function createCoordinatorReadOnlyHook(policy: NativeAgentExecutionPolicy): HookCallback {
+export function createCoordinatorReadOnlyHook(
+  policy: NativeAgentExecutionPolicy,
+  researchMcpServerNames: readonly string[] = coordinatorResearchMcpServersFromEnv(process.env).map(
+    (server) => server.name,
+  ),
+): HookCallback {
   const deniedTools = new Set(claudeDeniedTools(policy));
-  const allowedMcpPrefixes = ["mcp__orkestrator__"];
+  const allowedMcpPrefixes = [
+    "mcp__orkestrator__",
+    ...researchMcpServerNames.map((name) => `mcp__${name}__`),
+  ];
   return async (input): Promise<HookJSONOutput> => {
     if (input.hook_event_name !== "PreToolUse") return {};
     const toolName = input.tool_name;
@@ -464,7 +506,8 @@ export function createCoordinatorReadOnlyHook(policy: NativeAgentExecutionPolicy
     if (toolName.startsWith("mcp__")) {
       // Project MCP servers are arbitrary programs. Only Orkestrator's own
       // scoped server is reachable, which is also the only one whose
-      // capabilities the coordinator credential bounds.
+      // capabilities the coordinator credential bounds, plus the remote
+      // research servers the launcher named.
       if (!allowedMcpPrefixes.some((prefix) => toolName.startsWith(prefix))) {
         return deny(
           `Coordinator sessions may only use Orkestrator's own tools, so ${toolName} is not available.`,
@@ -503,13 +546,15 @@ export function processExecutionPolicyIsCoordinator(env: NodeJS.ProcessEnv = pro
 }
 
 /** The policy a coordinator process runs under, regardless of the request. */
-export function coordinatorProcessPolicy(): NativeAgentExecutionPolicy {
+export function coordinatorProcessPolicy(
+  env: NodeJS.ProcessEnv = process.env,
+): NativeAgentExecutionPolicy {
   return {
     id: "coordinator-read-only",
     sandbox: "provider",
     approvals: "deny",
     projectResources: false,
-    capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
+    capabilityPolicy: coordinatorCapabilityPolicy(coordinatorWebResearchFromEnv(env)),
     networkAccess: "restricted",
   };
 }

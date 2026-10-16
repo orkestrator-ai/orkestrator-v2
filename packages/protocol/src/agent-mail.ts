@@ -113,6 +113,20 @@ export interface MailboxCapabilities {
 
 export type MailboxKind = "native" | "tmux" | "terminal" | "ui";
 
+/**
+ * Which state changes of work a coordinator started wake it.
+ *
+ * - `off`: only what woke it before status wakes existed — a delegated tab's
+ *   turn ending, and a workflow reaching a terminal state.
+ * - `settled` (default): also states that need a decision or a person — a
+ *   Multi Review ready to address, a fix done or failed, a stall, a build
+ *   pipeline paused on an error, a delegated tab waiting on input or approval.
+ * - `stages`: also each build-pipeline stage completing and a Multi Review's
+ *   reviewers all finishing. Progress, so opt-in.
+ */
+export const COORDINATOR_STATUS_WAKE_MODES = ["off", "settled", "stages"] as const;
+export type CoordinatorStatusWakeMode = (typeof COORDINATOR_STATUS_WAKE_MODES)[number];
+
 export interface AgentMessagingSettings {
   enabled: boolean;
   allowCrossProject: boolean;
@@ -126,6 +140,8 @@ export interface AgentMessagingSettings {
   autonomousWakeBudget: number;
   /** Routed messages one pair may schedule per rolling hour; the runaway guard. */
   hourlyWakeLimit: number;
+  /** Which state changes of coordinator-started work wake the coordinator. */
+  coordinatorStatusWakes: CoordinatorStatusWakeMode;
   retentionDays: number;
   paused: boolean;
 }
@@ -137,6 +153,7 @@ export const DEFAULT_AGENT_MESSAGING_SETTINGS: Readonly<AgentMessagingSettings> 
   wakePeers: false,
   autonomousWakeBudget: AGENT_MAIL_DEFAULT_AUTONOMOUS_WAKE_BUDGET,
   hourlyWakeLimit: AGENT_MAIL_DEFAULT_HOURLY_WAKE_LIMIT,
+  coordinatorStatusWakes: "settled",
   retentionDays: AGENT_MAIL_DEFAULT_RETENTION_DAYS,
   paused: false,
 });
@@ -273,10 +290,128 @@ export interface AgentMailMessage {
   ackedAt?: string;
   userSeenAt?: string;
   discardedAt?: string;
+  /** Structured facts behind a workflow notice; only `system` senders carry one. */
+  notice?: AgentMailNotice;
+  /**
+   * The stand-in sender a workflow status notice is budgeted as.
+   *
+   * A system sender has no mailbox, so routed budgets would not apply to it.
+   * Status notices about one resource share this key, which makes the
+   * resource and the coordinator a pair like any worker and its coordinator:
+   * the unattended budget and the hourly limit hold its wakes the same way.
+   */
+  statusBudgetKey?: string;
   revision: number;
 }
 
+/** The budget key status notices about one resource share; see `AgentMailMessage.statusBudgetKey`. */
+export function agentMailStatusBudgetKey(resourceKind: string, resourceId: string): string {
+  return agentMailboxId(`status:${resourceKind}:${resourceId}`, "status");
+}
+
 export type AgentMailMessageSummary = Omit<AgentMailMessage, "body">;
+
+/**
+ * What a carrier holds, so a transcript can present it without reading prose.
+ *
+ * Derived from the authenticated sender at render time, never chosen by it: a
+ * tab cannot make its mail look like a workflow notice or a coordinator.
+ */
+export const AGENT_MAIL_KINDS = ["message", "coordinator", "user", "external", "notice"] as const;
+export type AgentMailKind = (typeof AGENT_MAIL_KINDS)[number];
+
+export function agentMailKind(message: Pick<AgentMailMessage, "from" | "trust">): AgentMailKind {
+  if (
+    message.from.kind === "external" ||
+    message.trust === "external" ||
+    message.trust === "cross-project"
+  ) {
+    return "external";
+  }
+  if (message.from.kind === "system") return "notice";
+  if (message.from.kind === "coordinator") return "coordinator";
+  if (message.from.kind === "user") return "user";
+  return "message";
+}
+
+/** How a reader should weigh a notice: it worked, it broke, it needs someone, or it is news. */
+export const AGENT_MAIL_NOTICE_TONES = ["success", "failure", "attention", "info"] as const;
+export type AgentMailNoticeTone = (typeof AGENT_MAIL_NOTICE_TONES)[number];
+
+/** The kinds of work a notice can report on. */
+export const AGENT_MAIL_NOTICE_RESOURCES = ["agent-tab", "multi-review", "build-pipeline"] as const;
+export type AgentMailNoticeResource = (typeof AGENT_MAIL_NOTICE_RESOURCES)[number];
+
+const AGENT_MAIL_NOTICE_MAX_ID_LENGTH = 256;
+const AGENT_MAIL_NOTICE_MAX_LABEL_LENGTH = 120;
+const AGENT_MAIL_NOTICE_STATE = /^[a-z][a-z0-9-]{0,47}$/;
+
+/**
+ * Structured facts behind a workflow notice: which resource it is about, the
+ * state it reached, and how to weigh it. The body stays the readable account;
+ * this is what lets a transcript pick an icon, and an agent filter, without
+ * parsing that prose.
+ */
+export interface AgentMailNotice {
+  resource: {
+    kind: AgentMailNoticeResource;
+    id: string;
+    environmentId?: string;
+    tabId?: string;
+    /** Human-facing name, such as the environment name. */
+    label?: string;
+  };
+  /** Lower-case machine state: `completed`, `failed`, `waiting`, `ready`… */
+  state: string;
+  tone: AgentMailNoticeTone;
+}
+
+function boundedNoticeString(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed && trimmed.length <= maxLength ? trimmed : undefined;
+}
+
+/**
+ * A notice with every field checked and bounded, or null.
+ *
+ * Carriers are read back out of provider transcripts, so the renderer treats
+ * this like any other untrusted input; the store applies the same check before
+ * persisting one.
+ */
+export function normalizeAgentMailNotice(value: unknown): AgentMailNotice | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const resource = record.resource;
+  if (!resource || typeof resource !== "object" || Array.isArray(resource)) return null;
+  const source = resource as Record<string, unknown>;
+  const kind = AGENT_MAIL_NOTICE_RESOURCES.find((candidate) => candidate === source.kind);
+  const tone = AGENT_MAIL_NOTICE_TONES.find((candidate) => candidate === record.tone);
+  const id = boundedNoticeString(source.id, AGENT_MAIL_NOTICE_MAX_ID_LENGTH);
+  if (
+    !kind ||
+    !tone ||
+    !id ||
+    typeof record.state !== "string" ||
+    !AGENT_MAIL_NOTICE_STATE.test(record.state)
+  ) {
+    return null;
+  }
+  const environmentId = boundedNoticeString(source.environmentId, AGENT_MAIL_NOTICE_MAX_ID_LENGTH);
+  const tabId = boundedNoticeString(source.tabId, AGENT_MAIL_NOTICE_MAX_ID_LENGTH);
+  const label = boundedNoticeString(source.label, AGENT_MAIL_NOTICE_MAX_LABEL_LENGTH);
+  return {
+    resource: {
+      kind,
+      id,
+      ...(environmentId ? { environmentId } : {}),
+      ...(tabId ? { tabId } : {}),
+      ...(label ? { label } : {}),
+    },
+    state: record.state,
+    tone,
+  };
+}
 
 export interface MailboxDescriptor {
   mailboxId: string;
@@ -485,13 +620,18 @@ export function escapeAgentMailJson(value: unknown): string {
 }
 
 export function renderAgentMailCarrier(message: AgentMailMessage): string {
+  const notice = message.from.kind === "system" ? normalizeAgentMailNotice(message.notice) : null;
   const payload = escapeAgentMailJson({
+    // The transcript's marker for what this is. Readers that predate it fall
+    // back to `from.kind`, which it is derived from.
+    kind: agentMailKind(message),
     from: message.from,
     to: { environmentId: message.toEnvironmentId, tabId: message.toTabId },
     trust: message.trust,
     messageId: message.id,
     threadId: message.threadId,
     ...(message.subject ? { subject: message.subject } : {}),
+    ...(notice ? { notice } : {}),
     body: message.body,
   });
   const warning =
@@ -547,6 +687,10 @@ export function normalizeAgentMessagingSettings(
       hourlyWakeLimit <= AGENT_MAIL_MAX_HOURLY_WAKE_LIMIT
         ? hourlyWakeLimit
         : fallback.hourlyWakeLimit,
+    coordinatorStatusWakes:
+      COORDINATOR_STATUS_WAKE_MODES.find((mode) => mode === record.coordinatorStatusWakes) ??
+      fallback.coordinatorStatusWakes ??
+      DEFAULT_AGENT_MESSAGING_SETTINGS.coordinatorStatusWakes,
     retentionDays:
       Number.isInteger(retentionDays) && retentionDays >= 1 && retentionDays <= 365
         ? retentionDays

@@ -63,6 +63,43 @@ readiness change (no design code touched), alongside case 0247. The unchanged
 owning file passed alone three times in a row. Evidence:
 `/tmp/orkestrator-test-run.8FscOl/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 
+Recurred on 2026-10-16 at 5553.87 ms in `mise run test` for the coordinator
+launch-defaults change (no design code touched), with the same
+`Design service is stopping` teardown error. The unchanged owning file passed
+alone (10 pass, 0 fail). Evidence:
+`/tmp/orkestrator-test-run.26CkBR/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+## Coordinator launch-defaults review validation — 2026-10-16
+
+Recurred in the full suite for `0d254a3a`; the unchanged owning file passed
+separately with one isolated Bun worker. Exact failures, suite counts,
+commands, durations and evidence are recorded in
+[0255](0255-backend-fixtures-launch-defaults-validation.md).
+No assertion, deadline or skip was changed.
+
+## Observation during live coordinator suite main merge (2026-10-16)
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`.
+- **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1
+  slots; backend used two isolated Bun workers on a shared 18-slot host.
+- **Suite counts:** backend 8,280 passed, 40 skipped, four failed and two
+  between-tests errors across 441 files (452.96 seconds). The aggregate exited
+  1 after 600.8 seconds. All other workspace packages and the bridge/protocol
+  groups passed; root had the Pi staged-runtime timeout tracked as 0178.
+- **Evidence:** `/tmp/orkestrator-test-run.3yIsw1/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
+  outer artifact `/tmp/orkestrator-test-run.i4Amls/merge-tests.log.gz`.
+
+- **Failure:** the replay-reset case in `apps/backend/src/core/design/service.test.ts`
+  timed out at 5011.94 ms, followed by `DesignError: Design service is stopping`.
+- **Isolated rerun:** `mise run test:logged -- --name merge-design-service-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/design/service.test.ts --parallel=1 --only-failures`
+  also failed: nine passed, one failed and one between-tests error across ten
+  tests (12.0 seconds). The same case timed out at 5025.95 ms. Artifact:
+  `/tmp/orkestrator-test-run.9GCebK/merge-design-service-isolated.log.gz`.
+- **Disposition:** this observation does not establish aggregate-only
+  intermittence; the timeout reproduced alone while other host workloads
+  remained active. Its cause remains unresolved. The merge conflict changes
+  only documentation; no test, timeout, assertion or skip was changed.
+
 ## Resolution (2026-10-16)
 
 Not an ordering bug. The cause is the same as

@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { QueuedPromptsDialog } from "@/components/chat/QueuedPromptsDialog";
 import { BlockingPromptCard } from "@/components/chat/BlockingPromptCard";
+import { TMUX_PROMPT_DEADLINE } from "@/components/chat/PromptDeadline";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import {
   DropdownMenu,
@@ -296,6 +297,7 @@ export function TmuxPlanCard({
     <BlockingPromptCard
       title="Plan ready for review"
       expiresAt={plan.expiresAt}
+      deadline={TMUX_PROMPT_DEADLINE}
       state={submitting ? "submitting" : "pending"}
       aria-label="Claude plan ready for review"
       arrivalAnnouncement="Claude is waiting for a plan decision."
@@ -365,6 +367,7 @@ export function TmuxPermissionCard({
     <BlockingPromptCard
       title="Claude needs permission"
       expiresAt={permission.expiresAt}
+      deadline={TMUX_PROMPT_DEADLINE}
       state={submitting ? "submitting" : "pending"}
       aria-label="Claude needs permission"
       arrivalAnnouncement="Claude is waiting for a permission decision."
@@ -466,6 +469,7 @@ export function TmuxElicitationCard({
       description={elicitation.message}
       meta={elicitation.mcpServerName}
       expiresAt={elicitation.expiresAt}
+      deadline={TMUX_PROMPT_DEADLINE}
       state={submitting ? "submitting" : "pending"}
       aria-label="Claude MCP input request"
       arrivalAnnouncement="Claude is waiting for MCP input."
@@ -1517,6 +1521,7 @@ export function ApprovalCard({
     <BlockingPromptCard
       title="Claude wants to use a tool"
       expiresAt={approval.expiresAt}
+      deadline={TMUX_PROMPT_DEADLINE}
       state={submitting ? "submitting" : "pending"}
       aria-label={`Claude wants to use ${approval.toolName}`}
       arrivalAnnouncement="Claude is waiting for a tool decision."

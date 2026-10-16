@@ -101,6 +101,7 @@ function normalizedClaudeModels(models: readonly ClaudeModelCatalogEntry[]): Age
     return {
       platform: "claude",
       id: model.id,
+      resolvedModel: model.resolvedModel,
       label: model.name,
       providerLabel: "Claude",
       reasoning: reasoningOptions(claudeModelReasoningIds(model, efforts)),

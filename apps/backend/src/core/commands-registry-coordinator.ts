@@ -16,6 +16,12 @@ import { isStartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline"
 import { isStartMultiReviewInput } from "@orkestrator/protocol/multi-review";
 import { runCommand } from "./shell.js";
 import { registerCoordinatorReviewActions } from "./coordinator-review-actions.js";
+import {
+  buildPipelineInputWithDefaults,
+  multiReviewInputWithDefaults,
+  readLaunchModelCatalog,
+  savedLaunchSettings,
+} from "./coordinator-launch-defaults.js";
 import { CoordinatorViewRevisions } from "./coordinator-view-revisions.js";
 import { actionHash, requireCoordinatorConversation } from "./coordinator-action-scope.js";
 import {
@@ -26,28 +32,6 @@ import {
 
 function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function multiReviewInputFromSnapshot(value: unknown): Record<string, unknown> | null {
-  if (!record(value)) return null;
-  return {
-    environmentId: value.environmentId,
-    projectId: value.projectId,
-    targetBranch: value.targetBranch,
-    ...(value.reviewInstruction ? { reviewInstruction: value.reviewInstruction } : {}),
-    reviewers: Array.isArray(value.reviewers)
-      ? value.reviewers.map((reviewer) => {
-          if (!record(reviewer)) return reviewer;
-          return {
-            agent: reviewer.agent,
-            model: reviewer.model,
-            ...(reviewer.reasoningEffort ? { reasoningEffort: reviewer.reasoningEffort } : {}),
-          };
-        })
-      : value.reviewers,
-    reviewModel: value.reviewModel,
-    fixModel: value.fixModel,
-  };
 }
 
 /**
@@ -135,7 +119,7 @@ export function registerCoordinatorCommands(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
-  registerCoordinatorReviewActions(register);
+  registerCoordinatorReviewActions(register, dependencies);
   const workflowStarts = new Map<string, Promise<unknown>>();
   const runWorkflowStart = <T>(key: string, operation: () => Promise<T>): Promise<T> => {
     const existing = workflowStarts.get(key);
@@ -655,6 +639,17 @@ export function registerCoordinatorCommands(
     const conversationId = asNonBlankString(identity.conversationId, "conversationId");
     await requireCoordinatorConversation(context, projectId, coordinatorId, conversationId);
     const stableRequestId = asNonBlankString(requestId, "requestId");
+    if (!record(input) || input.projectId !== projectId) {
+      throw new Error("Invalid scoped build pipeline request");
+    }
+    // Choices the coordinator left out run the Build button's saved defaults.
+    // The request hash below stays over the caller's payload, so a retry after
+    // the user edits their defaults still replays the original pipeline.
+    const requestedInput = input;
+    input = buildPipelineInputWithDefaults(
+      requestedInput,
+      savedLaunchSettings(await context.storage.loadConfig(), projectId),
+    );
     if (!isStartBuildPipelineInput(input) || input.projectId !== projectId) {
       throw new Error("Invalid scoped build pipeline request");
     }
@@ -679,7 +674,7 @@ export function registerCoordinatorCommands(
         input.delegationBaseCommit,
       );
     }
-    const payloadHash = actionHash(input);
+    const payloadHash = actionHash(requestedInput);
     return runWorkflowStart(`${coordinatorId}\0${stableRequestId}`, async () => {
       const receipt = await context.storage.reserveCoordinatorWorkflowAssociation({
         id: randomUUID(),
@@ -726,9 +721,11 @@ export function registerCoordinatorCommands(
       const conversationId = asNonBlankString(identity.conversationId, "conversationId");
       await requireCoordinatorConversation(context, projectId, coordinatorId, conversationId);
       const stableRequestId = asNonBlankString(requestId, "requestId");
-      if (!isStartMultiReviewInput(input) || input.projectId !== projectId) {
+      if (!record(input) || input.projectId !== projectId) {
         throw new Error("Invalid scoped multi-review request");
       }
+      // Omitted model rows and auto-actions run the saved Multi Review defaults.
+      const requestedInput = input;
       const requiredBuildPipelineId = asNonBlankString(buildPipelineId, "buildPipelineId");
       const buildRecord = await context.storage.getBuildPipeline(requiredBuildPipelineId);
       const buildSnapshot = buildRecord?.snapshot;
@@ -742,7 +739,10 @@ export function registerCoordinatorCommands(
           "Multi-review can start only after the associated build pipeline completed successfully",
         );
       }
-      const payloadHash = actionHash({ input, buildPipelineId: requiredBuildPipelineId });
+      const payloadHash = actionHash({
+        input: requestedInput,
+        buildPipelineId: requiredBuildPipelineId,
+      });
       return runWorkflowStart(`${coordinatorId}\0${stableRequestId}`, async () => {
         const receipt = await context.storage.reserveCoordinatorWorkflowAssociation({
           id: randomUUID(),
@@ -750,7 +750,7 @@ export function registerCoordinatorCommands(
           coordinatorId,
           conversationId,
           kind: "multi-review",
-          resourceId: `pending:${stableRequestId}`,
+          resourceId: randomUUID(),
           requestId: stableRequestId,
           payloadHash,
           dependsOnResourceId: requiredBuildPipelineId,
@@ -766,21 +766,45 @@ export function registerCoordinatorCommands(
         if (!receipt.claimed) {
           throw new Error("Multi-review creation is already in progress; retry this requestId");
         }
-        // A process may have crashed after the workflow save and before receipt
-        // completion. Reconcile that exact persisted input before creating work.
-        const recovered = (
-          await context.storage.listMultiReviewWorkflows(input.environmentId)
-        ).find(
-          (item) =>
-            record(item.snapshot) &&
-            typeof item.snapshot.createdAt === "string" &&
-            item.snapshot.createdAt >= receipt.association.createdAt &&
-            actionHash({
-              input: multiReviewInputFromSnapshot(item.snapshot),
-              buildPipelineId: requiredBuildPipelineId,
-            }) === payloadHash,
+        // The pending receipt reserves the workflow identity before any launch I/O.
+        // Recover by that identity even when defaults changed or the workflow finished.
+        if (receipt.association.resourceId.startsWith("pending:")) {
+          throw new Error(
+            "Legacy Multi Review reservation has no workflow identity; reconcile the existing review before starting more work",
+          );
+        }
+        const recovered = await context.storage.getMultiReviewWorkflow(
+          receipt.association.resourceId,
         );
-        const workflow = recovered?.snapshot ?? (await multiReviews.start(input));
+        if (recovered) {
+          await context.storage.completeCoordinatorWorkflowAssociation(
+            receipt.association.id,
+            receipt.association.resourceId,
+          );
+          return recovered.snapshot;
+        }
+        const environment =
+          typeof requestedInput.environmentId === "string"
+            ? await context.storage.getEnvironment(requestedInput.environmentId)
+            : null;
+        input = await multiReviewInputWithDefaults(
+          requestedInput,
+          savedLaunchSettings(
+            await context.storage.loadConfig(),
+            projectId,
+            environment?.projectId === projectId ? environment : undefined,
+          ),
+          () =>
+            readLaunchModelCatalog(
+              dependencies.commands.get("get_native_agent_model_catalog"),
+              String(requestedInput.environmentId),
+              context,
+            ),
+        );
+        if (!isStartMultiReviewInput(input) || input.projectId !== projectId) {
+          throw new Error("Invalid scoped multi-review request");
+        }
+        const workflow = await multiReviews.start(input, receipt.association.resourceId);
         if (!record(workflow) || typeof workflow.id !== "string") {
           throw new Error("Multi-review creation returned an invalid workflow");
         }

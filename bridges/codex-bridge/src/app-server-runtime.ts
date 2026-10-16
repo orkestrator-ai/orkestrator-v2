@@ -139,6 +139,18 @@ export class AppServerRuntime {
     return this.approvals.respondToInteraction(...args);
   }
 
+  holdApproval(
+    ...args: Parameters<CodexRuntimeApprovals["holdApproval"]>
+  ): ReturnType<CodexRuntimeApprovals["holdApproval"]> {
+    return this.approvals.holdApproval(...args);
+  }
+
+  holdInteraction(
+    ...args: Parameters<CodexRuntimeApprovals["holdInteraction"]>
+  ): ReturnType<CodexRuntimeApprovals["holdInteraction"]> {
+    return this.approvals.holdInteraction(...args);
+  }
+
   // -------------------------------------------------------------------------
   // Process lifecycle and supervision
 

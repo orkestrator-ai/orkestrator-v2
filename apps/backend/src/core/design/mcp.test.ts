@@ -220,14 +220,55 @@ describe("design MCP", () => {
     const retry = await call("submit_operation", descriptor);
     expect(retry.error ? retry.text : retry.value).toEqual(first.value);
     expect((await design.get(canvas.id, environmentId)).revision).toBe(3);
-    // Reusing a settled correlation id never runs new work: it reports the original receipt.
+    // Reusing a settled correlation id for different input is refused, never
+    // replayed as if it had run, and never runs new work.
     const changed = await call("submit_operation", {
       ...descriptor,
       input: { ...descriptor.input, patch: { x: 7 } },
     });
-    expect(changed.error ? changed.text : changed.value).toEqual(first.value);
+    expect(changed.error).toBe(true);
+    if (!changed.error) return;
+    const [message, typed] = changed.text.split("\n");
+    expect(message).toBe("This correlation id was already used for a different edit");
+    expect(JSON.parse(typed!)).toEqual({
+      error: {
+        code: "invalid-input",
+        message,
+        retry: "never",
+        details: { token: (first.value as { token: string }).token },
+      },
+    });
+    expect(await call("submit_operation", { ...descriptor, preconditions: {} })).toMatchObject({
+      error: true,
+      text: expect.stringContaining("different edit"),
+    });
     expect((await design.getFrame(canvas.id, environmentId, frame.id)).x).toBe(42);
     expect((await design.get(canvas.id, environmentId)).revision).toBe(3);
+    // A retry that serializes the same edit in another key order still replays.
+    const styles = { margin: "0", "margin-top": "10px" };
+    const kind = "set_element_styles";
+    const styled = {
+      canvasId: canvas.id,
+      input: { kind, frameId: frame.id, selector: "h1", styles },
+      preconditions: { frameRevision: 2 },
+      correlationId: "agent-style-1",
+    };
+    const styledFirst = await call("submit_operation", styled);
+    if (styledFirst.error) throw new Error(styledFirst.text);
+    expect(styledFirst.value).toMatchObject({ state: "committed", canvasRevision: 4 });
+    const reordered = await call("submit_operation", {
+      correlationId: styled.correlationId,
+      preconditions: styled.preconditions,
+      input: { styles, selector: "h1", frameId: frame.id, kind },
+      canvasId: styled.canvasId,
+    });
+    expect(reordered.error ? reordered.text : reordered.value).toEqual(styledFirst.value);
+    // Style order is part of the edit: margin after margin-top resets it.
+    const reversed = { "margin-top": "10px", margin: "0" };
+    expect(
+      await call("submit_operation", { ...styled, input: { ...styled.input, styles: reversed } }),
+    ).toMatchObject({ error: true, text: expect.stringContaining("different edit") });
+    expect((await design.get(canvas.id, environmentId)).revision).toBe(4);
     const found = await call("find_operation", {
       canvasId: canvas.id,
       correlationId: "agent-move-1",
@@ -255,15 +296,62 @@ describe("design MCP", () => {
     });
     expect(createdB.error ? createdB.text : createdB.value).toEqual(createdA.value);
     expect(
-      (await design.list(environmentId)).filter((entry) => entry.name === "From agent"),
-    ).toHaveLength(1);
-    // The edit is attributed to the agent.
+      await call("submit_operation", { ...create, input: { ...create.input, name: "Other" } }),
+    ).toMatchObject({ error: true, text: expect.stringContaining("different edit") });
+    const names = (await design.list(environmentId)).map((entry) => entry.name);
+    expect(names.filter((name) => name === "From agent")).toHaveLength(1);
+    expect(names).not.toContain("Other");
+    // The edits are attributed to the agent.
     expect(await design.historyStatus(canvas.id, environmentId, "agent")).toMatchObject({
-      undoCount: 1,
+      undoCount: 2,
     });
     expect(await design.historyStatus(canvas.id, environmentId, "user")).toMatchObject({
       undoCount: 1,
     });
+  });
+
+  test("a receipt settled before digests were kept replays only a matching retry", async () => {
+    const canvas = await design.create(environmentId, "Older receipts", undefined, "user");
+    const { frame } = await design.createFrame(
+      canvas.id,
+      environmentId,
+      1,
+      { name: "Card", x: 0, y: 0, width: 300, height: 200, html: "<h1>Card</h1>" },
+      "user",
+    );
+    const { call } = client();
+    const descriptor = {
+      canvasId: canvas.id,
+      input: { kind: "update_frame", frameId: frame.id, patch: { x: 42 } },
+      preconditions: { frameRevision: 1 },
+      correlationId: "older-move",
+    };
+    const first = await call("submit_operation", descriptor);
+    if (first.error) throw new Error(first.text);
+    // Drop the digest index, as a record written by an older backend has none.
+    await design.lane(canvas.id, async () => {
+      const { record } = await design.loadFor(canvas.id, environmentId);
+      expect(Object.keys(record.receiptDigests ?? {})).toEqual([
+        (first.value as { token: string }).token,
+      ]);
+      const older = structuredClone(record);
+      delete older.receiptDigests;
+      await design.commit(older, false);
+    });
+    expect((await design.loadFor(canvas.id, environmentId)).record.receiptDigests).toBeUndefined();
+    const retry = await call("submit_operation", descriptor);
+    expect(retry.error ? retry.text : retry.value).toEqual(first.value);
+    // Without a digest only the fields the receipt carries can disagree.
+    for (const changed of [
+      { ...descriptor, preconditions: { frameRevision: 2 } },
+      { ...descriptor, input: { kind: "delete_frame", frameId: frame.id } },
+      { ...descriptor, gestureId: "drag-1" },
+    ])
+      expect(await call("submit_operation", changed)).toMatchObject({
+        error: true,
+        text: expect.stringContaining("different edit"),
+      });
+    expect((await design.get(canvas.id, environmentId)).revision).toBe(3);
   });
 
   test("compact responses omit HTML while full responses keep the legacy shape", async () => {

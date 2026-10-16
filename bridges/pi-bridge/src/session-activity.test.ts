@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { AddressInfo } from "node:net";
+import { testApprovalDeadline } from "./testing/approval-fixtures.js";
 
 // `config.ts` reads its environment once, at import, so the bridge modules are
 // loaded after this suite's environment is in place (see `http.test.ts`).
@@ -74,7 +75,7 @@ describe("POST /sessions/activity", () => {
       toolName: "bash",
       input: { command: "ls" },
       createdAt: Date.now(),
-      expiresAt: Date.now() + 60_000,
+      deadline: testApprovalDeadline(),
       settle: () => undefined,
     });
     for (const state of [idle, running, waiting]) state.lastAccessed = 0;

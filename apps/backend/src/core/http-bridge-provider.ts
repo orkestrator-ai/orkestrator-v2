@@ -127,12 +127,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     this.interactionAdapter = new HttpBridgeInteractionAdapter(this.agent, connection, fetchImpl);
     this.catalogAdapter = new HttpBridgeCatalogAdapter(this.agent, connection, fetchImpl);
     this.activityBatchReader = new HttpBridgeActivityBatchReader(connection, fetchImpl);
-    this.interactions = {
-      listPendingInteractions: (sessionId) =>
-        this.interactionAdapter.listPendingInteractions(sessionId),
-      resolveInteraction: (sessionId, interactionId, resolution) =>
-        this.interactionAdapter.resolveInteraction(sessionId, interactionId, resolution),
-    };
+    this.interactions = this.interactionAdapter;
     if (this.agent === "grok") {
       this.turnTerminalError = (sessionId, requestId) =>
         readAcpTurnTerminalError(connection, fetchImpl, sessionId, requestId);

@@ -225,6 +225,11 @@ the mutation whatever the agent attempts. It requires both:
 so the same list means "Write, Edit" on one bridge and nothing at all on
 another. Use `capabilityPolicy`, which names the operation rather than the tool.
 
+Before moving a platform to `enforced`, run the live read-only suite for it
+(`mise run test:agent:coordinator --credential-source <platform>`) and keep the
+summary it writes. The unit tests show that the bridge translates the policy.
+Only a live run shows that the provider holds it.
+
 Where a platform cannot honour an axis, report it in the policy's `note` and
 leave the tier at `provider-configured`. Do not silently drop the axis, and do
 not claim a boundary the bridge is not holding — the tier is shown to the user
@@ -478,5 +483,13 @@ guarantee, not by one end-to-end scenario replayed per platform:
 - per-bridge activity and policy tests already cover whether a bridge reports
   `idle` at turn end and how it translates `capabilityPolicy`
 
-A live per-provider tree-hash suite is not in the tree. That gap is part of
-[coordinator-live-conformance.md](../todo/coordinator-live-conformance.md).
+- the read-only boundary against real providers: `mise run
+  test:agent:coordinator` runs one live coordinator turn per platform in a
+  disposable profile. Each turn attempts every class of mutation, then the
+  suite checks that the checkout digest is unchanged and that read and
+  discovery tools still answer. It is opt-in and never runs in `mise run test`
+  or CI. See "Live coordinator suite" in
+  [`agent-testing.md`](../development/agent-testing.md).
+
+The live async and mail scenarios, and the runs that qualify each platform, are
+in [coordinator-live-conformance.md](../todo/coordinator-live-conformance.md).

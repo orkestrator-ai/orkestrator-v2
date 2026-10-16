@@ -572,33 +572,43 @@ export function MultiReviewFlowGraph({
   layout,
 }: MultiReviewFlowGraphProps) {
   const [measureRef, measuredWidth] = useMeasuredWidth();
+  const [measureViewportRef, viewportWidth] = useMeasuredWidth();
   const nodeRefs = useRef(new Map<string, HTMLButtonElement>());
   const order = [packageNode, ...reviewerNodes, consolidationNode, fixNode];
   const stacked =
     layout === "stacked" ||
     (layout === undefined && measuredWidth !== null && measuredWidth < FLOW_GRAPH_STACK_BELOW);
   const geometry = multiReviewFlowLayout({
-    width: measuredWidth ?? 1440,
+    width: viewportWidth ?? measuredWidth ?? 1440,
     reviewerCount: reviewerNodes.length,
     packageHasChips: Boolean(packageNode.validation?.length),
   });
   const flowViewport = useFlowViewport({
     viewKey,
-    measuredWidth,
+    measuredWidth: viewportWidth,
     content: { width: geometry.width, height: geometry.height },
   });
   const { attachViewport } = flowViewport;
   const viewportRef = useCallback(
     (element: HTMLDivElement | null) => {
-      measureRef(element);
+      measureViewportRef(element);
       attachViewport(element);
     },
-    [attachViewport, measureRef],
+    [attachViewport, measureViewportRef],
   );
   // The stacked column keeps a view of its own, under its own key, so each
   // layout restores what it was left at.
   const [columnRef, columnHeight] = useMeasuredHeight();
   const stackedWrapperRef = useRef<HTMLDivElement | null>(null);
+  // This outer element survives layout changes and never reserves a scrollbar
+  // gutter. Only the inner viewport measurement determines graph geometry.
+  const wrapperRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      stackedWrapperRef.current = element;
+      measureRef(element);
+    },
+    [measureRef],
+  );
   const stackedViewport = useFlowViewport({
     viewKey: `${viewKey}\u0000stacked`,
     measuredWidth,
@@ -613,10 +623,9 @@ export function MultiReviewFlowGraph({
   const attachStackedViewport = stackedViewport.attachViewport;
   const stackedViewportRef = useCallback(
     (element: HTMLDivElement | null) => {
-      measureRef(element);
       attachStackedViewport(element);
     },
-    [attachStackedViewport, measureRef],
+    [attachStackedViewport],
   );
   const fitStacked = () => {
     stackedViewport.fit();
@@ -706,7 +715,7 @@ export function MultiReviewFlowGraph({
     const scaled = zoom !== 1 && measuredWidth !== null && columnHeight !== null;
     return (
       <div
-        ref={stackedWrapperRef}
+        ref={wrapperRef}
         data-flow-layout="stacked"
         className={cn("relative border-b border-divider", canvasClass)}
       >
@@ -739,6 +748,7 @@ export function MultiReviewFlowGraph({
               scaled
                 ? {
                     position: "relative",
+                    overflow: "clip",
                     width: measuredWidth * zoom,
                     height: columnHeight * zoom,
                     marginLeft: offset.x,
@@ -794,6 +804,7 @@ export function MultiReviewFlowGraph({
 
   return (
     <div
+      ref={wrapperRef}
       data-flow-layout="graph"
       className={cn("relative shrink-0 border-b border-divider", canvasClass)}
     >
@@ -810,7 +821,7 @@ export function MultiReviewFlowGraph({
         {...viewportHandlers}
       >
         <div
-          className="relative"
+          className="relative overflow-clip"
           style={{
             width: geometry.width * zoom,
             height: geometry.height * zoom,

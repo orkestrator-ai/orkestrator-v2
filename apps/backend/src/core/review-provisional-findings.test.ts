@@ -136,6 +136,50 @@ describe("reported finding validation", () => {
 });
 
 describe("provisional finding inbox", () => {
+  test("admits only one concurrent report into the last slot and persists every accepted id", async () => {
+    let open!: (value: boolean) => void;
+    const gate = new Promise<boolean>((resolve) => {
+      open = resolve;
+    });
+    const findings = new ProvisionalFindingInbox({ slotOpen: () => gate, wake: () => {} });
+    const record = reviewer({
+      provisionalFindings: Array.from({ length: 49 }, (_, index) => {
+        const parsed = parseReportedFinding(issue(`Recorded ${index}`));
+        if (!parsed.ok) throw new Error("invalid fixture");
+        return { id: parsed.id, reportedAt: "2026-10-16T00:00:00.000Z", issue: parsed.issue };
+      }),
+    });
+    findings.track(workflow({ reviewers: [record] }));
+    const first = findings.report(SCOPE, KEY, issue("Concurrent A"));
+    const second = findings.report(SCOPE, KEY, issue("Concurrent B"));
+    open(true);
+    const results = await Promise.all([first, second]);
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    expect(results.find((result) => !result.ok)).toMatchObject({
+      error: { code: "limit_reached" },
+    });
+    const staged = findings.take(KEY);
+    expect(staged).toHaveLength(1);
+    appendProvisionalFindings(record, staged);
+    expect(record.provisionalFindings).toHaveLength(REVIEW_PROVISIONAL_FINDINGS_MAX);
+    for (const result of results) {
+      if (result.ok)
+        expect(record.provisionalFindings?.some((finding) => finding.id === result.findingId)).toBe(
+          true,
+        );
+    }
+    findings.track(workflow({ reviewers: [record] }));
+    expect(await findings.report(SCOPE, KEY, issue("Concurrent A"))).toMatchObject({
+      ok: true,
+      duplicate: true,
+    });
+    expect(await findings.report(SCOPE, KEY, issue("Concurrent B"))).toMatchObject({
+      ok: false,
+      error: { code: "limit_reached" },
+    });
+    expect(findings.take(KEY)).toEqual([]);
+  });
+
   test("takes findings only from a running tool-mode reviewer of a live review", async () => {
     const { findings } = inbox();
     expect(findings.accepts(SCOPE, KEY)).toBe(false);

@@ -314,6 +314,58 @@ describe("StepTranscriptTail", () => {
     expect(within(tail).getByText("reports/reviewer-1.json")).toBeTruthy();
   });
 
+  for (const trigger of ["completion", "reactivation"] as const) {
+    test(`reads a fresh tail after ${trigger} during a pending read`, async () => {
+      useMultiReviewStore.getState().replaceWorkflow(workflowRevision(1));
+      let resolve!: (value: MultiReviewStepTranscript) => void;
+      const pending = new Promise<MultiReviewStepTranscript>((done) => {
+        resolve = done;
+      });
+      const final = stepTranscript({
+        sourceToken: "final-token",
+        messages: [message("final", [{ type: "text", content: "Consolidation finished." }])],
+      });
+      const loadTranscript = mock(
+        async (
+          _workflowId: string,
+          _step: MultiReviewStepKind,
+          _options?: { knownSourceToken?: string },
+        ) => (loadTranscript.mock.calls.length === 1 ? pending : final),
+      );
+      const view = renderStepTail(loadTranscript);
+      await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(1));
+      const show = (isActive: boolean) =>
+        view.rerender(
+          <StepTranscriptTail
+            workflowId="multi-1"
+            step="consolidate"
+            access={{ kind: "own" }}
+            live={false}
+            isActive={isActive}
+            loadTranscript={loadTranscript}
+          />,
+        );
+      if (trigger === "completion") {
+        act(() => {
+          useMultiReviewStore.getState().replaceWorkflow(workflowRevision(2));
+          useMultiReviewStore.getState().replaceWorkflow(workflowRevision(3));
+        });
+        show(true);
+      } else {
+        show(false);
+        show(true);
+      }
+      expect(loadTranscript).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        resolve(stepTranscript());
+        await pending;
+      });
+      await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(2));
+      expect(loadTranscript.mock.calls[1]?.[2]).toEqual({ knownSourceToken: "step-token-1" });
+      expect(await screen.findByText("Consolidation finished.")).toBeTruthy();
+    });
+  }
+
   test("polls only while the step is live, visible and its tab active", async () => {
     const { clock, document: fakeDocument } = installFakeReadCoordinator();
     const loadTranscript = mock(async () => stepTranscript());

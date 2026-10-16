@@ -289,6 +289,8 @@ export class ProvisionalFindingInbox implements ProvisionalFindingSink {
         },
       };
     }
+    // Admission and insertion must remain synchronous after slotOpen: concurrent
+    // reports must observe earlier insertions before testing the remaining capacity.
     const count = entry.recorded.size + entry.staged.length;
     if (entry.recorded.has(parsed.id) || entry.staged.some((staged) => staged.id === parsed.id)) {
       return {

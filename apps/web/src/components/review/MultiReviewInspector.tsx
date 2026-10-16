@@ -218,48 +218,62 @@ function useTranscriptTail<T extends TranscriptTailSnapshot>({
   const snapshotRef = useRef<T | null>(null);
   const sourceToken = useRef<string | undefined>(undefined);
   const readKey = useRef(viewKey);
-  const inFlight = useRef<{ viewKey: string; promise: Promise<void> } | null>(null);
+  const inFlight = useRef<{ viewKey: string; promise: Promise<void>; invalidated: boolean } | null>(
+    null,
+  );
   const workflowRevision = useMultiReviewStore(
     (state) => state.workflows.get(workflowId)?.backendRevision,
   );
 
-  const refresh = useCallback((): Promise<void> => {
-    const requestKey = `${workflowId}\u0000${targetId}`;
-    if (readKey.current !== requestKey) {
-      // Another node: never confirm a token this view no longer shows.
-      readKey.current = requestKey;
-      sourceToken.current = undefined;
-      snapshotRef.current = null;
-      inFlight.current = null;
-    }
-    if (inFlight.current?.viewKey === requestKey) return inFlight.current.promise;
-    // Assigned before the body can settle, so `finally` always sees it.
-    let promise!: Promise<void>;
-    promise = (async () => {
-      try {
-        const next = await readTail(workflowId, targetId, sourceToken.current);
-        if (readKey.current !== requestKey || !next) return;
-        sourceToken.current = next.sourceToken;
-        const merged = merge(snapshotRef.current, next);
-        snapshotRef.current = merged;
-        setRead({ viewKey: requestKey, snapshot: merged, error: null });
-      } catch (reason) {
-        if (readKey.current !== requestKey) return;
-        const error = reason instanceof Error ? reason.message : String(reason);
-        setRead({ viewKey: requestKey, snapshot: snapshotRef.current, error });
-      } finally {
-        if (inFlight.current?.promise === promise) inFlight.current = null;
+  const refresh = useCallback(
+    (invalidate = false): Promise<void> => {
+      const requestKey = `${workflowId}\u0000${targetId}`;
+      if (readKey.current !== requestKey) {
+        // Another node: never confirm a token this view no longer shows.
+        readKey.current = requestKey;
+        sourceToken.current = undefined;
+        snapshotRef.current = null;
+        inFlight.current = null;
       }
-    })();
-    inFlight.current = { viewKey: requestKey, promise };
-    return promise;
-  }, [merge, readTail, targetId, workflowId]);
+      if (inFlight.current?.viewKey === requestKey) {
+        if (invalidate) inFlight.current.invalidated = true;
+        return inFlight.current.promise;
+      }
+      // Publish the request before starting its body, including if readTail
+      // throws synchronously. Identity also fences late answers after reselecting a node.
+      const request = { viewKey: requestKey, promise: Promise.resolve(), invalidated: false };
+      request.promise = Promise.resolve().then(async () => {
+        try {
+          do {
+            request.invalidated = false;
+            try {
+              const next = await readTail(workflowId, targetId, sourceToken.current);
+              if (inFlight.current !== request || !next) return;
+              sourceToken.current = next.sourceToken;
+              const merged = merge(snapshotRef.current, next);
+              snapshotRef.current = merged;
+              setRead({ viewKey: requestKey, snapshot: merged, error: null });
+            } catch (reason) {
+              if (inFlight.current !== request) return;
+              const error = reason instanceof Error ? reason.message : String(reason);
+              setRead({ viewKey: requestKey, snapshot: snapshotRef.current, error });
+            }
+          } while (inFlight.current === request && request.invalidated);
+        } finally {
+          if (inFlight.current === request) inFlight.current = null;
+        }
+      });
+      inFlight.current = request;
+      return request.promise;
+    },
+    [merge, readTail, targetId, workflowId],
+  );
 
   // Selection, activation and every workflow checkpoint read once; bursts
-  // coalesce onto the request already in flight.
+  // coalesce into one fresh read after any request already in flight.
   useEffect(() => {
     if (!enabled) return;
-    void refresh();
+    void refresh(true);
   }, [enabled, refresh, workflowRevision]);
 
   const pollInstance = useId();

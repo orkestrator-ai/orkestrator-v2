@@ -100,6 +100,60 @@ test("uses the graph at desktop width and stacks on narrow screens", async ({ pa
   }
 });
 
+test("settles across the graph breakpoint with an 8px scrollbar gutter", async ({ page }) => {
+  await page.setViewportSize({ width: 952, height: 900 });
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/multi-review-flow?phase=reviewing&reviewers=32");
+  await page.addStyleTag({
+    content: `
+    [data-flow-viewport]::-webkit-scrollbar { width: 8px; height: 8px; }
+    [data-flow-viewport] { scrollbar-gutter: stable; scrollbar-color: auto; scrollbar-width: auto; }
+  `,
+  });
+  await expect(page.locator("[data-flow-layout]")).toHaveAttribute("data-flow-layout", "stacked");
+  const outerGutter = await page
+    .locator("[data-flow-layout]")
+    .evaluate((element) => window.innerWidth - element.clientWidth);
+  for (const width of [968, 964, 960, 959, 961, 965, 967, 958]) {
+    await page.setViewportSize({ width: width + outerGutter, height: 900 });
+    await expect
+      .poll(() => page.locator("[data-flow-layout]").evaluate((element) => element.clientWidth))
+      .toBe(width);
+    await expect(page.locator("[data-flow-layout]")).toHaveAttribute(
+      "data-flow-layout",
+      width < 960 ? "stacked" : "graph",
+    );
+    if (width >= 960) {
+      expect(
+        await page
+          .locator("[data-flow-viewport]")
+          .evaluate((element) => element.getBoundingClientRect().width - element.clientWidth),
+      ).toBe(8);
+    }
+    // Observe several paint/ResizeObserver cycles. The tablist must remain
+    // mounted and the layout must stop toggling once the resize has settled.
+    expect(
+      await page.locator("[data-flow-layout]").evaluate(async (element) => {
+        const tablist = element.querySelector('[role="tablist"]');
+        let changes = 0;
+        const observer = new MutationObserver(() => {
+          changes += 1;
+        });
+        observer.observe(element, {
+          attributes: true,
+          attributeFilter: ["data-flow-layout"],
+          childList: true,
+        });
+        for (let frame = 0; frame < 12; frame += 1) await new Promise(requestAnimationFrame);
+        observer.disconnect();
+        return changes === 0 && tablist === element.querySelector('[role="tablist"]');
+      }),
+    ).toBe(true);
+  }
+  expect(errors).toEqual([]);
+});
+
 test("walks the pipeline from the keyboard", async ({ page }) => {
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=4");
   const selected = page.locator('[role="tab"][aria-selected="true"]');
@@ -156,6 +210,13 @@ test("fits the 32-reviewer maximum and zooms within bounds", async ({ page }) =>
       return (await nodeBoxes(page)).every((box) => inside(box, frame));
     })
     .toBe(true);
+  // Layout overflow must agree with the scaled canvas, including at Fit.
+  const overflow = await page.locator("[data-flow-viewport]").evaluate((element) => ({
+    x: element.scrollWidth - element.clientWidth,
+    y: element.scrollHeight - element.clientHeight,
+  }));
+  expect(overflow.x).toBeLessThanOrEqual(1);
+  expect(overflow.y).toBeLessThanOrEqual(1);
   const boxes = await nodeBoxes(page);
   expect(boxes).toHaveLength(35);
   expect(overlapping(boxes)).toEqual([]);
@@ -174,6 +235,10 @@ test("keeps the node reached from the keyboard in view at the 32-reviewer maximu
   page,
 }) => {
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=32");
+  if (!isStacked(page)) {
+    await page.getByRole("button", { name: "Zoom in" }).click();
+    await page.getByRole("button", { name: "Zoom in" }).click();
+  }
   const selected = page.locator('[role="tab"][aria-selected="true"]');
   await selected.focus();
   await page.keyboard.press("Home");
@@ -193,9 +258,11 @@ test("pans the zoomed graph by dragging the canvas and with Ctrl + wheel zoom", 
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=32");
   const viewportLocator = page.locator("[data-flow-viewport]");
   const level = page.getByTestId("multi-review-zoom-level");
+  await page.getByRole("button", { name: "Zoom in" }).click();
+  await page.getByRole("button", { name: "Zoom in" }).click();
   if (isStacked(page)) {
     // The column fills the screen at 100%, so zoom in until it overflows sideways.
-    for (let click = 0; click < 4; click += 1) {
+    for (let click = 0; click < 2; click += 1) {
       await page.getByRole("button", { name: "Zoom in" }).click();
     }
     await expect(level).toHaveText("200%");

@@ -59,8 +59,8 @@ it reaches. Some rules of thumb:
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
 | High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 59 |
 | Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 243 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 251 |
-| **Total** | | **554** |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 252 |
+| **Total** | | **555** |
 
 ## Very high
 
@@ -165,8 +165,8 @@ it reaches. Some rules of thumb:
 ### Backend structure (high)
 
 - [x] Stop non-deleting sensitive saves rewriting the retired JSON archive with current values ([storage-service-repositories.md](storage-service-repositories.md))
-- [ ] Add storage guard tests: `saveJson` only under a lease, and no mixed `updateStore`/`saveJson` writers ([storage-service-repositories.md](storage-service-repositories.md))
-- [ ] Verify no store is written by both `updateStore` and a leased `saveJson` ([storage-service-repositories.md](storage-service-repositories.md), verify)
+- [x] Add storage guard tests: `saveJson` only under a lease, and no mixed `updateStore`/`saveJson` writers ([storage-service-repositories.md](storage-service-repositories.md))
+- [x] Verify no store is written by both `updateStore` and a leased `saveJson` ([storage-service-repositories.md](storage-service-repositories.md), verify)
 
 ### Cross-cutting (high)
 
@@ -424,7 +424,7 @@ it reaches. Some rules of thumb:
 - [ ] Extract the leaf storage repositories: preview services, agent mail, Kanban, drafts, public operations ([storage-service-repositories.md](storage-service-repositories.md))
 - [ ] Extract the entangled storage repositories, replacing abstract hooks with constructor dependencies ([storage-service-repositories.md](storage-service-repositories.md))
 - [ ] Delete the empty storage `extends` chain and `StorageBase`, and remove the pinned chain entry ([storage-service-repositories.md](storage-service-repositories.md))
-- [ ] Verify every `saveJson` call site is under a lease, beyond the text-sweep match ([storage-service-repositories.md](storage-service-repositories.md), verify)
+- [x] Verify every `saveJson` call site is under a lease, beyond the text-sweep match ([storage-service-repositories.md](storage-service-repositories.md), verify)
 - [ ] Extract `CatalogCache` (model and command catalogue caches) from `NativeAgentService` ([native-agent-service-collaborators.md](native-agent-service-collaborators.md))
 - [ ] Extract `TranscriptProjection` state and most of `native-agent-service-projection.ts` ([native-agent-service-collaborators.md](native-agent-service-collaborators.md))
 - [ ] Extract `InteractionTracker` from the native agent service layers ([native-agent-service-collaborators.md](native-agent-service-collaborators.md))
@@ -709,6 +709,7 @@ it reaches. Some rules of thumb:
 ### Backend structure (low)
 
 - [ ] Move protected-member test casts onto repository APIs as each store moves ([storage-service-repositories.md](storage-service-repositories.md), qualification)
+- [ ] Extend the storage writer guard to raw `StorageDatabase` writers outside the `StorageService` chain ([storage-service-repositories.md](storage-service-repositories.md))
 - [ ] Move the six `queue*` parsers into a module of pure functions ([native-agent-service-collaborators.md](native-agent-service-collaborators.md))
 - [ ] Split `applyPartialAssistantMessage` into one function per `stream_event` type ([claude-bridge-prompt-stream-state.md](claude-bridge-prompt-stream-state.md))
 - [ ] Move the three plan-mode flags from `PromptStreamState` to `TurnState` and fix the stale comment ([claude-bridge-prompt-stream-state.md](claude-bridge-prompt-stream-state.md))
@@ -804,7 +805,7 @@ it reaches. Some rules of thumb:
 | [coordinator-live-conformance.md](coordinator-live-conformance.md) |  | 4 | 6 |  | 10 |
 | [coordinator-consistency-gaps.md](coordinator-consistency-gaps.md) |  |  | 1 | 7 | 8 |
 | **Backend structure** | | | | | |
-| [storage-service-repositories.md](storage-service-repositories.md) |  | 3 | 5 | 1 | 9 |
+| [storage-service-repositories.md](storage-service-repositories.md) |  | 3 | 5 | 2 | 10 |
 | [native-agent-service-collaborators.md](native-agent-service-collaborators.md) |  |  | 5 | 1 | 6 |
 | [claude-bridge-prompt-stream-state.md](claude-bridge-prompt-stream-state.md) |  |  | 1 | 3 | 4 |
 | [backend-core-domain-folders.md](backend-core-domain-folders.md) |  |  | 4 | 3 | 7 |

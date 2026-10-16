@@ -14,7 +14,6 @@ interface SortableEnvironmentItemProps {
   onStop: (environmentId: string) => void;
   onRestart: (environmentId: string) => void;
   onFork?: (environmentId: string, environmentType: EnvironmentType) => void;
-  onUpdate?: (environment: Environment) => void;
   isMultiSelectMode?: boolean;
   isChecked?: boolean;
 }
@@ -28,7 +27,6 @@ export function SortableEnvironmentItem({
   onStop,
   onRestart,
   onFork,
-  onUpdate,
   isMultiSelectMode = false,
   isChecked = false,
 }: SortableEnvironmentItemProps) {
@@ -90,7 +88,6 @@ export function SortableEnvironmentItem({
             onStop={onStop}
             onRestart={onRestart}
             onFork={onFork}
-            onUpdate={onUpdate}
             isMultiSelectMode={isMultiSelectMode}
             isChecked={isChecked}
           />

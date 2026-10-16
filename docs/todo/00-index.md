@@ -57,10 +57,10 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 59 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 243 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 252 |
-| **Total** | | **555** |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 44 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 241 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 250 |
+| **Total** | | **536** |
 
 ## Very high
 
@@ -173,8 +173,8 @@ it reaches. Some rules of thumb:
 - [ ] Qualify Codex sub-agent cards on a fixture profile: one card per child, recovery after reload and restart ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
 - [x] Decide and implement a renderer-backend skew guard for raw OpenCode envelopes from older backends ([mixed-version-compatibility.md](mixed-version-compatibility.md))
 - [x] Fix flake 0166 (OpenCode probe deadline), which recurred on 2026-10-15 ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
-- [ ] Keep split panes mounted across the mobile breakpoint through stable per-pane hosts ([mobile-layout-gaps.md](mobile-layout-gaps.md))
-- [ ] Move the environment settings dialog out of the drawer row so it is usable on mobile ([mobile-layout-gaps.md](mobile-layout-gaps.md))
+- [x] Keep split panes mounted across the mobile breakpoint through stable per-pane hosts ([mobile-layout-gaps.md](mobile-layout-gaps.md))
+- [x] Move the environment settings dialog out of the drawer row so it is usable on mobile ([mobile-layout-gaps.md](mobile-layout-gaps.md))
 
 ## Medium
 
@@ -459,6 +459,7 @@ it reaches. Some rules of thumb:
 - [ ] Add `BackendProcess.launch` tests for readiness timeout, invalid auth file and startup races ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [ ] Test `main.ts` window and connection bookkeeping, including the `useConnection` rollback ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [ ] Add a breakpoint-crossing browser spec and check both mobile fixes in a real narrow browser ([mobile-layout-gaps.md](mobile-layout-gaps.md), qualification)
+- [x] Keep the panes the mobile switcher hides laid out, so a pane switch keeps the transcript's scroll ([mobile-layout-gaps.md](mobile-layout-gaps.md))
 - [ ] Upgrade Electron 44 → 46 before 44 loses support on 2027-03-02; re-test annotation masking on a HiDPI display ([dependency-upgrades.md](dependency-upgrades.md))
 - [ ] Burn down the React Compiler lint warnings in `apps/web` and raise each rule back to `error` at zero ([dependency-upgrades.md](dependency-upgrades.md))
 - [ ] Decide how to manage the update-manifest signing key before electron-builder 27 ([dependency-upgrades.md](dependency-upgrades.md), decision)
@@ -742,6 +743,8 @@ it reaches. Some rules of thumb:
 - [ ] Split backend `test:workspace` into source and `dist`-consuming tests if Turbo summaries justify it ([test-suite-and-ci-health.md](test-suite-and-ci-health.md), deferred)
 - [ ] Rotate a real phone or iOS simulator with a split and a terminal pane open ([mobile-layout-gaps.md](mobile-layout-gaps.md), qualification)
 - [ ] Verify the mobile environment-settings defect still reproduces in a real narrow browser ([mobile-layout-gaps.md](mobile-layout-gaps.md), verify)
+- [ ] Open the ActionBar's environment settings through `AppDialogHost`, leaving one host for the dialog ([mobile-layout-gaps.md](mobile-layout-gaps.md))
+- [ ] Return focus to the opener when a fullscreen settings dialog closes ([mobile-layout-gaps.md](mobile-layout-gaps.md))
 - [ ] Drop `tsx` from claude-bridge and codex-bridge in favour of `bun --watch` ([dependency-upgrades.md](dependency-upgrades.md))
 - [ ] Move to electron-builder 27 / electron-updater 7 once 27 is stable ([dependency-upgrades.md](dependency-upgrades.md), blocked)
 - [ ] Move to `marked` 18 once `@tiptap/markdown` accepts it ([dependency-upgrades.md](dependency-upgrades.md), blocked)
@@ -814,5 +817,5 @@ it reaches. Some rules of thumb:
 | [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md) |  | 1 | 10 | 3 | 14 |
 | [mixed-version-compatibility.md](mixed-version-compatibility.md) |  | 1 | 2 | 3 | 6 |
 | [test-suite-and-ci-health.md](test-suite-and-ci-health.md) | 1 | 1 | 4 | 11 | 17 |
-| [mobile-layout-gaps.md](mobile-layout-gaps.md) |  | 2 | 1 | 2 | 5 |
+| [mobile-layout-gaps.md](mobile-layout-gaps.md) |  |  | 1 | 4 | 5 |
 | [dependency-upgrades.md](dependency-upgrades.md) |  |  | 3 | 7 | 10 |

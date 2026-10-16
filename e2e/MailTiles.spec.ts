@@ -88,3 +88,43 @@ test("an expanded tile stays expanded when the transcript remounts", async ({ pa
   await expect(tiles(page).nth(1)).toHaveAttribute("data-expanded", "true");
   await expect(tiles(page).nth(0)).toHaveAttribute("data-expanded", "false");
 });
+
+test("find reveals a match below the mail preview and restores the saved expansion choice", async ({
+  page,
+}) => {
+  await page.goto("/mail-tiles");
+  const report = tiles(page).nth(0);
+  await expect(report).toHaveAttribute("data-expanded", "false");
+  // Keep another tile explicitly expanded while search temporarily opens the report.
+  await header(page, /Orkestrator workflow.*Multi Review ready/).click();
+  await header(page, /parser-fix worker/).focus();
+  await page.keyboard.press("ControlOrMeta+f");
+  const search = page.getByPlaceholder("Find in chat");
+  await search.fill("Detail line 100");
+  await expect(report).toHaveAttribute("data-expanded", "true");
+  const body = report.locator("[data-mail-body]");
+  await expect(body).not.toHaveAttribute("data-clamped", "true");
+  await expect(body).toHaveJSProperty("inert", false);
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const entry = Array.from(CSS.highlights.entries()).find(([name]) =>
+          name.startsWith("agent-chat-find-current-"),
+        );
+        const range = entry ? Array.from(entry[1])[0] : undefined;
+        if (!(range instanceof Range)) return false;
+        const rect = range.getBoundingClientRect();
+        const clip = document.querySelector("[data-mail-body]")!.getBoundingClientRect();
+        return (
+          rect.top >= clip.top &&
+          rect.bottom <= clip.bottom &&
+          rect.top >= 0 &&
+          rect.bottom <= innerHeight
+        );
+      }),
+    )
+    .toBe(true);
+  await search.press("Escape");
+  await expect(report).toHaveAttribute("data-expanded", "false");
+  await expect(tiles(page).nth(1)).toHaveAttribute("data-expanded", "true");
+});

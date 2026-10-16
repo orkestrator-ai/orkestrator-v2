@@ -15,3 +15,15 @@ Observed: 2026-10-14
 - Isolated rerun: `mise run test:logged -- --name fake-codex-isolated -- bun test ./bridges/codex-bridge/src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` passed unchanged in 0.2 seconds.
 
 Hypothesis: subprocess scheduling or startup delay under concurrent host load exceeded the fixed deadline. The test source was neither changed nor skipped.
+
+## Recurrence — 2026-10-16 (coordinator status-wake review fixes)
+
+`mise run test:logged -- --name review-all-tests -- mise run test` repeated
+this timeout at 5012.47 ms with one Codex bridge worker on the shared host.
+The bridge group failed only this case; the other four bridge packages passed.
+Evidence: `/tmp/orkestrator-test-run.stt8gO/bridges.log.gz` (compressed when
+the aggregate completes).
+
+`mise run test:logged -- --name review-codex-fixture-recheck -- bun test ./bridges/codex-bridge/src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures`
+passed unchanged alone in 0.4 seconds. No assertion or timeout was changed.
+Concurrent host contention remains an unconfirmed hypothesis.

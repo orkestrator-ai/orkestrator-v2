@@ -355,6 +355,23 @@ export function registerCoordinatorReviewActions(register: CommandRegistrar): vo
               `The review tab could not be opened: ${conciseError(error)} Close a tab if needed, ensure the environment is ready, then retry address_multi_review. No fix handoff was queued.`,
             );
           }
+          // Address adopts renderer-started work before dispatch so the observer
+          // can deliver the fix outcome even while this conversation is inactive.
+          if (!ownedAssociation) {
+            const association = await context.storage.saveCoordinatorWorkflowAssociation({
+              id: randomUUID(),
+              ...caller,
+              kind: "multi-review",
+              resourceId: id,
+              requestId: `address:${id}`,
+              createdAt: new Date().toISOString(),
+            });
+            if (association.conversationId !== caller.conversationId) {
+              throw new Error(
+                "Adopt this workflow into the current coordinator conversation before addressing it",
+              );
+            }
+          }
           try {
             workflow = await context.multiReviews.address(id);
           } catch (error) {

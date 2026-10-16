@@ -161,3 +161,15 @@ passed the unchanged owning file (four tests, exit 0) in 7.8 seconds. These
 credential checks do not change Pi staging. Host contention remains an
 unconfirmed hypothesis; no timeout, assertion or skip was changed in the
 vendoring tests.
+
+## Recurrence — 2026-10-16 (coordinator status-wake review fixes)
+
+`mise run test:logged -- --name review-all-tests -- mise run test` timed out
+the staged-runtime test at 30000.28 ms, using one isolated root worker while
+other worktrees and browser checks shared the host. Evidence:
+`/tmp/orkestrator-test-run.stt8gO/root-and-agent-support-tests.log.gz`
+(compressed when the aggregate completes).
+
+`mise run test:logged -- --name review-pi-vendor-recheck -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+passed unchanged alone (exit 0, 30.5 seconds for the owning file). No timeout,
+assertion or skip was changed. Host contention remains an unconfirmed cause.

@@ -1260,7 +1260,10 @@ async function createControlMcp(
         });
         const record = normalizedWorkflow(workflow);
         if (!record) throw new Error("Build pipeline returned no result");
-        return toolResult({ workflow: workflowSummary(record), ...workflowStatusWakeResult() });
+        return toolResult({
+          workflow: workflowSummary(record),
+          ...(await workflowStatusWakeResult(invoke)),
+        });
       },
     );
 
@@ -1336,7 +1339,10 @@ async function createControlMcp(
         });
         const record = normalizedWorkflow(workflow);
         if (!record) throw new Error("Multi-review returned no result");
-        return toolResult({ workflow: workflowSummary(record), ...workflowStatusWakeResult() });
+        return toolResult({
+          workflow: workflowSummary(record),
+          ...(await workflowStatusWakeResult(invoke)),
+        });
       },
     );
 

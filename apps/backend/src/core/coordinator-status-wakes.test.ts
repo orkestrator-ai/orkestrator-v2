@@ -279,6 +279,8 @@ describe("coordinator status wakes", () => {
     await savePipeline(world, worker, "pipeline-1", {
       phase: "paused",
       pausedFromPhase: "reviewing",
+      pauseCause: "requested",
+      error: "Reconnect failed",
     });
     await settle(context);
     expect(world.wakes(coordinator)).toBe(0);
@@ -287,6 +289,7 @@ describe("coordinator status wakes", () => {
       phase: "paused",
       pausedFromPhase: "fixing",
       error: "The fix changed nothing",
+      pauseCause: "supervisor",
     });
     await settle(context);
     await world.finishTurn(coordinator);
@@ -439,6 +442,113 @@ describe("coordinator status wakes", () => {
       "failed",
     ]);
   });
+
+  test("legacy consolidation survives delayed result saves without duplicate wakes", async () => {
+    const context = await createWorld();
+    const { world } = context;
+    const main = await world.main();
+    const worker = await world.addEnvironment("legacy-review");
+    await associate(world, "multi-review", "legacy");
+    const snapshot = {
+      phase: "ready",
+      fixSession: {
+        sessionKey: "legacy-consolidation",
+        status: "idle",
+        completedAt: "2026-10-16T10:00:00Z",
+      },
+      consolidatedReport: READY_REPORT,
+    };
+    await saveReview(world, worker, "legacy", { ...snapshot, updatedAt: "2026-10-16T10:01:00Z" });
+    await settle(context);
+    await world.finishTurn(main);
+    await saveReview(world, worker, "legacy", {
+      ...snapshot,
+      updatedAt: "2026-10-16T10:02:00Z",
+      pendingResultConsumptions: [],
+    });
+    await settle(context);
+    expect(world.wakes(main)).toBe(1);
+  });
+
+  for (const stage of ["reviewer", "consolidation"] as const) {
+    test(`a stalled build fan-out ${stage} wakes once per episode`, async () => {
+      const context = await createWorld();
+      const { world } = context;
+      const main = await world.main();
+      const worker = await world.addEnvironment("fanout");
+      await associate(world, "build-pipeline", "fanout");
+      const save = async (since: string) => {
+        const session = { sessionKey: stage, status: "running", stalledSince: since };
+        await savePipeline(world, worker, "fanout", {
+          phase: "reviewing",
+          reviewFanout:
+            stage === "reviewer"
+              ? { reviewers: [session] }
+              : { reviewers: [], consolidation: session },
+        });
+        await settle(context);
+      };
+      await save("2026-10-16T10:00:00Z");
+      await world.finishTurn(main);
+      await save("2026-10-16T10:00:00Z");
+      expect(world.wakes(main)).toBe(1);
+      await save("2026-10-16T11:00:00Z");
+      expect(world.wakes(main)).toBe(2);
+      expect(
+        world
+          .carriers(main)
+          .flat()
+          .map((message) => message.notice?.state),
+      ).toEqual(["stalled", "stalled"]);
+    });
+  }
+
+  for (const budget of ["loop", "hourly"] as const) {
+    test(`worker budget hold notices are once per ${budget} window and do not recurse`, async () => {
+      const context = await createWorld(
+        budget === "loop" ? { autonomousWakeBudget: 1 } : { hourlyWakeLimit: 1 },
+      );
+      const { world } = context;
+      const main = await world.main();
+      const worker = await world.addEnvironment("chatty");
+      await world.send(worker, main, "first");
+      await world.deliver();
+      await world.finishTurn(main);
+      const held = await world.send(worker, main, "second");
+      expect(held.placementReason).toBe(
+        budget === "loop" ? AGENT_MAIL_LOOP_BUDGET_REASON : AGENT_MAIL_HOURLY_LIMIT_REASON,
+      );
+      await world.send(worker, main, "third");
+      await world.deliver();
+      const notices = (await coordinatorInbox(world)).filter(
+        (message) => message.notice?.state === "mail-held",
+      );
+      expect(notices).toHaveLength(1);
+      expect(notices[0]!.requestId).toMatch(budget === "loop" ? /:epoch-\d+$/ : /:hour-\d+$/);
+      expect(notices[0]!.from.kind).toBe("system");
+      expect(notices[0]!.placement).toBe("injected");
+      expect(world.received(main).join("\n")).toContain("read_messages");
+      await world.finishTurn(main);
+      if (budget === "loop") {
+        await world.storage.resetAgentMailBudgetForSession(
+          main.environmentId,
+          main.logicalSessionKey,
+        );
+      } else {
+        await advance(context, 3_600_001);
+        await world.deliver();
+        await world.finishTurn(main);
+      }
+      await world.send(worker, main, "new budget first");
+      await world.deliver();
+      await world.finishTurn(main);
+      await world.send(worker, main, "new budget held");
+      await world.deliver();
+      expect(
+        (await coordinatorInbox(world)).filter((message) => message.notice?.state === "mail-held"),
+      ).toHaveLength(2);
+    });
+  }
 
   test("a resource's notices spend the unattended budget; the user's prompt starts a new one", async () => {
     const context = await createWorld({ autonomousWakeBudget: 2 });
@@ -739,6 +849,40 @@ describe("status classification and bounds", () => {
       ),
     ).toBeNull();
   });
+
+  for (const error of [
+    "Reconnect failed",
+    "Build paused, but stopping every agent could not be confirmed",
+  ]) {
+    test(`a requested pause with ${error} is not supervisor attention`, () => {
+      expect(
+        buildPipelineStatus({ phase: "paused", pauseCause: "requested", error }, "p"),
+      ).toBeNull();
+    });
+  }
+
+  test("legacy ready and consolidation keys use the session attempt, not bookkeeping time", () => {
+    const session = { sessionKey: "legacy", startedAt: "start", completedAt: "done" };
+    const ready = (updatedAt: string) =>
+      multiReviewStatus({ phase: "ready", fixSession: session, updatedAt }, "r")!.key;
+    expect(ready("first save")).toBe(ready("delayed result consumption"));
+    const stage = (sessionKey: string) =>
+      multiReviewStatus({ phase: "consolidating", fixSession: { ...session, sessionKey } }, "r")!
+        .key;
+    expect(stage("first attempt")).not.toBe(stage("second attempt"));
+  });
+
+  for (const [phase, finished] of [
+    ["fixing", "verification"],
+    ["creating-pr", "verification"],
+    ["resolving-conflicts", "pull request"],
+  ]) {
+    test(`${phase} reports its preceding completed stage`, () => {
+      expect(buildPipelineStatus({ phase }, "p")?.headline).toBe(
+        `finished its ${finished} stage; now ${phase}`,
+      );
+    });
+  }
 
   test("subjects, details and bodies stay bounded whatever the workflow holds", () => {
     const status = buildPipelineStatus(

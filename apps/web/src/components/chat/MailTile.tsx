@@ -1,4 +1,12 @@
-import { memo, useId, useLayoutEffect, useRef, useState, type ComponentType } from "react";
+import {
+  memo,
+  useContext,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ComponentType,
+} from "react";
 import {
   Bell,
   ChevronRight,
@@ -17,6 +25,7 @@ import { mailMarkdownComponents } from "@/components/agent-mail/mail-markdown-co
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 import type { PeerMailPresentation } from "@/lib/chat/native-message-types";
 import { cn } from "@/lib/utils";
+import { ChatFindActiveContext } from "./chat-find-context";
 import { MessageMarkdown } from "./MessageMarkdown";
 
 /**
@@ -128,7 +137,9 @@ export const MailTile = memo(function MailTile({
   expansionKey,
   timestampLabel,
 }: MailTileProps) {
-  const [open, setOpen] = useMessagePartExpansion(expansionKey);
+  const [preferredOpen, setOpen] = useMessagePartExpansion(expansionKey);
+  const findActive = useContext(ChatFindActiveContext);
+  const open = preferredOpen || findActive;
   const bodyId = useId();
   const bodyRef = useRef<HTMLDivElement>(null);
   const [overflows, setOverflows] = useState(false);

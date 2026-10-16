@@ -170,8 +170,13 @@ export function multiReviewStatus(snapshot: unknown, workflowId: string): Coordi
   const phase = text(snapshot.phase);
   const read = `get_multi_review { "workflowId": "${workflowId}" }`;
   const errorLine = text(snapshot.error) ? [`Error: ${boundedLine(snapshot.error as string)}`] : [];
-  const reviewSession = record(snapshot.reviewSession) ? snapshot.reviewSession : undefined;
   const fixSession = record(snapshot.fixSession) ? snapshot.fixSession : undefined;
+  const reviewSession = record(snapshot.reviewSession)
+    ? snapshot.reviewSession
+    : snapshot.reviewModel || snapshot.consolidationModel
+      ? undefined
+      : fixSession;
+  const reviewAttempt = `${text(reviewSession?.sessionKey) ?? ""}:${text(reviewSession?.startedAt) ?? ""}`;
   if (phase === "completed") {
     const fix = record(snapshot.fixResult) ? snapshot.fixResult : undefined;
     return {
@@ -244,7 +249,7 @@ export function multiReviewStatus(snapshot: unknown, workflowId: string): Coordi
     const findings = findingCounts(snapshot.consolidatedReport);
     return {
       // A restarted consolidation reaches `ready` again with a new report.
-      key: `ready:${hash(text(reviewSession?.completedAt) ?? text(snapshot.updatedAt) ?? "")}`,
+      key: `ready:${hash(`${reviewAttempt}:${text(reviewSession?.completedAt) ?? ""}`)}`,
       state: "ready",
       tone: findings.total > 0 ? "attention" : "success",
       terminal: false,
@@ -291,7 +296,7 @@ export function multiReviewStatus(snapshot: unknown, workflowId: string): Coordi
       (reviewer) => record(reviewer) && reviewer.status === "completed",
     ).length;
     return {
-      key: `consolidating:${hash(text(reviewSession?.sessionKey) ?? "")}`,
+      key: `consolidating:${hash(reviewAttempt)}`,
       state: "reviews-finished",
       tone: "info",
       terminal: false,
@@ -309,6 +314,7 @@ const BUILD_STAGE_LABELS: Record<string, string> = {
   addressing: "review",
   verifying: "address",
   fixing: "verification",
+  // Successful verification starts PR creation; a fix loops back through review.
   "creating-pr": "verification",
   "resolving-conflicts": "pull request",
 };
@@ -357,9 +363,9 @@ export function buildPipelineStatus(
   }
   // A pause the user (or the coordinator) asked for is not news to them; a
   // pause the supervisor took on an error needs a decision.
-  if (phase === "paused" && errorLine.length > 0) {
+  if (phase === "paused" && snapshot.pauseCause === "supervisor") {
     return {
-      key: `paused:${text(snapshot.pausedFromPhase) ?? ""}:${iteration}:${hash(snapshot.error as string)}`,
+      key: `paused:${text(snapshot.pausedFromPhase) ?? ""}:${iteration}:${hash(text(snapshot.error) ?? "")}`,
       state: "paused",
       tone: "attention",
       terminal: false,
@@ -369,6 +375,32 @@ export function buildPipelineStatus(
       mode: "settled",
     };
   }
+  const fanout = record(snapshot.reviewFanout) ? snapshot.reviewFanout : undefined;
+  const fanoutStall =
+    phase === "reviewing" && fanout
+      ? stalledSession([
+          ...(Array.isArray(fanout.reviewers)
+            ? fanout.reviewers.map(
+                (reviewer, index) => [`reviewer ${index + 1}`, reviewer] as [string, unknown],
+              )
+            : []),
+          ["consolidation", fanout.consolidation],
+        ])
+      : null;
+  if (fanoutStall)
+    return {
+      key: `stalled:${hash(`${fanoutStall.key}:${fanoutStall.since}`)}`,
+      state: "stalled",
+      tone: "attention",
+      terminal: false,
+      headline: `stalled (${fanoutStall.label})`,
+      details: [
+        ...task,
+        `No activity from the ${fanoutStall.label} session since ${fanoutStall.since}.`,
+      ],
+      tools: [read],
+      mode: "settled",
+    };
   const stall = record(snapshot.stallWarning) ? snapshot.stallWarning : undefined;
   if (stall && phase !== "paused") {
     return {

@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { VirtualizedMessageList } from "../../apps/web/src/components/chat/VirtualizedMessageList";
+import type { VirtuosoHandle } from "react-virtuoso";
+import { useRef, useState } from "react";
 import { renderAgentMailCarrier, type AgentMailMessage } from "@orkestrator/protocol/agent-mail";
 import { NativeMessage } from "../../apps/web/src/components/chat/NativeMessage";
 import { createPeerMailNativeMessagesFromCarrier } from "../../apps/web/src/lib/chat/client-only-messages";
@@ -12,7 +14,7 @@ const REPORT = [
   "- Ran `bun test` (412 passed)",
   "- Opened [the pull request](https://example.com/pr/12)",
   "",
-  ...Array.from({ length: 10 }, (_, index) => `Detail line ${index + 1} of the full report.`),
+  ...Array.from({ length: 100 }, (_, index) => `Detail line ${index + 1} of the full report.`),
 ].join("\n");
 
 function message(overrides: Partial<AgentMailMessage>): AgentMailMessage {
@@ -83,6 +85,7 @@ const BATCH = [
 
 export function MailTilesFixture() {
   const [mounted, setMounted] = useState(true);
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
   const rows = createPeerMailNativeMessagesFromCarrier({
     content: BATCH,
     createdAt: "2026-10-16T10:04:00.000Z",
@@ -97,10 +100,22 @@ export function MailTilesFixture() {
         {mounted ? "Unmount transcript" : "Mount transcript"}
       </button>
       {mounted ? (
-        <div data-testid="mail-transcript">
-          {rows.map((row) => (
-            <NativeMessage key={row.id} message={row} agentExpansionScope="fixture-session" />
-          ))}
+        <div data-testid="mail-transcript" className="flex flex-col" style={{ height: 600 }}>
+          <VirtualizedMessageList
+            messages={rows}
+            computeItemKey={(_, row) => row.id}
+            renderMessage={(_, row) => (
+              <NativeMessage message={row} agentExpansionScope="fixture-session" />
+            )}
+            virtuosoRef={virtuosoRef}
+            scrollProps={{
+              followOutput: () => false,
+              atBottomStateChange: () => undefined,
+              atBottomThreshold: 50,
+              restoreStateFrom: undefined,
+            }}
+            find={{ isActive: true, getSearchText: (row) => row.peerMail?.body ?? "" }}
+          />
         </div>
       ) : null}
     </div>

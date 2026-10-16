@@ -1,3 +1,5 @@
+import { ControlMcpServer } from "./control-mcp-server.js";
+import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -723,13 +725,69 @@ test("address accepts a renderer-started review with no coordinator association"
     addressTabId: `multi-review-fix:${ready.id}`,
   }));
   context.multiReviews!.address = address;
-  const outcome = (await commands.get("address_coordinator_multi_review_action")!(
-    { scope, workflowId: ready.id },
-    context,
-  )) as MultiReviewActionResult;
-  expect(outcome).toMatchObject({ outcome: "pending", workflow: { id: ready.id } });
-  expect(address).toHaveBeenCalledWith(ready.id);
-  expect(await storage.listCoordinatorWorkflowAssociations(scope.projectId)).toEqual([]);
+  const server = new ControlMcpServer(
+    storage.getDataDir(),
+    async <T>(command: string, args = {}) => (await commands.get(command)!(args, context)) as T,
+    { port: 0 },
+  );
+  await server.start();
+  try {
+    const workspace = (await storage.getCoordinatorWorkspace(scope.projectId))!;
+    const conversation = workspace.conversations.find((item) => item.id === scope.conversationId)!;
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      ...scope,
+      mailboxIncarnationId: conversation.mailboxIncarnationId!,
+      capabilities: ["multi-review"],
+    });
+    const response = await fetch(credential.url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${credential.token}`,
+        Accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "address_multi_review", arguments: { workflowId: ready.id } },
+      }),
+    });
+    const payload = await response.text();
+    const json = response.headers.get("content-type")?.startsWith("text/event-stream")
+      ? payload
+          .split("\n")
+          .find((line) => line.startsWith("data: "))!
+          .slice(6)
+      : payload;
+    const result = JSON.parse(json).result;
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent.delivery).toBe("async");
+    expect(result.structuredContent.wake).toContain("fix done or failed");
+    const outcome = result.structuredContent as MultiReviewActionResult;
+    expect(outcome).toMatchObject({ outcome: "pending", workflow: { id: ready.id } });
+    expect(address).toHaveBeenCalledWith(ready.id);
+    expect(await storage.listCoordinatorWorkflowAssociations(scope.projectId)).toEqual([
+      expect.objectContaining({ ...scope, kind: "multi-review", resourceId: ready.id }),
+    ]);
+    // The fix settles while no renderer is mounted; the saved association is
+    // sufficient for the real observer to put the promised wake in the inbox.
+    await storage.saveMultiReviewWorkflow(ready.id, environmentId, 1, {
+      ...ready,
+      phase: "interactive",
+      addressPromptPending: false,
+      fixSession: { ...ready.fixSession!, status: "idle" },
+    });
+    await context.coordinators!.reconcileWorkflowNotifications();
+    const inbox = await storage.getAgentMailMailbox(
+      coordinatorRuntimeId(scope.coordinatorId, scope.conversationId),
+      conversation.tabId,
+    );
+    expect(inbox.messages.map((message) => message.notice?.state)).toEqual(["fix-done"]);
+  } finally {
+    await server.stop();
+  }
 });
 
 test("terminal workflows remain idempotent and an explicitly deleted workflow is not relaunched", async () => {

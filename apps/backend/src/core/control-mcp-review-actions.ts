@@ -1,7 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { CoordinatorControlScope, ControlMcpInvoker } from "./control-mcp-server.js";
+import { COORDINATOR_WORKFLOW_STATUS_WAKE } from "@orkestrator/protocol/coordinator";
 import { workflowSummary } from "./control-workflow-summary.js";
+import { normalizeAgentMessagingSettings } from "@orkestrator/protocol/agent-mail";
 import type { MultiReviewActionResult } from "@orkestrator/protocol/multi-review";
 
 const selection = z
@@ -11,6 +13,24 @@ const selection = z
     reasoningEffort: z.string().trim().min(1).max(128).optional(),
   })
   .strict();
+
+/** The async contract for a coordinator-started workflow; see `COORDINATOR_WORKFLOW_STATUS_WAKE`. */
+export async function workflowStatusWakeResult(invoke: ControlMcpInvoker) {
+  const config = await invoke<{ global: { agentMessaging?: unknown } }>("get_config");
+  const mode = normalizeAgentMessagingSettings(config.global.agentMessaging).coordinatorStatusWakes;
+  if (mode === "off")
+    return {
+      delivery: "async" as const,
+      wake: "Only terminal workflow notices (completed, failed or cancelled) are enabled. Ready reviews, finished fix turns, stalls and pauses will not wake this conversation.",
+      nextStep:
+        "Finish your turn with a summary. For non-terminal work, tell the user to inspect get_multi_review or get_build_pipeline and return to continue; do not wait for a ready or fix-turn wake.",
+    };
+  return {
+    delivery: "async" as const,
+    wake: COORDINATOR_WORKFLOW_STATUS_WAKE,
+    nextStep: "Finish your turn now. Do not poll.",
+  };
+}
 
 type SelectionRow = { agent?: unknown; model?: unknown; reasoningEffort?: unknown };
 
@@ -42,14 +62,24 @@ function reviewSelection(
   };
 }
 
-function response(
+async function response(
   value: MultiReviewActionResult,
-  launchInput?: { reviewers?: unknown; reviewModel?: unknown; fixModel?: unknown },
+  invoke: ControlMcpInvoker,
+  options: {
+    startsWork?: boolean;
+    launchInput?: { reviewers?: unknown; reviewModel?: unknown; fixModel?: unknown };
+  } = {},
 ) {
   const summary = {
     ...value,
     workflow: workflowSummary(value.workflow as unknown as Record<string, unknown>),
-    ...(launchInput && value.workflow ? { selection: reviewSelection(value, launchInput) } : {}),
+    // Launching or addressing starts work the coordinator will hear back about.
+    ...(options.startsWork && value.outcome !== "partial"
+      ? await workflowStatusWakeResult(invoke)
+      : {}),
+    ...(options.launchInput && value.workflow
+      ? { selection: reviewSelection(value, options.launchInput) }
+      : {}),
   };
   return {
     content: [{ type: "text" as const, text: JSON.stringify(summary) }],
@@ -109,7 +139,8 @@ export function registerControlReviewActions(
           scope,
           input,
         }),
-        input,
+        invoke,
+        { startsWork: true, launchInput: input },
       ),
   );
 
@@ -147,7 +178,9 @@ export function registerControlReviewActions(
         },
       },
       async ({ workflowId }) =>
-        response(await invoke<MultiReviewActionResult>(command, { scope, workflowId })),
+        response(await invoke<MultiReviewActionResult>(command, { scope, workflowId }), invoke, {
+          startsWork: name === "address_multi_review",
+        }),
     );
   }
 }

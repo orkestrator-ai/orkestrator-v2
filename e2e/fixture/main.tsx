@@ -106,6 +106,10 @@ const ProjectNavigationFixture = lazy(async () => ({
   default: (await import("./ProjectNavigationFixture")).ProjectNavigationFixture,
 }));
 
+const MailTilesFixture = lazy(async () => ({
+  default: (await import("./MailTilesFixture")).MailTilesFixture,
+}));
+
 const PaneBreakpointFixture = lazy(async () => ({
   default: (await import("./PaneBreakpointFixture")).PaneBreakpointFixture,
 }));
@@ -1655,6 +1659,13 @@ function PullRequestCheckStatusFixture() {
 function fixtureForPath() {
   if (window.location.pathname === "/coordinator-pane-tree") return <CoordinatorPaneTreeFixture />;
   if (window.location.pathname === "/add-project") return <AddProjectDialogFixture />;
+  if (window.location.pathname === "/mail-tiles") {
+    return (
+      <Suspense fallback={null}>
+        <MailTilesFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/project-navigation") {
     return (
       <Suspense fallback={null}>

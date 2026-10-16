@@ -162,6 +162,18 @@ credential checks do not change Pi staging. Host contention remains an
 unconfirmed hypothesis; no timeout, assertion or skip was changed in the
 vendoring tests.
 
+## Recurrence — 2026-10-16 (coordinator status-wake review fixes)
+
+`mise run test:logged -- --name review-all-tests -- mise run test` timed out
+the staged-runtime test at 30000.28 ms, using one isolated root worker while
+other worktrees and browser checks shared the host. Evidence:
+`/tmp/orkestrator-test-run.stt8gO/root-and-agent-support-tests.log.gz`
+(compressed when the aggregate completes).
+
+`mise run test:logged -- --name review-pi-vendor-recheck -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+passed unchanged alone (exit 0, 30.5 seconds for the owning file). No timeout,
+assertion or skip was changed. Host contention remains an unconfirmed cause.
+
 Recurred on 2026-10-16 at 30000.02 ms in `mise run test` for the coordinator
 launch-defaults change (no Pi bridge code touched). The unchanged owning file
 passed alone (4 pass, 0 fail). Evidence: `/tmp/orkestrator-test-run.k2ySO0/root-and-agent-support-tests.log.gz`.
@@ -297,3 +309,21 @@ timeout or skip was changed to conceal the failure.
 - **Disposition:** isolated pass confirms an intermittent recurrence. The
   existing contention hypothesis remains unconfirmed; no implementation,
   assertion, timeout or skip changed.
+
+## Recurrence — 2026-10-16 (mail tiles and status wakes main merge)
+
+`mise run test:logged -- --name merge-tests -- mise run test`, with the
+testing guide's GNU-tool PATH, reserved 4/1/2/1 workspace/root/bridge/protocol
+slots on the shared host. The staged-runtime case timed out at 30001.53 ms.
+The root group reported 2,998 passed, one skipped and one failed across 137
+files (277.33 seconds). The backend reported 8,427 passed, 40 skipped and one
+failed; all other workspace packages, bridges and protocol verification passed.
+The aggregate exited 1 after 430.3 seconds. Evidence:
+`/tmp/orkestrator-test-run.R1hh40/root-and-agent-support-tests.log.gz`;
+outer artifact `/tmp/orkestrator-test-run.l77iN3/merge-tests.log.gz`.
+
+`mise run test:logged -- --name merge-pi-vendor-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+passed the unchanged owning file (exit 0) in 6.9 seconds after the root group
+finished. The backend group was still running. The isolated pass confirms an
+intermittent recurrence; shared host contention remains an unconfirmed
+hypothesis. No implementation, assertion, timeout or skip changed.

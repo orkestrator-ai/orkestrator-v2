@@ -32,6 +32,7 @@ const DEFAULT_CONFIG: AppConfig = {
       wakePeers: true,
       autonomousWakeBudget: 16,
       hourlyWakeLimit: 40,
+      coordinatorStatusWakes: "settled",
       retentionDays: 14,
       paused: false,
     },

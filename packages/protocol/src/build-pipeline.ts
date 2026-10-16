@@ -737,6 +737,7 @@ export interface BuildPipeline {
   reviewPackage?: PersistedReviewPackage;
   structuredReviewRequestId?: string;
   pausedFromPhase?: ResumableBuildPhase;
+  pauseCause?: "requested" | "supervisor";
   error?: string;
   failureContext?: PipelineFailureContext;
   reconnectAttempt?: PipelineReconnectAttempt;
@@ -1371,6 +1372,9 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
     !isOptionalNonBlankString(value.structuredReviewRequestId) ||
     (value.pausedFromPhase !== undefined &&
       !RESUMABLE_PHASES.has(value.pausedFromPhase as ResumableBuildPhase)) ||
+    (value.pauseCause !== undefined &&
+      value.pauseCause !== "requested" &&
+      value.pauseCause !== "supervisor") ||
     !isOptionalString(value.error) ||
     (value.failureContext !== undefined && !isFailureContext(value.failureContext)) ||
     (value.reconnectAttempt !== undefined && !isReconnectAttempt(value.reconnectAttempt)) ||

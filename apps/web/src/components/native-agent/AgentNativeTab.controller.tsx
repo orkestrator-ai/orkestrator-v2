@@ -81,7 +81,8 @@ import {
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import { hideMachineOutputText } from "@/lib/structured-review-messages";
 import {
-  createPeerMailNativeMessageFromCarrier,
+  createPeerMailNativeMessagesFromCarrier,
+  isPeerMailCarrierContent,
   createOptimisticNativeMessage,
   isClientOnlyNativeMessage,
   positionOptimisticNativeMessage,
@@ -591,16 +592,13 @@ export function SharedNativeAgentController({
   }, [claudeBackgroundTasksById, platform, projection?.messages]);
   const normalizedMessages = useMemo(
     () =>
-      normalizeNativeMessages(decoratedMessages).flatMap((message) => {
-        if (
-          message.role !== "user" ||
-          !message.content.trimStart().startsWith('<orkestrator-peer-message version="1">')
-        ) {
-          return [message];
-        }
-        const peerMail = createPeerMailNativeMessageFromCarrier(message);
-        return peerMail ? [peerMail] : [];
-      }),
+      normalizeNativeMessages(decoratedMessages).flatMap((message) =>
+        // One injected prompt can carry several batched messages; each one
+        // becomes its own mail tile.
+        message.role === "user" && isPeerMailCarrierContent(message.content)
+          ? createPeerMailNativeMessagesFromCarrier(message)
+          : [message],
+      ),
     [decoratedMessages],
   );
   // Tabs persisted before the presentation flag existed still carry this

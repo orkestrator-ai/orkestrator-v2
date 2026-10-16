@@ -1,3 +1,4 @@
+import { MailWorld } from "./agent-mail-world-test-support.js";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -8,7 +9,10 @@ import {
   type ControlMcpInvoker,
 } from "./control-mcp-server.js";
 import { coordinatorDelegationPresentationFrom } from "./coordinator-delegation-authority.js";
-import { COORDINATOR_CONTROL_TOOL_NAMES } from "@orkestrator/protocol/coordinator";
+import {
+  COORDINATOR_CONTROL_TOOL_NAMES,
+  COORDINATOR_WORKFLOW_STATUS_WAKE,
+} from "@orkestrator/protocol/coordinator";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
   parseCoordinatorDelegatedPrompt,
@@ -167,6 +171,139 @@ describe("Orkestrator control MCP server", () => {
     await rm(dataDir, { recursive: true, force: true });
   });
 
+  for (const mode of ["off", "settled"] as const) {
+    test(`workflow tool wake promises match the ${mode} observer policy`, async () => {
+      const world = await MailWorld.create({ statusWakes: { coalesceMs: 0 } });
+      try {
+        const config = await world.storage.loadConfig();
+        await world.storage.updateGlobalConfig({
+          ...config.global,
+          agentMessaging: { ...config.global.agentMessaging!, coordinatorStatusWakes: mode },
+        });
+        const main = await world.main();
+        const worker = await world.addEnvironment("review");
+        const workspace = (await world.storage.getCoordinatorWorkspace(world.projectId))!;
+        const conversation = workspace.conversations.find(
+          (item) => item.id === main.conversationId,
+        )!;
+        overrides.set("get_config", () => world.storage.loadConfig());
+        overrides.set("get_project_coordinator", () => ({ workspace }));
+        overrides.set("get_environment", () => ({
+          id: worker.environmentId,
+          projectId: world.projectId,
+        }));
+        const saveStarted = async (kind: "multi-review" | "build-pipeline", id: string) => {
+          const snapshot = {
+            id,
+            environmentId: worker.environmentId,
+            projectId: world.projectId,
+            phase: kind === "multi-review" ? "reviewing" : "building",
+          };
+          if (kind === "multi-review")
+            await world.storage.saveMultiReviewWorkflow(id, worker.environmentId, 1, snapshot);
+          else
+            await world.storage.saveBuildPipeline(
+              id,
+              world.projectId,
+              worker.environmentId,
+              1,
+              snapshot,
+            );
+          await world.storage.saveCoordinatorWorkflowAssociation({
+            id: `a-${id}`,
+            projectId: world.projectId,
+            coordinatorId: world.coordinatorId,
+            conversationId: main.conversationId!,
+            kind,
+            resourceId: id,
+            requestId: id,
+            createdAt: new Date().toISOString(),
+          });
+          return snapshot;
+        };
+        overrides.set("launch_coordinator_multi_review_action", async () => ({
+          outcome: "opened",
+          reused: false,
+          ui: { status: "opened" },
+          workflow: await saveStarted("multi-review", "launched"),
+        }));
+        overrides.set("start_coordinator_multi_review", () =>
+          saveStarted("multi-review", "started"),
+        );
+        overrides.set("start_coordinator_build_pipeline", () =>
+          saveStarted("build-pipeline", "build"),
+        );
+        const credential = server.issueCoordinatorCredential({
+          role: "coordinator",
+          projectId: world.projectId,
+          coordinatorId: world.coordinatorId,
+          conversationId: main.conversationId!,
+          mailboxIncarnationId: conversation.mailboxIncarnationId!,
+          capabilities: ["multi-review", "build-pipelines"],
+        });
+        const selection = { agent: "codex", model: "default" };
+        for (const [name, args] of [
+          [
+            "launch_multi_review",
+            { environmentId: worker.environmentId, reviewers: [selection], fixModel: selection },
+          ],
+          [
+            "start_multi_review",
+            {
+              buildPipelineId: "build",
+              environmentId: worker.environmentId,
+              targetBranch: "main",
+              reviewers: [selection],
+              fixModel: selection,
+            },
+          ],
+          [
+            "start_build_pipeline",
+            {
+              baseBranch: "main",
+              baseCommit: "a".repeat(40),
+              taskId: "task",
+              agentType: "codex",
+              taskTitle: "Fix",
+              taskSnapshot: {
+                title: "Fix",
+                description: "Fix parser",
+                acceptanceCriteria: "Tests pass",
+              },
+            },
+          ],
+        ] as const) {
+          const result = await rpc(credential.url, credential.token, "tools/call", {
+            name,
+            arguments: { requestId: name, ...args },
+          });
+          expect(result.body.result?.isError).not.toBe(true);
+          const content = result.body.result!.structuredContent!;
+          expect(content.delivery).toBe("async");
+          if (mode === "off") {
+            expect(content.wake).toContain("Only terminal");
+            expect(content.nextStep).toContain("tell the user to inspect");
+          } else expect(content.wake).toBe(COORDINATOR_WORKFLOW_STATUS_WAKE);
+        }
+        for (const id of ["launched", "started"]) {
+          await world.storage.saveMultiReviewWorkflow(id, worker.environmentId, 1, {
+            id,
+            environmentId: worker.environmentId,
+            phase: "ready",
+            reviewSession: { sessionKey: id, completedAt: "done" },
+          });
+        }
+        await world.coordinator.reconcileWorkflowNotifications();
+        const inbox = await world.storage.getAgentMailMailbox(main.environmentId, main.tabId);
+        expect(inbox.messages.filter((message) => message.notice?.state === "ready")).toHaveLength(
+          mode === "off" ? 0 : 2,
+        );
+      } finally {
+        await world.close();
+      }
+    });
+  }
+
   test("publishes a private descriptor and rejects invalid credentials", async () => {
     const info = server.getInfo();
     expect(info).not.toBeNull();
@@ -315,6 +452,11 @@ describe("Orkestrator control MCP server", () => {
         reviewPreparation: "default",
       },
     });
+    expect(build.body.result?.structuredContent).toMatchObject({
+      delivery: "async",
+      wake: COORDINATOR_WORKFLOW_STATUS_WAKE,
+      nextStep: "Finish your turn now. Do not poll.",
+    });
     expect(definitions.find((tool) => tool.name === "start_multi_review")?.description).toContain(
       "does NOT create/select a root tab",
     );
@@ -358,6 +500,31 @@ describe("Orkestrator control MCP server", () => {
       },
     });
     expect(JSON.stringify(button.body)).not.toContain("must-not-cross-mcp");
+    // A launch that did not start work promises no wake.
+    expect(button.body.result?.structuredContent).not.toHaveProperty("delivery");
+    overrides.set("launch_coordinator_multi_review_action", () => ({
+      outcome: "opened",
+      reused: false,
+      workflow: { id: "review-started", projectId: "project-1", environmentId: "env-1" },
+      ui: { status: "opened" },
+    }));
+    const started = await rpc(credential.url, credential.token, "tools/call", {
+      name: "launch_multi_review",
+      arguments: {
+        requestId: "launch-review-started",
+        environmentId: "env-1",
+        reviewers: [{ agent: "codex", model: "default" }],
+        fixModel: { agent: "claude", model: "default" },
+      },
+    });
+    // Started work tells the coordinator how it will hear back, so it does not poll.
+    expect(started.body.result?.structuredContent).toMatchObject({
+      outcome: "opened",
+      delivery: "async",
+      wake: COORDINATOR_WORKFLOW_STATUS_WAKE,
+      nextStep: "Finish your turn now. Do not poll.",
+    });
+
     expect(button.body.result?.structuredContent?.selection).toMatchObject({
       source: { reviewers: "requested", reviewModel: "default", fixModel: "requested" },
     });
@@ -381,6 +548,11 @@ describe("Orkestrator control MCP server", () => {
       arguments: { requestId: "launch-review-defaults", environmentId: "env-1" },
     });
     expect(defaulted.body.result?.isError).not.toBe(true);
+    expect(defaulted.body.result?.structuredContent).toMatchObject({
+      delivery: "async",
+      wake: COORDINATOR_WORKFLOW_STATUS_WAKE,
+      nextStep: "Finish your turn now. Do not poll.",
+    });
     expect(defaulted.body.result?.structuredContent?.selection).toEqual({
       reviewers: [{ agent: "claude", model: "default" }],
       reviewModel: { agent: "claude", model: "default" },

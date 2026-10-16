@@ -197,6 +197,15 @@ Aggregate backend counts for this observation: 8,341 passed, 40 skipped,
   contention remains a hypothesis; no implementation, assertion, timeout or
   skip changed.
 
+## Recurrence — 2026-10-16 (mail tiles and status wakes main merge)
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, with the testing guide's GNU-tool PATH. Workspace/root/bridge/protocol reserved 4/1/2/1 slots on the shared host; the backend used two isolated workers.
+- **Failure:** `refreshes a tracked environment on explicit request` exceeded its five-second deadline at 5113.84 ms.
+- **Suite counts:** backend 8,427 passed, 40 skipped and one failed across 450 files (318.69 seconds); root 2,998 passed, one skipped and one failed. All other workspace packages, bridges and protocol verification passed. The aggregate exited 1 after 430.3 seconds.
+- **Evidence:** `/tmp/orkestrator-test-run.R1hh40/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer artifact `/tmp/orkestrator-test-run.l77iN3/merge-tests.log.gz`.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-diffstats-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`, with the same GNU-tool PATH, passed the unchanged file (exit 0) in 37.0 seconds while the aggregate backend group was still running.
+- **Disposition:** isolated pass confirms an intermittent recurrence. Shared host contention remains an unconfirmed hypothesis; no implementation, assertion, timeout or skip changed.
+
 ## Coordinator launch-defaults main merge — 2026-10-16
 
 `mise run test:logged -- --name merge-tests -- mise run test`, with the testing

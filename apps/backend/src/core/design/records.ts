@@ -596,10 +596,27 @@ export class DesignRecordStore {
 /**
  * What a correlation id is bound to: the whole validated descriptor, key order
  * ignored, so a retry that serializes the same edit differently still matches.
- * Unlike the token's `digest`, it leaves out the canvas a create reserved.
+ * Style maps are the exception: they apply in declaration order, and a
+ * shorthand before or after its longhand gives a different result, so their
+ * order is kept. Unlike the token's `digest`, it leaves out the canvas a
+ * create reserved.
  */
 export function intentDigest(descriptor: DesignOperationDescriptor): string {
-  return createHash("sha256").update(canonicalJson(descriptor)).digest("hex");
+  const input = orderedStyles(descriptor.input);
+  return createHash("sha256")
+    .update(canonicalJson({ ...descriptor, input }))
+    .digest("hex");
+}
+
+/** Replaces each style map with its entries in application order. */
+function orderedStyles(input: DesignOperationDescriptor["input"]): unknown {
+  if (input.kind === "set_element_styles")
+    return {
+      ...input,
+      styles: Object.entries(input.styles ?? {}).filter(([, value]) => value !== undefined),
+    };
+  if (input.kind === "batch") return { ...input, operations: input.operations.map(orderedStyles) };
+  return input;
 }
 
 /** Settles a terminal receipt into the record, keeping its intent digest. */

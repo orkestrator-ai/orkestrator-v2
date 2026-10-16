@@ -394,20 +394,52 @@ describe("design private records, legacy migration and recovery states", () => {
     expect(Object.keys(record.receiptDigests!)).toHaveLength(record.receipts.length);
   });
 
-  test("the intent digest ignores key order but not values", () => {
-    const styles = (order: "ab" | "ba", color = "red"): DesignOperationDescriptor => ({
+  test("the intent digest ignores key order but not values or style order", () => {
+    const frameId = "00000000-0000-4000-8000-000000000001";
+    const kind = "set_element_styles";
+    const styled = (styles: Record<string, string | null>): DesignOperationDescriptor => ({
       correlationId: "c",
       preconditions: { frameRevision: 1 },
       canvasId: "00000000-0000-4000-8000-000000000000",
+      input: { kind, frameId, selector: "h1", styles },
+    });
+    const styles = { margin: "0", "margin-top": "10px" };
+    const base = styled(styles);
+    // Descriptor and input keys may arrive in any order.
+    expect(
+      intentDigest({
+        input: { styles, selector: "h1", frameId, kind },
+        canvasId: base.canvasId,
+        preconditions: { frameRevision: 1 },
+        correlationId: "c",
+      }),
+    ).toBe(intentDigest(base));
+    expect(intentDigest(base)).not.toBe(intentDigest(styled({ ...styles, "margin-top": "9px" })));
+    // Styles apply in order: a shorthand after its longhand resets it.
+    const reversed = { "margin-top": "10px", margin: "0" };
+    expect(intentDigest(base)).not.toBe(intentDigest(styled(reversed)));
+    const batch = (styles: Record<string, string | null>): DesignOperationDescriptor => ({
+      ...base,
       input: {
-        kind: "set_element_styles",
-        frameId: "00000000-0000-4000-8000-000000000001",
-        selector: "h1",
-        styles: order === "ab" ? { color, margin: "0" } : { margin: "0", color },
+        kind: "batch",
+        operations: [
+          { kind: "update_frame", frameId, patch: { x: 1, y: 2 } },
+          { kind, frameId, selector: "h1", styles },
+        ],
       },
     });
-    expect(intentDigest(styles("ab"))).toBe(intentDigest(styles("ba")));
-    expect(intentDigest(styles("ab"))).not.toBe(intentDigest(styles("ab", "blue")));
+    const batchReordered: DesignOperationDescriptor = {
+      ...base,
+      input: {
+        operations: [
+          { patch: { y: 2, x: 1 }, frameId, kind: "update_frame" },
+          { styles, selector: "h1", frameId, kind },
+        ],
+        kind: "batch",
+      },
+    };
+    expect(intentDigest(batch(styles))).toBe(intentDigest(batchReordered));
+    expect(intentDigest(batch(styles))).not.toBe(intentDigest(batch(reversed)));
   });
 
   test("legacy migration metadata is deterministic for the same snapshot", () => {

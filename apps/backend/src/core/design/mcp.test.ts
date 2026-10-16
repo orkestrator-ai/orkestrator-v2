@@ -245,14 +245,11 @@ describe("design MCP", () => {
     expect((await design.getFrame(canvas.id, environmentId, frame.id)).x).toBe(42);
     expect((await design.get(canvas.id, environmentId)).revision).toBe(3);
     // A retry that serializes the same edit in another key order still replays.
+    const styles = { margin: "0", "margin-top": "10px" };
+    const kind = "set_element_styles";
     const styled = {
       canvasId: canvas.id,
-      input: {
-        kind: "set_element_styles",
-        frameId: frame.id,
-        selector: "h1",
-        styles: { color: "red", margin: "0" },
-      },
+      input: { kind, frameId: frame.id, selector: "h1", styles },
       preconditions: { frameRevision: 2 },
       correlationId: "agent-style-1",
     };
@@ -262,10 +259,15 @@ describe("design MCP", () => {
     const reordered = await call("submit_operation", {
       correlationId: styled.correlationId,
       preconditions: styled.preconditions,
-      input: { ...styled.input, styles: { margin: "0", color: "red" } },
+      input: { styles, selector: "h1", frameId: frame.id, kind },
       canvasId: styled.canvasId,
     });
     expect(reordered.error ? reordered.text : reordered.value).toEqual(styledFirst.value);
+    // Style order is part of the edit: margin after margin-top resets it.
+    const reversed = { "margin-top": "10px", margin: "0" };
+    expect(
+      await call("submit_operation", { ...styled, input: { ...styled.input, styles: reversed } }),
+    ).toMatchObject({ error: true, text: expect.stringContaining("different edit") });
     expect((await design.get(canvas.id, environmentId)).revision).toBe(4);
     const found = await call("find_operation", {
       canvasId: canvas.id,

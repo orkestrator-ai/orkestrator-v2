@@ -25,7 +25,8 @@ settled receipt, is fixed; see "Constraints and rationale".)
   `mcp.test.ts` ("submit_operation is idempotent by correlationId…", "a
   receipt settled before digests were kept…"), `operations.test.ts` ("a
   settled correlation id refuses different input at preparation", "a create
-  prepared twice…") and `records.test.ts` (digest pruning, key order).
+  prepared twice…", "a correlation id binds style order but not other key
+  order") and `records.test.ts` (digest pruning, key and style order).
 - Restart recovery (`recoverPendingFor` in `core/design/service.ts`) writes
   `interrupted` receipts only for migrated records. On a never-migrated legacy
   canvas (`loaded.legacy`) it rewrites the pending file without the dead
@@ -93,7 +94,10 @@ settled receipt, is fixed; see "Constraints and rationale".)
   - *Fingerprint:* the whole validated descriptor (`canvasId`, `input`,
     `preconditions`, `predecessor`, `gestureId`, `clientId`,
     `correlationId`) as canonical JSON, so a retry that regenerates the call
-    with another key order (an agent re-emitting `styles`) still matches.
+    with another key order still matches. `styles` maps (top level and in a
+    batch) keep their order as entry lists, because `applyStyles` sets them
+    in order and a shorthand before or after its longhand gives a different
+    result.
     Environment and canvas scope come from where the receipt is looked up.
     It is separate from the token's `digest`, which binds environment,
     canvas and descriptor bytes and is re-verified at execute; changing that

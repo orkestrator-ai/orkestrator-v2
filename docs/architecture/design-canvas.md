@@ -82,8 +82,9 @@ Edits are **recoverable operations** (`design/service.ts`,
    provisional record.
 
    A correlation id is bound to an intent digest of the whole validated
-   descriptor (canonical JSON, so key order does not matter) while pending
-   and after it settles; the record keeps a private digest per correlated
+   descriptor (canonical JSON, so key order does not matter, except inside
+   a `styles` map, which applies in order: `margin` before or after
+   `margin-top` is a different edit) while pending and after it settles; the record keeps a private digest per correlated
    receipt, inside the receipt budget. The same id with the same descriptor
    replays (a pending token, or the stored receipt through
    `submit_operation`); the same id with a different descriptor fails

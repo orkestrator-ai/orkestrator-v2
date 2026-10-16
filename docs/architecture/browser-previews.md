@@ -362,7 +362,9 @@ New routes do not rewrite response bodies. Upstream requests carry
 `Host: localhost:<application port>`. A same-service `Origin` or `Referer` is
 mapped to `http://localhost:<port>`, and `X-Forwarded-Host`/`-Proto` carry the
 public origin. So development servers that only accept `localhost` work
-unchanged.
+unchanged. When a same-service `Origin` is mapped, `X-Forwarded-Host`/`-Proto`
+carry the private authority instead, so CSRF checks that compare the two (such
+as Next.js Server Actions) see a same-origin request.
 
 - **Vite 7.3.6** (pinned fixture): the page, module graph, and HMR updates work
   over a private origin with an empty config. No `allowedHosts` or `hmr`

@@ -4,8 +4,10 @@
  *
  * - Upstream sees its private authority (`Host: localhost:<appPort>`), so dev
  *   servers' host checks pass without permissive allowlists. The public origin
- *   travels in a rebuilt, trusted `X-Forwarded-*` set; inbound forwarding
- *   headers are always discarded.
+ *   travels in a rebuilt, trusted `X-Forwarded-*` set, except on requests whose
+ *   same-service `Origin` was mapped to the private origin: those forward the
+ *   private authority so `Origin` and `X-Forwarded-Host` agree. Inbound
+ *   forwarding headers are always discarded.
  * - Application `Authorization` and non-reserved cookies pass through
  *   untouched. Transport credentials, reserved cookies, and every
  *   `x-orkestrator-*` header are stripped.
@@ -166,6 +168,7 @@ export function upstreamRequestHeaders(
   const privateOrigin = privateOriginSet(policy)[0]!;
   const publicUrl = new URL(policy.publicOrigin);
   const out: HeaderList = [["host", policy.privateAuthority]];
+  let sameServiceOrigin = false;
   for (const [name, value] of incoming) {
     const lower = name.toLowerCase();
     if (options.upgrade && (UPGRADE_KEEP.has(lower) || lower === "connection")) {
@@ -183,6 +186,7 @@ export function upstreamRequestHeaders(
     if (lower === "origin") {
       // Same-service origin maps to the private origin; anything else is kept
       // so the application's own cross-origin checks still apply.
+      if (value === policy.publicOrigin) sameServiceOrigin = true;
       out.push([name, value === policy.publicOrigin ? privateOrigin : value]);
       continue;
     }
@@ -193,8 +197,12 @@ export function upstreamRequestHeaders(
     out.push([name, value]);
   }
   if (options.upgrade) out.push(["connection", "Upgrade"]);
-  out.push(["x-forwarded-host", publicUrl.host]);
-  out.push(["x-forwarded-proto", publicUrl.protocol.replace(":", "")]);
+  // Frameworks compare `Origin` with `X-Forwarded-Host` for CSRF (Next.js
+  // Server Actions abort on a mismatch). Once a same-service Origin has been
+  // mapped to the private origin, the forwarded authority must agree with it.
+  const forwardedUrl = sameServiceOrigin ? new URL(privateOrigin) : publicUrl;
+  out.push(["x-forwarded-host", forwardedUrl.host]);
+  out.push(["x-forwarded-proto", forwardedUrl.protocol.replace(":", "")]);
   if (policy.forwardedFor) out.push(["x-forwarded-for", policy.forwardedFor]);
   return out;
 }

@@ -67,14 +67,29 @@ describe("preview header policy", () => {
       ["Origin", "http://localhost:3000"],
       ["Referer", "http://localhost:3000/page?q=1"],
       ["Accept", "text/html"],
-      ["x-forwarded-host", "s-abc.preview.test"],
-      ["x-forwarded-proto", "https"],
+      ["x-forwarded-host", "localhost:3000"],
+      ["x-forwarded-proto", "http"],
     ]);
+  });
+
+  test("forwarded authority agrees with a mapped same-service origin", () => {
+    // Next.js Server Actions abort when Origin and X-Forwarded-Host disagree.
+    const mapped = upstreamRequestHeaders([["Origin", "https://s-abc.preview.test"]], policy);
+    expect(mapped).toContainEqual(["Origin", "http://localhost:3000"]);
+    expect(mapped).toContainEqual(["x-forwarded-host", "localhost:3000"]);
+    expect(mapped).toContainEqual(["x-forwarded-proto", "http"]);
+
+    // Without a same-service Origin the public origin is forwarded, so
+    // absolute URLs the app builds point at the preview host.
+    const navigation = upstreamRequestHeaders([["Accept", "text/html"]], policy);
+    expect(navigation).toContainEqual(["x-forwarded-host", "s-abc.preview.test"]);
+    expect(navigation).toContainEqual(["x-forwarded-proto", "https"]);
   });
 
   test("foreign origins are forwarded unchanged for the app's own checks", () => {
     const headers = upstreamRequestHeaders([["Origin", "https://evil.test"]], policy);
     expect(headers).toContainEqual(["Origin", "https://evil.test"]);
+    expect(headers).toContainEqual(["x-forwarded-host", "s-abc.preview.test"]);
   });
 
   test("upgrade mode keeps the websocket handshake fields", () => {

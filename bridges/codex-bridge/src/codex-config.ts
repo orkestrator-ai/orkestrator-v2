@@ -1,5 +1,14 @@
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
-import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import {
+  coordinatorCapabilityPolicy,
+  coordinatorResearchMcpServersFromEnv,
+  coordinatorWebResearchFromEnv,
+} from "@orkestrator/protocol/coordinator-web-research";
+import {
+  nativeAgentPolicyDeniesNetwork,
+  nativeAgentPolicyDeniesWebSearch,
+  type NativeAgentExecutionPolicy,
+} from "@orkestrator/protocol/native-agent";
 import { isAbsolute } from "node:path";
 
 export const CODEX_MAX_CONCURRENT_THREADS_ENV = "CODEX_MAX_CONCURRENT_THREADS_PER_SESSION";
@@ -16,39 +25,71 @@ export const BRIDGE_ATTACHMENT_ROOT_ENV = "ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT";
 export const MAX_CODEX_CONCURRENT_THREADS = Number.MAX_SAFE_INTEGER - 1;
 
 /**
- * Codex configuration that takes hosted web search away from the model.
+ * Codex's hosted web search modes a network-denied session may run under.
  *
  * The permission profile's `network.enabled = false` stops commands the agent
- * runs, but web search is a hosted tool: OpenAI's servers fetch the page, so
+ * runs, but web search is a hosted tool: OpenAI's servers do the work, so
  * nothing on this machine sees the request. Under 0.162.1 it is offered to the
  * model as `web__run` ("Tool for accessing the internet") even with network
- * off. `web_search = "disabled"` removes it, and wins over every legacy switch
- * (`features.web_search_request`, `features.web_search_cached`,
- * `tools.web_search`) and over `features.standalone_web_search`; all verified
- * against 0.162.1 by `live-contract.test.ts`. The legacy feature flags are not
- * set here: they cannot re-enable search, and naming them makes app-server emit
- * a deprecation notice on every thread. `standalone_web_search` is still under
- * development and is pinned off so it cannot become a second path once it ships.
+ * off, and in `live` mode it opens any URL the model names — verified on
+ * 2026-10-16 by having it open a Wikipedia search for a fresh random token,
+ * which came back in the page title. A URL can carry data out to whoever owns
+ * the page, so a network-denied session never gets `live`:
+ *
+ * - `disabled` removes the tool. It wins over every legacy switch
+ *   (`features.web_search_request`, `features.web_search_cached`,
+ *   `tools.web_search`) and over `features.standalone_web_search`.
+ * - `cached` keeps search but serves pages only from OpenAI's index. The same
+ *   fresh-token URL was refused with "Cache miss", and an echo service with
+ *   "not accessible via this tool".
+ *
+ * The legacy feature flags are not set: they cannot re-enable search, and
+ * naming them makes app-server emit a deprecation notice on every thread.
+ * `standalone_web_search` is still under development and is pinned off so it
+ * cannot become a second, unreviewed path once it ships.
  */
-export const CODEX_NETWORK_DENIED_CONFIG = Object.freeze({
-  web_search: "disabled",
-  "features.standalone_web_search": false,
-} as const);
+export type CodexNetworkDeniedSearchMode = "disabled" | "cached";
+
+/** The web search mode a network-denied policy runs Codex under. */
+export function codexNetworkDeniedSearchMode(
+  policy: NativeAgentExecutionPolicy | undefined,
+): CodexNetworkDeniedSearchMode {
+  return nativeAgentPolicyDeniesNetwork(policy) && !nativeAgentPolicyDeniesWebSearch(policy)
+    ? "cached"
+    : "disabled";
+}
+
+/** Thread configuration for a policy that denies the network; empty otherwise. */
+export function codexNetworkDeniedConfig(
+  policy: NativeAgentExecutionPolicy | undefined,
+): Record<string, unknown> {
+  if (!nativeAgentPolicyDeniesNetwork(policy) && !nativeAgentPolicyDeniesWebSearch(policy)) {
+    return {};
+  }
+  return {
+    web_search: codexNetworkDeniedSearchMode(policy),
+    "features.standalone_web_search": false,
+  };
+}
 
 /**
- * Whether an effective configuration (`config/read`) has hosted web search off.
+ * Whether an effective configuration (`config/read`) runs search in the
+ * expected mode.
  *
- * Returns what is missing, so a refusal can say which switch failed. An empty
+ * Returns what is wrong, so a refusal can say which switch failed. An empty
  * list is the only passing answer; a missing or unparseable `config` fails.
  */
-export function codexHostedNetworkLockGaps(config: unknown): string[] {
+export function codexHostedNetworkLockGaps(
+  config: unknown,
+  expected: CodexNetworkDeniedSearchMode = "disabled",
+): string[] {
   if (!config || typeof config !== "object" || Array.isArray(config)) {
     return ["config/read returned no configuration"];
   }
   const record = config as Record<string, unknown>;
   const gaps: string[] = [];
-  if (record.web_search !== CODEX_NETWORK_DENIED_CONFIG.web_search) {
-    gaps.push(`web_search is ${JSON.stringify(record.web_search ?? null)}, not "disabled"`);
+  if (record.web_search !== expected) {
+    gaps.push(`web_search is ${JSON.stringify(record.web_search ?? null)}, not "${expected}"`);
   }
   const features = record.features;
   if (
@@ -80,17 +121,20 @@ export function isCoordinatorReadOnlyEnvironment(env: NodeJS.ProcessEnv): boolea
  * persisted record carries.
  *
  * `capabilityPolicy` is what the agent information panel reads to say the
- * network is off, and what `toThreadParams` reads to remove hosted web search
- * from the thread; `toolPolicy` keeps Codex's own tool names.
+ * network is off, and what `toThreadParams` reads to set the thread's search
+ * mode; it follows the research setting the launcher passed. `toolPolicy`
+ * keeps Codex's own tool names.
  */
-export function codexCoordinatorPolicy(): NativeAgentExecutionPolicy {
+export function codexCoordinatorPolicy(
+  env: NodeJS.ProcessEnv = process.env,
+): NativeAgentExecutionPolicy {
   return {
     id: "coordinator-read-only",
     sandbox: "provider",
     approvals: "deny",
     projectResources: false,
     toolPolicy: { deny: ["write", "edit", "apply_patch", "shell"] },
-    capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
+    capabilityPolicy: coordinatorCapabilityPolicy(coordinatorWebResearchFromEnv(env)),
     networkAccess: "restricted",
   };
 }
@@ -157,13 +201,27 @@ export function codexAppServerConfigOverrides(
       `":workspace_roots" = { "." = "read" } }`;
     overrides[`permissions.${permissionProfile}.network.enabled`] = "false";
     // The profile above stops commands; hosted web search runs on OpenAI's
-    // servers and is only removed by configuration. The engine reads this back
-    // through `config/read` before every coordinator thread and refuses to run
-    // one without it.
-    overrides.web_search = JSON.stringify(CODEX_NETWORK_DENIED_CONFIG.web_search);
-    overrides["features.standalone_web_search"] = String(
-      CODEX_NETWORK_DENIED_CONFIG["features.standalone_web_search"],
+    // servers and is governed only by configuration: off, or `cached` when the
+    // research setting allows search, never `live`. The engine reads this
+    // back through `config/read` before every coordinator thread and refuses
+    // to run one in any other mode.
+    overrides.web_search = JSON.stringify(
+      codexNetworkDeniedSearchMode(codexCoordinatorPolicy(env)),
     );
+    overrides["features.standalone_web_search"] = "false";
+    // Research servers the user listed. Remote HTTPS only (validated in the
+    // protocol): a stdio server would be a local program outside the profile.
+    // app-server makes these calls itself, so the profile's network denial
+    // does not apply to them. Their tools are approved like the Orkestrator
+    // server's: under `approvalPolicy: never` and a read-only profile, Codex
+    // would otherwise refuse every call before it is made.
+    for (const server of coordinatorResearchMcpServersFromEnv(env)) {
+      const key = `mcp_servers.${server.name}`;
+      overrides[`${key}.url`] = JSON.stringify(server.url);
+      overrides[`${key}.required`] = "false";
+      overrides[`${key}.startup_timeout_sec`] = "10";
+      overrides[`${key}.default_tools_approval_mode`] = JSON.stringify("approve");
+    }
     // A coordinator checkout is data, not trusted runtime configuration.
     // Explicitly pin this project untrusted so repository-local config, hooks,
     // and extensions stay disabled even if a future Codex release changes the

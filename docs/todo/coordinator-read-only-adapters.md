@@ -108,44 +108,63 @@ advertises.
 5. **Grok.** Stays `advisory`. Do not raise the tier without a real gate in
    the ACP bridge.
 6. **Pi.** No change.
-7. **Hosted network tools.** Done. A live run of the read-only suite found a
-   Codex coordinator reaching `https://example.com` through Codex's hosted web
-   search while its permission profile had the network off: the profile stops
-   commands, and hosted search runs on OpenAI's servers. Every policy whose
-   `capabilityPolicy` denies `network` (`nativeAgentPolicyDeniesNetwork`) now
-   loses the provider's hosted and network tools:
-   - Codex: `web_search = "disabled"` and `features.standalone_web_search =
-     false` as process configuration for a coordinator and as thread
-     configuration for any network-denied thread (`CODEX_NETWORK_DENIED_CONFIG`).
-     The engine reads the coordinator's setting back through `config/read` once
-     per app-server generation and refuses the thread without it
-     (`assertHostedNetworkLock`), so a Codex that renames the switch fails
-     closed. Verified against 0.162.1 by `live-network-lock.test.ts`, which
-     reads the tools out of the real model request on a loopback endpoint,
-     and live on 2026-10-16 in a `dev:test` profile with real Codex
-     credentials. Before the change, a coordinator asked to search the web
-     called `web_search` and returned the title of `https://example.com`.
-     After it, the same conversation (resumed) answered "Web search is not
-     available to me". A fresh conversation found no search or fetch tool, and
-     its `curl` failed with "Could not resolve host".
-   - Claude: WebFetch and WebSearch were already off the coordinator's
-     allowlist, denied and refused by the hook; any other network-denied
-     policy now gets them in `disallowedTools` too (`claudeDisallowedTools`).
-   - OpenCode: named denies for `webfetch`, `websearch` and `codesearch`,
-     which a `task` subagent inherits.
-   - Grok: `--disable-web-search` and `--no-leader`, keyed by provider id so the
-     backend's serialized launcher record cannot drop them, and applied to
-     policy-less children in a coordinator process.
-   - Cursor and Pi: no change; their read-only allowlists already exclude every
-     network tool, now pinned by tests.
-8. **Grok flag, live.** The `--disable-web-search` flag and its effect on the
-   ACP toolset are read from the 1.0.52 binary, not from a live turn. Confirm
-   on the pinned build that a coordinator turn has no web search or web fetch.
+7. **Hosted network tools and web research.** Done. A live run of the
+   read-only suite found a Codex coordinator reaching `https://example.com`
+   through Codex's hosted web search while its permission profile had the
+   network off: the profile stops commands, and hosted search runs on OpenAI's
+   servers. Every policy whose `capabilityPolicy` denies `network` now loses
+   the provider's hosted and network tools, except that
+   `capabilityPolicy.allow: ["web.search"]` keeps hosted search. The
+   coordinator gets that exception from **Settings → Agent platforms →
+   Coordinator web research** (default: search plus research servers), passed
+   to each bridge at launch as process authority. Hosted page fetch has no
+   exception in any mode. See
+   [`coordinator.md`](../architecture/coordinator.md#network-and-web-research).
+   - Codex: `web_search = "disabled"`, or `"cached"` when search is allowed,
+     never `live`; `features.standalone_web_search = false`. The engine reads
+     the expected mode back through `config/read` once per app-server
+     generation and refuses the thread on any other value
+     (`assertHostedNetworkLock`). Research servers are `-c mcp_servers.*`
+     overrides with approved tools. Verified against 0.162.1:
+     - The loopback `live-network-lock.test.ts` reads the tools from the real
+       model request.
+     - Its canary showed `live` open a fresh Wikipedia search page while
+       `cached` refused it ("Cache miss"), and a coordinator call Context7 from
+       inside its permission profile.
+     - A `dev:test` profile with real credentials, before the research setting
+       existed: the old bridge searched and returned example.com's title; the
+       fixed bridge said "Web search is not available to me", and its `curl`
+       could not resolve a host.
+   - Claude: WebSearch on the allowlist when allowed; WebFetch denied by name
+     and by the hook; research servers added to the inline MCP set and
+     allowed by name. Any other network-denied policy gets the same tools in
+     `disallowedTools` (`claudeDisallowedTools`).
+   - OpenCode: `webfetch` denied after every allow (a `task` subagent inherits
+     it); `websearch` and `codesearch` allowed by name when search is allowed,
+     else denied.
+   - Cursor: `webSearch` joins the read-only allowlist when allowed; `webFetch`
+     never does.
+   - Grok: `--disable-web-search` and `--no-leader`, keyed by provider id and
+     applied to policy-less children in a coordinator process. It removes
+     search with fetch, so Grok coordinators get no search (item 8).
+   - Pi: no hosted tools; its name allowlist refuses an extension's web tool.
+   - The coordinator context now says what research is available, to keep its
+     own work to quick looks and delegate anything serious, and to report a
+     tool as refused only after a call was refused.
+8. **Grok search without fetch.** `--disable-web-search` removes both tools,
+   and its effect is read from the 1.0.52 binary rather than a live turn. The
+   binary also mentions `GROK_DISABLE_WEB_FETCH`. Verify on the pinned build
+   what that switch does; if it removes fetch alone, honour the research
+   setting on Grok.
 9. **Readiness for a failed Codex lock.** A Codex coordinator whose
-   `config/read` does not confirm search is off is refused at thread start,
+   `config/read` does not confirm its search mode is refused at thread start,
    which the user sees as a failed turn. `NativeAgentReadiness` has no state for
    "this provider cannot hold the boundary", so the conversation still looks
    ready until the first send. Add one if a Codex bump ever trips the check.
+10. **Research servers on OpenCode, Cursor and Pi.** Only Claude and Codex load
+    the coordinator's research servers. OpenCode would need them injected
+    under names its project configuration cannot claim, Cursor through its
+    in-process hosted tools, and Pi through its bridge-owned MCP client.
 
 ### Qualification
 

@@ -591,6 +591,32 @@ describe("ensureAgent", () => {
     expect(created[0]?.tools).toEqual([...CURSOR_READ_ONLY_TOOLS]);
   });
 
+  test("a researching coordinator adds web search to the allowlist, never web fetch", async () => {
+    process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY = "coordinator-read-only";
+    process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH = "search";
+    try {
+      const state = newSessionState(undefined, {
+        id: "coordinator-read-only",
+        sandbox: "provider",
+        approvals: "deny",
+        projectResources: false,
+        networkAccess: "restricted",
+      });
+      state.readOnly = true;
+
+      await ensureAgent(state);
+
+      expect(created[0]?.tools).toEqual([...CURSOR_READ_ONLY_TOOLS, "webSearch"]);
+      expect(created[0]?.tools).not.toContain("webFetch");
+      // What the session reports to the information panel says the same.
+      expect(resolveCursorExecutionPolicy(undefined).capabilityPolicy?.allow).toEqual([
+        "web.search",
+      ]);
+    } finally {
+      delete process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH;
+    }
+  });
+
   test("a session created read-only warms its first agent behind the allowlist", async () => {
     const state = await createSession(undefined, undefined, containerPolicy, true);
 

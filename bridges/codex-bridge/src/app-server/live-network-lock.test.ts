@@ -13,12 +13,22 @@
  *
  * The first test is the control: an ordinary thread is offered web search, so
  * a probe that saw nothing cannot pass the others by accident.
+ *
+ * What the request cannot show is the difference between `cached` and `live`
+ * search: Codex sends the same tool either way and applies the mode when the
+ * tool runs. A separately gated canary proves it with real turns. It copies
+ * the local auth file and spends a few short model turns:
+ *
+ *   RUN_LIVE_CODEX_APP_SERVER=1 RUN_LIVE_CODEX_WEB_SEARCH_CANARY=1 \
+ *     bun test bridges/codex-bridge/src/app-server/live-network-lock.test.ts
  */
 import { describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { COORDINATOR_WEB_RESEARCH_ENV } from "@orkestrator/protocol/coordinator-web-research";
 import {
   codexAppServerConfigOverrides,
   codexCoordinatorPolicy,
@@ -39,6 +49,8 @@ const NativeResponse =
 
 const LIVE = process.env.RUN_LIVE_CODEX_APP_SERVER === "1";
 const describeLive = LIVE ? describe : describe.skip;
+const describeLiveSearchCanary =
+  LIVE && process.env.RUN_LIVE_CODEX_WEB_SEARCH_CANARY === "1" ? describe : describe.skip;
 
 const CLIENT_INFO = { name: "orkestrator", title: "Orkestrator", version: "2.4.9" };
 const PROFILE = "coordinator-network-lock";
@@ -268,10 +280,52 @@ describeLive("live hosted network lock", () => {
         sandbox: "read-only",
         networkAccessEnabled: false,
         permissionProfile: PROFILE,
-        policy: codexCoordinatorPolicy(),
+        policy: codexCoordinatorPolicy({}),
       });
       expect(offersTools(frame)).toBe(true);
       expect(offersWebSearch(frame)).toBe(false);
+    } finally {
+      await engine.stop();
+      await responses.stop();
+    }
+  }, 120_000);
+
+  test("a researching coordinator is offered search, read back as cached", async () => {
+    const { codexHome, workspace } = await sandbox();
+    const responses = startFakeResponses();
+    const env = {
+      ORKESTRATOR_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
+      CODEX_BRIDGE_PERMISSION_PROFILE: PROFILE,
+      CODEX_BRIDGE_READABLE_RUNTIME_ROOT: workspace,
+      CWD: workspace,
+      [COORDINATOR_WEB_RESEARCH_ENV]: "search",
+    };
+    const engine = engineFor({
+      codexPath: await resolveCodexBinary(),
+      codexHome,
+      workspace,
+      configOverrides: {
+        ...codexAppServerConfigOverrides(env),
+        openai_base_url: JSON.stringify(responses.baseUrl),
+      },
+    });
+    try {
+      // The engine refuses the thread unless `config/read` says `cached`, so a
+      // request arriving at all is the readback passing.
+      const frame = await firstModelRequest(engine, responses, {
+        mode: "build",
+        cwd: workspace,
+        approvalPolicy: "never",
+        sandbox: "read-only",
+        networkAccessEnabled: false,
+        permissionProfile: PROFILE,
+        policy: codexCoordinatorPolicy(env),
+      });
+      expect(offersWebSearch(frame)).toBe(true);
+      const read = await engine
+        .getSupervisor()
+        .request<{ config?: unknown }>("config/read", { cwd: workspace });
+      expect(codexHostedNetworkLockGaps(read.config, "cached")).toEqual([]);
     } finally {
       await engine.stop();
       await responses.stop();
@@ -311,4 +365,125 @@ describeLive("live hosted network lock", () => {
       await responses.stop();
     }
   }, 120_000);
+});
+
+interface LiveTurn {
+  /** `webSearch` items, as app-server reports them. */
+  searches: Array<Record<string, unknown>>;
+  /** `mcpToolCall` items. */
+  mcpCalls: Array<Record<string, unknown>>;
+  /** Every agent message of the turn, joined. */
+  text: string;
+}
+
+/** One real coordinator turn under the given search mode, with a copy of the local login. */
+async function liveCoordinatorTurn(
+  research: "search" | "search-and-mcp",
+  searchMode: "cached" | "live",
+  prompt: string,
+): Promise<LiveTurn> {
+  const { codexHome, workspace } = await sandbox();
+  const source = join(process.env.CODEX_HOME || join(homedir(), ".codex"), "auth.json");
+  await writeFile(join(codexHome, "auth.json"), await readFile(source, "utf8"), { mode: 0o600 });
+  const overrides = codexAppServerConfigOverrides({
+    ORKESTRATOR_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
+    CODEX_BRIDGE_PERMISSION_PROFILE: PROFILE,
+    CODEX_BRIDGE_READABLE_RUNTIME_ROOT: workspace,
+    CWD: workspace,
+    [COORDINATOR_WEB_RESEARCH_ENV]: research,
+    ORKESTRATOR_COORDINATOR_RESEARCH_MCP: JSON.stringify([
+      { name: "context7", url: "https://mcp.context7.com/mcp" },
+    ]),
+  });
+  // The control replaces the coordinator's `cached` with `live`.
+  overrides.web_search = JSON.stringify(searchMode);
+  const args = ["app-server", "--stdio"];
+  for (const [key, value] of Object.entries(overrides)) args.push("-c", `${key}=${value}`);
+  const child = spawn(await resolveCodexBinary(), args, {
+    cwd: workspace,
+    env: { ...process.env, CODEX_HOME: codexHome, LOG_FORMAT: "json" },
+    stdio: ["pipe", "pipe", "pipe"],
+    shell: false,
+  });
+  child.stderr.resume();
+  const turn: LiveTurn = { searches: [], mcpCalls: [], text: "" };
+  let finish!: () => void;
+  const finished = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const client = new JsonlRpcClient({
+    generation: 1,
+    stdin: child.stdin,
+    stdout: child.stdout,
+    onNotification: (notification) => {
+      const params = (notification as { params?: Record<string, unknown> }).params ?? {};
+      if (notification.method === "item/completed") {
+        const item = (params.item ?? {}) as Record<string, unknown>;
+        if (item.type === "webSearch") turn.searches.push(item);
+        if (item.type === "mcpToolCall") turn.mcpCalls.push(item);
+        if (item.type === "agentMessage") turn.text += `${String(item.text ?? "")}\n`;
+      }
+      if (notification.method === "turn/completed") finish();
+    },
+    onServerRequest: () => undefined,
+  });
+  try {
+    await client.request("initialize", {
+      clientInfo: CLIENT_INFO,
+      capabilities: { experimentalApi: false, requestAttestation: false },
+    });
+    await client.notify("initialized");
+    const started = await client.request<{ thread: { id: string } }>("thread/start", {
+      cwd: workspace,
+      approvalPolicy: "never",
+    });
+    await client.request("turn/start", {
+      threadId: started.thread.id,
+      input: [{ type: "text", text: prompt, text_elements: [] }],
+    });
+    await withTimeout(finished, 240_000, "the turn to complete");
+    return turn;
+  } finally {
+    client.close();
+    child.stdin.end();
+    child.kill("SIGTERM");
+  }
+}
+
+/** A search URL no index can hold: Wikipedia echoes the fresh term in the page title. */
+function freshPageUrl(): { url: string; token: string } {
+  const token = `orkprobe${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+  return { url: `https://en.wikipedia.org/w/index.php?search=${token}&fulltext=1`, token };
+}
+
+const OPEN_PROMPT = (url: string) =>
+  `Use your web tool to open exactly this URL and quote the page title verbatim: ${url} . ` +
+  "Do not use shell commands. If you cannot open it, say exactly what the tool returned.";
+
+describeLiveSearchCanary("live coordinator web search modes", () => {
+  test("live search opens a page no index holds (control)", async () => {
+    const { url, token } = freshPageUrl();
+    const turn = await liveCoordinatorTurn("search", "live", OPEN_PROMPT(url));
+    expect(turn.searches.length).toBeGreaterThan(0);
+    // The page title, not just the URL, carries the fresh term.
+    expect(turn.text).toContain(`${token} - Search results`);
+  }, 300_000);
+
+  test("a coordinator's cached search cannot open it", async () => {
+    const { url, token } = freshPageUrl();
+    const turn = await liveCoordinatorTurn("search", "cached", OPEN_PROMPT(url));
+    expect(turn.searches.length).toBeGreaterThan(0);
+    expect(turn.text).not.toContain(`${token} - Search results`);
+  }, 300_000);
+
+  test("a coordinator calls its research server from inside the permission profile", async () => {
+    const turn = await liveCoordinatorTurn(
+      "search-and-mcp",
+      "cached",
+      "Use the context7 MCP server's library-resolution tool to find the Context7 library ID for React, and reply with that ID only.",
+    );
+    expect(
+      turn.mcpCalls.some((call) => call.server === "context7" && call.status === "completed"),
+    ).toBe(true);
+  }, 300_000);
 });

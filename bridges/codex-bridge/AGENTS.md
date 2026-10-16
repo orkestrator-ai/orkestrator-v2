@@ -90,11 +90,14 @@ newest row, which every window holds.
   Verified against codex 0.158.0.
 - Never treat the permission profile's `network.enabled = false` as "no network".
   It stops commands; hosted web search (`web__run` in code mode) runs on
-  OpenAI's servers. A network-denied thread needs `CODEX_NETWORK_DENIED_CONFIG`,
-  and a coordinator thread is refused unless `config/read` reads it back
-  (`assertHostedNetworkLock`). After a Codex bump, run `live-network-lock.test.ts`
-  with `RUN_LIVE_CODEX_APP_SERVER=1`; it reads the tools from the real model
-  request on a loopback endpoint and spends no credits.
+  OpenAI's servers. A network-denied thread gets `codexNetworkDeniedConfig`:
+  `disabled`, or `cached` when the policy allows search. Never `live`, which
+  opens any URL the model names. A coordinator thread is refused unless
+  `config/read` reads the expected mode back (`assertHostedNetworkLock`).
+  After a Codex bump, run `live-network-lock.test.ts` with
+  `RUN_LIVE_CODEX_APP_SERVER=1` (no credits), and once with
+  `RUN_LIVE_CODEX_WEB_SEARCH_CANARY=1`, which spends a few turns proving
+  `cached` still refuses a page `live` opens.
 - Agent version bumps follow [`docs/development/upgrade-agents.md`](../../docs/development/upgrade-agents.md);
   the generated protocol under `app-server/generated/` is a lockfile.
 - Never resolve an approval to "approved" by default. Every timeout, disconnect,

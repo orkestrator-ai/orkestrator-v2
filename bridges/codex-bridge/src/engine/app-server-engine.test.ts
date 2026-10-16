@@ -1,4 +1,5 @@
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import { coordinatorCapabilityPolicy } from "@orkestrator/protocol/coordinator-web-research";
 import { afterEach, describe, test, expect, spyOn } from "bun:test";
 import { EventEmitter } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -573,7 +574,7 @@ describe("thread lifecycle", () => {
       });
       await h.engine.start();
       await expect(h.engine.startThread({ config })).rejects.toThrow(
-        "did not confirm that hosted web search is off",
+        "did not confirm its hosted web search mode",
       );
       // Refused before a thread exists, so nothing could have run in it.
       expect(h.child().requests.some((request) => request.method === "thread/start")).toBe(false);
@@ -591,6 +592,51 @@ describe("thread lifecycle", () => {
     expect(unanswered.child().requests.some((request) => request.method === "thread/start")).toBe(
       false,
     );
+  });
+
+  test("a researching coordinator runs cached search and is refused live search", async () => {
+    const config: EngineTurnConfig = {
+      ...PLAN,
+      permissionProfile: "coordinator-conversation-1",
+      networkAccessEnabled: false,
+      policy: {
+        id: "coordinator-read-only",
+        sandbox: "provider",
+        approvals: "deny",
+        projectResources: false,
+        capabilityPolicy: coordinatorCapabilityPolicy("search"),
+        networkAccess: "restricted",
+      },
+    };
+    const started = (webSearch: string) =>
+      harness({
+        "config/read": () => ({ config: { web_search: webSearch }, origins: {}, layers: null }),
+        "thread/start": () => ({
+          thread: thread("t1"),
+          activePermissionProfile: { id: "coordinator-conversation-1" },
+        }),
+      });
+
+    const cached = started("cached");
+    await cached.engine.start();
+    await cached.engine.startThread({ config });
+    const params = cached
+      .child()
+      .requests.find((request) => request.method === "thread/start")!.params;
+    expect(params.config).toEqual({
+      web_search: "cached",
+      "features.standalone_web_search": false,
+    });
+
+    // `live` opens any URL the model names, and `disabled` is not what this
+    // coordinator was launched with: both are refused before a thread exists.
+    for (const mode of ["live", "disabled"]) {
+      const refused = started(mode);
+      await refused.engine.start();
+      await expect(refused.engine.startThread({ config })).rejects.toThrow(
+        `web_search is "${mode}", not "cached"`,
+      );
+    }
   });
 
   test("reads the coordinator's web search setting once per app-server generation", async () => {

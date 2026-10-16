@@ -1,3 +1,10 @@
+import {
+  COORDINATOR_RESEARCH_MCP_ENV,
+  COORDINATOR_WEB_RESEARCH_ENV,
+  coordinatorWebResearchEnv,
+  coordinatorWebResearchSetting,
+  normalizeCoordinatorResearchMcpServers,
+} from "@orkestrator/protocol/coordinator-web-research";
 import { assertEnvironmentNotMoving } from "./environment-replacement-fence.js";
 import {
   formatContainerLifecycleError,
@@ -1099,6 +1106,10 @@ export async function startLocalServerUnlocked(
   // started with this variable in its own environment would otherwise hand it
   // to every worker bridge. Only the branch below may name a root.
   delete env[ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT_ENV];
+  // The same for coordinator research: read-only review turns in a worker
+  // bridge consult these too, so only the coordinator branch may set them.
+  delete env[COORDINATOR_WEB_RESEARCH_ENV];
+  delete env[COORDINATOR_RESEARCH_MCP_ENV];
   if (coordinatorId) {
     // Coordinator authority is always freshly issued for this exact
     // conversation. Never inherit a token from the backend's own environment
@@ -1122,6 +1133,15 @@ export async function startLocalServerUnlocked(
     );
     await mkdir(attachmentRoot, { recursive: true, mode: 0o700 });
     env[ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT_ENV] = attachmentRoot;
+    // Process authority like the execution policy: read once at launch, so a
+    // changed setting reaches a conversation when its bridge next starts.
+    Object.assign(
+      env,
+      coordinatorWebResearchEnv(
+        coordinatorWebResearchSetting(bridgeConfig.global.coordinatorWebResearch),
+        normalizeCoordinatorResearchMcpServers(bridgeConfig.global.coordinatorResearchMcpServers),
+      ),
+    );
   }
 
   if (kind === "opencode") {

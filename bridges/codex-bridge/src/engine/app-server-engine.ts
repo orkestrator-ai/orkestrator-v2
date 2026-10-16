@@ -22,7 +22,6 @@
  *     against persisted turns rather than retrying blind.
  */
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
-import { nativeAgentPolicyDeniesNetwork } from "@orkestrator/protocol/native-agent";
 import { open } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -58,7 +57,11 @@ import {
   reconcileFromThreadTurns,
   type ReconciliationOutcome,
 } from "../sessions/dispatch-journal.js";
-import { CODEX_NETWORK_DENIED_CONFIG, codexHostedNetworkLockGaps } from "../codex-config.js";
+import {
+  codexHostedNetworkLockGaps,
+  codexNetworkDeniedConfig,
+  codexNetworkDeniedSearchMode,
+} from "../codex-config.js";
 import { type McpToolAvailability, waitForMcpToolAvailability } from "./mcp-tool-availability.js";
 import {
   APP_SERVER_CAPABILITIES,
@@ -1344,11 +1347,12 @@ export class AppServerEngine implements CodexEngine {
       Boolean(config.workflowResultTool && config.agentMcp);
     const threadConfig: Record<string, unknown> = {
       // A sandbox's network switch stops commands, not hosted web search, which
-      // runs on OpenAI's servers. Thread scope is what reaches a network-denied
+      // runs on OpenAI's servers: off, or `cached` (no live page fetches) when
+      // the policy allows search. Thread scope is what reaches a network-denied
       // session on a bridge that also serves other policies; a coordinator
       // process carries the same setting as process configuration, which
       // `assertHostedNetworkLock` reads back.
-      ...(nativeAgentPolicyDeniesNetwork(config.policy) ? CODEX_NETWORK_DENIED_CONFIG : {}),
+      ...codexNetworkDeniedConfig(config.policy),
       ...(config.agentMcp
         ? {
             // Replace the complete server table. The app-server process may
@@ -1406,14 +1410,16 @@ export class AppServerEngine implements CodexEngine {
   }
 
   /**
-   * Refuse a coordinator thread unless app-server confirms hosted web search is off.
+   * Refuse a coordinator thread unless app-server confirms its search mode.
    *
    * The coordinator's permission profile denies the network to commands, and
    * app-server echoes the profile back (`assertPermissionProfile`). Hosted web
-   * search is outside that profile, so its setting is read back separately from
-   * the effective configuration. A Codex that renames or ignores the switch then
-   * fails here, before a thread exists, rather than letting the model reach the
-   * internet. Verified once per app-server generation.
+   * search is outside that profile, so its mode is read back separately from
+   * the effective configuration: `disabled`, or `cached` when the coordinator's
+   * research setting allows search, never `live`. A Codex that renames or
+   * ignores the switch then fails here, before a thread exists, rather than
+   * letting the model open arbitrary URLs. Verified once per app-server
+   * generation.
    */
   private async assertHostedNetworkLock(config: EngineTurnConfig): Promise<void> {
     if (!config.permissionProfile) return;
@@ -1421,10 +1427,13 @@ export class AppServerEngine implements CodexEngine {
     const { result, generation } = await this.supervisor.requestWithGeneration<{
       config?: unknown;
     }>("config/read", { cwd: config.cwd ?? this.options.cwd });
-    const gaps = codexHostedNetworkLockGaps(result?.config);
+    const gaps = codexHostedNetworkLockGaps(
+      result?.config,
+      codexNetworkDeniedSearchMode(config.policy),
+    );
     if (gaps.length > 0) {
       throw new Error(
-        `Codex did not confirm that hosted web search is off (${gaps.join("; ")}), so this coordinator session was refused`,
+        `Codex did not confirm its hosted web search mode (${gaps.join("; ")}), so this coordinator session was refused`,
       );
     }
     this.hostedNetworkLockVerifiedGeneration = generation;

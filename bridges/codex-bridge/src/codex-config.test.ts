@@ -1,9 +1,12 @@
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  COORDINATOR_RESEARCH_MCP_ENV,
+  COORDINATOR_WEB_RESEARCH_ENV,
+} from "@orkestrator/protocol/coordinator-web-research";
+import {
   BRIDGE_ATTACHMENT_ROOT_ENV,
   CODEX_MAX_CONCURRENT_THREADS_ENV,
-  CODEX_NETWORK_DENIED_CONFIG,
   DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
   MAX_CODEX_CONCURRENT_THREADS,
   ORKESTRATOR_AGENT_MCP_TOKEN_ENV,
@@ -11,6 +14,8 @@ import {
   codexAppServerConfigOverrides,
   codexCoordinatorPolicy,
   codexHostedNetworkLockGaps,
+  codexNetworkDeniedConfig,
+  codexNetworkDeniedSearchMode,
   resolveCodexMaxConcurrentThreads,
 } from "./codex-config.js";
 
@@ -259,17 +264,96 @@ describe("Codex app-server configuration", () => {
   });
 
   test("turns hosted web search off for a coordinator in the TOML form -c expects", () => {
+    // No research setting from the launcher is the same as `off`.
     const overrides = codexAppServerConfigOverrides(COORDINATOR_ENV);
     // Each value is parsed as TOML by `codex -c key=value`; a bare `disabled`
     // would not parse as a string and app-server would refuse to start.
-    expect(overrides.web_search).toBe(JSON.stringify(CODEX_NETWORK_DENIED_CONFIG.web_search));
+    expect(overrides.web_search).toBe('"disabled"');
+    expect(overrides["features.standalone_web_search"]).toBe("false");
     // Naming the deprecated switches would only add a deprecation notice to
-    // every thread: `web_search = "disabled"` already wins over them.
+    // every thread: `web_search` already wins over them.
     expect(overrides["features.web_search_request"]).toBeUndefined();
     expect(overrides["features.web_search_cached"]).toBeUndefined();
   });
 
-  test("reads hosted web search back from an effective configuration", () => {
+  test("a research setting gives a coordinator cached search, never live", () => {
+    for (const mode of ["search", "search-and-mcp"]) {
+      const overrides = codexAppServerConfigOverrides({
+        ...COORDINATOR_ENV,
+        [COORDINATOR_WEB_RESEARCH_ENV]: mode,
+      });
+      expect(overrides.web_search).toBe('"cached"');
+      expect(overrides["features.standalone_web_search"]).toBe("false");
+    }
+    // An unknown value is not a mode, so search stays off.
+    expect(
+      codexAppServerConfigOverrides({ ...COORDINATOR_ENV, [COORDINATOR_WEB_RESEARCH_ENV]: "live" })
+        .web_search,
+    ).toBe('"disabled"');
+  });
+
+  test("adds the launcher's research servers to a coordinator, approved and optional", () => {
+    const env = {
+      ...COORDINATOR_ENV,
+      [COORDINATOR_WEB_RESEARCH_ENV]: "search-and-mcp",
+      [COORDINATOR_RESEARCH_MCP_ENV]: JSON.stringify([
+        { name: "context7", url: "https://mcp.context7.com/mcp" },
+        // Refused: a local endpoint, a reserved name, and a non-https URL.
+        { name: "local", url: "http://127.0.0.1:9000/mcp" },
+        { name: "orkestrator", url: "https://example.com/mcp" },
+      ]),
+    };
+    const overrides = codexAppServerConfigOverrides(env);
+    expect(overrides["mcp_servers.context7.url"]).toBe('"https://mcp.context7.com/mcp"');
+    expect(overrides["mcp_servers.context7.required"]).toBe("false");
+    expect(overrides["mcp_servers.context7.default_tools_approval_mode"]).toBe('"approve"');
+    expect(Object.keys(overrides).filter((key) => key.startsWith("mcp_servers."))).toEqual(
+      Object.keys(overrides).filter((key) => key.startsWith("mcp_servers.context7.")),
+    );
+
+    // Search alone loads no servers, whatever the list says.
+    const searchOnly = codexAppServerConfigOverrides({
+      ...env,
+      [COORDINATOR_WEB_RESEARCH_ENV]: "search",
+    });
+    expect(Object.keys(searchOnly).some((key) => key.startsWith("mcp_servers.context7"))).toBe(
+      false,
+    );
+    // And an ordinary bridge never loads them.
+    const worker = codexAppServerConfigOverrides({
+      CWD: "/projects/example",
+      [COORDINATOR_WEB_RESEARCH_ENV]: "search-and-mcp",
+      [COORDINATOR_RESEARCH_MCP_ENV]: env[COORDINATOR_RESEARCH_MCP_ENV],
+    });
+    expect(Object.keys(worker).some((key) => key.startsWith("mcp_servers.context7"))).toBe(false);
+  });
+
+  test("a network-denied thread searches only from the cache, and only when allowed", () => {
+    const denied = { ...codexCoordinatorPolicy({}) };
+    expect(codexNetworkDeniedSearchMode(denied)).toBe("disabled");
+    expect(codexNetworkDeniedConfig(denied)).toEqual({
+      web_search: "disabled",
+      "features.standalone_web_search": false,
+    });
+    const research = codexCoordinatorPolicy({ [COORDINATOR_WEB_RESEARCH_ENV]: "search" });
+    expect(codexNetworkDeniedSearchMode(research)).toBe("cached");
+    expect(codexNetworkDeniedConfig(research)).toEqual({
+      web_search: "cached",
+      "features.standalone_web_search": false,
+    });
+    // A policy that does not deny the network leaves Codex's own choice alone.
+    expect(
+      codexNetworkDeniedConfig({
+        id: "interactive-container",
+        sandbox: "container",
+        approvals: "auto-approve",
+        projectResources: true,
+        networkAccess: "restricted",
+      }),
+    ).toEqual({});
+  });
+
+  test("reads the hosted web search mode back from an effective configuration", () => {
     expect(
       codexHostedNetworkLockGaps({
         web_search: "disabled",
@@ -277,12 +361,17 @@ describe("Codex app-server configuration", () => {
       }),
     ).toEqual([]);
     expect(codexHostedNetworkLockGaps({ web_search: "disabled" })).toEqual([]);
-    // Codex's default is no setting at all, which serves `cached` search.
+    expect(codexHostedNetworkLockGaps({ web_search: "cached" }, "cached")).toEqual([]);
+    // No setting leaves the mode to Codex, which is not a confirmation.
     expect(codexHostedNetworkLockGaps({ web_search: null })).toEqual([
       'web_search is null, not "disabled"',
     ]);
     expect(codexHostedNetworkLockGaps({ web_search: "cached" })).toEqual([
       'web_search is "cached", not "disabled"',
+    ]);
+    // `live` opens any URL the model names; it never passes.
+    expect(codexHostedNetworkLockGaps({ web_search: "live" }, "cached")).toEqual([
+      'web_search is "live", not "cached"',
     ]);
     expect(
       codexHostedNetworkLockGaps({
@@ -298,11 +387,18 @@ describe("Codex app-server configuration", () => {
   });
 
   test("the coordinator policy names the network denial the panel and thread config read", () => {
-    expect(codexCoordinatorPolicy()).toMatchObject({
+    expect(codexCoordinatorPolicy({})).toMatchObject({
       id: "coordinator-read-only",
       approvals: "deny",
       networkAccess: "restricted",
       capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
+    });
+    expect(codexCoordinatorPolicy({}).capabilityPolicy?.allow).toBeUndefined();
+    expect(
+      codexCoordinatorPolicy({ [COORDINATOR_WEB_RESEARCH_ENV]: "search-and-mcp" }).capabilityPolicy,
+    ).toEqual({
+      deny: ["file.write", "file.patch", "shell.mutate", "network"],
+      allow: ["web.search"],
     });
   });
 

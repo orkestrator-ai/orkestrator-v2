@@ -12,6 +12,7 @@ import {
   isNativeAgentTabData,
   describeNativeAgentExecutionPolicy,
   nativeAgentPolicyDeniesNetwork,
+  nativeAgentPolicyDeniesWebSearch,
   type NativeAgentExecutionPolicy,
   normalizeNativeAgentTurnActivity,
   isSelectableOpenCodeModelId,
@@ -1239,6 +1240,50 @@ describe("native agent network denial", () => {
     const { capabilityPolicy: _omitted, ...restricted } = coordinator;
     expect(nativeAgentPolicyDeniesNetwork(restricted)).toBe(false);
     expect(nativeAgentPolicyDeniesNetwork(undefined)).toBe(false);
+  });
+
+  test("search is off under a network denial unless allowed, and can be denied alone", () => {
+    expect(nativeAgentPolicyDeniesWebSearch(coordinator)).toBe(true);
+    const research: NativeAgentExecutionPolicy = {
+      ...coordinator,
+      capabilityPolicy: { ...coordinator.capabilityPolicy!, allow: ["web.search"] },
+    };
+    expect(nativeAgentPolicyDeniesNetwork(research)).toBe(true);
+    expect(nativeAgentPolicyDeniesWebSearch(research)).toBe(false);
+    // A denial by name wins over an exception.
+    expect(
+      nativeAgentPolicyDeniesWebSearch({
+        ...research,
+        capabilityPolicy: { deny: ["network", "web.search"], allow: ["web.search"] },
+      }),
+    ).toBe(true);
+    expect(
+      nativeAgentPolicyDeniesWebSearch({
+        ...coordinator,
+        capabilityPolicy: { deny: ["web.search"] },
+      }),
+    ).toBe(true);
+    expect(nativeAgentPolicyDeniesWebSearch(undefined)).toBe(false);
+    expect(describeNativeAgentExecutionPolicy(research)).toBe(
+      "Provider sandbox, approvals denied, project rules off, no network except hosted web search, web fetch off",
+    );
+  });
+
+  test("an exception list is validated like the denials", () => {
+    expect(
+      isNativeAgentExecutionPolicy({
+        ...coordinator,
+        capabilityPolicy: { deny: ["network"], allow: ["web.search"] },
+      }),
+    ).toBe(true);
+    for (const allow of [["web.fetch"], "web.search", [1], null]) {
+      expect(
+        isNativeAgentExecutionPolicy({
+          ...coordinator,
+          capabilityPolicy: { deny: ["network"], allow },
+        }),
+      ).toBe(false);
+    }
   });
 
   test("the information panel says the hosted web tools are off, not just restricted", () => {

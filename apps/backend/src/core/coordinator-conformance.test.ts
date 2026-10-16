@@ -22,7 +22,9 @@ import {
 import {
   describeNativeAgentExecutionPolicy,
   nativeAgentPolicyDeniesNetwork,
+  nativeAgentPolicyDeniesWebSearch,
 } from "@orkestrator/protocol/native-agent";
+import { coordinatorWebResearchEnv } from "@orkestrator/protocol/coordinator-web-research";
 import { coordinatorProviderQualification } from "./coordinator-providers.js";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
@@ -106,7 +108,7 @@ describe("coordinator read-only conformance", () => {
       CWD: "/projects/example",
     });
     expect(codex.web_search).toBe('"disabled"');
-    expect(nativeAgentPolicyDeniesNetwork(codexCoordinatorPolicy())).toBe(true);
+    expect(nativeAgentPolicyDeniesNetwork(codexCoordinatorPolicy({}))).toBe(true);
 
     // Claude: both tools are denied by name, not only left off the allowlist.
     expect(claudeDeniedTools(coordinatorPolicy)).toEqual(
@@ -129,6 +131,53 @@ describe("coordinator read-only conformance", () => {
     });
     expect(grok[0]).toBe("--disable-web-search");
     expect(grok).toContain("--no-leader");
+  });
+
+  // The research setting reopens hosted search and nothing else: commands
+  // stay off the network and no platform may fetch an arbitrary page.
+  test("a researching coordinator gets search, never fetch, on every platform that has it", () => {
+    const research = resolveNativeAgentExecutionPolicy(
+      { environmentType: "local", networkAccessMode: "restricted" },
+      "coordinator",
+      undefined,
+      "search-and-mcp",
+    );
+    expect(nativeAgentPolicyDeniesNetwork(research)).toBe(true);
+    expect(nativeAgentPolicyDeniesWebSearch(research)).toBe(false);
+    expect(describeNativeAgentExecutionPolicy(research)).toContain(
+      "no network except hosted web search, web fetch off",
+    );
+
+    // Codex: cached search only, which cannot open a page outside OpenAI's index.
+    const codexEnv = {
+      ORKESTRATOR_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
+      CODEX_BRIDGE_PERMISSION_PROFILE: "coordinator-conversation-1",
+      CODEX_BRIDGE_READABLE_RUNTIME_ROOT: "/opt/orkestrator/codex",
+      CWD: "/projects/example",
+      ...coordinatorWebResearchEnv("search-and-mcp", [
+        { name: "context7", url: "https://mcp.context7.com/mcp" },
+      ]),
+    };
+    const codex = codexAppServerConfigOverrides(codexEnv);
+    expect(codex.web_search).toBe('"cached"');
+    expect(codex["mcp_servers.context7.url"]).toBe('"https://mcp.context7.com/mcp"');
+
+    // Claude: WebSearch allowed and WebFetch still denied.
+    expect(claudeDeniedTools(research)).toContain("WebFetch");
+    expect(claudeDeniedTools(research)).not.toContain("WebSearch");
+    expect(
+      claudeReadOnlyAllowedTools({ agentMcpServerNames: ["orkestrator"], policy: research }),
+    ).toContain("WebSearch");
+
+    // OpenCode: search allowed by name, fetch denied last.
+    const openCode = openCodePermissionRules(effectiveOpenCodePolicy(research));
+    expect(openCode.at(-1)).toEqual({ permission: "webfetch", pattern: "*", action: "deny" });
+    expect(
+      openCode.some((rule) => rule.permission === "websearch" && rule.action === "allow"),
+    ).toBe(true);
+
+    // Grok has no verified fetch-only switch, so its coordinator stays off.
+    expect(nativeAgentPolicyDeniesWebSearch(grokCoordinatorPolicy())).toBe(true);
   });
 
   test("a provider-configured platform denies, and says what it cannot hold", () => {

@@ -215,7 +215,7 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     await fs.mkdir(bridge, { recursive: true });
     await fs.writeFile(
       path.join(bridge, "index.js"),
-      `await Bun.write(process.env.CLAUDE_CONFIG_DIR + "/captured.json", JSON.stringify({ policy: process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN }));
+      `await Bun.write(process.env.CLAUDE_CONFIG_DIR + "/captured.json", JSON.stringify({ policy: process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN, research: process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH, researchMcp: process.env.ORKESTRATOR_COORDINATOR_RESEARCH_MCP }));
 const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGTERM", stop); process.on("SIGINT", stop);
@@ -293,6 +293,10 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         ),
         mcpUrl: "http://127.0.0.1:1234/mcp",
         mcpToken: "scoped-token",
+        // The research setting is process authority too; absent in the
+        // stored config means the default: search plus Context7.
+        research: "search-and-mcp",
+        researchMcp: JSON.stringify([{ name: "context7", url: "https://mcp.context7.com/mcp" }]),
       },
     );
     const attachmentRootStats = await fs.stat(
@@ -827,14 +831,14 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     }
   });
 
-  test("a worker bridge never inherits an attachment root from the backend's own environment", async () => {
+  test("a worker bridge never inherits an attachment root or research setting from the backend's own environment", async () => {
     // The variable widens where a bridge may read attachments from, so an
     // inherited one would quietly extend a worker's boundary too.
     const bridge = path.join(root, "bridges", "codex-bridge", "dist");
     await fs.mkdir(bridge, { recursive: true });
     await fs.writeFile(
       path.join(bridge, "index.js"),
-      `await Bun.write(process.env.CWD + "/captured.json", JSON.stringify({ attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT ?? null }));
+      `await Bun.write(process.env.CWD + "/captured.json", JSON.stringify({ attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT ?? null, research: process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH ?? null, researchMcp: process.env.ORKESTRATOR_COORDINATOR_RESEARCH_MCP ?? null }));
 const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGTERM", stop); process.on("SIGINT", stop);
@@ -858,16 +862,31 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     } as CommandContext;
     cleanupContext = context;
     cleanupRuntimeId = environment.id;
-    const previousRoot = process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT;
-    process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT = path.join(root, "inherited");
+    const inherited = {
+      ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT: path.join(root, "inherited"),
+      // Read-only review turns in a worker consult these, so an inherited
+      // research setting would hand them search and research servers.
+      ORKESTRATOR_COORDINATOR_WEB_RESEARCH: "search-and-mcp",
+      ORKESTRATOR_COORDINATOR_RESEARCH_MCP: JSON.stringify([
+        { name: "context7", url: "https://mcp.context7.com/mcp" },
+      ]),
+    };
+    const previous = Object.fromEntries(
+      Object.keys(inherited).map((name) => [name, process.env[name]]),
+    );
+    Object.assign(process.env, inherited);
     try {
       await startLocalServerUnlocked(environment.id, context, "codex");
       expect(JSON.parse(await fs.readFile(path.join(checkout, "captured.json"), "utf8"))).toEqual({
         attachmentRoot: null,
+        research: null,
+        researchMcp: null,
       });
     } finally {
-      if (previousRoot === undefined) delete process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT;
-      else process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT = previousRoot;
+      for (const [name, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
     }
   });
 

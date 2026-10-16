@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 
-import { claudeDisallowedTools, coordinatorProcessPolicy } from "./read-only-policy.js";
+import {
+  claudeDeniedTools,
+  claudeDisallowedTools,
+  claudeReadOnlyAllowedTools,
+  coordinatorProcessPolicy,
+  createCoordinatorReadOnlyHook,
+} from "./read-only-policy.js";
 import { createSession, nextQueryCall, sendPrompt, track } from "./session-manager-test-harness.js";
 
 /**
@@ -66,5 +72,50 @@ describe("a policy that denies the network", () => {
     call.push({ type: "result", subtype: "success" });
     call.finish();
     await promptPromise;
+  });
+});
+
+describe("a coordinator allowed to research", () => {
+  const research = coordinatorProcessPolicy({ ORKESTRATOR_COORDINATOR_WEB_RESEARCH: "search" });
+
+  async function decide(toolName: string, servers: readonly string[] = ["context7"]) {
+    const hook = createCoordinatorReadOnlyHook(research, servers);
+    const output = await hook(
+      { hook_event_name: "PreToolUse", tool_name: toolName, tool_input: {} } as never,
+      undefined as never,
+      { signal: new AbortController().signal } as never,
+    );
+    return (output as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput
+      ?.permissionDecision;
+  }
+
+  test("keeps WebSearch and loses WebFetch", () => {
+    expect(research.capabilityPolicy?.allow).toEqual(["web.search"]);
+    expect(claudeDeniedTools(research)).toContain("WebFetch");
+    expect(claudeDeniedTools(research)).not.toContain("WebSearch");
+    const allowed = claudeReadOnlyAllowedTools({
+      agentMcpServerNames: ["orkestrator"],
+      policy: research,
+      researchMcpServerNames: ["context7"],
+    });
+    expect(allowed).toContain("WebSearch");
+    expect(allowed).not.toContain("WebFetch");
+    expect(allowed).toContain("mcp__context7__*");
+    // Without the setting, neither is on the allowlist.
+    const off = claudeReadOnlyAllowedTools({
+      agentMcpServerNames: ["orkestrator"],
+      policy: coordinatorProcessPolicy({}),
+    });
+    expect(off).not.toContain("WebSearch");
+    expect(off.some((tool) => tool.startsWith("mcp__context7"))).toBe(false);
+  });
+
+  test("the hook admits search and the named research server, nothing else", async () => {
+    expect(await decide("WebSearch")).toBeUndefined();
+    expect(await decide("mcp__context7__query-docs")).toBeUndefined();
+    expect(await decide("WebFetch")).toBe("deny");
+    // A server the launcher did not name, even one whose name starts the same.
+    expect(await decide("mcp__context7x__query-docs")).toBe("deny");
+    expect(await decide("mcp__context7__query-docs", [])).toBe("deny");
   });
 });

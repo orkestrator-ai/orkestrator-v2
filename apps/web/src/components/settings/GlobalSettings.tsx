@@ -5,6 +5,12 @@ import * as backend from "@/lib/backend";
 import { getGatewayTokenValidationError } from "@/lib/gateway-token";
 import { getReviewInstructionValidationError } from "@orkestrator/protocol/review-instruction";
 import { DEFAULT_COORDINATOR_PROVIDER_TIER } from "@orkestrator/protocol/coordinator";
+import {
+  coordinatorWebResearchSetting,
+  normalizeCoordinatorResearchMcpServers,
+  type CoordinatorResearchMcpServer,
+  type CoordinatorWebResearch,
+} from "@orkestrator/protocol/coordinator-web-research";
 import { useTimedCopyFeedback } from "@/hooks";
 import { DEFAULT_REVIEW_INSTRUCTION } from "@/prompts";
 import type {
@@ -103,6 +109,8 @@ interface CoreFieldsSnapshot {
   preferredEditor: PreferredEditor;
   enabledAgentPlatforms: AgentPlatform[];
   coordinatorProviderTiers: "enforced" | "provider-configured" | "advisory";
+  coordinatorWebResearch: CoordinatorWebResearch;
+  coordinatorResearchMcpServers: CoordinatorResearchMcpServer[];
   agentSettings: AgentSettingsTier;
   openCodeModelProviders: string[];
   codexMaxConcurrentThreads: number;
@@ -136,6 +144,10 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
     preferredEditor: global.preferredEditor ?? "vscode",
     enabledAgentPlatforms: global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"],
     coordinatorProviderTiers: global.coordinatorProviderTiers ?? DEFAULT_COORDINATOR_PROVIDER_TIER,
+    coordinatorWebResearch: coordinatorWebResearchSetting(global.coordinatorWebResearch),
+    coordinatorResearchMcpServers: normalizeCoordinatorResearchMcpServers(
+      global.coordinatorResearchMcpServers,
+    ),
     agentSettings: normalizeAgentSettings(global.agentSettings),
     openCodeModelProviders: normalizeOpenCodeModelProviders(global.openCodeModelProviders),
     codexMaxConcurrentThreads:
@@ -211,6 +223,8 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.preferredEditor ?? "vscode",
     global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"],
     global.coordinatorProviderTiers ?? DEFAULT_COORDINATOR_PROVIDER_TIER,
+    coordinatorWebResearchSetting(global.coordinatorWebResearch),
+    normalizeCoordinatorResearchMcpServers(global.coordinatorResearchMcpServers),
     normalizeOpenCodeModelProviders(global.openCodeModelProviders),
     global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
     resolveClaudeBackgroundCommandLimitHours(global.claudeBackgroundCommandLimitHours),
@@ -274,6 +288,12 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   const [coordinatorProviderTiers, setCoordinatorProviderTiers] = useState<
     "enforced" | "provider-configured" | "advisory"
   >(global.coordinatorProviderTiers ?? DEFAULT_COORDINATOR_PROVIDER_TIER);
+  const [coordinatorWebResearch, setCoordinatorWebResearch] = useState<CoordinatorWebResearch>(() =>
+    coordinatorWebResearchSetting(global.coordinatorWebResearch),
+  );
+  const [coordinatorResearchMcpServers, setCoordinatorResearchMcpServers] = useState<
+    CoordinatorResearchMcpServer[]
+  >(() => normalizeCoordinatorResearchMcpServers(global.coordinatorResearchMcpServers));
   const [openCodeModelProviders, setOpenCodeModelProviders] = useState<string[]>(() =>
     normalizeOpenCodeModelProviders(global.openCodeModelProviders),
   );
@@ -380,6 +400,10 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setEnabledAgentPlatforms(global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]);
     setCoordinatorProviderTiers(
       global.coordinatorProviderTiers ?? DEFAULT_COORDINATOR_PROVIDER_TIER,
+    );
+    setCoordinatorWebResearch(coordinatorWebResearchSetting(global.coordinatorWebResearch));
+    setCoordinatorResearchMcpServers(
+      normalizeCoordinatorResearchMcpServers(global.coordinatorResearchMcpServers),
     );
     setAgentSettings(normalizeAgentSettings(global.agentSettings));
     setOpenCodeModelProviders(normalizeOpenCodeModelProviders(global.openCodeModelProviders));
@@ -544,6 +568,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       preferredEditor,
       enabledAgentPlatforms,
       coordinatorProviderTiers,
+      coordinatorWebResearch,
+      coordinatorResearchMcpServers,
       agentSettings: normalizeAgentSettings(agentSettings),
       openCodeModelProviders: normalizeOpenCodeModelProviders(openCodeModelProviders),
       codexMaxConcurrentThreads,
@@ -575,6 +601,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       preferredEditor,
       enabledAgentPlatforms,
       coordinatorProviderTiers,
+      coordinatorWebResearch,
+      coordinatorResearchMcpServers,
       agentSettings,
       openCodeModelProviders,
       codexMaxConcurrentThreads,
@@ -744,6 +772,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         preferredEditor?: PreferredEditor;
         enabledAgentPlatforms: AgentPlatform[];
         coordinatorProviderTiers: "enforced" | "provider-configured" | "advisory";
+        coordinatorWebResearch: CoordinatorWebResearch;
+        coordinatorResearchMcpServers: CoordinatorResearchMcpServer[];
         favoriteModels: Array<{ platform: AgentPlatform; modelId: string }>;
         agentSettings: AgentSettingsTier;
         openCodeModelProviders: string[];
@@ -771,6 +801,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         preferredEditor,
         enabledAgentPlatforms,
         coordinatorProviderTiers,
+        coordinatorWebResearch,
+        coordinatorResearchMcpServers,
         favoriteModels: global.favoriteModels ?? [],
         agentSettings: normalizeAgentSettings(agentSettings),
         openCodeModelProviders: normalizeOpenCodeModelProviders(openCodeModelProviders),
@@ -998,7 +1030,11 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     enabledAgentPlatforms,
     setEnabledAgentPlatforms,
     coordinatorProviderTiers,
+    coordinatorWebResearch,
+    coordinatorResearchMcpServers,
     setCoordinatorProviderTiers,
+    setCoordinatorWebResearch,
+    setCoordinatorResearchMcpServers,
     openCodeModelProviders,
     setOpenCodeModelProviders,
     planUsageRefreshToken,

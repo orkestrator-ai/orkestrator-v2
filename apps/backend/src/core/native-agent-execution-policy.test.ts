@@ -358,6 +358,49 @@ describe("OpenCode execution policy translation", () => {
     ).toEqual([{ permission: "*", pattern: "*", action: "allow" }]);
   });
 
+  test("a researching coordinator may search through OpenCode but never fetch", () => {
+    const policy = effectiveOpenCodePolicy(
+      resolveNativeAgentExecutionPolicy(
+        { environmentType: "local", networkAccessMode: "restricted" },
+        "coordinator",
+        undefined,
+        "search-and-mcp",
+      ),
+    );
+    expect(policy.capabilityPolicy).toEqual({
+      deny: ["file.write", "file.patch", "shell.mutate", "network"],
+      allow: ["web.search"],
+    });
+    const rules = openCodePermissionRules(policy);
+    const allowed = rules.filter((rule) => rule.action === "allow").map((rule) => rule.permission);
+    expect(allowed).toEqual(expect.arrayContaining(["websearch", "codesearch"]));
+    expect(allowed).not.toContain("webfetch");
+    // The fetch deny is still last, after every allow.
+    expect(rules.at(-1)).toEqual({ permission: "webfetch", pattern: "*", action: "deny" });
+    expect(rules.some((rule) => rule.permission === "websearch" && rule.action === "deny")).toBe(
+      false,
+    );
+  });
+
+  test("the coordinator research setting changes only the search exception", () => {
+    const resolve = (mode?: "off" | "search" | "search-and-mcp") =>
+      resolveNativeAgentExecutionPolicy(
+        { environmentType: "local", networkAccessMode: "restricted" },
+        "coordinator",
+        undefined,
+        mode,
+      );
+    // Absent keeps search off: an unread setting must not widen a coordinator.
+    expect(resolve().capabilityPolicy).toEqual({
+      deny: ["file.write", "file.patch", "shell.mutate", "network"],
+    });
+    expect(resolve("off")).toEqual(resolve());
+    expect(resolve("search").capabilityPolicy?.allow).toEqual(["web.search"]);
+    const { capabilityPolicy: _search, ...searchRest } = resolve("search");
+    const { capabilityPolicy: _off, ...offRest } = resolve("off");
+    expect(searchRest).toEqual(offRest);
+  });
+
   test("an explicit deny still wins over the coordinator read allowances", () => {
     const rules = openCodePermissionRules({
       id: "coordinator-read-only",

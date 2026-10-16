@@ -18,6 +18,10 @@ import type {
   AgentInteractionWorkflowSummary,
 } from "@orkestrator/protocol/agent-interactions";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type {
+  CoordinatorResearchMcpServer,
+  CoordinatorWebResearch,
+} from "@orkestrator/protocol/coordinator-web-research";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import type { TrustedUserPromptPresentation } from "@orkestrator/protocol/review-evidence-frames";
@@ -876,6 +880,14 @@ export interface AppConfig {
     coordinatorProviderTiers?: "enforced" | "provider-configured" | "advisory";
     /** Internal marker for the one-time coordinator safety-default migration. */
     coordinatorProviderTierDefaultVersion?: number;
+    /**
+     * Web research a coordinator may do. Absent means the product default
+     * (`search-and-mcp`). Commands and hosted page fetches stay off in every
+     * mode; see `@orkestrator/protocol/coordinator-web-research`.
+     */
+    coordinatorWebResearch?: CoordinatorWebResearch;
+    /** Remote research MCP servers; absent means the default list (Context7). */
+    coordinatorResearchMcpServers?: CoordinatorResearchMcpServer[];
     favoriteModels?: Array<{ platform: AgentPlatform; modelId: string }>;
     containerResources: { cpuCores: number; memoryGb: number };
     envFilePatterns: string[];

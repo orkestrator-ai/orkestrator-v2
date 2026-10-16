@@ -1,5 +1,9 @@
 import * as shared from "./native-agent-service-shared.js";
 import {
+  coordinatorResearchLine,
+  loadCoordinatorResearch,
+} from "./coordinator-research-context.js";
+import {
   COORDINATOR_ASYNC_CONTRACT,
   COORDINATOR_CONTEXT_CLOSE_TAG,
   COORDINATOR_CONTEXT_OPEN_TAG,
@@ -753,18 +757,24 @@ export abstract class NativeAgentServiceBase {
     ) {
       throw new Error("The project checkout is changing; wait for the Git operation to finish");
     }
+    const research = await loadCoordinatorResearch(this.storage);
+    const webResearch = research.mode;
     const trusted = {
       ...input,
       origin: "coordinator",
       interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
       owner: { kind: "coordinator", projectId: workspace.projectId, coordinatorId },
       executionPolicy: existing?.executionPolicy ?? COORDINATOR_EXECUTION_POLICY,
-      policy:
-        existing?.policy ??
-        resolveNativeAgentExecutionPolicy(
-          { environmentType: "local", networkAccessMode: "restricted" },
-          "coordinator",
-        ),
+      // Resolved fresh rather than read from the record: the coordinator
+      // policy is never user-overridable, and its only variable part is the
+      // research setting, which applies from the next turn. OpenCode has no
+      // bridge to hold process authority, so this is what it runs under.
+      policy: resolveNativeAgentExecutionPolicy(
+        { environmentType: "local", networkAccessMode: "restricted" },
+        "coordinator",
+        undefined,
+        webResearch,
+      ),
     };
     if (
       "prompt" in input &&
@@ -797,7 +807,10 @@ export abstract class NativeAgentServiceBase {
           `${COORDINATOR_CONTEXT_OPEN_TAG}\n` +
           `Project: ${workspace.projectId}\n` +
           `Coordinator: ${coordinatorId}\n` +
-          `Role: read-only coordinator. Inspect and plan here; delegate all file changes, commands that mutate the checkout, builds, and fixes to worker environments through approved Orkestrator controls. Never attempt to alter the project checkout directly.\n` +
+          `Role: read-only coordinator. Research, inspect and plan here; delegate all file changes, commands that mutate the checkout, builds, and fixes to worker environments through approved Orkestrator controls. Never attempt to alter the project checkout directly.\n` +
+          `Scope: keep your own work to quick reads, searches and lookups. Anything more serious (a multi-file investigation, running builds or tests, reproducing a bug, writing or reviewing code in depth) belongs in a worker environment you launch, even when it only reads.\n` +
+          coordinatorResearchLine(research) +
+          `Tools: report a tool as unavailable or denied only after you called it and the call was refused; never assume a refusal you have not seen.\n` +
           delegation +
           `Repository context revision: ${workspace.repositoryContextRevision}\n` +
           `Branch: ${status?.branch ?? "unknown"}\n` +

@@ -20,6 +20,7 @@ import {
   mcpSourceScopeForPolicy,
 } from "./mcp-config.js";
 import { getPluginsForSdk } from "./plugin-config.js";
+import { coordinatorResearchMcpServersFromEnv } from "@orkestrator/protocol/coordinator-web-research";
 import {
   claudeDeniedTools,
   claudeDisallowedTools,
@@ -143,6 +144,12 @@ export async function resolveQueryPlan(
         agentMcpServerNames: mcpServerNames.has(AGENT_MCP_SERVER_NAME)
           ? [AGENT_MCP_SERVER_NAME]
           : [],
+        policy,
+        // Only research servers this session actually loaded: a coordinator's
+        // inline set is the launcher's, so these are exactly the user's list.
+        researchMcpServerNames: coordinatorResearchMcpServersFromEnv(process.env)
+          .map((server) => server.name)
+          .filter((name) => mcpServerNames.has(name)),
       })
     : [
         ...(policy?.toolPolicy?.allow ?? defaultAllowedTools),

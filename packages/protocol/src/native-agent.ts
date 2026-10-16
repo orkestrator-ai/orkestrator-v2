@@ -1194,6 +1194,7 @@ export const NATIVE_AGENT_CAPABILITIES = [
   "shell",
   "shell.mutate",
   "network",
+  "web.search",
 ] as const;
 export type NativeAgentCapability = (typeof NATIVE_AGENT_CAPABILITIES)[number];
 
@@ -1209,8 +1210,16 @@ export interface NativeAgentExecutionPolicy {
   approvals: "ask" | "auto-approve" | "deny";
   projectResources: boolean;
   toolPolicy?: { allow?: string[]; deny?: string[] };
-  /** Provider-neutral denials each bridge translates into its own tool names. */
-  capabilityPolicy?: { deny: NativeAgentCapability[] };
+  /**
+   * Provider-neutral denials each bridge translates into its own tool names.
+   *
+   * `allow` carves an exception out of a broader denial and is never a grant on
+   * its own. Today the only exception is `web.search` under a `network`
+   * denial: hosted search stays available while commands, hosted page fetches
+   * and every other route to the internet stay off. A bridge that predates
+   * `allow` ignores it and keeps search off, which is the safe direction.
+   */
+  capabilityPolicy?: { deny: NativeAgentCapability[]; allow?: NativeAgentCapability[] };
   networkAccess: "restricted" | "full";
   /** Provider caveat when one policy axis cannot be enforced exactly. */
   note?: string;
@@ -1260,7 +1269,10 @@ export function isNativeAgentExecutionPolicy(value: unknown): value is NativeAge
             toolPolicy.deny.every((item) => typeof item === "string"))))) &&
     (capabilityPolicy === undefined ||
       (Array.isArray(capabilityPolicy.deny) &&
-        capabilityPolicy.deny.every(isNativeAgentCapability)))
+        capabilityPolicy.deny.every(isNativeAgentCapability) &&
+        (capabilityPolicy.allow === undefined ||
+          (Array.isArray(capabilityPolicy.allow) &&
+            capabilityPolicy.allow.every(isNativeAgentCapability)))))
   );
 }
 
@@ -1270,14 +1282,31 @@ export function isNativeAgentExecutionPolicy(value: unknown): value is NativeAge
  * Stronger than `networkAccess: "restricted"`, which only narrows what a
  * sandboxed command may reach: a denied network also takes away the
  * provider-hosted tools that reach the internet without running a command on
- * this machine (web search, web fetch). Those run on the vendor's servers, so
- * no sandbox or firewall here can stop them; each bridge has to remove them
- * from the agent's toolset.
+ * this machine (web fetch, and web search unless `allow` names it). Those run
+ * on the vendor's servers, so no sandbox or firewall here can stop them; each
+ * bridge has to remove them from the agent's toolset.
  */
 export function nativeAgentPolicyDeniesNetwork(
   policy: NativeAgentExecutionPolicy | undefined,
 ): boolean {
   return policy?.capabilityPolicy?.deny.includes("network") === true;
+}
+
+/**
+ * Whether a policy takes hosted web search away.
+ *
+ * Search is denied by name, or by a `network` denial that does not list
+ * `web.search` in `allow`. Hosted page fetches have no exception: under a
+ * `network` denial they are always off, because a fetched URL can carry data
+ * out to whoever owns the page.
+ */
+export function nativeAgentPolicyDeniesWebSearch(
+  policy: NativeAgentExecutionPolicy | undefined,
+): boolean {
+  const capabilities = policy?.capabilityPolicy;
+  if (!capabilities) return false;
+  if (capabilities.deny.includes("web.search")) return true;
+  return capabilities.deny.includes("network") && !capabilities.allow?.includes("web.search");
 }
 
 /** Stable, provider-neutral copy for the agent information panel. */
@@ -1294,9 +1323,11 @@ export function describeNativeAgentExecutionPolicy(policy: NativeAgentExecutionP
       : policy.approvals === "deny"
         ? "approvals denied"
         : "approvals off";
-  const network = nativeAgentPolicyDeniesNetwork(policy)
-    ? "no network, web search and web fetch off"
-    : `${policy.networkAccess} network`;
+  const network = !nativeAgentPolicyDeniesNetwork(policy)
+    ? `${policy.networkAccess} network`
+    : nativeAgentPolicyDeniesWebSearch(policy)
+      ? "no network, web search and web fetch off"
+      : "no network except hosted web search, web fetch off";
   return `${sandbox}, ${approvals}, project rules ${policy.projectResources ? "on" : "off"}, ${network}`;
 }
 

@@ -152,6 +152,32 @@ function record(environment: unknown) {
 }
 
 describe("replacement admission", () => {
+  test("rebuild preview exposes provider preservation limits before admission", async () => {
+    const { context } = await fixture();
+    const previous = process.env.ORKESTRATOR_CONTAINER_REPLACEMENT;
+    process.env.ORKESTRATOR_CONTAINER_REPLACEMENT = "paused";
+    try {
+      const preview = await rebuildPreview("env-lifecycle", context);
+      const providers = new Map(preview.providers.map((entry) => [entry.provider, entry]));
+      expect(providers.get("grok")).toMatchObject({ level: "partial", resumeQualified: false });
+      expect(providers.get("grok")?.limitations).toContain("worktrees.db");
+      expect(providers.get("grok")?.limitations).toContain("memory-v2");
+      expect(providers.get("codex")).toMatchObject({ level: "partial", resumeQualified: false });
+      expect(providers.get("codex")?.limitations).toContain("pending qualification");
+      expect(providers.get("codex")?.limitations).toContain("thread-name index");
+      expect(providers.get("opencode")?.limitations).toContain("earlier turns cannot be reverted");
+      expect(preview.preservedPaths).toContainEqual(
+        expect.stringContaining("/home/node/.grok/sessions"),
+      );
+      expect(preview.preservedPaths).toContainEqual(
+        expect.stringContaining("/home/node/.codex/orkestrator-bridge"),
+      );
+    } finally {
+      if (previous === undefined) delete process.env.ORKESTRATOR_CONTAINER_REPLACEMENT;
+      else process.env.ORKESTRATOR_CONTAINER_REPLACEMENT = previous;
+    }
+  });
+
   test("refuses a runtime that changed after review without touching Docker", async () => {
     const { context, environments } = await fixture();
     await withDockerScript(

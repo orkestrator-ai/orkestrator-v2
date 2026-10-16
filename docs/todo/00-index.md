@@ -57,10 +57,10 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 42 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 245 |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 41 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 244 |
 | Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 256 |
-| **Total** | | **544** |
+| **Total** | | **542** |
 
 ## Very high
 
@@ -109,7 +109,7 @@ it reaches. Some rules of thumb:
 - [ ] Re-run the full container live set, benchmarks and real-stack Docker specs on current `main` ([container-platform-qualification.md](container-platform-qualification.md), qualification)
 - [ ] Qualify the container live set and real-stack Docker run on Docker Desktop for Apple Silicon ([container-platform-qualification.md](container-platform-qualification.md), qualification)
 - [ ] Qualify stop with a pending approval (C11) on a real provider: the approval is denied, never approved ([container-platform-qualification.md](container-platform-qualification.md), qualification)
-- [ ] Re-trace `PROVIDER_STATE_LAYOUT` paths at current pins and add the step to the agent-upgrade guide ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md))
+- [x] Re-trace `PROVIDER_STATE_LAYOUT` paths at current pins and add the step to the agent-upgrade guide ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md))
 - [x] Allow firewall traffic as address, protocol and port tuples (TCP 443, GitHub SSH) under a new policy version ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
 - [ ] Replace the 1 s Claude state `docker exec` poll with a pushed change signal and a slow safety read ([container-state-observation.md](container-state-observation.md))
 - [ ] Record a non-skipped run of the deletion-during-setup real-stack spec on current `main` ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), qualification)
@@ -260,7 +260,7 @@ it reaches. Some rules of thumb:
 - [ ] Check the agent-tools port is answered from a container on a host whose reachability path is open (C22) ([container-platform-qualification.md](container-platform-qualification.md), qualification)
 - [ ] Decide the published minimum Engine and Desktop versions and whether rootless is gated or refused ([container-platform-qualification.md](container-platform-qualification.md), decision)
 - [ ] Decide whether the container live suites get a scheduled CI job on Linux amd64 and arm64 runners ([container-platform-qualification.md](container-platform-qualification.md), decision)
-- [ ] Close or explicitly accept partial rebuild preservation for Codex, OpenCode and Grok state files ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md))
+- [x] Close or explicitly accept partial rebuild preservation for Codex, OpenCode and Grok state files ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md))
 - [ ] Retire the legacy-layer, host-mounts and policy-1 paths, with an export path for legacy containers ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md))
 - [ ] Decide whether `restoreRecoveryCopy` always assigns a new `runtimeGeneration` so stale handles are refused ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md), decision)
 - [ ] Generate one canonical default allowlist for the backend, renderer and firewall fallbacks ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
@@ -543,8 +543,9 @@ it reaches. Some rules of thumb:
 ### Containers and environments (low)
 
 - [ ] Verify whether the container live suites have run since #877 ([container-platform-qualification.md](container-platform-qualification.md), verify)
-- [ ] Verify Codex `session_index.jsonl` and Grok `active_sessions.json` / `worktrees.db` paths at current pins ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md), verify)
+- [x] Verify Codex `session_index.jsonl` and Grok `active_sessions.json` / `worktrees.db` paths at current pins ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md), verify)
 - [ ] Decide whether a resumable copy journal is worth its complexity for very large workspaces ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md), decision)
+- [ ] Stop seeding OpenCode `snapshot/`, `storage/` and `account.json` from the host; 1.19.0 never reads the copies in a container ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md))
 - [ ] Optionally switch between restricted and full network mode in place instead of requiring a rebuild ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
 - [ ] Decide between per-platform regression targets and one reference host with a tolerance ([container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md), decision)
 - [ ] Replace per-member source `sha256sum` with an in-process tar hasher after a safety review ([container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md), deferred)
@@ -790,7 +791,7 @@ it reaches. Some rules of thumb:
 | [slash-command-qualification.md](slash-command-qualification.md) |  | 2 | 3 | 2 | 7 |
 | **Containers and environments** | | | | | |
 | [container-platform-qualification.md](container-platform-qualification.md) |  | 3 | 11 | 1 | 15 |
-| [container-rebuild-state-preservation.md](container-rebuild-state-preservation.md) |  | 1 | 3 | 2 | 6 |
+| [container-rebuild-state-preservation.md](container-rebuild-state-preservation.md) |  |  | 2 | 2 | 4 |
 | [container-network-and-credential-isolation.md](container-network-and-credential-isolation.md) |  |  | 2 | 1 | 3 |
 | [container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md) |  |  | 3 | 6 | 9 |
 | [container-state-observation.md](container-state-observation.md) |  | 1 | 5 | 5 | 11 |

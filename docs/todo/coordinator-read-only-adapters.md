@@ -121,7 +121,13 @@ advertises.
      per app-server generation and refuses the thread without it
      (`assertHostedNetworkLock`), so a Codex that renames the switch fails
      closed. Verified against 0.162.1 by `live-network-lock.test.ts`, which
-     reads the tools out of the real model request on a loopback endpoint.
+     reads the tools out of the real model request on a loopback endpoint,
+     and live on 2026-10-16 in a `dev:test` profile with real Codex
+     credentials. Before the change, a coordinator asked to search the web
+     called `web_search` and returned the title of `https://example.com`.
+     After it, the same conversation (resumed) answered "Web search is not
+     available to me". A fresh conversation found no search or fetch tool, and
+     its `curl` failed with "Could not resolve host".
    - Claude: WebFetch and WebSearch were already off the coordinator's
      allowlist, denied and refused by the hook; any other network-denied
      policy now gets them in `disallowedTools` too (`claudeDisallowedTools`).

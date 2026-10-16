@@ -170,7 +170,7 @@ it reaches. Some rules of thumb:
 ### Cross-cutting (high)
 
 - [ ] Qualify Codex sub-agent cards on a fixture profile: one card per child, recovery after reload and restart ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
-- [ ] Decide and implement a renderer-backend skew guard for raw OpenCode envelopes from older backends ([mixed-version-compatibility.md](mixed-version-compatibility.md))
+- [x] Decide and implement a renderer-backend skew guard for raw OpenCode envelopes from older backends ([mixed-version-compatibility.md](mixed-version-compatibility.md))
 - [x] Fix flake 0166 (OpenCode probe deadline), which recurred on 2026-10-15 ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [ ] Keep split panes mounted across the mobile breakpoint through stable per-pane hosts ([mobile-layout-gaps.md](mobile-layout-gaps.md))
 - [ ] Move the environment settings dialog out of the drawer row so it is usable on mobile ([mobile-layout-gaps.md](mobile-layout-gaps.md))

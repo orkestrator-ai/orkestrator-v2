@@ -315,6 +315,7 @@ of these package manifests synchronized:
 - `bridges/pi-bridge/package.json`
 - `packages/cli/package.json`
 - `packages/protocol/package.json`
+- `packages/toolchain/package.json`
 
 After a bump, run the following to verify every package manifest was included
 and has the intended version:

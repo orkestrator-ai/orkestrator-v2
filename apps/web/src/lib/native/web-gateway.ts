@@ -25,9 +25,11 @@ import { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
 const GATEWAY_PREFIX = "/__orkestrator";
 const EVENT_RECONNECT_DELAY_MS = 2_000;
 /**
- * Consecutive main-stream failures back off to at most this multiple of the
- * first retry (16 s by default), and a stream must stay up this long before
- * its loss counts as a first failure again.
+ * Consecutive failures of the main stream or a terminal fallback stream back
+ * off to at most this multiple of the first retry (16 s by default), and a
+ * stream must stay up this long (longer than the gateway's 25 s keepalive)
+ * before its loss counts as a first failure again. Open time, not a first
+ * frame, is the test: an idle terminal sends nothing.
  */
 const EVENT_RECONNECT_MAX_DELAY_FACTOR = 8;
 const EVENT_STREAM_HEALTHY_AFTER_MS = 30_000;
@@ -73,12 +75,17 @@ export interface BrowserGatewayOptions {
   token?: string;
   replaceExisting?: boolean;
   onTokenChanged?: (token: string) => void;
-  /** First main-stream reconnect delay; repeated failures back off from it. */
+  /**
+   * First reconnect delay of the main stream and the terminal fallback
+   * streams; repeated failures back off from it.
+   */
   eventReconnectDelayMs?: number;
-  /** Upper bound of the main-stream reconnect backoff. */
+  /** Upper bound of the event stream reconnect backoff. */
   eventReconnectMaxDelayMs?: number;
-  /** Jitter source for the main-stream reconnect backoff; uniform in [0, 1). */
+  /** Jitter source for the event stream reconnect backoff; uniform in [0, 1). */
   eventReconnectRandom?: () => number;
+  /** Clock that decides whether a dropped stream had stayed up long enough. */
+  eventReconnectNow?: () => number;
   reportBootMetrics?: boolean;
   /** Same-origin app install probes for the agent-test-only activity endpoint. */
   agentTestSessionActivity?: boolean;
@@ -121,18 +128,21 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   // failures back off with jitter so those tabs do not retry in lock-step for
   // the whole outage; the first retry is never slower than the configured
   // delay, and only a stream that stayed up resets the ladder. Replay is
-  // unchanged: each attempt still resumes from `mainStream.cursor`.
+  // unchanged: each attempt still resumes from `mainStream.cursor`. Terminal
+  // fallback streams use the same policy, one ladder per reconnect owner.
   const eventReconnectDelayMs = options.eventReconnectDelayMs ?? EVENT_RECONNECT_DELAY_MS;
-  const mainStreamBackoff = new ReconnectBackoff(
-    {
-      initialDelayMs: eventReconnectDelayMs,
-      maxDelayMs:
-        options.eventReconnectMaxDelayMs ??
-        eventReconnectDelayMs * EVENT_RECONNECT_MAX_DELAY_FACTOR,
-      healthyAfterMs: EVENT_STREAM_HEALTHY_AFTER_MS,
-    },
-    options.eventReconnectRandom ? { random: options.eventReconnectRandom } : {},
-  );
+  const createStreamBackoff = () =>
+    new ReconnectBackoff(
+      {
+        initialDelayMs: eventReconnectDelayMs,
+        maxDelayMs:
+          options.eventReconnectMaxDelayMs ??
+          eventReconnectDelayMs * EVENT_RECONNECT_MAX_DELAY_FACTOR,
+        healthyAfterMs: EVENT_STREAM_HEALTHY_AFTER_MS,
+      },
+      { random: options.eventReconnectRandom, now: options.eventReconnectNow },
+    );
+  const mainStreamBackoff = createStreamBackoff();
   let bootMetricsTimeout: ReturnType<typeof setTimeout> | null = null;
   let bootMetricsDeferredTimer: ReturnType<typeof setTimeout> | null = null;
   let bootMetricsLoadObserved =
@@ -150,6 +160,13 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     source: EventSource | null;
     controller: AbortController | null;
     reconnectTimer: ReturnType<typeof setTimeout> | null;
+    /**
+     * The direct fetch stream's own reconnect ladder. Each terminal has its
+     * own socket, so a shared ladder would climb one rung per terminal when a
+     * backend restart drops them all at once. A new stream for the same event
+     * (the user's Reconnect re-listens) starts a fresh ladder.
+     */
+    backoff: ReconnectBackoff;
     socketUnlisten: (() => void) | null;
     ready: Promise<void>;
     resolveReady: () => void;
@@ -179,7 +196,16 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
    * a refresh that resolves to the same filter must not touch the socket.
    */
   let browserTerminalSubscribedEvents: string[] | null = null;
+  /**
+   * The terminal streams the shared socket was opened for, kept after a fatal
+   * error. A refresh while that socket is dead rebuilds early only for a
+   * stream it did not carry: a newly mounted terminal, or one the user
+   * reconnected (re-listening creates a new stream object).
+   */
+  let browserTerminalSocketStreams: ReadonlySet<TerminalEventStream> = new Set();
   let browserTerminalReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** One ladder for the one shared socket, however many terminals it carries. */
+  const browserTerminalBackoff = createStreamBackoff();
   /**
    * Whether `browserTerminalEventSource` has actually opened. A stream that
    * attaches to an already-open shared socket gets no `onopen` of its own, so
@@ -527,6 +553,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
           throw new Error(`Gateway event stream failed with HTTP ${response.status}`);
         }
         mainStreamBackoff.connected();
+        retryWaitingTerminalFallbacks();
         if (bootMetricsEventStreamConnectedMs === null && typeof performance !== "undefined") {
           bootMetricsEventStreamConnectedMs = performance.now();
           maybeSendBootMetrics();
@@ -558,7 +585,10 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     });
     eventSource = source;
     source.onopen = () => {
-      if (eventSource === source) mainStreamBackoff.connected();
+      if (eventSource === source) {
+        mainStreamBackoff.connected();
+        retryWaitingTerminalFallbacks();
+      }
       if (bootMetricsEventStreamConnectedMs === null && typeof performance !== "undefined") {
         bootMetricsEventStreamConnectedMs = performance.now();
         maybeSendBootMetrics();
@@ -629,12 +659,17 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     browserTerminalReconnectTimer = null;
   };
 
+  /**
+   * Every reopen of a terminal stream announces a desync and costs each
+   * terminal on it a snapshot read, so a backend that keeps failing must not
+   * be retried at a fixed interval by every open tab at once.
+   */
   const scheduleBrowserTerminalReconnect = () => {
     if (browserTerminalReconnectTimer) return;
     browserTerminalReconnectTimer = setTimeout(() => {
       browserTerminalReconnectTimer = null;
       refreshBrowserTerminalEventSource();
-    }, options.eventReconnectDelayMs ?? EVENT_RECONNECT_DELAY_MS);
+    }, browserTerminalBackoff.nextDelayMs());
   };
 
   /**
@@ -680,10 +715,10 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     queueMicrotask(() => {
       browserTerminalRefreshQueued = false;
 
-      const events = [...terminalEventStreams.values()]
-        .filter((stream) => !stream.closed && stream.fallbackActive)
-        .map((stream) => stream.event)
-        .sort();
+      const streams = [...terminalEventStreams.values()].filter(
+        (stream) => !stream.closed && stream.fallbackActive,
+      );
+      const events = streams.map((stream) => stream.event).sort();
 
       // A live socket already carrying exactly this filter needs no work. The
       // null check matters: a fatal error clears the source but leaves the
@@ -698,6 +733,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         // fresh, unlatched stream riding an already-open socket, and no further
         // `onopen` is coming for it. Latch it as a first connect — it has not
         // missed anything it will not pick up in its own initial snapshot.
+        browserTerminalSocketStreams = new Set(streams);
         if (browserTerminalEventSourceOpen) {
           for (const event of events) {
             const stream = terminalEventStreams.get(event);
@@ -709,22 +745,44 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
         return;
       }
 
+      // The socket is dead and a backed-off rebuild is pending. A refresh that
+      // only narrows the filter, or repeats it (the terminal WebSocket asks
+      // for fallback on every failed attempt), waits for that rebuild rather
+      // than retrying early. A new terminal stream rebuilds now: it has no
+      // output until the socket carries it.
+      if (
+        !browserTerminalEventSource &&
+        browserTerminalReconnectTimer &&
+        streams.length > 0 &&
+        streams.every((stream) => browserTerminalSocketStreams.has(stream))
+      ) {
+        return;
+      }
+
       clearBrowserTerminalReconnectTimer();
       browserTerminalEventSource?.close();
       browserTerminalEventSource = null;
       browserTerminalSubscribedEvents = null;
+      browserTerminalSocketStreams = new Set();
       browserTerminalEventSourceOpen = false;
-      if (events.length === 0) return;
+      if (events.length === 0) {
+        // A later terminal starts a fresh connection, not the tail of an old
+        // outage.
+        browserTerminalBackoff.reset();
+        return;
+      }
 
       const source = new EventSource(apiUrl(eventStreamPath(events)), {
         withCredentials: true,
       });
       browserTerminalEventSource = source;
       browserTerminalSubscribedEvents = events;
+      browserTerminalSocketStreams = new Set(streams);
       const subscribedEvents = new Set(events);
       source.onopen = () => {
         if (browserTerminalEventSource !== source) return;
         browserTerminalEventSourceOpen = true;
+        browserTerminalBackoff.connected();
         for (const event of subscribedEvents) {
           const stream = terminalEventStreams.get(event);
           if (stream && !stream.closed && stream.fallbackActive) announceTerminalStreamOpen(stream);
@@ -755,7 +813,10 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   const startTerminalEventFallback = (stream: TerminalEventStream) => {
     if (stream.closed) return;
     stream.fallbackActive = true;
-    if (stream.source || stream.controller) return;
+    // A pending backed-off retry owns the next attempt. Without this, every
+    // failed terminal WebSocket attempt would restart the fetch at once and
+    // the fallback would retry at the socket's pace instead of its own.
+    if (stream.source || stream.controller || stream.reconnectTimer) return;
     if (bearerToken || baseUrl) {
       const controller = new AbortController();
       stream.controller = controller;
@@ -776,6 +837,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
             terminalEventStreams.get(stream.event) !== stream
           )
             return;
+          stream.backoff.connected();
           announceTerminalStreamOpen(stream);
           await consumeFetchEventStream(response, controller, false, true);
         } catch (error) {
@@ -798,7 +860,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
             stream.reconnectTimer = setTimeout(() => {
               stream.reconnectTimer = null;
               startTerminalEventFallback(stream);
-            }, options.eventReconnectDelayMs ?? EVENT_RECONNECT_DELAY_MS);
+            }, stream.backoff.nextDelayMs());
           }
         }
       })();
@@ -834,7 +896,29 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     browserTerminalEventSource?.close();
     browserTerminalEventSource = null;
     browserTerminalSubscribedEvents = null;
+    browserTerminalSocketStreams = new Set();
     browserTerminalEventSourceOpen = false;
+  };
+
+  /**
+   * The main stream just opened, so the gateway is reachable again. Retry
+   * every terminal fallback that is waiting out its backoff now, instead of
+   * leaving those terminals frozen for up to the cap after the rest of the UI
+   * has recovered. Each tab's terminals follow that tab's own main stream, so
+   * this adds no cross-tab lock-step. The ladders are kept: a retry that fails
+   * again waits for the next rung.
+   */
+  const retryWaitingTerminalFallbacks = () => {
+    if (browserTerminalReconnectTimer) {
+      clearBrowserTerminalReconnectTimer();
+      refreshBrowserTerminalEventSource();
+    }
+    for (const stream of terminalEventStreams.values()) {
+      if (!stream.reconnectTimer) continue;
+      clearTimeout(stream.reconnectTimer);
+      stream.reconnectTimer = null;
+      startTerminalEventFallback(stream);
+    }
   };
 
   const ensureTerminalSocket = (): TerminalWebSocketClient => {
@@ -901,6 +985,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       source: null,
       controller: null,
       reconnectTimer: null,
+      backoff: createStreamBackoff(),
       socketUnlisten: null,
       ready,
       resolveReady,

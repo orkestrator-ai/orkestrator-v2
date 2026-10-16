@@ -1,7 +1,7 @@
 # Design sync gap test times out in the aggregate
 
 - **ID:** 0193
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-12
 - **Test:** `design incremental sync > gaps reset: expired range, future cursor and a new generation`
 - **File:** `apps/backend/src/core/design/sync.test.ts`
@@ -57,3 +57,24 @@ fixture shutdown. No test was skipped, loosened, or changed to conceal the failu
 - **Hypothesis:** shared-host contention may contribute, as in earlier
   observations; the isolated pass does not establish the cause. No test or
   timeout was changed.
+
+## Resolution (2026-10-16)
+
+Not an ordering bug. The case is a sequential loop with no concurrency:
+`DESIGN_LIMITS.changeDescriptors + 2` = 258 legacy `mutate` calls, then pure
+reads. Each mutate is a prepare and an execute, and each of those takes a
+cross-process SQLite lease and makes several fsynced atomic writes (pending
+file, history checkpoint, record and parent directory). The case took about
+0.9 s alone. With other suites fsyncing on the same disk, it ran 5.0–5.7 s and
+hit Bun's generic 5 s deadline. The `Design service is stopping` error that
+followed was the abandoned loop's next `prepare` after teardown closed the
+service, which is the correct refusal.
+
+**Fix (test only).** The case lowers `changeDescriptors` to 8 with the new
+`withDesignLimit` helper in `core/design/test-support.ts` (the idiom
+`history.test.ts` already used for byte budgets). The log then rolls over
+after 10 real commits instead of 258, and the case also checks that the
+oldest cursor the log still covers gets a delta. A new in-memory case ("the
+shipped change log covers exactly the newest changeDescriptors revisions")
+keeps the shipped 256 bound covered with `pushChange` and `buildSync`, without
+one fsync per revision. The deadline was not raised.

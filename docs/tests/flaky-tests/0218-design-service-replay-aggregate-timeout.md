@@ -1,7 +1,7 @@
 # Design service replay aggregate timeout
 
 - **ID:** 0218
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-15
 - **Test:** `design service (legacy adapters over prepare/execute) > missed events,
   expired replay and generation changes reset through changes()`
@@ -62,3 +62,18 @@ Recurred on 2026-10-15 at 5012.03 ms in `mise run test` for the sign-in
 readiness change (no design code touched), alongside case 0247. The unchanged
 owning file passed alone three times in a row. Evidence:
 `/tmp/orkestrator-test-run.8FscOl/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+## Resolution (2026-10-16)
+
+Not an ordering bug. The cause is the same as
+[0193](0193-design-sync-gap-aggregate-timeout.md): 260 sequential, fsynced
+legacy mutations against a generic 5 s deadline. The case took about 0.9 s
+alone and 5.0–8.0 s under aggregate load. The stopping-service error is the
+abandoned loop meeting teardown. `changes()` reads one immutable record, and
+nothing in the case runs concurrently.
+
+**Fix (test only).** The case lowers `changeDescriptors` to 8 with
+`withDesignLimit` (12 real commits instead of 260) and keeps every assertion:
+reset for an expired cursor, a two-event replay, a future cursor, and a new
+generation after restart. The shipped 256 bound is covered in memory by the
+new case in `sync.test.ts`. The deadline was not raised.

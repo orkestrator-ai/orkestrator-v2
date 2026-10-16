@@ -250,6 +250,12 @@ describe("design operations: prepare, execute, status and cancel", () => {
 
   test("a lost execute response is answered by status and a repeated execute changes nothing", async () => {
     const { canvasId, frameId } = await setup();
+    // Appended HTML is validated in the background after commit, and that
+    // commit publishes its own status hint. Hold it so the counts below cannot
+    // race it under load (flake 0215).
+    const validation = deferred();
+    harness.renderer.block = (job) =>
+      job.priority === "validation" ? validation.promise : undefined;
     const prepared = await service().prepare("env-1", "user", {
       canvasId,
       input: { kind: "append_frame_html", frameId, html: "<p>once</p>" },
@@ -257,6 +263,7 @@ describe("design operations: prepare, execute, status and cancel", () => {
     });
     const first = await service().execute("env-1", canvasId, prepared.token);
     expect(first.state).toBe("committed");
+    await harness.renderer.started((job) => job.priority === "validation");
     const afterFirst = await service().get(canvasId, "env-1");
     const events = harness.events.length;
     const jobs = harness.renderer.jobs.length;
@@ -266,6 +273,19 @@ describe("design operations: prepare, execute, status and cancel", () => {
     expect(await service().get(canvasId, "env-1")).toEqual(afterFirst);
     expect(afterFirst.frames[0]!.html.match(/once/g)).toHaveLength(1);
     expect(harness.events.length).toBe(events);
+    expect(harness.renderer.jobs.length).toBe(jobs);
+    // The only later hint is the first commit's validation status.
+    const validated = validateFrame(service(), "env-1", canvasId, frameId);
+    validation.resolve();
+    expect((await validated)?.state).toBe("valid");
+    expect(harness.events.slice(events)).toEqual([
+      expect.objectContaining({
+        canvasId,
+        frameId,
+        kind: "status",
+        revision: afterFirst.revision,
+      }),
+    ]);
     expect(harness.renderer.jobs.length).toBe(jobs);
     // Also across restart.
     const restarted = await harness.restart(serviceOptions());

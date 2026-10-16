@@ -15,3 +15,14 @@
 ## Current assessment
 
 The design canvas test appears sensitive to the suite's six-worker parallel load. The design canvas code did not change in this task; investigate the timeout under controlled parallel load.
+
+## Ordering review (2026-10-16)
+
+Reviewed with the backend design flakes 0193, 0215 and 0218, which were test
+artefacts, not ordering bugs. The backend hint order this spec relies on is
+now pinned in `core/design/sync.test.ts`: per-canvas commit order, and status
+hints that never overtake their commit. This case was not rerun. Its symptoms
+(Playwright action timeouts, a disabled picker, an unmounted page) are client
+or profile timing, and nothing here implicates the design change feed. It
+stays open; see the follow-up in
+[design-canvas-qualification.md](../../todo/design-canvas-qualification.md).

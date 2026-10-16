@@ -15,7 +15,7 @@ import {
   type DesignChange,
   type DesignOperation,
 } from "@orkestrator/protocol/design-canvas";
-import type { DesignRendererHealth } from "@orkestrator/protocol/design-operations";
+import { DESIGN_LIMITS, type DesignRendererHealth } from "@orkestrator/protocol/design-operations";
 import { DesignError } from "./errors.js";
 import type { DesignRenderJob } from "./renderer.js";
 import { DesignService, type DesignRendererLike, type DesignServiceOptions } from "./service.js";
@@ -188,6 +188,26 @@ export function deferred<T = void>(): Deferred<T> {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+/**
+ * Temporarily lowers a design limit (DESIGN_LIMITS is a plain object at
+ * runtime, read at call time). Lets a test reach a bound in a few commits
+ * instead of hundreds of fsynced ones, whose wall time depends on host load.
+ */
+export async function withDesignLimit<T>(
+  key: keyof typeof DESIGN_LIMITS,
+  value: number,
+  work: () => Promise<T>,
+): Promise<T> {
+  const limits = DESIGN_LIMITS as unknown as Record<string, number>;
+  const previous = limits[key]!;
+  limits[key] = value;
+  try {
+    return await work();
+  } finally {
+    limits[key] = previous;
+  }
 }
 
 /**

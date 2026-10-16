@@ -89,7 +89,8 @@ promise, and one renderer edge can leave a hung Chromium process running.
 - [mixed-version-compatibility.md](mixed-version-compatibility.md): the
   never-migrated legacy canvas path is a compatibility path.
 - Flake [0215](../tests/flaky-tests/0215-design-operation-replay-event-count.md)
-  asserts the event count of the lost-execute and duplicate-execute case.
+  (resolved): the lost-execute and duplicate-execute case now holds the
+  background validation before it counts hints.
 - [`design-canvas.md`](../architecture/design-canvas.md) ("Operations",
   "Concurrency and bounds", "Renderer").
 

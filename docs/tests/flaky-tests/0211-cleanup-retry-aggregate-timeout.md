@@ -77,3 +77,17 @@ remains an unconfirmed hypothesis. No timeout, assertion or skip was changed.
 - While the aggregate was active, `mise run test:logged -- --name commands-integration-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` timed out in the unchanged cleanup-retry case at 6750.13 ms. The file reported 52 passed and three timeouts in 127.9 seconds.
 - After the aggregate finished, the same owning-file command with `--name commands-integration-final-rerun` passed unchanged in 32.1 seconds (exit 0).
 - Evidence: `/tmp/orkestrator-test-run.3kSG12/commands-integration-rerun.log.gz`. No cleanup implementation, assertion, timeout or skip changed; host contention remains a hypothesis.
+
+## Recurrence — 2026-10-16 (gateway terminal fallback backoff)
+
+`mise run test` on `feat/gateway-terminal-fallback-backoff`, which changed no
+backend code, timed out this unchanged test at 7473.73 ms against its 5000 ms
+limit while other worktrees ran suites on the host. Backend results were 8,085
+passed, 40 skipped and 3 failed across 438 files (324.01 seconds); the other
+failures are case 0248 and the deterministic provider line-limit check.
+Evidence:
+`/tmp/orkestrator-test-run.3Pp4em/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+`mise run test:logged -- --name backend-cmd-integration-file -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`
+passed the unchanged owning file in 32.3 seconds. No timeout, assertion or skip
+was changed.

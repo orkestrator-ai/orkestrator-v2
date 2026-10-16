@@ -20,7 +20,12 @@ import {
   workingDirectory,
 } from "./config.js";
 import { assertModelSignedIn, authStatus, CredentialError } from "./credentials.js";
-import { publicApprovals, publicInteractions, resolveApproval } from "./interactions.js";
+import {
+  holdApproval,
+  publicApprovals,
+  publicInteractions,
+  resolveApproval,
+} from "./interactions.js";
 import { listModels, refreshModels } from "./models.js";
 import { parseAgentMcpConnection } from "./mcp-config.js";
 import { parseWorkflowResultTurn } from "@orkestrator/protocol/workflow-results";
@@ -405,7 +410,7 @@ async function routeGlobal(
 }
 
 const SESSION_ROUTE =
-  /^\/session\/([^/]+)(?:\/(close|messages|transcript|status|activity|prompt|attach|dispatch|cancel|abort|hard-abort|structured-output|interactions|config|approvals|compact|fork|steer|queue|runtime-health|commands|mcp|rewind-messages|branches|title))?(?:\/([^/]+))?$/;
+  /^\/session\/([^/]+)(?:\/(close|messages|transcript|status|activity|prompt|attach|dispatch|cancel|abort|hard-abort|structured-output|interactions|config|approvals|compact|fork|steer|queue|runtime-health|commands|mcp|rewind-messages|branches|title))?(?:\/([^/]+))?(?:\/(hold))?$/;
 
 async function routeSession(
   request: IncomingMessage,
@@ -414,10 +419,15 @@ async function routeSession(
   clientSignal: AbortSignal,
 ): Promise<void> {
   const match = SESSION_ROUTE.exec(url.pathname);
-  if (!match) return json(response, 404, { error: "Not found" });
+  // `/hold` exists only under one approval; anywhere else it is a path this
+  // bridge does not serve, exactly as before the suffix was routed.
+  if (!match || (match[4] !== undefined && !(match[2] === "approvals" && match[3]))) {
+    return json(response, 404, { error: "Not found" });
+  }
   const state = sessions.get(match[1]!);
   const action = match[2];
   const subject = match[3];
+  const detail = match[4];
   if (!state) {
     // An enhanced catalogue read answers an unknown session in band too; the
     // backend must never fall back from a missing session to a global list.
@@ -664,6 +674,12 @@ async function routeSession(
     return json(response, 200, {
       structuredOutput: state.structured.get(requestId) ?? null,
     });
+  }
+  if (action === "approvals" && detail === "hold") {
+    // Matched before the decision route, which denies anything that is not
+    // an explicit approval: a pause must never answer the call.
+    if (request.method !== "POST") return json(response, 404, { error: "Not found" });
+    return await handleApprovalHold(request, response, state, subject!);
   }
   if (action === "approvals" && request.method === "GET") {
     return json(response, 200, publicApprovals(state));
@@ -1080,6 +1096,41 @@ async function handleApprovalDecision(
   if (!settled) return json(response, 404, { error: "Approval is no longer pending" });
   schedulePersist();
   return json(response, 200, { resolved: true });
+}
+
+/**
+ * `POST /session/:id/approvals/:approvalId/hold`, body `{ "held": boolean }`.
+ *
+ * Pauses or resumes the approval's countdown and nothing else: it never
+ * approves or denies, whatever the body says. A request no longer parked is
+ * 409 `stale`, never 404 — a 404 from this route is what a bridge that
+ * predates it answers.
+ */
+async function handleApprovalHold(
+  request: IncomingMessage,
+  response: ServerResponse,
+  state: SessionState,
+  approvalId: string,
+): Promise<void> {
+  const body = await readJson(request);
+  if (typeof body.held !== "boolean") {
+    return json(response, 400, { error: "'held' must be a boolean" });
+  }
+  const outcome = holdApproval(state, decodeURIComponent(approvalId), body.held);
+  if (outcome.result === "missing" || outcome.result === "settled") {
+    return json(response, 409, { error: "Approval is no longer pending", status: "stale" });
+  }
+  if (outcome.result === "unavailable") {
+    return json(response, 422, {
+      error: "This request's deadline cannot be extended",
+      status: "unavailable",
+    });
+  }
+  return json(response, 200, {
+    status: outcome.result,
+    expiresAt: outcome.expiresAt,
+    hold: outcome.hold,
+  });
 }
 
 /**

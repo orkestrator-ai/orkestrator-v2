@@ -63,6 +63,12 @@ mode is never taken as given. Under an `ask` or `deny` policy
   user anything.
 - **An allow never returns the SDK's `suggestions`.** They are durable rules,
   and nothing lists or revokes them yet.
+- **A pause only moves a card's deadline.** Questions, plan approvals and
+  parked interactions each run on an `InteractionDeadline`
+  (`session-manager-interaction-holds.ts`); `POST …/hold` stops the countdown
+  until the hold ceiling, and expiry still denies or cancels. A hold never
+  answers anything. While any card waits, the retained-continuation watchdog
+  re-arms instead of closing the query: a paused card is not silence.
 
 ## One row per model response
 

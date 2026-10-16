@@ -21,6 +21,7 @@ import type {
 } from "@orkestrator/protocol/native-agent";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { WorkflowResultTurn } from "@orkestrator/protocol/workflow-results";
+import type { InteractionDeadline } from "@orkestrator/protocol/agent-interaction-deadline";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import type { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
@@ -455,6 +456,13 @@ export interface SessionState {
   ignoreUncorrelatedVendorUsage?: boolean;
   /** Wall clock of the in-flight turn, used for the elapsed metric. */
   turnStartedAt?: number;
+  /**
+   * When the in-flight `session/prompt` request times out: `PROMPT_TIMEOUT_MS`
+   * after it was sent, re-armed by every retry attempt. The timeout terminates
+   * the child and clears every parked request, so a paused request never holds
+   * past it. Undefined while no prompt request is outstanding. Never persisted.
+   */
+  promptDeadlineAt?: number;
   /** A user cancellation suppresses any retriable-provider retry still in backoff. */
   retryCancelledPromptSequence?: number;
   /** `promptSequence` of the turn in which a held request expired unanswered. */
@@ -503,28 +511,32 @@ export interface PersistedUsage {
   updatedAt: string;
 }
 
-export interface ApprovalState {
+/**
+ * A parked request's countdown. `deadline.expiresAt` is its only deadline: a
+ * pause moves it, so the parked state keeps no copy of its own. Settled on
+ * every path that answers or drops the request; never persisted.
+ */
+export interface ParkedDeadline {
+  requestedAt: number;
+  deadline: InteractionDeadline;
+}
+
+export interface ApprovalState extends ParkedDeadline {
   id: string;
   title: string;
   options: Array<{ optionId: string; name: string; kind?: string }>;
-  requestedAt: number;
-  expiresAt: number;
   respond(optionId?: string): void;
-  timer: ReturnType<typeof setTimeout>;
 }
 
 export type AcpInteractionState =
-  | {
+  | (ParkedDeadline & {
       id: string;
       kind: "plan-approval";
       plan: string;
       planTruncated: boolean;
-      requestedAt: number;
-      expiresAt: number;
       respond(result: JsonObject): void;
-      timer: ReturnType<typeof setTimeout>;
-    }
-  | {
+    })
+  | (ParkedDeadline & {
       id: string;
       kind: "question";
       questions: Array<{
@@ -533,11 +545,8 @@ export type AcpInteractionState =
         multiple: boolean;
         options: Array<{ id: string; label: string; description?: string }>;
       }>;
-      requestedAt: number;
-      expiresAt: number;
       respond(result: JsonObject): void;
-      timer: ReturnType<typeof setTimeout>;
-    };
+    });
 
 export interface PersistedSession {
   id: string;

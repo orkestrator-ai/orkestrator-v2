@@ -96,3 +96,60 @@ for (const mode of ["form", "url"] as const) {
     await expect(page.getByText(title, { exact: true })).toHaveCount(0);
   });
 }
+
+test("a paused Claude question stays paused across a reload, then resumes and answers", async ({
+  page,
+  request,
+}) => {
+  await page.route("**/__claude-test/**", async (route) => {
+    const incoming = route.request();
+    const url = new URL(incoming.url());
+    const response = await request.fetch(
+      `${origin}${url.pathname.replace("/__claude-test", "")}${url.search}`,
+      { method: incoming.method(), data: incoming.postData() ?? undefined },
+    );
+    await route.fulfill({ response });
+  });
+  const { sessionId } = await (await request.post(`${origin}/start`)).json();
+  const snapshot = async () =>
+    (await (await request.get(`${origin}/snapshot?session=${sessionId}`)).json()) as {
+      snapshot: { requests: Array<{ hold?: { heldAt?: number }; expiresAt?: number }> };
+      result?: unknown;
+    };
+  await page.goto(`/claude-interactions?session=${sessionId}`);
+  await request.post(`${origin}/raise?session=${sessionId}`, { data: { mode: "question" } });
+
+  const pause = page.getByRole("button", { name: /^Pause countdown, \d:\d\d left$/ });
+  await expect(pause).toBeVisible();
+  await expect(pause).toHaveAttribute("aria-pressed", "false");
+  await pause.click();
+
+  // The bridge holds the deadline: its snapshot moves it out to the ceiling.
+  await expect
+    .poll(async () => (await snapshot()).snapshot.requests[0]?.hold?.heldAt !== undefined)
+    .toBe(true);
+  const ceiling = (await snapshot()).snapshot.requests[0]!.expiresAt!;
+  expect(ceiling - Date.now()).toBeGreaterThan(23 * 60 * 60_000);
+
+  // A reload (or another client) rehydrates the pause from the bridge.
+  await page.reload();
+  const resume = page.getByRole("button", { name: "Resume countdown", exact: true });
+  await expect(resume).toBeVisible();
+  await expect(resume).toHaveAttribute("aria-pressed", "true");
+  await expect(resume).toHaveText("Paused");
+  await page.screenshot({ path: test.info().outputPath("paused-question.png") });
+
+  await resume.click();
+  await expect(
+    page.getByRole("button", { name: /^Pause countdown, [45]:\d\d left$/ }),
+  ).toBeVisible();
+  await expect
+    .poll(async () => (await snapshot()).snapshot.requests[0]?.hold?.heldAt === undefined)
+    .toBe(true);
+
+  await page.getByRole("button", { name: "Core" }).click();
+  await page.getByRole("button", { name: "Submit", exact: true }).click();
+  await expect
+    .poll(async () => ((await snapshot()).result as { behavior?: string } | undefined)?.behavior)
+    .toBe("allow");
+});

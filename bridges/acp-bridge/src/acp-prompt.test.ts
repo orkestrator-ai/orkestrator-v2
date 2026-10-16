@@ -1,5 +1,4 @@
-import { describe, expect, test } from "bun:test";
-import { spawn } from "node:child_process";
+import { describe, expect, jest, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { resolve } from "node:path";
 
@@ -19,10 +18,12 @@ import { formatAcpRpcError } from "./acp-errors.js";
 import {
   FLATTENED_RETRIABLE_PROVIDER_SUFFIX,
   RETRIABLE_PROVIDER_ERROR,
+  requestPromptWithRetriableProviderRetries,
   retriableProviderError,
   structuredPromptInstruction,
   turnTerminalError,
 } from "./acp-prompt.js";
+import { PROMPT_TIMEOUT_MS, type AcpProcess, type SessionState } from "./acp-context.js";
 
 describe("turnTerminalError", () => {
   test("an expired request fails the turn whatever the agent then answered", () => {
@@ -76,6 +77,50 @@ describe("structuredPromptInstruction", () => {
     );
     expect(instruction).toContain("never send a JSON object or array as a progress update");
     expect(instruction).toContain("never draft or preview the final value");
+  });
+});
+
+describe("the prompt deadline a paused request is capped by", () => {
+  test("is when session/prompt times out, and only while it is outstanding", async () => {
+    const start = 1_800_000_000_000;
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date(start));
+    try {
+      const timeouts: number[] = [];
+      let settle!: { answer: (value: unknown) => void; fail: (error: Error) => void };
+      const child = {
+        request: (_method: string, _params: unknown, timeoutMs: number) => {
+          timeouts.push(timeoutMs);
+          return new Promise((answer, fail) => {
+            settle = { answer, fail };
+          });
+        },
+      } as unknown as AcpProcess;
+      const state = { messages: [] } as unknown as SessionState;
+      const prompt = { sessionId: "vendor-session", prompt: [] };
+
+      const answered = requestPromptWithRetriableProviderRetries(
+        state,
+        child,
+        prompt,
+        1,
+        undefined,
+      );
+      expect(timeouts).toEqual([PROMPT_TIMEOUT_MS]);
+      expect(state.promptDeadlineAt).toBe(start + PROMPT_TIMEOUT_MS);
+      settle.answer({ stopReason: "end_turn" });
+      await answered;
+      expect(state.promptDeadlineAt).toBeUndefined();
+
+      jest.advanceTimersByTime(1_000);
+      const failed = requestPromptWithRetriableProviderRetries(state, child, prompt, 2, undefined);
+      expect(state.promptDeadlineAt).toBe(start + 1_000 + PROMPT_TIMEOUT_MS);
+      settle.fail(new Error("agent exited"));
+      await expect(failed).rejects.toThrow("agent exited");
+      expect(state.promptDeadlineAt).toBeUndefined();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 

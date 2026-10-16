@@ -799,6 +799,17 @@ export async function resolveNativeAgentInteraction(input: {
   return invoke("resolve_native_agent_interaction", input);
 }
 
+/** Pause (`held`) or resume an interaction's countdown where the agent enforces it. */
+export async function holdNativeAgentInteraction(input: {
+  environmentId: string;
+  agent: NativeAgentClientPlatform;
+  logicalSessionKey: string;
+  interactionId: string;
+  held: boolean;
+}): Promise<AgentInteractionApplyOutcome> {
+  return invoke("hold_native_agent_interaction", input);
+}
+
 export async function dispatchNativeAgentPrompt(input: {
   environmentId: string;
   agent: NativeAgentClientPlatform;

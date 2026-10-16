@@ -14,8 +14,10 @@
  *
  * Nothing here ever takes a thread reducer lock. Blocking questions remain
  * parked for an explicit answer; timed questions and approvals retain bounded
- * fail-closed deadlines. Requests the UI cannot represent are cancelled promptly
- * instead of stalling the thread.
+ * fail-closed deadlines. A user may pause one of those deadlines, which only
+ * moves it to the hold ceiling: expiry still denies or cancels, never answers.
+ * Requests the UI cannot represent are cancelled promptly instead of stalling
+ * the thread.
  */
 import { JSON_RPC_METHOD_NOT_FOUND } from "./errors.js";
 import {
@@ -32,7 +34,16 @@ import {
 } from "./approvals.js";
 import type { InboundServerRequest } from "./envelope-validation.js";
 import type { EngineGeneration } from "../engine/types.js";
-import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
+import {
+  AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
+  type AgentInteractionHold,
+} from "@orkestrator/protocol/agent-interactions";
+import {
+  InteractionDeadline,
+  type InteractionDeadlineClock,
+  type InteractionDeadlineHoldResult,
+  type InteractionDeadlineOptions,
+} from "@orkestrator/protocol/agent-interaction-deadline";
 import {
   buildInteractionResponse,
   describeInteraction,
@@ -140,10 +151,39 @@ export interface ServerRequestRouterOptions {
   ) => void;
   /** Backstop so a branch that somehow fails to answer still answers. */
   responseTimeoutMs?: number;
-  /** How long a human has to answer before the request auto-declines. */
+  /**
+   * How long a human has to answer before the request auto-declines, and the
+   * fresh window a resumed (un-paused) request restarts.
+   */
   approvalTimeoutMs?: number;
   now?: () => number;
+  /**
+   * Time and timers for parked deadlines. Defaults to `now` with the global
+   * timers; tests pass a manual clock so a pause is proven without waiting.
+   */
+  clock?: InteractionDeadlineClock;
+  /**
+   * False once a generation has been replaced. A hold on one of its requests is
+   * stale: app-server has forgotten it, and `abandonGeneration` withdraws it.
+   */
+  isGenerationLive?: (generation: EngineGeneration) => boolean;
 }
+
+/**
+ * Outcome of pausing or resuming a parked request's deadline.
+ *
+ * `stale` covers a request that is no longer parked (answered, expired,
+ * withdrawn) and one whose generation died. `unavailable` is a pause the
+ * provider's own limit leaves no room for, or a request with no deadline.
+ */
+export type ParkedHoldOutcome =
+  | {
+      status: Extract<InteractionDeadlineHoldResult, "applied" | "unchanged">;
+      expiresAt: number;
+      hold: AgentInteractionHold;
+    }
+  | { status: "unavailable" }
+  | { status: "stale" };
 
 const DEFAULT_RESPONSE_TIMEOUT_MS = 10_000;
 
@@ -162,7 +202,8 @@ interface PendingApproval {
   rawParams: unknown;
   generation: EngineGeneration;
   requestId: string | number;
-  timer: ReturnType<typeof setTimeout>;
+  /** Denies at expiry; a pause only moves it. */
+  deadline: InteractionDeadline;
 }
 
 interface PendingInteraction {
@@ -171,12 +212,15 @@ interface PendingInteraction {
   request: InteractionRequest;
   generation: EngineGeneration;
   requestId: string | number;
-  timer?: ReturnType<typeof setTimeout>;
+  /** Cancels at expiry. Absent for a question that waits indefinitely. */
+  deadline?: InteractionDeadline;
 }
 
 export class ServerRequestRouter {
   private readonly options: ServerRequestRouterOptions;
   private readonly now: () => number;
+  private readonly clock: InteractionDeadlineClock;
+  private readonly isGenerationLive: (generation: EngineGeneration) => boolean;
   private readonly responseTimeoutMs: number;
   private readonly pending = new Map<string, ServerRequestRecord>();
   /** Requests whose response write has begun; the double-answer guard. */
@@ -206,18 +250,58 @@ export class ServerRequestRouter {
 
   constructor(options: ServerRequestRouterOptions) {
     this.options = options;
-    this.now = options.now ?? Date.now;
+    const clock = options.clock;
+    this.now = options.now ?? (clock ? () => clock.now() : Date.now);
+    // Delays are measured on the router's own clock, so a deadline published as
+    // `requestedAt + window` fires one window later whatever `now` is.
+    this.clock = clock ?? {
+      now: () => this.now(),
+      setTimeout: (callback, ms) => setTimeout(callback, ms),
+      clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+    };
+    this.isGenerationLive = options.isGenerationLive ?? (() => true);
     this.responseTimeoutMs = options.responseTimeoutMs ?? DEFAULT_RESPONSE_TIMEOUT_MS;
     this.approvalTimeoutMs = options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS;
   }
 
-  /** Approvals currently waiting on a human, for SSE rehydration. */
+  /**
+   * Approvals currently waiting on a human, for SSE rehydration, each with its
+   * deadline as it stands now (a pause moves `expiresAt`).
+   */
   getParkedApprovals(): readonly ApprovalRequest[] {
-    return [...this.parkedApprovals.values()].map((entry) => entry.request);
+    return [...this.parkedApprovals.values()].map((entry) => ({
+      ...entry.request,
+      expiresAt: entry.deadline.expiresAt,
+      hold: entry.deadline.hold(),
+    }));
   }
 
   getParkedInteractions(): readonly InteractionRequest[] {
-    return [...this.parkedInteractions.values()].map((entry) => entry.request);
+    return [...this.parkedInteractions.values()].map((entry) =>
+      entry.deadline
+        ? { ...entry.request, expiresAt: entry.deadline.expiresAt, hold: entry.deadline.hold() }
+        : entry.request,
+    );
+  }
+
+  /**
+   * Pauses (`held: true`) or resumes a parked approval's deadline.
+   *
+   * Never answers the request: a pause re-arms the same deny-at-expiry timer at
+   * the hold ceiling, and a resume restarts a fresh `approvalTimeoutMs` window.
+   */
+  holdApproval(approvalId: string, held: boolean): ParkedHoldOutcome {
+    const parked = this.parkedApprovals.get(approvalId);
+    if (!parked || !this.isGenerationLive(parked.generation)) return { status: "stale" };
+    return applyHold(parked.deadline, held);
+  }
+
+  /** Same as `holdApproval`; a question that waits indefinitely has nothing to pause. */
+  holdInteraction(interactionId: string, held: boolean): ParkedHoldOutcome {
+    const parked = this.parkedInteractions.get(interactionId);
+    if (!parked || !this.isGenerationLive(parked.generation)) return { status: "stale" };
+    if (!parked.deadline) return { status: "unavailable" };
+    return applyHold(parked.deadline, held);
   }
 
   resolveInteraction(interactionId: string, answer: InteractionAnswer): boolean {
@@ -579,37 +663,49 @@ export class ServerRequestRouter {
     generation: EngineGeneration,
   ): boolean {
     this.nextApprovalSeq += 1;
+    // Scoped by generation so an id from a dead child can never be reused.
+    const approvalId = `apr-${generation}-${this.nextApprovalSeq}`;
     const requestedAt = this.now();
-    const approval = describeApproval({
-      // Scoped by generation so an id from a dead child can never be reused.
-      approvalId: `apr-${generation}-${this.nextApprovalSeq}`,
-      method,
-      params: request.params,
-      generation,
+    // Armed before the UI is offered the card, so the card carries this
+    // deadline's own hold; settled again below if nobody takes it. No provider
+    // limit: app-server waits on an approval for as long as we do.
+    const deadline = this.deadline({
       requestedAt,
-      expiresAt: requestedAt + this.approvalTimeoutMs,
+      onExpire: () => {
+        const parked = this.parkedApprovals.get(approvalId);
+        if (!parked) return;
+        this.counts.approvalsExpired += 1;
+        record.timedOut = true;
+        // Deny, never approve: an unanswered prompt must not authorise anything.
+        void this.settleApproval(parked, "deny", "timed-out");
+      },
     });
+    const approval: ApprovalRequest = {
+      ...describeApproval({
+        approvalId,
+        method,
+        params: request.params,
+        generation,
+        requestedAt,
+        expiresAt: deadline.expiresAt,
+      }),
+      hold: deadline.hold(),
+    };
 
     let accepted = false;
     try {
       accepted = this.options.presentApproval?.(approval) === true;
     } catch (error) {
+      deadline.settle();
       console.error("[codex-bridge] presentApproval threw; falling back to auto-decline:", error);
       return false;
     }
-    if (!accepted) return false;
+    if (!accepted) {
+      deadline.settle();
+      return false;
+    }
 
-    const timer = setTimeout(() => {
-      const parked = this.parkedApprovals.get(approval.approvalId);
-      if (!parked) return;
-      this.counts.approvalsExpired += 1;
-      record.timedOut = true;
-      // Deny, never approve: an unanswered prompt must not authorise anything.
-      void this.settleApproval(parked, "deny", "timed-out");
-    }, this.approvalTimeoutMs);
-    timer.unref?.();
-
-    this.parkedApprovals.set(approval.approvalId, {
+    this.parkedApprovals.set(approvalId, {
       key,
       record,
       request: approval,
@@ -617,7 +713,7 @@ export class ServerRequestRouter {
       rawParams: request.params,
       generation,
       requestId: request.id,
-      timer,
+      deadline,
     });
     this.parkedKeys.add(key);
     this.counts.approvalsPresented += 1;
@@ -639,7 +735,7 @@ export class ServerRequestRouter {
   ): Promise<void> {
     // First writer wins, so a user click racing the expiry timer cannot answer twice.
     if (!this.parkedApprovals.delete(parked.request.approvalId)) return;
-    clearTimeout(parked.timer);
+    parked.deadline.settle();
     this.parkedKeys.delete(parked.key);
 
     const approved = isGrantingApprovalDecision(decision);
@@ -680,7 +776,7 @@ export class ServerRequestRouter {
   /** Retire a card answered by another client without inventing a user choice. */
   private withdrawApproval(parked: PendingApproval): void {
     if (!this.parkedApprovals.delete(parked.request.approvalId)) return;
-    clearTimeout(parked.timer);
+    parked.deadline.settle();
     this.parkedKeys.delete(parked.key);
     try {
       this.options.onApprovalResolved?.(parked.request, "withdrawn", "withdrawn");
@@ -702,7 +798,7 @@ export class ServerRequestRouter {
     generation: EngineGeneration,
   ): boolean {
     const requestedAt = this.now();
-    const interaction = describeInteraction({
+    const described = describeInteraction({
       interactionId: `ask-${generation}-${String(request.id)}`,
       method,
       params: request.params,
@@ -710,39 +806,56 @@ export class ServerRequestRouter {
       requestedAt,
       defaultExpiresAt: requestedAt + this.approvalTimeoutMs,
     });
-    if (!interaction) return false;
+    if (!described) return false;
+    const interactionId = described.interactionId;
+    const autoResolutionMs = described.autoResolutionMs;
 
-    let accepted = false;
-    try {
-      accepted = this.options.presentInteraction?.(interaction) === true;
-    } catch (error) {
-      console.error("[codex-bridge] presentInteraction threw; cancelling:", error);
-      return false;
-    }
-    if (!accepted) return false;
-
-    const timer =
-      interaction.expiresAt === undefined
+    // A blocking question waits indefinitely: no deadline, so nothing to pause.
+    const deadline =
+      described.expiresAt === undefined
         ? undefined
-        : setTimeout(
-            () => {
-              const parked = this.parkedInteractions.get(interaction.interactionId);
+        : this.deadline({
+            requestedAt,
+            expiresAt: described.expiresAt,
+            // app-server auto-resolves the question itself at this point, so a
+            // pause must never claim to hold it any longer.
+            ...(autoResolutionMs === undefined
+              ? {}
+              : { providerLimitAt: () => requestedAt + autoResolutionMs }),
+            // The MCP server that asked keeps a timeout of its own it never publishes.
+            upstreamMayExpire: described.kind === "mcp-form" || described.kind === "mcp-url",
+            onExpire: () => {
+              const parked = this.parkedInteractions.get(interactionId);
               if (!parked) return;
               this.counts.interactionsExpired += 1;
               record.timedOut = true;
               void this.settleInteraction(parked, { action: "cancel" }, "timed-out");
             },
-            Math.max(1, interaction.expiresAt - requestedAt),
-          );
-    timer?.unref?.();
+          });
+    const interaction: InteractionRequest = deadline
+      ? { ...described, expiresAt: deadline.expiresAt, hold: deadline.hold() }
+      : described;
 
-    this.parkedInteractions.set(interaction.interactionId, {
+    let accepted = false;
+    try {
+      accepted = this.options.presentInteraction?.(interaction) === true;
+    } catch (error) {
+      deadline?.settle();
+      console.error("[codex-bridge] presentInteraction threw; cancelling:", error);
+      return false;
+    }
+    if (!accepted) {
+      deadline?.settle();
+      return false;
+    }
+
+    this.parkedInteractions.set(interactionId, {
       key,
       record,
       request: interaction,
       generation,
       requestId: request.id,
-      ...(timer ? { timer } : {}),
+      ...(deadline ? { deadline } : {}),
     });
     this.parkedKeys.add(key);
     this.counts.interactionsPresented += 1;
@@ -756,7 +869,7 @@ export class ServerRequestRouter {
     options: { skipSend?: boolean } = {},
   ): Promise<void> {
     if (!this.parkedInteractions.delete(parked.request.interactionId)) return;
-    if (parked.timer) clearTimeout(parked.timer);
+    parked.deadline?.settle();
     this.parkedKeys.delete(parked.key);
     if (resolution === "answered") this.counts.interactionsAnswered += 1;
 
@@ -802,6 +915,21 @@ export class ServerRequestRouter {
           buildInteractionResponse(parked.request, answer),
         ),
     );
+  }
+
+  /** A parked request's deadline: unref'd, on the router's clock and window. */
+  private deadline(
+    options: Pick<
+      InteractionDeadlineOptions,
+      "onExpire" | "requestedAt" | "expiresAt" | "providerLimitAt" | "upstreamMayExpire"
+    >,
+  ): InteractionDeadline {
+    return new InteractionDeadline({
+      ...options,
+      windowMs: this.approvalTimeoutMs,
+      unref: true,
+      clock: this.clock,
+    });
   }
 
   private async finish(
@@ -853,6 +981,14 @@ export class ServerRequestRouter {
       message,
     });
   }
+}
+
+function applyHold(deadline: InteractionDeadline, held: boolean): ParkedHoldOutcome {
+  const result = deadline.setHeld(held);
+  // `settled` means the timer fired or the request settled after the lookup.
+  if (result === "settled") return { status: "stale" };
+  if (result === "unavailable") return { status: "unavailable" };
+  return { status: result, expiresAt: deadline.expiresAt, hold: deadline.hold() };
 }
 
 function asString(value: unknown): string | null {

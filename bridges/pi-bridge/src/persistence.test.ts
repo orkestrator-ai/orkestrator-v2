@@ -11,6 +11,7 @@ import {
 } from "./commands.js";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { clientSessionKeys, sessions, type PersistedState } from "./state.js";
+import { testApprovalDeadline } from "./testing/approval-fixtures.js";
 
 let directory: string;
 
@@ -163,7 +164,7 @@ describe("writing", () => {
       toolName: "bash",
       input: {},
       createdAt: 1,
-      expiresAt: 2,
+      deadline: testApprovalDeadline(1),
       settle: () => undefined,
     });
     sessions.set(state.id, state);

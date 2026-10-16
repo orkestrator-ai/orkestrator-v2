@@ -17,3 +17,24 @@
   from `apps/backend`: 68 passed in 20.77 s.
 - **Evidence:** `/tmp/orkestrator-test-run.AAEzu7/` and `/tmp/orkestrator-test-run.2uhUui/`.
 - **Hypothesis:** host contention, as in 0211 and 0214. Not confirmed.
+
+## Observation during storage-read accounting merge (2026-10-16)
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`.
+- **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1
+  slots; backend used two isolated Bun workers. Other worktrees were validating
+  on the same host; workspace admission waited 286.5 seconds.
+- **Suite counts:** backend 8,280 passed, 40 skipped, four failed and one
+  between-tests error across 441 files (454.79 seconds). The other workspace
+  packages, root, bridges and protocol groups passed. The aggregate exited 1
+  after 777.1 seconds.
+- **Evidence:** `/tmp/orkestrator-test-run.gwCPHc/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
+  outer artifact `/tmp/orkestrator-test-run.gxKAtN/merge-tests.log.gz`.
+- **Failure:** the same deletion-reap case exceeded its five-second deadline
+  at 5037.65 ms.
+- **Isolated rerun:** `mise run test:logged -- --name merge-commands-environments -- bun test
+  --cwd apps/backend --preload ../../tests/setup-node.ts
+  ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures`
+  passed the unchanged file in 20.6 seconds (exit 0).
+- **Disposition:** recurrence confirmed by the isolated pass; shared-host
+  contention remains a hypothesis. No test, timeout or skip was changed.

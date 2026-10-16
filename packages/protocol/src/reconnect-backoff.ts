@@ -110,13 +110,23 @@ export class ReconnectBackoff {
     this.#connectedAt ??= this.#now();
   }
 
-  /** The transport ended or failed; returns how long to wait before retrying. */
-  nextDelayMs(): number {
+  /**
+   * The owner closed a connection on purpose, e.g. to replace it. End its
+   * health interval without counting a failure: the failure count resets only
+   * if this connection had already stayed up for `healthyAfterMs`, and the
+   * replacement's health is measured from its own `connected()`.
+   */
+  disconnected(): void {
     const connectedAt = this.#connectedAt;
     this.#connectedAt = undefined;
     if (connectedAt !== undefined && this.#now() - connectedAt >= this.#policy.healthyAfterMs) {
       this.#failures = 0;
     }
+  }
+
+  /** The transport ended or failed; returns how long to wait before retrying. */
+  nextDelayMs(): number {
+    this.disconnected();
     const delay = reconnectDelayMs(this.#policy, this.#failures, this.#random);
     this.#failures = Math.min(MAX_TRACKED_FAILURES, this.#failures + 1);
     return delay;

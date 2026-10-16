@@ -144,6 +144,42 @@ until either version changes. The Settings **Debug** section shows the same
 note. The public CLI has its own schema handshake instead
 ([public-cli.md](public-cli.md)).
 
+## Event stream reconnects
+
+A web client holds one authoritative event stream and its terminal output
+streams. A same-origin browser shares one filtered `EventSource` across all its
+terminals; a direct (bearer) client opens one fetch stream per terminal. A
+backend restart drops all of them in every open tab at once, so each stream
+reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
+`packages/protocol/src/reconnect-backoff.ts`, wired in
+`apps/web/src/lib/native/web-gateway.ts`):
+
+- The first retry waits at most 2 s. Consecutive failures double the delay up
+  to 16 s, and each delay is drawn from the upper half of its step, so tabs
+  drift apart instead of retrying in lock-step.
+- A stream must stay open for 30 s, longer than the gateway's 25 s keepalive,
+  before losing it counts as a first failure again. A server that accepts
+  connections and drops them at once keeps backing off.
+- The main stream resumes from its cursor. Terminal output has no replay, so
+  every terminal stream reopen makes that terminal reload its snapshot. This
+  is why terminal retries back off too.
+- When the main stream reconnects, terminal streams that are waiting out a
+  delay retry at once, so terminals recover with the rest of the UI. A newly
+  mounted terminal, or one the user reconnects, also connects at once.
+- When the tab becomes visible or the browser fires `online`, the main stream
+  and every terminal stream that is waiting out a delay retry at once. A
+  hidden tab's timers are throttled, and the outage may have ended
+  mid-wait. Nothing happens when no stream is waiting.
+- None of these early retries resets the ladder. One that fails waits for
+  the next step.
+- The browser keeps retrying an `EventSource` itself until it gives up
+  (`CLOSED`). The ladder only takes over from there.
+- Going offline in the browser pauses and resets nothing, because a local
+  backend stays reachable without internet.
+- The opt-in terminal WebSocket has its own reconnect loop
+  (`terminal-websocket-client.ts`). When it asks again for the HTTP fallback,
+  that request waits for the fallback's pending retry.
+
 ## Security notes
 
 - The gateway requires a token before serving the app, backend API, event

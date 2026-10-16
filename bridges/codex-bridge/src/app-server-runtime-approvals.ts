@@ -19,9 +19,28 @@ import {
   type InteractionRequest,
   type InteractionResolution,
 } from "./app-server/interactions.js";
+import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interactions";
+import type { ParkedHoldOutcome } from "./app-server/server-request-router.js";
 import { estimateOrderedEventBytes, isJsonObject } from "./app-server-runtime-base.js";
 import type { CodexRuntimeContext } from "./app-server-runtime-context.js";
 import type { CodexRuntimeLifecycle } from "./app-server-runtime-lifecycle.js";
+
+/**
+ * Outcome of a pause or resume request from a tab.
+ *
+ * `unknown` is the same "the card is stale" as an answer to a request that has
+ * gone; `unavailable` is a deadline that cannot be extended (none at all, or
+ * the provider's own limit already is the countdown).
+ */
+export type ParkedHoldResponse =
+  | {
+      status: "applied" | "unchanged";
+      expiresAt: number;
+      hold: AgentInteractionHold;
+    }
+  | { status: "unknown" }
+  | { status: "wrong-session" }
+  | { status: "unavailable" };
 
 export class CodexRuntimeApprovals {
   constructor(
@@ -165,6 +184,53 @@ export class CodexRuntimeApprovals {
     // that can never be answered.
     this.ctx.pendingApprovals.delete(approvalId);
     return "unknown";
+  }
+
+  /**
+   * Pauses or resumes a parked approval's countdown for the tab that owns it.
+   *
+   * Never answers the request, and never touches liveness: the router re-arms
+   * the same deny-at-expiry timer. The mirror served by `listApprovals` takes
+   * the moved deadline at once, since the backend reads that route rather than
+   * an SSE frame.
+   */
+  holdApproval(sessionId: string, approvalId: string, held: boolean): ParkedHoldResponse {
+    const entry = this.ctx.pendingApprovals.get(approvalId);
+    if (!entry) return { status: "unknown" };
+    if (!this.sessionIdsForApproval(entry.request).includes(sessionId)) {
+      return { status: "wrong-session" };
+    }
+    const outcome = this.ctx.options.engine.holdApproval(approvalId, held);
+    return this.applyHold(this.ctx.pendingApprovals, approvalId, entry, outcome);
+  }
+
+  /** Same contract as `holdApproval`. */
+  holdInteraction(sessionId: string, interactionId: string, held: boolean): ParkedHoldResponse {
+    const entry = this.ctx.pendingInteractions.get(interactionId);
+    if (!entry) return { status: "unknown" };
+    if (!this.ctx.sessionIdsForThread(entry.request.threadId).includes(sessionId)) {
+      return { status: "wrong-session" };
+    }
+    const outcome = this.ctx.options.engine.holdInteraction(interactionId, held);
+    return this.applyHold(this.ctx.pendingInteractions, interactionId, entry, outcome);
+  }
+
+  private applyHold<T extends ApprovalRequest | InteractionRequest>(
+    mirror: Map<string, { request: T }>,
+    id: string,
+    entry: { request: T },
+    outcome: ParkedHoldOutcome,
+  ): ParkedHoldResponse {
+    if (outcome.status === "stale") {
+      // As for an answer: a card the router no longer holds open (gone, or from
+      // a dead generation) must not stay in the rehydration snapshot.
+      mirror.delete(id);
+      return { status: "unknown" };
+    }
+    if (outcome.status === "unavailable") return outcome;
+    // A fresh object, never a mutation: an emitted SSE frame may still hold the old one.
+    entry.request = { ...entry.request, expiresAt: outcome.expiresAt, hold: outcome.hold };
+    return outcome;
   }
 
   presentInteraction(request: InteractionRequest): boolean {

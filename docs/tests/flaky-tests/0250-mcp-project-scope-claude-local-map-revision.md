@@ -1,6 +1,6 @@
 # Claude project-scope MCP edit rejected with a revision conflict
 
-- **ID:** 0248
+- **ID:** 0250
 - **Status:** open
 - **Date observed:** 2026-10-16
 - **Test:** `project-scope CRUD > claude: the private local map is edited inside ~/.claude.json only`

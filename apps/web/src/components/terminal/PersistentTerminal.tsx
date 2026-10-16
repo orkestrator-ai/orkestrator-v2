@@ -90,6 +90,21 @@ const SESSION_SNAPSHOT_RETRY_BASE_MS = 250;
 const SESSION_SNAPSHOT_RETRY_MAX_MS = 5000;
 const terminalInputDisposables = new WeakMap<object, { dispose: () => void }>();
 
+/**
+ * Fits the terminal to its pane, unless the pane is not laid out.
+ *
+ * Split panes stay mounted below the mobile breakpoint, with every pane but
+ * the visible one under `display: none`. There the fit addon reads the
+ * container's computed `100%` width as 100px and would shrink the terminal,
+ * and the PTY with it, to about ten columns. The pane's resize observer fits
+ * it again once it is shown. Returns whether it fitted.
+ */
+function fitToLaidOutPane(fitAddon: { fit: () => void }, wrapper: HTMLElement | null): boolean {
+  if (!wrapper || wrapper.getClientRects().length === 0) return false;
+  fitAddon.fit();
+  return true;
+}
+
 function serializeLegacyTerminalBuffer(
   serialize: (options?: { scrollback?: number }) => string,
   configuredScrollback: unknown,
@@ -1287,8 +1302,7 @@ export function PersistentTerminal({
     }
     fitAnimationFrameRef.current = requestAnimationFrame(() => {
       fitAnimationFrameRef.current = null;
-      if (!fitAddon || !terminal) return;
-      fitAddon.fit();
+      if (!fitAddon || !terminal || !fitToLaidOutPane(fitAddon, terminalRef.current)) return;
       const { cols, rows } = terminal;
       void publishTerminalGeometry(cols, rows);
     });
@@ -1342,7 +1356,7 @@ export function PersistentTerminal({
       setTerminalContainer(environmentId, tabId, containerElement);
 
       // Initial fit and font loading
-      fitAddon.fit();
+      fitToLaidOutPane(fitAddon, terminalRef.current);
 
       scheduleFit();
       if (document?.fonts?.ready) {
@@ -1432,13 +1446,13 @@ export function PersistentTerminal({
           // Restore the buffer that was captured during cleanup
           requestAnimationFrame(() => {
             try {
-              fitAddon.fit();
+              fitToLaidOutPane(fitAddon, terminalRef.current);
               terminal.clear();
               terminal.write(pendingBuffer);
               terminal.scrollToBottom();
             } catch (err) {
               console.error(`[PersistentTerminal] Error restoring buffer for tab:${tabId}:`, err);
-              fitAddon.fit();
+              fitToLaidOutPane(fitAddon, terminalRef.current);
               terminal.refresh(0, terminal.rows - 1);
             } finally {
               // Clear the restoration flag after RAF completes
@@ -1448,14 +1462,14 @@ export function PersistentTerminal({
         } else if (!pendingBuffer) {
           // Terminal moved but no pending buffer - just refresh
           requestAnimationFrame(() => {
-            fitAddon.fit();
+            fitToLaidOutPane(fitAddon, terminalRef.current);
             terminal.refresh(0, terminal.rows - 1);
           });
         }
 
         // Fallback refresh after layout settles (only for moved terminals)
         setTimeout(() => {
-          fitAddon.fit();
+          fitToLaidOutPane(fitAddon, terminalRef.current);
           terminal.refresh(0, terminal.rows - 1);
         }, 100);
       } else {
@@ -1466,7 +1480,7 @@ export function PersistentTerminal({
         // Simple refresh since DOM was reconnected
         if (needsDOMMove) {
           requestAnimationFrame(() => {
-            fitAddon.fit();
+            fitToLaidOutPane(fitAddon, terminalRef.current);
             terminal.refresh(0, terminal.rows - 1);
           });
         }
@@ -1643,7 +1657,7 @@ export function PersistentTerminal({
     if (isActive && !wasActiveRef.current && terminalIsOpened) {
       // Terminal just became visible - refresh to ensure content is drawn
       requestAnimationFrame(() => {
-        fitAddon.fit();
+        fitToLaidOutPane(fitAddon, terminalRef.current);
         terminal.refresh(0, terminal.rows - 1);
       });
     }
@@ -1712,7 +1726,7 @@ export function PersistentTerminal({
     };
     terminal.options.scrollback = terminalScrollback;
 
-    fitAddon.fit();
+    fitToLaidOutPane(fitAddon, terminalRef.current);
   }, [
     terminal,
     fitAddon,

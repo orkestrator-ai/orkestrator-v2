@@ -204,5 +204,5 @@ iOS, two machines) are the most common open gate. They are batched in
 | [live-provider-and-platform-qualification.md](todo/live-provider-and-platform-qualification.md) | Shared prerequisites and a batching index for live-provider and platform runs, agent-test profile isolation, and checks with no other home. |
 | [mixed-version-compatibility.md](todo/mixed-version-compatibility.md) | Support-window policy for old clients, bridges and backends; renderer–backend skew; dead prompt-queue claim commands; index of compatibility paths awaiting retirement. |
 | [test-suite-and-ci-health.md](todo/test-suite-and-ci-health.md) | Slow test owners, a skipped settings test, red CI on `main` and missing branch protection, deferred test-structure candidates. |
-| [mobile-layout-gaps.md](todo/mobile-layout-gaps.md) | Narrow-viewport defects: split panes remount at the mobile breakpoint; environment settings blocked by the projects drawer. |
+| [mobile-layout-gaps.md](todo/mobile-layout-gaps.md) | Narrow-viewport defects: environment settings blocked by the projects drawer; panes the mobile switcher hides lose their layout. |
 | [dependency-upgrades.md](todo/dependency-upgrades.md) | Non-agent dependency upgrades still pending: Electron 46, React Compiler lint warnings, update-signing decision, and upgrades blocked upstream or deferred. |

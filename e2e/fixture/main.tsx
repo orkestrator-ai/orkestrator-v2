@@ -106,6 +106,10 @@ const ProjectNavigationFixture = lazy(async () => ({
   default: (await import("./ProjectNavigationFixture")).ProjectNavigationFixture,
 }));
 
+const PaneBreakpointFixture = lazy(async () => ({
+  default: (await import("./PaneBreakpointFixture")).PaneBreakpointFixture,
+}));
+
 declare global {
   interface Window {
     lastCreateEnvironmentOptions?: ClaudeOptions;
@@ -1662,6 +1666,13 @@ function fixtureForPath() {
     );
   }
 
+  if (window.location.pathname === "/pane-breakpoint") {
+    return (
+      <Suspense fallback={null}>
+        <PaneBreakpointFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/terminal-links") {
     return (
       <Suspense fallback={null}>

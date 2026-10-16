@@ -1,4 +1,4 @@
-import { memo, useCallback, useRef, useEffect } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef } from "react";
 import { type Layout } from "react-resizable-panels";
 import { useMediaQuery } from "@/hooks";
 import { usePaneLayoutStore } from "@/stores";
@@ -9,13 +9,12 @@ import {
   type PaneNode,
   type PaneSplit,
 } from "@/types/paneLayout";
-import { MobilePaneSwitcher } from "./MobilePaneSwitcher";
+import { MOBILE_SHELL_MEDIA_QUERY } from "@/components/layout/MobileAppShellLayout";
+import { MobilePaneSwitcher, selectMobilePaneId } from "./MobilePaneSwitcher";
 import { PaneLeafContainer } from "./PaneLeafContainer";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
+import { useStablePaneHosts, type StablePaneHosts } from "./useStablePaneHosts";
 import { getWorkflowTabTitle } from "./workflow-tab-title";
-
-// PaneTree and PaneSplitContainer render each other, so they share a module
-// rather than importing one another.
 
 interface PaneTreeProps {
   node: PaneNode;
@@ -28,6 +27,24 @@ interface PaneTreeProps {
   dragOverPaneId?: string | null;
 }
 
+/** Positions panes; their content is rendered once by `PaneTree`. */
+const PaneSlotContext = createContext<StablePaneHosts["slot"] | null>(null);
+
+function usePaneSlot(): StablePaneHosts["slot"] {
+  const slot = useContext(PaneSlotContext);
+  if (!slot) throw new Error("Pane layout rendered outside PaneTree");
+  return slot;
+}
+
+/**
+ * An environment's panes.
+ *
+ * Every pane renders once, into a stable host, and the layout only positions
+ * those hosts: nested resizable groups on desktop, a pane switcher below the
+ * mobile breakpoint. Crossing the breakpoint or splitting a pane therefore
+ * moves panes rather than remounting them, so their dialogs, drafts and
+ * terminal attachments survive.
+ */
 export const PaneTree = memo(function PaneTree({
   node,
   containerId,
@@ -36,34 +53,53 @@ export const PaneTree = memo(function PaneTree({
   activeDragId,
   dragOverPaneId,
 }: PaneTreeProps) {
-  if (isPaneLeaf(node)) {
-    return (
-      <PaneLeafContainer
-        pane={node}
-        containerId={containerId}
-        environmentId={environmentId}
-        isActive={isActive}
-        activeDragId={activeDragId}
-        dragOverPaneId={dragOverPaneId}
-      />
-    );
-  }
+  const isMobile = useMediaQuery(MOBILE_SHELL_MEDIA_QUERY);
+  const setActivePane = usePaneLayoutStore((state) => state.setActivePane);
+  const activePaneId = usePaneLayoutStore(
+    (state) => state.environments.get(environmentId)?.activePaneId,
+  );
+  const leaves = useMemo(() => collectPaneLeaves(node), [node]);
+  const hosts = useStablePaneHosts(useMemo(() => leaves.map((leaf) => leaf.id), [leaves]));
+  const split = isPaneSplit(node) ? node : null;
+  // Only one pane is on screen in the switcher; the others stay mounted but
+  // must not act as the visible tab.
+  const switcherPaneId = isMobile && split ? selectMobilePaneId(leaves, activePaneId) : null;
 
-  if (isPaneSplit(node)) {
-    return (
-      <PaneSplitContainer
-        split={node}
-        containerId={containerId}
-        environmentId={environmentId}
-        isActive={isActive}
-        activeDragId={activeDragId}
-        dragOverPaneId={dragOverPaneId}
-      />
-    );
-  }
-
-  return null;
+  return (
+    <PaneSlotContext.Provider value={hosts.slot}>
+      {hosts.park}
+      {split && isMobile ? (
+        <MobilePaneSwitcher
+          panes={mobilePaneOptions(split)}
+          activePaneId={activePaneId}
+          onSelect={(paneId) => setActivePane(paneId, environmentId)}
+          renderPane={(paneId) => hosts.slot(paneId)}
+        />
+      ) : (
+        <PaneNodeLayout node={node} environmentId={environmentId} />
+      )}
+      {leaves.map((leaf) =>
+        hosts.portal(
+          leaf.id,
+          <PaneLeafContainer
+            pane={leaf}
+            containerId={containerId}
+            environmentId={environmentId}
+            isActive={isActive && (switcherPaneId === null || switcherPaneId === leaf.id)}
+            activeDragId={activeDragId}
+            dragOverPaneId={dragOverPaneId}
+          />,
+        ),
+      )}
+    </PaneSlotContext.Provider>
+  );
 });
+
+function PaneNodeLayout({ node, environmentId }: { node: PaneNode; environmentId: string }) {
+  const slot = usePaneSlot();
+  if (isPaneLeaf(node)) return slot(node.id);
+  return <PaneSplitContainer split={node} environmentId={environmentId} />;
+}
 
 /** Debounce delay for store updates during resize operations (ms) */
 const RESIZE_DEBOUNCE_MS = 100;
@@ -87,31 +123,17 @@ export function mobilePaneOptions(split: PaneSplit): Array<{ id: string; label: 
 
 interface PaneSplitContainerProps {
   split: PaneSplit;
-  containerId: string | null;
   environmentId: string;
-  isActive: boolean;
-  /** Currently dragged tab ID (for cross-pane visual feedback) */
-  activeDragId?: string | null;
-  /** Pane ID currently being dragged over */
-  dragOverPaneId?: string | null;
 }
 
+/** The desktop layout of one split: two resizable panels. */
 export const PaneSplitContainer = memo(function PaneSplitContainer({
   split,
-  containerId,
   environmentId,
-  isActive,
-  activeDragId,
-  dragOverPaneId,
 }: PaneSplitContainerProps) {
-  const isMobile = useMediaQuery("(max-width: 767px)");
   // Use a selector to only get the updateSizes function - this prevents re-renders
   // when other parts of the store change
   const updateSizes = usePaneLayoutStore((state) => state.updateSizes);
-  const setActivePane = usePaneLayoutStore((state) => state.setActivePane);
-  const activePaneId = usePaneLayoutStore(
-    (state) => state.environments.get(environmentId)?.activePaneId,
-  );
   const debounceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track the split.id to detect changes during debounce
   const splitIdRef = useRef(split.id);
@@ -161,28 +183,6 @@ export const PaneSplitContainer = memo(function PaneSplitContainer({
     [environmentId, split.id, firstPanelId, secondPanelId, updateSizes],
   );
 
-  if (isMobile) {
-    const panes = collectPaneLeaves(split);
-    const paneById = new Map(panes.map((pane) => [pane.id, pane]));
-    return (
-      <MobilePaneSwitcher
-        panes={mobilePaneOptions(split)}
-        activePaneId={activePaneId}
-        onSelect={(paneId) => setActivePane(paneId, environmentId)}
-        renderPane={(paneId, paneIsActive) => (
-          <PaneTree
-            node={paneById.get(paneId)!}
-            containerId={containerId}
-            environmentId={environmentId}
-            isActive={isActive && paneIsActive}
-            activeDragId={activeDragId}
-            dragOverPaneId={dragOverPaneId}
-          />
-        )}
-      />
-    );
-  }
-
   return (
     <ResizablePanelGroup orientation={split.direction} onLayoutChange={handleLayoutChange}>
       <ResizablePanel
@@ -191,14 +191,7 @@ export const PaneSplitContainer = memo(function PaneSplitContainer({
         minSize={10}
         className="min-h-0 min-w-0"
       >
-        <PaneTree
-          node={firstChild}
-          containerId={containerId}
-          environmentId={environmentId}
-          isActive={isActive}
-          activeDragId={activeDragId}
-          dragOverPaneId={dragOverPaneId}
-        />
+        <PaneNodeLayout node={firstChild} environmentId={environmentId} />
       </ResizablePanel>
 
       <ResizableHandle orientation={split.direction} />
@@ -209,14 +202,7 @@ export const PaneSplitContainer = memo(function PaneSplitContainer({
         minSize={10}
         className="min-h-0 min-w-0"
       >
-        <PaneTree
-          node={secondChild}
-          containerId={containerId}
-          environmentId={environmentId}
-          isActive={isActive}
-          activeDragId={activeDragId}
-          dragOverPaneId={dragOverPaneId}
-        />
+        <PaneNodeLayout node={secondChild} environmentId={environmentId} />
       </ResizablePanel>
     </ResizablePanelGroup>
   );

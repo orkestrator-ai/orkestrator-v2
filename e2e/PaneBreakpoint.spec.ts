@@ -1,0 +1,161 @@
+import { expect, test, type Locator, type Page } from "@playwright/test";
+
+/**
+ * A window can cross the 768px breakpoint at any time: narrowed, rotated, or
+ * put into split screen. These cases cross it both ways with live pane state and
+ * check that nothing remounts or forgets where it was.
+ */
+
+const PHONE = { width: 390, height: 844 };
+const DESKTOP = { width: 1024, height: 900 };
+
+const TERMINAL_ROWS = 200;
+const TERMINAL_TOP_LINE = 50;
+
+function panes(page: Page) {
+  const terminalPane = page.locator("[data-pane-leaf]").filter({ has: page.locator(".xterm") });
+  const agentPane = page
+    .locator("[data-pane-leaf]")
+    .filter({ has: page.getByRole("textbox", { name: "Message Codex" }) });
+  return {
+    terminalPane,
+    agentPane,
+    terminal: terminalPane.locator(".xterm"),
+    terminalRows: terminalPane.locator(".xterm-rows"),
+    transcript: agentPane.getByTestId("virtuoso-scroller"),
+    composer: agentPane.getByRole("textbox", { name: "Message Codex" }),
+  };
+}
+
+async function firstVisibleMessage(transcript: Locator): Promise<string | null> {
+  return transcript.evaluate((scroller) => {
+    const top = scroller.getBoundingClientRect().top;
+    for (const element of Array.from(scroller.querySelectorAll("[data-item-index]"))) {
+      if (element.getBoundingClientRect().bottom > top + 1) {
+        return element.textContent?.match(/Transcript message \d+\./)?.[0] ?? null;
+      }
+    }
+    return null;
+  });
+}
+
+/**
+ * Scrolls the transcript away from its end the way a user does, and returns the
+ * message it settles on at the top. A transcript that remounted or lost its
+ * offset would show its first or its last messages instead.
+ */
+async function scrollTranscriptUp(page: Page, transcript: Locator): Promise<string> {
+  // Opening a transcript follows it to the end; scroll only once it got there.
+  await expect(transcript.getByText("Transcript message 59.")).toBeVisible();
+  const box = await transcript.boundingBox();
+  if (!box) throw new Error("Expected the transcript on screen");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const scrolledBack = /^Transcript message ([1-9]|[1-4]\d)\.$/;
+  await expect(async () => {
+    await page.mouse.wheel(0, -2500);
+    expect(await firstVisibleMessage(transcript)).toMatch(scrolledBack);
+  }).toPass();
+  let settled: string | null = null;
+  await expect
+    .poll(async () => {
+      const current = await firstVisibleMessage(transcript);
+      const stable = current !== null && current === settled;
+      settled = current;
+      return stable;
+    })
+    .toBe(true);
+  expect(settled).toMatch(scrolledBack);
+  return settled!;
+}
+
+/** The same element as before, so React kept the component that owns it. */
+async function remember(locator: Locator, name: string) {
+  await locator.evaluate((element, key) => {
+    (window as unknown as Record<string, Element>)[key] = element;
+  }, name);
+}
+
+async function isSameElement(locator: Locator, name: string): Promise<boolean> {
+  return locator.evaluate(
+    (element, key) => (window as unknown as Record<string, Element>)[key] === element,
+    name,
+  );
+}
+
+for (const mode of ["moveBefore", "appendChild fallback"] as const) {
+  test(`split panes keep terminal output, scroll positions and the draft across the breakpoint (${mode})`, async ({
+    page,
+  }, testInfo) => {
+    if (mode === "appendChild fallback") {
+      // Safari and older engines have no state-preserving move.
+      await page.addInitScript(() => {
+        delete (Element.prototype as { moveBefore?: unknown }).moveBefore;
+      });
+    }
+    // Each project starts on its own side of the breakpoint and crosses both ways.
+    const startsOnPhone = testInfo.project.name === "mobile-chromium";
+    const [start, other] = startsOnPhone ? [PHONE, DESKTOP] : [DESKTOP, PHONE];
+    await page.setViewportSize(start);
+    await page.goto("/pane-breakpoint");
+    const view = panes(page);
+
+    await expect(view.terminal).toHaveCount(1);
+    await page.evaluate(
+      (count) =>
+        window.writeBreakpointTerminal!(
+          Array.from({ length: count }, (_, index) => `Breakpoint row ${index}\r\n`).join(""),
+        ),
+      TERMINAL_ROWS,
+    );
+    await page.evaluate((line) => window.scrollBreakpointTerminal!(line), TERMINAL_TOP_LINE);
+    const transcriptTop = await scrollTranscriptUp(page, view.transcript);
+    await view.composer.click();
+    await page.keyboard.type("keep this draft");
+    await remember(view.terminalPane, "terminalPane");
+    await remember(view.agentPane, "agentPane");
+    await remember(view.terminal, "terminal");
+
+    const expectAgentPaneKept = async (typed: string) => {
+      expect(await isSameElement(view.agentPane, "agentPane")).toBe(true);
+      await expect(view.composer).toHaveText(typed);
+      expect(await firstVisibleMessage(view.transcript)).toBe(transcriptTop);
+    };
+    // xterm re-anchors its viewport by a few lines on every resize, crossing or
+    // not, so the terminal is checked for still being scrolled back into its
+    // history and showing it, rather than for one exact line.
+    const expectTerminalPaneKept = async () => {
+      expect(await isSameElement(view.terminalPane, "terminalPane")).toBe(true);
+      expect(await isSameElement(view.terminal, "terminal")).toBe(true);
+      // A pane that was hidden renders its rows on the frame after it shows.
+      await expect(async () => {
+        const terminal = (await page.evaluate(() => window.breakpointTerminalState!()))!;
+        expect(terminal.firstLine).toBe("Breakpoint row 0");
+        expect(terminal.lastLine).toBe(`Breakpoint row ${TERMINAL_ROWS - 1}`);
+        expect(terminal.viewportY).toBeGreaterThan(0);
+        expect(terminal.viewportY).toBeLessThan(terminal.baseY);
+        expect(await view.terminalRows.locator(":scope > div").first().textContent()).toBe(
+          `Breakpoint row ${terminal.viewportY}`,
+        );
+      }).toPass();
+    };
+
+    // Cross once. The composer still has focus and its caret: typing continues the draft.
+    await page.setViewportSize(other);
+    await expect(view.composer).toBeFocused();
+    await page.keyboard.type(" and more");
+    await expectAgentPaneKept("keep this draft and more");
+    await expect(page.getByRole("tablist", { name: "Split panes" })).toHaveCount(
+      other === PHONE ? 1 : 0,
+    );
+    if (other === DESKTOP) await expectTerminalPaneKept();
+
+    // And back. The phone shows one pane at a time, so the shell pane is checked
+    // last: switching panes in the switcher resets a transcript on its own.
+    await page.setViewportSize(start);
+    await expect(view.composer).toBeFocused();
+    await page.keyboard.type("!");
+    await expectAgentPaneKept("keep this draft and more!");
+    if (start === PHONE) await page.getByRole("tab", { name: /Shell/ }).click();
+    await expectTerminalPaneKept();
+  });
+}

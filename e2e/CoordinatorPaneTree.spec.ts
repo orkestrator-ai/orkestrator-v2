@@ -155,3 +155,28 @@ test("mobile switcher labels restored panes and keeps hidden composers mounted",
   await first.click();
   await expect(main.getByRole("textbox")).toHaveText("keep my draft");
 });
+
+test("split groups keep their composer drafts and focus across the mobile breakpoint", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "starts from the desktop split");
+  await splitSide(page);
+  const main = page.getByRole("region", { name: "Coordinator conversation", exact: true });
+  const side = page.getByRole("region", { name: "Side 1 conversation", exact: true });
+  await main.getByRole("textbox").fill("main draft");
+  await side.getByRole("textbox").click();
+  await page.keyboard.type("side draft");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole("tab", { name: "2. Side 1", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(side.getByRole("textbox")).toBeFocused();
+  await page.keyboard.type(" kept");
+
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await expect(side.getByRole("textbox")).toBeFocused();
+  await expect(side.getByRole("textbox")).toHaveText("side draft kept");
+  await expect(main.getByRole("textbox")).toHaveText("main draft");
+});

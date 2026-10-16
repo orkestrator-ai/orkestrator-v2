@@ -12,6 +12,14 @@ interface MobilePaneSwitcherProps {
   renderPane: (paneId: string, isActive: boolean) => ReactNode;
 }
 
+/** The pane the switcher shows: the active pane, or the first when that is not in the split. */
+export function selectMobilePaneId(
+  panes: ReadonlyArray<{ id: string }>,
+  activePaneId: string | undefined,
+): string | undefined {
+  return panes.some((pane) => pane.id === activePaneId) ? activePaneId : panes[0]?.id;
+}
+
 /**
  * Mobile replacement for resize handles. Every pane stays mounted so terminal
  * and agent views can continue receiving authoritative backend updates while
@@ -23,9 +31,7 @@ export function MobilePaneSwitcher({
   onSelect,
   renderPane,
 }: MobilePaneSwitcherProps) {
-  const selectedPaneId = panes.some((pane) => pane.id === activePaneId)
-    ? activePaneId
-    : panes[0]?.id;
+  const selectedPaneId = selectMobilePaneId(panes, activePaneId);
 
   if (!selectedPaneId) return null;
 

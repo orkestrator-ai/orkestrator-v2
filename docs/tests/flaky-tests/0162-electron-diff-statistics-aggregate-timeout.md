@@ -111,3 +111,9 @@ hypothesis; no timeout, assertion or skip was changed.
 - **Disposition:** aggregate-only deadline failures recorded without changing
   assertions, deadlines or skips. Host contention is a hypothesis, not a proven
   cause.
+
+## Recurrence during Multi Review validation diagnostics (2026-10-16)
+
+- While the aggregate was active, `mise run test:logged -- --name commands-integration-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` timed out in `enables git's scan caches on a newly created worktree` at 5150.45 ms. The file reported 52 passed and three timeouts in 127.9 seconds.
+- After the aggregate finished, the unchanged owning file passed in 32.1 seconds with the same command and `--name commands-integration-final-rerun` (exit 0).
+- Evidence: `/tmp/orkestrator-test-run.3kSG12/commands-integration-rerun.log.gz`. No diff-statistics code, assertion, timeout or skip changed; host contention remains a hypothesis.

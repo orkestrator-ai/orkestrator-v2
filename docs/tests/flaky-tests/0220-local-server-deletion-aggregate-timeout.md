@@ -23,3 +23,10 @@
 - **Disposition:** aggregate-only deadline failures recorded without changing
   assertions, deadlines or skips. Host contention is a hypothesis, not a proven
   cause.
+
+## Recurrence during Multi Review follow-up validation (2026-10-16)
+
+- **Aggregate:** `mise run test:logged -- --name full-suite -- mise run test`, with 4/1/2/1 workspace/root/bridge/protocol slots and two backend workers. The unchanged case exceeded five seconds at 5788.09 ms.
+- **Owning-file rerun during the aggregate:** `mise run test:logged -- --name commands-integration-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` also timed out in this case (6328.85 ms); the file reported 52 passed and three timed-out tests in 127.9 seconds. Evidence: `/tmp/orkestrator-test-run.3kSG12/commands-integration-rerun.log.gz`.
+- **After the aggregate:** the same owning-file command with `--name commands-integration-final-rerun` passed unchanged in 32.1 seconds (exit 0).
+- **Aggregate evidence:** `/tmp/orkestrator-test-run.1PZf4j/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`. No lifecycle implementation, assertion, timeout or skip changed. Host contention remains a hypothesis.

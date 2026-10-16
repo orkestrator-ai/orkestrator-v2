@@ -757,6 +757,7 @@ describe("BuildPipelineService", () => {
         expect(paused).toMatchObject({
           phase: "paused",
           pausedFromPhase: "fixing",
+          pauseCause: "supervisor",
           error: UNCHANGED_FIX_PAUSE_MESSAGE,
         });
         expect(paused.sessions.at(-1)?.fixWorktreeFingerprintAtStart).toBeUndefined();

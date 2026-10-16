@@ -1,5 +1,5 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterAll, afterEach, beforeEach, describe, expect, jest, mock, test } from "bun:test";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MessagesSquare, Settings2 } from "lucide-react";
 import {
   DEFAULT_AGENT_MESSAGING_SETTINGS,
@@ -53,6 +53,36 @@ afterAll(() => {
 });
 
 describe("MessagingSettings", () => {
+  test("offers coordinator status updates, defaulting to decisions and problems", async () => {
+    renderMessagingLayout();
+    const select = (await screen.findByLabelText(
+      "Coordinator status updates",
+    )) as HTMLSelectElement;
+    expect(select.value).toBe("settled");
+    expect(Array.from(select.options, (option) => option.value)).toEqual([
+      "off",
+      "settled",
+      "stages",
+    ]);
+
+    jest.useFakeTimers();
+    try {
+      act(() => {
+        fireEvent.change(select, { target: { value: "stages" } });
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(400);
+        await Promise.resolve();
+      });
+      expect(updateAgentMessagingSettings).toHaveBeenCalledWith({
+        ...DEFAULT_AGENT_MESSAGING_SETTINGS,
+        coordinatorStatusWakes: "stages",
+      });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   test("offers no save or reset controls", async () => {
     renderMessagingLayout();
 

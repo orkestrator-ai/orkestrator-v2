@@ -970,7 +970,7 @@ function PreviewIntentChooser({
               </Button>
               {!container && (
                 <Button type="button" variant="secondary" onClick={() => retarget(target.url)}>
-                  Open as a backend host port
+                  Open as a temporary backend host port
                 </Button>
               )}
             </div>

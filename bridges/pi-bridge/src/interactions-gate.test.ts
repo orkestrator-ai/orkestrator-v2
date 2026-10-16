@@ -4,22 +4,43 @@
  * `interactions.test.ts` exercises the parked-approval machinery directly,
  * because the default is off. This file turns the gate on, so the paths it
  * covers are the ones only `requestToolApproval` itself can take: the
- * read-only bypass, the pending cap, and the timeout — every one of which must
- * deny rather than approve.
+ * read-only bypass, the pending cap, the timeout — every one of which must
+ * deny rather than approve — and pausing that timeout.
  *
  * The gate is read per call rather than at import, so this holds whatever
- * order the suite happens to load these modules in. The timeout is not: it is
- * set before the dynamic import below, and lowered only so a test can prove
- * the denial without waiting five minutes.
+ * order the suite happens to load these modules in. Time is Bun's fake clock,
+ * which also moves `Date.now`, so the default five-minute window and the
+ * day-long hold ceiling are proven without waiting for either.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
+import { AGENT_INTERACTION_HOLD_CEILING_MS as CEILING } from "@orkestrator/protocol/agent-interactions";
 
 process.env.PI_BRIDGE_REQUIRE_APPROVAL = "1";
-process.env.PI_BRIDGE_APPROVAL_TIMEOUT_MS = "1000";
 
-const { requestToolApproval, resolveApproval } = await import("./interactions.js");
+const { holdApproval, publicApprovals, requestToolApproval, resolveApproval } =
+  await import("./interactions.js");
 const { newSessionState } = await import("./agent-session.js");
-const { MAX_PENDING_APPROVALS } = await import("./config.js");
+const { approvalTimeoutMs, MAX_PENDING_APPROVALS } = await import("./config.js");
+
+const HOUR = 60 * 60 * 1000;
+const EXPIRED = "The approval request expired before it was answered.";
+
+/** Run `body` on Bun's fake clock, restoring real timers however it ends. */
+async function withFakeTime(body: () => Promise<void>): Promise<void> {
+  jest.useFakeTimers();
+  try {
+    await body();
+  } finally {
+    jest.useRealTimers();
+  }
+}
+
+/** Park one mutating call through the real gate. */
+function parkBash(state: ReturnType<typeof newSessionState>) {
+  const decision = requestToolApproval(state, "call-1", "bash", { command: "make release" });
+  const [id] = [...state.approvals.keys()];
+  return { id: id!, decision };
+}
 
 describe("requestToolApproval with the gate on", () => {
   test("parks a mutating call and applies the answer it is given", async () => {
@@ -76,19 +97,172 @@ describe("requestToolApproval with the gate on", () => {
   });
 
   test("denies a call nobody answered before it expired", async () => {
-    const state = newSessionState();
-    const decision = await requestToolApproval(state, "call-1", "bash", { command: "ls" });
+    await withFakeTime(async () => {
+      const state = newSessionState();
+      const { id, decision } = parkBash(state);
 
-    // The timeout is the case that matters most: an unanswered prompt is a
-    // prompt nobody saw.
-    expect(decision.block).toBe(true);
-    expect(decision.reason).toContain("expired");
-    expect(state.approvals.size).toBe(0);
-  }, 10_000);
+      jest.advanceTimersByTime(approvalTimeoutMs() - 1);
+      expect(state.approvals.has(id)).toBe(true);
+      jest.advanceTimersByTime(1);
+
+      // The timeout is the case that matters most: an unanswered prompt is a
+      // prompt nobody saw.
+      expect(await decision).toEqual({ block: true, reason: EXPIRED });
+      expect(state.approvals.size).toBe(0);
+    });
+  });
 
   test("answers an id it does not know as false rather than throwing", () => {
     const state = newSessionState();
     expect(resolveApproval(state, "never-existed", "allow")).toBe(false);
+  });
+});
+
+describe("pausing an approval's deadline", () => {
+  test("a paused approval outlives its window and is denied at the hold ceiling", async () => {
+    await withFakeTime(async () => {
+      const window = approvalTimeoutMs();
+      const state = newSessionState();
+      const { id, decision } = parkBash(state);
+      const requestedAt = Date.now();
+
+      jest.advanceTimersByTime(window - 1_000);
+      const pausedAt = Date.now();
+      const revision = state.revision;
+      expect(holdApproval(state, id, true)).toEqual({
+        result: "applied",
+        expiresAt: pausedAt + CEILING,
+        hold: { available: true, heldAt: pausedAt },
+      });
+      // Readers learn of the moved deadline through the snapshot revision.
+      expect(state.revision).toBe(revision + 1);
+      expect(publicApprovals(state).approvals).toEqual([
+        expect.objectContaining({
+          approvalId: id,
+          requestedAt,
+          expiresAt: pausedAt + CEILING,
+          hold: { available: true, heldAt: pausedAt },
+        }),
+      ]);
+
+      // Well past the window: still parked, still unanswered.
+      jest.advanceTimersByTime(10 * window);
+      expect(state.approvals.has(id)).toBe(true);
+
+      // A pause only moves the deadline. Nobody came back, so it still denies.
+      jest.advanceTimersByTime(pausedAt + CEILING - Date.now() - 1);
+      expect(state.approvals.has(id)).toBe(true);
+      jest.advanceTimersByTime(1);
+      expect(await decision).toEqual({ block: true, reason: EXPIRED });
+      expect(state.approvals.size).toBe(0);
+    });
+  });
+
+  test("the turn's own budget caps a pause, and the hold says why", async () => {
+    await withFakeTime(async () => {
+      const state = newSessionState();
+      const turnDeadlineAt = Date.now() + 2 * HOUR;
+      state.turnDeadlineAt = turnDeadlineAt;
+      const { id, decision } = parkBash(state);
+
+      // Published before any pause, so the card can say a pause is limited.
+      expect(publicApprovals(state).approvals).toEqual([
+        expect.objectContaining({ hold: { available: true, reason: "provider-limit" } }),
+      ]);
+
+      const pausedAt = Date.now();
+      expect(holdApproval(state, id, true)).toEqual({
+        result: "applied",
+        expiresAt: turnDeadlineAt,
+        hold: { available: true, heldAt: pausedAt, reason: "provider-limit" },
+      });
+      expect(publicApprovals(state).approvals).toEqual([
+        expect.objectContaining({
+          expiresAt: turnDeadlineAt,
+          hold: { available: true, heldAt: pausedAt, reason: "provider-limit" },
+        }),
+      ]);
+
+      jest.advanceTimersByTime(2 * HOUR - 1);
+      expect(state.approvals.has(id)).toBe(true);
+      jest.advanceTimersByTime(1);
+      expect(await decision).toEqual({ block: true, reason: EXPIRED });
+    });
+  });
+
+  test("a resume restarts a fresh full window rather than the remainder", async () => {
+    await withFakeTime(async () => {
+      const window = approvalTimeoutMs();
+      const state = newSessionState();
+      const { id, decision } = parkBash(state);
+
+      // Paused with a second left, resumed three hours later.
+      jest.advanceTimersByTime(window - 1_000);
+      holdApproval(state, id, true);
+      jest.advanceTimersByTime(3 * HOUR);
+      const resumedAt = Date.now();
+      const revision = state.revision;
+      expect(holdApproval(state, id, false)).toEqual({
+        result: "applied",
+        expiresAt: resumedAt + window,
+        hold: { available: true },
+      });
+      expect(state.revision).toBe(revision + 1);
+      expect(publicApprovals(state).approvals).toEqual([
+        expect.objectContaining({ expiresAt: resumedAt + window, hold: { available: true } }),
+      ]);
+
+      jest.advanceTimersByTime(window - 1);
+      expect(state.approvals.has(id)).toBe(true);
+      jest.advanceTimersByTime(1);
+      expect(await decision).toEqual({ block: true, reason: EXPIRED });
+    });
+  });
+
+  test("a repeated pause changes nothing and never answers the call", async () => {
+    await withFakeTime(async () => {
+      const state = newSessionState();
+      const { id, decision } = parkBash(state);
+
+      expect(holdApproval(state, id, false).result).toBe("unchanged");
+      const paused = holdApproval(state, id, true);
+      if (paused.result !== "applied") throw new Error(`expected a pause, got ${paused.result}`);
+      const revision = state.revision;
+      expect(holdApproval(state, id, true)).toEqual({ ...paused, result: "unchanged" });
+      expect(state.revision).toBe(revision);
+      expect(state.approvals.has(id)).toBe(true);
+
+      // Still a live control: the user's answer is what settles it.
+      expect(resolveApproval(state, id, "allow")).toBe(true);
+      expect(await decision).toEqual({ block: false });
+      expect(holdApproval(state, id, false)).toEqual({ result: "missing" });
+
+      // The answered call's timer is gone: nothing fires at the ceiling.
+      jest.advanceTimersByTime(2 * CEILING);
+      expect(state.approvals.size).toBe(0);
+    });
+  });
+
+  test("is unavailable when the turn ends before the window does", async () => {
+    await withFakeTime(async () => {
+      const window = approvalTimeoutMs();
+      const state = newSessionState();
+      state.turnDeadlineAt = Date.now() + 60_000;
+      const { id, decision } = parkBash(state);
+      const expiresAt = Date.now() + window;
+      const revision = state.revision;
+
+      expect(holdApproval(state, id, true)).toEqual({
+        result: "unavailable",
+        expiresAt,
+        hold: { available: false, reason: "no-extension" },
+      });
+      expect(state.revision).toBe(revision);
+      expect(state.approvals.has(id)).toBe(true);
+
+      resolveApproval(state, id, "deny");
+      expect((await decision).block).toBe(true);
+    });
   });
 });
 
@@ -105,6 +279,29 @@ test("read-only reviews deny commands, writes and unknown tools even with approv
     expect(state.approvals.size).toBe(0);
     state.readOnly = false;
     expect(await requestToolApproval(state, "fix", "edit", {})).toEqual({ block: false });
+  } finally {
+    if (previous === undefined) delete process.env.PI_BRIDGE_REQUIRE_APPROVAL;
+    else process.env.PI_BRIDGE_REQUIRE_APPROVAL = previous;
+  }
+});
+
+test("a coordinator cannot reach the network through an extension's web tool", async () => {
+  // Pi ships no web tool, but a user extension can register one (and project
+  // extensions are not loaded for a coordinator). The gate is a name
+  // allowlist, so any such tool is refused before it runs, approvals or not.
+  const { coordinatorProcessPolicy } = await import("./agent-session.js");
+  const previous = process.env.PI_BRIDGE_REQUIRE_APPROVAL;
+  process.env.PI_BRIDGE_REQUIRE_APPROVAL = "0";
+  try {
+    const state = newSessionState();
+    state.policy = coordinatorProcessPolicy();
+    state.readOnly = true;
+    for (const tool of ["web_search", "web_fetch", "webfetch", "fetch", "browser"]) {
+      expect(
+        await requestToolApproval(state, tool, tool, { url: "https://example.com" }),
+      ).toMatchObject({ block: true });
+    }
+    expect(state.approvals.size).toBe(0);
   } finally {
     if (previous === undefined) delete process.env.PI_BRIDGE_REQUIRE_APPROVAL;
     else process.env.PI_BRIDGE_REQUIRE_APPROVAL = previous;
@@ -284,6 +481,92 @@ test("a colliding Orkestrator tool name does not unlock a Pi built-in", async ()
     expect(
       await requestToolApproval(state, "call-1", "bash", { command: "rm -rf ." }),
     ).toMatchObject({ block: true });
+  } finally {
+    setPiMcpTransportForTests();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a read-only reviewer may use its own attempt's result tools under every approval policy", async () => {
+  const { preparePiMcp, setPiMcpTransportForTests } = await import("./mcp.js");
+  const { mkdir, mkdtemp, rm, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "pi-mcp-reviewer-"));
+  const agentDir = join(root, "agent");
+  await mkdir(agentDir, { recursive: true });
+  // Another server offering tools of the same names is not the reviewer's.
+  await writeFile(
+    join(agentDir, "mcp.json"),
+    JSON.stringify({ mcpServers: { docs: { command: "docs-mcp" } } }),
+  );
+  const attemptTools = [
+    "validate_workflow_result",
+    "submit_review_report",
+    "get_workflow_result_status",
+    "report_finding",
+  ];
+  setPiMcpTransportForTests({
+    async connect(server) {
+      return {
+        tools:
+          server.id === "orkestrator"
+            ? [...attemptTools, "submit_fix_result"].map((name) => ({ name }))
+            : [{ name: "submit_review_report" }],
+        async call() {
+          return { content: [{ type: "text", text: "ok" }] };
+        },
+        async close() {},
+      };
+    },
+  });
+  const resultKey = "11111111-1111-4111-8111-111111111111";
+  const own = { resultKey };
+  const other = { resultKey: "22222222-2222-4222-8222-222222222222" };
+  try {
+    for (const approvals of ["auto-approve", "ask", "deny"] as const) {
+      const state = newSessionState();
+      state.readOnly = true;
+      state.policy = {
+        id: "pipeline",
+        sandbox: "none",
+        approvals,
+        projectResources: false,
+        networkAccess: "full",
+      };
+      state.agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "attempt-capability" };
+      state.workflowResultTurn = { tool: "submit_review_report", resultKey };
+      await preparePiMcp(state, { agentDir, cwd: root, env: {} });
+
+      for (const tool of attemptTools) {
+        expect(await requestToolApproval(state, tool, tool, own)).toEqual({ block: false });
+        // Another reviewer's key is never this reviewer's to submit.
+        expect(await requestToolApproval(state, tool, tool, other)).toMatchObject({ block: true });
+      }
+      // A tool this attempt does not offer, the same name from another server,
+      // and the read-only gate itself all still hold.
+      expect(await requestToolApproval(state, "fix", "submit_fix_result", own)).toMatchObject({
+        block: true,
+      });
+      expect(
+        await requestToolApproval(state, "other", "mcp_docs_submit_review_report", own),
+      ).toMatchObject({ block: true });
+      expect(await requestToolApproval(state, "edit", "edit", {})).toMatchObject({ block: true });
+      expect(state.approvals.size).toBe(0);
+
+      // A turn that declared no attempt is not a reviewer's.
+      state.workflowResultTurn = undefined;
+      expect(await requestToolApproval(state, "submit", "submit_review_report", own)).toMatchObject(
+        { block: true },
+      );
+      // An explicit deny still wins.
+      state.workflowResultTurn = { tool: "submit_review_report", resultKey };
+      state.policy = { ...state.policy, toolPolicy: { deny: ["submit_review_report"] } };
+      expect(await requestToolApproval(state, "submit", "submit_review_report", own)).toMatchObject(
+        { block: true },
+      );
+      state.approvals.clear();
+    }
   } finally {
     setPiMcpTransportForTests();
     await rm(root, { recursive: true, force: true });

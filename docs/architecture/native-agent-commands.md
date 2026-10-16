@@ -252,11 +252,20 @@ generation and session (`NativeAgentCommandCatalogueCache`), with status `loadin
 error code and retry backoff; they never become `ready: []`. Selected
 commands are revalidated at dispatch, dequeue and retry.
 
-A session that has no provider session ID yet (a new tab before its first
-turn) is cached under the key `global`, and `HttpBridgeCatalogAdapter` reads
-the bridge's legacy global route directly: `/global/slash-commands` for Codex
-and Cursor, `/plugins/commands` for Claude, Pi and Grok. With a session ID it
-reads `GET /session/:id/commands` and falls back to the same legacy route only
-on a 404. Legacy rows are non-enhanced: they get a synthetic `legacy:` ID
-(`legacyCommandId`) and run as typed text, never as a selection. Retiring that surface is tracked in
+A new tab has a provider session ID before its first turn: the renderer's
+`ensureNativeAgentSession` creates the bridge session when the tab opens, and
+a persisted mapping always carries `providerSessionId`. Until that lands the
+projection is `null` and the picker shows nothing; afterwards
+`HttpBridgeCatalogAdapter` reads `GET /session/:id/commands`. The Claude bridge
+answers a session that has not run a turn from one zero-turn CLI probe
+(`status: "stale"`) and the picker shows `loading` while the first read is in
+flight, so a current bridge never serves the legacy rows to a new tab.
+
+The legacy global route (`/global/slash-commands` for Codex and Cursor,
+`/plugins/commands` for Claude, Pi and Grok) is read only when the session
+route answers 404, or when `refreshProjectionCommands` runs for a key with no
+stored session; that read is cached under the key `global`, and its projection
+is `null`, so its rows are never shown. Legacy rows are non-enhanced: they get
+a synthetic `legacy:` ID (`legacyCommandId`) and run as typed text, never as a
+selection. Retiring that surface is tracked in
 [slash-command-catalogue.md](../todo/slash-command-catalogue.md).

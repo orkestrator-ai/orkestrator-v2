@@ -224,6 +224,22 @@ export interface CoordinatorDelegation {
    * is never sent twice.
    */
   wokenAt?: string;
+  /**
+   * The worker has been waiting on input or an approval since `since`.
+   *
+   * Waiting does not close a delegation, but once it has lasted past a short
+   * debounce the coordinator gets one status notice for it (`notifiedAt`).
+   * Cleared when the worker is seen working again, so a later wait is a new
+   * episode with its own notice.
+   */
+  waiting?: { since: string; notifiedAt?: string };
+}
+
+/** The last status a coordinator was sent for one workflow or worker. */
+export interface CoordinatorStatusNoticeRecord {
+  /** Stable key of the settled state; the same key is never sent twice. */
+  key: string;
+  notifiedAt: string;
 }
 
 export interface CoordinatorWorkflowAssociation {
@@ -247,6 +263,8 @@ export interface CoordinatorWorkflowAssociation {
   createdAt: string;
   lastNotifiedRevision?: number;
   terminalNotifiedAt?: string;
+  /** Last status wake sent for this resource; see `coordinator-status-wakes.ts`. */
+  statusNotice?: CoordinatorStatusNoticeRecord;
   adoptedByConversationId?: string;
   /** Present on `environment` associations that a coordinator is waiting on. */
   delegation?: CoordinatorDelegation;
@@ -303,6 +321,16 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
   "update_ticket",
 ] as const);
 
+/**
+ * The launch-selection rule every coordinator is told, verbatim.
+ *
+ * Coordinators otherwise fill every model and effort field `get_launch_options`
+ * lists, so each worker silently ran a more expensive selection than the
+ * user's configured default. Kept short: it is injected on every turn.
+ */
+export const COORDINATOR_LAUNCH_DEFAULTS_RULE =
+  "Defaults: omit modelId, reasoningId, Multi Review model rows and build agentType, steps and reviewers so environments, jobs, builds and Multi Reviews run the user's saved defaults. Override one only when the user asks for a specific model, agent, effort or reviewers, or agrees to one the task needs.";
+
 /** The mail-store hold reason that keeps worker progress from waking anyone. */
 export const COORDINATOR_DELEGATION_HOLD_REASON = "delegation-running";
 
@@ -316,6 +344,16 @@ export const COORDINATOR_DELEGATION_HOLD_REASON = "delegation-running";
  */
 export const COORDINATOR_ASYNC_CONTRACT =
   "Delegation is asynchronous. After launching a worker, sending it a message, or starting a workflow, finish this turn with a short summary of what was delegated and what you expect back. Do not wait, sleep, poll the mailbox, or repeatedly check message status: you will be woken with a new message when the worker has finished, and that message starts a new turn. Workers do not send progress updates, so silence means the work is still running.";
+
+/**
+ * What a workflow-starting tool tells a coordinator about being woken.
+ *
+ * Carried on the result for the same reason as the delegation contract: the
+ * model's question right after starting a review or a build is "how will I
+ * know?", and without an answer the obvious move is to poll its status.
+ */
+export const COORDINATOR_WORKFLOW_STATUS_WAKE =
+  "This conversation will be woken with a status update when this workflow settles: a Multi Review ready to address, its fix done or failed, a build paused on an error, a stall, and any workflow completing, failing or being cancelled. Updates that land together arrive in one wake. Do not poll its status.";
 
 export interface CoordinatorRepositoryContextEvent {
   revision: number;

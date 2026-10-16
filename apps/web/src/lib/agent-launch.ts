@@ -11,7 +11,8 @@ import {
   resolveReasoningId,
   type AgentModel,
 } from "@orkestrator/protocol/native-agent";
-import { SUPERSEDED_CLAUDE_MODEL_IDS } from "@/lib/claude-fallback-models";
+export { resolveCatalogModelId } from "@orkestrator/protocol/model-id";
+import { resolveCatalogModelId } from "@orkestrator/protocol/model-id";
 
 export type LaunchAgent = AgentPlatform;
 
@@ -52,55 +53,6 @@ export const LAUNCH_AGENT_OPTIONS: Array<{ value: LaunchAgent; label: string }> 
   { value: "opencode", label: "OpenCode" },
   { value: "pi", label: "Pi" },
 ];
-
-/**
- * The catalog id for a configured model preference, if the catalog still offers
- * it.
- *
- * Matched on the catalog id first and on the resolved model second, because
- * configuration and the catalog do not share an id space: the global Claude
- * default is stored as `claude-sonnet-5` while the catalog lists that model
- * under `sonnet`. Without the second pass every Claude preference misses and the
- * launcher silently falls back to the first entry.
- */
-function catalogIdFor(
-  models: AgentModelOption[],
-  preferred: string | undefined,
-): string | undefined {
-  if (!preferred) return undefined;
-  if (models.some((model) => model.id === preferred)) return preferred;
-  return models.find((model) => model.resolvedModel === preferred)?.id;
-}
-
-/**
- * Per-harness model ids an upgrade replaced. A preference naming one resolves
- * to its successor once the catalog stops offering the original, rather than
- * falling back to the first entry. Harnesses that resolve their catalog live
- * and rename nothing in place have no entry.
- */
-const SUPERSEDED_MODEL_IDS: Partial<Record<LaunchAgent, Readonly<Record<string, string>>>> = {
-  claude: SUPERSEDED_CLAUDE_MODEL_IDS,
-};
-
-export function resolveCatalogModelId(
-  agent: LaunchAgent,
-  models: AgentModelOption[],
-  modelId: string | undefined,
-): string | undefined {
-  const direct = catalogIdFor(models, modelId);
-  if (direct || !modelId) return direct;
-  // Successors can themselves be superseded (`claude-fable-5[1m]` →
-  // `claude-fable-5-1[1m]` → `fable[1m]`), so follow the chain until the
-  // catalog offers one. `seen` stops a cyclic table from looping.
-  const superseded = SUPERSEDED_MODEL_IDS[agent];
-  const seen = new Set([modelId]);
-  for (let next = superseded?.[modelId]; next && !seen.has(next); next = superseded?.[next]) {
-    const match = catalogIdFor(models, next);
-    if (match) return match;
-    seen.add(next);
-  }
-  return undefined;
-}
 
 /**
  * The preferred connected model when offered, otherwise the first connected one.

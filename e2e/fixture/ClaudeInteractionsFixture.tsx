@@ -4,6 +4,7 @@ import type {
   AgentInteractionResolution,
 } from "@orkestrator/protocol/agent-interactions";
 import { NativeAgentInteractionCard } from "../../apps/web/src/components/native-agent/NativeAgentInteractionCard";
+import { NativeAgentQuestionCard } from "../../apps/web/src/components/native-agent/NativeAgentQuestionCard";
 
 function ActiveInteractions({ session }: { session: string }) {
   const [snapshot, setSnapshot] = useState<AgentInteractionSnapshot>();
@@ -40,17 +41,35 @@ function ActiveInteractions({ session }: { session: string }) {
     });
     return response.json();
   };
+  const hold = async (interactionId: string, held: boolean) => {
+    const response = await fetch(`/__claude-test/hold?session=${session}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ interactionId, held }),
+    });
+    return response.json();
+  };
   return (
     <main className="mx-auto max-w-xl p-4">
       <p role="status">{activity}</p>
       {error ? <p role="alert">{error}</p> : null}
-      {snapshot?.requests.map((interaction) => (
-        <NativeAgentInteractionCard
-          key={interaction.id}
-          interaction={interaction}
-          onResolve={resolve}
-        />
-      ))}
+      {snapshot?.requests.map((interaction) =>
+        interaction.kind === "question" ? (
+          <NativeAgentQuestionCard
+            key={interaction.id}
+            interaction={interaction}
+            onResolve={resolve}
+            onHold={(held) => hold(interaction.id, held)}
+          />
+        ) : (
+          <NativeAgentInteractionCard
+            key={interaction.id}
+            interaction={interaction}
+            onResolve={resolve}
+            onHold={(held) => hold(interaction.id, held)}
+          />
+        ),
+      )}
     </main>
   );
 }

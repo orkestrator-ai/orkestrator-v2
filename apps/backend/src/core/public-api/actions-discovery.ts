@@ -31,7 +31,7 @@ import type { Environment, Project } from "../models.js";
 import { PublicActionError } from "./errors.js";
 import {
   invalid,
-  onlyKeys,
+  onlyActionKeys,
   optionalBoolean,
   optionalInteger,
   optionalString,
@@ -121,7 +121,7 @@ export function createCapabilitiesHandler(
     kind: "read",
     action: "capabilities",
     parse(input) {
-      onlyKeys(input, []);
+      onlyActionKeys(input, "capabilities");
       return {};
     },
     async run(_input, context) {
@@ -165,7 +165,7 @@ const projectList: ReadActionHandler<ReturnType<typeof pageInput>> = {
   kind: "read",
   action: "project.list",
   parse(input) {
-    onlyKeys(input, ["limit", "cursor"]);
+    onlyActionKeys(input, "project.list");
     return pageInput(input);
   },
   async run(input, context) {
@@ -184,7 +184,7 @@ const projectGet: ReadActionHandler<{ projectId?: string; name?: string }> = {
   kind: "read",
   action: "project.get",
   parse(input) {
-    onlyKeys(input, ["projectId", "name"]);
+    onlyActionKeys(input, "project.get");
     const projectId = input.projectId === undefined ? undefined : requiredId(input, "projectId");
     const name = optionalString(input, "name", PUBLIC_API_LIMITS.nameMaxChars);
     if ((projectId ? 1 : 0) + (name ? 1 : 0) !== 1) throw invalid("Pass projectId or name");
@@ -221,7 +221,7 @@ const environmentList: ReadActionHandler<{
   kind: "read",
   action: "environment.list",
   parse(input) {
-    onlyKeys(input, ["projectId", "status", "limit", "cursor"]);
+    onlyActionKeys(input, "environment.list");
     return {
       ...(input.projectId !== undefined ? { projectId: requiredId(input, "projectId") } : {}),
       status: oneOf(input, "status", ENVIRONMENT_STATUSES),
@@ -248,7 +248,7 @@ const environmentGet: ReadActionHandler<{
   kind: "read",
   action: "environment.get",
   parse(input) {
-    onlyKeys(input, ["environmentId", "projectId", "name"]);
+    onlyActionKeys(input, "environment.get");
     if (input.environmentId !== undefined) {
       if (input.projectId !== undefined || input.name !== undefined) {
         throw invalid("Pass environmentId, or projectId with name");
@@ -287,7 +287,7 @@ const sessionList: ReadActionHandler<{ environmentId: string }> = {
   kind: "read",
   action: "session.list",
   parse(input) {
-    onlyKeys(input, ["environmentId"]);
+    onlyActionKeys(input, "session.list");
     return { environmentId: requiredId(input, "environmentId") };
   },
   async run(input, context) {
@@ -301,7 +301,7 @@ const sessionGet: ReadActionHandler<ReturnType<typeof sessionTarget>> = {
   kind: "read",
   action: "session.get",
   parse(input) {
-    onlyKeys(input, ["sessionId"]);
+    onlyActionKeys(input, "session.get");
     return sessionTarget(input);
   },
   async run(input, context) {
@@ -328,7 +328,7 @@ const agentOptions: ReadActionHandler<{
   kind: "read",
   action: "agent.options",
   parse(input) {
-    onlyKeys(input, ["environmentId", "projectId", "refresh"]);
+    onlyActionKeys(input, "agent.options");
     const environmentId =
       input.environmentId !== undefined ? requiredId(input, "environmentId") : undefined;
     const projectId = input.projectId !== undefined ? requiredId(input, "projectId") : undefined;

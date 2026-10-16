@@ -1,4 +1,5 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
+import { showEnvironmentUnreadToast } from "@/components/environments/environmentUnreadToast";
 import * as backend from "@/lib/backend";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useVisibleEnvironmentId } from "./useVisibleEnvironmentId";
@@ -14,15 +15,29 @@ import { useVisibleEnvironmentId } from "./useVisibleEnvironmentId";
 export function useUnreadEnvironmentSync(): void {
   const selectedEnvironmentId = useVisibleEnvironmentId();
   const environments = useEnvironmentStore((state) => state.environments);
+  // The environment the user just switched to, until its row has been seen.
+  // Work that finishes while it is already on screen clears silently instead
+  // of toasting, because only an activation reveals a bell the user missed.
+  const pendingActivationRef = useRef<string | null>(null);
+  const lastVisibleIdRef = useRef<string | null>(null);
 
   useEffect(() => {
+    if (selectedEnvironmentId !== lastVisibleIdRef.current) {
+      lastVisibleIdRef.current = selectedEnvironmentId;
+      pendingActivationRef.current = selectedEnvironmentId;
+    }
     if (!selectedEnvironmentId) return;
     const environment = environments.find((candidate) => candidate.id === selectedEnvironmentId);
-    if (!environment?.hasUnreadWork) return;
+    if (!environment) return;
+    const activated = pendingActivationRef.current === selectedEnvironmentId;
+    pendingActivationRef.current = null;
+    if (!environment.hasUnreadWork) return;
 
+    if (activated) showEnvironmentUnreadToast(environment);
     const observedActivityAt = environment.lastActivityAt ?? null;
     useEnvironmentStore.getState().updateEnvironment(selectedEnvironmentId, {
       hasUnreadWork: false,
+      unreadReason: undefined,
     });
     void backend
       .setEnvironmentUnread(selectedEnvironmentId, false, observedActivityAt)
@@ -43,6 +58,7 @@ export function useUnreadEnvironmentSync(): void {
         if (persistedIsCurrent) {
           useEnvironmentStore.getState().updateEnvironment(selectedEnvironmentId, {
             hasUnreadWork: persistedEnvironment.hasUnreadWork === true,
+            unreadReason: persistedEnvironment.unreadReason,
           });
         }
       })

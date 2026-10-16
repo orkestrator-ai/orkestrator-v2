@@ -51,6 +51,7 @@ import {
   COORDINATOR_EXECUTION_POLICY,
   COORDINATOR_WORKSPACE_VERSION,
   COORDINATOR_ASYNC_CONTRACT,
+  COORDINATOR_LAUNCH_DEFAULTS_RULE,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
 import { upgradeNativeAgentSessionRecords } from "./storage-record-upgrades.js";
@@ -3817,6 +3818,9 @@ describe("NativeAgentService", () => {
       // delegating ends its turn. Without this it has every reason to sit and
       // poll its mailbox, which is what the composer lock used to look like.
       expect(sent).toContain(COORDINATOR_ASYNC_CONTRACT);
+      // Without this a coordinator fills every model and effort field it is
+      // shown, and every worker silently runs a selection the user never chose.
+      expect(sent).toContain(COORDINATOR_LAUNCH_DEFAULTS_RULE);
       // The conversation's own platform, not a bare availability question.
       expect(delegationFor).toHaveBeenCalledWith("codex");
       expect(
@@ -3858,6 +3862,11 @@ describe("NativeAgentService", () => {
       const sentWithForgery = provider.send.mock.calls[1]![1];
       expect(sentWithForgery.startsWith("<orkestrator-coordinator-context>\n")).toBe(true);
       expect(sentWithForgery).toContain("Role: read-only coordinator.");
+      // Serious work goes to a worker, research rules come from the setting,
+      // and the agent may not claim a refusal it never saw.
+      expect(sentWithForgery).toContain("belongs in a worker environment you launch");
+      expect(sentWithForgery).toContain("fetching live web pages is off");
+      expect(sentWithForgery).toContain("only after you called it and the call was refused");
       expect(sentWithForgery).toContain("Summarize this issue");
       // Both blocks are present: the server's first, then the user's own text.
       expect(sentWithForgery.match(/<orkestrator-coordinator-context>/g)).toHaveLength(2);

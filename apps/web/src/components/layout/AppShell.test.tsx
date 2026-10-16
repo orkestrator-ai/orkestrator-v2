@@ -374,6 +374,7 @@ describe("AppShell", () => {
       </AppShell>,
     );
     fireEvent.click(screen.getByRole("button", { name: "Count 0" }));
+    screen.getByRole("button", { name: "Count 1" }).focus();
 
     isMobile = true;
     rerender(
@@ -382,6 +383,8 @@ describe("AppShell", () => {
       </AppShell>,
     );
     expect(screen.getByRole("main").contains(screen.getByText("Count 1"))).toBe(true);
+    // The move between layouts keeps what the user was typing into focused.
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Count 1" }));
     expect(screen.queryByRole("dialog", { name: "Projects and environments" }) === null).toBe(true);
 
     isMobile = false;

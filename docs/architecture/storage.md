@@ -137,10 +137,26 @@ from that.
 - **`atomically(operation)`**: buffers every database-store write and delete
   made inside it and commits them in one transaction. Resource announcements
   made inside are published only after that commit. Reads inside see the
-  buffered state. Use it for pure storage work spanning stores (the prompt
-  queue to compose-draft transfer, the public-operation namespace retirement).
-  Never wrap work that must be durable *before* an external side effect, such
-  as a native `pendingDispatch` written before the provider send.
+  buffered state. Use it for pure storage work spanning stores (today only the
+  public-operation namespace retirement in `collectPublicOperations`). Never
+  wrap work that must be durable *before* an external side effect, such as a
+  native `pendingDispatch` written before the provider send.
+
+`saveJson` and `saveSensitiveJson` write a store's complete value as a row diff
+against the rows committed at that moment, so they belong inside a lease taken
+for that store, and every such writer of the store must hold the same lease. A
+lease only excludes other holders of it. A store therefore has one kind of
+writer: either leased whole-value saves or `updateStore`/`updateStoreRow`
+transactions, never both, because a leased save would silently revert or delete
+rows that an unleased transaction committed after the save's read. An
+`updateStore` inside `atomically` counts as a whole-value write, since the scope
+buffers the value and commits it whole, and so does `deleteStore`. Each write,
+helper call and `atomically` call on the way must be awaited or returned inside
+the lease, and a lease taken inside `atomically` does not count, because the
+scope commits after it is released. `storage-writer-guards.test.ts` parses the
+`StorageService` chain and enforces all of this per store, following private,
+protected and `#private` helpers to every caller, with no exceptions; a write
+it cannot follow fails.
 
 Whole-store reads are cached per store and revalidated against the committed
 revision on every read (one indexed lookup), which also observes other
@@ -149,6 +165,16 @@ on a cold connection or after another process writes; keyed mutations invalidate
 any whole-store cache after commit. Legacy document representations retain the
 whole-document fallback. `getResourceSnapshotRevision` hashes the database
 identity and that revision.
+
+Reads are charged to the innermost recurring job by what the caller got, not
+by where the rows came from, so an extra read shows however warm the cache
+is. Decoding a whole store, one owner's rows or one row is a `storage-read`,
+even when the cache serves it, because a cached whole-store read still parses
+every row. A revision check that lets a caller reuse values it already decoded
+is a `storage-stat`. That covers a write diffing against cached rows, row-size
+accounting, the build-pipeline control-record cache and the remaining file stat
+cache. Reads through `StorageDatabase.rows()` and hits in the workflow-result
+entry index are not charged yet.
 
 Several backends may share a data directory (the desktop app and `orkestrator
 serve` default to the same one). WAL lets them read concurrently, and the

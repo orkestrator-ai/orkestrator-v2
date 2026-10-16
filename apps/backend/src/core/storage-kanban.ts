@@ -772,12 +772,18 @@ export class StorageKanban extends StorageAgentMail {
       connectedAt: nowIso(),
       viewer,
     };
-    await this.saveSensitiveJson(this.linearAuthFile(), auth);
+    await this.enqueueLinearAuthMutation(() => this.saveSensitiveJson(this.linearAuthFile(), auth));
     return auth;
   }
 
   async clearLinearAuth(): Promise<void> {
-    await this.deleteStore(this.linearAuthFile());
+    await this.enqueueLinearAuthMutation(() => this.deleteStore(this.linearAuthFile()));
+  }
+
+  // Saves and clears take the store's lease, like every other whole-value
+  // write (storage-writer-guards.test.ts).
+  private enqueueLinearAuthMutation<T>(operation: () => Promise<T>): Promise<T> {
+    return this.serializeMutation(this.linearAuthFile(), "Linear auth storage", operation);
   }
 
   async getLinearCompletionComment(pipelineId: string): Promise<LinearCompletionComment | null> {

@@ -52,9 +52,11 @@ export function claudeTurnPolicy(
   sessionPolicy: NativeAgentExecutionPolicy | undefined,
   readOnly: boolean | undefined,
 ): NativeAgentExecutionPolicy | undefined {
-  return readOnly
-    ? structuredClone(READ_ONLY_TURN_POLICY)
-    : effectiveExecutionPolicy(sessionPolicy);
+  // Process authority is applied last: a coordinator keeps its launcher-approved
+  // research exception, while an ordinary read-only review keeps search denied.
+  return effectiveExecutionPolicy(
+    readOnly ? structuredClone(READ_ONLY_TURN_POLICY) : sessionPolicy,
+  );
 }
 
 /**

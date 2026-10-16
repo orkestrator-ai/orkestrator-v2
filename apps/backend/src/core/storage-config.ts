@@ -1,3 +1,7 @@
+import {
+  coordinatorWebResearchSetting,
+  normalizeCoordinatorResearchMcpServers,
+} from "@orkestrator/protocol/coordinator-web-research";
 import * as shared from "./storage-shared.js";
 import path from "node:path";
 import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
@@ -512,6 +516,22 @@ export abstract class StorageConfig extends StorageProjects {
       coordinatorProviderTierDefaultVersion: normalizeCoordinatorProviderTierDefaultVersion(
         reviewValidated.coordinatorProviderTierDefaultVersion,
       ),
+      // Missing follows the product default. A malformed mode fails closed to
+      // `off`; an unacceptable research server is dropped, never repaired.
+      ...(reviewValidated.coordinatorWebResearch === undefined
+        ? {}
+        : {
+            coordinatorWebResearch: coordinatorWebResearchSetting(
+              reviewValidated.coordinatorWebResearch,
+            ),
+          }),
+      ...(reviewValidated.coordinatorResearchMcpServers === undefined
+        ? {}
+        : {
+            coordinatorResearchMcpServers: normalizeCoordinatorResearchMcpServers(
+              reviewValidated.coordinatorResearchMcpServers,
+            ),
+          }),
       agentSettings: {
         ...agentSettings,
         defaultAgent: firstEnabledAgentPlatform(enabledAgentPlatforms, agentSettings.defaultAgent),

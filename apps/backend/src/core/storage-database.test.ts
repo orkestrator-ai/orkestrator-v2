@@ -480,18 +480,56 @@ describe("StorageDatabase layout changes", () => {
 });
 
 describe("StorageDatabase read observation", () => {
-  test("reports cache hits separately from loads", async () => {
+  test("a read is observed whether the cache or the database serves it", async () => {
     const directory = await dataDir();
     const events: string[] = [];
     const db = database(directory, { observe: (event) => events.push(event) });
     db.writeStore("records", { a: 1 });
     events.length = 0;
+    // Both served from the cache, yet each parses every row for its caller.
     db.readStore("records");
     db.readStore("records");
-    expect(events).toEqual(["cache-hit", "cache-hit"]);
+    expect(events).toEqual(["read", "read"]);
     database(directory).writeStore("records", { a: 2 });
     db.readStore("records");
-    expect(events).toEqual(["cache-hit", "cache-hit", "load"]);
+    expect(events).toEqual(["read", "read", "read"]);
+    db.writeStore("owned", { k: { owner: "o" } });
+    events.length = 0;
+    db.readStoreRow("records", "a");
+    db.readStoreRowsByOwner("owned", "o");
+    expect(events).toEqual(["read", "read"]);
+    // An absent store is only a revision lookup.
+    events.length = 0;
+    db.readStore("absent");
+    db.readStoreRow("absent", "a");
+    expect(events).toEqual([]);
+  });
+
+  test("an internal lookup of cached rows is a stat, and a miss is still a read", async () => {
+    const directory = await dataDir();
+    const events: string[] = [];
+    const db = database(directory, { observe: (event) => events.push(event) });
+    db.writeStore("records", { a: 1 });
+    events.length = 0;
+    // The write diffs against the cached previous rows; row sizes reuse them.
+    db.writeStore("records", { a: 2 });
+    db.storeRowStats("records");
+    expect(events).toEqual(["stat", "stat"]);
+    events.length = 0;
+    // Another connection's write leaves this cache stale: the diff must fetch.
+    database(directory).writeStore("records", { a: 3 });
+    db.writeStore("records", { a: 4 });
+    expect(events).toEqual(["read"]);
+    events.length = 0;
+    // A read-modify-write decodes the store for its callback, then diffs.
+    db.updateStore(
+      "records",
+      () => ({}),
+      (value: Record<string, number>) => {
+        value.b = 1;
+      },
+    );
+    expect(events).toEqual(["read", "stat"]);
   });
 });
 

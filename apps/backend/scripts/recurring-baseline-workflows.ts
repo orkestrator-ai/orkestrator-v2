@@ -57,7 +57,13 @@ export interface WorkflowDomainCounts {
   attempts: number;
   recordsScanned: number;
   recordsSelected: number;
+  /**
+   * Store content decoded for the supervisor (whole-store, owner and row
+   * reads), whether the rows came from SQLite or the connection's cache.
+   */
   storageReads: number;
+  /** Revision checks that reused records already decoded (build pipelines' control cache). */
+  storageStats: number;
   /** Provider status/activity reads for the active records. */
   providerReads: number;
 }
@@ -356,6 +362,7 @@ async function runDomain(
       recordsScanned: counters?.workUnits["record-scanned"] ?? 0,
       recordsSelected: counters?.workUnits["record-selected"] ?? 0,
       storageReads: counters?.workUnits["storage-read"] ?? 0,
+      storageStats: counters?.workUnits["storage-stat"] ?? 0,
       providerReads: provider.reads,
     };
   } finally {

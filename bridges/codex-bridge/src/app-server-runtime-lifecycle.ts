@@ -1,4 +1,4 @@
-import { isCoordinatorReadOnlyEnvironment } from "./codex-config.js";
+import { codexCoordinatorPolicy, isCoordinatorReadOnlyEnvironment } from "./codex-config.js";
 import {
   ThreadRuntimeState,
   MAX_PENDING_EVENTS_PER_TURN,
@@ -114,14 +114,7 @@ export class CodexRuntimeLifecycle {
               sandbox: "read-only",
               networkAccessEnabled: false,
               permissionProfile: requiredCoordinatorPermissionProfile(),
-              policy: {
-                id: "coordinator-read-only",
-                sandbox: "provider",
-                approvals: "deny",
-                projectResources: false,
-                toolPolicy: { deny: ["write", "edit", "apply_patch", "shell"] },
-                networkAccess: "restricted",
-              },
+              policy: codexCoordinatorPolicy(),
             }
           : persisted.config,
         title: persisted.title,
@@ -1916,14 +1909,7 @@ export class CodexRuntimeLifecycle {
     const coordinatorReadOnly = isCoordinatorReadOnlyEnvironment(process.env);
     const requestedPolicy = isNativeAgentExecutionPolicy(body.policy) ? body.policy : undefined;
     const policy: NativeAgentExecutionPolicy | undefined = coordinatorReadOnly
-      ? {
-          id: "coordinator-read-only",
-          sandbox: "provider",
-          approvals: "deny",
-          projectResources: false,
-          toolPolicy: { deny: ["write", "edit", "apply_patch", "shell"] },
-          networkAccess: "restricted",
-        }
+      ? codexCoordinatorPolicy()
       : requestedPolicy;
     const model =
       typeof body.model === "string" && body.model.trim().length > 0

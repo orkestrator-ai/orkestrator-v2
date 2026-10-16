@@ -29,8 +29,10 @@ candidates need a decision.
   latency budgets:
   [recurring-work.md](../architecture/recurring-work.md#latency-budgets).
   No reference artifact is committed (the stored step artifacts stopped
-  reproducing after the efficiency file-tree cache and the storage counter
-  regression below, and were deleted), so generate one before any comparison.
+  reproducing after the efficiency file-tree cache and the storage move, and
+  were deleted), so generate one before any comparison. The workflows block
+  reports `storageReads` beside `storageStats`, and the test holds each
+  attempt to a per-domain storage budget (`STORAGE_PER_ATTEMPT`).
 - Rollback switches, each read once at startup and let through the desktop
   environment allowlist in `apps/desktop/electron/backend-process.ts`:
   - `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` (`KEYED_SCHEDULING_ROLLBACK_ENV`,
@@ -57,14 +59,16 @@ candidates need a decision.
 
 ### Code: instrumentation, before the live profile
 
-1. Fix the storage counter. Since #969 the driven workflow block reports
-   `storageReads` = 0 in both rollback and keyed modes (it was 823 to 6,604).
-   `StorageDatabase.loadCachedInTransaction` (`storage-database.ts`) reports a
-   validated cache hit as `cache-hit`, which `storage-base.ts` charges as
-   `storage-stat`; only an uncached `load` charges `storage-read`. Either
-   charge row reads separately or redefine the counter and report
-   `storage-stat` beside it in the harness. No test asserts `storageReads`;
-   add one.
+1. Charge the storage reads that still bypass the counters.
+   `StorageDatabase.rows()` charges nothing; display tails, build-pipeline
+   transcript manifests, deletion fences and web annotations read through it.
+   Nor does a hit in the workflow-result entry index
+   (`workflow-result-service.ts`), which is revalidated by store revision.
+   Charge each as a `storage-read` or `storage-stat` under the storage
+   accounting rule in "Constraints and rationale". Also decide whether rows
+   fetched from the database should charge `bytes`, so the live profile can
+   tell a cache miss (a full row fetch) from a cache-served read. Both count
+   as one `storage-read` today.
 2. Decide the 19 catalogue kinds built with `external(...)` (renderer, bridge
    and desktop work). They are `instrumented: false`. Record them with
    bounded, content-free counters, or drop them from the vocabulary.
@@ -87,9 +91,7 @@ candidates need a decision.
    - `coordinator-repair` is catalogued `recovery` but registered as
      `maintenance` in `core/index.ts`; pick one.
    - `BASELINE_LIMITATIONS` in `recurring-baseline-harness.ts` still says
-     multi review uses the adaptive due scheduler by default (it is keyed)
-     and that each store is one JSON file (stores are SQLite rows since
-     the storage move).
+     multi review uses the adaptive due scheduler by default (it is keyed).
 
 ### Qualification
 
@@ -155,6 +157,10 @@ Decide each from the live data; change nothing without evidence.
 - Splitting the validation worker's 500 ms liveness write from changed-result
   writes (B20, `review-validation-worker.ts`), only with cross-process
   crash-recovery and cancellation proof.
+- A keyed row read for feature planning's per-record pass. `getFeaturePlan`
+  (`storage-kanban.ts`) decodes the whole feature-plan store on every pass, so
+  a pass costs O(plans) rather than O(row); the workflows block shows one
+  whole-store read per keyed attempt.
 
 ### Code: after soak
 
@@ -247,6 +253,40 @@ Qualification and rollout:
   change updates its entry in the same change, and the code cites the
   inventory's B, C and L IDs.
 
+Storage accounting, settled at `9906db30`:
+
+- Storage is charged by what the caller got, not where the rows came from.
+  A `storage-read` is stored content decoded for a caller (a whole store, one
+  owner's rows or one row), even when the connection's revision-validated
+  row cache serves it. A `storage-stat` is a revision or stat check that
+  reuses values already decoded: a write diffing against cached rows,
+  `storeRowStats`, the build-pipeline control-record and live-tag caches, and
+  the file stat cache. A database fetch for an internal lookup is still a
+  read. `StorageDatabase` reports `read` or `stat`, and `storage-base.ts` maps
+  them one to one.
+- Why: the counter exists to catch extra reads. A cached whole-store read
+  still parses every row, and whether the cache is warm depends on unrelated
+  writes, so a physical-fetch count cannot catch a pass that reads twice.
+  The rejected alternative kept a cache hit as a `storage-stat` beside
+  physical reads. An extra whole-store read would then show only as a stat,
+  and `storageReads` would stay near zero for whole-store readers.
+- The `cache-hit` attribution only partly explained the drop. At `9906db30`,
+  before the fix, the default workflows block (200 completed, 2 active,
+  10 min; rollback/keyed) read feature planning 0/0, build pipelines 4/4 and
+  looped review 6,005/6,015. Its stats were 1,800/1,223, 5/10 and 601/22.
+  The #852 artifact read 1,800/1,223, 1,200/823 and 6,604/6,035. So
+  `cache-hit` explains feature planning exactly and looped review to within 2
+  (its other reads are keyed row reads). It does not explain build pipelines.
+  Their reads moved into the decoded control cache (`buildPipelineReadCache`)
+  that #875 added, whose hits charged nothing. They dropped at #875, not
+  #969. "`storageReads` = 0 in both modes" was true only of feature planning.
+- After the fix, the same block reads feature planning 1,800/1,223, build
+  pipelines 8/12 with 1,203/827 stats, and looped review 6,606/6,037. That
+  matches #852 apart from the build-pipeline split and a few startup reads.
+  Storage counts do not grow with retained history. Injecting one extra
+  cache-served read into `getFeaturePlan` takes rollback feature planning to
+  450 against its budget of 270.
+
 ## Open questions
 
 - Are about three weeks of soak since #852 (2.19.x to 2.20.0) enough to retire
@@ -257,8 +297,6 @@ Qualification and rollout:
 
 ## Needs verification
 
-- That the `cache-hit` attribution above fully explains `storageReads` = 0.
-  Confirm by reporting `storage-stat` for the same passes.
 - Whether open flake [0177](../tests/flaky-tests/0177-driven-observation-baseline-timeout.md)
   (`recurring-baseline.test.ts` timeout) is load-only.
 

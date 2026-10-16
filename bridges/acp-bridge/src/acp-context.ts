@@ -11,15 +11,18 @@ import {
   type InitializeResponse,
   type McpServer,
 } from "@agentclientprotocol/sdk";
-import type {
-  NativeAgentComposerState,
-  NativeAgentMcpServer,
-  NativeAgentRuntimeSummary,
-  NativeAgentSlashCommand,
-  NativeAgentExecutionPolicy,
-  NativeAgentTurnUsage,
+import {
+  nativeAgentPolicyDeniesNetwork,
+  type NativeAgentComposerState,
+  type NativeAgentMcpServer,
+  type NativeAgentRuntimeSummary,
+  type NativeAgentSlashCommand,
+  type NativeAgentExecutionPolicy,
+  type NativeAgentTurnUsage,
 } from "@orkestrator/protocol/native-agent";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { WorkflowResultTurn } from "@orkestrator/protocol/workflow-results";
+import type { InteractionDeadline } from "@orkestrator/protocol/agent-interaction-deadline";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import type { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
@@ -34,6 +37,7 @@ import {
   providerArgv,
   undeclaredPromptCapabilities,
 } from "./acp-provider-config.js";
+import { effectiveExecutionPolicy } from "./acp-policy.js";
 import {
   GrokMcpConfigWatcher,
   grokMcpConfigFiles,
@@ -388,6 +392,12 @@ export interface SessionState {
    * write the bearer token. Env is the fallback when this is absent.
    */
   agentMcp?: AgentMcpConnection;
+  /**
+   * The workflow-result attempt the current turn runs for, from its prompt.
+   * Memory only and replaced by every prompt: it scopes the read-only
+   * exemption for that attempt's own tools to this turn.
+   */
+  workflowResultTurn?: WorkflowResultTurn;
   /** Fingerprint of the MCP connection the live child was started with. */
   attachedMcpKey?: string;
   /**
@@ -448,6 +458,13 @@ export interface SessionState {
   ignoreUncorrelatedVendorUsage?: boolean;
   /** Wall clock of the in-flight turn, used for the elapsed metric. */
   turnStartedAt?: number;
+  /**
+   * When the in-flight `session/prompt` request times out: `PROMPT_TIMEOUT_MS`
+   * after it was sent, re-armed by every retry attempt. The timeout terminates
+   * the child and clears every parked request, so a paused request never holds
+   * past it. Undefined while no prompt request is outstanding. Never persisted.
+   */
+  promptDeadlineAt?: number;
   /** A user cancellation suppresses any retriable-provider retry still in backoff. */
   retryCancelledPromptSequence?: number;
   /** `promptSequence` of the turn in which a held request expired unanswered. */
@@ -496,28 +513,32 @@ export interface PersistedUsage {
   updatedAt: string;
 }
 
-export interface ApprovalState {
+/**
+ * A parked request's countdown. `deadline.expiresAt` is its only deadline: a
+ * pause moves it, so the parked state keeps no copy of its own. Settled on
+ * every path that answers or drops the request; never persisted.
+ */
+export interface ParkedDeadline {
+  requestedAt: number;
+  deadline: InteractionDeadline;
+}
+
+export interface ApprovalState extends ParkedDeadline {
   id: string;
   title: string;
   options: Array<{ optionId: string; name: string; kind?: string }>;
-  requestedAt: number;
-  expiresAt: number;
   respond(optionId?: string): void;
-  timer: ReturnType<typeof setTimeout>;
 }
 
 export type AcpInteractionState =
-  | {
+  | (ParkedDeadline & {
       id: string;
       kind: "plan-approval";
       plan: string;
       planTruncated: boolean;
-      requestedAt: number;
-      expiresAt: number;
       respond(result: JsonObject): void;
-      timer: ReturnType<typeof setTimeout>;
-    }
-  | {
+    })
+  | (ParkedDeadline & {
       id: string;
       kind: "question";
       questions: Array<{
@@ -526,11 +547,8 @@ export type AcpInteractionState =
         multiple: boolean;
         options: Array<{ id: string; label: string; description?: string }>;
       }>;
-      requestedAt: number;
-      expiresAt: number;
       respond(result: JsonObject): void;
-      timer: ReturnType<typeof setTimeout>;
-    };
+    });
 
 export interface PersistedSession {
   id: string;
@@ -965,10 +983,14 @@ export class AcpProcess {
     }
     // Provider-specific command-line policy belongs in the launcher record.
     // Any permission request the agent still emits routes through the
-    // bridge's fail-closed approval flow.
+    // bridge's fail-closed approval flow. A child spawned without a policy
+    // (catalog probe, session list, replay) still runs under the process
+    // authority, so a coordinator bridge never starts Grok with its web tools.
+    const policy = spawnOptions.policy ?? effectiveExecutionPolicy(undefined);
     const args = providerArgv(providerConfig, {
       ...spawnOptions,
-      approvals: spawnOptions.policy?.approvals,
+      approvals: policy?.approvals,
+      denyNetwork: nativeAgentPolicyDeniesNetwork(policy),
     });
     // Read before the child starts, so an edit racing the spawn is reported
     // as a change rather than missed.

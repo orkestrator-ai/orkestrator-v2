@@ -37,6 +37,8 @@ import { AppServerEngine, type AppServerEngineOptions } from "./engine/app-serve
 import { codexAppServerConfigOverrides } from "./codex-config.js";
 import { APPROVAL_DECISIONS, isApprovalDecision } from "./app-server/approvals.js";
 import { parseInteractionAnswer, type InteractionAnswer } from "./app-server/interactions.js";
+import type { ParkedHoldResponse } from "./app-server-runtime-approvals.js";
+import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interactions";
 import { EventRing, parseEventCursor } from "./event-ring.js";
 import {
   commandUnavailableResponse,
@@ -1428,6 +1430,42 @@ app.post("/session/:id/prompt", async (c) => {
   return c.json(outcome.result, 202);
 });
 
+/** `{ "held": boolean }`, or null for anything else. */
+function parseHoldBody(body: unknown): boolean | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const held = (body as { held?: unknown }).held;
+  return typeof held === "boolean" ? held : null;
+}
+
+/** Maps a pause/resume outcome onto the hold routes' status codes and bodies. */
+function holdRouteResponse(
+  outcome: ParkedHoldResponse,
+  subject: "Approval" | "Interaction",
+):
+  | {
+      status: 200;
+      body: { status: "applied" | "unchanged"; expiresAt: number; hold: AgentInteractionHold };
+    }
+  | { status: 403 | 409 | 422; body: { error: string; status?: string } } {
+  switch (outcome.status) {
+    case "wrong-session":
+      return { status: 403, body: { error: `${subject} does not belong to this session` } };
+    case "unknown":
+      // 409, as for an answer: the window closed, so the card is stale.
+      return { status: 409, body: { error: `${subject} is no longer pending`, status: "stale" } };
+    case "unavailable":
+      return {
+        status: 422,
+        body: { error: "This request's deadline cannot be extended", status: "unavailable" },
+      };
+    default:
+      return {
+        status: 200,
+        body: { status: outcome.status, expiresAt: outcome.expiresAt, hold: outcome.hold },
+      };
+  }
+}
+
 /**
  * Approvals still awaiting a decision.
  *
@@ -1475,6 +1513,24 @@ app.post("/session/:id/approvals/:approvalId", async (c) => {
   return c.json({ status: "applied", decision: body.decision });
 });
 
+/**
+ * Pauses (`held: true`) or resumes a parked approval's countdown.
+ *
+ * Never answers the approval: a pause only moves the deny-at-expiry deadline
+ * to the hold ceiling, and a resume restarts a fresh window. Like the answer
+ * route it does not touch liveness. The backend reads the moved `expiresAt`
+ * back from `GET /session/:id/approvals`.
+ */
+app.post("/session/:id/approvals/:approvalId/hold", async (c) => {
+  const held = parseHoldBody(await c.req.json().catch(() => null));
+  if (held === null) return c.json({ error: "held must be a boolean" }, 400);
+  const response = holdRouteResponse(
+    appServerRuntime.holdApproval(c.req.param("id"), c.req.param("approvalId"), held),
+    "Approval",
+  );
+  return c.json(response.body, response.status);
+});
+
 app.get("/session/:id/interactions", (c) => {
   return c.json({
     interactions: appServerRuntime.listInteractions(c.req.param("id")),
@@ -1515,6 +1571,17 @@ app.post("/session/:id/interactions/:interactionId", async (c) => {
     return c.json({ error: "Interaction is no longer pending", status: "stale" }, 409);
   }
   return c.json({ status: "applied", action: answer.action });
+});
+
+/** The interaction counterpart of the approval hold route; same contract. */
+app.post("/session/:id/interactions/:interactionId/hold", async (c) => {
+  const held = parseHoldBody(await c.req.json().catch(() => null));
+  if (held === null) return c.json({ error: "held must be a boolean" }, 400);
+  const response = holdRouteResponse(
+    appServerRuntime.holdInteraction(c.req.param("id"), c.req.param("interactionId"), held),
+    "Interaction",
+  );
+  return c.json(response.body, response.status);
 });
 
 app.post("/session/:id/fork", async (c) => {

@@ -108,3 +108,10 @@ newer main changes (27 passed, 1 failed; 1.4 seconds; evidence
 is not classified as a flake.
 
 The cause remains unconfirmed. No assertion, timeout or skip was changed.
+
+## Recurrence during Multi Review follow-up validation (2026-10-16)
+
+- **Command:** `mise run test:logged -- --name full-suite -- mise run test`, with 4/1/2/1 workspace/root/bridge/protocol slots on the shared host.
+- **Failure:** `retains the environment and process ownership when deletion cannot reap a server` exceeded the five-second deadline at 5133.55 ms. No environment lifecycle code changed.
+- **Owning-file rerun:** `mise run test:logged -- --name backend-deletion-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures` passed unchanged in 58.4 seconds (exit 0).
+- **Evidence:** `/tmp/orkestrator-test-run.1PZf4j/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` after finalization. No assertion, deadline or skip changed; the load hypothesis remains unconfirmed.

@@ -315,6 +315,7 @@ of these package manifests synchronized:
 - `bridges/pi-bridge/package.json`
 - `packages/cli/package.json`
 - `packages/protocol/package.json`
+- `packages/toolchain/package.json`
 
 After a bump, run the following to verify every package manifest was included
 and has the intended version:
@@ -1089,6 +1090,9 @@ Storage rules:
   for one row) for a synchronous read-modify-write, `serializeMutation` (a
   lease) for one that awaits, and `atomically` to commit several stores
   together. Under a per-key lease, write only that key's row.
+- Give each store one kind of writer: `saveJson`/`saveSensitiveJson`/
+  `deleteStore` awaited inside the store's lease, or `updateStore`/
+  `updateStoreRow`, never both. `storage-writer-guards.test.ts` enforces it.
 - An older record shape is upgraded once by a migration
   (`storage-record-upgrades.ts`), not by a reader on every load.
 - Tests seed and inspect stores through `storage-test-support.ts`, never by

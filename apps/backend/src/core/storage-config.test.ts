@@ -191,6 +191,40 @@ describe("StorageService config migration", () => {
     }
   });
 
+  test("stores the coordinator research setting, failing closed on malformed input", async () => {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-coordinator-research-"));
+    try {
+      const storage = new StorageService(dataDir);
+      await storage.init();
+      const initial = await storage.loadConfig();
+      // Absent means the product default; nothing is materialized.
+      expect(initial.global.coordinatorWebResearch).toBeUndefined();
+      expect(initial.global.coordinatorResearchMcpServers).toBeUndefined();
+
+      const saved = await storage.updateGlobalConfig({
+        ...initial.global,
+        coordinatorWebResearch: "search",
+        coordinatorResearchMcpServers: [
+          { name: "context7", url: "https://mcp.context7.com/mcp" },
+          { name: "local", url: "http://127.0.0.1:9000/mcp" },
+        ],
+      });
+      expect(saved.global.coordinatorWebResearch).toBe("search");
+      // The local server is dropped rather than repaired.
+      expect(saved.global.coordinatorResearchMcpServers).toEqual([
+        { name: "context7", url: "https://mcp.context7.com/mcp" },
+      ]);
+
+      const malformed = await storage.updateGlobalConfig({
+        ...saved.global,
+        coordinatorWebResearch: "everything" as never,
+      });
+      expect(malformed.global.coordinatorWebResearch).toBe("off");
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   test("preserves future migration markers and fails closed for malformed updates", async () => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-coordinator-tier-validation-"));
     try {

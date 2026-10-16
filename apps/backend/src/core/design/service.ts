@@ -36,7 +36,7 @@ import {
 } from "@orkestrator/protocol/design-operations";
 import { applyComputed, verifyComputed } from "./apply.js";
 import { CANVAS_LEASE, DesignCoordination, GLOBAL_LEASE } from "./coordination.js";
-import { DesignError, designConflict, toDesignFailure } from "./errors.js";
+import { DesignError, designConflict, reusedCorrelation, toDesignFailure } from "./errors.js";
 import { computeOperation, type ComputedOperation, type RenderPriority } from "./execute.js";
 import {
   appendEntry,
@@ -53,11 +53,14 @@ import {
 } from "./history.js";
 import { DesignLibraryIndex, summarizeRecord, type DesignSummary } from "./library.js";
 import {
+  addReceipt,
   cloneRecord,
   descriptorDigest,
+  intentDigest,
   migrateLegacy,
   portableBytes,
-  pruneReceipts,
+  receiptDigest,
+  settledMatches,
   DesignRecordStore,
   type DesignHistoryEntryRecord,
   type DesignPendingOperation,
@@ -461,11 +464,11 @@ export class DesignService {
       let changed = false;
       for (const entry of entries) {
         if (settled.has(entry.token) || kept.includes(entry)) continue;
-        record.receipts.push(this.receipt(entry, "interrupted", { failure: INTERRUPTED_FAILURE }));
+        const receipt = this.receipt(entry, "interrupted", { failure: INTERRUPTED_FAILURE });
+        addReceipt(record, receipt, entry.descriptor);
         changed = true;
       }
       if (changed && record.state !== "provisional") {
-        pruneReceipts(record);
         record.statusVersion++;
         await this.commit(record, false);
       }
@@ -693,28 +696,30 @@ export class DesignService {
       const pending = this.livePending(record, await this.store.readPending(canvasId));
       const digest = descriptorDigest({ environmentId, canvasId, descriptor });
       if (descriptor.correlationId) {
-        const existing =
-          pending.find((entry) => entry.descriptor.correlationId === descriptor.correlationId) ??
-          record.receipts.find((receipt) => receipt.correlationId === descriptor.correlationId);
+        const existing = pending.find(
+          (entry) => entry.descriptor.correlationId === descriptor.correlationId,
+        );
         if (existing) {
-          const existingDigest = "digest" in existing ? existing.digest : undefined;
-          if (existingDigest !== undefined && existingDigest !== digest)
-            throw new DesignError(
-              "invalid-input",
-              "This correlation id was already used for a different edit",
-            );
-          if ("digest" in existing)
-            return {
-              token: existing.token,
-              canvasId,
-              state: "prepared",
-              expiresAt: existing.expiresAt,
-            };
+          if (intentDigest(existing.descriptor) !== intentDigest(descriptor))
+            throw reusedCorrelation(existing.token);
+          return {
+            token: existing.token,
+            canvasId,
+            state: "prepared",
+            expiresAt: existing.expiresAt,
+          };
+        }
+        const settled = record.receipts.find(
+          (receipt) => receipt.correlationId === descriptor.correlationId,
+        );
+        if (settled) {
+          if (!settledMatches(settled, receiptDigest(record, settled.token), descriptor))
+            throw reusedCorrelation(settled.token);
           throw new DesignError(
             "invalid-input",
             "This correlation id already has a settled operation",
             {
-              details: { token: existing.token },
+              details: { token: settled.token },
             },
           );
         }
@@ -879,8 +884,7 @@ export class DesignService {
         );
       const next = cloneRecord(record);
       const canceled = this.receipt(entry, "canceled");
-      next.receipts.push(canceled);
-      pruneReceipts(next);
+      addReceipt(next, canceled, entry.descriptor);
       next.statusVersion++;
       if (next.state === "provisional") {
         await this.store.writePending(
@@ -1116,8 +1120,7 @@ export class DesignService {
           ...(computed.outcomes ? { outcomes: computed.outcomes } : {}),
         },
       });
-      record.receipts.push(receipt);
-      pruneReceipts(record);
+      addReceipt(record, receipt, entry.descriptor);
       await this.commit(record, legacy);
       await this.dropPending(canvasId, pending, entry.token);
       return receipt;
@@ -1214,8 +1217,7 @@ export class DesignService {
       applied.result.historyEntryId = entryId;
     }
     const receipt = this.receipt(entry, "committed", { result: applied.result });
-    record.receipts.push(receipt);
-    pruneReceipts(record);
+    addReceipt(record, receipt, entry.descriptor);
     try {
       await this.commit(record, legacy, {
         revision: record.document.revision,
@@ -1251,8 +1253,7 @@ export class DesignService {
       return receipt;
     }
     const next = cloneRecord(record);
-    next.receipts.push(receipt);
-    pruneReceipts(next);
+    addReceipt(next, receipt, entry.descriptor);
     await this.commit(next, legacy);
     await this.dropPending(entry.canvasId, pending, entry.token);
     return receipt;

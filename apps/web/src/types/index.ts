@@ -19,6 +19,10 @@ export interface Project {
 export type EnvironmentStatus = "running" | "stopped" | "error" | "creating" | "stopping";
 // Shared with the backend: both sides order the same activity reports, so a
 // second definition of the vocabulary is a drift waiting to happen.
+import type {
+  CoordinatorResearchMcpServer,
+  CoordinatorWebResearch,
+} from "@orkestrator/protocol/coordinator-web-research";
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import type {
   AgentInteractionOrigin,
@@ -78,6 +82,15 @@ export interface ClaudeModelCatalogSnapshot {
   stale: boolean;
   error?: string;
 }
+
+/** Content-free cause of an environment's unread badge; mirrors the backend model. */
+export type EnvironmentUnreadReason =
+  | "agent_finished"
+  | "agent_ready"
+  | "agent_waiting"
+  | "agent_question"
+  | "terminal_finished"
+  | "marked_unread";
 
 export interface Environment {
   id: string;
@@ -197,6 +210,8 @@ export interface Environment {
    * a per-window guess.
    */
   hasUnreadWork?: boolean;
+  /** What most recently lit `hasUnreadWork`; absent for badges set before reasons existed. */
+  unreadReason?: EnvironmentUnreadReason;
   /** Backend-owned dedupe state; clients should not mutate it. */
   agentAttentionKeys?: string[];
   /**
@@ -510,6 +525,10 @@ export interface GlobalConfig {
   coordinatorProviderTiers?: "enforced" | "provider-configured" | "advisory";
   /** Internal marker for the one-time coordinator safety-default migration. */
   coordinatorProviderTierDefaultVersion?: number;
+  /** Web research a coordinator may do; absent means the product default. */
+  coordinatorWebResearch?: CoordinatorWebResearch;
+  /** Remote research MCP servers a coordinator may call; absent means Context7. */
+  coordinatorResearchMcpServers?: CoordinatorResearchMcpServer[];
   favoriteModels?: Array<{ platform: AgentPlatform; modelId: string }>;
   /** Legacy, never enforced; kept for older configurations. */
   containerResources: ContainerResources;

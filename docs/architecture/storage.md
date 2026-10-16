@@ -150,9 +150,13 @@ writer: either leased whole-value saves or `updateStore`/`updateStoreRow`
 transactions, never both, because a leased save would silently revert or delete
 rows that an unleased transaction committed after the save's read. An
 `updateStore` inside `atomically` counts as a whole-value write, since the scope
-buffers the value and commits it whole. `storage-writer-guards.test.ts` parses
-the `StorageService` chain and enforces all of this per store, following
-private and protected helpers to every caller, with no exceptions.
+buffers the value and commits it whole, and so does `deleteStore`. Each write,
+helper call and `atomically` call on the way must be awaited or returned inside
+the lease, and a lease taken inside `atomically` does not count, because the
+scope commits after it is released. `storage-writer-guards.test.ts` parses the
+`StorageService` chain and enforces all of this per store, following private,
+protected and `#private` helpers to every caller, with no exceptions; a write
+it cannot follow fails.
 
 Whole-store reads are cached per store and revalidated against the committed
 revision on every read (one indexed lookup), which also observes other

@@ -40,8 +40,9 @@ lost-update bugs closed by the SQLite migration cannot come back.
 - `storage-writer-guards.test.ts` enforces the write rules per store (checked
   against `main` at `9906db30`, 2026-10-16). It parses the `StorageService`
   chain with `oxc-parser`, follows lease wrappers and private or protected
-  helpers to every caller, and fails when a `saveJson`/`saveSensitiveJson`
-  holds no store-wide lease, when the whole-value writers of one store share
+  helpers to every caller, and fails when a `saveJson`/`saveSensitiveJson`/
+  `deleteStore` holds no store-wide lease, when a call on the way to it is
+  neither awaited nor returned, when the whole-value writers of one store share
   no lease, or when a store has both whole-value and `updateStore`/
   `updateStoreRow` writers. Its last test fails when a backend class outside
   the chain calls those primitives, so an extracted repository cannot drop
@@ -59,7 +60,8 @@ lost-update bugs closed by the SQLite migration cannot come back.
 - Concurrency coverage that exists: `storage-store-concurrency.test.ts` (16
   concurrent writes across two `StorageService` instances for sessions,
   project notes, Linear completion comments and feature plans),
-  `storage-atomic.test.ts` (the primitives) and
+  `storage-atomic.test.ts` (the primitives, and Linear auth saves and clears
+  waiting on another backend's lease and after a failed holder) and
   `storage-kanban-concurrency.test.ts`.
 - Tests reach into protected members with 31 `as unknown as` casts across 12
   of the 30 `storage*.test.ts` files.

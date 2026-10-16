@@ -250,9 +250,12 @@ quoted context
       FALLBACK,
     );
 
-    expect(transcript).toHaveLength(1);
-    expect(transcript[0]!.parts).toHaveLength(1);
-    expect(transcript[0]!.parts[0]).toMatchObject({ type: "text", content: "kept" });
+    // The empty record is a whole entry with no field of a display row, so a
+    // notice stands in for it; everything else leaves no trace.
+    expect(transcript).toHaveLength(2);
+    expect(transcript[0]).toMatchObject({ id: "transcript-skew:unrecognized:3", role: "system" });
+    expect(transcript[1]!.parts).toHaveLength(1);
+    expect(transcript[1]!.parts[0]).toMatchObject({ type: "text", content: "kept" });
   });
 
   test("replaces collection fields the renderer iterates when they are malformed", () => {
@@ -1425,5 +1428,170 @@ quoted context
       id: "pipeline-interaction:invalid-time",
       createdAt: FALLBACK,
     });
+  });
+});
+
+/** A raw OpenCode message, as a backend older than 2.19.17 serves it. */
+function rawOpenCodeEnvelope(id: string, text: string) {
+  return {
+    info: { id, role: "assistant", time: { created: 1_800_000_000_000 }, modelID: "model" },
+    parts: [
+      { id: `${id}-reasoning`, type: "reasoning", text: "Thinking it over" },
+      { id: `${id}-text`, type: "text", text },
+      {
+        id: `${id}-tool`,
+        type: "tool",
+        tool: "bash",
+        state: { status: "completed", input: { command: "bun test" }, output: "ok" },
+      },
+    ],
+  };
+}
+
+describe("toPipelineTranscript across backend versions", () => {
+  test("replaces raw OpenCode envelopes from an older backend with one notice", () => {
+    const transcript = toPipelineTranscript(
+      [rawOpenCodeEnvelope("m1", "First answer"), rawOpenCodeEnvelope("m2", "Second answer")],
+      "opencode",
+      FALLBACK,
+    );
+
+    // Without the guard both vanished without a trace (an envelope with a file
+    // part became an empty row instead), so the stage read as silent.
+    expect(transcript).toEqual([
+      {
+        id: "transcript-skew:opencode-envelope:m1",
+        role: "system",
+        content: expect.stringContaining("2 OpenCode messages not shown"),
+        parts: [{ type: "text", content: expect.stringContaining("older than 2.19.17") }],
+        createdAt: FALLBACK,
+      },
+    ]);
+    expect(transcript[0]!.content).toContain(
+      "Update Orkestrator on the computer running the backend",
+    );
+  });
+
+  test("renders display rows from a current backend without a notice", () => {
+    const transcript = toPipelineTranscript(
+      [
+        {
+          id: "m1",
+          role: "assistant",
+          content: "",
+          parts: [{ type: "text", content: "First answer" }],
+          createdAt: "2026-07-29T00:01:00.000Z",
+        },
+        // A display row may carry an `info` field of its own; its top-level
+        // role says it is not an envelope.
+        { id: "m2", role: "assistant", content: "Second answer", info: { id: "m2" } },
+      ],
+      "opencode",
+      FALLBACK,
+    );
+
+    expect(transcript.map((message) => message.role)).toEqual(["assistant", "assistant"]);
+    expect(transcript.some((message) => message.id.startsWith("transcript-skew:"))).toBe(false);
+  });
+
+  test("names an unknown future entry shape instead of dropping it silently", () => {
+    const transcript = toPipelineTranscript(
+      [
+        { id: "kept", role: "assistant", content: "Readable" },
+        { kind: "display-row-v3", row: { text: "Something newer" } },
+        { kind: "display-row-v3", row: { text: "Something newer still" } },
+      ],
+      "codex",
+      FALLBACK,
+    );
+
+    expect(transcript.map((message) => message.id)).toEqual([
+      "kept",
+      "transcript-skew:unrecognized:1",
+    ]);
+    expect(transcript[1]!.content).toBe(
+      "2 transcript entries not shown: they are in a format this app does not recognize. If this app and its backend run different Orkestrator versions, update the older one.",
+    );
+  });
+
+  test("puts one notice where each run of unreadable entries was", () => {
+    const transcript = toPipelineTranscript(
+      [
+        { id: "a", role: "assistant", content: "Before" },
+        rawOpenCodeEnvelope("raw-1", "lost"),
+        rawOpenCodeEnvelope("raw-2", "lost"),
+        { id: "b", role: "assistant", content: "Between" },
+        { future: true },
+        rawOpenCodeEnvelope("raw-3", "lost"),
+      ],
+      "opencode",
+      FALLBACK,
+    );
+
+    expect(
+      transcript.map((message) => [message.id, message.content.split(" not shown")[0]]),
+    ).toEqual([
+      ["a", "Before"],
+      ["transcript-skew:opencode-envelope:raw-1", "2 OpenCode messages"],
+      ["b", "Between"],
+      ["transcript-skew:unrecognized:4", "1 transcript entry"],
+      ["transcript-skew:opencode-envelope:raw-3", "1 OpenCode message"],
+    ]);
+    expect(JSON.stringify(transcript)).not.toContain("lost");
+  });
+
+  test("keeps the notice's identity while its run grows", () => {
+    const first = toPipelineTranscript([rawOpenCodeEnvelope("m1", "a")], "opencode", FALLBACK);
+    const grown = toPipelineTranscript(
+      [rawOpenCodeEnvelope("m1", "a"), rawOpenCodeEnvelope("m2", "b")],
+      "opencode",
+      FALLBACK,
+    );
+
+    expect(first.map((message) => message.id)).toEqual(grown.map((message) => message.id));
+    expect(first[0]!.content).toStartWith("1 OpenCode message not shown. ");
+    expect(grown[0]!.content).toStartWith("2 OpenCode messages not shown. ");
+  });
+
+  test("keeps the notice in place when interactions are merged by time", () => {
+    const transcript = toPipelineTranscript(
+      [
+        {
+          id: "before",
+          role: "assistant",
+          content: "Started",
+          createdAt: "2026-07-29T00:01:00.000Z",
+        },
+        rawOpenCodeEnvelope("raw", "lost"),
+        {
+          id: "after",
+          role: "assistant",
+          content: "Continued",
+          createdAt: "2026-07-29T00:03:00.000Z",
+        },
+      ],
+      "opencode",
+      FALLBACK,
+      [
+        {
+          id: "mid-stage",
+          provider: "opencode",
+          kind: "question",
+          phase: "build",
+          requestedAt: Date.parse("2026-07-29T00:01:30.000Z"),
+          resolvedAt: Date.parse("2026-07-29T00:02:00.000Z"),
+          outcome: "auto-declined-headless",
+          title: "Choose an implementation",
+          questions: [],
+        },
+      ],
+    );
+
+    expect(transcript.map((message) => message.id)).toEqual([
+      "before",
+      "transcript-skew:opencode-envelope:raw",
+      "pipeline-interaction:mid-stage",
+      "after",
+    ]);
   });
 });

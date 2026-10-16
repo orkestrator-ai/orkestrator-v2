@@ -145,6 +145,21 @@ describe("McpSourceStore", () => {
     expect(statSync(link, { throwIfNoEntry: false })).toBeDefined();
   });
 
+  test("concurrent first uses agree on one key", async () => {
+    // Each round is a fresh store and key file, so every pair races creation.
+    for (let round = 0; round < 50; round += 1) {
+      const fresh = new McpSourceStore({ keyFile: path.join(root, `keys-${round}`, "key") });
+      const [first, second, third] = await Promise.all([
+        fresh.secretKey(),
+        fresh.secretKey(),
+        fresh.revisionOf(new TextEncoder().encode("same bytes")),
+      ]);
+      expect(first.byteLength).toBe(32);
+      expect(second.equals(first)).toBe(true);
+      expect(third).toBe(await fresh.revisionOf(new TextEncoder().encode("same bytes")));
+    }
+  });
+
   test("serializes concurrent work on one file", async () => {
     const file = path.join(root, "a.json");
     const order: string[] = [];

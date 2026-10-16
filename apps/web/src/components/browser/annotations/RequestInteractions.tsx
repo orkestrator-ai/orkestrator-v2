@@ -19,7 +19,11 @@ import type { WebAnnotationRequest } from "@orkestrator/protocol/web-annotations
 import { NativeAgentInteractionCard } from "@/components/native-agent/NativeAgentInteractionCard";
 import { NativeAgentQuestionCard } from "@/components/native-agent/NativeAgentQuestionCard";
 import { Button } from "@/components/ui/button";
-import { getNativeAgentProjection, resolveNativeAgentInteraction } from "@/lib/backend/workflows";
+import {
+  getNativeAgentProjection,
+  holdNativeAgentInteraction,
+  resolveNativeAgentInteraction,
+} from "@/lib/backend/workflows";
 import { refreshWebAnnotations } from "@/lib/web-annotations/sync";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useAnnotationPanel } from "./panel-context";
@@ -68,7 +72,12 @@ export function RequestInteractions({
     const sharedInteractions =
       shared && shared.environmentId === environmentId ? shared.interactions : [];
     for (const item of fetched ?? []) byId.set(item.id, item);
-    for (const item of sharedInteractions) byId.set(item.id, item);
+    // The newer snapshot wins: a pause read back here is newer than a chat
+    // tab's cache that stopped refreshing when the tab was closed.
+    for (const item of sharedInteractions) {
+      const current = byId.get(item.id);
+      if (!current || item.revision >= current.revision) byId.set(item.id, item);
+    }
     return byId;
   }, [environmentId, fetched, shared]);
   const missing = pending.filter((item) => !known.has(item.id)).length;
@@ -120,6 +129,15 @@ export function RequestInteractions({
     return outcome;
   };
 
+  const hold = async (interactionId: string, held: boolean) => {
+    const identity = { environmentId, agent: destination.agent, logicalSessionKey: sessionKey };
+    const outcome = await holdNativeAgentInteraction({ ...identity, interactionId, held });
+    // The card shows the moved deadline only once it is read back.
+    const projection = await getNativeAgentProjection(identity).catch(() => null);
+    if (projection) setFetched(projection.interactions ?? []);
+    return outcome;
+  };
+
   return (
     <section aria-label="Waiting for your answer" className="space-y-1.5" data-interactions={ids}>
       <p className="text-amber-200">
@@ -135,12 +153,14 @@ export function RequestInteractions({
             key={item.id}
             interaction={interaction}
             onResolve={(resolution) => resolve(item.id, resolution)}
+            onHold={(held) => hold(item.id, held)}
           />
         ) : (
           <NativeAgentInteractionCard
             key={item.id}
             interaction={interaction}
             onResolve={(resolution) => resolve(item.id, resolution)}
+            onHold={(held) => hold(item.id, held)}
           />
         );
       })}

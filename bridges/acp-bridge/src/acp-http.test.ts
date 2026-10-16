@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import { resolve } from "node:path";
 
 import { commandBindingRevision } from "@orkestrator/protocol/agent-command-catalogue";
+import { MCP_CONFIG_REPORTING_VERSION } from "@orkestrator/protocol/mcp-management";
 import {
   BRIDGE_STARTUP_TIMEOUT_MS,
   here,
@@ -312,7 +313,11 @@ describe("ACP bridge", () => {
     const { base, headers } = await spawnBridge();
     const missing = await nativeFetch(`${base}/session/missing/runtime-health`, { headers });
     expect(missing.status).toBe(200);
-    expect(await missing.json()).toEqual({ summary: {}, notices: [] });
+    expect(await missing.json()).toEqual({
+      summary: {},
+      notices: [],
+      mcpConfigReporting: MCP_CONFIG_REPORTING_VERSION,
+    });
 
     const created = await nativeFetch(`${base}/session/create`, {
       method: "POST",
@@ -321,7 +326,11 @@ describe("ACP bridge", () => {
     const session = (await created.json()) as { id: string };
     const health = await nativeFetch(`${base}/session/${session.id}/runtime-health`, { headers });
     expect(health.status).toBe(200);
-    expect(await health.json()).toMatchObject({ summary: expect.any(Object), notices: [] });
+    expect(await health.json()).toMatchObject({
+      summary: expect.any(Object),
+      notices: [],
+      mcpConfigReporting: MCP_CONFIG_REPORTING_VERSION,
+    });
   });
 
   test("allows authenticated renderer requests from trusted local origins", async () => {

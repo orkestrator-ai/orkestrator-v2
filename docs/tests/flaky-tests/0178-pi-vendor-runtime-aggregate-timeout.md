@@ -161,3 +161,27 @@ passed the unchanged owning file (four tests, exit 0) in 7.8 seconds. These
 credential checks do not change Pi staging. Host contention remains an
 unconfirmed hypothesis; no timeout, assertion or skip was changed in the
 vendoring tests.
+
+## Recurrence — 2026-10-16 (question transcript review fixes)
+
+`mise run test:logged -- --name full-suite -- mise run test` reserved
+4/1/2/1 workspace/root/bridge/protocol slots while component and isolated
+browser validation also ran. The staged-runtime test timed out at 30000.61 ms;
+the root/support group reported 2,998 passed, one skipped and one failed
+across 137 files (250.74 seconds). Evidence:
+`/tmp/orkestrator-test-run.0igieQ/root-and-agent-support-tests.log.gz`.
+
+`mise run test:logged -- --name pi-vendor-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+passed the unchanged owning file alone, exit 0, in 8.9 seconds. The question
+renderer fixes do not change runtime staging. Shared host contention remains
+an unconfirmed hypothesis; no timeout, assertion or skip was changed.
+
+## Mobile layout merge validation recurrence — 2026-10-16
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, with the testing guide's GNU host utilities preferred in PATH, on `mobile-layout-gaps` while merging `origin/main`.
+- **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated Bun workers. Other worktrees and component browser validation were active on the host.
+- **Failure:** The staged Pi SDK load timed out at 30001.23 ms against its 30000 ms limit.
+- **Suite counts:** backend 8,320 passed, 40 skipped and 4 failed; root/support 2,998 passed, 1 skipped and 1 failed. All other workspace packages, bridges and protocol verification passed. The logged aggregate exited 1 after 544.1 s.
+- **Isolated rerun:** `mise run test:logged -- --name merge-pi-vendor-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the unchanged owning file in 16.9 s (exit 0).
+- **Evidence:** `/tmp/orkestrator-test-run.Z1q1Ht/root-and-agent-support-tests.log.gz`; outer artifact `/tmp/orkestrator-test-run.fZgI1l/merge-tests.log.gz`.
+- **Disposition:** recurrence confirmed by the isolated pass; shared host contention remains an unconfirmed hypothesis. No assertions, deadlines or skips changed.

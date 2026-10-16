@@ -411,6 +411,7 @@ export function SharedNativeAgentController({
     dismissSuggestedPrompt,
     updateControls,
     resolveInteraction,
+    holdInteraction,
     enqueue,
     removeQueued,
     moveQueued,
@@ -2627,6 +2628,7 @@ export function SharedNativeAgentController({
           key={interaction.id}
           interaction={interaction}
           onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
+          onHold={(held) => holdInteraction(interaction.id, held)}
         />
       ))}
       transcriptCards={transcriptInteractions.map((interaction) =>
@@ -2635,6 +2637,7 @@ export function SharedNativeAgentController({
             key={interaction.id}
             interaction={interaction}
             onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
+            onHold={(held) => holdInteraction(interaction.id, held)}
           />
         ) : (
           <NativeAgentInteractionCard
@@ -2644,6 +2647,7 @@ export function SharedNativeAgentController({
               interaction.presentation.planAvailable ? interaction.presentation.body : planContent
             }
             onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
+            onHold={(held) => holdInteraction(interaction.id, held)}
           />
         ),
       )}

@@ -1,6 +1,6 @@
 # Historic tool row has no tool buttons after a long-session append under load
 
-- **ID:** 0248
+- **ID:** 0250
 - **Status:** open
 - **Date observed:** 2026-10-16
 - **Test:** `[mobile-chromium] › a tool row outside the render window remains reachable after a long-session append`

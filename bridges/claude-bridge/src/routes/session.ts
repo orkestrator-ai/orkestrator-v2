@@ -4,6 +4,10 @@ import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { sessionRuntimeHealthBody } from "./runtime-health-body.js";
+import {
+  holdPendingRequest,
+  type ClaudeHoldFamily,
+} from "../services/session-manager-interaction-holds.js";
 import { NATIVE_AGENT_STEER_REJECTION_HTTP_STATUS } from "@orkestrator/protocol/native-agent";
 import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
 import {
@@ -113,6 +117,10 @@ const planApprovalBodyLimit = bodyLimit({
 const interactionBodyLimit = bodyLimit({
   maxSize: MAX_QUESTION_ANSWER_REQUEST_BYTES,
   onError: (c) => c.json({ error: "Interaction response is too large" }, 413),
+});
+const holdBodyLimit = bodyLimit({
+  maxSize: 1_024,
+  onError: (c) => c.json({ error: "Hold request is too large" }, 413),
 });
 
 /** An MCP form answer: a flat object of the value types MCP allows. */
@@ -1446,5 +1454,41 @@ session.post("/:id/interactions/:interactionId", interactionBodyLimit, async (c)
   }
   return c.json({ status: "resolved" });
 });
+
+/**
+ * Pause (`{ held: true }`) or resume (`{ held: false }`) a parked request's
+ * countdown. A hold never answers anything: it only moves the deadline, and
+ * the expiry it still ends in denies or cancels. A request that is no longer
+ * pending is stale, as on the answer routes; one whose deadline cannot move
+ * is 422 `unavailable`.
+ */
+function registerHoldRoute(family: ClaudeHoldFamily, param: string): void {
+  session.post(`/:id/${family}/:${param}/hold`, holdBodyLimit, async (c) => {
+    const sessionId = c.req.param("id");
+    const requestId = c.req.param(param);
+    if (!getSession(sessionId)) {
+      return c.json({ error: "Session not found" }, 404);
+    }
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (typeof body?.held !== "boolean") {
+      return c.json({ error: "'held' must be a boolean" }, 400);
+    }
+    const result = holdPendingRequest(family, sessionId, requestId, body.held);
+    if (result.status === "stale") {
+      return c.json(stalePrompt("Request is no longer pending"), STALE_PROMPT_STATUS);
+    }
+    if (result.status === "unavailable") {
+      return c.json(
+        { error: "This request's deadline cannot be extended", status: "unavailable" },
+        422,
+      );
+    }
+    return c.json(result);
+  });
+}
+
+registerHoldRoute("questions", "questionId");
+registerHoldRoute("plan-approvals", "approvalId");
+registerHoldRoute("interactions", "interactionId");
 
 export default session;

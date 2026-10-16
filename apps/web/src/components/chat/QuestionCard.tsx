@@ -4,7 +4,10 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { BlockingPromptCard } from "@/components/chat/BlockingPromptCard";
+import {
+  BlockingPromptCard,
+  type BlockingPromptCardDeadline,
+} from "@/components/chat/BlockingPromptCard";
 import { usePromptDraftField } from "@/stores/promptDraftStore";
 import { usePromptDeadline } from "@/hooks/usePromptDeadline";
 
@@ -95,6 +98,8 @@ interface QuestionCardProps {
   draftKey?: string;
   /** Absolute bridge deadline in epoch milliseconds, when the protocol exposes one. */
   expiresAt?: number;
+  /** Pause state for the countdown; see `BlockingPromptCard.deadline`. */
+  deadline?: BlockingPromptCardDeadline;
 }
 
 function optionValue(option: QuestionCardOption): string {
@@ -408,6 +413,7 @@ export function QuestionCard({
   customAnswerPlaceholder,
   draftKey,
   expiresAt,
+  deadline,
 }: QuestionCardProps) {
   const [answers, setAnswers] = usePromptDraftField<Record<string, AnswerEntry[]>>(
     draftKey,
@@ -696,6 +702,7 @@ export function QuestionCard({
         </span>
       }
       expiresAt={expiresAt}
+      deadline={deadline}
       state={
         expired
           ? "invalid"

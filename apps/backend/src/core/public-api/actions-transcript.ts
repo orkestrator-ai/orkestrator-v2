@@ -5,7 +5,13 @@ import type {
   PublicTranscriptPart,
 } from "@orkestrator/protocol/public-api-resources";
 import { PublicActionError } from "./errors.js";
-import { invalid, onlyKeys, optionalInteger, optionalString, sessionTarget } from "./input.js";
+import {
+  invalid,
+  onlyActionKeys,
+  optionalInteger,
+  optionalString,
+  sessionTarget,
+} from "./input.js";
 import { resolveSession } from "./sessions.js";
 import type { PublicActionHandler, ReadActionHandler } from "./types.js";
 
@@ -130,7 +136,7 @@ const sessionTranscript: ReadActionHandler<{
   kind: "read",
   action: "session.transcript",
   parse(input) {
-    onlyKeys(input, ["sessionId", "limit", "before"]);
+    onlyActionKeys(input, "session.transcript");
     const target = sessionTarget(input);
     const limit =
       optionalInteger(input, "limit", 1, PUBLIC_API_LIMITS.transcriptMaxMessages) ??

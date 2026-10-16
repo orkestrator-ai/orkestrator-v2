@@ -16,7 +16,7 @@ import {
 import {
   invalid,
   oneOf,
-  onlyKeys,
+  onlyActionKeys,
   optionalInteger,
   optionalString,
   requiredId,
@@ -121,7 +121,7 @@ const environmentExec: MutationActionHandler<ExecInput> = {
   kind: "mutation",
   action: "environment.exec",
   parse(input) {
-    onlyKeys(input, ["environmentId", "argv", "cwd", "env", "stdinBase64", "timeoutMs"]);
+    onlyActionKeys(input, "environment.exec");
     const environmentId = requiredId(input, "environmentId");
     const argv = input.argv;
     if (
@@ -275,7 +275,7 @@ const runCancel: MutationActionHandler<{ operationId: string }> = {
   kind: "mutation",
   action: "run.cancel",
   parse(input) {
-    onlyKeys(input, ["operationId"]);
+    onlyActionKeys(input, "run.cancel");
     const operationId = requiredString(input, "operationId", 100);
     return { value: { operationId }, scope: `operation:${operationId}`, intent: {} };
   },
@@ -331,7 +331,7 @@ const runOutput: ReadActionHandler<{
   kind: "read",
   action: "run.output",
   parse(input) {
-    onlyKeys(input, ["operationId", "stream", "offset", "tailBytes", "maxBytes"]);
+    onlyActionKeys(input, "run.output");
     const offset = optionalInteger(input, "offset", 0, Number.MAX_SAFE_INTEGER);
     const tailBytes = optionalInteger(
       input,

@@ -39,6 +39,50 @@ mise run test:logged -- --name coordinator-isolated -- bun test --cwd apps/backe
 
 No coordinator implementation, assertion, timeout or skip was changed.
 
+## MCP apply-path merge validation recurrence on 2026-10-16
+
+Merging `origin/main` into `mcp-apply-path-gaps` and running
+`mise run test:logged -- --name merge-suite -- mise run test` reproduced the
+same five-second timeout at 5184.28 ms. The pending nested-repository assertion
+then rejected with `disk I/O error` after fixture cleanup. The backend reported
+8,319 passed, 40 skipped, one failed and one unhandled error. The other workspace
+packages, root, bridges and protocol check passed. The workspace group took
+447.0 seconds. Evidence:
+`/tmp/orkestrator-test-run.U853xk/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+After the aggregate finished, the unchanged owning file passed alone (exit 0,
+18.5 seconds):
+
+```bash
+mise run test:logged -- --name merge-coordinator-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures
+```
+
+No coordinator implementation, assertion, timeout or skip was changed.
+
+## Merge validation recurrence on 2026-10-16
+
+`mise run test:logged -- --name merge-tests -- mise run test` on
+`overnight-opencode-skew-guard-854f012a1bb0` timed out in the same case at
+5216.88 ms, with four workspace worker slots alongside the root, bridge and
+protocol groups. The backend reported 8,279 passed, 40 skipped, one failed and
+one teardown error across 8,320 tests; the workspace group finished in
+456.6 seconds. Evidence:
+`/tmp/orkestrator-test-run.3f2Lou/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+An owning-file rerun while the aggregate was still active also timed out at
+5126.59 ms, followed by `SQLITE_IOERR_VNODE` during asynchronous persistence
+after fixture cleanup (47 passed, one failed, one error; 27.9 seconds).
+Evidence: `/tmp/orkestrator-test-run.vvWBFs/merge-coordinator-rerun.log.gz`.
+After the aggregate finished, the unchanged owning file passed all 48 tests,
+exit 0, in 19.7 seconds:
+
+```bash
+mise run test:logged -- --name merge-coordinator-final -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures
+```
+
+This matches the existing load-related timeout and teardown pattern. No
+coordinator implementation, assertion, timeout or skip was changed.
+
 ## Recurrence — 2026-10-15 (coordinator mail upgrade recovery)
 
 `mise run test:logged -- --name mail-native-reconciliation -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/agent-mail-service.test.ts ./src/core/coordinator-service.test.ts ./src/core/native-agent-service-reconciliation.test.ts --parallel=2 --only-failures`

@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
-import { createBrowserGatewayApi } from "./web-gateway";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { createBrowserGatewayApi, installBrowserGatewayApi } from "./web-gateway";
 import { clearDirectGatewayTransport } from "./gateway-auth-transport";
 
 /**
@@ -22,6 +22,8 @@ afterEach(() => {
   globalThis.setTimeout = originalSetTimeout;
   globalThis.clearTimeout = originalClearTimeout;
   console.warn = originalWarn;
+  // Tests that simulate a hidden or visible tab shadow the prototype getter.
+  Reflect.deleteProperty(document, "visibilityState");
 });
 
 const EVENTS_PATH = "/__orkestrator/events";
@@ -755,5 +757,173 @@ describe("gateway terminal fallback reconnect backoff", () => {
     expect(timers.pendingDelays()).toEqual([400]);
     stopTerminal();
     stopMain();
+  });
+});
+
+function setVisibility(state: DocumentVisibilityState): void {
+  Object.defineProperty(document, "visibilityState", { configurable: true, value: state });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
+
+/** Direct-mode fetch that fails every stream and counts main and terminal requests. */
+function failingDirectStreams() {
+  const counts = { main: 0, terminal: 0 };
+  globalThis.fetch = mock(async (input) => {
+    const url = new URL(String(input));
+    if (!url.pathname.endsWith("/events")) return new Response(null, { status: 404 });
+    if (url.searchParams.has("includeEvents")) counts.terminal += 1;
+    else counts.main += 1;
+    return new Response(null, { status: 503 });
+  }) as unknown as typeof fetch;
+  return counts;
+}
+
+describe("gateway streams waiting out a backoff when the tab or network comes back", () => {
+  test("a visible tab retries the waiting main stream and terminal at once, keeping their ladders", async () => {
+    console.warn = mock(() => undefined);
+    const counts = failingDirectStreams();
+    const timers = manualTimers();
+    const api = createBrowserGatewayApi({
+      ...DIRECT,
+      eventReconnectDelayMs: 100,
+      eventReconnectRandom: TOP_OF_RANGE,
+    });
+    const stopTerminal = api.listen("terminal-output-a", () => undefined);
+    const stopMain = api.listen("changed", () => undefined);
+    await until(() => timers.pendingDelays().length === 2, "both streams did not schedule");
+    expect(counts).toEqual({ main: 1, terminal: 1 });
+
+    // Hiding the tab or losing the network is not a reason to try sooner.
+    setVisibility("hidden");
+    window.dispatchEvent(new Event("offline"));
+    await flushMicrotasks();
+    expect(counts).toEqual({ main: 1, terminal: 1 });
+    expect(timers.pendingDelays()).toEqual([100, 100]);
+
+    setVisibility("visible");
+    expect(counts).toEqual({ main: 2, terminal: 2 });
+    expect(timers.pendingDelays()).toEqual([]);
+
+    // Both early attempts failed, so each waits for its next step.
+    await until(() => timers.pendingDelays().length === 2, "the early attempts did not reschedule");
+    expect(timers.pendingDelays()).toEqual([200, 200]);
+    stopTerminal();
+    stopMain();
+  });
+
+  test("coming back online retries the waiting shared terminal stream and main stream at once", async () => {
+    console.warn = mock(() => undefined);
+    MockEventSource.instances = [];
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+    const timers = manualTimers();
+    const api = createBrowserGatewayApi({
+      eventReconnectDelayMs: 100,
+      eventReconnectRandom: TOP_OF_RANGE,
+    });
+    const mainSources = () =>
+      MockEventSource.instances.filter((source) => source.terminalEvents === null);
+    const stopMain = api.listen("changed", () => undefined);
+    const stopTerminal = api.listen("terminal-output-a", () => undefined);
+    await flushMicrotasks();
+    mainSources()[0]!.fail();
+    terminalSources()[0]!.fail();
+    expect(timers.pendingDelays()).toEqual([100, 100]);
+
+    window.dispatchEvent(new Event("online"));
+    await flushMicrotasks();
+    expect(mainSources()).toHaveLength(2);
+    expect(terminalSources()).toHaveLength(2);
+    expect(timers.pendingDelays()).toEqual([]);
+
+    mainSources()[1]!.fail();
+    terminalSources()[1]!.fail();
+    expect(timers.pendingDelays()).toEqual([200, 200]);
+    stopTerminal();
+    stopMain();
+  });
+
+  test("nothing reconnects on visible or online when no stream is waiting", async () => {
+    console.warn = mock(() => undefined);
+    const counts = { main: 0, terminal: 0 };
+    globalThis.fetch = mock(async (input) => {
+      const url = new URL(String(input));
+      if (url.searchParams.has("includeEvents")) counts.terminal += 1;
+      else counts.main += 1;
+      return new Response(new ReadableStream({ start() {} }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const timers = manualTimers();
+    const api = createBrowserGatewayApi({ ...DIRECT, eventReconnectDelayMs: 100 });
+    const stopTerminal = api.listen("terminal-output-a", () => undefined);
+    const stopMain = api.listen("changed", () => undefined);
+    await api.eventStreamReady("terminal-output-a");
+    await flushMicrotasks();
+    expect(counts).toEqual({ main: 1, terminal: 1 });
+
+    setVisibility("visible");
+    window.dispatchEvent(new Event("online"));
+    await flushMicrotasks();
+
+    expect(counts).toEqual({ main: 1, terminal: 1 });
+    expect(timers.delays()).toEqual([]);
+    stopTerminal();
+    stopMain();
+  });
+
+  test("disposing the gateway removes its visibility and online listeners", async () => {
+    console.warn = mock(() => undefined);
+    const counts = failingDirectStreams();
+    const timers = manualTimers();
+    const addToDocument = spyOn(document, "addEventListener");
+    const removeFromDocument = spyOn(document, "removeEventListener");
+    const addToWindow = spyOn(window, "addEventListener");
+    const removeFromWindow = spyOn(window, "removeEventListener");
+    const gatewayWindow = {
+      location: { protocol: "http:" },
+      orkestrator: undefined,
+      orkestratorGateway: undefined,
+    } as unknown as Pick<Window, "location" | "orkestrator" | "orkestratorGateway">;
+    try {
+      installBrowserGatewayApi(gatewayWindow, {
+        ...DIRECT,
+        agentTestSessionActivity: false,
+        eventReconnectDelayMs: 100,
+        eventReconnectRandom: TOP_OF_RANGE,
+      });
+      const visibilityListener = addToDocument.mock.calls.find(
+        ([type]) => type === "visibilitychange",
+      )?.[1];
+      const onlineListener = addToWindow.mock.calls.find(([type]) => type === "online")?.[1];
+      expect(visibilityListener).toBeDefined();
+      expect(onlineListener).toBeDefined();
+
+      const replaced = gatewayWindow.orkestrator!;
+      replaced.listen("changed", () => undefined);
+      await until(() => timers.pendingDelays().includes(100), "the main stream did not schedule");
+      // Live before disposal, so the check after it proves removal.
+      window.dispatchEvent(new Event("online"));
+      expect(counts.main).toBe(2);
+      await until(
+        () => timers.pendingDelays().includes(200),
+        "the early attempt did not reschedule",
+      );
+
+      installBrowserGatewayApi(gatewayWindow, {
+        ...DIRECT,
+        agentTestSessionActivity: false,
+        replaceExisting: true,
+      });
+      expect(removeFromDocument).toHaveBeenCalledWith("visibilitychange", visibilityListener);
+      expect(removeFromWindow).toHaveBeenCalledWith("online", onlineListener);
+
+      setVisibility("visible");
+      window.dispatchEvent(new Event("online"));
+      await flushMicrotasks();
+      expect(counts.main).toBe(2);
+    } finally {
+      addToDocument.mockRestore();
+      removeFromDocument.mockRestore();
+      addToWindow.mockRestore();
+      removeFromWindow.mockRestore();
+    }
   });
 });

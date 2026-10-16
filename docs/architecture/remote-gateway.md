@@ -165,8 +165,13 @@ reconnects on its own capped, jittered ladder (`ReconnectBackoff` from
   is why terminal retries back off too.
 - When the main stream reconnects, terminal streams that are waiting out a
   delay retry at once, so terminals recover with the rest of the UI. A newly
-  mounted terminal, or one the user reconnects, also connects at once. Neither
-  case resets the ladder.
+  mounted terminal, or one the user reconnects, also connects at once.
+- When the tab becomes visible or the browser fires `online`, the main stream
+  and every terminal stream that is waiting out a delay retry at once. A
+  hidden tab's timers are throttled, and the outage may have ended
+  mid-wait. Nothing happens when no stream is waiting.
+- None of these early retries resets the ladder. One that fails waits for
+  the next step.
 - The browser keeps retrying an `EventSource` itself until it gives up
   (`CLOSED`). The ladder only takes over from there.
 - Going offline in the browser pauses and resets nothing, because a local

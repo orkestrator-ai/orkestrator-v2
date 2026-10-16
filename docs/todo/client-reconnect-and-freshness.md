@@ -31,8 +31,11 @@ the UI, and the read coordinator never hears that a transport is down.
   and `stream.backoff` for each direct terminal fetch stream. Cookie-mode
   `EventSource`s use it only once CLOSED; the browser retries a CONNECTING one
   itself. The main stream reopening retries any waiting terminal fallback at
-  once (`retryWaitingTerminalFallbacks`). `web-gateway-reconnect.test.ts`
-  covers both stream kinds on a manual timer queue.
+  once (`retryWaitingTerminalFallbacks`). A tab becoming visible or the
+  browser's `online` event retries the waiting main stream and terminal
+  fallbacks at once (`retryWaitingStreams`); the gateway's disposer removes
+  both listeners. `web-gateway-reconnect.test.ts` covers both stream kinds on
+  a manual timer queue.
 - Terminal WebSocket client (`apps/web/src/lib/native/terminal-websocket-client.ts`):
   `fallbackAndReconnect` and `scheduleSubscribe` use
   `min(10 s, 500 ms * 2^min(n, 5))` with no jitter. Its repeated
@@ -137,17 +140,18 @@ the UI, and the read coordinator never hears that a transport is down.
     waits for the next step):
     - the main stream opening, which retries every waiting fallback at once;
     - a new terminal stream: a mount, or the user's Reconnect, which
-      re-listens.
+      re-listens;
+    - the tab becoming visible, or the browser's `online` event, which retry
+      the waiting main stream and every waiting fallback. A hidden tab's
+      timers are throttled, and the outage may have ended mid-wait. This
+      matches the read coordinator, which retries reads on `online`.
   - What does not skip it:
     - narrowing the shared filter;
     - the terminal WebSocket asking for fallback again.
   - Removing the last fallback terminal resets the shared ladder.
-  - Tab visibility and browser `online` do not skip the wait. The main stream
-    has neither trigger, and terminals already follow the main stream. The
-    WebSocket client rebuilds itself on visibility.
 - Browser `offline` is deliberately not treated as disconnected: a local
   desktop backend stays reachable without internet. `online` only triggers a
-  reconcile.
+  reconcile, and the gateway retries any stream waiting out its backoff.
 - A freshness indicator must not imply a new measurement after a failed read;
   stale data keeps its original `observedAt`.
 - Keep the existing heartbeats: the gateway's `KEEPALIVE_MS` (25 s) also
@@ -171,11 +175,6 @@ the UI, and the read coordinator never hears that a transport is down.
 
 ## Open questions
 
-- Should the gateway main stream retry at once when the tab becomes visible
-  or the browser fires `online`, the way the read coordinator retries reads?
-  Terminal fallbacks would follow it through `retryWaitingTerminalFallbacks`.
-  Today both wait out their ladders (at most 16 s). Decide after the outage
-  workload shows whether that wait is noticeable.
 - Should the Codex breaker reset at all, or stay a permanent failure until the
   bridge restarts, with only the sleep made cancellable?
 - Where should the freshness indicators live: per view, or one connection

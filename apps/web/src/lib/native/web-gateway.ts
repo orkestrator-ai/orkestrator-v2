@@ -921,6 +921,36 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
     }
   };
 
+  /**
+   * The user came back to the tab, or the browser has a network path again.
+   * Either way the backend may have been reachable for a while (a hidden tab's
+   * timers are throttled), so retry the main stream and every terminal
+   * fallback that is waiting out its backoff now. Nothing happens when nothing
+   * is waiting, and the ladders are kept. Going offline changes nothing: a
+   * local backend stays reachable without internet.
+   */
+  const retryWaitingStreams = () => {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+      ensureEventStream();
+    }
+    retryWaitingTerminalFallbacks();
+  };
+  const retryWaitingStreamsWhenVisible = () => {
+    if (document.visibilityState === "visible") retryWaitingStreams();
+  };
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", retryWaitingStreamsWhenVisible);
+  }
+  if (typeof window !== "undefined") window.addEventListener("online", retryWaitingStreams);
+  const removeRetryWakeListeners = () => {
+    if (typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", retryWaitingStreamsWhenVisible);
+    }
+    if (typeof window !== "undefined") window.removeEventListener("online", retryWaitingStreams);
+  };
+
   const ensureTerminalSocket = (): TerminalWebSocketClient => {
     if (terminalSocket) return terminalSocket;
     terminalSocket = new TerminalWebSocketClient({
@@ -1229,6 +1259,7 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
   };
   browserGatewayDisposers.set(api, (reason = new Error("Browser gateway disposed")) => {
     disposeAgentTestActivity();
+    removeRetryWakeListeners();
     terminalInput.dispose(reason);
     terminalSocket?.dispose();
     terminalSocket = null;

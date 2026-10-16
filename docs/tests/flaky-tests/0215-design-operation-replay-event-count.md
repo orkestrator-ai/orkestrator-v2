@@ -49,6 +49,16 @@ mise run test:logged -- --name rerun-design-operations -- bun --cwd=apps/backend
 Aggregate evidence: `/tmp/orkestrator-test-run.D7RbFz/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 No assertions, timeouts, or production behavior were changed.
 
+## Recurrence — 2026-10-16 (live coordinator branch second main merge)
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`.
+- **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated Bun workers. Other worktrees were validating on the same host.
+- **Failure:** `a lost execute response is answered by status and a repeated execute changes nothing` expected 3 events but received 4 (202.63 ms).
+- **Suite counts:** backend 8,342 passed, 40 skipped and four failed across 445 files (599.23 seconds). All other workspace packages, root, bridges and protocol passed; aggregate exited 1 after 622.4 seconds.
+- **Evidence:** `/tmp/orkestrator-test-run.zOMprl/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer artifact `/tmp/orkestrator-test-run.TYkzGQ/merge-tests.log.gz`.
+- **Isolated rerun:** `mise run test:logged -- --name merge-design-operations-isolated -- bun test --cwd apps/backend ./src/core/design/operations.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed the unchanged owning file (exit 0) in 6.2 seconds. Each owning file ran in its own process; other focused reruns were active on the host.
+- **Disposition:** intermittent failure confirmed by the owning-file pass; the cause remains unconfirmed. No product code, assertion, timeout or skip was changed.
+
 ## Mobile layout merge validation recurrence — 2026-10-16
 
 - **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, with the testing guide's GNU host utilities preferred in PATH, on `mobile-layout-gaps` while merging `origin/main`.

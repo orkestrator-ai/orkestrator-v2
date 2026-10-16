@@ -10,16 +10,31 @@
  * the `v<version>` tag. `publish` checks that every platform made it and then
  * makes the draft public, so users and installed apps never see a partial
  * release. `--no-publish` builds without touching git state or GitHub.
+ *
+ * Every build also uploads `toolchain-pins.json` (the agent CLI and gh pins
+ * this release carries), which a running Orkestrator reads to show what an
+ * update would change. `publish` publishes the `orkestrator` npm package at
+ * the same version before making the release public, so standalone backends
+ * and desktop apps update to the same release; `--skip-npm` leaves it out.
  */
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { PINNED_TOOL_VERSIONS } from "../packages/toolchain/src/manifest.js";
 import { assertMacUpdateFeed, prepareMacUpdateFeeds } from "./mac-update-feed.js";
 
 const root = path.resolve(import.meta.dir, "..");
 const REPOSITORY = "orkestrator-ai/orkestrator-v2";
 
 /** Artifact extensions a complete release has, and the feed each platform owns. */
-const REQUIRED_ASSET_SUFFIXES = [".dmg", ".zip", "latest-mac.yml", ".AppImage", ".pacman"] as const;
+const REQUIRED_ASSET_SUFFIXES = [
+  ".dmg",
+  ".zip",
+  "latest-mac.yml",
+  ".AppImage",
+  ".pacman",
+  "toolchain-pins.json",
+] as const;
+export const TOOLCHAIN_PINS_ASSET = "toolchain-pins.json";
 const LINUX_UPDATE_FEEDS = ["latest-linux.yml", "latest-linux-arm64.yml"] as const;
 
 function fail(message: string): never {
@@ -99,7 +114,30 @@ export type ReleaseRuntime = {
   releaseTag(): string;
   artifacts(): string[];
   prepareMacUpdateFeeds(): string[];
+  /** Writes `toolchain-pins.json` for this release; returns its path. */
+  writeToolchainPins(version: string): string;
+  /** Whether `orkestrator@version` is already on npm. */
+  npmHasVersion(version: string): boolean;
 };
+
+function writeToolchainPins(version: string): string {
+  const directory = path.join(root, "release");
+  mkdirSync(directory, { recursive: true });
+  const file = path.join(directory, TOOLCHAIN_PINS_ASSET);
+  writeFileSync(file, `${JSON.stringify({ version, tools: PINNED_TOOL_VERSIONS }, null, 2)}\n`);
+  return file;
+}
+
+function npmHasVersion(version: string): boolean {
+  const result = Bun.spawnSync([
+    "curl",
+    "-sf",
+    "-o",
+    "/dev/null",
+    `https://registry.npmjs.org/orkestrator/${version}`,
+  ]);
+  return result.exitCode === 0;
+}
 
 const defaultRuntime: ReleaseRuntime = {
   platform: process.platform,
@@ -111,6 +149,8 @@ const defaultRuntime: ReleaseRuntime = {
   releaseTag,
   artifacts: () => readdirSync(path.join(root, "release")),
   prepareMacUpdateFeeds: () => prepareMacUpdateFeeds(path.join(root, "release")),
+  writeToolchainPins,
+  npmHasVersion,
 };
 
 function githubToken(runtime: ReleaseRuntime): string {
@@ -168,6 +208,9 @@ function build(publish: boolean, runtime: ReleaseRuntime): void {
       run(["gh", "release", "upload", tag, "--repo", REPOSITORY, "--clobber", ...feeds], env);
   }
 
+  const pins = runtime.writeToolchainPins(tag.replace(/^v/, ""));
+  if (publish) run(["gh", "release", "upload", tag, "--repo", REPOSITORY, "--clobber", pins], env);
+
   const artifacts = runtime.artifacts().filter((name) => !name.includes("unpacked"));
   console.log(`\nBuilt ${tag}:\n  ${artifacts.join("\n  ")}`);
   console.log(
@@ -177,7 +220,7 @@ function build(publish: boolean, runtime: ReleaseRuntime): void {
   );
 }
 
-function publish(runtime: ReleaseRuntime): void {
+function publish(runtime: ReleaseRuntime, options: { npm: boolean }): void {
   const { releaseTag, capture, run } = runtime;
   const tag = releaseTag();
   const release = JSON.parse(
@@ -218,6 +261,16 @@ function publish(runtime: ReleaseRuntime): void {
   }
 
   const prerelease = tag.includes("-");
+  // npm first: if it fails the release stays a draft, so the desktop and npm
+  // channels never disagree about the newest version.
+  const version = tag.replace(/^v/, "");
+  if (options.npm && !prerelease) {
+    if (runtime.npmHasVersion(version)) {
+      console.log(`\norkestrator@${version} is already on npm.`);
+    } else {
+      run(["mise", "run", "publish:cli"]);
+    }
+  }
   run([
     "gh",
     "release",
@@ -236,10 +289,10 @@ export function runDesktopRelease(args: string[], runtime: ReleaseRuntime = defa
   const [command, ...flags] = args;
   if (command === "build" && flags.every((flag) => flag === "--no-publish")) {
     build(!flags.includes("--no-publish"), runtime);
-  } else if (command === "publish" && flags.length === 0) {
-    publish(runtime);
+  } else if (command === "publish" && flags.every((flag) => flag === "--skip-npm")) {
+    publish(runtime, { npm: !flags.includes("--skip-npm") });
   } else {
-    fail("usage: release-desktop.ts build [--no-publish] | publish");
+    fail("usage: release-desktop.ts build [--no-publish] | publish [--skip-npm]");
   }
 }
 

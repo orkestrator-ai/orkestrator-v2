@@ -11,8 +11,20 @@ export const DISABLE_AUTO_UPDATE_ENV = "ORKESTRATOR_DISABLE_AUTO_UPDATE";
 
 export type UpdateCheckResult = {
   isUpdateAvailable?: boolean;
+  updateInfo?: { version: string };
   downloadPromise?: Promise<string[]> | null;
 };
+
+/** What one check found, reported whether or not anyone asked for it. */
+export type UpdateCheckReport = {
+  latestVersion: string | null;
+  updateAvailable: boolean | null;
+  checkedAt: string;
+  error: string | null;
+};
+
+/** Outcome of staging an update for a remote request. */
+export type StagedUpdate = { status: "staged"; version: string } | { status: "up-to-date" };
 
 class UpdateDownloadError extends Error {
   constructor(cause: unknown) {
@@ -26,9 +38,10 @@ export type UpdaterLike = {
   autoInstallOnAppQuit: boolean;
   allowPrerelease: boolean;
   on(event: "update-downloaded", listener: (info: { version: string }) => void): unknown;
+  on(event: "download-progress", listener: (info: { percent: number }) => void): unknown;
   on(event: "error", listener: (error: Error) => void): unknown;
   checkForUpdates(): Promise<UpdateCheckResult | null>;
-  quitAndInstall(): void;
+  quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): void;
 };
 
 export type AutoUpdateEnvironment = {
@@ -64,6 +77,15 @@ export type AutoUpdateController = {
   start(): void;
   /** Menu-driven check that reports its outcome to the user. */
   checkNow(): Promise<void>;
+  /** A check nobody watches: no dialogs, and failures are only reported. */
+  checkSilently(): Promise<void>;
+  /**
+   * Checks, downloads and stages an update for a remote request, without the
+   * Restart Now / Later prompt: the remote flow shows its own countdown.
+   */
+  stageForRemote(onProgress?: (percent: number) => void): Promise<StagedUpdate>;
+  /** Quits and installs `version` if it is the staged update; false otherwise. */
+  installStaged(version: string): boolean;
   stop(): void;
 };
 
@@ -77,6 +99,8 @@ export type AutoUpdateOptions = {
     options: MessageBoxOptions,
   ): Promise<MessageBoxReturnValue>;
   log?: Pick<Console, "info" | "warn">;
+  /** Called after every check, background ones included. */
+  onCheckResult?(report: UpdateCheckReport): void;
 };
 
 /**
@@ -96,6 +120,9 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
   let readinessRevision = 0;
   let initialTimer: NodeJS.Timeout | null = null;
   let intervalTimer: NodeJS.Timeout | null = null;
+  // While a remote request stages an update, its countdown replaces the prompt.
+  let remoteStaging = 0;
+  let progressListener: ((percent: number) => void) | null = null;
 
   updater.autoDownload = true;
   updater.autoInstallOnAppQuit = true;
@@ -120,12 +147,17 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
     }
   }
 
+  updater.on("download-progress", (info) => {
+    progressListener?.(info.percent);
+  });
+
   updater.on("update-downloaded", (info) => {
     downloadedVersion = info.version;
     log.info(`[Updater] Downloaded ${info.version}`);
     if (!checkInFlight) offerRestart(info.version);
   });
   function offerRestart(version: string): void {
+    if (remoteStaging > 0) return;
     void promptToRestart(version).catch((error: unknown) =>
       log.warn("[Updater] Restart prompt failed:", error),
     );
@@ -144,14 +176,32 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
     log.warn("[Updater] Update failed:", error);
   });
 
+  function reportCheck(report: Omit<UpdateCheckReport, "checkedAt">): void {
+    try {
+      options.onCheckResult?.({ ...report, checkedAt: new Date().toISOString() });
+    } catch (error) {
+      log.warn("[Updater] Reporting a check failed:", error);
+    }
+  }
+
   async function performCheck(): Promise<UpdateCheckResult | null> {
     let result: UpdateCheckResult | null;
     try {
       result = await updater.checkForUpdates();
     } catch (error) {
       log.warn("[Updater] Update check failed:", error);
+      reportCheck({
+        latestVersion: null,
+        updateAvailable: null,
+        error: error instanceof Error ? error.message : String(error),
+      });
       throw error;
     }
+    reportCheck({
+      latestVersion: result?.updateInfo?.version ?? null,
+      updateAvailable: result?.isUpdateAvailable ?? false,
+      error: null,
+    });
     // Observe the separate promise immediately, even for background checks.
     // The error event alone does not consume a rejected download promise.
     try {
@@ -185,6 +235,36 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
       // Neither timer may keep the process alive after the last window closes.
       initialTimer.unref();
       intervalTimer.unref();
+    },
+    async checkSilently(): Promise<void> {
+      await check().catch(() => undefined);
+    },
+    async stageForRemote(onProgress?: (percent: number) => void): Promise<StagedUpdate> {
+      remoteStaging += 1;
+      if (onProgress) progressListener = onProgress;
+      try {
+        const result = !downloadedVersion || checkInFlight ? await check() : null;
+        if (downloadedVersion) {
+          // The remote countdown is this version's prompt; do not ask again.
+          promptedVersion = downloadedVersion;
+          return { status: "staged", version: downloadedVersion };
+        }
+        if (result?.isUpdateAvailable) {
+          throw new Error("The update downloaded but was not staged for installation");
+        }
+        return { status: "up-to-date" };
+      } finally {
+        remoteStaging -= 1;
+        if (progressListener === onProgress) progressListener = null;
+      }
+    },
+    installStaged(version: string): boolean {
+      if (downloadedVersion !== version || checkInFlight) return false;
+      // Nobody may be at this computer: relaunch after installing. Linux
+      // AppImage otherwise exits without starting the new version; macOS
+      // always relaunches and ignores both arguments.
+      updater.quitAndInstall(true, true);
+      return true;
     },
     stop(): void {
       if (initialTimer) clearTimeout(initialTimer);

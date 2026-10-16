@@ -5,6 +5,7 @@ import {
   isAutoUpdateSupported,
   type AutoUpdateEnvironment,
   type UpdaterLike,
+  type UpdateCheckReport,
   type UpdateCheckResult,
 } from "./auto-update.js";
 
@@ -55,13 +56,14 @@ function createHarness(checkResult: UpdateCheckResult | Error | null = {}) {
       if (checkResult instanceof Error) throw checkResult;
       return checkResult;
     }),
-    quitAndInstall: mock(() => undefined),
+    quitAndInstall: mock((_isSilent?: boolean, _isForceRunAfter?: boolean) => undefined),
   };
   const showMessageBox = mock(async (_window: unknown, _options: { message?: string }) => ({
     response: 0,
     checkboxChecked: false,
   }));
   const log = { info: mock(() => undefined), warn: mock(() => undefined) };
+  const onCheckResult = mock((_report: UpdateCheckReport) => undefined);
   const controller = createAutoUpdateController({
     updater,
     productName: "Orkestrator AI",
@@ -69,9 +71,10 @@ function createHarness(checkResult: UpdateCheckResult | Error | null = {}) {
     getWindow: () => null,
     showMessageBox,
     log,
+    onCheckResult,
   });
   const emit = (event: string, arg: unknown) => listeners.get(event)?.(arg as never);
-  return { updater, showMessageBox, controller, emit, log };
+  return { updater, showMessageBox, controller, emit, log, onCheckResult };
 }
 
 describe("createAutoUpdateController", () => {
@@ -325,5 +328,81 @@ describe("update download and lifecycle", () => {
     } finally {
       controller.stop();
     }
+  });
+});
+
+describe("remote update staging", () => {
+  function downloading(harness: ReturnType<typeof createHarness>, version: string) {
+    harness.updater.checkForUpdates = mock(async () => ({
+      isUpdateAvailable: true,
+      updateInfo: { version },
+      downloadPromise: (async () => {
+        harness.emit("download-progress", { percent: 60 });
+        harness.emit("update-downloaded", { version });
+        return [];
+      })(),
+    }));
+  }
+
+  test("stages a download with progress and without the local Restart prompt", async () => {
+    const harness = createHarness();
+    downloading(harness, "2.20.0");
+    const progress: number[] = [];
+    const staged = await harness.controller.stageForRemote((percent) => progress.push(percent));
+    await flush();
+    expect(staged).toEqual({ status: "staged", version: "2.20.0" });
+    expect(progress).toEqual([60]);
+    expect(harness.showMessageBox).not.toHaveBeenCalled();
+    expect(harness.onCheckResult.mock.calls[0]?.[0]).toMatchObject({
+      latestVersion: "2.20.0",
+      updateAvailable: true,
+      error: null,
+    });
+    // A later background check does not prompt again for the same version.
+    await harness.controller.checkSilently();
+    await flush();
+    expect(harness.showMessageBox).not.toHaveBeenCalled();
+  });
+
+  test("reports up to date when nothing newer exists", async () => {
+    const harness = createHarness({ isUpdateAvailable: false, updateInfo: { version: "2.19.9" } });
+    expect(await harness.controller.stageForRemote()).toEqual({ status: "up-to-date" });
+    expect(harness.onCheckResult.mock.calls[0]?.[0]).toMatchObject({
+      latestVersion: "2.19.9",
+      updateAvailable: false,
+    });
+  });
+
+  test("reuses an update that was already downloaded", async () => {
+    const harness = createHarness();
+    harness.emit("update-downloaded", { version: "2.20.0" });
+    await flush();
+    harness.showMessageBox.mockClear();
+    expect(await harness.controller.stageForRemote()).toEqual({
+      status: "staged",
+      version: "2.20.0",
+    });
+    expect(harness.updater.checkForUpdates).not.toHaveBeenCalled();
+  });
+
+  test("installs only the staged version", async () => {
+    const harness = createHarness();
+    downloading(harness, "2.20.0");
+    await harness.controller.stageForRemote();
+    expect(harness.controller.installStaged("2.21.0")).toBe(false);
+    expect(harness.updater.quitAndInstall).not.toHaveBeenCalled();
+    expect(harness.controller.installStaged("2.20.0")).toBe(true);
+    expect(harness.updater.quitAndInstall).toHaveBeenCalledWith(true, true);
+  });
+
+  test("a failed check is reported with its error", async () => {
+    const harness = createHarness(new Error("offline"));
+    await harness.controller.checkSilently();
+    expect(harness.onCheckResult.mock.calls[0]?.[0]).toMatchObject({
+      latestVersion: null,
+      updateAvailable: null,
+      error: "offline",
+    });
+    expect(harness.showMessageBox).not.toHaveBeenCalled();
   });
 });

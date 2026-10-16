@@ -16,6 +16,9 @@ import { configureSshAgentSocketEnvironment } from "./ssh-agent-socket.js";
 import { publishInstanceDescriptor } from "./instance-descriptor.js";
 import { PUBLIC_API_SCHEMA_VERSION } from "@orkestrator/protocol/public-api";
 import { leaseActivatedToolchainSet } from "@orkestrator/toolchain/manager";
+import path from "node:path";
+import { readLauncherState, standaloneLayout } from "@orkestrator/protocol/node/standalone-service";
+import { createStandaloneUpdater } from "./host-standalone-updater.js";
 import {
   installStandaloneBackendLogging,
   stopStandaloneBackendLogging,
@@ -56,6 +59,17 @@ if (sshAgentSocket) {
   console.warn("[Backend] No usable SSH agent socket was found");
 }
 
+// A launcher-supervised standalone backend updates itself; the launcher passes
+// its directory, which must be this data directory's.
+const standaloneLayoutForService =
+  options.standaloneUpdaterDir &&
+  path.resolve(options.standaloneUpdaterDir) === standaloneLayout(options.dataDir).root
+    ? standaloneLayout(options.dataDir)
+    : null;
+if (options.standaloneUpdaterDir && !standaloneLayoutForService) {
+  console.warn("[Backend] --standalone-updater does not match --data-dir; self-update is off");
+}
+
 let gateway: OrkestratorGateway;
 let tailscaleServe: TailscaleServeManager | null = null;
 const managedWebClient = options.desktopWebClient
@@ -71,6 +85,13 @@ const backend = new OrkestratorBackend({
   dockerImage: options.dockerImage,
   strictDockerOwner: options.strictDockerOwner,
   credentialSources: options.credentialSources,
+  hostUpdater: options.desktopUpdater
+    ? "desktop"
+    : standaloneLayoutForService
+      ? "standalone"
+      : "none",
+  hostRollbackEvidence: () =>
+    standaloneLayoutForService ? readLauncherState(standaloneLayoutForService).rollback : null,
   emit: (event, payload) => gateway?.emit(event, payload),
 });
 await backend.init();
@@ -97,6 +118,12 @@ gateway = new OrkestratorGateway({
   agentTestMode: options.runtimeFlavor === "agent-test",
   agentTestProfile: options.runtimeProfileId,
   webClientControl: managedWebClient ?? undefined,
+  hostUpdaterControl: options.desktopUpdater
+    ? {
+        snapshot: () => backend.hostMaintenance.snapshotWithImpact(),
+        report: (report) => backend.hostMaintenance.report(report),
+      }
+    : undefined,
 });
 
 const gatewayInfo = await gateway.start();
@@ -186,6 +213,17 @@ const stop = createBackendShutdownHandler({
 });
 process.on("SIGINT", () => void stop("SIGINT"));
 process.on("SIGTERM", () => void stop("SIGTERM"));
+
+if (standaloneLayoutForService) {
+  createStandaloneUpdater({
+    service: backend.hostMaintenance,
+    layout: standaloneLayoutForService,
+    dataDir: options.dataDir,
+    currentVersion: APP_VERSION,
+    // The launcher sees `restart-requested` and starts the new release.
+    shutdown: () => void stop("SIGTERM"),
+  }).start();
+}
 
 // The Electron supervisor cannot deliver SIGTERM if it crashes or is
 // force-killed, and this process would otherwise keep every local bridge (and

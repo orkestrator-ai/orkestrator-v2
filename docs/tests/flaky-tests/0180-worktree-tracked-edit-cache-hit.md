@@ -79,3 +79,16 @@ mise run test:logged -- --name merge-worktree-isolated -- bun test --cwd apps/ba
 
 No watcher implementation, assertion, timeout or skip was changed. The existing
 cache-invalidation hypothesis remains unconfirmed.
+
+## Recurrence on 2026-10-17
+
+`mise run test:logged -- --name full-suite -- mise run test` on the remote host
+maintenance branch (based on `eeeca4b3`) failed the same cache-hit assertion
+(`Expected: 1, Received: 0`, 213 ms) in the workspace group, next to two
+deterministic failures that change caused and fixed: the command-label budget
+and the CLI pack list. It failed once more when run in one `bun test` process
+with `tests/gateway-support-extra.test.ts` (139 ms), then passed alone three
+times in a row (4 pass, 0 fail each) with
+`bun test --preload ../../tests/setup-node.ts src/core/worktree-snapshots-git.test.ts`
+from `apps/backend`. The change touches no worktree-snapshot, watcher or diff
+code. Status remains open.

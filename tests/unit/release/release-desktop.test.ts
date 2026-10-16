@@ -18,6 +18,7 @@ const assets = [
   "app.AppImage",
   "app.pacman",
   "latest-linux.yml",
+  "toolchain-pins.json",
 ];
 
 function harness(overrides: Partial<ReleaseRuntime> = {}) {
@@ -41,6 +42,8 @@ function harness(overrides: Partial<ReleaseRuntime> = {}) {
     releaseTag: () => tag,
     artifacts: () => ["app.dmg", "mac-arm64-unpacked"],
     prepareMacUpdateFeeds: () => ["release/latest-mac.yml"],
+    writeToolchainPins: () => "release/toolchain-pins.json",
+    npmHasVersion: () => false,
     ...overrides,
   };
   return { runtime, run, capture };
@@ -181,6 +184,16 @@ describe("desktop release commands", () => {
               ],
             ]
           : []),
+        [
+          "gh",
+          "release",
+          "upload",
+          tag,
+          "--repo",
+          "orkestrator-ai/orkestrator-v2",
+          "--clobber",
+          "release/toolchain-pins.json",
+        ],
       ]);
       expect(run.mock.calls[2]?.[1]).toMatchObject({
         GH_TOKEN: "test-only",
@@ -272,7 +285,31 @@ describe("desktop release commands", () => {
             }),
     });
     runDesktopRelease(["publish"], runtime);
-    expect(run).toHaveBeenCalledTimes(1);
+    // publish:cli, then the release edit.
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  test("publishes the npm package before making the release public, once", () => {
+    const { runtime, run } = harness();
+    runDesktopRelease(["publish"], runtime);
+    expect(run.mock.calls.map(([command]) => command[0] === "mise" ? command.join(" ") : command[2])).toEqual([
+      "mise run publish:cli",
+      "edit",
+    ]);
+
+    const already = harness({ npmHasVersion: () => true });
+    runDesktopRelease(["publish"], already.runtime);
+    expect(already.run.mock.calls.map(([command]) => command[2])).toEqual(["edit"]);
+
+    const skipped = harness();
+    runDesktopRelease(["publish", "--skip-npm"], skipped.runtime);
+    expect(skipped.run.mock.calls.map(([command]) => command[2])).toEqual(["edit"]);
+  });
+
+  test("a prerelease is never published to npm", () => {
+    const { runtime, run } = harness({ releaseTag: () => "v2.20.0-beta.1" });
+    runDesktopRelease(["publish"], runtime);
+    expect(run.mock.calls.map(([command]) => command[2])).toEqual(["edit"]);
   });
 
   test("refuses an already-public release", () => {

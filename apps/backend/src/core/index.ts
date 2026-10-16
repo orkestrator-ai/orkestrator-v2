@@ -66,8 +66,11 @@ import {
   ensureContainerAgentToolsHost,
   ensureContainerHostServicePorts,
 } from "./commands-environment.js";
-import { DOCKER_IMAGE } from "./constants.js";
+import { APP_VERSION, DOCKER_IMAGE } from "./constants.js";
 import { WorkflowResultService } from "./workflow-result-service.js";
+import { HostMaintenanceService } from "./host-maintenance.js";
+import { readImageStatus, readRestartImpact, readToolStatus } from "./host-maintenance-readers.js";
+import { applyGhChannel, fetchReleasePins } from "./host-maintenance-tasks.js";
 import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import {
   ControlMcpServer,
@@ -144,6 +147,8 @@ export class OrkestratorBackend {
   private readonly runtime: BackendRuntime;
   private readonly environmentLifecycleDrainTimeoutMs: number;
   private readonly workflowResults: WorkflowResultService;
+  /** Remote-initiated updates of this host; see host-maintenance.ts. */
+  readonly hostMaintenance: HostMaintenanceService;
   /** Absent in `bun test` backends unless injected: probing runs real Docker commands. */
   private readonly containerHostReachability: ContainerHostReachabilityService | undefined;
   private readonly workflowResultRollout: WorkflowResultRollout;
@@ -198,6 +203,10 @@ export class OrkestratorBackend {
     strictDockerOwner?: boolean;
     credentialSources?: import("@orkestrator/protocol/agent-platforms").AgentPlatform[];
     emit: BackendEmit;
+    /** What applies remote update requests on this host (default: nothing). */
+    hostUpdater?: import("@orkestrator/protocol/host-maintenance").HostUpdaterKind;
+    /** The standalone launcher's record of a release it rolled back. */
+    hostRollbackEvidence?: () => import("./host-maintenance.js").HostRollbackEvidence | null;
     startupReapers?: {
       localServers?: typeof reapOrphanedLocalServers;
       claudeTmuxRuntimes?: typeof reapOrphanedClaudeTmuxRuntimes;
@@ -237,6 +246,19 @@ export class OrkestratorBackend {
     this.activityJobClock = options.activityJobClock;
     const storage = new StorageService(options.dataDir);
     this.workflowResults = new WorkflowResultService(options.dataDir);
+    this.hostMaintenance = new HostMaintenanceService({
+      dataDir: options.dataDir,
+      updater: options.hostUpdater ?? "none",
+      version: APP_VERSION,
+      emit: (event, payload) => options.emit(event, payload),
+      rollbackEvidence: options.hostRollbackEvidence,
+      onCheck: (latestVersion) => {
+        if (!latestVersion || latestVersion === APP_VERSION) return;
+        void fetchReleasePins(latestVersion).then((pins) => {
+          if (pins) this.hostMaintenance.setNextRelease(pins);
+        });
+      },
+    });
     this.workflowResultRollout = new WorkflowResultRollout(
       async () => (await storage.loadConfig()).global.workflowResultTools,
     );
@@ -325,6 +347,7 @@ export class OrkestratorBackend {
       controlMcp: this.controlMcp,
       environmentLifecycleTasks: this.environmentLifecycleTasks,
       runtime: this.runtime,
+      hostMaintenance: this.hostMaintenance,
     } as CommandContext;
     context.notifyAgentTurnCompleted = async (environmentId: string) => {
       const handler = this.commands.get("pr_monitor_agent_turn_completed");
@@ -339,7 +362,13 @@ export class OrkestratorBackend {
     context.deleteWorkflowResultsByEnvironment = (environmentId: string) =>
       this.workflowResults.deleteByEnvironment(environmentId);
     this.context = context;
-    setManagedGitHubCli(resolveManagedBinary(context, "gh"));
+    context.pinnedGitHubCli = resolveManagedBinary(context, "gh");
+    setManagedGitHubCli(context.pinnedGitHubCli);
+    this.hostMaintenance.setReaders({
+      impact: () => readRestartImpact(context),
+      tools: () => readToolStatus(context, this.hostMaintenance.ghChannel()),
+      image: () => readImageStatus(context),
+    });
     this.coordinators = new CoordinatorService(
       storage,
       () => this.controlMcp.getSettings(),
@@ -832,6 +861,21 @@ export class OrkestratorBackend {
 
   async init(): Promise<void> {
     await this.context.storage.init();
+    // Settles an update the previous process was applying; installing one is
+    // what restarted this backend.
+    try {
+      this.hostMaintenance.init();
+      await applyGhChannel(
+        this.context,
+        this.hostMaintenance.ghChannel(),
+        this.context.pinnedGitHubCli,
+      );
+    } catch (error) {
+      console.warn(
+        "[backend] Failed to settle the host update record:",
+        error instanceof Error ? error.message : error,
+      );
+    }
     // Design startup recovery (interrupted operations, migrations, exports)
     // degrades the design feature on failure, never the backend; every design
     // command retries initialization lazily.
@@ -1588,6 +1632,7 @@ export class OrkestratorBackend {
           await this.context.design?.close();
           // Last: closing checkpoints the WAL into the database file.
           this.workflowResults.closeStorage();
+          this.hostMaintenance.close();
           closeEnvironmentCleanupStorage();
           this.context.storage.close();
         };

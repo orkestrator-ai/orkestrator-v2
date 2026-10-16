@@ -26,3 +26,19 @@ The failure text was not kept. `bunx playwright test --config
 e2e/playwright.config.ts e2e/DiffViewerMobile.spec.ts e2e/MultiReviewFlow.spec.ts
 --workers=1` passed (21 passed, 5 skipped), and a repeat of the full browser
 suite passed (257 passed, 61 skipped).
+
+
+## Mobile layout follow-up main merge recurrence — 2026-10-16
+
+- **Original command:** `ORKESTRATOR_E2E_PORT=52464 CI=1 mise run test:logged -- --name merge-latest-browser -- mise run test:browser`
+  while merging `origin/main` into `mobile-layout-gaps`.
+- **Worker configuration:** nine Playwright workers alongside the repository
+  suite and other validations on the shared host.
+- **Suite counts:** 310 passed, 69 skipped and three failed across 382 cases
+  (5.2 minutes). The other failures are recorded in 0174.
+- **Failure:** The desktop cases `the mounted diff switches exactly at the mobile breakpoint` (line 134) and `the desktop diff keeps its mode controls and full-ref tooltip` (line 161) found no `.monaco-diff-editor` within 5000 ms.
+- **Owning-file rerun:** `ORKESTRATOR_E2E_PORT=52464 CI=1 mise run test:logged -- --name merge-latest-browser-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts e2e/DiffViewerMobile.spec.ts --workers=1`
+  passed both unchanged owning files (exit 0, 51.6 seconds).
+- **Evidence:** `/tmp/orkestrator-test-run.r2KR91/merge-latest-browser.log.gz`.
+- **Disposition:** parallel-only recurrence matching the existing case. Host
+  contention remains a hypothesis; no assertion, timeout or skip changed.

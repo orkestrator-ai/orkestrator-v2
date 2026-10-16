@@ -13,6 +13,7 @@ import {
   multiReviewFlowEdges,
   multiReviewFlowLayout,
   multiReviewTotalTokens,
+  provisionalFindingLabel,
   reviewerFlowState,
   severityCounts,
   summarizeFlowEdges,
@@ -255,11 +256,58 @@ describe("findings so far", () => {
     expect(mergeReviewerFindings([reviewer(0, { report: report([]) })])).toEqual({
       findings: [],
       reviewerCount: 1,
+      provisionalCount: 0,
     });
     expect(mergeReviewerFindings([reviewer(0, { status: "running" })])).toEqual({
       findings: [],
       reviewerCount: 0,
+      provisionalCount: 0,
     });
+  });
+
+  test("adds what live reviewers reported, marked provisional until a report confirms it", () => {
+    const reported = (
+      title: string,
+      severity: ReviewIssue["severity"] = "P1",
+      file = "src/a.ts",
+    ) => ({
+      id: title.padEnd(24, "0").slice(0, 24),
+      reportedAt: "2026-10-16T00:00:00.000Z",
+      issue: issue(severity, title, file),
+    });
+    const { findings, reviewerCount, provisionalCount } = mergeReviewerFindings([
+      reviewer(0, { report: report([issue("P1", "Confirmed", "src/c.ts")]) }),
+      reviewer(1, {
+        status: "running",
+        // The same finding a completed report already has: the report decides.
+        provisionalFindings: [reported("Confirmed", "P0", "src/c.ts"), reported("Live only")],
+      }),
+      reviewer(2, { status: "failed", provisionalFindings: [reported("From a failure", "P2")] }),
+      reviewer(3, { status: "cancelled", provisionalFindings: [reported("From a stop", "P2")] }),
+      // Pending reviewers have reported nothing.
+      reviewer(4, { status: "pending" }),
+    ]);
+    expect(reviewerCount).toBe(1);
+    expect(provisionalCount).toBe(3);
+    const confirmed = findings.find((finding) => finding.title === "Confirmed")!;
+    expect(confirmed).toMatchObject({ provisional: false, severity: "P1" });
+    expect(confirmed.sources.map((source) => source.standing)).toEqual([
+      "confirmed",
+      "provisional",
+    ]);
+    expect(provisionalFindingLabel(confirmed)).toBeNull();
+    const label = (title: string) =>
+      provisionalFindingLabel(findings.find((finding) => finding.title === title)!);
+    expect(label("Live only")).toBe("provisional");
+    expect(label("From a failure")).toBe("unconfirmed (reviewer failed)");
+    expect(label("From a stop")).toBe("unconfirmed (reviewer stopped)");
+    // Within a severity, confirmed rows lead.
+    expect(findings.map((finding) => finding.title)).toEqual([
+      "Confirmed",
+      "Live only",
+      "From a failure",
+      "From a stop",
+    ]);
   });
 
   test("counts issues per severity", () => {

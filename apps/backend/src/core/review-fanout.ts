@@ -28,6 +28,7 @@ import {
   reviewersSettled,
   usableReviewerReports,
   type ReviewerModelSelection,
+  type ReviewerProvisionalFinding,
   type ReviewerRecord,
   type ReviewWorktreeSnapshotRecord,
 } from "@orkestrator/protocol/review-fanout";
@@ -100,6 +101,14 @@ import {
   type ReviewFanoutConcurrency,
 } from "./review-fanout-scheduler.js";
 import { PassTranscriptReader } from "./review-fanout-transcript.js";
+import {
+  clearReviewerAdmission,
+  projectReviewerAdmissionQueue,
+} from "./review-fanout-admission.js";
+import {
+  appendProvisionalFindings,
+  dropProvisionalFindings,
+} from "./review-provisional-findings.js";
 
 export const MAX_REVIEW_SCHEMA_REPAIR_ATTEMPTS = REVIEW_FANOUT_MAX_SCHEMA_REPAIR_ATTEMPTS;
 export const MAX_REVIEW_IDLE_RESULT_POLLS = REVIEW_FANOUT_MAX_IDLE_RESULT_POLLS;
@@ -682,6 +691,12 @@ export interface ReviewFanoutHost {
     schema: JsonSchema,
   ): Promise<void>;
   supportsToolResult?(selection: ReviewerModelSelection): boolean;
+  /**
+   * Findings this reviewer reported through `report_finding` since the last
+   * pass. A host that provides it offers the tool, and the reviewer's
+   * instruction mentions it.
+   */
+  takeProvisionalFindings?(reviewer: ReviewerRecord): ReviewerProvisionalFinding[];
   readResult?<T>(requestId: string): Promise<StructuredOutputResult<T> | null>;
   /** Bounded delivery state for one slot, projected into the saved record. */
   projectResult?(requestId: string): Promise<WorkflowResultSubmissionState | undefined>;
@@ -944,9 +959,17 @@ export class ReviewFanoutRunner {
       }
     }
 
+    // Findings reported since the last pass become observations of this one.
+    for (const { reviewer } of live) {
+      if (reviewer.status !== "running" || !reviewer.requestId) continue;
+      const reported = this.host.takeProvisionalFindings?.(reviewer) ?? [];
+      if (appendProvisionalFindings(reviewer, reported)) this.stageObservation();
+    }
+
     let fatal: { error: unknown } | undefined;
     const stats = await runBoundedTasks(
       live.map(({ reviewer, index }) => ({
+        reviewer,
         pool: reviewerNeedsDispatch(reviewer) ? ("admission" as const) : ("observation" as const),
         group: efficiencyPlatform(reviewer.agent),
         run: async () => {
@@ -959,7 +982,25 @@ export class ReviewFanoutRunner {
       })),
       reviewFanoutConcurrency(this.host.concurrency),
       () => fatal === undefined,
+      // Each queued reviewer's place, as the scheduler offers slots. Staged
+      // only: the next safety commit (a started reviewer's session) carries it.
+      (waiting) => {
+        const queued = waiting.flatMap((task) =>
+          task.reviewer.status === "pending" ? [task.reviewer] : [],
+        );
+        if (projectReviewerAdmissionQueue(reviewers, queued)) this.stageObservation();
+      },
     );
+    // A reviewer still pending here (a retryable setup failure, or a pass that
+    // stopped early) waits for the next pass, in panel order.
+    if (
+      projectReviewerAdmissionQueue(
+        reviewers,
+        reviewers.filter((reviewer) => reviewer.status === "pending"),
+      )
+    ) {
+      this.stageObservation();
+    }
     this.record({
       operation: "reviewer.task",
       reviewers: reviewers.length,
@@ -1025,6 +1066,7 @@ export class ReviewFanoutRunner {
       reviewer.status = "failed";
       reviewer.error = reviewFanoutErrorMessage(error).slice(0, 4_096);
       reviewer.completedAt = nowIso();
+      clearReviewerAdmission(reviewer);
       delete reviewer.idleResultPolls;
       delete reviewer.stalledSince;
       this.record({ operation: "reviewer.task", outcome: "failed" });
@@ -1107,6 +1149,7 @@ export class ReviewFanoutRunner {
       reviewer.resultSubmission = reviewer.resultTransport === "tool-v1" ? "preparing" : undefined;
       reviewer.status = "running";
       reviewer.startedAt = nowIso();
+      clearReviewerAdmission(reviewer);
       delete reviewer.tokenCount;
       delete reviewer.usageFinalizationPolls;
       host.pollGate?.clear(`${host.workflowId}\0${reviewer.id}\0usage`);
@@ -1196,6 +1239,7 @@ export class ReviewFanoutRunner {
           reviewer.resultTransport === "tool-v1"
             ? `${prompt}\n\n${workflowResultInstruction("review-report", reviewer.requestId, {
                 capability: agentMcp?.workflowResultCapability,
+                provisionalFindings: host.takeProvisionalFindings !== undefined,
               })}`
             : prompt,
           {
@@ -1211,7 +1255,12 @@ export class ReviewFanoutRunner {
             effort: reviewer.reasoningEffort,
             ...(typeof reviewer.fastMode === "boolean" ? { fastMode: reviewer.fastMode } : {}),
             ...(agentMcp ? { agentMcp } : {}),
-            ...(agentMcp ? { workflowResultTool: workflowResultToolName("review-report") } : {}),
+            ...(agentMcp
+              ? {
+                  workflowResultTool: workflowResultToolName("review-report"),
+                  workflowResultKey: reviewer.requestId,
+                }
+              : {}),
           },
         );
       } catch (error) {
@@ -1398,6 +1447,9 @@ export class ReviewFanoutRunner {
     reviewer.report = attributeReportFindings(parsed.data, reviewer);
     reviewer.status = "completed";
     reviewer.completedAt = nowIso();
+    // The accepted report is the reviewer's findings; the provisional ones it
+    // reported on the way were progress and are replaced, not merged.
+    dropProvisionalFindings(reviewer);
     delete reviewer.schemaRepairPrompt;
     delete reviewer.continuationPrompt;
     delete reviewer.idleResultPolls;

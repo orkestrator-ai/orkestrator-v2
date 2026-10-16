@@ -186,6 +186,54 @@ an unconfirmed hypothesis; no timeout, assertion or skip was changed.
 - **Evidence:** `/tmp/orkestrator-test-run.Z1q1Ht/root-and-agent-support-tests.log.gz`; outer artifact `/tmp/orkestrator-test-run.fZgI1l/merge-tests.log.gz`.
 - **Disposition:** recurrence confirmed by the isolated pass; shared host contention remains an unconfirmed hypothesis. No assertions, deadlines or skips changed.
 
+## Recurrence — 2026-10-16 (Multi Review follow-ups main merge)
+
+`mise run test:logged -- --name merge-tests -- mise run test` reserved
+4/1/2/1 workspace/root/bridge/protocol slots on the shared host. Workspace
+admission waited 122.6 seconds. The staged-runtime test timed out at
+30000.06 ms; root results were 2,998 passed, one skipped and one failed across
+137 files (228.87 seconds). Workspace, bridges and protocol verification
+passed. The aggregate exited 1 after 509.4 seconds. Evidence:
+`/tmp/orkestrator-test-run.7cVpSQ/root-and-agent-support-tests.log.gz`;
+outer artifact `/tmp/orkestrator-test-run.TneuV2/merge-tests.log.gz`.
+
+After the aggregate finished,
+`mise run test:logged -- --name merge-pi-vendor-rerun -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+passed the unchanged owning file (four tests, exit 0) in 11.3 seconds. The
+conflict resolutions preserve imports from both branches and do not change
+runtime staging. Shared host contention remains an unconfirmed hypothesis;
+no timeout, assertion or skip was changed.
+
+## Recurrence — 2026-10-16 (follow-up main merge)
+
+`mise run test:logged -- --name merge-tests -- mise run test` used
+4/1/2/1 workspace/root/bridge/protocol slots alongside browser validation on
+the shared host. The staged-runtime case timed out at 30004.03 ms; the root
+group reported 3,002 passed, one skipped and one failed across 137 files
+(286.40 seconds). The aggregate exited 1 after 496.0 seconds. Evidence:
+`/tmp/orkestrator-test-run.CtLQKC/root-and-agent-support-tests.log.gz`.
+
+`mise run test:logged -- --name merge-pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+passed the unchanged owning file, exit 0, in 14.6 seconds. Host contention
+remains an unconfirmed hypothesis; no timeout, assertion or skip changed.
+
+## Recurrence — 2026-10-16 (MCP apply-path main merge)
+
+`mise run test:logged -- --name merge-full-suite -- mise run test` used
+4/1/2/1 workspace/root/bridge/protocol slots on the shared host. Workspace
+admission waited 156.3 seconds. The staged-runtime case timed out at
+30001.09 ms; the root group reported 3,002 passed, one skipped and one failed
+across 137 files (288.65 seconds). Workspace, bridges and protocol verification
+passed. The aggregate exited 1 after 553.4 seconds. Evidence:
+`/tmp/orkestrator-test-run.hjgcHa/root-and-agent-support-tests.log.gz`;
+outer artifact `/tmp/orkestrator-test-run.FAOJMH/merge-full-suite.log.gz`.
+
+`mise run test:logged -- --name merge-pi-vendor-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+passed the unchanged owning file, exit 0, in 14.2 seconds. The conflict
+resolutions preserve both branches' imports and flake records without changing
+runtime staging. Shared host contention remains an unconfirmed hypothesis;
+no timeout, assertion or skip changed.
+
 ## Observation on 2026-10-16 during the storage writer guards merge
 
 `mise run test:logged -- --name merge-tests -- mise run test` ran root tests
@@ -205,3 +253,26 @@ runtime dependency closure, imports it in a child, and removes its temporary
 tree within that deadline; this branch changes none of those paths. The timed
 out operation and root cause remain unconfirmed. No product code, assertion,
 timeout or skip was changed to conceal the failure.
+
+
+## Mobile layout follow-up main merge — 2026-10-16
+
+- **Original command:** `mise run test:logged -- --name merge-latest-tests -- mise run test`
+  with the testing guide's GNU-tool PATH, merging `origin/main` at `222599b0`
+  into `mobile-layout-gaps`.
+- **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1
+  slots; backend used two isolated workers, root used one. Root admission
+  waited 114.7 seconds and bridges waited 394.0 seconds on the shared host.
+- **Suite counts:** root 2,996 passed, one skipped and three failed across
+  3,000 tests in 137 files (368.64 seconds execution). Backend reported
+  8,380 passed, 40 skipped and ten failed. Other workspace packages, bridges
+  and protocol verification passed; aggregate exited 1 after 671.2 seconds.
+- **Failure:** The staged-runtime load exceeded its 30000 ms deadline at 30028.46 ms.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-latest-pi-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+  with the same GNU-tool PATH passed the unchanged owning file (exit 0,
+  12.9 seconds).
+- **Evidence:** `/tmp/orkestrator-test-run.hmA9t0/root-and-agent-support-tests.log.gz`;
+  outer artifact `/tmp/orkestrator-test-run.1X6sCk/merge-latest-tests.log.gz`.
+- **Disposition:** isolated pass confirms an intermittent recurrence. The
+  existing contention hypothesis remains unconfirmed; no implementation,
+  assertion, timeout or skip changed.

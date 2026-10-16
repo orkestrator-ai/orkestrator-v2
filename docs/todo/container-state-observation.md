@@ -16,21 +16,24 @@ lose no exact recovery.
 ## Current state
 
 - Claude terminal state (inventory item B18), described in
-  [container-lifecycle.md](../architecture/container-lifecycle.md#claude-terminal-state-signal-claude-state-signal1):
+  [container-lifecycle.md](../architecture/container-lifecycle.md#claude-terminal-state-signal-claude-state-signal2):
   - `ClaudeStatePollManager` in `apps/backend/src/core/tmux-poll.ts`. Its
     `reconcile` (command `reconcile_claude_state_polling`, every 2 s) starts
     a poll for every running environment container, whether or not Claude
-    runs in it. Each read is `docker exec <id> cat /tmp/.claude-state`
-    (`claudeStateReadCommand`, 5 s timeout).
+    runs in it. Each read uses one `docker exec` to read at most 256 bytes of
+    `/tmp/.claude-state-snapshot`, falling back to `/tmp/.claude-state` on
+    older images (`claudeStateReadCommand`, 5 s timeout).
   - The file is written by Claude Code hooks that `docker/entrypoint.sh`
     installs (`working`, `waiting`). They fire for Claude started in a
     terminal, not for bridge sessions (`ORKESTRATOR_NATIVE_AGENT_BRIDGE` set).
-    On `claude-state-signal=1` images the hooks then run
-    `orkestrator-state-signal`, a detached curl POST to the agent tools
-    server's `/claude-state-signal` route.
+    On `claude-state-signal=2` images `orkestrator-state-signal` serializes
+    writers and atomically persists state, revision and completion counters
+    before sending a detached curl POST to the agent tools server. A lost
+    working-to-waiting pair is recovered from the completion counter.
   - A poll starts at 1 s. Once per lineage it arms the doorbell
     (`claude-state-signal.ts`: capability check, host alias and service
-    port, config written from stdin, one probe ring). The probe ring moves it
+    port, config written from stdin, one probe ring). A probe ring and a valid
+    counter snapshot move it
     to `CLAUDE_STATE_SAFETY_READ_INTERVAL_MS` (30 s); each ring requests one
     coalesced read. A safety read that finds a change no ring announced
     revokes the credential and returns to 1 s. Arming is retried at most every
@@ -151,7 +154,7 @@ lose no exact recovery.
   ring that lands between that read and the hook's write can cause a false
   demotion; it costs one re-arm, and is rare (one hook-to-ring window per
   transition against a 30 s read).
-- **Gating.** Image capability `claude-state-signal=1`, declared by the
+- **Gating.** Image capability `claude-state-signal=2`, declared by the
   marker in `docker/orkestrator-state-signal.sh`. Legacy and invalid
   manifests keep the 1 s poll for the container's life; an unreadable
   manifest is asked again after the retry window.

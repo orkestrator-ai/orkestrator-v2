@@ -43,7 +43,11 @@ export type PollTmuxLayerTypes = [
 ];
 export type ClaudeStatePoll = {
   timer: unknown;
+  intervalMs: number;
   lastState: string;
+  lastRevision?: number;
+  lastCompletions?: number;
+  observationRetry: boolean;
   failedReads: number;
   stale: boolean;
   active: boolean;
@@ -56,7 +60,7 @@ export type ClaudeStatePoll = {
   signal?: StateSignalCredential;
   /**
    * A doorbell from `signal` arrived, so a change is read when it is announced
-   * and the timer is only the safety read.
+   * and a counter snapshot allows the timer to become the safety read.
    */
   signalConfirmed: boolean;
   /** The image has no signal; the container keeps the 1 s poll for its life. */
@@ -82,6 +86,7 @@ export interface ClaudeStateSignalInstaller {
     containerId: string,
     credential: StateSignalCredential,
     context: CommandContext,
+    isCurrent: () => boolean,
   ): Promise<void>;
 }
 
@@ -145,13 +150,37 @@ export function claudeStateReadCommand(containerId: string): {
 } {
   return {
     command: "docker",
-    args: ["exec", containerId, "cat", "/tmp/.claude-state"],
+    args: [
+      "exec",
+      containerId,
+      "sh",
+      "-c",
+      "if [ -f /tmp/.claude-state-snapshot ]; then head -c 256 /tmp/.claude-state-snapshot; else head -c 256 /tmp/.claude-state; fi",
+    ],
     options: { timeoutMs: CLAUDE_STATE_READ_TIMEOUT_MS },
   };
 }
 
+/** Bounded v2 snapshots retain completion evidence even when both rings are lost. */
+export function parseClaudeStateSnapshot(value: string): {
+  state: string;
+  revision?: number;
+  completions?: number;
+} {
+  if (value === "working" || value === "waiting" || value === "idle") return { state: value };
+  if (value.length > 255) return { state: "" };
+  const match = /^(working|waiting|idle) ([0-9]{1,15}) ([0-9]{1,15})$/.exec(value);
+  if (!match) return { state: "" };
+  const revision = Number(match[2]);
+  const completions = Number(match[3]);
+  if (completions > revision) return { state: "" };
+  return { state: match[1]!, revision, completions };
+}
+
 export class ClaudeStatePollManager {
   private readonly polls = new Map<string, ClaudeStatePoll>();
+  /** Survives retirement until the old installer has stopped writing. */
+  private readonly signalInstallations = new Map<string, Promise<void>>();
   private readonly readState: (containerId: string) => Promise<string>;
   private readonly schedule: (callback: () => void, intervalMs: number) => unknown;
   private readonly cancel: (timer: unknown) => void;
@@ -194,7 +223,9 @@ export class ClaudeStatePollManager {
     }
     const poll: ClaudeStatePoll = {
       timer: undefined,
+      intervalMs: CLAUDE_STATE_POLL_INTERVAL_MS,
       lastState: "",
+      observationRetry: false,
       failedReads: 0,
       stale: false,
       active: true,
@@ -233,7 +264,10 @@ export class ClaudeStatePollManager {
       return;
     }
     poll.lastSignalAttemptAt = now;
+    const previous = this.signalInstallations.get(containerId);
     const arming = (async () => {
+      await previous;
+      if (!this.isCurrent(containerId, poll)) return;
       const support = await installer.support(containerId, poll.context);
       if (!this.isCurrent(containerId, poll)) return;
       if (support !== "supported") {
@@ -247,10 +281,16 @@ export class ClaudeStatePollManager {
       });
       if (!credential) return;
       poll.signal = credential;
-      await installer.install(containerId, credential, poll.context);
+      await installer.install(containerId, credential, poll.context, () =>
+        this.isCurrent(containerId, poll),
+      );
     })()
       .catch((error: unknown) => {
         // The poll is unchanged; the next attempt waits for the retry window.
+        if (this.isCurrent(containerId, poll)) {
+          poll.signalConfirmed = false;
+          this.reschedule(containerId, poll, CLAUDE_STATE_POLL_INTERVAL_MS);
+        }
         this.revokeSignal(poll);
         console.warn(
           `[tmux] Could not arm the Claude state signal for ${containerId}:`,
@@ -259,8 +299,11 @@ export class ClaudeStatePollManager {
       })
       .finally(() => {
         if (poll.signalArming === arming) poll.signalArming = undefined;
+        if (this.signalInstallations.get(containerId) === arming)
+          this.signalInstallations.delete(containerId);
       });
     poll.signalArming = arming;
+    this.signalInstallations.set(containerId, arming);
   }
 
   /** A doorbell from this lineage's credential: read now, and trust the signal. */
@@ -277,10 +320,7 @@ export class ClaudeStatePollManager {
       return;
     }
     poll.rings += 1;
-    if (!poll.signalConfirmed) {
-      poll.signalConfirmed = true;
-      this.reschedule(containerId, poll, CLAUDE_STATE_SAFETY_READ_INTERVAL_MS);
-    }
+    poll.signalConfirmed = true;
     this.requestPoll(containerId, poll);
   }
 
@@ -303,6 +343,8 @@ export class ClaudeStatePollManager {
   }
 
   private reschedule(containerId: string, poll: ClaudeStatePoll, intervalMs: number): void {
+    if (poll.intervalMs === intervalMs) return;
+    poll.intervalMs = intervalMs;
     this.cancel(poll.timer);
     poll.timer = this.schedule(() => this.requestPoll(containerId, poll), intervalMs);
   }
@@ -349,7 +391,9 @@ export class ClaudeStatePollManager {
     }
     poll.inFlight = this.metrics
       .observe("tmux-poll", (span) => this.poll(containerId, poll, span))
-      .catch(() => undefined)
+      .catch(() => {
+        if (this.isCurrent(containerId, poll)) this.retryObservation(containerId, poll);
+      })
       .finally(() => {
         poll.inFlight = undefined;
         if (poll.active && this.polls.get(containerId) === poll && poll.pollRequested) {
@@ -357,6 +401,32 @@ export class ClaudeStatePollManager {
           this.requestPoll(containerId, poll);
         }
       });
+  }
+
+  private retryObservation(containerId: string, poll: ClaudeStatePoll): void {
+    if (poll.signalConfirmed && !poll.observationRetry)
+      this.reschedule(containerId, poll, CLAUDE_STATE_POLL_INTERVAL_MS);
+    poll.observationRetry = true;
+  }
+
+  private acceptObservation(
+    containerId: string,
+    poll: ClaudeStatePoll,
+    rings: number,
+    revision?: number,
+    completions?: number,
+  ): void {
+    poll.ringsAtPreviousRead = rings;
+    poll.lastRevision = revision;
+    poll.lastCompletions = completions;
+    // A legacy state has no way to expose a whole missed turn: keep fast polling.
+    const slow = poll.signalConfirmed && revision !== undefined;
+    this.reschedule(
+      containerId,
+      poll,
+      slow ? CLAUDE_STATE_SAFETY_READ_INTERVAL_MS : CLAUDE_STATE_POLL_INTERVAL_MS,
+    );
+    poll.observationRetry = false;
   }
 
   private isCurrent(containerId: string, poll: ClaudeStatePoll): boolean {
@@ -382,30 +452,34 @@ export class ClaudeStatePollManager {
     // Any doorbell since the previous read started announces what this read
     // finds: that read may have run before the hook wrote the file.
     const ringsBeforePreviousRead = poll.ringsAtPreviousRead;
-    poll.ringsAtPreviousRead = poll.rings;
-    const state = (await this.readState(containerId).catch(() => "")).trim();
+    const ringsAtReadStart = poll.rings;
+    const { state, revision, completions } = parseClaudeStateSnapshot(
+      (await this.readState(containerId).catch(() => "")).trim(),
+    );
     if (!this.isCurrent(containerId, poll)) return;
 
     const known = state === "working" || state === "waiting" || state === "idle";
     if (known) poll.failedReads = 0;
     else poll.failedReads += 1;
-    const changed = known && (state !== poll.lastState || poll.stale);
+    const recoveredCompletion =
+      completions !== undefined &&
+      poll.lastCompletions !== undefined &&
+      completions > poll.lastCompletions;
+    const revisionChanged =
+      revision !== undefined && poll.lastRevision !== undefined && revision !== poll.lastRevision;
+    const changed = known && (state !== poll.lastState || poll.stale || revisionChanged);
     if (changed) span?.changed();
     else span?.unchanged();
-    if (
-      poll.signalConfirmed &&
-      known &&
-      state !== poll.lastState &&
-      poll.rings === ringsBeforePreviousRead
-    ) {
-      this.demoteSignal(containerId, poll, "missed a change");
-    }
+    if (!known) this.retryObservation(containerId, poll);
     // A tick that observed nothing new must cost nothing beyond the state read.
     // Loading environments here parses the whole environments file, once per
     // second per running container, to answer a question whose answer has not
     // changed. The retirement check below is what that read is *for*, and it
     // only has to be timely enough to stop polling a container that has gone.
-    if (!changed && !this.isRetirementCheckDue(poll)) return;
+    if (!changed && !this.isRetirementCheckDue(poll)) {
+      if (known) this.acceptObservation(containerId, poll, ringsAtReadStart, revision, completions);
+      return;
+    }
 
     const environment = (await poll.context.storage.loadEnvironments()).find(
       (candidate) => candidate.containerId === containerId,
@@ -434,7 +508,10 @@ export class ClaudeStatePollManager {
       poll.stale = true;
       return;
     }
-    if (!changed) return;
+    if (!changed) {
+      if (known) this.acceptObservation(containerId, poll, ringsAtReadStart, revision, completions);
+      return;
+    }
     const occurredAt = this.now();
     const persisted = await poll.context.storage.setEnvironmentAgentActivity(
       environment.id,
@@ -445,20 +522,41 @@ export class ClaudeStatePollManager {
     if (!this.isCurrent(containerId, poll)) return;
     const persistedTerminal = persisted?.agentActivitySources?.["claude-terminal"];
     if (persistedTerminal?.state !== state) {
+      this.retryObservation(containerId, poll);
       // Storage rejected a stale token, or answered without the source at all.
       // Either way this observation did not land, so keep the previous observed
       // state and let a later poll retry with a fresh backend timestamp. Note
       // this must not emit: the renderer would adopt a state storage rejected.
       return;
     }
+    // Storage may have seen waiting both before and after a whole missed turn.
+    // Publish its durable completion token without inventing a working state.
+    if (
+      recoveredCompletion &&
+      !(poll.lastState === "working" && (state === "waiting" || state === "idle"))
+    ) {
+      await poll.context.storage.recordEnvironmentSessionCompletion(environment.id, occurredAt);
+      if (!this.isCurrent(containerId, poll)) return;
+    }
+    if (
+      poll.signalConfirmed &&
+      !poll.observationRetry &&
+      poll.lastState !== "" &&
+      (state !== poll.lastState || revisionChanged) &&
+      poll.rings === ringsBeforePreviousRead
+    ) {
+      this.demoteSignal(containerId, poll, "missed a change");
+    }
+    this.acceptObservation(containerId, poll, ringsAtReadStart, revision, completions);
     // Production hooks write `working` at UserPromptSubmit and `waiting` at
     // Stop. `idle` is retained for older hook writers and recovery from a
     // backend restart. Storage's durable PR-recheck intent is authoritative,
     // so ordinary unarmed terminal turns do not manufacture monitor work.
     const completedTurn =
       Boolean(environment.prRecheckAfterAgentCompletionArmedAt) &&
-      (state === "idle" || state === "waiting") &&
-      (poll.lastState === "working" || poll.lastState === "");
+      (recoveredCompletion ||
+        ((state === "idle" || state === "waiting") &&
+          (poll.lastState === "working" || poll.lastState === "")));
     // The turn-end edge as *this* transport sees it, which is deliberately not
     // `isAgentTurnEndTransition` from the native path. There, a bridge reports
     // `waiting` for a turn that is parked on an approval and still live, so only
@@ -472,7 +570,9 @@ export class ClaudeStatePollManager {
     // turn that ended before this poll existed — probing it would cost one `gh`
     // call per running Claude tmux container on every backend start, which is
     // the standing per-environment cost the probe exists to avoid.
-    const endedTurn = (state === "idle" || state === "waiting") && poll.lastState === "working";
+    const endedTurn =
+      recoveredCompletion ||
+      ((state === "idle" || state === "waiting") && poll.lastState === "working");
     poll.lastState = state;
     poll.stale = false;
     if (completedTurn) {

@@ -50,9 +50,10 @@ export const IMAGE_CAPABILITIES = {
   /**
    * Claude terminal hooks ring the backend after writing `/tmp/.claude-state`
    * (`orkestrator-state-signal`), so the backend reads on change and keeps only
-   * a slow safety read.
+   * a slow safety read. Version 2 persists revision and completion counters
+   * atomically, so failed rings cannot hide a complete turn.
    */
-  "claude-state-signal": 1,
+  "claude-state-signal": 2,
 } as const;
 
 export type ImageCapability = keyof typeof IMAGE_CAPABILITIES;

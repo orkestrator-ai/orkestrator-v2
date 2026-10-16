@@ -673,12 +673,12 @@ cat > "$HOME/.claude/settings.json" << 'EOF'
   "hooks": {
     "UserPromptSubmit": [
       {
-        "hooks": [{ "type": "command", "command": "[ -n \"$ORKESTRATOR_NATIVE_AGENT_BRIDGE\" ] || { echo working > /tmp/.claude-state; /usr/local/bin/orkestrator-state-signal 2>/dev/null || true; }" }]
+        "hooks": [{ "type": "command", "command": "[ -n \"$ORKESTRATOR_NATIVE_AGENT_BRIDGE\" ] || { /usr/local/bin/orkestrator-state-signal working 2>/dev/null || true; }" }]
       }
     ],
     "Stop": [
       {
-        "hooks": [{ "type": "command", "command": "[ -n \"$ORKESTRATOR_NATIVE_AGENT_BRIDGE\" ] || { echo waiting > /tmp/.claude-state; /usr/local/bin/orkestrator-state-signal 2>/dev/null || true; }" }]
+        "hooks": [{ "type": "command", "command": "[ -n \"$ORKESTRATOR_NATIVE_AGENT_BRIDGE\" ] || { /usr/local/bin/orkestrator-state-signal waiting 2>/dev/null || true; }" }]
       }
     ]
   }

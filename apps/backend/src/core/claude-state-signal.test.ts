@@ -94,6 +94,6 @@ describe("orkestrator-state-signal", () => {
   });
 
   test("declares the capability its contract names", () => {
-    expect(readFileSync(SCRIPT, "utf8")).toContain("ORKESTRATOR_CAPABILITY claude-state-signal=1");
+    expect(readFileSync(SCRIPT, "utf8")).toContain("ORKESTRATOR_CAPABILITY claude-state-signal=2");
   });
 });

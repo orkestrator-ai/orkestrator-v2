@@ -11,10 +11,10 @@ import { runCommand } from "./shell.js";
 import type { ClaudeStateSignalInstaller, ClaudeStateSignalSupport } from "./tmux-poll.js";
 
 /**
- * Container side of the Claude terminal state signal (`claude-state-signal=1`).
+ * Container side of the Claude terminal state signal (`claude-state-signal=2`).
  *
- * The hooks in `docker/entrypoint.sh` run `orkestrator-state-signal` after
- * writing `/tmp/.claude-state`. That script POSTs to the backend with the curl
+ * The hooks in `docker/entrypoint.sh` call `orkestrator-state-signal` to write
+ * the state and its revision/completion snapshot. It POSTs with the curl
  * config written here, and the backend answers by reading the file. The config
  * is per poll lineage: a new poll (backend start, container start, a
  * replacement container) issues a new credential and overwrites it.
@@ -69,27 +69,29 @@ export function claudeStateSignalInstallCommand(
 export async function claudeStateSignalSupport(
   containerId: string,
   context: CommandContext,
+  readManifest = readImageManifest,
 ): Promise<ClaudeStateSignalSupport> {
   const environment = findEnvironmentByContainerId(
     await context.storage.loadEnvironments(),
     containerId,
   );
   const imageId = environment ? currentRuntimeIdentity(environment, context)?.imageId : undefined;
-  if (!imageId) return "unsupported";
-  const read = await readImageManifest(imageId, context);
+  if (!imageId) return "unknown";
+  const read = await readManifest(imageId, context);
   if (read.kind === "unavailable") return "unknown";
-  return read.kind === "manifest" && (read.manifest.capabilities["claude-state-signal"] ?? 0) >= 1
+  return read.kind === "manifest" && (read.manifest.capabilities["claude-state-signal"] ?? 0) >= 2
     ? "supported"
     : "unsupported";
 }
 
 export const claudeStateSignalInstaller: ClaudeStateSignalInstaller = {
   support: claudeStateSignalSupport,
-  async install(containerId, credential, context) {
+  async install(containerId, credential, context, isCurrent) {
     // The same host preparation a bridge start does: the host alias, and the
     // backend's current service port in a restricted container's firewall.
     await ensureContainerAgentToolsHost(containerId);
     await ensureContainerHostServicePorts(containerId, context.agentTools?.servicePort?.() ?? null);
+    if (!isCurrent()) return;
     const { command, args, options } = claudeStateSignalInstallCommand(containerId, credential);
     await runCommand(command, args, options);
   },

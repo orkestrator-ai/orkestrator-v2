@@ -455,7 +455,7 @@ export async function runScenario(
     nowMs: time.now,
     readState: async () => {
       metrics.work("docker-exec");
-      return "idle";
+      return input.claudeStateSignal ? "idle 0 0" : "idle";
     },
     ...(input.claudeStateSignal
       ? {

@@ -700,7 +700,7 @@ The legacy `stream_container_logs` is an adapter onto the same service whose
 lease lapses, so an old client that never closes cannot leave an immortal
 follower. Backend shutdown stops every follower.
 
-## Claude terminal state signal (`claude-state-signal=1`)
+## Claude terminal state signal (`claude-state-signal=2`)
 
 Claude started in a container terminal reports its state through the hooks the
 entrypoint writes into `~/.claude/settings.json`: `UserPromptSubmit` writes
@@ -709,21 +709,34 @@ entrypoint writes into `~/.claude/settings.json`: `UserPromptSubmit` writes
 (`tmux-poll.ts`) reads the file with one `docker exec` and persists and emits
 `claude-state-<containerId>` only on change.
 
-On an image with the capability, each hook then runs `orkestrator-state-signal`,
-which POSTs, detached and with no body, to `/claude-state-signal` on the agent
+Version 2 hooks call `orkestrator-state-signal working|waiting`, which serializes
+writers with a bounded file lock and atomically replaces `/tmp/.claude-state-snapshot`
+with `state revision completions`. The counters survive lost POSTs, including a
+whole working-to-waiting turn between reads. The legacy state file is still
+written for older backends. Reads are bounded to 256 bytes. Version 1 images
+keep the one-second poll because their state cannot expose a missed whole turn.
+
+After persisting, `orkestrator-state-signal` POSTs, detached and with no body,
+to `/claude-state-signal` on the agent
 tools server. The request only says "read now"; the backend reads the file
 itself, so a late or reordered request can never report a stale value.
 
 | Step | What happens | Where |
 | --- | --- | --- |
 | Arm | Once per poll lineage, if the image's manifest declares the capability: issue a doorbell credential, prepare the host alias and service port as a bridge start does, write the curl config to `/tmp/.orkestrator-claude-state-signal` (0600, from stdin, never argv), then ring once | `claude-state-signal.ts` |
-| Confirm | Until that probe ring arrives, the poll stays at 1 s. The ring moves it to a 30 s safety read | `CLAUDE_STATE_SAFETY_READ_INTERVAL_MS` |
+| Confirm | Until that probe ring arrives, the poll stays at 1 s. A ring plus a valid counter snapshot moves it to a 30 s safety read | `CLAUDE_STATE_SAFETY_READ_INTERVAL_MS` |
 | Ring | Each doorbell requests one read, coalesced behind any read in flight | `ClaudeStatePollManager.ring` |
-| Miss | A safety read that finds a change with no ring since the previous read began revokes the credential and returns to 1 s | `demoteSignal` |
+| Miss | A safety read that finds a state or revision change with no ring since the previous read began revokes the credential and returns to 1 s | `demoteSignal` |
 | Flood | More than 30 rings in a minute does the same, so a container can never cause more reads than the 1 s poll | `CLAUDE_STATE_SIGNAL_MAX_RINGS_PER_MINUTE` |
-| Retry | Arming is attempted at most every 5 min per container; a legacy or invalid manifest is never asked again, an unreadable one is | `CLAUDE_STATE_SIGNAL_RETRY_MS` |
-| Retire | Shutdown, retirement and a new poll revoke the credential; a backend restart forgets all of them | `AgentToolsServer.issueStateSignal` |
+| Retry | Arming is attempted at most every 5 min per container; a legacy or invalid manifest is never asked again, an unreadable one or missing runtime image identity is | `CLAUDE_STATE_SIGNAL_RETRY_MS` |
+| Retire | Shutdown and retirement revoke the credential; installs are serialized across poll lineages, and retired installs are fenced before publishing config; a backend restart forgets all of them | `AgentToolsServer.issueStateSignal` |
 
 A doorbell credential opens nothing else: `/mcp` refuses it and MCP tokens are
 refused on the doorbell. Images without the capability, contexts without the
 agent tools server, and unit tests (`NODE_ENV=test`) keep the 1 s poll.
+
+Failed reads and rejected persistence retry at one-second cadence without
+counting the failed observation as a missed signal. Only accepted observations
+advance the counters. A recovered completion restores the durable completion
+token and unread badge when storage missed the working edge, and triggers the armed PR refresh and
+the one-shot agent-created PR probe once, even if the final state is unchanged.

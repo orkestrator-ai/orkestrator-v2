@@ -26,7 +26,9 @@ function createSignalHarness(
     support?: ClaudeStateSignalSupport[];
     /** Whether the install's probe ring reaches the backend. */
     probeRings?: boolean;
-    install?: () => Promise<void>;
+    install?: (credential: StateSignalCredential, isCurrent: () => boolean) => Promise<void>;
+    legacy?: boolean;
+    rejectPersistence?: () => boolean;
     readGate?: () => Promise<void> | undefined;
   } = {},
 ) {
@@ -34,6 +36,12 @@ function createSignalHarness(
   const environment = createEnvironment("/worktree", "env-signal");
   environment.containerId = CONTAINER;
   let fileState = "waiting";
+  let revision = 0;
+  let completions = 0;
+  const completed: string[] = [];
+  const completionRecords: string[] = [];
+  const probes: string[] = [];
+  environment.prRecheckAfterAgentCompletionArmedAt = new Date(0).toISOString();
   const reads: number[] = [];
   const intervals: number[] = [];
   const emitted: Array<{ event: string; state: unknown }> = [];
@@ -52,14 +60,21 @@ function createSignalHarness(
   const context = {
     storage: {
       loadEnvironments: async () => [environment],
+      recordEnvironmentSessionCompletion: async (id: string) => {
+        completionRecords.push(id);
+        return environment;
+      },
       setEnvironmentAgentActivity: async (
         _environmentId: string,
         state: "idle" | "working" | "waiting",
         occurredAt: string,
-      ) => ({
-        ...environment,
-        agentActivitySources: { "claude-terminal": { state, updatedAt: occurredAt } },
-      }),
+      ) =>
+        options.rejectPersistence?.()
+          ? undefined
+          : {
+              ...environment,
+              agentActivitySources: { "claude-terminal": { state, updatedAt: occurredAt } },
+            },
     },
     emit: (event: string, payload: { state: unknown }) =>
       emitted.push({ event, state: payload.state }),
@@ -80,6 +95,12 @@ function createSignalHarness(
         return signal.credential;
       },
     },
+    notifyAgentTurnCompleted: async (id: string) => {
+      completed.push(id);
+    },
+    probeAgentCreatedPullRequest: async (id: string) => {
+      probes.push(id);
+    },
     appRoot: "",
     resourceRoot: "",
   } as unknown as CommandContext;
@@ -87,7 +108,8 @@ function createSignalHarness(
   const manager = new ClaudeStatePollManager({
     readState: async () => {
       reads.push(time.now());
-      const value = fileState;
+      const value =
+        options.legacy || fileState === "" ? fileState : `${fileState} ${revision} ${completions}`;
       await options.readGate?.();
       return value;
     },
@@ -104,16 +126,20 @@ function createSignalHarness(
         supportCalls += 1;
         return supportAnswers.length > 1 ? supportAnswers.shift()! : supportAnswers[0]!;
       },
-      install: async () => {
+      install: async (_containerId, credential, _context, isCurrent) => {
         installs += 1;
-        await options.install?.();
-        if (options.probeRings ?? true) ringServer();
+        await options.install?.(credential, isCurrent);
+        if (options.probeRings ?? true)
+          ringServer(issued.find((signal) => signal.credential === credential));
       },
     },
   });
 
   return {
     time,
+    completed,
+    completionRecords,
+    probes,
     manager,
     context,
     reads,
@@ -127,6 +153,10 @@ function createSignalHarness(
     },
     /** The hook: write the file, then (optionally) ring. */
     hook: (state: string, ring = true) => {
+      if (state !== "") {
+        revision += 1;
+        if (fileState === "working" && state === "waiting") completions += 1;
+      }
       fileState = state;
       if (ring) ringServer();
     },
@@ -137,6 +167,84 @@ function createSignalHarness(
 }
 
 describe("Claude state signal", () => {
+  test("recovers a whole turn with both rings lost and runs completion work once", async () => {
+    const harness = createSignalHarness();
+    await harness.start();
+    harness.completed.length = 0; // The durable armed intent is honoured at cold start.
+    harness.hook("working", false);
+    harness.hook("waiting", false);
+    await harness.time.advance(CLAUDE_STATE_SAFETY_READ_INTERVAL_MS);
+    expect(harness.completed).toEqual(["env-signal"]);
+    expect(harness.probes).toEqual(["env-signal"]);
+    expect(harness.completionRecords).toEqual(["env-signal"]);
+    expect(harness.issued[0]!.revoked).toBe(true);
+    await harness.time.advance(CLAUDE_STATE_SAFETY_READ_INTERVAL_MS);
+    expect(harness.completed).toHaveLength(1);
+    expect(harness.probes).toHaveLength(1);
+    expect(harness.completionRecords).toHaveLength(1);
+    harness.manager.shutdown(CONTAINER);
+  });
+
+  for (const failure of ["unknown", "rejected", "thrown"] as const) {
+    test(`retries a ${failure} ring observation promptly without demoting its credential`, async () => {
+      let reject = false;
+      const harness = createSignalHarness({
+        rejectPersistence: () => {
+          if (reject && failure === "thrown") throw new Error("storage unavailable");
+          return reject;
+        },
+      });
+      await harness.start();
+      reject = failure !== "unknown";
+      harness.hook(failure === "unknown" ? "" : "working");
+      await flushMicrotasks();
+      expect(harness.currentInterval()).toBe(CLAUDE_STATE_POLL_INTERVAL_MS);
+      reject = false;
+      if (failure === "unknown") harness.hook("working", false);
+      await harness.time.advance(CLAUDE_STATE_POLL_INTERVAL_MS);
+      expect(harness.emitted.at(-1)?.state).toBe("working");
+      expect(harness.currentInterval()).toBe(CLAUDE_STATE_SAFETY_READ_INTERVAL_MS);
+      await harness.time.advance(CLAUDE_STATE_SAFETY_READ_INTERVAL_MS);
+      expect(harness.issued[0]!.revoked).toBe(false);
+      harness.manager.shutdown(CONTAINER);
+    });
+  }
+
+  test("serializes installs across retirement and fences an old config publication", async () => {
+    const gate = deferred<void>();
+    let sharedToken: string | undefined;
+    let calls = 0;
+    const harness = createSignalHarness({
+      install: async (credential, isCurrent) => {
+        calls += 1;
+        if (calls === 1) await gate.promise;
+        if (isCurrent()) sharedToken = credential.token;
+      },
+    });
+    await harness.start();
+    const retired = harness.issued[0]!;
+    harness.manager.shutdown(CONTAINER);
+    await harness.start();
+    expect(calls).toBe(1); // The successor cannot publish before the old writer settles.
+    gate.resolve();
+    await flushMicrotasks();
+    expect(calls).toBe(2);
+    expect(retired.revoked).toBe(true);
+    expect(sharedToken).toBe(harness.issued[1]!.credential.token);
+    expect(harness.ringServer()).toBe(true);
+    expect(harness.currentInterval()).toBe(CLAUDE_STATE_SAFETY_READ_INTERVAL_MS);
+    harness.manager.shutdown(CONTAINER);
+  });
+
+  test("a ring with a legacy snapshot cannot slow polling", async () => {
+    const harness = createSignalHarness({ legacy: true });
+    await harness.start();
+    expect(harness.currentInterval()).toBe(CLAUDE_STATE_POLL_INTERVAL_MS);
+    await harness.time.advance(3_000);
+    expect(harness.reads.length).toBeGreaterThanOrEqual(4);
+    harness.manager.shutdown(CONTAINER);
+  });
+
   test("an image without the signal keeps the 1 s poll and is never asked again", async () => {
     const harness = createSignalHarness({ support: ["unsupported"] });
     await harness.start();

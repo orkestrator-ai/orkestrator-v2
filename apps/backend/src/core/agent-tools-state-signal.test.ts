@@ -3,6 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentToolsServer, CLAUDE_STATE_SIGNAL_PATH } from "./agent-tools.js";
+import { OrkestratorBackend } from "./index.js";
+import type { CommandContext } from "./commands-context.js";
 import { StorageService } from "./storage.js";
 
 describe("Claude state signal route", () => {
@@ -36,6 +38,31 @@ describe("Claude state signal route", () => {
       ...init,
     });
   }
+
+  test("production command context exposes the live server's state credential issuer", async () => {
+    const backend = new OrkestratorBackend({
+      dataDir,
+      toolchainBinDir: "",
+      appRoot: "",
+      resourceRoot: "",
+      emit: () => undefined,
+      agentTools: server,
+    });
+    try {
+      const context = (backend as unknown as { context: CommandContext }).context;
+      let rings = 0;
+      const credential = context.agentTools?.issueStateSignal?.(() => {
+        rings += 1;
+      });
+      expect(credential).toBeTruthy();
+      expect((await ring(credential!.url, credential!.token)).status).toBe(204);
+      expect(rings).toBe(1);
+      credential!.revoke();
+      expect((await ring(credential!.url, credential!.token)).status).toBe(401);
+    } finally {
+      await backend.shutdown();
+    }
+  });
 
   test("issues a container URL only once the server listens", async () => {
     const stopped = new AgentToolsServer(new StorageService(dataDir), "127.0.0.1");

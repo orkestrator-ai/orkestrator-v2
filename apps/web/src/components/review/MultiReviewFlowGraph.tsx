@@ -499,6 +499,35 @@ function useMeasuredWidth(): [(element: HTMLDivElement | null) => void, number |
   return [setElement, width];
 }
 
+/** The stacked column's natural height, or null until it has been measured. */
+function useMeasuredHeight(): [(element: HTMLDivElement | null) => void, number | null] {
+  const [element, setElement] = useState<HTMLDivElement | null>(null);
+  const [height, setHeight] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    if (!element) return;
+    // `offsetHeight` ignores transforms, so zooming never feeds back into it.
+    const measure = () => setHeight(element.offsetHeight > 0 ? element.offsetHeight : null);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [element]);
+  return [setElement, height];
+}
+
+/** The scrolling ancestor that shows the stacked column, the window failing that. */
+function scrollingAncestor(element: HTMLElement | null): HTMLElement | null {
+  for (let node = element?.parentElement ?? null; node; node = node.parentElement) {
+    const overflow = getComputedStyle(node).overflowY;
+    if ((overflow === "auto" || overflow === "scroll") && node.clientHeight > 0) return node;
+  }
+  return null;
+}
+
+/** Room around the column when Fit sizes it: its zoom controls and a margin. */
+const STACKED_FIT_MARGIN_PX = 72;
+
 export interface MultiReviewFlowGraphProps {
   packageNode: MultiReviewFlowNodeModel;
   reviewerNodes: MultiReviewFlowNodeModel[];
@@ -566,6 +595,40 @@ export function MultiReviewFlowGraph({
     },
     [attachViewport, measureRef],
   );
+  // The stacked column keeps a view of its own, under its own key, so each
+  // layout restores what it was left at.
+  const [columnRef, columnHeight] = useMeasuredHeight();
+  const stackedWrapperRef = useRef<HTMLDivElement | null>(null);
+  const stackedViewport = useFlowViewport({
+    viewKey: `${viewKey}\u0000stacked`,
+    measuredWidth,
+    content: { width: measuredWidth ?? 0, height: columnHeight ?? 0 },
+    layout: "stacked",
+    fitHeight: () => {
+      const scroller = scrollingAncestor(stackedWrapperRef.current);
+      const visible = scroller?.clientHeight ?? window.innerHeight;
+      return visible > STACKED_FIT_MARGIN_PX ? visible - STACKED_FIT_MARGIN_PX : null;
+    },
+  });
+  const attachStackedViewport = stackedViewport.attachViewport;
+  const stackedViewportRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      measureRef(element);
+      attachStackedViewport(element);
+    },
+    [attachStackedViewport, measureRef],
+  );
+  const fitStacked = () => {
+    stackedViewport.fit();
+    // The column just got shorter; bring its top back into view.
+    requestAnimationFrame(() => {
+      const wrapper = stackedWrapperRef.current;
+      const scroller = scrollingAncestor(wrapper);
+      if (!wrapper || !scroller) return;
+      const offset = wrapper.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+      if (offset < 0) scroller.scrollTop += offset;
+    });
+  };
 
   const registerRef = useCallback((id: string, element: HTMLButtonElement | null) => {
     if (element) nodeRefs.current.set(id, element);
@@ -638,26 +701,84 @@ export function MultiReviewFlowGraph({
         className={cn("mx-auto h-5 w-0 border-l-2", CONNECTOR_CLASS[state])}
       />
     );
+    const { zoom, offset, panning, viewportHandlers } = stackedViewport;
+    // Until the column is measured it renders unscaled, exactly as at 100%.
+    const scaled = zoom !== 1 && measuredWidth !== null && columnHeight !== null;
     return (
       <div
-        ref={measureRef}
-        role="tablist"
-        aria-label="Multi Review pipeline"
-        aria-orientation="vertical"
+        ref={stackedWrapperRef}
         data-flow-layout="stacked"
-        className={cn("flex flex-col gap-1.5 border-b border-divider px-4 py-4", canvasClass)}
+        className={cn("relative border-b border-divider", canvasClass)}
       >
-        <ColumnLabel>Prepare</ColumnLabel>
-        {renderNode(packageNode, undefined, "w-full")}
-        {connector(summarizeFlowEdges(edges.intoReviewers), "into-reviewers")}
-        <ColumnLabel title={reviewTitle}>{reviewLabel}</ColumnLabel>
-        {reviewerNodes.map((node) => renderNode(node, undefined, "w-full"))}
-        {connector(summarizeFlowEdges(edges.intoConsolidation), "into-consolidation")}
-        <ColumnLabel>Consolidate</ColumnLabel>
-        {renderNode(consolidationNode, undefined, "w-full")}
-        {connector(edges.intoFix, "into-fix")}
-        <ColumnLabel>Fix</ColumnLabel>
-        {renderNode(fixNode, undefined, "w-full")}
+        {/* Sticky, so the controls stay in reach while a long column scrolls. */}
+        <div className="pointer-events-none sticky top-0 z-10 flex justify-end px-3 pt-3">
+          <div className="pointer-events-auto">
+            <FlowZoomControls
+              placement="inline"
+              zoom={zoom}
+              onZoomOut={() => stackedViewport.zoomBy(-1)}
+              onZoomIn={() => stackedViewport.zoomBy(1)}
+              onReset={stackedViewport.resetZoom}
+              onFit={fitStacked}
+            />
+          </div>
+        </div>
+        <div
+          ref={stackedViewportRef}
+          data-flow-viewport=""
+          // Sideways only: the page keeps vertical scrolling, and the browser
+          // leaves pinch to the viewport.
+          className={cn(
+            "overflow-x-auto overflow-y-hidden [touch-action:pan-x_pan-y]",
+            zoom > 1 && (panning ? "cursor-grabbing select-none" : "cursor-grab"),
+          )}
+          {...viewportHandlers}
+        >
+          <div
+            style={
+              scaled
+                ? {
+                    position: "relative",
+                    width: measuredWidth * zoom,
+                    height: columnHeight * zoom,
+                    marginLeft: offset.x,
+                  }
+                : undefined
+            }
+          >
+            <div
+              ref={columnRef}
+              role="tablist"
+              aria-label="Multi Review pipeline"
+              aria-orientation="vertical"
+              className="flex flex-col gap-1.5 px-4 pt-2 pb-4"
+              style={
+                scaled
+                  ? {
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      width: measuredWidth,
+                      transform: `scale(${zoom})`,
+                      transformOrigin: "0 0",
+                    }
+                  : undefined
+              }
+            >
+              <ColumnLabel>Prepare</ColumnLabel>
+              {renderNode(packageNode, undefined, "w-full")}
+              {connector(summarizeFlowEdges(edges.intoReviewers), "into-reviewers")}
+              <ColumnLabel title={reviewTitle}>{reviewLabel}</ColumnLabel>
+              {reviewerNodes.map((node) => renderNode(node, undefined, "w-full"))}
+              {connector(summarizeFlowEdges(edges.intoConsolidation), "into-consolidation")}
+              <ColumnLabel>Consolidate</ColumnLabel>
+              {renderNode(consolidationNode, undefined, "w-full")}
+              {connector(edges.intoFix, "into-fix")}
+              <ColumnLabel>Fix</ColumnLabel>
+              {renderNode(fixNode, undefined, "w-full")}
+            </div>
+          </div>
+        </div>
       </div>
     );
   }

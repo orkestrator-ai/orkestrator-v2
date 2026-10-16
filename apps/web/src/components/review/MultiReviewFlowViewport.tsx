@@ -8,15 +8,19 @@ import {
 } from "react";
 import { Maximize, Minus, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { useMultiReviewFlowViewStore } from "@/stores/multiReviewFlowViewStore";
 import type { FlowRect } from "./multi-review-flow";
 import {
   DEFAULT_FLOW_VIEW,
+  FLOW_ZOOM_MAX,
   canZoomIn,
   canZoomOut,
   fitFlowView,
+  fitStackedFlowZoom,
   flowContentOffset,
   flowViewportHeight,
+  pinchFlowZoom,
   revealFlowRect,
   steppedFlowZoom,
   wheelZoomFactor,
@@ -35,29 +39,57 @@ interface GestureEvent extends UIEvent {
   clientY: number;
 }
 
+function touchDistance(touches: TouchList): number {
+  const [first, second] = [touches[0], touches[1]];
+  if (!first || !second) return 0;
+  return Math.hypot(first.clientX - second.clientX, first.clientY - second.clientY);
+}
+
+function touchMidpoint(touches: TouchList): { clientX: number; clientY: number } {
+  const [first, second] = [touches[0]!, touches[1]!];
+  return {
+    clientX: (first.clientX + second.clientX) / 2,
+    clientY: (first.clientY + second.clientY) / 2,
+  };
+}
+
 /**
  * Zoom and pan for the graph's scrolling viewport, kept per workflow.
  *
  * Pan is the viewport's scroll position, so ordinary scrolling pans it and the
- * browser bounds it. Ctrl/⌘ + wheel and pinch zoom around the pointer; a plain
- * wheel is left to scrolling, so the page around the graph still scrolls. A
- * view is restored only at the width it was taken at, and a change of panel
- * width resets it.
+ * browser bounds it. Ctrl/⌘ + wheel, a trackpad pinch and a two-finger touch
+ * pinch zoom around the pointer; a plain wheel is left to scrolling, so the
+ * page around the graph still scrolls. A view is restored only at the width it
+ * was taken at, and a change of panel width resets it.
+ *
+ * The wide graph scrolls both ways inside a viewport of bounded height. The
+ * stacked column scrolls only sideways: its viewport grows with the scaled
+ * column, so vertical scrolling stays with the page, and Fit fits the column
+ * to the height `fitHeight` reports the page shows it in.
  */
 export function useFlowViewport({
   viewKey,
   measuredWidth,
   content,
+  layout = "graph",
+  fitHeight,
 }: {
   viewKey: string;
   measuredWidth: number | null;
   content: FlowSize;
+  layout?: "graph" | "stacked";
+  fitHeight?: () => number | null;
 }) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [viewportElement, setViewportElement] = useState<HTMLDivElement | null>(null);
+  const stacked = layout === "stacked";
   const viewport: FlowSize = {
     width: measuredWidth ?? content.width,
-    height: flowViewportHeight(content.height),
+    // The stacked viewport is as tall as the column at any zoom, so nothing
+    // scrolls inside it vertically.
+    height: stacked
+      ? Math.max(1, content.height) * FLOW_ZOOM_MAX
+      : flowViewportHeight(content.height),
   };
   // The remembered zoom applies only at the width it was taken at.
   const zoom =
@@ -68,9 +100,9 @@ export function useFlowViewport({
   const zoomRef = useRef(zoom);
   /** A scroll position waiting for the render at its zoom. */
   const pendingRef = useRef<FlowView | null>(null);
-  const sizesRef = useRef({ content, viewport, measuredWidth, viewKey });
+  const sizesRef = useRef({ content, viewport, measuredWidth, viewKey, stacked, fitHeight });
   useLayoutEffect(() => {
-    sizesRef.current = { content, viewport, measuredWidth, viewKey };
+    sizesRef.current = { content, viewport, measuredWidth, viewKey, stacked, fitHeight };
   });
 
   const attachViewport = useCallback((element: HTMLDivElement | null) => {
@@ -175,8 +207,21 @@ export function useFlowViewport({
   const resetZoom = useCallback(() => zoomTo(DEFAULT_FLOW_VIEW.zoom), [zoomTo]);
 
   const fit = useCallback(() => {
-    const { content: size, viewport: box } = sizesRef.current;
-    apply(fitFlowView(size, box));
+    const {
+      content: size,
+      viewport: box,
+      stacked: column,
+      fitHeight: available,
+    } = sizesRef.current;
+    apply(
+      column
+        ? {
+            zoom: fitStackedFlowZoom(size.height, available?.() ?? null),
+            scrollLeft: 0,
+            scrollTop: 0,
+          }
+        : fitFlowView(size, box),
+    );
   }, [apply]);
 
   /** Bring a node (canvas coordinates) into view before it takes focus. */
@@ -228,13 +273,42 @@ export function useFlowViewport({
       const gesture = event as GestureEvent;
       zoomToRef.current(gestureStartZoom * gesture.scale, anchorOf(gesture));
     };
+    // A two-finger touch pinch. The viewport's `touch-action: pan-x pan-y`
+    // keeps the browser from zooming the whole page instead; one finger still
+    // scrolls natively.
+    let pinch: { distance: number; zoom: number } | null = null;
+    const onTouchStart = (event: TouchEvent) => {
+      pinch =
+        event.touches.length === 2
+          ? { distance: touchDistance(event.touches), zoom: zoomRef.current }
+          : null;
+    };
+    const onTouchMove = (event: TouchEvent) => {
+      if (!pinch || event.touches.length !== 2) return;
+      event.preventDefault();
+      zoomToRef.current(
+        pinchFlowZoom(pinch.zoom, pinch.distance, touchDistance(event.touches)),
+        anchorOf(touchMidpoint(event.touches)),
+      );
+    };
+    const onTouchEnd = (event: TouchEvent) => {
+      if (event.touches.length < 2) pinch = null;
+    };
     viewportElement.addEventListener("wheel", onWheel, { passive: false });
     viewportElement.addEventListener("gesturestart", onGestureStart);
     viewportElement.addEventListener("gesturechange", onGestureChange);
+    viewportElement.addEventListener("touchstart", onTouchStart, { passive: true });
+    viewportElement.addEventListener("touchmove", onTouchMove, { passive: false });
+    viewportElement.addEventListener("touchend", onTouchEnd);
+    viewportElement.addEventListener("touchcancel", onTouchEnd);
     return () => {
       viewportElement.removeEventListener("wheel", onWheel);
       viewportElement.removeEventListener("gesturestart", onGestureStart);
       viewportElement.removeEventListener("gesturechange", onGestureChange);
+      viewportElement.removeEventListener("touchstart", onTouchStart);
+      viewportElement.removeEventListener("touchmove", onTouchMove);
+      viewportElement.removeEventListener("touchend", onTouchEnd);
+      viewportElement.removeEventListener("touchcancel", onTouchEnd);
     };
   }, [viewportElement]);
 
@@ -289,10 +363,11 @@ export function useFlowViewport({
     onPointerCancel: endDrag,
   };
 
+  const offset = flowContentOffset(zoom, content, viewport);
   return {
     zoom,
     viewport,
-    offset: flowContentOffset(zoom, content, viewport),
+    offset: stacked ? { x: offset.x, y: 0 } : offset,
     panning,
     attachViewport,
     viewportHandlers,
@@ -303,29 +378,39 @@ export function useFlowViewport({
   };
 }
 
-const CONTROL_CLASS = "size-7 rounded-md";
-
-/** −, the zoom level (which resets to 100%), + and Fit, over the canvas's corner. */
+/**
+ * −, the zoom level (which resets to 100%), + and Fit. Over the wide graph's
+ * bottom-right corner; at the top of the stacked column, where they stay in
+ * reach while it scrolls. Touch targets are 44 px wherever the pointer is
+ * coarse, and always in the stacked layout, which is the phone layout.
+ */
 export function FlowZoomControls({
   zoom,
   onZoomOut,
   onZoomIn,
   onReset,
   onFit,
+  placement = "corner",
 }: {
   zoom: number;
   onZoomOut: () => void;
   onZoomIn: () => void;
   onReset: () => void;
   onFit: () => void;
+  placement?: "corner" | "inline";
 }) {
   const percent = Math.round(zoom * 100);
+  const touch = placement === "inline";
+  const CONTROL_CLASS = cn("rounded-md", touch ? "size-11" : "size-7 pointer-coarse:size-11");
   return (
     <div
       role="group"
       aria-label="Zoom"
       data-flow-zoom-controls=""
-      className="absolute right-4 bottom-4 flex items-center gap-0.5 rounded-lg border border-border bg-flow-node/95 p-0.5 shadow-[0_8px_24px_rgb(0_0_0/0.45)]"
+      className={cn(
+        "flex items-center gap-0.5 rounded-lg border border-border bg-flow-node/95 p-0.5 shadow-[0_8px_24px_rgb(0_0_0/0.45)]",
+        placement === "corner" && "absolute right-4 bottom-4",
+      )}
     >
       <Button
         type="button"
@@ -342,7 +427,10 @@ export function FlowZoomControls({
       <Button
         type="button"
         variant="ghost"
-        className="h-7 min-w-12 rounded-md px-1.5 font-mono text-[11px] tabular-nums"
+        className={cn(
+          "min-w-12 rounded-md px-1.5 font-mono text-[11px] tabular-nums",
+          touch ? "h-11 min-w-14" : "h-7 pointer-coarse:h-11",
+        )}
         aria-label={`Zoom ${percent}%, reset to 100%`}
         title="Reset to 100%"
         data-testid="multi-review-zoom-level"

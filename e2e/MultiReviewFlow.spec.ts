@@ -42,8 +42,10 @@ function overlapping(boxes: Box[]): Array<[number, number]> {
   return pairs;
 }
 
-test("renders every phase as a pipeline without overlapping nodes", async ({ page }) => {
-  for (const phase of PHASES) {
+// One test per phase, so each page load has its own time budget: twelve in
+// one test overran it under a loaded parallel run.
+for (const phase of PHASES) {
+  test(`renders the ${phase} phase as a pipeline without overlapping nodes`, async ({ page }) => {
     await page.goto(`/multi-review-flow?phase=${phase}&reviewers=4`);
     const pipeline = page.getByRole("tablist", { name: "Multi Review pipeline" });
     await expect(pipeline.getByRole("tab")).toHaveCount(7);
@@ -55,8 +57,8 @@ test("renders every phase as a pipeline without overlapping nodes", async ({ pag
       (await selected.getAttribute("id"))!,
     );
     expect(overlapping(await nodeBoxes(page)), phase).toEqual([]);
-  }
-});
+  });
+}
 
 for (const count of [1, 2, 4, 8]) {
   test(`fits a panel of ${count} reviewer${count === 1 ? "" : "s"}`, async ({ page }) => {
@@ -129,20 +131,33 @@ function inside(box: Box, frame: Box): boolean {
   );
 }
 
+const isStacked = (page: Page) => page.viewportSize()!.width < 960;
+
+/** Where nodes must be visible: the graph's viewport, or the page for the column. */
+async function visibleFrame(page: Page): Promise<Box> {
+  if (!isStacked(page)) return viewportBox(page);
+  const { width, height } = page.viewportSize()!;
+  return { x: 0, y: 0, width, height };
+}
+
 test("fits the 32-reviewer maximum and zooms within bounds", async ({ page }) => {
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=32");
-  const viewport = page.viewportSize()!;
-  test.skip(viewport.width < 960, "The stacked layout has no zoom");
   await expect(page.getByRole("tab", { name: /^Reviewer \d+ ·/ })).toHaveCount(32);
   const level = page.getByTestId("multi-review-zoom-level");
   await expect(level).toHaveText("100%");
 
   await page.getByRole("button", { name: "Fit the whole pipeline" }).click();
   await expect(level).not.toHaveText("100%");
-  const frame = await viewportBox(page);
+  // Every node at once: inside the graph's viewport, or for the stacked
+  // column, on the screen once Fit has brought the column's top into view.
+  await expect
+    .poll(async () => {
+      const frame = await visibleFrame(page);
+      return (await nodeBoxes(page)).every((box) => inside(box, frame));
+    })
+    .toBe(true);
   const boxes = await nodeBoxes(page);
   expect(boxes).toHaveLength(35);
-  for (const box of boxes) expect(inside(box, frame)).toBe(true);
   expect(overlapping(boxes)).toEqual([]);
 
   const zoomIn = page.getByRole("button", { name: "Zoom in" });
@@ -159,7 +174,6 @@ test("keeps the node reached from the keyboard in view at the 32-reviewer maximu
   page,
 }) => {
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=32");
-  test.skip(page.viewportSize()!.width < 960, "The stacked layout scrolls the page instead");
   const selected = page.locator('[role="tab"][aria-selected="true"]');
   await selected.focus();
   await page.keyboard.press("Home");
@@ -170,31 +184,97 @@ test("keeps the node reached from the keyboard in view at the 32-reviewer maximu
     const { x, y, width, height } = element.getBoundingClientRect();
     return { x, y, width, height };
   });
-  expect(inside(box, await viewportBox(page))).toBe(true);
+  expect(inside(box, await visibleFrame(page))).toBe(true);
 });
 
 test("pans the zoomed graph by dragging the canvas and with Ctrl + wheel zoom", async ({
   page,
 }) => {
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=32");
-  test.skip(page.viewportSize()!.width < 960, "The stacked layout has no zoom");
-  const frame = await viewportBox(page);
-  const scrollTop = () =>
-    page.locator("[data-flow-viewport]").evaluate((element) => element.scrollTop);
-  // Drag from empty canvas below the Fix column's label.
-  const start = { x: frame.x + frame.width - 60, y: frame.y + frame.height - 80 };
-  await page.mouse.move(start.x, start.y);
-  await page.mouse.down();
-  await page.mouse.move(start.x, start.y - 300, { steps: 5 });
-  await page.mouse.up();
-  expect(await scrollTop()).toBeGreaterThan(250);
-
+  const viewportLocator = page.locator("[data-flow-viewport]");
   const level = page.getByTestId("multi-review-zoom-level");
-  await page.mouse.move(frame.x + frame.width / 2, frame.y + frame.height / 2);
+  if (isStacked(page)) {
+    // The column fills the screen at 100%, so zoom in until it overflows sideways.
+    for (let click = 0; click < 4; click += 1) {
+      await page.getByRole("button", { name: "Zoom in" }).click();
+    }
+    await expect(level).toHaveText("200%");
+    // Drag from the column's "Prepare" label, which is canvas, not a node.
+    const label = await page.getByText("Prepare", { exact: true }).boundingBox();
+    const start = { x: label!.x + label!.width / 2, y: label!.y + label!.height / 2 };
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(start.x - 200, start.y, { steps: 5 });
+    await page.mouse.up();
+    expect(await viewportLocator.evaluate((element) => element.scrollLeft)).toBeGreaterThan(150);
+    // Sideways only: the page keeps vertical scrolling.
+    expect(await viewportLocator.evaluate((element) => element.scrollTop)).toBe(0);
+  } else {
+    const frame = await viewportBox(page);
+    // Drag from empty canvas below the Fix column's label.
+    const start = { x: frame.x + frame.width - 60, y: frame.y + frame.height - 80 };
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(start.x, start.y - 300, { steps: 5 });
+    await page.mouse.up();
+    expect(await viewportLocator.evaluate((element) => element.scrollTop)).toBeGreaterThan(250);
+  }
+
+  const before = await level.textContent();
+  const frame = await viewportBox(page);
+  await page.mouse.move(frame.x + frame.width / 2, frame.y + Math.min(frame.height, 400) / 2);
   await page.keyboard.down("Control");
   await page.mouse.wheel(0, 200);
   await page.keyboard.up("Control");
-  await expect(level).not.toHaveText("100%");
+  await expect(level).not.toHaveText(before!);
+});
+
+test("a two-finger pinch zooms the stacked column on touch", async ({ page }) => {
+  await page.goto("/multi-review-flow?phase=reviewing&reviewers=8");
+  test.skip(!isStacked(page), "The touch project uses the stacked layout");
+  const level = page.getByTestId("multi-review-zoom-level");
+  await expect(level).toHaveText("100%");
+  const pinch = (from: [number, number], to: [number, number]) =>
+    page.locator("[data-flow-viewport]").evaluate(
+      (element, [start, end]) => {
+        const touches = (spread: [number, number]) =>
+          spread.map(
+            (x, index) =>
+              new Touch({ identifier: index + 1, target: element, clientX: x, clientY: 300 }),
+          );
+        const send = (type: string, list: Touch[]) =>
+          element.dispatchEvent(
+            new TouchEvent(type, { touches: list, bubbles: true, cancelable: true }),
+          );
+        send("touchstart", touches(start));
+        const moved = !send("touchmove", touches(end));
+        send("touchend", []);
+        return moved;
+      },
+      [from, to] as const,
+    );
+  // Fingers spread to twice the distance: twice the zoom, and the page itself
+  // is not zoomed (the move was taken).
+  expect(await pinch([150, 250], [100, 300])).toBe(true);
+  await expect(level).toHaveText("200%");
+  expect(await pinch([100, 300], [150, 250])).toBe(true);
+  await expect(level).toHaveText("100%");
+});
+
+test("the stacked zoom controls are full-size touch targets", async ({ page }) => {
+  await page.goto("/multi-review-flow?phase=reviewing&reviewers=4");
+  test.skip(!isStacked(page), "The wide graph's controls are sized for a fine pointer");
+  const controls = page.getByRole("group", { name: "Zoom" });
+  await expect(controls.getByRole("button")).toHaveCount(4);
+  for (const button of await controls.getByRole("button").all()) {
+    const box = (await button.boundingBox())!;
+    expect(box.width).toBeGreaterThanOrEqual(44);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+  }
+  // Inside the screen, and still in reach after the page scrolls past the top.
+  const { width } = page.viewportSize()!;
+  const groupBox = (await controls.boundingBox())!;
+  expect(groupBox.x + groupBox.width).toBeLessThanOrEqual(width);
 });
 
 test("shows a failed reviewer's error on its node, with the whole text in a tooltip", async ({

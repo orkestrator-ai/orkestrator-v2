@@ -24,12 +24,19 @@ live findings on real providers and a few gaps found on the way.
   (`MultiReviewFlowViewport.tsx`, maths in `multi-review-flow-viewport.ts`).
   −, the zoom level (which resets to 100%), + and Fit sit in its bottom-right
   corner; zoom runs from 20% to 200%. Dragging the canvas, wheel and trackpad
-  scrolling pan it; Ctrl/⌘ + wheel and pinch zoom around the pointer, while a
-  plain wheel is left to scrolling so the page still scrolls past the graph.
-  A node reached from the keyboard is scrolled into view first. Zoom and pan
-  are kept per workflow in `multiReviewFlowViewStore` (renderer only, at most
-  50 workflows) and reset when the panel width changes. The stacked layout has
-  no zoom.
+  scrolling pan it; Ctrl/⌘ + wheel, a trackpad pinch and a two-finger touch
+  pinch zoom around the pointer, while a plain wheel is left to scrolling so
+  the page still scrolls past the graph. A node reached from the keyboard is
+  scrolled into view first. Zoom and pan are kept per workflow in
+  `multiReviewFlowViewStore` (renderer only, at most 50 workflows) and reset
+  when the panel width changes.
+- **Zoom in the stacked layout.** Below 960 px the column has the same
+  controls, range and presets, in a sticky row at its top with 44 px touch
+  targets. The column scales inside a viewport that scrolls only sideways and
+  grows with it, so vertical scrolling stays with the page and the inspector
+  below stays reachable; Fit sizes the column to the height the page shows it
+  in and brings its top into view. It keeps its own view, under the workflow
+  id plus `stacked`, so each layout restores what it was left at.
 - **Failed nodes.** A failed reviewer or step shows the first line of its
   error in place of its model, truncated to the node. The whole text is the
   node's accessible description and its tooltip, which also opens on keyboard
@@ -109,10 +116,11 @@ live findings on real providers and a few gaps found on the way.
   `host.docker.internal`. Each bridge's auto-allow path has a unit test; none
   has been run against a real model. Batch with
   [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md).
-- **Zoom, pan and the error tooltip in the desktop app.** The browser suite
-  covers them in Chromium (`e2e/MultiReviewFlow.spec.ts`), including Ctrl +
-  wheel, but not a real trackpad pinch, or Safari's gesture events in the web
-  client.
+- **Zoom, pan and the error tooltip on real devices.** The browser suite
+  covers them in Chromium at desktop and phone sizes (`e2e/MultiReviewFlow.spec.ts`),
+  including Ctrl + wheel and a synthetic two-finger touch pinch, but not a real
+  trackpad pinch in the desktop app, a phone's own pinch, or Safari's gesture
+  events in the web client.
 
 ### Known limits (by design)
 

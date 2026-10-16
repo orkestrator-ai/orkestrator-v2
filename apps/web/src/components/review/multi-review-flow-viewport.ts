@@ -195,3 +195,22 @@ export function wheelZoomFactor(deltaY: number, deltaMode: number): number {
   const exponent = clamp(-deltaY * unit * 10, -0.5, 0.5);
   return 2 ** exponent;
 }
+
+/**
+ * The zoom a two-finger pinch asks for: the zoom it started at, scaled by how
+ * far the fingers have spread since, within the zoom bounds.
+ */
+export function pinchFlowZoom(startZoom: number, startDistance: number, distance: number): number {
+  if (!(startDistance > 0) || !Number.isFinite(distance)) return clampFlowZoom(startZoom);
+  return clampFlowZoom((startZoom * distance) / startDistance);
+}
+
+/**
+ * The stacked layout's Fit: the whole column within the height the page shows
+ * it in. It never magnifies, and a height that could not be measured leaves
+ * the column at 100%.
+ */
+export function fitStackedFlowZoom(contentHeight: number, availableHeight: number | null): number {
+  if (!(contentHeight > 0) || availableHeight === null || !(availableHeight > 0)) return 1;
+  return clampFlowZoom(Math.min(1, availableHeight / contentHeight));
+}

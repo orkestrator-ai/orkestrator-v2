@@ -10,6 +10,8 @@ import {
   fitFlowZoom,
   flowContentOffset,
   flowViewportHeight,
+  fitStackedFlowZoom,
+  pinchFlowZoom,
   revealFlowRect,
   steppedFlowZoom,
   wheelZoomFactor,
@@ -148,5 +150,24 @@ describe("keeping a node in view", () => {
     const offset = flowContentOffset(1.5, content, viewport);
     expect(view.scrollTop).toBe(Math.round(layout.package.y * 1.5 + offset.y - 24));
     expect(view.scrollLeft).toBe(0);
+  });
+});
+
+describe("touch pinch and the stacked Fit", () => {
+  test("a pinch scales the zoom it started from, within bounds", () => {
+    expect(pinchFlowZoom(1, 100, 150)).toBe(1.5);
+    expect(pinchFlowZoom(0.5, 200, 100)).toBe(0.25);
+    expect(pinchFlowZoom(1, 100, 1_000)).toBe(FLOW_ZOOM_MAX);
+    expect(pinchFlowZoom(1, 100, 1)).toBe(FLOW_ZOOM_MIN);
+    // Fingers that started together give no ratio to scale by.
+    expect(pinchFlowZoom(0.8, 0, 50)).toBe(0.8);
+  });
+
+  test("Fit sizes the stacked column to the visible height and never magnifies", () => {
+    expect(fitStackedFlowZoom(2_000, 800)).toBeCloseTo(0.4);
+    expect(fitStackedFlowZoom(400, 800)).toBe(1);
+    expect(fitStackedFlowZoom(40_000, 800)).toBe(FLOW_ZOOM_MIN);
+    expect(fitStackedFlowZoom(2_000, null)).toBe(1);
+    expect(fitStackedFlowZoom(0, 800)).toBe(1);
   });
 });

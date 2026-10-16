@@ -998,9 +998,87 @@ describe("zoom and pan", () => {
     expect(element.scrollTop).toBe(300);
   });
 
-  test("shows no zoom controls in the stacked layout", () => {
+  test("the stacked layout has the same controls and bounds, with 44 px targets", () => {
     render(<MultiReviewFlowGraph {...panel(4)} layout="stacked" />);
-    expect(screen.queryByRole("group", { name: "Zoom" }) === null).toBe(true);
+    const controls = screen.getByRole("group", { name: "Zoom" });
+    for (const name of ["Zoom out", "Zoom in", "Fit the whole pipeline"]) {
+      expect(within(controls).getByRole("button", { name }).className).toContain("size-11");
+    }
+    expect(screen.getByTestId("multi-review-zoom-level").className).toContain("h-11");
+    // The page, not the column, scrolls vertically; the browser leaves pinch to it.
+    const viewport = document.querySelector<HTMLElement>("[data-flow-viewport]")!;
+    expect(viewport.className).toContain("overflow-y-hidden");
+    expect(viewport.className).toContain("[touch-action:pan-x_pan-y]");
+
+    const zoomIn = screen.getByRole("button", { name: "Zoom in" }) as HTMLButtonElement;
+    const zoomOut = screen.getByRole("button", { name: "Zoom out" }) as HTMLButtonElement;
+    for (let click = 0; click < 10; click += 1) fireEvent.click(zoomIn);
+    expect(zoomLevel()).toBe("200%");
+    expect(zoomIn.disabled).toBe(true);
+    for (let click = 0; click < 20; click += 1) fireEvent.click(zoomOut);
+    expect(zoomLevel()).toBe("20%");
+    expect(zoomOut.disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Zoom 20%, reset to 100%" }));
+    expect(zoomLevel()).toBe("100%");
+    // Unmeasured, Fit leaves the column as it is rather than guessing.
+    fireEvent.click(screen.getByRole("button", { name: "Fit the whole pipeline" }));
+    expect(zoomLevel()).toBe("100%");
+  });
+
+  test("the stacked and wide layouts each keep their own view", () => {
+    const stacked = render(<MultiReviewFlowGraph {...panel(4)} layout="stacked" />);
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(zoomLevel()).toBe("125%");
+    stacked.unmount();
+
+    const wide = render(<MultiReviewFlowGraph {...panel(4)} layout="graph" />);
+    expect(zoomLevel()).toBe("100%");
+    fireEvent.click(screen.getByRole("button", { name: "Zoom out" }));
+    expect(zoomLevel()).toBe("80%");
+    wide.unmount();
+
+    const views = useMultiReviewFlowViewStore.getState().views;
+    expect(views.get("workflow-zoom")?.zoom).toBe(0.8);
+    expect(views.get("workflow-zoom\u0000stacked")?.zoom).toBe(1.25);
+    const again = render(<MultiReviewFlowGraph {...panel(4)} layout="stacked" />);
+    expect(zoomLevel()).toBe("125%");
+    again.unmount();
+    render(<MultiReviewFlowGraph {...panel(4)} layout="graph" />);
+    expect(zoomLevel()).toBe("80%");
+  });
+
+  test("a two-finger pinch zooms either layout, and one finger leaves scrolling alone", () => {
+    for (const layout of ["stacked", "graph"] as const) {
+      const view = render(<MultiReviewFlowGraph {...panel(4)} layout={layout} />);
+      const viewport = document.querySelector<HTMLElement>("[data-flow-viewport]")!;
+      const touch = (type: string, points: Array<[number, number]>) => {
+        const event = new Event(type, { bubbles: true, cancelable: true });
+        Object.defineProperty(event, "touches", {
+          value: points.map(([clientX, clientY]) => ({ clientX, clientY })),
+        });
+        act(() => {
+          viewport.dispatchEvent(event);
+        });
+        return event;
+      };
+      touch("touchstart", [[100, 100]]);
+      expect(touch("touchmove", [[100, 300]]).defaultPrevented).toBe(false);
+      expect(zoomLevel()).toBe("100%");
+      touch("touchstart", [
+        [100, 100],
+        [200, 100],
+      ]);
+      // Fingers spread to twice the distance: twice the zoom.
+      const spread = touch("touchmove", [
+        [50, 100],
+        [250, 100],
+      ]);
+      expect(spread.defaultPrevented).toBe(true);
+      expect(zoomLevel()).toBe("200%");
+      touch("touchend", []);
+      view.unmount();
+      useMultiReviewFlowViewStore.setState({ views: new Map() });
+    }
   });
 
   test("remembers zoom per workflow between visits", () => {

@@ -7,14 +7,7 @@ import {
   mockToastSuccess as toastSuccessMock,
 } from "../../mocks/sonner";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
-
-type SettingsDialogProps = {
-  open: boolean;
-  environment: Environment;
-  onUpdate: (environment: Environment) => void;
-};
-
-const settingsDialogPropsMock = mock((_props: SettingsDialogProps) => {});
+import { expectDomAbsent } from "../../bounded-test-diagnostics";
 
 // Mock UI components that require providers.
 // NOTE: @/components/ui/tooltip is already mocked by StatusIndicator.test.tsx
@@ -101,30 +94,6 @@ mock.module("@/components/ui/checkbox", () => ({
   ),
 }));
 
-// The stub exposes the two update shapes the real dialog can emit, so the
-// component's own transitioning bookkeeping can be driven from a test.
-mock.module("@/components/environments/EnvironmentSettingsDialog", () => ({
-  EnvironmentSettingsDialog: (props: SettingsDialogProps) => {
-    settingsDialogPropsMock(props);
-    return props.open ? (
-      <div data-testid="settings-dialog">
-        <button
-          type="button"
-          onClick={() => props.onUpdate({ ...props.environment, status: "creating" })}
-        >
-          Emit transitioning update
-        </button>
-        <button
-          type="button"
-          onClick={() => props.onUpdate({ ...props.environment, status: "running" })}
-        >
-          Emit settled update
-        </button>
-      </div>
-    ) : null;
-  },
-}));
-
 mock.module("@/lib/backend", () => ({
   getEnvironments: async () => [],
   getEnvironment: async () => null,
@@ -152,6 +121,7 @@ import { useAgentMailStore } from "../../../apps/web/src/stores/agentMailStore";
 import { useConfigStore } from "../../../apps/web/src/stores/configStore";
 import { useUIStore } from "../../../apps/web/src/stores/uiStore";
 import { useProjectStore } from "../../../apps/web/src/stores/projectStore";
+import { useAppDialogStore } from "../../../apps/web/src/stores/appDialogStore";
 
 function makeEnvironment(overrides: Partial<Environment> = {}): Environment {
   return {
@@ -185,7 +155,6 @@ type RenderOptions = {
   onStop?: (environmentId: string) => void;
   onRestart?: (environmentId: string) => void;
   onFork?: (environmentId: string, environmentType: EnvironmentType) => void;
-  onUpdate?: (environment: Environment) => void;
 };
 
 function itemElement(env: Environment, options: RenderOptions = {}) {
@@ -199,7 +168,6 @@ function itemElement(env: Environment, options: RenderOptions = {}) {
       onStop={options.onStop ?? noopEnvironmentHandler}
       onRestart={options.onRestart ?? noopEnvironmentHandler}
       onFork={options.onFork}
-      onUpdate={options.onUpdate}
       isMultiSelectMode={options.isMultiSelectMode}
       isChecked={options.isChecked}
     />
@@ -232,7 +200,7 @@ async function showTooltip(container: HTMLElement) {
 beforeEach(() => {
   toastSuccessMock.mockClear();
   toastErrorMock.mockClear();
-  settingsDialogPropsMock.mockClear();
+  useAppDialogStore.setState({ request: null });
   useAgentActivityStore.setState({
     tabStates: {},
     containerStates: {},
@@ -939,69 +907,20 @@ describe("EnvironmentItem menu actions and selection", () => {
     expect(onRestart).not.toHaveBeenCalled();
   });
 
-  test("context menu Settings opens the settings dialog", async () => {
-    const env = makeEnvironment();
-    const { container } = renderItem(env);
+  test("context menu Settings requests the app-level settings dialog", () => {
+    // The row only records the request: in the mobile projects drawer it
+    // unmounts with the drawer, so `AppDialogHost` renders the dialog.
+    const { container } = renderItem(makeEnvironment());
 
     const settingsItem = findMenuItem(container, "Settings");
     expect(settingsItem).not.toBeUndefined();
-
     fireEvent.click(settingsItem!);
-    expect(screen.getByRole("status", { name: "Loading environment settings…" })).toBeTruthy();
-    // The dialog is a lazily imported chunk now, so resolving it is a real
-    // async boundary rather than a render tick. The default 1s waitFor is not
-    // enough headroom for that under a loaded parallel suite.
-    await waitFor(
-      () => {
-        expect(container.querySelector('[data-testid="settings-dialog"]')).not.toBeNull();
-      },
-      { timeout: 3_000 },
-    );
-    expect(settingsDialogPropsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ open: true }),
-    );
-  });
 
-  test("keeps transition controls disabled until a non-transitioning status arrives", async () => {
-    const onUpdate = mock((_environment: Environment) => {});
-    const initialEnvironment = makeEnvironment({ status: "running" });
-    const rendered = renderItem(initialEnvironment, { onUpdate });
-
-    fireEvent.click(findMenuItem(rendered.container, "Settings")!);
-    const dialogProps = settingsDialogPropsMock.mock.calls.at(-1)?.[0];
-    expect(dialogProps).toBeDefined();
-
-    const stoppingEnvironment = {
-      ...initialEnvironment,
-      status: "stopping" as const,
-    };
-    act(() => {
-      dialogProps!.onUpdate(stoppingEnvironment);
+    expect(useAppDialogStore.getState().request).toEqual({
+      kind: "environment-settings",
+      environmentId: "env-1",
     });
-
-    expect(onUpdate).toHaveBeenCalledWith(stoppingEnvironment);
-    expect(findMenuItem(rendered.container, "Stop")?.getAttribute("aria-disabled")).toBe("true");
-    expect(rendered.container.querySelector("svg.animate-spin.text-amber-500")).not.toBeNull();
-
-    rendered.rerender(
-      <EnvironmentItem
-        environment={{ ...initialEnvironment, status: "stopped" }}
-        isSelected={false}
-        onSelect={noopSelect}
-        onDelete={noopEnvironmentHandler}
-        onStart={noopEnvironmentHandler}
-        onStop={noopEnvironmentHandler}
-        onRestart={noopEnvironmentHandler}
-        onUpdate={onUpdate}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(findMenuItem(rendered.container, "Start")?.getAttribute("aria-disabled")).toBeNull();
-      expect(rendered.container.querySelector("svg.animate-spin.text-amber-500") === null).toBe(
-        true,
-      );
-    });
+    expectDomAbsent(screen.queryByRole("status", { name: "Loading environment settings…" }));
   });
 
   test("local environments never enter the container transition lifecycle", () => {
@@ -1356,22 +1275,17 @@ describe("EnvironmentItem mobile actions menu", () => {
     expect(writeText).toHaveBeenCalledWith("Review the migration plan");
   });
 
-  test("Settings opens the settings dialog", async () => {
-    const { container } = renderItem(makeEnvironment());
+  test("Settings requests the app-level settings dialog", async () => {
+    renderItem(makeEnvironment());
 
     await openActionsMenu();
     const menu = await findActionsMenu();
 
     await selectActionsMenuItem(menu, "Settings");
-    // The dialog is a lazily imported chunk now, so resolving it is a real
-    // async boundary rather than a render tick. The default 1s waitFor is not
-    // enough headroom for that under a loaded parallel suite.
-    await waitFor(
-      () => {
-        expect(container.querySelector('[data-testid="settings-dialog"]')).not.toBeNull();
-      },
-      { timeout: 3_000 },
-    );
+    expect(useAppDialogStore.getState().request).toEqual({
+      kind: "environment-settings",
+      environmentId: "env-1",
+    });
   });
 
   test("Delete asks for confirmation instead of deleting immediately", async () => {
@@ -1552,59 +1466,19 @@ describe("EnvironmentItem transitioning state", () => {
     expect(icon?.getAttribute("class")).not.toContain("animate-spin");
   });
 
-  test("forwards a settings update and clears the spinner once the environment settles", () => {
-    const onUpdate = mock(() => {});
-    const { container, rerender } = renderItem(makeEnvironment({ status: "creating" }), {
-      onUpdate,
-    });
-
-    fireEvent.click(findMenuItem(container, "Settings")!);
-    const emit = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent === "Emit transitioning update",
-    );
-    fireEvent.click(emit!);
-
-    expect(onUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "env-1", status: "creating" }),
-    );
+  test("clears the spinner once its environment settles", () => {
+    // A settings change that starts a transition reaches the row through the
+    // environment store, as a new status.
+    const { container, rerender } = renderItem(makeEnvironment({ status: "creating" }));
     expect(container.querySelector('div[role="button"] svg')?.getAttribute("class")).toContain(
       "animate-spin",
     );
 
-    // The parent reports the environment as settled; the local override the
-    // dialog set must not keep the spinner alive.
-    rerender(itemElement(makeEnvironment({ status: "running" }), { onUpdate }));
+    rerender(itemElement(makeEnvironment({ status: "running" })));
 
     const icon = container.querySelector('div[role="button"] svg');
     expect(icon?.getAttribute("class")).toContain("lucide-container");
     expect(icon?.getAttribute("class")).not.toContain("animate-spin");
-  });
-
-  test("a settled settings update leaves a non-transitioning row unchanged", () => {
-    const onUpdate = mock(() => {});
-    const { container } = renderItem(makeEnvironment({ status: "running" }), { onUpdate });
-
-    fireEvent.click(findMenuItem(container, "Settings")!);
-    const emit = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent === "Emit settled update",
-    );
-    fireEvent.click(emit!);
-
-    expect(onUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "env-1", status: "running" }),
-    );
-    const icon = container.querySelector('div[role="button"] svg');
-    expect(icon?.getAttribute("class")).not.toContain("animate-spin");
-  });
-
-  test("renders without an onUpdate handler", () => {
-    const { container } = renderItem(makeEnvironment());
-
-    fireEvent.click(findMenuItem(container, "Settings")!);
-    const emit = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent === "Emit settled update",
-    );
-    expect(() => fireEvent.click(emit!)).not.toThrow();
   });
 });
 

@@ -152,6 +152,7 @@ mock.module("@/components/native-agent", () => ({
     consumedAgentHandoffId,
     refreshRequestId,
     ownsGlobalShortcuts,
+    hiddenByLayout,
   }: {
     tabId: string;
     data: {
@@ -168,6 +169,7 @@ mock.module("@/components/native-agent", () => ({
     consumedAgentHandoffId?: string;
     refreshRequestId?: number;
     ownsGlobalShortcuts?: boolean;
+    hiddenByLayout?: boolean;
   }) => {
     const [mountedForEnvironment] = useState(data.environmentId);
     const [mountIndex] = useState(() => ++nativeAgentMountCount);
@@ -191,6 +193,7 @@ mock.module("@/components/native-agent", () => ({
         data-refresh-request-id={refreshRequestId}
         data-review-tab={String(Boolean(isReviewTab))}
         data-owns-global-shortcuts={String(Boolean(ownsGlobalShortcuts))}
+        data-hidden-by-layout={String(Boolean(hiddenByLayout))}
       />
     );
   },
@@ -763,6 +766,38 @@ describe("PaneLeafContainer", () => {
     expect((await screen.findByTestId("codex-tab")).dataset.mountedForEnvironment).toBe(
       "env-second",
     );
+  });
+
+  test("keeps the active tab of a pane the mobile switcher hides laid out but inactive", async () => {
+    const view = render(
+      <PaneLeafContainer
+        pane={nativePaneForEnvironment("env-first")}
+        containerId="container-first"
+        environmentId="env-first"
+        isActive={false}
+        hiddenByLayout
+      />,
+    );
+    const tab = await screen.findByTestId("codex-tab");
+    // Laid out (no `display: none` class) so its transcript keeps its scroll
+    // offset, yet not active and not taking shortcuts.
+    expect(tab.closest(".absolute.inset-0")?.classList.contains("hidden")).toBe(false);
+    expect(tab.dataset.active).toBe("false");
+    expect(tab.dataset.ownsGlobalShortcuts).toBe("false");
+    expect(tab.dataset.hiddenByLayout).toBe("true");
+
+    // An inactive pane that the switcher does not hide still hides its tabs.
+    view.rerender(
+      <PaneLeafContainer
+        pane={nativePaneForEnvironment("env-first")}
+        containerId="container-first"
+        environmentId="env-first"
+        isActive={false}
+      />,
+    );
+    const hiddenTab = await screen.findByTestId("codex-tab");
+    expect(hiddenTab.closest(".absolute.inset-0")?.classList.contains("hidden")).toBe(true);
+    expect(hiddenTab.dataset.hiddenByLayout).toBe("false");
   });
 
   test("keeps a native agent tab mounted across same-environment rerenders", async () => {

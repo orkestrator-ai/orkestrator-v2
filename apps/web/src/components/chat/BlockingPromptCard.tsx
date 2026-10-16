@@ -3,6 +3,7 @@ import { AlertTriangle, HelpCircle, Loader2, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { usePromptDeadline } from "@/hooks/usePromptDeadline";
 import { cn } from "@/lib/utils";
+import { PromptDeadline, type PromptDeadlineProps } from "./PromptDeadline";
 
 export type BlockingPromptState =
   | "pending"
@@ -13,6 +14,9 @@ export type BlockingPromptState =
   | "invalid"
   | "retryable-error";
 
+/** Pause state and control for a card's countdown. */
+export type BlockingPromptCardDeadline = Omit<PromptDeadlineProps, "expiresAt">;
+
 interface BlockingPromptCardProps {
   children: ReactNode;
   className?: string;
@@ -22,6 +26,8 @@ interface BlockingPromptCardProps {
   meta?: ReactNode;
   actions?: ReactNode;
   expiresAt?: number;
+  /** Pause state and control for the countdown; absent shows the bare countdown. */
+  deadline?: BlockingPromptCardDeadline;
   state?: BlockingPromptState;
   error?: string | null;
   onRetry?: () => void;
@@ -54,6 +60,7 @@ export function BlockingPromptCard({
   meta,
   actions,
   expiresAt,
+  deadline: deadlineControl,
   state = "pending",
   error,
   onRetry,
@@ -106,14 +113,12 @@ export function BlockingPromptCard({
                   aria-hidden
                 />
               )}
-              {effectiveState === "pending" && deadline.remaining && (
-                <span
-                  className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground"
-                  aria-live="off"
-                  aria-label={`Time remaining ${deadline.remaining}`}
-                >
-                  {deadline.remaining}
-                </span>
+              {effectiveState === "pending" && (
+                <PromptDeadline
+                  expiresAt={expiresAt}
+                  {...deadlineControl}
+                  className={cn("ml-auto text-xs", deadlineControl?.className)}
+                />
               )}
             </div>
             {description && (

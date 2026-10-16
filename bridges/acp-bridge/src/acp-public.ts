@@ -6,6 +6,7 @@ import {
   provider,
   publicRuntime,
   type JsonObject,
+  type ParkedDeadline,
   type PromptJournalEntry,
   type SessionState,
 } from "./acp-context.js";
@@ -157,6 +158,15 @@ export { parseTranscriptFromIndex as parseFromIndex } from "@orkestrator/protoco
 export { parseTranscriptTailLimit as parseTailLimit } from "@orkestrator/protocol/node/transcript-window";
 
 /**
+ * A parked request's countdown as it stands now: a pause moves `expiresAt` to
+ * the ceiling it holds until, and `hold` says whether it is paused and why a
+ * pause is limited or unavailable.
+ */
+function publicDeadline({ requestedAt, deadline }: ParkedDeadline) {
+  return { requestedAt, expiresAt: deadline.expiresAt, hold: deadline.hold() };
+}
+
+/**
  * Held permission requests in ACP's own shape: the agent's title and its
  * options (allow once, always allow, reject...), which the backend offers as
  * the choices (`mapAcpApproval`). The Codex envelope this route used to add
@@ -164,12 +174,11 @@ export { parseTranscriptTailLimit as parseTailLimit } from "@orkestrator/protoco
  * no option a client could select.
  */
 export function publicApprovals(state: SessionState): unknown[] {
-  return [...state.approvals.values()].map(({ id, title, options, requestedAt, expiresAt }) => ({
-    id,
-    title,
-    options,
-    requestedAt,
-    expiresAt,
+  return [...state.approvals.values()].map((approval) => ({
+    id: approval.id,
+    title: approval.title,
+    options: approval.options,
+    ...publicDeadline(approval),
   }));
 }
 
@@ -181,15 +190,13 @@ export function publicInteractions(state: SessionState): unknown[] {
           kind: interaction.kind,
           plan: interaction.plan,
           planTruncated: interaction.planTruncated,
-          requestedAt: interaction.requestedAt,
-          expiresAt: interaction.expiresAt,
+          ...publicDeadline(interaction),
         }
       : {
           id: interaction.id,
           kind: interaction.kind,
           questions: interaction.questions,
-          requestedAt: interaction.requestedAt,
-          expiresAt: interaction.expiresAt,
+          ...publicDeadline(interaction),
         },
   );
 }

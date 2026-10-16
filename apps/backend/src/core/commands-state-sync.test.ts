@@ -4977,6 +4977,46 @@ describe("multi review commands", () => {
     );
   });
 
+  test("delegates bounded step transcript reads", async () => {
+    const stepTranscript = mock(async (workflowId: string, step: string) => ({
+      workflowId,
+      step,
+      session: "own",
+      transcript: "snapshot",
+      messages: [{ id: "progress" }],
+    }));
+    const supervisor = { stepTranscript } as unknown as NonNullable<CommandContext["multiReviews"]>;
+
+    await withCommands(
+      async (invoke) => {
+        await expect(
+          invoke("get_multi_review_step_transcript", { workflowId: "multi-1", step: "fix" }),
+        ).resolves.toMatchObject({ step: "fix", messages: [{ id: "progress" }] });
+        expect(stepTranscript).toHaveBeenCalledWith("multi-1", "fix", undefined);
+        await invoke("get_multi_review_step_transcript", {
+          workflowId: "multi-1",
+          step: "consolidate",
+          knownSourceToken: "rt1.scope.token",
+        });
+        expect(stepTranscript).toHaveBeenLastCalledWith(
+          "multi-1",
+          "consolidate",
+          "rt1.scope.token",
+        );
+        for (const invalid of [
+          { workflowId: "multi-1", step: "reviewers" },
+          { workflowId: "multi-1", step: "fix", knownSourceToken: "x".repeat(513) },
+        ]) {
+          await expect(invoke("get_multi_review_step_transcript", invalid)).rejects.toThrow(
+            "Invalid multi review step transcript request",
+          );
+        }
+        expect(stepTranscript).toHaveBeenCalledTimes(2);
+      },
+      { multiReviews: supervisor },
+    );
+  });
+
   test("delegates bounded reviewer history page reads", async () => {
     const reviewerHistoryPage = mock(async () => ({
       status: "page",

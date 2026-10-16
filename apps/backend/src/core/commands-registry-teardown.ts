@@ -25,6 +25,10 @@ import {
   unfenceTabTeardownSessionId,
   isTabTeardownKind,
 } from "@orkestrator/protocol/tab-teardown";
+import {
+  isMultiReviewWorkflow,
+  multiReviewOwnsProviderSession,
+} from "@orkestrator/protocol/multi-review";
 
 export function registerTeardownCommands(
   register: CommandRegistrar,
@@ -308,7 +312,17 @@ export function registerTeardownCommands(
           session.logicalSessionKey !== logicalSessionKey &&
           session.providerSessionId === providerSessionId,
       );
-      if (!sharedWithAnotherTab) {
+      // A Multi Review step or reviewer session opened in a tab ("Open session")
+      // belongs to its workflow, which the supervisor drives and which closes it
+      // when the Multi Review itself is closed. Closing the tab only hides it.
+      const ownedByWorkflow =
+        !sharedWithAnotherTab &&
+        (await context.storage.listMultiReviewWorkflows(environment.id)).some(
+          ({ snapshot }) =>
+            isMultiReviewWorkflow(snapshot) &&
+            multiReviewOwnsProviderSession(snapshot, agent, providerSessionId),
+        );
+      if (!sharedWithAnotherTab && !ownedByWorkflow) {
         if (agent === "opencode") {
           await closeOpenCodeTabSession(environment.id, providerSessionId, context);
         } else {
@@ -324,7 +338,7 @@ export function registerTeardownCommands(
         }
         context.nativeAgents?.releaseProviderSession?.(environment.id, agent, providerSessionId);
       }
-      // The provider-side close is confirmed (or the session is shared), so the
+      // The provider-side close is confirmed (or another owner keeps it), so the
       // durable logical-tab mapping is retired as part of the same idempotent
       // intent. The vendor conversation itself is never deleted here.
       await context.storage.invalidateNativeAgentSession(storageKey, providerSessionId);

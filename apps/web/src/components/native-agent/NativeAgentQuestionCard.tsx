@@ -15,7 +15,9 @@ import type {
 } from "@orkestrator/protocol/agent-interactions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PromptDeadline } from "@/components/chat/PromptDeadline";
 import { usePromptDeadline } from "@/hooks/usePromptDeadline";
+import { usePromptHold, type PromptHoldHandler } from "@/hooks/usePromptHold";
 import { cn } from "@/lib/utils";
 import { nativeAgentInteractionDraftKey, usePromptDraftField } from "@/stores/promptDraftStore";
 import { useInteractionResolver } from "@/components/native-agent/use-interaction-resolver";
@@ -55,9 +57,12 @@ function isAnswered(answer: Answer): boolean {
 export function NativeAgentQuestionCard({
   interaction,
   onResolve,
+  onHold,
 }: {
   interaction: AgentInteractionRequest;
   onResolve: (resolution: AgentInteractionResolution) => Promise<AgentInteractionApplyOutcome>;
+  /** Pauses or resumes the countdown where the provider enforces it. */
+  onHold?: PromptHoldHandler;
 }) {
   const draftKey = nativeAgentInteractionDraftKey(interaction.sessionId, interaction.id);
   const questions = interaction.presentation.questions;
@@ -86,6 +91,7 @@ export function NativeAgentQuestionCard({
     () => 0,
   );
   const { remaining, expired } = usePromptDeadline(interaction.expiresAt);
+  const hold = usePromptHold(interaction.hold, onHold);
 
   const freeTextRef = useRef<HTMLTextAreaElement | HTMLInputElement | null>(null);
   const wantsFreeTextFocus = useRef(false);
@@ -199,10 +205,17 @@ export function NativeAgentQuestionCard({
         <span className="min-w-0 truncate text-xs font-medium text-foreground">
           {interaction.presentation.title}
         </span>
-        <span className="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground">
+        <span className="ml-auto inline-flex shrink-0 items-center text-[11px] tabular-nums text-muted-foreground">
           {count > 1 ? `${answeredCount}/${count} answered` : null}
-          {count > 1 && remaining && !expired ? " · " : null}
-          {remaining && !expired ? remaining : null}
+          {count > 1 && (remaining || hold.held) && !expired ? " · " : null}
+          <PromptDeadline
+            expiresAt={interaction.expiresAt}
+            hold={interaction.hold}
+            held={hold.held}
+            pending={hold.pending}
+            onToggle={hold.toggle}
+            provider={interaction.provider}
+          />
         </span>
       </div>
 
@@ -403,19 +416,21 @@ export function NativeAgentQuestionCard({
         ) : null}
       </div>
 
-      {expired || error ? (
+      {expired || error || hold.error ? (
         <div
-          role={error ? "alert" : "status"}
+          role={error || hold.error ? "alert" : "status"}
           className={cn(
             "flex items-center gap-1.5 border-t px-3 py-2 text-xs",
-            error
+            error || hold.error
               ? "border-destructive/30 bg-destructive/10 text-destructive"
               : "border-border/60 bg-muted/30 text-muted-foreground",
           )}
         >
           <AlertTriangle className="size-3.5 shrink-0" aria-hidden />
           <span className="min-w-0 flex-1">
-            {error ?? "This question has an invalid deadline and cannot be answered safely."}
+            {error ??
+              hold.error ??
+              "This question has an invalid deadline and cannot be answered safely."}
           </span>
         </div>
       ) : null}

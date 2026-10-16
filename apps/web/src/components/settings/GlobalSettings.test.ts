@@ -45,6 +45,38 @@ describe("global settings synchronization", () => {
     ).toBe(globalFormSignature(current));
   });
 
+  test("tracks and normalizes coordinator research mode and server configuration", () => {
+    const current = globalConfig();
+    const defaults = [{ name: "context7", url: "https://mcp.context7.com/mcp" }];
+    expect(storedCoreFields(current)).toMatchObject({
+      coordinatorWebResearch: "search-and-mcp",
+      coordinatorResearchMcpServers: defaults,
+    });
+    expect(
+      globalFormSignature({
+        ...current,
+        coordinatorWebResearch: "search-and-mcp",
+        coordinatorResearchMcpServers: defaults,
+      }),
+    ).toBe(globalFormSignature(current));
+    for (const mode of ["off", "search"] as const) {
+      expect(
+        storedCoreFields({ ...current, coordinatorWebResearch: mode }).coordinatorWebResearch,
+      ).toBe(mode);
+      expect(globalFormSignature({ ...current, coordinatorWebResearch: mode })).not.toBe(
+        globalFormSignature(current),
+      );
+    }
+    const servers = [{ name: "docs", url: "https://docs.example/mcp" }];
+    expect(
+      storedCoreFields({ ...current, coordinatorResearchMcpServers: servers })
+        .coordinatorResearchMcpServers,
+    ).toEqual(servers);
+    expect(globalFormSignature({ ...current, coordinatorResearchMcpServers: servers })).not.toBe(
+      globalFormSignature(current),
+    );
+  });
+
   test("tracks the Claude background task time limit", () => {
     const current = globalConfig();
     expect(globalFormSignature({ ...current, claudeBackgroundCommandLimitHours: 12 })).not.toBe(

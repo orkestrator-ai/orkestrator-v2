@@ -62,6 +62,48 @@ repeats it: exit 0 pass, 1 fail, 2 setup error. A provider that passes is
 added to `RESUME_QUALIFIED_PROVIDERS` (`container-replacement.ts`); until then
 the rebuild preview marks its resume unverified.
 
+## Provider-state review evidence (2026-10-16)
+
+The provider-state review fixes were exercised on native arm64 Docker Desktop
+(Engine 29.8.1), using the isolated image `orkestrator-v2:dev-e742c2db66c0`
+(`sha256:edba185cdc51ffa415e4057bdead0316f4d3900d8cece80a6481c7b2b8ed2f5e`).
+The live replacement suite passed all ten C14–C19 tests:
+
+```bash
+RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=orkestrator-v2:dev-e742c2db66c0 \
+  mise run test:logged -- --name live-replacement -- bun test --cwd apps/backend \
+  --preload ../../tests/setup-node.ts ./tests/container-live-replacement.test.ts \
+  --parallel=1 --only-failures
+```
+
+C14 now checks both migration and a subsequent volume rebuild. Real SQLite
+files for Codex's runtime and thread-history databases and OpenCode's session
+database, including committed rows still in WAL files, reopen at their
+relocated paths with identical rows and successful `PRAGMA integrity_check`.
+The preserved bridge title index and Grok session
+directory survive; Grok's process registry, worktree registry and opt-in memory
+directory are excluded as the preview states. The live fixture now supplies an
+empty account store, which current container creation requires.
+
+The credential-free `review-state-qa` profile also ran all five Docker browser
+scenarios, including switching environments during rebuild and reloading. The
+rebuild scenario asserts the displayed Codex, OpenCode and Grok limitations.
+Its report is `output/agent-testing/review-state-qa/browser/results.json`.
+
+These checks exercise actual Docker copying and SQLite reopening, with
+synthetic provider records. They do not establish compatibility with a
+provider's own database schema or qualify authenticated conversation resume
+(C13); the existing provider qualification gates and Codex caveat remain.
+The profile is stopped and reset after validation.
+
+The full non-iOS suite had one reproducible baseline failure:
+`agent-provider-boundaries.test.ts` reports that the unchanged
+`http-bridge-provider.ts` has 1,505 lines against its 1,500-line limit (the
+same count at `HEAD`). The focused rerun fails identically. The other three
+aggregate groups passed, as did formatting, lint, typecheck and the focused
+title/preview tests. Full-suite failure evidence is in
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.AQ6yxQ`.
+
 ## Scenario matrix
 
 Live test names carry the scenario id.

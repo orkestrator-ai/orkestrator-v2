@@ -522,6 +522,7 @@ export class BuildPipelineLifecycle {
 
       pipeline.pausedFromPhase = previous;
       pipeline.phase = "paused";
+      pipeline.pauseCause = "requested";
       // The warning says the stage "is still running"; a paused build has
       // stopped, and `advance` returns early for non-active phases so nothing
       // else would ever clear it.
@@ -557,6 +558,7 @@ export class BuildPipelineLifecycle {
       const phase = candidate.pausedFromPhase ?? "building";
       candidate.phase = phase;
       delete candidate.pausedFromPhase;
+      delete candidate.pauseCause;
       delete candidate.error;
       // Multi-model review resumes by opening a fresh panel. There is no one
       // reviewer session a generic resume prompt could safely target.
@@ -783,6 +785,7 @@ export class BuildPipelineLifecycle {
         // pipeline; the requested review starts on the next supervisor pass.
         candidate.phase = candidate.pausedFromPhase ?? "reviewing";
         delete candidate.pausedFromPhase;
+        delete candidate.pauseCause;
         delete candidate.error;
         delete candidate.failureContext;
         // The terminal comment for the abandoned outcome has already been
@@ -1020,6 +1023,7 @@ export class BuildPipelineLifecycle {
       delete candidate.interactionRetryRequested;
       delete candidate.stallWarning;
       delete candidate.pausedFromPhase;
+      delete candidate.pauseCause;
       delete candidate.completionCommentStatus;
       delete candidate.completionCommentError;
     });

@@ -13,6 +13,18 @@ export const SESSION_TITLE_MODEL = CODEX_BACKGROUND_TASK_MODEL;
 export const SESSION_TITLE_REASONING_EFFORT = CODEX_BACKGROUND_TASK_REASONING_EFFORT;
 export const SESSION_TITLE_INDEX_FILENAME = "session-titles.jsonl";
 
+/** The rename API's bound; user titles retain punctuation and internal whitespace. */
+export function normalizeExplicitSessionTitle(value: string): string {
+  return value.trim().slice(0, 512);
+}
+
+function boundedExplicitSessionTitle(value: string): string | null {
+  // The API already trimmed before truncating. A cut through whitespace can
+  // leave an accepted title ending in a space; do not trim it a second time.
+  const title = value.slice(0, 512);
+  return title.trim() ? title : null;
+}
+
 const MAX_SOURCE_PROMPT_LENGTH = 6_000;
 const MAX_TITLE_LENGTH = 72;
 const MAX_COMMAND_OUTPUT_LENGTH = 1024 * 1024;
@@ -449,13 +461,18 @@ export async function readPersistedSessionTitleEntries(
     try {
       const entry = JSON.parse(line) as PersistedSessionTitleEntry;
       const threadId = typeof entry.threadId === "string" ? entry.threadId.trim() : "";
-      const title = typeof entry.title === "string" ? sanitizeSessionTitle(entry.title) : null;
       const source: PersistedSessionTitleSource | null =
         entry.source === undefined
           ? "generated"
           : entry.source === "explicit" || entry.source === "generated" || entry.source === "prompt"
             ? entry.source
             : null;
+      const title =
+        typeof entry.title === "string"
+          ? source === "explicit"
+            ? boundedExplicitSessionTitle(entry.title)
+            : sanitizeSessionTitle(entry.title)
+          : null;
       if (!threadId || !title || !source) continue;
 
       const parsedUpdatedAt =
@@ -499,10 +516,11 @@ export async function persistSessionTitle(
   options: PersistSessionTitleOptions = {},
 ): Promise<void> {
   const normalizedThreadId = threadId.trim();
-  const normalizedTitle = sanitizeSessionTitle(title);
+  const source = options.source ?? "generated";
+  const normalizedTitle =
+    source === "explicit" ? boundedExplicitSessionTitle(title) : sanitizeSessionTitle(title);
   if (!normalizedThreadId || !normalizedTitle) return;
 
-  const source = options.source ?? "generated";
   const requestedUpdatedAt =
     options.updatedAt instanceof Date
       ? options.updatedAt

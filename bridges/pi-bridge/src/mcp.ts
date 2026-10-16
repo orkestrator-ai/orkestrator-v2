@@ -9,6 +9,10 @@
  */
 import { COORDINATOR_CONTROL_TOOL_NAMES } from "@orkestrator/protocol/coordinator";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import {
+  callsOwnWorkflowResult,
+  workflowResultTurnToolNames,
+} from "@orkestrator/protocol/workflow-results";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join, resolve as resolvePath } from "node:path";
@@ -146,6 +150,30 @@ export function isOrkestratorMailTool(state: SessionState, toolName: string): bo
   return (
     runtimes.get(state)?.orkestratorToolNames.has(toolName) === true &&
     (AGENT_MAIL_TOOL_NAMES as readonly string[]).includes(toolName)
+  );
+}
+
+/**
+ * A call to the current turn's own workflow-result attempt: its submission
+ * tool, validation, status and, for a reviewer, `report_finding`. The turn
+ * must have declared the attempt on its prompt, the tool must come from the
+ * Orkestrator server, and the call must name the attempt's own result key.
+ * These tools exist only on that attempt's capability and write nothing in the
+ * workspace, so a read-only turn may call them under any approval policy, like
+ * a worker's mail. An explicit `toolPolicy` deny still wins.
+ */
+export function isOwnWorkflowResultCall(
+  state: SessionState,
+  toolName: string,
+  input: unknown,
+): boolean {
+  const turn = state.workflowResultTurn;
+  return (
+    turn !== undefined &&
+    workflowResultTurnToolNames(turn).includes(toolName) &&
+    runtimes.get(state)?.orkestratorToolNames.has(toolName) === true &&
+    !state.policy?.toolPolicy?.deny?.includes(toolName) &&
+    callsOwnWorkflowResult(turn, input)
   );
 }
 

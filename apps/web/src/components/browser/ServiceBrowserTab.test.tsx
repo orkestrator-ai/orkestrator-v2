@@ -457,9 +457,9 @@ describe("service browser tabs", () => {
     );
     renderTab();
     const register = await screen.findByRole("button", { name: "Register port 4000" });
-    expect(screen.queryByRole("button", { name: "Open as a backend host port" }) === null).toBe(
-      true,
-    );
+    expect(
+      screen.queryByRole("button", { name: "Open as a temporary backend host port" }) === null,
+    ).toBe(true);
     expect(screen.getByText(/0\.0\.0\.0, which is its bind address/)).toBeTruthy();
     fireEvent.click(register);
     fireEvent.click(await screen.findByRole("button", { name: "Register" }));
@@ -469,6 +469,45 @@ describe("service browser tabs", () => {
         ref: { serviceId: "svc_registered_0003" },
       }),
     );
+  });
+
+  test("an unregistered host terminal port offers a temporary backend host port and opens the original URL", async () => {
+    useEnvironmentStore.setState((state) => ({
+      environments: state.environments.map((environment) => ({
+        ...environment,
+        environmentType: "local",
+        containerId: null,
+      })),
+    }));
+    const { browserPreview } = installBackend({
+      capabilities: fixturePreviewCapabilities(),
+      services: [],
+      resolution: {
+        kind: "unregistered",
+        path: "/health?check=1#status",
+        bindHint: false,
+        suggestion: { targetKind: "worktree", applicationPort: 4000, scheme: "http" },
+      },
+    });
+    const url = "http://localhost:4000/health?check=1#status";
+    const intentUri = formatPreviewIntentUri({
+      environmentId: FIXTURE_ENVIRONMENT_ID,
+      source: "worktree-terminal",
+      url,
+    });
+    seedTab(intentUri);
+    renderTab();
+
+    const open = await screen.findByRole("button", {
+      name: "Open as a temporary backend host port",
+    });
+    expect(tabUrl()).toBe(intentUri);
+    expect(browserPreview.attach).not.toHaveBeenCalled();
+    fireEvent.click(open);
+    await waitFor(() => expect(tabUrl()).toBe(url));
+    expect(invokeMock).toHaveBeenCalledWith("resolve_preview_target", {
+      intent: { url, source: "worktree-terminal", environmentId: FIXTURE_ENVIRONMENT_ID },
+    });
   });
 
   test("older backends keep the original link behaviour", async () => {

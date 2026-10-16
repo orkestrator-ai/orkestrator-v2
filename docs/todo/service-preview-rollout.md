@@ -228,6 +228,44 @@ baseline.
   | Desktop tunnel (WS, HELLO, OPEN, request) | 1.02 | 1.19 |
   | Private origin (TLS handshake and request) | 2.11 | 2.62 |
 
+2026-10-16, preview header authority follow-up, working tree based on
+`6892c000b`, macOS arm64, Bun 1.4.3, Node 24.21.0, Playwright 1.64.0:
+
+- `mise run test:logged -- --name preview-forward -- bun test --cwd
+  packages/protocol --preload ../../tests/setup-node.ts
+  ./src/node/preview-forward.test.ts --parallel=1 --only-failures`: 30 passed.
+- `mise run test:logged -- --name preview-publication -- bun test --cwd
+  apps/backend --preload ../../tests/setup-node.ts
+  ./src/preview-publication.test.ts --parallel=1 --only-failures`: 12 passed.
+  Mapped-Origin HTTP writes and WebSocket upgrades omit `X-Forwarded-Host`
+  and preserve the public protocol, including HTTPS publication; default-port
+  private origins use a canonical `Host` for the CSRF fallback.
+- `mise run test:logged -- --name preview-browser -- bunx playwright test
+  --config e2e/preview/playwright.preview.config.ts`: 5 passed, 1 skipped
+  (Vite fixture not installed). The authenticated Chromium paths used the
+  isolated preview harness and throwaway PKI, with no external opt-in flags.
+- A disposable Next.js 16.2.9 app (React 19.3.1) passed two live checks through
+  `forwardPreviewRequest`: a multipart form Server Action accepted the mapped
+  origin without an allowed-origins override, returned a 303 to an explicitly
+  configured public callback URL, and set a Secure cookie based on
+  `X-Forwarded-Proto`. API navigation, Origin-bearing GET, and POST requests
+  kept the same callback URL and Secure-cookie decision. Local reproduction
+  artifact: `output/agent-testing/preview-authority/next-smoke.test.ts`; command:
+  `mise run test:logged -- --name preview-next-live -- bun test --cwd
+  packages/protocol --preload ../../tests/setup-node.ts
+  ./../../output/agent-testing/preview-authority/next-smoke.test.ts --parallel=1`.
+  The artifact creates and removes its own temporary app and stops its server.
+- Preview harnesses, browser processes, and throwaway PKI were cleaned up. No
+  development profile or Docker container was started. Electron, Docker, iOS,
+  and two-machine checks were omitted because this change only adjusts shared
+  request headers and their tests.
+- Format, lint, and typecheck passed. The complete non-iOS command
+  `PATH="/opt/homebrew/bin:$PATH" mise run test:logged -- --name full-tests-host-python -- mise run test`
+  passed every group and package except the backend's existing
+  [0187 Git-excludes timeout](../tests/flaky-tests/0187-workspace-artifact-git-excludes-timeout.md).
+  Its unchanged owning file passed alone in 33.0 seconds; the recurrence and
+  compressed failure evidence are recorded in that case.
+
 ## Constraints and rationale
 
 - The threat boundaries, the credential and data path, and the resource-owner

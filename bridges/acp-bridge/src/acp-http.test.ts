@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import { resolve } from "node:path";
 
 import { commandBindingRevision } from "@orkestrator/protocol/agent-command-catalogue";
+import { MCP_CONFIG_REPORTING_VERSION } from "@orkestrator/protocol/mcp-management";
 import {
   BRIDGE_STARTUP_TIMEOUT_MS,
   here,
@@ -14,6 +15,12 @@ import {
   temporaryDirectory,
   waitFor,
 } from "./acp-test-harness.js";
+import {
+  AUTH_SECRET_CANARIES,
+  expectAuthStatusShape,
+  expectNoCanary,
+  expectNothingSecretLogged,
+} from "../../../tests/helpers/auth-secret-canaries.js";
 
 describe("ACP bridge", () => {
   test("reports Grok auth and the configured control MCP without exposing its token", async () => {
@@ -312,7 +319,11 @@ describe("ACP bridge", () => {
     const { base, headers } = await spawnBridge();
     const missing = await nativeFetch(`${base}/session/missing/runtime-health`, { headers });
     expect(missing.status).toBe(200);
-    expect(await missing.json()).toEqual({ summary: {}, notices: [] });
+    expect(await missing.json()).toEqual({
+      summary: {},
+      notices: [],
+      mcpConfigReporting: MCP_CONFIG_REPORTING_VERSION,
+    });
 
     const created = await nativeFetch(`${base}/session/create`, {
       method: "POST",
@@ -321,7 +332,11 @@ describe("ACP bridge", () => {
     const session = (await created.json()) as { id: string };
     const health = await nativeFetch(`${base}/session/${session.id}/runtime-health`, { headers });
     expect(health.status).toBe(200);
-    expect(await health.json()).toMatchObject({ summary: expect.any(Object), notices: [] });
+    expect(await health.json()).toMatchObject({
+      summary: expect.any(Object),
+      notices: [],
+      mcpConfigReporting: MCP_CONFIG_REPORTING_VERSION,
+    });
   });
 
   test("allows authenticated renderer requests from trusted local origins", async () => {
@@ -897,5 +912,59 @@ describe("ACP provider commands", () => {
       refreshed: false,
       commands: { outcome: "unsupported" },
     });
+  });
+});
+
+describe("Grok sign-in routes carry no credential", () => {
+  test("neither answers nor logs the key or the stored login", async () => {
+    const directory = await temporaryDirectory();
+    const credential = resolve(directory, "auth.json");
+    await fs.writeFile(
+      credential,
+      JSON.stringify({
+        access_token: AUTH_SECRET_CANARIES.accessToken,
+        refresh_token: AUTH_SECRET_CANARIES.refreshToken,
+      }),
+    );
+    const { child, base, headers } = await spawnBridge({
+      env: {
+        ACP_PROVIDER: "grok",
+        GROK_AUTH_FILE: credential,
+        XAI_API_KEY: AUTH_SECRET_CANARIES.xaiApiKey,
+        GROK_AUTH_PROVIDER_COMMAND: undefined,
+        GROK_AUTH_METHOD_ID: undefined,
+      },
+    });
+    const output: string[] = [];
+    child.stdout.on("data", (chunk: Buffer) => output.push(chunk.toString()));
+    child.stderr.on("data", (chunk: Buffer) => output.push(chunk.toString()));
+    const read = async (path: string, method = "GET") => {
+      const response = await nativeFetch(`${base}${path}`, { method, headers });
+      return { status: response.status, body: (await response.json()) as unknown };
+    };
+
+    const status = await read("/global/auth");
+    expect(status.status).toBe(200);
+    expectAuthStatusShape(status.body);
+    expect(status.body).toMatchObject({ state: "signed-in" });
+    // A session start hands the planted key and login to the Grok child.
+    const created = await nativeFetch(`${base}/session/create`, { method: "POST", headers });
+    expect(created.status).toBe(201);
+    const { id } = (await created.json()) as { id: string };
+    const session = await read(`/session/${id}/status`);
+    const login = await read("/global/auth/login", "POST");
+    const logout = await read("/global/auth/logout", "POST");
+    expect([login.status, logout.status]).toEqual([405, 405]);
+    await stopChild(child);
+
+    for (const [where, body] of [
+      ["auth status", status.body],
+      ["session status", session.body],
+      ["sign-in refusal", login.body],
+      ["sign-out refusal", logout.body],
+    ] as const) {
+      expectNoCanary(body, `Grok ${where}`);
+    }
+    expectNothingSecretLogged(output.join(""), "Grok bridge");
   });
 });

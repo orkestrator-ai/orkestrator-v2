@@ -7,6 +7,7 @@ import {
   isMultiReviewReviewerHistoryPageRequest,
   isMultiReviewStepControlInput,
   isMultiReviewReviewerTranscriptRequest,
+  isMultiReviewStepTranscriptRequest,
   isRestartMultiReviewStepInput,
   isStartMultiReviewCustomFixInput,
   isStartMultiReviewInput,
@@ -253,6 +254,27 @@ export function registerReviewWorkflowCommands(
       return context.multiReviews.reviewerTranscript(
         request.workflowId,
         request.reviewerId,
+        request.knownSourceToken,
+      );
+    },
+  );
+  register(
+    "get_multi_review_step_transcript",
+    ({ workflowId, step, knownSourceToken }, context) => {
+      if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+      const request = {
+        workflowId: asNonBlankString(workflowId, "workflowId"),
+        step,
+        ...(knownSourceToken === undefined ? {} : { knownSourceToken }),
+      };
+      // The step and token are renderer-supplied, and the token is forwarded
+      // toward a provider, so both are checked here.
+      if (!isMultiReviewStepTranscriptRequest(request)) {
+        throw new Error("Invalid multi review step transcript request");
+      }
+      return context.multiReviews.stepTranscript(
+        request.workflowId,
+        request.step,
         request.knownSourceToken,
       );
     },

@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ContainerResourceLimitsSettings } from "./ContainerResourceLimitsSettings";
+import { CoordinatorWebResearchSettings } from "./CoordinatorWebResearchSettings";
+import type {
+  CoordinatorResearchMcpServer,
+  CoordinatorWebResearch,
+} from "@orkestrator/protocol/coordinator-web-research";
 import type { Dispatch, SetStateAction } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -182,6 +187,10 @@ export type GlobalSettingsSectionSettings = Record<string, any> & {
   setCoordinatorProviderTiers: Dispatch<
     SetStateAction<"enforced" | "provider-configured" | "advisory">
   >;
+  coordinatorWebResearch: CoordinatorWebResearch;
+  setCoordinatorWebResearch: Dispatch<SetStateAction<CoordinatorWebResearch>>;
+  coordinatorResearchMcpServers: CoordinatorResearchMcpServer[];
+  setCoordinatorResearchMcpServers: Dispatch<SetStateAction<CoordinatorResearchMcpServer[]>>;
   setEnabledAgentPlatforms: Dispatch<SetStateAction<AgentPlatform[]>>;
   agentSettings: AgentSettingsTier;
   setAgentSettings: Dispatch<SetStateAction<AgentSettingsTier>>;
@@ -270,6 +279,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setEnabledAgentPlatforms,
     coordinatorProviderTiers,
     setCoordinatorProviderTiers,
+    coordinatorWebResearch,
+    setCoordinatorWebResearch,
+    coordinatorResearchMcpServers,
+    setCoordinatorResearchMcpServers,
     openCodeModelProviders,
     setOpenCodeModelProviders,
     planUsageRefreshToken,
@@ -1001,6 +1014,12 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           ))}
         </div>
       </div>
+      <CoordinatorWebResearchSettings
+        mode={coordinatorWebResearch}
+        setMode={setCoordinatorWebResearch}
+        servers={coordinatorResearchMcpServers}
+        setServers={setCoordinatorResearchMcpServers}
+      />
     </div>
   );
 

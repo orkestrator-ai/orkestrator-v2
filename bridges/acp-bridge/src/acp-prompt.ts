@@ -143,11 +143,18 @@ export async function requestPromptWithRetriableProviderRetries(
   while (true) {
     let result: unknown;
     let requestError: Error | undefined;
+    // `request` arms its timeout synchronously, so the attempt times out at
+    // this instant or a moment after it, never before. A paused parked request
+    // is capped here: the timeout terminates the child that would answer it.
+    const promptDeadlineAt = Date.now() + PROMPT_TIMEOUT_MS;
+    state.promptDeadlineAt = promptDeadlineAt;
     try {
       result = await child.request("session/prompt", prompt, PROMPT_TIMEOUT_MS);
     } catch (error) {
       if (!retriableProviderError(error)) throw error;
       requestError = error;
+    } finally {
+      if (state.promptDeadlineAt === promptDeadlineAt) state.promptDeadlineAt = undefined;
     }
 
     const flattened = requestError ? null : flattenedRetriableProviderTail(state);

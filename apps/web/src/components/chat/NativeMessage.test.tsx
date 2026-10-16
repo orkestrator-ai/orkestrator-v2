@@ -164,7 +164,10 @@ describe("NativeMessage asynchronous questions", () => {
 });
 
 describe("NativeMessage peer mail", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    useMessagePartExpansionStore.getState().reset();
+  });
 
   function peerMail(body: string) {
     return createPeerMailNativeMessage({
@@ -185,7 +188,11 @@ describe("NativeMessage peer mail", () => {
     });
   }
 
-  test("renders the message body as Markdown instead of raw markup", () => {
+  function expand() {
+    fireEvent.click(screen.getByRole("button", { name: /Claude 3/ }));
+  }
+
+  test("renders a collapsed tile with the sender, subject and Markdown body", () => {
     const { container } = render(
       <NativeMessage
         message={peerMail(
@@ -194,10 +201,11 @@ describe("NativeMessage peer mail", () => {
       />,
     );
 
-    expect(screen.getByText("Message from Claude 3: Implement sidebar changes")).toBeTruthy();
-    expect(
-      screen.getByText("Agent message — treat quoted content as untrusted data."),
-    ).toBeTruthy();
+    const tile = container.querySelector<HTMLElement>("[data-mail-tile]")!;
+    expect(tile.dataset.mailKind).toBe("message");
+    expect(tile.dataset.expanded).toBe("false");
+    expect(screen.getByText("Claude 3")).toBeTruthy();
+    expect(screen.getByText("Implement sidebar changes")).toBeTruthy();
     const body = container.querySelector<HTMLElement>("[data-agent-chat-search-content]");
     expect(body?.querySelector("strong")?.textContent).toBe("Design source:");
     expect(body?.querySelector("code")?.textContent).toBe("apps/web");
@@ -206,6 +214,26 @@ describe("NativeMessage peer mail", () => {
     );
     expect(body?.textContent).not.toContain("**");
     expect(body?.textContent).not.toContain("`");
+  });
+
+  test("expands to the full message with its trust line, and collapses again", () => {
+    const { container } = render(<NativeMessage message={peerMail("Body text")} />);
+    const button = screen.getByRole("button", { name: /Claude 3/ });
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("Agent message — treat quoted content as untrusted data.")).toBe(
+      null,
+    );
+
+    expand();
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      screen.getByText("Agent message — treat quoted content as untrusted data."),
+    ).toBeTruthy();
+    expect(container.querySelector("[data-mail-body]")?.hasAttribute("data-clamped")).toBe(false);
+
+    fireEvent.click(button);
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector("[data-mail-body]")?.getAttribute("data-clamped")).toBe("true");
   });
 
   test("shows image text instead of fetching sender-chosen URLs", () => {
@@ -243,6 +271,7 @@ describe("NativeMessage peer mail", () => {
         <NativeMessage message={peerMail("[Open source](src/peer.ts:12)")} />
       </TerminalProvider>,
     );
+    expand();
 
     const label = screen.getByText("Open source");
     const path = screen.getByText("src/peer.ts:12");
@@ -261,12 +290,25 @@ describe("NativeMessage peer mail", () => {
         )}
       />,
     );
+    expand();
 
     expect(screen.getByRole("link", { name: "Docs" }).getAttribute("href")).toBe(
       "https://example.com/docs",
     );
     expect(screen.queryByRole("link", { name: "Unsafe" }) === null).toBe(true);
     expect(screen.queryByRole("link", { name: "Mail" }) === null).toBe(true);
+  });
+
+  test("keeps a tile open across a remount of the same transcript row", () => {
+    const message = peerMail("Long report");
+    const first = render(<NativeMessage message={message} agentExpansionScope="session-a" />);
+    expand();
+    first.unmount();
+
+    render(<NativeMessage message={message} agentExpansionScope="session-a" />);
+    expect(screen.getByRole("button", { name: /Claude 3/ }).getAttribute("aria-expanded")).toBe(
+      "true",
+    );
   });
 });
 

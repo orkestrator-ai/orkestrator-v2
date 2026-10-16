@@ -4,6 +4,11 @@ import {
 } from "@orkestrator/protocol/agent-mail";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { WEB_ANNOTATION_TOOL_NAMES } from "@orkestrator/protocol/web-annotations";
+import {
+  callsOwnWorkflowResult,
+  workflowResultTurnToolNames,
+  type WorkflowResultTurn,
+} from "@orkestrator/protocol/workflow-results";
 import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import {
@@ -102,7 +107,11 @@ import { emptySessionConfig } from "./acp-persistence.js";
 import { persistState, schedulePersist } from "./acp-persist-writer.js";
 import { applyGrokInterjectionBroadcast } from "./grok-interjection.js";
 import { effectiveTurnExecutionPolicy } from "./acp-policy.js";
-import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
+import {
+  AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
+  AGENT_INTERACTION_LIMITS,
+} from "@orkestrator/protocol/agent-interactions";
+import { InteractionDeadline } from "@orkestrator/protocol/agent-interaction-deadline";
 import { applyCommandInventory } from "./acp-commands.js";
 import { applyJournaledCommandChanges, trackCommandChangeWindow } from "./acp-command-changes.js";
 
@@ -701,6 +710,72 @@ export function orkestratorToolPermissionOption(
   return allowOptionId(params);
 }
 
+function orkestratorToolIds(name: string): string[] {
+  return [
+    `${ORKESTRATOR_MCP_SERVER_NAME}__${name}`,
+    `mcp__${ORKESTRATOR_MCP_SERVER_NAME}__${name}`,
+    `${ORKESTRATOR_MCP_SERVER_NAME}_${name}`,
+    `${ORKESTRATOR_MCP_SERVER_NAME}/${name}`,
+    `${ORKESTRATOR_MCP_SERVER_NAME}.${name}`,
+  ];
+}
+
+/** A wrapped call's arguments: Grok's `use_tool` carries them in `tool_input`. */
+function wrappedToolArguments(input: unknown): unknown {
+  if (!isObject(input)) return undefined;
+  const wrapped = input.tool_input;
+  if (typeof wrapped !== "string") return wrapped;
+  if (wrapped.length > 1024 * 1024) return undefined;
+  try {
+    return JSON.parse(wrapped) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The allow option for a call to the current turn's own workflow-result
+ * attempt: its submission tool, validation, status and, for a reviewer,
+ * `report_finding`. Granted under every approval policy, including a
+ * read-only turn's `deny`, but only while the turn declared that attempt
+ * (`workflowResultTool` / `workflowResultKey` on its prompt) and only for a
+ * call whose arguments name the attempt's own result key.
+ *
+ * These tools exist only on the attempt's own capability and write nothing in
+ * the workspace. Identity follows `orkestratorToolPermissionOption`: a
+ * server-qualified name, Grok's namespaced metadata, or the tool Grok's
+ * `use_tool` wraps; never a bare name or a display title.
+ */
+export function workflowResultPermissionOption(
+  params: JsonObject,
+  turn: WorkflowResultTurn | undefined,
+  recordedInput?: unknown,
+): string | undefined {
+  if (!turn) return undefined;
+  const toolCall = isObject(params.toolCall) ? params.toolCall : undefined;
+  if (!toolCall || toolCall.kind === "execute" || toolCall.kind === "edit") return undefined;
+  const meta = isObject(toolCall._meta) ? toolCall._meta : undefined;
+  const xaiTool = meta && isObject(meta["x.ai/tool"]) ? meta["x.ai/tool"] : undefined;
+  const vendorName = xaiTool ? xaiTool.name : toolCall.name;
+  const input = toolCall.rawInput === undefined ? recordedInput : toolCall.rawInput;
+  const wrapped = typeof vendorName === "string" && vendorName.trim() === GROK_USE_TOOL;
+  const name = wrapped ? wrappedToolName(input) : vendorName;
+  const allowed = workflowResultTurnToolNames(turn);
+  const namespaced =
+    !wrapped &&
+    xaiTool?.namespace === ORKESTRATOR_MCP_SERVER_NAME &&
+    typeof xaiTool.name === "string" &&
+    allowed.includes(xaiTool.name.trim());
+  const qualified =
+    typeof name === "string" &&
+    allowed.some((tool) => orkestratorToolIds(tool).includes(name.trim()));
+  if (!namespaced && !qualified) return undefined;
+  if (!callsOwnWorkflowResult(turn, wrapped ? wrappedToolArguments(input) : input)) {
+    return undefined;
+  }
+  return allowOptionId(params);
+}
+
 function allowOptionId(params: JsonObject): string | undefined {
   const options = Array.isArray(params.options) ? params.options.filter(isObject) : [];
   const allow =
@@ -862,6 +937,13 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
       ? { name: recorded.toolName, input: recorded.toolArgs }
       : undefined;
     const toolDenied = explicitlyDeniedPermissionTool(params, policy, recordedTool);
+    const attemptAllow = toolDenied
+      ? undefined
+      : workflowResultPermissionOption(params, state.workflowResultTurn, recorded?.toolArgs);
+    if (attemptAllow) {
+      child.respond(requestId, { outcome: { outcome: "selected", optionId: attemptAllow } });
+      return;
+    }
     const orkestratorAllow = toolDenied
       ? undefined
       : orkestratorToolPermissionOption(params, policy?.approvals, recorded?.toolArgs);
@@ -1057,14 +1139,70 @@ export async function spawnAndLoadSession(state: SessionState): Promise<AcpProce
 }
 
 export function clearApprovals(state: SessionState): void {
-  for (const approval of state.approvals.values()) clearTimeout(approval.timer);
+  for (const approval of state.approvals.values()) approval.deadline.settle();
   state.approvals.clear();
   clearInteractions(state);
 }
 
 export function clearInteractions(state: SessionState): void {
-  for (const interaction of state.interactions.values()) clearTimeout(interaction.timer);
+  for (const interaction of state.interactions.values()) interaction.deadline.settle();
   state.interactions.clear();
+}
+
+/** Grok CLI's own `ask_user_question` wait when nothing overrides it. */
+export const GROK_QUESTION_DEFAULT_TIMEOUT_MS = 1_800_000;
+
+/**
+ * How long Grok itself waits on an `ask_user_question` before abandoning it,
+ * or undefined when that timeout is disabled.
+ *
+ * Read from the environment the child is spawned with (`AcpProcess`: the
+ * bridge's own merged with the launcher record's), which is where Grok reads
+ * `GROK_ASK_USER_QUESTION_TIMEOUT_SECS` / `_ENABLED`. Grok's `config.toml`
+ * `[toolset.ask_user_question]` ranks below the environment and is not read
+ * here; an unset environment is taken as Grok's documented default.
+ */
+export function grokQuestionTimeoutMs(
+  env: NodeJS.ProcessEnv = { ...process.env, ...providerConfig.env },
+): number | undefined {
+  const enabled = env.GROK_ASK_USER_QUESTION_TIMEOUT_ENABLED?.trim().toLowerCase();
+  if (enabled === "false" || enabled === "0") return undefined;
+  const seconds = env.GROK_ASK_USER_QUESTION_TIMEOUT_SECS?.trim() ?? "";
+  // Grok requires a positive integer; anything else leaves its default.
+  return /^[1-9]\d{0,9}$/.test(seconds)
+    ? Number(seconds) * 1_000
+    : GROK_QUESTION_DEFAULT_TIMEOUT_MS;
+}
+
+/**
+ * The countdown of one parked request.
+ *
+ * `limitAt` is the latest moment the agent still waits, read again at every
+ * pause and resume. The first deadline is capped by it too, so a request
+ * raised near the end of a turn never shows more time than the agent will
+ * give it. Unref'd, so a parked request cannot by itself keep the bridge alive.
+ */
+function parkedDeadline(
+  requestedAt: number,
+  limitAt: () => number | undefined,
+  onExpire: () => void,
+): InteractionDeadline {
+  const limit = limitAt();
+  const windowEnd = requestedAt + AGENT_INTERACTION_DEFAULT_TIMEOUT_MS;
+  return new InteractionDeadline({
+    requestedAt,
+    onExpire,
+    providerLimitAt: limitAt,
+    unref: true,
+    ...(limit !== undefined && limit > requestedAt && limit < windowEnd
+      ? { expiresAt: limit }
+      : {}),
+  });
+}
+
+function earliest(...values: Array<number | undefined>): number | undefined {
+  const defined = values.filter((value): value is number => value !== undefined);
+  return defined.length > 0 ? Math.min(...defined) : undefined;
 }
 
 export function parkGrokInteraction(
@@ -1089,26 +1227,24 @@ export function parkGrokInteraction(
   const existing = state.interactions.get(toolCallId);
   if (existing) existing.respond({ outcome: "cancelled" });
   const requestedAt = Date.now();
-  const expiresAt = requestedAt + 5 * 60_000;
   const promptSequence = state.promptSequence;
   const finish = (result: JsonObject) => {
     const interaction = state.interactions.get(toolCallId);
     if (!interaction) return;
-    clearTimeout(interaction.timer);
+    interaction.deadline.settle();
     state.interactions.delete(toolCallId);
     child.respond(requestId, result);
     state.revision += 1;
     schedulePersist();
   };
-  const timer = setTimeout(() => {
+  const expire = () => {
     // An older request may outlive its turn. It cannot fail a newer turn or
     // overwrite evidence of a request that expired in that newer turn.
     if (state.promptSequence === promptSequence) {
       state.expiredRequestPromptSequence = promptSequence;
     }
     finish({ outcome: "cancelled" });
-  }, expiresAt - requestedAt);
-  timer.unref();
+  };
 
   if (method.endsWith("exit_plan_mode")) {
     const rawPlan = typeof params.planContent === "string" ? params.planContent : "";
@@ -1119,9 +1255,9 @@ export function parkGrokInteraction(
       plan,
       planTruncated: plan.length < rawPlan.length,
       requestedAt,
-      expiresAt,
       respond: finish,
-      timer,
+      // Grok keeps no timeout of its own on a plan approval; the turn's does.
+      deadline: parkedDeadline(requestedAt, () => state.promptDeadlineAt, expire),
     });
   } else {
     const rawQuestions = Array.isArray(params.questions) ? params.questions : [];
@@ -1166,18 +1302,25 @@ export function parkGrokInteraction(
       });
     const questionIds = questions.map((question) => question.id);
     if (questions.length === 0 || new Set(questionIds).size !== questionIds.length) {
-      clearTimeout(timer);
       cancelled();
       return;
     }
+    // Grok abandons the question on its own timeout, counted from when it
+    // asked; the turn's deadline still applies on top of it.
+    const questionTimeoutMs = grokQuestionTimeoutMs();
+    const questionLimitAt =
+      questionTimeoutMs === undefined ? undefined : requestedAt + questionTimeoutMs;
     state.interactions.set(toolCallId, {
       id: toolCallId,
       kind: "question",
       questions,
       requestedAt,
-      expiresAt,
       respond: finish,
-      timer,
+      deadline: parkedDeadline(
+        requestedAt,
+        () => earliest(state.promptDeadlineAt, questionLimitAt),
+        expire,
+      ),
     });
   }
   state.revision += 1;
@@ -1217,12 +1360,11 @@ export function parkPermission(
     : [];
   const id = randomBytes(12).toString("hex");
   const requestedAt = Date.now();
-  const expiresAt = requestedAt + 5 * 60_000;
   const promptSequence = state.promptSequence;
   const finish = (optionId?: string) => {
     const approval = state.approvals.get(id);
     if (!approval) return;
-    clearTimeout(approval.timer);
+    approval.deadline.settle();
     state.approvals.delete(id);
     if (optionId && approval.options.some((option) => option.optionId === optionId)) {
       child.respond(requestId, { outcome: { outcome: "selected", optionId } });
@@ -1232,23 +1374,21 @@ export function parkPermission(
     state.revision += 1;
     schedulePersist();
   };
-  const timer = setTimeout(() => {
+  const expire = () => {
     // An older request may outlive its turn. It cannot fail a newer turn or
     // overwrite evidence of a request that expired in that newer turn.
     if (state.promptSequence === promptSequence) {
       state.expiredRequestPromptSequence = promptSequence;
     }
     finish();
-  }, expiresAt - requestedAt);
-  timer.unref();
+  };
   state.approvals.set(id, {
     id,
     title: permissionTitle(params),
     options,
     requestedAt,
-    expiresAt,
     respond: finish,
-    timer,
+    deadline: parkedDeadline(requestedAt, () => state.promptDeadlineAt, expire),
   });
   state.revision += 1;
   schedulePersist();

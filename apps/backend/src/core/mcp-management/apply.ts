@@ -12,6 +12,9 @@
  * - "applied" is only reported on evidence. A provider that reloads at its next
  *   message stays `pending-next-turn`; one that needs a restart says so. The
  *   evidence itself is checked in `evidence.ts`.
+ * - Nothing planned is dropped for display: an operation tracks up to
+ *   `runtimesTrackedPerOperation` runtimes and only its snapshot is paged
+ *   ({@link publicApply}).
  */
 
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -20,10 +23,12 @@ import {
   MCP_MANAGEMENT_LIMITS,
   type McpApplyState,
   type McpConfigSource,
+  type McpOperationSnapshot,
   type McpRuntimeApplyEntry,
 } from "@orkestrator/protocol/mcp-management";
 
 import { awaitsEvidenceIn, withTimeout, type RuntimeEvidenceRead } from "./evidence.js";
+import type { Supersession } from "./external-edits.js";
 
 export interface ApplyEnvironment {
   id: string;
@@ -40,6 +45,8 @@ export interface ApplySession {
   environmentId: string;
   agent: AgentPlatform;
   logicalSessionKey: string;
+  /** The provider session the logical session maps to now, when persisted. */
+  providerSessionId?: string;
   pendingDispatch: boolean;
   coordinator: boolean;
   projectResources?: boolean;
@@ -82,6 +89,17 @@ export interface PlannedRuntime extends McpRuntimeApplyEntry {
   awaitsEvidence?: boolean;
   /** Bridge process id at planning time, for providers that apply on restart. */
   bridgePid?: number;
+  /**
+   * What identifies a local runtime's generation at planning time; the
+   * service turns it into the opaque `generation` label.
+   */
+  generationParts?: GenerationParts;
+}
+
+/** The bridge process and provider session behind one local runtime. */
+export interface GenerationParts {
+  bridgePid?: number;
+  providerSessionId?: string;
 }
 
 const NOT_RUNNING = "Loads when the environment next starts this provider.";
@@ -141,38 +159,77 @@ function isCoordinatorSession(session: ApplySession): boolean {
 }
 
 /**
- * Keep the first `limit` runtimes, but list one runtime from every environment
- * before any environment's second: a queued Codex reload is per environment,
- * so an environment with no listed runtime would never be reloaded.
+ * Keep the first `limit` runtimes, but take one runtime from every environment
+ * (among those `spread` selects) before any environment's second. Planning
+ * spreads queued runtimes, because a Codex reload is per environment and an
+ * environment with no kept runtime would never be reloaded; the snapshot page
+ * spreads every runtime, so each environment stays visible.
  */
-export function pageRuntimes(
-  runtimes: PlannedRuntime[],
+export function pageRuntimes<T extends Pick<McpRuntimeApplyEntry, "environmentId" | "state">>(
+  runtimes: T[],
   limit: number,
-): { runtimes: PlannedRuntime[]; omitted: number } {
-  if (runtimes.length <= limit) return { runtimes, omitted: 0 };
-  const firsts = new Set<PlannedRuntime>();
+  spread: (runtime: T) => boolean = (runtime) => runtime.state === "queued",
+): { runtimes: T[]; rest: T[] } {
+  if (runtimes.length <= limit) return { runtimes, rest: [] };
+  const firsts = new Set<T>();
   const seen = new Set<string>();
   for (const runtime of runtimes) {
-    if (runtime.state !== "queued") continue;
+    if (!spread(runtime)) continue;
     const key = runtime.environmentId ?? "";
     if (seen.has(key)) continue;
     seen.add(key);
     firsts.add(runtime);
   }
-  const chosen = new Set<PlannedRuntime>(Array.from(firsts).slice(0, limit));
+  const chosen = new Set<T>(Array.from(firsts).slice(0, limit));
   for (const runtime of runtimes) {
     if (chosen.size >= limit) break;
     chosen.add(runtime);
   }
   // Preserve the original order for display.
-  const page = runtimes.filter((runtime) => chosen.has(runtime));
-  return { runtimes: page, omitted: runtimes.length - page.length };
+  return {
+    runtimes: runtimes.filter((runtime) => chosen.has(runtime)),
+    rest: runtimes.filter((runtime) => !chosen.has(runtime)),
+  };
+}
+
+/**
+ * The apply state a snapshot shows. An operation keeps every runtime it
+ * tracks, and the scheduler advances all of them; only the listing is cut to
+ * `runtimesPerOperation`. The rest are counted in `omitted` with their states
+ * in `omittedStates`, beside any runtimes planning could not track at all.
+ * `omittedStates` carries no `cancelReason`, so a superseded runtime is always
+ * listed when there is one: it is what tells a client a retry is refused.
+ */
+export function publicApply(apply: McpOperationSnapshot["apply"]): McpOperationSnapshot["apply"] {
+  const limit = MCP_MANAGEMENT_LIMITS.runtimesPerOperation;
+  if (apply.runtimes.length <= limit) return apply;
+  const page = pageRuntimes(apply.runtimes, limit, () => true);
+  const superseded = (runtime: McpRuntimeApplyEntry) =>
+    runtime.state === "cancelled" && runtime.cancelReason !== undefined;
+  const hidden = page.rest.find(superseded);
+  if (hidden && !page.runtimes.some(superseded)) {
+    // Swap it for the last listed runtime, keeping the original order.
+    const listed = new Set([...page.runtimes.slice(0, -1), hidden]);
+    page.runtimes = apply.runtimes.filter((runtime) => listed.has(runtime));
+    page.rest = apply.runtimes.filter((runtime) => !listed.has(runtime));
+  }
+  const omittedStates: Partial<Record<McpApplyState, number>> = {};
+  for (const runtime of page.rest) {
+    omittedStates[runtime.state] = (omittedStates[runtime.state] ?? 0) + 1;
+  }
+  return {
+    ...apply,
+    runtimes: page.runtimes,
+    omitted: apply.omitted + page.rest.length,
+    omittedStates,
+  };
 }
 
 /**
  * Initial per-runtime states for a saved change to `scope` of `provider`.
  * `environmentIds` limits the change to one environment for worktree scopes;
- * `null` means every local environment (backend-user files).
+ * `null` means every local environment (backend-user files). `omitted` counts
+ * the runtimes past `runtimesTrackedPerOperation`, which are not scheduled.
  */
 export async function planRuntimes(
   probe: RuntimeProbe,
@@ -199,11 +256,17 @@ export async function planRuntimes(
     local = false,
   ) => {
     const planned = entry(session, environment, state, reason, now, savedRevision);
+    const pid = local ? environment?.bridgePid?.(provider) : undefined;
+    if (local) {
+      planned.generationParts = {
+        ...(pid !== undefined ? { bridgePid: pid } : {}),
+        ...(session.providerSessionId ? { providerSessionId: session.providerSessionId } : {}),
+      };
+    }
     // Only a local runtime reads the host files the save wrote; a container's
     // copy or a coordinator's private home can never carry that evidence.
     if (local && awaitsEvidenceIn(provider, state)) {
       planned.awaitsEvidence = true;
-      const pid = environment?.bridgePid?.(provider);
       if (pid !== undefined) planned.bridgePid = pid;
     }
     runtimes.push(planned);
@@ -257,7 +320,7 @@ export async function planRuntimes(
         );
         break;
       case "codex":
-        add(session, environment, "queued", "Waiting to reload Codex's MCP configuration.");
+        add(session, environment, "queued", "Waiting to reload Codex's MCP configuration.", true);
         break;
       case "opencode":
         add(
@@ -265,6 +328,7 @@ export async function planRuntimes(
           environment,
           "restart-required",
           "OpenCode reads configuration when its server starts; stop and start the environment to load the change.",
+          true,
         );
         break;
       case "grok":
@@ -278,45 +342,66 @@ export async function planRuntimes(
         break;
     }
   }
-  return pageRuntimes(runtimes, MCP_MANAGEMENT_LIMITS.runtimesPerOperation);
+  const tracked = pageRuntimes(runtimes, MCP_MANAGEMENT_LIMITS.runtimesTrackedPerOperation);
+  return { runtimes: tracked.runtimes, omitted: tracked.rest.length };
 }
 
 export const CODEX_APPLY_WAIT_MS = 30 * 60_000;
 const CODEX_RELOAD_TIMEOUT_MS = 30_000;
 
 /**
- * Advance queued Codex runtimes. Returns the updated list and whether any are
- * still waiting. One reload per environment covers every thread in it.
+ * Advance queued Codex runtimes. Returns the updated list, whether any are
+ * still waiting, and the ids of those whose app-server reloaded. One reload
+ * per environment covers every thread in it.
+ *
+ * `refusal` is asked once, just before the first reload, whether the change
+ * still applies; a supersession cancels the queued runtimes, with its reason
+ * and `cancelReason`, instead of reloading.
  */
 export async function advanceCodexRuntimes(
   probe: RuntimeProbe,
   runtimes: PlannedRuntime[],
   queuedAt: number,
   nowMs: number,
-): Promise<{ runtimes: PlannedRuntime[]; waiting: boolean; changed: boolean }> {
+  refusal?: () => Promise<Supersession | undefined>,
+): Promise<{
+  runtimes: PlannedRuntime[];
+  waiting: boolean;
+  changed: boolean;
+  reloaded: string[];
+}> {
   const now = new Date(nowMs).toISOString();
   const queued = runtimes.filter(
     (runtime) =>
       runtime.agent === "codex" && (runtime.state === "queued" || runtime.state === "applying"),
   );
-  if (!queued.length) return { runtimes, waiting: false, changed: false };
+  if (!queued.length) return { runtimes, waiting: false, changed: false, reloaded: [] };
   const environments = new Map(
     (await probe.environments()).map((environment) => [environment.id, environment]),
   );
   const sessions = await probe.sessions();
   let waiting = false;
   let changed = false;
+  const reloaded: string[] = [];
   const byEnvironment = new Map<string, PlannedRuntime[]>();
   for (const runtime of queued) {
     const list = byEnvironment.get(runtime.environmentId!) ?? [];
     list.push(runtime);
     byEnvironment.set(runtime.environmentId!, list);
   }
-  const set = (list: PlannedRuntime[], state: McpApplyState, reason: string) => {
+  let refused: Promise<Supersession | undefined> | undefined;
+  const set = (
+    list: PlannedRuntime[],
+    state: McpApplyState,
+    reason: string,
+    cancelReason?: Supersession["cancelReason"],
+  ) => {
     for (const runtime of list) {
       if (runtime.state !== state || runtime.reason !== reason) changed = true;
       runtime.state = state;
       runtime.reason = reason;
+      if (cancelReason) runtime.cancelReason = cancelReason;
+      else delete runtime.cancelReason;
       runtime.updatedAt = now;
     }
   };
@@ -356,6 +441,14 @@ export async function advanceCodexRuntimes(
       }
       continue;
     }
+    // The file may have changed since the save; a reload would then load a
+    // configuration that no longer carries this change.
+    refused ??= (refusal?.() ?? Promise.resolve(undefined)).catch(() => undefined);
+    const superseded = await refused;
+    if (superseded) {
+      set(list, "cancelled", superseded.reason, superseded.cancelReason);
+      continue;
+    }
     set(list, "applying", "Reloading Codex's MCP configuration.");
     try {
       // Environment-level and no-spawn: a bridge restart that forgot every
@@ -375,10 +468,11 @@ export async function advanceCodexRuntimes(
             ? "Codex reloaded its MCP configuration; each thread uses it from its next turn."
             : "Codex is not running; it reads the saved configuration when it next starts.",
         );
+        if (outcome === "reloaded") reloaded.push(...list.map((runtime) => runtime.runtimeId));
       }
     } catch {
       set(list, "failed", "Codex did not accept the reload request; retry apply.");
     }
   }
-  return { runtimes, waiting, changed };
+  return { runtimes, waiting, changed, reloaded };
 }

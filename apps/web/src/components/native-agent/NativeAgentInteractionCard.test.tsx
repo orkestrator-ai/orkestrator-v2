@@ -372,3 +372,69 @@ describe("NativeAgentInteractionCard", () => {
     );
   });
 });
+
+describe("NativeAgentInteractionCard countdown pause", () => {
+  function approval(hold: AgentInteractionRequest["hold"]): AgentInteractionRequest {
+    return {
+      ...interaction(false),
+      provider: "codex",
+      kind: "command-approval",
+      expiresAt: Date.now() + 2 * 60_000,
+      hold,
+      presentation: {
+        title: "Run a command",
+        body: "git push",
+        questions: [],
+        confirmLabel: "Approve",
+        declineLabel: "Deny",
+      },
+    };
+  }
+
+  test("an approval's countdown pauses through the same control", async () => {
+    const onHold = mock(async (_held: boolean) => ({
+      result: "applied" as const,
+      interactionId: "interaction-1",
+      sessionId: "session-1",
+      revision: 2,
+    }));
+    render(
+      <NativeAgentInteractionCard
+        interaction={approval({ available: true })}
+        onResolve={async () => ({
+          result: "applied",
+          interactionId: "interaction-1",
+          sessionId: "session-1",
+          revision: 2,
+        })}
+        onHold={onHold}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Pause countdown, \d:\d\d left$/ }));
+    await waitFor(() => expect(onHold).toHaveBeenCalledWith(true));
+    // Pausing never answers: the approval's own buttons are still there.
+    expect(screen.getByRole("button", { name: "Approve" })).toBeTruthy();
+  });
+
+  test("an approval whose provider limit is the countdown cannot be paused", () => {
+    render(
+      <NativeAgentInteractionCard
+        interaction={approval({ available: false, reason: "no-extension" })}
+        onResolve={async () => ({
+          result: "applied",
+          interactionId: "interaction-1",
+          sessionId: "session-1",
+          revision: 2,
+        })}
+        onHold={async () => ({
+          result: "applied",
+          interactionId: "interaction-1",
+          sessionId: "session-1",
+          revision: 2,
+        })}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /countdown/ }) === null).toBe(true);
+    expect(screen.getByText(/Codex stops waiting at this deadline itself/)).toBeTruthy();
+  });
+});

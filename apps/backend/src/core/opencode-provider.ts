@@ -1295,17 +1295,33 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   ): Promise<string> {
     const status = await this.status(sessionId);
     if (status === "missing") throw new PromptRejectedError("OpenCode session was not found");
-    if (policy) {
-      const effectivePolicy = effectiveOpenCodePolicy(policy);
-      const response = await this.client.session.update(
-        { sessionID: sessionId, permission: openCodePermissionRules(effectivePolicy) },
-        this.requestOptions(),
-      );
-      assertSdkResponse(response, "OpenCode resumed session policy update");
-      this.sessionPolicies.set(sessionId, effectivePolicy);
-    }
+    if (policy) await this.applySessionPolicy(sessionId, effectiveOpenCodePolicy(policy));
     this.lifecycle.rememberExistingSession(sessionId);
     return sessionId;
+  }
+
+  async synchronizeSessionPolicy(
+    sessionId: string,
+    policy: NativeAgentExecutionPolicy,
+  ): Promise<void> {
+    const effectivePolicy = effectiveOpenCodePolicy(policy);
+    // OpenCode appends permission rules on update. Readiness checks must not
+    // append the same rules on every turn; a new provider rehydrates once.
+    if (JSON.stringify(this.sessionPolicies.get(sessionId)) === JSON.stringify(effectivePolicy))
+      return;
+    await this.applySessionPolicy(sessionId, effectivePolicy);
+  }
+
+  private async applySessionPolicy(
+    sessionId: string,
+    effectivePolicy: NativeAgentExecutionPolicy,
+  ): Promise<void> {
+    const response = await this.client.session.update(
+      { sessionID: sessionId, permission: openCodePermissionRules(effectivePolicy) },
+      this.requestOptions(),
+    );
+    assertSdkResponse(response, "OpenCode resumed session policy update");
+    this.sessionPolicies.set(sessionId, effectivePolicy);
   }
 
   async forkSession(sessionId: string, messageId?: string): Promise<NativeAgentForkOutcome> {

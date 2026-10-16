@@ -11,6 +11,7 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { claudeJsonPath } from "./claude-home.js";
+import { coordinatorResearchMcpServersFromEnv } from "@orkestrator/protocol/coordinator-web-research";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { readJsonSliceCached, readJsonSliceCachedWithDigest } from "./json-file-cache.js";
 import { isCoordinatorReadOnlyPolicy } from "./read-only-policy.js";
@@ -425,6 +426,12 @@ export async function getMcpRuntimeConfig(
         url: new URL("/design-mcp", agentServer.url).toString(),
       };
   }
+  // A coordinator loads no configured servers (`none`), only the remote
+  // research servers its launcher named as process authority. They come from
+  // the environment, never from a file the checkout could edit.
+  const research =
+    normalizeScope(sources) === "none" ? coordinatorResearchMcpServersFromEnv(env) : [];
+  for (const server of research) servers[server.name] = { type: "http", url: server.url };
 
   // Names come from the merged config, not from `servers`: a server whose
   // config shape we can't translate is still an MCP server as far as tool-name
@@ -436,6 +443,7 @@ export async function getMcpRuntimeConfig(
       ...(agentServer
         ? [AGENT_MCP_SERVER_NAME, ...(connection?.design ? ["orkestrator-design"] : [])]
         : []),
+      ...research.map((server) => server.name),
     ]),
     revision,
   };

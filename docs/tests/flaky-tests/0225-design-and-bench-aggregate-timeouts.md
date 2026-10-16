@@ -28,3 +28,17 @@
 - **Hypothesis:** host contention. Two of the cases exceeded their timeout and
   the third is a wall-clock benchmark. All three run SQLite-backed design or
   annotation storage introduced by #969. Not confirmed.
+
+## Design parts resolved (2026-10-16)
+
+The two design timeouts are fixed; the annotation bench stays open here, owned
+by [web-annotation-qualification.md](../../todo/web-annotation-qualification.md).
+
+- The design service replay case is [0218](0218-design-service-replay-aggregate-timeout.md),
+  resolved by reaching the change-log bound in 12 commits instead of 260.
+- The history entry-budget case made 55 sequential fsynced edits (about
+  0.36 s alone). It now lowers `historyEntriesPerCanvas` to
+  `PROTECTED_HISTORY_ENTRIES + 3` with `withDesignLimit` and makes 11 edits.
+  A new in-memory case ("the shipped entry budget keeps exactly the newest
+  entries") checks the shipped 50-entry bound through `appendEntry`. Neither
+  case is an ordering bug, and no deadline was raised.

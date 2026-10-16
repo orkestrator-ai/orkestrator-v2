@@ -106,6 +106,18 @@ const ProjectNavigationFixture = lazy(async () => ({
   default: (await import("./ProjectNavigationFixture")).ProjectNavigationFixture,
 }));
 
+const MailTilesFixture = lazy(async () => ({
+  default: (await import("./MailTilesFixture")).MailTilesFixture,
+}));
+
+const PaneBreakpointFixture = lazy(async () => ({
+  default: (await import("./PaneBreakpointFixture")).PaneBreakpointFixture,
+}));
+
+const EnvironmentSettingsDrawerFixture = lazy(async () => ({
+  default: (await import("./EnvironmentSettingsDrawerFixture")).EnvironmentSettingsDrawerFixture,
+}));
+
 declare global {
   interface Window {
     lastCreateEnvironmentOptions?: ClaudeOptions;
@@ -1647,6 +1659,13 @@ function PullRequestCheckStatusFixture() {
 function fixtureForPath() {
   if (window.location.pathname === "/coordinator-pane-tree") return <CoordinatorPaneTreeFixture />;
   if (window.location.pathname === "/add-project") return <AddProjectDialogFixture />;
+  if (window.location.pathname === "/mail-tiles") {
+    return (
+      <Suspense fallback={null}>
+        <MailTilesFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/project-navigation") {
     return (
       <Suspense fallback={null}>
@@ -1662,6 +1681,13 @@ function fixtureForPath() {
     );
   }
 
+  if (window.location.pathname === "/pane-breakpoint") {
+    return (
+      <Suspense fallback={null}>
+        <PaneBreakpointFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/terminal-links") {
     return (
       <Suspense fallback={null}>
@@ -1688,6 +1714,13 @@ function fixtureForPath() {
   if (window.location.pathname === "/composer-icon-pickers") return <ComposerIconPickersFixture />;
   if (window.location.pathname === "/agent-model-picker") return <AgentModelPickerFixture />;
   if (window.location.pathname === "/mobile-shell") return <MobileAppShellFixture />;
+  if (window.location.pathname === "/environment-settings-drawer") {
+    return (
+      <Suspense fallback={null}>
+        <EnvironmentSettingsDrawerFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/path-truncation") return <PathTruncationFixture />;
   if (window.location.pathname === "/multi-review-launch") {
     return <MultiReviewLaunchDialogFixture />;

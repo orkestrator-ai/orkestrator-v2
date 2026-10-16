@@ -991,8 +991,20 @@ describe("BuildPipelineService", () => {
       await service.advanceNow(started.id);
       expect(provider.sent).toHaveLength(1);
 
+      const reconnecting = await pipeline(storage, started.id);
+      await storage.saveBuildPipeline(
+        started.id,
+        reconnecting.projectId,
+        reconnecting.environmentId,
+        1,
+        { ...reconnecting, error: "Reconnect failed" },
+        reconnecting.backendRevision,
+      );
       await service.pause(started.id);
-      expect((await pipeline(storage, started.id)).sessions[0]?.status).toBe("idle");
+      const paused = await pipeline(storage, started.id);
+      expect(paused.sessions[0]?.status).toBe("idle");
+      expect(paused.pauseCause).toBe("requested");
+      expect(paused.error).toBe("Reconnect failed");
       await service.resume(started.id);
       await service.advanceNow(started.id);
 

@@ -6,7 +6,7 @@ import type {
   DesignOperationDescriptor,
   DesignOperationStatus,
 } from "@orkestrator/protocol/design-operations";
-import { DesignError, toDesignFailure } from "./errors.js";
+import { DesignError, reusedCorrelation, toDesignFailure } from "./errors.js";
 import { exportPreview, exportSave } from "./exports.js";
 import type { DesignExportDestination } from "./export-writer.js";
 import {
@@ -18,6 +18,7 @@ import {
   selectorSchema,
   stylesSchema,
 } from "./schemas.js";
+import { receiptDigest, settledMatches } from "./records.js";
 import { findCreate } from "./service-lifecycle.js";
 import type { DesignService } from "./service.js";
 import { validate as validateFrame } from "./validation.js";
@@ -99,6 +100,8 @@ export function designActions(
         "invalid-input",
         "submit_operation requires a correlationId so a retry cannot duplicate work",
       );
+    // A settled correlation id replays only for the same input (intent
+    // digest); `prepare` applies the same rule to pending ones.
     if (descriptor.canvasId) {
       const { record } = await service.loadFor(descriptor.canvasId, environmentId, {
         allowDeleted: true,
@@ -106,10 +109,18 @@ export function designActions(
       const settled = record.receipts.find(
         (receipt) => receipt.correlationId === descriptor.correlationId,
       );
-      if (settled) return compactStatus(settled);
+      if (settled) {
+        if (!settledMatches(settled, receiptDigest(record, settled.token), descriptor))
+          throw reusedCorrelation(settled.token);
+        return compactStatus(settled);
+      }
     } else if (descriptor.input.kind === "create_canvas") {
-      const settled = (await findCreate(service, environmentId, descriptor.correlationId))?.receipt;
-      if (settled) return compactStatus(settled);
+      const found = await findCreate(service, environmentId, descriptor.correlationId);
+      if (found?.receipt) {
+        if (!settledMatches(found.receipt, found.digest, descriptor))
+          throw reusedCorrelation(found.receipt.token);
+        return compactStatus(found.receipt);
+      }
     }
     const prepared = await service.prepare(environmentId, actor, descriptor);
     return compactStatus(await service.execute(environmentId, prepared.canvasId, prepared.token));

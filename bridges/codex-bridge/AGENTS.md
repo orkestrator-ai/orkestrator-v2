@@ -88,11 +88,26 @@ newest row, which every window holds.
   an unmaterialized thread is replaced instead. A result turn whose thread
   still does not list its submit tool is refused with 424 before journaling.
   Verified against codex 0.158.0.
+- Never treat the permission profile's `network.enabled = false` as "no network".
+  It stops commands; hosted web search (`web__run` in code mode) runs on
+  OpenAI's servers. A network-denied thread gets `codexNetworkDeniedConfig`:
+  `disabled`, or `cached` when the policy allows search. Never `live`, which
+  opens any URL the model names. A coordinator thread is refused unless
+  `config/read` reads the expected mode back (`assertHostedNetworkLock`).
+  After a Codex bump, run `live-network-lock.test.ts` with
+  `RUN_LIVE_CODEX_APP_SERVER=1` (no credits), and once with
+  `RUN_LIVE_CODEX_WEB_SEARCH_CANARY=1`, which spends a few turns proving
+  `cached` still refuses a page `live` opens.
 - Agent version bumps follow [`docs/development/upgrade-agents.md`](../../docs/development/upgrade-agents.md);
   the generated protocol under `app-server/generated/` is a lockfile.
 - Never resolve an approval to "approved" by default. Every timeout, disconnect,
   generation death and unparseable answer denies. Approving on a technicality would
   run a command the user never saw.
+- A pause (`POST …/approvals/:id/hold`, `…/interactions/:id/hold`) only moves the
+  parked request's `InteractionDeadline` to its hold ceiling (24 h, or a
+  question's `autoResolutionMs`); expiry still declines or cancels. A hold never
+  answers the request, and the GET rehydration routes publish the moved
+  `expiresAt` and `hold` at once.
 - Never answer an approval belonging to a **dead generation**. app-server has
   forgotten the request; withdraw the card and say so in the transcript instead
   (`abandonGeneration`). Conversely a *live* child must always be answered —

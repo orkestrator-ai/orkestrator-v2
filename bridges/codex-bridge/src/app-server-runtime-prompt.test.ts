@@ -5,6 +5,10 @@ import { MAX_LOCAL_MESSAGES, phaseToExternalStatus } from "./sessions/thread-reg
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
+import {
+  AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
+  AGENT_INTERACTION_HOLD_CEILING_MS,
+} from "@orkestrator/protocol/agent-interactions";
 
 import {
   NO_RESPONSE,
@@ -2104,6 +2108,106 @@ describe("interactive approvals", () => {
     expect(h.runtime.listApprovals(sessionId)[0]).toMatchObject({
       actionable: true,
       changes: [{ path: "src/index.ts", kind: "update" }],
+    });
+  });
+
+  test("a pause moves the listed deadline at once and never answers the approval", async () => {
+    const { h, sessionId } = await withPendingApproval();
+    const listed = h.runtime.listApprovals(sessionId)[0]!;
+    const requested = h.events.find((event) => event.type === "session.approval-requested");
+    expect((requested!.data!.approval as { hold?: unknown }).hold).toEqual({ available: true });
+    expect(listed.hold).toEqual({ available: true });
+    expect(listed.expiresAt).toBe(listed.requestedAt + AGENT_INTERACTION_DEFAULT_TIMEOUT_MS);
+
+    const before = Date.now();
+    const paused = h.runtime.holdApproval(sessionId, listed.approvalId, true);
+    const after = Date.now();
+    expect(paused.status).toBe("applied");
+    if (paused.status !== "applied") throw new Error("pause was not applied");
+    const heldAt = paused.hold.heldAt!;
+    expect(heldAt).toBeGreaterThanOrEqual(before);
+    expect(heldAt).toBeLessThanOrEqual(after);
+    expect(paused).toEqual({
+      status: "applied",
+      expiresAt: heldAt + AGENT_INTERACTION_HOLD_CEILING_MS,
+      hold: { available: true, heldAt },
+    });
+    // `GET /session/:id/approvals` reads this; the backend polls it.
+    expect(h.runtime.listApprovals(sessionId)[0]).toMatchObject({
+      approvalId: listed.approvalId,
+      requestedAt: listed.requestedAt,
+      expiresAt: paused.expiresAt,
+      hold: { available: true, heldAt },
+    });
+    expect(h.engine.getParkedApprovals()[0]).toMatchObject({
+      expiresAt: paused.expiresAt,
+      hold: { available: true, heldAt },
+    });
+
+    const resumed = h.runtime.holdApproval(sessionId, listed.approvalId, false);
+    expect(resumed.status).toBe("applied");
+    if (resumed.status !== "applied") throw new Error("resume was not applied");
+    expect(resumed.hold).toEqual({ available: true });
+    expect(resumed.expiresAt).toBeGreaterThanOrEqual(heldAt + AGENT_INTERACTION_DEFAULT_TIMEOUT_MS);
+    expect(h.runtime.listApprovals(sessionId)[0]).toMatchObject({
+      expiresAt: resumed.expiresAt,
+      hold: { available: true },
+    });
+    expect(h.runtime.listApprovals(sessionId)[0]!.hold?.heldAt).toBeUndefined();
+
+    await h.drain();
+    expect(h.child().stdin.lines.join("")).not.toContain('"decision"');
+    expect(h.events.some((event) => event.type === "session.approval-resolved")).toBe(false);
+  });
+
+  test("only the owning session can pause, and an answered approval is stale", async () => {
+    const { h, sessionId } = await withPendingApproval();
+    const approvalId = h.runtime.listApprovals(sessionId)[0]!.approvalId;
+    const other = h.runtime.createSession({ mode: "build" });
+
+    expect(h.runtime.holdApproval(other.sessionId, approvalId, true)).toEqual({
+      status: "wrong-session",
+    });
+    expect(h.runtime.holdApproval(sessionId, "apr-nope", true)).toEqual({ status: "unknown" });
+    expect(h.runtime.listApprovals(sessionId)[0]!.hold).toEqual({ available: true });
+
+    expect(h.runtime.respondToApproval(sessionId, approvalId, "deny")).toBe("applied");
+    await h.drain();
+    expect(h.runtime.holdApproval(sessionId, approvalId, true)).toEqual({ status: "unknown" });
+  });
+
+  test("a paused file-change approval keeps its enriched changes", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
+    h.child().notify("item/started", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "item-file",
+        type: "fileChange",
+        status: "inProgress",
+        changes: [{ path: "src/index.ts", kind: { type: "update", move_path: null } }],
+      },
+    });
+    await h.drain();
+    h.child().stdout.pushMessage({
+      jsonrpc: "2.0",
+      id: 9011,
+      method: "item/fileChange/requestApproval",
+      params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-file", startedAtMs: 1 },
+    });
+    await h.drain();
+    const approvalId = h.runtime.listApprovals(sessionId)[0]!.approvalId;
+
+    const paused = h.runtime.holdApproval(sessionId, approvalId, true);
+    expect(paused.status).toBe("applied");
+    if (paused.status !== "applied") throw new Error("pause was not applied");
+    expect(h.runtime.listApprovals(sessionId)[0]).toMatchObject({
+      actionable: true,
+      changes: [{ path: "src/index.ts", kind: "update" }],
+      expiresAt: paused.expiresAt,
+      hold: paused.hold,
     });
   });
 

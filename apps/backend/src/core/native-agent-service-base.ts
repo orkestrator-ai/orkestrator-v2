@@ -1,6 +1,11 @@
 import * as shared from "./native-agent-service-shared.js";
 import {
+  coordinatorResearchLine,
+  loadCoordinatorResearch,
+} from "./coordinator-research-context.js";
+import {
   COORDINATOR_ASYNC_CONTRACT,
+  COORDINATOR_LAUNCH_DEFAULTS_RULE,
   COORDINATOR_CONTEXT_CLOSE_TAG,
   COORDINATOR_CONTEXT_OPEN_TAG,
   COORDINATOR_MAIL_ADDRESS,
@@ -753,19 +758,64 @@ export abstract class NativeAgentServiceBase {
     ) {
       throw new Error("The project checkout is changing; wait for the Git operation to finish");
     }
+    const research = await loadCoordinatorResearch(this.storage);
+    const webResearch = research.mode;
     const trusted = {
       ...input,
       origin: "coordinator",
       interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
       owner: { kind: "coordinator", projectId: workspace.projectId, coordinatorId },
-      executionPolicy: existing?.executionPolicy ?? COORDINATOR_EXECUTION_POLICY,
-      policy:
-        existing?.policy ??
-        resolveNativeAgentExecutionPolicy(
-          { environmentType: "local", networkAccessMode: "restricted" },
-          "coordinator",
-        ),
+      executionPolicy: COORDINATOR_EXECUTION_POLICY,
+      // Resolved fresh rather than read from the record: the coordinator
+      // policy is never user-overridable, and its only variable part is the
+      // research setting, which applies from the next turn. OpenCode has no
+      // bridge to hold process authority, so this is what it runs under.
+      policy: resolveNativeAgentExecutionPolicy(
+        { environmentType: "local", networkAccessMode: "restricted" },
+        "coordinator",
+        undefined,
+        webResearch,
+      ),
     };
+    if (
+      existing &&
+      existing.policy &&
+      JSON.stringify(existing.policy) !== JSON.stringify(trusted.policy)
+    ) {
+      // Only the research exception may change on a coordinator conversation.
+      // All ownership and other policy fields still pass the normal identity
+      // check. Never turn an unrelated or forged policy into coordinator authority.
+      const oldAllow = existing.policy.capabilityPolicy?.allow;
+      if (oldAllow?.some((capability) => capability !== "web.search")) {
+        throw new Error("Native agent session key collision");
+      }
+      this.assertSessionIdentity(
+        existing,
+        {
+          ...trusted,
+          policy: {
+            ...trusted.policy,
+            capabilityPolicy: { ...trusted.policy.capabilityPolicy, allow: oldAllow },
+          },
+        },
+        existing.key,
+      );
+      // Resolve launcher authority before recording the change. A busy bridge
+      // refuses replacement; session-held permissions apply explicitly.
+      const provider = await this.provider(trusted);
+      if (provider.synchronizeSessionPolicy) {
+        const { status } = await readProviderStatus(provider, existing.providerSessionId);
+        // A missing provider session is replaced by ensureSession below.
+        if (status !== "missing") {
+          await provider.synchronizeSessionPolicy(existing.providerSessionId, trusted.policy);
+        }
+      }
+      await this.storage.transitionCoordinatorResearchPolicy(
+        existing,
+        trusted.policy,
+        trusted.owner,
+      );
+    }
     if (
       "prompt" in input &&
       typeof input.prompt === "string" &&
@@ -788,6 +838,7 @@ export abstract class NativeAgentServiceBase {
             `Delegation: create workers with the Orkestrator launch_environment tool. Provider sub-agents remain inside this coordinator session and are not worker environments. Report a worker as created only after launch_environment returns its environment id.\n` +
             `Actions: prefer launch_multi_review for the complete environment Multi Review button action; start_multi_review starts backend work only and does not open a tab. Use open_multi_review and open_multi_review_fix to present saved work. Reuse requestId on retry, and inspect outcome, ui and recovery before reporting completion.\n` +
             launchBaseLine +
+            `${COORDINATOR_LAUNCH_DEFAULTS_RULE}\n` +
             `${COORDINATOR_ASYNC_CONTRACT}\n`
           : `Delegation: Orkestrator worker controls are unavailable in this session. Provider sub-agents remain inside this coordinator session and are not worker environments; do not report them as workers.\n`;
       return {
@@ -797,7 +848,10 @@ export abstract class NativeAgentServiceBase {
           `${COORDINATOR_CONTEXT_OPEN_TAG}\n` +
           `Project: ${workspace.projectId}\n` +
           `Coordinator: ${coordinatorId}\n` +
-          `Role: read-only coordinator. Inspect and plan here; delegate all file changes, commands that mutate the checkout, builds, and fixes to worker environments through approved Orkestrator controls. Never attempt to alter the project checkout directly.\n` +
+          `Role: read-only coordinator. Research, inspect and plan here; delegate all file changes, commands that mutate the checkout, builds, and fixes to worker environments through approved Orkestrator controls. Never attempt to alter the project checkout directly.\n` +
+          `Scope: keep your own work to quick reads, searches and lookups. Anything more serious (a multi-file investigation, running builds or tests, reproducing a bug, writing or reviewing code in depth) belongs in a worker environment you launch, even when it only reads.\n` +
+          coordinatorResearchLine(research) +
+          `Tools: report a tool as unavailable or denied only after you called it and the call was refused; never assume a refusal you have not seen.\n` +
           delegation +
           `Repository context revision: ${workspace.repositoryContextRevision}\n` +
           `Branch: ${status?.branch ?? "unknown"}\n` +
@@ -978,6 +1032,11 @@ export abstract class NativeAgentServiceBase {
       const { status } = await readProviderStatus(provider, existing.providerSessionId);
       await this.assertEnvironmentLive(input.environmentId);
       if (status !== "missing") {
+        // Restate session-held authority even after a backend restart. Providers
+        // with process-held authority were refreshed by the launcher above.
+        if (input.owner?.kind === "coordinator" && input.policy) {
+          await provider.synchronizeSessionPolicy?.(existing.providerSessionId, input.policy);
+        }
         if (
           ((!existing.owner || !existing.policy) && input.owner) ||
           (!existing.initialPromptPresentation && input.initialPromptPresentation)

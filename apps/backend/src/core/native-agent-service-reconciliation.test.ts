@@ -1,3 +1,4 @@
+import { launchSelectionReport } from "./control-shared-actions.js";
 import { describe, expect, mock, test } from "bun:test";
 import type { ProviderRegistry } from "./native-agent-provider-registry.js";
 
@@ -1199,6 +1200,12 @@ describe("NativeAgentService", () => {
         activityState = "waiting";
         await service.reconcileAgentActivity();
 
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          agentActivityState: "waiting",
+          hasUnreadWork: true,
+          unreadReason: "agent_waiting",
+        });
+
         // Every announced transition is stamped by the observer: one lifetime
         // (`generation`) and a revision that advances by exactly one per
         // announcement, so a client can detect a missed one as a gap.
@@ -1261,7 +1268,11 @@ describe("NativeAgentService", () => {
         await service.reconcileAgentActivity();
         expect(observeActivity).toHaveBeenCalledWith("provider-1");
         expect(attention).toHaveBeenCalledTimes(1);
-        expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).toBe(true);
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          agentActivityState: "working",
+          hasUnreadWork: true,
+          unreadReason: "agent_question",
+        });
 
         await storage.setEnvironmentUnread("env-1", false);
         await service.reconcileAgentActivity();
@@ -1302,6 +1313,7 @@ describe("NativeAgentService", () => {
         expect(await storage.getEnvironment("env-1")).toMatchObject({
           agentActivityState: "working",
           hasUnreadWork: true,
+          unreadReason: "agent_ready",
         });
         expect(await service.hasObservedLiveWork("env-1", "claude")).toBe(true);
       },
@@ -1338,6 +1350,7 @@ describe("NativeAgentService", () => {
         expect(await storage.getEnvironment("env-1")).toMatchObject({
           agentActivityState: "working",
           hasUnreadWork: true,
+          unreadReason: "agent_ready",
         });
 
         // The bridge repeats `readyForInput: true` on every poll for as long as
@@ -1416,6 +1429,7 @@ describe("NativeAgentService", () => {
         expect(await storage.getEnvironment("env-1")).toMatchObject({
           agentActivityState: "idle",
           hasUnreadWork: true,
+          unreadReason: "agent_finished",
         });
       },
     );
@@ -3392,6 +3406,56 @@ describe("NativeAgentService", () => {
             context1m: true,
             chrome: true,
           });
+        },
+      );
+    });
+
+    test("environment launch report matches startup dispatch for unsupported inherited effort", async () => {
+      const models = [
+        {
+          platform: "codex" as const,
+          id: "mini",
+          label: "Mini",
+          reasoning: [{ id: "low", label: "Low" }],
+          defaultReasoningId: "low",
+        },
+      ];
+      const { provider, send } = createProviderStub("codex", { modelCatalog: async () => models });
+      await withService(
+        {
+          prefix: "ork-launch-report-effort-",
+          environment: {
+            pendingAgentLaunch: true,
+            initialAgentPlatform: "codex",
+            initialAgentModel: "mini",
+            initialPrompt: "Work",
+          },
+          provider: async () => provider,
+        },
+        async ({ storage, service }) => {
+          const agentSettings = {
+            platforms: { codex: { mode: "native" as const, reasoningEffort: "high" as const } },
+          };
+          await storage.updateRepositoryConfig("project-1", {
+            defaultBranch: "main",
+            prBaseBranch: "main",
+            agentSettings,
+          });
+          const selection = launchSelectionReport(
+            { repository: agentSettings },
+            models,
+            { agent: "codex", modelId: "mini" },
+            false,
+          );
+          await service.reconcileInitialLaunch("env-1");
+          expect(send).toHaveBeenCalledWith(
+            "provider-session",
+            "Work",
+            expect.objectContaining({
+              model: selection.model,
+              effort: selection.reasoning,
+            }),
+          );
         },
       );
     });

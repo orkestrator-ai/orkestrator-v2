@@ -398,6 +398,33 @@ describe("NativeAgentService command intent", () => {
     });
   });
 
+  test("a new tab's catalogue comes from its own session before the first prompt, never the global list", async () => {
+    // The Claude bridge answers a session that has not run a turn from a
+    // zero-turn CLI probe, reported as stale. The legacy global list (the
+    // filesystem scan plus `BUILTIN_COMMANDS`) is only read without a session.
+    const stub = providerStub("claude", {
+      catalogue: async () => ({
+        enhanced: true,
+        status: "stale",
+        commands: [command("/review", { source: "unknown" })],
+      }),
+    });
+    await withService(stub.provider, async ({ service }) => {
+      // Before the tab's ensure lands there is no projection, so no rows.
+      expect(await service.getProjection(base)).toBeNull();
+      expect(stub.commandCatalogue).not.toHaveBeenCalled();
+
+      await service.ensureSession(base);
+      const projection = await service.getProjection(base);
+      expect(stub.send).not.toHaveBeenCalled();
+      expect(projection?.slashCommandCatalogue).toMatchObject({ status: "stale", enhanced: true });
+      expect(projection?.slashCommands?.map((row) => row.id)).toContain("claude:/review");
+      const calls = stub.commandCatalogue.mock.calls as unknown as [string | undefined][];
+      expect(calls.length).toBeGreaterThan(0);
+      expect(calls.map(([sessionId]) => sessionId)).toEqual(calls.map(() => "provider-session"));
+    });
+  });
+
   test("an unsupported integration projects unsupported rather than an empty ready list", async () => {
     const stub = providerStub("cursor");
     await withService(stub.provider, async ({ service }) => {

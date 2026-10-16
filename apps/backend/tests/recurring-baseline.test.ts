@@ -121,6 +121,15 @@ describe("driven native observation baseline (step 07)", () => {
   });
 });
 
+// Storage reads plus stats each workflow attempt may cost, from the current
+// supervisors (whole-store ticks list the store and read each active record;
+// looped review reads a record's row four times and claims it once per pass).
+// Raise one only for a reviewed reason.
+const STORAGE_PER_ATTEMPT = {
+  rollback: { "feature-planning": 3, "build-pipeline": 4, "looped-review": 12 },
+  keyed: { "feature-planning": 1, "build-pipeline": 2, "looped-review": 5 },
+} as const;
+
 describe("driven workflow supervision baseline (step 08)", () => {
   test("is deterministic, content-free, and keyed selection no longer scales with history", async () => {
     const fixture = { completedPerStore: 30, activePerStore: 2, windowMs: 90_000 };
@@ -147,6 +156,26 @@ describe("driven workflow supervision baseline (step 08)", () => {
         Math.abs(keyed[domain].providerReads - rollback[domain].providerReads),
       ).toBeLessThanOrEqual(fixture.activePerStore * 2);
     }
+    // Every attempt reads storage, and none reads more than its budget, cache
+    // or not: one extra read per attempt breaks a budget.
+    for (const mode of ["rollback", "keyed"] as const) {
+      for (const domain of ["feature-planning", "build-pipeline", "looped-review"] as const) {
+        const counts = first.modes[mode][domain];
+        const storage = counts.storageReads + counts.storageStats;
+        expect(storage).toBeGreaterThanOrEqual(counts.attempts);
+        expect(storage).toBeLessThanOrEqual(STORAGE_PER_ATTEMPT[mode][domain] * counts.attempts);
+      }
+    }
+    // A feature-planning pass reads its whole store once; the row cache serves
+    // it and it still counts. A whole-store tick also lists the store first.
+    expect(keyed["feature-planning"].storageReads).toBe(keyed["feature-planning"].attempts);
+    expect(rollback["feature-planning"].storageReads).toBe(
+      rollback["feature-planning"].attempts * (1 + fixture.activePerStore),
+    );
+    // Build pipelines reuse their decoded control records between writes.
+    expect(keyed["build-pipeline"].storageStats).toBeGreaterThan(
+      keyed["build-pipeline"].storageReads,
+    );
     // Two complete runs over a real on-disk store: seconds of I/O even when
     // idle, so the default five-second budget fails under aggregate load.
   }, 60_000);

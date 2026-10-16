@@ -6,7 +6,7 @@ import {
   type DesignOperationDescriptor,
   type DesignOperationStatus,
 } from "@orkestrator/protocol/design-operations";
-import { isDesignError } from "./errors.js";
+import { isDesignError, type DesignError } from "./errors.js";
 import { validate as validateFrame } from "./validation.js";
 import type { DesignService } from "./service.js";
 import {
@@ -250,6 +250,12 @@ describe("design operations: prepare, execute, status and cancel", () => {
 
   test("a lost execute response is answered by status and a repeated execute changes nothing", async () => {
     const { canvasId, frameId } = await setup();
+    // Appended HTML is validated in the background after commit, and that
+    // commit publishes its own status hint. Hold it so the counts below cannot
+    // race it under load (flake 0215).
+    const validation = deferred();
+    harness.renderer.block = (job) =>
+      job.priority === "validation" ? validation.promise : undefined;
     const prepared = await service().prepare("env-1", "user", {
       canvasId,
       input: { kind: "append_frame_html", frameId, html: "<p>once</p>" },
@@ -257,6 +263,7 @@ describe("design operations: prepare, execute, status and cancel", () => {
     });
     const first = await service().execute("env-1", canvasId, prepared.token);
     expect(first.state).toBe("committed");
+    await harness.renderer.started((job) => job.priority === "validation");
     const afterFirst = await service().get(canvasId, "env-1");
     const events = harness.events.length;
     const jobs = harness.renderer.jobs.length;
@@ -266,6 +273,19 @@ describe("design operations: prepare, execute, status and cancel", () => {
     expect(await service().get(canvasId, "env-1")).toEqual(afterFirst);
     expect(afterFirst.frames[0]!.html.match(/once/g)).toHaveLength(1);
     expect(harness.events.length).toBe(events);
+    expect(harness.renderer.jobs.length).toBe(jobs);
+    // The only later hint is the first commit's validation status.
+    const validated = validateFrame(service(), "env-1", canvasId, frameId);
+    validation.resolve();
+    expect((await validated)?.state).toBe("valid");
+    expect(harness.events.slice(events)).toEqual([
+      expect.objectContaining({
+        canvasId,
+        frameId,
+        kind: "status",
+        revision: afterFirst.revision,
+      }),
+    ]);
     expect(harness.renderer.jobs.length).toBe(jobs);
     // Also across restart.
     const restarted = await harness.restart(serviceOptions());
@@ -548,7 +568,85 @@ describe("design operations: prepare, execute, status and cancel", () => {
     expect(elsewhere.canvasId).not.toBe(a.canvasId);
     expect((await service().execute("env-1", a.canvasId, a.token)).state).toBe("committed");
     await expect(service().prepare("env-1", "user", descriptor)).rejects.toThrow("settled");
+    // Once settled, different input is named as such rather than as a replay.
+    await expect(
+      service().prepare("env-1", "user", {
+        ...descriptor,
+        input: { kind: "create_canvas", name: "Different" },
+      }),
+    ).rejects.toThrow("different edit");
     expect(await service().list("env-1")).toHaveLength(1);
+  });
+
+  test("a settled correlation id refuses different input at preparation", async () => {
+    const { canvasId, frameId } = await setup();
+    const descriptor = { ...move(canvasId, frameId, 1, 10), correlationId: "settled-1" };
+    const prepared = await service().prepare("env-1", "user", descriptor);
+    expect((await service().execute("env-1", canvasId, prepared.token)).state).toBe("committed");
+    const settled = service().prepare("env-1", "user", descriptor);
+    await expect(settled).rejects.toThrow("already has a settled operation");
+    await expect(settled.catch((error: DesignError) => error.failure)).resolves.toMatchObject({
+      code: "invalid-input",
+      details: { token: prepared.token },
+    });
+    const changed = service().prepare("env-1", "user", {
+      ...move(canvasId, frameId, 1, 99),
+      correlationId: "settled-1",
+    });
+    await expect(changed).rejects.toThrow("different edit");
+    await expect(changed.catch((error: DesignError) => error.failure)).resolves.toMatchObject({
+      code: "invalid-input",
+      retry: "never",
+      details: { token: prepared.token },
+    });
+  });
+
+  test("a correlation id binds style order but not other key order", async () => {
+    const { canvasId, frameId } = await setup();
+    const kind = "set_element_styles";
+    const margins = (styles: Record<string, string>): DesignOperationDescriptor => ({
+      canvasId,
+      input: { kind, frameId, selector: "h1", styles },
+      preconditions: { frameRevision: 1 },
+      correlationId: "margins-1",
+    });
+    const styles = { margin: "0", "margin-top": "10px" };
+    const prepared = await service().prepare("env-1", "user", margins(styles));
+    // While pending, a retry with the descriptor's keys reordered is the same edit.
+    const reordered: DesignOperationDescriptor = {
+      correlationId: "margins-1",
+      preconditions: { frameRevision: 1 },
+      input: { styles, selector: "h1", frameId, kind },
+      canvasId,
+    };
+    expect((await service().prepare("env-1", "user", reordered)).token).toBe(prepared.token);
+    // Reversed shorthand and longhand would leave a different top margin.
+    const reversed = margins({ "margin-top": "10px", margin: "0" });
+    await expect(service().prepare("env-1", "user", reversed)).rejects.toThrow("different edit");
+    expect((await service().execute("env-1", canvasId, prepared.token)).state).toBe("committed");
+    // Once settled the same rule holds.
+    await expect(service().prepare("env-1", "user", reversed)).rejects.toThrow("different edit");
+    await expect(service().prepare("env-1", "user", reordered)).rejects.toThrow(
+      "already has a settled operation",
+    );
+    // The same applies to styles inside a batch.
+    const { revision } = await service().get(canvasId, "env-1");
+    const batch = (styles: Record<string, string>): DesignOperationDescriptor => ({
+      canvasId,
+      input: { kind: "batch", operations: [{ kind, frameId, selector: "h1", styles }] },
+      preconditions: { canvasRevision: revision },
+      correlationId: "margins-batch",
+    });
+    const padding = { padding: "0", "padding-left": "4px" };
+    const paddingReversed = batch({ "padding-left": "4px", padding: "0" });
+    const batched = await service().prepare("env-1", "user", batch(padding));
+    await expect(service().prepare("env-1", "user", paddingReversed)).rejects.toThrow(
+      "different edit",
+    );
+    expect((await service().execute("env-1", canvasId, batched.token)).state).toBe("committed");
+    await expect(service().prepare("env-1", "user", paddingReversed)).rejects.toThrow(
+      "different edit",
+    );
   });
 
   test("predecessor substitution only chains a committed predecessor from the same client", async () => {

@@ -5,10 +5,13 @@ import {
   type DesignSyncDelta,
   type DesignSyncResult,
 } from "@orkestrator/protocol/design-operations";
+import { cloneRecord, pushChange } from "./records.js";
+import { buildSync } from "./sync.js";
 import {
   createDesignHarness,
   deferred,
   trackUnhandledRejections,
+  withDesignLimit,
   type DesignHarness,
 } from "./test-support.js";
 import { validate } from "./validation.js";
@@ -191,45 +194,149 @@ describe("design incremental sync", () => {
 
   test("gaps reset: expired range, future cursor and a new generation", async () => {
     const { canvasId, ids, base } = await setup(1);
-    const total = DESIGN_LIMITS.changeDescriptors + 2;
-    for (let index = 1; index <= total; index++)
-      await service().mutate(canvasId, "env-1", ids[0]!, index, { x: index }, "user");
-    const revision = base.revision + total;
-    expect(await sync(canvasId, base.revision)).toMatchObject({
+    // A short change log rolls over in a few fsynced commits; 258 real ones
+    // exceeded the 5 s deadline under aggregate load (flake 0193).
+    await withDesignLimit("changeDescriptors", 8, async () => {
+      const total = DESIGN_LIMITS.changeDescriptors + 2;
+      for (let index = 1; index <= total; index++)
+        await service().mutate(canvasId, "env-1", ids[0]!, index, { x: index }, "user");
+      const revision = base.revision + total;
+      expect(await sync(canvasId, base.revision)).toMatchObject({
+        kind: "reset",
+        reason: "expired-range",
+        revision,
+      });
+      // The oldest cursor the log still covers gets a delta.
+      expect(
+        await sync(
+          canvasId,
+          revision - DESIGN_LIMITS.changeDescriptors,
+          await statusVersionOf(canvasId),
+        ),
+      ).toMatchObject({ kind: "delta", revision });
+      expect(await sync(canvasId, revision + 1)).toMatchObject({
+        kind: "reset",
+        reason: "future-cursor",
+        revision,
+      });
+      expect(await sync(canvasId, revision - 1, undefined, "other-generation")).toMatchObject({
+        kind: "reset",
+        reason: "generation",
+      });
+      expect(await sync(canvasId, revision - 1, await statusVersionOf(canvasId))).toMatchObject({
+        kind: "delta",
+        baseRevision: revision - 1,
+        revision,
+      });
+      expect(await sync(canvasId, revision, await statusVersionOf(canvasId))).toMatchObject({
+        kind: "unchanged",
+        revision,
+      });
+      const oldGeneration = service().generation;
+      const restarted = await harness.restart();
+      expect(await restarted.sync("env-1", canvasId, oldGeneration, revision, 0)).toMatchObject({
+        kind: "reset",
+        reason: "generation",
+        revision,
+      });
+      expect(
+        await restarted.sync("env-1", canvasId, restarted.generation, revision - 1, 0),
+      ).toMatchObject({
+        kind: "delta",
+      });
+    });
+  });
+
+  test("the shipped change log covers exactly the newest changeDescriptors revisions", async () => {
+    const { canvasId, ids } = await setup(1);
+    await service().mutate(canvasId, "env-1", ids[0]!, 1, { x: 1 }, "user");
+    // In memory: the shipped bound without one fsynced commit per revision.
+    const { record: loaded } = await service().loadFor(canvasId, "env-1");
+    const record = cloneRecord(loaded);
+    const template = record.changes.at(-1)!;
+    for (let index = 0; index < DESIGN_LIMITS.changeDescriptors + 2; index++)
+      pushChange(record, { ...template, revision: ++record.document.revision });
+    const revision = record.document.revision;
+    const oldest = revision - DESIGN_LIMITS.changeDescriptors;
+    expect(record.changes).toHaveLength(DESIGN_LIMITS.changeDescriptors);
+    expect(record.changes[0]!.revision).toBe(oldest + 1);
+    const generation = service().generation;
+    expect(buildSync(record, generation, generation, oldest - 1, 0)).toMatchObject({
       kind: "reset",
       reason: "expired-range",
-      revision,
     });
-    expect(await sync(canvasId, revision + 1)).toMatchObject({
-      kind: "reset",
-      reason: "future-cursor",
-      revision,
-    });
-    expect(await sync(canvasId, revision - 1, undefined, "other-generation")).toMatchObject({
-      kind: "reset",
-      reason: "generation",
-    });
-    expect(await sync(canvasId, revision - 1, await statusVersionOf(canvasId))).toMatchObject({
+    expect(buildSync(record, generation, generation, oldest, 0)).toMatchObject({
       kind: "delta",
-      baseRevision: revision - 1,
+      baseRevision: oldest,
       revision,
     });
-    expect(await sync(canvasId, revision, await statusVersionOf(canvasId))).toMatchObject({
-      kind: "unchanged",
-      revision,
-    });
-    const oldGeneration = service().generation;
-    const restarted = await harness.restart();
-    expect(await restarted.sync("env-1", canvasId, oldGeneration, revision, 0)).toMatchObject({
-      kind: "reset",
-      reason: "generation",
-      revision,
-    });
-    expect(
-      await restarted.sync("env-1", canvasId, restarted.generation, revision - 1, 0),
-    ).toMatchObject({
-      kind: "delta",
-    });
+  });
+
+  test("live hints follow per-canvas commit order and stale validation publishes nothing", async () => {
+    const { canvasId, ids } = await setup(1);
+    const frameId = ids[0]!;
+    const gate = deferred();
+    harness.renderer.block = (job) => (job.priority === "validation" ? gate.promise : undefined);
+    const eventsBefore = harness.events.length;
+    const revisionOf = async () => (await service().getFrame(canvasId, "env-1", frameId)).revision;
+    // The append's background validation is held while a geometry edit commits.
+    await service().mutate(
+      canvasId,
+      "env-1",
+      frameId,
+      1,
+      { op: "appendHtml", html: "<p>a</p>" },
+      "user",
+    );
+    await harness.renderer.started((job) => job.priority === "validation");
+    await service().mutate(canvasId, "env-1", frameId, await revisionOf(), { x: 9 }, "user");
+    const held = validate(service(), "env-1", canvasId, frameId);
+    gate.resolve();
+    expect((await held)?.state).toBe("valid");
+    const document = await service().get(canvasId, "env-1");
+    const statusVersion = await statusVersionOf(canvasId);
+    expect(harness.events.slice(eventsBefore)).toEqual([
+      expect.objectContaining({ kind: "document", revision: document.revision - 1, frameId }),
+      expect.objectContaining({ kind: "document", revision: document.revision, frameId }),
+      // The geometry edit kept the content, so its validation still applies.
+      expect.objectContaining({
+        kind: "status",
+        revision: document.revision,
+        frameId,
+        statusVersion,
+      }),
+    ]);
+    // A validation result for replaced content is discarded without a hint.
+    const second = deferred();
+    harness.renderer.block = (job) => (job.priority === "validation" ? second.promise : undefined);
+    const validations = harness.renderer.jobs.filter((job) => job.priority === "validation").length;
+    await service().mutate(
+      canvasId,
+      "env-1",
+      frameId,
+      await revisionOf(),
+      { op: "appendHtml", html: "<p>b</p>" },
+      "user",
+    );
+    await harness.renderer.started((job) => job.priority === "validation", validations + 1);
+    await service().mutate(
+      canvasId,
+      "env-1",
+      frameId,
+      await revisionOf(),
+      { html: "<h1>Replaced</h1>" },
+      "user",
+    );
+    const replaced = harness.events.length;
+    const stale = validate(service(), "env-1", canvasId, frameId);
+    second.resolve();
+    expect(await stale).toBeUndefined();
+    expect(harness.events.length).toBe(replaced);
+    const hints = harness.events.slice(eventsBefore);
+    for (let index = 1; index < hints.length; index++) {
+      expect(hints[index]!.revision).toBeGreaterThanOrEqual(hints[index - 1]!.revision);
+      expect(hints[index]!.statusVersion!).toBeGreaterThanOrEqual(hints[index - 1]!.statusVersion!);
+    }
   });
 
   test("an oversized net change resets with too-large and the snapshot path still works", async () => {

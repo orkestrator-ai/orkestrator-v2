@@ -510,9 +510,10 @@ export interface LaunchMultiReviewActionInput {
   autoPr?: boolean;
   requestId: string;
   environmentId: string;
-  reviewers: MultiReviewModelSelection[];
+  /** Omitted model rows use the saved Multi Review defaults, as the button does. */
+  reviewers?: MultiReviewModelSelection[];
   reviewModel?: MultiReviewModelSelection;
-  fixModel: MultiReviewModelSelection;
+  fixModel?: MultiReviewModelSelection;
   /** Omitted values use saved defaults; an explicit blank instruction clears its default. */
   targetBranch?: string;
   reviewInstruction?: string;
@@ -561,14 +562,23 @@ export function isLaunchMultiReviewActionInput(
         typeof reviewInstruction === "string" && reviewInstruction.trim().length === 0
           ? undefined
           : reviewInstruction,
-      reviewers: value.reviewers,
+      // An omitted row is filled from saved defaults by the backend, so only
+      // a row the caller actually sent is checked here.
+      reviewers:
+        value.reviewers === undefined ? [DEFAULTED_SELECTION_PLACEHOLDER] : value.reviewers,
       reviewModel: value.reviewModel,
-      fixModel: value.fixModel,
+      fixModel: value.fixModel === undefined ? DEFAULTED_SELECTION_PLACEHOLDER : value.fixModel,
       autoFix: value.autoFix,
       autoPr: value.autoPr,
     })
   );
 }
+
+/** A well-formed stand-in used only to validate the rest of a launch payload. */
+const DEFAULTED_SELECTION_PLACEHOLDER: MultiReviewModelSelection = {
+  agent: "claude",
+  model: "default",
+};
 
 export interface StartMultiReviewCustomFixInput {
   workflowId: string;
@@ -1086,4 +1096,156 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
 
 export function isMultiReviewTerminalPhase(phase: MultiReviewPhase): boolean {
   return phase === "interactive" || phase === "completed" || phase === "cancelled";
+}
+
+// ---------------------------------------------------------------------------
+// Step sessions and their transcript tails
+// ---------------------------------------------------------------------------
+
+/**
+ * Which step owns the fix session's clock and transcript right now.
+ *
+ * Older workflows run preparation, consolidation and the fix turn in one
+ * provider session, and every dispatch resets its clock, so whatever that
+ * session shows belongs to the step using it now and to no other.
+ */
+export function multiReviewSharedSessionStep(
+  workflow: MultiReviewWorkflow,
+): MultiReviewStepKind | null {
+  switch (workflow.phase) {
+    // The reviewers run without the fix session, so it still holds
+    // preparation's finished turn for the whole review stage.
+    case "preparing":
+    case "reviewing":
+      return "prepare";
+    case "consolidating":
+    case "ready":
+      return "consolidate";
+    case "fixing":
+    case "completed":
+      return "fix";
+    case "paused":
+      return workflow.pausedStep ?? null;
+    // The address turn has not been dispatched yet, so the session still
+    // carries consolidation's turn and no step may claim it.
+    case "interactive":
+      return workflow.addressPromptPending === true ? null : "fix";
+    default:
+      break;
+  }
+  // Cancellation clears the active request, so only a failure still says which
+  // turn was in flight.
+  return workflow.activeRequest?.kind ?? null;
+}
+
+/**
+ * The provider session a step runs in. Preparation keeps its own once
+ * consolidation moves to a fresh session; workflows without a separate
+ * preparation model ran every step in the fix session.
+ */
+export function multiReviewStepSession(
+  workflow: MultiReviewWorkflow,
+  step: MultiReviewStepKind,
+): MultiReviewSession | undefined {
+  if (step === "fix") return workflow.fixSession;
+  const coordinatorSession =
+    workflow.reviewSession ??
+    (workflow.reviewModel || workflow.consolidationModel ? undefined : workflow.fixSession);
+  return step === "prepare"
+    ? (workflow.preparationSession ?? coordinatorSession)
+    : coordinatorSession;
+}
+
+/**
+ * Whether a step may show its session's transcript as its own.
+ *
+ * - `none`: the step has no session yet.
+ * - `own`: the session is the step's, or the step is the one using a shared
+ *   session now (see {@link multiReviewSharedSessionStep}). Once the pipeline
+ *   has moved past every step sharing it, the last of them keeps it.
+ * - `other-step`: the session is shared and another step is using it, so its
+ *   transcript says nothing about this step.
+ */
+export type MultiReviewStepSessionAccess =
+  | { kind: "none" }
+  | { kind: "own"; session: MultiReviewSession }
+  | { kind: "other-step"; session: MultiReviewSession; step: MultiReviewStepKind | null };
+
+export function multiReviewStepSessionAccess(
+  workflow: MultiReviewWorkflow,
+  step: MultiReviewStepKind,
+): MultiReviewStepSessionAccess {
+  const session = multiReviewStepSession(workflow, step);
+  if (!session) return { kind: "none" };
+  const sharing = MULTI_REVIEW_STEP_KINDS.filter(
+    (candidate) =>
+      multiReviewStepSession(workflow, candidate)?.providerSessionId === session.providerSessionId,
+  );
+  if (sharing.length <= 1) return { kind: "own", session };
+  const current = multiReviewSharedSessionStep(workflow);
+  const order = (kind: MultiReviewStepKind) => MULTI_REVIEW_STEP_KINDS.indexOf(kind);
+  const last = sharing[sharing.length - 1]!;
+  const holder =
+    current === null
+      ? null
+      : sharing.includes(current)
+        ? current
+        : order(current) > order(last)
+          ? last
+          : null;
+  return holder === step ? { kind: "own", session } : { kind: "other-step", session, step: holder };
+}
+
+/**
+ * Read model for the transcript tail of a preparation, consolidation or Fix
+ * session, for the flow graph's inspector. It has the reviewer transcript's
+ * contract: a bounded tail, an opaque session-scoped `sourceToken`, and an
+ * `unchanged` answer with no messages when that token is still current.
+ */
+export interface MultiReviewStepTranscript {
+  workflowId: string;
+  step: MultiReviewStepKind;
+  workflowPhase: MultiReviewPhase;
+  /** See {@link MultiReviewStepSessionAccess}; only `own` carries messages. */
+  session: MultiReviewStepSessionAccess["kind"];
+  /** The step using a shared session now, when {@link session} is `other-step`. */
+  sessionStep?: MultiReviewStepKind;
+  agent?: AgentPlatform;
+  model?: string;
+  sessionStatus?: MultiReviewSession["status"];
+  startedAt?: string;
+  /** The bounded tail; empty when {@link transcript} is `"unchanged"`. */
+  messages: unknown[];
+  transcript: "snapshot" | "unchanged";
+  /** Opaque, session-scoped token to send back as `knownSourceToken`. */
+  sourceToken?: string;
+  /** True when older messages were omitted to respect the count/byte bounds. */
+  truncated?: boolean;
+}
+
+/** Messages one step transcript answer carries at most. */
+export const MULTI_REVIEW_STEP_TRANSCRIPT_MAX_MESSAGES = 100;
+/** Encoded JSON bytes of one step transcript answer's messages at most. */
+export const MULTI_REVIEW_STEP_TRANSCRIPT_MAX_BYTES = 256 * 1024;
+
+export interface MultiReviewStepTranscriptRequest {
+  workflowId: string;
+  step: MultiReviewStepKind;
+  /** Token from the previous response; the backend ignores a stale or foreign one. */
+  knownSourceToken?: string;
+}
+
+export function isMultiReviewStepTranscriptRequest(
+  value: unknown,
+): value is MultiReviewStepTranscriptRequest {
+  return (
+    record(value) &&
+    hasOnlyKeys(value, ["workflowId", "step", "knownSourceToken"]) &&
+    nonBlank(value.workflowId) &&
+    MULTI_REVIEW_STEP_KINDS.includes(value.step as MultiReviewStepKind) &&
+    (value.knownSourceToken === undefined ||
+      (typeof value.knownSourceToken === "string" &&
+        value.knownSourceToken.length > 0 &&
+        value.knownSourceToken.length <= MULTI_REVIEW_TRANSCRIPT_TOKEN_MAX_LENGTH))
+  );
 }

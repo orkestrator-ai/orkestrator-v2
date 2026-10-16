@@ -47,6 +47,32 @@ describe("agent mail between many actors", () => {
     await world.finishTurn(quiet);
     expect(world.wakes(coordinator)).toBe(1);
     expect(world.received(coordinator)[0]).toContain("without sending a report");
+    // The notice carries its facts as data, so a transcript can show it as a
+    // finished-worker tile without reading the prose.
+    expect(world.carriers(coordinator)[0]![0]).toMatchObject({
+      kind: "notice",
+      from: { kind: "system" },
+      notice: {
+        resource: {
+          kind: "agent-tab",
+          environmentId: quiet.environmentId,
+          tabId: "startup-agent",
+          label: "quiet",
+        },
+        state: "completed",
+        tone: "success",
+      },
+    });
+  });
+
+  test("a worker report reaches its coordinator as a plain message, not a notice", async () => {
+    const coordinator = await world.main();
+    const worker = await world.addEnvironment("reporter", { launched: true });
+    await world.send(worker, "coordinator", "done");
+    await world.finishTurn(worker);
+    const [carrier] = world.carriers(coordinator)[0]!;
+    expect(carrier!.kind).toBe("message");
+    expect(carrier!.notice).toBeUndefined();
   });
 
   test("the coordinator follows up by environment id and the worker answers", async () => {

@@ -24,7 +24,9 @@ was never collected.
   `reviewFanoutConcurrency`.
 - **Commits.** Safety transitions commit immediately. Observations go through
   `ReviewFanoutRunner.stageObservation` and flush once per pass. All runner
-  writes are serialised.
+  writes are serialised. The scheduler's queue is projected onto pending
+  reviewers as `admissionState` / `queuePosition` (`review-fanout-admission.ts`);
+  those are observations too, and cost no write of their own.
 - **Evidence.** `ReviewEvidencePermits` and `evidenceGenerationKey`
   (`review-evidence-permits.ts`) give two verifications per evidence
   generation: one before fan-out admission and one before consolidation
@@ -134,11 +136,10 @@ was never collected.
   `CONSOLIDATION_MAX_EVIDENCE_BYTES`. Intermediate merges must keep every
   source ID, and final provenance validation must still reject missing or
   invented IDs.
-- **`admissionState` / `queuedAt` reviewer fields**, only if queue time becomes
-  user-visible. At the default caps it is one setup wave. The flow graph now
-  labels queued reviewers, and its queue-position follow-up in
-  [multi-review-flow-graph.md](multi-review-flow-graph.md) would consume these
-  fields.
+- **A `queuedAt` reviewer field**, only if queue time becomes user-visible.
+  `admissionState` and `queuePosition` shipped for the flow graph's queue
+  position ([multi-review-flow-graph.md](multi-review-flow-graph.md)); the
+  graph shows the position only, so nothing would read a queue timestamp yet.
 - **Skip identical renderer refetches.** `store-resource-sync.ts` refetches the
   whole workflow on every `multi-review` announcement. `resource-sync.ts`
   already coalesces per key. A real skip needs a per-workflow revision in

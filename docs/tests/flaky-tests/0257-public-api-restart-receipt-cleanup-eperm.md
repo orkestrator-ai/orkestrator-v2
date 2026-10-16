@@ -1,6 +1,6 @@
 # Public API restart receipt fixture cleanup hits EPERM
 
-- **ID:** 0249
+- **ID:** 0257
 - **Status:** open
 - **Date observed:** 2026-10-16
 - **Test:** `request keys and receipts > a replay after a restart returns the original receipt without re-executing`

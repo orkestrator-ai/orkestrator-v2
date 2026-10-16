@@ -30,7 +30,10 @@ vocabulary:
 - `RECURRING_WORK_UNITS` counts physical work (`git-spawn`, `gh-spawn`,
   `docker-exec`, `directory-read`, `provider-request`, `storage-read`,
   `record-scanned`, …) at the boundary that performs it, attributed to the
-  innermost recurring job.
+  innermost recurring job. `storage-read` counts stored content decoded for a
+  caller, whether the database or its revision-validated row cache served it;
+  `storage-stat` counts a revision or stat check that reused values already
+  decoded (see [storage.md](storage.md)).
 
 The backend recorder, `recurringWorkMetrics`
 (`apps/backend/src/core/recurring-work-metrics.ts`), keeps one fixed record

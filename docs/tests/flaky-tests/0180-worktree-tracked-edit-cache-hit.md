@@ -49,3 +49,33 @@ mise run test:logged -- --name worktree-isolated -- bun test --cwd apps/backend 
 ```
 
 No watcher implementation, assertion, timeout or skip was changed.
+
+## Recurrence on 2026-10-16
+
+`mise run test` on `multi-review-flow-graph-followups` (Multi Review flow
+graph follow-ups; no worktree-snapshot code changed) failed the same test in
+the workspace group, alongside cases 0248 and the deterministic
+`agent provider module boundaries` failure. Evidence is in
+`/tmp/orkestrator-test-run.zlamOL/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+The unchanged owning file passed alone (`bun test src/core/worktree-snapshots-git.test.ts`
+from `apps/backend`: 4 pass, 0 fail). No assertion, timeout or skip was changed.
+
+## MCP apply-path merge validation recurrence on 2026-10-16
+
+`mise run test:logged -- --name merge-final-suite -- mise run test` after
+merging main through `65077337` into `mcp-apply-path-gaps` reproduced the same
+cache-hit assertion (`Expected: 1, Received: 0`, 192.77 ms, now at line 139).
+The backend reported 8,323 passed, 40 skipped and one failed across 444 files;
+the other workspace packages, root, bridges and protocol check passed.
+Evidence:
+`/tmp/orkestrator-test-run.822ACU/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+After the aggregate finished, the unchanged owning file passed alone (exit 0,
+1.5 seconds):
+
+```bash
+mise run test:logged -- --name merge-worktree-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures
+```
+
+No watcher implementation, assertion, timeout or skip was changed. The existing
+cache-invalidation hypothesis remains unconfirmed.

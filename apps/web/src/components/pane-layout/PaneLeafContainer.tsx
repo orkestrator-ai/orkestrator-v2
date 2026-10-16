@@ -95,6 +95,13 @@ interface PaneLeafContainerProps {
   containerId: string | null;
   environmentId: string;
   isActive: boolean;
+  /**
+   * The mobile pane switcher shows another pane over this one but keeps it
+   * laid out. Its active tab stays laid out too, so a transcript keeps its
+   * scroll offset, while `isActive` stays false: it takes no shortcuts and
+   * does not count as on screen.
+   */
+  hiddenByLayout?: boolean;
   /** Currently dragged tab ID (for cross-pane visual feedback) */
   activeDragId?: string | null;
   /** Pane ID currently being dragged over */
@@ -106,6 +113,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
   containerId: _containerId,
   environmentId,
   isActive,
+  hiddenByLayout = false,
   activeDragId,
   dragOverPaneId,
 }: PaneLeafContainerProps) {
@@ -241,6 +249,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
         {/* File and OpenCode native tabs render directly (no portal needed) */}
         {pane.tabs.map((tab) => {
           const isTabActive = tab.id === pane.activeTabId;
+          const isTabLaidOut = isTabActive && (isActive || hiddenByLayout);
 
           // File viewer tabs
           if (tab.type === "file" && tab.fileData) {
@@ -319,7 +328,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                 key={`${environmentId}:${tab.id}`}
                 className={cn(
                   "absolute inset-0 flex flex-col",
-                  isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden",
+                  isTabLaidOut ? "z-10 pointer-events-auto" : "hidden",
                 )}
               >
                 {/*
@@ -339,6 +348,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                       tabId={tab.id}
                       data={nativeAgentData}
                       isActive={isTabActive && isActive}
+                      hiddenByLayout={isTabActive && hiddenByLayout}
                       ownsGlobalShortcuts={isTabActive && isActive && isPaneFocused}
                       initialPrompt={tab.initialPrompt}
                       isReviewTab={tab.isReviewTab}
@@ -366,7 +376,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                 key={tab.id}
                 className={cn(
                   "absolute inset-0 flex flex-col",
-                  isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden",
+                  isTabLaidOut ? "z-10 pointer-events-auto" : "hidden",
                 )}
               >
                 <AgentMailBanner environmentId={environmentId} tabId={tab.id} />
@@ -400,7 +410,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                 key={tab.id}
                 className={cn(
                   "absolute inset-0",
-                  isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden",
+                  isTabLaidOut ? "z-10 pointer-events-auto" : "hidden",
                 )}
               >
                 <LazyLoadBoundary
@@ -423,7 +433,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                 key={tab.id}
                 className={cn(
                   "absolute inset-0",
-                  isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden",
+                  isTabLaidOut ? "z-10 pointer-events-auto" : "hidden",
                 )}
               >
                 <LazyLoadBoundary
@@ -445,7 +455,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                 key={tab.id}
                 className={cn(
                   "absolute inset-0",
-                  isTabActive && isActive ? "z-10 pointer-events-auto" : "hidden",
+                  isTabLaidOut ? "z-10 pointer-events-auto" : "hidden",
                 )}
               >
                 <MultiReviewTabBoundary

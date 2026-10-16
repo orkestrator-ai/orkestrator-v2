@@ -203,6 +203,40 @@ describe("agent interaction request contract", () => {
     expect(isAgentInteractionRequest({ ...blocking, blocking: "yes" })).toBe(false);
   });
 
+  test("accepts a pause only beside a deadline, and requires a reason when it is unavailable", () => {
+    const valid = [
+      { available: true },
+      { available: true, reason: "provider-limit" },
+      { available: true, reason: "upstream-may-expire" },
+      { available: true, heldAt: CREATED_AT + 1_000 },
+      { available: true, heldAt: CREATED_AT + 1_000, reason: "provider-limit" },
+      { available: false, reason: "no-extension" },
+      { available: false, reason: "bridge-outdated" },
+    ];
+    for (const hold of valid) {
+      expect(isAgentInteractionRequest({ ...request(), hold })).toBe(true);
+    }
+    const invalid = [
+      { available: "yes" },
+      { available: false },
+      { available: true, reason: "bridge-outdated" },
+      { available: false, reason: "provider-limit" },
+      { available: true, reason: "later" },
+      { available: false, reason: "no-extension", heldAt: CREATED_AT + 1_000 },
+      // Paused before the request existed, or past the ceiling it publishes.
+      { available: true, heldAt: CREATED_AT - 1 },
+      { available: true, heldAt: CREATED_AT + 300_000 },
+      { available: true, extra: true },
+    ];
+    for (const hold of invalid) {
+      expect(isAgentInteractionRequest({ ...request(), hold })).toBe(false);
+    }
+    // Nothing to pause without a deadline.
+    expect(
+      isAgentInteractionRequest({ ...request(), expiresAt: undefined, hold: { available: true } }),
+    ).toBe(false);
+  });
+
   test("accepts plan availability only on plan approvals", () => {
     const plan = request("plan-approval");
     plan.presentation.questions = [];

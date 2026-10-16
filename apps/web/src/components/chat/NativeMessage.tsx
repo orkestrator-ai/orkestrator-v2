@@ -10,6 +10,7 @@ import { formatElapsed } from "@/lib/format-elapsed";
 import {
   type NativeMessage as NativeMessageType,
   type NativeMessagePart,
+  type PeerMailPresentation,
 } from "@/lib/chat/native-message-types";
 import {
   messageHasVisibleContent,
@@ -34,12 +35,10 @@ import {
   UserPromptEvidenceContext,
   type NativeMessageProps,
 } from "./NativeMessage.shared";
-import { mailMarkdownComponents } from "@/components/agent-mail/mail-markdown-components";
 import { MessagePart } from "./NativeMessage.renderer";
 import { JsonPayloadPart } from "./JsonPayloadPart";
 import { TextPart } from "./NativeMessage.file-parts";
-import { MessageMarkdown } from "./MessageMarkdown";
-import type { Components } from "react-markdown";
+import { MailTile } from "./MailTile";
 import { structuredReviewJsonPayload } from "@/lib/chat/json-payload";
 import { WebAnnotationRequestChip, webAnnotationMarkerFor } from "./WebAnnotationRequestChip";
 
@@ -167,20 +166,12 @@ export const NativeMessage = memo(function NativeMessage({
   }
 
   if (isPeerMail) {
-    const { heading, warning, body } = splitPeerMailNativeMessageContent(message.content);
     return (
-      <div className="px-2 py-3 @sm:px-4">
-        <div className="mx-auto max-w-3xl rounded-lg border border-cyan-400/20 bg-cyan-400/[0.035] p-3">
-          <p className="text-xs font-medium text-cyan-200">{heading}</p>
-          <p className="mt-1 text-[11px] text-muted-foreground">{warning}</p>
-          <div
-            data-agent-chat-search-content="true"
-            className="mt-3 min-w-0 break-words [&_.prose>:first-child]:mt-0 [&_.prose>:last-child]:mb-0"
-          >
-            <MessageMarkdown content={body} components={peerMailMarkdownComponents} />
-          </div>
-        </div>
-      </div>
+      <MailTile
+        mail={message.peerMail ?? peerMailFromContent(message)}
+        expansionKey={`peer-mail:${stableAgentExpansionScope}:${message.id}`}
+        timestampLabel={formatTime(message.createdAt)}
+      />
     );
   }
 
@@ -319,16 +310,17 @@ export const NativeMessage = memo(function NativeMessage({
   );
 });
 
-/**
- * Use the inbox's link policy for untrusted peer mail: sender paths remain
- * copyable text. Keep the inline card's image text aligned with search.
- */
-const peerMailMarkdownComponents: Components = {
-  ...mailMarkdownComponents,
-  img: ({ alt, src }) => (
-    <span data-peer-mail-image="true">{alt || (typeof src === "string" ? src : "")}</span>
-  ),
-};
+/** A peer-mail row built without structured mail (a direct caller): read its frame back. */
+function peerMailFromContent(message: NativeMessageType): PeerMailPresentation {
+  const { heading, warning, body } = splitPeerMailNativeMessageContent(message.content);
+  return {
+    messageId: message.id.slice(PEER_MAIL_MESSAGE_PREFIX.length),
+    kind: "message",
+    sender: heading.replace(/^Message from /, ""),
+    warning,
+    body,
+  };
+}
 
 function renderMessageParts(
   message: NativeMessageType,

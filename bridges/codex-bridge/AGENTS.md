@@ -103,6 +103,11 @@ newest row, which every window holds.
 - Never resolve an approval to "approved" by default. Every timeout, disconnect,
   generation death and unparseable answer denies. Approving on a technicality would
   run a command the user never saw.
+- A pause (`POST …/approvals/:id/hold`, `…/interactions/:id/hold`) only moves the
+  parked request's `InteractionDeadline` to its hold ceiling (24 h, or a
+  question's `autoResolutionMs`); expiry still declines or cancels. A hold never
+  answers the request, and the GET rehydration routes publish the moved
+  `expiresAt` and `hold` at once.
 - Never answer an approval belonging to a **dead generation**. app-server has
   forgotten the request; withdraw the card and say so in the transcript instead
   (`abandonGeneration`). Conversely a *live* child must always be answered —

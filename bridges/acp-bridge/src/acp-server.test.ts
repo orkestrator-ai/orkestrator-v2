@@ -110,6 +110,33 @@ describe("ACP bridge", () => {
     expect(await response.json()).toEqual({ error: "readOnly must be a boolean" });
   });
 
+  test("rejects a malformed workflow-result attempt before claiming the turn", async () => {
+    const { base, headers } = await spawnBridge({ env: { ACP_PROVIDER: "grok" } });
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const { id } = (await created.json()) as { id: string };
+    for (const malformed of [
+      { workflowResultTool: "submit_review_report" },
+      { workflowResultTool: "anything", workflowResultKey: "11111111-1111-4111-8111-111111111111" },
+      { workflowResultTool: "submit_review_report", workflowResultKey: "has spaces" },
+    ]) {
+      const response = await nativeFetch(`${base}/session/${id}/prompt`, {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ prompt: "review", requestId: "malformed", ...malformed }),
+      });
+      expect(response.status).toBe(400);
+    }
+    // Nothing was journaled: the same request id is still free.
+    const dispatch = await nativeFetch(`${base}/session/${id}/dispatch?requestId=malformed`, {
+      headers,
+    });
+    expect(await dispatch.json()).toMatchObject({ dispatch: "unknown" });
+  });
+
   test("recreating a session under a stricter boundary restarts its agent", async () => {
     const argsFile = resolve(await temporaryDirectory(), "args.log");
     const { base, headers } = await spawnBridge({

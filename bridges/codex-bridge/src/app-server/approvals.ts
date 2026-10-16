@@ -18,6 +18,7 @@
  *    plain string for the v2 methods and a nested object for the legacy ones; the
  *    permissions method answers with a grant profile instead of a decision.
  */
+import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interactions";
 import type { EngineGeneration } from "../engine/types.js";
 import type {
   ExecPolicyAmendment,
@@ -128,8 +129,13 @@ export interface ApprovalRequest {
   generation: EngineGeneration;
   /** Milliseconds since epoch, from our clock — not app-server's. */
   requestedAt: number;
-  /** When this auto-denies, so the UI can show a countdown. */
+  /**
+   * When this auto-denies, so the UI can show a countdown. Moves when the user
+   * pauses (to the hold ceiling) or resumes (to a fresh window).
+   */
   expiresAt: number;
+  /** Pause state of the deadline; set by the router when it parks the request. */
+  hold?: AgentInteractionHold;
   /** Present for command approvals. */
   command?: string;
   cwd?: string;

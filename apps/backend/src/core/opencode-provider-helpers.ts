@@ -21,6 +21,7 @@ import {
 import {
   WORKFLOW_RESULT_KINDS,
   WORKFLOW_RESULT_MCP_SERVER_NAME,
+  REPORT_FINDING_TOOL_NAME,
   WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
   workflowResultToolName,
 } from "@orkestrator/protocol/workflow-results";
@@ -339,6 +340,20 @@ export function isOpenCodeWorkflowResultToolName(toolName: string): boolean {
   return OPENCODE_WORKFLOW_RESULT_SUBMISSION_TOOLS.has(toolName);
 }
 
+/**
+ * The broker tools a turn that submits `selectedTool` may call. A reviewer's
+ * turn also gets `report_finding`; the broker still answers only a live Multi
+ * Review reviewer's own signed capability.
+ */
+function openCodeWorkflowResultTurnToolNames(selectedTool: string): string[] {
+  return [
+    selectedTool,
+    WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
+    "get_workflow_result_status",
+    ...(selectedTool === workflowResultToolName("review-report") ? [REPORT_FINDING_TOOL_NAME] : []),
+  ];
+}
+
 /** Hide the persistent broker by default and expose only this turn's tools. */
 export function openCodeWorkflowResultTurnTools(selectedTool?: string): Record<string, boolean> {
   const tools = Object.fromEntries(
@@ -348,12 +363,13 @@ export function openCodeWorkflowResultTurnTools(selectedTool?: string): Record<s
       ),
       openCodeWorkflowResultToolId(WORKFLOW_RESULT_VALIDATION_TOOL_NAME),
       openCodeWorkflowResultToolId("get_workflow_result_status"),
+      openCodeWorkflowResultToolId(REPORT_FINDING_TOOL_NAME),
     ].map((tool) => [tool, false]),
   );
   if (selectedTool) {
-    tools[openCodeWorkflowResultToolId(selectedTool)] = true;
-    tools[openCodeWorkflowResultToolId(WORKFLOW_RESULT_VALIDATION_TOOL_NAME)] = true;
-    tools[openCodeWorkflowResultToolId("get_workflow_result_status")] = true;
+    for (const tool of openCodeWorkflowResultTurnToolNames(selectedTool)) {
+      tools[openCodeWorkflowResultToolId(tool)] = true;
+    }
   }
   return tools;
 }
@@ -361,13 +377,11 @@ export function openCodeWorkflowResultTurnTools(selectedTool?: string): Record<s
 export function openCodeWorkflowResultPermissionRules(selectedTool: string) {
   return [
     ...openCodeWorkflowResultDenyPermissionRules(),
-    ...[selectedTool, WORKFLOW_RESULT_VALIDATION_TOOL_NAME, "get_workflow_result_status"].map(
-      (tool) => ({
-        permission: openCodeWorkflowResultToolId(tool),
-        pattern: "*",
-        action: "allow" as const,
-      }),
-    ),
+    ...openCodeWorkflowResultTurnToolNames(selectedTool).map((tool) => ({
+      permission: openCodeWorkflowResultToolId(tool),
+      pattern: "*",
+      action: "allow" as const,
+    })),
   ];
 }
 

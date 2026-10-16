@@ -812,6 +812,7 @@ describe("BuildPipelineService", () => {
       await expect(service.pause(started.id)).rejects.toThrow("bridge disconnected");
       expect(await pipeline(storage, started.id)).toMatchObject({
         phase: "paused",
+        pauseCause: "requested",
         error: expect.stringContaining("could not be confirmed"),
       });
 

@@ -377,7 +377,9 @@ nested `{ path, body }` objects, and the question APIs
 to `opencode serve`; the renderer has no OpenCode client. Build-pipeline and
 Multi Review transcripts are stored raw and normalized for display on the way
 out (`apps/backend/src/core/opencode-display-transcript.ts`), so the renderer
-carries no OpenCode normalizer.
+carries no OpenCode normalizer. It only recognizes a raw envelope from a
+backend older than 2.19.17, to show an "update the backend" notice in its place
+([remote-gateway.md](remote-gateway.md#version-reminders)).
 
 Because the server is the vendor's rather than ours, the SSE event vocabulary is
 theirs too: `message.updated`, `message.part.updated`, `session.updated`,
@@ -760,10 +762,11 @@ under so old records stay readable.
 
 **Tool mode (`tool-v1`).** The backend prepares a durable result slot, mints an
 attempt-scoped MCP capability, and attaches it to that one turn. The agent tool
-server publishes exactly two tools for that capability: one typed submission
-tool for the attempt's result kind, and `get_workflow_result_status`. No Kanban
-or mail tool is reachable through it, so a subagent cannot inherit anything
-broader. The turn carries no provider final-output schema, and the prompt states
+server publishes three tools for that capability: one typed submission tool for
+the attempt's result kind, `validate_workflow_result` and
+`get_workflow_result_status`. A live Multi Review reviewer's attempt also gets
+`report_finding` (see "Provisional findings" below). No Kanban or mail tool is
+reachable through it, so a subagent cannot inherit anything broader. The turn carries no provider final-output schema, and the prompt states
 that the tool instruction supersedes any earlier "final JSON only" guidance.
 
 **Legacy mode.** Review and pipeline attempts fall back to
@@ -813,6 +816,93 @@ seeing the rejection:
 
 The shared instruction and reminder text (`WORKFLOW_RESULT_MALFORMED_CALL_GUIDANCE`)
 names both directions of the brace fault and forbids shortening the report.
+
+### Provisional findings (`report_finding`)
+
+A Multi Review reviewer's report arrives whole, when its result is accepted.
+To let "Findings so far" fill in while reviewers work, a live reviewer's own
+attempt capability also carries `report_finding`: one finding per call, in the
+shape of one entry of the report's `issues`. The reviewer instruction
+(`workflowResultInstruction(..., { provisionalFindings: true })`) encourages,
+but does not require, reporting each finding as soon as the reviewer is
+confident in it, and says the submitted report must still list every one.
+
+- **Who may call it.** The tool is listed only on a `review-report` attempt the
+  backend is following as a running tool-mode reviewer of a review in
+  progress (`ProvisionalFindingInbox`, `review-provisional-findings.ts`, fed
+  from every Multi Review save and load). Each call must name the capability's
+  own result key, and the slot must still be `open`: a finished, superseded or
+  cancelled attempt is refused (`attempt_closed`), and so is any attempt the
+  inbox does not follow (`not_accepting`), such as a build-pipeline reviewer.
+  The OpenCode broker lists it for every broker session but checks the signed
+  one-attempt capability and the slot kind on every call, and only a reviewer's
+  turn unmasks it.
+- **Validation and bounds.** A finding must pass the structured-review issue
+  contract and its budgets (`STRUCTURED_REVIEW_MAX_*`), and stay within 16 KiB
+  encoded (`REVIEW_PROVISIONAL_FINDING_MAX_BYTES`). A reviewer keeps at most
+  50 (`REVIEW_PROVISIONAL_FINDINGS_MAX`); later calls are refused with
+  `limit_reached`, so the first ones are kept. Provider-authored provenance is
+  dropped. The id is a digest of the normalised finding, so a retry returns
+  the same receipt with `duplicate: true`.
+- **Storage.** A call is staged in memory and the workflow is woken; the next
+  review pass moves staged findings onto `reviewer.provisionalFindings` as an
+  observation, so they cost no write of their own and never wait for the
+  workflow's lock. A finding staged when the backend stops is lost, which is
+  acceptable for progress: the report still carries it.
+- **Lifetime.** The accepted report replaces them (`reviewer.report`). A
+  reviewer that fails or is stopped keeps them; the flow graph labels them
+  "unconfirmed (reviewer failed)" or "(reviewer stopped)". A restart or retry
+  drops them, and they are removed once the workflow reaches `interactive` or
+  `completed`. Consolidation reads accepted reports only
+  (`consolidationReports`), never provisional findings.
+
+How each provider lets a reviewer call it under its reviewer policy, including
+the read-only turns of a packaged review:
+
+| Provider | How |
+| --- | --- |
+| Claude | In `claudeWorkflowResultTools`: added to `allowedTools` and allowed by `canUseTool` before any policy decision; read-only turns already allow `mcp__orkestrator__*` |
+| Codex | The attempt-scoped `orkestrator` server runs with `default_tools_approval_mode = "approve"` whenever a workflow result tool is set |
+| Cursor | Read-only sessions host every tool the Orkestrator server lists in-process; other sessions never ask |
+| OpenCode | `openCodeWorkflowResultTurnTools` / `openCodeWorkflowResultPermissionRules` unmask and allow it for a `submit_review_report` turn only |
+| Grok (ACP) | Exempt as one of the turn's own attempt tools; see "Attempt tools in read-only turns" below |
+| Pi | Exempt as one of the turn's own attempt tools; see "Attempt tools in read-only turns" below |
+
+None of these has been run against a real reviewer on its provider yet; see
+[multi-review-flow-graph.md](../todo/multi-review-flow-graph.md).
+
+### Attempt tools in read-only turns (Grok, Pi)
+
+The ACP (Grok) and Pi bridges gate tools themselves, and a packaged review's
+reviewer turns are read-only: the ACP bridge denies every permission request
+and Grok asks before every MCP call, and Pi's read-only gate blocks all but its
+reading built-ins. So the backend tells those two bridges which attempt a
+workflow-result turn runs for: the prompt body carries `workflowResultTool` and
+`workflowResultKey` next to the attempt's `agentMcp`
+(`bridgePromptBody`; the review fan-out sets the key to the reviewer's result
+key). The bridge keeps them for that turn only (`state.workflowResultTurn`,
+memory only, replaced by every prompt; a malformed pair is refused with 400
+before the turn is claimed).
+
+For that turn, and only for a call whose arguments name that result key
+(`callsOwnWorkflowResult`), the attempt's own tools are let through under every
+approval policy, including read-only: its submission tool,
+`validate_workflow_result`, `get_workflow_result_status`, and
+`report_finding` for a reviewer (`workflowResultTurnToolNames`).
+
+- **Grok:** `workflowResultPermissionOption` (`acp-session.ts`), called from
+  `onPermission` before the mail matcher, which is unchanged. Identity follows
+  the mail matcher (a server-qualified name, Grok's namespaced metadata, or
+  the tool `use_tool` wraps, whose arguments are read from `tool_input`); never
+  a bare name, a display title, or an `execute`/`edit` kind.
+- **Pi:** `isOwnWorkflowResultCall` (`mcp.ts`) in `requestToolApproval`: the
+  tool must come from the Orkestrator server's own registrations.
+
+An explicit `toolPolicy` deny still wins on both. A turn that declared no
+attempt (an ordinary, coordinator or older backend's turn) gets no exemption,
+and the backend still answers another key with `capability_denied`, because
+the attempt capability authorises only its own. Only the review fan-out
+declares the key today; consolidation and Fix turns on Grok or Pi do not yet.
 
 ### Provider qualification
 

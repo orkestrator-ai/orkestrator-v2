@@ -30,7 +30,10 @@ import {
   type AppServerHealth,
   type AppServerSupervisorOptions,
 } from "../app-server/process-supervisor.js";
-import { ServerRequestRouter } from "../app-server/server-request-router.js";
+import {
+  ServerRequestRouter,
+  type ParkedHoldOutcome,
+} from "../app-server/server-request-router.js";
 import type {
   ApprovalDecision,
   ApprovalResolvedDecision,
@@ -828,6 +831,9 @@ export class AppServerEngine implements CodexEngine {
       presentInteraction: (request) => this.interactionHandler?.(request) === true,
       onInteractionResolved: (request, answer, resolution) =>
         this.interactionResolvedHandler?.(request, answer, resolution),
+      // A replaced generation's requests are forgotten by app-server; holding
+      // one would extend a card nobody can answer.
+      isGenerationLive: (generation) => generation === this.supervisor.getGeneration(),
     });
   }
 
@@ -887,6 +893,16 @@ export class AppServerEngine implements CodexEngine {
 
   resolveInteraction(interactionId: string, answer: InteractionAnswer): boolean {
     return this.router.resolveInteraction(interactionId, answer);
+  }
+
+  /** Pauses or resumes a parked approval's deadline. Never answers it. */
+  holdApproval(approvalId: string, held: boolean): ParkedHoldOutcome {
+    return this.router.holdApproval(approvalId, held);
+  }
+
+  /** Pauses or resumes a parked interaction's deadline. Never answers it. */
+  holdInteraction(interactionId: string, held: boolean): ParkedHoldOutcome {
+    return this.router.holdInteraction(interactionId, held);
   }
 
   getParkedInteractions(): readonly InteractionRequest[] {

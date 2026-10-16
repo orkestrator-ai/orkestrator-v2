@@ -34,6 +34,7 @@ import type {
 import { stagePromptImages } from "./prompt-attachments.js";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { BuildPipelineContext } from "./build-pipeline-context.js";
+import { clearReviewerAdmission } from "./review-fanout-admission.js";
 
 /** Tiers and catalogue access shared by every selection in one operation. */
 interface BuildSelectionContext {
@@ -363,6 +364,7 @@ export class BuildPipelineAgents {
       }
       reviewer.status = "cancelled";
       reviewer.completedAt = now;
+      clearReviewerAdmission(reviewer);
       delete reviewer.stalledSince;
       delete reviewer.idleResultPolls;
       if (reviewer.providerSessionId) {

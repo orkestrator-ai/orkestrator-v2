@@ -1892,3 +1892,101 @@ test("startup fails closed when reconciliation cannot persist its result", async
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 });
+
+test("production activity wiring forwards only worker waiting/working edges and preserves the tab key", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-worker-edges-"));
+  const backend = new OrkestratorBackend({
+    dataDir,
+    toolchainBinDir: "",
+    appRoot: "",
+    resourceRoot: "",
+    emit: () => undefined,
+    agentTools: fakeAgentTools(),
+  });
+  const internal = backend as unknown as {
+    nativeAgents: { options: { onActivityTransition: (event: Record<string, unknown>) => void } };
+    coordinators: { noteWorkerActivity: (event: unknown) => Promise<void> };
+  };
+  const note = spyOn(internal.coordinators, "noteWorkerActivity").mockResolvedValue(undefined);
+  try {
+    const base = {
+      environmentId: "env:one",
+      logicalSessionKey: "env-env:one:tab:two",
+      owner: "environment",
+    };
+    const transition = internal.nativeAgents.options.onActivityTransition;
+    for (const state of ["waiting", "working"]) transition({ ...base, state });
+    for (const state of ["idle", "unknown"]) transition({ ...base, state });
+    transition({ ...base, state: "waiting", owner: "coordinator" });
+    transition({ ...base, state: "waiting", logicalSessionKey: "env-other:tab:two" });
+    transition({ ...base, state: "waiting", logicalSessionKey: undefined });
+    expect(note.mock.calls).toEqual([
+      [{ environmentId: "env:one", tabId: "tab:two", state: "waiting" }],
+      [{ environmentId: "env:one", tabId: "tab:two", state: "working" }],
+    ]);
+  } finally {
+    note.mockRestore();
+    await backend.shutdown();
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("production excerpt wiring looks up the exact session and falls back within five seconds", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-worker-excerpt-"));
+  const backend = new OrkestratorBackend({
+    dataDir,
+    toolchainBinDir: "",
+    appRoot: "",
+    resourceRoot: "",
+    emit: () => undefined,
+    agentTools: fakeAgentTools(),
+  });
+  const internal = backend as unknown as {
+    context: { storage: StorageService };
+    nativeAgents: { getProjection: (input: unknown) => Promise<{ messages: unknown[] }> };
+    coordinators: {
+      options: {
+        lastAssistantExcerpt: (environmentId: string, tabId: string) => Promise<string | undefined>;
+      };
+    };
+  };
+  const sessions = spyOn(internal.context.storage, "listNativeAgentSessions").mockResolvedValue([
+    { environmentId: "e", logicalSessionKey: "env-e:other", agent: "claude" },
+    { environmentId: "e", logicalSessionKey: "env-e:tab:one", agent: "codex" },
+  ] as Awaited<ReturnType<StorageService["listNativeAgentSessions"]>>);
+  const projection = spyOn(internal.nativeAgents, "getProjection").mockResolvedValue({
+    messages: [{ role: "assistant", content: "Worker result" }],
+  });
+  try {
+    const excerpt = internal.coordinators.options.lastAssistantExcerpt;
+    expect(await excerpt("e", "missing")).toBeUndefined();
+    expect(projection).not.toHaveBeenCalled();
+    expect(await excerpt("e", "tab:one")).toBe("Worker result");
+    expect(projection).toHaveBeenLastCalledWith({
+      environmentId: "e",
+      logicalSessionKey: "env-e:tab:one",
+      agent: "codex",
+      messageLimit: 6,
+    });
+    projection.mockRejectedValueOnce(new Error("bridge offline"));
+    expect(await excerpt("e", "tab:one")).toBeUndefined();
+    let rejectLate!: (error: Error) => void;
+    projection.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          rejectLate = reject;
+        }),
+    );
+    const startedAt = performance.now();
+    expect(await excerpt("e", "tab:one")).toBeUndefined();
+    expect(performance.now() - startedAt).toBeGreaterThanOrEqual(4_900);
+    expect(performance.now() - startedAt).toBeLessThan(6_000);
+    rejectLate(new Error("late bridge rejection"));
+    await Promise.resolve();
+  } finally {
+    sessions.mockRestore();
+    projection.mockRestore();
+    await backend.shutdown();
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+}, 10_000);

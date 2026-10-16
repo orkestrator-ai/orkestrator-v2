@@ -32,14 +32,27 @@ import { restoreCommandCatalogue } from "./commands.js";
 let tail: Promise<void> = Promise.resolve();
 let scheduled = false;
 let shuttingDown = false;
-let writeGateForTests: (() => Promise<void>) | undefined;
+let writeGateForTests: ((write: PersistWriteForTests) => Promise<void>) | undefined;
+
+/** What a test write gate is told about the publication it is holding. */
+export interface PersistWriteForTests {
+  /**
+   * Whether this is a `persistBarrier` write a caller awaits, as opposed to a
+   * best-effort scheduled or shutdown write. A route that sets a journal entry
+   * schedules a best-effort write before it reaches its barrier, so a test
+   * holding "the journal write" has to tell the two apart.
+   */
+  barrier: boolean;
+}
 
 /**
  * Hold every state-file publication at its write boundary in deterministic
  * tests. Serialization, queueing and failure propagation stay real; only the
  * moment the bytes are written is controlled. Pass nothing to remove it.
  */
-export function setPersistWriteGateForTests(gate?: () => Promise<void>): void {
+export function setPersistWriteGateForTests(
+  gate?: (write: PersistWriteForTests) => Promise<void>,
+): void {
   writeGateForTests = gate;
 }
 
@@ -75,7 +88,7 @@ export function schedulePersist(): void {
  */
 export async function persistBarrier(): Promise<void> {
   if (!stateFilePath()) return;
-  const operation = tail.then(() => persistNow());
+  const operation = tail.then(() => persistNow({ barrier: true }));
   tail = operation.catch(() => undefined);
   await operation;
 }
@@ -136,7 +149,7 @@ function shedToFit(payload: PersistedState, order: Map<string, number>): boolean
   return false;
 }
 
-async function persistNow(): Promise<void> {
+async function persistNow(write: PersistWriteForTests = { barrier: false }): Promise<void> {
   const stateFile = stateFilePath();
   if (!stateFile) return;
   // A session whose close is publishing its removal is still registered (so a
@@ -158,7 +171,7 @@ async function persistNow(): Promise<void> {
     serialized = JSON.stringify(payload);
   }
   await mkdir(dirname(stateFile), { recursive: true, mode: 0o700 });
-  if (writeGateForTests) await writeGateForTests();
+  if (writeGateForTests) await writeGateForTests(write);
   const temporary = `${stateFile}.tmp`;
   // Write-then-rename: a bridge killed mid-write must not leave a truncated
   // file that the next start reads as a session with no history.

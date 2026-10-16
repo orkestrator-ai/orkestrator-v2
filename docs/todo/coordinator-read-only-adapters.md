@@ -135,6 +135,12 @@ advertises.
        existed: the old bridge searched and returned example.com's title; the
        fixed bridge said "Web search is not available to me", and its `curl`
        could not resolve a host.
+     - The same on 2026-10-16 with the default setting, for a Codex main and a
+       Claude side coordinator. Both found Bun's latest version through web
+       search and React's Context7 library ID through Context7. Neither could
+       open a fresh Wikipedia search page: Codex got "Cache miss", and Claude
+       found no tool that opens a URL. Claude's attempt to write a plan file
+       was refused.
    - Claude: WebSearch on the allowlist when allowed; WebFetch denied by name
      and by the hook; research servers added to the inline MCP set and
      allowed by name. Any other network-denied policy gets the same tools in

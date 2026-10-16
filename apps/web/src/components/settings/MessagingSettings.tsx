@@ -10,6 +10,7 @@ import {
   AGENT_MAIL_MAX_HOURLY_WAKE_LIMIT,
   DEFAULT_AGENT_MESSAGING_SETTINGS,
   type AgentMessagingSettings,
+  type CoordinatorStatusWakeMode,
 } from "@orkestrator/protocol/agent-mail";
 
 // One write after a burst of edits, matching the shared settings form.
@@ -198,6 +199,26 @@ export function MessagingSettings() {
             />
             <span className="text-xs text-muted-foreground">per hour</span>
           </div>
+        </SettingRow>
+        <SettingRow
+          label="Coordinator status updates"
+          description="Wake a coordinator when work it started changes state: a Multi Review ready or fixed, a build that ends or stops on an error, a stall, a worker waiting for input or approval. Updates that land together arrive as one wake."
+        >
+          <select
+            aria-label="Coordinator status updates"
+            value={settings.coordinatorStatusWakes}
+            onChange={(event) =>
+              setSettings({
+                ...settings,
+                coordinatorStatusWakes: event.target.value as CoordinatorStatusWakeMode,
+              })
+            }
+            className="h-9 rounded-md border border-border/70 bg-input-surface px-3 text-sm"
+          >
+            <option value="off">Finished work only</option>
+            <option value="settled">Decisions and problems</option>
+            <option value="stages">Every build stage too</option>
+          </select>
         </SettingRow>
         <SettingRow
           label="Default automatic delivery"

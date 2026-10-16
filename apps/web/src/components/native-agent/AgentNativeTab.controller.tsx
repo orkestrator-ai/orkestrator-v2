@@ -81,7 +81,8 @@ import {
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import { hideMachineOutputText } from "@/lib/structured-review-messages";
 import {
-  createPeerMailNativeMessageFromCarrier,
+  createPeerMailNativeMessagesFromCarrier,
+  isPeerMailCarrierContent,
   createOptimisticNativeMessage,
   isClientOnlyNativeMessage,
   positionOptimisticNativeMessage,
@@ -252,6 +253,7 @@ export function SharedNativeAgentController({
   executionPolicy,
   coordinatorProjectId,
   coordinatorWorkspacePath,
+  hiddenByLayout = false,
 }: AgentNativeTabProps) {
   const isReadOnlyCoordinator = executionPolicy === "coordinator-read-only";
   const platform = data.platform!;
@@ -562,7 +564,9 @@ export function SharedNativeAgentController({
   const { favorites, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
   const { isAtBottom, scrollToBottom, scrollToIndex, virtuosoRef, scrollProps } =
     useVirtuosoScrollState({
-      isActive,
+      // Every activation re-locks to the end, but a pane the mobile switcher
+      // hid is still laid out where the user left it.
+      isActive: isActive || hiddenByLayout,
       persistKey: sessionKey,
       environmentId: data.environmentId,
       stickToBottomOnActivation: true,
@@ -588,16 +592,13 @@ export function SharedNativeAgentController({
   }, [claudeBackgroundTasksById, platform, projection?.messages]);
   const normalizedMessages = useMemo(
     () =>
-      normalizeNativeMessages(decoratedMessages).flatMap((message) => {
-        if (
-          message.role !== "user" ||
-          !message.content.trimStart().startsWith('<orkestrator-peer-message version="1">')
-        ) {
-          return [message];
-        }
-        const peerMail = createPeerMailNativeMessageFromCarrier(message);
-        return peerMail ? [peerMail] : [];
-      }),
+      normalizeNativeMessages(decoratedMessages).flatMap((message) =>
+        // One injected prompt can carry several batched messages; each one
+        // becomes its own mail tile.
+        message.role === "user" && isPeerMailCarrierContent(message.content)
+          ? createPeerMailNativeMessagesFromCarrier(message)
+          : [message],
+      ),
     [decoratedMessages],
   );
   // Tabs persisted before the presentation flag existed still carry this

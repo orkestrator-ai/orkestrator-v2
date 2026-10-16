@@ -14,6 +14,7 @@ import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
 import type { UserPromptPresentationKind } from "@orkestrator/protocol/review-evidence-frames";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type { MeasuredWorkspaceChange } from "@orkestrator/protocol/tool-diff";
+import type { AgentMailKind, AgentMailNotice } from "@orkestrator/protocol/agent-mail";
 
 export interface NativeToolDiffMetadata {
   filePath?: string;
@@ -381,4 +382,25 @@ export interface NativeMessage {
    * render the same structured object the review tab already owns.
    */
   promptEvidence?: StructuredReviewReport;
+  /**
+   * Structured agent mail behind a client-only peer-mail row, parsed from the
+   * carrier's JSON payload. The renderer draws the mail tile from this rather
+   * than reading `content` back.
+   */
+  peerMail?: PeerMailPresentation;
+}
+
+/** One delivered agent-mail message, as the transcript tile presents it. */
+export interface PeerMailPresentation {
+  messageId: string;
+  kind: AgentMailKind;
+  /** Display name of the sender. */
+  sender: string;
+  subject?: string;
+  /** The trust line shown above an expanded body. */
+  warning: string;
+  /** The sender's Markdown body, exactly as written. */
+  body: string;
+  /** Workflow notices only: what the notice is about and how to weigh it. */
+  notice?: AgentMailNotice;
 }

@@ -510,9 +510,10 @@ export interface LaunchMultiReviewActionInput {
   autoPr?: boolean;
   requestId: string;
   environmentId: string;
-  reviewers: MultiReviewModelSelection[];
+  /** Omitted model rows use the saved Multi Review defaults, as the button does. */
+  reviewers?: MultiReviewModelSelection[];
   reviewModel?: MultiReviewModelSelection;
-  fixModel: MultiReviewModelSelection;
+  fixModel?: MultiReviewModelSelection;
   /** Omitted values use saved defaults; an explicit blank instruction clears its default. */
   targetBranch?: string;
   reviewInstruction?: string;
@@ -561,14 +562,23 @@ export function isLaunchMultiReviewActionInput(
         typeof reviewInstruction === "string" && reviewInstruction.trim().length === 0
           ? undefined
           : reviewInstruction,
-      reviewers: value.reviewers,
+      // An omitted row is filled from saved defaults by the backend, so only
+      // a row the caller actually sent is checked here.
+      reviewers:
+        value.reviewers === undefined ? [DEFAULTED_SELECTION_PLACEHOLDER] : value.reviewers,
       reviewModel: value.reviewModel,
-      fixModel: value.fixModel,
+      fixModel: value.fixModel === undefined ? DEFAULTED_SELECTION_PLACEHOLDER : value.fixModel,
       autoFix: value.autoFix,
       autoPr: value.autoPr,
     })
   );
 }
+
+/** A well-formed stand-in used only to validate the rest of a launch payload. */
+const DEFAULTED_SELECTION_PLACEHOLDER: MultiReviewModelSelection = {
+  agent: "claude",
+  model: "default",
+};
 
 export interface StartMultiReviewCustomFixInput {
   workflowId: string;

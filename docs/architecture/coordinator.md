@@ -225,6 +225,11 @@ the mutation whatever the agent attempts. It requires both:
 so the same list means "Write, Edit" on one bridge and nothing at all on
 another. Use `capabilityPolicy`, which names the operation rather than the tool.
 
+Before moving a platform to `enforced`, run the live read-only suite for it
+(`mise run test:agent:coordinator --credential-source <platform>`) and keep the
+summary it writes. The unit tests show that the bridge translates the policy.
+Only a live run shows that the provider holds it.
+
 Where a platform cannot honour an axis, report it in the policy's `note` and
 leave the tier at `provider-configured`. Do not silently drop the axis, and do
 not claim a boundary the bridge is not holding — the tier is shown to the user
@@ -333,7 +338,10 @@ workflow association (`requestedAt`, `workerTabId`, `state`, `wakeKind`,
 worker's turn ends (`working → idle`). Environment error, stop, or deletion
 closes it as `failed` or `stopped` on the periodic sweep. A worker blocked on
 an approval or a question has not finished — that needs a person — so
-`working → waiting` does not close the delegation.
+`working → waiting` does not close the delegation. Once the wait has lasted
+20 seconds the coordinator does get one status notice saying so (see
+[Status wakes](#status-wakes)), so it can tell the user; it still cannot
+answer on the worker's behalf.
 
 Nothing the worker does mid-turn wakes the coordinator. Progress mail is stored
 and readable, held with reason `delegation-running`, and released together with
@@ -341,6 +349,13 @@ the final report. The mail drain claims every ready message for one mailbox,
 renders them into a single carrier in send order (bounded at 10 messages and
 128 KiB), and settles them together. A worker that finishes without reporting
 still wakes its coordinator, with a system notice saying so.
+
+In the coordinator's transcript every delivered message — a worker's report,
+a peer's mail or a workflow notice — is a collapsed mail tile rather than the
+full text, so a long report no longer takes over the view. The tile's icon and
+tone come from the carrier's structured `kind` and `notice`, never from the
+prose, and a batched wake shows one tile per message (see
+[`agent-messaging.md`](agent-messaging.md#how-a-message-moves), "Carrier").
 
 A follow-up message to a worker that is still on an earlier request joins that
 delegation instead of opening a second one: the open delegation does not close
@@ -384,16 +399,159 @@ Pause or mute messaging, or set a mailbox's injection policy to **Off**, to
 hold automatic delivery. Stored, injected, acknowledged, and completed remain
 distinct states. An injection receipt is not proof that the task finished.
 
+## Status wakes
+
+Besides the delegation wake, a coordinator is woken when other work it started
+or prompted **settles**, so it can keep track and respond without polling
+(`apps/backend/src/core/coordinator-status-wakes.ts`).
+
+**Ownership.** Only resources with a coordinator workflow association: the
+durable record written at launch or prompt time with the coordinator and
+conversation ids (`launch_multi_review`, `start_multi_review`,
+`start_build_pipeline`, and the delegations `launch_environment`,
+`launch_job`, `send_prompt_to_tab` and `send_message` open). A Multi Review or
+build the user started in the UI has no association and never wakes a
+coordinator. Notices go to the main coordinator, like every other report, and
+do not start one: with no main open they wait, and the sweep sends the state
+current when one opens.
+
+**What wakes it.** Each resource is reduced to one settled status with a
+stable key; a key is sent once, recorded on the association
+(`statusNotice`).
+
+| Resource | Status | Setting that sends it |
+| --- | --- | --- |
+| Multi Review | consolidation `ready` (finding counts by severity, coverage gaps, verdict) | `settled` |
+| Multi Review | interactive fix turn finished (`fix-done`) or failed (`fix-failed`) | `settled` |
+| Multi Review | a reviewer, consolidation or fix session `stalled` | `settled` |
+| Multi Review | `completed` (fix summary, files changed), `failed` (error), `cancelled` | always |
+| Multi Review | all reviewers finished and consolidation started (`reviews-finished`) | `stages` |
+| Build pipeline | `paused` by the supervisor on an error (a requested pause is not news) | `settled` |
+| Build pipeline | a stage `stalled` (`stallWarning`) | `settled` |
+| Build pipeline | `completed` (task, last verification), `failed` (error) | always |
+| Build pipeline | a stage completed (`stage-completed`: build, review, address, verification) | `stages` |
+| Delegated tab | `waiting` on input or an approval for 20 s (with its last message) | `settled` |
+| Delegated tab | turn ended: the worker's report, or `completed`/`failed`/`stopped` with its last message | always (the delegation wake) |
+
+Individual reviewers finishing never wakes anyone: that is progress, and a
+seven-reviewer panel would otherwise be seven turns. A relaunched fix, a second
+consolidation, or a new stall or waiting episode has a new key and is sent
+again.
+
+**Setting.** **Settings → Messaging → Coordinator status updates**
+(`coordinatorStatusWakes`): *Finished work only* (`off`, what woke a
+coordinator before status wakes), *Decisions and problems* (`settled`, the
+default) and *Every build stage too* (`stages`). It applies to coordinator-
+created resources only; there is no per-resource opt-in.
+
+**Message.** An ordinary workflow notice (`from.kind: "system"`) with a
+structured `notice` (resource kind and ids, state, tone), a subject such as
+"Multi Review api-fix is ready to address", a bounded Markdown body (at most
+eight 400-character detail lines) and the calls that read more or act —
+`get_multi_review`, `address_multi_review`, `open_multi_review_fix`,
+`get_build_pipeline`, `resume_build_pipeline`, `get_tab_state`,
+`get_tab_transcript` — written out with their arguments. In the transcript it
+is a mail tile toned by the notice.
+
+**No wake storms.**
+
+- Dedupe: one notice per status key, recorded durably; the mail request id is
+  fixed by association, conversation and key, so a crash between placing a
+  notice and recording it cannot send it twice.
+- Coalescing: a status notice is held 10 seconds (`coalesceMs`); notices
+  arriving while the window is open join it, so reviews settling together are
+  one wake, and the drain batches them into one carrier (at most 10 messages,
+  128 KiB). A coordinator mid-turn gets everything that settled meanwhile in
+  its next wake.
+- Debounce: workflow saves are observed at most every 2 seconds per resource;
+  a waiting episode must last 20 seconds before it is reported, so an approval
+  answered at once wakes nobody.
+- Budget: each resource's notices are budgeted as one routed pair with the
+  coordinator (`statusBudgetKey`), so the unattended budget and the hourly
+  limit hold them exactly as they hold a chatty worker. The user prompting the
+  coordinator, or **Resume**, starts a new budget.
+- Upgrade: a workflow first seen in a non-terminal settled state it reached
+  more than a day ago is recorded without a wake.
+
+**Delivery.** The durable mailbox and the existing drain: presence-gated
+injection, ack/read semantics, retry and restart recovery are the mail
+store's. Workflow saves wake an observation within seconds; the
+`coordinator-repair` maintenance job (every 60 s, and at startup) re-reads
+every owned workflow and open delegation, which recovers a missed save, a
+timer lost to a restart, or bookkeeping that never landed.
+`launch_multi_review`, `address_multi_review`, `start_multi_review` and
+`start_build_pipeline` return `delivery: "async"` with
+`COORDINATOR_WORKFLOW_STATUS_WAKE`, so the model is told it will be woken
+rather than left to poll `get_multi_review`.
+
+## Launch defaults
+
+Coordinator-launched work runs the user's saved defaults unless the user asks
+for something else. Coordinators used to copy a model and effort from
+`get_launch_options` into every call, so each worker silently ran a more
+expensive selection than the configured default. The rule is now stated in
+three places that agree:
+
+- `COORDINATOR_LAUNCH_DEFAULTS_RULE` (`packages/protocol/src/coordinator.ts`)
+  is a single line in the coordinator context prompt and the Control MCP server
+  instructions.
+- The descriptions of `launch_environment`, `launch_job`, `launch_multi_review`,
+  `start_multi_review` and `start_build_pipeline`, and of each model, effort and
+  agent field, say that omitting the field uses the saved default.
+- `get_launch_options` returns `defaults` (`agent`, per-agent
+  `byAgent[agent] = { modelId, reasoningId }`, `guidance`) and marks each
+  agent's default catalogue row with `isDefault: true`.
+
+What an omitted choice resolves to:
+
+| Tool | Omitted | Resolves to |
+| --- | --- | --- |
+| `launch_environment`, `launch_job` | `modelId`, `reasoningId`, `fastMode` | The platform column across environment → repository → app settings, else the agent's own default (`defaultReasoningId` for effort) |
+| `launch_multi_review`, `start_multi_review` | `reviewers`, `reviewModel`, `fixModel` | The Multi Review button's rows: Review, Review 2, saved extra reviewers and reviewer count; Review preparation and Fix review issues, each falling back to Review |
+| `launch_multi_review`, `start_multi_review` | auto-fix and auto-PR (not exposed) | The saved Multi Review settings |
+| `start_build_pipeline` | `agentType`, `steps`, `reviewers`, `reviewPreparation` | `buildPipelineConfiguredDefaults` (`packages/protocol/src/build-pipeline-defaults.ts`), the resolver the Build button uses |
+
+Every one of these can be overridden. A coordinator is told to override only
+when the user has asked for a specific model, agent, effort or reviewer set.
+Overrides layer the way the launchers do. For `start_build_pipeline`:
+
+- A named step replaces only that step, and a step that names only an agent runs
+  that agent's saved model.
+- `steps.build.agent` decides the pipeline agent.
+- Explicit `reviewers` replace the saved rows; otherwise an explicit
+  `steps.review` becomes Reviewer 1.
+
+Each Multi Review row field is replaced independently.
+
+Multi Review rows resolve in `apps/backend/src/core/coordinator-launch-defaults.ts`
+over the worker's model catalogue, mirroring the launch dialog: a stale saved
+model falls back to the first connected catalogue model, and an effort or speed
+is kept only when the chosen model offers it. When a platform has no catalogue,
+the saved model id is kept. The request hash covers the caller's payload, not
+the resolved rows, so retrying with the same `requestId` after the user edits
+their defaults replays the original work.
+
+Every launch reports what will run. `launch_environment` and `launch_job` return
+`selection: { agent, model, reasoning, source }`, where `source` is `requested`
+if the call set `modelId` or `reasoningId` and `default` otherwise. `model` is
+null when no tier pins one and the agent picks its own. The Multi Review result
+reports its rows the same way. `start_build_pipeline` reports the pipeline's
+`agentType`, `steps`, `reviewers` and `reviewPreparation`, with a per-step and
+per-field `source`. The environment and tab UI do not show a marker
+for overrides yet; that is a tracked follow-up.
+
 ## Complete application actions
 
 Use `launch_multi_review` for an environment's **Multi Review** button. Pass a
-stable `requestId`, the environment ID, and the same `reviewers` and `fixModel`
-rows accepted by the launch dialog (`agent`, `model`, optional
-`reasoningEffort`). `get_launch_options` supplies available model choices.
-The caller chooses the rows explicitly; this API does not invent reviewer
-defaults. Omitted `targetBranch` and `reviewInstruction` use the repository's
-PR base branch (falling back to `main`) and the global review instruction.
-An empty instruction explicitly clears the instruction for this launch.
+stable `requestId` and the environment ID. Omitted `reviewers`, `reviewModel`
+and `fixModel` use the saved Multi Review defaults exactly as the button does
+(see [Launch defaults](#launch-defaults)); explicit rows (`agent`, `model`,
+optional `reasoningEffort`) replace them one field at a time. Omitted
+`targetBranch` and `reviewInstruction` use the repository's PR base branch
+(falling back to `main`) and the global review instruction. An empty
+instruction explicitly clears the instruction for this launch. The result's
+`selection` lists the rows the saved review runs and, per field, whether they
+were `requested` or `default`.
 
 This action has no build-pipeline prerequisite. It reopens an active review
 regardless of the new selections, or reserves an immutable workflow ID and
@@ -472,11 +630,21 @@ guarantee, not by one end-to-end scenario replayed per platform:
 - coordinator presence and the turn-end edge:
   `native-agent-service-reconciliation.test.ts`
 - one-wake invariant and crash recovery: `coordinator-service.test.ts`
+- status wakes (ownership, one wake per settled transition per resource kind,
+  coalescing, budgets, restart, bounds): `coordinator-status-wakes.test.ts`
 - single-turn mail batching: `agent-mail-service.test.ts`
 - tool contract and poll guard: `control-mcp-server.test.ts`
 - no-waiting-tools boundary and tier table: `coordinator-conformance.test.ts`
 - per-bridge activity and policy tests already cover whether a bridge reports
   `idle` at turn end and how it translates `capabilityPolicy`
 
-A live per-provider tree-hash suite is not in the tree. That gap is part of
-[coordinator-live-conformance.md](../todo/coordinator-live-conformance.md).
+- the read-only boundary against real providers: `mise run
+  test:agent:coordinator` runs one live coordinator turn per platform in a
+  disposable profile. Each turn attempts every class of mutation, then the
+  suite checks that the checkout digest is unchanged and that read and
+  discovery tools still answer. It is opt-in and never runs in `mise run test`
+  or CI. See "Live coordinator suite" in
+  [`agent-testing.md`](../development/agent-testing.md).
+
+The live async and mail scenarios, and the runs that qualify each platform, are
+in [coordinator-live-conformance.md](../todo/coordinator-live-conformance.md).

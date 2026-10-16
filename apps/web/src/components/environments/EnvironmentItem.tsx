@@ -1,18 +1,9 @@
-import {
-  lazy,
-  memo,
-  useState,
-  useEffect,
-  useId,
-  useMemo,
-  useRef,
-  type ComponentType,
-  type ReactNode,
-} from "react";
+import { memo, useState, useId, useMemo, useRef, type ComponentType, type ReactNode } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DesignEnvironmentDeletionNotice } from "@/components/design/DesignEnvironmentDeletionNotice";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import { EnvironmentAgentSummary } from "./EnvironmentAgentSummary";
+import { UnreadBellIcon } from "./UnreadBellIcon";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -38,7 +29,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  Bell,
   Trash2,
   Play,
   Square,
@@ -58,19 +48,14 @@ import { toast } from "sonner";
 import type { AgentActivityState, Environment, EnvironmentType } from "@/types";
 import { useEnvironmentStore, useEnvironmentDiffStore, useBuildPipelineStore } from "@/stores";
 import { useAgentMailStore } from "@/stores/agentMailStore";
+import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useConfigStore } from "@/stores/configStore";
 import { parseUsableAgentActivityTime, useAgentActivityStore } from "@/stores/agentActivityStore";
 import { cn } from "@/lib/utils";
-import * as backend from "@/lib/backend";
 import { getEnvironmentPortAddress } from "@/lib/environment-address";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
-import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
-
-const LazyEnvironmentSettingsDialog = lazy(async () => ({
-  default: (await import("./EnvironmentSettingsDialog")).EnvironmentSettingsDialog,
-}));
 
 /** Below this width the row shows an explicit actions button; a right-click
  *  context menu is not reachable on touch. Matches Tailwind's `md` breakpoint. */
@@ -187,7 +172,6 @@ interface EnvironmentItemProps {
   onStop: (environmentId: string) => void;
   onRestart: (environmentId: string) => void;
   onFork?: (environmentId: string, environmentType: EnvironmentType) => void;
-  onUpdate?: (environment: Environment) => void;
   isMultiSelectMode?: boolean;
   isChecked?: boolean;
   /** Optional secondary label used by the flat activity view. */
@@ -203,7 +187,6 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   onStop,
   onRestart,
   onFork,
-  onUpdate,
   isMultiSelectMode = false,
   isChecked = false,
   subtitle,
@@ -211,9 +194,6 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   const dockerAvailable = useDockerAvailability();
   const localEnvironmentAvailable = useLocalEnvironmentAvailable(environment.projectId);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [showSettingsDialog, setShowSettingsDialog] = useState(false);
-  // Local state to track transitioning - ensures spinner shows immediately
-  const [isLocalTransitioning, setIsLocalTransitioning] = useState(false);
 
   // Get Claude activity state for this environment
   // For terminal-based Claude, state is keyed by containerId
@@ -274,29 +254,13 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   const isRunning = isLocalEnvironment || (dockerAvailable && environment.status === "running");
   const isCreating = environment.status === "creating";
   const isStopping = environment.status === "stopping";
-  // Use local state OR prop status for transitioning (not applicable for local environments)
-  const isTransitioning = !isLocalEnvironment && (isLocalTransitioning || isCreating || isStopping);
-
-  // Clear local transitioning state when environment status changes to non-transitioning
-  useEffect(() => {
-    if (!isCreating && !isStopping) {
-      setIsLocalTransitioning(false);
-    }
-  }, [environment.status, isCreating, isStopping]);
+  // Not applicable to local environments. A settings change that starts a
+  // transition reaches this row through the environment store, synchronously.
+  const isTransitioning = !isLocalEnvironment && (isCreating || isStopping);
 
   const confirmDelete = () => {
     onDelete(environment.id);
     setShowDeleteDialog(false);
-  };
-
-  const handleEnvironmentUpdate = (updated: Environment) => {
-    // Set local transitioning state for immediate spinner feedback
-    if (updated.status === "creating" || updated.status === "stopping") {
-      setIsLocalTransitioning(true);
-    } else {
-      setIsLocalTransitioning(false);
-    }
-    onUpdate?.(updated);
   };
 
   // Get network mode with null safety (defaults to "restricted")
@@ -375,7 +339,13 @@ export const EnvironmentItem = memo(function EnvironmentItem({
       key: "settings",
       label: "Settings",
       icon: <Settings2 className="h-4 w-4 mr-2" />,
-      onSelect: () => setShowSettingsDialog(true),
+      // The dialog lives in `AppDialogHost`, not in this row: in the mobile
+      // projects drawer the row unmounts with the drawer, and a modal opened
+      // from inside the drawer would be trapped behind it.
+      onSelect: () =>
+        useAppDialogStore
+          .getState()
+          .open({ kind: "environment-settings", environmentId: environment.id }),
     },
     ...(localAddress
       ? [
@@ -538,10 +508,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                     {isBuildEnvironment ? environment.name.replace(/^Build:\s*/, "") : displayName}
                   </span>
                   {hasUnreadActivity && (
-                    <Bell
-                      className="h-3 w-3 shrink-0 fill-amber-400/20 text-amber-400"
-                      aria-label="New completed activity"
-                    />
+                    <UnreadBellIcon className="h-3 w-3" aria-label="New completed activity" />
                   )}
                   {unreadMail > 0 && (
                     <span
@@ -768,22 +735,6 @@ export const EnvironmentItem = memo(function EnvironmentItem({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-
-      {/* Environment Settings Dialog — mounted only while open so a sidebar
-          with many rows does not pay for a dialog per row. */}
-      {showSettingsDialog && (
-        <LazyLoadBoundary
-          loadingFallback={<LazyDialogLoadingFallback label="Loading environment settings…" />}
-        >
-          <LazyEnvironmentSettingsDialog
-            open={showSettingsDialog}
-            onOpenChange={setShowSettingsDialog}
-            environment={environment}
-            onUpdate={handleEnvironmentUpdate}
-            onRestart={backend.recreateEnvironment}
-          />
-        </LazyLoadBoundary>
-      )}
     </>
   );
 });

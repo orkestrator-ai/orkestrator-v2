@@ -52,3 +52,25 @@ was changed.
 Aggregate backend counts for this observation: 8,341 passed, 40 skipped,
 5 failed and 3 between-tests errors across 8,386 tests in 445 files
 (391.37 seconds). The other failures are recorded in 0162, 0165 and 0248.
+
+## Coordinator launch-defaults main merge — 2026-10-16
+
+`mise run test:logged -- --name merge-tests -- mise run test`, with the testing
+guide's GNU-tool PATH, reserved 4/1/2/1 workspace/root/bridges/protocol slots.
+Backend used two isolated Bun workers while another worktree's aggregate
+shared the host. `move_environment > moves a worktree with nested submodules (copy)`
+exceeded its 5000 ms budget at 5077.71 ms. Its pending submodule check was
+terminated with `SIGTERM`, reporting invalid nested Git metadata as an
+unhandled error between tests.
+
+Backend reported 8,413 passed, 40 skipped, five failed and one between-tests
+error across 8,458 tests in 450 files (364.58 seconds). The aggregate exited 1
+after 453.6 seconds. Other failures are recorded in 0162, 0211 and 0256.
+Evidence:
+`/tmp/orkestrator-test-run.H7G9oK/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
+outer artifact `/tmp/orkestrator-test-run.e7nGed/merge-tests.log.gz`.
+
+`mise run test:logged -- --name merge-move-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures`
+passed the entire unchanged owning file (exit 0, 16.2 seconds). Shared host
+contention remains an unconfirmed hypothesis; no implementation, assertion,
+timeout or skip changed.

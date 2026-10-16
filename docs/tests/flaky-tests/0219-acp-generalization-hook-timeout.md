@@ -44,3 +44,18 @@
   (3 tests; logged command 0.9 seconds).
 - **Hypothesis:** consistent with the existing shared-fixture cleanup timeout
   under aggregate load. No test or product code was changed for this recurrence.
+
+## Recurrence — 2026-10-16 (temporary host port main merge)
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`,
+  using the testing guide's GNU-tool PATH. Workspace/root/bridges/protocol
+  reserved 4/1/2/1 slots; component browser validation ran alongside it.
+- **Failure:** the fixture hook timed out at 60008.13 ms in
+  `ACP protocol generalization > serves filesystem and bounded terminal requests from the fake agent`.
+- **Suite counts:** ACP 574 passed, three skipped and one failed across
+  578 tests in 37 files (167.06 s); the other four bridge packages passed.
+- **Isolated rerun:** `mise run test:logged -- --name merge-acp-generalization-isolated -- bun test --cwd bridges/acp-bridge --preload ../../tests/setup-node.ts ./src/acp-generalization.test.ts --parallel=1 --only-failures`
+  passed the unchanged owning file (exit 0, 0.4 s).
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.MTrBXO/bridges.log.gz`.
+- **Disposition:** confirms an intermittent recurrence; the existing fixture
+  contention hypothesis remains unconfirmed. No assertion, timeout or skip changed.

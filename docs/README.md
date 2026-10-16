@@ -177,7 +177,7 @@ iOS, two machines) are the most common open gate. They are batched in
 | --- | --- |
 | [multi-review-scale-and-cost.md](todo/multi-review-scale-and-cost.md) | Fix the post-SQLite fence-check regression, retire rollback gates and fallbacks, make the benchmark deterministic, collect scale evidence. |
 | [multi-review-panel-value.md](todo/multi-review-panel-value.md) | Prove compact consolidation and prompt-prefix savings, add an overlap metric, then decide presets, lenses and adaptive stopping. |
-| [multi-review-flow-graph.md](todo/multi-review-flow-graph.md) | Flow graph follow-ups that need backend data: live findings and queue position. |
+| [multi-review-flow-graph.md](todo/multi-review-flow-graph.md) | Flow graph follow-ups that need backend data: live findings. |
 
 ### Coordinator and agent mail
 

@@ -47,6 +47,18 @@ keep yet.
   it now (`multiReviewStepSessionAccess`, which follows the same rule as
   `fixSessionRuntimeStep`); the other steps say which step has it. Step tails
   hide prompts and schema-shaped text exactly as reviewer tails do.
+- **Queue position.** A pending reviewer in a review pass shows its place in
+  the admission queue ("queued · #3 of 7"), or "starting" while its session
+  is set up. `runBoundedTasks` (`review-fanout-scheduler.ts`) reports its
+  waiting queue as each task leaves it, and `ReviewFanoutRunner` projects that
+  onto the reviewer records (`admissionState`, `queuePosition`;
+  `review-fanout-admission.ts`). The fields are observations: they ride on the
+  pass's own safety commits and its one observational flush, so a position can
+  trail by one admission until the next commit. Stopping a queued reviewer
+  moves the ones behind it up; a restarted reviewer rejoins at its panel
+  place on the next pass. A backend without the fields shows a bare "queued".
+  There is deliberately no expected start time: nothing measures how long a
+  provider takes to admit a reviewer.
 - **Findings so far.** `mergeReviewerFindings` lists the issues of completed
   reviewers. An issue that several reviewers raised at the same file, line and
   title is listed once. Partial reports from failed or stopped reviewers are not
@@ -64,14 +76,6 @@ keep yet.
    report lands. The renderer must never parse findings out of the provider
    transcript; `toMultiReviewReviewerMessages` deliberately hides
    schema-shaped text.
-2. **Queue position and expected start for queued reviewers.** A queued
-   reviewer now shows `queued`, but neither its place in the admission queue
-   nor when it will start. This builds on the deferred `admissionState` /
-   `queuedAt` fields in
-   [multi-review-scale-and-cost.md](multi-review-scale-and-cost.md#deferred-until-measured).
-   It also needs the scheduler (`runBoundedTasks`, admission concurrency 4 by
-   default) to report a position. An estimate needs a measured per-provider
-   duration; without one, show only the position.
 
 ## Constraints and rationale
 

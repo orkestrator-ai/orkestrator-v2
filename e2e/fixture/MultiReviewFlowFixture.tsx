@@ -198,6 +198,21 @@ export function multiReviewFlowWorkflow(
     }
     return { ...base, status: "pending" as const };
   });
+  // While the panel is admitted, the first waiting reviewer is starting and
+  // the rest hold their place in the admission queue.
+  if (workflowPhase === "reviewing") {
+    let position = 0;
+    for (const reviewer of reviewers) {
+      if (reviewer.status !== "pending") continue;
+      Object.assign(
+        reviewer,
+        position === 0
+          ? { admissionState: "admitting" }
+          : { admissionState: "queued", queuePosition: position },
+      );
+      position += 1;
+    }
+  }
 
   const stepRuntimes: MultiReviewWorkflow["stepRuntimes"] = {
     prepare: {

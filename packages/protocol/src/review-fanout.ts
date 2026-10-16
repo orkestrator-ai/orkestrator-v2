@@ -45,6 +45,13 @@ export type ReviewerStatus = "pending" | "running" | "completed" | "failed" | "c
 /** How far a prompt got before the process could have died mid-flight. */
 export type ReviewDispatchState = "prepared" | "dispatching" | "sent";
 
+/**
+ * Where a pending reviewer stands in the admission queue: `queued` while it
+ * waits for an admission slot, `admitting` while its session is created and
+ * its prompt sent.
+ */
+export type ReviewerAdmissionState = "queued" | "admitting";
+
 export interface ReviewerRecord extends ReviewerModelSelection {
   id: string;
   status: ReviewerStatus;
@@ -66,6 +73,17 @@ export interface ReviewerRecord extends ReviewerModelSelection {
    * cannot serve, so the reviewer's row can say so.
    */
   modelSubstitution?: NativeAgentModelSubstitution;
+  /**
+   * The scheduler's view of a `pending` reviewer during a review pass. It is
+   * an observation, staged and written with the pass's other observations,
+   * and absent once the reviewer leaves `pending`.
+   */
+  admissionState?: ReviewerAdmissionState;
+  /**
+   * One-based place among the queued reviewers, in the order the scheduler
+   * will start them. Set only while {@link admissionState} is `queued`.
+   */
+  queuePosition?: number;
   sessionKey?: string;
   providerSessionId?: string;
   requestId?: string;
@@ -240,6 +258,8 @@ const REVIEWER_KEYS = [
   "status",
   "modelUnpinned",
   "modelSubstitution",
+  "admissionState",
+  "queuePosition",
   "sessionKey",
   "providerSessionId",
   "requestId",
@@ -276,6 +296,13 @@ export function isReviewerRecord(value: unknown): value is ReviewerRecord {
     (value.modelUnpinned === undefined || typeof value.modelUnpinned === "boolean") &&
     (value.modelSubstitution === undefined ||
       isNativeAgentModelSubstitution(value.modelSubstitution)) &&
+    (value.admissionState === undefined ||
+      value.admissionState === "queued" ||
+      value.admissionState === "admitting") &&
+    (value.queuePosition === undefined ||
+      (Number.isSafeInteger(value.queuePosition) &&
+        (value.queuePosition as number) >= 1 &&
+        (value.queuePosition as number) <= REVIEW_FANOUT_MAX_REVIEWERS)) &&
     (value.sessionKey === undefined || nonBlank(value.sessionKey)) &&
     (value.providerSessionId === undefined || nonBlank(value.providerSessionId)) &&
     (value.requestId === undefined || nonBlank(value.requestId)) &&

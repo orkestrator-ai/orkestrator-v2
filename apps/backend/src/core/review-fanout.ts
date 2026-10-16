@@ -100,6 +100,10 @@ import {
   type ReviewFanoutConcurrency,
 } from "./review-fanout-scheduler.js";
 import { PassTranscriptReader } from "./review-fanout-transcript.js";
+import {
+  clearReviewerAdmission,
+  projectReviewerAdmissionQueue,
+} from "./review-fanout-admission.js";
 
 export const MAX_REVIEW_SCHEMA_REPAIR_ATTEMPTS = REVIEW_FANOUT_MAX_SCHEMA_REPAIR_ATTEMPTS;
 export const MAX_REVIEW_IDLE_RESULT_POLLS = REVIEW_FANOUT_MAX_IDLE_RESULT_POLLS;
@@ -947,6 +951,7 @@ export class ReviewFanoutRunner {
     let fatal: { error: unknown } | undefined;
     const stats = await runBoundedTasks(
       live.map(({ reviewer, index }) => ({
+        reviewer,
         pool: reviewerNeedsDispatch(reviewer) ? ("admission" as const) : ("observation" as const),
         group: efficiencyPlatform(reviewer.agent),
         run: async () => {
@@ -959,7 +964,25 @@ export class ReviewFanoutRunner {
       })),
       reviewFanoutConcurrency(this.host.concurrency),
       () => fatal === undefined,
+      // Each queued reviewer's place, as the scheduler offers slots. Staged
+      // only: the next safety commit (a started reviewer's session) carries it.
+      (waiting) => {
+        const queued = waiting.flatMap((task) =>
+          task.reviewer.status === "pending" ? [task.reviewer] : [],
+        );
+        if (projectReviewerAdmissionQueue(reviewers, queued)) this.stageObservation();
+      },
     );
+    // A reviewer still pending here (a retryable setup failure, or a pass that
+    // stopped early) waits for the next pass, in panel order.
+    if (
+      projectReviewerAdmissionQueue(
+        reviewers,
+        reviewers.filter((reviewer) => reviewer.status === "pending"),
+      )
+    ) {
+      this.stageObservation();
+    }
     this.record({
       operation: "reviewer.task",
       reviewers: reviewers.length,
@@ -1025,6 +1048,7 @@ export class ReviewFanoutRunner {
       reviewer.status = "failed";
       reviewer.error = reviewFanoutErrorMessage(error).slice(0, 4_096);
       reviewer.completedAt = nowIso();
+      clearReviewerAdmission(reviewer);
       delete reviewer.idleResultPolls;
       delete reviewer.stalledSince;
       this.record({ operation: "reviewer.task", outcome: "failed" });
@@ -1107,6 +1131,7 @@ export class ReviewFanoutRunner {
       reviewer.resultSubmission = reviewer.resultTransport === "tool-v1" ? "preparing" : undefined;
       reviewer.status = "running";
       reviewer.startedAt = nowIso();
+      clearReviewerAdmission(reviewer);
       delete reviewer.tokenCount;
       delete reviewer.usageFinalizationPolls;
       host.pollGate?.clear(`${host.workflowId}\0${reviewer.id}\0usage`);

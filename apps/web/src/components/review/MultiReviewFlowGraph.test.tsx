@@ -497,6 +497,52 @@ describe("flow graph nodes", () => {
     ).toBeTruthy();
   });
 
+  test("shows a queued reviewer's place in the admission queue, and no start estimate", () => {
+    const queued = (index: number, position: number): Reviewer => ({
+      ...pending(index),
+      admissionState: "queued",
+      queuePosition: position,
+    });
+    renderTab(
+      workflow({
+        reviewers: [
+          running(0),
+          { ...pending(1), admissionState: "admitting" },
+          queued(2, 2),
+          queued(3, 1),
+          queued(4, 3),
+        ],
+      }),
+    );
+    const third = screen.getByRole("tab", { name: /^Reviewer 3 ·/ });
+    expect(within(third).getByText("queued · #2 of 3")).toBeTruthy();
+    expect(third.getAttribute("aria-label")).toContain("Queued · #2 of 3");
+    expect(
+      within(screen.getByRole("tab", { name: /^Reviewer 4 ·/ })).getByText("queued · #1 of 3"),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByRole("tab", { name: /^Reviewer 2 ·/ })).getByText("starting"),
+    ).toBeTruthy();
+    fireEvent.click(third);
+    expect(screen.getByTestId("multi-review-inspector-status").textContent).toBe(
+      "Queued · #2 of 3",
+    );
+    // Position only: nothing guesses when it will start.
+    expect(screen.getByTestId("multi-review-inspector").textContent).not.toMatch(
+      /starts in|expected|ETA/i,
+    );
+  });
+
+  test("a backend without queue fields keeps the bare queued label", () => {
+    renderTab(workflow({ reviewers: [running(0), pending(1), pending(2)] }));
+    expect(
+      within(screen.getByRole("tab", { name: /^Reviewer 2 ·/ })).getByText("queued"),
+    ).toBeTruthy();
+    expect(screen.getByRole("tab", { name: /^Reviewer 2 ·/ }).getAttribute("aria-label")).toContain(
+      "Queued",
+    );
+  });
+
   test("keeps validation checks on the package node", () => {
     renderTab(
       workflow({

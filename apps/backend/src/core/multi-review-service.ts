@@ -104,6 +104,10 @@ import {
 } from "./multi-review-progress.js";
 import { readTranscriptProgressSample } from "./transcript-progress.js";
 import { readMultiReviewStepTranscript } from "./multi-review-step-transcript.js";
+import {
+  clearReviewerAdmission,
+  compactReviewerAdmissionQueue,
+} from "./review-fanout-admission.js";
 import { ActivityReadCoalescer } from "./activity-read-coalescer.js";
 
 import {
@@ -379,6 +383,9 @@ function resetReviewerForRestart(
   reviewer: MultiReviewWorkflow["reviewers"][number],
 ): void {
   reviewer.status = "pending";
+  // The next review pass queues it behind nothing: the scheduler admits in
+  // panel order and assigns its place then.
+  clearReviewerAdmission(reviewer);
   reviewer.sessionKey = rotatedSessionKey(reviewerSessionKey(workflow.id, reviewer.id));
   delete reviewer.providerSessionId;
   delete reviewer.requestId;
@@ -1388,6 +1395,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
         reviewer.status = "cancelled";
         reviewer.completedAt = nowIso();
+        // The reviewers queued behind a stopped one move up.
+        compactReviewerAdmissionQueue(workflow.reviewers);
         // The session id is kept so the read-only transcript stays reachable.
         delete reviewer.idleResultPolls;
         delete reviewer.stalledSince;
@@ -3041,6 +3050,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       if (reviewer.status === "pending" || reviewer.status === "running") {
         reviewer.status = "cancelled";
       }
+      clearReviewerAdmission(reviewer);
     }
     if (workflow.fixSession?.status === "running") workflow.fixSession.status = "cancelled";
     if (workflow.reviewSession?.status === "running") workflow.reviewSession.status = "cancelled";

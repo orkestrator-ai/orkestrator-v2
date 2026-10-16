@@ -347,6 +347,84 @@ describe("bounded concurrent admission", () => {
     expect(h.overlappingSaves()).toBe(0);
   });
 
+  test("numbers the queued reviewers as they are admitted, through the pass's own writes", async () => {
+    const reviewers = Array.from({ length: 6 }, (_, index) => pendingReviewer(index));
+    const h = harness(reviewers, { concurrency: { admission: 2 } });
+    const provider = h.providers.claude!;
+    const first = deferred();
+    provider.createGate = first.promise;
+    const place = () =>
+      reviewers.map((reviewer) =>
+        reviewer.admissionState === "queued"
+          ? `#${reviewer.queuePosition}`
+          : (reviewer.admissionState ?? reviewer.status),
+      );
+
+    const pass = h.runner().advanceReviewers(reviewers);
+    for (let tick = 0; tick < 10; tick++) await flush();
+    expect(place()).toEqual(["admitting", "admitting", "#1", "#2", "#3", "#4"]);
+    // Nothing has been written yet: positions are staged, never a write of their own.
+    expect(h.saves).toHaveLength(0);
+
+    const second = deferred();
+    provider.createGate = second.promise;
+    first.resolve();
+    for (let tick = 0; tick < 20; tick++) await flush();
+    expect(place()).toEqual(["running", "running", "admitting", "admitting", "#1", "#2"]);
+    // The first admitted reviewer's session commit carried everyone's place;
+    // later moves ride on the next commit in the same way.
+    expect(h.saves[0]!.slice(2).map((reviewer) => reviewer.queuePosition)).toEqual([1, 2, 3, 4]);
+
+    second.resolve();
+    await pass;
+    expect(place()).toEqual(Array(6).fill("running"));
+    expect(h.saves.at(-1)!.some((reviewer) => "admissionState" in reviewer)).toBe(false);
+    expect(h.efficiency.count("workflow.save_observation")).toBeLessThanOrEqual(1);
+  });
+
+  test("a restarted reviewer rejoins the queue at its panel place on the next pass", async () => {
+    const reviewers = Array.from({ length: 4 }, (_, index) => pendingReviewer(index));
+    const h = harness(reviewers, { concurrency: { admission: 1 } });
+    const provider = h.providers.claude!;
+    await h.runner().advanceReviewers(reviewers);
+    expect(reviewers.every((reviewer) => reviewer.status === "running")).toBe(true);
+
+    // What a restart leaves behind: pending, with no session and no place.
+    for (const restarted of [reviewers[0]!, reviewers[2]!]) {
+      restarted.status = "pending";
+      delete restarted.providerSessionId;
+      delete restarted.requestId;
+      delete restarted.dispatchState;
+    }
+    const gate = deferred();
+    provider.createGate = gate.promise;
+    const pass = h.runner().advanceReviewers(reviewers);
+    for (let tick = 0; tick < 10; tick++) await flush();
+    expect(reviewers.map((reviewer) => reviewer.admissionState ?? null)).toEqual([
+      "admitting",
+      null,
+      "queued",
+      null,
+    ]);
+    expect(reviewers[2]!.queuePosition).toBe(1);
+    gate.resolve();
+    await pass;
+    expect(reviewers.some((reviewer) => reviewer.admissionState !== undefined)).toBe(false);
+  });
+
+  test("a reviewer still pending after the pass waits in panel order", async () => {
+    const reviewers = [pendingReviewer(0), pendingReviewer(1), pendingReviewer(2)];
+    const h = harness(reviewers, { concurrency: { admission: 1 } });
+    // The pass stops after the first admission: a lost fence on its second check.
+    h.loseFenceAfter(2);
+    await expect(h.runner().advanceReviewers(reviewers)).rejects.toThrow("fence lost");
+    expect(reviewers.map((reviewer) => reviewer.queuePosition ?? reviewer.status)).toEqual([
+      "running",
+      1,
+      2,
+    ]);
+  });
+
   test("a per-provider cap bounds one provider even when the pool allows more", async () => {
     const reviewers = Array.from({ length: 8 }, (_, index) =>
       pendingReviewer(index, index % 2 === 0 ? "claude" : "codex"),

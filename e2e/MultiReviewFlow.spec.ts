@@ -232,3 +232,11 @@ test("shows the selected step's transcript tail in the inspector", async ({ page
   const tail = page.getByRole("log", { name: "Latest consolidation activity" });
   await expect(tail).toContainText("Merging four reviewer reports");
 });
+
+test("shows each queued reviewer's place in the admission queue", async ({ page }) => {
+  await page.goto("/multi-review-flow?phase=reviewing&reviewers=8");
+  await expect(page.getByRole("tab", { name: /^Reviewer 4 ·/ })).toContainText("starting");
+  await expect(page.getByRole("tab", { name: /^Reviewer 5 ·/ })).toContainText("queued · #1 of 4");
+  await expect(page.getByRole("tab", { name: /^Reviewer 8 ·/ })).toContainText("queued · #4 of 4");
+  expect(overlapping(await nodeBoxes(page))).toEqual([]);
+});

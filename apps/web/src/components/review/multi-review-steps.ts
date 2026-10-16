@@ -408,11 +408,53 @@ export function reviewerColumnLabel(reviewers: MultiReviewWorkflow["reviewers"])
   return stopped === 0 ? `Review · ${progress}` : `Review · ${progress} · ${stopped} stopped`;
 }
 
+/**
+ * A queued reviewer's place in the admission queue, as the scheduler numbered
+ * it. Null for a backend that predates the queue fields, and outside a pass.
+ */
+export function reviewerQueuePlace(
+  reviewer: MultiReviewWorkflow["reviewers"][number],
+  reviewers: MultiReviewWorkflow["reviewers"],
+): { position: number; of: number } | null {
+  if (
+    reviewer.status !== "pending" ||
+    reviewer.admissionState !== "queued" ||
+    reviewer.queuePosition === undefined
+  ) {
+    return null;
+  }
+  const queued = reviewers.filter(
+    (entry) => entry.status === "pending" && entry.admissionState === "queued",
+  ).length;
+  return { position: reviewer.queuePosition, of: Math.max(queued, reviewer.queuePosition) };
+}
+
+/**
+ * Where a pending reviewer's runtime would be: its place in the queue
+ * ("queued · #3 of 7"), "starting" once its session is being set up, or a
+ * bare "queued" when the backend did not say. Position only: there is no
+ * measured duration to estimate a start time from.
+ */
+export function reviewerPendingLabel(
+  reviewer: MultiReviewWorkflow["reviewers"][number],
+  reviewers: MultiReviewWorkflow["reviewers"],
+): string {
+  if (reviewer.status === "pending" && reviewer.admissionState === "admitting") return "starting";
+  const place = reviewerQueuePlace(reviewer, reviewers);
+  return place ? `queued · #${place.position} of ${place.of}` : "queued";
+}
+
 /** The pill text for a reviewer, matching the step labels' register. */
-export function reviewerStatusLabel(reviewer: MultiReviewWorkflow["reviewers"][number]): string {
+export function reviewerStatusLabel(
+  reviewer: MultiReviewWorkflow["reviewers"][number],
+  reviewers: MultiReviewWorkflow["reviewers"] = [reviewer],
+): string {
   switch (reviewer.status) {
-    case "pending":
-      return "Queued";
+    case "pending": {
+      if (reviewer.admissionState === "admitting") return "Starting";
+      const place = reviewerQueuePlace(reviewer, reviewers);
+      return place ? `Queued · #${place.position} of ${place.of}` : "Queued";
+    }
     case "running":
       return reviewer.stalledSince ? "Stalled" : "Reviewing";
     case "completed":

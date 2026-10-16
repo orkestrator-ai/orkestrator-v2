@@ -71,6 +71,7 @@ import {
   openFixSessionError,
   reviewerColumnLabel,
   reviewerProgressSummary,
+  reviewerPendingLabel,
   reviewerStatusLabel,
   reviewerStatusNote,
   reviewerStatusWord,
@@ -1090,12 +1091,14 @@ function MultiReviewOverviewTab({
         title: `${name} · ${reviewer.agent}`,
         state: reviewerFlowState(reviewer.status),
         stalled,
-        statusLabel: reviewerStatusLabel(reviewer),
+        statusLabel: reviewerStatusLabel(reviewer, workflow.reviewers),
         detail: modelDetail(reviewer, false),
         runtime,
         runtimeLabel: `${name} runtime and token usage`,
         pendingLabel:
-          reviewer.status === "pending" ? flowPendingLabel("reviewer", "Queued") : undefined,
+          reviewer.status === "pending"
+            ? reviewerPendingLabel(reviewer, workflow.reviewers)
+            : undefined,
         statusWord: reviewerStatusWord(reviewer),
         error: reviewer.status === "failed" ? reviewer.error : undefined,
         // A failed or stopped reviewer can still have filed a partial report.

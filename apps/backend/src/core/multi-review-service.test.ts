@@ -6380,6 +6380,62 @@ test("MultiReviewService keeps reviewing when a reviewer cannot be attached", as
   });
 });
 
+test("MultiReviewService moves the queued reviewers up when one is stopped", async () => {
+  const provider = new Provider();
+  await withService("env-stop-queued", provider, async ({ service, storage }) => {
+    const timestamp = new Date().toISOString();
+    const workflow: MultiReviewWorkflow = {
+      version: 1,
+      controller: "backend",
+      id: "queued-panel",
+      environmentId: "env-stop-queued",
+      projectId: "project-1",
+      targetBranch: "main",
+      // As a pass that stopped early leaves its panel: waiting in panel order.
+      reviewers: Array.from({ length: 4 }, (_, index) => ({
+        id: `reviewer-${index + 1}`,
+        agent: "claude" as const,
+        model: "opus",
+        status: "pending" as const,
+        admissionState: "queued" as const,
+        queuePosition: index + 1,
+      })),
+      fixModel: { agent: "claude", model: "opus" },
+      phase: "reviewing",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      backendRevision: 0,
+      reviewWorktreeSnapshot: await captureReviewWorktreeSnapshot(
+        stableReviewInvoker,
+        "env-stop-queued",
+        "Multi Review",
+      ),
+    };
+    expect(
+      await storage.createMultiReviewWorkflowIfNoActive(
+        workflow.id,
+        workflow.environmentId,
+        1,
+        workflow,
+      ),
+    ).not.toBeNull();
+
+    const stopped = await service.stopReviewer(workflow.id, "reviewer-2");
+    expect(
+      stopped.reviewers.map((reviewer) => [
+        reviewer.status,
+        reviewer.admissionState ?? null,
+        reviewer.queuePosition ?? null,
+      ]),
+    ).toEqual([
+      ["pending", "queued", 1],
+      ["cancelled", null, null],
+      ["pending", "queued", 2],
+      ["pending", "queued", 3],
+    ]);
+  });
+});
+
 test("MultiReviewService consolidates from the reviewers left after one is stopped", async () => {
   const provider = new Provider();
   provider.statusValue = "idle";

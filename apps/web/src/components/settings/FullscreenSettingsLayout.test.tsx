@@ -583,4 +583,56 @@ describe("FullscreenSettingsLayout", () => {
     );
     expect(screen.getByText("section:general")).toBeTruthy();
   });
+
+  test("takes focus when it opens and returns it to the opener when it closes", () => {
+    const opener = document.createElement("button");
+    document.body.append(opener);
+    const view = (open: boolean) => (
+      <FullscreenSettingsLayout
+        open={open}
+        onOpenChange={() => undefined}
+        title="Settings"
+        menuItems={menuItems}
+      >
+        {() => <button type="button">Inside</button>}
+      </FullscreenSettingsLayout>
+    );
+    try {
+      opener.focus();
+      const { rerender } = render(view(true));
+      expect(document.activeElement).toBe(screen.getByRole("dialog", { name: "Settings" }));
+
+      screen.getByRole("button", { name: "Inside" }).focus();
+      rerender(view(false));
+      expect(document.activeElement).toBe(opener);
+    } finally {
+      opener.remove();
+    }
+  });
+
+  test("leaves focus another owner placed when it closes", () => {
+    const opener = document.createElement("button");
+    const elsewhere = document.createElement("button");
+    document.body.append(opener, elsewhere);
+    const view = (open: boolean) => (
+      <FullscreenSettingsLayout
+        open={open}
+        onOpenChange={() => undefined}
+        title="Settings"
+        menuItems={menuItems}
+      >
+        {() => null}
+      </FullscreenSettingsLayout>
+    );
+    try {
+      opener.focus();
+      const { rerender } = render(view(true));
+      elsewhere.focus();
+      rerender(view(false));
+      expect(document.activeElement).toBe(elsewhere);
+    } finally {
+      opener.remove();
+      elsewhere.remove();
+    }
+  });
 });

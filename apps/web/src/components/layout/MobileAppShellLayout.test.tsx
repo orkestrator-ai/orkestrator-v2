@@ -411,18 +411,54 @@ describe("MobileAppShellLayout", () => {
     expect(screen.getByRole("dialog", { name: "Projects and environments" })).toBeTruthy();
   });
 
-  test("gives way to a dialog requested from the drawer and returns focus to its trigger", async () => {
+  test("gives way to a dialog requested from the drawer and returns focus to its trigger once it closes", async () => {
     const { container } = renderLayout({}, { keepInitialDrawerOpen: true });
     const menuButton = getTitleBarSidebarTrigger(container);
+    // Stands in for the dialog `AppDialogHost` renders, which takes focus.
+    const dialogControl = document.createElement("button");
+    document.body.append(dialogControl);
 
-    act(() => {
-      useAppDialogStore
-        .getState()
-        .open({ kind: "environment-settings", environmentId: "environment-1" });
-    });
+    try {
+      act(() => {
+        useAppDialogStore
+          .getState()
+          .open({ kind: "environment-settings", environmentId: "environment-1" });
+      });
+      dialogControl.focus();
 
-    expect(screen.queryByRole("dialog", { name: "Projects and environments" }) === null).toBe(true);
-    await waitFor(() => expect(document.activeElement).toBe(menuButton));
+      expect(screen.queryByRole("dialog", { name: "Projects and environments" }) === null).toBe(
+        true,
+      );
+      // The closing drawer leaves the dialog's focus alone.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(document.activeElement).toBe(dialogControl);
+
+      act(() => useAppDialogStore.getState().close());
+      expect(document.activeElement).toBe(menuButton);
+    } finally {
+      dialogControl.remove();
+    }
+  });
+
+  test("leaves focus to a dialog requested while the drawer is closed", () => {
+    const { container } = renderLayout();
+    const menuButton = getTitleBarSidebarTrigger(container);
+    const opener = document.createElement("button");
+    document.body.append(opener);
+
+    try {
+      opener.focus();
+      act(() => {
+        useAppDialogStore
+          .getState()
+          .open({ kind: "environment-settings", environmentId: "environment-1" });
+      });
+      act(() => useAppDialogStore.getState().close());
+      expect(document.activeElement).toBe(opener);
+      expect(document.activeElement).not.toBe(menuButton);
+    } finally {
+      opener.remove();
+    }
   });
 
   test("closes the initial drawer with Escape and restores trigger focus", async () => {

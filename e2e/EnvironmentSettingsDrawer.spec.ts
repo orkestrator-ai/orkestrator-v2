@@ -32,9 +32,45 @@ test("environment settings opened from the projects drawer are usable on a phone
   await touchTap(page, otherSection);
   await expect(section).toHaveText(otherLabel);
 
-  // Closing it leaves nothing behind that blocks the shell: the drawer reopens.
+  // Closing it returns focus to the drawer trigger, the control that stands in
+  // for the row that opened it, and leaves nothing behind that blocks the
+  // shell: the drawer reopens.
   await touchTap(page, settings.getByRole("button", { name: "Close settings" }));
   await expect(settings).toHaveCount(0);
-  await touchTap(page, page.getByRole("button", { name: "Open projects and environments" }));
+  const drawerTrigger = page.getByRole("button", { name: "Open projects and environments" });
+  await expect(drawerTrigger).toBeFocused();
+  await touchTap(page, drawerTrigger);
+  await expect(drawer.getByText("drawer-environment")).toBeVisible();
+});
+
+test("closing drawer-opened settings with the keyboard returns focus to the drawer trigger", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "the projects drawer is phone-only");
+  await page.goto("/environment-settings-drawer");
+  const drawer = page.getByRole("dialog", { name: "Projects and environments" });
+  await expect(drawer).toBeVisible();
+
+  const actions = drawer.getByRole("button", { name: "Environment actions" });
+  await actions.focus();
+  await page.keyboard.press("Enter");
+  const settingsItem = page.getByRole("menuitem", { name: "Settings" });
+  await expect(settingsItem).toBeVisible();
+  await settingsItem.focus();
+  await page.keyboard.press("Enter");
+
+  const settings = page.getByRole("dialog", { name: "Environment Settings" });
+  await expect(settings).toBeVisible();
+  await expect(drawer).toHaveCount(0);
+  // The dialog takes focus while open, so the keyboard stays inside it.
+  await expect
+    .poll(() => settings.evaluate((dialog) => dialog.contains(document.activeElement)))
+    .toBe(true);
+
+  await page.keyboard.press("Escape");
+  await expect(settings).toHaveCount(0);
+  const drawerTrigger = page.getByRole("button", { name: "Open projects and environments" });
+  await expect(drawerTrigger).toBeFocused();
+  await page.keyboard.press("Enter");
   await expect(drawer.getByText("drawer-environment")).toBeVisible();
 });

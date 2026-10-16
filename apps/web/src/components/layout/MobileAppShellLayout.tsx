@@ -76,6 +76,7 @@ export function MobileAppShellLayout({
   const toolsTriggerRef = useRef<HTMLButtonElement>(null);
   const restoreSidebarFocusRef = useRef(false);
   const restoreToolsFocusRef = useRef(false);
+  const restoreFocusAfterAppDialogRef = useRef(false);
   const titleUsesNativeDragRegion = usesNativeWindowDragRegion();
 
   const handleSidebarOpenChange = (open: boolean) => {
@@ -109,15 +110,28 @@ export function MobileAppShellLayout({
     titleTooltipWasOpenOnPointerDownRef.current = false;
   }, [selectedEnvironmentId, selectedProjectId]);
 
+  const sidebarOpenRef = useRef(sidebarOpen);
+  useEffect(() => {
+    sidebarOpenRef.current = sidebarOpen;
+  }, [sidebarOpen]);
+
   // A dialog requested from a drawer row renders in `AppDialogHost`, outside
   // the drawer. The drawer gives way to it: left open, it would keep the
-  // dialog behind its modal layer. Focus returns to the drawer trigger.
+  // dialog behind its modal layer. The dialog takes focus as it opens, so the
+  // closing drawer must not pull focus back to its trigger; the trigger gets it
+  // once the dialog closes, standing in for the row that opened it.
   useEffect(
     () =>
       useAppDialogStore.subscribe((state, previous) => {
-        if (!state.request || previous.request) return;
-        restoreSidebarFocusRef.current = true;
-        setSidebarOpen(false);
+        if (state.request && !previous.request) {
+          if (!sidebarOpenRef.current) return;
+          restoreSidebarFocusRef.current = false;
+          restoreFocusAfterAppDialogRef.current = true;
+          setSidebarOpen(false);
+        } else if (!state.request && previous.request && restoreFocusAfterAppDialogRef.current) {
+          restoreFocusAfterAppDialogRef.current = false;
+          sidebarTriggerRef.current?.focus();
+        }
       }),
     [],
   );

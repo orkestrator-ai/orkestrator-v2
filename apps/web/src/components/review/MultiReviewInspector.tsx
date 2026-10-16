@@ -159,7 +159,8 @@ function collectTailLines(part: TailPart, key: string, lines: TranscriptTailLine
 
 /**
  * One short line per step of the reviewer's output: a keyword (`read`, `grep`,
- * `think`, `say`) and its subject. It is a glance at what the reviewer is doing,
+ * `think`, `say`) and its subject; the log shows `say` lines without their
+ * keyword, in white. It is a glance at what the reviewer is doing,
  * not a transcript; Open session shows the real one.
  */
 export function transcriptTailLines(
@@ -344,12 +345,24 @@ function TranscriptTailLog({
       {lines.length === 0 ? (
         <p className={cn(error ? "text-failure" : "text-muted-foreground")}>{empty}</p>
       ) : (
-        lines.map((line) => (
-          <div key={line.key} className="truncate" title={line.text}>
-            <span className="mr-2 text-cyan-300">{line.kind}</span>
-            {line.text}
-          </div>
-        ))
+        lines.map((line) =>
+          // Narrative needs no keyword: it reads in white against the grey steps.
+          line.kind === "say" ? (
+            <div
+              key={line.key}
+              data-tail-kind="say"
+              className="truncate text-foreground"
+              title={line.text}
+            >
+              {line.text}
+            </div>
+          ) : (
+            <div key={line.key} data-tail-kind={line.kind} className="truncate" title={line.text}>
+              <span className="mr-2 text-cyan-300">{line.kind}</span>
+              {line.text}
+            </div>
+          ),
+        )
       )}
       {live && lines.length > 0 ? (
         <div aria-hidden="true" className="animate-pulse text-cyan-300 motion-reduce:animate-none">

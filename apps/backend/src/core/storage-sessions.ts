@@ -191,7 +191,10 @@ export abstract class StorageSessions extends StorageConfig {
     return layouts[environmentId] ?? null;
   }
 
-  /** Remove every parent, reviewer, and adopted fix tab owned by one Multi Review. */
+  /**
+   * Remove every parent, reviewer, and adopted fix tab owned by one Multi Review,
+   * and the step session tabs its "Open session" opened.
+   */
   async removeMultiReviewTabs(environmentId: string, workflowId: string): Promise<string[]> {
     return this.enqueuePaneLayoutMutation(async () => {
       const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
@@ -210,7 +213,8 @@ export abstract class StorageSessions extends StorageConfig {
           const owned =
             reviewData?.workflowId === workflowId ||
             tabId === fixTabPrefix ||
-            tabId.startsWith(`${fixTabPrefix}:`);
+            tabId.startsWith(`${fixTabPrefix}:`) ||
+            tabId.startsWith(`multi-review-review:${workflowId}:`);
           if (owned && tabId) removed.push(tabId);
           return !owned;
         });

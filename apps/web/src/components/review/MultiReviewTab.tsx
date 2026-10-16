@@ -399,6 +399,8 @@ function MultiReviewOverviewTab({
   const [reviewPanelNow, setReviewPanelNow] = useState(() => Date.now());
   /** The node the user picked; null follows the running node. */
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  /** The tab's root, which the graph's fullscreen covers. */
+  const [tabRoot, setTabRoot] = useState<HTMLDivElement | null>(null);
   const panelId = useId();
   const mountedRef = useRef(false);
   const isActiveRef = useRef(isActive);
@@ -1361,7 +1363,7 @@ function MultiReviewOverviewTab({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
+    <div ref={setTabRoot} className="relative flex h-full min-h-0 flex-col bg-background">
       <header className="flex shrink-0 items-center justify-between gap-4 border-b border-divider px-4 py-3 sm:px-6">
         <div className="flex min-w-0 items-center gap-3">
           <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-cyan-400/25 bg-cyan-500/10 text-cyan-300">
@@ -1434,6 +1436,8 @@ function MultiReviewOverviewTab({
             onSelect={setSelectedNodeId}
             panelId={panelId}
             viewKey={workflow.id}
+            fullscreenContainer={tabRoot}
+            isActive={isActive}
           />
           <div className="grid min-h-80 flex-1 grid-cols-1 @min-[900px]:grid-cols-[1.3fr_1fr]">
             <section

@@ -119,7 +119,13 @@ When two tabs map the same provider session, closing one retires only its
 mapping; the last one performs the close. Teardowns are serialized per
 (environment, agent, provider session), so two such tabs closed together (or a
 close racing the reconcile sweep) cannot both skip the provider close.
-`NativeAgentRuntimeProvider.closeSession` has the same non-destructive meaning
+A tab that Multi Review's "Open session" opened on one of its workflow's
+current sessions (a step's or a reviewer's, `multiReviewOwnsProviderSession`)
+is closed the same way: only the tab's mapping goes, and the session keeps
+running in the background for the supervisor. Closing the Multi Review itself
+closes those sessions and removes their `multi-review-review:<workflow>:` tabs;
+a session a restart superseded is no longer the workflow's and closes with its
+tab. `NativeAgentRuntimeProvider.closeSession` has the same non-destructive meaning
 for every caller (Multi Review included).
 New teardown intents carry a `retain-history-close:` session-id fence
 (`fenceRetainingCloseSessionId`, `packages/protocol/src/tab-teardown.ts`). A

@@ -6,7 +6,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { Maximize, Minus, Plus } from "lucide-react";
+import { Maximize, Minimize, Minus, Plus, Scan } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useMultiReviewFlowViewStore } from "@/stores/multiReviewFlowViewStore";
@@ -66,6 +66,9 @@ function touchMidpoint(touches: TouchList): { clientX: number; clientY: number }
  * stacked column scrolls only sideways: its viewport grows with the scaled
  * column, so vertical scrolling stays with the page, and Fit fits the column
  * to the height `fitHeight` reports the page shows it in.
+ *
+ * In fullscreen the wide graph's viewport is `fillHeight` tall, the height it
+ * is given, instead of its own.
  */
 export function useFlowViewport({
   viewKey,
@@ -73,12 +76,14 @@ export function useFlowViewport({
   content,
   layout = "graph",
   fitHeight,
+  fillHeight = null,
 }: {
   viewKey: string;
   measuredWidth: number | null;
   content: FlowSize;
   layout?: "graph" | "stacked";
   fitHeight?: () => number | null;
+  fillHeight?: number | null;
 }) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [viewportElement, setViewportElement] = useState<HTMLDivElement | null>(null);
@@ -89,7 +94,7 @@ export function useFlowViewport({
     // scrolls inside it vertically.
     height: stacked
       ? Math.max(1, content.height) * FLOW_ZOOM_MAX
-      : flowViewportHeight(content.height),
+      : (fillHeight ?? flowViewportHeight(content.height)),
   };
   // The remembered zoom applies only at the width it was taken at.
   const zoom =
@@ -342,6 +347,9 @@ export function useFlowViewport({
     // Touch already pans by scrolling; the drag is for mouse and pen.
     onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => {
       if (event.button !== 0 || event.pointerType === "touch") return;
+      // React bubbles events out of portals: a press in a node's context menu
+      // reaches here, and capturing it would swallow the item's selection.
+      if (!(event.target instanceof Node) || !event.currentTarget.contains(event.target)) return;
       if (event.target instanceof Element && event.target.closest(NO_PAN_SELECTOR)) return;
       dragRef.current = {
         pointerId: event.pointerId,
@@ -379,7 +387,7 @@ export function useFlowViewport({
 }
 
 /**
- * −, the zoom level (which resets to 100%), + and Fit. Over the wide graph's
+ * −, the zoom level (which resets to 100%), +, Fit and Fullscreen. Over the wide graph's
  * bottom-right corner; at the top of the stacked column, where they stay in
  * reach while it scrolls. Touch targets are 44 px wherever the pointer is
  * coarse, and always in the stacked layout, which is the phone layout.
@@ -390,6 +398,8 @@ export function FlowZoomControls({
   onZoomIn,
   onReset,
   onFit,
+  fullscreen,
+  onToggleFullscreen,
   placement = "corner",
 }: {
   zoom: number;
@@ -397,6 +407,8 @@ export function FlowZoomControls({
   onZoomIn: () => void;
   onReset: () => void;
   onFit: () => void;
+  fullscreen: boolean;
+  onToggleFullscreen: () => void;
   placement?: "corner" | "inline";
 }) {
   const percent = Math.round(zoom * 100);
@@ -459,7 +471,20 @@ export function FlowZoomControls({
         title="Fit"
         onClick={onFit}
       >
-        <Maximize className="size-3.5" />
+        <Scan className="size-3.5" />
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className={CONTROL_CLASS}
+        aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+        aria-pressed={fullscreen}
+        title={fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
+        data-testid="multi-review-fullscreen"
+        onClick={onToggleFullscreen}
+      >
+        {fullscreen ? <Minimize className="size-3.5" /> : <Maximize className="size-3.5" />}
       </Button>
     </div>
   );

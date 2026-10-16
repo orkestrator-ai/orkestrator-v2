@@ -166,8 +166,21 @@ describe("StorageService control job tabs", () => {
         agent: "claude",
         isReviewTab: true,
       });
+      await storage.ensureNativeAgentJobTab({
+        environmentId: "env-1",
+        tabId: "multi-review-review:multi-1:review-session",
+        agent: "claude",
+        isReviewTab: true,
+      });
+      await storage.ensureNativeAgentJobTab({
+        environmentId: "env-1",
+        tabId: "multi-review-review:multi-10:other-session",
+        agent: "claude",
+        isReviewTab: true,
+      });
       expect(await storage.removeMultiReviewTabs("env-1", "multi-1")).toEqual([
         "multi-review-fix:multi-1:launch-1",
+        "multi-review-review:multi-1:review-session",
       ]);
     } finally {
       await rm(dataDir, { recursive: true, force: true });

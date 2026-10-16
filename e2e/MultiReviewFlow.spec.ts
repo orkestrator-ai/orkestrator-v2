@@ -332,7 +332,7 @@ test("the stacked zoom controls are full-size touch targets", async ({ page }) =
   await page.goto("/multi-review-flow?phase=reviewing&reviewers=4");
   test.skip(!isStacked(page), "The wide graph's controls are sized for a fine pointer");
   const controls = page.getByRole("group", { name: "Zoom" });
-  await expect(controls.getByRole("button")).toHaveCount(4);
+  await expect(controls.getByRole("button")).toHaveCount(5);
   for (const button of await controls.getByRole("button").all()) {
     const box = (await button.boundingBox())!;
     expect(box.width).toBeGreaterThanOrEqual(44);
@@ -342,6 +342,78 @@ test("the stacked zoom controls are full-size touch targets", async ({ page }) =
   const { width } = page.viewportSize()!;
   const groupBox = (await controls.boundingBox())!;
   expect(groupBox.x + groupBox.width).toBeLessThanOrEqual(width);
+});
+
+test("fullscreen covers its tab and keeps Fit and scrolling usable", async ({ page }) => {
+  await page.goto("/multi-review-flow?phase=reviewing&reviewers=8&paneControls");
+  // The overlay covers the tab root, including its header and inspector.
+  const root = page.getByTestId("review-pane");
+  const rootBox = (await root.boundingBox())!;
+  await page.getByRole("button", { name: "Fullscreen", exact: true }).click();
+  const overlay = page.locator("[data-flow-fullscreen]");
+  await expect(overlay).toBeVisible();
+  await expect
+    .poll(async () => {
+      const box = (await overlay.boundingBox())!;
+      return Math.max(
+        ...(["x", "y", "width", "height"] as const).map((key) => Math.abs(box[key] - rootBox[key])),
+      );
+    })
+    .toBeLessThanOrEqual(1);
+  await page.getByRole("button", { name: "Fit the whole pipeline" }).click();
+  const frame = (await overlay.boundingBox())!;
+  for (const box of await nodeBoxes(page)) {
+    expect(box.y).toBeGreaterThanOrEqual(frame.y);
+    expect(box.y + box.height).toBeLessThanOrEqual(frame.y + frame.height + 1);
+  }
+  if (isStacked(page)) {
+    await page.getByTestId("multi-review-zoom-level").click();
+    await overlay.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    await expect.poll(() => overlay.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    await expect(page.getByRole("button", { name: "Exit fullscreen" })).toBeInViewport();
+    await page.getByRole("button", { name: "Fit the whole pipeline" }).click();
+    await expect.poll(() => overlay.evaluate((element) => element.scrollTop)).toBe(0);
+  }
+  await page.getByRole("button", { name: "Exit fullscreen" }).press("Escape");
+  await expect(overlay).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Fullscreen", exact: true })).toBeFocused();
+});
+
+test("fullscreen leaves Escape to another pane, an inactive tab and an open context menu", async ({
+  page,
+}) => {
+  await page.goto("/multi-review-flow?phase=reviewing&reviewers=4&paneControls");
+  await page.getByRole("button", { name: "Fullscreen", exact: true }).click();
+  const overlay = page.locator("[data-flow-fullscreen]");
+  const outside = page.getByRole("textbox", { name: "Other pane input" });
+  const escapeUnconsumed = () =>
+    outside.evaluate((element) => {
+      const event = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      });
+      element.dispatchEvent(event);
+      return !event.defaultPrevented;
+    });
+  await outside.focus();
+  expect(await escapeUnconsumed()).toBe(true);
+  await expect(overlay).toBeVisible();
+  await page.getByRole("button", { name: "Activate other pane" }).click();
+  expect(await escapeUnconsumed()).toBe(true);
+  await expect(overlay).toHaveCount(1);
+  await page.getByRole("button", { name: "Activate review pane" }).click();
+  await expect(overlay).toBeVisible();
+  await page.getByRole("tab", { name: /^Reviewer 1 ·/ }).click({ button: "right" });
+  const menu = page.getByRole("menu");
+  await expect(menu).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(overlay).toBeVisible();
+  await page.getByRole("button", { name: "Exit fullscreen" }).press("Escape");
+  await expect(overlay).toHaveCount(0);
 });
 
 test("shows a failed reviewer's error on its node, with the whole text in a tooltip", async ({

@@ -760,7 +760,13 @@ export function createBrowserGatewayApi(options: BrowserGatewayOptions = {}) {
       }
 
       clearBrowserTerminalReconnectTimer();
-      browserTerminalEventSource?.close();
+      if (browserTerminalEventSource) {
+        // Replacing the socket is not a failure, but its uptime ends here: the
+        // replacement's health counts only from its own open, so time spent
+        // connecting it cannot pass as a healthy interval.
+        browserTerminalEventSource.close();
+        browserTerminalBackoff.disconnected();
+      }
       browserTerminalEventSource = null;
       browserTerminalSubscribedEvents = null;
       browserTerminalSocketStreams = new Set();

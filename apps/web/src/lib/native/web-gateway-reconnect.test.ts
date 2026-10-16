@@ -450,6 +450,82 @@ describe("gateway terminal fallback reconnect backoff", () => {
     stop();
   });
 
+  describe("rebuilding an open shared stream for a new filter", () => {
+    /** Two failures in, with the third socket open at `now = 0`. */
+    async function openAfterTwoFailures() {
+      console.warn = mock(() => undefined);
+      MockEventSource.instances = [];
+      globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
+      const timers = manualTimers();
+      const clock = { now: 0 };
+      const api = createBrowserGatewayApi({
+        eventReconnectDelayMs: 100,
+        eventReconnectMaxDelayMs: 800,
+        eventReconnectRandom: TOP_OF_RANGE,
+        eventReconnectNow: () => clock.now,
+      });
+      const stopA = api.listen("terminal-output-a", () => undefined);
+      await flushMicrotasks();
+      terminalSources().at(-1)!.fail();
+      timers.fire(100);
+      await flushMicrotasks();
+      terminalSources().at(-1)!.fail();
+      timers.fire(200);
+      await flushMicrotasks();
+      terminalSources().at(-1)!.open();
+      return { api, timers, clock, stopA };
+    }
+
+    test("a replacement that never opens does not inherit its predecessor's uptime", async () => {
+      const { api, timers, clock, stopA } = await openAfterTwoFailures();
+
+      clock.now += 5_000;
+      const stopB = api.listen("terminal-output-b", () => undefined);
+      await flushMicrotasks();
+      expect(terminalSources()).toHaveLength(4);
+      expect(terminalSources()[2]!.closed).toBe(true);
+
+      // Still connecting well past 30 s after the predecessor opened.
+      clock.now += 26_000;
+      terminalSources().at(-1)!.fail();
+
+      expect(timers.delays()).toEqual([100, 200, 400]);
+      stopB();
+      stopA();
+    });
+
+    test("a replacement that opens only briefly does not combine with its predecessor's uptime", async () => {
+      const { api, timers, clock, stopA } = await openAfterTwoFailures();
+
+      clock.now += 5_000;
+      const stopB = api.listen("terminal-output-b", () => undefined);
+      await flushMicrotasks();
+
+      // Connecting for 15 s, then open for 20 s: no single socket reached 30 s.
+      clock.now += 15_000;
+      terminalSources().at(-1)!.open();
+      clock.now += 20_000;
+      terminalSources().at(-1)!.fail();
+
+      expect(timers.delays()).toEqual([100, 200, 400]);
+      stopB();
+      stopA();
+    });
+
+    test("a predecessor that had already stayed open for 30 s still resets the ladder", async () => {
+      const { api, timers, clock, stopA } = await openAfterTwoFailures();
+
+      clock.now += 30_000;
+      const stopB = api.listen("terminal-output-b", () => undefined);
+      await flushMicrotasks();
+      terminalSources().at(-1)!.fail();
+
+      expect(timers.delays()).toEqual([100, 200, 100]);
+      stopB();
+      stopA();
+    });
+  });
+
   test("narrowing waits for a dead shared stream's retry; a new terminal or a Reconnect does not", async () => {
     console.warn = mock(() => undefined);
     MockEventSource.instances = [];

@@ -7,7 +7,7 @@ import { requestMcpServerSettings } from "@/lib/mcp-settings-navigation";
 import { mockToastError } from "../../../../../../tests/mocks/sonner";
 import { expectDomAbsent } from "../../../../../../tests/bounded-test-diagnostics";
 
-import { McpApplyStatus, partialOutcomeText } from "./McpApplyStatus";
+import { McpApplyStatus, omittedText, partialOutcomeText } from "./McpApplyStatus";
 import {
   baseHandlers,
   callsOf,
@@ -88,9 +88,64 @@ describe("apply status", () => {
 
   test("partialOutcomeText counts omitted sessions and is silent when all agree", () => {
     expect(partialOutcomeText([runtime("a", "applied"), runtime("b", "applied")])).toBeNull();
-    expect(partialOutcomeText([runtime("a", "applied"), runtime("b", "queued")], 3)).toBe(
-      "Saved; loaded in 1 of 5 sessions, 1 waiting",
+    expect(
+      partialOutcomeText([runtime("a", "applied"), runtime("b", "queued")], 3, { queued: 3 }),
+    ).toBe("Saved; loaded in 1 of 5 sessions, 4 waiting");
+    // Unlisted sessions in the same state as every listed one: still one state.
+    expect(partialOutcomeText([runtime("a", "applied")], 2, { applied: 2 })).toBeNull();
+    // An unlisted session that is still waiting makes the outcome partial.
+    expect(partialOutcomeText([runtime("a", "applied")], 2, { applied: 1, queued: 1 })).toBe(
+      "Saved; loaded in 2 of 3 sessions, 1 waiting",
     );
+  });
+
+  test("sessions past what one apply tracks are named, never folded into loaded", () => {
+    // Without per-state counts every omitted session is untracked (an older backend dropped them).
+    expect(partialOutcomeText([runtime("a", "applied")], 3)).toBe(
+      "Saved; loaded in 1 of 4 sessions, 3 not tracked",
+    );
+    expect(omittedText(70, { applied: 60, "pending-next-turn": 4 })).toBe(
+      "…and 70 more: 60 loaded, 4 waiting, 6 not tracked",
+    );
+    expect(omittedText(2, { failed: 1, "restart-required": 1 })).toBe(
+      "…and 2 more: 1 failed, 1 need attention",
+    );
+    render(
+      <McpApplyStatus
+        operations={[
+          operation({
+            apply: {
+              state: "applied",
+              runtimes: [runtime("a", "applied")],
+              omitted: 5,
+              omittedStates: { applied: 3 },
+            },
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByText("Saved; loaded in 4 of 6 sessions, 2 not tracked")).toBeTruthy();
+    expect(screen.getByText("…and 5 more: 3 loaded, 2 not tracked")).toBeTruthy();
+    expect(screen.getByText(/were not scheduled/)).toBeTruthy();
+  });
+
+  test("an operation whose unlisted sessions are all tracked does not claim any were dropped", () => {
+    render(
+      <McpApplyStatus
+        operations={[
+          operation({
+            apply: {
+              state: "pending-next-turn",
+              runtimes: [runtime("a", "pending-next-turn")],
+              omitted: 2,
+              omittedStates: { "pending-next-turn": 2 },
+            },
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByText("…and 2 more: 2 waiting")).toBeTruthy();
+    expectDomAbsent(screen.queryByText(/not tracked|were not scheduled/), "untracked claim");
   });
 
   test("loaded is not presented as connected: health points at the live panel", () => {

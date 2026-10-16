@@ -32,6 +32,21 @@
  *    the runtime is `restart-required` until a later query (a new CLI) shows
  *    the server gone.
  *
+ * Every runtime has a generation: the bridge process and provider session
+ * behind it, read from persisted records before and after the bridge reads. A
+ * read during which the generation changed is not attributed to either one and
+ * is retried. `applied` is stamped with the generation that proved it, and
+ * says so when that is a newer run than the one apply planned against.
+ *
+ * A bridge that answers without the MCP configuration report is older than
+ * it: it cannot prove an apply, and Cursor and Pi bridges that old do not
+ * reload between turns either. The runtime says so (`restart-required`, or a
+ * Claude `pending-next-turn` that cannot be confirmed) instead of waiting
+ * silently, and polling continues so a restarted bridge can still prove it.
+ *
+ * Each pass also re-reads the source of every operation it polled and applies
+ * the external-edit rule in `external-edits.ts`.
+ *
  * Polling is bounded: at most {@link EVIDENCE_READS_PER_TICK} reads per tick,
  * each runtime at most once per {@link EVIDENCE_RECHECK_MS}, each read capped
  * at {@link EVIDENCE_READ_TIMEOUT_MS}, and none after
@@ -42,7 +57,8 @@
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { McpApplyState, McpRuntimeApplyEntry } from "@orkestrator/protocol/mcp-management";
 
-import type { ApplyEnvironment, RuntimeProbe } from "./apply.js";
+import type { RuntimeProbe } from "./apply.js";
+import { noteOnce, retireSuperseded, sourceDrift } from "./external-edits.js";
 import type { StoredOperation } from "./operations-store.js";
 
 export const EVIDENCE_WINDOW_MS = 24 * 60 * 60_000;
@@ -72,8 +88,10 @@ export interface RuntimeConfigEvidence {
 
 export type RuntimeEvidenceRead =
   | { state: "evidence"; evidence: RuntimeConfigEvidence }
-  /** The bridge answered without evidence: older bridge, or nothing loaded yet. */
+  /** The bridge reports, but has nothing loaded yet; or the read failed. */
   | { state: "none" }
+  /** The bridge is older than the MCP configuration report. */
+  | { state: "unsupported" }
   /** No bridge is running; nothing was started to find out. */
   | { state: "not-running" };
 
@@ -103,14 +121,17 @@ export function evidenceRole(provider: AgentPlatform, sourceId: string): Evidenc
   }
 }
 
-/** Whether a planned runtime in `state` is waiting for evidence at all. */
+/**
+ * Whether a planned runtime in `state` is waiting for evidence at all. A
+ * Cursor or Pi runtime is `restart-required` only behind an older bridge, and
+ * a restarted bridge can still prove it.
+ */
 export function awaitsEvidenceIn(provider: AgentPlatform, state: McpApplyState): boolean {
   switch (provider) {
-    case "cursor":
-    case "pi":
-      return state === "pending-next-turn";
     case "claude":
+    case "cursor":
     case "grok":
+    case "pi":
       return state === "pending-next-turn" || state === "restart-required";
     default:
       return false;
@@ -157,6 +178,10 @@ export function evidenceDigest(
 export interface CurrentSourceState {
   digest: string;
   landed: boolean;
+  /** Keyed digest of the parsed server list, comparable with `savedEntriesDigest`. */
+  entriesDigest?: string;
+  /** The server list is exactly what a later save of this source left. */
+  replacedBySave?: boolean;
 }
 
 /**
@@ -194,6 +219,43 @@ export function appliedReason(provider: AgentPlatform): string {
   }
 }
 
+/** `applied` proven by a newer run than the one apply was planned against. */
+export const NEWER_RUN_REASON =
+  "A newer run of this session, started after apply was planned, loaded the saved configuration.";
+
+const BRIDGE_LABEL: Partial<Record<AgentPlatform, string>> = {
+  claude: "Claude",
+  cursor: "Cursor",
+  grok: "Grok Build",
+  pi: "Pi",
+};
+
+/**
+ * What a runtime behind a bridge older than the MCP configuration report is
+ * told. Claude bridges that old still re-read their files at every query, so
+ * the change loads; it just cannot be confirmed. Cursor and Pi bridges that
+ * old do not reload between turns, and Grok only ever loads on restart.
+ */
+export function olderBridgeOutcome(provider: AgentPlatform): {
+  state: McpApplyState;
+  reason: string;
+} {
+  const label = BRIDGE_LABEL[provider] ?? provider;
+  if (provider === "claude") {
+    return {
+      state: "pending-next-turn",
+      reason: `This ${label} bridge is older than this backend and does not report what it loads. The change loads on the session's next message, but cannot be confirmed until the environment restarts.`,
+    };
+  }
+  return {
+    state: "restart-required",
+    reason:
+      provider === "grok"
+        ? `This ${label} bridge is older than this backend and cannot confirm what it loaded. Stop and start the environment to load the change.`
+        : `This ${label} bridge is older than this backend and may not reload MCP servers between turns. Stop and start the environment to load the change.`,
+  };
+}
+
 export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -212,13 +274,27 @@ interface Candidate {
   key: string;
 }
 
+/** Runtime generations as persisted records describe them at one moment. */
+export interface RuntimeGenerations {
+  /** The opaque generation of one runtime now, or undefined when unknown. */
+  of(
+    environmentId: string,
+    agent: AgentPlatform,
+    logicalSessionKey: string,
+  ): Promise<string | undefined>;
+  /** The provider bridge's recorded process id now. */
+  bridgePid(environmentId: string, agent: AgentPlatform): number | undefined;
+}
+
 export interface EvidenceSchedulerDeps {
   probe: RuntimeProbe;
   now: () => number;
   /** A provider whose apply is paused by the rollout gate is not polled. */
   blocked: (provider: AgentPlatform) => boolean;
-  /** The saved source as it is now, for rule 3's later-revision arm. */
+  /** The saved source as it is now, for rule 3 and the external-edit rule. */
   currentSource: (stored: StoredOperation) => Promise<CurrentSourceState | undefined>;
+  /** Reads every runtime's generation from persisted records. */
+  generations: () => Promise<RuntimeGenerations>;
   /** Persist and publish an operation whose runtimes changed. */
   commit: (stored: StoredOperation) => Promise<void>;
 }
@@ -280,29 +356,31 @@ export class EvidenceScheduler {
       .sort((a, b) => (this.nextCheck.get(a.key) ?? 0) - (this.nextCheck.get(b.key) ?? 0))
       .slice(0, EVIDENCE_READS_PER_TICK);
     if (!due.length) return;
-    let environments: Map<string, ApplyEnvironment> | undefined;
+    let before: RuntimeGenerations;
+    try {
+      before = await this.deps.generations();
+    } catch {
+      // Without generations no answer can be attributed; every runtime stays due.
+      return;
+    }
     const reads = new Map<string, Promise<RuntimeEvidenceRead>>();
-    const currents = new Map<StoredOperation, Promise<CurrentSourceState | undefined>>();
-    const changed = new Set<StoredOperation>();
+    const answers: Array<{
+      candidate: Candidate;
+      answer: RuntimeEvidenceRead;
+      generation?: string;
+    }> = [];
     for (const candidate of due) {
       this.nextCheck.set(candidate.key, nowMs + EVIDENCE_RECHECK_MS);
-      const { stored, record, runtime } = candidate;
+      const { record } = candidate;
       const agent = record.agent as AgentPlatform;
       if (agent === "grok") {
         // Process-level evidence counts only from a bridge started after planning.
-        try {
-          environments ??= new Map(
-            (await this.deps.probe.environments()).map((environment) => [
-              environment.id,
-              environment,
-            ]),
-          );
-        } catch {
-          continue;
-        }
-        const pid = environments.get(record.environmentId)?.bridgePid?.("grok");
+        const pid = before.bridgePid(record.environmentId, "grok");
         if (pid === undefined || pid === record.bridgePid) continue;
       }
+      const generation = await before
+        .of(record.environmentId, agent, record.logicalSessionKey)
+        .catch(() => undefined);
       const readKey = `${record.environmentId}\u0000${agent}\u0000${record.logicalSessionKey}`;
       let read = reads.get(readKey);
       if (!read) {
@@ -312,8 +390,54 @@ export class EvidenceScheduler {
         ).catch((): RuntimeEvidenceRead => ({ state: "none" }));
         reads.set(readKey, read);
       }
-      const answer = await read;
-      if (answer.state !== "evidence") continue;
+      answers.push({ candidate, answer: await read, generation });
+    }
+    // A runtime replaced while its bridge was read cannot be told apart from
+    // its replacement: such an answer is dropped and the runtime read again.
+    let after: RuntimeGenerations | undefined;
+    if (
+      answers.some(({ answer }) => answer.state === "evidence" || answer.state === "unsupported")
+    ) {
+      after = await this.deps.generations().catch(() => undefined);
+    }
+    const currents = new Map<StoredOperation, Promise<CurrentSourceState | undefined>>();
+    const current = (stored: StoredOperation) => {
+      let read = currents.get(stored);
+      if (!read) {
+        read = this.deps.currentSource(stored).catch(() => undefined);
+        currents.set(stored, read);
+      }
+      return read;
+    };
+    const changed = new Set<StoredOperation>();
+    const stamp = (runtime: McpRuntimeApplyEntry, generation: string | undefined) => {
+      runtime.updatedAt = new Date(this.deps.now()).toISOString();
+      if (generation) runtime.generation = generation;
+      else delete runtime.generation;
+    };
+    for (const { candidate, answer, generation } of answers) {
+      if (answer.state !== "evidence" && answer.state !== "unsupported") continue;
+      const { stored, record, runtime } = candidate;
+      const agent = record.agent as AgentPlatform;
+      if (!after) continue;
+      const settled = await after
+        .of(record.environmentId, agent, record.logicalSessionKey)
+        .catch(() => undefined);
+      if (settled !== generation) {
+        this.nextCheck.delete(candidate.key);
+        continue;
+      }
+      if (answer.state === "unsupported") {
+        const older = olderBridgeOutcome(agent);
+        if (stored.snapshot.apply.runtimes !== candidate.runtimes) continue;
+        if (!awaitsEvidenceIn(agent, runtime.state)) continue;
+        if (runtime.state === older.state && runtime.reason === older.reason) continue;
+        runtime.state = older.state;
+        runtime.reason = older.reason;
+        stamp(runtime, generation);
+        changed.add(stored);
+        continue;
+      }
       // Only Grok's bridge reports process-level loads, and only Grok's are.
       if (answer.evidence.scope !== (agent === "grok" ? "process" : "session")) continue;
       const recovery = stored.recovery;
@@ -325,14 +449,7 @@ export class EvidenceScheduler {
       if (!digest) continue;
       let shown: boolean;
       try {
-        shown = await evidenceShowsSave(digest, recovery.savedDigest!, () => {
-          let current = currents.get(stored);
-          if (!current) {
-            current = this.deps.currentSource(stored).catch(() => undefined);
-            currents.set(stored, current);
-          }
-          return current;
-        });
+        shown = await evidenceShowsSave(digest, recovery.savedDigest!, () => current(stored));
       } catch {
         continue;
       }
@@ -346,16 +463,32 @@ export class EvidenceScheduler {
         if (runtime.state !== "restart-required" || runtime.reason !== STILL_LOADED_REASON) {
           runtime.state = "restart-required";
           runtime.reason = STILL_LOADED_REASON;
-          runtime.updatedAt = new Date(this.deps.now()).toISOString();
+          stamp(runtime, generation);
           changed.add(stored);
         }
         continue;
       }
+      const newerRun =
+        agent !== "grok" && !!record.generation && !!generation && generation !== record.generation;
       runtime.state = "applied";
-      runtime.reason = appliedReason(agent);
-      runtime.updatedAt = new Date(this.deps.now()).toISOString();
+      runtime.reason = newerRun ? NEWER_RUN_REASON : appliedReason(agent);
+      stamp(runtime, generation);
       this.nextCheck.delete(candidate.key);
       changed.add(stored);
+    }
+    // The external-edit rule, once per polled operation, after its evidence.
+    const polled = new Map<StoredOperation, McpRuntimeApplyEntry[]>();
+    for (const { stored, runtimes } of due) polled.set(stored, runtimes);
+    for (const [stored, runtimes] of polled) {
+      const drift = sourceDrift(stored, await current(stored));
+      if (stored.snapshot.apply.runtimes !== runtimes) continue;
+      if (drift.kind === "superseded") {
+        if (retireSuperseded(runtimes, drift.reason, new Date(this.deps.now()).toISOString())) {
+          changed.add(stored);
+        }
+      } else if (drift.kind === "merged" && noteOnce(stored.snapshot, drift.note)) {
+        changed.add(stored);
+      }
     }
     for (const stored of changed) await this.deps.commit(stored);
   }

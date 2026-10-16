@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -10,7 +11,15 @@ import {
 } from "@orkestrator/protocol/mcp-management";
 
 import { COORDINATOR_BLOCKED, ENVIRONMENT_DELETED } from "./apply.js";
-import { createFixture, mutation, revision, targetIdFor, type Fixture } from "./test-support.js";
+import { EVIDENCE_READS_PER_TICK } from "./evidence.js";
+import {
+  createFixture,
+  mutation,
+  pauseScheduler,
+  revision,
+  targetIdFor,
+  type Fixture,
+} from "./test-support.js";
 
 let fixture: Fixture;
 
@@ -93,7 +102,7 @@ describe("apply scope", () => {
     expect(fixture.reloads).toEqual([]);
   });
 
-  test("fan-out beyond the page keeps one reload per environment", async () => {
+  test("fan-out beyond the page lists every environment and counts the rest by state", async () => {
     const limit = MCP_MANAGEMENT_LIMITS.runtimesPerOperation;
     for (let index = 0; index < limit + 2; index += 1) session("codex", `env-env-1:tab-${index}`);
     environment("env-2");
@@ -101,9 +110,82 @@ describe("apply scope", () => {
     const result = await saveAndApply("codex", "codex:user");
     expect(result.operation.apply.runtimes).toHaveLength(limit);
     expect(result.operation.apply.omitted).toBe(3);
+    expect(result.operation.apply.omittedStates).toEqual({ queued: 3 });
     expect(
       result.operation.apply.runtimes.some((runtime) => runtime.environmentId === "env-2"),
     ).toBe(true);
+    await fixture.service.tick();
+    expect(fixture.reloads.sort()).toEqual(["env-1", "env-2"]);
+    // The unlisted runtimes were advanced too, not dropped.
+    const done = await fixture.service.getOperation({ operationId: result.operation.operationId });
+    expect(done.apply.omittedStates).toEqual({ "pending-next-turn": 3 });
+    expect(done.apply.state).toBe("pending-next-turn");
+    // The catalog snapshot pages its operations the same way.
+    const listed = (await fixture.service.snapshot({ targetId: result.operation.targetId }))
+      .operations[0]!;
+    expect(listed.apply.runtimes).toHaveLength(limit);
+    expect(listed.apply.omitted).toBe(3);
+  });
+
+  test("more Codex environments than the page are all reloaded", async () => {
+    const count = MCP_MANAGEMENT_LIMITS.runtimesPerOperation + 6;
+    for (let index = 2; index <= count; index += 1) {
+      environment(`env-${index}`);
+      session("codex", `env-env-${index}:tab`, { environmentId: `env-${index}` });
+    }
+    session("codex", "env-env-1:tab");
+    const result = await saveAndApply("codex", "codex:user");
+    expect(result.operation.apply.runtimes).toHaveLength(
+      MCP_MANAGEMENT_LIMITS.runtimesPerOperation,
+    );
+    expect(result.operation.apply.omitted).toBe(6);
+    await fixture.service.tick();
+    expect(new Set(fixture.reloads).size).toBe(count);
+  });
+
+  test("an unlisted runtime is still proven by its bridge", async () => {
+    const limit = MCP_MANAGEMENT_LIMITS.runtimesPerOperation;
+    for (let index = 0; index <= limit; index += 1) session("claude", `env-env-1:tab-${index}`);
+    const result = await saveAndApply("claude", "claude:user");
+    const listed = new Set(result.operation.apply.runtimes.map((runtime) => runtime.runtimeId));
+    const hidden = `env-env-1:tab-${limit}`;
+    expect(listed.has(`env-1\u0000${hidden}`)).toBe(false);
+    pauseScheduler(fixture);
+    fixture.now.value += 1_000;
+    fixture.evidence.set(`env-1:claude:${hidden}`, {
+      state: "evidence",
+      evidence: {
+        sources: {
+          user: `sha256:${createHash("sha256")
+            .update(readFileSync(path.join(fixture.home, ".claude.json")))
+            .digest("base64url")}`,
+        },
+        observedAt: new Date(fixture.now.value).toISOString(),
+        scope: "session",
+      },
+    });
+    // Reads are paced, so cover every runtime once.
+    const passes = Math.ceil((limit + 1) / EVIDENCE_READS_PER_TICK);
+    for (let pass = 0; pass < passes; pass += 1) await fixture.service.tick();
+    const proven = await fixture.service.getOperation({
+      operationId: result.operation.operationId,
+    });
+    expect(proven.apply.omittedStates).toEqual({ applied: 1 });
+  });
+
+  test("past what one apply tracks, the rest are counted as not scheduled", async () => {
+    const tracked = MCP_MANAGEMENT_LIMITS.runtimesTrackedPerOperation;
+    const page = MCP_MANAGEMENT_LIMITS.runtimesPerOperation;
+    for (let index = 0; index < tracked + 5; index += 1) session("codex", `env-env-1:tab-${index}`);
+    environment("env-2");
+    session("codex", "env-env-2:tab-last", { environmentId: "env-2" });
+    const result = await saveAndApply("codex", "codex:user");
+    const apply = result.operation.apply;
+    expect(apply.runtimes).toHaveLength(page);
+    expect(apply.omitted).toBe(tracked + 6 - page);
+    // Tracked but unlisted, by state; the remainder was never scheduled.
+    expect(apply.omittedStates).toEqual({ queued: tracked - page });
+    // The environment past the cap still keeps its reload.
     await fixture.service.tick();
     expect(fixture.reloads.sort()).toEqual(["env-1", "env-2"]);
   });

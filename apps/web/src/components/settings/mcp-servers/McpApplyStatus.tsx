@@ -60,28 +60,80 @@ const WAITING: ReadonlySet<McpApplyState> = new Set([
   "reconciling",
 ]);
 
+type OmittedStates = McpOperationSnapshot["apply"]["omittedStates"];
+
+interface OutcomeCounts {
+  loaded: number;
+  waiting: number;
+  failed: number;
+  other: number;
+  /** Past what one apply tracks: never scheduled, so in no state at all. */
+  untracked: number;
+}
+
+function outcomeCounts(
+  states: ReadonlyArray<readonly [McpApplyState, number]>,
+  untracked: number,
+): OutcomeCounts {
+  const counts: OutcomeCounts = { loaded: 0, waiting: 0, failed: 0, other: 0, untracked };
+  for (const [state, count] of states) {
+    if (state === "applied") counts.loaded += count;
+    else if (WAITING.has(state)) counts.waiting += count;
+    else if (state === "failed") counts.failed += count;
+    else counts.other += count;
+  }
+  return counts;
+}
+
+function countParts(counts: OutcomeCounts, includeLoaded: boolean): string[] {
+  const parts: string[] = [];
+  if (includeLoaded && counts.loaded) parts.push(`${counts.loaded} loaded`);
+  if (counts.waiting) parts.push(`${counts.waiting} waiting`);
+  if (counts.failed) parts.push(`${counts.failed} failed`);
+  if (counts.other) parts.push(`${counts.other} need attention`);
+  if (counts.untracked) parts.push(`${counts.untracked} not tracked`);
+  return parts;
+}
+
+/** Unlisted sessions by state; any remainder of `omitted` was never tracked. */
+function omittedEntries(omitted: number, omittedStates: OmittedStates) {
+  const entries = Object.entries(omittedStates ?? {}).filter(([, count]) => !!count) as Array<
+    [McpApplyState, number]
+  >;
+  const tracked = entries.reduce((sum, [, count]) => sum + count, 0);
+  return { entries, untracked: Math.max(0, omitted - tracked) };
+}
+
 /**
  * Headline for an operation whose sessions ended up in different states, e.g.
- * "Saved; loaded in 2 of 3 sessions, 1 waiting". Null when every listed
- * session shares one state (the aggregate state already says it).
+ * "Saved; loaded in 2 of 3 sessions, 1 waiting". Unlisted sessions count by
+ * their state, and sessions past what one apply tracks as "not tracked". Null
+ * when every session shares one state (the aggregate state already says it).
  */
 export function partialOutcomeText(
   runtimes: readonly McpRuntimeApplyEntry[],
   omitted = 0,
+  omittedStates?: OmittedStates,
 ): string | null {
-  if (new Set(runtimes.map((runtime) => runtime.state)).size < 2) return null;
-  const count = (match: (state: McpApplyState) => boolean) =>
-    runtimes.filter((runtime) => match(runtime.state)).length;
-  const loaded = count((state) => state === "applied");
-  const waiting = count((state) => WAITING.has(state));
-  const failed = count((state) => state === "failed");
-  const other = runtimes.length - loaded - waiting - failed;
+  const hidden = omittedEntries(omitted, omittedStates);
+  const states = new Set<string>(runtimes.map((runtime) => runtime.state));
+  for (const [state] of hidden.entries) states.add(state);
+  if (hidden.untracked) states.add("untracked");
+  if (states.size < 2) return null;
+  const counts = outcomeCounts(
+    [...runtimes.map((runtime) => [runtime.state, 1] as const), ...hidden.entries],
+    hidden.untracked,
+  );
   const total = runtimes.length + omitted;
-  const parts = [`loaded in ${loaded} of ${total} ${total === 1 ? "session" : "sessions"}`];
-  if (waiting) parts.push(`${waiting} waiting`);
-  if (failed) parts.push(`${failed} failed`);
-  if (other) parts.push(`${other} need attention`);
-  return `Saved; ${parts.join(", ")}`;
+  const parts = [`loaded in ${counts.loaded} of ${total} ${total === 1 ? "session" : "sessions"}`];
+  return `Saved; ${[...parts, ...countParts(counts, false)].join(", ")}`;
+}
+
+/** The line under the listed sessions, e.g. "…and 70 more: 64 loaded, 6 not tracked". */
+export function omittedText(omitted: number, omittedStates?: OmittedStates): string {
+  const hidden = omittedEntries(omitted, omittedStates);
+  const parts = countParts(outcomeCounts(hidden.entries, hidden.untracked), true);
+  return `…and ${omitted} more${parts.length ? `: ${parts.join(", ")}` : ""}`;
 }
 
 function OperationCard({
@@ -124,7 +176,7 @@ function OperationCard({
         : `Not saved${operation.message ? `: ${operation.message}` : ""}`
     : operation.applyIntent === "save" && !runtimes.length
       ? STATE_TEXT["not-requested"]
-      : (partialOutcomeText(runtimes, operation.apply.omitted) ??
+      : (partialOutcomeText(runtimes, operation.apply.omitted, operation.apply.omittedStates) ??
         (runtimes.length || operation.apply.state === "failed"
           ? STATE_TEXT[operation.apply.state]
           : "Saved; no running session uses it yet"));
@@ -132,6 +184,10 @@ function OperationCard({
     saved &&
     (operation.apply.state === "applied" ||
       runtimes.some((runtime) => runtime.state === "applied"));
+  const untracked = omittedEntries(
+    operation.apply.omitted,
+    operation.apply.omittedStates,
+  ).untracked;
   return (
     <li className="rounded-md border border-white/10 bg-zinc-900/40 px-3 py-2 text-xs">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -218,7 +274,15 @@ function OperationCard({
             </li>
           ))}
           {operation.apply.omitted ? (
-            <li className="text-muted-foreground">…and {operation.apply.omitted} more</li>
+            <li className="text-muted-foreground">
+              {omittedText(operation.apply.omitted, operation.apply.omittedStates)}
+            </li>
+          ) : null}
+          {untracked ? (
+            <li className="text-muted-foreground">
+              Sessions not tracked were past what one apply follows. They were not scheduled; each
+              reads the saved file the next time its provider loads its configuration.
+            </li>
           ) : null}
         </ul>
       ) : null}

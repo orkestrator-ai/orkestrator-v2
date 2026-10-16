@@ -23,6 +23,15 @@ collects the live evidence the shipped behaviour has never had.
   environment reload, then stays `pending-next-turn` (never `applied`).
   OpenCode is `restart-required`. Grok is `restart-required`, then `applied`
   once the bridge process is replaced.
+- Apply-path guards (see "Runtime application" in
+  [`mcp-management.md`](../architecture/mcp-management.md)): every outcome
+  names the runtime generation (bridge pid plus provider session) it was
+  observed against; a bridge older than the `mcpConfigReporting` marker is
+  reported as such (`restart-required`, or an unconfirmable Claude
+  `pending-next-turn`); an edit made to the source after the save is merged
+  (flagged) or supersedes the change (waiting runtimes `cancelled`, re-apply
+  refused) by `external-edits.ts`; one apply tracks 256 runtimes, lists 64 and
+  counts the rest by state in `omittedStates`.
 - Rollout and kill switch: `global.mcpManagement`, absent means everything on.
 - Live inventory and connection actions are a separate axis:
   `NativeAgentMcpServer` (`packages/protocol/src/native-agent.ts`), bridge
@@ -55,13 +64,14 @@ collects the live evidence the shipped behaviour has never had.
 
 ### Code
 
-1. **Apply-path gaps** (`service.ts`, `apply.ts`). No runtime or session
-   generation is recorded with an applied revision. Older Pi and Cursor
-   bridges cannot be told apart (no bridge version is recorded), so their
-   `pending-next-turn` never resolves. An external edit made after apply was
-   scheduled is not flagged. `pageRuntimes` keeps at most
-   `MCP_MANAGEMENT_LIMITS.runtimesPerOperation` (64), so a plan with more than
-   64 Codex environments drops the rest.
+1. **External edits for runtimes no pass polls.** The external-edit rule
+   (`external-edits.ts`) runs in the evidence pass, before a queued Codex
+   reload and on re-apply. An operation whose waiting runtimes are only
+   OpenCode or container `restart-required`, or Codex `pending-next-turn`
+   after its reload, is never polled, so a later edit that removes its change
+   leaves them waiting until the user applies again. Re-check such
+   operations on a slow, bounded cadence (or on catalog reads of the same
+   source) and retire them the same way.
 2. **OpenCode application.** Choose a directory-scoped reconcile or an
    idle-gated server restart that keeps sessions, pending questions and the
    runtime-only `orkestrator` injection; add evidence so OpenCode can report
@@ -136,7 +146,9 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   apply an edit; work continues. Switch to B, return after the safe boundary,
   then check revision, apply outcome, actual tools and controls. Repeat after
   a browser reload, with a dropped event stream and with a bridge generation
-  change. Add a shared-user variant across two environments and a
+  change (the outcome must name the newer run). Also leave a pre-marker
+  bridge running across a backend upgrade and confirm the older-bridge
+  outcome. Add a shared-user variant across two environments and a
   process-wide variant across two Codex or two OpenCode sessions.
 - **Real browser.** The live-panel link from a running session; a full pass
   after the dialog-layer fix (2026-09-24 confirmed it only by raising the
@@ -171,6 +183,36 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   For Pi the two parity tests fail when either side moves; the other
   providers have no such guard yet.
 - Terminal sessions get guidance only; no command is injected.
+- **Runtime generation** is the environment's recorded bridge pid plus the
+  persisted provider session id, as a keyed 16-character label. It needs no
+  bridge change and is read from the same records planning uses; the Grok
+  restart proof already trusts the same pid. A bridge-reported generation
+  would be more direct, but every bridge would have to report one and the
+  backend would still need the persisted mapping to know which session it
+  asked about. Evidence from a newer generation is accepted (the evidence
+  rules already prove that run loaded the save) and says so; refusing it
+  would leave a tab that really runs the change waiting. A read straddling a
+  generation change is dropped and retried.
+- **Older bridges are detected by a capability marker**, not a version
+  number: `mcpConfigReporting` on every runtime-health body. Bridges report
+  no usable version (the Claude and Codex health routes answer a fixed
+  `1.0.0`), and a backend-recorded build id would flag every bridge after
+  every upgrade. Bridges from #838 until the marker
+  report `mcpConfig` once something loaded, so an `mcpConfig` of any shape
+  also counts as reporting; such a bridge with nothing loaded yet is briefly
+  read as older and corrects itself on its first load. Outcomes reuse
+  existing states with explicit reasons, as Codex's older-bridge reload
+  already did, rather than adding an `unsupported` apply state that older
+  renderers could not label.
+- **External edits are compared over the parsed server list**, so Claude's
+  bookkeeping rewrites of `~/.claude.json` are not edits. A superseded change
+  retires its waiting runtimes as `cancelled` (the state "superseded by a
+  newer change" already uses) and refuses re-apply with `revision-conflict`;
+  apply never rewrites the file, so there is nothing to re-materialize.
+- **Fan-out is tracked, not dropped**: 256 runtimes per operation are
+  scheduled and advanced, and only the snapshot is paged to 64, so wire and
+  UI bounds are unchanged. Stored operations grow (about 0.5 KiB per tracked
+  runtime); finished ones are shed first by the existing 4 MiB bound.
 
 ### Alternatives considered
 

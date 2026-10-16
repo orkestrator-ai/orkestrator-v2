@@ -44,6 +44,11 @@ export interface OperationRecovery {
   writeStartedAt?: string;
   /** Which of a bridge's reported files the saved source is (see `EvidenceRole`). */
   evidenceRole?: "user" | "project" | "local";
+  /**
+   * Keyed digest of the server list the save left in the source, so a later
+   * edit of that list made outside Orkestrator can be told from bookkeeping.
+   */
+  savedEntriesDigest?: string;
   /** Runtimes that were chosen for apply, with the identity needed to act on them. */
   runtimes?: Array<{
     runtimeId: string;
@@ -54,6 +59,8 @@ export interface OperationRecovery {
     awaitsEvidence?: boolean;
     /** The provider bridge's process id when apply was planned (Grok restart proof). */
     bridgePid?: number;
+    /** The runtime's generation when apply was planned (see `RuntimeGenerations`). */
+    generation?: string;
   }>;
   applyQueuedAt?: string;
 }

@@ -56,6 +56,7 @@ import {
   type JsonObject,
   type SessionState,
 } from "./acp-context.js";
+import { MCP_CONFIG_REPORTING_VERSION } from "@orkestrator/protocol/mcp-management";
 import { emptyRuntimeHealth } from "@orkestrator/protocol/runtime-health";
 import {
   bridgeTranscriptRouteBody,
@@ -224,7 +225,12 @@ export async function route(
     // Same reasoning: a 404 here would read as "this bridge predates the
     // route" and fail the environment. Health is optional metadata, so an
     // unknown session answers empty rather than failing.
-    if (match[2] === "runtime-health") return json(response, 200, emptyRuntimeHealth());
+    if (match[2] === "runtime-health") {
+      return json(response, 200, {
+        ...emptyRuntimeHealth(),
+        mcpConfigReporting: MCP_CONFIG_REPORTING_VERSION,
+      });
+    }
     // The enhanced catalogue contract: an unknown session is answered in band.
     if (match[2] === "commands" && request.method === "GET") {
       return json(response, 200, commandCatalogue(undefined));
@@ -364,6 +370,7 @@ export async function route(
     return json(response, 200, {
       summary: publicRuntime(state),
       ...state.health.snapshot(),
+      mcpConfigReporting: MCP_CONFIG_REPORTING_VERSION,
       mcpConfig: await publicMcpConfigStatus(),
     });
   }

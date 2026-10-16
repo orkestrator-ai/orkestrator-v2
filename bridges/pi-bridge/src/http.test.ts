@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentSession, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { MCP_CONFIG_REPORTING_VERSION } from "@orkestrator/protocol/mcp-management";
 
 // `config.ts` reads its environment once, at import. Everything below is
 // therefore loaded dynamically, after the environment this suite needs is in
@@ -1360,10 +1361,14 @@ describe("session routes", () => {
       const state = seedSession();
       state.lastAccessed = 0;
       await preparePiMcp(state, { agentDir: root, cwd: root, env: {} });
-      // Detached: nothing loaded, nothing reported.
+      // Detached: nothing loaded, nothing reported, but the bridge still says
+      // it reports, so the backend does not read it as an older bridge.
+      const detached = await (await call(`/session/${state.id}/runtime-health`)).json();
+      expect(detached.mcpConfig).toBeUndefined();
+      expect(detached.mcpConfigReporting).toBe(MCP_CONFIG_REPORTING_VERSION);
       expect(
-        (await (await call(`/session/${state.id}/runtime-health`)).json()).mcpConfig,
-      ).toBeUndefined();
+        (await (await call(`/session/unknown-session/runtime-health`)).json()).mcpConfigReporting,
+      ).toBe(MCP_CONFIG_REPORTING_VERSION);
 
       state.session = {} as never;
       const body = await (await call(`/session/${state.id}/runtime-health`)).json();

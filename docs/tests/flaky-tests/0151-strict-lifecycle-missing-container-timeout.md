@@ -45,3 +45,10 @@ Observed while validating design-pane dividers; no lifecycle code changed.
 - **Hypothesis:** shared-host contention and fixture teardown after timeout
   remain plausible explanations; the isolated pass does not establish a cause.
   No test, timeout, assertion or skip was changed.
+
+## Recurrence during Multi Review follow-up validation (2026-10-16)
+
+- **Command:** `mise run test:logged -- --name full-suite -- mise run test`, with 4/1/2/1 workspace/root/bridge/protocol slots and two backend workers.
+- **Failure:** the unchanged missing-container repair case exceeded its five-second deadline at 6991.89 ms.
+- **Owning-file rerun after the aggregate:** `mise run test:logged -- --name lifecycle-status-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments-status.test.ts --parallel=1 --only-failures` passed unchanged in 4.4 seconds (exit 0).
+- **Evidence:** `/tmp/orkestrator-test-run.1PZf4j/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`. No lifecycle implementation, assertion, timeout or skip changed; the cause remains unconfirmed.

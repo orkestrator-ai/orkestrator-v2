@@ -4,6 +4,11 @@ import {
 } from "@orkestrator/protocol/agent-mail";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { WEB_ANNOTATION_TOOL_NAMES } from "@orkestrator/protocol/web-annotations";
+import {
+  callsOwnWorkflowResult,
+  workflowResultTurnToolNames,
+  type WorkflowResultTurn,
+} from "@orkestrator/protocol/workflow-results";
 import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import {
@@ -705,6 +710,72 @@ export function orkestratorToolPermissionOption(
   return allowOptionId(params);
 }
 
+function orkestratorToolIds(name: string): string[] {
+  return [
+    `${ORKESTRATOR_MCP_SERVER_NAME}__${name}`,
+    `mcp__${ORKESTRATOR_MCP_SERVER_NAME}__${name}`,
+    `${ORKESTRATOR_MCP_SERVER_NAME}_${name}`,
+    `${ORKESTRATOR_MCP_SERVER_NAME}/${name}`,
+    `${ORKESTRATOR_MCP_SERVER_NAME}.${name}`,
+  ];
+}
+
+/** A wrapped call's arguments: Grok's `use_tool` carries them in `tool_input`. */
+function wrappedToolArguments(input: unknown): unknown {
+  if (!isObject(input)) return undefined;
+  const wrapped = input.tool_input;
+  if (typeof wrapped !== "string") return wrapped;
+  if (wrapped.length > 1024 * 1024) return undefined;
+  try {
+    return JSON.parse(wrapped) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The allow option for a call to the current turn's own workflow-result
+ * attempt: its submission tool, validation, status and, for a reviewer,
+ * `report_finding`. Granted under every approval policy, including a
+ * read-only turn's `deny`, but only while the turn declared that attempt
+ * (`workflowResultTool` / `workflowResultKey` on its prompt) and only for a
+ * call whose arguments name the attempt's own result key.
+ *
+ * These tools exist only on the attempt's own capability and write nothing in
+ * the workspace. Identity follows `orkestratorToolPermissionOption`: a
+ * server-qualified name, Grok's namespaced metadata, or the tool Grok's
+ * `use_tool` wraps; never a bare name or a display title.
+ */
+export function workflowResultPermissionOption(
+  params: JsonObject,
+  turn: WorkflowResultTurn | undefined,
+  recordedInput?: unknown,
+): string | undefined {
+  if (!turn) return undefined;
+  const toolCall = isObject(params.toolCall) ? params.toolCall : undefined;
+  if (!toolCall || toolCall.kind === "execute" || toolCall.kind === "edit") return undefined;
+  const meta = isObject(toolCall._meta) ? toolCall._meta : undefined;
+  const xaiTool = meta && isObject(meta["x.ai/tool"]) ? meta["x.ai/tool"] : undefined;
+  const vendorName = xaiTool ? xaiTool.name : toolCall.name;
+  const input = toolCall.rawInput === undefined ? recordedInput : toolCall.rawInput;
+  const wrapped = typeof vendorName === "string" && vendorName.trim() === GROK_USE_TOOL;
+  const name = wrapped ? wrappedToolName(input) : vendorName;
+  const allowed = workflowResultTurnToolNames(turn);
+  const namespaced =
+    !wrapped &&
+    xaiTool?.namespace === ORKESTRATOR_MCP_SERVER_NAME &&
+    typeof xaiTool.name === "string" &&
+    allowed.includes(xaiTool.name.trim());
+  const qualified =
+    typeof name === "string" &&
+    allowed.some((tool) => orkestratorToolIds(tool).includes(name.trim()));
+  if (!namespaced && !qualified) return undefined;
+  if (!callsOwnWorkflowResult(turn, wrapped ? wrappedToolArguments(input) : input)) {
+    return undefined;
+  }
+  return allowOptionId(params);
+}
+
 function allowOptionId(params: JsonObject): string | undefined {
   const options = Array.isArray(params.options) ? params.options.filter(isObject) : [];
   const allow =
@@ -866,6 +937,13 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
       ? { name: recorded.toolName, input: recorded.toolArgs }
       : undefined;
     const toolDenied = explicitlyDeniedPermissionTool(params, policy, recordedTool);
+    const attemptAllow = toolDenied
+      ? undefined
+      : workflowResultPermissionOption(params, state.workflowResultTurn, recorded?.toolArgs);
+    if (attemptAllow) {
+      child.respond(requestId, { outcome: { outcome: "selected", optionId: attemptAllow } });
+      return;
+    }
     const orkestratorAllow = toolDenied
       ? undefined
       : orkestratorToolPermissionOption(params, policy?.approvals, recorded?.toolArgs);

@@ -104,3 +104,10 @@ not establish a root cause. No assertion, timeout or skip was changed.
 - **Hypothesis:** this repeats the intermittent queue-sampling failure under
   aggregate load; its root cause remains unconfirmed. No test, timeout,
   assertion or skip was changed.
+
+## Recurrence during Multi Review follow-up validation (2026-10-16)
+
+- **Command:** `mise run test:logged -- --name full-suite -- mise run test`, with 4/1/2/1 workspace/root/bridge/protocol slots and two backend workers.
+- **Failure:** the queue sample was 557298 bytes against the 557056-byte bound (323.02 ms test duration). No tunnel implementation changed.
+- **Owning-file rerun:** `mise run test:logged -- --name preview-queue-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/preview-tunnel-server.test.ts --parallel=1 --only-failures` passed unchanged in 0.8 seconds (exit 0).
+- **Evidence:** `/tmp/orkestrator-test-run.1PZf4j/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`. No assertion, bound, timeout or skip changed; the root cause remains unconfirmed.

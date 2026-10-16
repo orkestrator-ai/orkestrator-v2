@@ -11,6 +11,9 @@ import {
   isWorkflowResultSubmissionState,
   normalizeWorkflowResultToolsSettings,
   workflowResultInstruction,
+  parseWorkflowResultTurn,
+  workflowResultTurnToolNames,
+  callsOwnWorkflowResult,
   workflowResultNoun,
   workflowResultSubmissionLabel,
   workflowResultToolName,
@@ -154,5 +157,70 @@ describe("workflow result rollout settings", () => {
   test("the master switch is honoured and non-boolean values default to enabled", () => {
     expect(normalizeWorkflowResultToolsSettings({ enabled: false }).enabled).toBe(false);
     expect(normalizeWorkflowResultToolsSettings({ enabled: "no" }).enabled).toBe(true);
+  });
+});
+
+describe("provisional findings in the reviewer instruction", () => {
+  test("a live reviewer is encouraged, not required, to report findings as it goes", () => {
+    const resultKey = crypto.randomUUID();
+    const instruction = workflowResultInstruction("review-report", resultKey, {
+      provisionalFindings: true,
+    });
+    expect(instruction).toContain("`report_finding`");
+    expect(instruction).toContain("encouraged, but not required");
+    // The report stays the source of truth and must repeat every finding.
+    expect(instruction).toContain("must still list every finding");
+    expect(instruction).toContain(JSON.stringify(resultKey));
+  });
+
+  test("other attempts, and reviewers whose owner takes no findings, are not told about it", () => {
+    const resultKey = crypto.randomUUID();
+    expect(workflowResultInstruction("review-report", resultKey)).not.toContain("report_finding");
+    expect(
+      workflowResultInstruction("fix-result", resultKey, { provisionalFindings: true }),
+    ).not.toContain("report_finding");
+  });
+});
+
+describe("a turn's declared workflow-result attempt", () => {
+  const resultKey = "11111111-1111-4111-8111-111111111111";
+
+  test("both fields absent is an ordinary turn; one without the other is malformed", () => {
+    expect(parseWorkflowResultTurn(undefined, undefined)).toEqual({ ok: true });
+    expect(parseWorkflowResultTurn("submit_review_report", resultKey)).toEqual({
+      ok: true,
+      turn: { tool: "submit_review_report", resultKey },
+    });
+    for (const [tool, key] of [
+      ["submit_review_report", undefined],
+      [undefined, resultKey],
+      ["send_message", resultKey],
+      ["submit_review_report", ""],
+      ["submit_review_report", "a key"],
+      ["submit_review_report", "k".repeat(129)],
+      ["submit_review_report", 42],
+    ]) {
+      expect(parseWorkflowResultTurn(tool, key).ok).toBe(false);
+    }
+  });
+
+  test("names the attempt's own tools, with report_finding for a reviewer only", () => {
+    expect(workflowResultTurnToolNames({ tool: "submit_review_report", resultKey })).toEqual([
+      "submit_review_report",
+      "validate_workflow_result",
+      "get_workflow_result_status",
+      "report_finding",
+    ]);
+    expect(workflowResultTurnToolNames({ tool: "submit_fix_result", resultKey })).not.toContain(
+      "report_finding",
+    );
+  });
+
+  test("a call is the attempt's own only when its arguments name the attempt's key", () => {
+    const turn = { tool: "submit_review_report", resultKey };
+    expect(callsOwnWorkflowResult(turn, { resultKey, result: {} })).toBe(true);
+    for (const args of [{ resultKey: "other" }, {}, undefined, [resultKey], resultKey]) {
+      expect(callsOwnWorkflowResult(turn, args)).toBe(false);
+    }
   });
 });

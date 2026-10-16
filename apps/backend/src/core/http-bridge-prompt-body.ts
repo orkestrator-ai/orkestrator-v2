@@ -61,6 +61,17 @@ export function bridgePromptBody(
               reasoningEffort: options.effort ?? connection.effort,
               mode: options.mode,
               agentMcp: options.agentMcp,
+              // Grok and Pi gate tools in the bridge, so a read-only turn needs
+              // to know which attempt's tools it may let through.
+              ...(agent !== "cursor" &&
+              options.agentMcp &&
+              options.workflowResultTool &&
+              options.workflowResultKey
+                ? {
+                    workflowResultTool: options.workflowResultTool,
+                    workflowResultKey: options.workflowResultKey,
+                  }
+                : {}),
             }
           : { fastMode: options.fastMode ?? connection.fastMode }),
   };

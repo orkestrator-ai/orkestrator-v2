@@ -59,8 +59,8 @@ it reaches. Some rules of thumb:
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
 | High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 45 |
 | Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 243 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 253 |
-| **Total** | | **542** |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 249 |
+| **Total** | | **538** |
 
 ## Very high
 
@@ -684,17 +684,17 @@ it reaches. Some rules of thumb:
 - [ ] Design a backend-owned, content-addressed review evidence store with read-only mounts ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), deferred)
 - [ ] Add provider batch status observation once a bridge exposes batch settlement status ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), deferred)
 - [ ] Add hierarchical map/reduce consolidation only if real workflows exceed the 640 KiB budget ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), deferred)
-- [ ] Add `admissionState` / `queuedAt` reviewer fields only if queue time becomes user-visible ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), deferred)
+- [ ] Add a `queuedAt` reviewer field only if queue time becomes user-visible; `admissionState` shipped with the queue position ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), deferred)
 - [ ] Skip identical Multi Review renderer refetches using per-workflow revisions in resource-change events ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), deferred)
 - [ ] Verify whether any real-provider consolidation comparison was ever run ([multi-review-panel-value.md](multi-review-panel-value.md), verify)
 - [ ] Add Quick, Balanced and Thorough Multi Review presets that expand into editable reviewer rows ([multi-review-panel-value.md](multi-review-panel-value.md), deferred)
 - [ ] Add optional, non-exclusive review lenses as a shared-protocol enum ([multi-review-panel-value.md](multi-review-panel-value.md), deferred)
 - [ ] Add opt-in adaptive stopping with a minimum panel and a measured novelty rule ([multi-review-panel-value.md](multi-review-panel-value.md), deferred)
 - [ ] Revisit the default two-reviewer Multi Review panel ([multi-review-panel-value.md](multi-review-panel-value.md), deferred)
-- [ ] Show findings from a Multi Review reviewer that is still running, through a bounded partial-findings channel ([multi-review-flow-graph.md](multi-review-flow-graph.md))
-- [ ] Show queue position and expected start for queued Multi Review reviewers ([multi-review-flow-graph.md](multi-review-flow-graph.md))
-- [ ] Add a bounded transcript tail for the preparation, consolidation and Fix sessions in the flow graph inspector ([multi-review-flow-graph.md](multi-review-flow-graph.md))
-- [ ] Add flow graph zoom controls and keep zoom and pan between visits ([multi-review-flow-graph.md](multi-review-flow-graph.md))
+- [x] Show findings from a Multi Review reviewer that is still running, through a bounded partial-findings channel ([multi-review-flow-graph.md](multi-review-flow-graph.md))
+- [x] Show queue position for queued Multi Review reviewers (position only; no expected start) ([multi-review-flow-graph.md](multi-review-flow-graph.md))
+- [x] Add a bounded transcript tail for the preparation, consolidation and Fix sessions in the flow graph inspector ([multi-review-flow-graph.md](multi-review-flow-graph.md))
+- [x] Add flow graph zoom controls and keep zoom and pan between visits ([multi-review-flow-graph.md](multi-review-flow-graph.md))
 
 ### Coordinator and agent mail (low)
 

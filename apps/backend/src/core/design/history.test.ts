@@ -7,11 +7,12 @@ import {
   type DesignOperationDescriptor,
 } from "@orkestrator/protocol/design-operations";
 import { isDesignError } from "./errors.js";
-import { PROTECTED_HISTORY_ENTRIES } from "./history.js";
-import type { DesignPrivateRecord } from "./records.js";
+import { appendEntry, PROTECTED_HISTORY_ENTRIES } from "./history.js";
+import { cloneRecord, type DesignPrivateRecord } from "./records.js";
 import {
   createDesignHarness,
   trackUnhandledRejections,
+  withDesignLimit,
   type DesignHarness,
 } from "./test-support.js";
 
@@ -325,33 +326,41 @@ describe("design history: per-actor undo/redo, checkpoints and budgets", () => {
 
   test("the per-canvas entry budget prunes the oldest entries and their checkpoint files", async () => {
     const { canvasId, a } = await setup();
-    const edits = DESIGN_LIMITS.historyEntriesPerCanvas + 5;
-    for (let index = 1; index <= edits; index++) await moveFrame(canvasId, a, index, "user");
-    const page = await service().historyPage("env-1", canvasId, 0, 100);
-    expect(page.total).toBe(DESIGN_LIMITS.historyEntriesPerCanvas);
-    expect(page.entries.filter((entry) => entry.protected)).toHaveLength(PROTECTED_HISTORY_ENTRIES);
-    expect(page.entries.every((entry) => entry.actor === "user")).toBe(true);
-    const record = await recordOf(canvasId);
-    await service().close();
-    const files = await readdir(service().store.historyDir(canvasId));
-    expect(files.sort()).toEqual(record.history.entries.map((entry) => entry.checkpoint).sort());
+    // A lowered budget reaches pruning in a few fsynced edits; 55 real ones
+    // exceeded the 5 s deadline under aggregate load (flake 0225).
+    await withDesignLimit("historyEntriesPerCanvas", PROTECTED_HISTORY_ENTRIES + 3, async () => {
+      const edits = DESIGN_LIMITS.historyEntriesPerCanvas + 5;
+      for (let index = 1; index <= edits; index++) await moveFrame(canvasId, a, index, "user");
+      const page = await service().historyPage("env-1", canvasId, 0, 100);
+      expect(page.total).toBe(DESIGN_LIMITS.historyEntriesPerCanvas);
+      expect(page.entries.filter((entry) => entry.protected)).toHaveLength(
+        PROTECTED_HISTORY_ENTRIES,
+      );
+      expect(page.entries.every((entry) => entry.actor === "user")).toBe(true);
+      const record = await recordOf(canvasId);
+      await service().close();
+      const files = await readdir(service().store.historyDir(canvasId));
+      expect(files.sort()).toEqual(record.history.entries.map((entry) => entry.checkpoint).sort());
+    });
   });
 
-  /** Temporarily lowers a history budget (DESIGN_LIMITS is a plain object at runtime). */
-  const withLimit = async (
-    key: "historyBytesPerCanvas" | "historyBytesGlobal",
-    value: number,
-    work: () => Promise<void>,
-  ) => {
-    const limits = DESIGN_LIMITS as unknown as Record<string, number>;
-    const previous = limits[key]!;
-    limits[key] = value;
-    try {
-      await work();
-    } finally {
-      limits[key] = previous;
+  test("the shipped entry budget keeps exactly the newest entries", async () => {
+    const { canvasId, a } = await setup();
+    await moveFrame(canvasId, a, 1, "user");
+    // In memory: the shipped budget without one fsynced commit per entry.
+    const record = cloneRecord(await recordOf(canvasId));
+    const template = record.history.entries.at(-1)!;
+    const all = record.history.entries.map((entry) => entry.checkpoint);
+    const obsolete: string[] = [];
+    for (let index = 0; index < DESIGN_LIMITS.historyEntriesPerCanvas + 5; index++) {
+      const id = crypto.randomUUID();
+      all.push(`${id}.json`);
+      obsolete.push(...appendEntry(record, { ...template, id, checkpoint: `${id}.json` }).obsolete);
     }
-  };
+    const kept = all.length - DESIGN_LIMITS.historyEntriesPerCanvas;
+    expect(record.history.entries.map((entry) => entry.checkpoint)).toEqual(all.slice(kept));
+    expect(obsolete).toEqual(all.slice(0, kept));
+  });
 
   test("the per-canvas byte budget prunes old entries and refuses what it cannot keep undoable", async () => {
     const { canvasId, a } = await setup();
@@ -359,7 +368,7 @@ describe("design history: per-actor undo/redo, checkpoints and budgets", () => {
     const perEntry = Math.max(
       ...(await service().historyPage("env-1", canvasId)).entries.map((entry) => entry.bytes),
     );
-    await withLimit(
+    await withDesignLimit(
       "historyBytesPerCanvas",
       perEntry * (PROTECTED_HISTORY_ENTRIES + 1),
       async () => {
@@ -399,7 +408,7 @@ describe("design history: per-actor undo/redo, checkpoints and budgets", () => {
       await moveFrame(first.canvasId, first.a, index, "user");
     const firstBytes = (await service().historyPage("env-1", first.canvasId)).bytes;
     const second = await setup();
-    await withLimit("historyBytesGlobal", firstBytes + 1024, async () => {
+    await withDesignLimit("historyBytesGlobal", firstBytes + 1024, async () => {
       for (let index = 1; index <= 6; index++)
         await moveFrame(second.canvasId, second.a, index, "user");
       // Background pruning is tracked; restarting awaits it.

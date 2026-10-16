@@ -40,3 +40,14 @@ The design canvas test appears sensitive to the suite's six-worker parallel load
 - **Owning-file rerun:** `mise run test:logged -- --name merge-design-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1` passed the unchanged file in 23.7 s (exit 0).
 - **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.o1XC99/merge-browser.log.gz`.
 - **Disposition:** confirmed recurrence. Earlier overlapping focused browser invocations shared an output directory and are discarded as invalid evidence; the successful rerun ran sequentially. Host contention remains an unconfirmed hypothesis.
+
+## Ordering review (2026-10-16)
+
+Reviewed with the backend design flakes 0193, 0215 and 0218, which were test
+artefacts, not ordering bugs. The backend hint order this spec relies on is
+now pinned in `core/design/sync.test.ts`: per-canvas commit order, and status
+hints that never overtake their commit. This case was not rerun. Its symptoms
+(Playwright action timeouts, a disabled picker, an unmounted page) are client
+or profile timing, and nothing here implicates the design change feed. It
+stays open; see the follow-up in
+[design-canvas-qualification.md](../../todo/design-canvas-qualification.md).

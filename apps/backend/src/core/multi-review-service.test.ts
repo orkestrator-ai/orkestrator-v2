@@ -4481,6 +4481,41 @@ async function seedLegacyFixingWorkflow(
   return workflowId;
 }
 
+test("MultiReviewService reads a step's session tail only for the step using it", async () => {
+  const provider = new Provider();
+  provider.messagesValue = [
+    {
+      id: "assistant-1",
+      role: "assistant",
+      content: "Fixing the findings",
+      parts: [{ type: "text", content: "Fixing the findings" }],
+    },
+  ];
+  await withService("env-step-tail", provider, async ({ service, storage }) => {
+    // Every step of this older workflow ran in the one fix session.
+    const workflowId = await seedLegacyFixingWorkflow(storage, "env-step-tail");
+
+    await expect(service.stepTranscript(workflowId, "fix")).resolves.toMatchObject({
+      workflowId,
+      step: "fix",
+      workflowPhase: "fixing",
+      session: "own",
+      agent: "claude",
+      sessionStatus: "running",
+      transcript: "snapshot",
+      messages: provider.messagesValue,
+    });
+    await expect(service.stepTranscript(workflowId, "consolidate")).resolves.toMatchObject({
+      session: "other-step",
+      sessionStep: "fix",
+      messages: [],
+    });
+    await expect(service.stepTranscript("missing-workflow", "fix")).rejects.toThrow(
+      "Multi review workflow not found",
+    );
+  });
+});
+
 test("MultiReviewService finishes a fix turn persisted before the interactive handoff", async () => {
   const provider = new Provider();
   await withService("env-legacy-fixing", provider, async ({ service, storage, snapshot }) => {

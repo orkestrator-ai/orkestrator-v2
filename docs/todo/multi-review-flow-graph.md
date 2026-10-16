@@ -34,12 +34,19 @@ keep yet.
   node's accessible description and its tooltip, which also opens on keyboard
   focus. Steps take the workflow error, or the Fix session's own once the fix
   is interactive.
-- **Inspector.** `MultiReviewInspector.tsx`. For a reviewer, the transcript tail
-  reads `getMultiReviewReviewerTranscript`, echoing `knownSourceToken`. It reads
-  once on each selection and on each workflow checkpoint. It polls through the
-  read coordinator only while the reviewer is live and the tab is active.
-  Preparation, consolidation and Fix show only status, model and runtime, plus
-  Open session.
+- **Inspector.** `MultiReviewInspector.tsx`. Every node has a transcript tail.
+  A reviewer's reads `getMultiReviewReviewerTranscript`; preparation,
+  consolidation and Fix read `getMultiReviewStepTranscript`
+  (`get_multi_review_step_transcript`, `multi-review-step-transcript.ts`),
+  which has the same contract with tighter bounds: at most 100 messages and
+  256 KiB, a session-scoped `knownSourceToken`, and `unchanged` answers with no
+  messages. Each tail reads once on selection and on each workflow checkpoint,
+  and polls through the read coordinator only while its node is live, the
+  window visible and the tab active. A session that several steps share (older
+  workflows ran all three in the fix session) is read only for the step using
+  it now (`multiReviewStepSessionAccess`, which follows the same rule as
+  `fixSessionRuntimeStep`); the other steps say which step has it. Step tails
+  hide prompts and schema-shaped text exactly as reviewer tails do.
 - **Findings so far.** `mergeReviewerFindings` lists the issues of completed
   reviewers. An issue that several reviewers raised at the same file, line and
   title is listed once. Partial reports from failed or stopped reviewers are not
@@ -65,12 +72,6 @@ keep yet.
    It also needs the scheduler (`runBoundedTasks`, admission concurrency 4 by
    default) to report a position. An estimate needs a measured per-provider
    duration; without one, show only the position.
-3. **Transcript tail for preparation, consolidation and Fix.** These steps run
-   in backend-owned native sessions. Unlike the reviewer transcript, they have
-   no bounded read that echoes a token, so the inspector offers only Open
-   session. A step-session read with the same contract (bounded tail,
-   `knownSourceToken`, `unchanged` answers) would let the inspector show what
-   the step is doing without opening a tab.
 
 ## Constraints and rationale
 

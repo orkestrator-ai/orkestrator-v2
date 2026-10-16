@@ -1015,3 +1015,73 @@ describe("zoom and pan", () => {
     expect(useMultiReviewFlowViewStore.getState().views.has("workflow-restore")).toBe(false);
   });
 });
+
+describe("step transcript tails", () => {
+  function renderWithStepTail(target: MultiReviewWorkflow) {
+    useMultiReviewStore.getState().replaceWorkflow(target);
+    const loadStepTranscript = mock(
+      async (workflowId: string, step: "prepare" | "consolidate" | "fix") => ({
+        workflowId,
+        step,
+        workflowPhase: target.phase,
+        session: "own" as const,
+        agent: "codex" as const,
+        transcript: "snapshot" as const,
+        messages: [
+          {
+            id: `${step}-1`,
+            role: "assistant",
+            content: "",
+            createdAt: STARTED,
+            parts: [{ type: "text", content: `Working on ${step}` }],
+          },
+        ],
+      }),
+    );
+    render(
+      <MultiReviewTab
+        data={{ environmentId: target.environmentId, workflowId: target.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => target)}
+        loadReviewerTranscript={mock(async () => undefined as never)}
+        loadStepTranscript={loadStepTranscript}
+      />,
+    );
+    return loadStepTranscript;
+  }
+
+  test("shows the selected step's own session tail in the inspector", async () => {
+    const loadStepTranscript = renderWithStepTail(
+      workflow({
+        phase: "consolidating",
+        reviewers: allDone(),
+        reviewModel: { agent: "codex", model: "gpt-5.6" },
+        reviewSession: { ...fixSession("running")!, providerSessionId: "consolidation" },
+        activeRequest: { kind: "consolidate", requestId: "c-1", state: "sent", createdAt: STARTED },
+      }),
+    );
+    const tail = await screen.findByRole("log", { name: "Latest consolidation activity" });
+    expect(await within(tail).findByText("Working on consolidate")).toBeTruthy();
+    expect(loadStepTranscript.mock.calls[0]?.slice(0, 2)).toEqual(["multi-flow", "consolidate"]);
+  });
+
+  test("does not read a step whose shared session another step is using", () => {
+    // Every step of this older workflow runs in the fix session; consolidation
+    // is using it, so the Fix step has nothing of its own to show.
+    const loadStepTranscript = renderWithStepTail(
+      workflow({
+        phase: "consolidating",
+        reviewers: allDone(),
+        fixSession: fixSession("running"),
+        activeRequest: { kind: "consolidate", requestId: "c-1", state: "sent", createdAt: STARTED },
+      }),
+    );
+    fireEvent.click(screen.getByRole("tab", { name: /^Fix,/ }));
+    expect(
+      screen.getByText(
+        "This step's session is now running consolidation. Open session to read the whole conversation.",
+      ),
+    ).toBeTruthy();
+    expect(loadStepTranscript.mock.calls.map((call) => call[1])).not.toContain("fix");
+  });
+});

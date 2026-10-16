@@ -13,6 +13,7 @@ import type {
 import {
   MULTI_REVIEW_FIX_TAB_TITLE,
   MULTI_REVIEW_REVIEW_TAB_TITLE,
+  multiReviewSharedSessionStep,
 } from "@orkestrator/protocol/multi-review";
 import type { CreateTabOptions } from "@/contexts/TerminalContext";
 import { formatElapsed } from "@/lib/format-elapsed";
@@ -236,51 +237,20 @@ export function multiReviewStepError(
   return workflow.error;
 }
 
+const STEP_KEY: Record<MultiReviewStepKind, MultiReviewStepKey> = {
+  prepare: "package",
+  consolidate: "consolidation",
+  fix: "fix",
+};
+
 /**
  * Which step owns the fix session's clock. The three steps share one provider
  * session and every dispatch resets `startedAt`, so a runtime shown against the
  * wrong card would be the next step's elapsed time under a settled step's name.
  */
 export function fixSessionRuntimeStep(workflow: MultiReviewWorkflow): MultiReviewStepKey | null {
-  switch (workflow.phase) {
-    // The reviewers run without the fix session, so it still holds preparation's
-    // finished timings for the whole review stage.
-    case "preparing":
-    case "reviewing":
-      return "package";
-    case "consolidating":
-    case "ready":
-      return "consolidation";
-    case "fixing":
-    case "completed":
-      return "fix";
-    case "paused":
-      return workflow.pausedStep === "prepare"
-        ? "package"
-        : workflow.pausedStep === "consolidate"
-          ? "consolidation"
-          : workflow.pausedStep === "fix"
-            ? "fix"
-            : null;
-    // The address turn has not been dispatched yet, so the session still carries
-    // consolidation's timings and no step may claim them.
-    case "interactive":
-      return workflow.addressPromptPending === true ? null : "fix";
-    default:
-      break;
-  }
-  // Cancellation clears the active request, so only a failure still says which
-  // turn was in flight.
-  switch (workflow.activeRequest?.kind) {
-    case "prepare":
-      return "package";
-    case "consolidate":
-      return "consolidation";
-    case "fix":
-      return "fix";
-    default:
-      return null;
-  }
+  const kind = multiReviewSharedSessionStep(workflow);
+  return kind ? STEP_KEY[kind] : null;
 }
 
 export function fixSessionRuntimeSummary(

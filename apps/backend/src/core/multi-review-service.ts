@@ -23,6 +23,7 @@ import {
   type MultiReviewReviewerHistoryPage,
   type MultiReviewReviewerTranscript,
   type MultiReviewStepKind,
+  type MultiReviewStepTranscript,
   type MultiReviewWorkflow,
   type MultiReviewWorktreeSnapshot,
   type StartMultiReviewCustomFixInput,
@@ -102,6 +103,7 @@ import {
   stalledMinutes,
 } from "./multi-review-progress.js";
 import { readTranscriptProgressSample } from "./transcript-progress.js";
+import { readMultiReviewStepTranscript } from "./multi-review-step-transcript.js";
 import { ActivityReadCoalescer } from "./activity-read-coalescer.js";
 
 import {
@@ -795,6 +797,56 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       ...(reviewer.startedAt ? { startedAt: reviewer.startedAt } : {}),
       ...(reviewer.completedAt ? { completedAt: reviewer.completedAt } : {}),
     };
+  }
+
+  /**
+   * A bounded tail of a preparation, consolidation or Fix session, for the
+   * flow graph's inspector. Same contract as {@link reviewerTranscript}; a
+   * session another step is using now answers with no messages.
+   */
+  async stepTranscript(
+    workflowId: string,
+    step: MultiReviewStepKind,
+    knownSourceToken?: string,
+  ): Promise<MultiReviewStepTranscript> {
+    return readMultiReviewStepTranscript(
+      {
+        loadWorkflow: async (id) => {
+          const record = await this.storage.getMultiReviewWorkflow(id);
+          if (!record || !isMultiReviewWorkflow(record.snapshot)) {
+            throw new Error(`Multi review workflow not found: ${id}`);
+          }
+          return record.snapshot;
+        },
+        // A read holds the provider like a reviewer read does, and never
+        // registers the session: an interactive Fix belongs to its native tab.
+        withProvider: async (workflow, session, read) => {
+          const key = this.providerKey(workflow, session);
+          this.providerReaders.set(key, (this.providerReaders.get(key) ?? 0) + 1);
+          try {
+            return await read(await this.providerInstance(workflow, session));
+          } finally {
+            await this.releaseProviderReaderByKey(key);
+          }
+        },
+        recordRead: (read, elapsedMs) =>
+          recordEfficiency(this.options.efficiency, {
+            owner: "multi-review",
+            operation:
+              read.kind === "unchanged"
+                ? "transcript.ui_unchanged"
+                : read.fallback
+                  ? "transcript.ui_fallback"
+                  : "transcript.ui_read",
+            phase: "ui",
+            bytes: read.kind === "snapshot" ? read.bytes : 0,
+            elapsedMs,
+          }),
+      },
+      workflowId,
+      step,
+      knownSourceToken,
+    );
   }
 
   /** The body behind one reviewer row's deferred `detailRef`, from its own session. */

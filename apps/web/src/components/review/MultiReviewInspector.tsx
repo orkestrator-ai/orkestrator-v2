@@ -8,18 +8,23 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { MultiReviewReviewerTranscript } from "@orkestrator/protocol/multi-review";
+import type {
+  MultiReviewStepKind,
+  MultiReviewStepTranscript,
+} from "@orkestrator/protocol/multi-review";
 import { PLATFORM_ICON_CLASS } from "@/components/icons/AgentIcons";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as backend from "@/lib/backend";
 import type { RuntimeParts } from "@/lib/review/runtime-summary";
+import { hideReviewPackagePlanText } from "@/lib/structured-review-messages";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { cn } from "@/lib/utils";
 import {
   REFRESH_INTERVAL_MS,
   mergeMultiReviewReviewerTranscript,
   toMultiReviewReviewerMessages,
+  toMultiReviewSessionMessages,
 } from "./MultiReviewReviewerTab";
 import { MultiReviewFlowStateIcon, type MultiReviewFlowNodeModel } from "./MultiReviewFlowGraph";
 import { reviewSeverityStyles } from "./StructuredReviewReportView";
@@ -164,34 +169,49 @@ export function transcriptTailLines(
   return lines.slice(-limit);
 }
 
+/** What a tail read answers: a bounded tail, or `unchanged` with no messages. */
+interface TranscriptTailSnapshot {
+  messages: unknown[];
+  transcript?: "snapshot" | "unchanged";
+  sourceToken?: string;
+}
+
 /**
- * The reviewer read model the reviewer tab polls, reduced to a bounded tail.
+ * A transcript read model reduced to a bounded tail of short lines.
+ *
  * Each read sends the last source token, so an unchanged transcript costs a
- * status projection; a workflow checkpoint reads at once instead of waiting
- * for the interval, and only a live reviewer in an active tab is polled.
+ * status projection; selection and every workflow checkpoint read at once,
+ * and only a live node in an active tab is polled, through the read
+ * coordinator. `read`, `merge` and `toMessages` must be stable.
  */
-function useReviewerTranscriptTail({
+function useTranscriptTail<T extends TranscriptTailSnapshot>({
+  resource,
   workflowId,
-  reviewerId,
+  targetId,
   enabled,
   live,
-  loadTranscript,
+  read: readTail,
+  merge,
+  toMessages,
 }: {
+  resource: string;
   workflowId: string;
-  reviewerId: string;
+  targetId: string;
   enabled: boolean;
   live: boolean;
-  loadTranscript: typeof backend.getMultiReviewReviewerTranscript;
+  read: (workflowId: string, targetId: string, knownSourceToken?: string) => Promise<T>;
+  merge: (previous: T | null, next: T) => T;
+  toMessages: (snapshot: T) => NativeMessage[];
 }) {
-  const viewKey = `${workflowId}\u0000${reviewerId}`;
-  // Each answer is tagged with the reviewer it was read for, so switching
-  // reviewers shows nothing stale and needs no reset pass.
+  const viewKey = `${workflowId}\u0000${targetId}`;
+  // Each answer is tagged with the node it was read for, so switching nodes
+  // shows nothing stale and needs no reset pass.
   const [read, setRead] = useState<{
     viewKey: string;
-    snapshot: MultiReviewReviewerTranscript | null;
+    snapshot: T | null;
     error: string | null;
   }>({ viewKey, snapshot: null, error: null });
-  const snapshotRef = useRef<MultiReviewReviewerTranscript | null>(null);
+  const snapshotRef = useRef<T | null>(null);
   const sourceToken = useRef<string | undefined>(undefined);
   const readKey = useRef(viewKey);
   const inFlight = useRef<{ viewKey: string; promise: Promise<void> } | null>(null);
@@ -200,9 +220,9 @@ function useReviewerTranscriptTail({
   );
 
   const refresh = useCallback((): Promise<void> => {
-    const requestKey = `${workflowId}\u0000${reviewerId}`;
+    const requestKey = `${workflowId}\u0000${targetId}`;
     if (readKey.current !== requestKey) {
-      // Another reviewer: never confirm a token this view no longer shows.
+      // Another node: never confirm a token this view no longer shows.
       readKey.current = requestKey;
       sourceToken.current = undefined;
       snapshotRef.current = null;
@@ -213,12 +233,10 @@ function useReviewerTranscriptTail({
     let promise!: Promise<void>;
     promise = (async () => {
       try {
-        const next = await loadTranscript(workflowId, reviewerId, {
-          knownSourceToken: sourceToken.current,
-        });
+        const next = await readTail(workflowId, targetId, sourceToken.current);
         if (readKey.current !== requestKey || !next) return;
         sourceToken.current = next.sourceToken;
-        const merged = mergeMultiReviewReviewerTranscript(snapshotRef.current, next);
+        const merged = merge(snapshotRef.current, next);
         snapshotRef.current = merged;
         setRead({ viewKey: requestKey, snapshot: merged, error: null });
       } catch (reason) {
@@ -231,7 +249,7 @@ function useReviewerTranscriptTail({
     })();
     inFlight.current = { viewKey: requestKey, promise };
     return promise;
-  }, [loadTranscript, reviewerId, workflowId]);
+  }, [merge, readTail, targetId, workflowId]);
 
   // Selection, activation and every workflow checkpoint read once; bursts
   // coalesce onto the request already in flight.
@@ -242,11 +260,7 @@ function useReviewerTranscriptTail({
 
   const pollInstance = useId();
   useCoordinatedRead<void>({
-    key: {
-      resource: "multi-review-reviewer-transcript",
-      target: `${workflowId}\u0000${reviewerId}`,
-      view: pollInstance,
-    },
+    key: { resource, target: viewKey, view: pollInstance },
     enabled,
     readOnSubscribe: false,
     demand: { active: enabled && live, intervalMs: REFRESH_INTERVAL_MS, priority: "standard" },
@@ -256,8 +270,8 @@ function useReviewerTranscriptTail({
   const current = read.viewKey === viewKey ? read : null;
   const snapshot = current?.snapshot ?? null;
   const lines = useMemo(
-    () => (snapshot ? transcriptTailLines(toMultiReviewReviewerMessages(snapshot)) : []),
-    [snapshot],
+    () => (snapshot ? transcriptTailLines(toMessages(snapshot)) : []),
+    [snapshot, toMessages],
   );
   return { snapshot, lines, error: current?.error ?? null };
 }
@@ -265,55 +279,40 @@ function useReviewerTranscriptTail({
 /** Distance from the bottom within which the tail keeps following new lines. */
 const FOLLOW_THRESHOLD_PX = 24;
 
-export function ReviewerTranscriptTail({
-  workflowId,
-  reviewerId,
-  hasSession,
+/** The tail's scrolling log, following new lines unless the reader scrolled up. */
+function TranscriptTailLog({
+  label,
+  followKey,
+  lines,
   live,
-  isActive,
-  loadTranscript = backend.getMultiReviewReviewerTranscript,
+  empty,
+  error,
 }: {
-  workflowId: string;
-  reviewerId: string;
-  hasSession: boolean;
+  label: string;
+  /** Changing it starts following again (another node). */
+  followKey: string;
+  lines: TranscriptTailLine[];
   live: boolean;
-  isActive: boolean;
-  loadTranscript?: typeof backend.getMultiReviewReviewerTranscript;
+  empty: string;
+  error: boolean;
 }) {
-  const { snapshot, lines, error } = useReviewerTranscriptTail({
-    workflowId,
-    reviewerId,
-    enabled: isActive && hasSession,
-    live,
-    loadTranscript,
-  });
   const scrollRef = useRef<HTMLDivElement>(null);
   const following = useRef(true);
 
   useEffect(() => {
     following.current = true;
-  }, [reviewerId]);
+  }, [followKey]);
 
   useLayoutEffect(() => {
     const element = scrollRef.current;
     if (element && following.current) element.scrollTop = element.scrollHeight;
   }, [lines]);
 
-  const empty = !hasSession
-    ? "The transcript appears here once this reviewer starts."
-    : error
-      ? error
-      : !snapshot
-        ? "Loading transcript…"
-        : live
-          ? "Waiting for the reviewer's first output…"
-          : "No text transcript was produced for this review.";
-
   return (
     <div
       ref={scrollRef}
       data-testid="multi-review-transcript-tail"
-      aria-label="Latest reviewer activity"
+      aria-label={label}
       role="log"
       aria-live="off"
       tabIndex={0}
@@ -340,6 +339,165 @@ export function ReviewerTranscriptTail({
         </div>
       ) : null}
     </div>
+  );
+}
+
+export function ReviewerTranscriptTail({
+  workflowId,
+  reviewerId,
+  hasSession,
+  live,
+  isActive,
+  loadTranscript = backend.getMultiReviewReviewerTranscript,
+}: {
+  workflowId: string;
+  reviewerId: string;
+  hasSession: boolean;
+  live: boolean;
+  isActive: boolean;
+  loadTranscript?: typeof backend.getMultiReviewReviewerTranscript;
+}) {
+  const read = useCallback(
+    (workflow: string, reviewer: string, knownSourceToken?: string) =>
+      loadTranscript(workflow, reviewer, { knownSourceToken }),
+    [loadTranscript],
+  );
+  const { snapshot, lines, error } = useTranscriptTail({
+    resource: "multi-review-reviewer-transcript",
+    workflowId,
+    targetId: reviewerId,
+    enabled: isActive && hasSession,
+    live,
+    read,
+    merge: mergeMultiReviewReviewerTranscript,
+    toMessages: toMultiReviewReviewerMessages,
+  });
+
+  const empty = !hasSession
+    ? "The transcript appears here once this reviewer starts."
+    : error
+      ? error
+      : !snapshot
+        ? "Loading transcript…"
+        : live
+          ? "Waiting for the reviewer's first output…"
+          : "No text transcript was produced for this review.";
+
+  return (
+    <TranscriptTailLog
+      label="Latest reviewer activity"
+      followKey={reviewerId}
+      lines={lines}
+      live={live}
+      empty={empty}
+      error={Boolean(error)}
+    />
+  );
+}
+
+/**
+ * Folds a step tail answer into what is shown: `unchanged` keeps the messages
+ * already held and takes every other field from the new answer.
+ */
+export function mergeMultiReviewStepTranscript(
+  previous: MultiReviewStepTranscript | null,
+  next: MultiReviewStepTranscript,
+): MultiReviewStepTranscript {
+  if (next.transcript !== "unchanged") return next;
+  const { truncated: _truncated, ...rest } = next;
+  return {
+    ...rest,
+    messages: previous?.messages ?? [],
+    ...(previous?.truncated ? { truncated: true } : {}),
+  };
+}
+
+/**
+ * A step session's output for the tail, with the workflow's own prompts and
+ * every schema-shaped document hidden exactly as a reviewer's are: the step's
+ * accepted result is authoritative, and a half-written plan, report or fix
+ * result is progress data, never something to show as raw JSON.
+ */
+export function toMultiReviewStepMessages(snapshot: MultiReviewStepTranscript): NativeMessage[] {
+  return hideReviewPackagePlanText(
+    toMultiReviewSessionMessages(
+      snapshot.messages,
+      snapshot.agent ?? "codex",
+      snapshot.startedAt ?? "1970-01-01T00:00:00.000Z",
+    ),
+  );
+}
+
+const STEP_LABEL: Record<MultiReviewStepKind, string> = {
+  prepare: "review package generation",
+  consolidate: "consolidation",
+  fix: "Fix",
+};
+
+/** The transcript tail of a preparation, consolidation or Fix session. */
+export function StepTranscriptTail({
+  workflowId,
+  step,
+  access,
+  live,
+  isActive,
+  loadTranscript = backend.getMultiReviewStepTranscript,
+}: {
+  workflowId: string;
+  step: MultiReviewStepKind;
+  /**
+   * Whether the step has a session whose transcript is its own, from the
+   * workflow snapshot. Only an `own` session is read; the backend checks again.
+   */
+  access: { kind: MultiReviewStepTranscript["session"]; step?: MultiReviewStepKind | null };
+  live: boolean;
+  isActive: boolean;
+  loadTranscript?: typeof backend.getMultiReviewStepTranscript;
+}) {
+  const read = useCallback(
+    (workflow: string, target: string, knownSourceToken?: string) =>
+      loadTranscript(workflow, target as MultiReviewStepKind, { knownSourceToken }),
+    [loadTranscript],
+  );
+  const { snapshot, lines, error } = useTranscriptTail({
+    resource: "multi-review-step-transcript",
+    workflowId,
+    targetId: step,
+    enabled: isActive && access.kind === "own",
+    live,
+    read,
+    merge: mergeMultiReviewStepTranscript,
+    toMessages: toMultiReviewStepMessages,
+  });
+  // The backend's answer wins once there is one: the snapshot may be behind.
+  const session = access.kind === "own" && snapshot ? snapshot.session : access.kind;
+  const sessionStep =
+    access.kind === "own" && snapshot ? snapshot.sessionStep : (access.step ?? undefined);
+
+  const empty =
+    session === "none"
+      ? "The transcript appears here once this step starts."
+      : session === "other-step"
+        ? sessionStep
+          ? `This step's session is now running ${STEP_LABEL[sessionStep]}. Open session to read the whole conversation.`
+          : "This step shares its session with another step. Open session to read the whole conversation."
+        : error
+          ? error
+          : !snapshot
+            ? "Loading transcript…"
+            : live
+              ? "Waiting for the step's first output…"
+              : "No text transcript was produced for this step.";
+
+  return (
+    <TranscriptTailLog
+      label={`Latest ${STEP_LABEL[step]} activity`}
+      followKey={step}
+      lines={session === "own" ? lines : []}
+      live={live}
+      empty={empty}
+      error={session === "own" && Boolean(error)}
+    />
   );
 }
 

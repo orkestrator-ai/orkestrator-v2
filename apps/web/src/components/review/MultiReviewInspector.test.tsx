@@ -2,13 +2,18 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import type {
   MultiReviewReviewerTranscript,
+  MultiReviewStepKind,
+  MultiReviewStepTranscript,
   MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
+import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
+import { installFakeReadCoordinator } from "@/lib/testing/read-coordinator";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import {
   MultiReviewFindingsPane,
   ReviewerTranscriptTail,
+  StepTranscriptTail,
   transcriptTailLines,
 } from "./MultiReviewInspector";
 import { reviewSeverityStyles } from "./StructuredReviewReportView";
@@ -209,6 +214,215 @@ describe("ReviewerTranscriptTail", () => {
       />,
     );
     expect(await screen.findByText("Multi review reviewer not found")).toBeTruthy();
+  });
+});
+
+function stepTranscript(
+  overrides: Partial<MultiReviewStepTranscript> = {},
+): MultiReviewStepTranscript {
+  return {
+    workflowId: "multi-1",
+    step: "consolidate",
+    workflowPhase: "consolidating",
+    session: "own",
+    agent: "codex",
+    model: "gpt-6",
+    sessionStatus: "running",
+    startedAt: CREATED_AT,
+    transcript: "snapshot",
+    sourceToken: "step-token-1",
+    messages: [
+      {
+        id: "s1",
+        role: "user",
+        content: "Consolidate the reviewer reports",
+        createdAt: CREATED_AT,
+        parts: [{ type: "text", content: "Consolidate the reviewer reports" }],
+      },
+      {
+        id: "s2",
+        role: "assistant",
+        content: "Read",
+        createdAt: CREATED_AT,
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "Read",
+            toolName: "Read",
+            toolArgs: { file_path: "reports/reviewer-1.json" },
+            toolUseId: "tool-1",
+            toolState: "success",
+          },
+        ],
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function renderStepTail(
+  loadTranscript: (
+    workflowId: string,
+    step: MultiReviewStepKind,
+    options?: { knownSourceToken?: string },
+  ) => Promise<MultiReviewStepTranscript>,
+  props: Partial<Parameters<typeof StepTranscriptTail>[0]> = {},
+) {
+  return render(
+    <StepTranscriptTail
+      workflowId="multi-1"
+      step="consolidate"
+      access={{ kind: "own" }}
+      live
+      isActive
+      loadTranscript={loadTranscript}
+      {...props}
+    />,
+  );
+}
+
+describe("StepTranscriptTail", () => {
+  afterEach(() => resetReadCoordinatorForTests());
+
+  test("reads the step's tail on selection and every checkpoint, echoing its token", async () => {
+    useMultiReviewStore.getState().replaceWorkflow(workflowRevision(1));
+    const loadTranscript = mock(
+      async (
+        _workflowId: string,
+        _step: MultiReviewStepKind,
+        options?: { knownSourceToken?: string },
+      ) =>
+        options?.knownSourceToken === "step-token-1"
+          ? stepTranscript({ transcript: "unchanged", messages: [] })
+          : stepTranscript(),
+    );
+    renderStepTail(loadTranscript);
+
+    const tail = screen.getByRole("log", { name: "Latest consolidation activity" });
+    expect(await within(tail).findByText("reports/reviewer-1.json")).toBeTruthy();
+    // The workflow's own prompt is not the step's output.
+    expect(within(tail).queryByText(/Consolidate the reviewer reports/) === null).toBe(true);
+    expect(loadTranscript.mock.calls[0]).toEqual([
+      "multi-1",
+      "consolidate",
+      { knownSourceToken: undefined },
+    ]);
+
+    act(() => useMultiReviewStore.getState().replaceWorkflow(workflowRevision(2)));
+    await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(2));
+    expect(loadTranscript.mock.calls[1]?.[2]).toEqual({ knownSourceToken: "step-token-1" });
+    expect(within(tail).getByText("reports/reviewer-1.json")).toBeTruthy();
+  });
+
+  test("polls only while the step is live, visible and its tab active", async () => {
+    const { clock, document: fakeDocument } = installFakeReadCoordinator();
+    const loadTranscript = mock(async () => stepTranscript());
+    const view = renderStepTail(loadTranscript);
+    await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(1));
+
+    await act(() => clock.advance(4_000));
+    expect(loadTranscript).toHaveBeenCalledTimes(2);
+
+    // Hidden window: the coordinator stops polling.
+    act(() => fakeDocument.setVisibility("hidden"));
+    await act(() => clock.advance(12_000));
+    const whileHidden = loadTranscript.mock.calls.length;
+    await act(() => clock.advance(12_000));
+    expect(loadTranscript).toHaveBeenCalledTimes(whileHidden);
+    act(() => fakeDocument.setVisibility("visible"));
+
+    // A settled step stops polling; its last checkpoint already read it.
+    view.rerender(
+      <StepTranscriptTail
+        workflowId="multi-1"
+        step="consolidate"
+        access={{ kind: "own" }}
+        live={false}
+        isActive
+        loadTranscript={loadTranscript}
+      />,
+    );
+    await act(() => clock.advance(1));
+    const settled = loadTranscript.mock.calls.length;
+    await act(() => clock.advance(20_000));
+    expect(loadTranscript).toHaveBeenCalledTimes(settled);
+
+    // An inactive tab reads nothing at all.
+    view.rerender(
+      <StepTranscriptTail
+        workflowId="multi-1"
+        step="consolidate"
+        access={{ kind: "own" }}
+        live
+        isActive={false}
+        loadTranscript={loadTranscript}
+      />,
+    );
+    await act(() => clock.advance(20_000));
+    expect(loadTranscript).toHaveBeenCalledTimes(settled);
+  });
+
+  test("does not read a session another step is using, and says which", () => {
+    const loadTranscript = mock(async () => stepTranscript());
+    renderStepTail(loadTranscript, { access: { kind: "other-step", step: "fix" } });
+    expect(
+      screen.getByText(
+        "This step's session is now running Fix. Open session to read the whole conversation.",
+      ),
+    ).toBeTruthy();
+    cleanup();
+    renderStepTail(loadTranscript, { step: "fix", access: { kind: "none" } });
+    expect(screen.getByText("The transcript appears here once this step starts.")).toBeTruthy();
+    expect(loadTranscript).not.toHaveBeenCalled();
+  });
+
+  test("shows the backend's word when the session moved on since the snapshot", async () => {
+    renderStepTail(
+      mock(async () => stepTranscript({ session: "other-step", sessionStep: "fix", messages: [] })),
+    );
+    expect(
+      await screen.findByText(
+        "This step's session is now running Fix. Open session to read the whole conversation.",
+      ),
+    ).toBeTruthy();
+  });
+
+  test("hides schema-shaped output the way a reviewer's is hidden", async () => {
+    const plan = JSON.stringify({ headRef: "a".repeat(40), commands: [], limitations: [] });
+    const answer = stepTranscript({
+      step: "prepare",
+      messages: [
+        {
+          id: "p1",
+          role: "assistant",
+          content: plan,
+          createdAt: CREATED_AT,
+          parts: [{ type: "text", content: "Discovering the validation commands." }],
+        },
+        {
+          id: "p2",
+          role: "assistant",
+          content: plan,
+          createdAt: CREATED_AT,
+          parts: [{ type: "text", content: plan }],
+        },
+        {
+          id: "p3",
+          role: "assistant",
+          content: "",
+          createdAt: CREATED_AT,
+          parts: [{ type: "text", content: '{"reviewScope": {"targetBranch": "main", "filesRev' }],
+        },
+      ],
+    });
+    renderStepTail(
+      mock(async () => answer),
+      { step: "prepare" },
+    );
+    const tail = screen.getByRole("log", { name: "Latest review package generation activity" });
+    expect(await within(tail).findByText("Discovering the validation commands.")).toBeTruthy();
+    expect(tail.textContent).not.toContain("headRef");
+    expect(tail.textContent).not.toContain("reviewScope");
   });
 });
 

@@ -224,3 +224,11 @@ test("shows a failed reviewer's error on its node, with the whole text in a tool
   await page.keyboard.press("Escape");
   await expect(tooltip).toBeHidden();
 });
+
+test("shows the selected step's transcript tail in the inspector", async ({ page }) => {
+  await page.goto("/multi-review-flow?phase=consolidating&reviewers=4");
+  const selected = page.locator('[role="tab"][aria-selected="true"]');
+  await expect(selected).toHaveAttribute("aria-label", /^Consolidation,/);
+  const tail = page.getByRole("log", { name: "Latest consolidation activity" });
+  await expect(tail).toContainText("Merging four reviewer reports");
+});

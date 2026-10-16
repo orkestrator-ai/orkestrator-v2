@@ -3,6 +3,7 @@ import type {
   MultiReviewPhase,
   MultiReviewReviewerTranscript,
   MultiReviewStepKind,
+  MultiReviewStepTranscript,
   MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import type { ReviewIssue, StructuredReviewReport } from "@orkestrator/protocol/structured-review";
@@ -347,6 +348,39 @@ async function fixtureTranscript(
   };
 }
 
+const STEP_LINES: Record<MultiReviewStepKind, string[]> = {
+  prepare: ["Discovering validation commands from mise.toml", "Running typecheck and lint"],
+  consolidate: [
+    "Merging four reviewer reports",
+    "Two reviewers raised the paused-prepare finding; keeping the higher severity",
+  ],
+  fix: ["Addressing the P0 shared fix session runtime", "Running the focused tests"],
+};
+
+async function fixtureStepTranscript(
+  workflowId: string,
+  step: MultiReviewStepKind,
+): Promise<MultiReviewStepTranscript> {
+  const createdAt = new Date().toISOString();
+  return {
+    workflowId,
+    step,
+    workflowPhase: "consolidating",
+    session: "own",
+    agent: "codex",
+    model: "gpt-6-luna",
+    transcript: "snapshot",
+    sourceToken: "fixture",
+    messages: STEP_LINES[step].map((text, index) => ({
+      id: `${step}-${index}`,
+      role: "assistant",
+      content: text,
+      createdAt,
+      parts: [{ type: "thinking", content: text }],
+    })),
+  };
+}
+
 export function MultiReviewFlowFixture() {
   const params = new URLSearchParams(window.location.search);
   const phase = (params.get("phase") ?? "reviewing") as FixturePhase;
@@ -365,6 +399,7 @@ export function MultiReviewFlowFixture() {
         isActive
         hydrateWorkflow={async () => workflow}
         loadReviewerTranscript={fixtureTranscript}
+        loadStepTranscript={fixtureStepTranscript}
       />
     </main>
   );

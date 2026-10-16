@@ -13,10 +13,11 @@ import {
   Square,
   Wrench,
 } from "lucide-react";
-import type {
-  MultiReviewPhase,
-  MultiReviewStepKind,
-  MultiReviewWorkflow,
+import {
+  multiReviewStepSessionAccess,
+  type MultiReviewPhase,
+  type MultiReviewStepKind,
+  type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import type { MultiReviewTabData } from "@/types/paneLayout";
 import { Button } from "@/components/ui/button";
@@ -43,6 +44,7 @@ import {
   MultiReviewFindingsPane,
   MultiReviewInspectorHeader,
   ReviewerTranscriptTail,
+  StepTranscriptTail,
 } from "./MultiReviewInspector";
 import {
   defaultFlowSelection,
@@ -127,6 +129,8 @@ interface MultiReviewTabProps {
   openReviewer?: (reviewerId: string, index: number) => void;
   /** Reads the selected reviewer's transcript tail for the inspector. */
   loadReviewerTranscript?: typeof backend.getMultiReviewReviewerTranscript;
+  /** Reads the selected step's transcript tail for the inspector. */
+  loadStepTranscript?: typeof backend.getMultiReviewStepTranscript;
 }
 
 function phaseCopy(workflow: MultiReviewWorkflow): string {
@@ -361,6 +365,7 @@ function MultiReviewOverviewTab({
   commands = defaultCommands,
   openReviewer,
   loadReviewerTranscript,
+  loadStepTranscript,
 }: MultiReviewTabProps) {
   const createTab = useOptionalTerminalContext()?.createTab;
   const workflow = useMultiReviewStore((state) => state.workflows.get(data.workflowId));
@@ -791,6 +796,7 @@ function MultiReviewOverviewTab({
     };
     const pause = () => void runStepLifecycle(kind, "pause", commands.pauseStep);
     const resume = () => void runStepLifecycle(kind, "resume", commands.resumeStep);
+    const access = multiReviewStepSessionAccess(workflow, kind);
     return {
       node: {
         id: key,
@@ -907,9 +913,18 @@ function MultiReviewOverviewTab({
         <div className="space-y-4">
           <StepFacts model={model} runtime={runtime} status={status} />
           {details}
-          <p className="text-xs text-muted-foreground">
-            This step runs in a backend-owned session. Open session to read its transcript.
-          </p>
+          <StepTranscriptTail
+            key={kind}
+            workflowId={workflow.id}
+            step={kind}
+            access={{
+              kind: access.kind,
+              step: access.kind === "other-step" ? access.step : undefined,
+            }}
+            live={status.state === "running"}
+            isActive={isActive}
+            loadTranscript={loadStepTranscript}
+          />
         </div>
       ),
       activityAt,

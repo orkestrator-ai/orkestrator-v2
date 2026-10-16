@@ -789,6 +789,7 @@ export class AppServerEngine implements CodexEngine {
       onGenerationReady: (generation, previous) =>
         this.handleGenerationChange(generation, previous),
       onGenerationExit: (generation) => {
+        this.hostedNetworkLockVerifiedGeneration = null;
         this.rejectAllWaiters();
         this.router.abandonGeneration(generation);
       },
@@ -1421,12 +1422,15 @@ export class AppServerEngine implements CodexEngine {
    * letting the model open arbitrary URLs. Verified once per app-server
    * generation.
    */
-  private async assertHostedNetworkLock(config: EngineTurnConfig): Promise<void> {
-    if (!config.permissionProfile) return;
-    if (this.hostedNetworkLockVerifiedGeneration === this.supervisor.getGeneration()) return;
-    const { result, generation } = await this.supervisor.requestWithGeneration<{
-      config?: unknown;
-    }>("config/read", { cwd: config.cwd ?? this.options.cwd });
+  private async assertHostedNetworkLock(config: EngineTurnConfig): Promise<EngineGeneration> {
+    const { id: generation } = await this.supervisor.ensureReady();
+    if (!config.permissionProfile) return generation;
+    if (this.hostedNetworkLockVerifiedGeneration === generation) return generation;
+    const result = await this.supervisor.requestOnGeneration<{ config?: unknown }>(
+      generation,
+      "config/read",
+      { cwd: config.cwd ?? this.options.cwd },
+    );
     const gaps = codexHostedNetworkLockGaps(
       result?.config,
       codexNetworkDeniedSearchMode(config.policy),
@@ -1436,27 +1440,31 @@ export class AppServerEngine implements CodexEngine {
         `Codex did not confirm its hosted web search mode (${gaps.join("; ")}), so this coordinator session was refused`,
       );
     }
+    if (!this.supervisor.isReady() || this.supervisor.getGeneration() !== generation) {
+      throw new Error("Codex exited during hosted web search verification");
+    }
     this.hostedNetworkLockVerifiedGeneration = generation;
+    return generation;
   }
 
   async startThread(options: StartThreadOptions): Promise<EngineThread> {
-    await this.assertHostedNetworkLock(options.config);
-    const response = await this.supervisor.request<{
+    const generation = await this.assertHostedNetworkLock(options.config);
+    const response = await this.supervisor.requestOnGeneration<{
       thread: Record<string, unknown>;
       model?: unknown;
       activePermissionProfile?: { id?: unknown } | null;
-    }>("thread/start", this.toThreadParams(options.config));
+    }>(generation, "thread/start", this.toThreadParams(options.config));
     this.assertPermissionProfile(response.activePermissionProfile, options.config);
     return this.bindThread(response.thread, options.config, response.model);
   }
 
   async resumeThread(threadId: string, options: ResumeThreadOptions): Promise<EngineThread> {
-    await this.assertHostedNetworkLock(options.config);
-    const response = await this.supervisor.request<{
+    const generation = await this.assertHostedNetworkLock(options.config);
+    const response = await this.supervisor.requestOnGeneration<{
       thread: Record<string, unknown>;
       model?: unknown;
       activePermissionProfile?: { id?: unknown } | null;
-    }>("thread/resume", { threadId, ...this.toThreadParams(options.config) });
+    }>(generation, "thread/resume", { threadId, ...this.toThreadParams(options.config) });
     this.assertPermissionProfile(response.activePermissionProfile, options.config);
     const thread = this.bindThread(response.thread, options.config, response.model);
     // app-server reconstructs turn history on resume by default.
@@ -1507,12 +1515,12 @@ export class AppServerEngine implements CodexEngine {
     config: EngineTurnConfig,
     lastTurnId?: string,
   ): Promise<EngineThread> {
-    await this.assertHostedNetworkLock(config);
-    const response = await this.supervisor.request<{
+    const generation = await this.assertHostedNetworkLock(config);
+    const response = await this.supervisor.requestOnGeneration<{
       thread: Record<string, unknown>;
       model?: unknown;
       activePermissionProfile?: { id?: unknown } | null;
-    }>("thread/fork", {
+    }>(generation, "thread/fork", {
       threadId,
       ...(lastTurnId ? { lastTurnId } : {}),
       ...this.toThreadParams(config),

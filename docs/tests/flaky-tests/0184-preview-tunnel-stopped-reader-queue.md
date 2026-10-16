@@ -83,3 +83,13 @@ not establish a root cause. No assertion, timeout or skip was changed.
 - **Isolated rerun:** `mise run test:logged -- --name merge-preview-tunnel-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/preview-tunnel-server.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 0.7 seconds.
 - **Evidence:** `/tmp/orkestrator-test-run.LW4SBd/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `/tmp/orkestrator-test-run.LW4SBd/summary.json`; outer wrapper: `/tmp/orkestrator-test-run.dDf2wg/merge-tests.log.gz`.
 - **Hypothesis:** this repeats the existing intermittent queue-sampling failure under aggregate load. The isolated pass does not establish its root cause. No assertion, timeout or skip was changed.
+
+## Recurrence during coordinator research fixes (2026-10-16)
+
+- **Original command:** `mise run test:logged -- --name stable-final-tests -- mise run test`; Bun 1.4.3, macOS arm64.
+- **Worker configuration:** workspace/root/bridges/protocol used 4/1/2/1 slots; workspace allowed two packages with two Bun workers each.
+- **Failure:** expected `aggregateQueuedBytes <= 557056`; received `557298` at line 279 (311.33 ms).
+- **Suite counts:** backend: 8,141 total, 8,099 passed, 40 skipped, 2 failed across 440 files, with 40,463 assertions in 255.40 seconds. The other failure was the pre-existing `http-bridge-provider.ts` 1,500-line boundary (1,505 lines). Root/support, bridges and protocol passed.
+- **Isolated rerun:** `mise run test:logged -- --name preview-isolated -- bun test --cwd apps/backend ./src/preview-tunnel-server.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 0.7 seconds.
+- **Evidence:** `/tmp/orkestrator-test-run.5JXfax/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer wrapper: `/tmp/orkestrator-test-run.nBYbNf/stable-final-tests.log.gz`.
+- **Hypothesis:** same intermittent queue-sampling failure as the prior observations. No assertion, timeout, skip or tunnel behavior was changed.

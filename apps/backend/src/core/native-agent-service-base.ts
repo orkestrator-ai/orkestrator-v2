@@ -764,7 +764,7 @@ export abstract class NativeAgentServiceBase {
       origin: "coordinator",
       interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
       owner: { kind: "coordinator", projectId: workspace.projectId, coordinatorId },
-      executionPolicy: existing?.executionPolicy ?? COORDINATOR_EXECUTION_POLICY,
+      executionPolicy: COORDINATOR_EXECUTION_POLICY,
       // Resolved fresh rather than read from the record: the coordinator
       // policy is never user-overridable, and its only variable part is the
       // research setting, which applies from the next turn. OpenCode has no
@@ -776,6 +776,45 @@ export abstract class NativeAgentServiceBase {
         webResearch,
       ),
     };
+    if (
+      existing &&
+      existing.policy &&
+      JSON.stringify(existing.policy) !== JSON.stringify(trusted.policy)
+    ) {
+      // Only the research exception may change on a coordinator conversation.
+      // All ownership and other policy fields still pass the normal identity
+      // check. Never turn an unrelated or forged policy into coordinator authority.
+      const oldAllow = existing.policy.capabilityPolicy?.allow;
+      if (oldAllow?.some((capability) => capability !== "web.search")) {
+        throw new Error("Native agent session key collision");
+      }
+      this.assertSessionIdentity(
+        existing,
+        {
+          ...trusted,
+          policy: {
+            ...trusted.policy,
+            capabilityPolicy: { ...trusted.policy.capabilityPolicy, allow: oldAllow },
+          },
+        },
+        existing.key,
+      );
+      // Resolve launcher authority before recording the change. A busy bridge
+      // refuses replacement; session-held permissions apply explicitly.
+      const provider = await this.provider(trusted);
+      if (provider.synchronizeSessionPolicy) {
+        const { status } = await readProviderStatus(provider, existing.providerSessionId);
+        // A missing provider session is replaced by ensureSession below.
+        if (status !== "missing") {
+          await provider.synchronizeSessionPolicy(existing.providerSessionId, trusted.policy);
+        }
+      }
+      await this.storage.transitionCoordinatorResearchPolicy(
+        existing,
+        trusted.policy,
+        trusted.owner,
+      );
+    }
     if (
       "prompt" in input &&
       typeof input.prompt === "string" &&
@@ -991,6 +1030,11 @@ export abstract class NativeAgentServiceBase {
       const { status } = await readProviderStatus(provider, existing.providerSessionId);
       await this.assertEnvironmentLive(input.environmentId);
       if (status !== "missing") {
+        // Restate session-held authority even after a backend restart. Providers
+        // with process-held authority were refreshed by the launcher above.
+        if (input.owner?.kind === "coordinator" && input.policy) {
+          await provider.synchronizeSessionPolicy?.(existing.providerSessionId, input.policy);
+        }
         if (
           ((!existing.owner || !existing.policy) && input.owner) ||
           (!existing.initialPromptPresentation && input.initialPromptPresentation)

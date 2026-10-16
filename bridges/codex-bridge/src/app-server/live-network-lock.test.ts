@@ -473,6 +473,9 @@ describeLiveSearchCanary("live coordinator web search modes", () => {
     const { url, token } = freshPageUrl();
     const turn = await liveCoordinatorTurn("search", "cached", OPEN_PROMPT(url));
     expect(turn.searches.length).toBeGreaterThan(0);
+    // Require an explicit tool refusal as well as absence of page content.
+    // A differently worded successful fetch must never satisfy this canary.
+    expect(turn.text).toMatch(/cache miss|not accessible via this tool/i);
     expect(turn.text).not.toContain(`${token} - Search results`);
   }, 300_000);
 

@@ -110,6 +110,47 @@ describe("a coordinator allowed to research", () => {
     expect(off.some((tool) => tool.startsWith("mcp__context7"))).toBe(false);
   });
 
+  test("an ordinary read-only review cannot inherit a session's research exception", async () => {
+    const session = createSession("strict-read-only-review");
+    track(session.id);
+    session.executionPolicy = research;
+    const prompt = sendPrompt(session.id, "Review this", { readOnly: true });
+    const call = await nextQueryCall();
+    expect(call.options.allowedTools).not.toContain("WebSearch");
+    expect(call.options.disallowedTools).toContain("WebSearch");
+    expect(call.options.disallowedTools).toContain("WebFetch");
+    call.push({ type: "result", subtype: "success" });
+    call.finish();
+    await prompt;
+  });
+
+  test("a read-only prompt retains the coordinator process's research authority", async () => {
+    const previousPolicy = process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY;
+    const previousResearch = process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH;
+    process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY = "coordinator-read-only";
+    process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH = "search";
+    try {
+      const session = createSession("read-only-research-coordinator");
+      track(session.id);
+      // A persisted pre-research policy must not override launch authority.
+      session.executionPolicy = coordinatorProcessPolicy({});
+      const prompt = sendPrompt(session.id, "Look this up", { readOnly: true });
+      const call = await nextQueryCall();
+      expect(call.options.allowedTools).toContain("WebSearch");
+      expect(call.options.disallowedTools).not.toContain("WebSearch");
+      expect(call.options.disallowedTools).toContain("WebFetch");
+      expect(call.options.settingSources).toEqual([]);
+      call.push({ type: "result", subtype: "success" });
+      call.finish();
+      await prompt;
+    } finally {
+      if (previousPolicy === undefined) delete process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY;
+      else process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY = previousPolicy;
+      if (previousResearch === undefined) delete process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH;
+      else process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH = previousResearch;
+    }
+  });
+
   test("the hook admits search and the named research server, nothing else", async () => {
     expect(await decide("WebSearch")).toBeUndefined();
     expect(await decide("mcp__context7__query-docs")).toBeUndefined();

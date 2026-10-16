@@ -663,12 +663,87 @@ describe("thread lifecycle", () => {
 
     // A restart can bring up a different binary under the same overrides.
     firstChild.exit(1);
-    await h.engine.getSupervisor().ensureReady();
     await h.engine.resumeThread("t1", { config });
     expect(h.child()).not.toBe(firstChild);
     expect(h.child().requests.filter((request) => request.method === "config/read")).toHaveLength(
       1,
     );
+  });
+
+  for (const method of ["start", "resume", "fork"] as const) {
+    for (const invalid of [{ web_search: "live" }, {}]) {
+      test(`lazy replacement refuses ${method} with ${JSON.stringify(invalid)}`, async () => {
+        let readback = HOSTED_NETWORK_LOCKED();
+        const h = harness({
+          "config/read": () => readback,
+          "thread/start": () => ({
+            thread: thread("t1"),
+            activePermissionProfile: { id: "profile" },
+          }),
+          "thread/resume": () => ({
+            thread: thread("t1"),
+            activePermissionProfile: { id: "profile" },
+          }),
+          "thread/fork": () => ({
+            thread: thread("t2"),
+            activePermissionProfile: { id: "profile" },
+          }),
+        });
+        const config = { ...PLAN, permissionProfile: "profile", networkAccessEnabled: false };
+        await h.engine.startThread({ config });
+        h.child().exit(1);
+        readback = { ...readback, config: invalid } as typeof readback;
+        const request =
+          method === "start"
+            ? h.engine.startThread({ config })
+            : method === "resume"
+              ? h.engine.resumeThread("t1", { config })
+              : h.engine.forkThread("t1", config);
+        await expect(request).rejects.toThrow("did not confirm its hosted web search mode");
+        expect(h.children).toHaveLength(2);
+        expect(
+          h.child().requests.filter((request) => request.method.startsWith("thread/")),
+        ).toEqual([]);
+        await h.engine.stop();
+      });
+    }
+  }
+
+  test("an exit after config/read cannot send thread/start into a replacement", async () => {
+    const h = harness({ "config/read": HOSTED_NETWORK_LOCKED });
+    const supervisor = h.engine.getSupervisor();
+    const request = supervisor.requestOnGeneration.bind(supervisor);
+    spyOn(supervisor, "requestOnGeneration").mockImplementation(
+      async (generation, method, params, options) => {
+        const result = await request(generation, method, params, options);
+        if (method === "config/read") h.child().exit(1);
+        return result;
+      },
+    );
+    await expect(
+      h.engine.startThread({ config: { ...PLAN, permissionProfile: "profile" } }),
+    ).rejects.toThrow();
+    expect(h.children).toHaveLength(1);
+    expect(h.child().requests.some((request) => request.method === "thread/start")).toBe(false);
+    await h.engine.stop();
+  });
+
+  test("an exit after verification cannot lazily replace the verified generation", async () => {
+    const h = harness({ "config/read": HOSTED_NETWORK_LOCKED });
+    const supervisor = h.engine.getSupervisor();
+    const request = supervisor.requestOnGeneration.bind(supervisor);
+    spyOn(supervisor, "requestOnGeneration").mockImplementation(
+      (generation, method, params, options) => {
+        if (method === "thread/start") h.child().exit(1);
+        return request(generation, method, params, options);
+      },
+    );
+    await expect(
+      h.engine.startThread({ config: { ...PLAN, permissionProfile: "profile" } }),
+    ).rejects.toThrow();
+    expect(h.children).toHaveLength(1);
+    expect(h.child().requests.some((request) => request.method === "thread/start")).toBe(false);
+    await h.engine.stop();
   });
 
   test("plan mode resolves to a read-only sandbox", async () => {

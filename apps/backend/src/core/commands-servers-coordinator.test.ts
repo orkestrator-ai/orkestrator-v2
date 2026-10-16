@@ -210,80 +210,85 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
     }
   });
 
-  test("a Claude coordinator gets its credential, its policy, and none of the user's config", async () => {
-    const bridge = path.join(root, "bridges", "claude-bridge", "dist");
-    await fs.mkdir(bridge, { recursive: true });
-    await fs.writeFile(
-      path.join(bridge, "index.js"),
-      `await Bun.write(process.env.CLAUDE_CONFIG_DIR + "/captured.json", JSON.stringify({ policy: process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN, research: process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH, researchMcp: process.env.ORKESTRATOR_COORDINATOR_RESEARCH_MCP }));
+  test.each([undefined, "off", "search"] as const)(
+    "a Claude coordinator isolates config and launches stored research mode %s",
+    async (researchMode) => {
+      const config = await storage.loadConfig();
+      await storage.updateGlobalConfig({ ...config.global, coordinatorWebResearch: researchMode });
+      const bridge = path.join(root, "bridges", "claude-bridge", "dist");
+      await fs.mkdir(bridge, { recursive: true });
+      await fs.writeFile(
+        path.join(bridge, "index.js"),
+        `await Bun.write(process.env.CLAUDE_CONFIG_DIR + "/captured.json", JSON.stringify({ policy: process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY, attachmentRoot: process.env.ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL, mcpToken: process.env.ORKESTRATOR_AGENT_MCP_TOKEN, research: process.env.ORKESTRATOR_COORDINATOR_WEB_RESEARCH, researchMcp: process.env.ORKESTRATOR_COORDINATOR_RESEARCH_MCP }));
 const server = Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() { return Response.json({ ok: true }); } });
 const stop = () => { server.stop(true); process.exit(0); };
 process.on("SIGTERM", stop); process.on("SIGINT", stop);
 `,
-    );
-    const project = await storage.addProject(createProject("remote", checkout));
-    const coordinator = new CoordinatorService(storage, () => ({
-      enabled: true,
-      running: true,
-      error: null,
-    }));
-    const snapshot = await coordinator.ensure(project.id);
-    const conversation = snapshot.workspace.conversations[0]!;
-    await coordinator.assignConversationAgent(project.id, conversation.id, "claude");
-    const issue = mock(() => ({ url: "http://127.0.0.1:1234/mcp", token: "scoped-token" }));
-    const revoke = mock(() => undefined);
-    const context = {
-      storage,
-      coordinators: coordinator,
-      appRoot: root,
-      resourceRoot: root,
-      emit: () => undefined,
-      environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
-      runtime: new BackendRuntime({ emit: () => undefined }),
-      controlMcp: {
-        getSettings: () => ({
-          enabled: true,
-          running: true,
-          url: "http://127.0.0.1:1234/mcp",
-          token: "",
-          error: null,
-        }),
-        rotateToken: async () => ({
-          enabled: true,
-          running: true,
-          url: "http://127.0.0.1:1234/mcp",
-          token: "",
-          error: null,
-        }),
-        issueCoordinatorCredential: issue,
-        revokeCoordinatorCredentials: revoke,
-      },
-    } as CommandContext;
-    const runtimeId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
-    cleanupContext = context;
-    cleanupRuntimeId = runtimeId;
-    cleanupKind = "claude";
+      );
+      const project = await storage.addProject(createProject("remote", checkout));
+      const coordinator = new CoordinatorService(storage, () => ({
+        enabled: true,
+        running: true,
+        error: null,
+      }));
+      const snapshot = await coordinator.ensure(project.id);
+      const conversation = snapshot.workspace.conversations[0]!;
+      await coordinator.assignConversationAgent(project.id, conversation.id, "claude");
+      const issue = mock(() => ({ url: "http://127.0.0.1:1234/mcp", token: "scoped-token" }));
+      const revoke = mock(() => undefined);
+      const context = {
+        storage,
+        coordinators: coordinator,
+        appRoot: root,
+        resourceRoot: root,
+        emit: () => undefined,
+        environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+        runtime: new BackendRuntime({ emit: () => undefined }),
+        controlMcp: {
+          getSettings: () => ({
+            enabled: true,
+            running: true,
+            url: "http://127.0.0.1:1234/mcp",
+            token: "",
+            error: null,
+          }),
+          rotateToken: async () => ({
+            enabled: true,
+            running: true,
+            url: "http://127.0.0.1:1234/mcp",
+            token: "",
+            error: null,
+          }),
+          issueCoordinatorCredential: issue,
+          revokeCoordinatorCredentials: revoke,
+        },
+      } as CommandContext;
+      const runtimeId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
+      cleanupContext = context;
+      cleanupRuntimeId = runtimeId;
+      cleanupKind = "claude";
 
-    const started = await startLocalServerUnlocked(runtimeId, context, "claude");
-    expect(started).toMatchObject({ wasRunning: false, port: expect.any(Number) });
+      const started = await startLocalServerUnlocked(runtimeId, context, "claude");
+      expect(started).toMatchObject({ wasRunning: false, port: expect.any(Number) });
 
-    const isolatedHome = path.join(
-      storage.getDataDir(),
-      "coordinator-runtime",
-      snapshot.workspace.id,
-      "conversations",
-      conversation.id,
-      "claude-home",
-    );
-    expect(await fs.readFile(path.join(isolatedHome, ".credentials.json"), "utf8")).toContain(
-      "login",
-    );
-    // `settings.json` can declare hooks and `plugins/` is arbitrary code. Both
-    // would run inside a session pointed at the user's real checkout.
-    await expect(fs.access(path.join(isolatedHome, "settings.json"))).rejects.toThrow();
-    await expect(fs.access(path.join(isolatedHome, "plugins"))).rejects.toThrow();
-    expect(JSON.parse(await fs.readFile(path.join(isolatedHome, "captured.json"), "utf8"))).toEqual(
-      {
+      const isolatedHome = path.join(
+        storage.getDataDir(),
+        "coordinator-runtime",
+        snapshot.workspace.id,
+        "conversations",
+        conversation.id,
+        "claude-home",
+      );
+      expect(await fs.readFile(path.join(isolatedHome, ".credentials.json"), "utf8")).toContain(
+        "login",
+      );
+      // `settings.json` can declare hooks and `plugins/` is arbitrary code. Both
+      // would run inside a session pointed at the user's real checkout.
+      await expect(fs.access(path.join(isolatedHome, "settings.json"))).rejects.toThrow();
+      await expect(fs.access(path.join(isolatedHome, "plugins"))).rejects.toThrow();
+      expect(
+        JSON.parse(await fs.readFile(path.join(isolatedHome, "captured.json"), "utf8")),
+      ).toEqual({
         policy: "coordinator-read-only",
         // Attachments are staged outside the checkout, so the bridge is told
         // the one directory besides the workspace it may read them from.
@@ -295,36 +300,56 @@ process.on("SIGTERM", stop); process.on("SIGINT", stop);
         mcpToken: "scoped-token",
         // The research setting is process authority too; absent in the
         // stored config means the default: search plus Context7.
-        research: "search-and-mcp",
-        researchMcp: JSON.stringify([{ name: "context7", url: "https://mcp.context7.com/mcp" }]),
-      },
-    );
-    const attachmentRootStats = await fs.stat(
-      storage.coordinatorAttachmentDirectory(snapshot.workspace.id, conversation.id),
-    );
-    expect(attachmentRootStats.isDirectory()).toBe(true);
-    expect(attachmentRootStats.mode & 0o777).toBe(0o700);
-    // The conversation's bridge identity is stored in the neutral fields, not
-    // Codex's, so the reaper can find a Claude coordinator child too.
-    expect(await storage.getCoordinatorWorkspace(project.id)).toMatchObject({
-      conversations: [{ bridgePort: started.port, bridgePid: started.pid }],
-    });
-    // A renewed login must retain busy work, then replace an idle bridge and
-    // acknowledge the refresh only after the replacement has launched.
-    const key = `claude:${runtimeId}`;
-    staleLoginLocalBridges.add(key);
-    let busy = true;
-    context.nativeAgents = {
-      hasObservedLiveWork: async () => busy,
-    } as unknown as CommandContext["nativeAgents"];
-    const retained = await startLocalServerUnlocked(runtimeId, context, "claude");
-    expect(retained.pid).toBe(started.pid);
-    expect(staleLoginLocalBridges.has(key)).toBe(true);
-    busy = false;
-    const replaced = await startLocalServerUnlocked(runtimeId, context, "claude");
-    expect(replaced.pid).not.toBe(started.pid);
-    expect(staleLoginLocalBridges.has(key)).toBe(false);
-  });
+        research: researchMode ?? "search-and-mcp",
+        ...(researchMode === undefined
+          ? {
+              researchMcp: JSON.stringify([
+                { name: "context7", url: "https://mcp.context7.com/mcp" },
+              ]),
+            }
+          : {}),
+      });
+      const attachmentRootStats = await fs.stat(
+        storage.coordinatorAttachmentDirectory(snapshot.workspace.id, conversation.id),
+      );
+      expect(attachmentRootStats.isDirectory()).toBe(true);
+      expect(attachmentRootStats.mode & 0o777).toBe(0o700);
+      // The conversation's bridge identity is stored in the neutral fields, not
+      // Codex's, so the reaper can find a Claude coordinator child too.
+      expect(await storage.getCoordinatorWorkspace(project.id)).toMatchObject({
+        conversations: [{ bridgePort: started.port, bridgePid: started.pid }],
+      });
+      // A renewed login must retain busy work, then replace an idle bridge and
+      // acknowledge the refresh only after the replacement has launched.
+      const key = `claude:${runtimeId}`;
+      staleLoginLocalBridges.add(key);
+      let busy = true;
+      context.nativeAgents = {
+        hasObservedLiveWork: async () => busy,
+      } as unknown as CommandContext["nativeAgents"];
+      const retained = await startLocalServerUnlocked(runtimeId, context, "claude");
+      expect(retained.pid).toBe(started.pid);
+      expect(staleLoginLocalBridges.has(key)).toBe(true);
+      busy = false;
+      const replaced = await startLocalServerUnlocked(runtimeId, context, "claude");
+      expect(replaced.pid).not.toBe(started.pid);
+      expect(staleLoginLocalBridges.has(key)).toBe(false);
+      const current = await storage.loadConfig();
+      const nextMode = researchMode === "off" ? "search" : "off";
+      await storage.updateGlobalConfig({ ...current.global, coordinatorWebResearch: nextMode });
+      busy = true;
+      await expect(startLocalServerUnlocked(runtimeId, context, "claude")).rejects.toThrow(
+        "current work finishes",
+      );
+      expect(commandTesting.getLocalServerProcess(key)?.pid).toBe(replaced.pid);
+      busy = false;
+      const changed = await startLocalServerUnlocked(runtimeId, context, "claude");
+      expect(changed.pid).not.toBe(replaced.pid);
+      expect(
+        JSON.parse(await fs.readFile(path.join(isolatedHome, "captured.json"), "utf8")),
+      ).toMatchObject({ research: nextMode });
+    },
+  );
 
   test("a Cursor coordinator clears inherited project-settings opt-in", async () => {
     process.env.CURSOR_BRIDGE_PROJECT_SETTINGS = "1";

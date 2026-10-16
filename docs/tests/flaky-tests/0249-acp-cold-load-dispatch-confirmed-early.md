@@ -37,3 +37,19 @@
 The owning file passes alone. The last response is read after prompt acceptance and can already include an authoritative turn outcome when the fixture finishes quickly. Aggregate scheduling appears to change whether completion wins that race. The earlier assertion still observed `unknown` while loading. No assertion, timeout, or production ACP behavior was changed for this observation.
 
 The subsequent `mise run test:logged -- --name final-tests -- mise run test` aggregate passed the complete bridge group (90.1 seconds).
+
+## Recurrence — 2026-10-16 (temporary host port merge)
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`,
+  with workspace/root/bridge/protocol reservations of 4/1/2/1 worker slots;
+  component browser validation ran alongside it.
+- **Failure:** the final dispatch probe again included `turn: { state: "completed" }`
+  at `acp-context.test.ts:1382`, failing the exact-equality assertion after
+  1253.75 ms.
+- **Suite counts:** ACP reported 578 passed, three skipped and one failed across
+  37 files in 99.96 seconds. The other four bridge packages passed.
+- **Isolated rerun:** `mise run test:logged -- --name merge-acp-preloaded -- bun test --cwd bridges/acp-bridge ./src/acp-context.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+  passed unchanged (exit 0, 13.6 seconds).
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.CYmzDD/bridges.log.gz`.
+- **Assessment:** consistent with the recorded completion/probe race; no
+  production behavior, assertion, timeout or skip changed.

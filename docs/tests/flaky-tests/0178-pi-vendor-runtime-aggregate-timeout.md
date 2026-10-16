@@ -301,6 +301,22 @@ tree within that deadline; this branch changes none of those paths. The timed
 out operation and root cause remain unconfirmed. No product code, assertion,
 timeout or skip was changed to conceal the failure.
 
+## Recurrence — 2026-10-16 (temporary host port review fixes)
+
+`PATH="/opt/homebrew/bin:$PATH" mise run test:logged -- --name
+review-tests-python-path -- mise run test` used the standard 4/1/2/1
+workspace/root/bridge/protocol slot allocation. Workspace admission waited
+107.7 seconds for an earlier run in this worktree. The staged-runtime case
+timed out at 30000.80 ms; the root/support group reported 3,002 passed, one
+skipped and one failed across 137 files in 296.97 seconds. Evidence:
+`/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.XYvcWL/root-and-agent-support-tests.log.gz`
+(compressed when the aggregate completes).
+
+With the same PATH, `mise run test:logged -- --name pi-vendor-isolated --
+bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+passed the unchanged owning file, exit 0, in 15.1 seconds. This change only
+updates browser tests and the required flake register. Shared host contention
+remains an unconfirmed hypothesis; no timeout, assertion or skip was changed.
 
 ## Mobile layout follow-up main merge — 2026-10-16
 

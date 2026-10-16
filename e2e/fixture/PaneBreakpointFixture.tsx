@@ -6,6 +6,10 @@ import {
   type NativeAgentSessionStateUpdate,
   type NativeAgentViewIdentity,
 } from "@orkestrator/protocol/native-agent";
+import { AppShell } from "../../apps/web/src/components/layout/AppShell";
+import { TooltipProvider } from "../../apps/web/src/components/ui/tooltip";
+import { TerminalProvider } from "../../apps/web/src/contexts";
+import { DockerAvailabilityProvider } from "../../apps/web/src/contexts/DockerAvailabilityContext";
 import { PaneTree } from "../../apps/web/src/components/pane-layout/PaneTree";
 import { TerminalPortalHost } from "../../apps/web/src/components/terminal/TerminalPortalHost";
 import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
@@ -234,19 +238,37 @@ function installBackend() {
 /**
  * An environment's real pane tree, composed as `TerminalContainer` composes it:
  * a shell pane served by the terminal portal host beside a native Codex pane.
+ *
+ * With `?shell=app` it renders inside the real `AppShell`, as the app does, so
+ * a breakpoint crossing moves the shell's content host between its layouts at
+ * the same time as the pane tree moves its own pane hosts.
  */
 export function PaneBreakpointFixture() {
   useState(installBackend);
   const node = usePaneLayoutStore((state) => state.environments.get(ENVIRONMENT_ID)?.root);
   if (!node) return null;
-  return (
-    <main className="flex h-screen w-screen flex-col bg-background text-foreground">
-      <div className="relative min-h-0 flex-1 overflow-hidden bg-background">
-        <DndContext>
-          <PaneTree node={node} containerId={null} environmentId={ENVIRONMENT_ID} isActive />
-          <TerminalPortalHost containerId={null} environmentId={ENVIRONMENT_ID} />
-        </DndContext>
+  const panes = (
+    <div className="relative h-full min-h-0 flex-1 overflow-hidden bg-background">
+      <DndContext>
+        <PaneTree node={node} containerId={null} environmentId={ENVIRONMENT_ID} isActive />
+        <TerminalPortalHost containerId={null} environmentId={ENVIRONMENT_ID} />
+      </DndContext>
+    </div>
+  );
+  if (new URLSearchParams(window.location.search).get("shell") === "app") {
+    return (
+      <div className="h-screen w-screen bg-background text-foreground">
+        <TooltipProvider>
+          <TerminalProvider>
+            <DockerAvailabilityProvider available={false}>
+              <AppShell>{panes}</AppShell>
+            </DockerAvailabilityProvider>
+          </TerminalProvider>
+        </TooltipProvider>
       </div>
-    </main>
+    );
+  }
+  return (
+    <main className="flex h-screen w-screen flex-col bg-background text-foreground">{panes}</main>
   );
 }

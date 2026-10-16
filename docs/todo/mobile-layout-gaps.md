@@ -46,7 +46,9 @@ settings follow-ups and real-device qualification.
     both directions, splitting, host cleanup), `stable-host.test.ts`, and the
     browser specs `e2e/PaneBreakpoint.spec.ts` (a real terminal pane and a
     native Codex pane crossing both ways, with `moveBefore` and with the
-    fallback) and `e2e/CoordinatorPaneTree.spec.ts` (composer drafts and focus).
+    fallback, alone and inside the real `AppShell`, which moves its own content
+    host at the same breakpoint) and `e2e/CoordinatorPaneTree.spec.ts`
+    (composer drafts and focus).
 - **Panes the switcher hides.** `MobilePaneSwitcher` keeps every pane mounted
   and stacks them at full size (`absolute inset-0`). A hidden pane has inline
   `visibility: hidden`, `opacity: 0` and `pointer-events: none`, plus `inert`,
@@ -68,6 +70,12 @@ settings follow-ups and real-device qualification.
     its size instead of being shrunk, with its PTY, to about ten columns: the
     fit addon reads a `display: none` container's computed `100%` width as
     100px.
+  - A hidden pane's tab strip, tabs and edge zones sit at the same coordinates
+    as the visible pane's, and dnd-kit measures droppables regardless of
+    visibility. The shared tab collision detection
+    (`createTerminalCollisionDetection` in `TerminalContainer.helpers.ts`, also
+    used by `CoordinatorPaneTree`) skips droppables inside an `inert` subtree,
+    so a drop lands in the pane on screen.
   - Before this, switching panes on a phone, with no breakpoint crossing,
     jumped a native transcript from message 28 to 53, and a terminal hidden at
     load stayed at xterm's default 80 columns until it was shown.
@@ -79,7 +87,13 @@ settings follow-ups and real-device qualification.
     `persistent-terminal-redraw.test.ts`, and the `mobile-chromium` case in
     `e2e/PaneBreakpoint.spec.ts` that switches panes back and forth and checks
     the transcript's first visible message, the terminal's columns, rows and
-    scroll line.
+    scroll line. `TerminalContainer.helpers.test.tsx` and the narrow-window drag
+    case in `e2e/CoordinatorPaneTree.spec.ts` cover drops. Against the real
+    backend, `e2e/agent-testing/terminal-mobile-panes.spec.ts` runs a shell
+    loop in a split on a phone, hides its pane, switches environments until the
+    loop ends, and checks that no resize reached the PTY while it was away,
+    that the output and status come back, and that the PTY matches the
+    rendered terminal on return and after a reload.
 - **Environment settings from the projects drawer.**
   - `MobileAppShellLayout` renders the sidebar inside a modal Radix `Dialog`
     (`mobile-projects-drawer`) without `forceMount`, so the drawer's rows
@@ -93,7 +107,10 @@ settings follow-ups and real-device qualification.
     `EnvironmentSettingsDialog`. The host writes the dialog's changes to the
     environment store and drops a request whose environment disappears.
   - `MobileAppShellLayout` subscribes to the store and closes the drawer when a
-    request arrives, returning focus to its trigger.
+    request arrives. It leaves focus to the dialog, and gives it to the drawer
+    trigger, standing in for the unmounted row, once the dialog closes.
+  - `FullscreenSettingsLayout` takes focus when it opens and returns it to its
+    opener when it closes, unless something else has placed focus by then.
   - The drawer backdrop no longer has its own click handler. Radix closes the
     drawer on a press outside it, and only while the drawer is the top layer.
   - The ActionBar "Environment settings" button still keeps its own
@@ -104,8 +121,10 @@ settings follow-ups and real-device qualification.
     press inside the drawer began does not close it),
     `tests/unit/components/EnvironmentItem.test.tsx` and
     `HierarchicalSidebar.test.tsx`, and the browser specs
-    `e2e/EnvironmentSettingsDrawer.spec.ts` (touch taps through the drawer
-    into an interactive settings dialog, then reopen the drawer) and
+    `e2e/EnvironmentSettingsDrawer.spec.ts` (touch taps and the keyboard
+    through the drawer into an interactive settings dialog, focus on the
+    drawer trigger after it closes, then reopen the drawer),
+    `FullscreenSettingsLayout.test.tsx` (focus in and back out) and
     `e2e/MobileAppShellLayout.spec.ts` (tapping the backdrop closes the drawer
     and returns focus).
   - **Before the fix, in `mobile-chromium` (390 × 844):** a touch tap on a
@@ -127,12 +146,9 @@ settings follow-ups and real-device qualification.
    of the dialog (`useActionBarController.ts`, `ActionBar.view.tsx`). Moving
    it onto `useAppDialogStore` leaves one host for the dialog. Its tests in
    `ActionBar.test.tsx` mock the dialog and would follow it to the host.
-2. **Return focus to the opener when fullscreen settings close.**
-   `FullscreenSettingsLayout` is a `role="dialog"` portal without focus
-   management, so closing any settings dialog leaves focus on `body`, on
-   desktop and in the drawer flow alike. Done when closing returns focus to
-   the control that opened it, or to the drawer trigger when that control
-   has unmounted.
+2. **Trap focus in fullscreen settings.** `FullscreenSettingsLayout` now
+   takes focus and gives it back, but Tab can still leave it for the page
+   underneath once it reaches its last control.
 
 ### Qualification
 

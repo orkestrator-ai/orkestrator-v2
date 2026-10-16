@@ -1020,6 +1020,50 @@ describe("TerminalContainer", () => {
       expect(collisionDetection({} as never)).toEqual([{ id: "tabbar:right" }]);
     });
 
+    test("never offers droppables inside an inert pane to any strategy", () => {
+      const collisionDetection = createTerminalCollisionDetection({
+        pointerDetection: pointerWithinMock,
+        rectangleDetection: rectIntersectionMock,
+        nearestDetection: closestCenterMock,
+      });
+      // The mobile switcher stacks a hidden pane, inert, under the visible one.
+      const hiddenPane = document.createElement("div");
+      hiddenPane.inert = true;
+      const hiddenTabbar = document.createElement("div");
+      hiddenPane.append(hiddenTabbar);
+      const visibleTabbar = document.createElement("div");
+      document.body.append(hiddenPane, visibleTabbar);
+      const container = (id: string, node: HTMLElement | null) => ({ id, node: { current: node } });
+      const visible = container("tabbar:visible", visibleTabbar);
+      const unmounted = container("tabbar:unmounted", null);
+      const args = {
+        droppableContainers: [container("tabbar:hidden", hiddenTabbar), visible, unmounted],
+      };
+      try {
+        collisionDetection(args as never);
+        const offered = [pointerWithinMock, rectIntersectionMock, closestCenterMock].map(
+          (detection) =>
+            (
+              detection.mock.calls[0]![0] as { droppableContainers: Array<{ id: string }> }
+            ).droppableContainers.map(({ id }) => id),
+        );
+        expect(offered).toEqual([
+          ["tabbar:visible", "tabbar:unmounted"],
+          ["tabbar:visible", "tabbar:unmounted"],
+          ["tabbar:visible", "tabbar:unmounted"],
+        ]);
+
+        // With nothing inert, the arguments pass through untouched.
+        pointerWithinMock.mockClear();
+        const reachable = { droppableContainers: [visible, unmounted] };
+        collisionDetection(reachable as never);
+        expect(pointerWithinMock.mock.calls[0]![0]).toBe(reachable);
+      } finally {
+        hiddenPane.remove();
+        visibleTabbar.remove();
+      }
+    });
+
     test("wires drag-over state into self-collision cross-pane moves and ignores cancelled drops", async () => {
       usePaneLayoutStore.setState((state) => ({
         environments: new Map(state.environments).set("env-visible", {

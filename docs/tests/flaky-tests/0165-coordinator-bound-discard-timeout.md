@@ -205,3 +205,14 @@ Aggregate backend counts for this observation: 8,341 passed, 40 skipped,
 - **Disposition:** isolated pass confirms an intermittent recurrence. Host
   contention remains an unconfirmed hypothesis; no implementation, assertion,
   timeout or skip changed.
+
+## Unread-toast main merge recurrence — 2026-10-16
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, with system Python and GNU host utilities available in PATH.
+- **Workers:** workspace/root/bridge/protocol reserved 4/1/2/1 slots; backend used two isolated workers, alongside component and isolated browser suites.
+- **Failure:** `project coordinator > bound discard confirmations refuse stale, sequencer, nested, and failed switches` exceeded the 5000 ms deadline at 5196.86 ms, with a racing error between tests.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-coordinator-service-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` passed the unchanged owning file in 16.6 s (exit 0).
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.Gj6LAK/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Assessment:** recurrence confirmed; shared-host contention remains a hypothesis. No assertion, timeout or skip changed.
+
+Aggregate backend counts for this recurrence: 8,456 passed, 40 skipped, two failed and one error across 8,498 tests (481.96 s); aggregate exited 1 after 645.7 s.

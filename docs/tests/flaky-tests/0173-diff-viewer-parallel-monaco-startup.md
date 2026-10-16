@@ -42,3 +42,12 @@ suite passed (257 passed, 61 skipped).
 - **Evidence:** `/tmp/orkestrator-test-run.r2KR91/merge-latest-browser.log.gz`.
 - **Disposition:** parallel-only recurrence matching the existing case. Host
   contention remains a hypothesis; no assertion, timeout or skip changed.
+
+## Unread-toast main merge recurrence — 2026-10-16
+
+- **Original command:** `mise run test:logged -- --name merge-browser -- mise run test:browser`, nine Playwright workers alongside the full non-iOS suite and isolated browser checks.
+- **Failure:** The mobile `the diff header fits a phone and the editor uses the full width` case found no `.monaco-diff-editor` within 5000 ms.
+- **Suite counts:** 320 passed, 69 skipped, three failed across 392 cases (294.6 s).
+- **Owning-file rerun:** `mise run test:logged -- --name merge-diff-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DiffViewerMobile.spec.ts --workers=1` passed the unchanged file in 17.1 s (exit 0).
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.o1XC99/merge-browser.log.gz`.
+- **Disposition:** confirmed recurrence. Earlier overlapping focused browser invocations shared an output directory and are discarded as invalid evidence; the successful rerun ran sequentially. Host contention remains an unconfirmed hypothesis.

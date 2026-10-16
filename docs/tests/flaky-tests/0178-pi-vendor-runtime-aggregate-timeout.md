@@ -192,6 +192,20 @@ passed the unchanged owning file alone, exit 0, in 8.9 seconds. The question
 renderer fixes do not change runtime staging. Shared host contention remains
 an unconfirmed hypothesis; no timeout, assertion or skip was changed.
 
+## Recurrence — 2026-10-16 (unread-toast review fixes)
+
+`mise run test:logged -- --name non-ios -- mise run test` reserved 4/1/2/1
+workspace/root/bridge/protocol slots while component browser validation also
+ran. The staged-runtime test timed out at 30000.03 ms; the root group reported
+3,000 passed, one skipped and three failed across 137 files (311.74 s). The
+other two failures were Python-dependent copy fixtures. Evidence:
+`/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.6257an/root-and-agent-support-tests.log.gz`.
+
+`mise run test:logged -- --name pi-vendor-isolated -- bun test
+./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the
+unchanged owning file alone, exit 0, in 13.0 s. These unread-reason changes do
+not alter Pi staging. Host contention remains an unconfirmed hypothesis.
+
 ## Recurrence — 2026-10-16 (live coordinator suite main merge)
 
 `mise run test:logged -- --name merge-tests -- mise run test` reserved
@@ -327,3 +341,25 @@ passed the unchanged owning file (exit 0) in 6.9 seconds after the root group
 finished. The backend group was still running. The isolated pass confirms an
 intermittent recurrence; shared host contention remains an unconfirmed
 hypothesis. No implementation, assertion, timeout or skip changed.
+
+## Unread-toast main merge validation — 2026-10-16
+
+`mise run test:logged -- --name merge-tests -- mise run test` used
+4/1/2/1 workspace/root/bridge/protocol slots alongside component and isolated
+browser suites. The staged-runtime load timed out at 30000.02 ms. Root/support
+reported 2,997 passed, one skipped, three failed and one error across 3,001 tests
+(402.27 s). Evidence:
+`/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.Gj6LAK/root-and-agent-support-tests.log.gz`.
+
+The first owning-file rerun, `mise run test:logged -- --name merge-pi-isolated
+-- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`,
+also timed out at 30000.04 ms (three passed, one failed, 32.4 s) while those
+browser suites were still active. Evidence:
+`/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.XZ0uue/merge-pi-isolated.log.gz`.
+
+After both large browser runs ended, `mise run test:logged -- --name
+merge-pi-owner-after-browser -- bun test ./tests/unit/pi-bridge-vendor.test.ts
+--parallel=1 --only-failures` passed the unchanged owning file in 20.7 s (exit
+0), with the same PATH preference. This later pass establishes intermittence;
+shared-host filesystem contention remains an unconfirmed hypothesis. No
+assertion, timeout or skip changed.

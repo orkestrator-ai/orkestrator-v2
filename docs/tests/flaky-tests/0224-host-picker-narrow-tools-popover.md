@@ -131,3 +131,9 @@ rerun for classifying the terminal-history observation as a separate flake.
 The snapshot and history read may observe different persistence progress; the
 cause remains unconfirmed. No terminal, picker, assertion, deadline or skip was
 changed. Both profiles were stopped and reset after validation.
+
+## Unread-toast main merge validation — 2026-10-16
+
+- `mise run test:logged -- --name merge-agent-browser -- mise run test:agent:browser:isolated` on credential-free Codex profile `qa-browser-910af09e-8ee` reported 25 passed, 14 opt-in skips and one failure (536.5 s including lifecycle). The narrow host picker reached the socket dialog but `Select file` stayed disabled after entering the socket path (line 302, five-second visibility/enablement wait). Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.0YUiYo/merge-agent-browser.log.gz` and `output/agent-testing/qa-browser-910af09e-8ee/browser/`.
+- The full unchanged owning file on fresh credential-free Codex fixture profile `qa-unread-merge-owner` used `ORKESTRATOR_AGENT_TEST_PROFILE=qa-unread-merge-owner ORKESTRATOR_AGENT_TEST_RUN_ID=qa-unread-merge-owner mise run test:logged -- --name merge-gateway-browser-owner -- mise run test:agent:browser -- e2e/agent-testing/browser-gateway.spec.ts`. It reported 10 passed, five opt-in skips and one failure (110.1 s). The same narrow case failed earlier, with `Repository settings` hidden after `Open tools` (line 238, 15-second timeout). Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.PU8KT2/merge-gateway-browser-owner.log.gz` and `output/agent-testing/qa-unread-merge-owner/browser/`.
+- The changed project-home unread/background path passed in both runs. These results do not establish a new flake or resolve the existing picker issue; neither test nor picker code was changed in this merge. Both profiles were stopped and reset after validation.

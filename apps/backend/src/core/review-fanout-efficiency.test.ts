@@ -325,6 +325,68 @@ describe("observation checkpoints", () => {
   });
 });
 
+describe("provisional findings", () => {
+  const provisional = {
+    id: "0123456789abcdef01234567",
+    reportedAt: "2026-10-16T00:01:00.000Z",
+    issue: {
+      severity: "P1" as const,
+      confidence: 80,
+      category: "correctness" as const,
+      title: "Clock resets on restart",
+      file: "src/a.ts",
+      line: 3,
+      symbol: "",
+      description: "Restart clears the runtime.",
+      evidence: "Seen in restartStep",
+      suggestion: "Keep it",
+      verification: "Restart a step",
+    },
+  };
+
+  test("a pass records what the reviewer reported, and the accepted report replaces it", async () => {
+    const reviewers = [sentReviewer(0)];
+    const h = harness(reviewers);
+    const staged = [provisional, provisional];
+    const asked: string[] = [];
+    h.host.takeProvisionalFindings = (reviewer) => {
+      asked.push(reviewer.id);
+      return staged.splice(0);
+    };
+
+    await h.runner().advanceReviewers(reviewers);
+    expect(asked).toEqual(["reviewer-1"]);
+    expect(reviewers[0]!.provisionalFindings).toEqual([provisional]);
+    // One observational write carries it, as it does every other observation.
+    expect(h.saves).toHaveLength(1);
+    expect(h.saves[0]![0]!.provisionalFindings).toEqual([provisional]);
+
+    h.providers.claude!.statusValue = "idle";
+    await h.runner().advanceReviewers(reviewers);
+    expect(reviewers[0]).toMatchObject({ status: "completed" });
+    expect(reviewers[0]!.report?.issues).toEqual([]);
+    expect(reviewers[0]).not.toHaveProperty("provisionalFindings");
+    expect(h.saves.at(-1)![0]).not.toHaveProperty("provisionalFindings");
+  });
+
+  test("a reviewer that fails keeps what it reported, unconfirmed", async () => {
+    const reviewers = [sentReviewer(0)];
+    const h = harness(reviewers);
+    h.host.takeProvisionalFindings = () => [provisional];
+    h.providers.claude!.messagesError = null;
+    h.providers.claude!.statusValue = "running";
+    await h.runner().advanceReviewers(reviewers);
+    reviewers[0]!.status = "failed";
+    reviewers[0]!.error = "Session ended";
+    // A settled reviewer is not asked again, and keeps its findings.
+    h.host.takeProvisionalFindings = () => {
+      throw new Error("a settled reviewer is never asked");
+    };
+    await h.runner().advanceReviewers(reviewers);
+    expect(reviewers[0]!.provisionalFindings).toEqual([provisional]);
+  });
+});
+
 describe("bounded concurrent admission", () => {
   test("session setup overlaps up to the admission cap, in configured order", async () => {
     const reviewers = Array.from({ length: 6 }, (_, index) => pendingReviewer(index));
@@ -345,6 +407,84 @@ describe("bounded concurrent admission", () => {
     expect(provider.sends).toHaveLength(6);
     expect(reviewers.every((reviewer) => reviewer.dispatchState === "sent")).toBe(true);
     expect(h.overlappingSaves()).toBe(0);
+  });
+
+  test("numbers the queued reviewers as they are admitted, through the pass's own writes", async () => {
+    const reviewers = Array.from({ length: 6 }, (_, index) => pendingReviewer(index));
+    const h = harness(reviewers, { concurrency: { admission: 2 } });
+    const provider = h.providers.claude!;
+    const first = deferred();
+    provider.createGate = first.promise;
+    const place = () =>
+      reviewers.map((reviewer) =>
+        reviewer.admissionState === "queued"
+          ? `#${reviewer.queuePosition}`
+          : (reviewer.admissionState ?? reviewer.status),
+      );
+
+    const pass = h.runner().advanceReviewers(reviewers);
+    for (let tick = 0; tick < 10; tick++) await flush();
+    expect(place()).toEqual(["admitting", "admitting", "#1", "#2", "#3", "#4"]);
+    // Nothing has been written yet: positions are staged, never a write of their own.
+    expect(h.saves).toHaveLength(0);
+
+    const second = deferred();
+    provider.createGate = second.promise;
+    first.resolve();
+    for (let tick = 0; tick < 20; tick++) await flush();
+    expect(place()).toEqual(["running", "running", "admitting", "admitting", "#1", "#2"]);
+    // The first admitted reviewer's session commit carried everyone's place;
+    // later moves ride on the next commit in the same way.
+    expect(h.saves[0]!.slice(2).map((reviewer) => reviewer.queuePosition)).toEqual([1, 2, 3, 4]);
+
+    second.resolve();
+    await pass;
+    expect(place()).toEqual(Array(6).fill("running"));
+    expect(h.saves.at(-1)!.some((reviewer) => "admissionState" in reviewer)).toBe(false);
+    expect(h.efficiency.count("workflow.save_observation")).toBeLessThanOrEqual(1);
+  });
+
+  test("a restarted reviewer rejoins the queue at its panel place on the next pass", async () => {
+    const reviewers = Array.from({ length: 4 }, (_, index) => pendingReviewer(index));
+    const h = harness(reviewers, { concurrency: { admission: 1 } });
+    const provider = h.providers.claude!;
+    await h.runner().advanceReviewers(reviewers);
+    expect(reviewers.every((reviewer) => reviewer.status === "running")).toBe(true);
+
+    // What a restart leaves behind: pending, with no session and no place.
+    for (const restarted of [reviewers[0]!, reviewers[2]!]) {
+      restarted.status = "pending";
+      delete restarted.providerSessionId;
+      delete restarted.requestId;
+      delete restarted.dispatchState;
+    }
+    const gate = deferred();
+    provider.createGate = gate.promise;
+    const pass = h.runner().advanceReviewers(reviewers);
+    for (let tick = 0; tick < 10; tick++) await flush();
+    expect(reviewers.map((reviewer) => reviewer.admissionState ?? null)).toEqual([
+      "admitting",
+      null,
+      "queued",
+      null,
+    ]);
+    expect(reviewers[2]!.queuePosition).toBe(1);
+    gate.resolve();
+    await pass;
+    expect(reviewers.some((reviewer) => reviewer.admissionState !== undefined)).toBe(false);
+  });
+
+  test("a reviewer still pending after the pass waits in panel order", async () => {
+    const reviewers = [pendingReviewer(0), pendingReviewer(1), pendingReviewer(2)];
+    const h = harness(reviewers, { concurrency: { admission: 1 } });
+    // The pass stops after the first admission: a lost fence on its second check.
+    h.loseFenceAfter(2);
+    await expect(h.runner().advanceReviewers(reviewers)).rejects.toThrow("fence lost");
+    expect(reviewers.map((reviewer) => reviewer.queuePosition ?? reviewer.status)).toEqual([
+      "running",
+      1,
+      2,
+    ]);
   });
 
   test("a per-provider cap bounds one provider even when the pool allows more", async () => {

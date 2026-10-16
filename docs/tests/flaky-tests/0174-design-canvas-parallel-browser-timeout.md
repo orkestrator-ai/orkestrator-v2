@@ -15,3 +15,19 @@
 ## Current assessment
 
 The design canvas test appears sensitive to the suite's six-worker parallel load. The design canvas code did not change in this task; investigate the timeout under controlled parallel load.
+
+
+## Mobile layout follow-up main merge recurrence — 2026-10-16
+
+- **Original command:** `ORKESTRATOR_E2E_PORT=52464 CI=1 mise run test:logged -- --name merge-latest-browser -- mise run test:browser`
+  while merging `origin/main` into `mobile-layout-gaps`.
+- **Worker configuration:** nine Playwright workers alongside the repository
+  suite and other validations on the shared host.
+- **Suite counts:** 310 passed, 69 skipped and three failed across 382 cases
+  (5.2 minutes). The other failures are recorded in 0173.
+- **Failure:** The desktop case `canvas edits, script isolation, missed events, conflict and reload` exhausted its 30000 ms budget at `page.reload()` (line 190).
+- **Owning-file rerun:** `ORKESTRATOR_E2E_PORT=52464 CI=1 mise run test:logged -- --name merge-latest-browser-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts e2e/DiffViewerMobile.spec.ts --workers=1`
+  passed both unchanged owning files (exit 0, 51.6 seconds).
+- **Evidence:** `/tmp/orkestrator-test-run.r2KR91/merge-latest-browser.log.gz`.
+- **Disposition:** parallel-only recurrence matching the existing case. Host
+  contention remains a hypothesis; no assertion, timeout or skip changed.

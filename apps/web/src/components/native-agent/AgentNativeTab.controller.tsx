@@ -252,6 +252,7 @@ export function SharedNativeAgentController({
   executionPolicy,
   coordinatorProjectId,
   coordinatorWorkspacePath,
+  hiddenByLayout = false,
 }: AgentNativeTabProps) {
   const isReadOnlyCoordinator = executionPolicy === "coordinator-read-only";
   const platform = data.platform!;
@@ -410,6 +411,7 @@ export function SharedNativeAgentController({
     dismissSuggestedPrompt,
     updateControls,
     resolveInteraction,
+    holdInteraction,
     enqueue,
     removeQueued,
     moveQueued,
@@ -561,7 +563,9 @@ export function SharedNativeAgentController({
   const { favorites, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
   const { isAtBottom, scrollToBottom, scrollToIndex, virtuosoRef, scrollProps } =
     useVirtuosoScrollState({
-      isActive,
+      // Every activation re-locks to the end, but a pane the mobile switcher
+      // hid is still laid out where the user left it.
+      isActive: isActive || hiddenByLayout,
       persistKey: sessionKey,
       environmentId: data.environmentId,
       stickToBottomOnActivation: true,
@@ -2624,6 +2628,7 @@ export function SharedNativeAgentController({
           key={interaction.id}
           interaction={interaction}
           onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
+          onHold={(held) => holdInteraction(interaction.id, held)}
         />
       ))}
       transcriptCards={transcriptInteractions.map((interaction) =>
@@ -2632,6 +2637,7 @@ export function SharedNativeAgentController({
             key={interaction.id}
             interaction={interaction}
             onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
+            onHold={(held) => holdInteraction(interaction.id, held)}
           />
         ) : (
           <NativeAgentInteractionCard
@@ -2641,6 +2647,7 @@ export function SharedNativeAgentController({
               interaction.presentation.planAvailable ? interaction.presentation.body : planContent
             }
             onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
+            onHold={(held) => holdInteraction(interaction.id, held)}
           />
         ),
       )}

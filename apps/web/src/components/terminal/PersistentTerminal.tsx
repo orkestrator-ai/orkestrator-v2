@@ -43,6 +43,7 @@ import {
 } from "@/lib/terminal-utils";
 import {
   forceTerminalVisibilityRedraw,
+  hasLayoutBox,
   shouldTriggerEnvironmentVisibilityRedraw,
 } from "./persistent-terminal-redraw";
 import {
@@ -89,6 +90,17 @@ const TERMINAL_DISCONNECTED_NOTICE_DELAY_MS = 3000;
 const SESSION_SNAPSHOT_RETRY_BASE_MS = 250;
 const SESSION_SNAPSHOT_RETRY_MAX_MS = 5000;
 const terminalInputDisposables = new WeakMap<object, { dispose: () => void }>();
+
+/**
+ * Fits the terminal to its pane, unless the pane is not laid out (see
+ * `hasLayoutBox`); its resize observer fits it once it is. Returns whether it
+ * fitted.
+ */
+function fitToLaidOutPane(fitAddon: { fit: () => void }, wrapper: HTMLElement | null): boolean {
+  if (!hasLayoutBox(wrapper)) return false;
+  fitAddon.fit();
+  return true;
+}
 
 function serializeLegacyTerminalBuffer(
   serialize: (options?: { scrollback?: number }) => string,
@@ -1287,8 +1299,7 @@ export function PersistentTerminal({
     }
     fitAnimationFrameRef.current = requestAnimationFrame(() => {
       fitAnimationFrameRef.current = null;
-      if (!fitAddon || !terminal) return;
-      fitAddon.fit();
+      if (!fitAddon || !terminal || !fitToLaidOutPane(fitAddon, terminalRef.current)) return;
       const { cols, rows } = terminal;
       void publishTerminalGeometry(cols, rows);
     });
@@ -1342,7 +1353,7 @@ export function PersistentTerminal({
       setTerminalContainer(environmentId, tabId, containerElement);
 
       // Initial fit and font loading
-      fitAddon.fit();
+      fitToLaidOutPane(fitAddon, terminalRef.current);
 
       scheduleFit();
       if (document?.fonts?.ready) {
@@ -1432,13 +1443,13 @@ export function PersistentTerminal({
           // Restore the buffer that was captured during cleanup
           requestAnimationFrame(() => {
             try {
-              fitAddon.fit();
+              fitToLaidOutPane(fitAddon, terminalRef.current);
               terminal.clear();
               terminal.write(pendingBuffer);
               terminal.scrollToBottom();
             } catch (err) {
               console.error(`[PersistentTerminal] Error restoring buffer for tab:${tabId}:`, err);
-              fitAddon.fit();
+              fitToLaidOutPane(fitAddon, terminalRef.current);
               terminal.refresh(0, terminal.rows - 1);
             } finally {
               // Clear the restoration flag after RAF completes
@@ -1448,14 +1459,14 @@ export function PersistentTerminal({
         } else if (!pendingBuffer) {
           // Terminal moved but no pending buffer - just refresh
           requestAnimationFrame(() => {
-            fitAddon.fit();
+            fitToLaidOutPane(fitAddon, terminalRef.current);
             terminal.refresh(0, terminal.rows - 1);
           });
         }
 
         // Fallback refresh after layout settles (only for moved terminals)
         setTimeout(() => {
-          fitAddon.fit();
+          fitToLaidOutPane(fitAddon, terminalRef.current);
           terminal.refresh(0, terminal.rows - 1);
         }, 100);
       } else {
@@ -1466,7 +1477,7 @@ export function PersistentTerminal({
         // Simple refresh since DOM was reconnected
         if (needsDOMMove) {
           requestAnimationFrame(() => {
-            fitAddon.fit();
+            fitToLaidOutPane(fitAddon, terminalRef.current);
             terminal.refresh(0, terminal.rows - 1);
           });
         }
@@ -1643,7 +1654,7 @@ export function PersistentTerminal({
     if (isActive && !wasActiveRef.current && terminalIsOpened) {
       // Terminal just became visible - refresh to ensure content is drawn
       requestAnimationFrame(() => {
-        fitAddon.fit();
+        fitToLaidOutPane(fitAddon, terminalRef.current);
         terminal.refresh(0, terminal.rows - 1);
       });
     }
@@ -1679,6 +1690,7 @@ export function PersistentTerminal({
       terminal,
       fitAddon,
       resize: publishTerminalGeometry,
+      canFit: () => hasLayoutBox(terminalRef.current),
       isCancelled: () => cancelled,
     }).then((cleanup) => {
       redrawCleanup = cleanup;
@@ -1712,7 +1724,7 @@ export function PersistentTerminal({
     };
     terminal.options.scrollback = terminalScrollback;
 
-    fitAddon.fit();
+    fitToLaidOutPane(fitAddon, terminalRef.current);
   }, [
     terminal,
     fitAddon,

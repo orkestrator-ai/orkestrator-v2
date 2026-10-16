@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { Sidebar } from "./Sidebar";
@@ -23,23 +23,11 @@ import { getApplicationTitle } from "@/lib/application-title";
 import { AgentInfoButton } from "./AgentInfoButton";
 import { AgentMailButton } from "@/components/agent-mail/AgentMailButton";
 import { SystemUsageIndicator } from "./SystemUsageIndicator";
+import { HostPark, HostSlot } from "./HostSlot";
+import { AppDialogHost } from "./AppDialogHost";
 
 interface AppShellProps {
   children?: React.ReactNode;
-}
-
-/** Mounts the shell's content host in whichever layout is current. */
-function ContentSlot({ host }: { host: HTMLElement }) {
-  const slotRef = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    const slot = slotRef.current;
-    if (!slot) return;
-    slot.appendChild(host);
-    return () => {
-      if (host.parentNode === slot) slot.removeChild(host);
-    };
-  }, [host]);
-  return <div ref={slotRef} className="h-full w-full" />;
 }
 
 export function AppShell({ children }: AppShellProps) {
@@ -47,12 +35,14 @@ export function AppShell({ children }: AppShellProps) {
   // The desktop and mobile layouts are different trees, so rendering `children`
   // in each would remount every pane at the 768px breakpoint, closing dialogs
   // and dropping pane state when a window narrows or a phone rotates. The
-  // content renders once into this host instead, and the layouts only move it.
+  // content renders once into this host instead, and the layouts only move it
+  // (see `HostSlot`, which also keeps scroll offsets and focus across the move).
   const [contentHost] = useState(() => {
     const host = document.createElement("div");
     host.className = "h-full w-full";
     return host;
   });
+  const contentParkRef = useRef<HTMLDivElement>(null);
   // The mobile drawer opens with the layout only on a phone-sized first load;
   // a window that narrows keeps showing what the user was working on.
   const [desktopShown, setDesktopShown] = useState(!isMobile);
@@ -122,6 +112,9 @@ export function AppShell({ children }: AppShellProps) {
   return (
     <div className="flex h-full w-full flex-col overflow-hidden">
       <OpenFileDialog />
+      {/* Outside both layouts, so a dialog outlives the drawer that requested it. */}
+      <AppDialogHost />
+      <HostPark parkRef={contentParkRef} />
       {isMobile ? (
         <MobileAppShellLayout
           selectedProjectId={selectedProjectId}
@@ -141,7 +134,7 @@ export function AppShell({ children }: AppShellProps) {
           initialSidebarOpen={!desktopShown}
           onTitleBarMouseDown={handleTitleBarMouseDown}
         >
-          <ContentSlot host={contentHost} />
+          <HostSlot host={contentHost} parkRef={contentParkRef} />
         </MobileAppShellLayout>
       ) : (
         <>
@@ -209,7 +202,7 @@ export function AppShell({ children }: AppShellProps) {
               <div className="flex h-full flex-col" style={centralPanelThemeVars}>
                 <ActionBar />
                 <main className={cn("flex-1 overflow-hidden bg-background")}>
-                  <ContentSlot host={contentHost} />
+                  <HostSlot host={contentHost} parkRef={contentParkRef} />
                 </main>
               </div>
             </ResizablePanel>

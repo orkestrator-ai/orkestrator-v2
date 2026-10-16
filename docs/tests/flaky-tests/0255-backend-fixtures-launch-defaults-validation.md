@@ -1,6 +1,6 @@
 # Backend fixture failures during coordinator launch-defaults validation
 
-- **ID:** 0248
+- **ID:** 0255
 - **Status:** open
 - **Date observed:** 2026-10-16
 - **Tested change:** `0d254a3a`, branch `coordinator-launch-defaults`.

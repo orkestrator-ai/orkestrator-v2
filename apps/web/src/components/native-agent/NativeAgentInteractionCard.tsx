@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { usePromptDeadline } from "@/hooks/usePromptDeadline";
+import { usePromptHold, type PromptHoldHandler } from "@/hooks/usePromptHold";
 import { openInBrowser } from "@/lib/backend";
 import { nativeAgentInteractionDraftKey, usePromptDraftField } from "@/stores/promptDraftStore";
 import { useInteractionResolver } from "@/components/native-agent/use-interaction-resolver";
@@ -42,11 +43,14 @@ export function coerceNativeFormFieldValue(raw: string, type: unknown): string |
 export function NativeAgentInteractionCard({
   interaction,
   onResolve,
+  onHold,
   planContent,
 }: {
   interaction: AgentInteractionRequest;
   planContent?: string;
   onResolve: (resolution: AgentInteractionResolution) => Promise<AgentInteractionApplyOutcome>;
+  /** Pauses or resumes the countdown where the provider enforces it. */
+  onHold?: PromptHoldHandler;
 }) {
   const draftKey = nativeAgentInteractionDraftKey(interaction.sessionId, interaction.id);
   const [answers, setAnswers] = usePromptDraftField<Record<string, Answer>>(
@@ -62,7 +66,8 @@ export function NativeAgentInteractionCard({
   const [feedback, setFeedback] = usePromptDraftField<string>(draftKey, "feedback", () => "");
   const [secretAnswers, setSecretAnswers] = useState<Record<string, Answer>>({});
   const [secretForm, setSecretForm] = useState<Record<string, unknown>>({});
-  const { remaining, expired } = usePromptDeadline(interaction.expiresAt);
+  const { expired } = usePromptDeadline(interaction.expiresAt);
+  const hold = usePromptHold(interaction.hold, onHold);
   const questions = interaction.presentation.questions;
   const externalUrl = safeExternalUrl(interaction.presentation.url);
   const mcpQuestion = interaction.kind === "mcp-form" ? questions[0] : undefined;
@@ -220,14 +225,21 @@ export function NativeAgentInteractionCard({
       state={
         submitting ? "submitting" : expired ? "expired" : error ? "retryable-error" : "pending"
       }
-      error={error}
+      error={error ?? hold.error}
       title={interaction.presentation.title}
       description={
         interaction.kind === "plan-approval" && interaction.presentation.planAvailable
           ? undefined
           : interaction.presentation.body
       }
-      meta={remaining && !expired ? remaining : undefined}
+      expiresAt={interaction.expiresAt}
+      deadline={{
+        hold: interaction.hold,
+        held: hold.held,
+        pending: hold.pending,
+        onToggle: hold.toggle,
+        provider: interaction.provider,
+      }}
       arrivalAnnouncement={`${interaction.presentation.title} needs a response.`}
       role="group"
       actions={actions}

@@ -8,6 +8,7 @@ import {
   resolveApproval,
 } from "./interactions.js";
 import type { SessionState } from "./state.js";
+import { testApprovalDeadline } from "./testing/approval-fixtures.js";
 
 /**
  * The gate is off unless the environment turns it on, and `config.ts` reads
@@ -25,7 +26,7 @@ function park(state: SessionState, toolName: string, input: Record<string, unkno
     toolName,
     input,
     createdAt: now,
-    expiresAt: now + 60_000,
+    deadline: testApprovalDeadline(now),
     settle: (decision, reason) => {
       state.approvals.delete(id);
       decisions.push(

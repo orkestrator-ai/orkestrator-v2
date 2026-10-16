@@ -1073,7 +1073,14 @@ describe("BuildChatTab backend projection", () => {
     expandStageGroups();
 
     expect(screen.getByText("Verification crashed")).toBeTruthy();
-    expect(screen.getByText("No text transcript was produced for this stage.")).toBeTruthy();
+    // The two records carry nothing a display row has, so one notice says they
+    // were not shown rather than the stage claiming it produced nothing.
+    expect(
+      screen.getByText(/^2 transcript entries not shown: they are in a format this app does not/),
+    ).toBeTruthy();
+    expect(screen.queryByText("No text transcript was produced for this stage.") === null).toBe(
+      true,
+    );
   });
 
   test("runs pause, resume, and cancel controls against authoritative backend snapshots", async () => {

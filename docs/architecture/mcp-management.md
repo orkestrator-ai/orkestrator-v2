@@ -281,14 +281,37 @@ guidance instead.
 **Codex reload** is one environment-level call, `POST /global/mcp/reload` on the
 Codex bridge, which reloads only if an app-server child is already running
 (`requestIfReady`) and never spawns one: `reloaded` or `not-running` →
-`pending-next-turn`; a 404 from an older bridge → `restart-required`. When a
-plan exceeds 64 runtimes, each environment keeps its first runtime before any
-environment's second, so one reload per environment survives truncation (a plan
-with more than 64 Codex environments still omits the rest).
+`pending-next-turn`; a 404 from an older bridge → `restart-required`. Just
+before the first reload the backend re-reads the source; if the change is no
+longer in it (see [External edits](#external-edits)) the queued runtimes are
+`cancelled` and nothing is reloaded.
 
-**Older Pi and Cursor bridges** cannot be detected (the backend records no
-bridge version for them), so `pending-next-turn` is reported whatever their
-version; evidence-based `applied` simply never arrives from an old bridge.
+**Fan-out.** One apply schedules and tracks up to 256 runtimes
+(`runtimesTrackedPerOperation`) and advances every one of them: every tracked
+Codex environment is reloaded and every tracked runtime is polled for
+evidence. Only the snapshot is paged: an operation lists 64
+(`runtimesPerOperation`), one per environment before any environment's second,
+and counts the rest in `omitted` with their states in `omittedStates`. Past
+256, planning keeps one queued runtime per environment first and the remainder
+is not scheduled; it is the part of `omitted` that `omittedStates` does not
+account for, and the UI shows it as "not tracked" with what that means. The UI
+offers "Cancel apply" and "Retry apply" from `omittedStates` too, so queued or
+failed runtimes off the page stay actionable. `omittedStates` carries no
+`cancelReason`, so the page always lists a superseded runtime when the
+operation has one.
+
+**Bridges older than the MCP configuration report.** Current Claude, Cursor,
+Pi and ACP bridges put `mcpConfigReporting: 1` in every
+`/session/:id/runtime-health` body, including an unknown session's. A body
+with neither that marker nor an `mcpConfig` of any shape, or a 404/405 from
+the route, comes from an older bridge (`unsupported`); any other failed read
+says nothing about the version. An older bridge cannot prove an apply, so the
+runtime says so instead of waiting silently: Cursor and Pi (bridges that old
+do not reload between turns) and Grok become `restart-required` with
+"older than this backend … Stop and start the environment"; Claude stays
+`pending-next-turn` (its older bridges still re-read files every query) with
+a reason that the change cannot be confirmed. Polling continues inside the
+evidence window, so a restarted, current bridge still proves it.
 
 **Pi and Cursor bridges** fingerprint the MCP files each live generation was
 built from. At the next turn start (never mid-turn; running, compacting or
@@ -332,9 +355,9 @@ A runtime becomes `applied` when all of these hold:
    gone; the CLI ends once its background work does, or when the session is
    stopped.
 
-An older bridge without the field, a failed or timed-out read, `absent` /
-`excluded`, or a read that predates the save all leave the planned state
-untouched and are not errors. Only local runtimes are polled (containers and
+A failed or timed-out read, `absent` / `excluded`, or a read that predates the
+save all leave the planned state untouched and are not errors; a bridge older
+than the report is named, as above. Only local runtimes are polled (containers and
 coordinators never read the saved host file), and never Codex or OpenCode.
 Reads go through `NativeAgentService.mcpConfigEvidenceIfRunning`: persisted
 mapping → provider resolved like the activity sweep (never starts a bridge) →
@@ -344,10 +367,69 @@ each read capped at 10 s, and none 24 h after apply was planned — the runtime
 keeps its planned state and the scheduler goes idle once no queued or
 evidence work remains.
 
+### Runtime generations
+
+A runtime's generation is the provider bridge process (the environment's
+recorded bridge pid) and the provider session its logical session maps to,
+both read from persisted records. Planning records it per local runtime, and
+every outcome carries the generation it was observed against as an opaque
+16-character `generation` (a keyed digest; neither id is disclosed).
+
+- `applied` names the generation whose report proved it. When that is not the
+  planned one (the bridge restarted, or the tab moved to a new conversation),
+  the reason says a newer run, started after apply was planned, loaded the
+  saved configuration; the evidence rules above still apply to it in full.
+- Each evidence pass reads generations before and after its bridge reads. An
+  answer for a runtime whose generation changed in between could describe
+  either run, so it is dropped and the runtime is read again at once.
+- A re-apply plans afresh against the current generations; an earlier run's
+  `applied` is never carried over.
+- A Codex reload's outcome names the generation the reload reached.
+- Containers and coordinators have no generation the backend can name.
+
+### External edits
+
+Saving refuses a file changed since the editor read it, but anything may edit
+the file after the save. At save the backend also records a keyed digest of
+the server list the save left (`savedEntriesDigest`), so edits are compared
+over the parsed server map, not the bytes (Claude's bookkeeping in
+`~/.claude.json` is not an edit). Each evidence pass re-reads the source of
+every operation it polled, a queued Codex reload re-reads it before reloading,
+and `apply_mcp_configuration` re-reads it before planning. A deleted source
+holds no servers, so only a removal is still in it; an unreadable one is
+unknown and changes nothing:
+
+- **Unchanged:** nothing to say.
+- **Merged:** the server list changed but the change is still in it. Applying
+  continues and sessions load the file as it is now; the operation message
+  says the list also changed outside Orkestrator. A later save of the same
+  file here is its own operation and is not flagged.
+- **Superseded:** the change is no longer in the file. Every runtime still
+  waiting for it (`queued`, `pending-next-turn`, `pending-reattach`,
+  `restart-required`) becomes `cancelled` with the reason ("changed outside
+  Orkestrator", or "a later change saved here replaced this one"); runtimes
+  already `applied` keep it, because they loaded the saved bytes, and so do
+  Codex runtimes whose app-server already reloaded it (recorded as `reloaded`
+  in recovery), because that process holds the change until its next reload. Applying it
+  again is refused with `revision-conflict` and that reason. Apply never
+  rewrites the file, so an obsolete revision is never re-materialized. Those
+  runtimes also carry `cancelReason` (`superseded-external` or
+  `superseded-local`), which no other cancellation sets, so the UI offers no
+  "Retry apply" for the operation and says to open the server again or save
+  the change again instead.
+
+Operations whose runtimes no pass polls (OpenCode and container
+`restart-required`, Codex after its reload) are only re-checked when applied
+again.
+
+### Digest privacy
+
 The digests are unkeyed hashes of files that can hold low-entropy secrets, so
 they stay backend-only: `bridgeRuntimeSummary` (the renderer-facing runtime
 health) never copies `mcpConfig`, and the saved digest lives only in
 `operations.json`'s recovery half, never in an operation snapshot or event.
+
+### Scheduling
 
 The scheduler runs on a timer, never on a request or event path; every
 detached promise handles its rejection. Operation state survives backend
@@ -422,7 +504,7 @@ worktrees; nothing reads or writes the operator's configuration):
 | Editors | `json-edit.test.ts`, `toml-edit.test.ts` — comments, CRLF, multi-line strings, inline/dotted refusal |
 | Files | `source-store.test.ts` — conflicts, modes, symlinks, locks, stale-lock takeover |
 | Service | `service.test.ts`, `service-providers.test.ts`, `service-pi.test.ts`, `pi-mcp-parity.test.ts`, `service-grok.test.ts`, `service-sources.test.ts`, `service-transport-fields.test.ts`, `service-rename.test.ts`, `service-limits.test.ts`, `service-rollout.test.ts`, `service-apply.test.ts`, `service-apply-scope.test.ts`, `operations-store.test.ts`, `providers.test.ts`, `references.test.ts` — add/update/rename/remove for all six providers in user and project scope, custom homes, two worktrees, shadowing and fallback, Pi skip/collision rules, Grok compat/trust, secret absence (including `operations.json` and logs), idempotency, recovery, limits, rollout gate, Codex queue, supersession, coordinator and deleted-environment runtimes, container catalog |
-| Evidence | `service-evidence.test.ts` (per-provider applied/not-applied rules, bounds, idleness, digest privacy), `http-bridge-mcp-config-evidence.test.ts` (bridge shapes, renderer summary excludes digests), `native-agent-service-provider.test.ts` (no bridge start) |
+| Evidence | `service-evidence.test.ts` (per-provider applied/not-applied rules, bounds, idleness, digest privacy), `service-generations.test.ts` (generation labels, newer runs, reads straddling a replacement, no carry-over on re-apply, Codex reload), `service-older-bridges.test.ts` (older-bridge outcomes and recovery), `service-external-edits.test.ts` (superseded and merged edits, refused re-apply, Codex reload refused), `service-apply-scope.test.ts` (fan-out paging, more environments than the page, the tracked cap), `http-bridge-mcp-config-evidence.test.ts` (bridge shapes, the reporting marker, renderer summary excludes digests), `native-agent-service-provider.test.ts` (no bridge start) |
 | Commands | `commands-registry-mcp.test.ts` (correlation ids, rollout commands, reload probe), `http-bridge-mcp-reload.test.ts`, `storage-config-mcp-rollout.test.ts`, `apps/backend/tests/gateway-base.test.ts` (body cap) |
 | Bridges | Pi `mcp.test.ts`, `mcp-config.test.ts`, `mcp-config-upstream.test.ts`, `mcp-lifecycle.test.ts`, `agent-session.test.ts`, `http.test.ts`; Cursor `agent-session.test.ts`, `agent-session-mcp-reattach.test.ts`, `http.test.ts`, `persistence.test.ts`; Claude `mcp-config-scope.test.ts`, `session-manager-prompt-mcp.test.ts`, `runtime-health-body.test.ts`; ACP `acp-mcp-inventory.test.ts`; Codex `mcp-reload-route.test.ts`, `process-supervisor.test.ts` |
 | UI | `mcp-draft.test.ts`, `mcp-local-validation.test.ts`, `ProviderMcpSettings.test.tsx`, `McpEditorFlows.test.tsx`, `McpEntryFlows.test.tsx`, `McpStatusAndStates.test.tsx`, `AgentInfoMcpSection.test.tsx`, `FullscreenSettingsLayout.test.tsx`, `ActionBar.test.tsx` — focus return, keyboard-only flows, conflict reload, discard prompt, rollout gate, empty/offline/partial states |

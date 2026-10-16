@@ -110,6 +110,15 @@ export interface AgentInteractionProviderCapability {
     resolution: AgentInteractionResolution,
   ): Promise<AgentInteractionApplyOutcome>;
   watchInteractions?(sessionId: string, onRevision: (revision: number) => void): () => void;
+  /**
+   * Pause (`held`) or resume a request's deadline where it is enforced.
+   * Absent where no provider deadline exists to pause (OpenCode).
+   */
+  holdInteraction?(
+    sessionId: string,
+    interactionId: string,
+    held: boolean,
+  ): Promise<AgentInteractionApplyOutcome>;
 }
 
 export class PromptRejectedError extends Error {
@@ -275,6 +284,12 @@ export interface ProviderSendOptions {
   reviewShellPolicy?: NativeAgentExecutionPolicy;
   /** Exact workflow-result MCP tool to expose for this turn, when present. */
   workflowResultTool?: string;
+  /**
+   * The result key of the attempt `workflowResultTool` belongs to. Bridges that
+   * gate tools themselves (Grok, Pi) let that attempt's tools through a
+   * read-only turn only for calls naming this key.
+   */
+  workflowResultKey?: string;
   requestId: string;
   attachments?: PromptAttachment[];
   images?: ProviderPromptImage[];
@@ -738,11 +753,18 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
    * Which saved MCP configuration the session's live runtime was built from,
    * read from the same no-touch `/session/:id/runtime-health` route. Backend
    * only: the digests are unkeyed hashes of files that can hold secrets, so
-   * this never feeds a projection. `undefined` when the bridge reports none —
-   * an older bridge, or nothing loaded yet.
+   * this never feeds a projection. `unsupported` is a bridge too old to
+   * report; `none` is a current bridge with nothing loaded yet, or a failed read.
    */
-  mcpConfigEvidence?(sessionId: string): Promise<ProviderMcpConfigEvidence | undefined>;
+  mcpConfigEvidence?(sessionId: string): Promise<ProviderMcpConfigReport>;
 }
+
+/** One `/runtime-health` read, as MCP apply evidence. */
+export type ProviderMcpConfigReport =
+  | { state: "evidence"; evidence: ProviderMcpConfigEvidence }
+  | { state: "none" }
+  /** The bridge answered without the MCP configuration report: it predates it. */
+  | { state: "unsupported" };
 
 /** See {@link NativeAgentRuntimeProvider.mcpConfigEvidence}. */
 export interface ProviderMcpConfigEvidence {
@@ -764,10 +786,7 @@ export interface ProviderMcpConfigEvidence {
   staleServers?: string[];
 }
 
-export type ProviderMcpConfigEvidenceRead =
-  | { state: "evidence"; evidence: ProviderMcpConfigEvidence }
-  | { state: "none" }
-  | { state: "not-running" };
+export type ProviderMcpConfigEvidenceRead = ProviderMcpConfigReport | { state: "not-running" };
 
 export interface ProviderCommandCatalogue {
   /** Descriptors carry execution identity negotiated with this provider. */

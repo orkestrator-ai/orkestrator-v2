@@ -12,6 +12,7 @@ import type {
  * downstream needs to know which engine produced a transcript.
  */
 import type { AgentSession, AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
+import type { InteractionDeadline } from "@orkestrator/protocol/agent-interaction-deadline";
 import type {
   NativeAgentComposerState,
   NativeAgentSlashCommand,
@@ -268,7 +269,12 @@ export interface PendingApproval {
   toolName: string;
   input: JsonObject;
   createdAt: number;
-  expiresAt: number;
+  /**
+   * The countdown that denies this call unless it is answered, which the user
+   * may pause. Its `expiresAt` is the one published. Never persisted: a timer
+   * means nothing to the process that would read it back.
+   */
+  deadline: InteractionDeadline;
   /** Answers the parked tool call exactly once. Never persisted. */
   settle: (decision: "allow" | "deny", reason?: string) => void;
 }
@@ -283,6 +289,12 @@ export interface SessionState {
    * back to the process env when this is absent after a restart.
    */
   agentMcp?: { url: string; token: string };
+  /**
+   * The workflow-result attempt the current turn runs for, from its prompt.
+   * Runtime-only and replaced by every prompt: it scopes the read-only and
+   * approval exemption for that attempt's own tools to this turn.
+   */
+  workflowResultTurn?: import("@orkestrator/protocol/workflow-results").WorkflowResultTurn;
   id: string;
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
   clientSessionKey?: string;
@@ -452,6 +464,13 @@ export interface SessionState {
    */
   turnError?: string;
   turnStartedAt?: number;
+  /**
+   * When the in-flight turn's `PROMPT_TIMEOUT_MS` budget runs out, which denies
+   * every approval still parked. Set where that timer is armed (`followRun`),
+   * cleared when it settles; a pause never holds an approval past it.
+   * Runtime-only.
+   */
+  turnDeadlineAt?: number;
   /** Steering and follow-up prompts Pi is holding for the running turn. */
   queue: { steering: string[]; followUp: string[] };
   /**

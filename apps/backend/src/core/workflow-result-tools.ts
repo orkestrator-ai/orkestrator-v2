@@ -5,16 +5,20 @@ import type {
   WorkflowResultValidation,
 } from "@orkestrator/protocol/workflow-results";
 import {
+  REPORT_FINDING_TOOL_NAME,
   WORKFLOW_RESULT_KINDS,
   WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
   workflowResultToolName,
 } from "@orkestrator/protocol/workflow-results";
+import type { JsonSchema } from "@orkestrator/protocol/structured-output";
+import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
 import { z } from "zod";
 import { workflowResultJsonSchema } from "./workflow-result-contracts.js";
 import type {
   WorkflowResultCallerScope,
   WorkflowResultService,
 } from "./workflow-result-service.js";
+import type { ProvisionalFindingSink, ReportFindingResult } from "./review-provisional-findings.js";
 
 export interface WorkflowResultToolScope extends WorkflowResultCallerScope {
   workflowResultKey: string;
@@ -92,11 +96,76 @@ async function commitSubmission(
     : workflowResults.submit(scope, resultKey, result);
 }
 
+/**
+ * One entry of a report's `issues`, as `report_finding` takes it. Provenance
+ * and the alternative fixes may be left out: the backend assigns the first and
+ * the report carries the second.
+ */
+const PROVISIONAL_FINDING_OPTIONAL_FIELDS = new Set([
+  "reviewModels",
+  "reviewSourceIds",
+  "alternativeFixes",
+]);
+
+function provisionalFindingJsonSchema(): JsonSchema {
+  const issue = (
+    STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as unknown as {
+      properties: { issues: { items: JsonSchema & { required: readonly string[] } } };
+    }
+  ).properties.issues.items;
+  return {
+    ...issue,
+    required: issue.required.filter((field) => !PROVISIONAL_FINDING_OPTIONAL_FIELDS.has(field)),
+  };
+}
+
+function findingResponse(result: ReportFindingResult) {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(result) }],
+    structuredContent: result as unknown as Record<string, unknown>,
+    ...(!result.ok ? { isError: true as const } : {}),
+  };
+}
+
+function findingDenied(): ReportFindingResult {
+  return {
+    ok: false,
+    error: {
+      code: "capability_denied",
+      nextAction: "stop",
+      message: "This tool connection cannot report findings for that result key.",
+    },
+  };
+}
+
+function findingStorageFailure(): ReportFindingResult {
+  return {
+    ok: false,
+    error: {
+      code: "storage_unavailable",
+      nextAction: "continue",
+      message:
+        "The backend could not record the finding. Keep reviewing; it still belongs in your report.",
+    },
+  };
+}
+
+const REPORT_FINDING_DESCRIPTION =
+  "Report one finding of this review as soon as you are confident in it, so the user can follow your progress. Optional: the user sees it as provisional, and the report you submit must still list it. Pass the fields of one entry of the report's `issues` in `finding`. Repeating a call with the same finding is safe.";
+
+const REPORT_FINDING_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+} as const;
+
 /** Registers the tools exposed by one attempt-scoped result capability. */
 export function registerWorkflowResultTools(
   server: McpServer,
   workflowResults: WorkflowResultService,
   scope: WorkflowResultToolScope,
+  findings?: ProvisionalFindingSink | null,
 ): void {
   const submissionToolName = workflowResultToolName(scope.kind);
   const resultSchema = z.fromJSONSchema(workflowResultJsonSchema(scope.kind));
@@ -196,6 +265,47 @@ export function registerWorkflowResultTools(
       });
     },
   );
+  if (
+    findings &&
+    scope.kind === "review-report" &&
+    findings.accepts(scope, scope.workflowResultKey)
+  ) {
+    registerReportFindingTool(server, scope, findings);
+  }
+}
+
+/**
+ * A Multi Review reviewer's own attempt also takes `report_finding`. It is
+ * listed only while the reviewer is live, so a build-pipeline reviewer, or one
+ * that has finished, never sees it.
+ */
+function registerReportFindingTool(
+  server: McpServer,
+  scope: WorkflowResultToolScope,
+  findings: ProvisionalFindingSink,
+): void {
+  server.registerTool(
+    REPORT_FINDING_TOOL_NAME,
+    {
+      title: "Report a finding",
+      description: REPORT_FINDING_DESCRIPTION,
+      inputSchema: z
+        .object({
+          resultKey: z.string().uuid(),
+          finding: z.fromJSONSchema(provisionalFindingJsonSchema()),
+        })
+        .strict(),
+      annotations: REPORT_FINDING_ANNOTATIONS,
+    },
+    async ({ resultKey, finding }) => {
+      if (resultKey !== scope.workflowResultKey) return findingResponse(findingDenied());
+      try {
+        return findingResponse(await findings.report(scope, resultKey, finding));
+      } catch {
+        return findingResponse(findingStorageFailure());
+      }
+    },
+  );
 }
 
 /**
@@ -210,7 +320,40 @@ export function registerWorkflowResultBrokerTools(
   server: McpServer,
   workflowResults: WorkflowResultService,
   scope: WorkflowResultCallerScope,
+  findings?: ProvisionalFindingSink | null,
 ): void {
+  if (findings) {
+    server.registerTool(
+      REPORT_FINDING_TOOL_NAME,
+      {
+        title: "Report a finding",
+        description: REPORT_FINDING_DESCRIPTION,
+        inputSchema: z
+          .object({
+            resultKey: z.string().uuid(),
+            capability: z.string().min(32).max(2_048),
+            finding: z.fromJSONSchema(provisionalFindingJsonSchema()),
+          })
+          .strict(),
+        annotations: REPORT_FINDING_ANNOTATIONS,
+      },
+      async ({ resultKey, capability, finding }) => {
+        try {
+          if (
+            !(await workflowResults.authorizeCapability(scope, resultKey, capability, "opencode"))
+          ) {
+            return findingResponse(findingDenied());
+          }
+          const binding = await workflowResults.binding(scope, resultKey);
+          if (binding?.kind !== "review-report") return findingResponse(findingDenied());
+          return findingResponse(await findings.report(scope, resultKey, finding));
+        } catch {
+          return findingResponse(findingStorageFailure());
+        }
+      },
+    );
+  }
+
   for (const kind of WORKFLOW_RESULT_KINDS) {
     server.registerTool(
       workflowResultToolName(kind),

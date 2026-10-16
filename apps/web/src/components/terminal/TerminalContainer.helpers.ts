@@ -4,6 +4,7 @@ import {
   closestCenter,
   type CollisionDetection,
   type Collision,
+  type DroppableContainer,
 } from "@dnd-kit/core";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores";
 import type { TabType } from "@/contexts";
@@ -58,6 +59,26 @@ const isTabOrTabbar = (collision: Collision): boolean => {
 };
 
 /**
+ * A droppable inside an `inert` subtree, such as a pane the mobile switcher
+ * hides, is laid out but cannot be seen or reached. dnd-kit measures its rect
+ * regardless of visibility, so it would otherwise win drops aimed at the pane
+ * drawn over it.
+ */
+const isInsideInertSubtree = (container: DroppableContainer): boolean =>
+  container.node.current?.closest("[inert]") != null;
+
+type CollisionDetectionArgs = Parameters<CollisionDetection>[0];
+
+function withoutInertDroppables(args: CollisionDetectionArgs): CollisionDetectionArgs {
+  const containers = args.droppableContainers;
+  if (!containers) return args;
+  const reachable = containers.filter((container) => !isInsideInertSubtree(container));
+  return reachable.length === containers.length
+    ? args
+    : { ...args, droppableContainers: reachable };
+}
+
+/**
  * Custom collision detection that prioritizes tab bars and tabs over edge zones.
  * Uses multiple strategies:
  * 1. First try pointer-based detection (most accurate when pointer is directly over target)
@@ -65,7 +86,8 @@ const isTabOrTabbar = (collision: Collision): boolean => {
  * 3. Use closestCenter as last resort
  *
  * When multiple collisions are found, prioritize tabbars/tabs over edge zones
- * to prevent accidental splits when trying to combine tabs.
+ * to prevent accidental splits when trying to combine tabs. Droppables in an
+ * inert subtree never collide.
  */
 export function createTerminalCollisionDetection({
   pointerDetection = pointerWithin,
@@ -76,7 +98,8 @@ export function createTerminalCollisionDetection({
   rectangleDetection?: CollisionDetection;
   nearestDetection?: CollisionDetection;
 } = {}): CollisionDetection {
-  return (args) => {
+  return (allArgs) => {
+    const args = withoutInertDroppables(allArgs);
     // First, check if the pointer is directly over any droppable
     const pointerCollisions = pointerDetection(args);
     if (pointerCollisions.length > 0) {

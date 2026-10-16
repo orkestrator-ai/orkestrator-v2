@@ -74,5 +74,5 @@ alone (10 pass, 0 fail). Evidence:
 Recurred in the full suite for `0d254a3a`; the unchanged owning file passed
 separately with one isolated Bun worker. Exact failures, suite counts,
 commands, durations and evidence are recorded in
-[0248](0248-backend-fixtures-launch-defaults-validation.md).
+[0255](0255-backend-fixtures-launch-defaults-validation.md).
 No assertion, deadline or skip was changed.

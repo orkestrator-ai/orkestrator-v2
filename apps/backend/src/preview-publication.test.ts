@@ -249,7 +249,12 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
       body,
     });
     expect(allowed.status).toBe(200);
-    expect(fixture.requests.at(-1)?.origin).toBe(`http://localhost:${fixture.port}`);
+    expect(fixture.requests.at(-1)).toMatchObject({
+      host: `localhost:${fixture.port}`,
+      origin: `http://localhost:${fixture.port}`,
+      forwardedHost: undefined,
+      forwardedProto: "https",
+    });
   });
 
   test("revocation denies new requests", async () => {
@@ -291,6 +296,12 @@ describe("PreviewPublicationManager (private HTTPS origins)", () => {
     });
     expect(response).toStartWith("HTTP/1.1 101");
     expect(response.toLowerCase()).toContain("sec-websocket-protocol: fixture.v1");
+    expect(fixture.requests.at(-1)).toMatchObject({
+      host: `localhost:${fixture.port}`,
+      origin: `http://localhost:${fixture.port}`,
+      forwardedHost: undefined,
+      forwardedProto: "https",
+    });
   });
 
   test("a certificate that does not cover the preview hosts disables publication", async () => {

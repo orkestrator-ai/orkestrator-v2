@@ -24,6 +24,7 @@ import { AgentInfoButton } from "./AgentInfoButton";
 import { AgentMailButton } from "@/components/agent-mail/AgentMailButton";
 import { SystemUsageIndicator } from "./SystemUsageIndicator";
 import { HostPark, HostSlot } from "./HostSlot";
+import { AppDialogHost } from "./AppDialogHost";
 
 interface AppShellProps {
   children?: React.ReactNode;
@@ -111,6 +112,8 @@ export function AppShell({ children }: AppShellProps) {
   return (
     <div className="flex h-full w-full flex-col overflow-hidden">
       <OpenFileDialog />
+      {/* Outside both layouts, so a dialog outlives the drawer that requested it. */}
+      <AppDialogHost />
       <HostPark parkRef={contentParkRef} />
       {isMobile ? (
         <MobileAppShellLayout

@@ -11,6 +11,7 @@ import { Menu, Wrench, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { useAppDialogStore } from "@/stores/appDialogStore";
 
 /**
  * Accessible name of the collapsed tools trigger.
@@ -77,11 +78,6 @@ export function MobileAppShellLayout({
   const restoreToolsFocusRef = useRef(false);
   const titleUsesNativeDragRegion = usesNativeWindowDragRegion();
 
-  const closeSidebar = () => {
-    restoreSidebarFocusRef.current = true;
-    setSidebarOpen(false);
-  };
-
   const handleSidebarOpenChange = (open: boolean) => {
     if (!open) {
       restoreSidebarFocusRef.current = true;
@@ -112,6 +108,19 @@ export function MobileAppShellLayout({
     titlePointerTypeRef.current = null;
     titleTooltipWasOpenOnPointerDownRef.current = false;
   }, [selectedEnvironmentId, selectedProjectId]);
+
+  // A dialog requested from a drawer row renders in `AppDialogHost`, outside
+  // the drawer. The drawer gives way to it: left open, it would keep the
+  // dialog behind its modal layer. Focus returns to the drawer trigger.
+  useEffect(
+    () =>
+      useAppDialogStore.subscribe((state, previous) => {
+        if (!state.request || previous.request) return;
+        restoreSidebarFocusRef.current = true;
+        setSidebarOpen(false);
+      }),
+    [],
+  );
 
   useEffect(() => {
     setTitleTooltipOpen(false);
@@ -280,11 +289,18 @@ export function MobileAppShellLayout({
         </div>
 
         <DialogPrimitive.Portal>
+          {/*
+            No click handler here: Radix already closes the drawer on a press
+            outside its content, and only when the drawer is the top layer. A
+            tap that opens a row's actions menu ends with a click that lands on
+            this overlay, because the drawer stops taking pointer events once
+            the menu opens above it; closing on that click shut the drawer and
+            the menu together.
+          */}
           <DialogPrimitive.Overlay
             data-slot="mobile-projects-overlay"
             className="fixed bottom-0 left-0 right-0 top-11 z-50 bg-black/70 backdrop-blur-sm"
             style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
-            onClick={closeSidebar}
           />
           <DialogPrimitive.Content
             id="mobile-projects-drawer"

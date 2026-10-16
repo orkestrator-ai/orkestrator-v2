@@ -7,8 +7,10 @@ of the sidebar, and a pane switcher instead of resize handles. A window can
 cross that breakpoint at any time, for example when it is narrowed, when a phone
 rotates or when split-screen starts. Crossing it must not throw away UI state,
 and every action has to stay reachable in the narrow layout. #988 fixed this for
-the app shell, and stable per-pane hosts fixed it for split panes. The
-environment settings gap remains, plus a follow-up for panes the switcher hides.
+the app shell, stable per-pane hosts fixed it for split panes, and an app-level
+dialog host fixed environment settings opened from the projects drawer. What
+remains is a follow-up for panes the switcher hides, two small settings
+follow-ups, and real-device qualification.
 
 ## Current state
 
@@ -57,29 +59,47 @@ environment settings gap remains, plus a follow-up for panes the switcher hides.
     that had no size. See the follow-up below.
 - **Environment settings from the projects drawer.**
   - `MobileAppShellLayout` renders the sidebar inside a modal Radix `Dialog`
-    (`mobile-projects-drawer`) without `forceMount`.
-  - Each `EnvironmentItem` row (`apps/web/src/components/environments/EnvironmentItem.tsx`)
-    owns `showSettingsDialog` and renders `LazyEnvironmentSettingsDialog`
-    itself.
-  - Choosing Settings from a row's "Environment actions" menu opens the dialog
-    while the modal drawer stays open underneath, and the drawer blocks
-    interaction with it. Closing the drawer first would not help on its own:
-    the drawer's content unmounts when it closes, taking the row and its
-    dialog state with it.
-  - The ActionBar "Environment settings" button works
-    (`ActionBar.view.tsx`, whose `envSettingsEnvironmentId` state lives outside
-    the drawer). #988 changed shell mounting but not this path.
+    (`mobile-projects-drawer`) without `forceMount`, so the drawer's rows
+    unmount when it closes.
+  - An `EnvironmentItem` row (`apps/web/src/components/environments/EnvironmentItem.tsx`)
+    no longer renders the settings dialog. Settings records
+    `{ kind: "environment-settings", environmentId }` in `useAppDialogStore`
+    (`apps/web/src/stores/appDialogStore.ts`), and `AppDialogHost`
+    (`apps/web/src/components/layout/AppDialogHost.tsx`), mounted once in
+    `AppShell` outside both layouts, renders the lazy
+    `EnvironmentSettingsDialog`. The host writes the dialog's changes to the
+    environment store and drops a request whose environment disappears.
+  - `MobileAppShellLayout` subscribes to the store and closes the drawer when a
+    request arrives, returning focus to its trigger.
+  - The drawer backdrop no longer has its own click handler. Radix closes the
+    drawer on a press outside it, and only while the drawer is the top layer.
+  - The ActionBar "Environment settings" button still keeps its own
+    `envSettingsEnvironmentId` state and dialog (`ActionBar.view.tsx`). It
+    lives outside the drawer and works; see the follow-ups.
+  - Covered by `AppDialogHost.test.tsx`, `MobileAppShellLayout.test.tsx` (the
+    drawer gives way to a requested dialog; a click on the backdrop that a
+    press inside the drawer began does not close it),
+    `tests/unit/components/EnvironmentItem.test.tsx` and
+    `HierarchicalSidebar.test.tsx`, and the browser specs
+    `e2e/EnvironmentSettingsDrawer.spec.ts` (touch taps through the drawer
+    into an interactive settings dialog, then reopen the drawer) and
+    `e2e/MobileAppShellLayout.spec.ts` (tapping the backdrop closes the drawer
+    and returns focus).
+  - **Before the fix, in `mobile-chromium` (390 × 844):** a touch tap on a
+    row's "Environment actions" button closed the whole drawer, so Settings
+    was unreachable by touch. The tap opens the menu on `pointerdown`; the
+    drawer then stops taking pointer events under the menu's modal layer, and
+    the tap's `click` lands on the backdrop, whose `onClick` closed the drawer.
+    With that handler removed, Settings opened the dialog while the drawer
+    stayed open: `body` and the settings dialog both computed
+    `pointer-events: none`, and tapping the "Settings section" picker did
+    nothing.
 
 ## Outstanding work
 
 ### Code
 
-1. **Move the environment settings dialog out of the sidebar row.** Hold the
-   target environment in a store or in a host outside the drawer, following
-   the ActionBar's `envSettingsEnvironmentId` pattern. The row only requests
-   it, and the drawer closes when the dialog opens. Done when Settings opened
-   from a row is interactive in a narrow viewport.
-2. **Keep the panes the switcher hides laid out.** Hide inactive panes with
+1. **Keep the panes the switcher hides laid out.** Hide inactive panes with
    `visibility: hidden` layers (`invisible absolute inset-0`, plus `inert`)
    instead of `display: none`, so a hidden pane keeps its size. That keeps a
    native transcript's scroll offset across a pane switch, and also covers the
@@ -88,15 +108,29 @@ environment settings gap remains, plus a follow-up for panes the switcher hides.
    terminal whose pane is hidden. Update the `hidden` assertions in
    `MobilePaneSwitcher.test.tsx` and `PaneTree.test.tsx`. Done when switching
    panes keeps the transcript's first visible message, in a browser spec.
+2. **Open the ActionBar's environment settings through `AppDialogHost`.** The
+   ActionBar still holds `envSettingsEnvironmentId` and renders its own copy
+   of the dialog (`useActionBarController.ts`, `ActionBar.view.tsx`). Moving
+   it onto `useAppDialogStore` leaves one host for the dialog. Its tests in
+   `ActionBar.test.tsx` mock the dialog and would follow it to the host.
+3. **Return focus to the opener when fullscreen settings close.**
+   `FullscreenSettingsLayout` is a `role="dialog"` portal without focus
+   management, so closing any settings dialog leaves focus on `body`, on
+   desktop and in the drawer flow alike. Done when closing returns focus to
+   the control that opened it, or to the drawer trigger when that control
+   has unmounted.
 
 ### Qualification
 
-- `e2e/PaneBreakpoint.spec.ts` crosses the breakpoint mid-test in the
-  `mobile-chromium` and `desktop-chromium` projects for split panes. Settings
-  from the drawer still needs a narrow-browser check.
+- In Chromium both fixes are checked in a narrow browser:
+  `e2e/PaneBreakpoint.spec.ts` crosses the breakpoint mid-test in the
+  `mobile-chromium` and `desktop-chromium` projects, and
+  `e2e/EnvironmentSettingsDrawer.spec.ts` opens Settings from the drawer by
+  touch in `mobile-chromium`.
 - Rotate a real phone, or an iOS simulator, with a split open and with a
-  terminal pane visible. Safari has no `moveBefore`, so this exercises the
-  `appendChild` fallback, which the browser spec only emulates in Chromium.
+  terminal pane visible, and open Settings from the drawer there. Safari has
+  no `moveBefore`, so this exercises the `appendChild` fallback, which the
+  browser spec only emulates in Chromium.
 
 ## Constraints and rationale
 
@@ -126,6 +160,28 @@ environment settings gap remains, plus a follow-up for panes the switcher hides.
   crossing.
 - **Selections go back with `setBaseAndExtent`.** `addRange` on a node Chromium
   has not laid out since the move canonicalizes the caret to the node's start.
+- **Dialogs requested from the drawer live in one app-level host.** The
+  alternatives were to close the drawer from the row before opening a dialog
+  the row still owned (the row unmounts with the drawer and takes the dialog
+  with it), or to keep the drawer mounted when closed with `forceMount` (a
+  hidden drawer keeps every row and its subscriptions alive). A store request
+  plus `AppDialogHost` follows the ActionBar's state-outside-the-drawer
+  pattern and the existing `errorDialogStore`. The host sits in `AppShell`,
+  inside `DockerAvailabilityProvider`, which the settings dialog reads.
+- **The drawer closes itself.** It subscribes to `useAppDialogStore` and gives
+  way to any request, so a row only records what it wants and never reaches
+  into the layout. The subscription sets state from a store callback rather
+  than from an effect body.
+- **The row's update plumbing is gone.** With the dialog in the host,
+  `EnvironmentItem`'s `onUpdate` prop and its local transitioning flag had no
+  caller. The host writes updates to the environment store, which is what
+  the sidebar's handler did, and the row shows a transition from the status
+  it then reads. `onUpdate`, `onUpdateEnvironment` and
+  `createEnvironmentUpdateHandler` were removed from the sidebar components.
+- **No click handler on the drawer backdrop.** Radix's own outside-press
+  dismissal respects its layer stack: while a row's menu is open above the
+  drawer, a press outside closes only the menu. The backdrop's `onClick`
+  bypassed that and closed the drawer on the click that ends a tap.
 - **xterm re-anchors on every resize.** A terminal's first visible line moves
   by a few lines on any resize, crossing or not (50 to 52 for 1024 px to
   800 px wide). The browser spec therefore checks that the terminal is still

@@ -161,3 +161,21 @@ test("a narrow Electron title remains a native drag region", async ({ page }, te
   await title.dispatchEvent("mousedown", { button: 0 });
   await expect(page.getByTestId("mobile-shell-drag-starts")).toHaveText("1");
 });
+
+test("tapping the backdrop closes the projects drawer and returns focus to its trigger", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "mobile layout only");
+  await page.goto("/mobile-shell");
+  const drawer = page.getByRole("dialog", { name: "Projects and environments" });
+  await expect(drawer.locator("button.absolute.right-2")).toBeFocused();
+
+  // Radix closes the drawer on the press outside it; the backdrop has no
+  // click handler of its own (see MobileAppShellLayout).
+  const backdrop = page.locator("[data-slot='mobile-projects-overlay']");
+  const box = await backdrop.boundingBox();
+  if (!box) throw new Error("Expected the drawer backdrop on screen");
+  await page.touchscreen.tap(box.x + box.width - 12, box.y + box.height / 2);
+  await expect(drawer).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Open projects and environments" })).toBeFocused();
+});

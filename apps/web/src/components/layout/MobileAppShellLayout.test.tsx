@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createPortal } from "react-dom";
+import { useAppDialogStore } from "@/stores/appDialogStore";
 import {
   MOBILE_TOOLS_TRIGGER_LABEL,
   MOBILE_TOOLS_TRIGGER_SELECTOR,
@@ -12,6 +13,7 @@ const originalGateway = window.orkestratorGateway;
 
 afterEach(() => {
   cleanup();
+  useAppDialogStore.setState({ request: null });
   window.orkestrator = originalOrkestrator;
   window.orkestratorGateway = originalGateway;
 });
@@ -393,17 +395,35 @@ describe("MobileAppShellLayout", () => {
     expect(screen.getByRole("dialog", { name: "Projects and environments" })).toBeTruthy();
   });
 
-  test("closes the project drawer from its backdrop and restores trigger focus", async () => {
+  test("keeps the drawer open for a click on its backdrop that a press inside it began", () => {
+    // A tap that opens a row's menu inside the drawer ends with a click that
+    // lands on the backdrop, because the drawer stops taking pointer events
+    // while the menu is open above it.
+    renderLayout(
+      { sidebar: <button type="button">Environment actions</button> },
+      { keepInitialDrawerOpen: true },
+    );
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Environment actions" }), {
+      pointerType: "touch",
+    });
+    fireEvent.click(document.querySelector("[data-slot='mobile-projects-overlay']")!);
+
+    expect(screen.getByRole("dialog", { name: "Projects and environments" })).toBeTruthy();
+  });
+
+  test("gives way to a dialog requested from the drawer and returns focus to its trigger", async () => {
     const { container } = renderLayout({}, { keepInitialDrawerOpen: true });
     const menuButton = getTitleBarSidebarTrigger(container);
 
-    const backdrop = document.querySelector("[data-slot='mobile-projects-overlay']");
-    expect(backdrop).toBeTruthy();
-    fireEvent.click(backdrop!);
+    act(() => {
+      useAppDialogStore
+        .getState()
+        .open({ kind: "environment-settings", environmentId: "environment-1" });
+    });
 
     expect(screen.queryByRole("dialog", { name: "Projects and environments" }) === null).toBe(true);
     await waitFor(() => expect(document.activeElement).toBe(menuButton));
-  }, 20_000);
+  });
 
   test("closes the initial drawer with Escape and restores trigger focus", async () => {
     const { container } = renderLayout({}, { keepInitialDrawerOpen: true });

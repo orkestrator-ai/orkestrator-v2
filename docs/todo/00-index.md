@@ -57,9 +57,9 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 42 |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 41 |
 | Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 244 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 255 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 256 |
 | **Total** | | **542** |
 
 ## Very high
@@ -135,7 +135,7 @@ it reaches. Some rules of thumb:
 - [ ] Qualify a paused question and approval on each provider's real CLI past ten minutes, then answer ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
 - [ ] Keep the Claude CLI open across idle turns with an idle detach instead of draining at turn end ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md))
 - [x] Report `authentication-required` readiness on Claude, Pi, ACP and OpenCode; drop the Cursor-only 401 branch ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
-- [ ] Confirm no auth response body carries a token or key except the login URL, and the URL is never logged ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)
+- [x] Confirm no auth response body carries a token or key except the login URL, and the URL is never logged ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)
 - [ ] Confirm close retains the conversation through the UI for Cursor, Pi, OpenCode and Grok ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
 
 ### Transcripts, observation and bandwidth (high)
@@ -618,6 +618,7 @@ it reaches. Some rules of thumb:
 - [ ] Report or re-link account entries whose shared symlink a CLI atomic-rename replaced with a file ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
 - [ ] Verify with a live switch mid-turn that usage windows no longer fold into the new account's card ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), verify)
 - [ ] Stop older container images restoring the host login on restart by retiring the legacy host-mount path ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), blocked)
+- [ ] Scrub credential shapes from bridge stdout/stderr before the backend forwards it to the debug application log ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
 - [ ] Source Codex reasoning `summary` and `personality` from a setting, or remove the bridge plumbing ([composer-model-parameters.md](composer-model-parameters.md))
 - [ ] Decide whether Claude `acceptEdits` joins the `mode` axis, or stop forwarding `permissionMode` ([composer-model-parameters.md](composer-model-parameters.md))
 - [ ] Add a backend per-environment `maxBudgetUsd` setting mapped to a stopped notice, or drop the option ([composer-model-parameters.md](composer-model-parameters.md))
@@ -807,7 +808,7 @@ it reaches. Some rules of thumb:
 | [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md) |  | 2 | 9 | 4 | 15 |
 | [mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md) |  | 1 | 3 | 5 | 9 |
 | [session-titles-and-history.md](session-titles-and-history.md) |  |  | 4 | 4 | 8 |
-| [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md) |  | 1 | 8 | 5 | 14 |
+| [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md) |  |  | 8 | 6 | 14 |
 | [composer-model-parameters.md](composer-model-parameters.md) |  |  | 2 | 4 | 6 |
 | [opencode-v2.md](opencode-v2.md) |  |  |  | 3 | 3 |
 | [provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md) |  |  | 2 | 15 | 17 |

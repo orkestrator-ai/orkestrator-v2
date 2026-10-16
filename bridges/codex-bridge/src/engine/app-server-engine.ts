@@ -1117,7 +1117,7 @@ export class AppServerEngine implements CodexEngine {
         // what Codex reported.
         console.warn(
           "[codex-bridge] Account sign-in check failed:",
-          error instanceof Error ? error.message : error,
+          redactSecrets(error instanceof Error ? error.message : String(error)),
         );
       });
   }
@@ -1819,7 +1819,7 @@ export class AppServerEngine implements CodexEngine {
     void this.applyAccountRead(response, sequence, generation, false).catch((error: unknown) => {
       console.warn(
         "[codex-bridge] Account connector recovery failed:",
-        error instanceof Error ? error.message : error,
+        redactSecrets(error instanceof Error ? error.message : String(error)),
       );
     });
     return response;

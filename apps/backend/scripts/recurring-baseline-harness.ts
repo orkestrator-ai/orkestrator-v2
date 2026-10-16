@@ -14,7 +14,7 @@ import {
   formatContainerFetchResponse,
 } from "../src/core/container-git-fetch.js";
 import { PrMonitorService, type PrMonitorTarget } from "../src/core/pr-monitor.js";
-import { CLAUDE_STATE_POLL_INTERVAL_MS, ClaudeStatePollManager } from "../src/core/tmux-poll.js";
+import { ClaudeStatePollManager } from "../src/core/tmux-poll.js";
 import { RecurringWorkMetrics } from "../src/core/recurring-work-metrics.js";
 import { ManualTime } from "../src/core/recurring-test-support.js";
 import {
@@ -77,6 +77,12 @@ export const PHYSICAL_COST = {
   localTreeDirectoryReads: 40,
   /** Branch resolution before discovery: one `git`/`docker exec`. */
   prBranchResolutionSpawns: 1,
+  /**
+   * Arming the Claude state doorbell (`claude-state-signal.ts`): the host
+   * alias check (2 `docker exec`), the firewall's service-port read (1) and
+   * the config write that rings once (1). Once per poll lineage.
+   */
+  claudeStateSignalInstallDockerExecs: 4,
 } as const;
 
 export interface BaselineScenario {
@@ -91,6 +97,8 @@ export interface BaselineScenario {
   /** Completed (inactive) records per workflow store, for modelled scans. */
   completedWorkflows: number;
   untrackedFilesPerEnvironment: number;
+  /** Container images implement `claude-state-signal`, so state polls arm the doorbell. */
+  claudeStateSignal?: boolean;
 }
 
 export const DEFAULT_SCENARIOS: readonly BaselineScenario[] = [
@@ -109,6 +117,9 @@ export const DEFAULT_SCENARIOS: readonly BaselineScenario[] = [
   // where joined reads matter most.
   scenario("env1-local-c2", 1, 1, 2, "none", 0),
   scenario("env1-container-c2", 1, 0, 2, "none", 0),
+  // Added with the Claude state signal: the 50-container scenario on images
+  // that ring on change, so state reads drop to the safety read.
+  { ...scenario("env50-container-c1-pr-signal", 50, 0, 1, "mixed", 0), claudeStateSignal: true },
 ];
 
 function scenario(
@@ -434,9 +445,11 @@ export async function runScenario(
     },
   });
 
+  // Doorbells by token. The fake install rings once, as the real one's probe does.
+  const stateSignals = new Map<string, () => void>();
   const statePolls = new ClaudeStatePollManager({
     metrics,
-    schedule: (callback) => time.setInterval(callback, CLAUDE_STATE_POLL_INTERVAL_MS),
+    schedule: (callback, intervalMs) => time.setInterval(callback, intervalMs),
     cancel: (timer) => time.clear(timer),
     now: () => new Date(0).toISOString(),
     nowMs: time.now,
@@ -444,6 +457,17 @@ export async function runScenario(
       metrics.work("docker-exec");
       return "idle";
     },
+    ...(input.claudeStateSignal
+      ? {
+          signal: {
+            support: async () => "supported" as const,
+            install: async (_containerId: string, credential: { token: string }) => {
+              metrics.work("docker-exec", PHYSICAL_COST.claudeStateSignalInstallDockerExecs);
+              stateSignals.get(credential.token)?.();
+            },
+          },
+        }
+      : {}),
   });
   const environments = fixtures
     .filter((fixture) => fixture.target.kind === "container")
@@ -455,6 +479,21 @@ export async function runScenario(
     }));
   const pollContext = {
     emit: () => undefined,
+    ...(input.claudeStateSignal
+      ? {
+          agentTools: {
+            issueStateSignal: (onSignal: () => void) => {
+              const token = `state-signal-${stateSignals.size}`;
+              stateSignals.set(token, onSignal);
+              return {
+                url: "http://agent-tools.invalid/claude-state-signal",
+                token,
+                revoke: () => stateSignals.delete(token),
+              };
+            },
+          },
+        }
+      : {}),
     storage: {
       loadEnvironments: async () => {
         // A stat-validated cached read in production.

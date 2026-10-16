@@ -443,11 +443,12 @@ COPY docker/orkestrator-drain.sh /usr/local/bin/orkestrator-drain.sh
 COPY docker/orkestrator-storage.sh /usr/local/bin/orkestrator-storage.sh
 COPY docker/orkestrator-migrate.sh /usr/local/bin/orkestrator-migrate.sh
 COPY docker/orkestrator-log-writer.sh /usr/local/bin/orkestrator-log-writer
+COPY docker/orkestrator-state-signal.sh /usr/local/bin/orkestrator-state-signal
 # Per-boot status and process registration. Owned by node because the
 # entrypoint runs as node after the network policy is fixed; the records are
 # orchestration evidence, not a security boundary against the same user.
 RUN install -d -o node -g node -m 0755 /run/orkestrator /run/orkestrator/processes \
- && chmod 0755 /usr/local/bin/orkestrator-drain.sh /usr/local/bin/orkestrator-storage.sh /usr/local/bin/orkestrator-migrate.sh /usr/local/bin/orkestrator-log-writer
+ && chmod 0755 /usr/local/bin/orkestrator-drain.sh /usr/local/bin/orkestrator-storage.sh /usr/local/bin/orkestrator-migrate.sh /usr/local/bin/orkestrator-log-writer /usr/local/bin/orkestrator-state-signal
 COPY docker/git-branch-helpers.sh /usr/local/bin/
 COPY docker/runtime-env.sh /usr/local/bin/orkestrator-runtime-env.sh
 RUN apt-get update && apt-get install -y --no-install-recommends util-linux \

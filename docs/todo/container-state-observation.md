@@ -1,10 +1,12 @@
 # Container state observation
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `9906db30` (2026-10-16).
 
 The backend observes state inside containers by running `docker exec` on fixed
-timers. The Claude terminal-state poll alone is one exec per running container
-per second, the largest remaining idle cost of containers. An open Files panel
+timers. The Claude terminal-state poll was one exec per running container per
+second, the largest idle cost of containers; on images with the
+`claude-state-signal` capability it is now a pushed doorbell plus a 30 s safety
+read, and only older images keep the 1 s poll. An open Files panel
 on a container pays one status exec per read plus a tree walk every 10–15 s,
 because a container worktree has no change signal the way a watched local
 worktree does. The aim is to replace fixed-interval execs with a
@@ -13,24 +15,45 @@ lose no exact recovery.
 
 ## Current state
 
-- Claude terminal state (inventory item B18):
+- Claude terminal state (inventory item B18), described in
+  [container-lifecycle.md](../architecture/container-lifecycle.md#claude-terminal-state-signal-claude-state-signal1):
   - `ClaudeStatePollManager` in `apps/backend/src/core/tmux-poll.ts`. Its
-    `reconcile` (command `reconcile_claude_state_polling`) starts a poll for
-    every running environment container, whether or not Claude runs in it.
-  - Every `CLAUDE_STATE_POLL_INTERVAL_MS` (1 s), `claudeStateReadCommand`
-    runs `docker exec <id> cat /tmp/.claude-state` with a
-    `CLAUDE_STATE_READ_TIMEOUT_MS` (5 s) timeout.
+    `reconcile` (command `reconcile_claude_state_polling`, every 2 s) starts
+    a poll for every running environment container, whether or not Claude
+    runs in it. Each read is `docker exec <id> cat /tmp/.claude-state`
+    (`claudeStateReadCommand`, 5 s timeout).
   - The file is written by Claude Code hooks that `docker/entrypoint.sh`
     installs (`working`, `waiting`). They fire for Claude started in a
     terminal, not for bridge sessions (`ORKESTRATOR_NATIVE_AGENT_BRIDGE` set).
+    On `claude-state-signal=1` images the hooks then run
+    `orkestrator-state-signal`, a detached curl POST to the agent tools
+    server's `/claude-state-signal` route.
+  - A poll starts at 1 s. Once per lineage it arms the doorbell
+    (`claude-state-signal.ts`: capability check, host alias and service
+    port, config written from stdin, one probe ring). The probe ring moves it
+    to `CLAUDE_STATE_SAFETY_READ_INTERVAL_MS` (30 s); each ring requests one
+    coalesced read. A safety read that finds a change no ring announced
+    revokes the credential and returns to 1 s. Arming is retried at most every
+    `CLAUDE_STATE_SIGNAL_RETRY_MS` (5 min).
   - The manager emits `claude-state-<containerId>` only on change, rechecks
-    retirement every `CLAUDE_STATE_RETIREMENT_CHECK_MS` (15 s), handles stale
-    reads, and probes for an agent-created PR only on a turn-ending transition
-    (`probeForAgentCreatedPullRequest`).
+    retirement every `CLAUDE_STATE_RETIREMENT_CHECK_MS` (15 s; in practice
+    every safety read), handles stale reads, and probes for an agent-created
+    PR only on a turn-ending transition (`probeForAgentCreatedPullRequest`).
   - It is catalogue kind `tmux-poll` in `packages/protocol/src/recurring-work.ts`.
-  - Measured: 60 execs per minute per container in live runs. In the
-    deterministic harness it is 3,000 of about 3,300 execs per minute in the
-    50-environment container scenario.
+  - Measured in the deterministic harness (`env50-container-c1-pr` against
+    `env50-container-c1-pr-signal`): state reads drop from 3,000 to 100 execs
+    per minute (60 to 2 per container), all idle execs from 3,296 to 396 per
+    minute, and storage stats from 200 to 100. Arming costs about 4 execs per
+    container once.
+  - Measured live on Docker Desktop 29.8.1 (Apple M5 Pro, 2026-10-16, a
+    stock `orkestrator-v2:latest` container with the script copied in): one
+    state read takes 42 ms p50 and 55 ms p95 and about 20 ms of host CPU in
+    the `docker` CLI (32 MB peak RSS per CLI process), so the 1 s poll costs
+    about 2 % of a core per container on the CLI side alone. Daemon and VM
+    CPU were not measured. Arming took 310 ms including the probe ring; a
+    hook's ring reached the backend within its own `docker exec` (about
+    50 ms); a revoked credential was refused; the token appeared in no
+    process argv.
 - Container Files panel:
   - The client polls every 5 s (`AUTO_REFRESH_INTERVAL` in
     `apps/web/src/hooks/useFilesPanel.ts`).
@@ -66,20 +89,17 @@ lose no exact recovery.
 
 ### Code
 
-1. Measure the real cost of one B18 exec (latency and backend CPU, Docker
-   Desktop against Linux Engine) through the recurring-work recorder before
-   designing the replacement.
-2. Replace the 1 s Claude state poll with a pushed change signal, and demote
-   the poll to a slow safety read. Candidates:
-   - the hook that writes `/tmp/.claude-state` also notifies;
-   - one long-lived exec per container streams state changes, restarted with
-     the runtime's generation.
-
-   Keep stale-read handling, change-only emits, retirement checks and the
-   transition-only PR probe.
+1. Measure one B18 exec on Linux Engine (latency and backend CPU), and the
+   Docker Desktop daemon and VM side, which the live measurement above left
+   out. It matters now only for images without the signal.
+2. Report Claude state signal health per container (armed, confirmed,
+   demoted, unsupported) in recurring diagnostics. Today a demotion is only a
+   backend log line, so a container stuck on the 1 s poll is invisible.
 3. Add a container worktree change signal so a quiet container's Files-panel
    reads are served from valid state, as watched local worktrees are. It can
-   share the transport chosen for item 2. Specify restart and generation
+   share the Claude state doorbell: a second route, or a kind on the same
+   one, issued by `AgentToolsServer` per poll lineage and armed the same way,
+   with an in-container watcher in place of the hook. Specify restart and generation
    handling (a new runtime generation or boot starts a new lineage), and make
    overflow force a full reconciliation. It must share `DiffStatsService`
    ownership rather than add a second scanner. Gate it on an image capability
@@ -92,6 +112,10 @@ lose no exact recovery.
 
 ### Qualification
 
+- With an image built from this branch, confirm on Docker Desktop and Linux
+  Engine that a terminal Claude turn arms and confirms the signal, shows
+  working and waiting within budget, and costs 2 state execs per container
+  per minute when idle.
 - In an isolated profile with a container fixture
   (`mise run dev:test --profile <p> --fixture --fixture-environments local,container`),
   record before and after each change: idle execs per container per minute,
@@ -105,6 +129,51 @@ lose no exact recovery.
   artifacts no longer reproduce at this commit.
 
 ## Constraints and rationale
+
+### Claude state signal decisions (2026-10-16)
+
+- **Transport: the hooks ring an HTTP doorbell on the agent tools server.**
+  Alternatives: one long-lived `docker exec` per container streaming changes
+  (one blocked `docker` CLI process, about 32 MB, per container on the host,
+  all stalled together when Docker Desktop hangs); reporting through a bridge
+  (bridges run only for native sessions, never for terminal Claude); a FIFO
+  or socket on a mount (named volumes are not host-visible on Desktop, and
+  host mounts are being retired). The agent tools server is already reachable
+  from containers through the host alias and firewall service-port rule that
+  bridges prepare.
+- **The doorbell carries no state.** The backend still reads the file, so
+  the existing stale-read handling, change-only emits, retirement checks and
+  transition-only PR probe are unchanged, and a late or reordered POST cannot
+  report an old value. Cost: one exec per transition instead of none.
+- **Trust is earned and can be lost.** A poll stays at 1 s until the
+  install's probe ring proves the whole path. A safety read that finds a
+  change with no ring since the previous read began demotes it to 1 s. A
+  ring that lands between that read and the hook's write can cause a false
+  demotion; it costs one re-arm, and is rare (one hook-to-ring window per
+  transition against a 30 s read).
+- **Gating.** Image capability `claude-state-signal=1`, declared by the
+  marker in `docker/orkestrator-state-signal.sh`. Legacy and invalid
+  manifests keep the 1 s poll for the container's life; an unreadable
+  manifest is asked again after the retry window.
+- **Credential.** Per poll lineage, random, held only in backend memory,
+  scoped to ringing one poll: `/mcp` refuses it and the doorbell refuses MCP
+  tokens. Written to a 0600 file from stdin, never on a command line. The
+  agent can already write `/tmp/.claude-state`, so ringing grants it nothing
+  new. A container that rings more than 30 times in a minute
+  (`CLAUDE_STATE_SIGNAL_MAX_RINGS_PER_MINUTE`; a turn rings twice) is
+  demoted and its credential revoked, so a flood never makes the host run
+  more reads than the 1 s poll did.
+- **Safety read: 30 s.** 60 s would save one exec per minute per container
+  but double the worst case for a missed signal. Stale marking after three
+  failed reads now takes about 90 s instead of 3 s on a signalled container.
+- **No polling limited to terminal Claude.** Not done: the hooks also fire
+  for Claude started by hand, so the backend's session list proves nothing,
+  and a confirmed container already costs only the safety read. Containers
+  that never ran Claude cost 2 reads a minute.
+- **Measurement.** Deterministic: the harness scenario
+  `env50-container-c1-pr-signal`. Live: the Docker Desktop numbers under
+  Current state. Linux Engine and the real built image are under Outstanding
+  work and Qualification.
 
 - A container-side signal adds lifecycle, authentication and recovery duties.
   Treat it as a measured experiment, not a cadence tweak.
@@ -128,20 +197,14 @@ lose no exact recovery.
 
 ## Open questions
 
-- Does Claude terminal state need 1 s fidelity, or is the 4 s activity budget
-  met by an event plus a slower safety read?
-- Which signal transport works in the bundled image and degrades cleanly on
-  older images?
-- Can polling be limited to containers where Claude runs in a terminal? The
-  hooks also fire for Claude started by hand in a plain terminal tab, so the
-  backend's own session list is not proof that none runs.
 - Is the roughly 15 s worst case for Git-invisible changes acceptable against
   the 6 s Files-panel budget, or does it need the signal too?
 - Should ad hoc roots key by `realpath`?
 
 ## Needs verification
 
-- B18's per-exec cost on Docker Desktop has not been measured.
+- B18's per-exec cost on Linux Engine, and the Docker Desktop daemon and VM
+  share, have not been measured (the Desktop CLI side is under Current state).
 
 ## Related
 

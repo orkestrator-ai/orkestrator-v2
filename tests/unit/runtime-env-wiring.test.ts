@@ -223,6 +223,10 @@ describe("container runtime environment wiring", () => {
     ] as const) {
       const command = hooks[event]?.[0]?.hooks[0]?.command;
       expect(command).toContain("/tmp/.claude-state");
+      // The doorbell rings after the write, so the backend's read sees it.
+      expect(command!.indexOf("/usr/local/bin/orkestrator-state-signal")).toBeGreaterThan(
+        command!.indexOf("/tmp/.claude-state"),
+      );
       withTempDir((dir) => {
         const stateFile = join(dir, "state");
         const script = command!.replaceAll("/tmp/.claude-state", shellQuote(stateFile));

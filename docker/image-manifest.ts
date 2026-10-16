@@ -46,6 +46,10 @@ export const CONTRACT_FILES: ReadonlyArray<{ installed: string; source: string }
     installed: "/usr/local/bin/orkestrator-log-writer",
     source: "docker/orkestrator-log-writer.sh",
   },
+  {
+    installed: "/usr/local/bin/orkestrator-state-signal",
+    source: "docker/orkestrator-state-signal.sh",
+  },
 ];
 
 const MARKER = /ORKESTRATOR_CAPABILITY ([a-z-]+)=(\d+)/g;

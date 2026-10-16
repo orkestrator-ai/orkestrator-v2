@@ -650,7 +650,9 @@ chmod 700 "$HOME/.claude"
 
 # Create settings.json with bypass permissions mode and activity hooks
 # This is the primary settings file that Claude Code reads
-# Hooks write state to /tmp/.claude-state for the host to poll
+# Hooks write state to /tmp/.claude-state for the host to read, then ring the
+# backend (orkestrator-state-signal) so it reads on change instead of polling
+# every second; the backend keeps a slow safety read for a missed signal
 # - UserPromptSubmit: fires when user sends a prompt (better than PreToolUse which fires on startup)
 # - Stop: fires when Claude finishes responding
 # These describe terminal Claude only. The native claude-bridge sets
@@ -671,12 +673,12 @@ cat > "$HOME/.claude/settings.json" << 'EOF'
   "hooks": {
     "UserPromptSubmit": [
       {
-        "hooks": [{ "type": "command", "command": "[ -n \"$ORKESTRATOR_NATIVE_AGENT_BRIDGE\" ] || echo working > /tmp/.claude-state" }]
+        "hooks": [{ "type": "command", "command": "[ -n \"$ORKESTRATOR_NATIVE_AGENT_BRIDGE\" ] || { echo working > /tmp/.claude-state; /usr/local/bin/orkestrator-state-signal 2>/dev/null || true; }" }]
       }
     ],
     "Stop": [
       {
-        "hooks": [{ "type": "command", "command": "[ -n \"$ORKESTRATOR_NATIVE_AGENT_BRIDGE\" ] || echo waiting > /tmp/.claude-state" }]
+        "hooks": [{ "type": "command", "command": "[ -n \"$ORKESTRATOR_NATIVE_AGENT_BRIDGE\" ] || { echo waiting > /tmp/.claude-state; /usr/local/bin/orkestrator-state-signal 2>/dev/null || true; }" }]
       }
     ]
   }

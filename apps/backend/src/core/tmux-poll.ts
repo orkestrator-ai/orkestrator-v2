@@ -1,5 +1,6 @@
 import * as shared from "./tmux-shared.js";
 import { TranscriptTaskTracker, runCommand } from "./tmux-shared.js";
+import type { StateSignalCredential } from "./agent-tools.js";
 import { TmuxBackend } from "./tmux-backend.js";
 import { AsyncMutex, TmuxSession, TmuxSessionManager } from "./tmux-session-manager.js";
 import {
@@ -51,22 +52,79 @@ export type ClaudeStatePoll = {
   context: CommandContext;
   /** When storage last confirmed the environment still owns a running container. */
   lastRetirementCheckAt?: number;
+  /** This lineage's doorbell credential, while one is issued. */
+  signal?: StateSignalCredential;
+  /**
+   * A doorbell from `signal` arrived, so a change is read when it is announced
+   * and the timer is only the safety read.
+   */
+  signalConfirmed: boolean;
+  /** The image has no signal; the container keeps the 1 s poll for its life. */
+  signalUnsupported: boolean;
+  signalArming?: Promise<void>;
+  lastSignalAttemptAt?: number;
+  /** Doorbells received, and the count when the previous read started. */
+  rings: number;
+  ringsAtPreviousRead: number;
+  /** Rate window for {@link CLAUDE_STATE_SIGNAL_MAX_RINGS_PER_MINUTE}. */
+  ringWindowStartedAt?: number;
+  ringsInWindow: number;
 };
+
+/** `unknown`: the image could not be inspected right now; ask again later. */
+export type ClaudeStateSignalSupport = "supported" | "unsupported" | "unknown";
+
+/** Puts the doorbell config into a container (`claude-state-signal.ts`). */
+export interface ClaudeStateSignalInstaller {
+  support(containerId: string, context: CommandContext): Promise<ClaudeStateSignalSupport>;
+  /** Resolves once the config is written and its probe ring has been sent. */
+  install(
+    containerId: string,
+    credential: StateSignalCredential,
+    context: CommandContext,
+  ): Promise<void>;
+}
 
 export type ClaudeStatePollManagerOptions = {
   readState?: (containerId: string) => Promise<string>;
-  schedule?: (callback: () => void) => unknown;
+  schedule?: (callback: () => void, intervalMs: number) => unknown;
   cancel?: (timer: unknown) => void;
   now?: () => string;
   nowMs?: () => number;
   /** Content-free cost accounting; defaults to the process-wide recorder. */
   metrics?: RecurringWorkMetrics;
+  /** Without one every container keeps the 1 s poll. */
+  signal?: ClaudeStateSignalInstaller;
 };
 
 /** How long the agent has to answer before a state read is abandoned. */
 export const CLAUDE_STATE_READ_TIMEOUT_MS = 5_000;
-/** Gap between state reads. Each tick coalesces behind any in-flight read. */
+/**
+ * Gap between state reads for a container without a working signal (an older
+ * image, or one whose doorbell has not rung yet). Each tick coalesces behind
+ * any in-flight read.
+ */
 export const CLAUDE_STATE_POLL_INTERVAL_MS = 1_000;
+/**
+ * Gap between reads once the doorbell works. Changes are read when announced;
+ * this read only catches one the doorbell missed, and proves it missed: a
+ * change seen here with no ring since the previous read demotes the container
+ * to the 1 s poll.
+ */
+export const CLAUDE_STATE_SAFETY_READ_INTERVAL_MS = 30_000;
+/**
+ * Least gap between attempts to arm the doorbell for one container, so a path
+ * that cannot work (firewall, a user's own hooks) costs a few execs every five
+ * minutes rather than on every 2 s reconciliation.
+ */
+export const CLAUDE_STATE_SIGNAL_RETRY_MS = 300_000;
+/**
+ * Doorbells one container may ring in a minute. A turn rings twice, so this is
+ * far above real use; past it the container returns to the 1 s poll, so code
+ * in a container can never make the host run more state reads than the poll
+ * it replaced.
+ */
+export const CLAUDE_STATE_SIGNAL_MAX_RINGS_PER_MINUTE = 30;
 /**
  * How often a poll that observed *no* change still asks storage whether its
  * environment is still running. A changed state consults storage immediately;
@@ -95,14 +153,16 @@ export function claudeStateReadCommand(containerId: string): {
 export class ClaudeStatePollManager {
   private readonly polls = new Map<string, ClaudeStatePoll>();
   private readonly readState: (containerId: string) => Promise<string>;
-  private readonly schedule: (callback: () => void) => unknown;
+  private readonly schedule: (callback: () => void, intervalMs: number) => unknown;
   private readonly cancel: (timer: unknown) => void;
   private readonly now: () => string;
   private readonly nowMs: () => number;
   private readonly metrics: RecurringWorkMetrics;
+  private signalInstaller: ClaudeStateSignalInstaller | null;
 
   constructor(options: ClaudeStatePollManagerOptions = {}) {
     this.metrics = options.metrics ?? recurringWorkMetrics;
+    this.signalInstaller = options.signal ?? null;
     this.readState =
       options.readState ??
       (async (containerId) => {
@@ -110,10 +170,18 @@ export class ClaudeStatePollManager {
         return (await runCommand(command, args, runOptions)).stdout.trim();
       });
     this.schedule =
-      options.schedule ?? ((callback) => setInterval(callback, CLAUDE_STATE_POLL_INTERVAL_MS));
+      options.schedule ?? ((callback, intervalMs) => setInterval(callback, intervalMs));
     this.cancel = options.cancel ?? ((timer) => clearInterval(timer as NodeJS.Timeout));
     this.now = options.now ?? (() => new Date().toISOString());
     this.nowMs = options.nowMs ?? (() => Date.now());
+  }
+
+  /**
+   * The registry installs the Docker-backed installer on the process-wide
+   * manager; the poll module itself never reaches into container setup.
+   */
+  setSignalInstaller(installer: ClaudeStateSignalInstaller | null): void {
+    this.signalInstaller = installer;
   }
 
   start(containerId: string, context: CommandContext): void {
@@ -121,6 +189,7 @@ export class ClaudeStatePollManager {
     if (existing) {
       // Adopt the newest backend context after a supervisor reconciliation.
       existing.context = context;
+      this.armSignal(containerId, existing);
       return;
     }
     const poll: ClaudeStatePoll = {
@@ -131,10 +200,111 @@ export class ClaudeStatePollManager {
       active: true,
       pollRequested: false,
       context,
+      signalConfirmed: false,
+      signalUnsupported: false,
+      rings: 0,
+      ringsAtPreviousRead: 0,
+      ringsInWindow: 0,
     };
-    poll.timer = this.schedule(() => this.requestPoll(containerId, poll));
+    poll.timer = this.schedule(
+      () => this.requestPoll(containerId, poll),
+      CLAUDE_STATE_POLL_INTERVAL_MS,
+    );
     this.polls.set(containerId, poll);
     this.requestPoll(containerId, poll);
+    this.armSignal(containerId, poll);
+  }
+
+  /**
+   * Issues this lineage a doorbell credential and installs it, at most once
+   * per retry window. Nothing changes until the install's probe ring arrives:
+   * a credential that never rings leaves the 1 s poll in place.
+   */
+  private armSignal(containerId: string, poll: ClaudeStatePoll): void {
+    const installer = this.signalInstaller;
+    const agentTools = poll.context.agentTools;
+    if (!installer || !agentTools?.issueStateSignal) return;
+    if (poll.signalUnsupported || poll.signalConfirmed || poll.signalArming) return;
+    const now = this.nowMs();
+    if (
+      poll.lastSignalAttemptAt !== undefined &&
+      now - poll.lastSignalAttemptAt < CLAUDE_STATE_SIGNAL_RETRY_MS
+    ) {
+      return;
+    }
+    poll.lastSignalAttemptAt = now;
+    const arming = (async () => {
+      const support = await installer.support(containerId, poll.context);
+      if (!this.isCurrent(containerId, poll)) return;
+      if (support !== "supported") {
+        poll.signalUnsupported = support === "unsupported";
+        return;
+      }
+      this.revokeSignal(poll);
+      let credential: StateSignalCredential | null = null;
+      credential = agentTools.issueStateSignal!(() => {
+        if (credential && poll.signal === credential) this.ring(containerId, poll);
+      });
+      if (!credential) return;
+      poll.signal = credential;
+      await installer.install(containerId, credential, poll.context);
+    })()
+      .catch((error: unknown) => {
+        // The poll is unchanged; the next attempt waits for the retry window.
+        this.revokeSignal(poll);
+        console.warn(
+          `[tmux] Could not arm the Claude state signal for ${containerId}:`,
+          error instanceof Error ? error.message : error,
+        );
+      })
+      .finally(() => {
+        if (poll.signalArming === arming) poll.signalArming = undefined;
+      });
+    poll.signalArming = arming;
+  }
+
+  /** A doorbell from this lineage's credential: read now, and trust the signal. */
+  private ring(containerId: string, poll: ClaudeStatePoll): void {
+    if (!this.isCurrent(containerId, poll)) return;
+    const now = this.nowMs();
+    if (poll.ringWindowStartedAt === undefined || now - poll.ringWindowStartedAt >= 60_000) {
+      poll.ringWindowStartedAt = now;
+      poll.ringsInWindow = 0;
+    }
+    poll.ringsInWindow += 1;
+    if (poll.ringsInWindow > CLAUDE_STATE_SIGNAL_MAX_RINGS_PER_MINUTE) {
+      this.demoteSignal(containerId, poll, "rang too often");
+      return;
+    }
+    poll.rings += 1;
+    if (!poll.signalConfirmed) {
+      poll.signalConfirmed = true;
+      this.reschedule(containerId, poll, CLAUDE_STATE_SAFETY_READ_INTERVAL_MS);
+    }
+    this.requestPoll(containerId, poll);
+  }
+
+  /**
+   * Stop trusting the doorbell: poll every second again. Revoking the
+   * credential makes any further ring a 401 that costs no read.
+   */
+  private demoteSignal(containerId: string, poll: ClaudeStatePoll, reason: string): void {
+    poll.signalConfirmed = false;
+    this.revokeSignal(poll);
+    this.reschedule(containerId, poll, CLAUDE_STATE_POLL_INTERVAL_MS);
+    console.warn(
+      `[tmux] Claude state signal in ${containerId} ${reason}; polling every second until it is re-armed`,
+    );
+  }
+
+  private revokeSignal(poll: ClaudeStatePoll): void {
+    poll.signal?.revoke();
+    poll.signal = undefined;
+  }
+
+  private reschedule(containerId: string, poll: ClaudeStatePoll, intervalMs: number): void {
+    this.cancel(poll.timer);
+    poll.timer = this.schedule(() => this.requestPoll(containerId, poll), intervalMs);
   }
 
   /** Adopt every running container without waiting for a renderer lease. */
@@ -165,6 +335,7 @@ export class ClaudeStatePollManager {
     if (this.polls.get(containerId) !== poll) return;
     poll.active = false;
     this.cancel(poll.timer);
+    this.revokeSignal(poll);
     this.polls.delete(containerId);
   }
 
@@ -208,6 +379,10 @@ export class ClaudeStatePollManager {
     poll: ClaudeStatePoll,
     span?: RecurringWorkSpan,
   ): Promise<void> {
+    // Any doorbell since the previous read started announces what this read
+    // finds: that read may have run before the hook wrote the file.
+    const ringsBeforePreviousRead = poll.ringsAtPreviousRead;
+    poll.ringsAtPreviousRead = poll.rings;
     const state = (await this.readState(containerId).catch(() => "")).trim();
     if (!this.isCurrent(containerId, poll)) return;
 
@@ -217,6 +392,14 @@ export class ClaudeStatePollManager {
     const changed = known && (state !== poll.lastState || poll.stale);
     if (changed) span?.changed();
     else span?.unchanged();
+    if (
+      poll.signalConfirmed &&
+      known &&
+      state !== poll.lastState &&
+      poll.rings === ringsBeforePreviousRead
+    ) {
+      this.demoteSignal(containerId, poll, "missed a change");
+    }
     // A tick that observed nothing new must cost nothing beyond the state read.
     // Loading environments here parses the whole environments file, once per
     // second per running container, to answer a question whose answer has not

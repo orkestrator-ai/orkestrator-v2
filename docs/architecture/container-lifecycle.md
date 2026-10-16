@@ -699,3 +699,31 @@ and a replaced runtime is a new source id. Closing releases only the observer.
 The legacy `stream_container_logs` is an adapter onto the same service whose
 lease lapses, so an old client that never closes cannot leave an immortal
 follower. Backend shutdown stops every follower.
+
+## Claude terminal state signal (`claude-state-signal=1`)
+
+Claude started in a container terminal reports its state through the hooks the
+entrypoint writes into `~/.claude/settings.json`: `UserPromptSubmit` writes
+`working` and `Stop` writes `waiting` to `/tmp/.claude-state`. Bridge sessions
+(`ORKESTRATOR_NATIVE_AGENT_BRIDGE` set) write nothing. `ClaudeStatePollManager`
+(`tmux-poll.ts`) reads the file with one `docker exec` and persists and emits
+`claude-state-<containerId>` only on change.
+
+On an image with the capability, each hook then runs `orkestrator-state-signal`,
+which POSTs, detached and with no body, to `/claude-state-signal` on the agent
+tools server. The request only says "read now"; the backend reads the file
+itself, so a late or reordered request can never report a stale value.
+
+| Step | What happens | Where |
+| --- | --- | --- |
+| Arm | Once per poll lineage, if the image's manifest declares the capability: issue a doorbell credential, prepare the host alias and service port as a bridge start does, write the curl config to `/tmp/.orkestrator-claude-state-signal` (0600, from stdin, never argv), then ring once | `claude-state-signal.ts` |
+| Confirm | Until that probe ring arrives, the poll stays at 1 s. The ring moves it to a 30 s safety read | `CLAUDE_STATE_SAFETY_READ_INTERVAL_MS` |
+| Ring | Each doorbell requests one read, coalesced behind any read in flight | `ClaudeStatePollManager.ring` |
+| Miss | A safety read that finds a change with no ring since the previous read began revokes the credential and returns to 1 s | `demoteSignal` |
+| Flood | More than 30 rings in a minute does the same, so a container can never cause more reads than the 1 s poll | `CLAUDE_STATE_SIGNAL_MAX_RINGS_PER_MINUTE` |
+| Retry | Arming is attempted at most every 5 min per container; a legacy or invalid manifest is never asked again, an unreadable one is | `CLAUDE_STATE_SIGNAL_RETRY_MS` |
+| Retire | Shutdown, retirement and a new poll revoke the credential; a backend restart forgets all of them | `AgentToolsServer.issueStateSignal` |
+
+A doorbell credential opens nothing else: `/mcp` refuses it and MCP tokens are
+refused on the doorbell. Images without the capability, contexts without the
+agent tools server, and unit tests (`NODE_ENV=test`) keep the 1 s poll.

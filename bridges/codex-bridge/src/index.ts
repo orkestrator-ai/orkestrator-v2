@@ -35,6 +35,7 @@ import { AppServerRuntime, SESSION_CLOSING_ERROR } from "./app-server-runtime.js
 import { AppServerEngine, type AppServerEngineOptions } from "./engine/app-server-engine.js";
 import { codexAppServerConfigOverrides } from "./codex-config.js";
 import { APPROVAL_DECISIONS, isApprovalDecision } from "./app-server/approvals.js";
+import { redactSecrets } from "./app-server/redaction.js";
 import { parseInteractionAnswer, type InteractionAnswer } from "./app-server/interactions.js";
 import { EventRing, parseEventCursor } from "./event-ring.js";
 import {
@@ -140,6 +141,22 @@ interface PromptAttachmentInput {
 }
 
 export const app = new Hono();
+
+/**
+ * Hono's default handler prints the whole error, and an `AppServerRpcError`
+ * carries app-server's `data` verbatim. Log one redacted line instead; the
+ * response is the default one.
+ */
+app.onError((error, c) => {
+  if ("getResponse" in error) {
+    const response = (error as { getResponse(): Response }).getResponse();
+    return c.newResponse(response.body, response);
+  }
+  console.error(
+    `[codex-bridge] ${c.req.method} ${c.req.path} failed: ${redactSecrets(`${error.name}: ${error.message}`)}`,
+  );
+  return c.text("Internal Server Error", 500);
+});
 export const MAX_CODEX_TRANSCRIPT_RESPONSE_BYTES = 16 * 1024 * 1024;
 
 export function boundCodexTranscriptResponse(

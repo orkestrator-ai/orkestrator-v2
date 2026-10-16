@@ -12,6 +12,11 @@ import {
 import type { AppServerSupervisorOptions } from "../app-server/process-supervisor.js";
 import { FakeReadable, FakeWritable } from "../app-server/testing/fake-app-server.js";
 import type { EngineEvent, EngineTurnConfig } from "./types.js";
+import {
+  AUTH_SECRET_CANARIES,
+  captureOutput,
+  expectNothingSecretLogged,
+} from "../../../../tests/helpers/auth-secret-canaries.js";
 
 const BUILD: EngineTurnConfig = { mode: "build", model: "gpt-5.6-sol", cwd: "/tmp/workspace" };
 const PLAN: EngineTurnConfig = { mode: "plan", cwd: "/tmp/workspace" };
@@ -2743,6 +2748,23 @@ describe("account sign-in", () => {
     first.resolve(SIGNED_IN);
     await flush(h);
     expect(requestCount(h, "config/mcpServer/reload")).toBe(1);
+  });
+
+  test("a failed sign-in check logs app-server's reason with credentials redacted", async () => {
+    const h = harness({
+      "account/read": () => {
+        throw new Error(
+          `refresh rejected: Bearer ${AUTH_SECRET_CANARIES.accessToken} ${AUTH_SECRET_CANARIES.openAiApiKey}`,
+        );
+      },
+    });
+    const { output } = await captureOutput(async () => {
+      await h.engine.start();
+      h.child().notify("account/login/completed", { loginId: "l1", success: true, error: null });
+      await flush(h);
+    });
+    expect(output).toContain("Account sign-in check failed");
+    expectNothingSecretLogged(output, "Codex sign-in check");
   });
 
   test("an older routine read cannot overwrite a newer account change", async () => {

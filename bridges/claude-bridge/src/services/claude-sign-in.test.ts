@@ -16,6 +16,13 @@ import {
   noteClaudeAuthenticationWorked,
   readClaudeAuthStatus,
 } from "./claude-sign-in.js";
+import {
+  AUTH_SECRET_CANARIES,
+  captureOutput,
+  expectAuthStatusShape,
+  expectNoCanary,
+  expectNothingSecretLogged,
+} from "../../../../tests/helpers/auth-secret-canaries.js";
 
 // What `accountInfo()` answers with an empty config directory (Claude 0.3.296).
 const SIGNED_OUT = { tokenSource: "none", apiProvider: "firstParty" } as const;
@@ -221,5 +228,43 @@ describe("Claude prompt admission", () => {
       clock.mockRestore();
     }
     expect(accountInfo).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("Claude auth status carries no credential", () => {
+  test("drops every token the environment and the SDK hold, and logs none of them", async () => {
+    const planted = {
+      ANTHROPIC_API_KEY: AUTH_SECRET_CANARIES.anthropicApiKey,
+      CLAUDE_CODE_OAUTH_TOKEN: AUTH_SECRET_CANARIES.claudeOAuthToken,
+    };
+    const previous = Object.fromEntries(Object.keys(planted).map((key) => [key, process.env[key]]));
+    Object.assign(process.env, planted);
+    // Everything `accountInfo()` reports, plus fields a future SDK might add.
+    queryControlOverrides.accountInfo = mock(async () => ({
+      email: "user@example.test",
+      organization: "Example Org",
+      subscriptionType: "max",
+      tokenSource: "CLAUDE_CODE_OAUTH_TOKEN",
+      apiKeySource: "ANTHROPIC_API_KEY",
+      apiProvider: "firstParty",
+      accessToken: AUTH_SECRET_CANARIES.accessToken,
+      refreshToken: AUTH_SECRET_CANARIES.refreshToken,
+      apiKey: AUTH_SECRET_CANARIES.anthropicApiKey,
+    }));
+    try {
+      const { result: status, output } = await captureOutput(() => readClaudeAuthStatus());
+      expectAuthStatusShape(status);
+      expect(status).toMatchObject({
+        state: "signed-in",
+        account: { label: "Example Org", plan: "max" },
+      });
+      expectNoCanary(status, "Claude auth status");
+      expectNothingSecretLogged(output, "Claude auth status");
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 });

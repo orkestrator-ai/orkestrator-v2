@@ -176,7 +176,8 @@ for arg in "$@"; do
 done
 if [ "\${FAKE_LAUNCHER_FAIL_EXECUTABLE:-}" = "\${0##*/}" ] || \
    [ "\${FAKE_LAUNCHER_FAIL_SECONDARY_EXECUTABLE:-}" = "\${0##*/}" ]; then
-  printf 'launcher failed\n' >&2
+  # Like xdg-open, optionally name what it could not open.
+  printf 'launcher failed%s\n' "\${FAKE_LAUNCHER_ECHO_ARGS:+: $*}" >&2
   exit "\${FAKE_LAUNCHER_EXIT_CODE:-23}"
 fi
 `;
@@ -1512,6 +1513,27 @@ describe("process and platform command behavior", () => {
     },
     PROCESS_TEST_BUDGET_MS,
   );
+
+  test("a failed browser launch does not echo the URL it was given", async () => {
+    const platform = process.platform;
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+    process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE = "xdg-open";
+    process.env.FAKE_LAUNCHER_ECHO_ARGS = "1";
+    const url = "https://auth.example.test/authorize?state=private-login-state";
+    try {
+      const failure = await invoke("open_in_browser", { url }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toBe("launcher failed: [REDACTED]");
+      expect(String((failure as Error).message)).not.toContain("private-login-state");
+    } finally {
+      Object.defineProperty(process, "platform", { configurable: true, value: platform });
+      delete process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE;
+      delete process.env.FAKE_LAUNCHER_ECHO_ARGS;
+    }
+  });
 
   test("propagates the fallback failure when both Linux reveal commands fail", async () => {
     const platform = process.platform;

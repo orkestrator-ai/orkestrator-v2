@@ -7,6 +7,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentSession, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import {
+  AUTH_SECRET_CANARIES,
+  captureOutput,
+  expectAuthStatusShape,
+  expectNoCanary,
+  expectNothingSecretLogged,
+} from "../../../tests/helpers/auth-secret-canaries.js";
 
 // `config.ts` reads its environment once, at import. Everything below is
 // therefore loaded dynamically, after the environment this suite needs is in
@@ -187,6 +194,44 @@ describe("authorized global routes", () => {
         signIn: { kind: "terminal", hint: "Open a Pi terminal tab and run /login." },
         signOut: false,
       });
+    } finally {
+      resetTestDependencies();
+    }
+  });
+
+  test("reports neither the provider credential nor where it came from", async () => {
+    installRuntime({
+      // Everything a provider and an auth check carry, credential fields included.
+      getProviders: () => [
+        {
+          id: "test-provider",
+          name: "Test Provider",
+          apiKey: AUTH_SECRET_CANARIES.anthropicApiKey,
+          oauth: { refresh: AUTH_SECRET_CANARIES.refreshToken },
+        },
+      ],
+      checkAuth: async () => ({
+        source: `env:${AUTH_SECRET_CANARIES.anthropicApiKey}`,
+        type: "oauth",
+        apiKey: AUTH_SECRET_CANARIES.anthropicApiKey,
+        access: AUTH_SECRET_CANARIES.accessToken,
+        refresh: AUTH_SECRET_CANARIES.refreshToken,
+      }),
+      isUsingOAuth: () => true,
+    });
+    try {
+      const { result, output } = await captureOutput(async () => {
+        const status = await call("/global/auth");
+        const login = await call("/global/auth/login", { method: "POST" });
+        return { status: await status.json(), login: await login.json() };
+      });
+      expectAuthStatusShape(result.status);
+      expect(result.status).toMatchObject({
+        state: "signed-in",
+        providers: [{ id: "test-provider", state: "signed-in", method: "oauth" }],
+      });
+      expectNoCanary(result, "Pi auth routes");
+      expectNothingSecretLogged(output, "Pi auth routes");
     } finally {
       resetTestDependencies();
     }

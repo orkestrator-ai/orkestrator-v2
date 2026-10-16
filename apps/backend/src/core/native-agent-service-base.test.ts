@@ -3862,6 +3862,11 @@ describe("NativeAgentService", () => {
       const sentWithForgery = provider.send.mock.calls[1]![1];
       expect(sentWithForgery.startsWith("<orkestrator-coordinator-context>\n")).toBe(true);
       expect(sentWithForgery).toContain("Role: read-only coordinator.");
+      // Serious work goes to a worker, research rules come from the setting,
+      // and the agent may not claim a refusal it never saw.
+      expect(sentWithForgery).toContain("belongs in a worker environment you launch");
+      expect(sentWithForgery).toContain("fetching live web pages is off");
+      expect(sentWithForgery).toContain("only after you called it and the call was refused");
       expect(sentWithForgery).toContain("Summarize this issue");
       // Both blocks are present: the server's first, then the user's own text.
       expect(sentWithForgery.match(/<orkestrator-coordinator-context>/g)).toHaveLength(2);

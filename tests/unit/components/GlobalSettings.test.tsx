@@ -1453,6 +1453,63 @@ describe("GlobalSettings", () => {
     );
   });
 
+  test("rehydrates coordinator research controls and saves mode and server edits", async () => {
+    const servers = [{ name: "docs", url: "https://docs.example/mcp" }];
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          coordinatorWebResearch: "search",
+          coordinatorResearchMcpServers: servers,
+        },
+      },
+    }));
+    render(<GlobalSettings activeSection="platforms" />);
+    const choices = screen.getByRole("radiogroup", { name: "Coordinator web research" });
+    expect(
+      (within(choices).getByRole("radio", { name: /Web search only/ }) as HTMLInputElement).checked,
+    ).toBe(true);
+    fireEvent.click(
+      within(choices).getByRole("radio", { name: /Web search and research servers/ }),
+    );
+    expect(screen.getByRole("list", { name: "Research servers" }).textContent).toContain(
+      "https://docs.example/mcp",
+    );
+    fireEvent.change(screen.getByRole("textbox", { name: "Research server name" }), {
+      target: { value: "guides" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Research server URL" }), {
+      target: { value: "https://guides.example/mcp" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Add/ }));
+    await flushAutoSave();
+    await waitFor(() =>
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          coordinatorWebResearch: "search-and-mcp",
+          coordinatorResearchMcpServers: [
+            ...servers,
+            { name: "guides", url: "https://guides.example/mcp" },
+          ],
+        }),
+      ),
+    );
+    fireEvent.click(within(choices).getByRole("radio", { name: /Off/ }));
+    await flushAutoSave();
+    await waitFor(() =>
+      expect(mockUpdateGlobalConfig).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          coordinatorWebResearch: "off",
+          coordinatorResearchMcpServers: [
+            ...servers,
+            { name: "guides", url: "https://guides.example/mcp" },
+          ],
+        }),
+      ),
+    );
+  });
+
   test("persists a coordinator safety level change on its own", async () => {
     render(<GlobalSettings activeSection="platforms" />);
 

@@ -7,6 +7,8 @@ import type {
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2/client";
 import {
   DEFAULT_OPENCODE_MODEL_PROVIDERS,
+  nativeAgentPolicyDeniesNetwork,
+  nativeAgentPolicyDeniesWebSearch,
   normalizeOpenCodeModelProviders,
   type NativeAgentExecutionPolicy,
   type NativeAgentDefaultModelResolution,
@@ -293,6 +295,25 @@ const OPENCODE_AGENT_MAIL_PERMISSIONS = Object.freeze(
   AGENT_MAIL_TOOL_NAMES.map((name) => `${ORKESTRATOR_AGENT_MCP_SERVER_NAME}_${name}`),
 );
 
+/**
+ * OpenCode's page-fetch tool, denied by name whenever a policy denies `network`.
+ *
+ * A coordinator's `{"*": deny}` base already covers it, but that is a side
+ * effect of the base rule, which an explicit `toolPolicy.allow` replaces. Named
+ * denies hold whatever the base is, and a `task` subagent inherits every deny
+ * rule of its parent session (OpenCode 1.19.0), so they reach subagents too.
+ */
+const OPENCODE_FETCH_PERMISSIONS = Object.freeze(["webfetch"]);
+
+/**
+ * OpenCode's hosted search tools: denied with the network unless the policy's
+ * `allow` names `web.search`, and then allowed by name over a `*: deny` base.
+ * Both send a query to a hosted search service and return its results.
+ * `codesearch` is not a 1.19.0 tool; it is listed because earlier releases
+ * shipped it as a hosted search, and a rule for an absent permission is inert.
+ */
+const OPENCODE_SEARCH_PERMISSIONS = Object.freeze(["websearch", "codesearch"]);
+
 /** Per-message tool mask for a structured report turn that must not mutate state. */
 export const OPENCODE_READ_ONLY_TURN_TOOLS: Readonly<Record<string, boolean>> = Object.freeze({
   write: false,
@@ -402,7 +423,11 @@ export function openCodePermissionRules(policy: NativeAgentExecutionPolicy) {
         : ("ask" as const);
   const coordinatorAllow =
     policy.id === "coordinator-read-only" && !policy.toolPolicy?.allow
-      ? [...OPENCODE_READ_ONLY_PERMISSIONS, ...OPENCODE_COORDINATOR_TOOL_PERMISSIONS]
+      ? [
+          ...OPENCODE_READ_ONLY_PERMISSIONS,
+          ...OPENCODE_COORDINATOR_TOOL_PERMISSIONS,
+          ...(nativeAgentPolicyDeniesWebSearch(policy) ? [] : OPENCODE_SEARCH_PERMISSIONS),
+        ]
       : [];
   // A worker can always report back: its mail tools are allowed whatever the
   // ask/deny default. An explicit deny below still wins.
@@ -420,7 +445,11 @@ export function openCodePermissionRules(policy: NativeAgentExecutionPolicy) {
       }),
     ),
     // Last, so a deny always wins a collision with the read allowances above.
-    ...(policy.toolPolicy?.deny ?? []).map((permission) => ({
+    ...[
+      ...(policy.toolPolicy?.deny ?? []),
+      ...(nativeAgentPolicyDeniesNetwork(policy) ? OPENCODE_FETCH_PERMISSIONS : []),
+      ...(nativeAgentPolicyDeniesWebSearch(policy) ? OPENCODE_SEARCH_PERMISSIONS : []),
+    ].map((permission) => ({
       permission,
       pattern: "*",
       action: "deny" as const,

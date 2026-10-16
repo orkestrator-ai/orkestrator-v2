@@ -2763,6 +2763,11 @@ describe("session lifecycle", () => {
     process.env.CODEX_BRIDGE_PERMISSION_PROFILE = "coordinator-conversation-1";
     try {
       const h = await harness({
+        "config/read": () => ({
+          config: { web_search: "disabled", features: { standalone_web_search: false } },
+          origins: {},
+          layers: null,
+        }),
         "thread/start": () => ({
           thread: threadPayload("thread-1"),
           activePermissionProfile: { id: "coordinator-conversation-1" },
@@ -2780,6 +2785,15 @@ describe("session lifecycle", () => {
       ).toMatchObject({
         cwd: "/tmp/ws",
         approvalPolicy: "never",
+        // Hosted web search is off on the thread too, not only in the process
+        // configuration the engine read back before starting it.
+        config: { web_search: "disabled", "features.standalone_web_search": false },
+      });
+      expect(h.child().requests.map((request) => request.method)).toContain("config/read");
+      // The policy the agent information panel renders says the network is off.
+      expect((await h.runtime.getConfig(sessionId))?.policy).toMatchObject({
+        id: "coordinator-read-only",
+        capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
       });
       expect(
         h.child().requests.find((request) => request.method === "thread/start")!.params.sandbox,

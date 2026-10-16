@@ -1,6 +1,6 @@
 # Docker image identity aggregate timeout
 
-- **ID:** 0261
+- **ID:** 0263
 - **Status:** open
 - **Date observed:** 2026-10-16
 - **Test:** `image identity > resolves a tag to its immutable id and registry digest`

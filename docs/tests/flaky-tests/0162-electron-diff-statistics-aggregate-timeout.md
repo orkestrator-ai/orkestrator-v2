@@ -227,3 +227,15 @@ passed the entire unchanged owning file (exit 0, 27.1 seconds). Evidence:
 outer artifact `/tmp/orkestrator-test-run.e7nGed/merge-tests.log.gz`.
 Host contention remains an unconfirmed hypothesis; no assertion, timeout or
 skip changed.
+
+## Recurrence — 2026-10-16 (coordinator network lockdown main merge)
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test` (Bun 1.4.3, macOS arm64).
+- **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated Bun workers. The browser component suite also ran during the start of the aggregate.
+- **Suite counts:** backend 8,462 passed, 40 skipped, seven failed and one between-tests error across 453 files (297.75 seconds). The aggregate exited 1 after 352.2 seconds; the bridge group also hit its ACP no-progress watchdog. Root, protocol and all other workspace packages passed.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-commands-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed the unchanged file (exit 0) in 23.0 seconds.
+- **Evidence:** `/tmp/orkestrator-test-run.TpifY7/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `summary.json`; outer artifact `/tmp/orkestrator-test-run.jvncxJ/merge-tests.log.gz`.
+- **Failures:** six diff-statistics cases exceeded the 5000 ms deadline: `computes counts for a tracked local environment and announces them` (5262.70 ms), `serves the Files panel from the scan the badge already ran` (5137.61 ms), `does not resurrect deleted tracking from a stale reconciliation` (5134.49 ms), `does not mark the counts approximate for an ordinary worktree` (5520.49 ms), `enables git's scan caches on a newly created worktree` (6089.10 ms), and `deleting an environment drops its counts from the snapshot` (5103.45 ms). The artifact-excludes timeout and late rejection are recorded under 0187.
+- **Assessment:** the isolated pass confirms an intermittent recurrence. Aggregate contention remains an unconfirmed hypothesis. No implementation, assertion, timeout or skip changed.
+
+- **Final aggregate rerun:** `mise run test:logged -- --name merge-tests-final -- mise run test` passed all four groups (exit 0, 277.5 seconds), including all five bridges (88.0 seconds). No tests, assertions, timeouts or skips changed.

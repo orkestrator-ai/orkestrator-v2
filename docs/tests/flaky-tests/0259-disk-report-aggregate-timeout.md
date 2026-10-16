@@ -26,3 +26,19 @@
 - **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.MTrBXO/root-and-agent-support-tests.log.gz`.
 - **Disposition:** confirms an intermittent recurrence; shared host contention
   remains an unconfirmed hypothesis. No assertion, timeout or skip changed.
+
+## Recurrence — 2026-10-16 (follow-up main merge)
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`,
+  with system Python and GNU shell utilities preferred in PATH. Worker
+  reservations were 4/1/2/1 for workspace/root/bridges/protocol; component
+  browser validation ran alongside it.
+- **Failure:** the five-second deadline expired at 5064.26 ms; `report.status`
+  was null instead of 0, also producing an error between tests.
+- **Suite counts:** root/support reported 3,000 passed, one skipped, one failed
+  and one error across 3,002 tests in 137 files (284.10 seconds).
+- **Isolated rerun:** `mise run test:logged -- --name merge-disk-isolated -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures`
+  passed unchanged (exit 0, 1.3 seconds).
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.CYmzDD/root-and-agent-support-tests.log.gz`.
+- **Assessment:** another confirmed intermittent recurrence. Shared-host
+  contention remains unconfirmed; no assertion, timeout or skip changed.

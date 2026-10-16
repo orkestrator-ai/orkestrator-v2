@@ -179,13 +179,17 @@ What each enforced platform actually does:
   network inside the child process, with `sandbox: read-only`,
   `approvalPolicy: never`, and a private `CODEX_HOME` holding only `auth.json`.
   The bridge refuses to run a turn unless app-server echoes the profile back.
+  Hosted web search is outside the profile, so its mode is set separately
+  (`disabled`, or `cached` when research is on, never `live`), and the bridge
+  refuses a thread unless `config/read` reports that mode.
 - **Claude** runs with the SDK command sandbox on and `allowUnsandboxedCommands`
-  off, `permissionMode: dontAsk`, an allowlist that excludes every writing tool,
-  `settingSources: []`, a private `CLAUDE_CONFIG_DIR` holding only the
-  credential, and a bridge-owned `PreToolUse` hook. The hook is the real
-  boundary for shell: it allows a fixed list of reading commands and refuses
-  pipes, redirection, substitution and chaining. On Windows, where there is no
-  command sandbox, Claude drops to `provider-configured` automatically.
+  off, `permissionMode: dontAsk`, an allowlist that excludes every writing tool
+  and WebFetch (and WebSearch unless research is on), `settingSources: []`, a private
+  `CLAUDE_CONFIG_DIR` holding only the credential, and a bridge-owned
+  `PreToolUse` hook. The hook is the real boundary for shell: it allows a fixed
+  list of reading commands and refuses pipes, redirection, substitution and
+  chaining. On Windows, where there is no command sandbox, Claude drops to
+  `provider-configured` automatically.
 - **Pi** blocks every tool outside its read-only set in its own `tool_call`
   gate, which runs in the bridge process and cannot be switched off by the
   workspace.
@@ -197,8 +201,63 @@ callback, and is refused outright if its sandbox cannot be enabled.
 
 The coordinator policy names operations, not one provider's tool strings:
 `capabilityPolicy.deny` is `file.write`, `file.patch`, `shell.mutate`, and
-`network`. Each bridge translates that list. `toolPolicy` stays Codex-shaped
-and is also the user-override surface, so it cannot carry the translation.
+`network`. Each bridge translates that list. `capabilityPolicy.allow` carves
+exceptions out of it; the only one is `web.search` (see below). `toolPolicy`
+stays Codex-shaped and is also the user-override surface, so it cannot carry
+the translation.
+
+### Network and web research
+
+A sandbox or firewall on this machine only sees what the agent's own commands
+send. Hosted web tools run on the vendor's servers, so they reach the internet
+whatever the sandbox says. A live run once showed a Codex coordinator opening
+`https://example.com` through hosted search while its permission profile had
+the network off. So a `network` denial (`nativeAgentPolicyDeniesNetwork`)
+covers hosted tools as well as commands, and each bridge removes them in its
+provider's own terms.
+
+**Settings → Agent platforms → Coordinator web research** reopens one part of
+that on purpose. Commands stay off the network and hosted page fetches stay
+off in every mode, because a URL the agent opens can carry data out to
+whoever owns the page:
+
+| Mode | Coordinator gets |
+| --- | --- |
+| Web search and research servers (default) | Hosted web search, plus the remote research MCP servers the user lists (Context7 by default) |
+| Web search only | Hosted web search |
+| Off | Neither |
+
+The backend passes the setting to each coordinator bridge at launch as process
+authority (`ORKESTRATOR_COORDINATOR_WEB_RESEARCH`,
+`ORKESTRATOR_COORDINATOR_RESEARCH_MCP`), like the execution policy, so a
+change applies when a conversation's agent next starts. Worker bridges never
+receive either variable, even one inherited by the backend. The policy carries
+the result as `capabilityPolicy.allow: ["web.search"]`; a bridge or a stored
+record that predates `allow` ignores it and keeps search off.
+
+Research servers are HTTPS only, named with lowercase letters, digits and
+hyphens (`orkestrator*` is reserved), at most eight. A local (stdio) server is
+refused: it would be a program running on this machine outside every sandbox.
+Orkestrator injects each one itself, never from a file the checkout can edit.
+
+| Platform | Search | Page fetch | Research servers |
+| --- | --- | --- | --- |
+| Codex | `web_search = "cached"` when allowed, else `"disabled"`; `features.standalone_web_search = false`. The engine reads the mode back through `config/read` once per app-server generation and refuses the thread on any other value. `cached` serves pages only from OpenAI's index: a live run had it refuse a fresh URL with "Cache miss" while `live` opened it. | No separate tool; `live` mode is never used | Process `-c mcp_servers.<name>` overrides, tools approved |
+| Claude | WebSearch on the allowlist when allowed, else in `disallowedTools` and refused by the hook | WebFetch denied by name and by the hook | Added to the inline MCP set, `mcp__<name>__*` on the allowlist and the hook |
+| OpenCode | `websearch` and `codesearch` allowed by name when allowed, else denied | `webfetch` denied after every allow; `task` subagents inherit it | Not yet |
+| Cursor | `webSearch` joins the read-only allowlist when allowed | `webFetch` never on the allowlist | Not yet |
+| Grok | Off: its only verified switch, `--disable-web-search`, removes search and fetch together. Also `--no-leader`, so a shared leader that ignores the flag is never used | Off | Not yet |
+| Pi | No hosted search | None; the read-only gate is a name allowlist, so an extension's web tool is refused | Not yet |
+
+The coordinator context tells the agent which of these it has, that commands
+and live page fetches are off, and to report a tool as refused only after a
+call was refused. It also says to keep its own work to quick reads and
+lookups and to delegate anything more serious to a worker.
+
+The agent information panel reads "no network, web search and web fetch off",
+or "no network except hosted web search, web fetch off" when search is
+allowed. A `restricted` network without a `network` denial still reads
+"restricted network", because hosted tools stay available there.
 
 Every coordinator bridge is launched with
 `ORKESTRATOR_BRIDGE_EXECUTION_POLICY=coordinator-read-only`. That is process
@@ -634,7 +693,14 @@ guarantee, not by one end-to-end scenario replayed per platform:
   coalescing, budgets, restart, bounds): `coordinator-status-wakes.test.ts`
 - single-turn mail batching: `agent-mail-service.test.ts`
 - tool contract and poll guard: `control-mcp-server.test.ts`
-- no-waiting-tools boundary and tier table: `coordinator-conformance.test.ts`
+- no-waiting-tools boundary, tier table, hosted network tools removed on
+  every platform, and search without fetch when research is on:
+  `coordinator-conformance.test.ts`
+- hosted web search against the real pinned Codex, read from the model request
+  on a loopback endpoint (gated on `RUN_LIVE_CODEX_APP_SERVER=1`), plus a
+  canary that proves `cached` refuses a fresh page `live` opens and that a
+  research server is callable (`RUN_LIVE_CODEX_WEB_SEARCH_CANARY=1`):
+  `live-network-lock.test.ts`
 - per-bridge activity and policy tests already cover whether a bridge reports
   `idle` at turn end and how it translates `capabilityPolicy`
 

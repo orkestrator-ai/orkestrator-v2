@@ -285,6 +285,29 @@ test("read-only reviews deny commands, writes and unknown tools even with approv
   }
 });
 
+test("a coordinator cannot reach the network through an extension's web tool", async () => {
+  // Pi ships no web tool, but a user extension can register one (and project
+  // extensions are not loaded for a coordinator). The gate is a name
+  // allowlist, so any such tool is refused before it runs, approvals or not.
+  const { coordinatorProcessPolicy } = await import("./agent-session.js");
+  const previous = process.env.PI_BRIDGE_REQUIRE_APPROVAL;
+  process.env.PI_BRIDGE_REQUIRE_APPROVAL = "0";
+  try {
+    const state = newSessionState();
+    state.policy = coordinatorProcessPolicy();
+    state.readOnly = true;
+    for (const tool of ["web_search", "web_fetch", "webfetch", "fetch", "browser"]) {
+      expect(
+        await requestToolApproval(state, tool, tool, { url: "https://example.com" }),
+      ).toMatchObject({ block: true });
+    }
+    expect(state.approvals.size).toBe(0);
+  } finally {
+    if (previous === undefined) delete process.env.PI_BRIDGE_REQUIRE_APPROVAL;
+    else process.env.PI_BRIDGE_REQUIRE_APPROVAL = previous;
+  }
+});
+
 test("coordinator read-only allows Orkestrator MCP tools and still denies the rest", async () => {
   const { preparePiMcp, setPiMcpTransportForTests } = await import("./mcp.js");
   const { mkdir, mkdtemp, rm, writeFile } = await import("node:fs/promises");

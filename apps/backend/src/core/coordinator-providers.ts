@@ -102,7 +102,10 @@ function judge(platform: AgentPlatform, host: CoordinatorHostCapabilities): Tier
     case "codex":
       // A Codex permission profile denies the filesystem and the network in the
       // child process itself, and the bridge refuses to run a turn unless
-      // app-server echoes the profile back.
+      // app-server echoes the profile back. Hosted web search is outside that
+      // profile (OpenAI's servers fetch the page), so it is switched off in
+      // configuration and the bridge refuses a thread unless `config/read`
+      // confirms it. A Codex that cannot do that would not be `enforced`.
       return { tier: "enforced", mcpClient: true };
     case "claude":
       return host.claudeSandbox
@@ -136,7 +139,7 @@ function judge(platform: AgentPlatform, host: CoordinatorHostCapabilities): Tier
       return {
         tier: "advisory",
         reason:
-          "Grok is asked to request permission before acting and every request is denied. A tool that does not ask is not stopped.",
+          "Grok's web search and web fetch are switched off, and it is asked to request permission before acting with every request denied. A tool that does not ask is not stopped.",
         mcpClient: true,
       };
   }

@@ -99,3 +99,26 @@ The aggregate and browser workload delayed the real Git/worktree operations beyo
 - **Assessment:** the isolated pass confirms an intermittent recurrence. Aggregate contention remains an unconfirmed hypothesis. No implementation, assertion, timeout or skip changed.
 
 - **Final aggregate rerun:** `mise run test:logged -- --name merge-tests-final -- mise run test` passed all four groups (exit 0, 277.5 seconds), including all five bridges (88.0 seconds). No tests, assertions, timeouts or skips changed.
+
+## Recurrence — 2026-10-16 (preview header authority validation)
+
+- **Original command:** `PATH="/opt/homebrew/bin:$PATH" mise run test:logged -- --name full-tests-host-python -- mise run test`
+  on macOS arm64, Bun 1.4.3, working tree based on `6892c000b`. The PATH
+  selects the installed Python for unrelated archive fixtures; the default
+  Python shim hung in both aggregate and isolated migration-test runs.
+- **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1
+  slots; backend used two isolated Bun workers. Workspace admission waited
+  141.6 seconds for the preceding same-worktree run to stop.
+- **Failure:** the artifact-excludes test timed out at 5,011.70 ms against its
+  5,000 ms deadline, followed by one between-tests error after fixture cleanup.
+- **Suite counts:** backend 8,470 passed, 40 skipped, one failed and one
+  additional error across 453 files (321.12 seconds). All other workspace
+  packages and all other aggregate groups passed; aggregate exit 1 (517.4 s).
+- **Isolated rerun:** `PATH="/opt/homebrew/bin:$PATH" mise run test:logged -- --name commands-integration-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`
+  passed the unchanged owning file (exit 0, 33.0 seconds).
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.SL2KEC/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+  and `summary.json`; outer artifact directory
+  `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.XHkW6I`.
+- **Assessment:** the timeout and isolated pass match the existing aggregate
+  symptom. Load sensitivity remains a hypothesis. No assertions, deadlines,
+  skips or implementation in this owner changed.

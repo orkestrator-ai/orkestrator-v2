@@ -234,7 +234,7 @@ function settingValueSchema(descriptor: PublicSettingDescriptor): PublicJsonSche
       return {
         type: "array",
         items: { type: "string" },
-        maxItems: 256,
+        maxItems: descriptor.type === "domain-list" ? 512 : 256,
         description,
       };
     case "port-mappings":
@@ -245,10 +245,21 @@ function settingValueSchema(descriptor: PublicSettingDescriptor): PublicJsonSche
           type: "object",
           properties: {
             containerPort: { type: "integer", minimum: 1, maximum: 65_535 },
-            hostPort: { type: "integer", minimum: 1, maximum: 65_535 },
+            hostPort: {
+              type: "integer",
+              minimum: 0,
+              maximum: 65_535,
+              description: '0 is valid only with hostPortMode "auto".',
+            },
+            hostPortMode: {
+              type: "string",
+              enum: ["auto"],
+              description:
+                "Automatic host-port allocation; requires hostPort 0. Omit for an explicit host port.",
+            },
             protocol: { type: "string", enum: ["tcp", "udp"] },
           },
-          required: ["containerPort", "hostPort"],
+          required: ["containerPort", "hostPort", "protocol"],
         },
         description,
       };
@@ -588,6 +599,7 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
           },
           stdinBase64: {
             type: "string",
+            minLength: 1,
             maxLength: Math.ceil((PUBLIC_API_LIMITS.execStdinMaxBytes * 4) / 3) + 4,
             description: "Standard input, base64-encoded.",
           },

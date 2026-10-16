@@ -5,7 +5,7 @@
 - **Date observed:** 2026-10-16
 - **Test:** `WorkspaceChangeProbe > measures tracked edits, new files and deletions made during the window`
 - **Owning file:** `packages/protocol/src/node/workspace-change-probe.test.ts`
-- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, with the testing guide's GNU-tool PATH, while merging `origin/main` at `c0c7beaf` into `coordinator-launch-defaults`.
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, with the testing guide's GNU-tool PATH, while merging `origin/main` at `59bd3aac` into `coordinator-launch-defaults`.
 - **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1 slots; protocol and backend package tests each used two isolated Bun workers. Another worktree's aggregate suite was active on the host.
 - **Failure:** the unchanged test exceeded its 5000 ms deadline at 5123.49 ms.
 - **Suite counts:** protocol 1,517 passed and one failed. Backend 8,413 passed, 40 skipped, five failed and one between-tests error across 8,458 tests in 450 files (364.58 seconds). Other workspace packages, root, bridges and protocol lockfile verification passed. The aggregate exited 1 after 453.6 seconds.

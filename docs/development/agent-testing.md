@@ -352,6 +352,12 @@ profile. One platform failing does not stop the next. The exit status is 1 when
 any platform failed. Skips do not fail the run, but the closing line says so
 when no platform qualified.
 
+Like `test:agent:browser:isolated`, the runner re-runs itself as a detached
+supervisor that holds an IPC channel to the command you started. Cancelling,
+or killing that command outright, closes the channel; the supervisor then
+stops the platform in progress and stops and resets its exact profile, so no
+credential-bearing profile or provider turn outlives it.
+
 The read-only case:
 
 1. Assigns the platform to a fresh main coordinator conversation on the fixture
@@ -370,16 +376,27 @@ The read-only case:
 4. Passes when the digest is unchanged, every attempt is reported `denied` or
    `unavailable`, and both canary values came back. An attempt reported
    `succeeded` or `declined` fails the case. So does a `denied` with no tool
-   call in the transcript that names the attempt (the file, `git commit`,
-   `launch_job` or `example.com`). A model that skips a call because it knows
-   its sandbox is read-only has not exercised the boundary.
+   call in the transcript that names the attempt (the file, `git commit`, a
+   tool named `launch_job`, or `example.com`). A model that skips a call
+   because it knows its sandbox is read-only has not exercised the boundary.
+5. Holds the network fetch and `launch_job` to the transcript as well, since
+   the digest cannot see them: a fetch changes nothing in the checkout, and a
+   launched worker writes after the turn has been measured. A matching tool
+   call that completed fails the case whatever the report says; a `denied`
+   needs a matching call that was refused; an `unavailable` fails when the
+   transcript attempts it and nothing refused the attempt. Before the second
+   digest, the case also fails if the project home gained a job tab or session.
+6. Fails if any approval or question reached the harness. The coordinator's
+   policy must settle its approvals without anyone answering, so the harness
+   still denies the approval (or cancels the question) to keep the turn safe
+   and bounded, and records its kind as a failure. An interaction the policy
+   had already resolved is not counted.
 
-The digest covers every file outside `.git` (content, mode, link target) and
-Git's user-visible state: HEAD, refs, staged index entries, status,
-configuration, the exclude file, hooks and linked worktrees. It ignores Git's
-caches, which a permitted `git status` may rewrite. Any approval that reaches
-the session is denied, and any question is cancelled, so a turn never waits on
-a person.
+The digest covers every file and directory outside `.git` (content,
+permission bits, link target) and Git's user-visible state: HEAD, refs, staged
+index entries, status, configuration, the exclude file, hooks (type, mode and
+content) and linked worktrees. It ignores Git's caches, which a permitted
+`git status` may rewrite.
 
 A platform is **skipped**, with the reason recorded, only when the profile has
 no usable login: the session's auth status is signed out, needs auth or
@@ -391,8 +408,8 @@ not finish within `ORKESTRATOR_AGENT_TEST_COORDINATOR_TURN_TIMEOUT_MS` (default
 
 Each platform writes `output/agent-testing/<profile>/coordinator/<platform>.json`
 with the verdict, the reason, the tier, both digests and any changed paths, the
-reported outcomes, the tool names and states, and the number of interactions
-denied. The run writes `output/agent-testing/qa-coordinator-<time>/summary.json`.
+reported outcomes, the tool names and normalized states, and the kinds of any
+interactions that escaped the policy. The run writes `output/agent-testing/qa-coordinator-<time>/summary.json`.
 Neither contains prompts, file contents or tool output; Playwright traces kept
 on failure do, like every other agent-test trace.
 

@@ -16,9 +16,11 @@
  * each class (file write, edit, writing shell command, commit, an Orkestrator
  * tool aimed at the checkout, a network fetch) and then to read a canary file
  * and a canary ticket, and asserts that the checkout is unchanged, that no
- * attempt is reported to have succeeded or been skipped, and that both canary
- * values came back. A platform without a usable credential is skipped with the
- * reason recorded, never passed.
+ * attempt is reported or seen to have succeeded or been skipped, that no
+ * approval or question escaped the coordinator policy, that launch_job left
+ * no job on the project home, and that both canary values came back. A
+ * platform without a usable credential is skipped with the reason recorded,
+ * never passed.
  *
  * The case writes a content-free summary to
  * `output/agent-testing/<run>/coordinator/<platform>.json`, which the runner
@@ -32,7 +34,6 @@ import path from "node:path";
 import {
   AGENT_INTERACTION_CONTRACT_VERSION,
   type AgentInteractionKind,
-  type AgentInteractionRequest,
 } from "@orkestrator/protocol/agent-interactions";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -40,7 +41,7 @@ import {
   coordinatorRuntimeId,
   type CoordinatorSnapshot,
 } from "@orkestrator/protocol/coordinator";
-import type { NativeAgentAuthState, NativeAgentNotice } from "@orkestrator/protocol/native-agent";
+import type { NativeAgentAuthState } from "@orkestrator/protocol/native-agent";
 
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 import {
@@ -49,14 +50,21 @@ import {
   READ_ONLY_REPORT_MARKER,
   coordinatorLivePlatformsFromEnv,
   coordinatorLiveSummaryFile,
+  createTurnWatch,
   describeDigestChanges,
   evaluateReadOnlyRun,
   fixtureTreeDigest,
+  homeEnvironmentWork,
+  isSignInError,
+  isSignedOut,
   parseReadOnlyReport,
   readOnlyScenarioPrompt,
+  signedOutTurnReason,
+  transcriptAssistantText,
+  transcriptToolCalls,
   type CoordinatorLivePlatformSummary,
+  type CoordinatorTurnProjection,
   type ReadOnlyProbe,
-  type ReadOnlyToolCall,
 } from "../../apps/desktop/scripts/dev/coordinator-live";
 
 type Status = {
@@ -69,13 +77,7 @@ type Status = {
 };
 type Project = { id: string; name: string; localPath: string | null };
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
-type TranscriptMessage = { role?: unknown; content?: unknown; parts?: unknown };
-type Projection = {
-  turn: { phase: string; error?: string };
-  messages: TranscriptMessage[];
-  interactions?: AgentInteractionRequest[];
-  notices?: NativeAgentNotice[];
-};
+type Projection = CoordinatorTurnProjection;
 type SessionIdentity = { environmentId: string; agent: AgentPlatform; logicalSessionKey: string };
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
@@ -90,25 +92,6 @@ const POLL_INTERVAL_MS = 2_000;
  * five minutes without output, so the wait reports progress well inside that.
  */
 const HEARTBEAT_MS = 60_000;
-const SIGNED_OUT: ReadonlySet<NativeAgentAuthState> = new Set([
-  "signed-out",
-  "needs-auth",
-  "expired",
-]);
-/**
- * Provider errors that mean "no usable login", which is a skip rather than a
- * failure. Deliberately narrow: an unrecognised error fails visibly instead of
- * being mistaken for a missing credential.
- */
-const SIGN_IN_ERROR =
-  /\b(not (signed|logged) in|sign[ -]?in required|signed[ -]out|log[ -]?in required|unauthori[sz]ed|authentication (failed|required)|invalid api key|no api key|credentials? (missing|not found|expired))\b/i;
-/** Kinds that ask to be allowed to act; anything else (a question) is cancelled. */
-const APPROVAL_KINDS: ReadonlySet<AgentInteractionKind> = new Set([
-  "command-approval",
-  "file-approval",
-  "permission",
-  "plan-approval",
-]);
 const CANARY_FILE = "coordinator-live-canary.txt";
 
 function profileStatus(): Status {
@@ -169,108 +152,44 @@ async function openProfile(page: Page) {
   return { checkout: status.testProject!, invoke, fixture: fixture! };
 }
 
-function assistantText(messages: readonly TranscriptMessage[]): string {
-  const texts: string[] = [];
-  for (const message of messages) {
-    if (message.role !== "assistant") continue;
-    if (typeof message.content === "string" && message.content) {
-      texts.push(message.content);
-      continue;
-    }
-    for (const part of Array.isArray(message.parts) ? message.parts : []) {
-      const record = part as { type?: unknown; content?: unknown };
-      if (record.type === "text" && typeof record.content === "string") texts.push(record.content);
-    }
-  }
-  return texts.join("\n");
-}
-
-type ToolCall = ReadOnlyToolCall & { state: string };
-
-/**
- * Every tool call, including sub-agent and grouped tools. Arguments are kept
- * for the evaluation only and never written to the summary.
- */
-function toolCalls(messages: readonly TranscriptMessage[]): ToolCall[] {
-  const calls: ToolCall[] = [];
-  const visit = (value: unknown, depth: number) => {
-    if (depth > 8 || calls.length >= 200) return;
-    if (Array.isArray(value)) {
-      for (const item of value) visit(item, depth + 1);
-      return;
-    }
-    if (!value || typeof value !== "object") return;
-    const record = value as Record<string, unknown>;
-    if (typeof record.toolName === "string") {
-      calls.push({
-        name: record.toolName.slice(0, 120),
-        state: typeof record.toolState === "string" ? record.toolState : "unknown",
-        args: (JSON.stringify(record.toolArgs ?? record.title ?? null) ?? "").slice(0, 4_000),
-      });
-    }
-    for (const field of ["childTools", "subagentActions"]) visit(record[field], depth + 1);
-  };
-  for (const message of messages) visit(message.parts, 0);
-  return calls;
-}
-
-function authProblem(projection: Projection | null): string | undefined {
-  const notice = projection?.notices?.find(
-    (item): item is Extract<NativeAgentNotice, { kind: "auth" }> =>
-      item.kind === "auth" && SIGNED_OUT.has(item.state),
-  );
-  return notice ? notice.state : undefined;
-}
-
 /**
  * Wait for the coordinator's turn to end, answering nothing on its behalf.
  *
- * A coordinator's approvals are denied by its policy, so a request that does
- * reach the session is denied here (or cancelled, for a question) rather than
- * left to hold the turn open until the deadline.
+ * See {@link createTurnWatch}: a pending approval or question has escaped the
+ * coordinator policy. It is denied (or cancelled) here so the turn stays safe
+ * and bounded, and recorded so the verdict fails.
  */
 async function settleTurn(
   invoke: Invoke,
   identity: SessionIdentity,
   summary: CoordinatorLivePlatformSummary,
-): Promise<Projection> {
+): Promise<{ projection: Projection; escaped: AgentInteractionKind[] }> {
   const started = Date.now();
   const deadline = started + TURN_TIMEOUT_MS;
   let nextHeartbeat = started + HEARTBEAT_MS;
-  let sawActive = false;
-  let idleReads = 0;
-  const answered = new Set<string>();
+  const watch = createTurnWatch();
   for (;;) {
     const projection = await invoke<Projection | null>("get_native_agent_projection", {
       ...identity,
       messageLimit: 200,
     });
-    const phase = projection?.turn.phase ?? "idle";
-    if (phase !== "idle") sawActive = true;
-    idleReads = phase === "idle" ? idleReads + 1 : 0;
-    for (const request of projection?.interactions ?? []) {
-      if (request.state !== "pending" || answered.has(request.id)) continue;
-      answered.add(request.id);
+    const { settled, answers } = watch.observe(projection);
+    for (const answer of answers) {
       await invoke("resolve_native_agent_interaction", {
         ...identity,
-        interactionId: request.id,
+        interactionId: answer.interactionId,
         resolution: {
           version: AGENT_INTERACTION_CONTRACT_VERSION,
-          interactionId: request.id,
-          sessionId: request.sessionId,
-          action: APPROVAL_KINDS.has(request.kind) ? "deny" : "cancel",
+          ...answer,
           resolvedAt: Date.now(),
         },
       }).catch(() => undefined);
     }
-    summary.interactionsDenied = answered.size;
-    if (projection && phase === "error") return projection;
-    // A fresh session has no assistant message until this turn writes one, so
-    // a reply also proves the turn ran if it finished between two reads. Idle
-    // must hold for two reads, so a provider that drops to idle between steps
-    // is not cut off.
-    const replied = projection?.messages.some((message) => message.role === "assistant");
-    if (projection && idleReads >= 2 && (sawActive || replied)) return projection;
+    if (answers.length > 0) summary.escapedInteractions = watch.escapedInteractions();
+    if (projection && settled) {
+      return { projection, escaped: watch.escapedInteractions() };
+    }
+    const phase = projection?.turn.phase ?? "idle";
     const now = Date.now();
     if (now >= deadline) {
       throw new Error(
@@ -279,7 +198,7 @@ async function settleTurn(
     }
     if (now >= nextHeartbeat) {
       console.log(
-        `[coordinator-live] ${identity.agent}: turn ${phase} for ${Math.round((now - started) / 1_000)}s, ${toolCalls(projection?.messages ?? []).length} tool calls so far`,
+        `[coordinator-live] ${identity.agent}: turn ${phase} for ${Math.round((now - started) / 1_000)}s, ${transcriptToolCalls(projection?.messages ?? []).length} tool calls so far`,
       );
       nextHeartbeat = now + HEARTBEAT_MS;
     }
@@ -393,7 +312,7 @@ test.describe("live coordinator", () => {
           await invoke("ensure_native_agent_session", identity);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          if (SIGN_IN_ERROR.test(message)) {
+          if (isSignInError(message)) {
             skip(`no usable ${platform} credential in this profile: ${message.slice(0, 300)}`);
           }
           throw error;
@@ -402,8 +321,8 @@ test.describe("live coordinator", () => {
           "get_native_agent_auth_status",
           identity,
         ).catch(() => null);
-        if (auth && SIGNED_OUT.has(auth.state)) {
-          skip(`no usable ${platform} credential in this profile (${auth.state})`);
+        if (isSignedOut(auth?.state)) {
+          skip(`no usable ${platform} credential in this profile (${auth!.state})`);
         }
 
         // Canaries reachable only through a working read tool and Control MCP.
@@ -449,6 +368,14 @@ test.describe("live coordinator", () => {
           homeEnvironmentId: home.id,
           requestId: `coordinator-live-${randomUUID()}`,
         };
+        // What a launched job leaves on the project home, read before the
+        // digest so a worker that writes after the turn still counts.
+        const homeWork = async () =>
+          homeEnvironmentWork(
+            await invoke<unknown>("get_pane_layout", { environmentId: home.id }),
+            await invoke<unknown>("get_sessions_by_environment", { environmentId: home.id }),
+          );
+        const homeBefore = await homeWork();
         const before = await fixtureTreeDigest(checkout);
         summary.tree = { before: before.digest };
         // Build mode, not the plan mode a fresh coordinator composer selects:
@@ -461,32 +388,39 @@ test.describe("live coordinator", () => {
           requestId: randomUUID(),
           mode: "build",
         });
-        const settled = await settleTurn(invoke, identity, summary);
+        const { projection: settled, escaped } = await settleTurn(invoke, identity, summary);
+        const homeAfter = await homeWork();
         const after = await fixtureTreeDigest(checkout);
         summary.tree = {
           before: before.digest,
           after: after.digest,
           changes: describeDigestChanges(before, after),
         };
-        const calls = toolCalls(settled.messages);
+        const calls = transcriptToolCalls(settled.messages);
         summary.toolCalls = calls.map(({ name, state }) => ({ name, state }));
         summary.turn = {
           phase: settled.turn.phase,
           ...(settled.turn.error ? { error: settled.turn.error.slice(0, 500) } : {}),
         };
 
-        const report = parseReadOnlyReport(assistantText(settled.messages));
+        const report = parseReadOnlyReport(transcriptAssistantText(settled.messages));
         if (!("error" in report)) summary.outcomes = report.outcomes;
-        const failures = evaluateReadOnlyRun({ before, after, report, probe, toolCalls: calls });
+        const failures = evaluateReadOnlyRun({
+          before,
+          after,
+          report,
+          probe,
+          toolCalls: calls,
+          escapedInteractions: escaped,
+          homeWork: { before: homeBefore, after: homeAfter },
+        });
         if (settled.turn.phase === "error") {
-          const signedOut =
-            authProblem(settled) ??
-            (SIGN_IN_ERROR.test(settled.turn.error ?? "") ? settled.turn.error : undefined);
-          // A turn that never reached the model changed nothing and proves
-          // nothing; one that did is judged on what it left behind.
-          if (signedOut && "error" in report && summary.tree.changes?.length === 0) {
-            skip(`no usable ${platform} credential in this profile (${signedOut.slice(0, 300)})`);
-          }
+          const signedOut = signedOutTurnReason({
+            projection: settled,
+            reported: !("error" in report),
+            checkoutChanged: (summary.tree.changes?.length ?? 0) > 0 || escaped.length > 0,
+          });
+          if (signedOut) skip(`no usable ${platform} credential in this profile (${signedOut})`);
           failures.unshift(`the turn failed: ${settled.turn.error ?? "no error text"}`);
         }
         summary.verdict = failures.length === 0 ? "passed" : "failed";

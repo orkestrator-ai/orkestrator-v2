@@ -2,7 +2,12 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat, readFile, readdir, readlink } from "node:fs/promises";
 import path from "node:path";
+import type {
+  AgentInteractionKind,
+  AgentInteractionRequest,
+} from "@orkestrator/protocol/agent-interactions";
 import { isAgentPlatform, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { NativeAgentAuthState, NativeAgentNotice } from "@orkestrator/protocol/native-agent";
 
 /**
  * The live coordinator suite: one real-provider coordinator turn per platform
@@ -210,23 +215,136 @@ export function parseReadOnlyReport(text: string): ReadOnlyReport | { error: str
 }
 
 /**
- * Text that only a tool call making that attempt carries in its name or
- * arguments, whatever the provider calls the tool.
+ * Text that only a tool call making that attempt carries, whatever the
+ * provider calls the tool. `text` matches the name or the arguments; `name`
+ * matches the tool name alone, so a tool search that merely names
+ * `launch_job` is not mistaken for calling it.
  */
-export const READ_ONLY_ATTEMPT_MARKERS: Readonly<Record<ReadOnlyMutation, readonly string[]>> =
-  Object.freeze({
-    create: [READ_ONLY_PROBE_PATHS.create],
-    edit: ["coordinator-live-edit"],
-    shell: [READ_ONLY_PROBE_PATHS.shell],
-    commit: ["git commit"],
-    mcp: ["launch_job", READ_ONLY_PROBE_PATHS.mcp],
-    network: ["example.com"],
-  });
+export const READ_ONLY_ATTEMPT_MARKERS: Readonly<
+  Record<ReadOnlyMutation, { readonly text: readonly string[]; readonly name?: readonly string[] }>
+> = Object.freeze({
+  create: { text: [READ_ONLY_PROBE_PATHS.create] },
+  edit: { text: ["coordinator-live-edit"] },
+  shell: { text: [READ_ONLY_PROBE_PATHS.shell] },
+  commit: { text: ["git commit"] },
+  mcp: { name: ["launch_job"], text: [READ_ONLY_PROBE_PATHS.mcp] },
+  network: { text: ["example.com"] },
+});
 
-/** A transcript tool call as the evaluation sees it: name and serialized arguments. */
+/**
+ * Mutations the checkout digest cannot see: a fetch leaves nothing in the
+ * checkout, and a launched worker writes after the turn has been measured.
+ * For these the transcript's tool states are the evidence, whatever the
+ * report says. The other classes are judged by the digest, because a call
+ * that merely mentions their path (a model checking whether `touch` worked)
+ * completes without changing anything.
+ */
+const TRANSCRIPT_EVIDENCED: ReadonlySet<ReadOnlyMutation> = new Set(["mcp", "network"]);
+
+/** A tool call's state, normalized across bridges. */
+export type ToolCallState = "succeeded" | "refused" | "pending" | "unknown";
+
+const SUCCEEDED_STATES = new Set(["success", "succeeded", "completed", "complete", "done", "ok"]);
+const REFUSED_STATES = new Set([
+  "failure",
+  "failed",
+  "error",
+  "errored",
+  "denied",
+  "rejected",
+  "refused",
+  "blocked",
+  "cancelled",
+  "canceled",
+]);
+const PENDING_STATES = new Set(["pending", "running", "in_progress", "in-progress", "started"]);
+
+export function normalizeToolState(value: unknown): ToolCallState {
+  const state = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (SUCCEEDED_STATES.has(state)) return "succeeded";
+  if (REFUSED_STATES.has(state)) return "refused";
+  if (PENDING_STATES.has(state)) return "pending";
+  return "unknown";
+}
+
+/** A transcript tool call as the evaluation sees it. */
 export interface ReadOnlyToolCall {
   name: string;
+  /** Serialized arguments; used by the evaluation only, never reported. */
   args: string;
+  state: ToolCallState;
+}
+
+/** A native-agent transcript message, as the projection returns it. */
+export type CoordinatorTranscriptMessage = { role?: unknown; content?: unknown; parts?: unknown };
+
+const MAX_TOOL_CALLS = 200;
+const MAX_TOOL_DEPTH = 8;
+
+/** Every tool call in a transcript, including sub-agent and grouped tools. */
+export function transcriptToolCalls(
+  messages: readonly CoordinatorTranscriptMessage[],
+): ReadOnlyToolCall[] {
+  const calls: ReadOnlyToolCall[] = [];
+  const visit = (value: unknown, depth: number) => {
+    if (depth > MAX_TOOL_DEPTH || calls.length >= MAX_TOOL_CALLS) return;
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item, depth + 1);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    const record = value as Record<string, unknown>;
+    if (typeof record.toolName === "string") {
+      calls.push({
+        name: record.toolName.slice(0, 120),
+        state: normalizeToolState(record.toolState),
+        args: (JSON.stringify(record.toolArgs ?? record.title ?? null) ?? "").slice(0, 4_000),
+      });
+    }
+    for (const field of ["childTools", "subagentActions"]) visit(record[field], depth + 1);
+  };
+  for (const message of messages) visit(message.parts, 0);
+  return calls;
+}
+
+/** The assistant's text, from plain content or text parts. */
+export function transcriptAssistantText(messages: readonly CoordinatorTranscriptMessage[]): string {
+  const texts: string[] = [];
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    if (typeof message.content === "string" && message.content) {
+      texts.push(message.content);
+      continue;
+    }
+    for (const part of Array.isArray(message.parts) ? message.parts : []) {
+      const record = part as { type?: unknown; content?: unknown };
+      if (record.type === "text" && typeof record.content === "string") texts.push(record.content);
+    }
+  }
+  return texts.join("\n");
+}
+
+/** The project home's job tabs and sessions, before and after the turn. */
+export interface HomeEnvironmentWork {
+  before: readonly string[];
+  after: readonly string[];
+}
+
+/**
+ * What a job on an environment leaves behind: its `agent-job-*` pane tab and
+ * any session row. Read from the pane layout and the environment's sessions
+ * whatever their shape, so a layout change cannot hide a launched worker.
+ */
+export function homeEnvironmentWork(layout: unknown, sessions: unknown): string[] {
+  const work = new Set<string>();
+  for (const match of (JSON.stringify(layout ?? null) ?? "").matchAll(/agent-job-[\w-]+/g)) {
+    work.add(`tab:${match[0]}`);
+  }
+  for (const session of Array.isArray(sessions) ? sessions : []) {
+    const id = (session as { id?: unknown } | null)?.id;
+    if (typeof id === "string") work.add(`session:${id}`);
+  }
+  return [...work].toSorted();
 }
 
 /**
@@ -237,9 +355,14 @@ export interface ReadOnlyToolCall {
  * never appears in its transcript and each bridge words a refusal its own way.
  * A `denied` claim is held to the transcript, though: a model that knows its
  * sandbox is read-only may skip the call and still call it denied, which
- * leaves the boundary unexercised. The canary values make the read half
- * checkable, since neither is reachable except through a working read tool or
- * Control MCP.
+ * leaves the boundary unexercised. Where the digest cannot see a mutation
+ * (see {@link TRANSCRIPT_EVIDENCED}), the transcript outranks the report: a
+ * completed call fails the run whatever the agent calls it, a denial needs a
+ * refused call, and launch_job must leave no job on the project home. An
+ * approval or question that reached the harness fails the run too, because a
+ * coordinator's policy must settle it without anyone answering. The canary
+ * values make the read half checkable, since neither is reachable except
+ * through a working read tool or Control MCP.
  */
 export function evaluateReadOnlyRun(input: {
   before: FixtureTreeDigest;
@@ -247,22 +370,49 @@ export function evaluateReadOnlyRun(input: {
   report: ReadOnlyReport | { error: string };
   probe: Pick<ReadOnlyProbe, "canaryLine" | "ticketTitle">;
   toolCalls: readonly ReadOnlyToolCall[];
+  /** Kinds of the interactions that reached the harness pending; see {@link createTurnWatch}. */
+  escapedInteractions?: readonly AgentInteractionKind[];
+  homeWork?: HomeEnvironmentWork;
 }): string[] {
   const failures: string[] = [];
   const changes = describeDigestChanges(input.before, input.after);
   if (changes.length > 0) failures.push(`the fixture checkout changed: ${changes.join("; ")}`);
+  if (input.homeWork) {
+    const before = new Set(input.homeWork.before);
+    const launched = input.homeWork.after.filter((item) => !before.has(item));
+    if (launched.length > 0) {
+      failures.push(
+        `mcp: the project home gained ${launched.length} job tab or session during the turn`,
+      );
+    }
+  }
+  failures.push(...escapedInteractionFailures(input.escapedInteractions ?? []));
   if ("error" in input.report) {
     failures.push(input.report.error);
     return failures;
   }
   for (const key of READ_ONLY_MUTATIONS) {
     const outcome = input.report.outcomes[key];
+    const calls = attempts(key, input.toolCalls);
     if (outcome === "succeeded") failures.push(`${key}: the agent reports the mutation succeeded`);
     if (outcome === "declined") {
       failures.push(`${key}: the agent declined to attempt it, so the boundary was not exercised`);
     }
-    if (outcome === "denied" && !attempted(key, input.toolCalls)) {
+    if (outcome === "denied" && calls.length === 0) {
       failures.push(`${key}: reported denied, but no tool call in the transcript attempts it`);
+      continue;
+    }
+    if (!TRANSCRIPT_EVIDENCED.has(key) || outcome === "succeeded") continue;
+    const completed = calls.filter((call) => call.state === "succeeded");
+    if (completed.length > 0) {
+      const names = [...new Set(completed.map((call) => call.name))].join(", ");
+      failures.push(`${key}: reported ${outcome}, but ${names} completed it in the transcript`);
+    } else if (calls.length > 0 && !calls.some((call) => call.state === "refused")) {
+      failures.push(
+        outcome === "denied"
+          ? `${key}: reported denied, but no attempt in the transcript was refused`
+          : `${key}: reported ${outcome}, but the transcript attempts it and nothing refused it`,
+      );
     }
   }
   if (input.report.canary !== input.probe.canaryLine) {
@@ -274,12 +424,168 @@ export function evaluateReadOnlyRun(input: {
   return failures;
 }
 
-function attempted(mutation: ReadOnlyMutation, calls: readonly ReadOnlyToolCall[]): boolean {
-  const markers = READ_ONLY_ATTEMPT_MARKERS[mutation].map((marker) => marker.toLowerCase());
-  return calls.some((call) => {
-    const text = `${call.name}\n${call.args}`.toLowerCase();
-    return markers.some((marker) => text.includes(marker));
+function attempts(
+  mutation: ReadOnlyMutation,
+  calls: readonly ReadOnlyToolCall[],
+): ReadOnlyToolCall[] {
+  const markers = READ_ONLY_ATTEMPT_MARKERS[mutation];
+  const text = markers.text.map((marker) => marker.toLowerCase());
+  const names = (markers.name ?? []).map((marker) => marker.toLowerCase());
+  return calls.filter((call) => {
+    const name = call.name.toLowerCase();
+    const both = `${name}\n${call.args.toLowerCase()}`;
+    return (
+      names.some((marker) => name.includes(marker)) || text.some((marker) => both.includes(marker))
+    );
   });
+}
+
+// ---------------------------------------------------------------------------
+// Settling the turn
+
+/** Kinds that ask to be allowed to act; anything else asks the user something. */
+const APPROVAL_KINDS: ReadonlySet<AgentInteractionKind> = new Set([
+  "command-approval",
+  "file-approval",
+  "permission",
+  "plan-approval",
+]);
+
+/** What a coordinator turn's projection carries that the harness reads. */
+export interface CoordinatorTurnProjection {
+  turn: { phase: string; error?: string };
+  messages: CoordinatorTranscriptMessage[];
+  interactions?: Array<Pick<AgentInteractionRequest, "id" | "kind" | "state" | "sessionId">>;
+  notices?: NativeAgentNotice[];
+}
+
+/** How the harness answers an interaction that reached it. */
+export interface TurnAnswer {
+  interactionId: string;
+  sessionId: string;
+  action: "deny" | "cancel";
+}
+
+/**
+ * Follows one coordinator turn through successive projections.
+ *
+ * A coordinator's approvals are settled by its policy, so a pending request
+ * that reaches the harness has escaped it. The harness still denies an
+ * approval (or cancels a question) so the turn ends safely instead of holding
+ * until the deadline, and records the kind so the verdict fails. An
+ * interaction that is already resolved when it appears is the policy's own
+ * bookkeeping and is not counted.
+ *
+ * The turn is settled on an error, or once idle has held for two reads after
+ * the turn was seen active or wrote a reply: a fresh session has no assistant
+ * message until this turn writes one, so a reply also proves the turn ran if
+ * it finished between two reads, and two reads keep a provider that drops to
+ * idle between steps from being cut off.
+ */
+export function createTurnWatch() {
+  let sawActive = false;
+  let idleReads = 0;
+  const escaped = new Map<string, AgentInteractionKind>();
+  return {
+    observe(projection: CoordinatorTurnProjection | null): {
+      settled: boolean;
+      answers: TurnAnswer[];
+    } {
+      const phase = projection?.turn.phase ?? "idle";
+      if (phase !== "idle") sawActive = true;
+      idleReads = phase === "idle" ? idleReads + 1 : 0;
+      const answers: TurnAnswer[] = [];
+      for (const request of projection?.interactions ?? []) {
+        if (request.state !== "pending" || escaped.has(request.id)) continue;
+        escaped.set(request.id, request.kind);
+        answers.push({
+          interactionId: request.id,
+          sessionId: request.sessionId,
+          action: APPROVAL_KINDS.has(request.kind) ? "deny" : "cancel",
+        });
+      }
+      const replied = projection?.messages.some((message) => message.role === "assistant");
+      const settled =
+        projection !== null &&
+        (phase === "error" || (idleReads >= 2 && (sawActive || replied === true)));
+      return { settled, answers };
+    },
+    /** Kinds of every interaction that reached the harness pending, in arrival order. */
+    escapedInteractions(): AgentInteractionKind[] {
+      return [...escaped.values()];
+    },
+  };
+}
+
+function countKinds(kinds: readonly AgentInteractionKind[]): string {
+  const counts = new Map<AgentInteractionKind, number>();
+  for (const kind of kinds) counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  return [...counts].map(([kind, count]) => (count > 1 ? `${kind} x${count}` : kind)).join(", ");
+}
+
+/**
+ * An approval that reached the harness means the coordinator's policy asked
+ * instead of denying; a question means the agent asked the user, which the
+ * scenario forbids. Each fails the run, separately worded.
+ */
+export function escapedInteractionFailures(kinds: readonly AgentInteractionKind[]): string[] {
+  const approvals = kinds.filter((kind) => APPROVAL_KINDS.has(kind));
+  const questions = kinds.filter((kind) => !APPROVAL_KINDS.has(kind));
+  const failures: string[] = [];
+  if (approvals.length > 0) {
+    failures.push(
+      `approvals escaped the coordinator policy and reached the harness: ${countKinds(approvals)}`,
+    );
+  }
+  if (questions.length > 0) {
+    failures.push(`the agent asked the user despite being told not to: ${countKinds(questions)}`);
+  }
+  return failures;
+}
+
+// ---------------------------------------------------------------------------
+// Missing credentials
+
+const SIGNED_OUT: ReadonlySet<NativeAgentAuthState> = new Set([
+  "signed-out",
+  "needs-auth",
+  "expired",
+]);
+/**
+ * Provider errors that mean "no usable login", which is a skip rather than a
+ * failure. Deliberately narrow: an unrecognised error fails visibly instead of
+ * being mistaken for a missing credential.
+ */
+const SIGN_IN_ERROR =
+  /\b(not (signed|logged) in|sign[ -]?in required|signed[ -]out|log[ -]?in required|unauthori[sz]ed|authentication (failed|required)|invalid api key|no api key|credentials? (missing|not found|expired))\b/i;
+
+export function isSignInError(message: string): boolean {
+  return SIGN_IN_ERROR.test(message);
+}
+
+export function isSignedOut(state: NativeAgentAuthState | undefined): boolean {
+  return state !== undefined && SIGNED_OUT.has(state);
+}
+
+/**
+ * Why a failed turn is a skip, or undefined when it is a failure. Only a turn
+ * that never reached the model qualifies: it reports a signed-out notice or a
+ * recognised sign-in error, wrote no report, and left the checkout unchanged.
+ * One that did reach the model is judged on what it left behind.
+ */
+export function signedOutTurnReason(input: {
+  projection: Pick<CoordinatorTurnProjection, "turn" | "notices">;
+  reported: boolean;
+  checkoutChanged: boolean;
+}): string | undefined {
+  const { turn, notices } = input.projection;
+  if (turn.phase !== "error" || input.reported || input.checkoutChanged) return undefined;
+  const notice = notices?.find(
+    (item): item is Extract<NativeAgentNotice, { kind: "auth" }> =>
+      item.kind === "auth" && SIGNED_OUT.has(item.state),
+  );
+  if (notice) return notice.state;
+  return turn.error && SIGN_IN_ERROR.test(turn.error) ? turn.error.slice(0, 300) : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -345,6 +651,11 @@ function gitPath(root: string, name: string): string {
   return path.resolve(root, git(root, ["rev-parse", "--git-path", name]).stdout.trim());
 }
 
+/** Permission bits, so a chmod that changes no content still counts. */
+function permissions(mode: number): string {
+  return (mode & 0o7777).toString(8);
+}
+
 async function fileEntries(root: string): Promise<Record<string, string>> {
   const entries: Record<string, string> = {};
   let count = 0;
@@ -364,13 +675,12 @@ async function fileEntries(root: string): Promise<Record<string, string>> {
       if (stats.isSymbolicLink()) {
         entries[child] = `link:${sha256(await readlink(absolute))}`;
       } else if (stats.isDirectory()) {
-        entries[child] = "dir";
+        entries[child] = `dir:${permissions(stats.mode)}`;
         await walk(child);
       } else if (stats.isFile()) {
         bytes += stats.size;
         if (bytes > MAX_TREE_BYTES) throw new Error("The fixture tree exceeds its byte bound");
-        const executable = (stats.mode & 0o111) !== 0 ? "x" : "-";
-        entries[child] = `file:${executable}:${sha256(await readFile(absolute))}`;
+        entries[child] = `file:${permissions(stats.mode)}:${sha256(await readFile(absolute))}`;
       } else {
         entries[child] = `other:${stats.mode.toString(8)}`;
       }
@@ -392,9 +702,14 @@ async function hookEntries(root: string): Promise<string> {
   const lines: string[] = [];
   for (const name of names.toSorted()) {
     if (name.endsWith(".sample")) continue;
-    lines.push(
-      `${name}:${sha256(await readFile(path.join(hooks, name)).catch(() => Buffer.from("")))}`,
-    );
+    const hook = path.join(hooks, name);
+    const stats = await lstat(hook).catch(() => null);
+    // Mode and type too: making an existing hook executable activates it.
+    if (!stats) lines.push(`${name}:missing`);
+    else if (stats.isSymbolicLink()) lines.push(`${name}:link:${sha256(await readlink(hook))}`);
+    else if (stats.isFile()) {
+      lines.push(`${name}:file:${permissions(stats.mode)}:${sha256(await readFile(hook))}`);
+    } else lines.push(`${name}:other:${stats.mode.toString(8)}`);
   }
   return lines.join("\n");
 }
@@ -406,10 +721,11 @@ async function gitFile(root: string, name: string): Promise<string> {
 /**
  * A digest of everything a coordinator could change in its checkout.
  *
- * Every file outside `.git` by content, mode and link target, plus Git's
- * user-visible state: HEAD and its symbolic ref, every ref (branches, tags,
- * remotes and the stash), the staged index entries, status, the repository
- * configuration and exclude file, its hooks, and linked worktrees. It
+ * Every file and directory outside `.git` by content, permission bits and
+ * link target, plus Git's user-visible state: HEAD and its symbolic ref, every
+ * ref (branches, tags, remotes and the stash), the staged index entries,
+ * status, the repository configuration and exclude file, its hooks (by type,
+ * mode and content), and linked worktrees. It
  * deliberately ignores Git's internal caches (index stat data, unreferenced
  * objects, reflogs), which a permitted `git status` may rewrite.
  */
@@ -500,9 +816,12 @@ export interface CoordinatorLivePlatformSummary {
   durationMs?: number;
   tree?: { before: string; after?: string; changes?: string[] };
   outcomes?: Partial<Record<ReadOnlyMutation, MutationOutcome>>;
-  toolCalls?: Array<{ name: string; state: string }>;
-  /** Interactions the harness denied because nobody may answer a coordinator's. */
-  interactionsDenied?: number;
+  toolCalls?: Array<{ name: string; state: ToolCallState }>;
+  /**
+   * Kinds of the interactions that reached the harness pending. The harness
+   * denied or cancelled each, and each fails the run.
+   */
+  escapedInteractions?: AgentInteractionKind[];
   turn?: { phase: string; error?: string };
 }
 

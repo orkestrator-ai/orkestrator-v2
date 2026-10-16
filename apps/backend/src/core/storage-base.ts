@@ -675,10 +675,11 @@ export abstract class StorageBase {
   protected get database(): StorageDatabase {
     if (!this.storageDatabase || this.storageDatabase.isClosed()) {
       this.storageDatabase = openBackendDatabase(this.dataDir, {
-        // Same meaning as for the JSON files: a validated cache hit is a
-        // "stat", re-reading the store's rows is a "read".
+        // Charged by what the caller got, not where the rows came from: a
+        // read served from the revision-validated cache still parses every
+        // row, and an extra read must show however warm the cache is.
         observe: (event) =>
-          recurringWorkMetrics.work(event === "cache-hit" ? "storage-stat" : "storage-read"),
+          recurringWorkMetrics.work(event === "read" ? "storage-read" : "storage-stat"),
       });
     }
     return this.storageDatabase;

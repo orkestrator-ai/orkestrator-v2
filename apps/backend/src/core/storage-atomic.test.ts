@@ -323,6 +323,67 @@ describe("serializeMutation", () => {
   });
 });
 
+describe("Linear auth mutations", () => {
+  const pause = () => new Promise((resolve) => setTimeout(resolve, 100));
+
+  test("wait for another backend holding the linear-auth.json lease", async () => {
+    const { storage: first, dataDir } = await storage();
+    const { storage: second } = await storage(dataDir);
+
+    let release!: () => void;
+    let held = first.serialize(
+      "linear-auth.json",
+      () => new Promise<void>((resolve) => (release = resolve)),
+    );
+    await pause();
+    const saving = second.saveLinearAuth("SECOND-KEY");
+    await pause();
+    expect(await first.getLinearAuth()).toBeNull();
+    release();
+    await Promise.all([held, saving]);
+    expect((await first.getLinearAuth())?.apiKey).toBe("SECOND-KEY");
+
+    held = first.serialize(
+      "linear-auth.json",
+      () => new Promise<void>((resolve) => (release = resolve)),
+    );
+    await pause();
+    const clearing = second.clearLinearAuth();
+    await pause();
+    expect((await first.getLinearAuth())?.apiKey).toBe("SECOND-KEY");
+    release();
+    await Promise.all([held, clearing]);
+    expect(await first.getLinearAuth()).toBeNull();
+  });
+
+  test("run after a failed mutation releases the lease", async () => {
+    const { storage: first, dataDir } = await storage();
+    const { storage: second } = await storage(dataDir);
+
+    let fail!: (error: Error) => void;
+    const failing = first.serialize(
+      "linear-auth.json",
+      () => new Promise<void>((_, reject) => (fail = reject)),
+    );
+    // Observe the rejection without awaiting it before the holder fails.
+    const failed = failing.then(
+      () => null,
+      (error: Error) => error.message,
+    );
+    await pause();
+    const saving = first.saveLinearAuth("QUEUED-KEY");
+    await pause();
+    expect(await second.getLinearAuth()).toBeNull();
+    fail(new Error("holder failed"));
+    expect(await failed).toBe("holder failed");
+    await saving;
+    expect((await second.getLinearAuth())?.apiKey).toBe("QUEUED-KEY");
+    // The other backend can take the lease again.
+    await second.clearLinearAuth();
+    expect(await first.getLinearAuth()).toBeNull();
+  });
+});
+
 describe("updateStore", () => {
   test("serializes synchronous mutations from two backends without a lease", async () => {
     const { storage: first, dataDir } = await storage();

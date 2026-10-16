@@ -145,3 +145,24 @@ failed case was the diff-statistics timeout tracked in 0162. Evidence:
 `mise run test:logged -- --name merge-coordinator-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`
 passed the unchanged owning file, exit 0, in 17.5 seconds. Host contention
 remains an unconfirmed hypothesis; no timeout, assertion or skip changed.
+
+## Recurrence on 2026-10-16 during the storage writer guards merge
+
+`mise run test:logged -- --name merge-tests -- mise run test` ran the backend
+with two isolated workers within a four-slot workspace group while other
+worktree validations shared the host. `project coordinator > bound discard
+confirmations refuse stale, sequencer, nested, and failed switches` exceeded
+the five-second deadline at 5,165.84 ms.
+
+`mise run test:logged -- --name merge-coordinator-isolated -- bun test
+--cwd apps/backend --preload ../../tests/setup-node.ts
+./src/core/coordinator-service.test.ts --parallel=1 --only-failures` passed the
+unchanged owning file in 18.6 seconds. Evidence and aggregate package counts
+are retained in
+`/tmp/orkestrator-test-run.Q27xqQ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+The existing load hypothesis remains unconfirmed; no assertion, timeout or
+skip was changed.
+
+Aggregate backend counts for this observation: 8,341 passed, 40 skipped,
+5 failed and 3 between-tests errors across 8,386 tests in 445 files
+(391.37 seconds). The other failures are recorded in 0162, 0165 and 0248.

@@ -37,6 +37,7 @@ import {
 } from "./build-pipeline-transcript-migration.js";
 import { StoragePrompts } from "./storage-prompts.ts";
 import { StoreCorruptError } from "./storage-database.js";
+import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 type PersistedBuildPipeline = shared.PersistedBuildPipeline;
 
 export type BuildPipelineDowngradeExport =
@@ -187,6 +188,7 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
     const store = this.buildPipelineStore();
     const revision = this.database.storeRevision(store);
     if (this.liveBuildPipelineTagCache?.revision === revision) {
+      recurringWorkMetrics.work("storage-stat");
       return this.liveBuildPipelineTagCache.tags;
     }
     let value: unknown;
@@ -203,6 +205,7 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
   /**
    * Decoded control records. The returned map and its records are shared with
    * the cache: callers must treat them as read-only and clone before mutating.
+   * A hit costs one revision lookup and is charged as a `storage-stat`.
    *
    * The revision is read before the rows, so a foreign write landing in
    * between caches fresh content under a stale revision — one extra re-read
@@ -212,7 +215,10 @@ export abstract class StorageBuildPipelines extends StoragePrompts {
     const revision = this.database.storeRevision(this.buildPipelineStore());
     const fingerprint = revision === null ? "missing" : `revision:${revision}`;
     const cached = this.buildPipelineReadCache;
-    if (cached && cached.fingerprint === fingerprint) return { records: cached.records, revision };
+    if (cached && cached.fingerprint === fingerprint) {
+      recurringWorkMetrics.work("storage-stat");
+      return { records: cached.records, revision };
+    }
     const stored = await this.loadJson<Record<string, PersistedBuildPipeline>>(
       this.buildPipelinesFile(),
       () => ({}),

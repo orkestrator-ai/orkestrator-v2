@@ -178,6 +178,9 @@ const SCHEMA: StorageMigration = {
   },
 };
 
+/** How {@link StorageDatabaseOptions.observe} classifies a read. */
+export type StorageReadEvent = "read" | "stat";
+
 export interface StorageDatabaseOptions {
   /** Ordered migrations after the base schema (version 1). */
   migrations?: readonly StorageMigration[];
@@ -190,11 +193,14 @@ export interface StorageDatabaseOptions {
    */
   beforeMigrate?: (database: StorageDatabase, from: number, to: number) => void;
   /**
-   * Observes reads: `cache-hit` when the committed revision matched the cached
-   * rows, `load` when rows were read from the database (whole-store or keyed).
-   * Never sees content.
+   * Observes reads, never content. `read`: stored content was decoded for a
+   * caller (a whole store, one owner's rows or one row), whether its rows came
+   * from the database or from this connection's revision-validated cache, or
+   * a store's rows were fetched from the database for an internal lookup.
+   * `stat`: an internal lookup (a write's previous rows, row sizes) reused the
+   * cached rows after checking the committed revision.
    */
-  observe?: (event: "cache-hit" | "load") => void;
+  observe?: (event: StorageReadEvent) => void;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -220,7 +226,7 @@ export class StorageDatabase {
   /** Revision each store was bumped to by row writes in the open transaction. */
   private readonly touchedRevisions = new Map<string, number>();
   private readonly layoutFor: (store: string) => StoreLayout;
-  private readonly observe: ((event: "cache-hit" | "load") => void) | undefined;
+  private readonly observe: ((event: StorageReadEvent) => void) | undefined;
   private closed = false;
 
   constructor(dataDir: string, options: StorageDatabaseOptions = {}) {
@@ -406,7 +412,7 @@ export class StorageDatabase {
    * the committed revision, which also observes writes by other processes.
    */
   readStore(store: string): StoreSnapshot | null {
-    const cached = this.loadCached(store);
+    const cached = this.loadCached(store, "read");
     if (!cached) return null;
     return { value: this.assemble(store, cached), revision: cached.revision };
   }
@@ -436,7 +442,7 @@ export class StorageDatabase {
    * Returns the items as an array in stored order (record keys are dropped).
    */
   readStoreRowsByOwner(store: string, owner: string): unknown[] | null {
-    const cached = this.loadCached(store);
+    const cached = this.loadCached(store, "read");
     if (!cached) return null;
     if (cached.mode === "document") {
       const layout = this.layoutFor(store);
@@ -465,13 +471,13 @@ export class StorageDatabase {
         let value: unknown;
         try {
           if (header.mode === "rows") {
-            this.observe?.("load");
+            this.observe?.("read");
             const row = this.db
               .query("SELECT value FROM store_rows WHERE store = ? AND collection = ? AND key = ?")
               .get(store, collection, key) as { value: string } | null;
             return row ? (JSON.parse(row.value) as unknown) : undefined;
           }
-          this.observe?.("load");
+          this.observe?.("read");
           value = assembleStoredValue(header, []);
         } catch (error) {
           if (error instanceof SyntaxError) throw new StoreCorruptError(store);
@@ -513,7 +519,8 @@ export class StorageDatabase {
       throw new StoreConflictError(store);
     }
     const next = decompose(layout, value);
-    const previous = committed === null ? null : this.loadCachedInTransaction(store, committed);
+    const previous =
+      committed === null ? null : this.loadCachedInTransaction(store, committed, "stat");
     if (previous?.mode === "rows" && next.mode === "rows")
       stabilizePositions(next.rows, previous.rows);
     const revision = this.nextRevision(store, committed);
@@ -643,7 +650,7 @@ export class StorageDatabase {
         );
         return update.result;
       }
-      this.observe?.("load");
+      this.observe?.("read");
       const existing = this.db
         .query(
           "SELECT position, value FROM store_rows WHERE store = ? AND collection = ? AND key = ?",
@@ -716,7 +723,7 @@ export class StorageDatabase {
     store: string,
     collection = "",
   ): Array<{ key: string; bytes: number; position: number }> | null {
-    const cached = this.loadCached(store);
+    const cached = this.loadCached(store, "stat");
     if (!cached || cached.mode === "document") return null;
     const stats: Array<{ key: string; bytes: number; position: number }> = [];
     for (const row of cached.rows.values()) {
@@ -741,7 +748,9 @@ export class StorageDatabase {
     const committed = this.storeRevision(store);
     if (committed === null) return null;
     try {
-      return { value: this.assemble(store, this.loadCachedInTransaction(store, committed)) };
+      return {
+        value: this.assemble(store, this.loadCachedInTransaction(store, committed, "read")),
+      };
     } catch (error) {
       if (error instanceof StoreCorruptError && options.unreadable !== "throw") return null;
       throw error;
@@ -793,7 +802,7 @@ export class StorageDatabase {
     }
   }
 
-  private loadCached(store: string): CachedStore | null {
+  private loadCached(store: string, use: StorageReadEvent): CachedStore | null {
     return this.db
       .transaction(() => {
         const committed = this.storeRevision(store);
@@ -801,20 +810,30 @@ export class StorageDatabase {
           this.setCache(store, null);
           return null;
         }
-        return this.loadCachedInTransaction(store, committed);
+        return this.loadCachedInTransaction(store, committed, use);
       })
       .deferred();
   }
 
-  private loadCachedInTransaction(store: string, committed: number): CachedStore {
+  /**
+   * The store's rows at `committed`, from this connection's cache when its
+   * revision matches. `use` is how a cache hit is observed: `read` when the
+   * caller decodes the rows, `stat` for an internal lookup. A miss fetches
+   * every row, which is always a read.
+   */
+  private loadCachedInTransaction(
+    store: string,
+    committed: number,
+    use: StorageReadEvent,
+  ): CachedStore {
     const cached = this.pendingCache?.has(store)
       ? this.pendingCache.get(store)
       : this.cache.get(store);
     if (cached && cached.revision === committed) {
-      this.observe?.("cache-hit");
+      this.observe?.(use);
       return cached;
     }
-    this.observe?.("load");
+    this.observe?.("read");
     const meta = this.db
       .query("SELECT revision, layout, mode, document FROM stores WHERE name = ?")
       .get(store) as {

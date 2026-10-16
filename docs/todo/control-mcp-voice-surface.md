@@ -54,8 +54,10 @@ is [`control-mcp.md`](../architecture/control-mcp.md).
   `mutation`, `effects`, `observation`, `waitConditions` and `summary`, but
   **no input schema**.
 - **Validation:** handlers in `apps/backend/src/core/public-api/` check
-  input by hand with the helpers in `input.ts` (`onlyKeys`, `requiredString`
-  and so on). Input types are private to the backend.
+  values by hand with the helpers in `input.ts` (`requiredString`, `oneOf`
+  and so on). Their accepted keys come from `PUBLIC_ACTION_INPUTS`
+  (`packages/protocol/src/public-api-inputs.ts`) through `onlyActionKeys`;
+  see Input schemas.
 - **Dispatch:** `dispatchPublicAction` (`dispatch.ts`) hard-codes
   `authority: "operator"` in `createPublicActionContext`.
 - **Request keys:** a key is `sha256(authority, action, scope, requestId)`
@@ -216,7 +218,13 @@ Input schemas).
   - `environment.stop`
   - `environment.exec`
   - `session.interaction.resolve` when it approves a command or a file
-    change. This one is a decision; see Open questions.
+    change: `answer` or `approve-for-session` on any interaction other than
+    a question. Denials, cancels and question answers need no confirmation.
+    The spoken description reads the command (truncated) or a summary of
+    the file change, not the full diff.
+
+The table records the conditional cases as `confirmWhen: "discard"` and
+`confirmWhen: "approval"`.
 
 How it works, with no server state:
 
@@ -257,7 +265,14 @@ credentials:
 - `mail`
 
 A profile is a preset. `voice` excludes `projects`, `settings`,
-`environments.destructive` and `exec` by default.
+`environments.destructive` and `exec` by default. A credential may opt in to
+`exec` explicitly; `environment.exec` keeps its `voice` confirmation class,
+so a voice credential that is granted it confirms every call.
+
+Each action's capability is in `PUBLIC_ACTION_INPUTS`. Reads that every
+profile needs to follow its own work (`run.get`, `run.output`) are in
+`discovery`. `run.retry` and `run.discard` are in `sessions.control`, and
+`run.cancel` is in `exec`.
 
 **Enforcement** happens in one function, `actionAllowed(credential,
 action)`:
@@ -279,8 +294,8 @@ action)`:
 **Storage and setup:**
 
 - Each credential can be rotated and revoked on its own.
-- Storage is plaintext 0600 like today, so Copy setup keeps working; see
-  Open questions.
+- Storage is plaintext 0600 like today, so Copy setup keeps working
+  (decided; see Decisions).
 - **Settings → MCP** (`apps/web/src/components/settings/McpSettings.tsx`)
   lists credentials and creates one with a profile. Each credential gets
   Copy setup for each client, including a generic "other or voice client"
@@ -294,25 +309,36 @@ instead of adding a public listener.
 
 **Schemas in protocol:**
 
-- Add `PUBLIC_ACTION_INPUTS: Record<PublicActionName,
-  PublicActionInputSchema>` in a new
-  `packages/protocol/src/public-api-inputs.ts`.
+Done. `PUBLIC_ACTION_INPUTS` in `packages/protocol/src/public-api-inputs.ts`
+holds, per action, `input` (the schema), `capability`, `confirmation`,
+optional `confirmWhen` and `examples`.
+
 - Each entry is a plain JSON Schema object literal. Protocol has no runtime
   dependencies; keep it that way.
-- Use only a portable subset: `type`, `properties`, `required`, `enum`,
-  `minLength`/`maxLength`, `minimum`/`maximum`, `description`, and
-  `additionalProperties: false`. Field descriptions are written for agents.
-- Put each action's capability and confirmation class in the same table.
+- The portable subset is `type`, `properties`, `required`, `enum`, `items`,
+  `minLength`/`maxLength`, `minItems`/`maxItems`, `minimum`/`maximum`,
+  `description` and `additionalProperties`. Every top-level schema is closed
+  (`additionalProperties: false`). Field descriptions are written for agents.
+- Rules the subset cannot express (exactly one of two fields, fields given
+  together) are stated in descriptions; the handler enforces them.
+- Fields that accept a string or `null` (`project.update` `set.folder` and
+  `set.path`) carry no `type`, since the subset has no unions.
+- The settings `set` and `unset` schemas are generated from
+  `PUBLIC_PROJECT_SETTINGS` and `PUBLIC_ENVIRONMENT_SETTINGS`.
 
 **Backend:**
 
-- Handlers take their allowed keys from the schema instead of hand-written
-  `onlyKeys([...])` lists.
-- A conformance test per action checks that:
-  - the schema properties equal the accepted keys;
-  - a missing required field is rejected;
-  - `enum` matches the handler's `oneOf` lists;
-  - examples from `describe_action` parse.
+Done.
+
+- Handlers take their allowed keys from the schema through
+  `onlyActionKeys(input, action)`, and nested objects (`project.update`
+  `set`, interaction `answers`) through `publicActionNestedKeys`.
+- `public-api-inputs.test.ts` in the backend checks, per action, that the
+  schema properties equal the accepted keys, a missing required field is
+  rejected, `enum` matches the handler's lists, and every example parses.
+- `public-api-inputs.test.ts` in protocol checks catalogue coverage, the
+  portable subset, examples against their schemas, capability grouping and
+  the confirmation table.
 
 **MCP:**
 
@@ -419,9 +445,9 @@ item and is not needed for full functionality.
 
 In order. Each item lists its main files and when it is done.
 
-1. **Decisions.** Settle the open questions below and record the answers
-   here.
-2. **Input schemas.**
+1. **Decisions.** Questions 1 to 4 are settled; see Decisions. Questions
+   5 to 7 stay open and block nothing before item 9.
+2. **Input schemas.** Done.
    - Files: `packages/protocol/src/public-api-inputs.ts`, handlers in
      `apps/backend/src/core/public-api/actions-*.ts`.
    - Done when: every action has a schema, capability and confirmation
@@ -515,15 +541,23 @@ In order. Each item lists its main files and when it is done.
 - **Withdrawing an action** still means removing its handler. Capabilities,
   gateway listings and direct tools follow from the handler table.
 
+## Decisions
+
+Settled on 2026-10-16.
+
+1. **Authority:** each MCP credential dispatches under its own authority,
+   `control-mcp:<credentialId>`. It cannot read the CLI's or another
+   credential's operations.
+2. **Storage:** credentials stay in plaintext with mode 0600, so Copy setup
+   works at any time. Each one can be rotated and revoked on its own.
+3. **Voice approvals:** only approvals of a command or file change need a
+   confirm token. The spoken description reads the command (truncated) or a
+   summary of the file change. Denials and question answers run directly.
+4. **Exec in voice:** excluded from the voice preset. A credential may be
+   granted `exec` explicitly; every voice call then needs a confirm token.
+
 ## Open questions
 
-1. Should each MCP credential have its own authority, or share `operator`
-   with the CLI? Recommendation: separate.
-2. Should credentials be stored in plaintext (Copy setup at any time) or as
-   hashes (shown once)?
-3. Which approvals need confirmation in the voice profile, and must the full
-   command or diff summary be read aloud?
-4. Should `exec` ever be allowed in the voice profile?
 5. Should Multi Review and build pipelines become operator public actions?
 6. For hosted voice platforms: local relay only, or allow the remote
    (Tailscale) gateway for MCP?

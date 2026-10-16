@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import { isGitRemoteUrl } from "@orkestrator/protocol/git-remote-url";
 import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
+import { publicActionNestedKeys } from "@orkestrator/protocol/public-api-inputs";
 import {
   addExistingProject,
   createProjectFromScratch,
@@ -11,7 +12,14 @@ import { cleanupProjectForRemoval } from "../commands-registry-projects.js";
 import { ProjectHasEnvironmentsError } from "../storage-projects.js";
 import { requireProject } from "./actions-discovery.js";
 import { boundedMessage, PublicActionError } from "./errors.js";
-import { absolutePath, invalid, onlyKeys, optionalString, requiredId } from "./input.js";
+import {
+  absolutePath,
+  invalid,
+  onlyActionKeys,
+  onlyKeys,
+  optionalString,
+  requiredId,
+} from "./input.js";
 import { publicProjectSummary } from "./summaries.js";
 import type { MutationActionHandler, PublicActionHandler } from "./types.js";
 
@@ -26,7 +34,7 @@ const projectAdd: MutationActionHandler<{ remote?: string; path?: string }> = {
   kind: "mutation",
   action: "project.add",
   parse(input) {
-    onlyKeys(input, ["remote", "path"]);
+    onlyActionKeys(input, "project.add");
     const remote = optionalString(input, "remote", PUBLIC_API_LIMITS.gitUrlMaxChars)?.trim();
     const path = absolutePath(input, "path");
     if (!remote && !path) throw invalid("Pass remote, path, or both");
@@ -83,7 +91,7 @@ const projectCreate: MutationActionHandler<{ path: string }> = {
   kind: "mutation",
   action: "project.create",
   parse(input) {
-    onlyKeys(input, ["path", "githubPrivate"]);
+    onlyActionKeys(input, "project.create");
     if (input.githubPrivate !== true) {
       throw invalid(
         "project.create creates a private GitHub repository and pushes to it; set githubPrivate to true to confirm",
@@ -146,14 +154,14 @@ const projectUpdate: MutationActionHandler<ProjectUpdateInput> = {
   kind: "mutation",
   action: "project.update",
   parse(input) {
-    onlyKeys(input, ["projectId", "set", "expectedRevision"]);
+    onlyActionKeys(input, "project.update");
     const projectId = requiredId(input, "projectId");
     const expectedRevision = optionalString(input, "expectedRevision", 64);
     const raw = input.set;
     if (!raw || typeof raw !== "object" || Array.isArray(raw))
       throw invalid("set must be an object");
     const set = raw as Record<string, unknown>;
-    onlyKeys(set, ["name", "folder", "remote", "path"]);
+    onlyKeys(set, publicActionNestedKeys("project.update", "set"));
     const parsed: ProjectUpdateInput["set"] = {};
     if (set.name !== undefined)
       parsed.name = optionalString(set, "name", PUBLIC_API_LIMITS.nameMaxChars)!.trim();
@@ -211,7 +219,7 @@ const projectRemove: MutationActionHandler<{ projectId: string }> = {
   kind: "mutation",
   action: "project.remove",
   parse(input) {
-    onlyKeys(input, ["projectId"]);
+    onlyActionKeys(input, "project.remove");
     const projectId = requiredId(input, "projectId");
     return { value: { projectId }, scope: `project:${projectId}`, intent: {} };
   },

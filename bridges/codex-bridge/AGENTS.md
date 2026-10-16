@@ -88,6 +88,13 @@ newest row, which every window holds.
   an unmaterialized thread is replaced instead. A result turn whose thread
   still does not list its submit tool is refused with 424 before journaling.
   Verified against codex 0.158.0.
+- Never treat the permission profile's `network.enabled = false` as "no network".
+  It stops commands; hosted web search (`web__run` in code mode) runs on
+  OpenAI's servers. A network-denied thread needs `CODEX_NETWORK_DENIED_CONFIG`,
+  and a coordinator thread is refused unless `config/read` reads it back
+  (`assertHostedNetworkLock`). After a Codex bump, run `live-network-lock.test.ts`
+  with `RUN_LIVE_CODEX_APP_SERVER=1`; it reads the tools from the real model
+  request on a loopback endpoint and spends no credits.
 - Agent version bumps follow [`docs/development/upgrade-agents.md`](../../docs/development/upgrade-agents.md);
   the generated protocol under `app-server/generated/` is a lockfile.
 - Never resolve an approval to "approved" by default. Every timeout, disconnect,

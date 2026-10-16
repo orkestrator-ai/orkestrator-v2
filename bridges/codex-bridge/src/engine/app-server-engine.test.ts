@@ -16,6 +16,13 @@ import type { EngineEvent, EngineTurnConfig } from "./types.js";
 const BUILD: EngineTurnConfig = { mode: "build", model: "gpt-5.6-sol", cwd: "/tmp/workspace" };
 const PLAN: EngineTurnConfig = { mode: "plan", cwd: "/tmp/workspace" };
 
+/** What app-server's `config/read` reports once `-c web_search="disabled"` is applied. */
+const HOSTED_NETWORK_LOCKED = () => ({
+  config: { web_search: "disabled", features: { standalone_web_search: false } },
+  origins: {},
+  layers: null,
+});
+
 /**
  * A scripted app-server child. Handlers may be replaced per test, and
  * notifications can be injected to model the real interleaving of a response with
@@ -423,6 +430,7 @@ describe("thread lifecycle", () => {
   test("keeps coordinator MCP approval on thread start and resume", async () => {
     const activePermissionProfile = { id: "coordinator-conversation-1" };
     const h = harness({
+      "config/read": HOSTED_NETWORK_LOCKED,
       "thread/start": () => ({ thread: thread("t1"), activePermissionProfile }),
       "thread/resume": () => ({ thread: thread("t1"), activePermissionProfile }),
       "turn/start": () => ({ turn: { id: "turn-1" } }),
@@ -463,6 +471,160 @@ describe("thread lifecycle", () => {
     expect(turn.config).toBeUndefined();
   });
 
+  test("a network-denied policy turns hosted web search off on the thread", async () => {
+    const h = harness({ "thread/start": () => ({ thread: thread("t1") }) });
+    const config: EngineTurnConfig = {
+      ...BUILD,
+      sandbox: "workspace-write",
+      networkAccessEnabled: false,
+      policy: {
+        id: "pipeline",
+        sandbox: "provider",
+        approvals: "auto-approve",
+        projectResources: false,
+        capabilityPolicy: { deny: ["network"] },
+        networkAccess: "restricted",
+      },
+    };
+    await h.engine.start();
+    await h.engine.startThread({ config });
+
+    // The sandbox's network switch stops commands; web search runs on OpenAI's
+    // servers, so only this removes it from the model's tools.
+    const params = h.child().requests.find((request) => request.method === "thread/start")!.params;
+    expect(params.config).toEqual({
+      web_search: "disabled",
+      "features.standalone_web_search": false,
+    });
+    // Not a coordinator process, so there is no process setting to read back.
+    expect(h.child().requests.some((request) => request.method === "config/read")).toBe(false);
+  });
+
+  test("keeps hosted web search off alongside a scoped MCP connection", async () => {
+    const h = harness({ "thread/start": () => ({ thread: thread("t1") }) });
+    await h.engine.start();
+    await h.engine.startThread({
+      config: {
+        ...BUILD,
+        policy: {
+          id: "pipeline",
+          sandbox: "provider",
+          approvals: "auto-approve",
+          projectResources: false,
+          capabilityPolicy: { deny: ["network"] },
+          networkAccess: "restricted",
+        },
+        agentMcp: { url: "http://127.0.0.1:4567/mcp", token: "tab-secret" },
+      },
+    });
+
+    const params = h.child().requests.find((request) => request.method === "thread/start")!.params;
+    expect(params.config).toMatchObject({
+      web_search: "disabled",
+      "mcp_servers.orkestrator": { url: "http://127.0.0.1:4567/mcp" },
+    });
+  });
+
+  test("leaves web search to Codex when the policy does not deny the network", async () => {
+    const h = harness({ "thread/start": () => ({ thread: thread("t1") }) });
+    await h.engine.start();
+    await h.engine.startThread({
+      config: {
+        ...BUILD,
+        policy: {
+          id: "interactive-container",
+          sandbox: "container",
+          approvals: "auto-approve",
+          projectResources: true,
+          // A container's restricted network is its own firewall; it is not a
+          // capability denial and keeps Codex's default search.
+          networkAccess: "restricted",
+        },
+      },
+    });
+
+    const params = h.child().requests.find((request) => request.method === "thread/start")!.params;
+    expect(params.config).toBeUndefined();
+  });
+
+  test("refuses a coordinator thread when app-server does not confirm web search is off", async () => {
+    const config: EngineTurnConfig = {
+      ...PLAN,
+      permissionProfile: "coordinator-conversation-1",
+      networkAccessEnabled: false,
+    };
+    for (const configRead of [
+      // Codex's default: no setting, which serves cached search.
+      () => ({ config: { web_search: null, features: {} }, origins: {}, layers: null }),
+      () => ({ config: { web_search: "live" }, origins: {}, layers: null }),
+      () => ({
+        config: { web_search: "disabled", features: { standalone_web_search: true } },
+        origins: {},
+        layers: null,
+      }),
+      () => ({}),
+    ]) {
+      const h = harness({
+        "config/read": configRead,
+        "thread/start": () => ({
+          thread: thread("t1"),
+          activePermissionProfile: { id: "coordinator-conversation-1" },
+        }),
+      });
+      await h.engine.start();
+      await expect(h.engine.startThread({ config })).rejects.toThrow(
+        "did not confirm that hosted web search is off",
+      );
+      // Refused before a thread exists, so nothing could have run in it.
+      expect(h.child().requests.some((request) => request.method === "thread/start")).toBe(false);
+    }
+
+    // An app-server that cannot answer at all is refused the same way.
+    const unanswered = harness({
+      "thread/start": () => ({
+        thread: thread("t1"),
+        activePermissionProfile: { id: "coordinator-conversation-1" },
+      }),
+    });
+    await unanswered.engine.start();
+    await expect(unanswered.engine.startThread({ config })).rejects.toThrow("config/read");
+    expect(unanswered.child().requests.some((request) => request.method === "thread/start")).toBe(
+      false,
+    );
+  });
+
+  test("reads the coordinator's web search setting once per app-server generation", async () => {
+    const activePermissionProfile = { id: "coordinator-conversation-1" };
+    const h = harness({
+      "config/read": HOSTED_NETWORK_LOCKED,
+      "thread/start": () => ({ thread: thread("t1"), activePermissionProfile }),
+      "thread/resume": () => ({ thread: thread("t1"), activePermissionProfile }),
+      "thread/fork": () => ({ thread: thread("t2"), activePermissionProfile }),
+    });
+    const config: EngineTurnConfig = {
+      ...PLAN,
+      permissionProfile: "coordinator-conversation-1",
+      networkAccessEnabled: false,
+    };
+    await h.engine.start();
+    await h.engine.startThread({ config });
+    await h.engine.resumeThread("t1", { config });
+    await h.engine.forkThread("t1", config);
+    const firstChild = h.child();
+    expect(firstChild.requests.filter((request) => request.method === "config/read")).toEqual([
+      { method: "config/read", params: { cwd: "/tmp/workspace" } },
+    ]);
+
+    // A restart can bring up a different binary under the same overrides.
+    firstChild.exit(1);
+    await h.engine.getSupervisor().ensureReady();
+    await h.engine.resumeThread("t1", { config });
+    expect(h.child()).not.toBe(firstChild);
+    expect(h.child().requests.filter((request) => request.method === "config/read")).toHaveLength(
+      1,
+    );
+  });
+
   test("plan mode resolves to a read-only sandbox", async () => {
     const h = harness({ "thread/start": () => ({ thread: thread("t1") }) });
     await h.engine.start();
@@ -480,6 +642,7 @@ describe("thread lifecycle", () => {
       networkAccessEnabled: false,
     };
     const h = harness({
+      "config/read": HOSTED_NETWORK_LOCKED,
       "thread/start": () => ({
         thread: thread("t1"),
         activePermissionProfile: { id: "coordinator-conversation-1" },
@@ -501,6 +664,7 @@ describe("thread lifecycle", () => {
     expect(turn.sandboxPolicy).toBeUndefined();
 
     const rejected = harness({
+      "config/read": HOSTED_NETWORK_LOCKED,
       "thread/start": () => ({
         thread: thread("wrong"),
         activePermissionProfile: { id: ":read-only" },

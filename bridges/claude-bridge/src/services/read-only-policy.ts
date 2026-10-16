@@ -324,6 +324,23 @@ export function claudeDeniedTools(policy: NativeAgentExecutionPolicy | undefined
 }
 
 /**
+ * `disallowedTools` for a turn that is not a read-only coordinator turn.
+ *
+ * The override's own names, plus Claude's names for every capability the
+ * policy denies. A policy that denies `network` therefore loses WebFetch and
+ * WebSearch whatever its id: WebSearch runs on Anthropic's servers, so the
+ * command sandbox's network allowlist never sees it. Without a capability
+ * denial this is exactly `toolPolicy.deny`, so ordinary sessions are unchanged.
+ */
+export function claudeDisallowedTools(
+  policy: NativeAgentExecutionPolicy | undefined,
+): string[] | undefined {
+  const denied = claudeDeniedTools(policy);
+  if (denied.length === 0) return policy?.toolPolicy?.deny;
+  return [...new Set([...(policy?.toolPolicy?.deny ?? []), ...denied])];
+}
+
+/**
  * The allowlist for a read-only turn.
  *
  * `mcp__orkestrator__*` has to be in here explicitly. Supplying an allowlist

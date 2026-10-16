@@ -22,6 +22,7 @@
  *     against persisted turns rather than retrying blind.
  */
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import { nativeAgentPolicyDeniesNetwork } from "@orkestrator/protocol/native-agent";
 import { open } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -57,6 +58,7 @@ import {
   reconcileFromThreadTurns,
   type ReconciliationOutcome,
 } from "../sessions/dispatch-journal.js";
+import { CODEX_NETWORK_DENIED_CONFIG, codexHostedNetworkLockGaps } from "../codex-config.js";
 import { type McpToolAvailability, waitForMcpToolAvailability } from "./mcp-tool-availability.js";
 import {
   APP_SERVER_CAPABILITIES,
@@ -721,6 +723,12 @@ export class AppServerEngine implements CodexEngine {
    */
   private accountSignInRequired = false;
   /**
+   * The generation whose effective configuration was read back with hosted
+   * web search off. Checked again after every restart: a toolchain update can
+   * swap the binary underneath the same overrides.
+   */
+  private hostedNetworkLockVerifiedGeneration: EngineGeneration | null = null;
+  /**
    * The stored login successfully loaded by a replacement child. A confirmed sign-out
    * that persists after the reload must not trigger another one, so a login that
    * is genuinely dead costs one restart rather than a loop.
@@ -1334,6 +1342,48 @@ export class AppServerEngine implements CodexEngine {
         config.sandbox !== "read-only") ||
       (config.policy?.id === "coordinator-read-only" && Boolean(config.permissionProfile)) ||
       Boolean(config.workflowResultTool && config.agentMcp);
+    const threadConfig: Record<string, unknown> = {
+      // A sandbox's network switch stops commands, not hosted web search, which
+      // runs on OpenAI's servers. Thread scope is what reaches a network-denied
+      // session on a bridge that also serves other policies; a coordinator
+      // process carries the same setting as process configuration, which
+      // `assertHostedNetworkLock` reads back.
+      ...(nativeAgentPolicyDeniesNetwork(config.policy) ? CODEX_NETWORK_DENIED_CONFIG : {}),
+      ...(config.agentMcp
+        ? {
+            // Replace the complete server table. The app-server process may
+            // have inherited an environment-wide bearer_token_env_var for
+            // this name, and configured bearer tokens take precedence over
+            // Authorization headers. Dotted leaf overrides would therefore
+            // keep authenticating as the broader environment capability.
+            ...(config.agentMcp.design
+              ? {
+                  "mcp_servers.orkestrator-design": {
+                    url: new URL("/design-mcp", config.agentMcp.url).toString(),
+                    http_headers: { Authorization: `Bearer ${config.agentMcp.token}` },
+                    required: false,
+                    startup_timeout_sec: 3,
+                  },
+                }
+              : {}),
+            "mcp_servers.orkestrator": {
+              url: config.agentMcp.url,
+              http_headers: { Authorization: `Bearer ${config.agentMcp.token}` },
+              required: false,
+              startup_timeout_sec: 3,
+              // `approve` bypasses the thread's approval policy, so reserve it
+              // for an auto-approved execution mode, the trusted
+              // coordinator profile, or a backend-selected tool paired with
+              // an attempt-scoped workflow result server. Ask/deny must
+              // retain Codex's defaults for ordinary MCP connections — except
+              // the mail tools, which a worker always needs to report back.
+              ...(approveAgentMcpTools
+                ? { default_tools_approval_mode: "approve" }
+                : { tools: AGENT_MAIL_TOOL_APPROVALS }),
+            },
+          }
+        : {}),
+    };
     return {
       cwd: config.cwd ?? this.options.cwd,
       // Passed explicitly on every call rather than relying on inherited state.
@@ -1351,46 +1401,37 @@ export class AppServerEngine implements CodexEngine {
       ...(config.personality ? { personality: config.personality } : {}),
       // `null` clears a previously set tier; `undefined` would leave it in place.
       serviceTier: config.serviceTier ?? null,
-      ...(config.agentMcp
-        ? {
-            config: {
-              // Replace the complete server table. The app-server process may
-              // have inherited an environment-wide bearer_token_env_var for
-              // this name, and configured bearer tokens take precedence over
-              // Authorization headers. Dotted leaf overrides would therefore
-              // keep authenticating as the broader environment capability.
-              ...(config.agentMcp.design
-                ? {
-                    "mcp_servers.orkestrator-design": {
-                      url: new URL("/design-mcp", config.agentMcp.url).toString(),
-                      http_headers: { Authorization: `Bearer ${config.agentMcp.token}` },
-                      required: false,
-                      startup_timeout_sec: 3,
-                    },
-                  }
-                : {}),
-              "mcp_servers.orkestrator": {
-                url: config.agentMcp.url,
-                http_headers: { Authorization: `Bearer ${config.agentMcp.token}` },
-                required: false,
-                startup_timeout_sec: 3,
-                // `approve` bypasses the thread's approval policy, so reserve it
-                // for an auto-approved execution mode, the trusted
-                // coordinator profile, or a backend-selected tool paired with
-                // an attempt-scoped workflow result server. Ask/deny must
-                // retain Codex's defaults for ordinary MCP connections — except
-                // the mail tools, which a worker always needs to report back.
-                ...(approveAgentMcpTools
-                  ? { default_tools_approval_mode: "approve" }
-                  : { tools: AGENT_MAIL_TOOL_APPROVALS }),
-              },
-            },
-          }
-        : {}),
+      ...(Object.keys(threadConfig).length > 0 ? { config: threadConfig } : {}),
     };
   }
 
+  /**
+   * Refuse a coordinator thread unless app-server confirms hosted web search is off.
+   *
+   * The coordinator's permission profile denies the network to commands, and
+   * app-server echoes the profile back (`assertPermissionProfile`). Hosted web
+   * search is outside that profile, so its setting is read back separately from
+   * the effective configuration. A Codex that renames or ignores the switch then
+   * fails here, before a thread exists, rather than letting the model reach the
+   * internet. Verified once per app-server generation.
+   */
+  private async assertHostedNetworkLock(config: EngineTurnConfig): Promise<void> {
+    if (!config.permissionProfile) return;
+    if (this.hostedNetworkLockVerifiedGeneration === this.supervisor.getGeneration()) return;
+    const { result, generation } = await this.supervisor.requestWithGeneration<{
+      config?: unknown;
+    }>("config/read", { cwd: config.cwd ?? this.options.cwd });
+    const gaps = codexHostedNetworkLockGaps(result?.config);
+    if (gaps.length > 0) {
+      throw new Error(
+        `Codex did not confirm that hosted web search is off (${gaps.join("; ")}), so this coordinator session was refused`,
+      );
+    }
+    this.hostedNetworkLockVerifiedGeneration = generation;
+  }
+
   async startThread(options: StartThreadOptions): Promise<EngineThread> {
+    await this.assertHostedNetworkLock(options.config);
     const response = await this.supervisor.request<{
       thread: Record<string, unknown>;
       model?: unknown;
@@ -1401,6 +1442,7 @@ export class AppServerEngine implements CodexEngine {
   }
 
   async resumeThread(threadId: string, options: ResumeThreadOptions): Promise<EngineThread> {
+    await this.assertHostedNetworkLock(options.config);
     const response = await this.supervisor.request<{
       thread: Record<string, unknown>;
       model?: unknown;
@@ -1456,6 +1498,7 @@ export class AppServerEngine implements CodexEngine {
     config: EngineTurnConfig,
     lastTurnId?: string,
   ): Promise<EngineThread> {
+    await this.assertHostedNetworkLock(config);
     const response = await this.supervisor.request<{
       thread: Record<string, unknown>;
       model?: unknown;

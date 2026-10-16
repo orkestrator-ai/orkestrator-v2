@@ -303,6 +303,61 @@ describe("OpenCode execution policy translation", () => {
     expect(allowed.some((permission) => permission.includes("*"))).toBe(false);
   });
 
+  test("a network denial removes OpenCode's web tools by name, last so they always lose", () => {
+    const network = ["webfetch", "websearch", "codesearch"].map((permission) => ({
+      permission,
+      pattern: "*",
+      action: "deny" as const,
+    }));
+    // The coordinator: its `*: deny` base already covers these, but only as a
+    // side effect, and a task subagent inherits named denies from its parent.
+    const coordinator = openCodePermissionRules(
+      effectiveOpenCodePolicy(
+        resolveNativeAgentExecutionPolicy(
+          { environmentType: "local", networkAccessMode: "restricted" },
+          "coordinator",
+        ),
+      ),
+    );
+    expect(coordinator.slice(-network.length)).toEqual(network);
+
+    // An explicit allow list replaces the coordinator's read allowances, and
+    // an auto-approved policy starts from `*: allow`; neither may reopen search.
+    for (const policy of [
+      {
+        id: "coordinator-read-only" as const,
+        sandbox: "provider" as const,
+        approvals: "deny" as const,
+        projectResources: true,
+        toolPolicy: { allow: ["webfetch", "websearch"] },
+        capabilityPolicy: { deny: ["network" as const] },
+        networkAccess: "restricted" as const,
+      },
+      {
+        id: "pipeline" as const,
+        sandbox: "container" as const,
+        approvals: "auto-approve" as const,
+        projectResources: true,
+        capabilityPolicy: { deny: ["network" as const] },
+        networkAccess: "restricted" as const,
+      },
+    ]) {
+      expect(openCodePermissionRules(policy).slice(-network.length)).toEqual(network);
+    }
+
+    // No capability denial, no extra rules: a container's restricted network is
+    // its own firewall and keeps OpenCode's web tools.
+    expect(
+      openCodePermissionRules({
+        id: "interactive-container",
+        sandbox: "container",
+        approvals: "auto-approve",
+        projectResources: true,
+        networkAccess: "restricted",
+      }),
+    ).toEqual([{ permission: "*", pattern: "*", action: "allow" }]);
+  });
+
   test("an explicit deny still wins over the coordinator read allowances", () => {
     const rules = openCodePermissionRules({
       id: "coordinator-read-only",

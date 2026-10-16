@@ -1,4 +1,5 @@
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { isAbsolute } from "node:path";
 
 export const CODEX_MAX_CONCURRENT_THREADS_ENV = "CODEX_MAX_CONCURRENT_THREADS_PER_SESSION";
@@ -15,6 +16,52 @@ export const BRIDGE_ATTACHMENT_ROOT_ENV = "ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT";
 export const MAX_CODEX_CONCURRENT_THREADS = Number.MAX_SAFE_INTEGER - 1;
 
 /**
+ * Codex configuration that takes hosted web search away from the model.
+ *
+ * The permission profile's `network.enabled = false` stops commands the agent
+ * runs, but web search is a hosted tool: OpenAI's servers fetch the page, so
+ * nothing on this machine sees the request. Under 0.162.1 it is offered to the
+ * model as `web__run` ("Tool for accessing the internet") even with network
+ * off. `web_search = "disabled"` removes it, and wins over every legacy switch
+ * (`features.web_search_request`, `features.web_search_cached`,
+ * `tools.web_search`) and over `features.standalone_web_search`; all verified
+ * against 0.162.1 by `live-contract.test.ts`. The legacy feature flags are not
+ * set here: they cannot re-enable search, and naming them makes app-server emit
+ * a deprecation notice on every thread. `standalone_web_search` is still under
+ * development and is pinned off so it cannot become a second path once it ships.
+ */
+export const CODEX_NETWORK_DENIED_CONFIG = Object.freeze({
+  web_search: "disabled",
+  "features.standalone_web_search": false,
+} as const);
+
+/**
+ * Whether an effective configuration (`config/read`) has hosted web search off.
+ *
+ * Returns what is missing, so a refusal can say which switch failed. An empty
+ * list is the only passing answer; a missing or unparseable `config` fails.
+ */
+export function codexHostedNetworkLockGaps(config: unknown): string[] {
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return ["config/read returned no configuration"];
+  }
+  const record = config as Record<string, unknown>;
+  const gaps: string[] = [];
+  if (record.web_search !== CODEX_NETWORK_DENIED_CONFIG.web_search) {
+    gaps.push(`web_search is ${JSON.stringify(record.web_search ?? null)}, not "disabled"`);
+  }
+  const features = record.features;
+  if (
+    features &&
+    typeof features === "object" &&
+    (features as Record<string, unknown>).standalone_web_search === true
+  ) {
+    gaps.push("features.standalone_web_search is on");
+  }
+  return gaps;
+}
+
+/**
  * Whether this process was launched to serve a read-only coordinator.
  *
  * `ORKESTRATOR_BRIDGE_EXECUTION_POLICY` is the provider-neutral name every
@@ -26,6 +73,26 @@ export function isCoordinatorReadOnlyEnvironment(env: NodeJS.ProcessEnv): boolea
     env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY === "coordinator-read-only" ||
     env.CODEX_BRIDGE_EXECUTION_POLICY === "coordinator-read-only"
   );
+}
+
+/**
+ * The policy a coordinator process runs under, whatever a request body or a
+ * persisted record carries.
+ *
+ * `capabilityPolicy` is what the agent information panel reads to say the
+ * network is off, and what `toThreadParams` reads to remove hosted web search
+ * from the thread; `toolPolicy` keeps Codex's own tool names.
+ */
+export function codexCoordinatorPolicy(): NativeAgentExecutionPolicy {
+  return {
+    id: "coordinator-read-only",
+    sandbox: "provider",
+    approvals: "deny",
+    projectResources: false,
+    toolPolicy: { deny: ["write", "edit", "apply_patch", "shell"] },
+    capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
+    networkAccess: "restricted",
+  };
 }
 
 export function resolveCodexMaxConcurrentThreads(value: string | undefined): number {
@@ -89,6 +156,14 @@ export function codexAppServerConfigOverrides(
         : "") +
       `":workspace_roots" = { "." = "read" } }`;
     overrides[`permissions.${permissionProfile}.network.enabled`] = "false";
+    // The profile above stops commands; hosted web search runs on OpenAI's
+    // servers and is only removed by configuration. The engine reads this back
+    // through `config/read` before every coordinator thread and refuses to run
+    // one without it.
+    overrides.web_search = JSON.stringify(CODEX_NETWORK_DENIED_CONFIG.web_search);
+    overrides["features.standalone_web_search"] = String(
+      CODEX_NETWORK_DENIED_CONFIG["features.standalone_web_search"],
+    );
     // A coordinator checkout is data, not trusted runtime configuration.
     // Explicitly pin this project untrusted so repository-local config, hooks,
     // and extensions stay disabled even if a future Codex release changes the

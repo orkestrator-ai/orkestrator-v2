@@ -22,6 +22,7 @@ import {
 import { getPluginsForSdk } from "./plugin-config.js";
 import {
   claudeDeniedTools,
+  claudeDisallowedTools,
   claudeReadOnlyAllowedTools,
   claudeReadOnlySandbox,
   createCoordinatorReadOnlyHook,
@@ -150,9 +151,11 @@ export async function resolveQueryPlan(
       ];
   // Provider tool names, not the policy's own: `toolPolicy.deny` carries
   // Codex's vocabulary, and passing it to `disallowedTools` matches nothing.
+  // Any other policy keeps its override and also loses the tools for each
+  // capability it denies (a network denial takes WebFetch and WebSearch).
   const disallowedTools = coordinatorReadOnly
     ? claudeDeniedTools(policy)
-    : policy?.toolPolicy?.deny;
+    : claudeDisallowedTools(policy);
 
   const fastMode = options?.fastMode === true;
   const ultracode = requestsUltracode(options?.parameterValues);

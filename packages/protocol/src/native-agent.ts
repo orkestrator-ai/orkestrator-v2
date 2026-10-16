@@ -1264,6 +1264,22 @@ export function isNativeAgentExecutionPolicy(value: unknown): value is NativeAge
   );
 }
 
+/**
+ * Whether a policy denies the agent the network outright.
+ *
+ * Stronger than `networkAccess: "restricted"`, which only narrows what a
+ * sandboxed command may reach: a denied network also takes away the
+ * provider-hosted tools that reach the internet without running a command on
+ * this machine (web search, web fetch). Those run on the vendor's servers, so
+ * no sandbox or firewall here can stop them; each bridge has to remove them
+ * from the agent's toolset.
+ */
+export function nativeAgentPolicyDeniesNetwork(
+  policy: NativeAgentExecutionPolicy | undefined,
+): boolean {
+  return policy?.capabilityPolicy?.deny.includes("network") === true;
+}
+
 /** Stable, provider-neutral copy for the agent information panel. */
 export function describeNativeAgentExecutionPolicy(policy: NativeAgentExecutionPolicy): string {
   const sandbox =
@@ -1278,7 +1294,10 @@ export function describeNativeAgentExecutionPolicy(policy: NativeAgentExecutionP
       : policy.approvals === "deny"
         ? "approvals denied"
         : "approvals off";
-  return `${sandbox}, ${approvals}, project rules ${policy.projectResources ? "on" : "off"}, ${policy.networkAccess} network`;
+  const network = nativeAgentPolicyDeniesNetwork(policy)
+    ? "no network, web search and web fetch off"
+    : `${policy.networkAccess} network`;
+  return `${sandbox}, ${approvals}, project rules ${policy.projectResources ? "on" : "off"}, ${network}`;
 }
 
 export interface NativeAgentRateLimitWindow {

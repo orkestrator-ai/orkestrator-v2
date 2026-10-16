@@ -24,7 +24,7 @@ export function coordinatorProcessPolicy(): NativeAgentExecutionPolicy {
     projectResources: false,
     capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
     networkAccess: "restricted",
-    note: "The agent is asked to request permission and every request is denied. A tool that does not ask is not stopped.",
+    note: "Grok's web search and web fetch are switched off. Every other tool is asked to request permission and every request is denied; a tool that does not ask is not stopped.",
   };
 }
 

@@ -179,13 +179,17 @@ What each enforced platform actually does:
   network inside the child process, with `sandbox: read-only`,
   `approvalPolicy: never`, and a private `CODEX_HOME` holding only `auth.json`.
   The bridge refuses to run a turn unless app-server echoes the profile back.
+  Hosted web search is outside the profile, so it is switched off separately
+  (`web_search = "disabled"`), and the bridge refuses a thread unless
+  `config/read` reports it off.
 - **Claude** runs with the SDK command sandbox on and `allowUnsandboxedCommands`
-  off, `permissionMode: dontAsk`, an allowlist that excludes every writing tool,
-  `settingSources: []`, a private `CLAUDE_CONFIG_DIR` holding only the
-  credential, and a bridge-owned `PreToolUse` hook. The hook is the real
-  boundary for shell: it allows a fixed list of reading commands and refuses
-  pipes, redirection, substitution and chaining. On Windows, where there is no
-  command sandbox, Claude drops to `provider-configured` automatically.
+  off, `permissionMode: dontAsk`, an allowlist that excludes every writing tool
+  and WebFetch and WebSearch, `settingSources: []`, a private
+  `CLAUDE_CONFIG_DIR` holding only the credential, and a bridge-owned
+  `PreToolUse` hook. The hook is the real boundary for shell: it allows a fixed
+  list of reading commands and refuses pipes, redirection, substitution and
+  chaining. On Windows, where there is no command sandbox, Claude drops to
+  `provider-configured` automatically.
 - **Pi** blocks every tool outside its read-only set in its own `tool_call`
   gate, which runs in the bridge process and cannot be switched off by the
   workspace.
@@ -199,6 +203,33 @@ The coordinator policy names operations, not one provider's tool strings:
 `capabilityPolicy.deny` is `file.write`, `file.patch`, `shell.mutate`, and
 `network`. Each bridge translates that list. `toolPolicy` stays Codex-shaped
 and is also the user-override surface, so it cannot carry the translation.
+
+### A denied network includes hosted tools
+
+A sandbox or firewall on this machine only sees what the agent's own commands
+send. Hosted web search and fetch run on the vendor's servers, so they reach
+the internet whatever the sandbox says. A live run once showed a Codex
+coordinator opening `https://example.com` through hosted search while its
+permission profile had the network off. So a policy that denies `network`
+(`nativeAgentPolicyDeniesNetwork`) takes those tools away in each provider's
+own terms, as well as turning the sandbox network off:
+
+| Platform | Hosted and network tools removed by |
+| --- | --- |
+| Codex | `web_search = "disabled"` and `features.standalone_web_search = false`, as process configuration for a coordinator and as thread configuration for any network-denied thread. The engine reads the coordinator's setting back through `config/read` once per app-server generation and refuses the thread without it. |
+| Claude | WebFetch and WebSearch in `disallowedTools`; for a coordinator they are also off the allowlist and refused by the hook |
+| OpenCode | Named deny rules for `webfetch`, `websearch` and `codesearch`, placed after every allow; a `task` subagent inherits them |
+| Cursor | The read-only allowlist (`CURSOR_READ_ONLY_TOOLS`) leaves out `webFetch` and `webSearch`; other network-denied sessions get both in `disallowedTools` |
+| Grok | `--disable-web-search` (removes web search and web fetch) and `--no-leader`, so a shared leader that ignores the flag is never used; also applied to probe and replay children of a coordinator process |
+| Pi | No hosted tools; the read-only gate is a name allowlist, so an extension's web tool is refused too |
+
+The agent information panel says "no network, web search and web fetch off"
+only for a policy that carries this denial; a `restricted` network without it
+still reads "restricted network", because hosted tools stay available there.
+Fail closed: a Codex whose effective configuration does not read back with
+search off is refused at thread start. A platform that could not remove these
+tools at all would have to leave `enforced`, and say so in its qualification
+reason.
 
 Every coordinator bridge is launched with
 `ORKESTRATOR_BRIDGE_EXECUTION_POLICY=coordinator-read-only`. That is process
@@ -474,7 +505,11 @@ guarantee, not by one end-to-end scenario replayed per platform:
 - one-wake invariant and crash recovery: `coordinator-service.test.ts`
 - single-turn mail batching: `agent-mail-service.test.ts`
 - tool contract and poll guard: `control-mcp-server.test.ts`
-- no-waiting-tools boundary and tier table: `coordinator-conformance.test.ts`
+- no-waiting-tools boundary, tier table, and hosted network tools removed on
+  every platform: `coordinator-conformance.test.ts`
+- hosted web search against the real pinned Codex, read from the model request
+  on a loopback endpoint (gated on `RUN_LIVE_CODEX_APP_SERVER=1`):
+  `live-network-lock.test.ts`
 - per-bridge activity and policy tests already cover whether a bridge reports
   `idle` at turn end and how it translates `capabilityPolicy`
 

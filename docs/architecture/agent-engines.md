@@ -303,10 +303,11 @@ process-env token is only the fallback.
 The conversation always receives a trusted `coordinator-read-only` execution
 policy. Codex additionally selects a per-conversation permission profile on
 restored sessions and every turn: filesystem denied except the project and
-managed Codex runtime, shell network off, isolated `CODEX_HOME` holding only
+managed Codex runtime, shell network off, hosted web search off (read back
+through `config/read` before every thread), isolated `CODEX_HOME` holding only
 the credential, project hooks and plugin/browser paths disabled. Claude uses
-the SDK command sandbox plus a read-only shell allowlist. Pi's gate runs
-inside the bridge on every tool call. The only injected MCP server is the
+the SDK command sandbox plus a read-only shell allowlist, with WebFetch and
+WebSearch denied. Pi's gate runs inside the bridge on every tool call. The only injected MCP server is the
 scoped Orkestrator endpoint. The renderer stores pasted attachments outside
 the checkout and hides mode/permission controls, resume/fork, and
 file-rewinding actions; the backend independently rejects write-capable
@@ -502,14 +503,21 @@ project resources, and follow the environment network setting. Pipeline runs
 are unattended. The coordinator always uses the immutable
 `coordinator-read-only` policy regardless of an environment override.
 
-| Adapter | Policy mapping |
-| --- | --- |
-| Claude | `permissionMode` and the approval callback; `allowedTools`/`disallowedTools`; `settingSources`; SDK sandbox options |
-| Codex | `approvalPolicy`, thread sandbox and sandbox network; the coordinator's verified permission profile |
-| Cursor | local SDK sandbox/auto-review; `settingSources`; `tools`/`disallowedTools`, re-applied on resume |
-| Grok | `--always-approve` only for auto-approval, and under auto-approval the bridge also answers the ACP permission requests Grok still sends (allow option), except for a kind the policy denies (`autoApprovedPermissionOption`); ACP permission requests otherwise; project MCP trust at the launcher boundary |
-| Pi | approval extension; resource-loader exclusions and project trust; active SDK tool selection |
-| OpenCode | session permission rules; project resources remain enabled because OpenCode owns config discovery, which is stated in the effective policy note |
+| Adapter | Policy mapping | `network` in `capabilityPolicy.deny` |
+| --- | --- | --- |
+| Claude | `permissionMode` and the approval callback; `allowedTools`/`disallowedTools`; `settingSources`; SDK sandbox options | WebFetch and WebSearch in `disallowedTools` (`claudeDisallowedTools`) |
+| Codex | `approvalPolicy`, thread sandbox and sandbox network; the coordinator's verified permission profile | `web_search = "disabled"` on the thread; a coordinator also sets it as process configuration and has it read back through `config/read` |
+| Cursor | local SDK sandbox/auto-review; `settingSources`; `tools`/`disallowedTools`, re-applied on resume | `webFetch`, `webSearch` and `task` in `disallowedTools`; the read-only allowlist never includes them |
+| Grok | `--always-approve` only for auto-approval, and under auto-approval the bridge also answers the ACP permission requests Grok still sends (allow option), except for a kind the policy denies (`autoApprovedPermissionOption`); ACP permission requests otherwise; project MCP trust at the launcher boundary | `--disable-web-search` and `agent --no-leader` |
+| Pi | approval extension; resource-loader exclusions and project trust; active SDK tool selection | No hosted tools; the read-only gate admits only its read tools by name |
+| OpenCode | session permission rules; project resources remain enabled because OpenCode owns config discovery, which is stated in the effective policy note | Deny rules for `webfetch`, `websearch` and `codesearch` after every allow |
+
+A sandbox's network switch (`networkAccess`) only governs commands the agent
+runs on this machine. Hosted web search and fetch run on the vendor's servers,
+so only removing the tools stops them; that is what the last column does, and
+why it keys on the capability denial rather than on `networkAccess:
+"restricted"`, which a container uses for its own firewall. See
+[`coordinator.md`](coordinator.md#a-denied-network-includes-hosted-tools).
 
 ### Approval modes
 

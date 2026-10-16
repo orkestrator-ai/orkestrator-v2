@@ -1,0 +1,314 @@
+/**
+ * Hosted web search against the **real** pinned `codex app-server` binary.
+ *
+ * A coordinator's permission profile turns the network off for commands, but
+ * web search is a hosted tool: OpenAI's servers fetch the page, so the profile
+ * never sees it. These tests point Codex at a loopback Responses endpoint and
+ * read the tool list from the first model request, so they prove what the
+ * model is offered without calling a model or spending credits. Gated like the
+ * other live contract tests because they need the pinned binary:
+ *
+ *   RUN_LIVE_CODEX_APP_SERVER=1 \
+ *     bun test bridges/codex-bridge/src/app-server/live-network-lock.test.ts
+ *
+ * The first test is the control: an ordinary thread is offered web search, so
+ * a probe that saw nothing cannot pass the others by accident.
+ */
+import { describe, expect, test } from "bun:test";
+import { spawn } from "node:child_process";
+import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  codexAppServerConfigOverrides,
+  codexCoordinatorPolicy,
+  codexHostedNetworkLockGaps,
+} from "../codex-config.js";
+import { AppServerEngine } from "../engine/app-server-engine.js";
+import type { EngineTurnConfig } from "../engine/types.js";
+import { JsonlRpcClient } from "./jsonl-rpc-client.js";
+import { resolveCodexBinary } from "./live-binary.js";
+
+// See `live-contract.test.ts`: the test preload replaces `Response`, and
+// `Bun.serve` only accepts its own.
+const NATIVE_WEB_PLATFORM_KEY = Symbol.for("orkestrator.tests.native-web-platform");
+const NativeResponse =
+  (globalThis as typeof globalThis & { [key: symbol]: { Response?: typeof Response } | undefined })[
+    NATIVE_WEB_PLATFORM_KEY
+  ]?.Response ?? Response;
+
+const LIVE = process.env.RUN_LIVE_CODEX_APP_SERVER === "1";
+const describeLive = LIVE ? describe : describe.skip;
+
+const CLIENT_INFO = { name: "orkestrator", title: "Orkestrator", version: "2.4.9" };
+const PROFILE = "coordinator-network-lock";
+const PROMPT = "Search the web for https://example.com and tell me its title.";
+
+interface FakeResponses {
+  baseUrl: string;
+  /** The first `response.create` frame Codex sends. */
+  firstRequest: Promise<Record<string, unknown>>;
+  stop: () => Promise<void>;
+}
+
+/**
+ * A Responses endpoint that records the request and fails it.
+ *
+ * Codex 0.162.1 opens the Responses API as a WebSocket and sends the whole
+ * request, tools included, as one `response.create` frame. Closing the socket
+ * afterwards makes the turn fail, which is all these tests need.
+ */
+function startFakeResponses(): FakeResponses {
+  let capture!: (frame: Record<string, unknown>) => void;
+  const firstRequest = new Promise<Record<string, unknown>>((resolve) => {
+    capture = resolve;
+  });
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request, bun) {
+      if (request.headers.get("upgrade")?.toLowerCase() === "websocket" && bun.upgrade(request)) {
+        return undefined;
+      }
+      return new NativeResponse("not served", { status: 400 });
+    },
+    websocket: {
+      message(socket, message) {
+        try {
+          const frame = JSON.parse(String(message)) as Record<string, unknown>;
+          if (frame.type === "response.create") capture(frame);
+        } catch {
+          // Only the request frame matters.
+        }
+        socket.close(1011, "recorded");
+      },
+    },
+  });
+  return {
+    baseUrl: `http://127.0.0.1:${server.port}/v1`,
+    firstRequest,
+    stop: async () => {
+      await server.stop(true);
+    },
+  };
+}
+
+/** Whether a model request offers hosted web search in either of its shapes. */
+function offersWebSearch(frame: Record<string, unknown>): boolean {
+  const text = JSON.stringify(frame);
+  // Code mode (every model the 0.162.1 catalog serves) nests it in the `exec`
+  // declaration as `web__run`; outside code mode it is a `web_search` tool.
+  return text.includes("web__run") || /"type":"web_search/.test(text);
+}
+
+/** Whether a model request still carries tools at all, so absence means something. */
+function offersTools(frame: Record<string, unknown>): boolean {
+  return JSON.stringify(frame).includes('"name":"exec"');
+}
+
+async function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timed out waiting for ${what}`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** A throwaway CODEX_HOME holding a placeholder API key, and a git workspace. */
+async function sandbox(): Promise<{ codexHome: string; workspace: string }> {
+  const codexHome = await mkdtemp(join(tmpdir(), "ork-netlock-home-"));
+  const workspace = await realpath(await mkdtemp(join(tmpdir(), "ork-netlock-ws-")));
+  await mkdir(join(workspace, ".git"), { recursive: true });
+  await writeFile(join(workspace, ".git", "HEAD"), "ref: refs/heads/main\n", "utf8");
+  // Never a real key: the only server it can reach is the loopback fake.
+  await writeFile(
+    join(codexHome, "auth.json"),
+    JSON.stringify({ OPENAI_API_KEY: "sk-orkestrator-loopback-probe" }),
+    { mode: 0o600 },
+  );
+  return { codexHome, workspace };
+}
+
+function engineFor(options: {
+  codexPath: string;
+  codexHome: string;
+  workspace: string;
+  configOverrides: Record<string, string>;
+}): AppServerEngine {
+  return new AppServerEngine({
+    codexPath: options.codexPath,
+    cwd: options.workspace,
+    codexHome: options.codexHome,
+    clientInfo: CLIENT_INFO,
+    configOverrides: options.configOverrides,
+    supervisorOverrides: { pidFileEnabled: false },
+  });
+}
+
+/** Starts one thread and one turn through the bridge's engine, returning the model request. */
+async function firstModelRequest(
+  engine: AppServerEngine,
+  responses: FakeResponses,
+  config: EngineTurnConfig,
+): Promise<Record<string, unknown>> {
+  await engine.start();
+  const thread = await engine.startThread({ config });
+  await engine.startTurn({
+    handle: thread.handle,
+    input: [{ type: "text", text: PROMPT }],
+    config,
+  });
+  return withTimeout(responses.firstRequest, 60_000, "the model request");
+}
+
+describeLive("live hosted network lock", () => {
+  test("an ordinary thread is offered hosted web search (control)", async () => {
+    const { codexHome, workspace } = await sandbox();
+    const responses = startFakeResponses();
+    const child = spawn(
+      await resolveCodexBinary(),
+      ["app-server", "--stdio", "-c", `openai_base_url=${JSON.stringify(responses.baseUrl)}`],
+      {
+        cwd: workspace,
+        env: { ...process.env, CODEX_HOME: codexHome, LOG_FORMAT: "json" },
+        stdio: ["pipe", "pipe", "pipe"],
+        shell: false,
+      },
+    );
+    child.stderr.resume();
+    const client = new JsonlRpcClient({
+      generation: 1,
+      stdin: child.stdin,
+      stdout: child.stdout,
+      onNotification: () => undefined,
+      onServerRequest: () => undefined,
+    });
+    try {
+      await client.request("initialize", {
+        clientInfo: CLIENT_INFO,
+        capabilities: { experimentalApi: false, requestAttestation: false },
+      });
+      await client.notify("initialized");
+      // Network off for commands: what a coordinator had before this lock.
+      const started = await client.request<{ thread: { id: string } }>("thread/start", {
+        cwd: workspace,
+        sandbox: "read-only",
+        approvalPolicy: "never",
+      });
+      await client.request("turn/start", {
+        threadId: started.thread.id,
+        input: [{ type: "text", text: PROMPT, text_elements: [] }],
+      });
+      const frame = await withTimeout(responses.firstRequest, 60_000, "the model request");
+      expect(offersTools(frame)).toBe(true);
+      expect(offersWebSearch(frame)).toBe(true);
+    } finally {
+      client.close();
+      child.stdin.end();
+      child.kill("SIGTERM");
+      await responses.stop();
+    }
+  }, 120_000);
+
+  test("a coordinator's effective configuration reads back with web search off", async () => {
+    const { codexHome, workspace } = await sandbox();
+    const engine = engineFor({
+      codexPath: await resolveCodexBinary(),
+      codexHome,
+      workspace,
+      configOverrides: codexAppServerConfigOverrides({
+        ORKESTRATOR_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
+        CODEX_BRIDGE_PERMISSION_PROFILE: PROFILE,
+        CODEX_BRIDGE_READABLE_RUNTIME_ROOT: workspace,
+        CWD: workspace,
+      }),
+    });
+    try {
+      await engine.start();
+      // The same request the engine makes before a coordinator thread, under
+      // the bridge's own non-experimental client capabilities.
+      const read = await engine
+        .getSupervisor()
+        .request<{ config?: unknown }>("config/read", { cwd: workspace });
+      expect(codexHostedNetworkLockGaps(read.config)).toEqual([]);
+    } finally {
+      await engine.stop();
+    }
+  }, 120_000);
+
+  test("a coordinator thread is never offered hosted web search", async () => {
+    const { codexHome, workspace } = await sandbox();
+    const responses = startFakeResponses();
+    const engine = engineFor({
+      codexPath: await resolveCodexBinary(),
+      codexHome,
+      workspace,
+      configOverrides: {
+        ...codexAppServerConfigOverrides({
+          ORKESTRATOR_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
+          CODEX_BRIDGE_PERMISSION_PROFILE: PROFILE,
+          CODEX_BRIDGE_READABLE_RUNTIME_ROOT: workspace,
+          CWD: workspace,
+        }),
+        openai_base_url: JSON.stringify(responses.baseUrl),
+      },
+    });
+    try {
+      // What `toEngineConfig` builds for a coordinator process.
+      const frame = await firstModelRequest(engine, responses, {
+        mode: "build",
+        cwd: workspace,
+        approvalPolicy: "never",
+        sandbox: "read-only",
+        networkAccessEnabled: false,
+        permissionProfile: PROFILE,
+        policy: codexCoordinatorPolicy(),
+      });
+      expect(offersTools(frame)).toBe(true);
+      expect(offersWebSearch(frame)).toBe(false);
+    } finally {
+      await engine.stop();
+      await responses.stop();
+    }
+  }, 120_000);
+
+  test("a network-denied thread on an ordinary bridge is not offered web search", async () => {
+    const { codexHome, workspace } = await sandbox();
+    const responses = startFakeResponses();
+    // No coordinator overrides: the thread's own config is the whole lock.
+    const engine = engineFor({
+      codexPath: await resolveCodexBinary(),
+      codexHome,
+      workspace,
+      configOverrides: { openai_base_url: JSON.stringify(responses.baseUrl) },
+    });
+    try {
+      const frame = await firstModelRequest(engine, responses, {
+        mode: "build",
+        cwd: workspace,
+        approvalPolicy: "never",
+        sandbox: "workspace-write",
+        networkAccessEnabled: false,
+        policy: {
+          id: "pipeline",
+          sandbox: "provider",
+          approvals: "auto-approve",
+          projectResources: false,
+          capabilityPolicy: { deny: ["network"] },
+          networkAccess: "restricted",
+        },
+      });
+      expect(offersTools(frame)).toBe(true);
+      expect(offersWebSearch(frame)).toBe(false);
+    } finally {
+      await engine.stop();
+      await responses.stop();
+    }
+  }, 120_000);
+});

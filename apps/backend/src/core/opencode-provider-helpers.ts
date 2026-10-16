@@ -7,6 +7,7 @@ import type {
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2/client";
 import {
   DEFAULT_OPENCODE_MODEL_PROVIDERS,
+  nativeAgentPolicyDeniesNetwork,
   normalizeOpenCodeModelProviders,
   type NativeAgentExecutionPolicy,
   type NativeAgentDefaultModelResolution,
@@ -292,6 +293,20 @@ const OPENCODE_AGENT_MAIL_PERMISSIONS = Object.freeze(
   AGENT_MAIL_TOOL_NAMES.map((name) => `${ORKESTRATOR_AGENT_MCP_SERVER_NAME}_${name}`),
 );
 
+/**
+ * OpenCode's network tools, denied by name whenever a policy denies `network`.
+ *
+ * A coordinator's `{"*": deny}` base already covers them, but that is a side
+ * effect of the base rule, which an explicit `toolPolicy.allow` replaces. Named
+ * denies hold whatever the base is, and a `task` subagent inherits every deny
+ * rule of its parent session (OpenCode 1.19.0), so they reach subagents too.
+ * `websearch` calls a hosted search service, not this machine's network, so no
+ * sandbox stops it. `codesearch` is not a 1.19.0 tool; it is listed because
+ * earlier releases shipped it as a hosted search, and a deny for an absent
+ * permission is inert.
+ */
+const OPENCODE_NETWORK_PERMISSIONS = Object.freeze(["webfetch", "websearch", "codesearch"]);
+
 /** Per-message tool mask for a structured report turn that must not mutate state. */
 export const OPENCODE_READ_ONLY_TURN_TOOLS: Readonly<Record<string, boolean>> = Object.freeze({
   write: false,
@@ -406,7 +421,10 @@ export function openCodePermissionRules(policy: NativeAgentExecutionPolicy) {
       }),
     ),
     // Last, so a deny always wins a collision with the read allowances above.
-    ...(policy.toolPolicy?.deny ?? []).map((permission) => ({
+    ...[
+      ...(policy.toolPolicy?.deny ?? []),
+      ...(nativeAgentPolicyDeniesNetwork(policy) ? OPENCODE_NETWORK_PERMISSIONS : []),
+    ].map((permission) => ({
       permission,
       pattern: "*",
       action: "deny" as const,

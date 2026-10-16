@@ -10,6 +10,9 @@ import {
   fallbackReasoningId,
   isNativeAgentExecutionPolicy,
   isNativeAgentTabData,
+  describeNativeAgentExecutionPolicy,
+  nativeAgentPolicyDeniesNetwork,
+  type NativeAgentExecutionPolicy,
   normalizeNativeAgentTurnActivity,
   isSelectableOpenCodeModelId,
   isSelectableOpenCodeProvider,
@@ -1211,6 +1214,41 @@ describe("native agent execution policy guard", () => {
     ).toBe(false);
     expect(isNativeAgentExecutionPolicy({ ...valid, capabilityPolicy: {} })).toBe(false);
     expect(isNativeAgentExecutionPolicy({ ...valid, capabilityPolicy: { deny: [1] } })).toBe(false);
+  });
+});
+
+describe("native agent network denial", () => {
+  const coordinator: NativeAgentExecutionPolicy = {
+    id: "coordinator-read-only",
+    sandbox: "provider",
+    approvals: "deny",
+    projectResources: false,
+    capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
+    networkAccess: "restricted",
+  };
+
+  test("only a capability denial denies the network", () => {
+    expect(nativeAgentPolicyDeniesNetwork(coordinator)).toBe(true);
+    expect(
+      nativeAgentPolicyDeniesNetwork({
+        ...coordinator,
+        capabilityPolicy: { deny: ["file.write"] },
+      }),
+    ).toBe(false);
+    // `restricted` narrows what a sandboxed command reaches; it is not a denial.
+    const { capabilityPolicy: _omitted, ...restricted } = coordinator;
+    expect(nativeAgentPolicyDeniesNetwork(restricted)).toBe(false);
+    expect(nativeAgentPolicyDeniesNetwork(undefined)).toBe(false);
+  });
+
+  test("the information panel says the hosted web tools are off, not just restricted", () => {
+    expect(describeNativeAgentExecutionPolicy(coordinator)).toBe(
+      "Provider sandbox, approvals denied, project rules off, no network, web search and web fetch off",
+    );
+    const { capabilityPolicy: _omitted, ...restricted } = coordinator;
+    expect(describeNativeAgentExecutionPolicy(restricted)).toBe(
+      "Provider sandbox, approvals denied, project rules off, restricted network",
+    );
   });
 });
 

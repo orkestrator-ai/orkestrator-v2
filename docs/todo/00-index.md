@@ -58,9 +58,9 @@ it reaches. Some rules of thumb:
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
 | High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 59 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 232 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 247 |
-| **Total** | | **539** |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 233 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 248 |
+| **Total** | | **541** |
 
 ## Very high
 
@@ -76,6 +76,10 @@ it reaches. Some rules of thumb:
 ### Multi Review (very high)
 
 - [x] Fix fence checks that take the lease and parse the whole store since #969 (per-row reads) ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
+
+### Coordinator and agent mail (very high)
+
+- [x] Take hosted web search and fetch away from every network-denied session; Codex refuses a coordinator thread unless `config/read` confirms search is off ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md))
 
 ### Cross-cutting (very high)
 
@@ -393,6 +397,7 @@ it reaches. Some rules of thumb:
 - [ ] Decide whether Claude on Windows stays offered at the default coordinator safety level ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md))
 - [ ] Disable command-backed project MCP servers for OpenCode coordinators if it must reach `enforced` ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md))
 - [ ] Decide whether `provider-configured` is an acceptable final coordinator tier for OpenCode and Cursor ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md), decision)
+- [ ] Confirm on Grok 1.0.52 that `--disable-web-search` leaves a coordinator turn with no web search or web fetch ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md), qualification)
 - [ ] Add the live async scenario: async launch, queue before mail, one carrier, one silent-worker notice ([coordinator-live-conformance.md](coordinator-live-conformance.md))
 - [ ] Require every `enforced` coordinator platform to appear on the live suite's platform list in tests ([coordinator-live-conformance.md](coordinator-live-conformance.md))
 - [ ] Run the ten-message peer scenario between two environments with Wake peers on ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
@@ -677,6 +682,7 @@ it reaches. Some rules of thumb:
 - [ ] Add an argv0 deny for `sleep` on the Codex coordinator profile if live runs show Codex using it ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md))
 - [ ] Raise Grok above `advisory` only after adding a real read-only gate in the ACP bridge ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md), deferred)
 - [ ] Raise the Cursor coordinator tier only once a probe can prove a denied tool did not run ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md), blocked)
+- [ ] Report a Codex coordinator that fails the hosted web search check as not ready, not only as a refused turn ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md))
 - [ ] Extend the coordinator poll guard to `list_environments` if live runs show coordinators polling it ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md))
 - [ ] Add an optional `data-mail-kind` to injected mail carriers so system and tab mail style apart ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md))
 - [ ] Hide coordinator favourites for platforms the conversation cannot use under `platformFilter` ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md))
@@ -778,7 +784,7 @@ it reaches. Some rules of thumb:
 | [multi-review-panel-value.md](multi-review-panel-value.md) |  | 1 | 4 | 5 | 10 |
 | [multi-review-flow-graph.md](multi-review-flow-graph.md) |  |  |  | 4 | 4 |
 | **Coordinator and agent mail** | | | | | |
-| [coordinator-read-only-adapters.md](coordinator-read-only-adapters.md) |  |  | 3 | 3 | 6 |
+| [coordinator-read-only-adapters.md](coordinator-read-only-adapters.md) |  |  | 4 | 4 | 8 |
 | [coordinator-live-conformance.md](coordinator-live-conformance.md) |  | 4 | 6 |  | 10 |
 | [coordinator-consistency-gaps.md](coordinator-consistency-gaps.md) |  |  | 1 | 7 | 8 |
 | **Backend structure** | | | | | |

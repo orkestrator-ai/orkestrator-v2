@@ -7,9 +7,22 @@ import {
   isReadOnlyShellCommand,
 } from "../../../../bridges/claude-bridge/src/services/read-only-policy.js";
 import {
+  codexAppServerConfigOverrides,
+  codexCoordinatorPolicy,
+} from "../../../../bridges/codex-bridge/src/codex-config.js";
+import {
+  loadAcpProviderConfig,
+  providerArgv,
+} from "../../../../bridges/acp-bridge/src/acp-provider-config.js";
+import { coordinatorProcessPolicy as grokCoordinatorPolicy } from "../../../../bridges/acp-bridge/src/acp-policy.js";
+import {
   COORDINATOR_ASYNC_CONTRACT,
   type CoordinatorProviderTier,
 } from "@orkestrator/protocol/coordinator";
+import {
+  describeNativeAgentExecutionPolicy,
+  nativeAgentPolicyDeniesNetwork,
+} from "@orkestrator/protocol/native-agent";
 import { coordinatorProviderQualification } from "./coordinator-providers.js";
 import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
@@ -72,6 +85,50 @@ describe("coordinator read-only conformance", () => {
       enabled: true,
       allowUnsandboxedCommands: false,
     });
+  });
+
+  // Hosted web search reaches the internet from the vendor's servers, so a
+  // sandbox or firewall here never sees it. A live run found a Codex
+  // coordinator fetching https://example.com this way while its profile had
+  // the network off. Each platform has to take these tools away itself.
+  test("a denied network takes hosted web search and fetch away on every platform", () => {
+    expect(nativeAgentPolicyDeniesNetwork(coordinatorPolicy)).toBe(true);
+    expect(describeNativeAgentExecutionPolicy(coordinatorPolicy)).toContain(
+      "web search and web fetch off",
+    );
+
+    // Codex: process configuration, read back before every thread, and the
+    // bridge's own policy (what the information panel shows) names the denial.
+    const codex = codexAppServerConfigOverrides({
+      ORKESTRATOR_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
+      CODEX_BRIDGE_PERMISSION_PROFILE: "coordinator-conversation-1",
+      CODEX_BRIDGE_READABLE_RUNTIME_ROOT: "/opt/orkestrator/codex",
+      CWD: "/projects/example",
+    });
+    expect(codex.web_search).toBe('"disabled"');
+    expect(nativeAgentPolicyDeniesNetwork(codexCoordinatorPolicy())).toBe(true);
+
+    // Claude: both tools are denied by name, not only left off the allowlist.
+    expect(claudeDeniedTools(coordinatorPolicy)).toEqual(
+      expect.arrayContaining(["WebFetch", "WebSearch"]),
+    );
+    const claudeAllowed = claudeReadOnlyAllowedTools({ agentMcpServerNames: ["orkestrator"] });
+    expect(claudeAllowed).not.toContain("WebFetch");
+    expect(claudeAllowed).not.toContain("WebSearch");
+
+    // OpenCode: named denies after every allow.
+    const openCodeDenied = openCodePermissionRules(effectiveOpenCodePolicy(coordinatorPolicy))
+      .filter((rule) => rule.action === "deny")
+      .map((rule) => rule.permission);
+    expect(openCodeDenied).toEqual(expect.arrayContaining(["webfetch", "websearch"]));
+
+    // Grok: the CLI drops both tools; it never asks before a search.
+    const grok = providerArgv(loadAcpProviderConfig({ ACP_PROVIDER: "grok" }), {
+      approvals: grokCoordinatorPolicy().approvals,
+      denyNetwork: nativeAgentPolicyDeniesNetwork(grokCoordinatorPolicy()),
+    });
+    expect(grok[0]).toBe("--disable-web-search");
+    expect(grok).toContain("--no-leader");
   });
 
   test("a provider-configured platform denies, and says what it cannot hold", () => {

@@ -66,13 +66,13 @@ advertises.
 
   | Platform | Tier | How read-only is held | Gap |
   | --- | --- | --- | --- |
-  | Claude (macOS, Linux) | `enforced` | SDK command sandbox, `allowUnsandboxedCommands` off, `dontAsk`, an allowlist without writing tools, and a bridge `PreToolUse` hook that allows a fixed list of reading commands | None known |
+  | Claude (macOS, Linux) | `enforced` | SDK command sandbox, `allowUnsandboxedCommands` off, `dontAsk`, an allowlist without writing tools, and a bridge `PreToolUse` hook that allows a fixed list of reading commands; WebFetch and WebSearch are off the allowlist, in `disallowedTools` and refused by the hook | None known |
   | Claude (Windows) | `provider-configured` | Same, without the OS sandbox; the hook allowlist is the boundary | No OS containment |
-  | Codex | `enforced` | Permission profile that denies filesystem writes and network in the child; the bridge refuses a turn unless app-server echoes the profile back | `sleep` is not denied (it is a read-only command) |
-  | Pi | `enforced` | In-process `tool_call` gate in the bridge | None known |
-  | OpenCode | `provider-configured` | SDK `plan` agent plus permission rules (`*: deny`, a read-only list, the coordinator's own Orkestrator tools by name) | Always loads the checkout's project configuration, including command-backed MCP servers in `opencode.json` |
-  | Cursor | `provider-configured` | SDK sandbox plus a built-in tool allowlist (`CURSOR_READ_ONLY_TOOLS`, with denied capabilities mapped by `CURSOR_CAPABILITY_TOOLS`); a read-only session without a sandbox boundary is refused before attach | No approval callback, so a denial cannot be verified |
-  | Grok | `advisory` | Every permission request is cancelled | A tool that does not ask is not stopped; not offered at the default safety level |
+  | Codex | `enforced` | Permission profile that denies filesystem writes and network in the child; the bridge refuses a turn unless app-server echoes the profile back. Hosted web search (`web__run`) is switched off with `web_search = "disabled"`, and the bridge refuses a thread unless `config/read` reads it back | `sleep` is not denied (it is a read-only command) |
+  | Pi | `enforced` | In-process `tool_call` gate in the bridge; a name allowlist, so an extension's web tool is refused too | None known |
+  | OpenCode | `provider-configured` | SDK `plan` agent plus permission rules (`*: deny`, a read-only list, the coordinator's own Orkestrator tools by name, then named denies for `webfetch`, `websearch` and `codesearch`) | Always loads the checkout's project configuration, including command-backed MCP servers in `opencode.json` |
+  | Cursor | `provider-configured` | SDK sandbox plus a built-in tool allowlist (`CURSOR_READ_ONLY_TOOLS`, with denied capabilities mapped by `CURSOR_CAPABILITY_TOOLS`), which leaves out `webFetch` and `webSearch`; a read-only session without a sandbox boundary is refused before attach | No approval callback, so a denial cannot be verified |
+  | Grok | `advisory` | Web search and web fetch removed with `--disable-web-search` (plus `--no-leader`, so a shared leader cannot ignore it); every other permission request is cancelled | A tool that does not ask is not stopped; not offered at the default safety level |
 
 - Waiting tools. Claude refuses `Monitor`, `ScheduleWakeup`, the `Cron*`
   tools and `sleep`/`watch`/`timeout` (asserted in
@@ -108,6 +108,38 @@ advertises.
 5. **Grok.** Stays `advisory`. Do not raise the tier without a real gate in
    the ACP bridge.
 6. **Pi.** No change.
+7. **Hosted network tools.** Done. A live run of the read-only suite found a
+   Codex coordinator reaching `https://example.com` through Codex's hosted web
+   search while its permission profile had the network off: the profile stops
+   commands, and hosted search runs on OpenAI's servers. Every policy whose
+   `capabilityPolicy` denies `network` (`nativeAgentPolicyDeniesNetwork`) now
+   loses the provider's hosted and network tools:
+   - Codex: `web_search = "disabled"` and `features.standalone_web_search =
+     false` as process configuration for a coordinator and as thread
+     configuration for any network-denied thread (`CODEX_NETWORK_DENIED_CONFIG`).
+     The engine reads the coordinator's setting back through `config/read` once
+     per app-server generation and refuses the thread without it
+     (`assertHostedNetworkLock`), so a Codex that renames the switch fails
+     closed. Verified against 0.162.1 by `live-network-lock.test.ts`, which
+     reads the tools out of the real model request on a loopback endpoint.
+   - Claude: WebFetch and WebSearch were already off the coordinator's
+     allowlist, denied and refused by the hook; any other network-denied
+     policy now gets them in `disallowedTools` too (`claudeDisallowedTools`).
+   - OpenCode: named denies for `webfetch`, `websearch` and `codesearch`,
+     which a `task` subagent inherits.
+   - Grok: `--disable-web-search` and `--no-leader`, keyed by provider id so the
+     backend's serialized launcher record cannot drop them, and applied to
+     policy-less children in a coordinator process.
+   - Cursor and Pi: no change; their read-only allowlists already exclude every
+     network tool, now pinned by tests.
+8. **Grok flag, live.** The `--disable-web-search` flag and its effect on the
+   ACP toolset are read from the 1.0.52 binary, not from a live turn. Confirm
+   on the pinned build that a coordinator turn has no web search or web fetch.
+9. **Readiness for a failed Codex lock.** A Codex coordinator whose
+   `config/read` does not confirm search is off is refused at thread start,
+   which the user sees as a failed turn. `NativeAgentReadiness` has no state for
+   "this provider cannot hold the boundary", so the conversation still looks
+   ready until the first send. Add one if a Codex bump ever trips the check.
 
 ### Qualification
 

@@ -128,6 +128,7 @@ const { MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_TITLE_BYTES, workingDirectory } =
 const {
   applyComposerPatch,
   createSession,
+  CURSOR_READ_ONLY_TOOLS,
   cursorDeniedTools,
   detachAgent,
   ensureAgent,
@@ -565,6 +566,29 @@ describe("ensureAgent", () => {
       local: { sandboxOptions: { enabled: false }, settingSources: [] },
       tools: expect.arrayContaining(["read", "grep", "glob", "ls", "mcp"]),
     });
+  });
+
+  test("a coordinator agent is never offered web search or web fetch", async () => {
+    // Both run through Cursor's servers, so the sandbox cannot stop them; the
+    // closed allowlist is what does, and it must never grow to include them.
+    process.env.ORKESTRATOR_BRIDGE_EXECUTION_POLICY = "coordinator-read-only";
+    const state = newSessionState(undefined, {
+      id: "coordinator-read-only",
+      sandbox: "provider",
+      approvals: "deny",
+      projectResources: false,
+      capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
+      networkAccess: "restricted",
+    });
+    state.readOnly = true;
+
+    await ensureAgent(state);
+
+    for (const tool of ["webFetch", "webSearch", "task", "shell"]) {
+      expect(CURSOR_READ_ONLY_TOOLS as readonly string[]).not.toContain(tool);
+      expect(created[0]?.tools).not.toContain(tool);
+    }
+    expect(created[0]?.tools).toEqual([...CURSOR_READ_ONLY_TOOLS]);
   });
 
   test("a session created read-only warms its first agent behind the allowlist", async () => {

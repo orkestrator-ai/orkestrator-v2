@@ -3,11 +3,14 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   BRIDGE_ATTACHMENT_ROOT_ENV,
   CODEX_MAX_CONCURRENT_THREADS_ENV,
+  CODEX_NETWORK_DENIED_CONFIG,
   DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
   MAX_CODEX_CONCURRENT_THREADS,
   ORKESTRATOR_AGENT_MCP_TOKEN_ENV,
   ORKESTRATOR_AGENT_MCP_URL_ENV,
   codexAppServerConfigOverrides,
+  codexCoordinatorPolicy,
+  codexHostedNetworkLockGaps,
   resolveCodexMaxConcurrentThreads,
 } from "./codex-config.js";
 
@@ -212,8 +215,12 @@ describe("Codex app-server configuration", () => {
     expect(filesystem).toContain('":slash_tmp" = "deny"');
     expect(filesystem).toContain('":workspace_roots" = { "." = "read" }');
     expect(filesystem).not.toContain('"write"');
-    // 3. No network egress from delegated tool calls.
+    // 3. No network egress from delegated tool calls, and no hosted web search,
+    //    which reaches the internet from OpenAI's servers and so is untouched
+    //    by the profile's network switch.
     expect(overrides["permissions.coordinator-conversation-1.network.enabled"]).toBe("false");
+    expect(overrides.web_search).toBe('"disabled"');
+    expect(overrides["features.standalone_web_search"]).toBe("false");
     // 4. The checkout stays data, so repository-local config/hooks cannot run.
     expect(overrides['projects."/projects/example".trust_level']).toBe('"untrusted"');
     // 5. Credentials are excluded from model-created execution environments.
@@ -251,8 +258,58 @@ describe("Codex app-server configuration", () => {
     }
   });
 
+  test("turns hosted web search off for a coordinator in the TOML form -c expects", () => {
+    const overrides = codexAppServerConfigOverrides(COORDINATOR_ENV);
+    // Each value is parsed as TOML by `codex -c key=value`; a bare `disabled`
+    // would not parse as a string and app-server would refuse to start.
+    expect(overrides.web_search).toBe(JSON.stringify(CODEX_NETWORK_DENIED_CONFIG.web_search));
+    // Naming the deprecated switches would only add a deprecation notice to
+    // every thread: `web_search = "disabled"` already wins over them.
+    expect(overrides["features.web_search_request"]).toBeUndefined();
+    expect(overrides["features.web_search_cached"]).toBeUndefined();
+  });
+
+  test("reads hosted web search back from an effective configuration", () => {
+    expect(
+      codexHostedNetworkLockGaps({
+        web_search: "disabled",
+        features: { standalone_web_search: false },
+      }),
+    ).toEqual([]);
+    expect(codexHostedNetworkLockGaps({ web_search: "disabled" })).toEqual([]);
+    // Codex's default is no setting at all, which serves `cached` search.
+    expect(codexHostedNetworkLockGaps({ web_search: null })).toEqual([
+      'web_search is null, not "disabled"',
+    ]);
+    expect(codexHostedNetworkLockGaps({ web_search: "cached" })).toEqual([
+      'web_search is "cached", not "disabled"',
+    ]);
+    expect(
+      codexHostedNetworkLockGaps({
+        web_search: "disabled",
+        features: { standalone_web_search: true },
+      }),
+    ).toEqual(["features.standalone_web_search is on"]);
+    for (const malformed of [undefined, null, "disabled", ["disabled"]]) {
+      expect(codexHostedNetworkLockGaps(malformed)).toEqual([
+        "config/read returned no configuration",
+      ]);
+    }
+  });
+
+  test("the coordinator policy names the network denial the panel and thread config read", () => {
+    expect(codexCoordinatorPolicy()).toMatchObject({
+      id: "coordinator-read-only",
+      approvals: "deny",
+      networkAccess: "restricted",
+      capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
+    });
+  });
+
   test("applies none of the coordinator hardening outside the coordinator policy", () => {
     const overrides = codexAppServerConfigOverrides({ CWD: "/projects/example" });
+    // Search stays a per-thread decision on a bridge that serves many policies.
+    expect(overrides.web_search).toBeUndefined();
 
     // A normal environment is isolated by its container, configures no
     // permission profile, and must not inherit a half-applied coordinator

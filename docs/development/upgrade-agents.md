@@ -571,6 +571,25 @@ hermetic `codex exec` exception.
    listing and reads, thread naming, MCP configuration acceptance, MCP
    protocol-era negotiation, project-trust behavior, and clean process shutdown.
 
+   Also run the hosted network lock against the new binary. It points Codex at
+   a loopback Responses endpoint and reads the tool list out of the first model
+   request, so it spends no credits:
+
+   ```bash
+   CODEX_PROTOCOL_BINARY=/absolute/path/to/new/codex \
+     RUN_LIVE_CODEX_APP_SERVER=1 \
+     bun test bridges/codex-bridge/src/app-server/live-network-lock.test.ts
+   ```
+
+   Treat a failure as a release blocker. The control case proves an ordinary
+   thread is still offered web search (`web__run` in code mode); the others
+   prove `web_search = "disabled"` removes it from coordinator and
+   network-denied threads, and that `config/read` still reports the setting the
+   bridge checks before every coordinator thread. If the switch is renamed,
+   update `CODEX_NETWORK_DENIED_CONFIG` and `codexHostedNetworkLockGaps`
+   together; until then coordinator threads are refused, which is the intended
+   failure.
+
    Treat a failure in the "live MCP protocol era" block as a release blocker
    rather than a flaky test. Those two contracts stand in for every third-party
    HTTP MCP server that still speaks the 2025 protocol: the bridge relies on
@@ -1043,6 +1062,17 @@ grok --help | rg -- '--always-approve'
 # 1.0.52 answer both. Run it signed in (`grok login`): signed out, `session/new` ends
 # in `Authentication required`, and once signed in `authMethods[0]` (the id the
 # bridge authenticates with) is `cached_token` rather than `grok.com`.
+```
+
+A session whose policy denies `network` (every coordinator and read-only
+session) is launched as `grok --disable-web-search [--always-approve] agent
+--no-leader … stdio`. Grok searches without asking permission, so the flag is
+the only thing that removes web search and web fetch. After a bump, confirm it
+is still a global option and still covers both tools:
+
+```bash
+grok --help | rg -- '--disable-web-search'
+(sleep 4 | timeout 6 grok --disable-web-search agent --no-leader stdio; echo "exit $?")
 ```
 
 Run these against the pinned version, not whatever is on `PATH` — compare

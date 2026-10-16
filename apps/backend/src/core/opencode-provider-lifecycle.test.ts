@@ -18,6 +18,37 @@ import {
 } from "./agent-provider-test-support.js";
 
 describe("OpenCode provider", () => {
+  test("synchronizes coordinator policy once per change and again after provider restart", async () => {
+    const fake = openCodeFake();
+    const policy = {
+      id: "coordinator-read-only" as const,
+      sandbox: "provider" as const,
+      approvals: "deny" as const,
+      projectResources: false,
+      capabilityPolicy: { deny: ["network" as const] },
+      networkAccess: "restricted" as const,
+    };
+    let provider = openCodeActivityProvider(fake);
+    try {
+      await provider.synchronizeSessionPolicy?.("owned-session", policy);
+      expect(fake.updateCalls).toHaveLength(1);
+      await provider.synchronizeSessionPolicy?.("owned-session", structuredClone(policy));
+      expect(fake.updateCalls).toHaveLength(1);
+      const research = {
+        ...policy,
+        capabilityPolicy: { ...policy.capabilityPolicy, allow: ["web.search" as const] },
+      };
+      await provider.synchronizeSessionPolicy?.("owned-session", research);
+      expect(fake.updateCalls).toHaveLength(2);
+      await provider.dispose?.();
+      provider = openCodeActivityProvider(fake);
+      await provider.synchronizeSessionPolicy?.("owned-session", research);
+      expect(fake.updateCalls).toHaveLength(3);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("applies the backend policy before adopting a resumed session", async () => {
     const fake = openCodeFake();
     const provider = openCodeActivityProvider(fake);

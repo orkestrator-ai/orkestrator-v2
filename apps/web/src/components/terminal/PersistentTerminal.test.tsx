@@ -1607,6 +1607,55 @@ describe("PersistentTerminal", () => {
     });
   });
 
+  it("leaves a terminal in a hidden pane at its size until the pane shows", () => {
+    // A pane the mobile switcher hides is under `display: none`, where the fit
+    // addon would read the container as 100px wide and shrink the PTY with it.
+    const frames: FrameRequestCallback[] = [];
+    const originalRequestAnimationFrame = window.requestAnimationFrame;
+    const originalGetClientRects = HTMLElement.prototype.getClientRects;
+    let paneHidden = true;
+    window.requestAnimationFrame = ((callback: FrameRequestCallback) =>
+      frames.push(callback)) as typeof window.requestAnimationFrame;
+    HTMLElement.prototype.getClientRects = function getClientRects(this: HTMLElement) {
+      return paneHidden ? ([] as unknown as DOMRectList) : originalGetClientRects.call(this);
+    };
+    const runFrames = () =>
+      act(() => {
+        for (const frame of frames.splice(0)) frame(0);
+      });
+    try {
+      const terminalData = createTerminalData();
+      render(
+        <PersistentTerminal
+          terminalData={terminalData}
+          tabId="tab-1"
+          tabType="plain"
+          containerId="container-1"
+          environmentId="env-1"
+          isEnvironmentVisible
+          isActive={false}
+          isFocused={false}
+          isFirstTab={false}
+          paneId="pane-1"
+        />,
+      );
+      runFrames();
+      expect(terminalData.fitAddon.fit).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+
+      paneHidden = false;
+      act(() => {
+        window.dispatchEvent(new Event("resize"));
+      });
+      runFrames();
+      expect(terminalData.fitAddon.fit).toHaveBeenCalled();
+      expect(resizeMock).toHaveBeenCalledWith(80, 24);
+    } finally {
+      window.requestAnimationFrame = originalRequestAnimationFrame;
+      HTMLElement.prototype.getClientRects = originalGetClientRects;
+    }
+  });
+
   it("clicking the terminal updates the active pane for its own environment", async () => {
     const { container } = render(
       <PersistentTerminal

@@ -86,6 +86,35 @@ describe("HTTP bridge provider", () => {
     },
   );
 
+  test("tells Grok and Pi which attempt a workflow-result turn runs for", async () => {
+    const agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "attempt-token" };
+    const attempt = {
+      requestId: "request-1",
+      readOnly: true,
+      agentMcp,
+      workflowResultTool: "submit_review_report",
+      workflowResultKey: "11111111-1111-4111-8111-111111111111",
+    };
+    for (const connection of [grokConnection, piConnection]) {
+      const sent = httpProvider(() => Response.json({ status: "processing" }), connection);
+      await sent.provider.send("session-1", "review", attempt);
+      expect(JSON.parse(String(sent.requests[0]!.init.body))).toMatchObject({
+        workflowResultTool: "submit_review_report",
+        workflowResultKey: "11111111-1111-4111-8111-111111111111",
+      });
+      // Without the attempt's own connection there is no attempt to name.
+      const ordinary = httpProvider(() => Response.json({ status: "processing" }), connection);
+      await ordinary.provider.send("session-1", "review", { ...attempt, agentMcp: undefined });
+      const body = JSON.parse(String(ordinary.requests[0]!.init.body));
+      expect(body.workflowResultTool).toBeUndefined();
+      expect(body.workflowResultKey).toBeUndefined();
+    }
+    // Cursor hosts the attempt's tools itself and needs neither.
+    const cursor = httpProvider(() => Response.json({ status: "processing" }), cursorConnection);
+    await cursor.provider.send("session-1", "review", attempt);
+    expect(JSON.parse(String(cursor.requests[0]!.init.body)).workflowResultKey).toBeUndefined();
+  });
+
   test("forwards Codex's selected workflow-result tool with its attempt connection", async () => {
     const agentMcp = {
       url: "http://127.0.0.1:4567/mcp",

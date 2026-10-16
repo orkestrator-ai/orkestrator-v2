@@ -25,6 +25,12 @@ import {
   coordinatorProviderQualifications,
   type CoordinatorHostCapabilities,
 } from "./coordinator-providers.js";
+import {
+  boundedLine,
+  CoordinatorStatusWakes,
+  type CoordinatorStatusWakeOptions,
+} from "./coordinator-status-wakes.js";
+import { AgentMailError } from "@orkestrator/protocol/agent-mail";
 
 const MAX_STARTUP_ERROR_CHARS = 2_000;
 const DELEGATION_IDLE_RECONCILE_GRACE_MS = 15_000;
@@ -108,6 +114,8 @@ function retainCoordinatorConversations(
 export class CoordinatorService {
   private readonly projectOperations = new Map<string, Promise<unknown>>();
   private delegationWakeDelivery: Promise<void> | null = null;
+  /** Status wakes for work this coordinator started; see `coordinator-status-wakes.ts`. */
+  readonly statusWakes: CoordinatorStatusWakes;
 
   constructor(
     private readonly storage: StorageService,
@@ -121,7 +129,12 @@ export class CoordinatorService {
       environmentId: string,
       tabId: string,
     ) => Promise<AgentActivityState | "unknown">,
+    private readonly options: Omit<CoordinatorStatusWakeOptions, "workerActivity"> = {},
   ) {
+    this.statusWakes = new CoordinatorStatusWakes(storage, {
+      ...options,
+      ...(workerActivity ? { workerActivity } : {}),
+    });
     // Mail to "coordinator", or to a conversation that has since closed, finds
     // the current main through here, which starts one if there is none.
     this.storage.setCoordinatorMailResolver?.((projectId) => this.mainMailAddress(projectId));
@@ -601,67 +614,31 @@ export class CoordinatorService {
     await this.storage.deleteCoordinatorByProject(projectId);
   }
 
-  async reconcileWorkflowNotifications(): Promise<void> {
-    const state = await this.storage.getCoordinatorReconciliationState();
-    for (const workspace of state.workspaces) {
-      const associations = state.workflows.filter(
-        (association) =>
-          association.projectId === workspace.projectId &&
-          association.kind !== "environment" &&
-          !association.pending &&
-          !association.terminalNotifiedAt,
-      );
-      for (const association of associations) {
-        const record =
-          association.kind === "build-pipeline"
-            ? await this.storage.getBuildPipeline(association.resourceId)
-            : association.kind === "multi-review"
-              ? await this.storage.getMultiReviewWorkflow(association.resourceId)
-              : null;
-        if (!record) continue;
-        const snapshot = record.snapshot as Record<string, unknown> | undefined;
-        const phase = String(snapshot?.phase ?? "");
-        const terminal =
-          association.kind === "build-pipeline"
-            ? phase === "complete" || phase === "failed"
-            : ["completed", "failed", "cancelled"].includes(phase);
-        if (!terminal) continue;
-        const revision =
-          typeof record.revision === "number"
-            ? record.revision
-            : typeof snapshot?.backendRevision === "number"
-              ? snapshot.backendRevision
-              : 0;
-        if ((association.lastNotifiedRevision ?? -1) >= revision) {
-          await this.storage.markCoordinatorWorkflowNotified(association.id, revision);
-          continue;
-        }
-        // Reported to the main coordinator, whichever conversation started it.
-        // A notice does not start a main on its own: workflows that finished
-        // under long-closed conversations were never reported, and waking a
-        // fresh coordinator with them would be a surprise turn. It waits for
-        // the next main instead.
-        const current = workspace;
-        const conversation = coordinatorMainConversation(workspace);
-        if (!conversation) continue;
-        await this.storage.sendAgentMail(
-          {
-            kind: "system",
-            projectId: workspace.projectId,
-            source: "workflow",
-            resourceId: association.resourceId,
-          },
-          {
-            requestId: `workflow-${association.id}-${conversation.id}-${revision}`,
-            toEnvironmentId: coordinatorRuntimeId(current.id, conversation.id),
-            toTabId: conversation.tabId,
-            subject: `${association.kind === "build-pipeline" ? "Build pipeline" : "Multi-review"} ${phase}`,
-            body: `Authoritative workflow ${association.resourceId} reached ${phase}. Inspect the workflow through Orkestrator controls before deciding what to do next.`,
-          },
-        );
-        await this.storage.markCoordinatorWorkflowNotified(association.id, revision);
-      }
-    }
+  /**
+   * Status wakes for coordinator-owned workflows and waiting workers: settled
+   * states, terminal ones included, each reported once to the main
+   * coordinator. See `coordinator-status-wakes.ts`.
+   */
+  reconcileWorkflowNotifications(): Promise<void> {
+    return this.statusWakes.reconcile();
+  }
+
+  /** Observe workflow saves so status wakes arrive within seconds. */
+  startStatusWakes(): void {
+    this.statusWakes.start();
+  }
+
+  stopStatusWakes(): void {
+    this.statusWakes.stop();
+  }
+
+  /** A worker tab's activity changed; only delegated tabs' waiting episodes matter. */
+  noteWorkerActivity(event: {
+    environmentId: string;
+    tabId: string;
+    state: AgentActivityState | "unknown";
+  }): Promise<void> {
+    return this.statusWakes.noteWorkerActivity(event);
   }
 
   /**
@@ -860,29 +837,66 @@ export class CoordinatorService {
             : delegation.state === "failed"
               ? "failed"
               : "stopped";
-        await this.storage.sendAgentMail(
-          {
-            kind: "system",
-            projectId: association.projectId,
-            source: "workflow",
-            resourceId: association.resourceId,
-          },
-          {
-            requestId: `delegation-${association.id}-${delegation.completedAt ?? outcome}`,
-            toEnvironmentId: runtimeId,
-            toTabId: conversation.tabId,
-            subject: `Worker ${label} ${outcome}`,
-            body:
-              `Worker environment ${association.resourceId} (tab ${delegation.workerTabId}) ${outcome} ` +
-              `without sending a report.` +
-              (association.baseBranch
-                ? ` It was started from ${association.baseBranch}${
-                    association.baseCommit ? ` at ${association.baseCommit.slice(0, 12)}` : ""
-                  }.`
-                : "") +
-              ` Inspect the environment through Orkestrator controls before deciding what to do next.`,
-          },
-        );
+        // What the worker last said is the closest thing to a report it left.
+        // Only a finished turn has a live session worth reading; best effort.
+        const excerpt =
+          delegation.state === "completed"
+            ? await this.options
+                .lastAssistantExcerpt?.(association.resourceId, delegation.workerTabId)
+                .catch(() => undefined)
+            : undefined;
+        const tabArgs = `{ "environmentId": "${association.resourceId}", "tabId": "${delegation.workerTabId}" }`;
+        await this.storage
+          .sendAgentMail(
+            {
+              kind: "system",
+              projectId: association.projectId,
+              source: "workflow",
+              resourceId: association.resourceId,
+            },
+            {
+              requestId: `delegation-${association.id}-${delegation.completedAt ?? outcome}`,
+              toEnvironmentId: runtimeId,
+              toTabId: conversation.tabId,
+              subject: `Worker ${label} ${outcome}`,
+              body:
+                `Worker environment ${association.resourceId} (tab ${delegation.workerTabId}) ${outcome} ` +
+                `without sending a report.` +
+                (association.baseBranch
+                  ? ` It was started from ${association.baseBranch}${
+                      association.baseCommit ? ` at ${association.baseCommit.slice(0, 12)}` : ""
+                    }.`
+                  : "") +
+                ` Inspect the environment through Orkestrator controls before deciding what to do next.` +
+                (excerpt ? `\n\nLast message: ${boundedLine(excerpt)}` : "") +
+                `\n\nRead more: \`get_tab_transcript ${tabArgs}\`, \`get_tab_state ${tabArgs}\`.`,
+            },
+            {
+              notice: {
+                resource: {
+                  kind: "agent-tab",
+                  id: delegation.workerTabId,
+                  environmentId: association.resourceId,
+                  tabId: delegation.workerTabId,
+                  label,
+                },
+                state: delegation.state,
+                tone:
+                  delegation.state === "completed"
+                    ? "success"
+                    : delegation.state === "failed"
+                      ? "failure"
+                      : "info",
+              },
+            },
+          )
+          .catch((error: unknown) => {
+            // Placed by an earlier pass whose woken stamp never landed; the
+            // excerpt read this time differs, so the store calls it a
+            // conflict. The wake was delivered.
+            if (error instanceof AgentMailError && error.code === "idempotency-conflict") return;
+            throw error;
+          });
       }
       await this.storage.markCoordinatorDelegationWoken(association.id);
     }

@@ -16,7 +16,7 @@ import { PublicActionError } from "./errors.js";
 import {
   invalid,
   oneOf,
-  onlyKeys,
+  onlyActionKeys,
   optionalBoolean,
   optionalString,
   requiredId,
@@ -184,16 +184,7 @@ const sessionStart: MutationActionHandler<StartInput> = {
   kind: "mutation",
   action: "session.start",
   parse(input) {
-    onlyKeys(input, [
-      "environmentId",
-      "agent",
-      "model",
-      "reasoning",
-      "fastMode",
-      "mode",
-      "title",
-      "prompt",
-    ]);
+    onlyActionKeys(input, "session.start");
     const environmentId = requiredId(input, "environmentId");
     const selection = parseAgentSelection(input);
     const prompt = textInput(
@@ -277,7 +268,7 @@ const sessionPrompt: MutationActionHandler<PromptInput> = {
   kind: "mutation",
   action: "session.prompt",
   parse(input) {
-    onlyKeys(input, ["sessionId", "prompt", "mode"]);
+    onlyActionKeys(input, "session.prompt");
     const target = sessionTarget(input);
     const prompt = textInput(
       input,

@@ -14,9 +14,10 @@ import os from "node:os";
 import path from "node:path";
 import { COORDINATOR_MAIL_ADDRESS, coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
-import type { AgentMailMessage } from "@orkestrator/protocol/agent-mail";
+import type { AgentMailMessage, AgentMailNotice } from "@orkestrator/protocol/agent-mail";
 import { AgentMailService } from "./agent-mail-service.js";
 import { CoordinatorService } from "./coordinator-service.js";
+import type { CoordinatorStatusWakeOptions } from "./coordinator-status-wakes.js";
 import { runCommand } from "./shell.js";
 import type { AgentMailSender } from "./storage-agent-mail.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
@@ -33,6 +34,21 @@ export type MailActor = {
 type Address = MailActor | typeof COORDINATOR_MAIL_ADDRESS | { environmentId: string };
 
 const BASE_COMMIT = "a".repeat(40);
+
+export type MailWorldOptions = {
+  /** Status-wake collaborators for the coordinator service, kept across restarts. */
+  statusWakes?: CoordinatorStatusWakeOptions;
+};
+
+/** One carrier's JSON payload, the structured part of an injected mail prompt. */
+export type DeliveredCarrier = {
+  kind?: string;
+  from: { kind: string };
+  messageId: string;
+  subject?: string;
+  notice?: AgentMailNotice;
+  body: string;
+};
 
 export class MailWorld {
   private readonly busy = new Set<string>();
@@ -51,14 +67,26 @@ export class MailWorld {
     public mail: AgentMailService,
     readonly projectId: string,
     readonly coordinatorId: string,
+    private readonly options: MailWorldOptions,
   ) {}
 
-  private static services(world: () => MailWorld, storage: StorageService) {
-    const coordinator = new CoordinatorService(storage, () => ({
-      enabled: true,
-      running: true,
-      error: null,
-    }));
+  private static services(
+    world: () => MailWorld,
+    storage: StorageService,
+    options: MailWorldOptions = {},
+  ) {
+    const { workerActivity, ...statusWakes } = options.statusWakes ?? {};
+    const coordinator = new CoordinatorService(
+      storage,
+      () => ({
+        enabled: true,
+        running: true,
+        error: null,
+      }),
+      undefined,
+      workerActivity,
+      statusWakes,
+    );
     const mail = new AgentMailService(
       storage,
       {
@@ -87,7 +115,8 @@ export class MailWorld {
     await this.mail.shutdown();
     this.storage = new StorageService(path.join(this.root, "data"));
     await this.storage.init();
-    const { coordinator, mail } = MailWorld.services(() => this, this.storage);
+    this.coordinator.stopStatusWakes();
+    const { coordinator, mail } = MailWorld.services(() => this, this.storage, this.options);
     this.coordinator = coordinator;
     this.mail = mail;
     await this.mail.init();
@@ -97,7 +126,7 @@ export class MailWorld {
     await this.storage.updateEnvironment(actor.environmentId, { status });
   }
 
-  static async create(): Promise<MailWorld> {
+  static async create(options: MailWorldOptions = {}): Promise<MailWorld> {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-mail-world-"));
     const checkout = path.join(root, "checkout");
     await fs.mkdir(checkout);
@@ -118,11 +147,19 @@ export class MailWorld {
       createProject("https://example.invalid/mail-world.git", checkout),
     );
     let world: MailWorld | undefined;
-    const { coordinator, mail } = MailWorld.services(() => world!, storage);
+    const { coordinator, mail } = MailWorld.services(() => world!, storage, options);
     const ensured = await coordinator.ensure(project.id);
     const main = ensured.workspace.conversations[0]!;
     await coordinator.assignConversationAgent(project.id, main.id, "codex");
-    world = new MailWorld(root, storage, coordinator, mail, project.id, ensured.workspace.id);
+    world = new MailWorld(
+      root,
+      storage,
+      coordinator,
+      mail,
+      project.id,
+      ensured.workspace.id,
+      options,
+    );
     await mail.init();
     return world;
   }
@@ -145,6 +182,7 @@ export class MailWorld {
   }
 
   async close(): Promise<void> {
+    this.coordinator.stopStatusWakes();
     await this.mail.shutdown();
     await fs.rm(this.root, { recursive: true, force: true });
   }
@@ -325,13 +363,18 @@ export class MailWorld {
 
   /** Every message body delivered to this actor, in order, across all its turns. */
   received(actor: MailActor): string[] {
+    return this.carriers(actor).flatMap((turn) => turn.map((carrier) => carrier.body));
+  }
+
+  /** Each wake's carriers, as the agent's transcript would echo them. */
+  carriers(actor: MailActor): DeliveredCarrier[][] {
     const prompts = this.prompts.get(`${actor.environmentId}\0${actor.logicalSessionKey}`) ?? [];
-    return prompts.flatMap((prompt) =>
+    return prompts.map((prompt) =>
       [
         ...prompt.matchAll(
           /<orkestrator-peer-payload-json>\n([\s\S]*?)\n<\/orkestrator-peer-payload-json>/g,
         ),
-      ].map((match) => (JSON.parse(match[1]!) as { body: string }).body),
+      ].map((match) => JSON.parse(match[1]!) as DeliveredCarrier),
     );
   }
 

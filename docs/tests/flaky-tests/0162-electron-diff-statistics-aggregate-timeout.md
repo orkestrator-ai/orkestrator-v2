@@ -111,3 +111,131 @@ hypothesis; no timeout, assertion or skip was changed.
 - **Disposition:** aggregate-only deadline failures recorded without changing
   assertions, deadlines or skips. Host contention is a hypothesis, not a proven
   cause.
+
+Recurred on 2026-10-16 at 5059.21 ms (`enables git's scan caches on a newly
+created worktree`) in `mise run test` for the coordinator launch-defaults
+change (no diff code touched). The unchanged case passed alone. Evidence:
+`/tmp/orkestrator-test-run.k2ySO0/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+## Mobile layout merge validation recurrence — 2026-10-16
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, with the testing guide's GNU host utilities preferred in PATH, on `mobile-layout-gaps` while merging `origin/main`.
+- **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated Bun workers. Other worktrees and component browser validation were active on the host.
+- **Failure:** `deleting an environment drops its counts from the snapshot` timed out at 5066.55 ms against its 5000 ms limit.
+- **Suite counts:** backend 8,320 passed, 40 skipped and 4 failed; root/support 2,998 passed, 1 skipped and 1 failed. All other workspace packages, bridges and protocol verification passed. The logged aggregate exited 1 after 544.1 s.
+- **Isolated rerun:** `mise run test:logged -- --name merge-commands-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed the unchanged owning file in 44.2 s (exit 0).
+- **Evidence:** `/tmp/orkestrator-test-run.Z1q1Ht/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer artifact `/tmp/orkestrator-test-run.fZgI1l/merge-tests.log.gz`.
+- **Disposition:** recurrence confirmed by the isolated pass; shared host contention remains an unconfirmed hypothesis. No assertions, deadlines or skips changed.
+
+## Recurrence during Multi Review validation diagnostics (2026-10-16)
+
+- While the aggregate was active, `mise run test:logged -- --name commands-integration-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` timed out in `enables git's scan caches on a newly created worktree` at 5150.45 ms. The file reported 52 passed and three timeouts in 127.9 seconds.
+- After the aggregate finished, the unchanged owning file passed in 32.1 seconds with the same command and `--name commands-integration-final-rerun` (exit 0).
+- Evidence: `/tmp/orkestrator-test-run.3kSG12/commands-integration-rerun.log.gz`. No diff-statistics code, assertion, timeout or skip changed; host contention remains a hypothesis.
+
+## Follow-up main merge validation — 2026-10-16
+
+`mise run test:logged -- --name merge-tests -- mise run test` (4/1/2/1
+workspace/root/bridge/protocol slots) timed out in
+`refreshes a tracked environment on explicit request` at 5174.79 ms.
+Backend results were 8,325 passed, 40 skipped, three failed and two
+between-tests errors across 445 files (382.70 seconds). Evidence:
+`/tmp/orkestrator-test-run.CtLQKC/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+`mise run test:logged -- --name merge-commands-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`
+passed the diff-statistics case but did not pass the whole owning file:
+53 passed and two failed across 55 tests (101.42 seconds).
+`persists safe cleanup failure details and permits a backend deletion retry`
+timed out at 7862.39 ms, and
+`deletes an environment only after all three local server kinds exit`
+timed out at 6533.79 ms. Evidence:
+`/tmp/orkestrator-test-run.MHGIKo/merge-commands-owner.log.gz`.
+The owning-file rerun remains red, so this observation alone does not
+establish a new flake. No implementation, timeout, assertion or skip changed.
+
+## Recurrence on 2026-10-16 during the storage writer guards merge
+
+`mise run test:logged -- --name merge-tests -- mise run test` ran the backend
+with two isolated workers within a four-slot workspace group while other
+worktree validations shared the host. `computes counts for a tracked local
+environment and announces them` (6,028.62 ms) and `serves the Files panel from
+the scan the badge already ran` (5,732.82 ms) exceeded the five-second deadline.
+
+`mise run test:logged -- --name merge-diff-statistics-isolated -- bun test
+--cwd apps/backend --preload ../../tests/setup-node.ts
+./tests/commands-integration.test.ts --parallel=1 --only-failures` passed the
+unchanged owning file in 53.8 seconds. Evidence and aggregate package counts
+are retained in
+`/tmp/orkestrator-test-run.Q27xqQ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+The existing load hypothesis remains unconfirmed; no assertion, timeout or
+skip was changed.
+
+Aggregate backend counts for this observation: 8,341 passed, 40 skipped,
+5 failed and 3 between-tests errors across 8,386 tests in 445 files
+(391.37 seconds). The other failures are recorded in 0162, 0165 and 0248.
+
+
+## Mobile layout follow-up main merge — 2026-10-16
+
+- **Original command:** `mise run test:logged -- --name merge-latest-tests -- mise run test`
+  with the testing guide's GNU-tool PATH, merging `origin/main` at `222599b0`
+  into `mobile-layout-gaps`.
+- **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1
+  slots; backend used two isolated workers while other validations shared
+  the host.
+- **Suite counts:** backend 8,380 passed, 40 skipped and ten failed across
+  8,430 tests in 449 files (556.88 seconds). Root had three failures; other
+  workspace packages, bridges and protocol verification passed. The aggregate
+  exited 1 after 671.2 seconds.
+- **Failure:** Four diff-statistics cases exceeded their 5000 ms budget: `clears published counts when a repository config retarget cannot be scanned` (5271.89 ms), `does not mark the counts approximate for an ordinary worktree` (5578.58 ms), `enables git's scan caches on a newly created worktree` (7047.54 ms), and `deleting an environment drops its counts from the snapshot` (6708.58 ms).
+- **Owning-file rerun:** `mise run test:logged -- --name merge-latest-commands-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`
+  with the same GNU-tool PATH passed the entire unchanged owning file (exit 0,
+  23.7 seconds).
+- **Evidence:** `/tmp/orkestrator-test-run.hmA9t0/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
+  outer artifact `/tmp/orkestrator-test-run.1X6sCk/merge-latest-tests.log.gz`.
+- **Disposition:** isolated pass confirms an intermittent recurrence. Host
+  contention remains a hypothesis; no implementation, assertion, timeout or
+  skip changed.
+
+## Recurrence — 2026-10-16 (mail tiles and status wakes main merge)
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, with the testing guide's GNU-tool PATH. Workspace/root/bridge/protocol reserved 4/1/2/1 slots on the shared host; the backend used two isolated workers.
+- **Failure:** `refreshes a tracked environment on explicit request` exceeded its five-second deadline at 5113.84 ms.
+- **Suite counts:** backend 8,427 passed, 40 skipped and one failed across 450 files (318.69 seconds); root 2,998 passed, one skipped and one failed. All other workspace packages, bridges and protocol verification passed. The aggregate exited 1 after 430.3 seconds.
+- **Evidence:** `/tmp/orkestrator-test-run.R1hh40/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer artifact `/tmp/orkestrator-test-run.l77iN3/merge-tests.log.gz`.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-diffstats-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`, with the same GNU-tool PATH, passed the unchanged file (exit 0) in 37.0 seconds while the aggregate backend group was still running.
+- **Disposition:** isolated pass confirms an intermittent recurrence. Shared host contention remains an unconfirmed hypothesis; no implementation, assertion, timeout or skip changed.
+
+## Coordinator launch-defaults main merge — 2026-10-16
+
+`mise run test:logged -- --name merge-tests -- mise run test`, with the testing
+guide's GNU-tool PATH, reserved 4/1/2/1 workspace/root/bridges/protocol slots.
+Backend used two isolated Bun workers while another worktree's aggregate
+shared the host. Backend reported 8,413 passed, 40 skipped, five failed and
+one between-tests error across 8,458 tests in 450 files (364.58 seconds).
+The aggregate exited 1 after 453.6 seconds; protocol's separate timeout is
+recorded in [0256](0256-workspace-change-probe-aggregate-timeout.md).
+
+Three unchanged diff-statistics cases exceeded their 5000 ms budget:
+`serves the Files panel from the scan the badge already ran` (5530.23 ms),
+`does not mark the counts approximate for an ordinary worktree` (5245.14 ms),
+and `enables git's scan caches on a newly created worktree` (5249.96 ms).
+
+`mise run test:logged -- --name merge-commands-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`
+passed the entire unchanged owning file (exit 0, 27.1 seconds). Evidence:
+`/tmp/orkestrator-test-run.H7G9oK/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
+outer artifact `/tmp/orkestrator-test-run.e7nGed/merge-tests.log.gz`.
+Host contention remains an unconfirmed hypothesis; no assertion, timeout or
+skip changed.
+
+## Recurrence — 2026-10-16 (coordinator network lockdown main merge)
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test` (Bun 1.4.3, macOS arm64).
+- **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated Bun workers. The browser component suite also ran during the start of the aggregate.
+- **Suite counts:** backend 8,462 passed, 40 skipped, seven failed and one between-tests error across 453 files (297.75 seconds). The aggregate exited 1 after 352.2 seconds; the bridge group also hit its ACP no-progress watchdog. Root, protocol and all other workspace packages passed.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-commands-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed the unchanged file (exit 0) in 23.0 seconds.
+- **Evidence:** `/tmp/orkestrator-test-run.TpifY7/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `summary.json`; outer artifact `/tmp/orkestrator-test-run.jvncxJ/merge-tests.log.gz`.
+- **Failures:** six diff-statistics cases exceeded the 5000 ms deadline: `computes counts for a tracked local environment and announces them` (5262.70 ms), `serves the Files panel from the scan the badge already ran` (5137.61 ms), `does not resurrect deleted tracking from a stale reconciliation` (5134.49 ms), `does not mark the counts approximate for an ordinary worktree` (5520.49 ms), `enables git's scan caches on a newly created worktree` (6089.10 ms), and `deleting an environment drops its counts from the snapshot` (5103.45 ms). The artifact-excludes timeout and late rejection are recorded under 0187.
+- **Assessment:** the isolated pass confirms an intermittent recurrence. Aggregate contention remains an unconfirmed hypothesis. No implementation, assertion, timeout or skip changed.
+
+- **Final aggregate rerun:** `mise run test:logged -- --name merge-tests-final -- mise run test` passed all four groups (exit 0, 277.5 seconds), including all five bridges (88.0 seconds). No tests, assertions, timeouts or skips changed.

@@ -39,10 +39,24 @@ import {
 import {
   advanceCodexRuntimes,
   planRuntimes,
+  publicApply,
+  type GenerationParts,
   type PlannedRuntime,
   type RuntimeProbe,
 } from "./apply.js";
-import { EvidenceScheduler, evidenceRole, type CurrentSourceState } from "./evidence.js";
+import {
+  EvidenceScheduler,
+  evidenceRole,
+  type CurrentSourceState,
+  type RuntimeGenerations,
+} from "./evidence.js";
+import {
+  heldRuntimes,
+  noteOnce,
+  retireSuperseded,
+  sourceDrift,
+  type Supersession,
+} from "./external-edits.js";
 import { renameReferenceWarnings } from "./references.js";
 import { McpRolloutGate } from "./rollout.js";
 import {
@@ -166,6 +180,7 @@ export class McpManagementService {
       now: this.now,
       blocked: (provider) => !!this.gate.applyBlock(provider),
       currentSource: (stored) => this.currentSource(stored),
+      generations: () => this.runtimeGenerations(),
       commit: (stored) => this.finishApplyUpdate(stored),
     });
   }
@@ -299,7 +314,7 @@ export class McpManagementService {
       sources: catalog.sources.map(publicSource),
       definitions: [],
       effective,
-      operations: this.operations.forTarget(target.targetId),
+      operations: this.operations.forTarget(target.targetId).map(publicOperation),
       catalogRevision: this.catalogRevision,
       freshness: "fresh",
       truncated: 0,
@@ -333,7 +348,7 @@ export class McpManagementService {
     const stored =
       typeof args.operationId === "string" ? this.operations.get(args.operationId) : undefined;
     if (!stored) throw mcpFailure("unknown-operation");
-    return stored.snapshot;
+    return publicOperation(stored.snapshot);
   }
 
   // -------------------------------------------------------------------------
@@ -402,6 +417,11 @@ export class McpManagementService {
       if ((source.file?.revision ?? null) !== expected) throw mcpFailure("revision-conflict");
       // Limits are checked before the record exists: a refused change is not an operation.
       const next = nextSourceText(prepared);
+      const savedParsed = parsedOrUndefined(spec, next);
+      const savedEntriesDigest = await this.serverListDigest(
+        savedParsed?.entries,
+        savedParsed?.entryIssues,
+      );
       const created = nowIso(this.now);
       const operation: StoredOperation = {
         snapshot: {
@@ -457,6 +477,7 @@ export class McpManagementService {
           operation.recovery.writeStartedAt = writeStartedAt;
           operation.recovery.evidenceRole = role;
         }
+        if (savedEntriesDigest) operation.recovery.savedEntriesDigest = savedEntriesDigest;
         operation.snapshot.phase = "saved";
         operation.snapshot.savedRevision = written.revision ?? undefined;
         operation.snapshot.resultEntryId = prepared.resultName
@@ -509,7 +530,7 @@ export class McpManagementService {
       throw mcpFailure(snapshot.errorCode ?? "internal", { message: snapshot.message });
     }
     return {
-      operation: snapshot,
+      operation: publicOperation(snapshot),
       replayed,
       savedRevision: snapshot.savedRevision ?? "",
       entryId: snapshot.resultEntryId ?? null,
@@ -805,10 +826,16 @@ export class McpManagementService {
     }
     this.gate.assertApplicable(stored.snapshot.provider);
     const target = await resolveTarget(stored.snapshot.targetId, this.options.storage);
+    // Applying never rewrites the file, so it cannot bring a superseded change
+    // back; it would only report progress on one the file no longer holds.
+    const drift = sourceDrift(stored, await this.currentSource(stored).catch(() => undefined));
+    if (drift.kind === "superseded")
+      throw mcpFailure("revision-conflict", { message: drift.reason });
+    if (drift.kind === "merged") noteOnce(stored.snapshot, drift.note);
     stored.snapshot.applyIntent = "save-and-apply";
     await this.startApply(stored, target);
     this.publish([stored.snapshot.targetId], [stored.snapshot.operationId]);
-    return stored.snapshot;
+    return publicOperation(stored.snapshot);
   }
 
   // -------------------------------------------------------------------------
@@ -865,7 +892,7 @@ export class McpManagementService {
       }
     }
     await this.finishApplyUpdate(stored);
-    return stored.snapshot;
+    return publicOperation(stored.snapshot);
   }
 
   private async startApply(stored: StoredOperation, target: ResolvedTarget): Promise<void> {
@@ -917,6 +944,11 @@ export class McpManagementService {
       }
       if (touched) await this.finishApplyUpdate(other, false);
     }
+    for (const runtime of planned.runtimes) {
+      const generation = await this.generationOf(runtime.agent, runtime.generationParts);
+      if (generation) runtime.generation = generation;
+    }
+    // Every tracked runtime is kept and advanced; snapshots page the listing.
     stored.snapshot.apply = {
       state: aggregateApplyState(planned.runtimes.map((runtime) => runtime.state)),
       runtimes: planned.runtimes.map(publicRuntime),
@@ -930,6 +962,7 @@ export class McpManagementService {
       logicalSessionKey: runtime.logicalSessionKey,
       ...(runtime.awaitsEvidence ? { awaitsEvidence: true } : {}),
       ...(runtime.bridgePid !== undefined ? { bridgePid: runtime.bridgePid } : {}),
+      ...(runtime.generation ? { generation: runtime.generation } : {}),
     }));
     stored.recovery.applyQueuedAt = now;
     stored.snapshot.updatedAt = now;
@@ -1020,14 +1053,55 @@ export class McpManagementService {
       });
       const startingStates = runtimes.map((runtime) => runtime.state);
       const queuedAt = Date.parse(stored.recovery.applyQueuedAt ?? stored.snapshot.updatedAt);
-      const outcome = await advanceCodexRuntimes(this.options.probe, planned, queuedAt, this.now());
-      if (!outcome.changed) continue;
+      let superseded: Supersession | undefined;
+      let merged: string | undefined;
+      const outcome = await advanceCodexRuntimes(
+        this.options.probe,
+        planned,
+        queuedAt,
+        this.now(),
+        async () => {
+          const drift = sourceDrift(stored, await this.currentSource(stored));
+          if (drift.kind === "superseded") {
+            superseded = { reason: drift.reason, cancelReason: drift.cancelReason };
+          } else if (drift.kind === "merged") {
+            // The reload goes ahead and loads the file as it is now.
+            merged = drift.note;
+          }
+          return superseded;
+        },
+      );
+      if (!outcome.changed && !merged) continue;
+      // A reload's outcome was observed against the process it reached.
+      const observed = new Map<number, string>();
+      const generations = await this.runtimeGenerations().catch(() => undefined);
+      for (const [index, runtime] of outcome.runtimes.entries()) {
+        if (runtime.state === startingStates[index] || !runtime.logicalSessionKey) continue;
+        if (runtime.state === "queued" || runtime.state === "applying") continue;
+        const generation = await generations
+          ?.of(runtime.environmentId ?? "", runtime.agent, runtime.logicalSessionKey)
+          .catch(() => undefined);
+        if (generation) observed.set(index, generation);
+      }
       // A request may cancel or replace the plan while reloadCodex awaits.
       if (stored.snapshot.apply.runtimes !== runtimes) continue;
-      stored.snapshot.apply.runtimes = outcome.runtimes.map((runtime, index) => {
+      const next = outcome.runtimes.map((runtime, index) => {
         const current = runtimes[index]!;
-        return current.state === startingStates[index] ? publicRuntime(runtime) : current;
+        if (current.state !== startingStates[index]) return current;
+        const updated = publicRuntime(runtime);
+        const generation = observed.get(index);
+        return generation ? { ...updated, generation } : updated;
       });
+      stored.snapshot.apply.runtimes = next;
+      const reloaded = new Set(outcome.reloaded);
+      for (const record of stored.recovery.runtimes ?? []) {
+        if (reloaded.has(record.runtimeId)) record.reloaded = true;
+      }
+      if (merged) noteOnce(stored.snapshot, merged);
+      // The change is gone for every runtime still waiting on it, not only
+      // the queued ones that were about to reload. An app-server that already
+      // reloaded it keeps it until its next reload.
+      if (superseded) retireSuperseded(next, superseded, nowIso(this.now), heldRuntimes(stored));
       await this.finishApplyUpdate(stored);
     }
     // Proof of adoption for runtimes that apply on their own boundary.
@@ -1035,9 +1109,11 @@ export class McpManagementService {
   }
 
   /**
-   * The saved source file as it is now: the digest of its bytes and whether
-   * the operation's change is still in it. Host files only — evidence is only
-   * awaited from local runtimes — and read-only.
+   * The saved source file as it is now: the digest of its bytes, whether the
+   * operation's change is still in it, and whether its server list is the one
+   * the save left, or one a later save of the same file left. Host files only
+   * — evidence is only awaited from local runtimes — and read-only. A deleted
+   * file holds no servers; an unreadable one is unknown.
    */
   private async currentSource(stored: StoredOperation): Promise<CurrentSourceState | undefined> {
     const target = await resolveTarget(stored.snapshot.targetId, this.options.storage);
@@ -1047,9 +1123,98 @@ export class McpManagementService {
     );
     if (!spec || spec.format === "runtime") return undefined;
     const source = (await loadCatalog(this.store, [spec])).sources[0];
-    const digest = source?.file?.contentDigest;
-    if (!source?.parsed || !digest) return undefined;
-    return { digest, landed: await this.changeLanded(stored, source.parsed.entries) };
+    const absent = source?.state === "absent";
+    // No bridge reports `absent` as evidence, so it never proves a save.
+    const digest = absent ? ABSENT_REVISION : source?.file?.contentDigest;
+    const entries = absent ? new Map<string, unknown>() : source?.parsed?.entries;
+    if (!entries || !digest) return undefined;
+    const entriesDigest = await this.serverListDigest(entries, source?.parsed?.entryIssues);
+    // Records are kept in the order they were created.
+    const operations = this.operations.list();
+    const position = operations.findIndex(
+      (candidate) => candidate.snapshot.operationId === stored.snapshot.operationId,
+    );
+    const replacedBySave =
+      !!entriesDigest &&
+      position >= 0 &&
+      operations.slice(position + 1).some(
+        ({ snapshot, recovery }) =>
+          snapshot.phase === "saved" &&
+          snapshot.provider === stored.snapshot.provider &&
+          snapshot.sourceId === stored.snapshot.sourceId &&
+          // A user file is one file whichever target saved it; any other
+          // source is one file per target.
+          (spec.scope === "backend-user" || snapshot.targetId === stored.snapshot.targetId) &&
+          recovery.savedEntriesDigest === entriesDigest,
+      );
+    return {
+      digest,
+      landed: await this.changeLanded(stored, entries),
+      ...(entriesDigest ? { entriesDigest } : {}),
+      ...(replacedBySave ? { replacedBySave } : {}),
+    };
+  }
+
+  /** Keyed digest of a source's server list, ignoring the rest of the file. */
+  private async serverListDigest(
+    entries: ReadonlyMap<string, unknown> | undefined,
+    issues: ReadonlyMap<string, unknown> = new Map(),
+  ): Promise<string | undefined> {
+    if (!entries) return undefined;
+    return this.operations.entryDigest({
+      entries: Object.fromEntries(entries),
+      issues: Array.from(issues.keys()).sort(),
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Runtime generations
+  // -------------------------------------------------------------------------
+
+  /**
+   * Opaque label of the bridge process and provider session behind a local
+   * runtime. Keyed, so it names a generation without disclosing either id.
+   */
+  private async generationOf(
+    agent: AgentPlatform,
+    parts: GenerationParts | undefined,
+  ): Promise<string | undefined> {
+    if (!parts || (parts.bridgePid === undefined && !parts.providerSessionId)) return undefined;
+    const digest = await this.operations.digest([
+      "runtime-generation",
+      agent,
+      parts.bridgePid ?? null,
+      parts.providerSessionId ?? null,
+    ]);
+    return digest.slice(0, 16);
+  }
+
+  /** Every runtime's generation, from the same persisted records planning reads. */
+  private async runtimeGenerations(): Promise<RuntimeGenerations> {
+    const [environments, sessions] = await Promise.all([
+      this.options.probe.environments(),
+      this.options.probe.sessions(),
+    ]);
+    const byId = new Map(environments.map((environment) => [environment.id, environment]));
+    const byKey = new Map(
+      sessions.map((session) => [
+        `${session.environmentId}\u0000${session.agent}\u0000${session.logicalSessionKey}`,
+        session,
+      ]),
+    );
+    return {
+      bridgePid: (environmentId, agent) => byId.get(environmentId)?.bridgePid?.(agent),
+      of: async (environmentId, agent, logicalSessionKey) => {
+        const environment = byId.get(environmentId);
+        const session = byKey.get(`${environmentId}\u0000${agent}\u0000${logicalSessionKey}`);
+        if (!environment || environment.environmentType !== "local" || !session) return undefined;
+        const bridgePid = environment.bridgePid?.(agent);
+        return this.generationOf(agent, {
+          ...(bridgePid !== undefined ? { bridgePid } : {}),
+          ...(session.providerSessionId ? { providerSessionId: session.providerSessionId } : {}),
+        });
+      },
+    };
   }
 
   /** Whether `entries` carry exactly the outcome the operation intended. */
@@ -1192,6 +1357,21 @@ export class McpManagementService {
   }
 }
 
+/** What a caller sees of an operation: its runtimes paged (see `publicApply`). */
+function publicOperation(snapshot: McpOperationSnapshot): McpOperationSnapshot {
+  const apply = publicApply(snapshot.apply);
+  return apply === snapshot.apply ? snapshot : { ...snapshot, apply };
+}
+
+/** The source text parsed, or undefined when it cannot be. */
+function parsedOrUndefined(spec: SourceSpec, text: string): ParsedSource | undefined {
+  try {
+    return parseSource(spec, text);
+  } catch {
+    return undefined;
+  }
+}
+
 function publicRuntime(
   runtime: PlannedRuntime | McpOperationSnapshot["apply"]["runtimes"][number],
 ) {
@@ -1204,6 +1384,10 @@ function publicRuntime(
     updatedAt: runtime.updatedAt,
     ...(runtime.savedRevision ? { savedRevision: runtime.savedRevision } : {}),
     ...(runtime.generation ? { generation: runtime.generation } : {}),
+    // Only a cancellation carries one; a replanned runtime starts without it.
+    ...(runtime.state === "cancelled" && runtime.cancelReason
+      ? { cancelReason: runtime.cancelReason }
+      : {}),
   };
 }
 

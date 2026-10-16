@@ -15,6 +15,15 @@ export const AGENT_INTERACTION_SUMMARY_VERSION = 1 as const;
 export const AGENT_INTERACTION_DEFAULT_TIMEOUT_MS = 5 * 60 * 1_000;
 
 /**
+ * The longest a user's pause holds a request before it expires anyway.
+ *
+ * Long enough to read as "until I come back", short enough that a forgotten
+ * card cannot pin a turn — and its CLI child — open for the life of the bridge.
+ * A provider with a shorter limit of its own caps it further.
+ */
+export const AGENT_INTERACTION_HOLD_CEILING_MS = 24 * 60 * 60 * 1_000;
+
+/**
  * Claude's AskUserQuestion boundary accepts one string per question. JSON is
  * used for multi-select so labels containing commas remain unambiguous.
  */
@@ -211,6 +220,52 @@ export interface AgentInteractionPresentation {
   approveForSessionLabel?: string;
 }
 
+/**
+ * Why pausing a request's countdown is limited or unavailable.
+ *
+ * - `provider-limit`: the provider stops waiting at a time it publishes (Grok's
+ *   own question timeout and turn limit, a Codex question's auto-resolution,
+ *   Pi's turn limit). A pause holds only until then; `expiresAt` says when.
+ * - `upstream-may-expire`: someone behind the provider keeps a deadline nobody
+ *   publishes — the MCP server that asked — and may stop waiting first.
+ * - `no-extension`: the provider's own limit is already the countdown, so a
+ *   pause would buy nothing.
+ * - `bridge-outdated`: the bridge serving this session predates pausing; it
+ *   updates when the environment restarts.
+ */
+export const AGENT_INTERACTION_HOLD_REASONS = [
+  "provider-limit",
+  "upstream-may-expire",
+  "no-extension",
+  "bridge-outdated",
+] as const;
+export type AgentInteractionHoldReason = (typeof AGENT_INTERACTION_HOLD_REASONS)[number];
+
+/** Reasons that leave a pause available, only limited. */
+const LIMITED_HOLD_REASONS = new Set<AgentInteractionHoldReason>([
+  "provider-limit",
+  "upstream-may-expire",
+]);
+
+/**
+ * Whether the user may pause a request's countdown, and whether it is paused.
+ *
+ * The authority that owns the deadline publishes this beside `expiresAt`. A
+ * pause is enforced there, never in a client: while `heldAt` is present the
+ * timer that would decline the request is stopped, and `expiresAt` is the hard
+ * ceiling the pause still ends at ({@link AGENT_INTERACTION_HOLD_CEILING_MS}, or
+ * the provider's own shorter limit). Absent means the authority predates
+ * pausing or publishes no deadline at all.
+ */
+export interface AgentInteractionHold {
+  /** Whether a pause (or, while paused, a resume) can be requested now. */
+  available: boolean;
+  /** When the user paused the countdown; present only while paused. */
+  heldAt?: number;
+  /** Why the pause is limited, or why it is unavailable. */
+  reason?: AgentInteractionHoldReason;
+}
+
 export interface AgentInteractionRequest {
   version: typeof AGENT_INTERACTION_CONTRACT_VERSION;
   /** Opaque, stable for this upstream request's lifetime. */
@@ -227,6 +282,8 @@ export interface AgentInteractionRequest {
   updatedAt: number;
   /** Absent only when the authority publishes no deadline. */
   expiresAt?: number;
+  /** Pause state of the deadline; only meaningful alongside `expiresAt`. */
+  hold?: AgentInteractionHold;
   /**
    * Whether the turn is waiting on this request.
    *
@@ -485,8 +542,10 @@ const REQUEST_KEYS = new Set([
   "createdAt",
   "updatedAt",
   "expiresAt",
-  "blocking",
+  "hold",
 ]);
+const HOLD_KEYS = new Set(["available", "heldAt", "reason"]);
+const HOLD_REASONS = new Set<string>(AGENT_INTERACTION_HOLD_REASONS);
 const PRESENTATION_KEYS = new Set([
   "title",
   "body",
@@ -698,6 +757,35 @@ function isPresentation(
   return true;
 }
 
+/**
+ * Validates a published hold against the request it belongs to.
+ *
+ * A hold without a deadline is meaningless, a paused request must still carry
+ * the ceiling it ends at, and an unavailable pause must say why — the card
+ * shows that reason instead of a button.
+ */
+export function isAgentInteractionHold(
+  value: unknown,
+  request: { createdAt: number; expiresAt?: number },
+): value is AgentInteractionHold {
+  if (!isRecord(value) || !hasOnlyKeys(value, HOLD_KEYS)) return false;
+  if (typeof value.available !== "boolean" || request.expiresAt === undefined) return false;
+  const reason = value.reason;
+  if (reason !== undefined && (typeof reason !== "string" || !HOLD_REASONS.has(reason))) {
+    return false;
+  }
+  const limited =
+    reason === undefined || LIMITED_HOLD_REASONS.has(reason as AgentInteractionHoldReason);
+  if (value.available !== limited) return false;
+  if (value.heldAt === undefined) return true;
+  return (
+    value.available &&
+    isEpochMilliseconds(value.heldAt) &&
+    value.heldAt >= request.createdAt &&
+    request.expiresAt > value.heldAt
+  );
+}
+
 export function isAgentInteractionRequest(value: unknown): value is AgentInteractionRequest {
   if (!isRecord(value) || !hasOnlyKeys(value, REQUEST_KEYS)) return false;
   if (
@@ -718,7 +806,12 @@ export function isAgentInteractionRequest(value: unknown): value is AgentInterac
     !isEpochMilliseconds(value.updatedAt) ||
     value.updatedAt < value.createdAt ||
     (value.expiresAt !== undefined &&
-      (!isEpochMilliseconds(value.expiresAt) || value.expiresAt <= value.createdAt))
+      (!isEpochMilliseconds(value.expiresAt) || value.expiresAt <= value.createdAt)) ||
+    (value.hold !== undefined &&
+      !isAgentInteractionHold(value.hold, {
+        createdAt: value.createdAt,
+        expiresAt: value.expiresAt as number | undefined,
+      }))
   ) {
     return false;
   }

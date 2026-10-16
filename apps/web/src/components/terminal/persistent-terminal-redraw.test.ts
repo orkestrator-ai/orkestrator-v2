@@ -2,6 +2,7 @@ import { describe, expect, it, mock } from "bun:test";
 import {
   forceTerminalVisibilityRedraw,
   getTerminalResizeBounceDimensions,
+  hasLayoutBox,
   shouldTriggerEnvironmentVisibilityRedraw,
 } from "./persistent-terminal-redraw";
 
@@ -99,6 +100,43 @@ describe("persistent terminal redraw helpers", () => {
 
     // Cleanup exists
     expect(typeof cancel).toBe("function");
+  });
+
+  it("does not fit a terminal without a layout box, but still bounces at its size", async () => {
+    const fit = mock(() => {});
+    const resize = mock(async () => {});
+    const refreshTimers: Array<() => void> = [];
+
+    await forceTerminalVisibilityRedraw({
+      terminal: { cols: 120, rows: 40, refresh: mock(() => {}) },
+      fitAddon: { fit },
+      resize,
+      canFit: () => false,
+      requestAnimationFrameFn: (callback) => {
+        callback(0);
+        return 1;
+      },
+      setTimeoutFn: ((callback: TimerHandler) => {
+        refreshTimers.push(callback as () => void);
+        return 1 as unknown as ReturnType<typeof setTimeout>;
+      }) as unknown as typeof setTimeout,
+    });
+    refreshTimers[0]?.();
+
+    // Under `display: none` a fit would shrink the PTY to about ten columns.
+    expect(fit).not.toHaveBeenCalled();
+    expect(resize).toHaveBeenNthCalledWith(1, 120, 41);
+    expect(resize).toHaveBeenNthCalledWith(2, 120, 40);
+  });
+
+  it("finds a layout box only on a rendered element", () => {
+    const element = document.createElement("div");
+    document.body.appendChild(element);
+    expect(hasLayoutBox(element)).toBe(true);
+    element.getClientRects = () => [] as unknown as DOMRectList;
+    expect(hasLayoutBox(element)).toBe(false);
+    expect(hasLayoutBox(null)).toBe(false);
+    element.remove();
   });
 
   it("still bounces when fit() leaves the dimensions unchanged", async () => {

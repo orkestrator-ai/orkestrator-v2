@@ -57,11 +57,44 @@ describe("ACP bridge", () => {
   test("a session created read-only starts its agent without automatic approval", async () => {
     // The child is spawned by session creation itself, so a boundary learned
     // from the first prompt would arrive after the agent had already been told
-    // to approve its own tools.
+    // to approve its own tools. The read-only boundary also denies the network,
+    // so Grok's web search and web fetch are switched off from the start.
     expect(await readAgentArgs({ ACP_PROVIDER: "grok" }, { readOnly: true })).toEqual([
+      "--disable-web-search",
       "agent",
+      "--no-leader",
       "stdio",
     ]);
+  });
+
+  test("a coordinator process starts Grok without web search or web fetch", async () => {
+    // Grok searches through xAI without asking permission first, so denying
+    // its permission requests could never stop a search; the flag removes the
+    // tools. Process authority applies even when the request names no policy.
+    expect(
+      await readAgentArgs({
+        ACP_PROVIDER: "grok",
+        ORKESTRATOR_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
+      }),
+    ).toEqual(["--disable-web-search", "agent", "--no-leader", "stdio"]);
+  });
+
+  test("any policy that denies the network starts Grok without web search", async () => {
+    expect(
+      await readAgentArgs(
+        { ACP_PROVIDER: "grok" },
+        {
+          policy: {
+            id: "pipeline",
+            sandbox: "container",
+            approvals: "auto-approve",
+            projectResources: true,
+            capabilityPolicy: { deny: ["network"] },
+            networkAccess: "restricted",
+          },
+        },
+      ),
+    ).toEqual(["--disable-web-search", "--always-approve", "agent", "--no-leader", "stdio"]);
   });
 
   test("rejects a malformed read-only boundary at session creation", async () => {
@@ -75,6 +108,33 @@ describe("ACP bridge", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "readOnly must be a boolean" });
+  });
+
+  test("rejects a malformed workflow-result attempt before claiming the turn", async () => {
+    const { base, headers } = await spawnBridge({ env: { ACP_PROVIDER: "grok" } });
+    const created = await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const { id } = (await created.json()) as { id: string };
+    for (const malformed of [
+      { workflowResultTool: "submit_review_report" },
+      { workflowResultTool: "anything", workflowResultKey: "11111111-1111-4111-8111-111111111111" },
+      { workflowResultTool: "submit_review_report", workflowResultKey: "has spaces" },
+    ]) {
+      const response = await nativeFetch(`${base}/session/${id}/prompt`, {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ prompt: "review", requestId: "malformed", ...malformed }),
+      });
+      expect(response.status).toBe(400);
+    }
+    // Nothing was journaled: the same request id is still free.
+    const dispatch = await nativeFetch(`${base}/session/${id}/dispatch?requestId=malformed`, {
+      headers,
+    });
+    expect(await dispatch.json()).toMatchObject({ dispatch: "unknown" });
   });
 
   test("recreating a session under a stricter boundary restarts its agent", async () => {

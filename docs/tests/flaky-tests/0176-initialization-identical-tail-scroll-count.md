@@ -38,3 +38,18 @@ owning area changed, and no test was skipped or loosened.
   src/components/terminal/InitializationLogs.test.tsx --parallel=1
   --only-failures` passed all 10 tests, wrapper duration 0.3 s.
 - No test or production code was changed.
+
+## Recurrence — 2026-10-16 (temporary host port main merge)
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`,
+  using the testing guide's GNU-tool PATH. Workspace/root/bridges/protocol
+  reserved 4/1/2/1 slots; component browser validation ran alongside it.
+- **Failure:** `identical tails write no state: no re-render, no re-scroll`
+  expected zero scroll calls and received one at line 146 (49.27 ms).
+- **Suite counts:** web 7,877 passed, ten skipped and one failed across
+  7,888 tests in 444 files (170.55 s).
+- **Isolated rerun:** `mise run test:logged -- --name merge-initialization-logs-isolated -- bun test --cwd apps/web ./src/components/terminal/InitializationLogs.test.tsx --parallel=1 --only-failures`
+  passed the unchanged owning file (exit 0, 0.4 s).
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.MTrBXO/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Disposition:** confirms an intermittent recurrence; the existing initial
+  scroll timing hypothesis remains unconfirmed. No assertion, timeout or skip changed.

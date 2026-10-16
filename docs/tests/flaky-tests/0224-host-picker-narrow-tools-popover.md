@@ -94,3 +94,46 @@ transport recovery on branch `terminal-input-issue-ccc06ff4761a-r1`:
 
 The terminal changes do not modify project selection or the tools popover.
 No existing assertions were skipped or weakened.
+
+## Coordinator launch-defaults review validation — 2026-10-16
+
+On `0d254a3a`, the complete owning-file rerun reproduced the same narrow
+host-picker timeout at line 238:
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-launch-defaults-history-rerun mise run test:logged -- --name browser-gateway-isolated-rerun -- mise run test:agent:browser -- e2e/agent-testing/browser-gateway.spec.ts
+```
+
+Result: 10 passed, 5 skipped, 1 failed; 157.4 seconds, one Playwright worker.
+Evidence: `/tmp/orkestrator-test-run.v5zz3s/browser-gateway-isolated-rerun.log.gz`
+and `output/agent-testing/qa-launch-defaults-history-rerun/browser/`.
+The profile used `dev:test --fixture --no-agent-credentials --agent-platforms codex`.
+
+The preceding full isolated browser suite used
+`mise run test:logged -- --name isolated-browser -- mise run test:agent:browser:isolated`
+on profile `qa-browser-96d6e8a6-ca0`: 24 passed, 14 skipped, 1 failed,
+506.9 seconds including startup and cleanup. Its narrow host-picker case passed;
+the failure instead occurred in `real browser gateway exercises an authoritative
+local environment` at line 581: the terminal snapshot already held
+`background-done`, but the immediate history-page read did not contain it.
+Evidence: `/tmp/orkestrator-test-run.cjrgnN/isolated-browser.log.gz` and
+`output/agent-testing/qa-browser-96d6e8a6-ca0/browser/`.
+
+That terminal scenario passed separately (one test, exit 0, 8.9 seconds):
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-launch-defaults-history-rerun mise run test:logged -- --name terminal-history-rerun -- mise run test:agent:browser -- e2e/agent-testing/browser-gateway.spec.ts --grep 'real browser gateway exercises an authoritative local environment'
+```
+
+It also passed in the complete owning-file rerun above, whose only failure
+was the known host-picker case. This does not establish a new file-wide passing
+rerun for classifying the terminal-history observation as a separate flake.
+The snapshot and history read may observe different persistence progress; the
+cause remains unconfirmed. No terminal, picker, assertion, deadline or skip was
+changed. Both profiles were stopped and reset after validation.
+
+## Unread-toast main merge validation — 2026-10-16
+
+- `mise run test:logged -- --name merge-agent-browser -- mise run test:agent:browser:isolated` on credential-free Codex profile `qa-browser-910af09e-8ee` reported 25 passed, 14 opt-in skips and one failure (536.5 s including lifecycle). The narrow host picker reached the socket dialog but `Select file` stayed disabled after entering the socket path (line 302, five-second visibility/enablement wait). Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.0YUiYo/merge-agent-browser.log.gz` and `output/agent-testing/qa-browser-910af09e-8ee/browser/`.
+- The full unchanged owning file on fresh credential-free Codex fixture profile `qa-unread-merge-owner` used `ORKESTRATOR_AGENT_TEST_PROFILE=qa-unread-merge-owner ORKESTRATOR_AGENT_TEST_RUN_ID=qa-unread-merge-owner mise run test:logged -- --name merge-gateway-browser-owner -- mise run test:agent:browser -- e2e/agent-testing/browser-gateway.spec.ts`. It reported 10 passed, five opt-in skips and one failure (110.1 s). The same narrow case failed earlier, with `Repository settings` hidden after `Open tools` (line 238, 15-second timeout). Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.PU8KT2/merge-gateway-browser-owner.log.gz` and `output/agent-testing/qa-unread-merge-owner/browser/`.
+- The changed project-home unread/background path passed in both runs. These results do not establish a new flake or resolve the existing picker issue; neither test nor picker code was changed in this merge. Both profiles were stopped and reset after validation.

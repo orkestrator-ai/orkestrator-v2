@@ -746,6 +746,7 @@ export class BuildPipelineSupervisor {
     }
     pipeline.pausedFromPhase = "fixing";
     pipeline.phase = "paused";
+    pipeline.pauseCause = "supervisor";
     pipeline.error = UNCHANGED_FIX_PAUSE_MESSAGE;
     delete pipeline.stallWarning;
     await this.ctx.save(pipeline, pipeline.backendRevision);

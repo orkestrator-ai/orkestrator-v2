@@ -279,8 +279,7 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     const provider = await this.observeProvider({ environmentId, agent, logicalSessionKey });
     if (!provider) return { state: "not-running" };
     if (!provider.mcpConfigEvidence) return { state: "none" };
-    const evidence = await provider.mcpConfigEvidence(session.providerSessionId);
-    return evidence ? { state: "evidence", evidence } : { state: "none" };
+    return provider.mcpConfigEvidence(session.providerSessionId);
   }
 
   protected trackScan(task: Promise<void>): Promise<void> {

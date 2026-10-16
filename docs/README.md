@@ -147,6 +147,7 @@ iOS, two machines) are the most common open gate. They are batched in
 | --- | --- |
 | [mcp-management.md](todo/mcp-management.md) | Keep the per-provider MCP editor faithful to current pins (Claude retained runtime), close apply paths that stop at pending or restart, collect live evidence. |
 | [mcp-environment-delivery.md](todo/mcp-environment-delivery.md) | Durable container-private MCP overlay, Cursor delivery, and truthful scope, network and auth behaviour outside the backend host. |
+| [control-mcp-voice-surface.md](todo/control-mcp-voice-surface.md) | Control MCP voice profile: small core tools, gateway meta-tools over the public actions, scoped operator credentials, and parity with the CLI. |
 
 ### Agent engines and provider SDKs
 
@@ -177,7 +178,7 @@ iOS, two machines) are the most common open gate. They are batched in
 | --- | --- |
 | [multi-review-scale-and-cost.md](todo/multi-review-scale-and-cost.md) | Fix the post-SQLite fence-check regression, retire rollback gates and fallbacks, make the benchmark deterministic, collect scale evidence. |
 | [multi-review-panel-value.md](todo/multi-review-panel-value.md) | Prove compact consolidation and prompt-prefix savings, add an overlap metric, then decide presets, lenses and adaptive stopping. |
-| [multi-review-flow-graph.md](todo/multi-review-flow-graph.md) | Flow graph follow-ups that need backend data: live findings, queue position, step-session transcript tails, zoom and pan. |
+| [multi-review-flow-graph.md](todo/multi-review-flow-graph.md) | Flow graph follow-ups: live qualification of provisional findings, and gaps found building them. |
 
 ### Coordinator and agent mail
 
@@ -191,7 +192,7 @@ iOS, two machines) are the most common open gate. They are batched in
 
 | File | Summary |
 | --- | --- |
-| [storage-service-repositories.md](todo/storage-service-repositories.md) | Replace the `StorageService` inheritance chain with per-store repositories over a shared `StorageContext`, guard tests first. Pinned by `tests/unit/inheritance-chains.test.ts`. |
+| [storage-service-repositories.md](todo/storage-service-repositories.md) | Replace the `StorageService` inheritance chain with per-store repositories over a shared `StorageContext`, keeping the store writer guard (`storage-writer-guards.test.ts`) passing. Pinned by `tests/unit/inheritance-chains.test.ts`. |
 | [native-agent-service-collaborators.md](todo/native-agent-service-collaborators.md) | Turn the six-layer `NativeAgentService` chain into a class composed of collaborators. Pinned by `tests/unit/inheritance-chains.test.ts`. |
 | [claude-bridge-prompt-stream-state.md](todo/claude-bridge-prompt-stream-state.md) | Direct tests for `createPromptStreamState`, then split its delta handler and move the plan-mode flags to `TurnState`. |
 | [backend-core-domain-folders.md](todo/backend-core-domain-folders.md) | Move `apps/backend/src/core/` prefix groups into lint-enforced domain folders, one domain per PR. |
@@ -204,5 +205,5 @@ iOS, two machines) are the most common open gate. They are batched in
 | [live-provider-and-platform-qualification.md](todo/live-provider-and-platform-qualification.md) | Shared prerequisites and a batching index for live-provider and platform runs, agent-test profile isolation, and checks with no other home. |
 | [mixed-version-compatibility.md](todo/mixed-version-compatibility.md) | Support-window policy for old clients, bridges and backends; renderer–backend skew; dead prompt-queue claim commands; index of compatibility paths awaiting retirement. |
 | [test-suite-and-ci-health.md](todo/test-suite-and-ci-health.md) | Slow test owners, a skipped settings test, red CI on `main` and missing branch protection, deferred test-structure candidates. |
-| [mobile-layout-gaps.md](todo/mobile-layout-gaps.md) | Narrow-viewport defects: split panes remount at the mobile breakpoint; environment settings blocked by the projects drawer. |
+| [mobile-layout-gaps.md](todo/mobile-layout-gaps.md) | Narrow-viewport follow-ups: one host for environment settings, focus return from settings, real-phone qualification. |
 | [dependency-upgrades.md](todo/dependency-upgrades.md) | Non-agent dependency upgrades still pending: Electron 46, React Compiler lint warnings, update-signing decision, and upgrades blocked upstream or deferred. |

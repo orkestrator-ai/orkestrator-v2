@@ -12,6 +12,11 @@ import {
 } from "./approvals.js";
 import type { InboundServerRequest } from "./envelope-validation.js";
 import type { InteractionRequest, InteractionResolution } from "./interactions.js";
+import type { InteractionDeadlineClock } from "@orkestrator/protocol/agent-interaction-deadline";
+import {
+  AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
+  AGENT_INTERACTION_HOLD_CEILING_MS,
+} from "@orkestrator/protocol/agent-interactions";
 
 interface Answer {
   generation: number;
@@ -1087,5 +1092,370 @@ describe("interactive questions and MCP elicitation", () => {
         answers: { q: ["Yes"] },
       }),
     ).toBe(false);
+  });
+});
+
+describe("pausing a parked deadline", () => {
+  const START = 1_800_000_000_000;
+  const WINDOW = AGENT_INTERACTION_DEFAULT_TIMEOUT_MS;
+  const CEILING = AGENT_INTERACTION_HOLD_CEILING_MS;
+
+  /** Timers fire only when the test advances time past them; nothing waits. */
+  function manualClock() {
+    let now = START;
+    let nextId = 0;
+    let unrefs = 0;
+    const timers = new Map<number, { at: number; callback: () => void }>();
+    const clock: InteractionDeadlineClock = {
+      now: () => now,
+      setTimeout: (callback, ms) => {
+        nextId += 1;
+        timers.set(nextId, { at: now + ms, callback });
+        return { id: nextId, unref: () => (unrefs += 1) };
+      },
+      clearTimeout: (handle) => {
+        timers.delete((handle as { id: number }).id);
+      },
+    };
+    const advance = (ms: number) => {
+      const target = now + ms;
+      for (;;) {
+        const due = [...timers.entries()]
+          .filter(([, timer]) => timer.at <= target)
+          .sort((a, b) => a[1].at - b[1].at)[0];
+        if (!due) break;
+        timers.delete(due[0]);
+        now = due[1].at;
+        due[1].callback();
+      }
+      now = target;
+    };
+    return {
+      clock,
+      advance,
+      now: () => now,
+      armed: () => timers.size,
+      unrefs: () => unrefs,
+    };
+  }
+
+  function pauseHarness(options: { accept?: boolean } = {}) {
+    const time = manualClock();
+    const approvals: ApprovalRequest[] = [];
+    const interactions: InteractionRequest[] = [];
+    const resolved: string[] = [];
+    let generationLive = true;
+    const h = harness({
+      clock: time.clock,
+      approvalTimeoutMs: WINDOW,
+      isGenerationLive: () => generationLive,
+      presentApproval: (approval) => {
+        approvals.push(approval);
+        return options.accept !== false;
+      },
+      onApprovalResolved: (_approval, _decision, resolution) => resolved.push(resolution),
+      presentInteraction: (interaction) => {
+        interactions.push(interaction);
+        return options.accept !== false;
+      },
+      onInteractionResolved: (_interaction, _answer, resolution) => resolved.push(resolution),
+    });
+    return {
+      ...h,
+      ...time,
+      approvals,
+      interactions,
+      resolved,
+      killGeneration: () => {
+        generationLive = false;
+      },
+    };
+  }
+
+  function question(params: Record<string, unknown> = {}): InboundServerRequest {
+    return {
+      kind: "server-request",
+      id: "srv-q",
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        questions: [{ id: "q", header: "Question", question: "Continue?" }],
+        ...params,
+      },
+    };
+  }
+
+  function mcpForm(): InboundServerRequest {
+    return {
+      kind: "server-request",
+      id: "srv-mcp",
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        serverName: "deploy",
+        mode: "form",
+        message: "Choose a region",
+        requestedSchema: { type: "object", properties: {} },
+      },
+    };
+  }
+
+  test("a parked approval publishes a full pause and keeps its timer unref'd", async () => {
+    const h = pauseHarness();
+    h.router.handle(request("item/commandExecution/requestApproval"), 1);
+    await settle();
+
+    expect(h.approvals[0]).toMatchObject({
+      requestedAt: START,
+      expiresAt: START + WINDOW,
+      hold: { available: true },
+    });
+    expect(h.approvals[0]!.hold).toEqual({ available: true });
+    expect(h.router.getParkedApprovals()[0]).toMatchObject({
+      expiresAt: START + WINDOW,
+      hold: { available: true },
+    });
+    expect(h.unrefs()).toBeGreaterThan(0);
+  });
+
+  test("a held approval is not declined past its window, and is declined at the ceiling", async () => {
+    const h = pauseHarness();
+    h.router.handle(request("item/commandExecution/requestApproval"), 1);
+    await settle();
+    const approvalId = h.approvals[0]!.approvalId;
+
+    h.advance(60_000);
+    const heldAt = START + 60_000;
+    expect(h.router.holdApproval(approvalId, true)).toEqual({
+      status: "applied",
+      expiresAt: heldAt + CEILING,
+      hold: { available: true, heldAt },
+    });
+    // Rehydration sees the moved deadline at once; when it was raised does not move.
+    expect(h.router.getParkedApprovals()[0]).toMatchObject({
+      requestedAt: START,
+      expiresAt: heldAt + CEILING,
+      hold: { available: true, heldAt },
+    });
+
+    h.advance(WINDOW * 20);
+    await settle();
+    expect(h.answers).toHaveLength(0);
+    expect(h.router.getParkedApprovals()).toHaveLength(1);
+    expect(h.router.getMetrics().approvalsExpired).toBe(0);
+
+    h.advance(heldAt + CEILING - h.now() - 1);
+    await settle();
+    expect(h.answers).toHaveLength(0);
+
+    h.advance(1);
+    await settle();
+    // The pause only moved the deadline: expiry still declines, never approves.
+    expect(h.answers[0]!.result).toEqual({ decision: "decline" });
+    expect(h.resolved).toEqual(["timed-out"]);
+    expect(h.router.getMetrics().approvalsExpired).toBe(1);
+    expect(h.router.getHistory().at(-1)).toMatchObject({
+      resolution: "user-declined",
+      timedOut: true,
+    });
+    expect(h.transcript.at(-1)?.message).toContain("expired");
+  });
+
+  test("resuming restarts a fresh full window rather than the remainder", async () => {
+    const h = pauseHarness();
+    h.router.handle(request("item/commandExecution/requestApproval"), 1);
+    await settle();
+    const approvalId = h.approvals[0]!.approvalId;
+
+    // Paused three seconds before expiry, resumed an hour later.
+    h.advance(WINDOW - 3_000);
+    expect(h.router.holdApproval(approvalId, true).status).toBe("applied");
+    h.advance(60 * 60_000);
+    const resumedAt = h.now();
+    expect(h.router.holdApproval(approvalId, false)).toEqual({
+      status: "applied",
+      expiresAt: resumedAt + WINDOW,
+      hold: { available: true },
+    });
+    expect(h.router.getParkedApprovals()[0]!.expiresAt).toBe(resumedAt + WINDOW);
+
+    h.advance(WINDOW - 1);
+    await settle();
+    expect(h.answers).toHaveLength(0);
+
+    h.advance(1);
+    await settle();
+    expect(h.answers[0]!.result).toEqual({ decision: "decline" });
+    expect(h.resolved).toEqual(["timed-out"]);
+  });
+
+  test("a repeated pause or resume is unchanged and a hold never answers", async () => {
+    const h = pauseHarness();
+    h.router.handle(request("item/commandExecution/requestApproval"), 1);
+    await settle();
+    const approvalId = h.approvals[0]!.approvalId;
+
+    expect(h.router.holdApproval(approvalId, false)).toEqual({
+      status: "unchanged",
+      expiresAt: START + WINDOW,
+      hold: { available: true },
+    });
+    expect(h.router.holdApproval(approvalId, true).status).toBe("applied");
+    expect(h.router.holdApproval(approvalId, true)).toEqual({
+      status: "unchanged",
+      expiresAt: START + CEILING,
+      hold: { available: true, heldAt: START },
+    });
+    await settle();
+
+    expect(h.answers).toHaveLength(0);
+    expect(h.resolved).toEqual([]);
+    expect(h.router.getParkedApprovals()).toHaveLength(1);
+  });
+
+  test("a hold on a settled, unknown or dead-generation approval is stale", async () => {
+    const h = pauseHarness();
+    h.router.handle(request("item/commandExecution/requestApproval", "srv-a"), 1);
+    h.router.handle(request("item/commandExecution/requestApproval", "srv-b"), 1);
+    await settle();
+    const [answered, orphaned] = h.approvals.map((approval) => approval.approvalId);
+
+    h.router.resolveApproval(answered!, "deny");
+    await settle();
+    expect(h.router.holdApproval(answered!, true)).toEqual({ status: "stale" });
+    expect(h.router.holdApproval("apr-does-not-exist", true)).toEqual({ status: "stale" });
+
+    h.killGeneration();
+    expect(h.router.holdApproval(orphaned!, true)).toEqual({ status: "stale" });
+    // Stale changes nothing: the card keeps its original deadline.
+    expect(h.router.getParkedApprovals()[0]!.expiresAt).toBe(START + WINDOW);
+  });
+
+  test("settling a held approval disarms its deadline", async () => {
+    const h = pauseHarness();
+    h.router.handle(request("item/commandExecution/requestApproval"), 1);
+    await settle();
+    const approvalId = h.approvals[0]!.approvalId;
+    h.router.holdApproval(approvalId, true);
+
+    h.router.resolveApproval(approvalId, "approve");
+    await settle();
+    expect(h.armed()).toBe(0);
+    h.advance(CEILING * 2);
+    await settle();
+    expect(h.answers).toHaveLength(1);
+    expect(h.answers[0]!.result).toEqual({ decision: "accept" });
+  });
+
+  test("a card nobody takes leaves no deadline armed", async () => {
+    const h = pauseHarness({ accept: false });
+    h.router.handle(request("item/commandExecution/requestApproval"), 1);
+    h.router.handle(question(), 1);
+    await settle();
+
+    expect(h.armed()).toBe(0);
+    expect(h.answers).toHaveLength(2);
+  });
+
+  test("a held MCP elicitation publishes that its server may still give up first", async () => {
+    const h = pauseHarness();
+    h.router.handle(mcpForm(), 1);
+    await settle();
+    const interactionId = h.interactions[0]!.interactionId;
+
+    expect(h.interactions[0]).toMatchObject({
+      expiresAt: START + WINDOW,
+      hold: { available: true, reason: "upstream-may-expire" },
+    });
+    h.advance(1_000);
+    expect(h.router.holdInteraction(interactionId, true)).toEqual({
+      status: "applied",
+      expiresAt: START + 1_000 + CEILING,
+      hold: { available: true, heldAt: START + 1_000, reason: "upstream-may-expire" },
+    });
+    expect(h.router.getParkedInteractions()[0]).toMatchObject({
+      requestedAt: START,
+      expiresAt: START + 1_000 + CEILING,
+      hold: { available: true, heldAt: START + 1_000, reason: "upstream-may-expire" },
+    });
+
+    h.advance(START + 1_000 + CEILING - h.now());
+    await settle();
+    expect(h.answers[0]!.result).toEqual({ action: "cancel", content: null, _meta: null });
+    expect(h.resolved).toEqual(["timed-out"]);
+    expect(h.router.getMetrics().interactionsExpired).toBe(1);
+  });
+
+  test("an auto-resolving question pauses only until app-server would resolve it", async () => {
+    const autoResolutionMs = 60 * 60_000;
+    const h = pauseHarness();
+    h.router.handle(question({ autoResolutionMs }), 1);
+    await settle();
+    const interactionId = h.interactions[0]!.interactionId;
+    const limit = START + autoResolutionMs;
+
+    // The first deadline is still the shorter of the window and the provider's.
+    expect(h.interactions[0]).toMatchObject({
+      expiresAt: START + WINDOW,
+      hold: { available: true, reason: "provider-limit" },
+    });
+    expect(h.router.holdInteraction(interactionId, true)).toEqual({
+      status: "applied",
+      expiresAt: limit,
+      hold: { available: true, heldAt: START, reason: "provider-limit" },
+    });
+
+    h.advance(limit - h.now() - 1);
+    await settle();
+    expect(h.answers).toHaveLength(0);
+    h.advance(1);
+    await settle();
+    expect(h.answers[0]!.result).toEqual({ answers: {} });
+    expect(h.resolved).toEqual(["timed-out"]);
+  });
+
+  test("a question whose provider limit already is the countdown cannot be paused", async () => {
+    const h = pauseHarness();
+    h.router.handle(question({ autoResolutionMs: 30_000 }), 1);
+    await settle();
+    const interactionId = h.interactions[0]!.interactionId;
+
+    expect(h.interactions[0]).toMatchObject({
+      expiresAt: START + 30_000,
+      hold: { available: false, reason: "no-extension" },
+    });
+    expect(h.router.holdInteraction(interactionId, true)).toEqual({ status: "unavailable" });
+    expect(h.router.getParkedInteractions()[0]!.expiresAt).toBe(START + 30_000);
+  });
+
+  test("a blocking question has no deadline, so no hold and nothing to pause", async () => {
+    const h = pauseHarness();
+    h.router.handle(question({ isBlocking: true }), 1);
+    await settle();
+    const interactionId = h.interactions[0]!.interactionId;
+
+    expect(h.interactions[0]!.expiresAt).toBeUndefined();
+    expect(h.interactions[0]!.hold).toBeUndefined();
+    expect(h.router.getParkedInteractions()[0]!.hold).toBeUndefined();
+    expect(h.armed()).toBe(0);
+    expect(h.router.holdInteraction(interactionId, true)).toEqual({ status: "unavailable" });
+  });
+
+  test("a hold on a settled or dead-generation interaction is stale", async () => {
+    const h = pauseHarness();
+    h.router.handle(question(), 1);
+    h.router.handle(mcpForm(), 1);
+    await settle();
+    const [asked, elicited] = h.interactions.map((interaction) => interaction.interactionId);
+
+    h.router.resolveInteraction(asked!, { action: "cancel" });
+    await settle();
+    expect(h.router.holdInteraction(asked!, true)).toEqual({ status: "stale" });
+
+    h.killGeneration();
+    expect(h.router.holdInteraction(elicited!, true)).toEqual({ status: "stale" });
   });
 });

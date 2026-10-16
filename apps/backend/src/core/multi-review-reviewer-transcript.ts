@@ -242,12 +242,20 @@ export async function readReviewerTranscript(
    * reviewer, its provider session and the history epoch.
    */
   history?: { key: string },
+  /**
+   * The tail's count and byte bounds. The reviewer tab takes the defaults; a
+   * smaller reader (the flow graph's step tails) asks for less.
+   */
+  limits: { maxMessages: number; maxBytes: number } = {
+    maxMessages: MAX_REVIEWER_TRANSCRIPT_MESSAGES,
+    maxBytes: MAX_REVIEWER_TRANSCRIPT_BYTES,
+  },
 ): Promise<ReviewerTranscriptRead> {
   const capable = provider as SnapshotCapable;
   if (typeof capable.transcriptSnapshot === "function") {
     const snapshot = await capable.transcriptSnapshot(providerSessionId, {
-      limit: MAX_REVIEWER_TRANSCRIPT_MESSAGES,
-      targetBytes: MAX_REVIEWER_TRANSCRIPT_BYTES,
+      limit: limits.maxMessages,
+      targetBytes: limits.maxBytes,
       // Details resolve through `readReviewerToolDetails`, so the display can
       // take the lightweight form wherever the provider offers it.
       ...(typeof capable.transcriptDetail === "function"
@@ -262,7 +270,7 @@ export async function readReviewerTranscript(
       // An unwrappable token cannot be sent back; answer with a snapshot the
       // renderer can use instead of an unchanged it cannot follow up on.
       if (sourceToken) return { kind: "unchanged", sourceToken, fallback: false };
-      return readReviewerTranscript(provider, providerSessionId, undefined, history);
+      return readReviewerTranscript(provider, providerSessionId, undefined, history, limits);
     }
     if (!Array.isArray(snapshot.messages)) {
       throw new Error("The reviewer transcript snapshot was malformed");
@@ -274,7 +282,7 @@ export async function readReviewerTranscript(
       snapshot.representation === "summary"
         ? snapshot.messages.map(displayMessage)
         : snapshot.messages;
-    const bounded = boundReviewerTranscript(normalizeOpenCodeDisplayEntries(source));
+    const bounded = boundReviewerTranscript(normalizeOpenCodeDisplayEntries(source), limits);
     const firstShown = source[source.length - bounded.messages.length];
     const sourceToken = snapshot.sourceToken
       ? wrapToken(providerSessionId, snapshot.sourceToken)
@@ -336,15 +344,13 @@ export async function readReviewerTranscript(
   // provider is asked for no more messages than the tab can show, and the
   // response is byte-bounded here; a transport that can only fetch the whole
   // history still slices it before it reaches this module.
-  const messages = await provider.messages(providerSessionId, {
-    limit: MAX_REVIEWER_TRANSCRIPT_MESSAGES,
-  });
+  const messages = await provider.messages(providerSessionId, { limit: limits.maxMessages });
   // Provider reads are raw (an OpenCode `{ info, parts }` envelope); the tab
   // renders display messages. Bounded after normalizing, which is what ships;
   // the cursor still names the raw message the next page searches for.
-  const bounded = boundReviewerTranscript(normalizeOpenCodeDisplayEntries(messages));
+  const bounded = boundReviewerTranscript(normalizeOpenCodeDisplayEntries(messages), limits);
   // A full window may have had older history the limited read left behind.
-  const truncated = bounded.truncated || messages.length >= MAX_REVIEWER_TRANSCRIPT_MESSAGES;
+  const truncated = bounded.truncated || messages.length >= limits.maxMessages;
   const historyCursor =
     history && truncated
       ? joinedCursor(

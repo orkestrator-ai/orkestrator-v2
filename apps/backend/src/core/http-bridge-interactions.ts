@@ -2,14 +2,17 @@ import {
   AGENT_INTERACTION_CONTRACT_VERSION,
   AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
   AGENT_INTERACTION_LIMITS,
+  isAgentInteractionHold,
   isAgentInteractionResolution,
   type AgentInteractionApplyOutcome,
+  type AgentInteractionHold,
   type AgentInteractionQuestion,
   type AgentInteractionRequest,
   type AgentInteractionResolution,
   type AgentInteractionSnapshot,
 } from "@orkestrator/protocol/agent-interactions";
 import {
+  type AgentInteractionProviderCapability,
   type BridgeConnection,
   ProviderUnavailableError,
   type ProviderSessionRegistration,
@@ -31,15 +34,66 @@ import {
 import { assertOk, boundedJson, bridgeFetch } from "./http-bridge-transport.js";
 
 const MCP_FORM_CONTENT_QUESTION_ID = "mcp-form-content";
+
+/**
+ * The pause state a bridge publishes beside a deadline.
+ *
+ * A bridge that predates pausing publishes none, so its countdown is shown
+ * but not clickable until the environment restarts onto one that can. A
+ * malformed hold is treated the same way: the card stays answerable, and only
+ * the pause is withheld.
+ */
+function bridgeHold(
+  published: Record<string, unknown> | null | undefined,
+  timing: { createdAt: number; expiresAt?: number },
+): { hold?: AgentInteractionHold } {
+  if (timing.expiresAt === undefined) return {};
+  const hold = published?.hold;
+  if (!isAgentInteractionHold(hold, timing)) {
+    return { hold: { available: false, reason: "bridge-outdated" } };
+  }
+  return {
+    hold: {
+      available: hold.available,
+      ...(hold.heldAt === undefined ? {} : { heldAt: hold.heldAt }),
+      ...(hold.reason === undefined ? {} : { reason: hold.reason }),
+    },
+  };
+}
+
+/**
+ * When a Claude question or plan approval was raised.
+ *
+ * Bridges that pause publish `requestedAt`. Older ones did not, and the
+ * deadline was always five minutes after the request, so it was derived from
+ * `expiresAt` — which a pause moves a day out, and a `createdAt` in the future
+ * would reject every answer as early.
+ */
+function claudeCreatedAt(
+  requestedAt: unknown,
+  expiresAt: unknown,
+  firstSeen: () => number,
+): number {
+  if (
+    Number.isSafeInteger(requestedAt) &&
+    (requestedAt as number) >= 0 &&
+    (!Number.isSafeInteger(expiresAt) || (requestedAt as number) < (expiresAt as number))
+  ) {
+    return requestedAt as number;
+  }
+  return Number.isSafeInteger(expiresAt)
+    ? requestCreatedAt(expiresAt as number, Date.now())
+    : firstSeen();
+}
 const CODEX_APPROVAL_AMENDMENT_QUESTION_ID = "codex-approval-amendment";
 const MAX_RENDERED_FILE_CHANGES = 48;
 const MAX_RENDERED_FILE_CHANGE_TEXT_LENGTH = 256;
 
-export class HttpBridgeInteractionAdapter {
+export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCapability {
   private readonly interactionTracker = new InteractionSnapshotTracker();
   private readonly providerInteractionIds = new Map<
     string,
-    { providerRequestId: string; sessionId: string; actionable?: boolean }
+    { providerRequestId: string; sessionId: string; family: string; actionable?: boolean }
   >();
   private readonly resolvingInteractions = new Set<string>();
 
@@ -75,16 +129,17 @@ export class HttpBridgeInteractionAdapter {
     sessionId: string,
     providerRequestId: string,
     category: string,
+    published: Record<string, unknown> | null | undefined,
     input: Omit<
       AgentInteractionRequest,
-      "version" | "id" | "provider" | "origin" | "sessionId" | "state" | "revision"
+      "version" | "id" | "provider" | "origin" | "sessionId" | "state" | "revision" | "hold"
     >,
   ): AgentInteractionRequest {
     const id = this.normalizedId(sessionId, providerRequestId, category);
     setBoundedMapEntry(
       this.providerInteractionIds,
       id,
-      { providerRequestId, sessionId },
+      { providerRequestId, sessionId, family: this.snapshotFamily(category) },
       MAX_TRACKED_PROVIDER_INTERACTIONS,
     );
     return {
@@ -96,6 +151,7 @@ export class HttpBridgeInteractionAdapter {
       state: "pending",
       revision: 0,
       ...input,
+      ...bridgeHold(published, input),
     };
   }
 
@@ -161,13 +217,13 @@ export class HttpBridgeInteractionAdapter {
       };
     });
     const id = this.normalizedId(sessionId, providerRequestId, "question");
-    const createdAt = Number.isSafeInteger(expiresAt)
-      ? requestCreatedAt(expiresAt as number, Date.now())
-      : this.interactionTracker.firstSeen(id);
+    const createdAt = claudeCreatedAt(request.requestedAt, expiresAt, () =>
+      this.interactionTracker.firstSeen(id),
+    );
     const expiry = Number.isSafeInteger(expiresAt)
       ? (expiresAt as number)
       : createdAt + AGENT_INTERACTION_DEFAULT_TIMEOUT_MS;
-    return this.interactionRequest(sessionId, providerRequestId, "question", {
+    return this.interactionRequest(sessionId, providerRequestId, "question", request, {
       kind: "question",
       presentation: { title: "Claude needs input", questions: mapped },
       createdAt,
@@ -199,13 +255,13 @@ export class HttpBridgeInteractionAdapter {
       (typeof rawPlan === "string" && rawPlan.length > AGENT_INTERACTION_LIMITS.maxTextLength);
     const actionable = plan !== null && !planWasTruncated;
     const id = this.normalizedId(sessionId, providerRequestId, "plan");
-    const createdAt = Number.isSafeInteger(expiresAt)
-      ? requestCreatedAt(expiresAt as number, Date.now())
-      : this.interactionTracker.firstSeen(id);
+    const createdAt = claudeCreatedAt(request?.requestedAt, expiresAt, () =>
+      this.interactionTracker.firstSeen(id),
+    );
     const expiry = Number.isSafeInteger(expiresAt)
       ? (expiresAt as number)
       : createdAt + AGENT_INTERACTION_DEFAULT_TIMEOUT_MS;
-    const mapped = this.interactionRequest(sessionId, providerRequestId, "plan", {
+    const mapped = this.interactionRequest(sessionId, providerRequestId, "plan", request, {
       kind: "plan-approval",
       presentation: {
         title: actionable
@@ -258,7 +314,7 @@ export class HttpBridgeInteractionAdapter {
       if (kind === "mcp-url" && !url) {
         throw new ProviderUnavailableError("Claude returned a malformed URL elicitation");
       }
-      return this.interactionRequest(sessionId, providerRequestId, "interaction", {
+      return this.interactionRequest(sessionId, providerRequestId, "interaction", request, {
         kind,
         presentation: {
           title: nonEmptyString(request.title)
@@ -309,7 +365,7 @@ export class HttpBridgeInteractionAdapter {
       ...optionalLine("Blocked path", request.blockedPath),
       ...optionalLine("Input", request.input),
     ]);
-    return this.interactionRequest(sessionId, providerRequestId, "approval", {
+    return this.interactionRequest(sessionId, providerRequestId, "approval", request, {
       kind,
       presentation: {
         // The sentence the CLI composed names the operation better than a
@@ -441,7 +497,7 @@ export class HttpBridgeInteractionAdapter {
       ...(networkHost ? [`Network host: ${boundedText(networkHost, "Network host")}`] : []),
       ...(!actionable ? ["Approval is missing actionable operation details."] : []),
     ]);
-    const mapped = this.interactionRequest(sessionId, providerRequestId, "approval", {
+    const mapped = this.interactionRequest(sessionId, providerRequestId, "approval", request, {
       kind,
       presentation: {
         title:
@@ -511,7 +567,7 @@ export class HttpBridgeInteractionAdapter {
     const expiresAt = Number.isSafeInteger(request.expiresAt)
       ? (request.expiresAt as number)
       : createdAt + AGENT_INTERACTION_DEFAULT_TIMEOUT_MS;
-    return this.interactionRequest(sessionId, providerRequestId, "approval", {
+    return this.interactionRequest(sessionId, providerRequestId, "approval", request, {
       kind: "permission",
       presentation: {
         title: boundedText(title, "Approval requested"),
@@ -570,7 +626,7 @@ export class HttpBridgeInteractionAdapter {
       const rawPlan = typeof request.plan === "string" ? request.plan : "";
       const truncated = request.planTruncated === true;
       const plan = truncatedText(rawPlan, rawPlan || "Grok did not provide plan text.");
-      const mapped = this.interactionRequest(sessionId, providerRequestId, "plan", {
+      const mapped = this.interactionRequest(sessionId, providerRequestId, "plan", request, {
         kind: "plan-approval",
         presentation: {
           title: truncated ? "Grok's plan is too large to approve" : "Approve Grok's plan",
@@ -631,7 +687,7 @@ export class HttpBridgeInteractionAdapter {
         };
       },
     );
-    return this.interactionRequest(sessionId, providerRequestId, "question", {
+    return this.interactionRequest(sessionId, providerRequestId, "question", request, {
       kind: "question",
       presentation: { title: "Grok needs input", questions },
       createdAt: requestedAt as number,
@@ -670,7 +726,7 @@ export class HttpBridgeInteractionAdapter {
     if (kind === "mcp-url" && !url) {
       throw new ProviderUnavailableError("Codex returned a malformed URL elicitation");
     }
-    return this.interactionRequest(sessionId, providerRequestId, "interaction", {
+    return this.interactionRequest(sessionId, providerRequestId, "interaction", request, {
       kind,
       presentation: {
         title:
@@ -971,6 +1027,87 @@ export class HttpBridgeInteractionAdapter {
     } finally {
       this.resolvingInteractions.delete(interactionId);
     }
+  }
+
+  /**
+   * Pause (`held`) or resume a request's countdown on the bridge that owns
+   * its deadline. Never answers the request: the bridge only moves the
+   * deadline, and the expiry it still ends in declines exactly as before.
+   */
+  async holdInteraction(
+    sessionId: string,
+    interactionId: string,
+    held: boolean,
+  ): Promise<AgentInteractionApplyOutcome> {
+    const knownSession = this.interactionTracker.sessionFor(interactionId);
+    if (knownSession !== undefined && knownSession !== sessionId) {
+      return outcome("rejected", sessionId, interactionId, 0);
+    }
+    const snapshot = await this.listPendingInteractions(sessionId);
+    const request = snapshot.requests.find((candidate) => candidate.id === interactionId);
+    if (!request || (request.expiresAt !== undefined && request.expiresAt <= Date.now())) {
+      return outcome("stale", sessionId, interactionId, snapshot.revision);
+    }
+    if ((request.hold?.heldAt !== undefined) === held) {
+      return outcome("applied", sessionId, interactionId, snapshot.revision);
+    }
+    if (request.hold?.available !== true) {
+      return outcome("rejected", sessionId, interactionId, snapshot.revision);
+    }
+    if (this.resolvingInteractions.has(interactionId)) {
+      return outcome("already-resolved", sessionId, interactionId, snapshot.revision);
+    }
+    const identity = this.providerInteractionIds.get(interactionId);
+    if (!identity) return outcome("stale", sessionId, interactionId, snapshot.revision);
+    let response: Response;
+    try {
+      response = await bridgeFetch(
+        this.connection,
+        `/session/${encodeURIComponent(sessionId)}/${identity.family}/${encodeURIComponent(
+          identity.providerRequestId,
+        )}/hold`,
+        { method: "POST", body: JSON.stringify({ held }) },
+        this.fetchImpl,
+      );
+    } catch {
+      return outcome("provider-unavailable", sessionId, interactionId, snapshot.revision);
+    }
+    if (response.status === 409 || response.status === 404) {
+      const reconciled = await this.listPendingInteractions(sessionId).catch(() => snapshot);
+      return outcome("stale", sessionId, interactionId, reconciled.revision);
+    }
+    if (!response.ok) {
+      return outcome(
+        isTransientHttpStatus(response.status) ? "provider-unavailable" : "rejected",
+        sessionId,
+        interactionId,
+        snapshot.revision,
+      );
+    }
+    const reconciled = await this.listPendingInteractions(sessionId).catch(() => null);
+    if (!reconciled) {
+      return outcome("provider-unavailable", sessionId, interactionId, snapshot.revision);
+    }
+    const after = reconciled.requests.find((candidate) => candidate.id === interactionId);
+    if (!after) return outcome("stale", sessionId, interactionId, reconciled.revision);
+    return outcome(
+      (after.hold?.heldAt !== undefined) === held ? "applied" : "provider-unavailable",
+      sessionId,
+      interactionId,
+      reconciled.revision,
+    );
+  }
+
+  /** The bridge route family a request was read from, which its hold route mirrors. */
+  private snapshotFamily(category: string): string {
+    if (this.agent === "claude") {
+      return category === "question"
+        ? "questions"
+        : category === "plan"
+          ? "plan-approvals"
+          : "interactions";
+    }
+    return category === "approval" ? "approvals" : "interactions";
   }
 
   private async httpResolutionTarget(

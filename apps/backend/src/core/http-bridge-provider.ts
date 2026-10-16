@@ -24,7 +24,7 @@ import {
   PromptRejectedError,
   ProviderSessionFailedError,
   ProviderUnavailableError,
-  type ProviderMcpConfigEvidence,
+  type ProviderMcpConfigReport,
   type ProviderRuntimeHealth,
   ProviderUnreachableError,
 } from "./agent-provider-contract.js";
@@ -127,12 +127,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     this.interactionAdapter = new HttpBridgeInteractionAdapter(this.agent, connection, fetchImpl);
     this.catalogAdapter = new HttpBridgeCatalogAdapter(this.agent, connection, fetchImpl);
     this.activityBatchReader = new HttpBridgeActivityBatchReader(connection, fetchImpl);
-    this.interactions = {
-      listPendingInteractions: (sessionId) =>
-        this.interactionAdapter.listPendingInteractions(sessionId),
-      resolveInteraction: (sessionId, interactionId, resolution) =>
-        this.interactionAdapter.resolveInteraction(sessionId, interactionId, resolution),
-    };
+    this.interactions = this.interactionAdapter;
     if (this.agent === "grok") {
       this.turnTerminalError = (sessionId, requestId) =>
         readAcpTurnTerminalError(connection, fetchImpl, sessionId, requestId);
@@ -609,7 +604,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   /** Backend-only MCP apply evidence; see `http-bridge-mcp-evidence.ts`. */
-  mcpConfigEvidence(sessionId: string): Promise<ProviderMcpConfigEvidence | undefined> {
+  mcpConfigEvidence(sessionId: string): Promise<ProviderMcpConfigReport> {
     const { connection, fetchImpl, agent } = this;
     return readBridgeMcpConfigEvidence({ connection, fetchImpl, agent, sessionId });
   }

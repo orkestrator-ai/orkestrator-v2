@@ -27,6 +27,8 @@ import {
   type MultiReviewWorkflow as BackendMultiReviewWorkflow,
   type MultiReviewReviewerHistoryPage,
   type MultiReviewReviewerTranscript,
+  type MultiReviewStepKind,
+  type MultiReviewStepTranscript,
   type StartMultiReviewCustomFixInput,
   type StartMultiReviewInput,
 } from "@orkestrator/protocol/multi-review";
@@ -373,6 +375,22 @@ export async function getMultiReviewReviewerTranscript(
   return invoke<MultiReviewReviewerTranscript>("get_multi_review_reviewer_transcript", {
     workflowId,
     reviewerId,
+    ...(options.knownSourceToken ? { knownSourceToken: options.knownSourceToken } : {}),
+  });
+}
+
+/**
+ * Reads a bounded tail of a preparation, consolidation or Fix session, with
+ * the reviewer transcript's conditional `knownSourceToken` contract.
+ */
+export async function getMultiReviewStepTranscript(
+  workflowId: string,
+  step: MultiReviewStepKind,
+  options: { knownSourceToken?: string } = {},
+): Promise<MultiReviewStepTranscript> {
+  return invoke<MultiReviewStepTranscript>("get_multi_review_step_transcript", {
+    workflowId,
+    step,
     ...(options.knownSourceToken ? { knownSourceToken: options.knownSourceToken } : {}),
   });
 }
@@ -779,6 +797,17 @@ export async function resolveNativeAgentInteraction(input: {
   resolution: AgentInteractionResolution;
 }): Promise<AgentInteractionApplyOutcome> {
   return invoke("resolve_native_agent_interaction", input);
+}
+
+/** Pause (`held`) or resume an interaction's countdown where the agent enforces it. */
+export async function holdNativeAgentInteraction(input: {
+  environmentId: string;
+  agent: NativeAgentClientPlatform;
+  logicalSessionKey: string;
+  interactionId: string;
+  held: boolean;
+}): Promise<AgentInteractionApplyOutcome> {
+  return invoke("hold_native_agent_interaction", input);
 }
 
 export async function dispatchNativeAgentPrompt(input: {

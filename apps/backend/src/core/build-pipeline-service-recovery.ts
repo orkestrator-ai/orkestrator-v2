@@ -792,6 +792,7 @@ export class BuildPipelineRecovery {
     delete pipeline.pendingInteractionResolution;
     delete pipeline.stallWarning;
     delete pipeline.pausedFromPhase;
+    delete pipeline.pauseCause;
     this.ctx.provisioningPrompts.delete(pipeline.id);
     this.ctx.lastProviderAgent.delete(pipeline.id);
     session.interactionSummary = appendInteractionSummary(

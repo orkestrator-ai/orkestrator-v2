@@ -9,7 +9,11 @@ import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 
 import { httpProvider } from "./agent-provider-test-support.js";
-import { bridgeMcpConfigEvidence, bridgeRuntimeSummary } from "./http-bridge-runtime-health.js";
+import {
+  bridgeMcpConfigEvidence,
+  bridgeReportsMcpConfig,
+  bridgeRuntimeSummary,
+} from "./http-bridge-runtime-health.js";
 
 const digest = (text: string) => `sha256:${createHash("sha256").update(text).digest("base64url")}`;
 const USER = digest("user file");
@@ -132,9 +136,12 @@ describe("renderer-facing health never carries the digests", () => {
     expect(JSON.stringify(health)).not.toContain(USER.slice("sha256:".length));
 
     expect(await provider.mcpConfigEvidence!("s-1")).toEqual({
-      sources: { user: USER, project: PROJECT, local: USER },
-      observedAt: AT,
-      scope: "session",
+      state: "evidence",
+      evidence: {
+        sources: { user: USER, project: PROJECT, local: USER },
+        observedAt: AT,
+        scope: "session",
+      },
     });
     // Only the runtime-health route: never `/session/:id` or `/status`, which
     // refresh liveness, hydrate a transcript or re-attach.
@@ -144,8 +151,47 @@ describe("renderer-facing health never carries the digests", () => {
     ]);
   });
 
-  test("a bridge that predates the route reports no evidence", async () => {
+  test("a bridge that predates the route is older than the report", async () => {
     const { provider } = httpProvider(() => new Response("not found", { status: 404 }));
-    expect(await provider.mcpConfigEvidence!("s-1")).toBeUndefined();
+    expect(await provider.mcpConfigEvidence!("s-1")).toEqual({ state: "unsupported" });
+  });
+});
+
+describe("telling an older bridge from one with nothing loaded", () => {
+  const read = async (body: unknown, status = 200) => {
+    const { provider } = httpProvider(() =>
+      typeof body === "string" ? new Response(body, { status }) : Response.json(body, { status }),
+    );
+    return provider.mcpConfigEvidence!("s-1");
+  };
+
+  test("a current bridge marks every body, even before anything loaded", async () => {
+    expect(await read({ summary: {}, notices: [], mcpConfigReporting: 1 })).toEqual({
+      state: "none",
+    });
+  });
+
+  test("a bridge that reports mcpConfig without the marker still reports", async () => {
+    // Grok's process-level report before any child listed its servers.
+    expect(
+      await read({ summary: {}, notices: [], mcpConfig: { inventoryScope: "process" } }),
+    ).toEqual({ state: "none" });
+  });
+
+  test("a readable body with neither is a bridge older than the report", async () => {
+    expect(await read({ summary: {}, notices: [] })).toEqual({ state: "unsupported" });
+  });
+
+  test("a failure that is not 404 or 405 says nothing about the version", async () => {
+    expect(await read("busy", 503)).toEqual({ state: "none" });
+    expect(await read("gone", 405)).toEqual({ state: "unsupported" });
+  });
+
+  test("only a positive marker counts", () => {
+    expect(bridgeReportsMcpConfig({ mcpConfigReporting: 0 })).toBe(false);
+    expect(bridgeReportsMcpConfig({ mcpConfigReporting: "1" })).toBe(false);
+    expect(bridgeReportsMcpConfig({ mcpConfig: [] })).toBe(false);
+    expect(bridgeReportsMcpConfig(null)).toBe(false);
+    expect(bridgeReportsMcpConfig({ mcpConfigReporting: 2 })).toBe(true);
   });
 });

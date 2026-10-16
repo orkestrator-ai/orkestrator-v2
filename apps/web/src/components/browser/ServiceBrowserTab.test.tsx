@@ -457,7 +457,7 @@ describe("service browser tabs", () => {
     );
     renderTab();
     const register = await screen.findByRole("button", { name: "Register port 4000" });
-    expect(screen.queryByRole("button", { name: "Open as a backend host port" }) === null).toBe(
+    expect(screen.queryByRole("button", { name: "Open as a temporary backend host port" }) === null).toBe(
       true,
     );
     expect(screen.getByText(/0\.0\.0\.0, which is its bind address/)).toBeTruthy();

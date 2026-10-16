@@ -105,6 +105,7 @@ function pidAlive(pid: number): boolean {
 export class McpSourceStore {
   private readonly queues = new Map<string, Promise<unknown>>();
   private key: Buffer | null = null;
+  private keyLoad: Promise<Buffer> | null = null;
   private selfStart: string | null | undefined;
 
   constructor(
@@ -117,11 +118,25 @@ export class McpSourceStore {
     },
   ) {}
 
-  /** Private per-backend key; also used for operation fingerprints. */
+  /**
+   * Private per-backend key; also used for operation fingerprints. Every
+   * caller must get the same key, or two concurrent first requests compute
+   * different fingerprints and revisions, so concurrent calls share one load:
+   * otherwise the second could find the file the first had just created but
+   * not yet written, and read a short or empty key.
+   */
   async secretKey(): Promise<Buffer> {
     if (this.key) return this.key;
+    this.keyLoad ??= this.loadKey().finally(() => {
+      this.keyLoad = null;
+    });
+    return this.keyLoad;
+  }
+
+  private async loadKey(): Promise<Buffer> {
+    const keyFile = this.options.keyFile;
     try {
-      const existing = await fs.readFile(this.options.keyFile);
+      const existing = await fs.readFile(keyFile);
       if (existing.byteLength >= 32) {
         this.key = existing;
         return existing;
@@ -130,13 +145,13 @@ export class McpSourceStore {
       if (!isErrno(error, "ENOENT")) throw error;
     }
     const created = randomBytes(32);
-    await fs.mkdir(path.dirname(this.options.keyFile), { recursive: true, mode: 0o700 });
+    await fs.mkdir(path.dirname(keyFile), { recursive: true, mode: 0o700 });
     try {
-      await fs.writeFile(this.options.keyFile, created, { mode: 0o600, flag: "wx" });
+      await fs.writeFile(keyFile, created, { mode: 0o600, flag: "wx" });
       this.key = created;
     } catch (error) {
       if (!isErrno(error, "EEXIST")) throw error;
-      this.key = await fs.readFile(this.options.keyFile);
+      this.key = await fs.readFile(keyFile);
     }
     return this.key;
   }

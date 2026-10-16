@@ -7,6 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentSession, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { MCP_CONFIG_REPORTING_VERSION } from "@orkestrator/protocol/mcp-management";
+import { testApprovalDeadline } from "./testing/approval-fixtures.js";
 
 // `config.ts` reads its environment once, at import. Everything below is
 // therefore loaded dynamically, after the environment this suite needs is in
@@ -34,6 +36,8 @@ const { applySessionEvent } = await import("./translate.js");
 const { nativeFetch } = await import("./testing/native-fetch.js");
 const { buildCommandCatalogue, publishCommandCatalogue } = await import("./commands.js");
 const { NOT_AUTHENTICATED_MESSAGE } = await import("./credentials.js");
+const { requestToolApproval, resolveApproval } = await import("./interactions.js");
+const { approvalTimeoutMs } = await import("./config.js");
 
 let origin: string;
 
@@ -1319,7 +1323,7 @@ describe("session routes", () => {
       toolName: "bash",
       input: { command: "ls" },
       createdAt: Date.now(),
-      expiresAt: Date.now() + 60_000,
+      deadline: testApprovalDeadline(),
       settle: () => undefined,
     });
 
@@ -1360,10 +1364,14 @@ describe("session routes", () => {
       const state = seedSession();
       state.lastAccessed = 0;
       await preparePiMcp(state, { agentDir: root, cwd: root, env: {} });
-      // Detached: nothing loaded, nothing reported.
+      // Detached: nothing loaded, nothing reported, but the bridge still says
+      // it reports, so the backend does not read it as an older bridge.
+      const detached = await (await call(`/session/${state.id}/runtime-health`)).json();
+      expect(detached.mcpConfig).toBeUndefined();
+      expect(detached.mcpConfigReporting).toBe(MCP_CONFIG_REPORTING_VERSION);
       expect(
-        (await (await call(`/session/${state.id}/runtime-health`)).json()).mcpConfig,
-      ).toBeUndefined();
+        (await (await call(`/session/unknown-session/runtime-health`)).json()).mcpConfigReporting,
+      ).toBe(MCP_CONFIG_REPORTING_VERSION);
 
       state.session = {} as never;
       const body = await (await call(`/session/${state.id}/runtime-health`)).json();
@@ -1483,7 +1491,7 @@ describe("closing a session", () => {
       toolName: "bash",
       input: { command: "rm -rf build" },
       createdAt: Date.now(),
-      expiresAt: Date.now() + 60_000,
+      deadline: testApprovalDeadline(),
       settle: (decision) => decisions.push(decision),
     });
 
@@ -1623,7 +1631,7 @@ describe("cancel", () => {
       toolName: "bash",
       input: { command: "make release" },
       createdAt: Date.now(),
-      expiresAt: Date.now() + 60_000,
+      deadline: testApprovalDeadline(),
       settle: (decision) => order.push(decision),
     });
     state.cancelTurn = async () => {
@@ -2568,7 +2576,7 @@ describe("approvals", () => {
       toolName: "bash",
       input: { command: "ls" },
       createdAt: Date.now(),
-      expiresAt: Date.now() + 60_000,
+      deadline: testApprovalDeadline(),
       settle: (decision) => {
         state.approvals.delete("a1");
         decisions.push(decision);
@@ -2581,6 +2589,164 @@ describe("approvals", () => {
     });
     expect(response.status).toBe(200);
     expect(decisions).toEqual(["deny"]);
+  });
+
+  describe("hold", () => {
+    /**
+     * Park a call through the real gate. Its timer is real but unref'd and
+     * never waited on: every test settles it before it could fire.
+     */
+    function parkThroughGate(state: ReturnType<typeof newSessionState>) {
+      state.policy = {
+        id: "interactive-host",
+        sandbox: "provider",
+        approvals: "ask",
+        projectResources: false,
+        networkAccess: "restricted",
+      };
+      let decision: { block: boolean; reason?: string } | undefined;
+      const settled = requestToolApproval(state, "call-1", "bash", {
+        command: "make release",
+      }).then((value) => {
+        decision = value;
+        return value;
+      });
+      const [id] = [...state.approvals.keys()];
+      return { id: id!, settled, decision: () => decision };
+    }
+
+    function hold(state: ReturnType<typeof newSessionState>, id: string, body: unknown) {
+      return call(`/session/${state.id}/approvals/${id}/hold`, {
+        method: "POST",
+        body: typeof body === "string" ? body : JSON.stringify(body),
+      });
+    }
+
+    test("pauses and resumes the countdown without answering the call", async () => {
+      const state = seedSession();
+      const parked = parkThroughGate(state);
+      const requestedAt = state.approvals.get(parked.id)!.createdAt;
+
+      const paused = await hold(state, parked.id, { held: true });
+      expect(paused.status).toBe(200);
+      const pausedBody = (await paused.json()) as {
+        status: string;
+        expiresAt: number;
+        hold: { available: boolean; heldAt: number };
+      };
+      expect(pausedBody).toEqual({
+        status: "applied",
+        expiresAt: expect.any(Number),
+        hold: { available: true, heldAt: expect.any(Number) },
+      });
+      // The ceiling, a day out, not the five-minute window.
+      expect(pausedBody.expiresAt).toBeGreaterThan(requestedAt + approvalTimeoutMs());
+
+      // Still parked, and the snapshot publishes the moved deadline.
+      expect(state.approvals.has(parked.id)).toBe(true);
+      const snapshot = (await (await call(`/session/${state.id}/approvals`)).json()) as {
+        approvals: Array<Record<string, unknown>>;
+      };
+      expect(snapshot.approvals).toEqual([
+        expect.objectContaining({
+          approvalId: parked.id,
+          requestedAt,
+          expiresAt: pausedBody.expiresAt,
+          hold: pausedBody.hold,
+        }),
+      ]);
+
+      const again = await hold(state, parked.id, { held: true });
+      expect(again.status).toBe(200);
+      expect(await again.json()).toEqual({ ...pausedBody, status: "unchanged" });
+
+      const resumed = await hold(state, parked.id, { held: false });
+      expect(resumed.status).toBe(200);
+      expect(await resumed.json()).toEqual({
+        status: "applied",
+        expiresAt: expect.any(Number),
+        hold: { available: true },
+      });
+
+      await Promise.resolve();
+      expect(parked.decision()).toBeUndefined();
+      expect(state.approvals.has(parked.id)).toBe(true);
+      resolveApproval(state, parked.id, "deny");
+      expect((await parked.settled).block).toBe(true);
+    });
+
+    test("answers 409 stale for an approval that is no longer parked", async () => {
+      const state = seedSession();
+      const parked = parkThroughGate(state);
+      resolveApproval(state, parked.id, "allow");
+      expect(await parked.settled).toEqual({ block: false });
+
+      for (const id of [parked.id, "never-existed"]) {
+        const response = await hold(state, id, { held: true });
+        // Never 404: that is what a bridge without this route answers.
+        expect(response.status).toBe(409);
+        expect(await response.json()).toEqual({
+          error: "Approval is no longer pending",
+          status: "stale",
+        });
+      }
+    });
+
+    test("answers 422 when the turn's budget leaves the pause nothing to buy", async () => {
+      const state = seedSession();
+      state.turnDeadlineAt = Date.now() + 60_000;
+      const parked = parkThroughGate(state);
+      const before = state.approvals.get(parked.id)!.deadline.expiresAt;
+
+      const response = await hold(state, parked.id, { held: true });
+      expect(response.status).toBe(422);
+      expect(await response.json()).toEqual({
+        error: "This request's deadline cannot be extended",
+        status: "unavailable",
+      });
+      expect(state.approvals.get(parked.id)!.deadline.expiresAt).toBe(before);
+
+      resolveApproval(state, parked.id, "deny");
+      await parked.settled;
+    });
+
+    test("rejects a malformed hold with 400 and never treats it as an answer", async () => {
+      const state = seedSession();
+      const parked = parkThroughGate(state);
+      const revision = state.revision;
+
+      for (const body of [{}, { held: "true" }, { decision: "approve" }, "not json"]) {
+        const response = await hold(state, parked.id, body);
+        expect(response.status).toBe(400);
+      }
+
+      // Unlike the decision route, nothing here denies or approves.
+      await Promise.resolve();
+      expect(parked.decision()).toBeUndefined();
+      expect(state.approvals.has(parked.id)).toBe(true);
+      expect(state.revision).toBe(revision);
+      expect(state.approvals.get(parked.id)!.deadline.heldAt).toBeUndefined();
+
+      resolveApproval(state, parked.id, "deny");
+      await parked.settled;
+    });
+
+    test("answers an unknown session as the other approval routes do", async () => {
+      const response = await call(`/session/no-such-session/approvals/a1/hold`, {
+        method: "POST",
+        body: JSON.stringify({ held: true }),
+      });
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual({ error: "Session not found" });
+    });
+
+    test("serves the suffix only under one approval", async () => {
+      const state = seedSession();
+      for (const path of [`/session/${state.id}/messages/a1/hold`, `/session/${state.id}/hold`]) {
+        expect((await call(path, { method: "POST", body: "{}" })).status).toBe(404);
+      }
+      expect((await call(`/session/${state.id}/approvals/a1/hold`)).status).toBe(404);
+    });
   });
 });
 

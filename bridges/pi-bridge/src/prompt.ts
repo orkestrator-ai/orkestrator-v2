@@ -480,6 +480,10 @@ async function followRun(
   command?: { run: PiCommandRun; cancelled: Promise<void> },
 ): Promise<void> {
   const commandRun = command?.run;
+  // The moment the budget below denies every parked approval. Published so a
+  // paused approval's deadline is capped by it rather than outliving the turn.
+  const turnDeadlineAt = Date.now() + promptTimeoutMs;
+  state.turnDeadlineAt = turnDeadlineAt;
   try {
     const work = command
       ? Promise.race([run.then(() => awaitExtensionWork(session)), command.cancelled])
@@ -523,6 +527,8 @@ async function followRun(
     failTurn(state, session, error, input);
   } finally {
     if (commandRun && state.commandRun === commandRun) state.commandRun = undefined;
+    // By value, like the claim: a superseded turn must not clear its successor's.
+    if (state.turnDeadlineAt === turnDeadlineAt) state.turnDeadlineAt = undefined;
   }
 }
 

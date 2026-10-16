@@ -5,6 +5,7 @@ import {
   type QuestionCardQuestion,
   type SubmitAnswersHandler,
 } from "@/components/chat/QuestionCard";
+import { TMUX_PROMPT_DEADLINE } from "@/components/chat/PromptDeadline";
 
 /**
  * Renders a Claude AskUserQuestion request. The caller owns the pending request
@@ -75,6 +76,7 @@ export function ClaudeQuestionCard({
       hideDismiss={hideDismiss}
       draftKey={draftKey}
       expiresAt={question.expiresAt}
+      deadline={TMUX_PROMPT_DEADLINE}
     />
   );
 }

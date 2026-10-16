@@ -39,6 +39,50 @@ mise run test:logged -- --name coordinator-isolated -- bun test --cwd apps/backe
 
 No coordinator implementation, assertion, timeout or skip was changed.
 
+## MCP apply-path merge validation recurrence on 2026-10-16
+
+Merging `origin/main` into `mcp-apply-path-gaps` and running
+`mise run test:logged -- --name merge-suite -- mise run test` reproduced the
+same five-second timeout at 5184.28 ms. The pending nested-repository assertion
+then rejected with `disk I/O error` after fixture cleanup. The backend reported
+8,319 passed, 40 skipped, one failed and one unhandled error. The other workspace
+packages, root, bridges and protocol check passed. The workspace group took
+447.0 seconds. Evidence:
+`/tmp/orkestrator-test-run.U853xk/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+After the aggregate finished, the unchanged owning file passed alone (exit 0,
+18.5 seconds):
+
+```bash
+mise run test:logged -- --name merge-coordinator-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures
+```
+
+No coordinator implementation, assertion, timeout or skip was changed.
+
+## Merge validation recurrence on 2026-10-16
+
+`mise run test:logged -- --name merge-tests -- mise run test` on
+`overnight-opencode-skew-guard-854f012a1bb0` timed out in the same case at
+5216.88 ms, with four workspace worker slots alongside the root, bridge and
+protocol groups. The backend reported 8,279 passed, 40 skipped, one failed and
+one teardown error across 8,320 tests; the workspace group finished in
+456.6 seconds. Evidence:
+`/tmp/orkestrator-test-run.3f2Lou/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+An owning-file rerun while the aggregate was still active also timed out at
+5126.59 ms, followed by `SQLITE_IOERR_VNODE` during asynchronous persistence
+after fixture cleanup (47 passed, one failed, one error; 27.9 seconds).
+Evidence: `/tmp/orkestrator-test-run.vvWBFs/merge-coordinator-rerun.log.gz`.
+After the aggregate finished, the unchanged owning file passed all 48 tests,
+exit 0, in 19.7 seconds:
+
+```bash
+mise run test:logged -- --name merge-coordinator-final -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures
+```
+
+This matches the existing load-related timeout and teardown pattern. No
+coordinator implementation, assertion, timeout or skip was changed.
+
 ## Recurrence — 2026-10-15 (coordinator mail upgrade recovery)
 
 `mise run test:logged -- --name mail-native-reconciliation -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/agent-mail-service.test.ts ./src/core/coordinator-service.test.ts ./src/core/native-agent-service-reconciliation.test.ts --parallel=2 --only-failures`
@@ -79,3 +123,24 @@ mise run test:logged -- --name coordinator-repro -- bun test --cwd apps/backend 
 
 The matching timeout and isolated pass support the existing load hypothesis.
 No coordinator implementation, assertion, timeout or skip was changed.
+
+## Recurrence on 2026-10-16 during the storage writer guards merge
+
+`mise run test:logged -- --name merge-tests -- mise run test` ran the backend
+with two isolated workers within a four-slot workspace group while other
+worktree validations shared the host. `project coordinator > bound discard
+confirmations refuse stale, sequencer, nested, and failed switches` exceeded
+the five-second deadline at 5,165.84 ms.
+
+`mise run test:logged -- --name merge-coordinator-isolated -- bun test
+--cwd apps/backend --preload ../../tests/setup-node.ts
+./src/core/coordinator-service.test.ts --parallel=1 --only-failures` passed the
+unchanged owning file in 18.6 seconds. Evidence and aggregate package counts
+are retained in
+`/tmp/orkestrator-test-run.Q27xqQ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+The existing load hypothesis remains unconfirmed; no assertion, timeout or
+skip was changed.
+
+Aggregate backend counts for this observation: 8,341 passed, 40 skipped,
+5 failed and 3 between-tests errors across 8,386 tests in 445 files
+(391.37 seconds). The other failures are recorded in 0162, 0165 and 0248.

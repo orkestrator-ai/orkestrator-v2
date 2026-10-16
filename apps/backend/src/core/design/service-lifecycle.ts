@@ -11,14 +11,17 @@ import {
   type DesignOperationStatus,
   type DesignPrepareResult,
 } from "@orkestrator/protocol/design-operations";
-import { DesignError, toDesignFailure } from "./errors.js";
+import { DesignError, reusedCorrelation, toDesignFailure } from "./errors.js";
 import {
+  addReceipt,
   cloneRecord,
   descriptorDigest,
   freshFrameMeta,
+  intentDigest,
   newRecord,
-  pruneReceipts,
   readBounded,
+  receiptDigest,
+  settledMatches,
   type DesignPendingOperation,
   type DesignPrivateRecord,
 } from "./records.js";
@@ -85,14 +88,8 @@ export async function prepareCreate(
       const existing = await findCreate(service, environmentId, descriptor.correlationId);
       if (existing?.pending) {
         const { pending } = existing;
-        if (
-          pending.digest !==
-          descriptorDigest({ environmentId, canvasId: pending.canvasId, descriptor })
-        )
-          throw new DesignError(
-            "invalid-input",
-            "This correlation id was already used for a different edit",
-          );
+        if (intentDigest(pending.descriptor) !== intentDigest(descriptor))
+          throw reusedCorrelation(pending.token);
         return {
           token: pending.token,
           canvasId: pending.canvasId,
@@ -100,7 +97,9 @@ export async function prepareCreate(
           expiresAt: pending.expiresAt,
         };
       }
-      if (existing?.receipt)
+      if (existing?.receipt) {
+        if (!settledMatches(existing.receipt, existing.digest, descriptor))
+          throw reusedCorrelation(existing.receipt.token);
         throw new DesignError(
           "invalid-input",
           "This correlation id already has a settled operation",
@@ -108,6 +107,7 @@ export async function prepareCreate(
             details: { token: existing.receipt.token },
           },
         );
+      }
     }
     const counts = service.library.counts();
     if (counts.live + counts.provisional >= DESIGN_MAX_CANVASES)
@@ -153,7 +153,9 @@ export async function findCreate(
   service: DesignService,
   environmentId: string,
   correlationId: string,
-): Promise<{ pending?: DesignPendingOperation; receipt?: DesignOperationStatus } | undefined> {
+): Promise<
+  { pending?: DesignPendingOperation; receipt?: DesignOperationStatus; digest?: string } | undefined
+> {
   await service.initialize();
   for (const entry of Array.from(service.library.entries.values())) {
     if (entry.environmentId !== environmentId) continue;
@@ -173,7 +175,7 @@ export async function findCreate(
       (candidate) =>
         candidate.kind === "create_canvas" && candidate.correlationId === correlationId,
     );
-    if (receipt) return { receipt };
+    if (receipt) return { receipt, digest: receiptDigest(loaded.record, receipt.token) };
   }
   return undefined;
 }
@@ -209,8 +211,7 @@ export async function executeLifecycle(
         const settled = loaded.record.receipts.find((candidate) => candidate.token === entry.token);
         if (settled) return settled;
         const next = cloneRecord(loaded.record);
-        next.receipts.push(receipt);
-        pruneReceipts(next);
+        addReceipt(next, receipt, entry.descriptor);
         await service.commit(next, loaded.legacy);
       } else if (loaded.kind === "record") {
         await discardProvisional(service, entry.canvasId);
@@ -277,7 +278,7 @@ async function executeCreate(service: DesignService, entry: DesignPendingOperati
         })),
       },
     });
-    next.receipts.push(receipt);
+    addReceipt(next, receipt, entry.descriptor);
     await service.commit(next, false, {
       revision: 1,
       kind: "document",
@@ -331,8 +332,7 @@ async function executeDelete(service: DesignService, entry: DesignPendingOperati
     const receipt = service.receipt(entry, "committed", {
       result: { canvasRevision: record.document.revision, frames: [] },
     });
-    next.receipts.push(receipt);
-    pruneReceipts(next);
+    addReceipt(next, receipt, entry.descriptor);
     await service.commit(next, legacy, {
       revision: record.document.revision,
       kind: "deleted",
@@ -386,8 +386,7 @@ async function executeRestore(service: DesignService, entry: DesignPendingOperat
       const receipt = service.receipt(entry, "committed", {
         result: { canvasRevision: next.document.revision, frames: [] },
       });
-      next.receipts.push(receipt);
-      pruneReceipts(next);
+      addReceipt(next, receipt, entry.descriptor);
       await service.commit(next, legacy, {
         revision: next.document.revision,
         kind: "restored",
@@ -468,8 +467,7 @@ async function executeDuplicate(
         frames: [],
       },
     });
-    next.receipts.push(receipt);
-    pruneReceipts(next);
+    addReceipt(next, receipt, entry.descriptor);
     await service.commit(next, legacy);
     await service.dropPending(
       entry.canvasId,

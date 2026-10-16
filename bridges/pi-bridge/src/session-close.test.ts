@@ -14,6 +14,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { testApprovalDeadline } from "./testing/approval-fixtures.js";
 
 const ENV_KEYS = [
   "PORT",
@@ -197,7 +198,7 @@ describe("POST /session/:id/close", () => {
       toolName: "bash",
       input: { command: "rm -rf build" },
       createdAt: Date.now(),
-      expiresAt: Date.now() + 60_000,
+      deadline: testApprovalDeadline(),
       settle: (decision) => decisions.push(decision),
     });
     state.status = "running";

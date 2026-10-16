@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { gunzipSync } from "node:zlib";
 import { TaskRegistry } from "@orkestrator/protocol/task-list";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
+import { MCP_CONFIG_REPORTING_VERSION } from "@orkestrator/protocol/mcp-management";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 
 // Snapshot the real session-manager BEFORE installing the route's stub mock.
@@ -450,6 +451,7 @@ describe("session routes", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       summary: { drift: { unknownEvents: 1, unknownKinds: ["future-event"] } },
+      mcpConfigReporting: MCP_CONFIG_REPORTING_VERSION,
       notices: [
         expect.objectContaining({
           message: "Provider deprecated an option",
@@ -465,7 +467,11 @@ describe("session routes", () => {
   test("runtime health answers empty in band for an unknown session", async () => {
     const response = await app.request("/session/missing/runtime-health");
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ summary: {}, notices: [] });
+    expect(await response.json()).toEqual({
+      summary: {},
+      notices: [],
+      mcpConfigReporting: MCP_CONFIG_REPORTING_VERSION,
+    });
   });
 
   // --- POST /session/create ---

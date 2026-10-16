@@ -166,6 +166,16 @@ any whole-store cache after commit. Legacy document representations retain the
 whole-document fallback. `getResourceSnapshotRevision` hashes the database
 identity and that revision.
 
+Reads are charged to the innermost recurring job by what the caller got, not
+by where the rows came from, so an extra read shows however warm the cache
+is. Decoding a whole store, one owner's rows or one row is a `storage-read`,
+even when the cache serves it, because a cached whole-store read still parses
+every row. A revision check that lets a caller reuse values it already decoded
+is a `storage-stat`. That covers a write diffing against cached rows, row-size
+accounting, the build-pipeline control-record cache and the remaining file stat
+cache. Reads through `StorageDatabase.rows()` and hits in the workflow-result
+entry index are not charged yet.
+
 Several backends may share a data directory (the desktop app and `orkestrator
 serve` default to the same one). WAL lets them read concurrently, and the
 primitives above serialize their writes.

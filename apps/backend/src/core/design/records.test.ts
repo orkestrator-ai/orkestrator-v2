@@ -4,11 +4,19 @@ import { join } from "node:path";
 import { DESIGN_MAX_DOCUMENT_BYTES, type DesignCanvas } from "@orkestrator/protocol/design-canvas";
 import { isDesignError } from "./errors.js";
 import {
+  DESIGN_LIMITS,
+  type DesignOperationDescriptor,
+  type DesignOperationStatus,
+} from "@orkestrator/protocol/design-operations";
+import {
+  addReceipt,
   cloneRecord,
   DesignRecordStore,
+  intentDigest,
   migrateLegacy,
   newRecord,
   portableBytes,
+  receiptDigest,
   RECORD_KIND,
   type DesignPrivateRecord,
 } from "./records.js";
@@ -341,6 +349,98 @@ describe("design private records, legacy migration and recovery states", () => {
       service().create("env-2", "Copy", portableBytes(current).toString("utf8"), "user"),
     ).resolves.toBeDefined();
   }, 30_000);
+
+  test("receipt digests are kept only for correlated receipts and pruned with them", () => {
+    const record = newRecord(crypto.randomUUID(), "env-1", new Date(0).toISOString(), "live");
+    const receipt = (token: string, extra: Partial<DesignOperationStatus> = {}) =>
+      ({
+        token,
+        canvasId: record.canvasId,
+        kind: "update_frame",
+        state: "committed",
+        actor: "agent",
+        base: {},
+        correlationId: `corr-${token}`,
+        preparedAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+        ...extra,
+      }) satisfies DesignOperationStatus;
+    const descriptor = (n: number): DesignOperationDescriptor => ({
+      canvasId: record.canvasId,
+      input: { kind: "update_frame", frameId: record.canvasId, patch: { x: n } },
+      preconditions: {},
+      correlationId: `corr-op_${n}`,
+    });
+    addReceipt(record, receipt("op_0", { correlationId: undefined }), descriptor(0));
+    expect(record.receiptDigests).toBeUndefined();
+    for (let n = 1; n <= DESIGN_LIMITS.receiptsPerCanvas + 1; n++)
+      addReceipt(record, receipt(`op_${n}`), descriptor(n));
+    // The count bound drops the oldest receipts and their digests together.
+    expect(record.receipts).toHaveLength(DESIGN_LIMITS.receiptsPerCanvas);
+    expect(record.receipts[0]!.token).toBe("op_2");
+    expect(Object.keys(record.receiptDigests!).sort()).toEqual(
+      record.receipts.map((entry) => entry.token).sort(),
+    );
+    expect(receiptDigest(record, "op_1")).toBeUndefined();
+    expect(receiptDigest(record, "op_2")).toBe(intentDigest(descriptor(2)));
+    // Digests count toward the receipt byte budget.
+    const failure = { code: "conflict", message: "x".repeat(900), retry: "never" } as const;
+    for (let n = 0; n < DESIGN_LIMITS.receiptsPerCanvas; n++)
+      addReceipt(record, receipt(`op_bulky_${n}`, { failure }), descriptor(n));
+    const receiptBytes = Buffer.byteLength(JSON.stringify(record.receipts));
+    const digestBytes = Buffer.byteLength(JSON.stringify(record.receiptDigests));
+    expect(receiptBytes + digestBytes).toBeLessThanOrEqual(DESIGN_LIMITS.receiptBytesPerCanvas);
+    expect(receiptBytes + digestBytes).toBeGreaterThan(DESIGN_LIMITS.receiptBytesPerCanvas - 1_200);
+    expect(Object.keys(record.receiptDigests!)).toHaveLength(record.receipts.length);
+  });
+
+  test("the intent digest ignores key order but not values or style order", () => {
+    const frameId = "00000000-0000-4000-8000-000000000001";
+    const kind = "set_element_styles";
+    const styled = (styles: Record<string, string | null>): DesignOperationDescriptor => ({
+      correlationId: "c",
+      preconditions: { frameRevision: 1 },
+      canvasId: "00000000-0000-4000-8000-000000000000",
+      input: { kind, frameId, selector: "h1", styles },
+    });
+    const styles = { margin: "0", "margin-top": "10px" };
+    const base = styled(styles);
+    // Descriptor and input keys may arrive in any order.
+    expect(
+      intentDigest({
+        input: { styles, selector: "h1", frameId, kind },
+        canvasId: base.canvasId,
+        preconditions: { frameRevision: 1 },
+        correlationId: "c",
+      }),
+    ).toBe(intentDigest(base));
+    expect(intentDigest(base)).not.toBe(intentDigest(styled({ ...styles, "margin-top": "9px" })));
+    // Styles apply in order: a shorthand after its longhand resets it.
+    const reversed = { "margin-top": "10px", margin: "0" };
+    expect(intentDigest(base)).not.toBe(intentDigest(styled(reversed)));
+    const batch = (styles: Record<string, string | null>): DesignOperationDescriptor => ({
+      ...base,
+      input: {
+        kind: "batch",
+        operations: [
+          { kind: "update_frame", frameId, patch: { x: 1, y: 2 } },
+          { kind, frameId, selector: "h1", styles },
+        ],
+      },
+    });
+    const batchReordered: DesignOperationDescriptor = {
+      ...base,
+      input: {
+        operations: [
+          { patch: { y: 2, x: 1 }, frameId, kind: "update_frame" },
+          { styles, selector: "h1", frameId, kind },
+        ],
+        kind: "batch",
+      },
+    };
+    expect(intentDigest(batch(styles))).toBe(intentDigest(batchReordered));
+    expect(intentDigest(batch(styles))).not.toBe(intentDigest(batch(reversed)));
+  });
 
   test("legacy migration metadata is deterministic for the same snapshot", () => {
     const canvas = legacyCanvas();

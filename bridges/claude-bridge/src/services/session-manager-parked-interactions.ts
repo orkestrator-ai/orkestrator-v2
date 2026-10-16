@@ -4,6 +4,7 @@ import type {
   ElicitationResult,
   PermissionResult,
 } from "@anthropic-ai/claude-agent-sdk";
+import { InteractionDeadline } from "@orkestrator/protocol/agent-interaction-deadline";
 import { AGENT_INTERACTION_LIMITS } from "@orkestrator/protocol/agent-interactions";
 import type {
   ClaudeElicitationRequest,
@@ -13,6 +14,10 @@ import type {
   SessionState,
 } from "../types/index.js";
 import { canAdmitInteraction, interactionKey } from "./session-manager-interaction-budget.js";
+import {
+  interactionExpiryMessage,
+  registerInteractionDeadline,
+} from "./session-manager-interaction-holds.js";
 import { isSupportedClaudeForm } from "./claude-elicitation-schema.js";
 import { eventEmitter } from "./event-emitter.js";
 import {
@@ -54,7 +59,20 @@ export async function parkInteraction(
   const outcome = new Promise<ClaudeInteractionOutcome>((resolve) => {
     resolveOutcome = resolve;
   });
-  const timeout = setTimeout(() => resolveOutcome({ action: "timeout" }), INTERACTION_TIMEOUT_MS);
+  // An MCP server keeps its own request timeout, which nobody publishes: a
+  // paused elicitation can still be withdrawn when the server gives up.
+  const deadline: InteractionDeadline = new InteractionDeadline({
+    requestedAt: request.requestedAt,
+    expiresAt: request.expiresAt,
+    windowMs: INTERACTION_TIMEOUT_MS,
+    upstreamMayExpire: request.kind === "mcp-form" || request.kind === "mcp-url",
+    onExpire: () =>
+      resolveOutcome({
+        action: "timeout",
+        message: interactionExpiryMessage("Approval", deadline),
+      }),
+  });
+  const releaseDeadline = registerInteractionDeadline("interactions", request, deadline);
   const withdraw = () => resolveOutcome({ action: "withdrawn" });
   signal?.addEventListener("abort", withdraw, { once: true });
   // Store and register the resolver before announcing the request, so an
@@ -64,7 +82,7 @@ export async function parkInteraction(
   interactionResolvers.set(key, resolveOutcome);
   eventEmitter.emit({ type: "interaction.requested", sessionId: request.sessionId, data: request });
   const settled = await outcome;
-  clearTimeout(timeout);
+  releaseDeadline();
   signal?.removeEventListener("abort", withdraw);
   if (pendingInteractions.get(key) === request) pendingInteractions.delete(key);
   if (interactionResolvers.get(key) === resolveOutcome) {
@@ -204,7 +222,7 @@ export async function requestClaudeToolApproval(
         interrupt: true,
       };
     case "timeout":
-      return { behavior: "deny", message: "Approval timed out after 5 minutes" };
+      return { behavior: "deny", message: outcome.message };
     case "withdrawn":
       return { behavior: "deny", message: "The approval request was withdrawn" };
     default:

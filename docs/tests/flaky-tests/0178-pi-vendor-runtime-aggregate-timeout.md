@@ -161,3 +161,37 @@ passed the unchanged owning file (four tests, exit 0) in 7.8 seconds. These
 credential checks do not change Pi staging. Host contention remains an
 unconfirmed hypothesis; no timeout, assertion or skip was changed in the
 vendoring tests.
+
+## Recurrence — 2026-10-16 (question transcript review fixes)
+
+`mise run test:logged -- --name full-suite -- mise run test` reserved
+4/1/2/1 workspace/root/bridge/protocol slots while component and isolated
+browser validation also ran. The staged-runtime test timed out at 30000.61 ms;
+the root/support group reported 2,998 passed, one skipped and one failed
+across 137 files (250.74 seconds). Evidence:
+`/tmp/orkestrator-test-run.0igieQ/root-and-agent-support-tests.log.gz`.
+
+`mise run test:logged -- --name pi-vendor-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+passed the unchanged owning file alone, exit 0, in 8.9 seconds. The question
+renderer fixes do not change runtime staging. Shared host contention remains
+an unconfirmed hypothesis; no timeout, assertion or skip was changed.
+
+## Observation on 2026-10-16 during the storage writer guards merge
+
+`mise run test:logged -- --name merge-tests -- mise run test` ran root tests
+with one isolated worker while other worktree validations shared the host.
+The staged-runtime test exceeded its thirty-second deadline at 30,000.22 ms.
+The root/support group reported 3,002 passed, one skipped and one failed
+across 137 files (275.88 seconds). Evidence:
+`/tmp/orkestrator-test-run.Q27xqQ/root-and-agent-support-tests.log.gz`.
+
+Unlike earlier observations, `mise run test:logged -- --name
+merge-pi-vendor-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts
+--parallel=1 --only-failures` also timed out at 30,000.11 ms (3 passed,
+1 failed; 31.64 seconds). Evidence:
+`/tmp/orkestrator-test-run.xQfm4k/merge-pi-vendor-isolated.log.gz`.
+This run does not independently establish a flake. The test stages the SDK's
+runtime dependency closure, imports it in a child, and removes its temporary
+tree within that deadline; this branch changes none of those paths. The timed
+out operation and root cause remain unconfirmed. No product code, assertion,
+timeout or skip was changed to conceal the failure.

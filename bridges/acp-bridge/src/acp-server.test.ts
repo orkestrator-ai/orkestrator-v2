@@ -57,11 +57,44 @@ describe("ACP bridge", () => {
   test("a session created read-only starts its agent without automatic approval", async () => {
     // The child is spawned by session creation itself, so a boundary learned
     // from the first prompt would arrive after the agent had already been told
-    // to approve its own tools.
+    // to approve its own tools. The read-only boundary also denies the network,
+    // so Grok's web search and web fetch are switched off from the start.
     expect(await readAgentArgs({ ACP_PROVIDER: "grok" }, { readOnly: true })).toEqual([
+      "--disable-web-search",
       "agent",
+      "--no-leader",
       "stdio",
     ]);
+  });
+
+  test("a coordinator process starts Grok without web search or web fetch", async () => {
+    // Grok searches through xAI without asking permission first, so denying
+    // its permission requests could never stop a search; the flag removes the
+    // tools. Process authority applies even when the request names no policy.
+    expect(
+      await readAgentArgs({
+        ACP_PROVIDER: "grok",
+        ORKESTRATOR_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
+      }),
+    ).toEqual(["--disable-web-search", "agent", "--no-leader", "stdio"]);
+  });
+
+  test("any policy that denies the network starts Grok without web search", async () => {
+    expect(
+      await readAgentArgs(
+        { ACP_PROVIDER: "grok" },
+        {
+          policy: {
+            id: "pipeline",
+            sandbox: "container",
+            approvals: "auto-approve",
+            projectResources: true,
+            capabilityPolicy: { deny: ["network"] },
+            networkAccess: "restricted",
+          },
+        },
+      ),
+    ).toEqual(["--disable-web-search", "--always-approve", "agent", "--no-leader", "stdio"]);
   });
 
   test("rejects a malformed read-only boundary at session creation", async () => {

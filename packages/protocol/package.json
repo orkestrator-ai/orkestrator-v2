@@ -29,6 +29,7 @@
     "./container-recovery": "./src/container-recovery.ts",
     "./container-resources": "./src/container-resources.ts",
     "./coordinator": "./src/coordinator.ts",
+    "./coordinator-web-research": "./src/coordinator-web-research.ts",
     "./codex-background-task": "./src/codex-background-task.ts",
     "./node/cursor-plan-usage": "./src/node/cursor-plan-usage.ts",
     "./diff-stats": "./src/diff-stats.ts",

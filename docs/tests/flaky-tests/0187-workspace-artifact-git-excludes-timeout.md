@@ -87,3 +87,15 @@ The aggregate and browser workload delayed the real Git/worktree operations beyo
 - **Evidence:** `/tmp/orkestrator-test-run.gyVhpj/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Hypothesis:** the timeout and late cleanup rejection match the existing
   aggregate-load symptom. No backend code, assertion, deadline or skip was changed.
+
+## Recurrence — 2026-10-16 (coordinator network lockdown main merge)
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test` (Bun 1.4.3, macOS arm64).
+- **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated Bun workers. The browser component suite also ran during the start of the aggregate.
+- **Suite counts:** backend 8,462 passed, 40 skipped, seven failed and one between-tests error across 453 files (297.75 seconds). The aggregate exited 1 after 352.2 seconds; the bridge group also hit its ACP no-progress watchdog. Root, protocol and all other workspace packages passed.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-commands-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed the unchanged file (exit 0) in 23.0 seconds.
+- **Evidence:** `/tmp/orkestrator-test-run.TpifY7/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `summary.json`; outer artifact `/tmp/orkestrator-test-run.jvncxJ/merge-tests.log.gz`.
+- **Failure:** the artifact-excludes case exceeded its 5000 ms deadline at 5053.01 ms. A late Git request rejected after fixture cleanup removed its worktree, producing the between-tests error. The six diff-statistics timeouts are recorded under 0162.
+- **Assessment:** the isolated pass confirms an intermittent recurrence. Aggregate contention remains an unconfirmed hypothesis. No implementation, assertion, timeout or skip changed.
+
+- **Final aggregate rerun:** `mise run test:logged -- --name merge-tests-final -- mise run test` passed all four groups (exit 0, 277.5 seconds), including all five bridges (88.0 seconds). No tests, assertions, timeouts or skips changed.

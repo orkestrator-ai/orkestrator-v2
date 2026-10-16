@@ -1,3 +1,10 @@
+import {
+  COORDINATOR_RESEARCH_MCP_ENV,
+  COORDINATOR_WEB_RESEARCH_ENV,
+  coordinatorWebResearchEnv,
+  coordinatorWebResearchSetting,
+  normalizeCoordinatorResearchMcpServers,
+} from "@orkestrator/protocol/coordinator-web-research";
 import { assertEnvironmentNotMoving } from "./environment-replacement-fence.js";
 import {
   formatContainerLifecycleError,
@@ -936,6 +943,9 @@ export function cancelAllOpenCodeAgentToolsConfigurations(): void {
   configuredOpenCodeAgentTools.clear();
 }
 
+// Child-scoped launch authority; weak keys release exited process records.
+const coordinatorResearchLaunches = new WeakMap<ChildProcessWithoutNullStreams, string>();
+
 export async function startLocalServerUnlocked(
   environmentId: string,
   context: CommandContext,
@@ -943,6 +953,15 @@ export async function startLocalServerUnlocked(
 ): Promise<{ port: number; pid: number; wasRunning: boolean; authToken?: string }> {
   assertEnvironmentNotMoving(environmentId);
   const key = `${kind}:${environmentId}`;
+  const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
+  const researchConfig = coordinatorId ? (await context.storage.loadConfig()).global : undefined;
+  const researchEnv = researchConfig
+    ? coordinatorWebResearchEnv(
+        coordinatorWebResearchSetting(researchConfig.coordinatorWebResearch),
+        normalizeCoordinatorResearchMcpServers(researchConfig.coordinatorResearchMcpServers),
+      )
+    : undefined;
+  const researchSignature = JSON.stringify(researchEnv);
   const cursorCredentials =
     kind === "cursor" ? await resolveCursorHostCredentialMaterial(context) : undefined;
   const cursorApiKey = cursorCredentials?.apiKey;
@@ -967,7 +986,17 @@ export async function startLocalServerUnlocked(
       Boolean(env?.worktreePath) && localServerWorkingDirectories.get(key) === env?.worktreePath;
     const accountMatches = await localBridgeIsOnActiveAccount(key, kind, environmentId, context);
     let replaceReason: string;
-    if (!credentialMatches) {
+    if (coordinatorId && coordinatorResearchLaunches.get(existing) !== researchSignature) {
+      // Launch authority cannot change on a running agent. Keep its work alive
+      // and refuse a new turn until an idle replacement can apply the setting.
+      if (await context.nativeAgents?.hasObservedLiveWork(environmentId, kind)) {
+        throw retryableBridgeStartupError(
+          "Coordinator research settings will apply when its current work finishes.",
+          2_000,
+        );
+      }
+      replaceReason = "coordinator research settings changed";
+    } else if (!credentialMatches) {
       replaceReason = "Cursor credentials changed";
     } else if (!accountMatches) {
       replaceReason = "the active agent account changed";
@@ -1038,7 +1067,6 @@ export async function startLocalServerUnlocked(
     await terminateLocalServerChild(key, existing, `replacing bridge: ${replaceReason}`);
   }
 
-  const coordinatorId = coordinatorIdFromRuntimeId(environmentId);
   // Resolved before the worktree check so an unassigned or unqualified
   // conversation reports what is actually wrong. `localRuntimeEnvironment`
   // synthesizes its Environment from a *ready* runtime, so those cases would
@@ -1099,6 +1127,10 @@ export async function startLocalServerUnlocked(
   // started with this variable in its own environment would otherwise hand it
   // to every worker bridge. Only the branch below may name a root.
   delete env[ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT_ENV];
+  // The same for coordinator research: read-only review turns in a worker
+  // bridge consult these too, so only the coordinator branch may set them.
+  delete env[COORDINATOR_WEB_RESEARCH_ENV];
+  delete env[COORDINATOR_RESEARCH_MCP_ENV];
   if (coordinatorId) {
     // Coordinator authority is always freshly issued for this exact
     // conversation. Never inherit a token from the backend's own environment
@@ -1122,6 +1154,9 @@ export async function startLocalServerUnlocked(
     );
     await mkdir(attachmentRoot, { recursive: true, mode: 0o700 });
     env[ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT_ENV] = attachmentRoot;
+    // Process authority like the execution policy: read once at launch, so a
+    // changed setting replaces an idle bridge before the next turn.
+    Object.assign(env, researchEnv);
   }
 
   if (kind === "opencode") {
@@ -1389,6 +1424,7 @@ export async function startLocalServerUnlocked(
     localCursorCredentialFingerprints.set(environmentId, cursorCredentialFingerprint);
   }
   localServerProcesses.set(key, child);
+  if (coordinatorId) coordinatorResearchLaunches.set(child, researchSignature);
   localServerWorkingDirectories.set(key, environment.worktreePath);
   if (launchedAccountId) localAgentAccountIds.set(key, launchedAccountId);
   else localAgentAccountIds.delete(key);

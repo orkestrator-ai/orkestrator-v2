@@ -7,6 +7,11 @@
  * restart, an idle detach or a crashed child all recover without the renderer
  * seeing anything other than a session that was briefly connecting.
  */
+import {
+  coordinatorCapabilityPolicy,
+  coordinatorWebResearchFromEnv,
+} from "@orkestrator/protocol/coordinator-web-research";
+import { nativeAgentPolicyDeniesWebSearch } from "@orkestrator/protocol/native-agent";
 import { createHash, randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -476,7 +481,14 @@ async function attach(state: SessionState): Promise<SDKAgent> {
       ...(hosted ? { customTools: hosted.customTools } : {}),
     },
     ...(readOnly
-      ? { tools: [...CURSOR_READ_ONLY_TOOLS] }
+      ? {
+          // Hosted search joins the closed allowlist only when the policy's
+          // `allow` names it; `webFetch` never does.
+          tools: [
+            ...CURSOR_READ_ONLY_TOOLS,
+            ...(nativeAgentPolicyDeniesWebSearch(policy) ? [] : (["webSearch"] as const)),
+          ],
+        }
       : (() => {
           const allowed = cursorAllowedTools(policy);
           return allowed ? { tools: allowed } : {};
@@ -601,7 +613,9 @@ export function resolveCursorExecutionPolicy(
       sandbox: policy?.sandbox === "container" ? "container" : "provider",
       approvals: "deny",
       projectResources: false,
-      capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
+      // Follows the launcher's research setting: hosted search may be allowed,
+      // never fetch. Research MCP servers are not loaded on Cursor yet.
+      capabilityPolicy: coordinatorCapabilityPolicy(coordinatorWebResearchFromEnv(process.env)),
       networkAccess: "restricted",
       note: "Cursor applies these restrictions, but its SDK exposes no approval callback to verify them.",
     };

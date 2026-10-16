@@ -11,13 +11,14 @@ import {
   type InitializeResponse,
   type McpServer,
 } from "@agentclientprotocol/sdk";
-import type {
-  NativeAgentComposerState,
-  NativeAgentMcpServer,
-  NativeAgentRuntimeSummary,
-  NativeAgentSlashCommand,
-  NativeAgentExecutionPolicy,
-  NativeAgentTurnUsage,
+import {
+  nativeAgentPolicyDeniesNetwork,
+  type NativeAgentComposerState,
+  type NativeAgentMcpServer,
+  type NativeAgentRuntimeSummary,
+  type NativeAgentSlashCommand,
+  type NativeAgentExecutionPolicy,
+  type NativeAgentTurnUsage,
 } from "@orkestrator/protocol/native-agent";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { WorkflowResultTurn } from "@orkestrator/protocol/workflow-results";
@@ -36,6 +37,7 @@ import {
   providerArgv,
   undeclaredPromptCapabilities,
 } from "./acp-provider-config.js";
+import { effectiveExecutionPolicy } from "./acp-policy.js";
 import {
   GrokMcpConfigWatcher,
   grokMcpConfigFiles,
@@ -981,10 +983,14 @@ export class AcpProcess {
     }
     // Provider-specific command-line policy belongs in the launcher record.
     // Any permission request the agent still emits routes through the
-    // bridge's fail-closed approval flow.
+    // bridge's fail-closed approval flow. A child spawned without a policy
+    // (catalog probe, session list, replay) still runs under the process
+    // authority, so a coordinator bridge never starts Grok with its web tools.
+    const policy = spawnOptions.policy ?? effectiveExecutionPolicy(undefined);
     const args = providerArgv(providerConfig, {
       ...spawnOptions,
-      approvals: spawnOptions.policy?.approvals,
+      approvals: policy?.approvals,
+      denyNetwork: nativeAgentPolicyDeniesNetwork(policy),
     });
     // Read before the child starts, so an edit racing the spawn is reported
     // as a change rather than missed.

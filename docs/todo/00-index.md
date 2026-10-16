@@ -58,9 +58,9 @@ it reaches. Some rules of thumb:
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
 | High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 45 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 243 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 254 |
-| **Total** | | **543** |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 245 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 255 |
+| **Total** | | **546** |
 
 ## Very high
 
@@ -76,6 +76,10 @@ it reaches. Some rules of thumb:
 ### Multi Review (very high)
 
 - [x] Fix fence checks that take the lease and parse the whole store since #969 (per-row reads) ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
+
+### Coordinator and agent mail (very high)
+
+- [x] Take hosted page fetch away from every network-denied session and keep coordinator search to the research setting (Codex `cached` only, read back through `config/read`) ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md))
 
 ### Cross-cutting (very high)
 
@@ -413,6 +417,8 @@ it reaches. Some rules of thumb:
 - [ ] Decide whether Claude on Windows stays offered at the default coordinator safety level ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md))
 - [ ] Disable command-backed project MCP servers for OpenCode coordinators if it must reach `enforced` ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md))
 - [ ] Decide whether `provider-configured` is an acceptable final coordinator tier for OpenCode and Cursor ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md), decision)
+- [ ] Verify whether Grok 1.0.52 can disable web fetch alone, so Grok coordinators can search ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md), qualification)
+- [ ] Load coordinator research MCP servers on OpenCode, Cursor and Pi ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md))
 - [ ] Add the live async scenario: async launch, queue before mail, one carrier, one silent-worker notice ([coordinator-live-conformance.md](coordinator-live-conformance.md))
 - [ ] Require every `enforced` coordinator platform to appear on the live suite's platform list in tests ([coordinator-live-conformance.md](coordinator-live-conformance.md))
 - [ ] Run the ten-message peer scenario between two environments with Wake peers on ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
@@ -705,6 +711,7 @@ it reaches. Some rules of thumb:
 - [ ] Check the Claude coordinator's permission mode: `coordinator.md` says `dontAsk`, but live sessions start in plan mode ([coordinator-live-conformance.md](coordinator-live-conformance.md), verify)
 - [ ] Raise Grok above `advisory` only after adding a real read-only gate in the ACP bridge ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md), deferred)
 - [ ] Raise the Cursor coordinator tier only once a probe can prove a denied tool did not run ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md), blocked)
+- [ ] Report a Codex coordinator that fails the hosted web search mode check as not ready, not only as a refused turn ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md))
 - [ ] Extend the coordinator poll guard to `list_environments` if live runs show coordinators polling it ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md))
 - [x] Add an optional `data-mail-kind` to injected mail carriers so system and tab mail style apart ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md))
 - [ ] Hide coordinator favourites for platforms the conversation cannot use under `platformFilter` ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md))
@@ -771,7 +778,7 @@ it reaches. Some rules of thumb:
 | [service-preview-rollout.md](service-preview-rollout.md) |  | 3 | 14 | 7 | 24 |
 | [embedded-service-previews.md](embedded-service-previews.md) |  |  |  | 13 | 13 |
 | [preview-service-discovery.md](preview-service-discovery.md) |  |  | 1 | 5 | 6 |
-| [web-annotation-qualification.md](web-annotation-qualification.md) |  | 4 | 14 | 3 | 21 |
+| [web-annotation-qualification.md](web-annotation-qualification.md) |  | 3 | 14 | 3 | 20 |
 | [web-annotation-known-limitations.md](web-annotation-known-limitations.md) |  |  | 7 | 3 | 10 |
 | [web-annotation-extensions.md](web-annotation-extensions.md) |  |  |  | 11 | 11 |
 | **CLI and slash commands** | | | | | |
@@ -782,23 +789,23 @@ it reaches. Some rules of thumb:
 | **Containers and environments** | | | | | |
 | [container-platform-qualification.md](container-platform-qualification.md) |  | 3 | 11 | 1 | 15 |
 | [container-rebuild-state-preservation.md](container-rebuild-state-preservation.md) |  | 1 | 3 | 2 | 6 |
-| [container-network-and-credential-isolation.md](container-network-and-credential-isolation.md) |  | 1 | 2 | 1 | 4 |
+| [container-network-and-credential-isolation.md](container-network-and-credential-isolation.md) |  |  | 2 | 1 | 3 |
 | [container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md) |  |  | 3 | 6 | 9 |
 | [container-state-observation.md](container-state-observation.md) |  | 1 | 5 | 5 | 11 |
 | [environment-and-disk-cleanup.md](environment-and-disk-cleanup.md) |  | 2 | 1 | 5 | 8 |
 | **Design canvas** | | | | | |
 | [design-canvas-qualification.md](design-canvas-qualification.md) |  | 2 | 5 | 6 | 13 |
-| [design-operation-recovery-edges.md](design-operation-recovery-edges.md) |  | 1 | 1 | 2 | 4 |
+| [design-operation-recovery-edges.md](design-operation-recovery-edges.md) |  |  | 1 | 2 | 3 |
 | [design-agent-conversation-links.md](design-agent-conversation-links.md) |  |  | 5 | 3 | 8 |
 | **MCP** | | | | | |
 | [mcp-management.md](mcp-management.md) |  | 3 | 10 | 7 | 20 |
 | [mcp-environment-delivery.md](mcp-environment-delivery.md) |  |  | 4 | 10 | 14 |
 | [control-mcp-voice-surface.md](control-mcp-voice-surface.md) |  |  | 9 |  | 9 |
 | **Agent engines and provider SDKs** | | | | | |
-| [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md) |  | 3 | 9 | 4 | 16 |
+| [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md) |  | 2 | 9 | 4 | 15 |
 | [mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md) |  | 1 | 3 | 5 | 9 |
 | [session-titles-and-history.md](session-titles-and-history.md) |  |  | 4 | 4 | 8 |
-| [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md) |  | 2 | 8 | 5 | 15 |
+| [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md) |  | 1 | 8 | 5 | 14 |
 | [composer-model-parameters.md](composer-model-parameters.md) |  |  | 2 | 4 | 6 |
 | [opencode-v2.md](opencode-v2.md) |  |  |  | 3 | 3 |
 | [provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md) |  |  | 2 | 15 | 17 |
@@ -807,25 +814,25 @@ it reaches. Some rules of thumb:
 | [transcript-history-efficiency.md](transcript-history-efficiency.md) |  | 4 | 11 | 5 | 20 |
 | [remote-client-bandwidth.md](remote-client-bandwidth.md) |  |  | 4 | 9 | 13 |
 | [native-agent-idle-observation.md](native-agent-idle-observation.md) |  | 1 | 3 | 2 | 6 |
-| [client-reconnect-and-freshness.md](client-reconnect-and-freshness.md) |  | 1 | 6 | 2 | 9 |
-| [recurring-work-qualification.md](recurring-work-qualification.md) |  | 5 | 10 | 19 | 34 |
+| [client-reconnect-and-freshness.md](client-reconnect-and-freshness.md) |  |  | 6 | 2 | 8 |
+| [recurring-work-qualification.md](recurring-work-qualification.md) |  | 4 | 9 | 19 | 32 |
 | **Multi Review** | | | | | |
-| [multi-review-scale-and-cost.md](multi-review-scale-and-cost.md) |  | 3 | 5 | 9 | 17 |
+| [multi-review-scale-and-cost.md](multi-review-scale-and-cost.md) |  | 2 | 5 | 9 | 16 |
 | [multi-review-panel-value.md](multi-review-panel-value.md) |  | 1 | 4 | 5 | 10 |
 | [multi-review-flow-graph.md](multi-review-flow-graph.md) |  |  |  | 4 | 4 |
 | **Coordinator and agent mail** | | | | | |
-| [coordinator-read-only-adapters.md](coordinator-read-only-adapters.md) |  |  | 3 | 3 | 6 |
-| [coordinator-live-conformance.md](coordinator-live-conformance.md) |  | 7 | 8 | 1 | 16 |
-| [coordinator-consistency-gaps.md](coordinator-consistency-gaps.md) |  |  | 1 | 11 | 12 |
+| [coordinator-read-only-adapters.md](coordinator-read-only-adapters.md) |  |  | 5 | 4 | 9 |
+| [coordinator-live-conformance.md](coordinator-live-conformance.md) |  | 5 | 8 | 1 | 14 |
+| [coordinator-consistency-gaps.md](coordinator-consistency-gaps.md) |  |  | 1 | 10 | 11 |
 | **Backend structure** | | | | | |
-| [storage-service-repositories.md](storage-service-repositories.md) |  | 3 | 5 | 2 | 10 |
+| [storage-service-repositories.md](storage-service-repositories.md) |  |  | 4 | 2 | 6 |
 | [native-agent-service-collaborators.md](native-agent-service-collaborators.md) |  |  | 5 | 1 | 6 |
 | [claude-bridge-prompt-stream-state.md](claude-bridge-prompt-stream-state.md) |  |  | 1 | 3 | 4 |
 | [backend-core-domain-folders.md](backend-core-domain-folders.md) |  |  | 4 | 3 | 7 |
 | [backend-runtime-state-ownership.md](backend-runtime-state-ownership.md) |  |  | 4 | 3 | 7 |
 | **Cross-cutting** | | | | | |
 | [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md) |  | 1 | 10 | 3 | 14 |
-| [mixed-version-compatibility.md](mixed-version-compatibility.md) |  | 1 | 2 | 3 | 6 |
-| [test-suite-and-ci-health.md](test-suite-and-ci-health.md) | 1 | 1 | 4 | 11 | 17 |
+| [mixed-version-compatibility.md](mixed-version-compatibility.md) |  |  | 2 | 3 | 5 |
+| [test-suite-and-ci-health.md](test-suite-and-ci-health.md) | 1 |  | 4 | 11 | 16 |
 | [mobile-layout-gaps.md](mobile-layout-gaps.md) |  |  | 1 | 4 | 5 |
 | [dependency-upgrades.md](dependency-upgrades.md) |  |  | 3 | 7 | 10 |

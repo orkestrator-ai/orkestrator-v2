@@ -694,6 +694,11 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
     update: NativeAgentControlUpdate,
   ): Promise<NativeAgentComposerState | undefined>;
   listResumableSessions?(): Promise<NativeAgentResumeEntry[]>;
+  /**
+   * Restate trusted session-held permissions before dispatch and after restart.
+   * Process-held authority is refreshed by the launcher instead.
+   */
+  synchronizeSessionPolicy?(sessionId: string, policy: NativeAgentExecutionPolicy): Promise<void>;
   resumeSession?(
     sessionId: string,
     controls?: NativeAgentControlUpdate,

@@ -79,11 +79,49 @@ export function loadAcpProviderConfig(
   };
 }
 
+/**
+ * Flags that take a provider's own network tools away.
+ *
+ * Grok's web search and web fetch run through xAI rather than as a command on
+ * this machine, and Grok does not ask permission before a search, so denying
+ * permission requests cannot stop them. `--disable-web-search` removes both
+ * tools from the toolset ("web fetch is off (disable_web_search)" in 1.0.52).
+ * It is a top-level flag, and a shared leader process ignores it, so the agent
+ * subcommand also gets `--no-leader`: a user config with `[cli] use_leader`
+ * would otherwise hand the session to a leader that still has the tools.
+ *
+ * Keyed by provider id, not by launcher record, for the same reason as
+ * `UNDECLARED_PROMPT_CAPABILITIES`: the backend's serialized config and the
+ * built-in one must agree, and a record that forgot the flag must not fail open.
+ */
+const NETWORK_DENIED_ARGUMENTS: Readonly<
+  Record<
+    string,
+    { leading: readonly string[]; subcommand: string; afterSubcommand: readonly string[] }
+  >
+> = {
+  grok: {
+    leading: ["--disable-web-search"],
+    subcommand: "agent",
+    afterSubcommand: ["--no-leader"],
+  },
+};
+
 export function providerArgv(
   config: AcpProviderConfig,
-  options: { model?: string; effort?: string; approvals?: "ask" | "auto-approve" | "deny" },
+  options: {
+    model?: string;
+    effort?: string;
+    approvals?: "ask" | "auto-approve" | "deny";
+    /** The session's policy denies `network`. */
+    denyNetwork?: boolean;
+  },
 ): string[] {
-  return config.argv.flatMap((argument) => {
+  const network =
+    options.denyNetwork && Object.hasOwn(NETWORK_DENIED_ARGUMENTS, config.id)
+      ? NETWORK_DENIED_ARGUMENTS[config.id]!
+      : undefined;
+  const argv = config.argv.flatMap((argument) => {
     if (
       argument === "--always-approve" &&
       options.approvals &&
@@ -95,8 +133,12 @@ export function providerArgv(
     if (argument === "{{effort}}") {
       return options.effort ? ["--reasoning-effort", options.effort] : [];
     }
+    if (network && argument === network.subcommand) {
+      return [argument, ...network.afterSubcommand];
+    }
     return [argument];
   });
+  return network ? [...network.leading, ...argv] : argv;
 }
 
 function parseProviderConfig(serialized: string): AcpProviderConfig {

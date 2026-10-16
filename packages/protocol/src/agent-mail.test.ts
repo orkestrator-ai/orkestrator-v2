@@ -15,6 +15,21 @@ import {
 } from "./agent-mail.js";
 
 describe("agent mail protocol", () => {
+  test("coordinator status wakes default to settled states and reject unknown modes", () => {
+    expect(normalizeAgentMessagingSettings({}).coordinatorStatusWakes).toBe("settled");
+    expect(
+      normalizeAgentMessagingSettings({ coordinatorStatusWakes: "stages" }).coordinatorStatusWakes,
+    ).toBe("stages");
+    expect(
+      normalizeAgentMessagingSettings({ coordinatorStatusWakes: "always" }).coordinatorStatusWakes,
+    ).toBe("settled");
+    // Settings saved before the field existed keep the default.
+    const { coordinatorStatusWakes: _omitted, ...older } = normalizeAgentMessagingSettings({});
+    expect(
+      normalizeAgentMessagingSettings({ enabled: true }, older as never).coordinatorStatusWakes,
+    ).toBe("settled");
+  });
+
   test("missing peer-wake consent stays off when normalizing existing settings", () => {
     const settings = normalizeAgentMessagingSettings({ enabled: true, defaultInjectPolicy: "off" });
     expect(settings.wakePeers).toBe(false);

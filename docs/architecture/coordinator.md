@@ -333,7 +333,10 @@ workflow association (`requestedAt`, `workerTabId`, `state`, `wakeKind`,
 worker's turn ends (`working → idle`). Environment error, stop, or deletion
 closes it as `failed` or `stopped` on the periodic sweep. A worker blocked on
 an approval or a question has not finished — that needs a person — so
-`working → waiting` does not close the delegation.
+`working → waiting` does not close the delegation. Once the wait has lasted
+20 seconds the coordinator does get one status notice saying so (see
+[Status wakes](#status-wakes)), so it can tell the user; it still cannot
+answer on the worker's behalf.
 
 Nothing the worker does mid-turn wakes the coordinator. Progress mail is stored
 and readable, held with reason `delegation-running`, and released together with
@@ -390,6 +393,91 @@ is doing — see [`agent-registry.md`](agent-registry.md).
 Pause or mute messaging, or set a mailbox's injection policy to **Off**, to
 hold automatic delivery. Stored, injected, acknowledged, and completed remain
 distinct states. An injection receipt is not proof that the task finished.
+
+## Status wakes
+
+Besides the delegation wake, a coordinator is woken when other work it started
+or prompted **settles**, so it can keep track and respond without polling
+(`apps/backend/src/core/coordinator-status-wakes.ts`).
+
+**Ownership.** Only resources with a coordinator workflow association: the
+durable record written at launch or prompt time with the coordinator and
+conversation ids (`launch_multi_review`, `start_multi_review`,
+`start_build_pipeline`, and the delegations `launch_environment`,
+`launch_job`, `send_prompt_to_tab` and `send_message` open). A Multi Review or
+build the user started in the UI has no association and never wakes a
+coordinator. Notices go to the main coordinator, like every other report, and
+do not start one: with no main open they wait, and the sweep sends the state
+current when one opens.
+
+**What wakes it.** Each resource is reduced to one settled status with a
+stable key; a key is sent once, recorded on the association
+(`statusNotice`).
+
+| Resource | Status | Setting that sends it |
+| --- | --- | --- |
+| Multi Review | consolidation `ready` (finding counts by severity, coverage gaps, verdict) | `settled` |
+| Multi Review | interactive fix turn finished (`fix-done`) or failed (`fix-failed`) | `settled` |
+| Multi Review | a reviewer, consolidation or fix session `stalled` | `settled` |
+| Multi Review | `completed` (fix summary, files changed), `failed` (error), `cancelled` | always |
+| Multi Review | all reviewers finished and consolidation started (`reviews-finished`) | `stages` |
+| Build pipeline | `paused` by the supervisor on an error (a requested pause is not news) | `settled` |
+| Build pipeline | a stage `stalled` (`stallWarning`) | `settled` |
+| Build pipeline | `completed` (task, last verification), `failed` (error) | always |
+| Build pipeline | a stage completed (`stage-completed`: build, review, address, verification) | `stages` |
+| Delegated tab | `waiting` on input or an approval for 20 s (with its last message) | `settled` |
+| Delegated tab | turn ended: the worker's report, or `completed`/`failed`/`stopped` with its last message | always (the delegation wake) |
+
+Individual reviewers finishing never wakes anyone: that is progress, and a
+seven-reviewer panel would otherwise be seven turns. A relaunched fix, a second
+consolidation, or a new stall or waiting episode has a new key and is sent
+again.
+
+**Setting.** **Settings → Messaging → Coordinator status updates**
+(`coordinatorStatusWakes`): *Finished work only* (`off`, what woke a
+coordinator before status wakes), *Decisions and problems* (`settled`, the
+default) and *Every build stage too* (`stages`). It applies to coordinator-
+created resources only; there is no per-resource opt-in.
+
+**Message.** An ordinary workflow notice (`from.kind: "system"`) with a
+structured `notice` (resource kind and ids, state, tone), a subject such as
+"Multi Review api-fix is ready to address", a bounded Markdown body (at most
+eight 400-character detail lines) and the calls that read more or act —
+`get_multi_review`, `address_multi_review`, `open_multi_review_fix`,
+`get_build_pipeline`, `resume_build_pipeline`, `get_tab_state`,
+`get_tab_transcript` — written out with their arguments. In the transcript it
+is a mail tile toned by the notice.
+
+**No wake storms.**
+
+- Dedupe: one notice per status key, recorded durably; the mail request id is
+  fixed by association, conversation and key, so a crash between placing a
+  notice and recording it cannot send it twice.
+- Coalescing: a status notice is held 10 seconds (`coalesceMs`); notices
+  arriving while the window is open join it, so reviews settling together are
+  one wake, and the drain batches them into one carrier (at most 10 messages,
+  128 KiB). A coordinator mid-turn gets everything that settled meanwhile in
+  its next wake.
+- Debounce: workflow saves are observed at most every 2 seconds per resource;
+  a waiting episode must last 20 seconds before it is reported, so an approval
+  answered at once wakes nobody.
+- Budget: each resource's notices are budgeted as one routed pair with the
+  coordinator (`statusBudgetKey`), so the unattended budget and the hourly
+  limit hold them exactly as they hold a chatty worker. The user prompting the
+  coordinator, or **Resume**, starts a new budget.
+- Upgrade: a workflow first seen in a non-terminal settled state it reached
+  more than a day ago is recorded without a wake.
+
+**Delivery.** The durable mailbox and the existing drain: presence-gated
+injection, ack/read semantics, retry and restart recovery are the mail
+store's. Workflow saves wake an observation within seconds; the
+`coordinator-repair` maintenance job (every 60 s, and at startup) re-reads
+every owned workflow and open delegation, which recovers a missed save, a
+timer lost to a restart, or bookkeeping that never landed.
+`launch_multi_review`, `address_multi_review`, `start_multi_review` and
+`start_build_pipeline` return `delivery: "async"` with
+`COORDINATOR_WORKFLOW_STATUS_WAKE`, so the model is told it will be woken
+rather than left to poll `get_multi_review`.
 
 ## Complete application actions
 
@@ -479,6 +567,8 @@ guarantee, not by one end-to-end scenario replayed per platform:
 - coordinator presence and the turn-end edge:
   `native-agent-service-reconciliation.test.ts`
 - one-wake invariant and crash recovery: `coordinator-service.test.ts`
+- status wakes (ownership, one wake per settled transition per resource kind,
+  coalescing, budgets, restart, bounds): `coordinator-status-wakes.test.ts`
 - single-turn mail batching: `agent-mail-service.test.ts`
 - tool contract and poll guard: `control-mcp-server.test.ts`
 - no-waiting-tools boundary and tier table: `coordinator-conformance.test.ts`

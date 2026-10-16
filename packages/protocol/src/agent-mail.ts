@@ -113,6 +113,20 @@ export interface MailboxCapabilities {
 
 export type MailboxKind = "native" | "tmux" | "terminal" | "ui";
 
+/**
+ * Which state changes of work a coordinator started wake it.
+ *
+ * - `off`: only what woke it before status wakes existed — a delegated tab's
+ *   turn ending, and a workflow reaching a terminal state.
+ * - `settled` (default): also states that need a decision or a person — a
+ *   Multi Review ready to address, a fix done or failed, a stall, a build
+ *   pipeline paused on an error, a delegated tab waiting on input or approval.
+ * - `stages`: also each build-pipeline stage completing and a Multi Review's
+ *   reviewers all finishing. Progress, so opt-in.
+ */
+export const COORDINATOR_STATUS_WAKE_MODES = ["off", "settled", "stages"] as const;
+export type CoordinatorStatusWakeMode = (typeof COORDINATOR_STATUS_WAKE_MODES)[number];
+
 export interface AgentMessagingSettings {
   enabled: boolean;
   allowCrossProject: boolean;
@@ -126,6 +140,8 @@ export interface AgentMessagingSettings {
   autonomousWakeBudget: number;
   /** Routed messages one pair may schedule per rolling hour; the runaway guard. */
   hourlyWakeLimit: number;
+  /** Which state changes of coordinator-started work wake the coordinator. */
+  coordinatorStatusWakes: CoordinatorStatusWakeMode;
   retentionDays: number;
   paused: boolean;
 }
@@ -137,6 +153,7 @@ export const DEFAULT_AGENT_MESSAGING_SETTINGS: Readonly<AgentMessagingSettings> 
   wakePeers: false,
   autonomousWakeBudget: AGENT_MAIL_DEFAULT_AUTONOMOUS_WAKE_BUDGET,
   hourlyWakeLimit: AGENT_MAIL_DEFAULT_HOURLY_WAKE_LIMIT,
+  coordinatorStatusWakes: "settled",
   retentionDays: AGENT_MAIL_DEFAULT_RETENTION_DAYS,
   paused: false,
 });
@@ -275,7 +292,21 @@ export interface AgentMailMessage {
   discardedAt?: string;
   /** Structured facts behind a workflow notice; only `system` senders carry one. */
   notice?: AgentMailNotice;
+  /**
+   * The stand-in sender a workflow status notice is budgeted as.
+   *
+   * A system sender has no mailbox, so routed budgets would not apply to it.
+   * Status notices about one resource share this key, which makes the
+   * resource and the coordinator a pair like any worker and its coordinator:
+   * the unattended budget and the hourly limit hold its wakes the same way.
+   */
+  statusBudgetKey?: string;
   revision: number;
+}
+
+/** The budget key status notices about one resource share; see `AgentMailMessage.statusBudgetKey`. */
+export function agentMailStatusBudgetKey(resourceKind: string, resourceId: string): string {
+  return agentMailboxId(`status:${resourceKind}:${resourceId}`, "status");
 }
 
 export type AgentMailMessageSummary = Omit<AgentMailMessage, "body">;
@@ -656,6 +687,10 @@ export function normalizeAgentMessagingSettings(
       hourlyWakeLimit <= AGENT_MAIL_MAX_HOURLY_WAKE_LIMIT
         ? hourlyWakeLimit
         : fallback.hourlyWakeLimit,
+    coordinatorStatusWakes:
+      COORDINATOR_STATUS_WAKE_MODES.find((mode) => mode === record.coordinatorStatusWakes) ??
+      fallback.coordinatorStatusWakes ??
+      DEFAULT_AGENT_MESSAGING_SETTINGS.coordinatorStatusWakes,
     retentionDays:
       Number.isInteger(retentionDays) && retentionDays >= 1 && retentionDays <= 365
         ? retentionDays

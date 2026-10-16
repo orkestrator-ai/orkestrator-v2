@@ -112,6 +112,16 @@ for prerequisites and how to batch them with other provider runs.
   option and never prompt, under both the `orkestrator__<tool>` name and the
   `_meta["x.ai/tool"]` form. A bare `send_message` from another server must
   still prompt.
+- **Status wakes**, once per qualified platform with default settings: a
+  coordinator-launched Multi Review reaching `ready`, then (after
+  `address_multi_review`) its fix finishing, then `completed`, wakes the
+  coordinator once per state with a toned tile; a coordinator-started build
+  pipeline completing wakes it once; a delegated worker held on an approval for
+  more than 20 seconds wakes it once; seven reviews finishing together are one
+  wake. Expect zero wakes from a review the user started.
+- **Mail tiles per platform**: each platform echoes the injected carrier as its
+  user row, single and batched, and the coordinator transcript shows one
+  collapsed tile per message with no raw carrier text.
 - **Cursor and Grok mailbox identity:**
   - two tabs in one environment each see themselves as `self` in
     `list_mailboxes`;

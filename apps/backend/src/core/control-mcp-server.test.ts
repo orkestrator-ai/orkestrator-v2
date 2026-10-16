@@ -8,7 +8,10 @@ import {
   type ControlMcpInvoker,
 } from "./control-mcp-server.js";
 import { coordinatorDelegationPresentationFrom } from "./coordinator-delegation-authority.js";
-import { COORDINATOR_CONTROL_TOOL_NAMES } from "@orkestrator/protocol/coordinator";
+import {
+  COORDINATOR_CONTROL_TOOL_NAMES,
+  COORDINATOR_WORKFLOW_STATUS_WAKE,
+} from "@orkestrator/protocol/coordinator";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
   parseCoordinatorDelegatedPrompt,
@@ -283,6 +286,30 @@ describe("Orkestrator control MCP server", () => {
       },
     });
     expect(JSON.stringify(button.body)).not.toContain("must-not-cross-mcp");
+    // A launch that did not start work promises no wake.
+    expect(button.body.result?.structuredContent).not.toHaveProperty("delivery");
+    overrides.set("launch_coordinator_multi_review_action", () => ({
+      outcome: "opened",
+      reused: false,
+      workflow: { id: "review-started", projectId: "project-1", environmentId: "env-1" },
+      ui: { status: "opened" },
+    }));
+    const started = await rpc(credential.url, credential.token, "tools/call", {
+      name: "launch_multi_review",
+      arguments: {
+        requestId: "launch-review-started",
+        environmentId: "env-1",
+        reviewers: [{ agent: "codex", model: "default" }],
+        fixModel: { agent: "claude", model: "default" },
+      },
+    });
+    // Started work tells the coordinator how it will hear back, so it does not poll.
+    expect(started.body.result?.structuredContent).toMatchObject({
+      outcome: "opened",
+      delivery: "async",
+      wake: COORDINATOR_WORKFLOW_STATUS_WAKE,
+      nextStep: "Finish your turn now. Do not poll.",
+    });
     expect(
       invocations.find((entry) => entry.command === "launch_coordinator_multi_review_action")?.args,
     ).toMatchObject({

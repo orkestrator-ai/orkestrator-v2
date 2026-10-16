@@ -232,6 +232,16 @@ gets one workflow notice per budget (or per hour), so it can read the held
 mail and decide. Peers get no notice; the sender's `send_message` result and
 the recipient's banner show the hold.
 
+A coordinator's status notices (see [`coordinator.md`](coordinator.md#status-wakes))
+have no sending mailbox, so each carries `statusBudgetKey`
+(`agentMailStatusBudgetKey`): a stand-in sender per resource. That makes a
+Multi Review, a build pipeline or a delegated tab and its coordinator a routed
+pair like any worker, and both budgets above hold its notices. The other
+workflow notices (a delegation's finished notice, held-mail and terminal
+notices) stay outside the budgets. A status notice is also placed with a
+10-second coalescing hold (`coalesceMs`): it joins a hold already open for the
+same mailbox, so notices that land together are delivered as one batch.
+
 Mail that is only stored records why in `placementReason`: `inject-policy-off`,
 `isolated-route`, `reply-to-injected-turn`, `recipient-cannot-inject`,
 `untrusted-sender`, or `hop-limit`. `get_message_status` returns it to the
@@ -367,7 +377,7 @@ policy is. Mute, explicit Off, pause, hop budget, and `canInject` still apply.
 | Surface | Location | Notes |
 | --- | --- | --- |
 | Transcript | `MailTile` (`apps/web/src/components/chat/`) | Each injected message is a collapsed tile: an icon for its kind or notice tone, sender, subject and about three clamped lines of the body. The header is a button (`aria-expanded`); clicking it, or the clipped preview, expands the Markdown body, and the choice survives remounts and paging for the session. A batched prompt becomes one tile per message |
-| Settings | Settings → Messaging | `enabled`, `paused`, `allowCrossProject`, `wakePeers`, `autonomousWakeBudget`, `hourlyWakeLimit`, `defaultInjectPolicy` (`off` / `idle`), `retentionDays` |
+| Settings | Settings → Messaging | `enabled`, `paused`, `allowCrossProject`, `wakePeers`, `autonomousWakeBudget`, `hourlyWakeLimit`, `coordinatorStatusWakes` (`off` / `settled` / `stages`), `defaultInjectPolicy` (`off` / `idle`), `retentionDays` |
 | Global inbox | `AgentMailButton` | Compose, sent, seen; destinations filtered to `canPull` |
 | Per-tab banner | `AgentMailBanner` | Pending, failed, pull-only, budget or hourly-limit held; retry / resume / discard |
 | Tab menu | `DraggableTab` | “Message this tab” / inbox settings when `canPull` |
@@ -501,6 +511,7 @@ Defaults (`DEFAULT_AGENT_MESSAGING_SETTINGS`):
 - `wakePeers: true`
 - `autonomousWakeBudget: 16`
 - `hourlyWakeLimit: 40`
+- `coordinatorStatusWakes: "settled"`
 - `retentionDays: 14`
 
 Disable messaging and the Agent Tools server omits the mail tools.
@@ -591,4 +602,5 @@ capability row says so.
 | Settings / inbox / banner | `apps/web/src/components/settings/MessagingSettings.tsx`, `apps/web/src/components/agent-mail/` |
 | Transcript tiles | `apps/web/src/lib/chat/client-only-messages.ts` (carrier → rows), `apps/web/src/components/chat/MailTile.tsx` |
 | Main / side coordinator, respawn | `apps/backend/src/core/coordinator-service.ts`, `packages/protocol/src/coordinator.ts` |
+| Coordinator status wakes | `apps/backend/src/core/coordinator-status-wakes.ts` |
 | Multi-actor scenarios | `apps/backend/src/core/agent-mail-scenarios.test.ts` on `agent-mail-world-test-support.ts` |

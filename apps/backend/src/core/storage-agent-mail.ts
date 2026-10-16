@@ -118,6 +118,8 @@ type PersistedAgentMailStore = {
     verificationAttempts?: number;
     /** An ambiguous dispatch to confirm against the session journal before resending. */
     verifyRequestId?: string;
+    /** `retryAt` is a coalescing window other notices may join, not a failure backoff. */
+    coalescing?: true;
   }>;
   counterparts: Record<string, AgentMailMessageSummary>;
 };
@@ -226,13 +228,48 @@ function sortableId(): string {
   return `${Date.now().toString(36).padStart(10, "0")}-${randomUUID()}`;
 }
 
+/**
+ * Who a routed message is budgeted as: the sending tab's mailbox, or for a
+ * workflow status notice its resource's stand-in (`statusBudgetKey`).
+ */
+function budgetSenderOf(message: AgentMailMessage): string | null {
+  if (message.from.kind === "tab" || message.from.kind === "coordinator") {
+    return agentMailboxId(message.from.environmentId, message.from.tabId);
+  }
+  return message.from.kind === "system" && message.statusBudgetKey ? message.statusBudgetKey : null;
+}
+
+/**
+ * When a coalescing hold for this recipient ends: an open window if a notice
+ * already started one, otherwise a new one. Joining rather than starting keeps
+ * a burst of notices in one delivery instead of a chain of overlapping holds.
+ */
+function coalescingWindow(
+  store: PersistedAgentMailStore,
+  mailboxId: string,
+  coalesceMs: number,
+): string {
+  const now = Date.now();
+  const open = store.pendingInject
+    .filter(
+      (entry) =>
+        entry.mailboxId === mailboxId &&
+        entry.coalescing === true &&
+        entry.retryAt !== undefined &&
+        Date.parse(entry.retryAt) > now,
+    )
+    .map((entry) => entry.retryAt!)
+    .sort()[0];
+  return open ?? new Date(now + coalesceMs).toISOString();
+}
+
 function sameMailboxPair(
   message: AgentMailMessage,
   firstMailboxId: string,
   secondMailboxId: string,
 ): boolean {
-  if (message.from.kind !== "tab" && message.from.kind !== "coordinator") return false;
-  const from = agentMailboxId(message.from.environmentId, message.from.tabId);
+  const from = budgetSenderOf(message);
+  if (!from) return false;
   const to = agentMailboxId(message.toEnvironmentId, message.toTabId);
   return (
     (from === firstMailboxId && to === secondMailboxId) ||
@@ -1252,10 +1289,23 @@ export class StorageAgentMail extends StorageDrafts {
       newDelegation?: boolean;
       /** Structured facts for a workflow notice; ignored for any other sender. */
       notice?: AgentMailNotice;
+      /**
+       * Budget a workflow status notice as this stand-in sender
+       * (`agentMailStatusBudgetKey`). Ignored for any other sender.
+       */
+      statusBudgetKey?: string;
+      /**
+       * Hold a scheduled wake this long so notices that land together are
+       * delivered as one batch. A notice joins a window already open for the
+       * recipient rather than starting its own.
+       */
+      coalesceMs?: number;
     } = {},
   ): Promise<AgentMailMessage> {
     const requestId = input.requestId.trim();
     const notice = sender.kind === "system" ? normalizeAgentMailNotice(options.notice) : null;
+    const statusBudgetKey =
+      sender.kind === "system" && options.statusBudgetKey ? options.statusBudgetKey : undefined;
     if (!requestId || requestId.length > AGENT_MAIL_MAX_REQUEST_ID_LENGTH)
       throw new Error("requestId must be 1-256 characters");
     const bodyBytes = Buffer.byteLength(input.body, "utf8");
@@ -1493,9 +1543,12 @@ export class StorageAgentMail extends StorageDrafts {
       // the default inject policy is. Only an explicit per-tab Off or a mute
       // stops them; the pair hop budget below bounds an unattended exchange.
       const routeWakes = agentMailRouteWakes(route, recipient.injectOverride, settings);
+      // The pair a routed budget counts: the sending tab, or for a workflow
+      // status notice the resource it reports on.
+      const budgetSenderId = senderMailbox?.mailboxId ?? statusBudgetKey;
       const pairDepth =
-        routeWakes && senderMailbox
-          ? latestMailboxPairDepth(store, senderMailbox.mailboxId, destinationId, lineageCutoff)
+        routeWakes && budgetSenderId
+          ? latestMailboxPairDepth(store, budgetSenderId, destinationId, lineageCutoff)
           : null;
       // Only admission of a new delegation, a user prompt, or Resume resets
       // the pair budget. Follow-ups and main/side mail consume the same lineage.
@@ -1505,8 +1558,8 @@ export class StorageAgentMail extends StorageDrafts {
         recipient.ownerKind !== "coordinator";
       const pairEpoch = startsBudget
         ? store.revision
-        : senderMailbox
-          ? pairBudgetEpoch(store, senderMailbox.mailboxId, destinationId)
+        : budgetSenderId
+          ? pairBudgetEpoch(store, budgetSenderId, destinationId)
           : 0;
       const parentDepthInEpoch =
         parent?.autonomousSequence !== undefined && parent.autonomousSequence > pairEpoch
@@ -1520,8 +1573,8 @@ export class StorageAgentMail extends StorageDrafts {
       const depthLimit = routeWakes ? settings.autonomousWakeBudget : AGENT_MAIL_MAX_THREAD_HOPS;
       const overHourlyLimit =
         routeWakes &&
-        senderMailbox !== undefined &&
-        pairMessagesInLastHour(store, senderMailbox.mailboxId, destinationId, Date.now()) >=
+        budgetSenderId !== undefined &&
+        pairMessagesInLastHour(store, budgetSenderId, destinationId, Date.now()) >=
           settings.hourlyWakeLimit;
       const canInject = agentMailCapabilities(
         recipient.tabType,
@@ -1606,6 +1659,7 @@ export class StorageAgentMail extends StorageDrafts {
           : {}),
         ...(route ? { route } : {}),
         ...(notice ? { notice } : {}),
+        ...(statusBudgetKey ? { statusBudgetKey } : {}),
         placement: shouldScheduleInject
           ? "pending-inject"
           : heldForDelegation || heldForLoopBudget || heldForHourlyLimit
@@ -1668,8 +1722,18 @@ export class StorageAgentMail extends StorageDrafts {
           mailboxId: destinationId,
           messageId: id,
         };
-        if (shouldScheduleInject)
-          store.pendingInject.push({ mailboxId: destinationId, messageId: id });
+        if (shouldScheduleInject) {
+          store.pendingInject.push({
+            mailboxId: destinationId,
+            messageId: id,
+            ...(options.coalesceMs && options.coalesceMs > 0
+              ? {
+                  retryAt: coalescingWindow(store, destinationId, options.coalesceMs),
+                  coalescing: true as const,
+                }
+              : {}),
+          });
+        }
       }
       store.revision += 1;
       await this.saveAgentMailStore(store);
@@ -1836,12 +1900,12 @@ export class StorageAgentMail extends StorageDrafts {
               message.placement === "inject-held" &&
               message.placementReason === AGENT_MAIL_HOURLY_LIMIT_REASON &&
               !message.discardedAt &&
-              (message.from.kind === "tab" || message.from.kind === "coordinator"),
+              budgetSenderOf(message) !== null,
           )
           .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
         for (const message of held) {
-          if (message.from.kind !== "tab" && message.from.kind !== "coordinator") continue;
-          const senderMailboxId = agentMailboxId(message.from.environmentId, message.from.tabId);
+          const senderMailboxId = budgetSenderOf(message);
+          if (!senderMailboxId) continue;
           if (
             pairMessagesInLastHour(store, senderMailboxId, mailbox.mailboxId, now) >=
             settings.hourlyWakeLimit

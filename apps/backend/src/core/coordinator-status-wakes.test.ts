@@ -1,0 +1,772 @@
+/**
+ * Status wakes on the real mail world: storage, routes, budgets, the
+ * coordinator service and the injection drain are production code; only the
+ * agents, the clock and the timers are simulated.
+ */
+import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
+import {
+  AGENT_MAIL_HOURLY_LIMIT_REASON,
+  AGENT_MAIL_LOOP_BUDGET_REASON,
+  type AgentMessagingSettings,
+} from "@orkestrator/protocol/agent-mail";
+import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
+import { MailWorld, type MailActor } from "./agent-mail-world-test-support.js";
+import {
+  buildPipelineStatus,
+  COORDINATOR_STATUS_COALESCE_MS,
+  COORDINATOR_WAITING_DEBOUNCE_MS,
+  lastAssistantText,
+  multiReviewStatus,
+  renderCoordinatorStatusNotice,
+  type CoordinatorStatusWakeTimers,
+} from "./coordinator-status-wakes.js";
+
+/** Timers the test advances by hand; the system clock moves with them. */
+class ManualTimers implements CoordinatorStatusWakeTimers {
+  private current = Date.now();
+  private nextId = 0;
+  private due: Array<{ id: number; at: number; callback: () => void }> = [];
+
+  constructor() {
+    setSystemTime(new Date(this.current));
+  }
+
+  now = (): number => this.current;
+
+  setTimeout = (callback: () => void, delayMs: number): unknown => {
+    this.nextId += 1;
+    this.due.push({ id: this.nextId, at: this.current + delayMs, callback });
+    return this.nextId;
+  };
+
+  clearTimeout = (handle: unknown): void => {
+    this.due = this.due.filter((entry) => entry.id !== handle);
+  };
+
+  advance(milliseconds: number): void {
+    this.current += milliseconds;
+    setSystemTime(new Date(this.current));
+    const ready = this.due
+      .filter((entry) => entry.at <= this.current)
+      .sort((left, right) => left.at - right.at);
+    this.due = this.due.filter((entry) => entry.at > this.current);
+    for (const entry of ready) entry.callback();
+  }
+
+  pending(): number {
+    return this.due.length;
+  }
+}
+
+const READY_REPORT = {
+  issues: [
+    { severity: "P1", title: "a" },
+    { severity: "P0", title: "b" },
+    { severity: "P1", title: "c" },
+  ],
+  testCoverageGaps: [{ file: "x.ts", untestedBehavior: "y" }],
+  verdict: { ready: "with-fixes", reasoning: "" },
+};
+
+type WorldSetup = {
+  world: MailWorld;
+  timers: ManualTimers;
+  activity: Map<string, AgentActivityState | "unknown">;
+  excerpts: Map<string, string>;
+};
+
+let setup: WorldSetup | null = null;
+
+async function createWorld(settings: Partial<AgentMessagingSettings> = {}): Promise<WorldSetup> {
+  const timers = new ManualTimers();
+  const activity = new Map<string, AgentActivityState | "unknown">();
+  const excerpts = new Map<string, string>();
+  const world = await MailWorld.create({
+    statusWakes: {
+      timers,
+      workerActivity: async (environmentId, tabId) =>
+        activity.get(`${environmentId}:${tabId}`) ?? "working",
+      lastAssistantExcerpt: async (environmentId, tabId) =>
+        excerpts.get(`${environmentId}:${tabId}`),
+    },
+  });
+  if (Object.keys(settings).length > 0) {
+    const config = await world.storage.loadConfig();
+    await world.storage.updateGlobalConfig({
+      ...config.global,
+      agentMessaging: { ...config.global.agentMessaging!, ...settings },
+    });
+  }
+  setup = { world, timers, activity, excerpts };
+  return setup;
+}
+
+afterEach(async () => {
+  await setup?.world.close();
+  setup = null;
+  setSystemTime();
+});
+
+async function associate(
+  world: MailWorld,
+  kind: "multi-review" | "build-pipeline",
+  resourceId: string,
+): Promise<string> {
+  const main = await world.main();
+  const id = `association-${resourceId}`;
+  await world.storage.saveCoordinatorWorkflowAssociation({
+    id,
+    projectId: world.projectId,
+    coordinatorId: world.coordinatorId,
+    conversationId: main.conversationId!,
+    kind,
+    resourceId,
+    requestId: `request-${resourceId}`,
+    createdAt: new Date().toISOString(),
+  });
+  return id;
+}
+
+async function saveReview(
+  world: MailWorld,
+  environment: MailActor,
+  id: string,
+  snapshot: Record<string, unknown>,
+): Promise<void> {
+  await world.storage.saveMultiReviewWorkflow(id, environment.environmentId, 1, {
+    id,
+    environmentId: environment.environmentId,
+    projectId: world.projectId,
+    reviewers: [],
+    ...snapshot,
+  });
+}
+
+async function savePipeline(
+  world: MailWorld,
+  environment: MailActor,
+  id: string,
+  snapshot: Record<string, unknown>,
+): Promise<void> {
+  await world.storage.saveBuildPipeline(id, world.projectId, environment.environmentId, 1, {
+    id,
+    environmentId: environment.environmentId,
+    projectId: world.projectId,
+    taskTitle: "Fix the parser",
+    iteration: 1,
+    ...snapshot,
+  });
+}
+
+/**
+ * Move the clock only once the drains already running have finished. Real time
+ * does not jump; a drain that read the store before a notice landed and the
+ * clock after a jump would see a window that never existed.
+ */
+async function advance({ world, timers }: WorldSetup, milliseconds: number): Promise<void> {
+  await world.deliver();
+  await world.coordinator.statusWakes.settled();
+  timers.advance(milliseconds);
+}
+
+/** Run a status pass, let the coalescing window close, and deliver what is due. */
+async function settle(context: WorldSetup): Promise<void> {
+  await context.world.coordinator.reconcileWorkflowNotifications();
+  await advance(context, COORDINATOR_STATUS_COALESCE_MS + 1);
+  await context.world.deliver();
+}
+
+async function coordinatorInbox(world: MailWorld) {
+  const main = await world.main();
+  return (await world.storage.getAgentMailMailbox(main.environmentId, main.tabId)).messages;
+}
+
+describe("coordinator status wakes", () => {
+  test("a Multi Review the coordinator started wakes it once when it is ready to address", async () => {
+    const context = await createWorld();
+    const { world } = context;
+    const coordinator = await world.main();
+    const worker = await world.addEnvironment("review-env");
+    await saveReview(world, worker, "review-1", { phase: "reviewing" });
+    await associate(world, "multi-review", "review-1");
+
+    await settle(context);
+    expect(world.wakes(coordinator)).toBe(0);
+
+    await saveReview(world, worker, "review-1", {
+      phase: "ready",
+      consolidatedReport: READY_REPORT,
+      reviewSession: { sessionKey: "review", status: "idle", completedAt: "2026-10-16T10:00:00Z" },
+    });
+    await settle(context);
+
+    expect(world.wakes(coordinator)).toBe(1);
+    const [carrier] = world.carriers(coordinator)[0]!;
+    expect(carrier).toMatchObject({
+      kind: "notice",
+      subject: "Multi Review review-env is ready to address",
+      notice: {
+        resource: { kind: "multi-review", id: "review-1", environmentId: worker.environmentId },
+        state: "ready",
+        tone: "attention",
+      },
+    });
+    expect(carrier!.body).toContain("3 findings (1 P0, 2 P1), 1 test-coverage gap");
+    expect(carrier!.body).toContain('`get_multi_review { "workflowId": "review-1" }`');
+    expect(carrier!.body).toContain("address_multi_review");
+
+    // The same state, observed again and after the coordinator's turn, is not news.
+    await world.finishTurn(coordinator);
+    await settle(context);
+    expect(world.wakes(coordinator)).toBe(1);
+
+    // Ownership is durable: the association remembers what it was told.
+    const association = (
+      await world.storage.listCoordinatorWorkflowAssociations(world.projectId)
+    ).find((item) => item.resourceId === "review-1");
+    expect(association?.statusNotice?.key).toMatch(/^ready:/);
+  });
+
+  test("each later settled state wakes it once more: fix done, then completed", async () => {
+    const context = await createWorld();
+    const { world } = context;
+    const coordinator = await world.main();
+    const worker = await world.addEnvironment("review-env");
+    await saveReview(world, worker, "review-1", {
+      phase: "ready",
+      consolidatedReport: READY_REPORT,
+    });
+    await associate(world, "multi-review", "review-1");
+    await settle(context);
+    await world.finishTurn(coordinator);
+
+    await saveReview(world, worker, "review-1", {
+      phase: "interactive",
+      consolidatedReport: READY_REPORT,
+      fixSession: { sessionKey: "fix", status: "idle", startedAt: "2026-10-16T10:10:00Z" },
+    });
+    await settle(context);
+    await world.finishTurn(coordinator);
+
+    await saveReview(world, worker, "review-1", {
+      phase: "completed",
+      fixResult: { complete: true, summary: "All findings fixed", filesChanged: ["a.ts", "b.ts"] },
+    });
+    await settle(context);
+
+    expect(world.wakes(coordinator)).toBe(3);
+    expect(world.carriers(coordinator).map((turn) => turn[0]!.notice?.state)).toEqual([
+      "ready",
+      "fix-done",
+      "completed",
+    ]);
+    expect(world.received(coordinator)[2]).toContain("Files changed: 2");
+    // A terminal state closes the association's reporting, as before.
+    const association = (
+      await world.storage.listCoordinatorWorkflowAssociations(world.projectId)
+    ).find((item) => item.resourceId === "review-1");
+    expect(association?.terminalNotifiedAt).toBeDefined();
+  });
+
+  test("a build pipeline wakes on its end and on a pause the supervisor took, not a requested one", async () => {
+    const context = await createWorld();
+    const { world } = context;
+    const coordinator = await world.main();
+    const worker = await world.addEnvironment("build-env");
+    await savePipeline(world, worker, "pipeline-1", { phase: "building" });
+    await associate(world, "build-pipeline", "pipeline-1");
+
+    await savePipeline(world, worker, "pipeline-1", {
+      phase: "paused",
+      pausedFromPhase: "reviewing",
+    });
+    await settle(context);
+    expect(world.wakes(coordinator)).toBe(0);
+
+    await savePipeline(world, worker, "pipeline-1", {
+      phase: "paused",
+      pausedFromPhase: "fixing",
+      error: "The fix changed nothing",
+    });
+    await settle(context);
+    await world.finishTurn(coordinator);
+
+    await savePipeline(world, worker, "pipeline-1", {
+      phase: "complete",
+      verificationResult: "pass",
+    });
+    await settle(context);
+
+    expect(world.carriers(coordinator).map((turn) => turn[0]!.notice)).toEqual([
+      expect.objectContaining({ state: "paused", tone: "attention" }),
+      expect.objectContaining({ state: "completed", tone: "success" }),
+    ]);
+    expect(world.received(coordinator)[0]).toContain("Error: The fix changed nothing");
+  });
+
+  test("stage completions wake only under the opt-in stages setting", async () => {
+    const settled = await createWorld();
+    const worker = await settled.world.addEnvironment("build-env");
+    await savePipeline(settled.world, worker, "pipeline-1", { phase: "building" });
+    await associate(settled.world, "build-pipeline", "pipeline-1");
+    await savePipeline(settled.world, worker, "pipeline-1", { phase: "reviewing" });
+    await settle(settled);
+    expect(settled.world.wakes(await settled.world.main())).toBe(0);
+    await settled.world.close();
+    setup = null;
+
+    const stages = await createWorld({ coordinatorStatusWakes: "stages" });
+    const coordinator = await stages.world.main();
+    const stagedWorker = await stages.world.addEnvironment("build-env");
+    await savePipeline(stages.world, stagedWorker, "pipeline-2", { phase: "building" });
+    await associate(stages.world, "build-pipeline", "pipeline-2");
+    await savePipeline(stages.world, stagedWorker, "pipeline-2", { phase: "reviewing" });
+    await settle(stages);
+    expect(stages.world.carriers(coordinator)[0]![0]!.notice).toMatchObject({
+      state: "stage-completed",
+      tone: "info",
+    });
+    expect(stages.world.carriers(coordinator)[0]![0]!.subject).toContain(
+      "finished its build stage",
+    );
+  });
+
+  test("off keeps only the terminal workflow notices it always sent", async () => {
+    const context = await createWorld({ coordinatorStatusWakes: "off" });
+    const { world } = context;
+    const coordinator = await world.main();
+    const worker = await world.addEnvironment("review-env");
+    await saveReview(world, worker, "review-1", {
+      phase: "ready",
+      consolidatedReport: READY_REPORT,
+    });
+    await associate(world, "multi-review", "review-1");
+    await settle(context);
+    expect(world.wakes(coordinator)).toBe(0);
+
+    await saveReview(world, worker, "review-1", { phase: "failed", error: "Reviewer crashed" });
+    await settle(context);
+    expect(world.wakes(coordinator)).toBe(1);
+    expect(world.carriers(coordinator)[0]![0]!.notice?.state).toBe("failed");
+
+    // A delegated worker waiting on an approval is not reported either.
+    await world.finishTurn(coordinator);
+    const delegated = await world.addEnvironment("worker", { launched: true });
+    context.activity.set(`${delegated.environmentId}:${delegated.tabId}`, "waiting");
+    await world.coordinator.noteWorkerActivity({ ...delegated, state: "waiting" });
+    await advance(context, COORDINATOR_WAITING_DEBOUNCE_MS + 1);
+    await settle(context);
+    expect(world.wakes(coordinator)).toBe(1);
+  });
+
+  test("work the user started never wakes a coordinator", async () => {
+    const context = await createWorld();
+    const { world } = context;
+    const coordinator = await world.main();
+    const worker = await world.addEnvironment("user-env");
+    // No association: the user launched these from the UI.
+    await saveReview(world, worker, "review-user", { phase: "failed", error: "x" });
+    await savePipeline(world, worker, "pipeline-user", { phase: "complete" });
+    context.activity.set(`${worker.environmentId}:${worker.tabId}`, "waiting");
+    await world.coordinator.noteWorkerActivity({
+      environmentId: worker.environmentId,
+      tabId: worker.tabId,
+      state: "waiting",
+    });
+    await advance(context, COORDINATOR_WAITING_DEBOUNCE_MS + 1);
+    await settle(context);
+
+    expect(world.wakes(coordinator)).toBe(0);
+    expect(await coordinatorInbox(world)).toEqual([]);
+  });
+
+  test("seven reviews settling together arrive as one wake", async () => {
+    const context = await createWorld();
+    const { world } = context;
+    const coordinator = await world.main();
+    const worker = await world.addEnvironment("review-env");
+    const ids = Array.from({ length: 7 }, (_, index) => `review-${index + 1}`);
+    for (const id of ids) {
+      await saveReview(world, worker, id, { phase: "reviewing" });
+      await associate(world, "multi-review", id);
+    }
+    for (const id of ids) {
+      await saveReview(world, worker, id, { phase: "ready", consolidatedReport: READY_REPORT });
+    }
+    await world.coordinator.reconcileWorkflowNotifications();
+    // Inside the coalescing window nothing is delivered yet.
+    await world.deliver();
+    expect(world.wakes(coordinator)).toBe(0);
+
+    await advance(context, COORDINATOR_STATUS_COALESCE_MS + 1);
+    await world.deliver();
+    expect(world.wakes(coordinator)).toBe(1);
+    expect(world.carriers(coordinator)[0]!.map((carrier) => carrier.notice?.resource.id)).toEqual(
+      ids,
+    );
+  });
+
+  test("rapid transitions of one resource coalesce into one wake", async () => {
+    const context = await createWorld();
+    const { world } = context;
+    const coordinator = await world.main();
+    const worker = await world.addEnvironment("review-env");
+    await saveReview(world, worker, "review-1", { phase: "reviewing" });
+    await associate(world, "multi-review", "review-1");
+
+    await saveReview(world, worker, "review-1", {
+      phase: "reviewing",
+      reviewers: [
+        {
+          id: "r1",
+          model: "gpt",
+          status: "running",
+          sessionKey: "r1",
+          stalledSince: "2026-10-16T10:00:00Z",
+        },
+      ],
+    });
+    await world.coordinator.reconcileWorkflowNotifications();
+    await advance(context, 3_000);
+    await saveReview(world, worker, "review-1", { phase: "failed", error: "Stalled reviewer" });
+    await world.coordinator.reconcileWorkflowNotifications();
+    await advance(context, COORDINATOR_STATUS_COALESCE_MS);
+    await world.deliver();
+
+    expect(world.wakes(coordinator)).toBe(1);
+    expect(world.carriers(coordinator)[0]!.map((carrier) => carrier.notice?.state)).toEqual([
+      "stalled",
+      "failed",
+    ]);
+  });
+
+  test("a resource's notices spend the unattended budget; the user's prompt starts a new one", async () => {
+    const context = await createWorld({ autonomousWakeBudget: 2 });
+    const { world } = context;
+    const coordinator = await world.main();
+    const worker = await world.addEnvironment("review-env");
+    await saveReview(world, worker, "review-1", { phase: "reviewing" });
+    await associate(world, "multi-review", "review-1");
+
+    const stall = async (since: string) => {
+      await saveReview(world, worker, "review-1", {
+        phase: "reviewing",
+        reviewers: [{ id: "r1", status: "running", sessionKey: "r1", stalledSince: since }],
+      });
+      await settle(context);
+      await world.finishTurn(coordinator);
+    };
+    await stall("2026-10-16T10:00:00Z");
+    await stall("2026-10-16T11:00:00Z");
+    await stall("2026-10-16T12:00:00Z");
+
+    expect(world.wakes(coordinator)).toBe(2);
+    const held = (await coordinatorInbox(world)).filter(
+      (message) => message.placement === "inject-held",
+    );
+    expect(held.map((message) => message.placementReason)).toEqual([AGENT_MAIL_LOOP_BUDGET_REASON]);
+
+    // A person prompting the coordinator is the authority the budget stands for.
+    await advance(context, 1_000);
+    await world.storage.resetAgentMailBudgetForSession(
+      coordinator.environmentId,
+      coordinator.logicalSessionKey,
+    );
+    await stall("2026-10-16T13:00:00Z");
+    expect(world.wakes(coordinator)).toBe(3);
+  });
+
+  test("the hourly limit holds a resource's notices and releases them as the hour passes", async () => {
+    const context = await createWorld({ hourlyWakeLimit: 1 });
+    const { world } = context;
+    const coordinator = await world.main();
+    const worker = await world.addEnvironment("review-env");
+    await saveReview(world, worker, "review-1", { phase: "reviewing" });
+    await associate(world, "multi-review", "review-1");
+
+    await saveReview(world, worker, "review-1", {
+      phase: "ready",
+      consolidatedReport: READY_REPORT,
+    });
+    await settle(context);
+    await world.finishTurn(coordinator);
+    await saveReview(world, worker, "review-1", { phase: "failed", error: "x" });
+    await settle(context);
+    expect(world.wakes(coordinator)).toBe(1);
+    expect(
+      (await coordinatorInbox(world)).find((message) => message.notice?.state === "failed")
+        ?.placementReason,
+    ).toBe(AGENT_MAIL_HOURLY_LIMIT_REASON);
+
+    await advance(context, 60 * 60 * 1_000);
+    await world.deliver();
+    expect(world.wakes(coordinator)).toBe(2);
+  });
+
+  test("a notice placed before a backend restart is delivered once after it", async () => {
+    const context = await createWorld();
+    const { world } = context;
+    const coordinator = await world.main();
+    const worker = await world.addEnvironment("review-env");
+    await saveReview(world, worker, "review-1", {
+      phase: "ready",
+      consolidatedReport: READY_REPORT,
+    });
+    await associate(world, "multi-review", "review-1");
+    await world.coordinator.reconcileWorkflowNotifications();
+
+    await world.restart();
+    await world.coordinator.reconcileWorkflowNotifications();
+    await advance(context, COORDINATOR_STATUS_COALESCE_MS + 1);
+    await world.deliver();
+    expect(world.wakes(coordinator)).toBe(1);
+    expect(await coordinatorInbox(world)).toHaveLength(1);
+  });
+
+  test("a crash between placing a notice and recording it never sends it twice", async () => {
+    const context = await createWorld();
+    const { world } = context;
+    const coordinator = await world.main();
+    const worker = await world.addEnvironment("review-env");
+    await saveReview(world, worker, "review-1", {
+      phase: "ready",
+      consolidatedReport: READY_REPORT,
+    });
+    const associationId = await associate(world, "multi-review", "review-1");
+    await world.coordinator.reconcileWorkflowNotifications();
+    // The bookkeeping write is lost.
+    await world.storage.updateCoordinatorWorkflowAssociation(associationId, (association) => {
+      delete association.statusNotice;
+      return true;
+    });
+
+    await world.restart();
+    await settle(context);
+    expect(world.wakes(coordinator)).toBe(1);
+    expect(await coordinatorInbox(world)).toHaveLength(1);
+  });
+
+  test("an old workflow first seen after an upgrade is recorded without a wake", async () => {
+    const context = await createWorld();
+    const { world, timers } = context;
+    const coordinator = await world.main();
+    const worker = await world.addEnvironment("review-env");
+    setSystemTime(new Date(timers.now() - 2 * 24 * 60 * 60 * 1_000));
+    await saveReview(world, worker, "review-old", {
+      phase: "ready",
+      consolidatedReport: READY_REPORT,
+    });
+    setSystemTime(new Date(timers.now()));
+    await associate(world, "multi-review", "review-old");
+
+    await settle(context);
+    expect(world.wakes(coordinator)).toBe(0);
+    const association = (
+      await world.storage.listCoordinatorWorkflowAssociations(world.projectId)
+    ).find((item) => item.resourceId === "review-old");
+    expect(association?.statusNotice?.key).toMatch(/^ready:/);
+  });
+
+  test("a workflow save is reported within seconds through the change listener", async () => {
+    const context = await createWorld();
+    const { world } = context;
+    const coordinator = await world.main();
+    world.coordinator.startStatusWakes();
+    const worker = await world.addEnvironment("review-env");
+    await saveReview(world, worker, "review-1", { phase: "reviewing" });
+    await associate(world, "multi-review", "review-1");
+
+    await saveReview(world, worker, "review-1", { phase: "cancelled" });
+    await advance(context, 2_000);
+    await advance(context, COORDINATOR_STATUS_COALESCE_MS + 1);
+    await world.deliver();
+    expect(world.carriers(coordinator)[0]![0]!.notice?.state).toBe("cancelled");
+  });
+
+  describe("delegated tabs", () => {
+    test("a worker waiting past the debounce wakes its coordinator once per episode", async () => {
+      const context = await createWorld();
+      const { world, activity, excerpts } = context;
+      const coordinator = await world.main();
+      const worker = await world.addEnvironment("worker", { launched: true });
+      const key = `${worker.environmentId}:${worker.tabId}`;
+      excerpts.set(key, "May I run `rm -rf build`?");
+
+      // An approval answered within seconds is not news.
+      activity.set(key, "waiting");
+      await world.coordinator.noteWorkerActivity({ ...worker, state: "waiting" });
+      await advance(context, 5_000);
+      activity.set(key, "working");
+      await world.coordinator.noteWorkerActivity({ ...worker, state: "working" });
+      await advance(context, COORDINATOR_WAITING_DEBOUNCE_MS);
+      await advance(context, COORDINATOR_STATUS_COALESCE_MS + 1);
+      await world.deliver();
+      expect(world.wakes(coordinator)).toBe(0);
+
+      // One that lasts is.
+      activity.set(key, "waiting");
+      await world.coordinator.noteWorkerActivity({ ...worker, state: "waiting" });
+      await advance(context, COORDINATOR_WAITING_DEBOUNCE_MS);
+      await advance(context, COORDINATOR_STATUS_COALESCE_MS + 1);
+      await world.deliver();
+      expect(world.wakes(coordinator)).toBe(1);
+      const [carrier] = world.carriers(coordinator)[0]!;
+      expect(carrier!.notice).toMatchObject({
+        resource: {
+          kind: "agent-tab",
+          environmentId: worker.environmentId,
+          tabId: "startup-agent",
+        },
+        state: "waiting",
+        tone: "attention",
+      });
+      expect(carrier!.body).toContain("Last message: May I run `rm -rf build`?");
+      expect(carrier!.body).toContain("get_tab_state");
+
+      // Still the same episode on the sweep: no second notice.
+      await world.finishTurn(coordinator);
+      await settle(context);
+      expect(world.wakes(coordinator)).toBe(1);
+
+      // Working again, then waiting again, is a new episode.
+      activity.set(key, "working");
+      await world.coordinator.noteWorkerActivity({ ...worker, state: "working" });
+      activity.set(key, "waiting");
+      await world.coordinator.noteWorkerActivity({ ...worker, state: "waiting" });
+      await advance(context, COORDINATOR_WAITING_DEBOUNCE_MS);
+      await advance(context, COORDINATOR_STATUS_COALESCE_MS + 1);
+      await world.deliver();
+      expect(world.wakes(coordinator)).toBe(2);
+
+      // The turn ending still closes the delegation with its own single wake.
+      await world.finishTurn(coordinator);
+      await world.finishTurn(worker);
+      expect(world.wakes(coordinator)).toBe(3);
+      expect(world.received(coordinator)[2]).toContain("without sending a report");
+    });
+
+    test("two workers' waiting notices are budgeted apart, though both tabs are startup-agent", async () => {
+      const context = await createWorld({ autonomousWakeBudget: 1 });
+      const { world, activity } = context;
+      const coordinator = await world.main();
+      const first = await world.addEnvironment("first", { launched: true });
+      const second = await world.addEnvironment("second", { launched: true });
+      for (const worker of [first, second]) {
+        activity.set(`${worker.environmentId}:${worker.tabId}`, "waiting");
+        await world.coordinator.noteWorkerActivity({ ...worker, state: "waiting" });
+      }
+      await advance(context, COORDINATOR_WAITING_DEBOUNCE_MS);
+      await advance(context, COORDINATOR_STATUS_COALESCE_MS + 1);
+      await world.deliver();
+      expect(world.wakes(coordinator)).toBe(1);
+      expect(
+        world.carriers(coordinator)[0]!.map((carrier) => carrier.notice?.resource.environmentId),
+      ).toEqual([first.environmentId, second.environmentId]);
+    });
+
+    test("the sweep finds a waiting episode whose edge was lost to a restart", async () => {
+      const context = await createWorld();
+      const { world, activity } = context;
+      const coordinator = await world.main();
+      const worker = await world.addEnvironment("worker", { launched: true });
+      activity.set(`${worker.environmentId}:${worker.tabId}`, "waiting");
+
+      await world.restart();
+      await world.coordinator.reconcileWorkflowNotifications();
+      await advance(context, COORDINATOR_WAITING_DEBOUNCE_MS);
+      await advance(context, COORDINATOR_STATUS_COALESCE_MS + 1);
+      await world.deliver();
+      expect(world.carriers(coordinator)[0]![0]!.notice?.state).toBe("waiting");
+    });
+
+    test("a silent worker's finished notice carries its last message", async () => {
+      const context = await createWorld();
+      const { world, excerpts } = context;
+      const coordinator = await world.main();
+      const worker = await world.addEnvironment("quiet", { launched: true });
+      excerpts.set(`${worker.environmentId}:${worker.tabId}`, "All tests pass; PR #12 opened.");
+      await world.finishTurn(worker);
+      expect(world.received(coordinator)[0]).toContain(
+        "Last message: All tests pass; PR #12 opened.",
+      );
+      expect(world.received(coordinator)[0]).toContain("get_tab_transcript");
+    });
+  });
+});
+
+describe("status classification and bounds", () => {
+  test("individual reviewers finishing is progress, not a status", () => {
+    expect(
+      multiReviewStatus(
+        {
+          phase: "reviewing",
+          reviewers: [
+            { id: "a", status: "completed" },
+            { id: "b", status: "running" },
+          ],
+        },
+        "review-1",
+      ),
+    ).toBeNull();
+    expect(multiReviewStatus({ phase: "consolidating", reviewers: [] }, "review-1")?.mode).toBe(
+      "stages",
+    );
+    expect(multiReviewStatus({ phase: "preparing" }, "review-1")).toBeNull();
+    expect(buildPipelineStatus({ phase: "building" }, "pipeline-1")).toBeNull();
+  });
+
+  test("a relaunched fix or a second consolidation is a new state", () => {
+    const fix = (sessionKey: string) =>
+      multiReviewStatus(
+        {
+          phase: "interactive",
+          fixSession: { sessionKey, status: "idle", startedAt: "2026-10-16T10:00:00Z" },
+        },
+        "review-1",
+      )!.key;
+    expect(fix("fix-a")).not.toBe(fix("fix-b"));
+    const ready = (completedAt: string) =>
+      multiReviewStatus(
+        { phase: "ready", reviewSession: { completedAt }, consolidatedReport: READY_REPORT },
+        "review-1",
+      )!.key;
+    expect(ready("2026-10-16T10:00:00Z")).not.toBe(ready("2026-10-16T11:00:00Z"));
+    // A pending fix handoff has not settled.
+    expect(
+      multiReviewStatus(
+        { phase: "interactive", addressPromptPending: true, fixSession: { status: "idle" } },
+        "review-1",
+      ),
+    ).toBeNull();
+  });
+
+  test("subjects, details and bodies stay bounded whatever the workflow holds", () => {
+    const status = buildPipelineStatus(
+      { phase: "failed", taskTitle: "t".repeat(5_000), error: "e".repeat(50_000) },
+      "pipeline-1",
+    )!;
+    const rendered = renderCoordinatorStatusNotice(
+      { kind: "build-pipeline", id: "pipeline-1", label: "l".repeat(1_000) },
+      status,
+    );
+    expect(rendered.subject.length).toBeLessThanOrEqual(160);
+    expect(rendered.body.length).toBeLessThan(2_000);
+    expect(rendered.notice.resource.label!.length).toBeLessThanOrEqual(80);
+    for (const line of rendered.body.split("\n")) expect(line.length).toBeLessThanOrEqual(600);
+  });
+
+  test("reads the newest assistant text from a projection page", () => {
+    expect(
+      lastAssistantText([
+        { role: "assistant", content: "older" },
+        { role: "user", content: "question" },
+        { role: "assistant", content: "", parts: [{ type: "text", content: "newest\nanswer" }] },
+        { role: "assistant", content: "", parts: [{ type: "tool-invocation" }] },
+      ]),
+    ).toBe("newest answer");
+    expect(lastAssistantText(undefined)).toBeUndefined();
+    expect(lastAssistantText([{ role: "assistant", content: "x".repeat(2_000) }])!.length).toBe(
+      400,
+    );
+  });
+});

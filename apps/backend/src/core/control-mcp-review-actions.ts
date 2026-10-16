@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { CoordinatorControlScope, ControlMcpInvoker } from "./control-mcp-server.js";
+import { COORDINATOR_WORKFLOW_STATUS_WAKE } from "@orkestrator/protocol/coordinator";
 import { workflowSummary } from "./control-workflow-summary.js";
 import type { MultiReviewActionResult } from "@orkestrator/protocol/multi-review";
 
@@ -12,10 +13,21 @@ const selection = z
   })
   .strict();
 
-function response(value: MultiReviewActionResult) {
+/** The async contract for a coordinator-started workflow; see `COORDINATOR_WORKFLOW_STATUS_WAKE`. */
+export function workflowStatusWakeResult() {
+  return {
+    delivery: "async" as const,
+    wake: COORDINATOR_WORKFLOW_STATUS_WAKE,
+    nextStep: "Finish your turn now. Do not poll.",
+  };
+}
+
+function response(value: MultiReviewActionResult, options: { startsWork?: boolean } = {}) {
   const summary = {
     ...value,
     workflow: workflowSummary(value.workflow as unknown as Record<string, unknown>),
+    // Launching or addressing starts work the coordinator will hear back about.
+    ...(options.startsWork && value.outcome !== "partial" ? workflowStatusWakeResult() : {}),
   };
   return {
     content: [{ type: "text" as const, text: JSON.stringify(summary) }],
@@ -59,6 +71,7 @@ export function registerControlReviewActions(
           scope,
           input,
         }),
+        { startsWork: true },
       ),
   );
 
@@ -96,7 +109,9 @@ export function registerControlReviewActions(
         },
       },
       async ({ workflowId }) =>
-        response(await invoke<MultiReviewActionResult>(command, { scope, workflowId })),
+        response(await invoke<MultiReviewActionResult>(command, { scope, workflowId }), {
+          startsWork: name === "address_multi_review",
+        }),
     );
   }
 }

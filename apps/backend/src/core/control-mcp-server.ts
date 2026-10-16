@@ -28,7 +28,10 @@ import {
   terminalSessionId,
   validateSelection,
 } from "./control-shared-actions.js";
-import { registerControlReviewActions } from "./control-mcp-review-actions.js";
+import {
+  registerControlReviewActions,
+  workflowStatusWakeResult,
+} from "./control-mcp-review-actions.js";
 import { normalizedWorkflow, workflowSummary } from "./control-workflow-summary.js";
 import { withCoordinatorDelegationPresentation } from "./coordinator-delegation-authority.js";
 
@@ -1257,7 +1260,7 @@ async function createControlMcp(
         });
         const record = normalizedWorkflow(workflow);
         if (!record) throw new Error("Build pipeline returned no result");
-        return toolResult({ workflow: workflowSummary(record) });
+        return toolResult({ workflow: workflowSummary(record), ...workflowStatusWakeResult() });
       },
     );
 
@@ -1333,7 +1336,7 @@ async function createControlMcp(
         });
         const record = normalizedWorkflow(workflow);
         if (!record) throw new Error("Multi-review returned no result");
-        return toolResult({ workflow: workflowSummary(record) });
+        return toolResult({ workflow: workflowSummary(record), ...workflowStatusWakeResult() });
       },
     );
 

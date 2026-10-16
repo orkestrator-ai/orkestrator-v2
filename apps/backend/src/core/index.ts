@@ -93,6 +93,7 @@ import { AgentRegistry } from "./agent-registry.js";
 import { tmuxManager } from "./tmux-session-manager.js";
 import { AgentMailService } from "./agent-mail-service.js";
 import { CoordinatorService } from "./coordinator-service.js";
+import { lastAssistantText } from "./coordinator-status-wakes.js";
 import { coordinatorProviderQualification } from "./coordinator-providers.js";
 import { ProjectGitService } from "./project-git-service.js";
 import {
@@ -360,6 +361,10 @@ export class OrkestratorBackend {
           logicalSessionKey,
         );
       },
+      {
+        lastAssistantExcerpt: (environmentId, tabId) =>
+          this.lastAssistantExcerpt(environmentId, tabId),
+      },
     );
     context.coordinators = this.coordinators;
     const interactionMonitorMode =
@@ -410,6 +415,26 @@ export class OrkestratorBackend {
           // dropped while one is already running.
           if (event.owner !== "coordinator") {
             this.wakeWorkflows(event.environmentId, "provider-transition");
+          }
+          // A delegated tab blocked on input or an approval, or working again:
+          // the edges a coordinator's waiting-worker status wake hangs off.
+          if (
+            event.owner !== "coordinator" &&
+            (event.state === "waiting" || event.state === "working") &&
+            event.logicalSessionKey?.startsWith(`env-${event.environmentId}:`)
+          ) {
+            void this.coordinators
+              .noteWorkerActivity({
+                environmentId: event.environmentId,
+                tabId: event.logicalSessionKey.slice(`env-${event.environmentId}:`.length),
+                state: event.state,
+              })
+              .catch((error: unknown) => {
+                console.warn(
+                  "[backend] Failed to note worker activity for status wakes:",
+                  error instanceof Error ? error.message : error,
+                );
+              });
           }
           if (isAgentTurnEndTransition(event)) {
             // A coordinator has no environment row and no PR to probe for.
@@ -737,6 +762,46 @@ export class OrkestratorBackend {
    * idempotent — an environment already being monitored just gets its next
    * check brought forward.
    */
+  /**
+   * What a worker tab last said, for a coordinator status notice.
+   *
+   * Best effort and bounded: a short projection read with a deadline, so a
+   * slow bridge delays the notice by at most a few seconds and never fails it.
+   */
+  private async lastAssistantExcerpt(
+    environmentId: string,
+    tabId: string,
+  ): Promise<string | undefined> {
+    const logicalSessionKey = `env-${environmentId}:${tabId}`;
+    const session = (await this.context.storage.listNativeAgentSessions()).find(
+      (candidate) =>
+        candidate.environmentId === environmentId &&
+        candidate.logicalSessionKey === logicalSessionKey,
+    );
+    if (!session) return undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), 5_000);
+      timer.unref?.();
+    });
+    try {
+      const projection = await Promise.race([
+        this.nativeAgents
+          .getProjection({
+            environmentId,
+            agent: session.agent,
+            logicalSessionKey,
+            messageLimit: 6,
+          })
+          .catch(() => null),
+        deadline,
+      ]);
+      return lastAssistantText(projection?.messages);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   /**
    * The single PR-monitor call site for a native turn-end edge.
    *
@@ -1356,6 +1421,7 @@ export class OrkestratorBackend {
       console.warn("[backend] Failed to start control MCP:", error);
     });
     this.reserveOwnedPreviewPorts();
+    this.coordinators.startStatusWakes();
     reconcileCoordinatorWorkflows();
     // Tell the user now, not when a review stage silently fails to submit its
     // result: can agents in containers reach the agent tools server? Runs in
@@ -1434,6 +1500,7 @@ export class OrkestratorBackend {
     }
     this.activityJobs?.stop();
     this.activityJobs = null;
+    this.coordinators.stopStatusWakes();
     // Synchronous and cannot fail, so it runs before the awaited drain rather
     // than racing it: every watcher holds a file descriptor and a debounce timer.
     this.runtime.shutdown();

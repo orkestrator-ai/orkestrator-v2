@@ -25,7 +25,7 @@ export function registerSessionCommands(
     const target = asString(url, "url");
     const { command, args } = resolveBrowserOpenCommand(target);
     // A sign-in URL carries its OAuth state; a failed launch must not echo it.
-    return runCommand(command, args, { redactValues: [target] }).then(() => undefined);
+    return runCommand(command, args, { redactValues: [target, ...args] }).then(() => undefined);
   });
   register("reveal_in_file_manager", async ({ path: filePath }) => {
     const target = asString(filePath, "path");

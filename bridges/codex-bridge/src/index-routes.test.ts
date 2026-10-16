@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { CompressionStream as NodeCompressionStream } from "node:stream/web";
 import { gunzipSync } from "node:zlib";
+import { HTTPException } from "hono/http-exception";
 import {
   AUTH_SECRET_CANARIES,
   CANARY_LOGIN_URL,
@@ -195,13 +196,13 @@ describe("sign-in routes carry no credential", () => {
     );
   });
 
-  test("a failed account read logs one redacted line, not app-server's error data", async () => {
+  test("a failed account read redacts its message and excludes app-server's error data", async () => {
     await withRuntimeMethod(
       "readAuthStatus",
       async () => {
         throw new AppServerRpcError("account/read", {
           code: -32000,
-          message: `refresh failed for Bearer ${AUTH_SECRET_CANARIES.accessToken} (${AUTH_SECRET_CANARIES.openAiApiKey})`,
+          message: `refresh failed for Bearer ${AUTH_SECRET_CANARIES.accessToken} (${AUTH_SECRET_CANARIES.openAiApiKey}) at ${CANARY_LOGIN_URL}`,
           data: { refreshToken: AUTH_SECRET_CANARIES.refreshToken, authUrl: CANARY_LOGIN_URL },
         });
       },
@@ -213,6 +214,66 @@ describe("sign-in routes carry no credential", () => {
         expect(response).toEqual({ status: 500, body: "Internal Server Error" });
         expect(output).toContain("[codex-bridge] GET /global/auth failed: AppServerRpcError");
         expectNothingSecretLogged(output, "Codex auth failure");
+      },
+    );
+  });
+
+  test("unexpected route errors retain redacted stack frames", async () => {
+    await withRuntimeMethod(
+      "readAuthStatus",
+      async function unexpectedAccountRead() {
+        throw new Error(
+          `account read failed: ${CANARY_LOGIN_URL} Bearer ${AUTH_SECRET_CANARIES.accessToken}`,
+          { cause: { refreshToken: AUTH_SECRET_CANARIES.refreshToken } },
+        );
+      },
+      async () => {
+        const { result: response, output } = await captureOutput(async () => {
+          const failed = await app.request("/global/auth");
+          return { status: failed.status, body: await failed.text() };
+        });
+        expect(response).toEqual({ status: 500, body: "Internal Server Error" });
+        expect(output).toContain("Error: account read failed:");
+        expect(output).toMatch(/\n\s+at unexpectedAccountRead/);
+        expectNothingSecretLogged(output, "Codex unexpected route failure");
+      },
+    );
+  });
+
+  test("HTTPException preserves its response without logging its secret cause", async () => {
+    await withRuntimeMethod(
+      "readAuthStatus",
+      async () => {
+        throw new HTTPException(409, {
+          res: new Response("Account unavailable", { headers: { "Retry-After": "3" } }),
+          cause: new Error(CANARY_LOGIN_URL),
+        });
+      },
+      async () => {
+        const { result: response, output } = await captureOutput(() => app.request("/global/auth"));
+        expect(response.status).toBe(409);
+        expect(response.headers.get("Retry-After")).toBe("3");
+        expect(await response.text()).toBe("Account unavailable");
+        expect(output).toBe("");
+        expectNothingSecretLogged(output, "Codex HTTPException");
+      },
+    );
+  });
+
+  test("MCP OAuth returns only the authorization URL and never logs it", async () => {
+    await withRuntimeMethod(
+      "performMcpAction",
+      async () => ({ authorizationUrl: CANARY_LOGIN_URL, ...tokens }),
+      async () => {
+        const { result: response, output } = await captureOutput(() =>
+          app.request("/session/test-session/mcp/example/sign-in", { method: "POST" }),
+        );
+        expect(response.status).toBe(200);
+        const body = await response.json();
+        expect(body).toEqual({ url: CANARY_LOGIN_URL });
+        expectSignInShape(body);
+        expectOnlyLoginSecrets(body, "Codex MCP OAuth");
+        expectNothingSecretLogged(output, "Codex MCP OAuth");
       },
     );
   });

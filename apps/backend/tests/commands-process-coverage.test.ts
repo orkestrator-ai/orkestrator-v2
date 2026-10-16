@@ -177,7 +177,9 @@ done
 if [ "\${FAKE_LAUNCHER_FAIL_EXECUTABLE:-}" = "\${0##*/}" ] || \
    [ "\${FAKE_LAUNCHER_FAIL_SECONDARY_EXECUTABLE:-}" = "\${0##*/}" ]; then
   # Like xdg-open, optionally name what it could not open.
-  printf 'launcher failed%s\n' "\${FAKE_LAUNCHER_ECHO_ARGS:+: $*}" >&2
+  if [ "\${FAKE_LAUNCHER_SILENT:-}" != "1" ]; then
+    printf 'launcher failed%s\n' "\${FAKE_LAUNCHER_ECHO_ARGS:+: $*}" >&2
+  fi
   exit "\${FAKE_LAUNCHER_EXIT_CODE:-23}"
 fi
 `;
@@ -1514,24 +1516,36 @@ describe("process and platform command behavior", () => {
     PROCESS_TEST_BUDGET_MS,
   );
 
-  test("a failed browser launch does not echo the URL it was given", async () => {
+  test.each([
+    ["https://auth.example.test/authorize?state=private-login-state", false],
+    ["https://auth.example.test?state=private-login-state", false],
+    ["https://auth.example.test?state=private-login-state", true],
+  ])("a failed browser launch redacts %s (silent: %s)", async (url, silent) => {
     const platform = process.platform;
     Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
     process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE = "xdg-open";
     process.env.FAKE_LAUNCHER_ECHO_ARGS = "1";
-    const url = "https://auth.example.test/authorize?state=private-login-state";
+    if (silent) process.env.FAKE_LAUNCHER_SILENT = "1";
     try {
       const failure = await invoke("open_in_browser", { url }).then(
         () => undefined,
         (error: unknown) => error,
       );
       expect(failure).toBeInstanceOf(Error);
-      expect((failure as Error).message).toBe("launcher failed: [REDACTED]");
+      expect((failure as Error).message).toBe(
+        silent ? "Command failed: xdg-open [REDACTED]" : "launcher failed: [REDACTED]",
+      );
+      expect((failure as Error).message).not.toContain(url);
+      expect((failure as Error).message).not.toContain(new URL(url).toString());
       expect(String((failure as Error).message)).not.toContain("private-login-state");
+      expect(await readLauncherInvocations()).toEqual([
+        { executable: "xdg-open", args: [new URL(url).toString()] },
+      ]);
     } finally {
       Object.defineProperty(process, "platform", { configurable: true, value: platform });
       delete process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE;
       delete process.env.FAKE_LAUNCHER_ECHO_ARGS;
+      delete process.env.FAKE_LAUNCHER_SILENT;
     }
   });
 

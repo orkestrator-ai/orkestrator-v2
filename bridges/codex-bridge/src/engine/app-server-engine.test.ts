@@ -2767,6 +2767,37 @@ describe("account sign-in", () => {
     expectNothingSecretLogged(output, "Codex sign-in check");
   });
 
+  test("a failed connector recovery logs its reason with credentials redacted", async () => {
+    let account: unknown = SIGNED_OUT;
+    const h = harness({
+      "account/read": () => account,
+      "config/mcpServer/reload": () => {
+        throw new Error(
+          `reload rejected: Bearer ${AUTH_SECRET_CANARIES.accessToken} ${AUTH_SECRET_CANARIES.openAiApiKey}`,
+        );
+      },
+    });
+    await h.engine.start();
+    h.child().notify("mcpServer/startupStatus/updated", {
+      name: "codex_apps",
+      status: "failed",
+      error: EXPIRED_ACCOUNT_TOKEN,
+    });
+    await flush(h);
+    expect(h.engine.isAccountSignInRequired()).toBe(true);
+    account = SIGNED_IN;
+    const { result, output } = await captureOutput(async () => {
+      const response = await h.engine.readAccount();
+      await flush(h);
+      return response;
+    });
+    expect(result).toEqual(SIGNED_IN);
+    expect(requestCount(h, "config/mcpServer/reload")).toBe(1);
+    expect(output).toContain("Account connector recovery failed:");
+    expect(output).toContain("reload rejected:");
+    expectNothingSecretLogged(output, "Codex connector recovery");
+  });
+
   test("an older routine read cannot overwrite a newer account change", async () => {
     const first = deferred<unknown>();
     let reads = 0;

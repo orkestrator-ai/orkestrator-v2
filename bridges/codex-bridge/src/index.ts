@@ -144,8 +144,8 @@ export const app = new Hono();
 
 /**
  * Hono's default handler prints the whole error, and an `AppServerRpcError`
- * carries app-server's `data` verbatim. Log one redacted line instead; the
- * response is the default one.
+ * carries app-server's `data` verbatim. Log only the redacted stack string,
+ * preserving diagnostic frames without inspecting attached error data.
  */
 app.onError((error, c) => {
   if ("getResponse" in error) {
@@ -153,7 +153,7 @@ app.onError((error, c) => {
     return c.newResponse(response.body, response);
   }
   console.error(
-    `[codex-bridge] ${c.req.method} ${c.req.path} failed: ${redactSecrets(`${error.name}: ${error.message}`)}`,
+    `[codex-bridge] ${c.req.method} ${c.req.path} failed: ${redactSecrets(error.stack ?? `${error.name}: ${error.message}`)}`,
   );
   return c.text("Internal Server Error", 500);
 });

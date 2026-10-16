@@ -49,13 +49,19 @@ describe("redactSecrets", () => {
     expect(redacted).toContain("page=2");
   });
 
-  test.each(["access_token", "refresh_token", "token", "secret", "password", "signature"])(
-    "removes a %s query parameter",
-    (parameter) => {
-      const redacted = redactSecrets(`https://api.test/cb?${parameter}=zzzz9999abcd`);
-      expect(redacted).not.toContain("zzzz9999abcd");
-    },
-  );
+  test.each([
+    "access_token",
+    "refresh_token",
+    "token",
+    "secret",
+    "password",
+    "signature",
+    "state",
+    "code",
+  ])("removes a %s query parameter", (parameter) => {
+    const redacted = redactSecrets(`https://api.test/cb?${parameter}=zzzz9999abcd`);
+    expect(redacted).not.toContain("zzzz9999abcd");
+  });
 
   test("removes assignment-style credentials in prose or a config dump", () => {
     for (const line of [

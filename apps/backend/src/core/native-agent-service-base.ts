@@ -823,14 +823,15 @@ export abstract class NativeAgentServiceBase {
       !(COORDINATOR_CONTEXT_APPLIED in input)
     ) {
       const status = workspace.repositoryStatus;
-      const hasLaunchBase =
-        typeof status?.branch === "string" &&
-        status.branch.length > 0 &&
-        typeof status.headCommit === "string" &&
-        status.headCommit.length > 0;
-      const launchBaseLine = hasLaunchBase
-        ? `Launch base: every launch_environment call must include baseBranch and baseCommit exactly as shown in the repository context below. get_launch_options repeats these required values.\n`
-        : `Launch base: the current checkout has no launchable branch and commit, so launch_environment is blocked until the repository is on a named branch with a HEAD commit. Report this blocked state instead of guessing values.\n`;
+      // Workers start where a normal environment would: the latest commit of
+      // the configured base branch, not wherever this checkout happens to be.
+      const baseBranch = await this.storage
+        .getRepositoryConfig(workspace.projectId)
+        .then((config) => config.defaultBranch?.trim() || "main")
+        .catch(() => "main");
+      const launchBaseLine =
+        `Launch base: every launch_environment call must include baseBranch and baseCommit. By default start workers from the latest commit of the base branch ${baseBranch}: call get_launch_options and pass coordinatorBase.baseBranch and coordinatorBase.baseCommit unchanged. ` +
+        `Use checkoutBase, the branch and commit of this checkout shown below, only when the user asks to build on the current checkout. If coordinatorBase is unavailable, report that instead of guessing values.\n`;
       const side = coordinator.conversation.role === "side";
       const delegation = side
         ? `Side agent: you are ${coordinator.conversation.title}, a side agent of this project's coordinator. You can read the project and Orkestrator state, but you cannot launch environments or jobs. Exchange mail only with the main coordinator: send_message to toEnvironmentId "${COORDINATOR_MAIL_ADDRESS}". Workers and other agents cannot reach you.\n`

@@ -95,20 +95,15 @@ and what its first runs found. Everything else here is qualification.
    entry. Either repeat that assertion next to the tier table (the conformance
    test already imports from the bridges, so importing the list is the same
    pattern) or close this item as covered.
-3. **Codex coordinator reaches the network through hosted `web_search`.** The
-   first live read-only run on Codex (2026-10-16) answered the fetch step with
-   Codex's hosted `web_search` tool, which succeeded. The permission profile
-   denies network to the child process only, and `codexAppServerConfigOverrides`
-   (`bridges/codex-bridge/src/codex-config.ts`) switches off a list of features
-   but not web search. The coordinator policy denies `network` and calls Codex
-   `enforced`, and Claude's translation removes `WebSearch` and `WebFetch`, so
-   either disable web search in the coordinator overrides (and pin it in
-   `codex-config.test.ts`) or record why hosted search is outside the
-   `network` axis. Until then the live read-only case fails Codex on its
-   network step. Codex also reports create, edit and shell as `denied` without
-   calling a tool for them. Once web search is settled, check whether the
-   prompt can get Codex to make those calls. If it cannot, decide whether a
-   sandbox the model already knows is read-only counts as exercised.
+3. **Codex claims denials it never attempted.** In both live read-only runs
+   (2026-10-16, and 2026-10-17 on `31d0fb06` with the hosted search lock in
+   place), Codex reported create, edit and shell as `denied` with no tool call
+   for them, so the case fails on those three steps. Its `curl`, `git commit`
+   and `launch_job` calls were made and refused, the network step passed and
+   the checkout was unchanged. Find out whether the prompt can get Codex to
+   make the three calls. If it cannot, decide whether a sandbox the model
+   already knows is read-only counts as exercised, and teach
+   `coordinatorLiveVerdict` the answer.
 4. **Let agent-test profiles authorize Pi's login.** `--credential-source pi`
    is accepted, but `apps/desktop/electron/backend-process.ts` seeds only
    Claude, Codex, OpenCode and Cursor credentials into an agent-test profile.
@@ -149,8 +144,8 @@ for prerequisites and how to batch them with other provider runs.
 
   | Platform | Read-only result |
   | --- | --- |
-  | Claude (macOS) | Passed. Write and Edit unavailable. Shell, commit and network refused by the hook. `launch_job` on the project home refused. Canary and `list_tickets` read back. |
-  | Codex | Failed: hosted `web_search` reached the network, and create, edit and shell were reported denied with no call (Code item 3). Commit and `launch_job` refused, checkout unchanged, canaries read back. |
+  | Claude (macOS) | Passed. Write and Edit unavailable. Shell, commit and network refused by the hook. `launch_job` on the project home refused. Canary and `list_tickets` read back.. Passed again 2026-10-17 with web research off. |
+  | Codex | Failed: hosted `web_search` reached the network, and create, edit and shell were reported denied with no call (Code item 3). Commit and `launch_job` refused, checkout unchanged, canaries read back. Re-run 2026-10-17 on `31d0fb06` with web research off: network passed (no hosted search; `curl` refused), the three unattempted denials still fail it. |
   | Pi | Skipped: `needs-auth`, because the profile seeds no Pi login (Code item 4). |
   | OpenCode | Passed. Every mutation unavailable, checkout unchanged, canaries read back. |
   | Cursor | Skipped: `signed-out` in the profile. Whether the host has a Cursor Agent login was not checked. |
@@ -274,6 +269,34 @@ is the truth, and this file is the backlog.
 - Network stays in the scenario. The coordinator policy denies `network`, so a
   hosted tool that reaches it (Codex `web_search`) fails the case even though
   the checkout is untouched.
+- Hosted search is inside the `network` axis, not outside it. A sandbox stops
+  commands only, and hosted search runs on the vendor's servers, so a policy
+  that denies `network` loses the provider's hosted search and fetch on every
+  adapter (#1032, `c51a8ff1`: Codex `web_search = "disabled"` with a
+  fail-closed `config/read` readback, Grok `--disable-web-search`, named
+  denies on Claude, OpenCode and Cursor, Pi's name allowlist). Calling hosted
+  search out of scope was rejected: an `enforced` tier that still let the
+  model open any URL would claim a boundary it does not hold. The one carve-out
+  is the opt-in **Coordinator web research** setting (`capabilityPolicy.allow:
+  ["web.search"]`), which keeps search in `cached` mode and never fetches.
+- The live read-only case switches **Coordinator web research** off for its
+  run and restores it. With the default (search on), a model asked to fetch
+  could answer from cached search and fail a step the product allows; with it
+  off, the step tests the whole denial. What allowed search can reach is
+  proved by the gated canary in `live-network-lock.test.ts` instead (`cached`
+  refuses a page `live` opens). The alternative, a fresh uncacheable URL whose
+  token must not appear in any tool result, tests the default configuration
+  but needs result-content evidence the transcript parser does not have.
+- Read-only turns deny `network` on every provider. Claude, Cursor, Grok,
+  OpenCode and Pi already did; Codex read-only turns kept the session's
+  policy, so a Multi Review reviewer or consolidation turn on Codex could
+  still search. They now add the denial (`codexReadOnlyTurnPolicy`) and reload
+  the thread when the search setting changes (`promptThreadConfig`). A review
+  reads untrusted diff content, and hosted fetch is the one route that turn
+  had to send it to a page owner. Allowing `cached` search on review turns
+  across providers was the alternative; it would need the same change on all
+  six adapters and was not asked for. A coordinator keeps its research mode on
+  a read-only turn, matching Claude's process authority.
 
 ## Open questions
 

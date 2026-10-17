@@ -523,7 +523,7 @@ export class CodexRuntimeLifecycle {
         name: thread.name,
         modelId: thread.model,
       });
-      context.mcpApprovalConfig = undefined;
+      context.promptThreadConfig = undefined;
       context.cwd = thread.cwd ?? context.cwd;
       context.name = thread.name ?? context.name;
       // It had a rollout to resume from, so it is materialized by definition.
@@ -1479,7 +1479,7 @@ export class CodexRuntimeLifecycle {
         const thread = await this.ctx.options.engine.resumeThread(context.threadId, {
           config: session.config,
         });
-        context.mcpApprovalConfig = undefined;
+        context.promptThreadConfig = undefined;
         context.engineHandle = thread.handle;
         context.cwd = thread.cwd ?? context.cwd;
         context.name = thread.name ?? context.name;

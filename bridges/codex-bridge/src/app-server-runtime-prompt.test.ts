@@ -3886,6 +3886,53 @@ describe("composed approval settings", () => {
       await h.drain();
     }
   });
+  test("read-only turns take hosted web search away and build turns give it back", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({
+      mode: "build",
+      policy: {
+        id: "interactive-host",
+        sandbox: "none",
+        approvals: "auto-approve",
+        projectResources: true,
+        networkAccess: "full",
+      },
+    });
+    // No agentMcp: hosted search alone must be enough to reload the thread.
+    for (const [index, readOnly] of [false, true, false, false].entries()) {
+      const before = h.child().requests.length;
+      expect(
+        await h.runtime.prompt(sessionId, {
+          prompt: "Inspect",
+          requestId: `search-readonly-${index}`,
+          attachments: [],
+          readOnly,
+        }),
+      ).toMatchObject({ ok: true });
+      const sent = h
+        .child()
+        .requests.slice(before)
+        .map((r) => r.method);
+      const thread = h
+        .child()
+        .requests.findLast((r) => r.method === "thread/start" || r.method === "thread/resume")!;
+      const config = thread.params.config as Record<string, unknown> | undefined;
+      expect(config?.web_search).toBe(index === 1 ? "disabled" : undefined);
+      // Turns 1 and 2 change the search mode, so each reloads the thread;
+      // turn 3 repeats turn 2's configuration and does not.
+      expect(sent.filter((method) => method === "thread/unsubscribe")).toHaveLength(
+        index === 1 || index === 2 ? 1 : 0,
+      );
+      expect(sent.filter((method) => method === "thread/resume")).toHaveLength(
+        index === 1 || index === 2 ? 1 : 0,
+      );
+      h.child().notify("turn/completed", {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status: "completed" },
+      });
+      await h.drain();
+    }
+  });
   test("read-only dispatch overrides selected reviewer without leaking into the following turn", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });

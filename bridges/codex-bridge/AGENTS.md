@@ -94,7 +94,10 @@ newest row, which every window holds.
   `disabled`, or `cached` when the policy allows search. Never `live`, which
   opens any URL the model names. A coordinator thread is refused unless
   `config/read` reads the expected mode back (`assertHostedNetworkLock`).
-  After a Codex bump, run `live-network-lock.test.ts` with
+  A `readOnly` turn adds the denial (`codexReadOnlyTurnPolicy`), and the
+  runtime reloads the thread whenever the search setting changes between
+  turns (`promptThreadConfig`); a resume that names no mode restores Codex's
+  own (verified against 0.162.1 by the loopback test). After a Codex bump, run `live-network-lock.test.ts` with
   `RUN_LIVE_CODEX_APP_SERVER=1` (no credits), and once with
   `RUN_LIVE_CODEX_WEB_SEARCH_CANARY=1`, which spends a few turns proving
   `cached` still refuses a page `live` opens.

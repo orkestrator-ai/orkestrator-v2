@@ -178,8 +178,12 @@ export interface ThreadContext {
   engineHandle: string;
   /** Generation this context is currently bound to. */
   engineGeneration: EngineGeneration;
-  /** Approval configuration actually applied to the loaded MCP connection. */
-  mcpApprovalConfig?: string;
+  /**
+   * Prompt-scoped thread configuration (MCP approvals, hosted web search)
+   * actually applied to the loaded thread; undefined after a re-attach with
+   * the session's own configuration.
+   */
+  promptThreadConfig?: string;
   bridgeSessionIds: Set<string>;
   /** The one canonical transcript for this Codex thread. */
   messages: NormalizedMessage[];

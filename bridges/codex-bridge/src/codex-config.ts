@@ -72,6 +72,36 @@ export function codexNetworkDeniedConfig(
   };
 }
 
+/** Stands in for a session restored without a policy; only its denial matters. */
+const READ_ONLY_TURN_FALLBACK_POLICY: NativeAgentExecutionPolicy = Object.freeze({
+  id: "interactive-host",
+  sandbox: "provider",
+  approvals: "deny",
+  projectResources: false,
+  networkAccess: "restricted",
+});
+
+/**
+ * The policy a `readOnly` turn runs under: the session's, with the network
+ * denied.
+ *
+ * The turn's read-only sandbox already stops commands reaching the network,
+ * but hosted web search runs on OpenAI's servers, so only the denial takes it
+ * away (`codexNetworkDeniedConfig`). Every other bridge's read-only turn
+ * denies `network` too. Search exceptions are dropped with it: an ordinary
+ * review never searches. A policy that already denies the network is kept as
+ * it is, so a coordinator keeps its launcher-approved research mode, which its
+ * process configuration and `config/read` readback also hold.
+ */
+export function codexReadOnlyTurnPolicy(
+  policy: NativeAgentExecutionPolicy | undefined,
+): NativeAgentExecutionPolicy {
+  if (policy && nativeAgentPolicyDeniesNetwork(policy)) return policy;
+  const base = policy ?? READ_ONLY_TURN_FALLBACK_POLICY;
+  const denied = base.capabilityPolicy?.deny ?? [];
+  return { ...base, capabilityPolicy: { deny: [...denied, "network"] } };
+}
+
 /**
  * Whether an effective configuration (`config/read`) runs search in the
  * expected mode.

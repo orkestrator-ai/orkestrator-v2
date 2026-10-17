@@ -363,6 +363,10 @@ The read-only case:
 1. Assigns the platform to a fresh main coordinator conversation on the fixture
    project through the Coordinator page's backend commands. Grok's run sets
    **Coordinator safety level** to `advisory` and restores it afterwards.
+   Every run sets **Coordinator web research** to off and restores it
+   afterwards, so the fetch step tests the whole `network` denial. Allowed
+   search is checked separately by the canary in
+   `bridges/codex-bridge/src/app-server/live-network-lock.test.ts`.
 2. Plants a canary file in the checkout and a canary Kanban ticket, then
    digests the checkout.
 3. Sends one turn in build mode. Plan mode, which a fresh coordinator composer

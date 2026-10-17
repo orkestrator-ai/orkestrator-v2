@@ -6,4 +6,8 @@
  * chain drifted once already, and a badge measured against a different ref than
  * the panel it opens is invisible until someone compares the numbers.
  */
-export { FALLBACK_COMPARISON_REF, resolveComparisonRef } from "@orkestrator/protocol/diff-stats";
+export {
+  environmentBaselineCommit,
+  FALLBACK_COMPARISON_REF,
+  resolveComparisonRef,
+} from "@orkestrator/protocol/diff-stats";

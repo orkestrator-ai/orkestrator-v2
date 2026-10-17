@@ -73,30 +73,18 @@ forward that nothing in the backend supplies.
 4. **`maxBudgetUsd`.** Add a backend-owned per-environment budget setting, with
    `error_max_budget_usd` mapping to a `stopped` notice, or drop the option from
    the bridge.
-5. **A stored model the catalogue does not offer.** Found in the slash-command
-   qualification run (2026-10-17, `31d0fb06`, Codex 0.162.1, ChatGPT login):
-   - A new profile's default Codex model is `gpt-5.4`
-     (`storage-shared-core.ts:1941`). The renderer creates the tab's session
-     with it, so the session stores `controls.modelId: "gpt-5.4"`.
-   - That login's `model/list` does not offer `gpt-5.4`, so the projection
-     reports the first catalogue model (`selectedModelId: "gpt-6.1-sol"`) and
-     the picker shows it.
-   - Turns still run the stored model. The Codex bridge uses
-     `session.config.model` (`app-server-runtime-prompt.ts:459`), and the
-     dispatch's own `model` (`gpt-6.1-sol`) only seeds a new session
-     (`native-agent-service-provider.ts:366`). Every turn fails with "The
-     'gpt-5.4' model is not supported when using Codex with a ChatGPT
-     account", while the picker shows a model that would have worked.
-
-   Make the shown and the run model the same. Either resolve an unoffered
-   stored model to the catalogue's choice and persist it, or show the stored
-   model as unavailable and refuse to send until the user picks one. Check the
-   other providers for the same fallback. The live slash-command spec works
-   around it by launching Codex on `ORKESTRATOR_AGENT_TEST_MODEL`.
-
-   The Codex sub-agent qualification independently reproduced this with both
-   the composer and an explicit `ensure_native_agent_session` model. Evidence:
-   [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md#codex-sub-agent-cards-evidence).
+5. **A per-turn model on a Codex dispatch.** The Codex prompt body drops
+   `model` (`http-bridge-prompt-body.ts`, the `agent === "codex"` branch), so a
+   `dispatch_native_agent_prompt` or Control MCP `model` sent to an existing
+   Codex session is silently ignored and the turn runs the session's model.
+   Claude, Cursor, Grok and Pi carry it on every prompt. Either apply it to the
+   session config before `turn/start` (as a model pick does) or reject a
+   differing model with a message.
+6. **Refuse a Codex send on a model the login does not offer.** An existing
+   session that holds an unoffered model now shows it as "not offered to this
+   login", but a send still reaches Codex and fails with its HTTP 400. A
+   preflight against the live `model/list` could keep the draft and say which
+   model to pick instead. Optional: the 400 already names the model.
 
 ### Qualification
 
@@ -117,6 +105,60 @@ forward that nothing in the backend supplies.
   approval mode chooses within that bound and never widens it.
 - A parameter whose change needs a new process is launch-only: changing it
   against a running Claude CLI is a conflict, not a silent relaunch.
+- The shown and the run model must be the same. Fixed for Codex on
+  2026-10-17 (branch `fix/codex-stored-model-mismatch`, from `9da80451`). A new
+  install's Codex default `gpt-5.4` is not in a ChatGPT login's `model/list`.
+  The picker showed that list's first row while every turn ran `gpt-5.4` and
+  failed with HTTP 400.
+  - Codex turns run the bridge session's `config.model`; the prompt carries
+    none. Claude, Cursor, Grok and Pi carry the composer's `selectedModelId`
+    on every prompt (`AgentNativeTab.controller.tsx`, `send` options), so for
+    them the shown row is the one that runs and only Codex needed a fix.
+  - New sessions: a Codex provider's `resolveDefaultModel`
+    (`resolveCodexBridgeDefaultModel`, attached in `createNativeAgentProvider`)
+    checks an inherited default against the bridge's `/global/models`. If the live list
+    does not offer it, the session starts on that list's first model, which is
+    the row the picker already falls back to, and the renderer's
+    `modelSubstitution` toast says so. The rule is OpenCode's: it applies to
+    defaults only and to that session only, and settings keep the user's
+    choice so the default returns if the login changes.
+  - Only `source: "app-server"` with `supportedModelIds` counts as evidence.
+    That list is the complete `model/list` with `includeHidden`, so a model
+    Codex supports but hides from the picker is kept. The bridge reads it on
+    every request instead of caching it for the process lifetime, so an
+    account switch cannot swap a default against the previous login's list.
+    The bridge's persisted cache and hardcoded fallback can omit models the
+    login serves, so they never trigger a swap. An unreadable or over-long
+    list keeps the configured model.
+  - An explicit or pinned model is never swapped. That covers a launch-dialog
+    pick, a Build step's model and a public API `model`. The user chose it, so
+    a wrong choice should fail loudly.
+  - Build and Multi Review stages share the rule (`build-pipeline-service-
+    agents.ts`, which was OpenCode-only), because a Codex stage on the
+    unoffered default failed the same way.
+  - Existing sessions: the platform policy's `runsSessionHeldModel` makes the
+    projection add the held model as a row marked "session model"
+    rather than show the first catalogue row. Nothing is persisted on a read.
+    Picking any listed model replaces it through the normal control update.
+    Discovery's models section is the shared catalogue, so the renderer keeps
+    the selected model's row when discovery replaces the composer's models.
+    Without that, the live UI still showed the first catalogue row.
+  - The shipped default `gpt-5.4` stays. It is valid for API-key logins, and
+    an unset default would hand the choice to Codex's own config while the
+    picker showed the first row, which is the same mismatch again.
+  - The replacement is the list's first row, not the `model/list` row marked
+    `isDefault`. Using `isDefault` would need the bridge to forward that flag
+    (`BridgeModel` drops it), and it could pick a model other than the one
+    the picker shows for an unset selection.
+  - Live evidence, 2026-10-17. Profile `dev:test --fixture --credential-source
+    codex`, Codex 0.162.1, ChatGPT login, configured default `gpt-5.4`.
+    - A new tab's toast read "gpt-5.4 isn't available with your Codex login;
+      using GPT-6.1-Sol."
+    - The picker showed GPT-6.1-Sol, and a turn replied with the rollout's
+      `turn_context.model` equal to `gpt-6.1-sol`.
+    - A tab launched explicitly on `gpt-5.4` showed `gpt-5.4` in the picker.
+      Picking GPT-6.1-Sol ran the next turn on `gpt-6.1-sol` and removed the
+      not-offered row.
 
 ## Open questions
 

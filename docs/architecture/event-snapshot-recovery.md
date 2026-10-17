@@ -276,6 +276,18 @@ are invalidations only; the file list and tree are re-read with
   that changes only remote freshness republishes the state without advancing
   either revision. `stale` means the list is exact against the clone's refs,
   which may be behind the remote — never that the list is unusable.
+- `comparisonRef` comes from `resolveComparisonRef(environmentBaselineCommit(env))`
+  (`packages/protocol/src/diff-stats.ts`), shared by the backend and the
+  renderer. The baseline is the creation commit until the branch takes in
+  newer history from its target branch (a merge of, rebase onto or reset to
+  a newer `origin/main`). A local scan then records the merge base as
+  `diffBaseline` (`apps/backend/src/core/diff-baseline.ts`) and retargets.
+  Otherwise those incoming commits would count as the environment's own
+  work. A `diffBaseline` whose `createdFromCommit` no longer matches the
+  environment is ignored, so recreated checkouts need no clean-up.
+  It stops moving once the environment's PR is merged, because the
+  target then holds the environment's own commits. Containers still measure
+  from the creation commit.
 
 ## Coordinator view (step 09)
 

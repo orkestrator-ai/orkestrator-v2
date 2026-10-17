@@ -322,11 +322,13 @@ export class BuildPipelineAgents {
     // allowlist. Both resolve to OpenCode's effective default for this stage
     // only: the configuration keeps the user's choice for when the provider
     // reconnects. A model the step pinned is left alone, so an explicit choice
-    // still fails loudly.
+    // still fails loudly. Codex gets the same treatment for a configured
+    // default its login's live catalogue does not offer, which fails every
+    // turn of the session it was created with.
     const usesDefault = options.modelFromDefaults || !selection.model;
     const configuredDefault = selection.model ?? defaults.model;
     const resolution =
-      selection.agent === "opencode" && usesDefault
+      (selection.agent === "opencode" || selection.agent === "codex") && usesDefault
         ? await context.resolveDefaultModel(selection.agent, configuredDefault)
         : undefined;
     const modelSubstitution = resolution?.substitution;

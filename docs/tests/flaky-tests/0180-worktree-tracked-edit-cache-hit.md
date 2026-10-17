@@ -155,3 +155,10 @@ cache-invalidation hypothesis remains unconfirmed.
 - Unchanged owning-file rerun: `mise run test:logged -- --name snapshots-owner-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures` passed all four tests, exit 0, 0.5 seconds.
 - Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.IJ4t3D/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.NEipUr/final-full-review-recovery.log.gz`.
 - No watcher implementation, assertion, timeout or skip changed. Cache invalidation racing the read remains a hypothesis, not an established cause.
+
+## Pi and Cursor agent-test logins PR stage — 2026-10-17
+
+- Original command: `bun run test:workspace` in `apps/backend` (two workers) after merging `origin/main` into `fix-pi-login-in-agent-test-profiles-379ebff75838`, macOS arm64 on the heavily loaded shared host.
+- The tracked-edit case failed at 304.02 ms: cache hits expected 1, received 0 (line 139). Backend: 8,830 passed, 41 skipped, two failed across 475 files (457.71 seconds); the other failure was 0165.
+- Unchanged owning-file rerun: `bun test --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts` in `apps/backend` passed all four tests (0.83 seconds).
+- The branch does not touch worktree snapshots. No watcher implementation, assertion, timeout or skip changed.

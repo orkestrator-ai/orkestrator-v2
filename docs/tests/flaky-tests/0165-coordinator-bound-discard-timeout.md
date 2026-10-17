@@ -283,3 +283,10 @@ passed the unchanged owning file in 23.8 seconds (exit 0). Evidence:
 - Owning-file runs during the aggregate also timed out (47 passed, one failed, one between-tests teardown error each): `coordinator-owner-rerun` in 32.5 seconds and `coordinator-after-browser` in 24.9 seconds. Their artifacts are `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.iCnX63/coordinator-owner-rerun.log.gz` and `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.0jjdbZ/coordinator-after-browser.log.gz`.
 - After the aggregate and browser runs ended, the unchanged owning file passed: `mise run test:logged -- --name coordinator-post-aggregate -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`, 19.1 seconds, exit 0.
 - Shared-host contention and teardown after timeout remain hypotheses. No assertion, timeout, skip or implementation in this owner changed.
+
+## Pi and Cursor agent-test logins PR stage — 2026-10-17
+
+- Original command: `bun run test:workspace` in `apps/backend` (two workers) after merging `origin/main` into `fix-pi-login-in-agent-test-profiles-379ebff75838`, macOS arm64 on the heavily loaded shared host.
+- The bound-discard case timed out at 5107.48 ms. Backend: 8,830 passed, 41 skipped, two failed across 475 files (457.71 seconds); the other failure was 0180.
+- Unchanged owning-file rerun: `bun test --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts` in `apps/backend` passed all 52 tests (24.67 seconds).
+- The branch does not touch the coordinator service. No assertion, timeout, skip or implementation changed.

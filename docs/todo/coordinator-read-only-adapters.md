@@ -72,7 +72,7 @@ advertises.
   | Pi | `enforced` | In-process `tool_call` gate in the bridge; a name allowlist, so an extension's web tool is refused too | None known |
   | OpenCode | `provider-configured` | SDK `plan` agent plus permission rules (`*: deny`, a read-only list, the coordinator's own Orkestrator tools by name, then named denies for `webfetch`, `websearch` and `codesearch`) | Always loads the checkout's project configuration, including command-backed MCP servers in `opencode.json` |
   | Cursor | `provider-configured` | SDK sandbox plus a built-in tool allowlist (`CURSOR_READ_ONLY_TOOLS`, with denied capabilities mapped by `CURSOR_CAPABILITY_TOOLS`), which leaves out `webFetch` and `webSearch`; a read-only session without a sandbox boundary is refused before attach | No approval callback, so a denial cannot be verified |
-  | Grok | `advisory` | Web search and web fetch removed with `--disable-web-search` (plus `--no-leader`, so a shared leader cannot ignore it); every other permission request is cancelled | A tool that does not ask is not stopped; not offered at the default safety level |
+  | Grok | `advisory` | Write, edit, shell and built-in subagents removed with a private `--agent-profile`; web tools removed with `--disable-web-search`; `--no-leader` keeps those restrictions local; remaining permission requests refused | A tool that does not ask is not stopped; not offered at the default safety level |
 
 - Waiting tools. Claude refuses `Monitor`, `ScheduleWakeup`, the `Cron*`
   tools and `sleep`/`watch`/`timeout` (asserted in
@@ -105,8 +105,10 @@ advertises.
 4. **Cursor.** Stays `provider-configured` until a probe can prove that a
    denied tool did not run. Without an approval callback there is nothing to
    check today.
-5. **Grok.** Stays `advisory`. Do not raise the tier without a real gate in
-   the ACP bridge.
+5. **Grok.** Stays `advisory`. The ACP bridge now removes built-in mutation
+   tools through an agent profile, including the shell that ran `touch`
+   without asking. Qualify live before changing the tier; unasked tools
+   outside that removed set still need a stronger boundary.
 6. **Pi.** No change.
 7. **Hosted network tools and web research.** Done. A live run of the
    read-only suite found a Codex coordinator reaching `https://example.com`

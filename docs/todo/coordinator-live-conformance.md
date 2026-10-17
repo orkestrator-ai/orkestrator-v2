@@ -119,6 +119,29 @@ and what its first runs found. Everything else here is qualification.
      on 2026-10-17, Codex passed twice from the transcript alone, and Claude
      passed on the same suite.
 
+4. **Grok shell gate applied.** Grok 1.0.52 ran `touch shell.txt` without
+   asking permission in the 2026-10-17 probe. Deny-policy children now load
+   a private `--agent-profile` removing `write`, `search_replace`,
+   `run_terminal_cmd` and built-in subagents, with `--no-leader`. The bridge
+   still denies MCP permission requests and continues refused attempts.
+   Keep the advisory tier until the live read-only qualification passes;
+   unasked tools outside this removed set are not an enforced boundary.
+   Live rerun on 2026-10-17 after rebuilding the ACP bundle (Grok 1.0.52,
+   profile `qa-coordinator-grok-4cd8b564`): checkout digests matched with no
+   changes, and the transcript contained no write, edit or shell calls. The
+   turn finished, including a refused MCP `use_tool`. Full qualification still
+   failed: Grok labelled the unavailable mutation/network tools `denied`
+   without attempting them, and its ticket-discovery title did not match.
+   The suite was not weakened and the disposable profile was stopped/reset.
+   Evidence: `output/agent-testing/qa-coordinator-grok-4cd8b564/coordinator/grok.json`
+   (local, ignored artifact).
+5. **Continued ACP usage accounting fixed.** Vendor and result carriers merge
+   within each attempt; consumption sums across attempts while context
+   occupancy and ACP's cumulative session cost keep their latest snapshot,
+   and a late carrier merges into the last attempt. Policy and provider continuations
+   share that accounting and clear partial structured output. Regression
+   coverage includes the HTTP journal and structured-output result.
+
 ### Verify
 
 - **Cursor reports `network` denied without attempting the fetch.** The first
@@ -131,12 +154,6 @@ and what its first runs found. Everything else here is qualification.
   (`unavailable` would then be the honest answer), or whether the model skipped
   the call. As with Codex item 3, decide whether that counts as exercised.
 
-- **Grok's turn ends at its first denied tool.** In both live read-only runs
-  (2026-10-16), Grok called `write` for step 1, the call failed, and the turn
-  went idle with no further tool call and no answer. The suite fails it for a
-  missing report. Find out whether the ACP bridge's denial of an `advisory`
-  coordinator's permission request ends the Grok turn. If it does, a Grok
-  coordinator stops answering whenever it tries anything mutating.
 - **Claude coordinator permission mode.** `coordinator.md` says Claude runs
   with `permissionMode: dontAsk`. A live coordinator session reports
   `composer.selectedModeId: "plan"`, the renderer sends that mode, and the
@@ -167,7 +184,7 @@ for prerequisites and how to batch them with other provider runs.
   | Pi | Skipped: `needs-auth`, because the profile seeded no Pi login. Re-run 2026-10-17 with the host `auth.json` shared: still `needs-auth`, because this host's Pi `auth.json` holds no provider (`{}`). Needs a host with a Pi login. |
   | OpenCode | Passed. Every mutation unavailable, checkout unchanged, canaries read back. |
   | Cursor | Skipped: `signed-out`, because the profile could not see the host's Orkestrator-stored Cursor key. Re-run 2026-10-17 with the key snapshot: signed in and ran the turn. Failed: `network` reported denied with no fetch call (Verify). Create, edit, shell and commit unavailable, `launch_job` denied, checkout unchanged. |
-  | Grok (`advisory`) | Failed: the turn ended after the denied `write`, with no report (Verify). Checkout unchanged. |
+  | Grok (`advisory`) | Failed: the turn ended after the denied `write`, with no report. Checkout unchanged. Fixed since by the policy-denial continuation (see Constraints and rationale); needs a re-run. |
 
   Claude on Linux has not run. No coordinator used `sleep` or polled
   `list_environments` in these single-turn runs, but nothing in the read-only
@@ -338,6 +355,44 @@ is the truth, and this file is the backlog.
   across providers was the alternative; it would need the same change on all
   six adapters and was not asked for. A coordinator keeps its research mode on
   a read-only turn, matching Claude's process authority.
+
+- **A Grok turn ended on a policy refusal is continued by the bridge.**
+  Reproduced on 2026-10-17 against the pinned Grok 1.0.52 with the
+  coordinator's argv in an isolated `GROK_HOME`. A refused `write` returns
+  `stopReason: "cancelled"` with `_meta.cancellationCategory`
+  `PermissionCancelled` when the answer is `cancelled` (what the bridge sent,
+  `acp-session.ts`). It returns `PermissionRejected` when the answer selects
+  `reject_once`. Grok ends its own turn on any answer except allow, so the
+  bridge's answer shape alone was not the cause. A denial from Grok's own rule
+  engine (`[permission] deny` in `config.toml`) instead fails the tool and lets
+  the model report (`end_turn`). Decisions:
+  - Refuse with `reject_once` (`policyDenialOutcome`). `cancelled` is ACP's
+    "the turn was cancelled" outcome. `reject_always` would persist a "never
+    allow" grant in the user's Grok approvals for that project.
+  - Keep refused MCP calls going in the bridge. Built-in mutation tools are
+    removed by the read-only profile before the child starts. After a
+    `cancelled` attempt during which the bridge refused a request, the prompt
+    loop sends the same session `POLICY_DENIAL_CONTINUATION`. That covers every
+    tool that asks, MCP calls included. The profile removes the built-in
+    mutation tools; remaining unasked tools keep the tier advisory.
+    Cost: one extra model request per refusal.
+  - Continue on the bridge's own refusal record. Grok's
+    `cancellationCategory` is only a veto: any category other than
+    `PermissionRejected` or `PermissionCancelled` ends the turn. A user
+    cancel or close (`retryCancelledPromptSequence`) is never continued.
+  - At most `POLICY_DENIAL_MAX_CONTINUATIONS` (8) per turn. After that the
+    turn is recorded as failed: "…kept ending the turn on tool calls this
+    session's policy refuses".
+  - The continuation is a fixed, content-free instruction, not the refused
+    call's title, so no agent-supplied text is fed back as an instruction.
+
+  Verified live through the built bridge
+  (`ORKESTRATOR_BRIDGE_EXECUTION_POLICY=coordinator-read-only`, a scratch Git
+  repository). Write, edit, `git commit` and an MCP `use_tool` were each
+  refused and continued, the read succeeded, and the turn finished
+  `completed` with the full report and the checkout unchanged. The same fix
+  covers Grok reviewers on read-only Multi Review turns. Tests:
+  `acp-policy-denial.test.ts`.
 
 - **Agent-test profiles carry the host's Pi and Cursor logins** (2026-10-17).
   Pi was the one `--credential-source` with no seeding: the local Pi bridge

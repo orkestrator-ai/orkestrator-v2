@@ -1,5 +1,6 @@
 import {
   AcpProcess,
+  POLICY_DENIAL_MAX_CONTINUATIONS,
   PROMPT_TIMEOUT_MS,
   RETRIABLE_PROVIDER_MAX_RETRIES,
   RETRIABLE_PROVIDER_RETRY_BASE_MS,
@@ -11,6 +12,7 @@ import {
   type JsonObject,
   type SessionState,
 } from "./acp-context.js";
+import { recordTurnUsage } from "./acp-session.js";
 import { STRUCTURED_PROMPT_INSTRUCTION_PREFIX } from "./structured-prompt-marker.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import { schedulePersist } from "./acp-persist-writer.js";
@@ -55,6 +57,49 @@ export const FLATTENED_RETRIABLE_PROVIDER_SUFFIX = new RegExp(
 );
 export const RETRIABLE_PROVIDER_CONTINUATION =
   "Continue from where the interrupted turn stopped. A transient provider error ended the previous attempt. Do not repeat work or tool calls that already completed; inspect the session history and finish the original request.";
+export const POLICY_DENIAL_CONTINUATION =
+  "Your last tool call was refused because this session's policy does not permit it. That is final: do not retry the call or work around it with another tool. Continue the original request without it, and say in your answer what you could not do.";
+
+/** Grok's `cancellationCategory` values for a turn ended on a permission answer. */
+const PERMISSION_CANCELLATION_CATEGORIES = new Set(["PermissionRejected", "PermissionCancelled"]);
+
+/**
+ * Whether a `cancelled` turn ended on the policy refusal the bridge gave
+ * during it, so continuing cannot override anything else.
+ *
+ * Grok 1.0.52 ends its turn on any non-allow permission answer, so a
+ * coordinator's or reviewer's first denied write used to end the turn before
+ * it reported anything. A turn the user cancelled or closed sets
+ * `retryCancelledPromptSequence` and is never continued. Grok names its
+ * reason in `_meta.cancellationCategory`; one naming any other cause (a hook,
+ * a mid-turn abort) is left ended. An agent that sends no category is
+ * continued on the bridge's own refusal record.
+ */
+function endedOnPolicyRefusal(state: SessionState, result: unknown, deniedBefore: number): boolean {
+  if ((state.policyDeniedRequests ?? 0) <= deniedBefore) return false;
+  const meta = (result as { _meta?: unknown })._meta;
+  const category =
+    meta && typeof meta === "object" && !Array.isArray(meta)
+      ? (meta as { cancellationCategory?: unknown }).cancellationCategory
+      : undefined;
+  return category === undefined || PERMISSION_CANCELLATION_CATEGORIES.has(String(category));
+}
+
+function continuationPrompt(
+  state: SessionState,
+  text: string,
+  schema: JsonObject | undefined,
+): JsonObject {
+  return {
+    sessionId: state.acpSessionId,
+    // The schema instruction rides every attempt. The continuation replaces
+    // the original prompt on the wire, so omitting it would ask a structured
+    // turn to finish without restating the contract it must satisfy.
+    prompt: [
+      { type: "text", text: schema ? `${text}\n\n${structuredPromptInstruction(schema)}` : text },
+    ],
+  };
+}
 
 export function flattenedRetriableProviderTail(state: SessionState): {
   message: BridgeMessage;
@@ -114,6 +159,7 @@ export function retryStillOwned(
 ): boolean {
   return (
     !shuttingDown &&
+    !state.closing &&
     sessions.get(state.id) === state &&
     state.child === child &&
     state.status === "running" &&
@@ -137,12 +183,16 @@ export async function requestPromptWithRetriableProviderRetries(
   promptSequence: number,
   schema: JsonObject | undefined,
 ): Promise<unknown> {
+  state.currentAttemptUsage = {};
+  state.completedAttemptUsage = undefined;
   let prompt = initialPrompt;
   let retries = 0;
+  let policyContinuations = 0;
 
   while (true) {
     let result: unknown;
     let requestError: Error | undefined;
+    const deniedBefore = state.policyDeniedRequests ?? 0;
     // `request` arms its timeout synchronously, so the attempt times out at
     // this instant or a moment after it, never before. A paused parked request
     // is capped here: the timeout terminates the child that would answer it.
@@ -157,10 +207,25 @@ export async function requestPromptWithRetriableProviderRetries(
       if (state.promptDeadlineAt === promptDeadlineAt) state.promptDeadlineAt = undefined;
     }
 
+    recordTurnUsage(state, result);
     const flattened = requestError ? null : flattenedRetriableProviderTail(state);
     if (!requestError && !flattened) {
-      promptStopReason(result);
-      return result;
+      if (
+        promptStopReason(result) !== "cancelled" ||
+        !endedOnPolicyRefusal(state, result, deniedBefore) ||
+        !retryStillOwned(state, child, promptSequence)
+      ) {
+        return result;
+      }
+      if (policyContinuations >= POLICY_DENIAL_MAX_CONTINUATIONS) {
+        cancelEndedAttemptInteractions(state);
+        state.policyDenialExhaustedPromptSequence = promptSequence;
+        return result;
+      }
+      resetEndedAttempt(state);
+      policyContinuations += 1;
+      prompt = continuationPrompt(state, POLICY_DENIAL_CONTINUATION, schema);
+      continue;
     }
     if (!retryStillOwned(state, child, promptSequence)) {
       if (state.retryCancelledPromptSequence === promptSequence) {
@@ -180,11 +245,7 @@ export async function requestPromptWithRetriableProviderRetries(
     // and the typed-RPC path. The continuation re-emits the whole value, so a
     // retained prefix would concatenate into unparseable JSON and fail a turn
     // that actually recovered.
-    if (state.currentTurnOutput !== null) state.currentTurnOutput = "";
-    // A provider can stop between a tool's start and terminal update. Settle
-    // that attempt before the continuation starts; completed tools remain
-    // successful and the continuation is explicitly told not to repeat them.
-    reconcileStaleToolParts(state);
+    resetEndedAttempt(state);
     retries += 1;
     await retryDelay(RETRIABLE_PROVIDER_RETRY_BASE_MS * 2 ** (retries - 1));
 
@@ -194,20 +255,23 @@ export async function requestPromptWithRetriableProviderRetries(
       }
       throw retryOwnershipLostError(state);
     }
-    prompt = {
-      sessionId: state.acpSessionId,
-      // The schema instruction rides every attempt. The continuation replaces
-      // the original prompt on the wire, so omitting it would ask a structured
-      // turn to finish without restating the contract it must satisfy.
-      prompt: [
-        {
-          type: "text",
-          text: schema
-            ? `${RETRIABLE_PROVIDER_CONTINUATION}\n\n${structuredPromptInstruction(schema)}`
-            : RETRIABLE_PROVIDER_CONTINUATION,
-        },
-      ],
-    };
+    prompt = continuationPrompt(state, RETRIABLE_PROVIDER_CONTINUATION, schema);
+  }
+}
+
+function resetEndedAttempt(state: SessionState): void {
+  state.completedAttemptUsage = state.currentTurnUsage;
+  state.currentAttemptUsage = {};
+  if (state.currentTurnOutput !== null) state.currentTurnOutput = "";
+  reconcileStaleToolParts(state);
+  cancelEndedAttemptInteractions(state);
+}
+
+function cancelEndedAttemptInteractions(state: SessionState): void {
+  // Requests from an ended attempt must not outlive it or resolve a
+  // request in the continuation. `respond` also settles each deadline.
+  for (const interaction of Array.from(state.interactions.values())) {
+    interaction.respond({ outcome: "cancelled" });
   }
 }
 
@@ -238,13 +302,21 @@ export function promptStopReason(result: unknown): StopReason {
  * Fixed, content-free text: it reaches request cards and run results.
  */
 export function turnTerminalError(
-  state: Pick<SessionState, "expiredRequestPromptSequence" | "retryCancelledPromptSequence">,
+  state: Pick<
+    SessionState,
+    | "expiredRequestPromptSequence"
+    | "retryCancelledPromptSequence"
+    | "policyDenialExhaustedPromptSequence"
+  >,
   stopReason: StopReason,
   promptSequence: number,
 ): string | undefined {
   if (state.retryCancelledPromptSequence === promptSequence) return undefined;
   if (state.expiredRequestPromptSequence === promptSequence) {
     return `${provider} stopped after a permission request or question went unanswered for 5 minutes`;
+  }
+  if (state.policyDenialExhaustedPromptSequence === promptSequence) {
+    return `${provider} kept ending the turn on tool calls this session's policy refuses`;
   }
   if (stopReason === "end_turn") return undefined;
   if (stopReason === "cancelled") return `${provider} cancelled the turn`;

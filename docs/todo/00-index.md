@@ -452,7 +452,8 @@ it reaches. Some rules of thumb:
 - [ ] Confirm Grok Orkestrator mail tools auto-allow under both naming forms on the pinned Grok build ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
 - [ ] Verify Cursor and Grok mailbox identity, injection, coordinator wake, resume and token rotation live ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
 - [ ] Decide whether Wake peers stays off by default and align `agent-messaging.md` with the code ([coordinator-live-conformance.md](coordinator-live-conformance.md), decision)
-- [ ] Find out why a Grok coordinator's turn ends at its first denied tool in the live read-only run ([coordinator-live-conformance.md](coordinator-live-conformance.md), verify)
+- [x] Find out why a Grok coordinator's turn ends at its first denied tool in the live read-only run ([coordinator-live-conformance.md](coordinator-live-conformance.md), verify)
+- [ ] Qualify live that the Grok read-only agent profile stops shell commands Grok never asks about (`touch` ran unasked on 1.0.52) ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
 - [x] Let agent-test profiles authorize Pi's host login so the live coordinator suite can qualify Pi ([coordinator-live-conformance.md](coordinator-live-conformance.md))
 - [ ] Find out why a Cursor coordinator reports `network` denied without attempting the fetch in the live read-only run ([coordinator-live-conformance.md](coordinator-live-conformance.md), verify)
 - [x] Get Codex to attempt create, edit and shell in the live read-only run, or decide a known read-only sandbox counts as exercised ([coordinator-live-conformance.md](coordinator-live-conformance.md))
@@ -782,6 +783,7 @@ it reaches. Some rules of thumb:
 
 - [ ] Add an argv0 deny for `sleep` on the Codex coordinator profile if live runs show Codex using it ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md))
 - [ ] Check the Claude coordinator's permission mode: `coordinator.md` says `dontAsk`, but live sessions start in plan mode ([coordinator-live-conformance.md](coordinator-live-conformance.md), verify)
+- [x] Count usage across every attempt of an ACP turn the bridge continued, not only the last ([coordinator-live-conformance.md](coordinator-live-conformance.md))
 - [ ] Raise Grok above `advisory` only after adding a real read-only gate in the ACP bridge ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md), deferred)
 - [ ] Raise the Cursor coordinator tier only once a probe can prove a denied tool did not run ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md), blocked)
 - [ ] Report a Codex coordinator that fails the hosted web search mode check as not ready, not only as a refused turn ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md))

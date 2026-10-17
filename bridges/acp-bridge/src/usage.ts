@@ -206,3 +206,45 @@ export function acpContextUsage(
     updatedAt: details.updatedAt,
   };
 }
+
+/** Fields that are snapshots of the session, not one attempt's consumption. */
+const SNAPSHOT_USAGE_FIELDS: ReadonlySet<keyof AcpTurnUsage> = new Set([
+  "contextUsedTokens",
+  "contextWindow",
+  // ACP defines `usage_update.cost.amount` as the session's cumulative cost.
+  "costUsd",
+]);
+
+/** Sum consumption across attempts, retaining the latest session snapshots. */
+export function accumulateAttemptUsage(
+  previous: AcpTurnUsage = {},
+  attempt: AcpTurnUsage,
+): AcpTurnUsage {
+  const combined = { ...previous, ...attempt };
+  for (const key of Object.keys(attempt) as Array<keyof AcpTurnUsage>) {
+    if (!SNAPSHOT_USAGE_FIELDS.has(key)) {
+      combined[key] = (previous[key] ?? 0) + attempt[key]!;
+    }
+  }
+  const previousTokens = acpUsageTokenCount(previous);
+  const attemptTokens = acpUsageTokenCount(attempt);
+  if (previousTokens !== undefined || attemptTokens !== undefined) {
+    combined.totalTokens = (previousTokens ?? 0) + (attemptTokens ?? 0);
+  }
+  return combined;
+}
+
+export function acpUsageTokenCount(usage: AcpTurnUsage): number | undefined {
+  return (
+    usage.totalTokens ??
+    (usage.inputTokens === undefined &&
+    usage.outputTokens === undefined &&
+    usage.cacheReadTokens === undefined &&
+    usage.cacheWriteTokens === undefined
+      ? undefined
+      : (usage.inputTokens ?? 0) +
+        (usage.outputTokens ?? 0) +
+        (usage.cacheReadTokens ?? 0) +
+        (usage.cacheWriteTokens ?? 0))
+  );
+}

@@ -216,15 +216,18 @@ export class PreviewTunnelServer {
       const socket = upstream;
       if (!socket) return;
       const frameMax = limits.tunnelFrameMaxBytes;
+      const queueMax = limits.tunnelQueueMaxBytesPerDirection * 2;
       let flushed = true;
       for (let offset = 0; offset < chunk.length; offset += frameMax) {
-        flushed = ws.send(chunk.subarray(offset, offset + frameMax), true) && flushed;
-      }
-      if (ws.bufferedBytes > limits.tunnelQueueMaxBytesPerDirection * 2) {
-        // A reader that stopped consuming entirely: close with a typed failure
-        // rather than buffering application bytes without bound.
-        fail(PREVIEW_TUNNEL_CLOSE.capacity, "capacity-exceeded", "error");
-        return;
+        const frame = chunk.subarray(offset, offset + frameMax);
+        if (ws.bufferedBytes + frame.length > queueMax) {
+          // A reader that stopped consuming entirely: close with a typed failure
+          // rather than buffering application bytes without bound. One upstream
+          // read can far exceed a frame (Bun reads 512 KiB), so check each frame.
+          fail(PREVIEW_TUNNEL_CLOSE.capacity, "capacity-exceeded", "error");
+          return;
+        }
+        flushed = ws.send(frame, true) && flushed;
       }
       const overAggregate = this.aggregateQueuedBytes() >= limits.tunnelQueueMaxBytesAggregate;
       if (!flushed || ws.bufferedBytes >= limits.tunnelQueueMaxBytesPerDirection) {

@@ -1,7 +1,7 @@
 # Design service, design history and annotation bench: aggregate-load failures (`apps/backend`)
 
 - **ID:** 0225
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-15
 - **Tests and files:**
   - `design service (legacy adapters over prepare/execute) > missed events, expired replay and generation changes reset through changes()`
@@ -42,3 +42,43 @@ by [web-annotation-qualification.md](../../todo/web-annotation-qualification.md)
   A new in-memory case ("the shipped entry budget keeps exactly the newest
   entries") checks the shipped 50-entry bound through `appendEntry`. Neither
   case is an ordering bug, and no deadline was raised.
+
+## Annotation bench resolved (2026-10-17)
+
+The last open part, the creation-cost bound in
+`web-annotation-payloads.bench.test.ts`, is fixed. The case compared whole-batch
+totals: 60 sequential, fully synced creates per batch, so a few writes stalled
+by a contended disk could push the third batch past `max(first * 4, 2 s)` even
+though the typical create had not changed. It now times each create and compares
+the median create of the third batch with the first (`max(first * 4, 2 s / 60)`).
+A whole-history rewrite would still fail, because it slows every create. A burst
+of stalled fsyncs moves the median only when it hits more than half the batch.
+No bound was raised, and the 60-second total bound stays.
+
+- Measured alone on macOS (`main` at `31d0fb06`): medians 0.50 ms (first batch)
+  and 1.47 ms (third), totals 34 ms and 92 ms.
+- Eight concurrent copies of the quota and bench files, twice, on a host with
+  load average about 13 (18 cores): all passed, 2.2 to 2.7 s each.
+- The measurement also shows that the cost of a create grows linearly with the
+  collection (median 0.34 ms empty, 1.34 ms at 500, 2.84 ms at 1,000 and
+  4.11 ms at 1,900 annotations). That is not quadratic and not a flake. It is
+  recorded as a follow-up in
+  [web-annotation-qualification.md](../../todo/web-annotation-qualification.md).
+
+## Review correction (2026-10-17)
+
+The median gate above retained a `2 s / 60` floor (33.33 ms per create), so
+it did not reliably detect the named whole-history rewrite. The benchmark now
+uses temporary SQLite triggers on its real storage connection to count inserted
+and updated rows and their UTF-8 bytes for every create, including the store's
+document envelope. Later creates must write no more rows than the first and
+stay within a fixed 2 KiB byte allowance. Rewriting unchanged history therefore
+fails independently of fsync stalls. Median timings remain diagnostic and the
+60-second total deadline remains a stalled-run guard. The known in-memory
+collection cost remains the separate follow-up above.
+
+Negative control: a temporary copy that executes `UPDATE store_rows SET value = value`
+after every create failed on the second create (25 writes against the initial
+18-write allowance). The probe was removed. Its expected-failure evidence is
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.FVOrgp/annotation-rewrite-negative.log.gz`.
+The unmodified benchmark passed all six cases with the new gate.

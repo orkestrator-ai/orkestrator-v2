@@ -10,6 +10,7 @@ import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 import { prepareFixtureRepository } from "../../apps/desktop/scripts/dev/fixture";
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
+import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
 
 /**
@@ -132,7 +133,10 @@ test("Electron keeps a lost terminal write fenced until Resume, without restarti
     await waitForUrl(rendererUrl);
     app = await electron.launch({
       executablePath: electronExecutable,
-      args: [path.join(repositoryRoot, "apps", "desktop", "dist", "electron", "main.js")],
+      args: [
+        ...ELECTRON_TEST_SWITCHES,
+        path.join(repositoryRoot, "apps", "desktop", "dist", "electron", "main.js"),
+      ],
       cwd: repositoryRoot,
       env: {
         ...process.env,

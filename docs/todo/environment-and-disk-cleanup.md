@@ -88,6 +88,14 @@ leak, and a way to see cleanup that has stopped retrying.
 2. Optional: surface permanently failing cleanup. Add a diagnostics entry or a
    `disk:report` row for ledger entries at the attempt cap (count, pending
    steps, redacted `lastError`), using the ledger's own predicates.
+3. Remove a profile's `safeStorage` Keychain item when `dev:reset` removes the
+   profile. Electron stores the key as the generic password
+   `<electronTitle> Safe Storage` in the login Keychain, and nothing deletes
+   it. On 2026-10-17 the run host had 292 such items. Agent-test profiles on
+   macOS no longer create one (`use-mock-keychain`, see
+   [service-preview-rollout.md](service-preview-rollout.md) evidence log), but
+   `development` profiles still do. Delete only the reset profile's own item
+   (`security delete-generic-password -s "<title> Safe Storage"`).
 
 ### Qualification
 

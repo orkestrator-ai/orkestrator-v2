@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   assertProfileIsolatedFromProduction,
   assertSafeProfileResetTarget,
+  chromiumSwitchesForRuntime,
   defaultRuntimeProfileRoots,
   isExternalWorktreeDir,
   normalizeRuntimeProfileId,
@@ -195,4 +196,13 @@ test("rejects a worktree root equal to the profiles directory and round-trips ac
     });
     expect(parseRuntimeProfile(JSON.parse(JSON.stringify(profile)))).toEqual(profile);
   }
+});
+
+test("only an agent-test profile on macOS swaps the login keychain for a mock", () => {
+  // A stale keychain item would otherwise block an unattended launch on an
+  // access prompt; development and production keep the user's keychain.
+  expect(chromiumSwitchesForRuntime("agent-test", "darwin")).toEqual(["use-mock-keychain"]);
+  expect(chromiumSwitchesForRuntime("agent-test", "linux")).toEqual([]);
+  expect(chromiumSwitchesForRuntime("development", "darwin")).toEqual([]);
+  expect(chromiumSwitchesForRuntime("production", "darwin")).toEqual([]);
 });

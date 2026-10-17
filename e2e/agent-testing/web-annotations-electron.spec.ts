@@ -14,12 +14,19 @@
  * inert in the compiled brief and forged provenance rejected; pins after
  * hot reload / reorder / duplicate / removal; hash and query route identity
  * with token stripping; no synthetic secret in profile storage or logs.
+ *
+ * Native window (rendered by the real renderer, not fixed bounds): the Notes
+ * column shrinks the view to its host at app zoom 0.8, 1 and 1.25 (150% turns
+ * the layout narrow); menus and dialogs hide the view; the narrow
+ * Preview/Notes switch; keyboard-only create and send with focus handed to the
+ * view and back to the editor. Capture pixels and the selection highlight
+ * stay on the target at preview zoom 0.8, 1 and 1.5 and at DPR 1 and 2.
  */
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { _electron as electron } from "playwright";
 import type { ElectronApplication } from "playwright";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, writeFile, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -34,6 +41,8 @@ import {
   webAnnotationPageKey,
   type WebAnnotationCaptureInput,
   type WebAnnotationRect,
+  type WebAnnotationRequest,
+  type WebAnnotationGetResult,
 } from "@orkestrator/protocol/web-annotations";
 
 import {
@@ -55,6 +64,7 @@ import {
   startFixtureServer,
   type FixtureServer,
 } from "./web-annotations-support";
+import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
@@ -100,13 +110,23 @@ async function waitForUrl(url: string): Promise<void> {
     .toBe(true);
 }
 
-async function launchElectron(current: Pick<Stack, "profile" | "profilePath" | "rendererUrl">) {
+/** `switches` are Chromium switches, e.g. `--force-device-scale-factor=2`. */
+async function launchElectron(
+  current: Pick<Stack, "profile" | "profilePath" | "rendererUrl">,
+  switches: string[] = [],
+) {
   const app = await electron.launch({
     executablePath: electronExecutable,
-    args: [path.join(packageRoot, "dist", "electron", "main.js")],
+    args: [
+      ...ELECTRON_TEST_SWITCHES,
+      ...switches,
+      path.join(packageRoot, "dist", "electron", "main.js"),
+    ],
     cwd: repositoryRoot,
     env: {
       ...process.env,
+      PATH: `${path.join(current.profile.dataDir, "probe-bin")}${path.delimiter}${process.env.PATH ?? ""}`,
+      ORKESTRATOR_ANNOTATION_CODEX_PROBE: path.join(current.profile.dataDir, "codex-launches"),
       ELECTRON_DEV: "1",
       VITE_DEV_SERVER_URL: current.rendererUrl,
       ORKESTRATOR_RUNTIME_PROFILE_FILE: current.profilePath,
@@ -376,20 +396,21 @@ async function waitForFixturePage(route: string): Promise<void> {
     .toBe(true);
 }
 
-async function captureElement(selector: string, index = 0) {
+/** `zoom` is the preview's page zoom: input events take DIPs, rects are CSS px. */
+async function captureElement(selector: string, index = 0, zoom = 1, tabId = TAB_ID) {
   const rect = await settledRect(selector, index);
   const started = await preview<BrowserPreviewSelectionStatus>("startCapture", {
-    tabId: TAB_ID,
+    tabId,
     mode: "element",
     environmentId: s().environmentId,
   });
   expect(started.status).toBe("selecting");
-  await trustedClick(rect.x + rect.width / 2, rect.y + rect.height / 2);
+  await trustedClick((rect.x + rect.width / 2) * zoom, (rect.y + rect.height / 2) * zoom);
   let status: BrowserPreviewSelectionStatus = started;
   await expect
     .poll(
       async () => {
-        status = await preview<BrowserPreviewSelectionStatus>("getCaptureStatus", TAB_ID);
+        status = await preview<BrowserPreviewSelectionStatus>("getCaptureStatus", tabId);
         return status.status;
       },
       { timeout: 20_000 },
@@ -528,6 +549,22 @@ test.beforeAll(async () => {
     },
   });
   const profilePath = await initializeProfile(profile);
+  // Refuse and record any accidental provider launch, including after cleanup
+  // and across relaunches of this persisted profile. No real Codex can run.
+  const probeBin = path.join(profile.dataDir, "probe-bin");
+  await mkdir(probeBin, { recursive: true });
+  await writeFile(path.join(profile.dataDir, "codex-launches"), "");
+  await writeFile(
+    path.join(probeBin, "codex"),
+    `#!/bin/sh
+case "$1" in
+  --version) echo 'codex-cli 0.158.0'; exit 0 ;;
+  app-server|exec) printf 'provider-launch\n' >> "$ORKESTRATOR_ANNOTATION_CODEX_PROBE" ;;
+esac
+exit 91
+`,
+    { mode: 0o700 },
+  );
   // Enable only the isolated onboarding read and seed its empty marker. This
   // fixture copies no host credentials and runs no Claude turns.
   const isolatedHome = path.join(profile.dataDir, "agent-credentials", "home");
@@ -588,6 +625,10 @@ test.afterAll(async () => {
     // Playwright throws once the application has been closed.
   }
   if (running) await closeElectron().catch(() => undefined);
+  const launches = await readFile(
+    path.join(current.profile.dataDir, "codex-launches"),
+    "utf8",
+  ).catch(() => "probe-unreadable");
   stack = null;
   await current.fixture?.stop().catch(() => undefined);
   if (current.vite?.pid) {
@@ -596,6 +637,7 @@ test.afterAll(async () => {
     } catch {}
   }
   await rm(current.temporaryRoot, { recursive: true, force: true });
+  expect(launches, "no Codex session/prompt launch through cleanup or relaunch").toBe("");
 });
 
 test.beforeEach(async () => {
@@ -1147,9 +1189,712 @@ test("text, region, and page modes capture end to end; embedded roots resolve to
   record(testInfo, "embedded-hosts", hosts.join("; "));
 });
 
+// ---------------------------------------------------------------------------
+// The real Notes column beside the native view, keyboard flow, zoom and DPR.
+
+const UI_TAB_ID = "annotation-ui-preview";
+const MARKER_ID = "annotation-alignment-marker";
+
+/** A rect in window DIPs (or image pixels, where named). */
+type DipRect = WebAnnotationRect;
+
+/** The fixture's native view as main holds it: bounds in window DIPs. */
+function nativePreviewView(): Promise<{ bounds: DipRect; visible: boolean } | null> {
+  return s().app.evaluate(({ BrowserWindow }, origin) => {
+    const host = BrowserWindow.getAllWindows()[0];
+    for (const view of host?.contentView.children ?? []) {
+      const child = view as unknown as {
+        getBounds(): DipRect;
+        getVisible(): boolean;
+        webContents?: { getURL(): string };
+      };
+      if (child.webContents?.getURL().startsWith(origin)) {
+        return { bounds: child.getBounds(), visible: child.getVisible() };
+      }
+    }
+    return null;
+  }, s().fixture.url);
+}
+
+/** Renderer rects scaled to window DIPs by the host's native zoom factor. */
+async function rendererLayout(selectors: Record<string, string>) {
+  const zoom = await s().app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0]!.webContents.getZoomFactor(),
+  );
+  const css = await s().window.evaluate((selectors) => {
+    const out: Record<string, { x: number; y: number; width: number; height: number } | null> = {};
+    for (const [name, selector] of Object.entries(selectors)) {
+      const element = document.querySelector(selector);
+      const rect = element?.getBoundingClientRect();
+      out[name] =
+        rect && rect.width > 0
+          ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+          : null;
+    }
+    return out;
+  }, selectors);
+  const dip: Record<string, DipRect | null> = {};
+  for (const [name, rect] of Object.entries(css)) {
+    dip[name] = rect
+      ? { x: rect.x * zoom, y: rect.y * zoom, width: rect.width * zoom, height: rect.height * zoom }
+      : null;
+  }
+  return { zoom, dip };
+}
+
+const PREVIEW_HOST = `[data-native-browser-preview="${UI_TAB_ID}"]`;
+const NOTES_PANEL = `[data-annotation-panel="${UI_TAB_ID}"]`;
+
+/** The native view sits on the renderer's preview host, within whole-DIP rounding. */
+async function expectViewOnHost(testInfo: TestInfo, label: string): Promise<DipRect> {
+  let last: unknown = null;
+  await expect
+    .poll(
+      async () => {
+        const [view, layout] = await Promise.all([
+          nativePreviewView(),
+          rendererLayout({ host: PREVIEW_HOST }),
+        ]);
+        const host = layout.dip.host;
+        last = { view, host, zoom: layout.zoom };
+        if (!view?.visible || !host) return false;
+        return (
+          Math.abs(view.bounds.x - host.x) <= 1.5 &&
+          Math.abs(view.bounds.y - host.y) <= 1.5 &&
+          Math.abs(view.bounds.width - host.width) <= 1.5 &&
+          Math.abs(view.bounds.height - host.height) <= 1.5
+        );
+      },
+      { timeout: 20_000, message: `${label}: native view off its host` },
+    )
+    .toBe(true)
+    .catch((error: Error) => {
+      throw new Error(`${error.message}\n${JSON.stringify(last)}`);
+    });
+  record(testInfo, `bounds-${label}`, JSON.stringify(last));
+  return (last as { view: { bounds: DipRect } }).view.bounds;
+}
+
+/**
+ * Whether two rects share at least one DIP in both axes. Main rounds the
+ * view's bounds to whole DIPs, so against a fractional neighbour (app zoom
+ * 0.8) it can reach up to a DIP into it; that is not covering it.
+ */
+function overlaps(a: DipRect, b: DipRect): boolean {
+  const x = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+  const y = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+  return x >= 1 && y >= 1;
+}
+
+async function uiStore(action: string, ...args: unknown[]): Promise<void> {
+  await s().window.evaluate(
+    async ({ action, args }) => {
+      const modulePath = "/src/stores/uiStore.ts";
+      const { useUIStore } = await import(modulePath);
+      (useUIStore.getState() as Record<string, (...values: unknown[]) => void>)[action]!(...args);
+    },
+    { action, args },
+  );
+}
+
+async function setHostWindowSize(width: number, height: number): Promise<void> {
+  await s().app.evaluate(
+    ({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0]?.setSize(size.width, size.height),
+    { width, height },
+  );
+}
+
+/**
+ * Show the annotation environment with one browser tab rendered by the real
+ * renderer (BrowserTab, AnnotatedPreviewArea, AnnotationPanel). The fixed-bounds
+ * preview the other tests drive is destroyed first, so exactly one native view
+ * shows the fixture; `restoreDirectPreview` puts it back.
+ */
+async function showRendererPreview(extraTabs: Array<Record<string, unknown>> = []) {
+  const environment = await invoke<{ projectId: string }>("get_environment", {
+    environmentId: s().environmentId,
+  });
+  await preview("destroy", TAB_ID);
+  const current = await invoke<{ revision?: number } | null>("get_pane_layout", {
+    environmentId: s().environmentId,
+  });
+  await invoke("save_pane_layout", {
+    environmentId: s().environmentId,
+    expectedRevision: current?.revision ?? 0,
+    layout: {
+      version: PANE_LAYOUT_VERSION,
+      containerId: null,
+      activePaneId: "annotation-ui-pane",
+      root: {
+        kind: "leaf",
+        id: "annotation-ui-pane",
+        activeTabId: UI_TAB_ID,
+        tabs: [
+          {
+            id: UI_TAB_ID,
+            type: "browser",
+            browserData: { url: `${s().fixture.url}${ROUTE_VARIANTS.settings}` },
+          },
+          ...extraTabs,
+        ],
+      },
+    },
+  });
+  await uiStore("selectProjectAndEnvironment", environment.projectId, s().environmentId);
+  await expect(s().window.locator(PREVIEW_HOST)).toBeVisible({ timeout: 30_000 });
+  await expect.poll(async () => (await nativePreviewView())?.visible ?? false).toBe(true);
+  await waitForFixturePage(ROUTE_VARIANTS.settings);
+}
+
+async function restoreDirectPreview(): Promise<void> {
+  await uiStore("setZoomLevel", 100).catch(() => undefined);
+  await setHostWindowSize(1440, 960);
+  await uiStore("selectProject", null).catch(() => undefined);
+  await preview("destroy", UI_TAB_ID).catch(() => undefined);
+  await attachPreview(ROUTE_VARIANTS.settings);
+}
+
+/** Keyboard activation of a renderer control: focus it, then Enter. No pointer. */
+async function pressControl(locator: ReturnType<Page["locator"]>, key = "Enter"): Promise<void> {
+  await locator.focus();
+  await expect(locator).toBeFocused();
+  await s().window.keyboard.press(key);
+}
+
+test("the real Notes column shrinks the native view, overlays hide it, and the narrow switch swaps surfaces", async () => {
+  const testInfo = test.info();
+  testInfo.setTimeout(180_000);
+  await showRendererPreview();
+  try {
+    const notesButton = s().window.getByRole("button", { name: /^Annotations, / });
+    await expect(notesButton).toHaveAttribute("aria-expanded", "false");
+    const closed = await expectViewOnHost(testInfo, "notes-closed");
+
+    // Opening Notes gives the column real width; the native view shrinks to
+    // the host and never reaches under the column, its resize handle or a
+    // focus ring inside it.
+    await pressControl(notesButton);
+    await expect(s().window.locator(NOTES_PANEL)).toBeVisible();
+    for (const zoom of [100, 80, 125]) {
+      await uiStore("setZoomLevel", zoom);
+      await expect
+        .poll(() => rendererLayout({}).then((layout) => layout.zoom))
+        .toBeCloseTo(zoom / 100, 2);
+      const bounds = await expectViewOnHost(testInfo, `notes-open-zoom-${zoom}`);
+      const { dip } = await rendererLayout({
+        notes: NOTES_PANEL,
+        handle: '[aria-label="Resize annotations panel"]',
+      });
+      expect(dip.notes).not.toBeNull();
+      expect(overlaps(bounds, dip.notes!)).toBe(false);
+      expect(overlaps(bounds, dip.handle!)).toBe(false);
+      expect(bounds.x + bounds.width).toBeLessThanOrEqual(dip.handle!.x + 1);
+      if (zoom === 100) expect(bounds.width).toBeLessThan(closed.width - 200);
+    }
+    // At 150% the 1440-DIP window is 960 CSS px wide, so the column becomes
+    // the narrow Preview/Notes switch; Preview still lands on its host.
+    await uiStore("setZoomLevel", 150);
+    const zoomedSurfaces = s().window.getByRole("tablist", { name: "Preview or notes" });
+    await expect(zoomedSurfaces).toBeVisible({ timeout: 20_000 });
+    await pressControl(zoomedSurfaces.getByRole("tab", { name: "Preview" }));
+    await expectViewOnHost(testInfo, "notes-open-zoom-150-narrow");
+    await uiStore("setZoomLevel", 100);
+    await expect(zoomedSurfaces).toHaveCount(0, { timeout: 20_000 });
+    await expectViewOnHost(testInfo, "notes-open-zoom-reset");
+
+    const addNote = s().window.getByRole("button", { name: "Add note" });
+    await addNote.focus();
+    const ring = await s().window.evaluate(() => {
+      const element = document.activeElement as HTMLElement | null;
+      const rect = element?.getBoundingClientRect();
+      // Two-pixel ring plus offset, generously.
+      return rect
+        ? { x: rect.x - 4, y: rect.y - 4, width: rect.width + 8, height: rect.height + 8 }
+        : null;
+    });
+    const view = (await nativePreviewView())!;
+    expect(ring).not.toBeNull();
+    expect(overlaps(view.bounds, ring!)).toBe(false);
+
+    // A menu and a dialog over the window hide the native view (it is a
+    // separate surface and would otherwise paint over them), then it returns.
+    const servers = s().window.getByRole("button", { name: /^Connected server: / });
+    await pressControl(servers);
+    await expect(s().window.getByRole("menu")).toBeVisible();
+    await expect.poll(async () => (await nativePreviewView())?.visible).toBe(false);
+    await s().window.keyboard.press("Escape");
+    await expect(s().window.getByRole("menu")).toHaveCount(0);
+    await expect.poll(async () => (await nativePreviewView())?.visible).toBe(true);
+    await pressControl(servers);
+    await pressControl(s().window.getByRole("menuitem", { name: "New connection" }));
+    const dialog = s().window.getByRole("dialog", { name: "New connection" });
+    await expect(dialog).toBeVisible();
+    await expect.poll(async () => (await nativePreviewView())?.visible).toBe(false);
+    await s().window.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expectViewOnHost(testInfo, "after-dialog");
+
+    // Under 720 px the column becomes a Preview/Notes switch.
+    await setHostWindowSize(900, 900);
+    const surfaces = s().window.getByRole("tablist", { name: "Preview or notes" });
+    await expect(surfaces).toBeVisible({ timeout: 20_000 });
+    await pressControl(surfaces.getByRole("tab", { name: "Notes" }));
+    await expect(surfaces.getByRole("tab", { name: "Notes" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await expect(s().window.locator(NOTES_PANEL)).toBeVisible();
+    await expect.poll(async () => (await nativePreviewView())?.visible).toBe(false);
+    await pressControl(surfaces.getByRole("tab", { name: "Preview" }));
+    const narrow = await expectViewOnHost(testInfo, "narrow-preview");
+    const { dip } = await rendererLayout({ notes: NOTES_PANEL });
+    expect(dip.notes).toBeNull();
+    expect(narrow.width).toBeGreaterThan(300);
+    await setHostWindowSize(1440, 960);
+    await expect(surfaces).toHaveCount(0, { timeout: 20_000 });
+    await expectViewOnHost(testInfo, "wide-again");
+    await pressControl(s().window.getByRole("button", { name: "Close annotations" }));
+    await expect(notesButton).toHaveAttribute("aria-expanded", "false");
+    await expect(notesButton).toBeFocused();
+    const reclosed = await expectViewOnHost(testInfo, "notes-reclosed");
+    expect(Math.abs(reclosed.width - closed.width)).toBeLessThanOrEqual(1.5);
+  } finally {
+    await restoreDirectPreview();
+  }
+});
+
+/** Reach controls through Chromium's tab order, without locator.focus(). */
+async function tabTo(locator: ReturnType<Page["locator"]>, backwards = false): Promise<void> {
+  await expect(locator).toBeVisible();
+  const key = backwards ? "Shift+Tab" : "Tab";
+  for (let step = 0; step < 100; step++) {
+    if (await locator.evaluate((element) => element === document.activeElement)) return;
+    await s().window.keyboard.press(key);
+  }
+  await expect(locator, `unreachable through ${key}`).toBeFocused();
+}
+
+async function tabActivate(locator: ReturnType<Page["locator"]>, key = "Enter") {
+  await tabTo(locator);
+  await expect(locator).toBeFocused();
+  await s().window.keyboard.press(key);
+}
+
+async function expectNoCodexLaunch(): Promise<void> {
+  expect(await readFile(path.join(s().profile.dataDir, "codex-launches"), "utf8")).toBe("");
+}
+
+test("keyboard alone creates a note and sends it, with focus handed to the native view and back", async () => {
+  const testInfo = test.info();
+  testInfo.setTimeout(180_000);
+  const agentTabId = "annotation-ui-codex";
+  await showRendererPreview([
+    {
+      id: agentTabId,
+      type: "agent-native",
+      nativeAgentData: { environmentId: s().environmentId, platform: "codex" },
+    },
+  ]);
+  let draftKey: string | null = null;
+  let annotationId: string | null = null;
+  let sent = false;
+  let requestId: string | null = null;
+  try {
+    // Hold the destination's queue with an unsent chat draft (as the gateway
+    // suite does), so the send is durable and observable but never executed.
+    const { options } = await invoke<{
+      options: Array<{ destination: { tabId: string; logicalSessionKey: string } }>;
+    }>(C.destinations, { environmentId: s().environmentId });
+    const option = options.find((candidate) => candidate.destination.tabId === agentTabId);
+    expect(option, "codex tab offered as a destination").toBeTruthy();
+    draftKey = `codex:${s().environmentId}:${encodeURIComponent(option!.destination.logicalSessionKey)}`;
+    await invoke("save_compose_draft", {
+      draftKey,
+      ownerType: "environment",
+      ownerId: s().environmentId,
+      value: { text: "Held by the annotation suite", mentions: [], attachments: [] },
+    });
+    const before = new Set((await listAnnotations()).items.map((item) => item.id));
+
+    // Bring the app forward so native focus is observable. Another app may
+    // keep the key window on a shared desktop; then only the in-app handoff
+    // (main focusing the view, the renderer focusing the editor) is asserted.
+    const windowFocused = await s().app.evaluate(async ({ app, BrowserWindow }) => {
+      const host = BrowserWindow.getAllWindows()[0]!;
+      if (process.platform === "darwin") app.focus({ steal: true });
+      host.focus();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return host.isFocused();
+    });
+    record(testInfo, "window-focused", String(windowFocused));
+
+    await tabActivate(s().window.getByRole("button", { name: /^Annotations, / }));
+    // Start in the native page, then reach its target with real Tab events.
+    // The inspector seeds its candidate from that focused element on start.
+    await s().app.evaluate(({ webContents }, origin) => {
+      webContents
+        .getAllWebContents()
+        .find((contents) => !contents.isDestroyed() && contents.getURL().startsWith(origin))
+        ?.focus();
+    }, s().fixture.url);
+    for (let step = 0; step < 100; step++) {
+      const onTarget = await inPreview<boolean>(
+        `document.activeElement?.getAttribute('data-testid') === ${JSON.stringify(TEST_IDS.saveSettings)}`,
+      );
+      if (onTarget) break;
+      await trustedInput([
+        { type: "keyDown", keyCode: "Tab" },
+        { type: "keyUp", keyCode: "Tab" },
+      ]);
+    }
+    expect(await inPreview(`document.activeElement?.getAttribute('data-testid')`)).toBe(
+      TEST_IDS.saveSettings,
+    );
+    await s().app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0]!.webContents.focus(),
+    );
+    const addNote = s().window.getByRole("button", { name: "Add note" });
+    await tabTo(addNote);
+    // Reverse and return to establish both directions of the local tab order.
+    await s().window.keyboard.press("Shift+Tab");
+    await expect(addNote).not.toBeFocused();
+    await s().window.keyboard.press("Tab");
+    await expect(addNote).toBeFocused();
+    await tabActivate(s().window.getByRole("button", { name: "Add note" }));
+    await expect(s().window.getByRole("button", { name: "Cancel selection" })).toBeVisible();
+    const previewFocus = () =>
+      s().app.evaluate(({ webContents }, origin) => {
+        const contents = webContents
+          .getAllWebContents()
+          .find((candidate) => !candidate.isDestroyed() && candidate.getURL().startsWith(origin));
+        return contents?.isFocused() ?? false;
+      }, s().fixture.url);
+    if (windowFocused) await expect.poll(previewFocus).toBe(true);
+    record(testInfo, "preview-focused-while-selecting", String(await previewFocus()));
+    await trustedInput([
+      { type: "keyDown", keyCode: "Enter" },
+      { type: "char", keyCode: "\r" },
+      { type: "keyUp", keyCode: "Enter" },
+    ]);
+
+    // Main hands focus back: the renderer focuses the note editor.
+    const editor = s().window.locator(`${NOTES_PANEL} textarea`).first();
+    await expect(editor).toBeFocused({ timeout: 20_000 });
+    const body = "Keyboard-only note: align the Save button with Cancel.";
+    await s().window.keyboard.type(body);
+    await tabActivate(s().window.getByRole("button", { name: "Save note", exact: true }));
+    await expect
+      .poll(async () => (await listAnnotations()).items.find((item) => !before.has(item.id)))
+      .toBeTruthy();
+    const created = (await listAnnotations()).items.find((item) => !before.has(item.id))!;
+    annotationId = created.id;
+    expect(created.latestIntent).toBe(body);
+    const saved = await invoke<WebAnnotationGetResult>(C.get, {
+      environmentId: s().environmentId,
+      annotationId: created.id,
+    });
+    expect(saved.capture?.target.kind).toBe("element");
+    if (saved.capture?.target.kind !== "element") throw new Error("Missing keyboard capture");
+    expect(saved.capture.target.anchor.stableId).toEqual({
+      kind: "test-id",
+      value: TEST_IDS.saveSettings,
+    });
+
+    // Send by keyboard: Discuss…, the session, Discuss with <agent>, then Send.
+    const thread = s().window.locator(NOTES_PANEL);
+    const discuss = thread.getByRole("button", { name: "Discuss…" });
+    await expect(discuss).toBeVisible({ timeout: 20_000 });
+    await tabActivate(discuss);
+    const composer = thread.getByRole("region", { name: "Ask an agent" });
+    await expect(composer).toBeVisible();
+    // Choose the codex session (Space on its radio), then the operation, which
+    // prepares the brief; Send appears with its preview.
+    const session = composer
+      .getByRole("radiogroup", { name: "Agent session" })
+      .getByRole("radio")
+      .first();
+    await expect(session).toBeVisible({ timeout: 20_000 });
+    await tabActivate(session, "Space");
+    await expect(session).toHaveAttribute("aria-checked", "true");
+    const prepare = composer.getByRole("button", { name: /^Discuss with / });
+    await expect(prepare).toBeEnabled({ timeout: 20_000 });
+    await tabActivate(prepare);
+    const send = composer.getByRole("button", { name: "Send", exact: true });
+    await expect(send).toBeEnabled({ timeout: 20_000 });
+    sent = true;
+    await tabActivate(send);
+    await expect
+      .poll(async () => {
+        const got = await invoke<{ requests: WebAnnotationRequest[] }>(C.get, {
+          environmentId: s().environmentId,
+          annotationId: created.id,
+        });
+        requestId = got.requests[0]?.id ?? null;
+        return got.requests.map((request) => `${request.operation}:${request.state}`);
+      })
+      .toEqual(["discuss:queued"]);
+  } finally {
+    try {
+      if (draftKey) {
+        // Discover receipts again even if an assertion failed immediately after
+        // Send. Never release the hold on an unreadable/ambiguous request.
+        const { requests } = await invoke<{ requests: WebAnnotationRequest[] }>(C.requestList, {
+          environmentId: s().environmentId,
+          ...(annotationId ? { annotationId } : {}),
+        });
+        if (sent)
+          expect(requests.length, "Send receipt before releasing draft hold").toBeGreaterThan(0);
+        if (requestId) expect(requests.some((request) => request.id === requestId)).toBe(true);
+        for (const request of requests) {
+          if (request.state !== "cancelled") {
+            const cancelled = await invoke<{ request: WebAnnotationRequest; outcome: string }>(
+              C.requestCancel,
+              {
+                environmentId: s().environmentId,
+                requestId: request.id,
+                expectedRevision: request.revision,
+              },
+            );
+            expect(cancelled.outcome).toBe("cancelled");
+          }
+          const got = await invoke<{ request: WebAnnotationRequest }>(C.requestGet, {
+            environmentId: s().environmentId,
+            requestId: request.id,
+          });
+          expect(got.request.state).toBe("cancelled");
+          const queue = await invoke<{
+            messages: Array<{ id: string }>;
+            inFlight?: unknown;
+            outstandingClaim?: unknown;
+          } | null>("get_prompt_queue", { queueKey: request.queueKey });
+          expect(queue?.messages.some((message) => message.id === request.id) ?? false).toBe(false);
+          expect(queue?.inFlight ?? null).toBeNull();
+          expect(queue?.outstandingClaim ?? null).toBeNull();
+        }
+        await expectNoCodexLaunch();
+        await invoke("delete_compose_draft", { draftKey });
+      }
+    } finally {
+      // A failed cancellation leaves its draft in place until profile disposal.
+      await restoreDirectPreview();
+    }
+  }
+});
+
+/** The selection highlight's border colour (`browser-preview-annotation-script.ts`). */
+const HIGHLIGHT_RGB: [number, number, number] = [38, 132, 255];
+/** The marker under the highlight's 10% tint. */
+const TINTED_MARKER_RGB: [number, number, number] = [233, 13, 255];
+
+/**
+ * Bounding box, in image pixels, of pixels within `tolerance` of `rgb` inside
+ * `within` (image pixels). Accepts BGRA and RGBA bitmaps.
+ */
+async function colorBox(
+  dataUrl: string,
+  rgb: [number, number, number],
+  within: DipRect,
+  tolerance = 40,
+) {
+  return s().app.evaluate(
+    ({ nativeImage }, { dataUrl, rgb, within, tolerance }) => {
+      const image = nativeImage.createFromDataURL(dataUrl);
+      const { width, height } = image.getSize();
+      const bitmap = image.toBitmap();
+      const near = (a: number, b: number, c: number) =>
+        Math.abs(a - rgb[0]) <= tolerance &&
+        Math.abs(b - rgb[1]) <= tolerance &&
+        Math.abs(c - rgb[2]) <= tolerance;
+      let minX = width;
+      let minY = height;
+      let maxX = -1;
+      let maxY = -1;
+      const x0 = Math.max(0, Math.floor(within.x));
+      const y0 = Math.max(0, Math.floor(within.y));
+      const x1 = Math.min(width, Math.ceil(within.x + within.width));
+      const y1 = Math.min(height, Math.ceil(within.y + within.height));
+      for (let y = y0; y < y1; y++) {
+        for (let x = x0; x < x1; x++) {
+          const offset = (y * width + x) * 4;
+          const p0 = bitmap[offset]!;
+          const p1 = bitmap[offset + 1]!;
+          const p2 = bitmap[offset + 2]!;
+          if (near(p0, p1, p2) || near(p2, p1, p0)) {
+            if (x < minX) minX = x;
+            if (y < minY) minY = y;
+            if (x > maxX) maxX = x;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+      return maxX < 0
+        ? null
+        : { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 };
+    },
+    { dataUrl, rgb, within, tolerance },
+  );
+}
+
+function scaled(rect: DipRect, scale: number, inset = 0): DipRect {
+  return {
+    x: (rect.x + inset) * scale,
+    y: (rect.y + inset) * scale,
+    width: (rect.width - 2 * inset) * scale,
+    height: (rect.height - 2 * inset) * scale,
+  };
+}
+
+function expectBoxNear(
+  label: string,
+  box: DipRect | null,
+  expected: DipRect,
+  tolerance: number,
+): void {
+  expect(box, `${label}: no pixels`).not.toBeNull();
+  const detail = `${label}: ${JSON.stringify({ box, expected })}`;
+  expect(Math.abs(box!.x - expected.x), detail).toBeLessThanOrEqual(tolerance);
+  expect(Math.abs(box!.y - expected.y), detail).toBeLessThanOrEqual(tolerance);
+  expect(Math.abs(box!.width - expected.width), detail).toBeLessThanOrEqual(tolerance);
+  expect(Math.abs(box!.height - expected.height), detail).toBeLessThanOrEqual(tolerance);
+}
+
+async function setPreviewZoom(factor: number): Promise<void> {
+  await s().app.evaluate(
+    ({ webContents }, { origin, factor }) => {
+      webContents
+        .getAllWebContents()
+        .find((candidate) => !candidate.isDestroyed() && candidate.getURL().startsWith(origin))
+        ?.setZoomFactor(factor);
+    },
+    { origin: s().fixture.url, factor },
+  );
+}
+
+async function relaunch(switches: string[]): Promise<void> {
+  await closeElectron();
+  const relaunched = await launchElectron(s(), switches);
+  s().app = relaunched.app;
+  s().window = relaunched.window;
+  await attachPreview(ROUTE_VARIANTS.settings);
+}
+
+test("capture pixels stay on the target at preview zoom 0.8, 1 and 1.5 and at DPR 1 and 2", async () => {
+  const testInfo = test.info();
+  testInfo.setTimeout(420_000);
+  const natural = await s().app.evaluate(({ screen }) => screen.getPrimaryDisplay().scaleFactor);
+  record(testInfo, "natural-scale-factor", String(natural));
+  // Exercise both forced branches on every host, including forced DPR 1 on
+  // non-Retina machines. Natural capture remains a separate baseline.
+  const runs = [
+    { dpr: natural, switches: [] as string[] },
+    ...[1, 2].map((dpr) => ({ dpr, switches: [`--force-device-scale-factor=${dpr}`] })),
+  ];
+  let forced = false;
+  try {
+    for (const run of runs) {
+      if (run.switches.length > 0 || forced) {
+        await relaunch(run.switches);
+        forced = run.switches.length > 0;
+      }
+      const scaleFactor = await s().app.evaluate(
+        ({ screen }) => screen.getPrimaryDisplay().scaleFactor,
+      );
+      expect(scaleFactor).toBe(run.dpr);
+      for (const layout of ["direct", "notes"] as const) {
+        const tabId = layout === "direct" ? TAB_ID : UI_TAB_ID;
+        if (layout === "direct") {
+          // 800 DIPs keeps DPR 2 below the 2000-pixel reduction bound.
+          await preview("attach", {
+            tabId,
+            url: `${s().fixture.url}${ROUTE_VARIANTS.settings}`,
+            bounds: { x: 0, y: 0, width: 800, height: 600 },
+            visible: true,
+          });
+          await waitForFixturePage(ROUTE_VARIANTS.settings);
+        } else {
+          await setHostWindowSize(1280, 900);
+          await showRendererPreview();
+          const notes = s().window.getByRole("button", { name: /^Annotations, / });
+          if ((await notes.getAttribute("aria-expanded")) === "false") await pressControl(notes);
+          const bounds = await expectViewOnHost(testInfo, `capture-notes-dpr-${run.dpr}`);
+          expect(bounds.x).toBeGreaterThan(0);
+          expect(bounds.y).toBeGreaterThan(0);
+          expect(bounds.width).toBeLessThanOrEqual(1000);
+        }
+        for (const zoom of [0.8, 1, 1.5]) {
+          await setPreviewZoom(zoom);
+          await inPreview(
+            `(() => { document.getElementById(${JSON.stringify(MARKER_ID)})?.remove(); const marker = document.createElement("div"); marker.id = ${JSON.stringify(MARKER_ID)}; Object.assign(marker.style, { position: "fixed", left: "200px", top: "140px", width: "160px", height: "90px", background: "rgb(255, 0, 255)", zIndex: "2147480000" }); document.body.append(marker); return true; })()`,
+          );
+          const { descriptor, rect } = await captureElement(`#${MARKER_ID}`, 0, zoom, tabId);
+          const pending = await readPending(descriptor.captureId);
+          const label = `${run.switches.length ? "forced" : "natural"}-${layout}-dpr-${run.dpr}-zoom-${zoom}`;
+          try {
+            expect(pending.capture.target.kind).toBe("element");
+            const geometry = pending.capture.geometry!;
+            expect(geometry.zoomFactor).toBeCloseTo(zoom, 2);
+            expect(geometry.devicePixelRatio).toBeCloseTo(run.dpr * zoom, 1);
+            expect(pending.imageDataUrl, `${label}: image`).toBeTruthy();
+            const scale = geometry.image!.scale;
+            expect(geometry.image!.reduced, `${label}: full native scale`).toBe(false);
+            expect(scale).toBeCloseTo(run.dpr * zoom, 1);
+            if (pending.capture.target.kind !== "element") throw new Error(label);
+            const target = pending.capture.target.rect;
+            record(
+              testInfo,
+              label,
+              JSON.stringify({
+                geometry,
+                target,
+                rect,
+                tag: pending.capture.target.anchor.semantic.tagName,
+              }),
+            );
+            // The recorded target matches the page's own layout.
+            expect(Math.abs(target.x - rect.x)).toBeLessThanOrEqual(1);
+            expect(Math.abs(target.y - rect.y)).toBeLessThanOrEqual(1);
+            expect(Math.abs(target.width - rect.width)).toBeLessThanOrEqual(1);
+            // The highlight's border box is the target, and the marker shows
+            // inside its 2 CSS px border, both within a device pixel or two.
+            const tolerance = Math.max(2, Math.ceil(scale) + 1);
+            const expected = scaled(target, scale);
+            const search = {
+              x: expected.x - 12,
+              y: expected.y - 12,
+              width: expected.width + 24,
+              height: expected.height + 24,
+            };
+            const highlight = await colorBox(pending.imageDataUrl!, HIGHLIGHT_RGB, search);
+            const marker = await colorBox(pending.imageDataUrl!, TINTED_MARKER_RGB, search);
+            record(testInfo, `${label}-pixels`, JSON.stringify({ highlight, marker, expected }));
+            expectBoxNear(`${label} highlight`, highlight, expected, tolerance);
+            expectBoxNear(`${label} marker`, marker, scaled(target, scale, 2), tolerance);
+            if (zoom === 1) {
+              await testInfo.attach(`${label}.png`, {
+                body: Buffer.from(pending.imageDataUrl!.split(",")[1]!, "base64"),
+                contentType: "image/png",
+              });
+            }
+          } finally {
+            await preview("discardPendingCapture", descriptor.captureId);
+          }
+        }
+        await setPreviewZoom(1);
+        await inPreview(`document.getElementById(${JSON.stringify(MARKER_ID)})?.remove(); true`);
+        if (layout === "notes") await restoreDirectPreview();
+      }
+      await expectNoCodexLaunch();
+    }
+  } finally {
+    if (forced) await relaunch([]);
+    else await setPreviewZoom(1).catch(() => undefined);
+  }
+});
+
 test("profile storage and logs contain no synthetic secret", async () => {
   // Stop the app first so every buffered log and spool write is on disk.
   await closeElectron();
+  await expectNoCodexLaunch();
   const scan = await findSyntheticSecrets([s().profile.dataDir, s().profile.logDir]);
   expect(scan.scannedFiles).toBeGreaterThan(0);
   expect(scan.hits).toEqual([]);

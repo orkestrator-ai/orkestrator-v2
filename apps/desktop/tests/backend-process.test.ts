@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
+import { type ChildProcess, spawn } from "node:child_process";
 import { access, chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
@@ -1608,4 +1609,27 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
     },
     SPAWN_TIMEOUT_MS,
   );
+
+  test("stop resolves only after the backend child has exited", async () => {
+    const backendProcess = new BackendProcess();
+    await expect(backendProcess.stop()).resolves.toBeUndefined();
+
+    // A child that takes a moment to drain after SIGTERM, like the backend.
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        "process.on('SIGTERM', () => setTimeout(() => process.exit(0), 100)); setInterval(() => {}, 1000);",
+      ],
+      { stdio: "ignore" },
+    );
+    await Bun.sleep(200);
+    (backendProcess as unknown as { child: ChildProcess }).child = child;
+    let exited = false;
+    child.once("exit", () => (exited = true));
+
+    await backendProcess.stop();
+    expect(exited).toBe(true);
+    expect(backendProcess.getPid()).toBeUndefined();
+  });
 });

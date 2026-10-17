@@ -58,9 +58,9 @@ it reaches. Some rules of thumb:
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
 | High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 38 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 247 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 259 |
-| **Total** | | **545** |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 250 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 261 |
+| **Total** | | **550** |
 
 ## Very high
 
@@ -177,6 +177,7 @@ it reaches. Some rules of thumb:
 
 ### Cross-cutting (high)
 
+- [x] Make the desktop app wait (bounded) for the backend to exit before `quitAndInstall` and on every quit ([remote-host-upgrades.md](remote-host-upgrades.md))
 - [ ] Qualify Codex sub-agent cards on a fixture profile: one card per child, recovery after reload and restart ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
 - [x] Decide and implement a renderer-backend skew guard for raw OpenCode envelopes from older backends ([mixed-version-compatibility.md](mixed-version-compatibility.md))
 - [x] Fix flake 0166 (OpenCode probe deadline), which recurred on 2026-10-15 ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
@@ -459,6 +460,31 @@ it reaches. Some rules of thumb:
 
 ### Cross-cutting (medium)
 
+- [x] Decide the remote dependency-update policy: pinned only, a signed overlay, or per-tool latest ([remote-host-upgrades.md](remote-host-upgrades.md), decision)
+- [x] Decide whether a person at the Mac can postpone a remote-initiated restart ([remote-host-upgrades.md](remote-host-upgrades.md), decision)
+- [x] Decide who may trigger host maintenance, and keep it off every MCP surface ([remote-host-upgrades.md](remote-host-upgrades.md), decision)
+- [x] Decide the host-upgrade support matrix across desktop, AppImage, supervised and unsupervised backends ([remote-host-upgrades.md](remote-host-upgrades.md), decision)
+- [x] Extend `host.status` with per-tool versions and sources, image status and restart impact ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Cancel a host update before its restart stage ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Pass `listenerKind` to `handleInvoke` and add control-listener-only commands ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Add a durable host-maintenance job with revisioned events and a reconciler that settles on version evidence ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Add a drain policy (`whenIdle` with a maximum wait, or `now`) over `shutdown()` ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Show a host-updating banner outside Settings, reload backend-served clients, and add an install action to the version reminder ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Add `--host-updater=desktop` and a main-process executor that rehydrates from `host.status` on reconnect ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Add a non-interactive `checkAndStage()` that reports progress and counts as staged only after `downloadPromise` ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Make a remote-initiated relaunch unattended: no blocking modals, and the gateway and Tailscale Serve return ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [ ] Qualify a remote-initiated update between two signed releases on macOS and AppImage with agents running ([remote-host-upgrades.md](remote-host-upgrades.md), qualification)
+- [x] Add `orkestrator service install | uninstall | status` with launchd and systemd user units ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Add versioned standalone release directories, a launcher shim and rollback after failed boots ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Pin Bun for standalone service installs ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Publish the npm package from `release-desktop.ts publish` with the desktop version ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Add the supervised standalone executor: npm integrity check, smoke check, toolchain pre-install, flip and restart ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [ ] Qualify standalone upgrade and rollback on macOS launchd and Linux systemd ([remote-host-upgrades.md](remote-host-upgrades.md), qualification)
+- [ ] Qualify `host.image.update` against the GHCR release image and `host.gh.update` latest on macOS and Linux ([remote-host-upgrades.md](remote-host-upgrades.md), qualification)
+- [x] Add `host.toolchain.repair` through the shared toolchain manager under its install lock ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Publish each release's toolchain pin list and show it in `host.status` ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Add `host.image.update`: pull the matching GHCR image, retag it, and list environments to recreate ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Verify whether the managed host `claude` updates itself without `DISABLE_AUTOUPDATER` ([remote-host-upgrades.md](remote-host-upgrades.md), verify)
 - [ ] Decide and align agent-test binary resolution: document the `PATH` fallback or refuse it ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
 - [ ] Refresh the live OpenCode spec for the no-default-model and fork-keeps-model fixes ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
 - [ ] Re-run the Electron terminal input resume spec and confirm Resume keeps the same PTY process ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
@@ -752,6 +778,10 @@ it reaches. Some rules of thumb:
 
 ### Cross-cutting (low)
 
+- [x] Add a 60 s countdown with Postpone on the Mac for remote-initiated restarts ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Offer an opt-in, unqualified out-of-band `gh` update ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [ ] Rebuild environments on an outdated image from Settings → Updates instead of one by one ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [ ] Separate container terminals from host terminals in the restart impact ([remote-host-upgrades.md](remote-host-upgrades.md))
 - [ ] Confirm runtime drift counters and advisory notices show and rehydrate in Agent Info on two platforms ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
 - [ ] Confirm the usage panel shows turns and account windows across a reload on two providers ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
 - [ ] Verify agent-test Claude profiles do not treat `~/.claude` as a first run when `CLAUDE_CONFIG_DIR` is unset ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), verify)
@@ -847,3 +877,4 @@ it reaches. Some rules of thumb:
 | [test-suite-and-ci-health.md](test-suite-and-ci-health.md) | 1 |  | 4 | 11 | 16 |
 | [mobile-layout-gaps.md](mobile-layout-gaps.md) |  |  | 1 | 4 | 5 |
 | [dependency-upgrades.md](dependency-upgrades.md) |  |  | 3 | 7 | 10 |
+| [remote-host-upgrades.md](remote-host-upgrades.md) |  | 1 | 25 | 4 | 30 |

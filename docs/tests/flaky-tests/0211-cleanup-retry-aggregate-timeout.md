@@ -161,3 +161,13 @@ skip changed.
 - **Failure:** `persists safe cleanup failure details and permits a backend deletion retry` exceeded its 5000 ms budget at 9438.69 ms.
 - **Owning-file rerun:** `mise run test:logged -- --name commands-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 19.9 seconds.
 - **Assessment:** the unchanged owning-file pass confirms an intermittent recurrence. Shared-host contention remains a hypothesis. No owning implementation, assertion, timeout or skip changed.
+
+## Refused-cell validation recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test`. No backend implementation or owning test changed.
+- **Workers:** workspace/root/bridges/protocol reserved 4/1/2/1 slots on the shared 18-slot host; backend used two isolated workers. The workspace group waited 686.3 seconds for capacity.
+- **Failure:** the cleanup-retry case exceeded its 5000 ms deadline at 5735.01 ms.
+- **Suite counts:** backend 8818 passed, 41 skipped and three failed across 8862 tests in 473 files (366.20 seconds). The other backend failures are the activity-batch cases in 0247; bridges separately hit 0214. Root/support and protocol passed. The aggregate exited 1 after 1101.3 seconds.
+- **Owning-file rerun:** `mise run test:logged -- --name cleanup-retry-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 22.8 seconds.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.nN9Z1G/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- Shared-host contention remains a hypothesis. No assertion, deadline or skip changed.

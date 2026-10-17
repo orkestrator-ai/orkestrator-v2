@@ -29,3 +29,8 @@
 - **Owning-file rerun:** `mise run test:logged -- --name lifecycle-isolated -- bun test ./bridges/codex-bridge/src/app-server-runtime-lifecycle.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 2.0 seconds.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.nN9Z1G/bridges.log.gz` after aggregate finalization.
 - The repeated failure matches the existing timer-delivery hypothesis under host contention. No assertion, timeout or skip was changed.
+
+The entire Codex package subsequently passed with
+`mise run test:logged -- --name codex-package-rerun -- bun run --cwd bridges/codex-bridge test:bridge`
+(exit 0, 39.0 seconds). The aggregate finished with the backend-only recurrences
+recorded in 0211 and 0247; root/support and protocol passed.

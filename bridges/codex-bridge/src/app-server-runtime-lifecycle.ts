@@ -1110,13 +1110,17 @@ export class CodexRuntimeLifecycle {
     if (state.refusedCellTail?.turnId === turn.turnId) return;
     state.refusedCellTail?.tail.close();
     state.refusedCellTail = undefined;
+    // The boundary belongs to the prompt that captured it; a turn started some
+    // other way (an inline review) falls back to the bounded turn-ID scan.
+    const offset = state.refusedCellOffset;
+    state.refusedCellOffset = undefined;
     const path = this.ctx.options.engine.rolloutPath(context.threadId);
     if (!path) return;
     const watch = this.ctx.options.watchRolloutFile;
     const tail = new RefusedCellTail({
       path,
       turnId: turn.turnId,
-      offset: state.refusedCellOffset,
+      offset,
       ...(watch ? { watch } : {}),
       itemStartedBetween: (fromMs, toMs) => turn.clientToolItemStartedBetween(fromMs, toMs),
       onCell: (cell) => {

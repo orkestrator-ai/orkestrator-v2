@@ -224,6 +224,17 @@ describe("refused code-mode cells", () => {
     }
   });
 
+  test("the dispatch boundary is spent by its own turn, not left for a later review", async () => {
+    const { h, cleanup } = await startTurn();
+    try {
+      const state = internals(h).context.threadState.get("thread-1")!;
+      expect(state.refusedCellTail?.turnId).toBe("turn-1");
+      expect(state.refusedCellOffset).toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
+
   test("a slow read precedes the following response and agrees with a reload", async () => {
     const { h, sessionId, rollout, cleanup } = await startTurn();
     const gate = deferredSignal();

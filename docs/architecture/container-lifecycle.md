@@ -187,9 +187,12 @@ backend beside its daemon plus the remote gateway. The `host.docker.internal`
 host-gateway alias is added only for a Linux Engine; Docker Desktop (including
 Desktop for Linux) provides its own DNS entry.
 
-Qualified locally: Docker Engine 29.7.2 on Linux amd64. Docker Desktop and
-rootless daemons are detected and reported but not yet qualified; features
-that depend on cgroup or firewall enforcement gate on them explicitly.
+Qualified locally: Docker Engine 29.7.2 on Linux amd64 and Docker Desktop
+4.93.0 (Engine 29.8.1) on Apple Silicon (native arm64). Rootless daemons are
+detected and reported but not yet qualified; features that depend on cgroup or
+firewall enforcement gate on them explicitly. The evidence and what each run
+covered are in
+[container-qualification.md](../development/container-qualification.md).
 
 ## Readiness
 
@@ -239,8 +242,25 @@ An image with the `graceful-shutdown` capability runs under Docker's `--init`
    drain or Docker had to SIGKILL PID 1.
 
 Backend shutdown never stops user containers; their processes are rehydrated
-and uncertain operations reconciled on the next start. Approvals are never
-approved by a stop: bridges deny or withdraw on the way out.
+and uncertain operations reconciled on the next start.
+
+A stop never approves a pending approval. The drain signals the bridge and the
+provider process that raised the request, so nothing is left that could act on
+it (Claude's bridge has no shutdown handler of its own and simply exits). Until
+the session reattaches after the next start, the backend's projection can
+still list the request as `pending`. A stopped environment renders no agent
+tabs, though, so there is nothing to answer, and the reattached session no
+longer lists it. Qualified live for Claude (C11,
+`e2e/agent-testing/container-approval-stop.spec.ts`).
+
+A stop also clears the renderer's local panes for that environment, together
+with its hydration state. It releases only local views: no native or tmux tab
+teardown is requested, since one queued against the stopped bridge would close
+the session after the restart. Agent tabs and their sessions outlive the
+runtime, so the next start restores the persisted layout from the backend
+rather than seeding a default terminal. The backend refuses a layout written for another
+runtime generation, so the cleared local copy can never overwrite the durable
+one.
 
 ## Persistent storage (`volume-v1`)
 

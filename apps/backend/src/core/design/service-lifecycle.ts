@@ -620,8 +620,10 @@ export async function deleteEnvironment(
  * removes its canvases before the environment record goes, so a crash or
  * failure in between leaves a fenced environment's files behind; older builds,
  * or an environment removed another way, leave canvases whose owner is simply
- * absent. `liveEnvironmentIds` must be the complete set: a caller that cannot
- * list every environment must not sweep.
+ * absent. `liveEnvironmentIds` must load the complete set, and throw when it
+ * cannot: a caller that cannot list every environment must not sweep. It is
+ * not called when no canvas has an owner, so a fresh install whose
+ * environment store was never written has nothing to refuse.
  *
  * A fenced owner's canvases go at once, since environment ids are never reused.
  * An absent owner's canvas goes only once its file is older than `minAgeMs`, so
@@ -630,15 +632,18 @@ export async function deleteEnvironment(
  */
 export async function sweepOrphanedCanvases(
   service: DesignService,
-  liveEnvironmentIds: ReadonlySet<string>,
+  liveEnvironmentIds: () => Promise<ReadonlySet<string>>,
   minAgeMs: number,
 ): Promise<number> {
   await service.refreshLibrary();
+  const owned = Array.from(service.library.entries.values()).some((entry) => entry.environmentId);
+  if (!owned) return 0;
+  const live = await liveEnvironmentIds();
   const now = service.now().getTime();
   const orphaned = (entry: { environmentId: string; fileMtimeMs: number }) => {
     if (!entry.environmentId) return false;
     if (service.environmentDeleted(entry.environmentId)) return true;
-    return !liveEnvironmentIds.has(entry.environmentId) && now - entry.fileMtimeMs >= minAgeMs;
+    return !live.has(entry.environmentId) && now - entry.fileMtimeMs >= minAgeMs;
   };
   let removed = 0;
   for (const entry of Array.from(service.library.entries.values())) {

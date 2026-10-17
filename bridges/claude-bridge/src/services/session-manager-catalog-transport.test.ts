@@ -420,8 +420,14 @@ describe("Claude command catalogue", () => {
       // Single flight: both readers share one CLI.
       expect(mockQuery).toHaveBeenCalledTimes(1);
       const probe = await nextQueryCall();
+      // Control only: the SDK drops `maxTurns: 0`, so any user message would
+      // start a real turn. The probe's input must never yield one.
+      expect(typeof probe.prompt).not.toBe("string");
+      const firstMessage = (probe.prompt as AsyncIterable<unknown>)[Symbol.asyncIterator]().next();
+      expect(
+        await Promise.race([firstMessage.then(() => "message"), Bun.sleep(20).then(() => "none")]),
+      ).toBe("none");
       expect(probe.options).toMatchObject({
-        maxTurns: 0,
         settingSources: ["user"],
         env: { ORKESTRATOR_NATIVE_AGENT_BRIDGE: "claude" },
       });

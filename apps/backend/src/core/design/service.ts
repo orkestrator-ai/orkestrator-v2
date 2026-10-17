@@ -1853,7 +1853,7 @@ export class DesignService {
 
   /** Removes canvases whose environment is gone; see {@link lifecycle.sweepOrphanedCanvases}. */
   async sweepOrphanedCanvases(
-    liveEnvironmentIds: ReadonlySet<string>,
+    liveEnvironmentIds: () => Promise<ReadonlySet<string>>,
     minAgeMs: number,
   ): Promise<number> {
     await this.initialize();

@@ -60,3 +60,12 @@ No assertion, deadline or skip was changed.
 - **Failure:** the unchanged missing-container repair case exceeded its five-second deadline at 6991.89 ms.
 - **Owning-file rerun after the aggregate:** `mise run test:logged -- --name lifecycle-status-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments-status.test.ts --parallel=1 --only-failures` passed unchanged in 4.4 seconds (exit 0).
 - **Evidence:** `/tmp/orkestrator-test-run.1PZf4j/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`. No lifecycle implementation, assertion, timeout or skip changed; the cause remains unconfirmed.
+
+## Multi Review recovery validation — 2026-10-17
+
+- Original command: `mise run test:logged -- --name full-review-recovery -- mise run test` on `4443c027` plus the recovery changes, macOS arm64 under shared-host load. Workspace/root/bridge/protocol reserved 4/1/2/1 slots; backend used two isolated workers.
+- Aggregate: backend 8,632 passed, 41 skipped, four failed and two between-tests errors across 463 files (525.39 seconds); outer run exited 1 after 549.9 seconds. Three failures were known five-second timeouts, and one provider-identity assertion was updated for the new lifetime wrapper and passed in its owning file. All other workspace packages and the root/bridge/protocol groups passed.
+- Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.AdrtP5/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.YbWcld/full-review-recovery.log.gz`.
+- The missing-container repair case timed out at 6140.30 ms, then a late fixture read reported a missing fake Docker log.
+- Unchanged owning-file rerun: `mise run test:logged -- --name status-owner-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments-status.test.ts --parallel=1 --only-failures` passed in 6.4 seconds, exit 0.
+- Shared-host contention and teardown after timeout remain hypotheses. No assertion, timeout, skip or implementation in this owner changed.

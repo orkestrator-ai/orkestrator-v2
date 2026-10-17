@@ -9,9 +9,13 @@
  * in-memory doubles; this closes the gap between those and the live binary.
  *
  *   FAKE_CODEX_VERSION   version reported by `--version` (default 0.145.0)
- *   FAKE_CODEX_SCRIPT    `auto-complete` to finish a turn on its own
+ *   FAKE_CODEX_SCRIPT    `auto-complete` to finish a turn on its own;
+ *                        `subagents` to run `fake-codex-subagents.mjs`, which
+ *                        writes real rollouts under CODEX_HOME
+ *   FAKE_CODEX_CONTROL_SOCKET  where the `subagents` script takes `finish`
  */
 import { createInterface } from "node:readline";
+import { createSubagentScenario, listenForControl } from "./fake-codex-subagents.mjs";
 
 const args = process.argv.slice(2);
 const version = process.env.FAKE_CODEX_VERSION || "0.145.0";
@@ -34,6 +38,28 @@ const threads = new Map();
 function send(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
 }
+
+/*
+ * The sub-agent script outlives a restart: a second process resumes threads the
+ * first one wrote, so its ids must not repeat (`fake-thread-1` would) and its
+ * turn timestamps must be real ones the rollout records can fall inside.
+ */
+const subagents =
+  process.env.FAKE_CODEX_SCRIPT === "subagents"
+    ? createSubagentScenario({
+        send,
+        codexHome: process.env.CODEX_HOME || "/tmp/codex-home",
+        cwd: process.cwd(),
+        model: "fake-model",
+      })
+    : null;
+if (subagents && process.env.FAKE_CODEX_CONTROL_SOCKET) {
+  listenForControl(process.env.FAKE_CODEX_CONTROL_SOCKET, subagents);
+}
+const nextThreadId = () =>
+  subagents ? crypto.randomUUID() : `fake-thread-${(threadCounter += 1)}`;
+const nextTurnId = () => (subagents ? crypto.randomUUID() : `fake-turn-${(turnCounter += 1)}`);
+const nowSeconds = () => (subagents ? Math.floor(Date.now() / 1_000) : 1_700_000_200);
 
 function respond(id, result) {
   send({ jsonrpc: "2.0", id, result });
@@ -83,8 +109,7 @@ const handlers = {
     });
   },
   "thread/start": (id, params) => {
-    threadCounter += 1;
-    const threadId = `fake-thread-${threadCounter}`;
+    const threadId = nextThreadId();
     threads.set(threadId, null);
     const thread = threadObject(threadId, { cwd: params?.cwd ?? process.cwd() });
     respond(id, {
@@ -102,9 +127,9 @@ const handlers = {
     send({ jsonrpc: "2.0", method: "thread/started", params: { thread } });
   },
   "thread/resume": (id, params) => {
-    const threadId = params?.threadId ?? `fake-thread-${++threadCounter}`;
+    const threadId = params?.threadId ?? nextThreadId();
     threads.set(threadId, null);
-    const thread = threadObject(threadId);
+    const thread = threadObject(threadId, { path: subagents?.pathOf(threadId) ?? null });
     respond(id, {
       thread,
       model: "gpt-5.6-sol",
@@ -119,7 +144,8 @@ const handlers = {
     });
   },
   "thread/read": (id, params) => {
-    respond(id, { thread: threadObject(params?.threadId ?? "fake-thread-1") });
+    const threadId = params?.threadId ?? "fake-thread-1";
+    respond(id, { thread: threadObject(threadId, { path: subagents?.pathOf(threadId) ?? null }) });
   },
   "thread/list": (id) => respond(id, { data: [], nextCursor: null, backwardsCursor: null }),
   "thread/unsubscribe": (id) => respond(id, {}),
@@ -154,8 +180,7 @@ const handlers = {
       nextCursor: null,
     }),
   "turn/start": (id, params) => {
-    turnCounter += 1;
-    const turnId = `fake-turn-${turnCounter}`;
+    const turnId = nextTurnId();
     const threadId = params?.threadId;
     threads.set(threadId, turnId);
     const turn = {
@@ -164,12 +189,20 @@ const handlers = {
       itemsView: "full",
       status: "inProgress",
       error: null,
-      startedAt: 1_700_000_200,
+      startedAt: nowSeconds(),
       completedAt: null,
       durationMs: null,
     };
     respond(id, { turn });
     send({ jsonrpc: "2.0", method: "turn/started", params: { threadId, turn } });
+
+    if (subagents) {
+      const prompt = (params?.input ?? [])
+        .map((entry) => (entry?.type === "text" ? entry.text : ""))
+        .join("");
+      subagents.startTurn({ threadId, turnId, prompt });
+      return;
+    }
 
     if (process.env.FAKE_CODEX_SCRIPT === "auto-complete") {
       // Stream a delta, then the authoritative item, then finish — the same

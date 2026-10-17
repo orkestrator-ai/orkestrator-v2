@@ -73,6 +73,30 @@ forward that nothing in the backend supplies.
 4. **`maxBudgetUsd`.** Add a backend-owned per-environment budget setting, with
    `error_max_budget_usd` mapping to a `stopped` notice, or drop the option from
    the bridge.
+5. **A stored model the catalogue does not offer.** Found in the slash-command
+   qualification run (2026-10-17, `31d0fb06`, Codex 0.162.1, ChatGPT login):
+   - A new profile's default Codex model is `gpt-5.4`
+     (`storage-shared-core.ts:1941`). The renderer creates the tab's session
+     with it, so the session stores `controls.modelId: "gpt-5.4"`.
+   - That login's `model/list` does not offer `gpt-5.4`, so the projection
+     reports the first catalogue model (`selectedModelId: "gpt-6.1-sol"`) and
+     the picker shows it.
+   - Turns still run the stored model. The Codex bridge uses
+     `session.config.model` (`app-server-runtime-prompt.ts:459`), and the
+     dispatch's own `model` (`gpt-6.1-sol`) only seeds a new session
+     (`native-agent-service-provider.ts:366`). Every turn fails with "The
+     'gpt-5.4' model is not supported when using Codex with a ChatGPT
+     account", while the picker shows a model that would have worked.
+
+   Make the shown and the run model the same. Either resolve an unoffered
+   stored model to the catalogue's choice and persist it, or show the stored
+   model as unavailable and refuse to send until the user picks one. Check the
+   other providers for the same fallback. The live slash-command spec works
+   around it by launching Codex on `ORKESTRATOR_AGENT_TEST_MODEL`.
+
+   The Codex sub-agent qualification independently reproduced this with both
+   the composer and an explicit `ensure_native_agent_session` model. Evidence:
+   [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md#codex-sub-agent-cards-evidence).
 
 ### Qualification
 

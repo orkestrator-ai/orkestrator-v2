@@ -50,6 +50,7 @@ import {
   AmbiguousPromptDispatchError,
   ProviderSessionFailedError,
 } from "./build-pipeline-provider.js";
+import { ProviderUnreachableError } from "./agent-provider-contract.js";
 import { codexConnection, httpProvider } from "./agent-provider-test-support.js";
 import {
   REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
@@ -5830,6 +5831,64 @@ test("MultiReviewService fails a reviewer whose provider session errors or disap
       });
     });
   }
+});
+
+/*
+ * A local bridge that died cannot answer a status read. That is an
+ * observation fault, not the reviewer's: the reviewer keeps its session and
+ * request, and the cached provider is dropped so the next pass resolves the
+ * connection again, which restarts the bridge.
+ */
+test("MultiReviewService reconnects a reviewer whose bridge became unreachable", async () => {
+  class DeadBridgeProvider extends Provider {
+    down = false;
+    override async status(sessionId: string): Promise<ProviderStatus> {
+      if (this.down) throw new ProviderUnreachableError("claude bridge is not reachable");
+      return super.status(sessionId);
+    }
+  }
+  const provider = new DeadBridgeProvider();
+  let creations = 0;
+  await withService(
+    "env-reviewer-unreachable",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      provider.down = true;
+      await service.advanceNow(started.id);
+
+      const reconnecting = await snapshot(started.id);
+      expect(reconnecting?.phase).toBe("reviewing");
+      expect(reconnecting?.reviewers[0]).toMatchObject({
+        status: "running",
+        providerSessionId: "session-1",
+        dispatchState: "sent",
+      });
+      expect(reconnecting?.reviewers[0]?.idleResultPolls).toBeGreaterThanOrEqual(1);
+      expect(reconnecting?.reviewers[0]?.error).toBeUndefined();
+      expect(provider.aborted).toEqual([]);
+      // The unreachable instance was dropped, so the next pass reconnects.
+      const creationsBeforeReconnect = creations;
+      provider.down = false;
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      expect(creations).toBeGreaterThan(creationsBeforeReconnect);
+      const ready = await snapshot(started.id);
+      expect(ready?.reviewers[0]).toMatchObject({
+        status: "completed",
+        providerSessionId: "session-1",
+      });
+      expect(provider.aborted).toEqual([]);
+    },
+    {
+      createProvider: async () => {
+        creations += 1;
+        return provider;
+      },
+    },
+  );
 });
 
 /*

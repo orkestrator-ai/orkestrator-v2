@@ -3300,6 +3300,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         reviewer.sessionKey ?? reviewerSessionKey(workflow.id, reviewer.id),
       sessionLabelFor: (_reviewer, index) => `Multi Review · Reviewer ${index + 1}`,
       provider: (selection) => this.provider(workflow, selection),
+      providerUnavailable: (selection, provider) =>
+        this.evictUnreachableProvider(workflow, selection, provider),
       executionPolicy: () => this.executionPolicy(workflow),
       agentMcp: (selection, resultKey) =>
         this.workflowAgentMcp(workflow, resultKey, selection.agent, "Multi Review reviewer"),
@@ -4406,6 +4408,28 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     if (readers <= 1) this.providerReaders.delete(key);
     else this.providerReaders.set(key, readers - 1);
     await this.disposeProviderIfUnused(key);
+  }
+
+  /**
+   * Drops a cached provider whose bridge stopped answering, so the next
+   * `provider()` call resolves the connection again. For a local environment
+   * that restarts a bridge that died. Only the instance that failed is
+   * dropped: a concurrent reviewer may already have reconnected. Users and
+   * readers keep their registrations.
+   */
+  private async evictUnreachableProvider(
+    workflow: MultiReviewWorkflow,
+    selection: MultiReviewModelSelection,
+    provider: BuildPipelineProvider,
+  ): Promise<void> {
+    const key = this.providerKey(workflow, selection);
+    if (this.providers.get(key) !== provider) return;
+    this.providers.delete(key);
+    try {
+      await provider.dispose?.();
+    } catch {
+      // Its bridge is already unreachable; nothing more to release.
+    }
   }
 
   private async disposeProviderIfUnused(key: string): Promise<void> {

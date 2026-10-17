@@ -61,6 +61,7 @@ import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-ag
 import {
   AmbiguousPromptDispatchError,
   ProviderDispatchPreparationError,
+  ProviderUnavailableError,
   readProviderStatus,
   type BuildPipelineProvider,
   type ProviderPrepareDispatchOptions,
@@ -679,6 +680,16 @@ export interface ReviewFanoutHost {
   /** Pane title for one reviewer's session. */
   sessionLabelFor(reviewer: ReviewerRecord, index: number): string;
   provider(selection: ReviewerModelSelection): Promise<BuildPipelineProvider>;
+  /**
+   * `provider`, returned by {@link provider} for this selection, could not
+   * reach its bridge. A host that caches providers drops that instance (and
+   * only that one: a peer may already have replaced it), so the next
+   * {@link provider} call reconnects.
+   */
+  providerUnavailable?(
+    selection: ReviewerModelSelection,
+    provider: BuildPipelineProvider,
+  ): Promise<void>;
   /** Trusted policy resolved from the persisted environment, never provider defaults. */
   executionPolicy(): Promise<NativeAgentExecutionPolicy>;
   agentMcp?(
@@ -1305,15 +1316,30 @@ export class ReviewFanoutRunner {
       await this.commit();
     }
     if (reviewer.status !== "running") return "continue";
-    await host.resolveUnattendedInteractions(provider, reviewer.providerSessionId);
     // Read as data so the terminal-failure branch below fires whether or not
     // the provider explained itself, and can report the explanation when it did.
     const statusStarted = Date.now();
-    const observation = await readProviderStatus(
-      provider,
-      reviewer.providerSessionId,
-      reviewer.requestId,
-    );
+    let observation: Awaited<ReturnType<typeof readProviderStatus>>;
+    try {
+      await host.resolveUnattendedInteractions(provider, reviewer.providerSessionId);
+      observation = await readProviderStatus(
+        provider,
+        reviewer.providerSessionId,
+        reviewer.requestId,
+      );
+    } catch (error) {
+      if (!(error instanceof ProviderUnavailableError)) throw error;
+      // A bridge that cannot be reached is an observation fault, not the
+      // reviewer's: keep its state and look again when due. The host drops its
+      // cached provider so the next pass reconnects, which restarts a local
+      // bridge that died; the idle-poll bound still fails a reviewer whose
+      // bridge never comes back.
+      await host.providerUnavailable?.(reviewer, provider);
+      return this.recordStall(
+        reviewer,
+        `The reviewer's ${reviewer.agent} bridge stayed unreachable: ${reviewFanoutErrorMessage(error)}`,
+      );
+    }
     this.record({
       operation: "reviewer.status",
       platform: efficiencyPlatform(reviewer.agent),

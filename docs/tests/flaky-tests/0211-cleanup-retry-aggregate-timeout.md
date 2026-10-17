@@ -223,6 +223,16 @@ other workspace package passed; aggregate exit 1 after 852.0 seconds.
 - Post-workspace owning-file rerun: `mise run test:logged -- --name merge-cleanup-post-workspace -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed unchanged, exit 0 (28.4 seconds).
 - The later owning-file pass confirms intermittence. Shared-host contention remains a hypothesis; no implementation, assertion, timeout or skip changed.
 
+## Refused-cell validation recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test`. No backend implementation or owning test changed.
+- **Workers:** workspace/root/bridges/protocol reserved 4/1/2/1 slots on the shared 18-slot host; backend used two isolated workers. The workspace group waited 686.3 seconds for capacity.
+- **Failure:** the cleanup-retry case exceeded its 5000 ms deadline at 5735.01 ms.
+- **Suite counts:** backend 8818 passed, 41 skipped and three failed across 8862 tests in 473 files (366.20 seconds). The other backend failures are the activity-batch cases in 0247; bridges separately hit 0214. Root/support and protocol passed. The aggregate exited 1 after 1101.3 seconds.
+- **Owning-file rerun:** `mise run test:logged -- --name cleanup-retry-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 22.8 seconds.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.nN9Z1G/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- Shared-host contention remains a hypothesis. No assertion, deadline or skip changed.
+
 ## Slash catalogue main merge recurrence — 2026-10-17
 
 - **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, with the testing guide's GNU tools preferred in PATH (Bun 1.4.3, macOS arm64).

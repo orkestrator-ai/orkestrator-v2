@@ -530,6 +530,13 @@ Aggregate command, worker configuration, counts and evidence are recorded in [02
 - Owning-file rerun: `mise run test:logged -- --name merge-pi-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` also timed out at 30001.95 ms; three passed and one failed (32.47 seconds). Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.HkX36D/merge-pi-owner.log.gz`.
 - This repeats the branch's unresolved staging limitation; the isolated failure does not establish a flake. No implementation, assertion, timeout or skip changed.
 
+## Codex phantom-denials branch validation (2026-10-17)
+
+Recurred in `mise run test` on `fix-codex-phantom-denials-8bdb8d15d820` (base
+`9da80451`), whose diff touches no Pi source, at 30,002.02 ms, alongside 0226 and 0310.
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.6fSEkJ`.
+The unchanged owning file passed alone (`bun test --preload ./tests/setup-node.ts tests/unit/pi-bridge-vendor.test.ts` from the root): 4 passed in 23.4 s.
+
 ## Slash catalogue accuracy review recurrence — 2026-10-17
 
 `mise run test:logged -- --name full-tests -- mise run test` on macOS arm64

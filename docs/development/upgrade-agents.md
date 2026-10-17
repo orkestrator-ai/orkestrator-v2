@@ -672,6 +672,26 @@ hermetic `codex exec` exception.
    If `cached` ever opens the fresh page, research coordinators must go back
    to `disabled` until a mode without live fetches exists.
 
+   Then check how a sandbox refusal reaches the bridge, also on a loopback
+   endpoint and without credits:
+
+   ```bash
+   CODEX_PROTOCOL_BINARY=/absolute/path/to/new/codex \
+     RUN_LIVE_CODEX_APP_SERVER=1 \
+     bun test bridges/codex-bridge/src/app-server/live-refused-calls.test.ts
+   ```
+
+   It expects 0.162.1's behaviour: no item for a refused `apply_patch` or
+   refused command, the cell and its refusal kept in the rollout, and the
+   bridge showing each refused cell as a failed `exec` row in the order it
+   ran. If the refusals now arrive as items, `RefusedCellTail` can go. If
+   app-server stops reporting `thread.path`, or the rollout stops recording
+   the cell, the rows disappear again. If the refusal wording changes,
+   update `STRONG_REFUSAL_MARKERS` in
+   `bridges/codex-bridge/src/sessions/refused-cell-tail.ts` and
+   `SANDBOX_REFUSALS` in `apps/desktop/scripts/dev/coordinator-live.ts`, or
+   the live coordinator suite fails Codex on create, edit and shell.
+
    Treat a failure in the "live MCP protocol era" block as a release blocker
    rather than a flaky test. Those two contracts stand in for every third-party
    HTTP MCP server that still speaks the 2025 protocol: the bridge relies on

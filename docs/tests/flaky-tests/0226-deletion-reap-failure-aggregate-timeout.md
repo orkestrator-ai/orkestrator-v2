@@ -114,6 +114,13 @@ Aggregate command, worker configuration, counts and evidence are recorded in [02
 - Unchanged owning-file rerun: `mise run test:logged -- --name merge-deletion-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures` passed, exit 0 (35.6 seconds).
 - The owning-file pass confirms intermittence. Shared-host contention remains a hypothesis; no implementation, assertion, timeout or skip changed.
 
+## Codex phantom-denials branch validation (2026-10-17)
+
+Recurred in `mise run test` on `fix-codex-phantom-denials-8bdb8d15d820` (base
+`9da80451`), whose diff touches no backend source, at 6,636.73 ms, alongside 0178 and 0310.
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.6fSEkJ`.
+The test passed alone (`bun test --preload ../../tests/setup-node.ts tests/commands-registry-environments.test.ts -t "deletion cannot reap a server"` from `apps/backend`) in 1.4 s.
+
 ## Slash catalogue main merge recurrence — 2026-10-17
 
 - **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, with the testing guide's GNU tools preferred in PATH (Bun 1.4.3, macOS arm64).

@@ -387,3 +387,23 @@ assertion, timeout or skip changed.
 - **Owning-file rerun:** `mise run test:logged -- --name merge-pi-vendor-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 16.6 seconds.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.IG0vGk/root-and-agent-support-tests.log.gz`.
 - **Assessment:** the isolated pass confirms intermittence; root cause remains unconfirmed. No assertion, timeout or skip changed.
+
+## Pane reset review observation — 2026-10-17
+
+`mise run test:logged -- --name full-suite -- mise run test` (4/1/2/1
+workspace/root/bridge/protocol slots, with browser runs and other worktrees
+on the host) timed out at 30000.07 ms. Root/support finished with 3030 passed,
+one skipped and this one failed in 274.68 seconds. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.XKPva3/root-and-agent-support-tests.log.gz`
+(compressed when the aggregate completes).
+
+Both unchanged owning-file reruns also failed at the 30-second deadline:
+`mise run test:logged -- --name pi-vendor-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+(31.0 seconds overall), and the same command named `pi-vendor-after-browser`
+(30.9 seconds overall, after the large browser suite ended). Each reported
+three passed and one failed. Their evidence directories are
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.xDkPTo`
+and `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.w0udEz`.
+This observation does not independently establish a flake. Runtime staging
+remains an unresolved validation limitation; no source, assertion, timeout or
+skip changed.

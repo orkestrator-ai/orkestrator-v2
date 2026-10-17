@@ -212,6 +212,49 @@ C22 live host-service item below; it was not checked by a dedicated run.
    `TerminalContainer.view.test.tsx`; it fails without the fix. The live C11
    spec covers the same path.
 
+### Pane reset review follow-up, 2026-10-17
+
+Validated the review fixes on top of `309f7a5d` in
+`todo-container-live-qualification-8efe5278910a-r1`, using the disposable
+profile `qa-pane-reset-review` (Docker Desktop 29.8.1, macOS arm64). Runtime
+reset now releases local views without requesting native/tmux tab closure.
+Stopping during the first pending hydration also clears it; request identities
+prevent its late response from settling the next start's restore.
+
+- The focused pane store, persistence, TerminalContainer and resource-sync
+  tests passed through `test:logged` (`--name reset-final`, one Bun worker).
+  Coverage includes native stop/start, replacement container IDs, a stale
+  pending hydration, and suppression of the reset's empty persisted layout.
+- `ORKESTRATOR_AGENT_TEST_PROFILE=qa-pane-reset-review ORKESTRATOR_AGENT_TEST_DOCKER=1 ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_APPROVAL=1 mise run test:logged -- --name c11-live-reselect -- mise run test:agent:browser -- e2e/agent-testing/container-approval-stop.spec.ts`
+  passed (one test, 85.3 s). The fixture had no prior pane layout. The browser
+  used the profile's loopback gateway at 1440×1000. It stopped/restarted the
+  container from its own stopped view after switching away, retained the
+  original native mapping, forced teardown reconciliation, completed another
+  turn while inactive, and reopened/reloaded the native tab. Cleanup confirmed
+  both the layout and mapping were absent. The first run reached the completed
+  follow-up turn but failed because reload returned to the unselected workspace;
+  the spec now explicitly selects the environment after reload. Evidence:
+  `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.RlXZkp/c11-live.log.gz`.
+- `ORKESTRATOR_AGENT_TEST_PROFILE=qa-pane-reset-review mise run test:logged -- --name docker-fixture -- mise run test:agent:docker`
+  passed (five tests, one live-provider opt-in skip, 61.1 s). The live case
+  was already run separately above. Results are under
+  `output/agent-testing/qa-pane-reset-review/browser/`.
+- Format, lint, full typecheck, the flaky-register test and the backend
+  retaining-close tests passed. The broad repository/browser runs also hit
+  unrelated failures, recorded in the flaky-test register (0165, 0174, 0178,
+  0194, 0210, 0226 and 0266). Pi runtime staging also timed out on both owning-file
+  reruns, so this validation does not establish a fully green repository suite.
+  The full suite finished in 565.3 s: web passed 7892 tests (10 skipped),
+  backend reported four failures and one late error, root one failure, and
+  bridges one failure. Full evidence:
+  `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.XKPva3/`
+  (outer logged artifact `orkestrator-test-run.XD6iJX/full-suite.log.gz`).
+
+`dev:stop` and `dev:reset` completed for this profile; no launcher was retained.
+Reset removed two exact-owner containers, four volumes, one network and the
+disposable profile state. No Electron-only or iOS behavior changed; those
+scenario suites were not selected.
+
 Seen but not fixed: a dev or agent-test profile shows "Orkestrator has been
 updated … the server now runs 44.7.0". The dev launcher starts Electron on a
 bare script (`apps/desktop/scripts/dev/lifecycle.ts:629`), so

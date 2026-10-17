@@ -31,3 +31,15 @@ Concurrent host contention remains an unconfirmed hypothesis.
 Recurred on 2026-10-16 at 5066.71 ms in `mise run test` for the coordinator
 launch-defaults change (no bridge code touched). The unchanged owning file
 passed alone (2 pass, 0 fail). Evidence: `/tmp/orkestrator-test-run.k2ySO0/bridges.log.gz`.
+
+## Recurrence — 2026-10-17 (pane reset review fixes)
+
+`mise run test:logged -- --name full-suite -- mise run test` hit the same
+5000 ms timeout with four workspace, one root, two bridge and one protocol
+worker slots while browser validation and other worktrees used the host.
+The other four bridge packages passed. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.XKPva3/bridges.log.gz`
+(compressed when the aggregate completes).
+
+`mise run test:logged -- --name fake-codex-isolated -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures`
+passed the unchanged owner in 0.2 seconds. No assertion, timeout or skip changed.

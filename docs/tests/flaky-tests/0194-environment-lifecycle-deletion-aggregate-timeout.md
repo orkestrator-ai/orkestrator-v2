@@ -115,3 +115,14 @@ The cause remains unconfirmed. No assertion, timeout or skip was changed.
 - **Failure:** `retains the environment and process ownership when deletion cannot reap a server` exceeded the five-second deadline at 5133.55 ms. No environment lifecycle code changed.
 - **Owning-file rerun:** `mise run test:logged -- --name backend-deletion-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures` passed unchanged in 58.4 seconds (exit 0).
 - **Evidence:** `/tmp/orkestrator-test-run.1PZf4j/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` after finalization. No assertion, deadline or skip changed; the load hypothesis remains unconfirmed.
+
+## Pane reset review recurrence — 2026-10-17
+
+`mise run test:logged -- --name full-suite -- mise run test` used workspace,
+root, bridge and protocol reservations of 4/1/2/1 slots while browser checks
+and other worktrees used the host. `continues merged environment cleanup when the remote head branch is already deleted` (5102.67 ms) and `does not delete remote branches during closed environment cleanup` (5248.06 ms) exceeded their five-second deadlines.
+
+`mise run test:logged -- --name environment-lifecycle-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures`
+passed the unchanged owning file in 24.7 seconds (exit 0). Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.XKPva3/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+(compressed when the aggregate completes). No assertion, timeout or skip changed.

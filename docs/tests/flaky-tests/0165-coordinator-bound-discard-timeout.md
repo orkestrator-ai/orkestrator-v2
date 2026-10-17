@@ -231,3 +231,14 @@ remote-fetch case at 5183.14 ms, `git switch --discard-changes` failing), in
 real `git` work inside a five-second deadline. Evidence:
 `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.v19VcP`.
 No assertion, timeout or skip changed.
+
+## Pane reset review recurrence — 2026-10-17
+
+`mise run test:logged -- --name full-suite -- mise run test` used workspace,
+root, bridge and protocol reservations of 4/1/2/1 slots while browser checks
+and other worktrees used the host. The bound-discard case timed out at 5143.01 ms and emitted a late ENOENT for the removed checkout.
+
+`mise run test:logged -- --name coordinator-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`
+passed the unchanged owning file in 23.8 seconds (exit 0). Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.XKPva3/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+(compressed when the aggregate completes). No assertion, timeout or skip changed.

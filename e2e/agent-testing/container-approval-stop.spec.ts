@@ -28,7 +28,11 @@ type Interaction = {
   state: string;
   presentation: { confirmLabel?: string };
 };
-type Projection = { turn: { phase: string }; interactions: Interaction[] } | null;
+type Projection = {
+  turn: { phase: string };
+  interactions: Interaction[];
+  messages: Array<{ role: string; parts: unknown[] }>;
+} | null;
 type StoredLayout = {
   version: number;
   containerId: string | null;
@@ -115,12 +119,23 @@ test("Docker fixture live Claude approval is never granted by an explicit stop (
   const previousLayout = await invoke<StoredLayout | null>("get_pane_layout", {
     environmentId: target!.id,
   });
+  testInfo.annotations.push({
+    type: "c11-prior-layout",
+    description: previousLayout ? "present" : "absent",
+  });
   const projection = () =>
     invoke<Projection>("get_native_agent_projection", {
       environmentId: target!.id,
       agent: "claude",
       logicalSessionKey: sessionKey,
     });
+  const mapping = () =>
+    invoke<{ providerSessionId: string } | null>("get_native_agent_session", {
+      environmentId: target!.id,
+      agent: "claude",
+      logicalSessionKey: sessionKey,
+    });
+  let originalSessionId: string | undefined;
   const openEnvironment = async (name: string) => {
     const expand = page.getByRole("button", { name: `Expand project ${fixture!.name}` });
     const entry = page.getByText(name, { exact: true }).first();
@@ -219,6 +234,8 @@ test("Docker fixture live Claude approval is never granted by an explicit stop (
         )
         .toBe(true);
       expect(markerExists(target!.containerId!, marker)).toBe(false);
+      originalSessionId = (await mapping())?.providerSessionId;
+      expect(originalSessionId).toBeTruthy();
     });
 
     await test.step("switch away and stop the container from the sidebar", async () => {
@@ -280,6 +297,51 @@ test("Docker fixture live Claude approval is never granted by an explicit stop (
       const current = await invoke<Environment>("get_environment", { environmentId: target!.id });
       expect(markerExists(current.containerId!, marker)).toBe(false);
     });
+
+    await test.step("a new turn survives teardown reconciliation after re-adoption", async () => {
+      expect((await mapping())?.providerSessionId).toBe(originalSessionId);
+      const environment = await invoke<{ tabTeardownIntents?: Record<string, unknown> }>(
+        "get_environment",
+        { environmentId: target!.id },
+      );
+      expect(environment.tabTeardownIntents?.[tabId]).toBeUndefined();
+      // Exercise the exact periodic sweep now, rather than depending on its
+      // 60-second wall-clock schedule landing inside the reconnect wait.
+      await invoke("reconcile_tab_teardowns");
+      expect((await mapping())?.providerSessionId).toBe(originalSessionId);
+      const reply = `C11_RESTART_OK_${suffix}`;
+      await invoke("dispatch_native_agent_intent", {
+        environmentId: target!.id,
+        agent: "claude",
+        logicalSessionKey: sessionKey,
+        requestId: `c11-followup-${suffix}`,
+        mode: "build",
+        prompt: `Do not use tools. Reply with exactly ${reply}`,
+      });
+      await openEnvironment(other!.name);
+      await invoke("reconcile_tab_teardowns");
+      await expect
+        .poll(
+          async () => {
+            const current = await projection();
+            return (
+              current?.turn.phase === "idle" &&
+              current.messages.some(
+                (message) =>
+                  message.role === "assistant" && JSON.stringify(message.parts).includes(reply),
+              )
+            );
+          },
+          { timeout: 180_000 },
+        )
+        .toBe(true);
+      expect((await mapping())?.providerSessionId).toBe(originalSessionId);
+      await openEnvironment(target!.name);
+      await page.reload();
+      await openEnvironment(target!.name);
+      await expect(page.getByTestId("shared-native-compose-bar")).toBeVisible({ timeout: 90_000 });
+      expect((await mapping())?.providerSessionId).toBe(originalSessionId);
+    });
   } finally {
     // Recorded on failure too: what the backend held and which tab it named.
     const final = await invoke<StoredLayout | null>("get_pane_layout", {
@@ -290,16 +352,35 @@ test("Docker fixture live Claude approval is never granted by an explicit stop (
     if ((await environmentStatus().catch(() => "unknown")) === "stopped") {
       await invoke("start_environment", { environmentId: target!.id }).catch(() => undefined);
     }
+    // Unmount the renderer before restoring/deleting the durable layout, so
+    // its pending writes cannot recreate the injected tab during cleanup.
+    await page.goto("about:blank");
+    await invoke("teardown_tab", {
+      environmentId: target!.id,
+      tabId,
+      kind: "claude-native",
+    });
     const layout = await invoke<{ revision?: number } | null>("get_pane_layout", {
       environmentId: target!.id,
-    }).catch(() => null);
-    if (previousLayout && layout) {
+    });
+    if (previousLayout) {
       const { version, containerId, activePaneId, root } = previousLayout;
       await invoke("save_pane_layout", {
         environmentId: target!.id,
-        expectedRevision: layout.revision ?? 0,
+        expectedRevision: layout?.revision ?? 0,
         layout: { version, containerId, activePaneId, root },
-      }).catch(() => undefined);
+      });
+    } else if (!previousLayout && layout) {
+      await invoke("delete_pane_layout", {
+        environmentId: target!.id,
+        expectedRevision: layout.revision ?? 0,
+      });
     }
+    const restored = await invoke<StoredLayout | null>("get_pane_layout", {
+      environmentId: target!.id,
+    });
+    if (previousLayout) expect(restored?.root).toEqual(previousLayout.root);
+    else expect(restored).toBeNull();
+    expect(await mapping()).toBeNull();
   }
 });

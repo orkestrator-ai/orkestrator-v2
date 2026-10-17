@@ -151,6 +151,7 @@ until the user resumes it.
 | `reconcile_tab_teardowns` (startup and the 60-second sweep) | Finish an earlier tab close | Same close |
 | `reconcile_orphaned_tab_resources` (tabs no pane layout references, after a one-hour grace) | Release ownership nobody holds | Native tabs (including a startup agent session) go through `teardown_tab` |
 | `teardown_tab` for `terminal` / `claude-tmux` | Stop a terminal process | Kills the process; the tmux Claude CLI keeps its own JSONL |
+| `resume_native_agent_session` replacing a tab's session | Release the session the tab no longer shows (a new tab's empty one, in practice) | `provider.closeSession` after the resume is adopted, under tab teardown's lock and last-owner rules; skipped while another tab maps it or a Multi Review owns it. Best effort |
 | `MultiReviewService` cleanup | Remove a finished workflow and its tabs | `provider.closeSession`, so reviewer and fix conversations are kept |
 | `close_coordinator_conversation` | Close a coordinator conversation | Stops the projection and that conversation's bridge, revokes its credentials, invalidates the mapping. No DELETE |
 | `delete_environment` | Remove an environment | Stops processes, removes mappings, worktree or container. No provider DELETE; history inside a removed container goes with it |

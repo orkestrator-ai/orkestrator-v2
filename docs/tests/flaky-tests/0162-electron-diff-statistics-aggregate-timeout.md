@@ -257,7 +257,6 @@ skip changed.
 - **Owning-file rerun:** `mise run test:logged -- --name commands-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 19.9 seconds.
 - **Assessment:** the unchanged owning-file pass confirms an intermittent recurrence. Shared-host contention remains a hypothesis. No owning implementation, assertion, timeout or skip changed.
 
-
 ## Diff-baseline review recurrence — 2026-10-17
 
 - **Original command:** `mise run test:logged -- --name baseline-final-full-suite -- mise run test` on Bun 1.4.3, macOS arm64, fix commit `fc4dd012`.
@@ -267,3 +266,10 @@ skip changed.
 - **Owning-file rerun:** `mise run test:logged -- --name diff-command-integration-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed the entire unchanged owning file (exit 0, 16.7 seconds).
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.r499sA/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer artifact `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.gO5x6r/baseline-final-full-suite.log.gz`.
 - **Assessment:** the unchanged owning-file pass confirms an intermittent recurrence. Shared-host contention remains an unconfirmed hypothesis. No test, assertion, timeout or skip changed.
+
+## Preview tunnel slow-reader validation — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name full-tests -- mise run test` on `9da80451` plus a preview-tunnel-only change, macOS arm64, load average 30 to 40.
+- **Failure:** `computes counts for a tracked local environment and announces them` (5749.61 ms). Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.vJOfiZ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Owning-file rerun:** `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1` passed unchanged (55 passed).
+- **Assessment:** an intermittent recurrence. No implementation, assertion, timeout or skip changed.

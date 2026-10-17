@@ -58,9 +58,9 @@ it reaches. Some rules of thumb:
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
 | High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 25 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 257 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 268 |
-| **Total** | | **551** |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 255 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 271 |
+| **Total** | | **552** |
 
 ## Very high
 
@@ -194,7 +194,7 @@ it reaches. Some rules of thumb:
 - [ ] Add a real-Electron service-preview spec under `e2e/agent-testing/` and add it to the Electron `testMatch` ([service-preview-rollout.md](service-preview-rollout.md))
 - [ ] Add a hostile service-worker route to the preview-app fixture that intercepts `/__orkestrator_preview/session` ([service-preview-rollout.md](service-preview-rollout.md))
 - [x] Diagnose or fix preview flakes 0184, 0195 and 0221 ([service-preview-rollout.md](service-preview-rollout.md))
-- [ ] Pause the preview tunnel upstream before one 512 KiB read can close a slow but live reader ([service-preview-rollout.md](service-preview-rollout.md))
+- [x] Pause the preview tunnel upstream before one 512 KiB read can close a slow but live reader ([service-preview-rollout.md](service-preview-rollout.md))
 - [ ] Clear preview service and connection partitions when services, environments or connections are removed ([service-preview-rollout.md](service-preview-rollout.md))
 - [ ] Remove `ServiceBrowserTab` compatibility mode and retire the legacy loopback route after the support window ([service-preview-rollout.md](service-preview-rollout.md))
 - [ ] Qualify publication with real private DNS and wildcard certificates per deployment type, with or without Serve ([service-preview-rollout.md](service-preview-rollout.md), qualification)
@@ -380,7 +380,7 @@ it reaches. Some rules of thumb:
 - [ ] Withdraw a dead-generation approval card after close and reload in an inactive environment ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
 - [ ] Verify an attachment-only Cursor or Grok draft survives a backend restart without losing its image ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), verify)
 - [ ] Check what a live Cursor resume row shows when every agent is created as `Orkestrator` ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), verify)
-- [ ] Close the empty session a resume into a new tab replaces; Grok keeps a process per resume ([session-lifecycle-consistency.md](session-lifecycle-consistency.md))
+- [x] Close the empty session a resume into a new tab replaces; Grok keeps a process per resume ([session-lifecycle-consistency.md](session-lifecycle-consistency.md))
 - [ ] Run live close retention for Cursor and Pi with both signed in to an isolated profile ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
 
 ### Transcripts, observation and bandwidth (medium)
@@ -536,6 +536,7 @@ it reaches. Some rules of thumb:
 - [ ] Run the remaining preview compatibility cases in a real browser (SPA, srcset, source maps, OAuth, IPv6) ([service-preview-rollout.md](service-preview-rollout.md), qualification)
 - [ ] Measure disk used by `orkestrator-preview-svc-*` partitions on a long-lived profile ([service-preview-rollout.md](service-preview-rollout.md), verify)
 - [ ] Decide whether annotations on legacy URL tabs may keep depending on the legacy route ([service-preview-rollout.md](service-preview-rollout.md), decision)
+- [ ] Decide whether preview tunnel liveness should outlast a reader paused by backpressure, whose ping waits behind queued data ([service-preview-rollout.md](service-preview-rollout.md), decision)
 - [ ] Build the web iframe preview surface: minimal sandbox, honoured framing, top-level fallback, safe postMessage ([embedded-service-previews.md](embedded-service-previews.md))
 - [ ] Investigate partitioned (CHIPS) cookies for the `__Host-orkestrator-preview` transport cookie only ([embedded-service-previews.md](embedded-service-previews.md))
 - [ ] Build an optional iOS in-app preview in a dedicated `WKWebView` with its own data store ([embedded-service-previews.md](embedded-service-previews.md))
@@ -704,6 +705,8 @@ it reaches. Some rules of thumb:
 - [ ] Decide whether to align idle cancel and abort responses across Claude, Codex and ACP ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), decision)
 - [ ] Decide whether Claude, Codex, Pi and ACP publish bounded-state occupancy in runtime health ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), decision)
 - [ ] Label untitled resume rows by detail or a readable id, not the first 8 characters of a Grok token or Pi path ([session-lifecycle-consistency.md](session-lifecycle-consistency.md))
+- [ ] Create no provider session for a tab opened only to resume; OpenCode and Grok keep one empty conversation per resume ([session-lifecycle-consistency.md](session-lifecycle-consistency.md))
+- [ ] Retry a replaced-session close that failed, through a durable intent, if the resume leak reappears ([session-lifecycle-consistency.md](session-lifecycle-consistency.md))
 
 ### Transcripts, observation and bandwidth (low)
 
@@ -844,7 +847,7 @@ it reaches. Some rules of thumb:
 | File | Very high | High | Medium | Low | Total |
 | --- | --- | --- | --- | --- | --- |
 | **Service previews and web annotations** | | | | | |
-| [service-preview-rollout.md](service-preview-rollout.md) |  | 2 | 12 | 7 | 21 |
+| [service-preview-rollout.md](service-preview-rollout.md) |  | 2 | 11 | 8 | 21 |
 | [embedded-service-previews.md](embedded-service-previews.md) |  |  |  | 13 | 13 |
 | [preview-service-discovery.md](preview-service-discovery.md) |  |  | 1 | 5 | 6 |
 | [web-annotation-qualification.md](web-annotation-qualification.md) |  | 1 | 14 | 4 | 19 |
@@ -878,7 +881,7 @@ it reaches. Some rules of thumb:
 | [composer-model-parameters.md](composer-model-parameters.md) |  | 1 | 2 | 4 | 7 |
 | [opencode-v2.md](opencode-v2.md) |  |  |  | 3 | 3 |
 | [provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md) |  |  | 2 | 15 | 17 |
-| [session-lifecycle-consistency.md](session-lifecycle-consistency.md) |  |  | 8 | 5 | 13 |
+| [session-lifecycle-consistency.md](session-lifecycle-consistency.md) |  |  | 7 | 7 | 14 |
 | **Transcripts, observation and bandwidth** | | | | | |
 | [transcript-history-efficiency.md](transcript-history-efficiency.md) |  | 4 | 11 | 5 | 20 |
 | [remote-client-bandwidth.md](remote-client-bandwidth.md) |  |  | 4 | 9 | 13 |

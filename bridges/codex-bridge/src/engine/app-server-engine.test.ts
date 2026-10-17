@@ -3249,6 +3249,126 @@ describe("account sign-in", () => {
     expect(h.engine.isAccountSignInRequired()).toBe(true);
   });
 
+  describe("a model that is answering outweighs a signed-out account read", () => {
+    const UNAUTHORIZED = {
+      threadId: "t1",
+      turnId: "turn-1",
+      error: { message: "Unauthorized", codexErrorInfo: "unauthorized" },
+      willRetry: false,
+    };
+    const expireConnector = (h: Harness) =>
+      h.child().notify("mcpServer/startupStatus/updated", {
+        name: "codex_apps",
+        status: "failed",
+        error: EXPIRED_ACCOUNT_TOKEN,
+      });
+
+    test.each([
+      [
+        "item/agentMessage/delta",
+        { threadId: "t1", turnId: "turn-2", itemId: "i1", delta: "Working on it" },
+      ],
+      [
+        "item/reasoning/textDelta",
+        { threadId: "t1", turnId: "turn-2", itemId: "r1", delta: "Thinking", contentIndex: 0 },
+      ],
+      ["turn/completed", { threadId: "t1", turn: { id: "turn-2", status: "completed" } }],
+    ])("%s clears a confirmed sign-out", async (method, params) => {
+      const h = harness({ "account/read": () => SIGNED_OUT });
+      await h.engine.start();
+      h.child().notify("error", UNAUTHORIZED);
+      await flush(h);
+      expect(h.engine.isAccountSignInRequired()).toBe(true);
+
+      h.child().notify(method, params);
+      await flush(h);
+      expect(h.engine.isAccountSignInRequired()).toBe(false);
+    });
+
+    test("a stale signed-out read cannot restore the sign-out while turns are served", async () => {
+      const h = harness({ "account/read": () => SIGNED_OUT });
+      await h.engine.start();
+      h.child().notify("item/agentMessage/delta", {
+        threadId: "t1",
+        turnId: "turn-1",
+        itemId: "i1",
+        delta: "Working on it",
+      });
+      expireConnector(h);
+      await h.engine.readAccount();
+      await flush(h);
+
+      expect(requestCount(h, "account/read")).toBe(2);
+      expect(h.engine.isAccountSignInRequired()).toBe(false);
+    });
+
+    test("a turn refused after answering asks for sign-in again", async () => {
+      const h = harness({ "account/read": () => SIGNED_OUT });
+      await h.engine.start();
+      h.child().notify("item/agentMessage/delta", {
+        threadId: "t1",
+        turnId: "turn-1",
+        itemId: "i1",
+        delta: "Working on it",
+      });
+      await flush(h);
+      h.child().notify("error", { ...UNAUTHORIZED, turnId: "turn-2" });
+      await flush(h);
+
+      expect(h.engine.isAccountSignInRequired()).toBe(true);
+    });
+
+    test("a sign-out reported through account/updated is not hidden by earlier answers", async () => {
+      const h = harness({ "account/read": () => SIGNED_OUT });
+      await h.engine.start();
+      h.child().notify("turn/completed", {
+        threadId: "t1",
+        turn: { id: "turn-1", status: "completed" },
+      });
+      await flush(h);
+      h.child().notify("account/updated", {});
+      await flush(h);
+
+      expect(h.engine.isAccountSignInRequired()).toBe(true);
+    });
+
+    test("a failed or interrupted turn is no proof the account works", async () => {
+      const h = harness({ "account/read": () => SIGNED_OUT });
+      await h.engine.start();
+      h.child().notify("error", UNAUTHORIZED);
+      await flush(h);
+      h.child().notify("turn/completed", {
+        threadId: "t1",
+        turn: { id: "turn-2", status: "interrupted" },
+      });
+      h.child().notify("turn/completed", {
+        threadId: "t1",
+        turn: { id: "turn-3", status: "failed", error: { message: "boom" } },
+      });
+      await flush(h);
+
+      expect(h.engine.isAccountSignInRequired()).toBe(true);
+    });
+
+    test("proof of a working account does not survive a replacement child", async () => {
+      const h = harness({ "account/read": () => SIGNED_OUT });
+      await h.engine.start();
+      h.child().notify("item/agentMessage/delta", {
+        threadId: "t1",
+        turnId: "turn-1",
+        itemId: "i1",
+        delta: "Working on it",
+      });
+      await flush(h);
+      h.child().exit(1);
+      await h.engine.getSupervisor().ensureReady();
+      expireConnector(h);
+      await flush(h);
+
+      expect(h.engine.isAccountSignInRequired()).toBe(true);
+    });
+  });
+
   test("only a refused turn forces a token refresh", async () => {
     const h = harness({
       "account/read": () => SIGNED_IN,

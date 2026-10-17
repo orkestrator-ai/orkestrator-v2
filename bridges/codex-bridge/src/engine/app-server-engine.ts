@@ -693,6 +693,24 @@ function mcpRuntimeNoticeMessage(
     : `${notice.subject} MCP reported a startup warning`;
 }
 
+/**
+ * Events only a model that accepted the account's credentials can produce:
+ * streamed output, a tool call, token accounting, or a turn that completed.
+ */
+function isModelResponseEvent(event: EngineEvent): boolean {
+  switch (event.kind) {
+    case "item.text.delta":
+    case "item.reasoning.delta":
+    case "model.tool.called":
+    case "thread.usage.updated":
+      return true;
+    case "turn.completed":
+      return event.status === "completed" && !event.error;
+    default:
+      return false;
+  }
+}
+
 const DEFAULT_INTERRUPT_TIMEOUT_MS = 15_000;
 /** Distinct unrecognised notification method names retained. */
 const MAX_UNKNOWN_METHODS = 16;
@@ -728,6 +746,14 @@ export class AppServerEngine implements CodexEngine {
    * with a stale token that the normal refresh would have replaced.
    */
   private accountSignInRequired = false;
+  /**
+   * The generation whose model has answered since its last refused turn or
+   * account change. Once a forced refresh is rejected, app-server reports no
+   * account for the rest of its life even while the access token still serves
+   * turns, so a signed-out `account/read` cannot outweigh a model that is
+   * answering. Only a refused turn (or an account change) retires the proof.
+   */
+  private accountServingGeneration?: EngineGeneration;
   /**
    * The generation whose effective configuration was read back with hosted
    * web search off. Checked again after every restart: a toolchain update can
@@ -1055,6 +1081,9 @@ export class AppServerEngine implements CodexEngine {
         objectRecord(notification.params).success === true) ||
       notification.method === "account/updated"
     ) {
+      // A sign-out through another client is a new account state: answers the
+      // model gave the previous one prove nothing about it.
+      this.accountServingGeneration = undefined;
       this.checkAccountSignIn(true);
     }
 
@@ -1081,7 +1110,10 @@ export class AppServerEngine implements CodexEngine {
         (event.kind === "turn.completed" || (event.kind === "error" && !event.willRetry)) &&
         event.error?.code === "unauthorized"
       ) {
+        this.accountServingGeneration = undefined;
         this.checkAccountSignIn(false, true);
+      } else if (isModelResponseEvent(event)) {
+        this.recordAccountServing(generation);
       }
       this.emit(event);
     }
@@ -1090,6 +1122,16 @@ export class AppServerEngine implements CodexEngine {
   /** Whether app-server confirmed the account must be signed in again. */
   isAccountSignInRequired(): boolean {
     return this.accountSignInRequired;
+  }
+
+  /**
+   * The model answered, so the account is serving turns whatever `account/read`
+   * last said. Retire a confirmed sign-out rather than keep asking the user to
+   * sign in to an account that is visibly working.
+   */
+  private recordAccountServing(generation: EngineGeneration): void {
+    this.accountServingGeneration = generation;
+    this.accountSignInRequired = false;
   }
 
   /**
@@ -1206,7 +1248,10 @@ export class AppServerEngine implements CodexEngine {
   private recordAccount(response: unknown): boolean {
     const root = objectRecord(response);
     const signedIn = Boolean(root.account);
-    this.accountSignInRequired = !signedIn && root.requiresOpenaiAuth === true;
+    this.accountSignInRequired =
+      !signedIn &&
+      root.requiresOpenaiAuth === true &&
+      this.accountServingGeneration !== this.supervisor.getGeneration();
     return signedIn;
   }
 

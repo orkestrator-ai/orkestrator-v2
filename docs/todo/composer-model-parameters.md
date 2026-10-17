@@ -122,9 +122,14 @@ forward that nothing in the backend supplies.
     `modelSubstitution` toast says so. The rule is OpenCode's: it applies to
     defaults only and to that session only, and settings keep the user's
     choice so the default returns if the login changes.
-  - Only `source: "app-server"` counts as evidence. The bridge's persisted
-    cache and hardcoded fallback can omit models the login serves, so they
-    never trigger a swap. An unreadable list keeps the configured model.
+  - Only `source: "app-server"` with `supportedModelIds` counts as evidence.
+    That list is the complete `model/list` with `includeHidden`, so a model
+    Codex supports but hides from the picker is kept. The bridge reads it on
+    every request instead of caching it for the process lifetime, so an
+    account switch cannot swap a default against the previous login's list.
+    The bridge's persisted cache and hardcoded fallback can omit models the
+    login serves, so they never trigger a swap. An unreadable or over-long
+    list keeps the configured model.
   - An explicit or pinned model is never swapped. That covers a launch-dialog
     pick, a Build step's model and a public API `model`. The user chose it, so
     a wrong choice should fail loudly.
@@ -132,7 +137,7 @@ forward that nothing in the backend supplies.
     agents.ts`, which was OpenCode-only), because a Codex stage on the
     unoffered default failed the same way.
   - Existing sessions: the platform policy's `runsSessionHeldModel` makes the
-    projection add the held model as a row marked "not offered to this login"
+    projection add the held model as a row marked "session model"
     rather than show the first catalogue row. Nothing is persisted on a read.
     Picking any listed model replaces it through the normal control update.
     Discovery's models section is the shared catalogue, so the renderer keeps

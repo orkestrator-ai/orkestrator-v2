@@ -122,6 +122,34 @@ and snapshot, validation, and packaging timings. Progress remains recoverable
 after reload. Legacy in-flight preparation results and older packages without
 log hashes remain readable during upgrades.
 
+## Auto-fix and auto-PR
+
+`autoFix` and `autoPr` are fixed on the workflow at launch. The launch dialog
+opens its two checkboxes on the saved app-level settings. Coordinator launches
+(`launch_multi_review`, `start_multi_review`) take the same saved values unless
+the call sets them, and a requested `autoPr: true` turns an omitted `autoFix` on
+(`multiReviewAutomation` in `coordinator-launch-defaults.ts`). Both paths then
+run the same `MultiReviewService` code:
+
+| Step | Durable record | Recovery after restart |
+| --- | --- | --- |
+| Consolidation with findings and `autoFix` | report saved with `phase: interactive`, `addressPromptPending` (`queueDefaultFix`); no `ready` | The supervisor delivers the pending handoff under its reserved request id; failed attempts persist and fail the review after three |
+| Fix runs in its ordinary interactive tab | `fixSession` observed `running` | Observation resumes from the provider session |
+| Fix turn finished on its own, `autoPr` | `fixSession.status: idle` and `autoPrLaunch: pending` in one save (`queueAutoPr`) | The supervisor retries the launch under `multi-review-pr:<id>`, which the native-agent layer deduplicates |
+| PR session | `autoPrLaunch: launched` with its tab, or `failed` after three attempts | A launched PR is never repeated |
+
+Only proof that a Fix completed queues the PR: a complete structured result, or
+an interactive handoff turn that finished on its own as its conversation's
+last turn. A Fix that fails, is stopped, is superseded or cannot be confirmed
+records `skipped` with its reason, or nothing when the session failed. The
+review stops there. A custom Fix never starts a PR, and a new Fix drops an
+undelivered PR intent so the PR cannot race it. Every PR intent records the
+Fix attempt that authorized it (`autoPrLaunch.fixIdentity`). Status notices and
+`get_multi_review` therefore never present an earlier PR as the outcome of a
+later Fix; that Fix's changes need a manual PR update. `autoPr` without `autoFix`
+means a PR after a Fix the user (or `address_multi_review`) starts. The PR
+session pushes the branch and opens the pull request; nothing merges.
+
 ## Performance boundary and verification
 
 Without reusing earlier results, preparation cannot finish before its required

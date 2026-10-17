@@ -282,7 +282,9 @@ describe("Orkestrator control MCP server", () => {
           expect(content.delivery).toBe("async");
           if (mode === "off") {
             expect(content.wake).toContain("Only terminal");
+            expect(content.wake).not.toBe(COORDINATOR_WORKFLOW_STATUS_WAKE);
             expect(content.nextStep).toContain("tell the user to inspect");
+            expect(content.nextStep).toContain("do not wait for a ready or fix-turn wake");
           } else expect(content.wake).toBe(COORDINATOR_WORKFLOW_STATUS_WAKE);
         }
         for (const id of ["launched", "started"]) {
@@ -394,8 +396,29 @@ describe("Orkestrator control MCP server", () => {
           | { inputSchema?: { required?: string[] } }
           | undefined
       )?.inputSchema?.required ?? [];
-    for (const field of ["reviewers", "reviewModel", "fixModel"])
+    for (const field of ["reviewers", "reviewModel", "fixModel", "autoFix", "autoPr"])
       expect(required("start_multi_review")).not.toContain(field);
+    // Both launch tools expose auto-fix and auto-PR as optional, saved-by-default booleans.
+    for (const name of ["launch_multi_review", "start_multi_review"]) {
+      const tool = definitions.find((item) => item.name === name) as
+        | {
+            description?: string;
+            inputSchema?: { properties?: Record<string, { type?: string; description?: string }> };
+          }
+        | undefined;
+      expect(tool?.description).toContain(
+        "Omit autoFix and autoPr to use the user's saved Auto-fix and Auto-PR settings, as the button does; set them only when the user asks.",
+      );
+      expect(tool?.description).toContain("A failed, stopped or stalled Fix starts no PR.");
+      expect(tool?.description).not.toContain("always apply");
+      for (const field of ["autoFix", "autoPr"]) {
+        expect(tool?.inputSchema?.properties?.[field]?.type).toBe("boolean");
+        expect(tool?.inputSchema?.properties?.[field]?.description).toContain(
+          "Set only when the user asks.",
+        );
+      }
+      expect(tool?.inputSchema?.properties?.autoPr?.description).toContain("never merges");
+    }
     // Build steps and reviewers are overridable, but the defaults are the stated norm.
     for (const field of ["agentType", "steps", "reviewers", "reviewPreparation"])
       expect(required("start_build_pipeline")).not.toContain(field);
@@ -557,12 +580,131 @@ describe("Orkestrator control MCP server", () => {
       reviewers: [{ agent: "claude", model: "default" }],
       reviewModel: { agent: "claude", model: "default" },
       fixModel: { agent: "claude", model: "default", reasoningEffort: "high" },
-      source: { reviewers: "default", reviewModel: "default", fixModel: "default" },
+      autoFix: false,
+      autoPr: false,
+      source: {
+        reviewers: "default",
+        reviewModel: "default",
+        fixModel: "default",
+        autoFix: "default",
+        autoPr: "default",
+      },
     });
     expect(
       invocations.findLast((entry) => entry.command === "launch_coordinator_multi_review_action")
         ?.args.input,
     ).toEqual({ requestId: "launch-review-defaults", environmentId: "env-1" });
+    // Auto-PR passes through untouched; the backend resolves the Fix it implies.
+    overrides.set("launch_coordinator_multi_review_action", () => ({
+      outcome: "opened",
+      reused: false,
+      workflow: {
+        id: "review-auto-pr",
+        projectId: "project-1",
+        environmentId: "env-1",
+        phase: "preparing",
+        autoFix: true,
+        autoPr: true,
+      },
+      ui: { status: "opened" },
+    }));
+    const autoPr = await rpc(credential.url, credential.token, "tools/call", {
+      name: "launch_multi_review",
+      arguments: { requestId: "launch-review-auto-pr", environmentId: "env-1", autoPr: true },
+    });
+    expect(autoPr.body.result?.isError).not.toBe(true);
+    expect(
+      invocations.findLast((entry) => entry.command === "launch_coordinator_multi_review_action")
+        ?.args.input,
+    ).toEqual({ requestId: "launch-review-auto-pr", environmentId: "env-1", autoPr: true });
+    expect(autoPr.body.result?.structuredContent?.selection).toMatchObject({
+      autoFix: true,
+      autoPr: true,
+      source: { autoFix: "implied", autoPr: "requested" },
+    });
+    expect(autoPr.body.result?.structuredContent?.workflow).toMatchObject({
+      automation: {
+        autoFix: true,
+        autoPr: true,
+        next: "The Fix starts automatically if consolidation reports findings, then a PR session once the Fix completes.",
+      },
+    });
+    const autoFixOff = await rpc(credential.url, credential.token, "tools/call", {
+      name: "launch_multi_review",
+      arguments: {
+        requestId: "launch-review-auto-fix-off",
+        environmentId: "env-1",
+        autoFix: false,
+        autoPr: true,
+      },
+    });
+    expect(autoFixOff.body.result?.structuredContent?.selection).toMatchObject({
+      source: { autoFix: "requested", autoPr: "requested" },
+    });
+    overrides.set("start_coordinator_multi_review", () => ({
+      id: "started-review",
+      projectId: "project-1",
+      environmentId: "env-1",
+      phase: "preparing",
+      reviewers: [{ id: "reviewer-0", agent: "codex", model: "default", status: "pending" }],
+      fixModel: { agent: "claude", model: "default" },
+      autoFix: false,
+      autoPr: true,
+      controllerFence: "must-not-cross-mcp",
+    }));
+    const startedReview = await rpc(credential.url, credential.token, "tools/call", {
+      name: "start_multi_review",
+      arguments: {
+        requestId: "start-review-auto",
+        buildPipelineId: "pipeline-1",
+        environmentId: "env-1",
+        targetBranch: "main",
+        autoFix: false,
+        autoPr: true,
+      },
+    });
+    expect(startedReview.body.result?.isError).not.toBe(true);
+    expect(
+      invocations.findLast((entry) => entry.command === "start_coordinator_multi_review")?.args
+        .input,
+    ).toEqual({
+      environmentId: "env-1",
+      targetBranch: "main",
+      autoFix: false,
+      autoPr: true,
+      projectId: "project-1",
+    });
+    expect(startedReview.body.result?.structuredContent).toMatchObject({
+      workflow: {
+        id: "started-review",
+        automation: {
+          autoFix: false,
+          autoPr: true,
+          next: "Stops at ready; address_multi_review starts the Fix; a PR session starts once that Fix completes.",
+        },
+      },
+      selection: {
+        reviewers: [{ agent: "codex", model: "default" }],
+        autoFix: false,
+        autoPr: true,
+        source: { reviewers: "default", autoFix: "requested", autoPr: "requested" },
+      },
+      delivery: "async",
+    });
+    expect(JSON.stringify(startedReview.body)).not.toContain("must-not-cross-mcp");
+    const notBoolean = await rpc(credential.url, credential.token, "tools/call", {
+      name: "launch_multi_review",
+      arguments: { requestId: "launch-review-bad-auto", environmentId: "env-1", autoPr: "yes" },
+    });
+    expect(notBoolean.body.result?.isError).toBe(true);
+    expect(
+      invocations.filter(
+        (entry) =>
+          entry.command === "launch_coordinator_multi_review_action" &&
+          entry.args.input &&
+          (entry.args.input as { requestId?: string }).requestId === "launch-review-bad-auto",
+      ),
+    ).toHaveLength(0);
     overrides.delete("launch_coordinator_multi_review_action");
     expect(
       invocations.find((entry) => entry.command === "launch_coordinator_multi_review_action")?.args,

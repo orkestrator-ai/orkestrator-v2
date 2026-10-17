@@ -1,3 +1,4 @@
+import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
 /**
  * Status wakes on the real mail world: storage, routes, budgets, the
  * coordinator service and the injection drain are production code; only the
@@ -266,6 +267,243 @@ describe("coordinator status wakes", () => {
       await world.storage.listCoordinatorWorkflowAssociations(world.projectId)
     ).find((item) => item.resourceId === "review-1");
     expect(association?.terminalNotifiedAt).toBeDefined();
+  });
+
+  test("an auto-fix and auto-PR review wakes on the PR, not on each step it takes by itself", async () => {
+    const context = await createWorld();
+    const { world } = context;
+    const coordinator = await world.main();
+    const worker = await world.addEnvironment("review-env");
+    const auto = { autoFix: true, autoPr: true, consolidatedReport: READY_REPORT };
+    const fix = { sessionKey: "fix", startedAt: "2026-10-16T10:10:00Z" };
+    await saveReview(world, worker, "review-1", { ...auto, phase: "reviewing" });
+    await associate(world, "multi-review", "review-1");
+    await settle(context);
+    // Consolidation with findings goes straight to the Fix handoff: no ready.
+    await saveReview(world, worker, "review-1", {
+      ...auto,
+      phase: "interactive",
+      addressPromptPending: true,
+    });
+    await settle(context);
+    await saveReview(world, worker, "review-1", {
+      ...auto,
+      phase: "interactive",
+      fixSession: { ...fix, status: "running" },
+    });
+    await settle(context);
+    // The Fix finished and queued its PR in the same save: hold for the PR.
+    await saveReview(world, worker, "review-1", {
+      ...auto,
+      phase: "interactive",
+      fixSession: { ...fix, status: "idle" },
+      autoPrLaunch: { state: "pending", requestId: "multi-review-pr:review-1" },
+    });
+    await settle(context);
+    expect(world.wakes(coordinator)).toBe(0);
+
+    await saveReview(world, worker, "review-1", {
+      ...auto,
+      phase: "interactive",
+      fixSession: { ...fix, status: "idle" },
+      autoPrLaunch: {
+        state: "launched",
+        requestId: "multi-review-pr:review-1",
+        tabId: "pr-tab",
+        fixIdentity: multiReviewFixIdentity(fix),
+      },
+    });
+    await settle(context);
+    await world.finishTurn(coordinator);
+    // The PR monitor records the pull request; the next sweep reports it.
+    await world.storage.updateEnvironment(worker.environmentId, {
+      prUrl: "https://github.com/org/repo/pull/7",
+      prState: "open",
+    });
+    await settle(context);
+
+    expect(world.carriers(coordinator).map((turn) => turn[0]!.notice?.state)).toEqual([
+      "pr-started",
+      "pr-opened",
+    ]);
+    expect(world.carriers(coordinator)[0]![0]!.subject).toBe(
+      "Multi Review review-env fix finished; PR session started",
+    );
+    expect(world.received(coordinator)[0]).toContain(
+      `get_tab_state { "environmentId": "${worker.environmentId}", "tabId": "pr-tab" }`,
+    );
+    expect(world.received(coordinator)[1]).toContain(
+      "Pull request: https://github.com/org/repo/pull/7",
+    );
+    expect(world.received(coordinator)[1]).toContain("does not merge");
+  });
+
+  test.each(["sessionKey", "startedAt"] as const)(
+    "a later Fix with a new %s wakes with fix-done after an earlier PR launch",
+    async (field) => {
+      const context = await createWorld();
+      const { world } = context;
+      const coordinator = await world.main();
+      const worker = await world.addEnvironment("review-env");
+      const fix = { sessionKey: "fix-a", startedAt: "2026-10-16T10:10:00Z", status: "idle" };
+      const autoPrLaunch = {
+        state: "launched",
+        requestId: "pr",
+        tabId: "pr-tab",
+        fixIdentity: multiReviewFixIdentity(fix),
+      };
+      const snapshot = { autoPr: true, phase: "interactive", fixSession: fix, autoPrLaunch };
+      await saveReview(world, worker, "review-1", snapshot);
+      await associate(world, "multi-review", "review-1");
+      await settle(context);
+      await world.finishTurn(coordinator);
+      await world.storage.updateEnvironment(worker.environmentId, {
+        prUrl: "https://github.com/org/repo/pull/7",
+        prState: "open",
+      });
+      await saveReview(world, worker, "review-1", {
+        ...snapshot,
+        fixSession: { ...fix, [field]: field === "sessionKey" ? "fix-b" : "2026-10-16T11:10:00Z" },
+      });
+      await settle(context);
+      expect(world.carriers(coordinator).map((turn) => turn[0]!.notice?.state)).toEqual([
+        "pr-started",
+        "fix-done",
+      ]);
+      expect(world.received(coordinator)[1]).toContain(
+        "does not confirm inclusion of this Fix's changes",
+      );
+    },
+  );
+
+  test.each(["open", "closed", "merged", undefined] as const)(
+    "first PR observation after restart reports state %s accurately",
+    async (prState) => {
+      const context = await createWorld();
+      const { world } = context;
+      const coordinator = await world.main();
+      const worker = await world.addEnvironment("review-env");
+      const fix = { sessionKey: "fix", startedAt: "2026-10-16T10:10:00Z", status: "idle" };
+      const snapshot = {
+        autoPr: true,
+        phase: "interactive",
+        fixSession: fix,
+        autoPrLaunch: {
+          state: "launched",
+          requestId: "pr",
+          fixIdentity: multiReviewFixIdentity(fix),
+        },
+      };
+      const prUrl = "https://github.com/org/repo/pull/7";
+      await saveReview(world, worker, "review-1", snapshot);
+      await associate(world, "multi-review", "review-1");
+      await world.storage.updateEnvironment(worker.environmentId, { prUrl, prState });
+      const expected = prState === "open" ? "pr-opened" : prState ? `pr-${prState}` : "pr-unknown";
+      expect(multiReviewStatus(snapshot, "review-1", { prUrl, prState })?.state).toBe(expected);
+      await world.restart();
+      await settle(context);
+      expect(world.carriers(coordinator)[0]![0]!.notice?.state).toBe(expected);
+      await world.finishTurn(coordinator);
+      await world.restart();
+      await settle(context);
+      expect(await coordinatorInbox(world)).toHaveLength(1);
+      // The retained URL also must not mask a subsequent state change.
+      if (prState === "open") {
+        await world.storage.updateEnvironment(worker.environmentId, { prState: "closed" });
+        await settle(context);
+        expect(world.carriers(coordinator)[1]![0]!.notice?.state).toBe("pr-closed");
+      }
+    },
+  );
+
+  test.each(["failed", "skipped"] as const)(
+    "a structured Fix held for a pending PR wakes when the launch is %s",
+    async (state) => {
+      const context = await createWorld();
+      const { world } = context;
+      const coordinator = await world.main();
+      const worker = await world.addEnvironment("review-env");
+      const snapshot = {
+        autoPr: true,
+        phase: "completed",
+        fixResult: { complete: true, summary: "Fixed" },
+      };
+      await saveReview(world, worker, "review-1", {
+        ...snapshot,
+        autoPrLaunch: { state: "pending", requestId: "pr" },
+      });
+      await associate(world, "multi-review", "review-1");
+      await settle(context);
+      expect(world.wakes(coordinator)).toBe(0);
+      await saveReview(world, worker, "review-1", {
+        ...snapshot,
+        autoPrLaunch: { state, requestId: "pr", message: "PR needs manual creation" },
+      });
+      await settle(context);
+      expect(world.carriers(coordinator)[0]![0]!.notice?.state).toBe("completed");
+      expect(world.received(coordinator)[0]).toContain(
+        "No PR session started: PR needs manual creation",
+      );
+      await world.finishTurn(coordinator);
+      await settle(context);
+      expect(await coordinatorInbox(world)).toHaveLength(1);
+    },
+  );
+
+  test("an auto-PR review stops at a failed Fix or PR launch and says why", async () => {
+    const context = await createWorld();
+    const { world } = context;
+    const coordinator = await world.main();
+    const worker = await world.addEnvironment("review-env");
+    const auto = { autoFix: true, autoPr: true, consolidatedReport: READY_REPORT };
+    for (const id of ["fix-failed", "pr-failed", "pr-skipped"]) {
+      await saveReview(world, worker, id, { ...auto, phase: "reviewing" });
+      await associate(world, "multi-review", id);
+    }
+    await settle(context);
+    const fix = { sessionKey: "fix", startedAt: "2026-10-16T10:10:00Z" };
+    await saveReview(world, worker, "fix-failed", {
+      ...auto,
+      phase: "interactive",
+      fixSession: { ...fix, status: "failed", error: "The interactive fix session failed" },
+    });
+    await saveReview(world, worker, "pr-failed", {
+      ...auto,
+      phase: "interactive",
+      fixSession: { ...fix, status: "idle" },
+      autoPrLaunch: {
+        state: "failed",
+        requestId: "multi-review-pr:pr-failed",
+        attempts: 3,
+        message: "Environment already has the maximum of 12 tabs",
+      },
+    });
+    await saveReview(world, worker, "pr-skipped", {
+      ...auto,
+      phase: "interactive",
+      fixSession: { ...fix, status: "idle" },
+      autoPrLaunch: {
+        state: "skipped",
+        requestId: "multi-review-pr:pr-skipped",
+        message: "The Fix was stopped before it finished, so no PR agent was launched.",
+      },
+    });
+    await settle(context);
+
+    expect(world.wakes(coordinator)).toBe(1);
+    const turn = world.carriers(coordinator)[0]!;
+    const byResource = new Map(turn.map((carrier) => [carrier.notice?.resource.id, carrier]));
+    expect(byResource.get("fix-failed")?.notice?.state).toBe("fix-failed");
+    expect(byResource.get("fix-failed")?.body).toContain("No PR session will start.");
+    expect(byResource.get("pr-failed")?.notice).toMatchObject({
+      state: "pr-failed",
+      tone: "failure",
+    });
+    expect(byResource.get("pr-failed")?.body).toContain("maximum of 12 tabs");
+    expect(byResource.get("pr-skipped")?.notice?.state).toBe("fix-done");
+    expect(byResource.get("pr-skipped")?.body).toContain(
+      "No PR session started: The Fix was stopped before it finished",
+    );
   });
 
   test("a build pipeline wakes on its end and on a pause the supervisor took, not a requested one", async () => {
@@ -848,6 +1086,80 @@ describe("status classification and bounds", () => {
         "review-1",
       ),
     ).toBeNull();
+  });
+
+  test("auto-actions explain a ready review and hold a completion whose PR is queued", () => {
+    const ready = (snapshot: Record<string, unknown>) =>
+      multiReviewStatus(
+        { phase: "ready", consolidatedReport: { issues: [], testCoverageGaps: [] }, ...snapshot },
+        "review-1",
+      )!.details;
+    expect(ready({ autoFix: true, autoPr: true })).toContain(
+      "Auto-fix is on, but there was nothing to fix, so no Fix or PR session started.",
+    );
+    expect(ready({ autoPr: true }).join(" ")).toContain(
+      "once a Fix started with address_multi_review",
+    );
+    expect(ready({})).toHaveLength(1);
+    expect(
+      multiReviewStatus(
+        { phase: "ready", consolidatedReport: READY_REPORT, autoFix: true },
+        "review-1",
+      )!.details.join(" "),
+    ).not.toContain("nothing to fix");
+    const completedFix = { sessionKey: "structured-fix", startedAt: "2026-10-16T10:10:00Z" };
+    const completed = {
+      phase: "completed",
+      autoPr: true,
+      fixResult: { complete: true },
+      fixSession: completedFix,
+    };
+    expect(
+      multiReviewStatus(
+        { ...completed, autoPrLaunch: { state: "pending", requestId: "r" } },
+        "review-1",
+      ),
+    ).toBeNull();
+    expect(
+      multiReviewStatus(
+        {
+          ...completed,
+          autoPrLaunch: {
+            state: "launched",
+            requestId: "r",
+            tabId: "pr",
+            fixIdentity: multiReviewFixIdentity(completedFix),
+          },
+        },
+        "review-1",
+      )!.details,
+    ).toContain("PR session started in tab pr.");
+    // Without auto-PR a stray launch record is ignored, as the supervisor ignores it.
+    expect(
+      multiReviewStatus(
+        {
+          phase: "interactive",
+          fixSession: { sessionKey: "fix", status: "idle" },
+          autoPrLaunch: { state: "pending", requestId: "r" },
+        },
+        "review-1",
+      )?.state,
+    ).toBe("fix-done");
+  });
+
+  test("a legacy launch with no Fix identity cannot claim a later Fix's PR", () => {
+    expect(
+      multiReviewStatus(
+        {
+          phase: "interactive",
+          autoPr: true,
+          fixSession: { sessionKey: "later-fix", status: "idle" },
+          autoPrLaunch: { state: "launched", requestId: "pr" },
+        },
+        "review-1",
+        { prUrl: "https://github.com/org/repo/pull/7", prState: "open" },
+      )?.state,
+    ).toBe("fix-done");
   });
 
   for (const error of [

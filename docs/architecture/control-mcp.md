@@ -118,6 +118,13 @@ backend actions and are not MCP tools.
 In addition to the ordinary discovery tools, a coordinator can start/stop
 workers, launch a job, start and control a structured build pipeline, start/get/
 cancel/address a multi-review, and use durable mailbox read/send/ack operations.
+`launch_multi_review` and `start_multi_review` take optional `autoFix` and
+`autoPr` booleans. Omitted, they use the user's saved Multi Review settings, as
+the button does; a coordinator sets them only when the user asks. With both on
+the review runs consolidation, then Fix, then a PR session, and the PR never
+precedes a completed Fix. No tool merges. The launch result's `selection` and
+`get_multi_review`'s `automation` report the effective settings and the next
+step; see [`coordinator.md`](coordinator.md#complete-application-actions).
 Environment launch requires an explicit base branch and immutable 40-character
 commit. The association between request, coordinator, worker/workflow, and base
 revision is persisted independently of the open chat tab.
@@ -130,8 +137,9 @@ an injection receipt as proof that a task completed. Backend workflow
 notifications use a distinct authenticated system origin and a stable outbox
 message ID so restart reconciliation cannot lose or duplicate them. Besides
 completion, a coordinator is sent a status notice when work it started settles
-— a Multi Review ready to address or fixed, a build paused on an error, a
-stall, a delegated tab waiting on input — and the tools that start a workflow
+— a Multi Review ready to address or fixed, its automatic PR session started,
+opened or failed, a build paused on an error, a stall, a delegated tab waiting
+on input — and the tools that start a workflow
 say so in their result (`delivery: "async"`); see
 [`coordinator.md`](coordinator.md#status-wakes).
 

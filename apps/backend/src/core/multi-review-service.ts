@@ -2703,6 +2703,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         workflow.fixSession?.status === "idle";
       if (!structuredFixCompleted && !interactiveFixSettled) {
         workflow.autoPrLaunch = {
+          fixIdentity: launch.fixIdentity,
           state: "skipped",
           requestId: launch.requestId,
           message: "Automatic PR requires a completed Fix",
@@ -2757,12 +2758,14 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       }
       if (outcome.kind === "launched") {
         workflow.autoPrLaunch = {
+          fixIdentity: launch.fixIdentity,
           state: "launched",
           requestId: launch.requestId,
           tabId: outcome.tabId,
         };
       } else if (outcome.kind === "skipped") {
         workflow.autoPrLaunch = {
+          fixIdentity: launch.fixIdentity,
           state: "skipped",
           requestId: launch.requestId,
           message: outcome.message.slice(0, 4_096),
@@ -2771,6 +2774,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         const attempts = (launch.attempts ?? 0) + 1;
         const exhausted = outcome.kind === "rejected" || attempts >= MAX_AUTO_PR_ATTEMPTS;
         workflow.autoPrLaunch = {
+          fixIdentity: launch.fixIdentity,
           state: exhausted ? "failed" : "pending",
           requestId: launch.requestId,
           attempts,

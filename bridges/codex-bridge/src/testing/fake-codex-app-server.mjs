@@ -11,10 +11,14 @@
  *   FAKE_CODEX_VERSION   version reported by `--version` (default 0.145.0)
  *   FAKE_CODEX_SCRIPT    `auto-complete` to finish a turn on its own;
  *                        `subagents` to run `fake-codex-subagents.mjs`, which
- *                        writes real rollouts under CODEX_HOME
+ *                        writes real rollouts under CODEX_HOME;
+ *                        `restart` persists content-free turn identities so a
+ *                        replacement child can report interrupted turns
  *   FAKE_CODEX_CONTROL_SOCKET  where the `subagents` script takes `finish`
  */
 import { createInterface } from "node:readline";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { createSubagentScenario, listenForControl } from "./fake-codex-subagents.mjs";
 
 const args = process.argv.slice(2);
@@ -56,9 +60,33 @@ const subagents =
 if (subagents && process.env.FAKE_CODEX_CONTROL_SOCKET) {
   listenForControl(process.env.FAKE_CODEX_CONTROL_SOCKET, subagents);
 }
+const restartScenario = process.env.FAKE_CODEX_SCRIPT === "restart";
+const restartStatePath = join(process.env.CODEX_HOME || "/tmp/codex-home", "restart-turns.json");
+function savedRestartTurns() {
+  try {
+    return JSON.parse(readFileSync(restartStatePath, "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT") return {};
+    throw error;
+  }
+}
+function restartTurns(threadId) {
+  if (!restartScenario) return [];
+  const saved = savedRestartTurns()[threadId];
+  if (!saved) return [];
+  return [
+    {
+      id: saved.turnId,
+      status: threads.get(threadId) === saved.turnId ? "inProgress" : "interrupted",
+      items: [{ type: "userMessage", clientId: saved.requestId }],
+    },
+  ];
+}
+
 const nextThreadId = () =>
-  subagents ? crypto.randomUUID() : `fake-thread-${(threadCounter += 1)}`;
-const nextTurnId = () => (subagents ? crypto.randomUUID() : `fake-turn-${(turnCounter += 1)}`);
+  subagents || restartScenario ? crypto.randomUUID() : `fake-thread-${(threadCounter += 1)}`;
+const nextTurnId = () =>
+  subagents || restartScenario ? crypto.randomUUID() : `fake-turn-${(turnCounter += 1)}`;
 const nowSeconds = () => (subagents ? Math.floor(Date.now() / 1_000) : 1_700_000_200);
 
 function respond(id, result) {
@@ -129,7 +157,10 @@ const handlers = {
   "thread/resume": (id, params) => {
     const threadId = params?.threadId ?? nextThreadId();
     threads.set(threadId, null);
-    const thread = threadObject(threadId, { path: subagents?.pathOf(threadId) ?? null });
+    const thread = threadObject(threadId, {
+      path: subagents?.pathOf(threadId) ?? null,
+      turns: restartTurns(threadId),
+    });
     respond(id, {
       thread,
       model: "gpt-5.6-sol",
@@ -145,7 +176,12 @@ const handlers = {
   },
   "thread/read": (id, params) => {
     const threadId = params?.threadId ?? "fake-thread-1";
-    respond(id, { thread: threadObject(threadId, { path: subagents?.pathOf(threadId) ?? null }) });
+    respond(id, {
+      thread: threadObject(threadId, {
+        path: subagents?.pathOf(threadId) ?? null,
+        turns: restartTurns(threadId),
+      }),
+    });
   },
   "thread/list": (id) => respond(id, { data: [], nextCursor: null, backwardsCursor: null }),
   "thread/unsubscribe": (id) => respond(id, {}),
@@ -183,6 +219,12 @@ const handlers = {
     const turnId = nextTurnId();
     const threadId = params?.threadId;
     threads.set(threadId, turnId);
+    if (restartScenario) {
+      const saved = savedRestartTurns();
+      saved[threadId] = { turnId, requestId: params.clientUserMessageId };
+      mkdirSync(process.env.CODEX_HOME, { recursive: true });
+      writeFileSync(restartStatePath, JSON.stringify(saved));
+    }
     const turn = {
       id: turnId,
       items: [],

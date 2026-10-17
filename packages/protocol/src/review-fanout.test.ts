@@ -93,6 +93,11 @@ describe("reviewer records", () => {
     expect(isReviewerRecord(reviewer({ resultReminderSent: "yes" as never }))).toBe(false);
   });
 
+  test("persists the spent restart continuation as a boolean", () => {
+    expect(isReviewerRecord(reviewer({ restartContinuationSent: true }))).toBe(true);
+    expect(isReviewerRecord(reviewer({ restartContinuationSent: 1 as never }))).toBe(false);
+  });
+
   test("requires a 64-character digest so a truncated one cannot be compared", () => {
     expect(isReviewerRecord(reviewer({ progressDigest: "a".repeat(64) }))).toBe(true);
     expect(isReviewerRecord(reviewer({ progressDigest: "a".repeat(63) }))).toBe(false);

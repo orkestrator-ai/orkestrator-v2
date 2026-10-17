@@ -412,6 +412,36 @@ describe("draft release ownership", () => {
     expect(buildRuns(run)[0]).toBe("bun install --frozen-lockfile");
   });
 
+  test("a listing that lags the create never deletes the new draft", () => {
+    // v2.22.3: the list right after the create omitted the new draft.
+    const { runtime, run, capture, releases } = harness({}, []);
+    const original = capture.getMockImplementation()!;
+    let listings = 0;
+    capture.mockImplementation((command) =>
+      isReleaseList(command) && ++listings === 2 ? "" : original(command),
+    );
+    runDesktopRelease(["build"], runtime);
+    expect(run.mock.calls.some(([command]) => command.includes("DELETE"))).toBe(false);
+    expect(releases.map((release) => release.id)).toEqual([101]);
+  });
+
+  test("a lagging listing that shows only an older draft keeps ours and stops before packaging", () => {
+    const { runtime, run, capture, releases } = harness({}, []);
+    const original = capture.getMockImplementation()!;
+    let listings = 0;
+    capture.mockImplementation((command) => {
+      const output = original(command);
+      if (command.includes("POST")) releases.unshift({ id: 50, draft: true, assets: [] });
+      // The second listing has the other machine's draft but not yet ours.
+      if (isReleaseList(command) && ++listings === 2) return listing([releases[0]!]);
+      return output;
+    });
+    expect(() => runDesktopRelease(["build"], runtime)).toThrow("has 2 releases");
+    expect(run.mock.calls.some(([command]) => command.includes("DELETE"))).toBe(false);
+    expect(run.mock.calls.some(([command]) => command[1] === "electron-builder")).toBe(false);
+    expect(releases.map((release) => release.id)).toEqual([50, 101]);
+  });
+
   test("a later build reuses the existing draft", () => {
     const { runtime, capture, releases } = harness({ platform: "linux", arch: "x64" }, [
       { id: 100, draft: true, assets: ["app.dmg"] },

@@ -243,9 +243,13 @@ function claimDraftRelease(tag: string, runtime: ReleaseRuntime, env: NodeJS.Pro
   // grow, so the oldest wins everywhere and each loser deletes the empty draft
   // it just made, never anyone else's. The winner may still see the loser's
   // draft here; the check before packaging confirms it has gone.
-  const drafts = releasesForTag(tag, runtime.capture);
-  const oldest = Math.min(...drafts.map((release) => release.id));
-  if (created !== oldest) {
+  //
+  // The list can lag a fresh write and omit the draft just created. Only a
+  // listing that shows our draft and an older one is evidence we lost; anything
+  // else keeps the draft, and the check before packaging catches a real pair.
+  const ids = releasesForTag(tag, runtime.capture).map((release) => release.id);
+  const lostRace = ids.includes(created) && ids.some((id) => id < created);
+  if (lostRace) {
     runtime.run(
       ["gh", "api", "--method", "DELETE", `repos/${REPOSITORY}/releases/${created}`],
       env,

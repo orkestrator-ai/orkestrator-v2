@@ -2123,10 +2123,10 @@ describe("sendPrompt", () => {
     expect(session.abortController).toBe(secondCall.options.abortController);
 
     secondCall.push({ type: "result", subtype: "success" });
-    expect(await secondInputCompletion).toEqual({ done: true, value: undefined });
-    secondCall.finish();
     await secondPrompt;
     expect(session.status).toBe("idle");
+    secondCall.finish();
+    expect(await secondInputCompletion).toEqual({ done: true, value: undefined });
   });
 
   test("ignores malformed stream indices and stream events without a usable message identity", async () => {

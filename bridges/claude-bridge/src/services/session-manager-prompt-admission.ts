@@ -21,7 +21,6 @@ import {
 import {
   captureTurnStartup,
   createTurnState,
-  type PromptTestHooks,
   type TurnStartupSnapshot,
   type TurnState,
 } from "./session-manager-prompt-turn.js";
@@ -341,7 +340,6 @@ export function createClaudeTurn(
     options: PromptOptions | undefined;
     userMessage: NormalizedMessage;
     transcriptHydrationFailed: boolean;
-    testHooks: PromptTestHooks | undefined;
   },
 ): TurnState {
   const { session, sessionId } = admission;
@@ -362,7 +360,6 @@ export function createClaudeTurn(
     structuredRequestId: admission.structuredRequestId,
     userMessage: input.userMessage,
     dispatchRequestId: admission.dispatchRequestId,
-    retainedContinuationTimeoutMs: input.testHooks?.retainedContinuationTimeoutMs,
     beforeStartup: admission.beforeStartup,
     abortController: admission.abortController,
     turnGeneration: admission.turnGeneration,

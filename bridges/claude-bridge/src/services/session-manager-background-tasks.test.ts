@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import {
   normalizePersistedSessionMessages,
   persistedBackgroundTaskMessage,
@@ -25,6 +25,49 @@ import {
   track,
   waitFor,
 } from "./session-manager-test-harness.js";
+import { setClaudeRuntimeIdleTimingForTesting } from "./session-manager-runtime-idle.js";
+
+// These cases pin the moment a turn stops owing anything to its CLI. With no
+// idle window, that moment closes the CLI's input, so each one stays visible
+// as an input close; `session-manager-runtime-idle.test.ts` covers the warm
+// window itself. The harness restores the default after each case.
+beforeEach(() => setClaudeRuntimeIdleTimingForTesting({ idleMs: 0 }));
+
+/**
+ * Take over the idle window's scheduler: `elapse` lets every armed window run
+ * out at once, as if that much silence had passed, instead of waiting for it.
+ */
+function controlSilenceWindow() {
+  const armed: Array<{ fire: () => void; done: boolean }> = [];
+  setClaudeRuntimeIdleTimingForTesting({
+    idleMs: 0,
+    schedule: (fire) => {
+      const entry = { fire, done: false };
+      armed.push(entry);
+      return {
+        cancel: () => {
+          entry.done = true;
+        },
+      };
+    },
+  });
+  return {
+    elapse: () => {
+      for (const entry of armed.splice(0)) {
+        if (entry.done) continue;
+        entry.done = true;
+        entry.fire();
+      }
+    },
+  };
+}
+
+/** Whether the session's CLI is still waiting for an owed continuation. */
+function awaitingContinuation(session: {
+  claudeRuntime?: { latestTurn: { isAwaitingContinuation(): boolean } };
+}) {
+  return session.claudeRuntime?.latestTurn.isAwaitingContinuation() ?? false;
+}
 
 function replayTaskFrames(frames: unknown[], processGone = true) {
   if (!processGone) {
@@ -194,11 +237,10 @@ describe("background task reducer", () => {
   });
 
   test("bounds a query retained by a subagent stop hook when no continuation follows", async () => {
+    const silence = controlSilenceWindow();
     const created = createSession("stop hook without a continuation");
     track(created.id);
-    const promptPromise = sendPrompt(created.id, "delegate to a silent provider", undefined, {
-      retainedContinuationTimeoutMs: 25,
-    });
+    const promptPromise = sendPrompt(created.id, "delegate to a silent provider");
     const call = await nextQueryCall();
     const hooks = call.options.hooks as Record<
       string,
@@ -224,11 +266,13 @@ describe("background task reducer", () => {
       agent_transcript_path: "/tmp/agent-silent-hook.jsonl",
     });
 
-    // Retention buys the continuation a window, not an unbounded lease: a
+    // Waiting buys the continuation a window, not an unbounded lease: a
     // provider that answers the stop hook with nothing must still release the
     // held stdin and the CLI child behind it.
+    expect(awaitingContinuation(created)).toBe(true);
+    silence.elapse();
     expect(await inputCompletion).toEqual({ done: true, value: undefined });
-    await waitFor(() => call.isClosed());
+    call.finish();
     await promptPromise;
     expect(created.status).toBe("idle");
     expect(created.backgroundTasks?.["agent-silent-hook"]?.status).toBe("completed");
@@ -357,11 +401,10 @@ describe("background task reducer", () => {
   });
 
   test("re-arms rather than expires while a second task this query owns is still running", async () => {
+    const silence = controlSilenceWindow();
     const created = createSession("stop hook with a sibling still running");
     track(created.id);
-    const promptPromise = sendPrompt(created.id, "delegate two surveys", undefined, {
-      retainedContinuationTimeoutMs: 25,
-    });
+    const promptPromise = sendPrompt(created.id, "delegate two surveys");
     const call = await nextQueryCall();
     const hooks = call.options.hooks as Record<
       string,
@@ -395,11 +438,12 @@ describe("background task reducer", () => {
     expect(created.backgroundTasks?.["agent-pair-first"]?.status).toBe("completed");
     expect(created.backgroundTasks?.["agent-pair-second"]?.status).toBe("running");
 
-    // Several watchdog windows with no frame at all. Expiry here would close
-    // held stdin and take the CLI child down with the second subagent still
-    // running inside it, so the bound has to keep deferring while this query
-    // owns live work rather than counting silence against it.
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    // Several windows with no frame at all. Expiry here would close held
+    // stdin and take the CLI child down with the second subagent still
+    // running inside it, so the window has to keep deferring while this
+    // process owns live work rather than counting silence against it.
+    for (let window = 0; window < 3; window += 1) silence.elapse();
+    await Promise.resolve();
     expect(inputClosed).toBe(false);
     expect(call.isClosed()).toBe(false);
     expect(created.backgroundTasks?.["agent-pair-second"]?.status).toBe("running");
@@ -412,10 +456,11 @@ describe("background task reducer", () => {
       agent_transcript_path: "/tmp/agent-pair-second.jsonl",
     });
 
-    // Nothing this query owns is live any more, so the next expiry is the one
-    // that releases it.
+    // Nothing this process owns is live any more, so the next expiry is the
+    // one that releases it.
+    silence.elapse();
     expect(await inputCompletion).toEqual({ done: true, value: undefined });
-    await waitFor(() => call.isClosed());
+    call.finish();
     await promptPromise;
     expect(created.status).toBe("idle");
     expect(created.backgroundTasks?.["agent-pair-second"]?.status).toBe("completed");
@@ -571,7 +616,9 @@ describe("background task reducer", () => {
             : [];
         }),
       ).toEqual([false, false, false]);
-      expect(getSession(created.id)?.status).toBe("running");
+      // The continuation's result ends the turn; it does not wait for the
+      // process to exit.
+      expect(getSession(created.id)?.status).toBe("idle");
 
       call.finish();
       await promptPromise;
@@ -1306,7 +1353,8 @@ describe("background task reducer", () => {
     call.finish();
     await secondPrompt;
     expect(created.status).toBe("idle");
-    expect(created.claudeRuntime).toBeUndefined();
+    // The prompt settles at its result; the process exits after it.
+    await waitFor(() => created.claudeRuntime === undefined);
   });
 
   test("reclaims a resumed turn from its first streamed partial, before any assistant record", async () => {
@@ -1514,12 +1562,11 @@ describe("background task reducer", () => {
     await promptPromise;
   });
 
-  test("closes a retained query when no continuation follows the notification", async () => {
+  test("closes a CLI awaiting a continuation that never follows the notification", async () => {
+    const silence = controlSilenceWindow();
     const created = createSession("continuation never arrives");
     track(created.id);
-    const promptPromise = sendPrompt(created.id, "delegate to a silent provider", undefined, {
-      retainedContinuationTimeoutMs: 25,
-    });
+    const promptPromise = sendPrompt(created.id, "delegate to a silent provider");
     const call = await nextQueryCall();
     const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
     expect((await input.next()).done).toBe(false);
@@ -1547,20 +1594,20 @@ describe("background task reducer", () => {
     await waitFor(() => created.backgroundTasks?.["agent-silent"]?.status === "completed");
     expect(inputClosed).toBe(false);
 
-    // Nothing further arrives. The watchdog must close the held input and the
-    // retained control rather than strand the CLI child for the bridge's life.
+    // Nothing further arrives. The idle window must close the held input
+    // rather than strand the CLI child for the bridge's life.
+    silence.elapse();
     expect(await inputCompletion).toEqual({ done: true, value: undefined });
-    await waitFor(() => call.isClosed());
+    call.finish();
     await promptPromise;
     expect(created.status).toBe("idle");
   });
 
-  test("does not let the continuation watchdog close input while a sibling task runs", async () => {
+  test("does not let the idle window close input while a sibling task runs", async () => {
+    const silence = controlSilenceWindow();
     const created = createSession("sibling task still running");
     track(created.id);
-    const promptPromise = sendPrompt(created.id, "delegate twice", undefined, {
-      retainedContinuationTimeoutMs: 25,
-    });
+    const promptPromise = sendPrompt(created.id, "delegate twice");
     const call = await nextQueryCall();
     const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
     expect((await input.next()).done).toBe(false);
@@ -1593,9 +1640,11 @@ describe("background task reducer", () => {
     });
     await waitFor(() => created.backgroundTasks?.["agent-sibling-one"]?.status === "completed");
 
-    // The watchdog bounds a *silent* retained query. The second task is still
-    // running, so closing stdin here would kill work the user is waiting on.
-    await new Promise((resolve) => setTimeout(resolve, 90));
+    // The window bounds a *silent* CLI. The second task is still running, so
+    // closing stdin here would kill work the user is waiting on.
+    silence.elapse();
+    silence.elapse();
+    await Promise.resolve();
     expect(inputClosed).toBe(false);
     expect(call.isClosed()).toBe(false);
     expect(created.backgroundTasks?.["agent-sibling-two"]?.status).toBe("running");
@@ -1607,8 +1656,10 @@ describe("background task reducer", () => {
       task_id: "agent-sibling-two",
       status: "completed",
     });
+    await waitFor(() => created.backgroundTasks?.["agent-sibling-two"]?.status === "completed");
+    silence.elapse();
     expect(await inputCompletion).toEqual({ done: true, value: undefined });
-    await waitFor(() => call.isClosed());
+    call.finish();
     await promptPromise;
   });
 
@@ -2245,18 +2296,12 @@ describe("background task reducer", () => {
    * `task_notification` that would have resumed the model was delivered to a
    * dead process.
    */
-  async function releaseTurnHoldingOneBackgroundTask(
-    title: string,
-    retainedContinuationTimeoutMs?: number,
-  ) {
+  async function releaseTurnHoldingOneBackgroundTask(title: string) {
     const created = createSession(title);
     track(created.id);
-    const promptPromise = sendPrompt(
-      created.id,
-      "run the suite in the background",
-      { requestId: "background-report" },
-      { retainedContinuationTimeoutMs },
-    );
+    const promptPromise = sendPrompt(created.id, "run the suite in the background", {
+      requestId: "background-report",
+    });
     const call = await nextQueryCall();
     const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
     expect((await input.next()).done).toBe(false);
@@ -2427,11 +2472,10 @@ describe("background task reducer", () => {
     expect(getSession(created.id)?.status).toBe("idle");
   });
 
-  test("the continuation watchdog releases a terminal patch with no notification or continuation", async () => {
-    const { created, call, promptPromise, closedState } = await releaseTurnHoldingOneBackgroundTask(
-      "silent terminal patch",
-      100,
-    );
+  test("the idle window releases a terminal patch with no notification or continuation", async () => {
+    const silence = controlSilenceWindow();
+    const { created, call, promptPromise, closedState } =
+      await releaseTurnHoldingOneBackgroundTask("silent terminal patch");
     const owner = created.backgroundTaskControls?.get("bash-task-lf");
     expect(owner).toBeDefined();
 
@@ -2443,16 +2487,17 @@ describe("background task reducer", () => {
     });
     await waitFor(() => created.backgroundTasks?.["bash-task-lf"]?.status === "completed");
     expect(created.backgroundTaskControls?.has("bash-task-lf")).toBe(false);
-    expect(created.retainedQueryControls?.has(owner!)).toBe(true);
+    expect(awaitingContinuation(created)).toBe(true);
     expect(created.retainedContinuationRequestIds?.has("background-report")).toBe(true);
     expect(closedState.inputClosed).toBe(false);
     expect(call.isClosed()).toBe(false);
 
-    // No further SDK frames arrive: the silence bound must release both stdin
-    // and the retained process, while preserving the terminal task snapshot.
-    await waitFor(() => closedState.inputClosed && call.isClosed());
+    // No further SDK frames arrive: the silence bound must release stdin, and
+    // with it the process, while preserving the terminal task snapshot.
+    silence.elapse();
+    await waitFor(() => closedState.inputClosed);
+    call.finish();
     await promptPromise;
-    expect(created.retainedQueryControls).toBeUndefined();
     expect(created.retainedContinuationRequestIds).toBeUndefined();
     expect(created.backgroundTaskControls?.size ?? 0).toBe(0);
     expect(created.backgroundTasks?.["bash-task-lf"]).toMatchObject({
@@ -2486,7 +2531,7 @@ describe("background task reducer", () => {
     });
     await waitFor(() => created.backgroundTasks?.["foreground-task"]?.status === "completed");
     expect(created.status).toBe("running");
-    expect(created.retainedQueryControls).toBeUndefined();
+    expect(awaitingContinuation(created)).toBe(false);
     expect(created.retainedContinuationRequestIds).toBeUndefined();
     expect(inputClosed).toBe(false);
     expect(call.isClosed()).toBe(false);
@@ -2518,9 +2563,10 @@ describe("background task reducer", () => {
         patch: { status, end_time: 1234 },
       });
       await waitFor(() => created.backgroundTasks?.["bash-task-lf"]?.endedAt === 1234);
-      expect(created.retainedQueryControls).toBeUndefined();
+      expect(awaitingContinuation(created)).toBe(false);
       expect(created.retainedContinuationRequestIds).toBeUndefined();
-      await waitFor(() => closedState.inputClosed && call.isClosed());
+      await waitFor(() => closedState.inputClosed);
+      call.finish();
       await promptPromise;
       expect(created.status).toBe("idle");
       expect(created.backgroundTasks?.["bash-task-lf"]?.status).toBe(status);
@@ -2541,8 +2587,9 @@ describe("background task reducer", () => {
       patch: { status: "completed" },
     });
     await waitFor(() => created.backgroundTasks?.["bash-task-lf"]?.status === "completed");
-    expect(closeOtherQuery).toHaveBeenCalledTimes(1);
-    expect(created.retainedQueryControls).toBeUndefined();
+    // That process is ending or gone; it closes itself when its runtime ends.
+    expect(closeOtherQuery).not.toHaveBeenCalled();
+    expect(awaitingContinuation(created)).toBe(false);
     expect(created.retainedContinuationRequestIds).toBeUndefined();
     await waitFor(() => closedState.inputClosed);
     call.finish();
@@ -2612,7 +2659,7 @@ describe("background task reducer", () => {
       status: "completed",
       endedAt: 1234,
     });
-    expect(created.retainedQueryControls?.has(owner!)).toBe(true);
+    expect(awaitingContinuation(created)).toBe(true);
     expect(created.retainedContinuationRequestIds?.has("provisional-patch-report")).toBe(true);
     expect(inputClosed).toBe(false);
     expect(call.isClosed()).toBe(false);
@@ -2633,7 +2680,7 @@ describe("background task reducer", () => {
       },
     });
     await waitFor(() => created.status === "running");
-    expect(created.retainedQueryControls).toBeUndefined();
+    expect(awaitingContinuation(created)).toBe(false);
     expect(created.retainedContinuationRequestIds).toBeUndefined();
     expect(created.queryControl).toBe(owner);
     expect(inputClosed).toBe(false);
@@ -2657,17 +2704,13 @@ describe("background task reducer", () => {
     ).toBe(true);
   });
 
-  test("the continuation watchdog still releases a query parked by a level signal", async () => {
+  test("the idle window still releases a CLI parked by a level signal", async () => {
     const created = createSession("level before edge, no continuation");
     track(created.id);
-    const promptPromise = sendPrompt(
-      created.id,
-      "run the suite in the background",
-      { requestId: "watchdog-report" },
-      {
-        retainedContinuationTimeoutMs: 25,
-      },
-    );
+    const silence = controlSilenceWindow();
+    const promptPromise = sendPrompt(created.id, "run the suite in the background", {
+      requestId: "watchdog-report",
+    });
     const call = await nextQueryCall();
     const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
     expect((await input.next()).done).toBe(false);
@@ -2689,14 +2732,15 @@ describe("background task reducer", () => {
     });
     await waitFor(() => created.settlingBackgroundTasks !== undefined);
 
-    // The edge never arrives. The watchdog must release the held input, the
-    // retained control and the parked snapshot rather than strand the CLI child
-    // and its metadata for the lifetime of the bridge.
+    // The edge never arrives. The idle window must release the held input
+    // and, once the process is gone, the parked snapshot rather than strand
+    // the CLI child and its metadata for the lifetime of the bridge.
+    silence.elapse();
     expect(await inputCompletion).toEqual({ done: true, value: undefined });
-    await waitFor(() => created.settlingBackgroundTasks === undefined);
-    expect(created.retainedQueryControls).toBeUndefined();
-    expect(created.retainedContinuationRequestIds).toBeUndefined();
     call.finish();
+    await waitFor(() => created.settlingBackgroundTasks === undefined);
+    expect(awaitingContinuation(created)).toBe(false);
+    expect(created.retainedContinuationRequestIds).toBeUndefined();
     await promptPromise;
   });
 
@@ -2723,7 +2767,7 @@ describe("background task reducer", () => {
     });
     await waitFor(() => created.backgroundTasks?.["agent-midturn"] === undefined);
     expect(created.settlingBackgroundTasks).toBeUndefined();
-    expect(created.retainedQueryControls).toBeUndefined();
+    expect(awaitingContinuation(created)).toBe(false);
     expect(call.isClosed()).toBe(false);
 
     call.push({ type: "result", subtype: "success" });

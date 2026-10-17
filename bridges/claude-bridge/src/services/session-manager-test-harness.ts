@@ -68,6 +68,7 @@ import { readSessionPreferences, updateSessionPreferences } from "./session-pref
 export { readSessionPreferences, updateSessionPreferences };
 
 import { resetClaudeSignInForTesting } from "./claude-sign-in.js";
+import { setClaudeRuntimeIdleTimingForTesting } from "./session-manager-runtime-idle.js";
 
 export const sessionManagerTestHome = mkdtempSync(join(tmpdir(), "claude-session-manager-home-"));
 
@@ -161,7 +162,6 @@ export function createPromptTurnForTesting(session: SessionState, options?: Prom
     options,
     userMessage,
     transcriptHydrationFailed: false,
-    testHooks: undefined,
   });
   return { turn, sdkTextPrompt };
 }
@@ -279,6 +279,7 @@ afterEach(() => {
   resetClaudeSignInForTesting();
   installSdkModuleMock();
   for (const key of Object.keys(queryControlOverrides)) delete queryControlOverrides[key];
+  setClaudeRuntimeIdleTimingForTesting();
 });
 
 afterAll(async () => {
@@ -347,6 +348,8 @@ export async function runPromptWithMessages(
   for (const message of messages) call.push(message);
   call.finish();
   await promptPromise;
+  // The prompt settles at its result; the process exits once `finish` lands.
+  await waitFor(() => getSession(session.id)?.claudeRuntime === undefined);
   return { session: getSession(session.id)!, call };
 }
 

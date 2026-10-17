@@ -9,10 +9,7 @@ import type {
 import type { StructuredUsageRefreshCoordinator } from "./session-manager-core.js";
 import type { PromptStreamState } from "./session-manager-prompt-stream.js";
 import type { ClaudeRuntime, ClaudeRuntimeTurn } from "./session-manager-runtime.js";
-import {
-  closeTurnInput,
-  finishTurnInputIfSettled,
-} from "./session-manager-prompt-turn-lifecycle.js";
+import { finishTurnInputIfSettled } from "./session-manager-prompt-turn-lifecycle.js";
 import { ClaudeStreamUsageAccumulator } from "./session-manager-usage.js";
 
 /** Seams `sendPrompt` exposes to tests; never set in production. */
@@ -21,8 +18,6 @@ export interface PromptTestHooks {
   afterAttachmentCanonicalValidation?: (filePath: string) => void | Promise<void>;
   afterAttachmentInitialValidation?: (filePath: string) => void | Promise<void>;
   onQueryStarted?: () => void;
-  /** Shortens the retained-continuation watchdog so tests can observe it. */
-  retainedContinuationTimeoutMs?: number;
 }
 
 /**
@@ -82,8 +77,6 @@ export interface TurnState {
   readonly promptUuid: string;
   /** The caller's idempotency key, when it sent one. */
   readonly dispatchRequestId: string | undefined;
-  /** Overrides `RETAINED_CONTINUATION_TIMEOUT_MS`; tests only. */
-  readonly retainedContinuationTimeoutMs: number | undefined;
   readonly beforeStartup: TurnStartupSnapshot;
   readonly abortController: AbortController;
   readonly turnGeneration: number;
@@ -117,8 +110,6 @@ export interface TurnState {
    * result, which cannot precede it.
    */
   readonly pendingCommandChanges: Map<string, MeasuredWorkspaceChange>;
-  /** Closes the CLI's input when this turn still owns it; see `closeTurnInput`. */
-  readonly closeSdkInput: () => void;
   /** This turn's `session.finishTurnInputIfSettled`, recognized by identity when it ends. */
   readonly finishTurnInputForThisTurn: () => void;
   /** Reports a stop to the diagnostics; the listener is removed when the turn ends. */
@@ -159,10 +150,10 @@ export interface TurnState {
   turnReleasedToBackgroundTasks: boolean;
   releasedTurnStartedAt: string | undefined;
   /**
-   * Armed while a released turn is waiting for the continuation a background
-   * task notification triggers, so the `finally` can always disarm it.
+   * Set while a released turn is waiting for the continuation a background
+   * task notification triggers; the runtime's idle window bounds the wait.
    */
-  retainedContinuationTimer: ReturnType<typeof setTimeout> | null;
+  awaitingContinuation: boolean;
   latestSteerUuid: string | undefined;
   receivedResult: boolean;
   /**
@@ -191,7 +182,6 @@ export function createTurnState(
     structuredRequestId: string | undefined;
     userMessage: NormalizedMessage;
     dispatchRequestId: string | undefined;
-    retainedContinuationTimeoutMs: number | undefined;
     beforeStartup: TurnStartupSnapshot;
     abortController: AbortController;
     turnGeneration: number;
@@ -224,7 +214,6 @@ export function createTurnState(
     unansweredSteerUuids: new Set(),
     informationalRowsByToolUse: new Map(),
     pendingCommandChanges: new Map(),
-    closeSdkInput: () => closeTurnInput(state as TurnState),
     finishTurnInputForThisTurn: () => finishTurnInputIfSettled(state as TurnState),
     observeAbort: () => {
       (state as TurnState).diagnostics?.requestCancellation();
@@ -245,7 +234,7 @@ export function createTurnState(
     queryEnded: false,
     turnReleasedToBackgroundTasks: false,
     releasedTurnStartedAt: undefined,
-    retainedContinuationTimer: null,
+    awaitingContinuation: false,
     latestSteerUuid: undefined,
     receivedResult: false,
     receivedPromptResult: false,

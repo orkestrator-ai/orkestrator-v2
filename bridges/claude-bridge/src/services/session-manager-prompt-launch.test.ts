@@ -110,8 +110,8 @@ describe("runTurnOnRuntime", () => {
       const plan = await resolveQueryPlan(second, sdkTextPrompt, undefined);
       const push = mock(runtime.input.push);
       runtime.input.push = push;
-      // Retention belongs to the old turn and must survive a failed setup.
-      first.session.retainedQueryControls = new Set([runtime.control]);
+      // The continuation the old turn waits for must survive a failed setup.
+      first.awaitingContinuation = true;
       let expected: string;
       if (failure === "settings") {
         setModel.mockImplementation(async () => {
@@ -135,7 +135,7 @@ describe("runTurnOnRuntime", () => {
         expect(second.queryStarted).toBe(false);
         expect(first.session.queryControl).toBeUndefined();
         expect(first.session.claudeRuntime).toBe(runtime);
-        expect(first.session.retainedQueryControls.has(runtime.control)).toBe(true);
+        expect(first.awaitingContinuation).toBe(true);
         expect(runtime.latestTurn).toBe(first.thisTurn);
         expect(Array.from(runtime.waitingTurns)).toEqual([first.thisTurn!]);
         expect(first.superseded).toBe(false);

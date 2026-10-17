@@ -14,23 +14,38 @@ notifications as the coordinator — duplicated agents, interleaved edits, two
 writers on one `.jsonl`. When touching the prompt path:
 
 - **Never start a query for a session whose runtime is open.** A turn that ends
-  while its CLI still owns background work releases the foreground but leaves
-  the process running; the next prompt is written into it (`submitClaudeTurn`).
-  A new process starts only when there is none, or after a draining one has
-  exited (`retireDrainingClaudeRuntime`). Probes that never run the model
-  (`maxTurns: 0` rewind, catalogue reads) are not turns.
+  releases the foreground but leaves the process running, whether or not it
+  still owns background work; the next prompt is written into it
+  (`submitClaudeTurn`). A new process starts only when there is none, or after
+  a draining one has exited (`retireDrainingClaudeRuntime`). Probes that never
+  run the model (`maxTurns: 0` rewind, catalogue reads) are not turns.
+- **The runtime ends itself; turns never close its input.** Its idle window
+  (`session-manager-runtime-idle.ts`, `CLAUDE_BRIDGE_RUNTIME_IDLE_MS`, default
+  10 minutes; 0 closes input at turn end) closes input after that much silence
+  with no foreground turn, no live task and no parked card. An owed
+  continuation stretches the window to `CONTINUATION_SILENCE_MS`. No route
+  read extends it: the backend polls `GET /session/:id` and `/activity`, so a
+  window that counted reads would never release an open tab's CLI. At most
+  `CLAUDE_BRIDGE_MAX_IDLE_RUNTIMES` (default 3) idle CLIs stay warm per bridge;
+  the one idle longest goes first. A hard abort with nothing running leaves a
+  warm CLI alone.
 - **The newest turn owns the root conversation.** Root frames, results, hooks
   and continuations go to `runtime.latestTurn`; only a subagent's frames go to
   the turn whose row holds its call (`routeClaudeFrame`). A superseded turn
-  never closes input, releases retention or arms the continuation watchdog —
-  the newer turn may be waiting on all three.
+  never releases the foreground or waits for a continuation — the newer turn
+  inherits both. The latest turn may have settled its prompt already: a root
+  loop the CLI resumes on its own reclaims the foreground through it and
+  publishes its own idle edge (`finishTurnInputIfSettled`), and a process that
+  ends under such a turn hands the foreground back (`endClaudeRuntime`).
 - **Launch-only settings are refused, not ignored.** Output schema, execution
   policy, agent, settings sources, effective context beta, prompt suggestions,
   plugins and managed credentials cannot change on a live CLI. Adaptive thinking
   can only reset a runtime launched in adaptive mode; bypass mode requires the
-  launch capability. A prompt that changes them while the runtime is open is a 409 before anything is
-  journaled (`assertClaudeRuntimeAccepts`, checked by the route and again by
-  `sendPrompt`); one that leaves agent or settings sources unsaid inherits the
+  launch capability. A prompt that changes them while the runtime still owes
+  work (a live task, an owed continuation, a parked card) is a 409 before
+  anything is journaled (`assertClaudeRuntimeAccepts`, checked by the route and
+  again by `sendPrompt`); an idle warm runtime is retired instead and the turn
+  launches a new one (`runTurnOnRuntime`). One that leaves agent or settings sources unsaid inherits the
   running values. Model, mode, effort, thinking, fast mode and Ultracode are
   restated on the live process every time it is joined, within those launch
   constraints. An abort or close request fences the runtime immediately but
@@ -38,7 +53,7 @@ writers on one `.jsonl`. When touching the prompt path:
   `runtime.ended`, with a bounded retryable conflict when it cannot be confirmed.
   A failed live MCP update remains pending and is retried, never recorded as
   applied. During join setup, the session generation fences the old turn's
-  input-close and retention paths until submission transfers runtime ownership.
+  release and continuation paths until submission transfers runtime ownership.
 - **A running CLI unloads only what `setMcpServers` gave it.** Servers passed
   to `query()` at launch survive an update that omits them, so the first
   update that drops one restates the launch set first
@@ -67,8 +82,8 @@ mode is never taken as given. Under an `ask` or `deny` policy
   parked interactions each run on an `InteractionDeadline`
   (`session-manager-interaction-holds.ts`); `POST …/hold` stops the countdown
   until the hold ceiling, and expiry still denies or cancels. A hold never
-  answers anything. While any card waits, the retained-continuation watchdog
-  re-arms instead of closing the query: a paused card is not silence.
+  answers anything. While any card waits, the runtime's idle window re-arms
+  instead of closing the CLI: a paused card is not silence.
 
 ## One row per model response
 
@@ -85,14 +100,16 @@ tool result, denial or command change rebuilds the row holding that call
 
 When touching the session catalogue (`session-manager-catalog.ts`):
 
-- **A control that is still set is not necessarily usable.**
-  `session.queryControl` lives until the turn's `finally`, but the CLI's stdin
-  closes earlier, at the result boundary. Every control request issued in that
-  window races the process exit and is rejected with
+- **A control that is still set is not necessarily usable.** Once the CLI's
+  input is closed (an idle release, a retirement, a close) the process is
+  exiting, and every control request races that exit and is rejected with
   `Query closed before response received`. Reads go through `readableControl`,
-  which skips a control marked `queryControlDraining`. `closeTurnInput()` in
-  `session-manager-prompt-turn-lifecycle.ts` is the one place that sets the marker, so a new
-  stdin-close site cannot forget it.
+  which skips a control marked `queryControlDraining`. Input closes and the
+  marker is set in two places only: `drainClaudeRuntime()` in
+  `session-manager-runtime.ts`, and teardown (`takeQueryControls`). Route a new
+  close site through the first so it cannot forget the marker. A turn hands
+  `session.queryControl` back when it releases the foreground, so a warm idle
+  CLI is not read through it.
 - **Reads fall back, writes conflict.** `isClosedTransportError` maps a dead
   transport onto the cached answer for `/commands` and `/mcp`, and onto 409 for
   `/config` — a settings change that never reached the CLI must not look like it

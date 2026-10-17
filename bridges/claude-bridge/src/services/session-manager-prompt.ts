@@ -13,7 +13,6 @@ import { runTurnOnRuntime } from "./session-manager-prompt-launch.js";
 import { resolveQueryPlan } from "./session-manager-prompt-query.js";
 import { finalizeTurn, settleFailedTurn, settleTurnEnd } from "./session-manager-prompt-settle.js";
 import type { PromptTestHooks } from "./session-manager-prompt-turn.js";
-export { RETAINED_CONTINUATION_TIMEOUT_MS } from "./session-manager-prompt-turn-lifecycle.js";
 export { memoryRecallPart } from "./session-manager-messages.js";
 export { THINKING_TOKENS_EMIT_INTERVAL_MS } from "./session-manager-prompt-handlers/system.js";
 export { applyClaudeUsageReport } from "./session-manager-prompt-handlers/assistant.js";
@@ -53,7 +52,6 @@ export async function sendPrompt(
     options,
     userMessage,
     transcriptHydrationFailed,
-    testHooks,
   });
   try {
     const plan = await resolveQueryPlan(turn, sdkTextPrompt, testHooks);

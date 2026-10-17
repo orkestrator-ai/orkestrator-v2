@@ -1707,9 +1707,30 @@ describe("claude usage snapshot", () => {
     track(session.id);
     // A background-task continuation delivers a second result on the same
     // `query()`, whichever CLI is running; it has always been cumulative.
-    await runTurns(session.id, [
-      { cli: "2.1.276", results: [cumulativeTurn(1), cumulativeTurn(2)] },
-    ]);
+    const promptPromise = sendPrompt(session.id, "turn 0");
+    const call = await nextQueryCall();
+    call.push({
+      type: "system",
+      subtype: "init",
+      session_id: "sdk-usage",
+      claude_code_version: "2.1.276",
+    });
+    call.push(cumulativeTurn(1));
+    await promptPromise;
+    // The continuation resumes the root loop, which takes the foreground back.
+    call.push({
+      type: "assistant",
+      message: {
+        id: "msg-continuation",
+        model: "claude-opus-5",
+        content: [{ type: "text", text: "The task finished." }],
+      },
+      parent_tool_use_id: null,
+    });
+    await waitFor(() => session.status === "running");
+    call.push(cumulativeTurn(2));
+    await waitFor(() => session.status === "idle");
+    call.finish();
     expect(getSession(session.id)?.usage).toMatchObject({ inputTokens: 20, costUsd: 1 });
   });
 

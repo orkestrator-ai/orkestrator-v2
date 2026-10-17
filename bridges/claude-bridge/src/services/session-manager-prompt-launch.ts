@@ -1,11 +1,11 @@
 import type { SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { eventEmitter } from "./event-emitter.js";
 import { debugLog } from "./logger.js";
 import { AGENT_MCP_SERVER_NAME } from "./mcp-config.js";
 import {
-  closeQueryControlIfUnused,
+  closeQueryControl,
   emitBackgroundTaskSnapshot,
-  forgetRetainedQueryControl,
   forgetSettlingBackgroundTasksOwnedBy,
   removeBackgroundTaskCandidatesOwnedBy,
   settleTasksOwnedByClosedControl,
@@ -26,10 +26,17 @@ import {
 import { createClaudeRuntimeTurn } from "./session-manager-prompt-runtime-turn.js";
 import type { PromptTestHooks, TurnState } from "./session-manager-prompt-turn.js";
 import {
+  disarmClaudeRuntimeIdleDetach,
+  noteClaudeRuntimeFrame,
+} from "./session-manager-runtime-idle.js";
+import {
   applyClaudeLiveSettings,
   assertClaudeRuntimeAccepts,
+  claudeLaunchConflict,
   claudeLaunchedProfile,
+  claudeLaunchProfile,
   claudeLaunchResourceProfile,
+  claudeRuntimeOwesWork,
   type ClaudeRuntime,
   type ClaudeRuntimeTurn,
   createClaudeRuntime,
@@ -62,6 +69,7 @@ async function consumeClaudeRuntime(
   try {
     for await (const message of frames) {
       if (runtime.abortController.signal.aborted) break;
+      noteClaudeRuntimeFrame(runtime);
       const turn = routeClaudeFrame(runtime, message);
       try {
         await turn.handleMessage(message);
@@ -92,10 +100,18 @@ function endClaudeRuntime(
   failure: { turn: ClaudeRuntimeTurn; error: unknown } | undefined,
 ): void {
   runtime.state = "ended";
+  disarmClaudeRuntimeIdleDetach(runtime);
+  // Nothing reads the held prompt any more; release it.
+  runtime.input.close();
   const { session, control } = runtime;
   if (session.claudeRuntime === runtime) session.claudeRuntime = undefined;
-  // Dropping the retention is what lets the close below actually run.
-  forgetRetainedQueryControl(session, control);
+  // The latest turn's prompt can have settled already and the turn still hold
+  // the foreground: the CLI resumed its root loop on its own. Nothing else is
+  // waiting to hand that foreground back.
+  const orphanedForeground =
+    !runtime.waitingTurns.has(runtime.latestTurn) &&
+    session.queryControl === control &&
+    session.status === "running";
   removeBackgroundTaskCandidatesOwnedBy(session, control);
   // The handle is dead, so no edge can still arrive to claim these.
   forgetSettlingBackgroundTasksOwnedBy(session, control);
@@ -106,17 +122,41 @@ function endClaudeRuntime(
   );
   if (session.queryControl === control) session.queryControl = undefined;
   if (session.queryControlDraining === control) session.queryControlDraining = undefined;
-  closeQueryControlIfUnused(session, control);
+  // Idempotent: the SDK has normally cleaned up already.
+  void closeQueryControl(control);
   if (settled) emitBackgroundTaskSnapshot(session);
   // A turn that failed after it stopped waiting still ended the process; the
   // turn the user is waiting on is the one that has to say so.
   const failedTurn =
     failure && (runtime.waitingTurns.has(failure.turn) ? failure.turn : runtime.latestTurn);
-  const turns = Array.from(runtime.waitingTurns);
+  // The latest turn hears of it even when its prompt has settled, so that an
+  // owed continuation dies with the process.
+  const turns = new Set([...runtime.waitingTurns, runtime.latestTurn]);
   runtime.waitingTurns.clear();
   for (const turn of turns) {
     turn.runtimeEnded(turn === failedTurn && failure ? { error: failure.error } : undefined);
   }
+  if (orphanedForeground) releaseOrphanedForeground(runtime, failure?.error);
+}
+
+/** Hand back a foreground no waiting prompt can settle; see `endClaudeRuntime`. */
+function releaseOrphanedForeground(runtime: ClaudeRuntime, error: unknown): void {
+  const { session } = runtime;
+  const sessionId = session.id;
+  session.turnStartedAt = undefined;
+  session.abortController = undefined;
+  session.completionBlockedByBackgroundTasks = false;
+  if (error === undefined) {
+    session.status = "idle";
+    eventEmitter.emit({ type: "session.idle", sessionId, data: { success: true } });
+    return;
+  }
+  console.error("[session-manager] Claude runtime ended under a resumed root turn", {
+    sessionId,
+  });
+  session.status = "error";
+  session.error = error instanceof Error ? error.message : String(error);
+  eventEmitter.emit({ type: "session.error", sessionId, data: { error: session.error } });
 }
 
 /** Drop the claims a failed join made; the previous turn's work is untouched. */
@@ -292,6 +332,24 @@ function markQueryStarted(turn: TurnState, testHooks: PromptTestHooks | undefine
 }
 
 /**
+ * The running CLI this turn joins, or undefined when it launches one.
+ *
+ * A warm CLI that owes nothing and was launched with other launch-only
+ * settings is retired rather than refused: `prepareLaunch` closes its input and
+ * waits for it to exit before the new one starts. One that still owes work is
+ * returned, and joining it answers 409 (`assertClaudeRuntimeAccepts`).
+ */
+function joinableRuntime(turn: TurnState, plan: QueryPlan): ClaudeRuntime | undefined {
+  const running = openClaudeRuntime(turn.session);
+  if (!running || claudeRuntimeOwesWork(running)) return running;
+  const requested = {
+    ...claudeLaunchProfile(turn.session, turn.options),
+    ...claudeLaunchResourceProfile(plan.plugins, plan.queryEnvironment),
+  };
+  return claudeLaunchConflict(running.launch, requested) ? undefined : running;
+}
+
+/**
  * Put this turn on the session's CLI: written into the running one, or as the
  * first turn of a new one. Answers false when it was stopped before either.
  */
@@ -301,10 +359,10 @@ export async function runTurnOnRuntime(
   testHooks: PromptTestHooks | undefined,
 ): Promise<boolean> {
   turn.thisTurn = createClaudeRuntimeTurn(turn);
-  // The session's CLI is still running when an earlier turn left background
-  // work in it. This prompt is written into that process: a second CLI
+  // The session's CLI is still running after an earlier turn: warm, or owning
+  // background work. This prompt is written into that process: a second CLI
   // resumed from the same rollout would run its own root loop beside it.
-  const running = openClaudeRuntime(turn.session);
+  const running = joinableRuntime(turn, plan);
   if (running) {
     const messages = await prepareJoin(turn, plan, running);
     submitToRunningRuntime(turn, running, messages);

@@ -29,6 +29,7 @@ import {
 } from "./session-manager-core.js";
 import {
   LIVE_BACKGROUND_TASK_STATUSES,
+  claudeRuntimeOwnsLiveWork,
   releaseQueryControl,
 } from "./session-manager-background-tasks.js";
 import { appendInterruptedNotice } from "./session-manager-messages.js";
@@ -524,10 +525,15 @@ export function getSessionMessages(sessionId: string): NormalizedMessage[] {
  */
 export function abortSession(sessionId: string): boolean {
   const session = sessions.get(sessionId);
-  if (
-    session &&
-    (session.abortController || (session.claudeRuntime && session.claudeRuntime.state !== "ended"))
-  ) {
+  // A CLI kept warm between turns, owing nothing, is not running: stopping it
+  // would only cost the next prompt a cold start and write a stray
+  // interruption into the transcript.
+  const runtime = session?.claudeRuntime;
+  const runtimeOwesWork =
+    runtime !== undefined &&
+    runtime.state !== "ended" &&
+    (claudeRuntimeOwnsLiveWork(session!, runtime) || runtime.latestTurn.isAwaitingContinuation());
+  if (session && (session.abortController || runtimeOwesWork)) {
     session.abortController?.abort();
     // Bank completed model calls synchronously. A replacement prompt may claim
     // the session before the aborted iterator reaches its finally block; if we

@@ -21,3 +21,10 @@ Final aggregate totals: backend 8814 passed, 41 skipped, ten failed and three
 between-tests errors across 8865 tests in 472 files (541.38 seconds).
 Toolchain had 90 passed and one failed. Root, bridges, protocol and every
 other workspace package passed; aggregate exit 1 after 852.0 seconds.
+
+## Codex default-model PR-stage main merge — 2026-10-17
+
+- **Original command:** `bun run --cwd apps/backend test:workspace` (Bun 1.4.2, two workers; host load average 13–27).
+- **Failure:** the case exceeded its 5000 ms deadline at 5121.09 ms.
+- **Owning-file rerun:** `bun test --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts` passed unchanged (37 passed, 31.6 seconds).
+- **Assessment:** a second isolated pass; no move implementation, assertion, timeout or skip changed.

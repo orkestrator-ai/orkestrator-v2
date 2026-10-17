@@ -96,6 +96,27 @@ describe("Multi Review automation summary", () => {
     ).toBe("No PR session could start: tab limit");
   });
 
+  test.each(["issues", "testCoverageGaps"])(
+    "a retained clean-review launch does not hide current %s",
+    (kind) => {
+      const automation = workflowSummary({
+        autoFix: false,
+        autoPr: true,
+        phase: "ready",
+        consolidatedReport: { issues: [], testCoverageGaps: [], [kind]: [{}] },
+        autoPrLaunch: {
+          basis: "clean-review",
+          state: "launched",
+          requestId: "pr",
+          tabId: "old-pr",
+        },
+      }).automation as { next: string };
+      expect(automation.next).toContain("Waiting for address_multi_review");
+      expect(automation.next).toContain("earlier PR does not confirm inclusion");
+      expect(automation.next).not.toContain("The PR session started");
+    },
+  );
+
   test.each([true, false])(
     "a retained PR does not hide a new Fix (pending handoff: %s)",
     (pending) => {

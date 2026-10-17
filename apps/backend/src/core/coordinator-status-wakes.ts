@@ -197,7 +197,9 @@ export function multiReviewStatus(
   const prLaunch =
     recordedPrLaunch &&
     (cleanReviewPr
-      ? phase === "ready"
+      ? phase === "ready" &&
+        record(snapshot.consolidatedReport) &&
+        findingCounts(snapshot.consolidatedReport).total === 0
       : recordedPrLaunch.fixIdentity === undefined
         ? recordedPrLaunch.state !== "launched"
         : recordedPrLaunch.fixIdentity === multiReviewFixIdentity(fixSession))
@@ -375,13 +377,15 @@ export function multiReviewStatus(
         `Consolidated report: ${findings.line}.`,
         ...(cleanReviewPr && prLaunch
           ? [`No PR session started${prLaunchMessage ? `: ${prLaunchMessage}` : "."}`]
-          : snapshot.autoFix === true && findings.total === 0
-            ? ["Auto-fix is on, but there was nothing to fix, so no Fix or PR session started."]
-            : autoPr
-              ? [
-                  "Auto-PR is on: once a Fix started with address_multi_review completes, a PR session starts automatically.",
-                ]
-              : []),
+          : recordedPrLaunch?.state === "launched"
+            ? ["An earlier PR session started; review and update it manually after this Fix."]
+            : snapshot.autoFix === true && findings.total === 0
+              ? ["Auto-fix is on, but there was nothing to fix, so no Fix or PR session started."]
+              : autoPr
+                ? [
+                    "Auto-PR is on: once a Fix started with address_multi_review completes, a PR session starts automatically.",
+                  ]
+                : []),
       ],
       tools: [read, `address_multi_review { "workflowId": "${workflowId}" }`],
       mode: "settled",

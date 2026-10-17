@@ -1131,6 +1131,24 @@ describe("status classification and bounds", () => {
     expect(skipped.details).toContain("No PR session started: A pull request already exists");
   });
 
+  test.each(["issues", "testCoverageGaps"])(
+    "a retained clean-review PR cannot hide current %s",
+    (kind) => {
+      const status = multiReviewStatus(
+        {
+          phase: "ready",
+          autoPr: true,
+          consolidatedReport: { issues: [], testCoverageGaps: [], [kind]: [{}] },
+          autoPrLaunch: { basis: "clean-review", state: "launched", requestId: "pr" },
+        },
+        "review-1",
+        { prUrl: "https://github.com/org/repo/pull/7", prState: "open" },
+      )!;
+      expect(status).toMatchObject({ state: "ready", headline: "is ready to address" });
+      expect(status.tools).toContain('address_multi_review { "workflowId": "review-1" }');
+    },
+  );
+
   test("auto-actions explain a ready review and hold a completion whose PR is queued", () => {
     const ready = (snapshot: Record<string, unknown>) =>
       multiReviewStatus(

@@ -330,6 +330,68 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     );
   });
 
+  test.each(["ready", "interactive", "reviewing", "consolidating"] as const)(
+    "hides a retained clean-review notice after moving to %s with findings",
+    (phase) => {
+      const workflow: MultiReviewWorkflow = {
+        ...readyWorkflow(),
+        autoPr: true,
+        consolidatedReport: { ...report, issues: [], testCoverageGaps: [] },
+        autoPrLaunch: {
+          basis: "clean-review",
+          state: "launched",
+          requestId: "multi-review-pr:multi-1",
+          tabId: "agent-job-pr",
+        },
+      };
+      useMultiReviewStore.getState().replaceWorkflow(workflow);
+      const view = render(
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => workflow)}
+        />,
+      );
+      expect(screen.getByTestId("multi-review-auto-pr-notice").textContent).toContain(
+        "The review found nothing to fix",
+      );
+      const moved = { ...workflow, phase, consolidatedReport: report };
+      act(() => useMultiReviewStore.getState().replaceWorkflow(moved));
+      expect(screen.queryByTestId("multi-review-auto-pr-notice") === null).toBe(true);
+      // A fresh mount reads the same persisted snapshot, without the transition event.
+      view.unmount();
+      render(
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => moved)}
+        />,
+      );
+      expect(screen.queryByTestId("multi-review-auto-pr-notice") === null).toBe(true);
+    },
+  );
+
+  test.each(["interactive", "reviewing", "consolidating"] as const)(
+    "hides the clean-review notice in %s even while the old clean report remains",
+    (phase) => {
+      const workflow: MultiReviewWorkflow = {
+        ...readyWorkflow(),
+        phase,
+        consolidatedReport: { ...report, issues: [], testCoverageGaps: [] },
+        autoPrLaunch: { basis: "clean-review", state: "launched", requestId: "pr" },
+      };
+      useMultiReviewStore.getState().replaceWorkflow(workflow);
+      render(
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: workflow.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => workflow)}
+        />,
+      );
+      expect(screen.queryByTestId("multi-review-auto-pr-notice") === null).toBe(true);
+    },
+  );
+
   test("formats live reviewer elapsed time and token usage", () => {
     const reviewer = reviewingWorkflow().reviewers[0]!;
     reviewer.startedAt = "2026-08-14T00:00:00.000Z";

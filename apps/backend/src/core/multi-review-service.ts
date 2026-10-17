@@ -1377,6 +1377,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           workflow.phase = "reviewing";
         } else if (workflow.consolidatedReport && reviewSession(workflow)) {
           workflow.phase = "ready";
+          // A failed Fix may have superseded the clean report's pending PR.
+          // Restoring that report restores its intent under the same request id.
+          queueCleanReviewAutoPr(workflow);
           reviewSession(workflow)!.status = "idle";
           delete workflow.addressPromptPending;
           delete workflow.addressPromptAttempts;

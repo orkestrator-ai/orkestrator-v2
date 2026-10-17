@@ -50,20 +50,27 @@ export function multiReviewAutomation(workflow: Record<string, unknown>): Record
 function automationNext(workflow: Record<string, unknown>): string {
   const autoFix = workflow.autoFix === true;
   const autoPr = workflow.autoPr === true;
-  const launch = isRecord(workflow.autoPrLaunch) ? workflow.autoPrLaunch : undefined;
+  const recordedLaunch = isRecord(workflow.autoPrLaunch) ? workflow.autoPrLaunch : undefined;
   const fix = isRecord(workflow.fixSession) ? workflow.fixSession : undefined;
   const phase = workflow.phase;
   const customFix = isRecord(workflow.fixLaunch) && workflow.fixLaunch.kind === "custom";
-  const cleanReviewPr = launch?.basis === "clean-review";
+  const cleanReviewPr = recordedLaunch?.basis === "clean-review";
+  const launch =
+    cleanReviewPr &&
+    (phase !== "ready" ||
+      !isRecord(workflow.consolidatedReport) ||
+      hasFindings(workflow.consolidatedReport))
+      ? undefined
+      : recordedLaunch;
   const earlierPr =
-    launch?.state === "launched" &&
+    recordedLaunch?.state === "launched" &&
     (cleanReviewPr ||
-      launch.fixIdentity === undefined ||
-      launch.fixIdentity !== multiReviewFixIdentity(fix));
+      recordedLaunch.fixIdentity === undefined ||
+      recordedLaunch.fixIdentity !== multiReviewFixIdentity(fix));
   const manualPr = "; review its result and start or update the PR manually";
   const thenPr = customFix
     ? manualPr
-    : launch?.state === "launched"
+    : recordedLaunch?.state === "launched"
       ? "; the earlier PR does not confirm inclusion of this Fix's changes, so review and update it manually"
       : autoPr
         ? "; a PR session starts once that Fix completes"

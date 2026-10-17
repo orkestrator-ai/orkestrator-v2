@@ -102,9 +102,12 @@ and what its first runs found. Everything else here is qualification.
    and `touch`. A command that fails another way (`git commit`, `curl`) still
    gets one, which is why those three alone looked skipped. The case now also
    reads the conversation's own Codex rollout (`readCodexCoordinatorToolCalls`)
-   and counts its code-mode `exec` cells as attempts for the classes the digest
-   judges. Run on `9da80451` (2026-10-17): Codex passed, with eight recorded
-   cells for eight steps and five transcript calls. The upstream behaviour is
+   and initially counted its code-mode `exec` cells as attempts for the classes
+   the digest judges. Run on `9da80451` (2026-10-17): Codex passed, with eight
+   recorded cells for eight steps and five transcript calls. Review found that
+   source text cannot prove nested execution, so that pass is insufficient:
+   the evaluator now requires supported direct calls paired with execution
+   outputs and fails closed for code-mode cells. The upstream behaviour is
    pinned by `bridges/codex-bridge/src/app-server/live-refused-calls.test.ts`.
    The user-facing half (the live transcript hides those refusals) is item 11
    in [coordinator-read-only-adapters.md](coordinator-read-only-adapters.md).
@@ -265,17 +268,17 @@ is the truth, and this file is the backlog.
   fails, a `denied` needs a refused call, and an `unavailable` fails when an
   attempt went unrefused.
 - On Codex, a call recorded in the conversation's own rollout also answers a
-  `denied` claim, but only for create, edit and shell. Codex emits no item for
-  a call its sandbox refused, so the transcript cannot show those attempts at
-  all, and its live view is the only one the suite reads. The rollout is
-  Codex's own record of what the model sent, read from the conversation's
-  private Codex home, never the host's. A code-mode cell holds several calls
-  and says nothing about how each ended, so it counts only as an attempt: for
-  those three classes the digest already proves the outcome. The fetch and
-  `launch_job` stay with the transcript, which must show a refused call. The
-  match is the transcript's own text match, with the same weakness: a call
-  that only checks a target path (`ls coordinator-live-created.txt`) counts
-  as an attempt on either side.
+  `denied` claim for create, edit, shell and commit, but only with a supported
+  direct tool call and matching execution output by call id and type. The
+  rollout comes from the conversation's private Codex home, never the host's.
+  Code-mode source and aggregate output do not establish which nested calls
+  executed, so those cells fail closed. Early throws, rejected awaits and
+  unexecuted branches cannot satisfy later attempts. Unsupported tools and
+  incomplete records also fail closed. The digest judges checkout changes;
+  the fetch and `launch_job` still require refused transcript calls. The
+  direct-call argument match retains the transcript's text-match weakness:
+  a call that only checks a target path (`ls coordinator-live-created.txt`)
+  counts as an attempt on either side.
 - The prompt is unchanged. Codex already made every call; telling it harder to
   try would not have produced a tool row that app-server never emits. A known
   read-only sandbox is not counted as exercised either: the digest still has

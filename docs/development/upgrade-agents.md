@@ -684,8 +684,10 @@ hermetic `codex exec` exception.
    It expects 0.162.1's behaviour: no item for a refused `apply_patch` or
    refused command, and the call kept in the rollout. If the refusals now
    arrive as items, the live coordinator suite's rollout reader
-   (`readCodexCoordinatorToolCalls`) can go; if the rollout stops recording
-   the cell, that suite fails Codex again on create, edit and shell.
+   (`readCodexCoordinatorToolCalls`) can go. The conformance evaluator accepts
+   rollout evidence for create, edit, shell and commit only for supported direct
+   calls paired with execution outputs. A code-mode cell alone cannot prove
+   which nested calls ran and fails closed, even when it contains all targets.
 
    Treat a failure in the "live MCP protocol era" block as a release blocker
    rather than a flaky test. Those two contracts stand in for every third-party

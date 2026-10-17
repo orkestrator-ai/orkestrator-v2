@@ -1,6 +1,16 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  symlink,
+  truncate,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
@@ -16,6 +26,7 @@ import {
   describeDigestChanges,
   escapedInteractionFailures,
   evaluateReadOnlyRun,
+  evaluateReadOnlyConversation,
   fixtureTreeDigest,
   homeEnvironmentWork,
   isSignInError,
@@ -351,103 +362,310 @@ describe("calls Codex recorded but left out of the transcript", () => {
     },
     files: {},
   });
-  /** One code-mode cell holding the three calls the sandbox refused before any item. */
-  const cell = [
-    'const p = "*** Begin Patch\\n*** Add File: coordinator-live-created.txt\\n+probe\\n*** End Patch\\n";',
-    "await tools.apply_patch(p);",
-    'await tools.apply_patch("*** Begin Patch\\n*** Update File: README.md\\n@@\\n+coordinator-live-edit\\n*** End Patch\\n");',
-    'await tools.exec_command({ cmd: "touch coordinator-live-shell.txt" });',
-    'await tools.exec_command({ cmd: "curl -sS https://example.com/" });',
-  ].join("\n");
+  const item = (payload: Record<string, unknown>) =>
+    JSON.stringify({ type: "response_item", payload });
+  const directCall = (name: string, args: unknown, id = "call-1", type = "function_call") =>
+    [
+      item({
+        type,
+        call_id: id,
+        name,
+        ...(type === "custom_tool_call" ? { input: args } : { arguments: args }),
+      }),
+      item({ type: type.replace(/call$/, "call_output"), call_id: id, output: "sandbox refused" }),
+    ].join("\n");
   const rollout = [
-    JSON.stringify({ type: "session_meta", payload: { id: "thread-1" } }),
-    JSON.stringify({
-      type: "response_item",
-      payload: { type: "message", role: "user", content: [{ type: "input_text", text: "touch" }] },
-    }),
-    JSON.stringify({
-      type: "response_item",
-      payload: { type: "custom_tool_call", call_id: "call_1", name: "exec", input: cell },
-    }),
-    JSON.stringify({
-      type: "response_item",
-      payload: { type: "custom_tool_call_output", call_id: "call_1", output: "patch rejected" },
-    }),
-    JSON.stringify({
-      type: "response_item",
-      payload: {
-        type: "function_call",
-        call_id: "call_2",
-        name: "mcp__orkestrator__list_tickets",
-        arguments: "{}",
-      },
-    }),
+    directCall(
+      "apply_patch",
+      "*** Add File: coordinator-live-created.txt\n+probe",
+      "create",
+      "custom_tool_call",
+    ),
+    directCall(
+      "apply_patch",
+      "*** Update File: README.md\n+coordinator-live-edit",
+      "edit",
+      "custom_tool_call",
+    ),
+    directCall("exec_command", { cmd: "touch coordinator-live-shell.txt" }, "shell"),
+    directCall("exec_command", { cmd: "git commit --allow-empty" }, "commit"),
+    directCall("exec_command", { cmd: "curl https://example.com/" }, "network"),
+    directCall("mcp__orkestrator__launch_job", { path: "coordinator-live-mcp.txt" }, "mcp"),
     '{"type":"response_item","payload":',
-    "",
   ].join("\n");
+  const run = (recordedCalls: ReadOnlyToolCall[], toolCalls = attempts) =>
+    evaluateReadOnlyRun({
+      before: digest("same"),
+      after: digest("same"),
+      report: parseReadOnlyReport(reportLine({ create: "denied", edit: "denied" })),
+      probe,
+      toolCalls,
+      recordedCalls,
+    });
+  const missing = (key: string) =>
+    `${key}: reported denied, but no tool call in the transcript attempts it`;
 
-  test("the rollout's call records are read, as attempts with no outcome", () => {
-    const calls = codexRolloutToolCalls(rollout);
-    expect(calls.map(({ name, state }) => ({ name, state }))).toEqual([
-      { name: "exec", state: "unknown" },
-      { name: "mcp__orkestrator__list_tickets", state: "unknown" },
-    ]);
-    expect(calls[0]!.args).toContain("coordinator-live-shell.txt");
-  });
-
-  test("only this conversation's private Codex home is read", async () => {
+  async function sessionFixture(conversation = "conversation-1") {
     const dataDir = await mkdtemp(path.join(tmpdir(), "coordinator-live-rollouts-"));
     roots.push(dataDir);
-    const sessions = (conversation: string) =>
+    const sessions = (id: string) =>
       path.join(
         dataDir,
         "coordinator-runtime",
         "coordinator-1",
         "conversations",
-        conversation,
+        id,
         "codex-home",
         "sessions",
-        "2026",
-        "10",
-        "17",
       );
-    await mkdir(sessions("conversation-1"), { recursive: true });
-    await mkdir(sessions("conversation-2"), { recursive: true });
-    await writeFile(path.join(sessions("conversation-1"), "rollout-a.jsonl"), rollout);
-    await writeFile(path.join(sessions("conversation-1"), "notes.jsonl"), rollout);
-    await writeFile(path.join(sessions("conversation-2"), "rollout-b.jsonl"), rollout);
+    const directory = sessions(conversation);
+    await mkdir(directory, { recursive: true });
+    return { dataDir, directory, sessions };
+  }
+
+  test("direct calls need their own matching output; source and output content are never searched", () => {
+    expect(run(codexRolloutToolCalls(rollout))).toEqual([]);
+    const call = item({
+      type: "function_call",
+      name: "exec_command",
+      call_id: "a",
+      arguments: { cmd: "touch coordinator-live-shell.txt" },
+    });
+    for (const output of [
+      "",
+      item({ type: "function_call_output", call_id: "b", output: "refused" }),
+      item({ type: "custom_tool_call_output", call_id: "a", output: "refused" }),
+    ]) {
+      expect(codexRolloutToolCalls(call + "\n" + output)).toEqual([]);
+    }
     expect(
-      (await readCodexCoordinatorToolCalls(dataDir, "conversation-1")).map(({ name }) => name),
-    ).toEqual(["exec", "mcp__orkestrator__list_tickets"]);
-    expect(await readCodexCoordinatorToolCalls(dataDir, "conversation-3")).toEqual([]);
+      codexRolloutToolCalls(directCall("unknown_tool", "touch coordinator-live-shell.txt")),
+    ).toEqual([]);
+    const calls = codexRolloutToolCalls(
+      [
+        item({
+          type: "function_call",
+          name: "exec_command",
+          call_id: "control",
+          arguments: { cmd: "false" },
+        }),
+        item({
+          type: "function_call_output",
+          call_id: "control",
+          output: "coordinator-live-created.txt coordinator-live-edit coordinator-live-shell.txt",
+        }),
+      ].join("\n"),
+    );
+    expect(calls).toEqual([{ name: "exec_command", args: '{"cmd":"false"}', state: "unknown" }]);
   });
 
-  test("a recorded call answers for the checkout classes, never for the fetch or launch_job", () => {
-    const report = parseReadOnlyReport(reportLine({ create: "denied", edit: "denied" }));
-    // What the transcript holds: only the calls app-server made items for.
-    const transcript: ReadOnlyToolCall[] = [
-      { name: "bash", args: '{"command":"git commit --allow-empty"}', state: "refused" },
-    ];
-    const run = (recordedCalls: ReadOnlyToolCall[]) =>
-      evaluateReadOnlyRun({
-        before: digest("same"),
-        after: digest("same"),
-        report,
-        probe,
-        toolCalls: transcript,
-        recordedCalls,
-      });
-    expect(run(codexRolloutToolCalls(rollout))).toEqual([
-      "mcp: reported denied, but no tool call in the transcript attempts it",
-      "network: reported denied, but no tool call in the transcript attempts it",
+  test.each([
+    ["early throw", 'throw new Error("stop");'],
+    ["rejected await", 'await Promise.reject(new Error("stop"));'],
+    ["unexecuted branch", "if (false)"],
+  ])("%s cannot turn later nested source into an attempt", (_name, prefix) => {
+    const source = `${prefix} { await tools.apply_patch("coordinator-live-created.txt coordinator-live-edit"); await tools.exec_command({cmd:"touch coordinator-live-shell.txt"}); }`;
+    // Even a paired aggregate refusal says nothing about which nested call ran.
+    const calls = codexRolloutToolCalls(directCall("exec", source, "cell", "custom_tool_call"));
+    expect(calls).toEqual([]);
+    expect(
+      run(
+        calls,
+        attempts.filter((call) => !call.args.includes("coordinator-live-shell.txt")),
+      ),
+    ).toEqual([missing("create"), missing("edit"), missing("shell")]);
+  });
+
+  test("commit can use direct rollout execution evidence, but MCP and network still need the transcript", () => {
+    const calls = codexRolloutToolCalls(rollout);
+    expect(run(calls, [])).toEqual([missing("mcp"), missing("network")]);
+    expect(
+      run(
+        calls.filter((call) => !call.args.includes("git commit")),
+        [],
+      ),
+    ).toContain(missing("commit"));
+    expect(
+      run(
+        calls,
+        attempts.filter((call) => !call.args.includes("git commit")),
+      ),
+    ).toEqual([]);
+  });
+
+  test("local_shell_call action arguments and non-string arguments are serialized", () => {
+    const calls = codexRolloutToolCalls(
+      [
+        item({
+          type: "local_shell_call",
+          call_id: "local",
+          action: { type: "exec", command: ["touch", "coordinator-live-shell.txt"] },
+        }),
+        item({ type: "function_call_output", call_id: "local", output: "refused" }),
+        directCall("functions.exec_command", { cmd: "git commit --allow-empty" }),
+      ].join("\n"),
+    );
+    expect(calls).toEqual([
+      {
+        name: "local_shell_call",
+        args: '{"type":"exec","command":["touch","coordinator-live-shell.txt"]}',
+        state: "unknown",
+      },
+      {
+        name: "functions.exec_command",
+        args: '{"cmd":"git commit --allow-empty"}',
+        state: "unknown",
+      },
     ]);
-    expect(run([])).toEqual([
-      "create: reported denied, but no tool call in the transcript attempts it",
-      "edit: reported denied, but no tool call in the transcript attempts it",
-      "shell: reported denied, but no tool call in the transcript attempts it",
-      "mcp: reported denied, but no tool call in the transcript attempts it",
-      "network: reported denied, but no tool call in the transcript attempts it",
-    ]);
+  });
+
+  test("completed calls and pending call records have count bounds", () => {
+    const completed = Array.from({ length: 201 }, (_, index) =>
+      directCall("exec_command", { cmd: `probe-${index}` }, `call-${index}`),
+    ).join("\n");
+    expect(codexRolloutToolCalls(completed)).toHaveLength(200);
+    const pending = Array.from({ length: 201 }, (_, index) =>
+      item({
+        type: "function_call",
+        name: "exec_command",
+        call_id: `call-${index}`,
+        arguments: "{}",
+      }),
+    );
+    expect(
+      codexRolloutToolCalls(
+        [
+          ...pending,
+          item({ type: "function_call_output", call_id: "call-200", output: "refused" }),
+        ].join("\n"),
+      ),
+    ).toEqual([]);
+  });
+
+  test("only this conversation's private Codex home and rollout files are read", async () => {
+    const { dataDir, directory, sessions } = await sessionFixture();
+    await writeFile(path.join(directory, "rollout-a.jsonl"), rollout);
+    await writeFile(path.join(directory, "notes.jsonl"), rollout);
+    await mkdir(sessions("conversation-2"), { recursive: true });
+    await writeFile(path.join(sessions("conversation-2"), "rollout-b.jsonl"), rollout);
+    expect(await readCodexCoordinatorToolCalls(dataDir, "conversation-1")).toEqual(
+      codexRolloutToolCalls(rollout),
+    );
+    expect(await readCodexCoordinatorToolCalls(dataDir, "missing")).toEqual([]);
+  });
+
+  test("the file cap applies within one directory and across coordinator roots", async () => {
+    const { dataDir, directory } = await sessionFixture();
+    for (let index = 0; index < 66; index++) {
+      await writeFile(
+        path.join(directory, `rollout-${String(index).padStart(3, "0")}.jsonl`),
+        directCall("exec_command", { cmd: `probe-${index}` }),
+      );
+    }
+    const other = directory.replace("coordinator-1", "coordinator-2");
+    await mkdir(other, { recursive: true });
+    await writeFile(path.join(other, "rollout-extra.jsonl"), rollout);
+    const calls = await readCodexCoordinatorToolCalls(dataDir, "conversation-1");
+    expect(calls).toHaveLength(64);
+    expect(calls.at(-1)?.args).toContain("probe-63");
+  });
+
+  test("walk depth four is included; deeper files and symlinks are excluded", async () => {
+    const { dataDir, directory } = await sessionFixture();
+    const included = path.join(directory, "1", "2", "3", "4");
+    const excluded = path.join(included, "5");
+    await mkdir(excluded, { recursive: true });
+    await writeFile(
+      path.join(included, "rollout-included.jsonl"),
+      directCall("exec_command", "included"),
+    );
+    await writeFile(path.join(excluded, "rollout-excluded.jsonl"), rollout);
+    await symlink(
+      path.join(excluded, "rollout-excluded.jsonl"),
+      path.join(directory, "rollout-link.jsonl"),
+    );
+    await symlink(excluded, path.join(directory, "linked-directory"));
+    expect(await readCodexCoordinatorToolCalls(dataDir, "conversation-1")).toEqual(
+      codexRolloutToolCalls(directCall("exec_command", "included")),
+    );
+  });
+
+  test("byte overflow fails closed before reading a rollout", async () => {
+    const { dataDir, directory } = await sessionFixture();
+    const file = path.join(directory, "rollout-large.jsonl");
+    await writeFile(file, "");
+    await truncate(file, 64 * 1024 * 1024 + 1);
+    await expect(readCodexCoordinatorToolCalls(dataDir, "conversation-1")).rejects.toThrow(
+      "byte bound",
+    );
+  });
+
+  test("byte accounting is cumulative and permits the exact limit", async () => {
+    const { dataDir, directory } = await sessionFixture();
+    await writeFile(path.join(directory, "rollout-a.jsonl"), rollout);
+    // Sparse-size metadata avoids allocating or parsing 64 MiB in a unit test.
+    const filesystem = { readFile, readdir, lstat: async () => ({ size: 64 * 1024 * 1024 }) };
+    expect(await readCodexCoordinatorToolCalls(dataDir, "conversation-1", filesystem)).toEqual(
+      codexRolloutToolCalls(rollout),
+    );
+    await writeFile(path.join(directory, "rollout-b.jsonl"), rollout);
+    await expect(
+      readCodexCoordinatorToolCalls(dataDir, "conversation-1", filesystem),
+    ).rejects.toThrow("byte bound");
+  });
+
+  test("lstat failure propagates instead of silently discarding evidence", async () => {
+    const { dataDir, directory } = await sessionFixture();
+    await writeFile(path.join(directory, "rollout-gone.jsonl"), rollout);
+    await expect(
+      readCodexCoordinatorToolCalls(dataDir, "conversation-1", {
+        readFile,
+        readdir,
+        lstat: async () => {
+          throw new Error("rollout disappeared");
+        },
+      }),
+    ).rejects.toThrow("rollout disappeared");
+  });
+
+  test("opt-in spec wiring reads the selected conversation, evaluates it and returns only call names", async () => {
+    const { dataDir, directory, sessions } = await sessionFixture();
+    await writeFile(path.join(directory, "rollout-a.jsonl"), rollout);
+    await mkdir(sessions("decoy"), { recursive: true });
+    await writeFile(
+      path.join(sessions("decoy"), "rollout-decoy.jsonl"),
+      directCall("exec_command", { cmd: "decoy" }),
+    );
+    const input = {
+      platform: "codex" as const,
+      dataDir,
+      conversation: { id: "conversation-1" },
+      before: digest("same"),
+      after: digest("same"),
+      probe,
+      toolCalls: attempts,
+      report: parseReadOnlyReport(reportLine({ create: "denied", edit: "denied" })),
+    };
+    expect(await evaluateReadOnlyConversation(input)).toEqual({
+      failures: [],
+      recordedToolCalls: [
+        "apply_patch",
+        "apply_patch",
+        "exec_command",
+        "exec_command",
+        "exec_command",
+      ],
+    });
+    expect(
+      (await evaluateReadOnlyConversation({ ...input, conversation: { id: "decoy" } })).failures,
+    ).toEqual([missing("create"), missing("edit")]);
+    expect(
+      (await evaluateReadOnlyConversation({ ...input, conversation: { id: "missing" } })).failures,
+    ).toEqual([missing("create"), missing("edit")]);
+    // Other providers must never borrow Codex's evidence, even at the same id.
+    expect(await evaluateReadOnlyConversation({ ...input, platform: "claude" })).toEqual({
+      failures: [missing("create"), missing("edit")],
+    });
   });
 });
 

@@ -52,13 +52,12 @@ import {
   coordinatorLiveSummaryFile,
   createTurnWatch,
   describeDigestChanges,
-  evaluateReadOnlyRun,
+  evaluateReadOnlyConversation,
   fixtureTreeDigest,
   homeEnvironmentWork,
   isSignInError,
   isSignedOut,
   parseReadOnlyReport,
-  readCodexCoordinatorToolCalls,
   readOnlyScenarioPrompt,
   signedOutTurnReason,
   transcriptAssistantText,
@@ -405,11 +404,6 @@ test.describe("live coordinator", () => {
         };
         const calls = transcriptToolCalls(settled.messages);
         summary.toolCalls = calls.map(({ name, state }) => ({ name, state }));
-        // Codex leaves a call its sandbox refused out of the transcript, so its
-        // rollout is read before the conversation is closed.
-        const recordedCalls =
-          platform === "codex" ? await readCodexCoordinatorToolCalls(dataDir, conversation.id) : [];
-        if (platform === "codex") summary.recordedToolCalls = recordedCalls.map(({ name }) => name);
         summary.turn = {
           phase: settled.turn.phase,
           ...(settled.turn.error ? { error: settled.turn.error.slice(0, 500) } : {}),
@@ -417,16 +411,19 @@ test.describe("live coordinator", () => {
 
         const report = parseReadOnlyReport(transcriptAssistantText(settled.messages));
         if (!("error" in report)) summary.outcomes = report.outcomes;
-        const failures = evaluateReadOnlyRun({
+        const { failures, recordedToolCalls } = await evaluateReadOnlyConversation({
+          platform,
+          dataDir,
+          conversation,
           before,
           after,
           report,
           probe,
           toolCalls: calls,
-          recordedCalls,
           escapedInteractions: escaped,
           homeWork: { before: homeBefore, after: homeAfter },
         });
+        if (recordedToolCalls) summary.recordedToolCalls = recordedToolCalls;
         if (settled.turn.phase === "error") {
           const signedOut = signedOutTurnReason({
             projection: settled,

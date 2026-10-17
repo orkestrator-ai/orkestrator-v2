@@ -343,12 +343,18 @@ const MAX_ROLLOUT_BYTES = 64 * 1024 * 1024;
 export async function readCodexCoordinatorToolCalls(
   dataDir: string,
   conversationId: string,
+  filesystem: {
+    lstat: (file: string) => Promise<{ size: number }>;
+    readFile: typeof readFile;
+    readdir: typeof readdir;
+  } = { lstat, readFile, readdir },
 ): Promise<ReadOnlyToolCall[]> {
   const files: string[] = [];
   const walk = async (directory: string, depth: number) => {
     if (depth > 4 || files.length >= MAX_ROLLOUT_FILES) return;
-    const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
+    const entries = await filesystem.readdir(directory, { withFileTypes: true }).catch(() => []);
     for (const entry of entries.toSorted((a, b) => a.name.localeCompare(b.name))) {
+      if (files.length >= MAX_ROLLOUT_FILES) return;
       const child = path.join(directory, entry.name);
       if (entry.isDirectory()) await walk(child, depth + 1);
       else if (entry.isFile() && /^rollout-.*\.jsonl$/.test(entry.name)) files.push(child);
@@ -360,30 +366,35 @@ export async function readCodexCoordinatorToolCalls(
   const calls: ReadOnlyToolCall[] = [];
   let bytes = 0;
   for (const file of files.slice(0, MAX_ROLLOUT_FILES)) {
-    bytes += (await lstat(file)).size;
+    bytes += (await filesystem.lstat(file)).size;
     if (bytes > MAX_ROLLOUT_BYTES) throw new Error("The Codex rollouts exceed their byte bound");
-    calls.push(...codexRolloutToolCalls(await readFile(file, "utf8")));
+    calls.push(...codexRolloutToolCalls(await filesystem.readFile(file, "utf8")));
   }
   return calls.slice(0, MAX_TOOL_CALLS);
 }
 
-const ROLLOUT_CALL_TYPES = new Set(["function_call", "custom_tool_call", "local_shell_call"]);
+/** Only direct tools whose arguments describe the operation, rather than executable source. */
+const DIRECT_ROLLOUT_TOOLS = new Set(["apply_patch", "exec_command", "shell", "shell_command"]);
+const ROLLOUT_OUTPUT_TYPES: Readonly<Record<string, string>> = {
+  function_call: "function_call_output",
+  custom_tool_call: "custom_tool_call_output",
+  local_shell_call: "function_call_output",
+};
 
 /**
- * Every tool call the model made, from a Codex rollout's `response_item`
- * records.
+ * Direct calls with a matching execution output in Codex's response items.
  *
- * Codex 0.162.1 emits no transcript item for a call its sandbox refuses under
- * `approvalPolicy: "never"`: a rejected `apply_patch`, and a command that
- * fails with "Operation not permitted". The model gets the refusal back, but
- * the bridge never sees the call, so it is missing from the transcript. The
- * rollout keeps the model's own call record: its code-mode `exec` cell, whose
- * source names each nested call. A record proves only that the call was made,
- * never how it ended (one cell holds several calls), so the state is always
- * `unknown`.
+ * Code-mode exec cells are deliberately excluded: neither their source nor
+ * their aggregate output establishes which nested calls executed. Early throws,
+ * rejected awaits and unexecuted branches must leave the boundary untested.
+ * Unsupported tools and incomplete records fail closed too. A paired output
+ * establishes execution of a direct call, but not its outcome; the checkout
+ * digest still judges create, edit, shell and commit. Network and MCP always
+ * require transcript evidence.
  */
 export function codexRolloutToolCalls(text: string): ReadOnlyToolCall[] {
   const calls: ReadOnlyToolCall[] = [];
+  const pending = new Map<string, { call: ReadOnlyToolCall; outputType: string }>();
   for (const line of text.split("\n")) {
     if (calls.length >= MAX_TOOL_CALLS) break;
     if (!line.includes('"response_item"')) continue;
@@ -396,12 +407,26 @@ export function codexRolloutToolCalls(text: string): ReadOnlyToolCall[] {
     const { type, payload } = (record ?? {}) as { type?: unknown; payload?: unknown };
     if (type !== "response_item" || !payload || typeof payload !== "object") continue;
     const item = payload as Record<string, unknown>;
-    if (!ROLLOUT_CALL_TYPES.has(String(item.type))) continue;
+    if (typeof item.call_id !== "string") continue;
+    const waiting = pending.get(item.call_id);
+    if (waiting && item.type === waiting.outputType && item.output !== undefined) {
+      calls.push(waiting.call);
+      pending.delete(item.call_id);
+      continue;
+    }
+    const outputType = ROLLOUT_OUTPUT_TYPES[String(item.type)];
+    if (!outputType || pending.size >= MAX_TOOL_CALLS) continue;
+    const name = typeof item.name === "string" ? item.name : String(item.type);
+    const directName = name.replace(/^functions\./, "");
+    if (item.type !== "local_shell_call" && !DIRECT_ROLLOUT_TOOLS.has(directName)) continue;
     const args = item.input ?? item.arguments ?? item.action ?? null;
-    calls.push({
-      name: (typeof item.name === "string" ? item.name : String(item.type)).slice(0, 120),
-      args: (typeof args === "string" ? args : (JSON.stringify(args) ?? "")).slice(0, 4_000),
-      state: "unknown",
+    pending.set(item.call_id, {
+      outputType,
+      call: {
+        name: name.slice(0, 120),
+        args: (typeof args === "string" ? args : (JSON.stringify(args) ?? "")).slice(0, 4_000),
+        state: "unknown",
+      },
     });
   }
   return calls;
@@ -457,8 +482,10 @@ export function homeEnvironmentWork(layout: unknown, sessions: unknown): string[
  * sandbox is read-only may skip the call and still call it denied, which
  * leaves the boundary unexercised. For the classes the digest judges, a call
  * the provider recorded but the transcript cannot show (`recordedCalls`; see
- * {@link codexRolloutToolCalls}) also counts as the attempt, since the digest
- * already proves how it ended. Where the digest cannot see a mutation
+ * {@link codexRolloutToolCalls}) also counts as the attempt only with matching
+ * direct-call execution output. The digest judges create, edit, shell and
+ * commit; source text in a code-mode cell cannot establish execution of its
+ * nested calls. Where the digest cannot see a mutation
  * (see {@link TRANSCRIPT_EVIDENCED}), the transcript outranks the report: a
  * completed call fails the run whatever the agent calls it, a denial needs a
  * refused call, and launch_job must leave no job on the project home. An
@@ -532,6 +559,26 @@ export function evaluateReadOnlyRun(input: {
     failures.push("discovery: the ticket title from list_tickets does not match");
   }
   return failures;
+}
+
+/** Shared by the opt-in spec and credential-free wiring tests. Never reads another platform's rollouts. */
+export async function evaluateReadOnlyConversation(
+  input: Parameters<typeof evaluateReadOnlyRun>[0] & {
+    platform: AgentPlatform;
+    dataDir: string;
+    conversation: { id: string };
+  },
+): Promise<{ failures: string[]; recordedToolCalls?: string[] }> {
+  const recordedCalls =
+    input.platform === "codex"
+      ? await readCodexCoordinatorToolCalls(input.dataDir, input.conversation.id)
+      : [];
+  return {
+    failures: evaluateReadOnlyRun({ ...input, recordedCalls }),
+    ...(input.platform === "codex"
+      ? { recordedToolCalls: recordedCalls.map(({ name }) => name) }
+      : {}),
+  };
 }
 
 function attempts(

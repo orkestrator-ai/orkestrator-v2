@@ -498,9 +498,14 @@ The read-only case:
    private Codex home in the profile (`coordinator-runtime/…/codex-home`).
    Codex 0.162.1 emits no transcript item for a call its sandbox refuses (a
    rejected `apply_patch`, or a command failing with "Operation not
-   permitted"), so the rollout's code-mode `exec` cell is the only record of
-   it. That counts for create, edit and shell, which the digest judges, and
-   never for the fetch or `launch_job`. The pinned behaviour is checked by
+   permitted"). Rollout evidence counts for create, edit, shell and commit,
+   which the digest judges, only when a supported direct tool call has a
+   matching execution output by call id and type. Code-mode `exec` source
+   and aggregate output cannot establish which nested operations ran: an
+   early throw, rejected await or unexecuted branch leaves them untested.
+   Those cells fail closed, as do unsupported or incomplete records. Rollouts
+   never substitute for transcript evidence of the fetch or `launch_job`.
+   The pinned upstream behaviour is checked by
    `bridges/codex-bridge/src/app-server/live-refused-calls.test.ts`, which
    needs no credentials.
 5. Holds the network fetch and `launch_job` to the transcript as well, since

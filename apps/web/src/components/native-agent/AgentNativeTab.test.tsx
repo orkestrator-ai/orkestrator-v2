@@ -1420,6 +1420,8 @@ describe("AgentNativeTab", () => {
       agent: "codex",
       logicalSessionKey: createSessionKey("env-1", "tab-codex-signed-out"),
     });
+    // A local backend shares this machine's browser, so its callback is reachable.
+    expect(beginNativeAgentSignInMock.mock.calls[0]?.[0]).not.toHaveProperty("deviceCode");
     expect(mockToastInfo).toHaveBeenCalledWith("Finish signing in to Codex in your browser");
     const link = screen.getByRole("link", { name: "Open sign-in link" });
     expect(link.getAttribute("href")).toBe("https://auth.example.test/login");
@@ -1506,6 +1508,8 @@ describe("AgentNativeTab", () => {
     expect(screen.getByRole("link", { name: "Open sign-in link" }).getAttribute("href")).toBe(
       "https://auth.example.test/device",
     );
+    // The code stays in the banner for as long as the sign-in takes.
+    expect(screen.getByText("ABCD-1234")).toBeTruthy();
     fireEvent.click(button);
     await waitFor(() =>
       expect(mockToastError).toHaveBeenCalledWith(
@@ -1513,6 +1517,32 @@ describe("AgentNativeTab", () => {
       ),
     );
     expect(screen.queryByRole("link", { name: "Open sign-in link" }) === null).toBe(true);
+    expect(screen.queryByText("ABCD-1234") === null).toBe(true);
+  });
+
+  test("asks for a device code when the backend is on another machine", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      readiness: { state: "authentication-required" as const, message: "Sign in to Codex" },
+    }));
+    getNativeAgentAuthStatusMock.mockImplementation(async () => ({
+      state: "needs-auth" as const,
+      signIn: { kind: "browser-url" as const },
+    }));
+    const previousGateway = window.orkestratorGateway;
+    // The Electron preload publishes `desktop` only for a remote connection.
+    window.orkestratorGateway = { enabled: true, desktop: true };
+    try {
+      render(<AgentNativeTab tabId="tab-codex-remote" data={identity("codex")} isActive />);
+      fireEvent.click(await screen.findByRole("button", { name: "Sign in to Codex" }));
+      await waitFor(() => expect(beginNativeAgentSignInMock).toHaveBeenCalled());
+      expect(beginNativeAgentSignInMock.mock.calls[0]?.[0]).toMatchObject({
+        agent: "codex",
+        deviceCode: true,
+      });
+    } finally {
+      window.orkestratorGateway = previousGateway;
+    }
   });
 
   test("opens a Grok sign-in terminal from the route its readiness names", async () => {

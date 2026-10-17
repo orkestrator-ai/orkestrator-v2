@@ -196,6 +196,36 @@ describe("sign-in routes carry no credential", () => {
     );
   });
 
+  test("POST /global/auth/login starts device code only when asked", async () => {
+    const methods: unknown[] = [];
+    await withRuntimeMethod(
+      "beginAuthLogin",
+      async (method: unknown) => {
+        methods.push(method);
+        return {
+          type: "chatgptDeviceCode",
+          verificationUrl: CANARY_LOGIN_URL,
+          userCode: CANARY_USER_CODE,
+        };
+      },
+      async () => {
+        const body = await (
+          await app.request("/global/auth/login", {
+            method: "POST",
+            body: JSON.stringify({ method: "device-code" }),
+          })
+        ).json();
+        expect(body).toEqual({ url: CANARY_LOGIN_URL, code: CANARY_USER_CODE });
+        await app.request("/global/auth/login", { method: "POST" });
+        await app.request("/global/auth/login", {
+          method: "POST",
+          body: JSON.stringify({ method: "something-else" }),
+        });
+      },
+    );
+    expect(methods).toEqual(["device-code", "browser", "browser"]);
+  });
+
   test("a failed account read redacts its message and excludes app-server's error data", async () => {
     await withRuntimeMethod(
       "readAuthStatus",

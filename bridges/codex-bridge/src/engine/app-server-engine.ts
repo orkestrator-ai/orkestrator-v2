@@ -1931,7 +1931,15 @@ export class AppServerEngine implements CodexEngine {
     return rateLimitWindowsFromRead(response);
   }
 
-  async beginAccountLogin(): Promise<unknown> {
+  /**
+   * Start a ChatGPT login. The browser flow redirects to a callback app-server
+   * serves on this machine's loopback, so a browser elsewhere (a remote
+   * backend, a container) cannot finish it; device code has no callback.
+   */
+  async beginAccountLogin(method: "browser" | "device-code" = "browser"): Promise<unknown> {
+    if (method === "device-code") {
+      return this.supervisor.request("account/login/start", { type: "chatgptDeviceCode" });
+    }
     return this.supervisor.request("account/login/start", {
       type: "chatgpt",
       codexStreamlinedLogin: true,

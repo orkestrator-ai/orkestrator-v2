@@ -1165,7 +1165,10 @@ app.get("/global/auth", async (c) => {
 });
 
 app.post("/global/auth/login", async (c) => {
-  const raw = (await appServerRuntime.beginAuthLogin()) as {
+  // `{ method: "device-code" }` asks for the flow without a loopback callback.
+  const body = (await c.req.json().catch(() => ({}))) as { method?: unknown };
+  const method = body?.method === "device-code" ? "device-code" : "browser";
+  const raw = (await appServerRuntime.beginAuthLogin(method)) as {
     authUrl?: string;
     verificationUrl?: string;
     userCode?: string;

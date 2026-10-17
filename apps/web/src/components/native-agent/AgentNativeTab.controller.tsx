@@ -90,6 +90,7 @@ import {
 } from "@/lib/chat/client-only-messages";
 import { pinNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
+import { isRemoteGatewayConnection } from "@/lib/gateway-url";
 import {
   buildMessageForkPlan,
   forkAttachmentNotice,
@@ -913,6 +914,7 @@ export function SharedNativeAgentController({
     currentSignInStatus?.kind === "browser-url" || currentSignInStatus?.kind === "device-code";
   const [signInPending, setSignInPending] = useState(false);
   const [signInUrl, setSignInUrl] = useState<string | null>(null);
+  const [signInCode, setSignInCode] = useState<string | null>(null);
   // A sign-in that runs in the platform's own CLI opens where this agent runs:
   // the environment's terminal is local for a local tab, inside the container
   // otherwise.
@@ -940,10 +942,14 @@ export function SharedNativeAgentController({
   const startSignIn = useCallback(() => {
     setSignInPending(true);
     setSignInUrl(null);
+    setSignInCode(null);
     void beginNativeAgentSignIn({
       environmentId: data.environmentId,
       agent: platform,
       logicalSessionKey: sessionKey,
+      // A browser on another machine cannot reach a loopback callback on the
+      // backend's, so a remote connection signs in with a device code.
+      ...(isRemoteGatewayConnection() ? { deviceCode: true } : {}),
     })
       .then((result) => {
         if (result.url) {
@@ -954,6 +960,7 @@ export function SharedNativeAgentController({
           setSignInUrl(url.href);
           openSignInUrl(url.href);
         }
+        if (result.code) setSignInCode(result.code);
         if (result.code) toast.info(`Enter code ${result.code} to finish signing in to ${label}`);
         else if (result.url) toast.info(`Finish signing in to ${label} in your browser`);
       })
@@ -2410,6 +2417,11 @@ export function SharedNativeAgentController({
               >
                 Open sign-in link
               </a>
+            ) : null}
+            {signInCode ? (
+              <span>
+                Code <span className="select-all font-mono font-semibold">{signInCode}</span>
+              </span>
             ) : null}
           </div>
         ) : terminalSignInCommand && createTerminalTab ? (

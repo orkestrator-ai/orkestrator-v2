@@ -288,11 +288,14 @@ export class HttpBridgeCatalogAdapter {
     };
   }
 
-  async beginSignIn(): Promise<{ url?: string; code?: string }> {
+  async beginSignIn(options?: { deviceCode?: boolean }): Promise<{ url?: string; code?: string }> {
     const response = await bridgeFetch(
       this.connection,
       "/global/auth/login",
-      { method: "POST" },
+      {
+        method: "POST",
+        ...(options?.deviceCode ? { body: JSON.stringify({ method: "device-code" }) } : {}),
+      },
       this.fetchImpl,
     );
     await assertOkWithErrorDetail(response, `${this.agent} sign in`);

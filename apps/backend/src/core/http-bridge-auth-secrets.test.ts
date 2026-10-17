@@ -91,4 +91,17 @@ describe.each(CONNECTIONS)("%s bridge auth boundary", (_agent, connection) => {
     expectOnlyLoginSecrets(answer, "sign-in answer");
     expectNothingSecretLogged(output, "sign-in");
   });
+
+  test("asks the bridge for a device code only when the caller does", async () => {
+    const bodies: Array<string | null> = [];
+    const { provider } = httpProvider(async (_input, init) => {
+      bodies.push(typeof init?.body === "string" ? init.body : null);
+      return Response.json({ url: CANARY_LOGIN_URL, code: CANARY_USER_CODE });
+    }, connection);
+
+    await provider.beginSignIn!({ deviceCode: true });
+    await provider.beginSignIn!();
+
+    expect(bodies).toEqual([JSON.stringify({ method: "device-code" }), null]);
+  });
 });

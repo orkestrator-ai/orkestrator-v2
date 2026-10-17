@@ -22,6 +22,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn, createSessionKey } from "@/lib/utils";
+import { isRemoteGatewayConnection } from "@/lib/gateway-url";
 import { getNativeAgentData, type TabInfo } from "@/types/paneLayout";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useConfigStore } from "@/stores/configStore";
@@ -93,6 +94,9 @@ interface ControlUpdateState {
 
 /** Host-meter freshness requested while the agent-information popover is open. */
 export const AGENT_INFO_SYSTEM_USAGE_INTERVAL_MS = 3_000;
+
+/** One device-code toast at a time; a confirmed sign-in dismisses it. */
+const DEVICE_CODE_TOAST_ID = "agent-info-device-code";
 
 interface ActiveNativeSession {
   provider: AgentPlatform;
@@ -458,7 +462,10 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
         if (typeof status?.state !== "string") throw new Error("Account status is unavailable");
         setAccountStatus({ key: accountKey, status });
         setAccountReadFailed(false);
-        if (status.state === "signed-in") signInReadsRemaining = 0;
+        if (status.state === "signed-in") {
+          signInReadsRemaining = 0;
+          toast.dismiss(DEVICE_CODE_TOAST_ID);
+        }
       } catch {
         if (cancelled || request !== sequence) return;
         setAccountReadFailed(true);
@@ -1439,11 +1446,20 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                                 environmentId: activeSession.environmentId,
                                 agent: activeSession.provider,
                                 logicalSessionKey: activeSession.sessionKey,
+                                // No loopback callback reaches a remote backend.
+                                ...(isRemoteGatewayConnection() ? { deviceCode: true } : {}),
                               });
                               reader?.watchSignIn();
                               // The desktop shell denies window.open.
                               if (result.url) await openInBrowser(result.url);
-                              if (result.code) toast.info(`Device code: ${result.code}`);
+                              // The code is needed for as long as the sign-in takes.
+                              if (result.code) {
+                                toast.info(`Device code: ${result.code}`, {
+                                  id: DEVICE_CODE_TOAST_ID,
+                                  duration: Infinity,
+                                  closeButton: true,
+                                });
+                              }
                             })
                           }
                         >

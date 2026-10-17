@@ -34,3 +34,31 @@ or skips were changed.
 - **Isolated rerun:** `mise run test:logged -- --name fix-quotas-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/web-annotation-quotas.test.ts --parallel=1 --only-failures` passed (exit 0, 2.4 seconds).
 - **Evidence:** `/tmp/orkestrator-test-run.Pv387k/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Hypothesis:** fixture lifecycle work exceeded its deadline under aggregate load or shared backend activity. The owning test and backend were unchanged; the cause is unconfirmed. No test was skipped or timeout raised.
+
+## Investigation on 2026-10-17 (not reproduced; still open)
+
+- **Host:** macOS, `main` at `31d0fb06`, host load average about 13 on 18 cores
+  (nine other worktrees running live suites).
+- **Phase timings, alone:** the case's restart (closing the first service and
+  initializing a second over 5,000 seeded request rows) took 33 to 39 ms, and
+  the `afterEach` cleanup took 3.7 to 4.4 ms (three runs, with timing probes
+  that were then removed).
+- **Under load:** eight concurrent copies of `web-annotation-quotas.test.ts`
+  with `web-annotation-payloads.bench.test.ts`, twice, all passed (2.2 to
+  2.7 s each). All 22 `web-annotation*.test.ts` files with `--parallel=2`, four
+  times: 265 passed each time (4.2 to 5.2 s).
+- **Lead, unconfirmed:** both recorded failures stopped within 6 ms of 10 s
+  (10,000.19 and 10,005.53 ms), not at a load-dependent time. 10 s is also the
+  SQLite `busy_timeout` that `StorageDatabase` sets (`storage-database.ts`), and
+  `bun:sqlite`'s busy handler blocks the event loop while it waits. So a hook
+  that hits a held write lock would stall for exactly that long, and Bun could
+  report the hook timeout only after it returned. No second writer to the
+  harness's private database has been found: the harness closes the first
+  service before opening the second, and every transaction is synchronous.
+  `WebAnnotationStorage.close()` keeps its store map, and `database()` reopens
+  a connection lazily after close. A late write from a closed service would
+  therefore open a second connection, but none was observed.
+- **Next step:** when it recurs, find which statement blocked, for example by
+  lowering the `busy_timeout` in a local `StorageDatabase` build so that the
+  `SQLITE_BUSY` error names the statement. No test, deadline or skip was
+  changed.

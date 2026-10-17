@@ -430,22 +430,35 @@ describe("large collections", () => {
     harness = await createHarness();
     const batch = 60;
     const batchMs: number[] = [];
+    const medianMs: number[] = [];
     for (let round = 0; round < 3; round++) {
-      const { ms } = await timed(async () => {
-        for (let index = 0; index < batch; index++) {
-          await harness!.service.create({
+      const samples: number[] = [];
+      for (let index = 0; index < batch; index++) {
+        const { ms } = await timed(() =>
+          harness!.service.create({
             environmentId: ENV_A,
             operationId: `op-growth-${round}-${index}`,
             capture: fixtureCaptureInput("element"),
             body: `Growth note ${round}-${index}`,
-          });
-        }
-      });
-      batchMs.push(ms);
+          }),
+        );
+        samples.push(ms);
+      }
+      batchMs.push(samples.reduce((sum, ms) => sum + ms, 0));
+      medianMs.push(samples.sort((a, b) => a - b)[batch / 2]!);
     }
-    measurements.creationGrowth = { first: batchMs[0]!, second: batchMs[1]!, third: batchMs[2]! };
-    // Quadratic manifest growth would make the third batch several times slower.
-    expect(batchMs[2]!).toBeLessThan(Math.max(batchMs[0]! * 4, 2_000));
+    measurements.creationGrowth = {
+      first: batchMs[0]!,
+      second: batchMs[1]!,
+      third: batchMs[2]!,
+      firstMedian: medianMs[0]!,
+      thirdMedian: medianMs[2]!,
+    };
+    // A whole-history rewrite makes every create cost grow with the collection,
+    // so the typical create of the third batch would be several times slower.
+    // Compare medians, not batch totals: a few writes stalled by a contended
+    // disk move a total past its bound but leave the median alone (flake 0225).
+    expect(medianMs[2]!).toBeLessThan(Math.max(medianMs[0]! * 4, 2_000 / batch));
     expect(batchMs.reduce((sum, ms) => sum + ms, 0)).toBeLessThan(60_000);
   });
 });

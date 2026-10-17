@@ -1,4 +1,5 @@
 import * as shared from "./native-agent-service-shared.js";
+import { withProviderSessionTeardownLock } from "./provider-session-ownership.js";
 import {
   coordinatorResearchLine,
   loadCoordinatorResearch,
@@ -1157,39 +1158,49 @@ export abstract class NativeAgentServiceBase {
     );
     await this.assertEnvironmentLive(input.environmentId);
     const provider = await this.provider(input);
-    provider.registerSession?.(input.providerSessionId, {
-      origin: input.origin ?? "interactive-native",
-      interactionPolicy:
-        input.interactionPolicy ??
-        (input.origin === "build-pipeline" || input.origin === "looped-review"
-          ? UNATTENDED_AGENT_INTERACTION_POLICY
-          : INTERACTIVE_AGENT_INTERACTION_POLICY),
-      phase: input.phase,
-    });
-    // Same liveness-only rule as ensureSession: a failed last turn is not a
-    // missing session, and adopting one must still succeed.
-    const { status } = await readProviderStatus(provider, input.providerSessionId);
-    await this.assertEnvironmentLive(input.environmentId);
-    if (status === "missing") {
-      throw new NativeAgentProviderSessionMissingError();
-    }
-    const session = await this.storage.adoptNativeAgentSession({
-      key,
-      environmentId: input.environmentId,
-      agent: input.agent,
-      logicalSessionKey: input.logicalSessionKey,
-      providerSessionId: input.providerSessionId,
-      origin: input.origin,
-      interactionPolicy: input.interactionPolicy,
-      controls: input.controls ?? controlsFromSessionInput(input),
-      owner: input.owner,
-      executionPolicy: input.executionPolicy,
-      policy: input.policy,
-      initialPromptPresentation: input.initialPromptPresentation,
-      expectedProviderSessionId: input.expectedProviderSessionId,
-    });
-    void this.reconcileAgentInteractions().catch(() => undefined);
-    return session;
+    // Acquisition and last-owner close share a lifecycle fence. Recheck liveness
+    // after waiting: a close may have completed while this adoption was queued.
+    return withProviderSessionTeardownLock(
+      this.storage,
+      input.environmentId,
+      input.agent,
+      input.providerSessionId,
+      async () => {
+        provider.registerSession?.(input.providerSessionId, {
+          origin: input.origin ?? "interactive-native",
+          interactionPolicy:
+            input.interactionPolicy ??
+            (input.origin === "build-pipeline" || input.origin === "looped-review"
+              ? UNATTENDED_AGENT_INTERACTION_POLICY
+              : INTERACTIVE_AGENT_INTERACTION_POLICY),
+          phase: input.phase,
+        });
+        // Same liveness-only rule as ensureSession: a failed last turn is not a
+        // missing session, and adopting one must still succeed.
+        const { status } = await readProviderStatus(provider, input.providerSessionId);
+        await this.assertEnvironmentLive(input.environmentId);
+        if (status === "missing") {
+          throw new NativeAgentProviderSessionMissingError();
+        }
+        const session = await this.storage.adoptNativeAgentSession({
+          key,
+          environmentId: input.environmentId,
+          agent: input.agent,
+          logicalSessionKey: input.logicalSessionKey,
+          providerSessionId: input.providerSessionId,
+          origin: input.origin,
+          interactionPolicy: input.interactionPolicy,
+          controls: input.controls ?? controlsFromSessionInput(input),
+          owner: input.owner,
+          executionPolicy: input.executionPolicy,
+          policy: input.policy,
+          initialPromptPresentation: input.initialPromptPresentation,
+          expectedProviderSessionId: input.expectedProviderSessionId,
+        });
+        void this.reconcileAgentInteractions().catch(() => undefined);
+        return session;
+      },
+    );
   }
 
   /**

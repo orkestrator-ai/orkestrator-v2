@@ -98,6 +98,7 @@ type Vendor = {
   opencode: {
     sessions: Array<{ id: string; prompts: string[]; replies: string[] }>;
     deleted: string[];
+    aborted: string[];
   };
 };
 
@@ -214,6 +215,46 @@ async function resumeInNewTab(page: Page, platform: Platform, prompt: string) {
   await expect(picker).toHaveCount(0);
 }
 
+/**
+ * The new tab was given an empty session before the resume replaced it; that
+ * session must be closed, not left running beside the resumed one (for Grok,
+ * an agent process per resume). `since` is the bridge request count, and
+ * `openCodeBefore` the OpenCode session ids, from before the new tab opened.
+ */
+async function expectReplacedSessionClosed(
+  request: APIRequestContext,
+  platform: Platform,
+  since: number,
+  openCodeBefore: ReadonlySet<string>,
+) {
+  if (platform === "opencode") {
+    // OpenCode has no bridge. The replaced session is the one the new tab
+    // created, which never ran a prompt; its retaining close aborts it.
+    const created = (await vendor(request)).opencode.sessions.filter(
+      (session) => !openCodeBefore.has(session.id),
+    );
+    expect(created.map((session) => session.prompts)).toEqual([[]]);
+    await expect
+      .poll(async () => (await vendor(request)).opencode.aborted)
+      .toContain(created[0]!.id);
+    expect((await vendor(request)).opencode.deleted).toEqual([]);
+    return;
+  }
+  const sent = await bridgeRequests(request, platform, since);
+  const createdAt = sent.indexOf("POST /session/create");
+  const resumedAt = sent.indexOf("POST /session/resume");
+  expect(createdAt, "the new tab created a session").toBeGreaterThanOrEqual(0);
+  expect(resumedAt, "the resume followed the create").toBeGreaterThan(createdAt);
+  const replaced = sent
+    .slice(createdAt + 1, resumedAt)
+    .map((line) => /^[A-Z]+ \/session\/([^/]+)/.exec(line)?.[1])
+    .find((id) => id !== undefined);
+  expect(replaced, "the created session was used before the resume").toBeTruthy();
+  await expect
+    .poll(() => bridgeRequests(request, platform, since))
+    .toContain(`POST /session/${replaced}/close`);
+}
+
 function uniqueMarker(platform: Platform): string {
   return `${platform}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
@@ -262,8 +303,18 @@ for (const platform of ["cursor", "pi", "opencode", "grok"] as const) {
     await expect(page.getByRole("button", { name: "New agent tab" })).toBeEnabled();
     await expect(page.getByRole("button", { name: /^Close / })).toHaveCount(0);
 
+    const requestsBeforeResume = (await bridgeRequests(request, platform)).length;
+    const openCodeBeforeResume = new Set(
+      (await vendor(request)).opencode.sessions.map((session) => session.id),
+    );
     await resumeInNewTab(page, platform, first);
     await expect(page.getByText(`Answer to: ${first}`)).toHaveCount(1, { timeout: 30_000 });
+    await expectReplacedSessionClosed(
+      request,
+      platform,
+      requestsBeforeResume,
+      openCodeBeforeResume,
+    );
 
     await completeTurn(page, platform, second);
     await expect

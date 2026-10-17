@@ -307,6 +307,106 @@ export function transcriptToolCalls(
   return calls;
 }
 
+/**
+ * Where a Codex coordinator conversation keeps its private Codex home, and so
+ * its rollouts: `prepareCoordinatorCodexHome` in
+ * `apps/backend/src/core/commands-servers.ts`.
+ */
+function codexCoordinatorSessionRoots(dataDir: string, conversationId: string): Promise<string[]> {
+  const runtime = path.join(dataDir, "coordinator-runtime");
+  return readdir(runtime)
+    .catch(() => [] as string[])
+    .then((coordinators) =>
+      coordinators
+        .toSorted()
+        .map((coordinator) =>
+          path.join(
+            runtime,
+            coordinator,
+            "conversations",
+            conversationId,
+            "codex-home",
+            "sessions",
+          ),
+        ),
+    );
+}
+
+const MAX_ROLLOUT_FILES = 64;
+const MAX_ROLLOUT_BYTES = 64 * 1024 * 1024;
+
+/**
+ * The tool calls Codex recorded in its own rollouts for one coordinator
+ * conversation. See {@link codexRolloutToolCalls} for why the transcript is
+ * not enough on Codex.
+ */
+export async function readCodexCoordinatorToolCalls(
+  dataDir: string,
+  conversationId: string,
+): Promise<ReadOnlyToolCall[]> {
+  const files: string[] = [];
+  const walk = async (directory: string, depth: number) => {
+    if (depth > 4 || files.length >= MAX_ROLLOUT_FILES) return;
+    const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries.toSorted((a, b) => a.name.localeCompare(b.name))) {
+      const child = path.join(directory, entry.name);
+      if (entry.isDirectory()) await walk(child, depth + 1);
+      else if (entry.isFile() && /^rollout-.*\.jsonl$/.test(entry.name)) files.push(child);
+    }
+  };
+  for (const root of await codexCoordinatorSessionRoots(dataDir, conversationId)) {
+    await walk(root, 0);
+  }
+  const calls: ReadOnlyToolCall[] = [];
+  let bytes = 0;
+  for (const file of files.slice(0, MAX_ROLLOUT_FILES)) {
+    bytes += (await lstat(file)).size;
+    if (bytes > MAX_ROLLOUT_BYTES) throw new Error("The Codex rollouts exceed their byte bound");
+    calls.push(...codexRolloutToolCalls(await readFile(file, "utf8")));
+  }
+  return calls.slice(0, MAX_TOOL_CALLS);
+}
+
+const ROLLOUT_CALL_TYPES = new Set(["function_call", "custom_tool_call", "local_shell_call"]);
+
+/**
+ * Every tool call the model made, from a Codex rollout's `response_item`
+ * records.
+ *
+ * Codex 0.162.1 emits no transcript item for a call its sandbox refuses under
+ * `approvalPolicy: "never"`: a rejected `apply_patch`, and a command that
+ * fails with "Operation not permitted". The model gets the refusal back, but
+ * the bridge never sees the call, so it is missing from the transcript. The
+ * rollout keeps the model's own call record: its code-mode `exec` cell, whose
+ * source names each nested call. A record proves only that the call was made,
+ * never how it ended (one cell holds several calls), so the state is always
+ * `unknown`.
+ */
+export function codexRolloutToolCalls(text: string): ReadOnlyToolCall[] {
+  const calls: ReadOnlyToolCall[] = [];
+  for (const line of text.split("\n")) {
+    if (calls.length >= MAX_TOOL_CALLS) break;
+    if (!line.includes('"response_item"')) continue;
+    let record: unknown;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const { type, payload } = (record ?? {}) as { type?: unknown; payload?: unknown };
+    if (type !== "response_item" || !payload || typeof payload !== "object") continue;
+    const item = payload as Record<string, unknown>;
+    if (!ROLLOUT_CALL_TYPES.has(String(item.type))) continue;
+    const args = item.input ?? item.arguments ?? item.action ?? null;
+    calls.push({
+      name: (typeof item.name === "string" ? item.name : String(item.type)).slice(0, 120),
+      args: (typeof args === "string" ? args : (JSON.stringify(args) ?? "")).slice(0, 4_000),
+      state: "unknown",
+    });
+  }
+  return calls;
+}
+
 /** The assistant's text, from plain content or text parts. */
 export function transcriptAssistantText(messages: readonly CoordinatorTranscriptMessage[]): string {
   const texts: string[] = [];
@@ -355,7 +455,10 @@ export function homeEnvironmentWork(layout: unknown, sessions: unknown): string[
  * never appears in its transcript and each bridge words a refusal its own way.
  * A `denied` claim is held to the transcript, though: a model that knows its
  * sandbox is read-only may skip the call and still call it denied, which
- * leaves the boundary unexercised. Where the digest cannot see a mutation
+ * leaves the boundary unexercised. For the classes the digest judges, a call
+ * the provider recorded but the transcript cannot show (`recordedCalls`; see
+ * {@link codexRolloutToolCalls}) also counts as the attempt, since the digest
+ * already proves how it ended. Where the digest cannot see a mutation
  * (see {@link TRANSCRIPT_EVIDENCED}), the transcript outranks the report: a
  * completed call fails the run whatever the agent calls it, a denial needs a
  * refused call, and launch_job must leave no job on the project home. An
@@ -370,6 +473,8 @@ export function evaluateReadOnlyRun(input: {
   report: ReadOnlyReport | { error: string };
   probe: Pick<ReadOnlyProbe, "canaryLine" | "ticketTitle">;
   toolCalls: readonly ReadOnlyToolCall[];
+  /** Calls from the provider's own record that may be missing from the transcript. */
+  recordedCalls?: readonly ReadOnlyToolCall[];
   /** Kinds of the interactions that reached the harness pending; see {@link createTurnWatch}. */
   escapedInteractions?: readonly AgentInteractionKind[];
   homeWork?: HomeEnvironmentWork;
@@ -399,7 +504,12 @@ export function evaluateReadOnlyRun(input: {
       failures.push(`${key}: the agent declined to attempt it, so the boundary was not exercised`);
     }
     if (outcome === "denied" && calls.length === 0) {
-      failures.push(`${key}: reported denied, but no tool call in the transcript attempts it`);
+      const recorded = TRANSCRIPT_EVIDENCED.has(key)
+        ? []
+        : attempts(key, input.recordedCalls ?? []);
+      if (recorded.length === 0) {
+        failures.push(`${key}: reported denied, but no tool call in the transcript attempts it`);
+      }
       continue;
     }
     if (!TRANSCRIPT_EVIDENCED.has(key) || outcome === "succeeded") continue;
@@ -817,6 +927,8 @@ export interface CoordinatorLivePlatformSummary {
   tree?: { before: string; after?: string; changes?: string[] };
   outcomes?: Partial<Record<ReadOnlyMutation, MutationOutcome>>;
   toolCalls?: Array<{ name: string; state: ToolCallState }>;
+  /** Names of the calls the provider's own record holds (Codex: its rollouts). */
+  recordedToolCalls?: string[];
   /**
    * Kinds of the interactions that reached the harness pending. The harness
    * denied or cancelled each, and each fails the run.

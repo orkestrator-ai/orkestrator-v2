@@ -494,6 +494,15 @@ The read-only case:
    call in the transcript that names the attempt (the file, `git commit`, a
    tool named `launch_job`, or `example.com`). A model that skips a call
    because it knows its sandbox is read-only has not exercised the boundary.
+   On Codex, the call can also be in the conversation's own rollout, under its
+   private Codex home in the profile (`coordinator-runtime/…/codex-home`).
+   Codex 0.162.1 emits no transcript item for a call its sandbox refuses (a
+   rejected `apply_patch`, or a command failing with "Operation not
+   permitted"), so the rollout's code-mode `exec` cell is the only record of
+   it. That counts for create, edit and shell, which the digest judges, and
+   never for the fetch or `launch_job`. The pinned behaviour is checked by
+   `bridges/codex-bridge/src/app-server/live-refused-calls.test.ts`, which
+   needs no credentials.
 5. Holds the network fetch and `launch_job` to the transcript as well, since
    the digest cannot see them: a fetch changes nothing in the checkout, and a
    launched worker writes after the turn has been measured. A matching tool

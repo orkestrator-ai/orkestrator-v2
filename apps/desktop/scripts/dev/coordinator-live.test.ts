@@ -10,6 +10,7 @@ import {
   READ_ONLY_REPORT_MARKER,
   coordinatorLivePlatformsFromEnv,
   coordinatorLiveSummaryFile,
+  codexRolloutToolCalls,
   coordinatorLiveVerdict,
   createTurnWatch,
   describeDigestChanges,
@@ -23,6 +24,7 @@ import {
   parseCoordinatorLiveArguments,
   parseCoordinatorLivePlatformSummary,
   parseReadOnlyReport,
+  readCodexCoordinatorToolCalls,
   readOnlyScenarioPrompt,
   runCoordinatorLiveSuite,
   signedOutTurnReason,
@@ -287,8 +289,8 @@ describe("read-only scenario", () => {
   });
 
   test("a denied step needs a call in the transcript; an unavailable one does not", () => {
-    // Codex's first live run: it reported create, edit and shell denied
-    // without calling anything for them.
+    // Codex's first live runs: the transcript held nothing for create, edit
+    // and shell, which Codex reported denied.
     const report = parseReadOnlyReport(
       reportLine({ create: "denied", edit: "denied", network: "unavailable" }),
     );
@@ -331,6 +333,121 @@ describe("read-only scenario", () => {
         ],
       }),
     ).toEqual([]);
+  });
+});
+
+describe("calls Codex recorded but left out of the transcript", () => {
+  const digest = (value: string): FixtureTreeDigest => ({
+    digest: value,
+    components: {
+      files: value,
+      head: "h",
+      refs: "r",
+      index: "i",
+      status: "s",
+      config: "c",
+      hooks: "k",
+      worktrees: "w",
+    },
+    files: {},
+  });
+  /** One code-mode cell holding the three calls the sandbox refused before any item. */
+  const cell = [
+    'const p = "*** Begin Patch\\n*** Add File: coordinator-live-created.txt\\n+probe\\n*** End Patch\\n";',
+    "await tools.apply_patch(p);",
+    'await tools.apply_patch("*** Begin Patch\\n*** Update File: README.md\\n@@\\n+coordinator-live-edit\\n*** End Patch\\n");',
+    'await tools.exec_command({ cmd: "touch coordinator-live-shell.txt" });',
+    'await tools.exec_command({ cmd: "curl -sS https://example.com/" });',
+  ].join("\n");
+  const rollout = [
+    JSON.stringify({ type: "session_meta", payload: { id: "thread-1" } }),
+    JSON.stringify({
+      type: "response_item",
+      payload: { type: "message", role: "user", content: [{ type: "input_text", text: "touch" }] },
+    }),
+    JSON.stringify({
+      type: "response_item",
+      payload: { type: "custom_tool_call", call_id: "call_1", name: "exec", input: cell },
+    }),
+    JSON.stringify({
+      type: "response_item",
+      payload: { type: "custom_tool_call_output", call_id: "call_1", output: "patch rejected" },
+    }),
+    JSON.stringify({
+      type: "response_item",
+      payload: {
+        type: "function_call",
+        call_id: "call_2",
+        name: "mcp__orkestrator__list_tickets",
+        arguments: "{}",
+      },
+    }),
+    '{"type":"response_item","payload":',
+    "",
+  ].join("\n");
+
+  test("the rollout's call records are read, as attempts with no outcome", () => {
+    const calls = codexRolloutToolCalls(rollout);
+    expect(calls.map(({ name, state }) => ({ name, state }))).toEqual([
+      { name: "exec", state: "unknown" },
+      { name: "mcp__orkestrator__list_tickets", state: "unknown" },
+    ]);
+    expect(calls[0]!.args).toContain("coordinator-live-shell.txt");
+  });
+
+  test("only this conversation's private Codex home is read", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "coordinator-live-rollouts-"));
+    roots.push(dataDir);
+    const sessions = (conversation: string) =>
+      path.join(
+        dataDir,
+        "coordinator-runtime",
+        "coordinator-1",
+        "conversations",
+        conversation,
+        "codex-home",
+        "sessions",
+        "2026",
+        "10",
+        "17",
+      );
+    await mkdir(sessions("conversation-1"), { recursive: true });
+    await mkdir(sessions("conversation-2"), { recursive: true });
+    await writeFile(path.join(sessions("conversation-1"), "rollout-a.jsonl"), rollout);
+    await writeFile(path.join(sessions("conversation-1"), "notes.jsonl"), rollout);
+    await writeFile(path.join(sessions("conversation-2"), "rollout-b.jsonl"), rollout);
+    expect(
+      (await readCodexCoordinatorToolCalls(dataDir, "conversation-1")).map(({ name }) => name),
+    ).toEqual(["exec", "mcp__orkestrator__list_tickets"]);
+    expect(await readCodexCoordinatorToolCalls(dataDir, "conversation-3")).toEqual([]);
+  });
+
+  test("a recorded call answers for the checkout classes, never for the fetch or launch_job", () => {
+    const report = parseReadOnlyReport(reportLine({ create: "denied", edit: "denied" }));
+    // What the transcript holds: only the calls app-server made items for.
+    const transcript: ReadOnlyToolCall[] = [
+      { name: "bash", args: '{"command":"git commit --allow-empty"}', state: "refused" },
+    ];
+    const run = (recordedCalls: ReadOnlyToolCall[]) =>
+      evaluateReadOnlyRun({
+        before: digest("same"),
+        after: digest("same"),
+        report,
+        probe,
+        toolCalls: transcript,
+        recordedCalls,
+      });
+    expect(run(codexRolloutToolCalls(rollout))).toEqual([
+      "mcp: reported denied, but no tool call in the transcript attempts it",
+      "network: reported denied, but no tool call in the transcript attempts it",
+    ]);
+    expect(run([])).toEqual([
+      "create: reported denied, but no tool call in the transcript attempts it",
+      "edit: reported denied, but no tool call in the transcript attempts it",
+      "shell: reported denied, but no tool call in the transcript attempts it",
+      "mcp: reported denied, but no tool call in the transcript attempts it",
+      "network: reported denied, but no tool call in the transcript attempts it",
+    ]);
   });
 });
 

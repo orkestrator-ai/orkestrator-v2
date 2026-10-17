@@ -101,6 +101,12 @@ newest row, which every window holds.
   `RUN_LIVE_CODEX_APP_SERVER=1` (no credits), and once with
   `RUN_LIVE_CODEX_WEB_SEARCH_CANARY=1`, which spends a few turns proving
   `cached` still refuses a page `live` opens.
+- Never read a missing tool row as "the model did not try". Under
+  `approvalPolicy: "never"`, app-server emits no item for a call its sandbox
+  refuses: a rejected `apply_patch`, or a command failing with "Operation not
+  permitted". The model still gets the refusal, and only the rollout keeps its
+  code-mode `exec` cell (verified against 0.162.1 by `live-refused-calls.test.ts`,
+  no credits). The live coordinator suite reads the rollout for this.
 - Agent version bumps follow [`docs/development/upgrade-agents.md`](../../docs/development/upgrade-agents.md);
   the generated protocol under `app-server/generated/` is a lockfile.
 - Never resolve an approval to "approved" by default. Every timeout, disconnect,

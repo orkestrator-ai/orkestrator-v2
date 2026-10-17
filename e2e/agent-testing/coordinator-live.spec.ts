@@ -58,6 +58,7 @@ import {
   isSignInError,
   isSignedOut,
   parseReadOnlyReport,
+  readCodexCoordinatorToolCalls,
   readOnlyScenarioPrompt,
   signedOutTurnReason,
   transcriptAssistantText,
@@ -149,7 +150,7 @@ async function openProfile(page: Page) {
     (project) => project.localPath === status.testProject,
   );
   expect(fixture, `the ${profile} fixture project is missing`).toBeTruthy();
-  return { checkout: status.testProject!, invoke, fixture: fixture! };
+  return { checkout: status.testProject!, dataDir: runtime.dataDir, invoke, fixture: fixture! };
 }
 
 /**
@@ -244,7 +245,7 @@ test.describe("live coordinator", () => {
       // Undone last-first in `finally`, whatever happened before.
       const cleanup: Array<() => Promise<unknown>> = [];
       try {
-        const { checkout, invoke, fixture } = await openProfile(page);
+        const { checkout, dataDir, invoke, fixture } = await openProfile(page);
         const projectId = fixture.id;
 
         const config = await invoke<{ global: Record<string, unknown> }>("get_config");
@@ -404,6 +405,11 @@ test.describe("live coordinator", () => {
         };
         const calls = transcriptToolCalls(settled.messages);
         summary.toolCalls = calls.map(({ name, state }) => ({ name, state }));
+        // Codex leaves a call its sandbox refused out of the transcript, so its
+        // rollout is read before the conversation is closed.
+        const recordedCalls =
+          platform === "codex" ? await readCodexCoordinatorToolCalls(dataDir, conversation.id) : [];
+        if (platform === "codex") summary.recordedToolCalls = recordedCalls.map(({ name }) => name);
         summary.turn = {
           phase: settled.turn.phase,
           ...(settled.turn.error ? { error: settled.turn.error.slice(0, 500) } : {}),
@@ -417,6 +423,7 @@ test.describe("live coordinator", () => {
           report,
           probe,
           toolCalls: calls,
+          recordedCalls,
           escapedInteractions: escaped,
           homeWork: { before: homeBefore, after: homeAfter },
         });

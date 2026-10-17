@@ -172,6 +172,29 @@ advertises.
     under names its project configuration cannot claim, Cursor through its
     in-process hosted tools, and Pi through its bridge-owned MCP client.
 
+11. **Show Codex sandbox refusals in the live transcript.** Codex 0.162.1
+    emits no item for a call its sandbox refuses under `approvalPolicy:
+    "never"`: a rejected `apply_patch`, or a command failing with "Operation
+    not permitted" (`live-refused-calls.test.ts`). The model gets the refusal
+    and usually says so, but the live transcript shows no row for it, so a
+    Codex coordinator or Multi Review reviewer appears to claim a denial it
+    never tried. A reload should show it, because hydration builds a row from
+    every rollout call record, the `exec` cell included
+    (`createPersistedToolParts` in `history/rollout.ts`; not checked live). So
+    the live and reloaded transcripts disagree. The live coordinator suite reads the
+    rollout itself (see
+    [coordinator-live-conformance.md](coordinator-live-conformance.md)). Two
+    ways to fix the view:
+    - opt in to `experimentalApi` with `experimentalRawEvents` on thread start,
+      which streams the cell as `rawResponseItem/completed` (checked on
+      0.162.1), and extend the reducer's raw `apply_patch` fallback to `exec`
+      cells. The bridge declines `experimentalApi` today because the router
+      cannot type-check experimental shapes;
+    - read the turn's new rollout records at `turn/completed` and add the cells
+      the stream missed.
+
+    Either way, a cell that also produced items needs one row, not two.
+
 ### Qualification
 
 - The live read-only scenario (tree hash unchanged, every mutation denied,

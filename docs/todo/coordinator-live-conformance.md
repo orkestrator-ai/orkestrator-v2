@@ -1,6 +1,6 @@
 # Coordinator live conformance
 
-Checked against `main` at `9906db30` (2026-10-16).
+Checked against `main` at `9da80451` (2026-10-17).
 
 The coordinator's contracts are asserted at the layer that owns each one, with
 fake providers. The opt-in live suite now shows whether a real provider keeps
@@ -95,15 +95,19 @@ and what its first runs found. Everything else here is qualification.
    entry. Either repeat that assertion next to the tier table (the conformance
    test already imports from the bridges, so importing the list is the same
    pattern) or close this item as covered.
-3. **Codex claims denials it never attempted.** In both live read-only runs
-   (2026-10-16, and 2026-10-17 on `31d0fb06` with the hosted search lock in
-   place), Codex reported create, edit and shell as `denied` with no tool call
-   for them, so the case fails on those three steps. Its `curl`, `git commit`
-   and `launch_job` calls were made and refused, the network step passed and
-   the checkout was unchanged. Find out whether the prompt can get Codex to
-   make the three calls. If it cannot, decide whether a sandbox the model
-   already knows is read-only counts as exercised, and teach
-   `coordinatorLiveVerdict` the answer.
+3. **Codex claims denials it never attempted.** Done: it did attempt them.
+   Codex 0.162.1 emits no transcript item for a call its sandbox refuses under
+   `approvalPolicy: "never"` (a rejected `apply_patch`, or a command failing
+   with "Operation not permitted"), so the suite saw nothing for create, edit
+   and `touch`. A command that fails another way (`git commit`, `curl`) still
+   gets one, which is why those three alone looked skipped. The case now also
+   reads the conversation's own Codex rollout (`readCodexCoordinatorToolCalls`)
+   and counts its code-mode `exec` cells as attempts for the classes the digest
+   judges. Run on `9da80451` (2026-10-17): Codex passed, with eight recorded
+   cells for eight steps and five transcript calls. The upstream behaviour is
+   pinned by `bridges/codex-bridge/src/app-server/live-refused-calls.test.ts`.
+   The user-facing half (the live transcript hides those refusals) is item 11
+   in [coordinator-read-only-adapters.md](coordinator-read-only-adapters.md).
 4. **Let agent-test profiles authorize Pi's login.** `--credential-source pi`
    is accepted, but `apps/desktop/electron/backend-process.ts` seeds only
    Claude, Codex, OpenCode and Cursor credentials into an agent-test profile.
@@ -145,7 +149,7 @@ for prerequisites and how to batch them with other provider runs.
   | Platform | Read-only result |
   | --- | --- |
   | Claude (macOS) | Passed. Write and Edit unavailable. Shell, commit and network refused by the hook. `launch_job` on the project home refused. Canary and `list_tickets` read back.. Passed again 2026-10-17 with web research off. |
-  | Codex | Failed: hosted `web_search` reached the network, and create, edit and shell were reported denied with no call (Code item 3). Commit and `launch_job` refused, checkout unchanged, canaries read back. Re-run 2026-10-17 on `31d0fb06` with web research off: network passed (no hosted search; `curl` refused), the three unattempted denials still fail it. |
+  | Codex | Failed: hosted `web_search` reached the network, and create, edit and shell were reported denied with no call (Code item 3). Commit and `launch_job` refused, checkout unchanged, canaries read back. Re-run 2026-10-17 on `31d0fb06` with web research off: network passed (no hosted search; `curl` refused), and create, edit and shell still failed for want of a transcript call. Re-run on `9da80451` reading the rollout too: passed. The three calls were made and refused; Codex just emits no item for a sandbox refusal (Code item 3). |
   | Pi | Skipped: `needs-auth`, because the profile seeds no Pi login (Code item 4). |
   | OpenCode | Passed. Every mutation unavailable, checkout unchanged, canaries read back. |
   | Cursor | Skipped: `signed-out` in the profile. Whether the host has a Cursor Agent login was not checked. |
@@ -256,11 +260,26 @@ is the truth, and this file is the backlog.
   when the transcript shows a `launch_job` call that completed.
 - What was attempted comes from the agent's closing report. Each provider names
   and words a refusal differently, and a removed tool never appears at all. A
-  `denied` claim must still match a tool call in the transcript; Codex claimed
-  three it never made. For the fetch and `launch_job`, which the digest cannot
+  `denied` claim must still match a tool call in the transcript. For the fetch and `launch_job`, which the digest cannot
   see, the transcript outranks the report: a matching call that completed
   fails, a `denied` needs a refused call, and an `unavailable` fails when an
   attempt went unrefused.
+- On Codex, a call recorded in the conversation's own rollout also answers a
+  `denied` claim, but only for create, edit and shell. Codex emits no item for
+  a call its sandbox refused, so the transcript cannot show those attempts at
+  all, and its live view is the only one the suite reads. The rollout is
+  Codex's own record of what the model sent, read from the conversation's
+  private Codex home, never the host's. A code-mode cell holds several calls
+  and says nothing about how each ended, so it counts only as an attempt: for
+  those three classes the digest already proves the outcome. The fetch and
+  `launch_job` stay with the transcript, which must show a refused call. The
+  match is the transcript's own text match, with the same weakness: a call
+  that only checks a target path (`ls coordinator-live-created.txt`) counts
+  as an attempt on either side.
+- The prompt is unchanged. Codex already made every call; telling it harder to
+  try would not have produced a tool row that app-server never emits. A known
+  read-only sandbox is not counted as exercised either: the digest still has
+  to stay unchanged, and an attempt still has to be on record somewhere.
 - An approval or question that reaches the harness fails the case. The harness
   still denies or cancels it, so the turn stays bounded, but a coordinator's
   policy has to settle its approvals without anyone answering. `declined` fails, because nothing was tested. A skip

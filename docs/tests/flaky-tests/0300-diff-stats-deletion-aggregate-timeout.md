@@ -1,6 +1,6 @@
 # Diff-statistics deletion case exceeds the aggregate deadline
 
-- **ID:** 0317
+- **ID:** 0300
 - **Status:** open
 
 Observed: 2026-10-17

@@ -167,6 +167,6 @@ skip changed.
 - Original command: `mise run test:logged -- --name full-restart-continuation -- mise run test` on `9da80451` plus the Multi Review restart-continuation change, macOS arm64, alongside another environment's full suite on the same host.
 - Aggregate: backend 8,800 passed, 41 skipped, four failed and one between-tests error across 472 files (505.46 seconds). One failure was the change's own provider line-limit breach, fixed before commit; the other three were five-second timeouts in unchanged owners. All other workspace packages and the root, bridge and protocol groups passed.
 - Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.vczqfd/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
-- This test timed out at 6482.48 ms. In the same owner, `deleting an environment drops its counts from the snapshot` also timed out (5236.95 ms), recorded as [0317](0317-diff-stats-deletion-aggregate-timeout.md).
+- This test timed out at 6482.48 ms. In the same owner, `deleting an environment drops its counts from the snapshot` also timed out (5236.95 ms), recorded as [0300](0300-diff-stats-deletion-aggregate-timeout.md).
 - Unchanged owning-file rerun: `bun test ./tests/commands-integration.test.ts` from `apps/backend` passed 55 of 55.
 - No assertion, timeout, skip or implementation in this owner changed.

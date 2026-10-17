@@ -166,8 +166,12 @@ export function providerArgv(
     denyNetwork?: boolean;
     /** The session's policy turns project resources on. */
     trustProject?: boolean;
+    readOnlyProfilePath?: string;
   },
 ): string[] {
+  if (options.readOnlyProfilePath && !config.argv.includes("agent")) {
+    throw new Error("Grok read-only profile requires a local agent launcher");
+  }
   const network =
     options.denyNetwork && Object.hasOwn(NETWORK_DENIED_ARGUMENTS, config.id)
       ? NETWORK_DENIED_ARGUMENTS[config.id]!
@@ -188,8 +192,15 @@ export function providerArgv(
     const after = [
       ...(network && argument === network.subcommand ? network.afterSubcommand : []),
       ...(trust && argument === trust.subcommand ? trust.afterSubcommand : []),
+      ...(argument === "agent" && options.readOnlyProfilePath ? ["--no-leader"] : []),
     ];
-    return [argument, ...new Set(after)];
+    return [
+      argument,
+      ...new Set(after),
+      ...(argument === "agent" && options.readOnlyProfilePath
+        ? ["--agent-profile", options.readOnlyProfilePath]
+        : []),
+    ];
   });
   return network ? [...network.leading, ...argv] : argv;
 }

@@ -77,6 +77,11 @@ import { readSessionPreferences, updateSessionPreferences } from "./session-pref
 export { readSessionPreferences, updateSessionPreferences };
 
 import { resetClaudeSignInForTesting } from "./claude-sign-in.js";
+import {
+  resetTerminalSlashCommandsForTesting,
+  terminalSlashCommandWritesForTesting,
+} from "./claude-terminal-commands.js";
+export { terminalSlashCommandWritesForTesting };
 import { setClaudeRuntimeIdleTimingForTesting } from "./session-manager-runtime-idle.js";
 
 export const sessionManagerTestHome = mkdtempSync(join(tmpdir(), "claude-session-manager-home-"));
@@ -286,6 +291,8 @@ afterEach(() => {
   resetSessionActivityProbeCacheForTesting();
   // The account read is bridge-wide; one test's "no login" must not lock the next.
   resetClaudeSignInForTesting();
+  // Remembered terminal lists are bridge-wide, like the account read.
+  resetTerminalSlashCommandsForTesting();
   installSdkModuleMock();
   for (const key of Object.keys(queryControlOverrides)) delete queryControlOverrides[key];
   setClaudeRuntimeIdleTimingForTesting();

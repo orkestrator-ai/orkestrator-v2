@@ -196,6 +196,15 @@ The isolated credential-free Codex browser run on `8a2f9444` plus the retired-di
 
 The unchanged full owning file passed on fresh credential-free Codex fixture profile `qa-retired-owner-b37f`: `ORKESTRATOR_AGENT_TEST_PROFILE=qa-retired-owner-b37f ORKESTRATOR_AGENT_TEST_RUN_ID=retired-gateway-owner mise run test:logged -- --name gateway-owner -- mise run test:agent:browser -- e2e/agent-testing/browser-gateway.spec.ts` (13 passed, six opt-in skips, 145.4 seconds including CLI build). Evidence: `output/agent-testing/retired-gateway-owner/browser/`. Both profiles were stopped and reset. No picker implementation, assertion, timeout or skip changed.
 
+## Pending Resolve review recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name resolve-isolated-browser -- mise run test:agent:browser:isolated` on credential-free Codex fixture profile `qa-browser-17a015ee-6d4`, one Playwright worker alongside repository/component-browser validation.
+- **Failure:** The narrow host-picker case timed out after 15000 ms waiting to click the hidden `Repository settings` button at line 238.
+- **Suite counts:** 27 passed, 25 skipped and one failed across 53 cases (549.7 seconds including startup and cleanup).
+- **Owning-file rerun:** `ORKESTRATOR_AGENT_TEST_PROFILE=qa-resolve-review-9f1a4 ORKESTRATOR_AGENT_TEST_RUN_ID=qa-resolve-review-9f1a4-gateway mise run test:logged -- --name resolve-gateway-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1` passed the unchanged file: 13 passed, six skipped, exit 0 in 135.6 seconds.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.FifXht/resolve-isolated-browser.log.gz`; sanitized browser results under `output/agent-testing/qa-browser-17a015ee-6d4/browser/` and `output/agent-testing/qa-resolve-review-9f1a4-gateway/browser/`.
+- **Assessment:** Matches the existing intermittent tools-popover symptom. The Pending Resolve change does not alter project selection or popover dismissal. Both profiles were stopped and reset; no timeout, assertion or skip changed.
+
 ## Device-login review validation (2026-10-17)
 
 `mise run test:logged -- --name login-isolated-browser -- mise run test:agent:browser:isolated`

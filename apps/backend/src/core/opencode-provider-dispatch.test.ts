@@ -915,6 +915,7 @@ describe("OpenCode provider dispatch", () => {
           status: "ready",
           truncated: false,
           freshness: "ttl",
+          revision: 0,
           commands: [
             {
               name: "/init",
@@ -1045,6 +1046,7 @@ describe("OpenCode provider dispatch", () => {
           commands: [],
           truncated: false,
           freshness: "ttl",
+          revision: 0,
         });
         // Rows that cannot be addressed exactly are dropped, and the list says so.
         fake.setCommandListResponse({
@@ -1058,7 +1060,7 @@ describe("OpenCode provider dispatch", () => {
           ],
         });
         await expect(provider.refreshCommands!()).resolves.toEqual({
-          outcome: "reread",
+          outcome: "reloaded",
         });
         const catalogue = await provider.commandCatalogue!();
         expect(catalogue.commands.map((command) => command.name)).toEqual(["/ok"]);
@@ -1314,6 +1316,239 @@ describe("OpenCode provider dispatch", () => {
         expect(fake.promptCalls).toHaveLength(0);
       } finally {
         gate.resolve();
+        await provider.dispose?.();
+      }
+    });
+
+    // OpenCode 1.19.0 reads command files once per directory instance: until
+    // `instance.dispose`, `command.list` keeps answering what it loaded first.
+    const instanceScopedList = (fake: ReturnType<typeof openCodeFake>) => {
+      patchClient(fake).command.list = async (parameters) => {
+        fake.commandListCalls.push(parameters as Record<string, unknown>);
+        const names = fake.instanceDisposeCalls.length > 0 ? ["alpha", "beta"] : ["alpha"];
+        return { data: names.map((name) => ({ name, source: "command", hints: [] })) };
+      };
+    };
+
+    test("a refresh reloads an idle directory so command files added since start are listed", async () => {
+      const fake = openCodeFake();
+      instanceScopedList(fake);
+      const provider = openCodeProvider(fake);
+      try {
+        const before = await provider.commandCatalogue!("owned-session");
+        expect(before.commands.map((command) => command.name)).toEqual(["/alpha"]);
+        expect(before.revision).toBe(0);
+
+        await expect(provider.refreshCommands!("owned-session")).resolves.toEqual({
+          outcome: "reloaded",
+        });
+        expect(fake.instanceDisposeCalls).toEqual([{ directory: "/workspace" }]);
+        const after = await provider.commandCatalogue!("owned-session");
+        expect(after).toMatchObject({ status: "ready", revision: 1 });
+        expect(after.commands.map((command) => command.name)).toEqual(["/alpha", "/beta"]);
+        // Session snapshots carry the revision, so the backend cache re-reads.
+        await expect(provider.sessionStateSnapshot!("owned-session")).resolves.toMatchObject({
+          commandCatalogueRevision: 1,
+        });
+        // The new command runs.
+        await provider.send("owned-session", "/beta", {
+          requestId: "after-reload",
+          allowProviderCommands: true,
+          command: selected("beta"),
+        });
+        expect(fake.commandDispatchCalls).toEqual([
+          expect.objectContaining({ command: "beta", directory: "/workspace" }),
+        ]);
+      } finally {
+        await provider.dispose?.();
+      }
+    });
+
+    test("a refresh never disposes a busy directory and reloads at its next idle edge", async () => {
+      const fake = openCodeFake();
+      instanceScopedList(fake);
+      // A session this provider does not own still runs in the same instance.
+      fake.setStatusResponse({
+        data: { "owned-session": { type: "idle" }, "other-tab": { type: "busy" } },
+      });
+      const disposed = deferred();
+      fake.setInstanceDisposeHandler(async () => {
+        disposed.resolve();
+        return { data: true };
+      });
+      const provider = openCodeProvider(fake);
+      try {
+        await expect(provider.refreshCommands!("owned-session")).resolves.toEqual({
+          outcome: "deferred",
+          message: "OpenCode loads changed command files once none of its sessions is running.",
+        });
+        expect(fake.instanceDisposeCalls).toHaveLength(0);
+        const waiting = await provider.commandCatalogue!("owned-session");
+        expect(waiting).toMatchObject({ status: "stale", revision: 0 });
+        expect(waiting.commands.map((command) => command.name)).toEqual(["/alpha"]);
+
+        await waitUntil(() => fake.subscriptions.length > 0);
+        // An idle edge while another session is still busy changes nothing.
+        fake.subscriptions[0]!.push({
+          type: "session.status",
+          properties: { sessionID: "owned-session", status: { type: "idle" } },
+        });
+        fake.setStatusResponse({
+          data: { "owned-session": { type: "idle" }, "other-tab": { type: "idle" } },
+        });
+        fake.subscriptions[0]!.push({
+          type: "session.idle",
+          properties: { sessionID: "other-tab" },
+        });
+        await disposed.promise;
+        expect(fake.instanceDisposeCalls).toHaveLength(1);
+        // A dispatch waits for the reload to finish before it reads the list.
+        await provider.send("owned-session", "/beta", {
+          requestId: "after-deferred-reload",
+          allowProviderCommands: true,
+          command: selected("beta"),
+        });
+        const after = await provider.commandCatalogue!("owned-session");
+        expect(after).toMatchObject({ status: "ready", revision: 1 });
+        expect(after.commands.map((command) => command.name)).toEqual(["/alpha", "/beta"]);
+      } finally {
+        await provider.dispose?.();
+      }
+    });
+
+    test("reconnect reconciliation recovers a deferred reload after a lost idle event", async () => {
+      const fake = openCodeFake();
+      instanceScopedList(fake);
+      fake.setStatusResponse({ data: { "owned-session": { type: "busy" } } });
+      const provider = openCodeProvider(fake);
+      provider.registerSession?.("owned-session");
+      try {
+        await provider.commandCatalogue!("owned-session");
+        await waitUntil(() => fake.subscriptions.length === 1 && fake.messageCalls.length > 0);
+        // Wait for initial reconciliation before asking for the reload.
+        await provider.status("owned-session");
+        await expect(provider.refreshCommands!("owned-session")).resolves.toMatchObject({
+          outcome: "deferred",
+        });
+        expect(fake.instanceDisposeCalls).toHaveLength(0);
+        // The turn ends across a stream gap: no idle event reaches the provider.
+        fake.setStatusResponse({ data: {} });
+        fake.subscriptions[0]!.close();
+        await waitUntil(
+          () => fake.subscriptions.length >= 2 && fake.instanceDisposeCalls.length === 1,
+        );
+        const after = await provider.commandCatalogue!("owned-session");
+        expect(after).toMatchObject({ status: "ready", revision: 1 });
+        expect(after.commands.map((command) => command.name)).toEqual(["/alpha", "/beta"]);
+        await expect(provider.sessionStateSnapshot!("owned-session")).resolves.toMatchObject({
+          commandCatalogueRevision: 1,
+        });
+      } finally {
+        await provider.dispose?.();
+      }
+    });
+
+    test("a deferred disposal failure leaves the catalogue stale until explicit refresh succeeds", async () => {
+      const fake = openCodeFake();
+      fake.setStatusResponse({ data: { "owned-session": { type: "busy" } } });
+      fake.setInstanceDisposeHandler(async () => ({
+        error: { name: "BadRequest" },
+        response: { status: 400 },
+      }));
+      const provider = openCodeProvider(fake);
+      try {
+        await expect(provider.refreshCommands!("owned-session")).resolves.toMatchObject({
+          outcome: "deferred",
+        });
+        await waitUntil(() => fake.subscriptions.length > 0);
+        fake.setStatusResponse({ data: {} });
+        fake.subscriptions[0]!.push({
+          type: "session.idle",
+          properties: { sessionID: "owned-session" },
+        });
+        await waitUntil(() => fake.instanceDisposeCalls.length === 1);
+        await expect(provider.commandCatalogue!("owned-session")).resolves.toMatchObject({
+          status: "stale",
+          revision: 0,
+        });
+        fake.setInstanceDisposeHandler(null);
+        await expect(provider.refreshCommands!("owned-session")).resolves.toEqual({
+          outcome: "reloaded",
+        });
+        await expect(provider.commandCatalogue!("owned-session")).resolves.toMatchObject({
+          status: "ready",
+          revision: 1,
+        });
+      } finally {
+        await provider.dispose?.();
+      }
+    });
+
+    test("a plain prompt acknowledgement does not reload before the turn becomes busy", async () => {
+      const fake = openCodeFake();
+      instanceScopedList(fake);
+      const promptGate = deferred();
+      fake.setPromptGate(promptGate.promise);
+      const provider = openCodeProvider(fake);
+      try {
+        const sending = provider.send("owned-session", "Hello", { requestId: "in-flight" });
+        await waitUntil(() => fake.promptCalls.length === 1);
+        // OpenCode has not marked the session busy yet; the open dispatch alone
+        // holds the reload off.
+        await expect(provider.refreshCommands!("owned-session")).resolves.toMatchObject({
+          outcome: "deferred",
+        });
+        expect(fake.instanceDisposeCalls).toHaveLength(0);
+        const disposed = deferred();
+        fake.setInstanceDisposeHandler(async () => {
+          disposed.resolve();
+          return { data: true };
+        });
+        promptGate.resolve();
+        await sending;
+        // promptAsync returned 204, but the server still reports idle. Releasing
+        // the HTTP dispatch must not dispose the newly forked turn.
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(fake.instanceDisposeCalls).toHaveLength(0);
+        fake.setStatusResponse({ data: { "owned-session": { type: "busy" } } });
+        fake.subscriptions[0]!.push({
+          type: "session.status",
+          properties: { sessionID: "owned-session", status: { type: "busy" } },
+        });
+        fake.setStatusResponse({ data: {} });
+        fake.subscriptions[0]!.push({
+          type: "session.idle",
+          properties: { sessionID: "owned-session" },
+        });
+        await disposed.promise;
+        expect(fake.instanceDisposeCalls).toHaveLength(1);
+      } finally {
+        promptGate.resolve();
+        await provider.dispose?.();
+      }
+    });
+
+    test("a refused reload still re-reads the list and reports the failure", async () => {
+      const fake = openCodeFake();
+      instanceScopedList(fake);
+      fake.setInstanceDisposeHandler(async () => ({
+        error: { name: "BadRequest" },
+        response: { status: 400 },
+      }));
+      const provider = openCodeProvider(fake);
+      try {
+        await provider.commandCatalogue!("owned-session");
+        const listReads = fake.commandListCalls.length;
+        await expect(provider.refreshCommands!("owned-session")).resolves.toMatchObject({
+          outcome: "failed",
+          message: expect.stringContaining("could not reload its command files"),
+        });
+        expect(fake.commandListCalls.length).toBe(listReads + 1);
+        await expect(provider.commandCatalogue!("owned-session")).resolves.toMatchObject({
+          status: "stale",
+          revision: 0,
+        });
+      } finally {
         await provider.dispose?.();
       }
     });

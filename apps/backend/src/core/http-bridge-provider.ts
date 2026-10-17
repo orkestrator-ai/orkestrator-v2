@@ -22,7 +22,6 @@ import type {
 import {
   AmbiguousPromptDispatchError,
   PromptRejectedError,
-  ProviderSessionFailedError,
   ProviderUnavailableError,
   type ProviderMcpConfigReport,
   type ProviderRuntimeHealth,
@@ -74,6 +73,7 @@ import { readHttpBridgeAuthoritativeSessionState } from "./http-bridge-progressi
 import {
   assertOk,
   assertOkWithErrorDetail,
+  throwExplainedTurnFailure,
   boundedJson,
   bridgeFetch,
   normalizeProviderReadiness,
@@ -492,12 +492,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           remaining: 16 * 1024 * 1024,
         }),
       ) ?? {};
-    if (body.status === "error" && typeof body.error === "string") {
-      const detail = body.error.trim().slice(0, 4_000);
-      if (detail) {
-        throw new ProviderSessionFailedError(this.agent, detail);
-      }
-    }
+    const interruption = throwExplainedTurnFailure(this.agent, body);
     const status =
       body.status === "running" || body.status === "idle" || body.status === "error"
         ? body.status
@@ -505,6 +500,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     const contextUsage = this.contextUsage(body.contextUsage);
     return {
       status,
+      ...(interruption ? { interruption } : {}),
       // sessionTokens has explicit cumulative semantics. Do not expose an
       // occupancy-only bridge snapshot as review consumption.
       ...(contextUsage?.sessionTokens !== undefined ? { contextUsage } : {}),

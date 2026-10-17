@@ -52,7 +52,7 @@ import {
   coordinatorLiveSummaryFile,
   createTurnWatch,
   describeDigestChanges,
-  evaluateReadOnlyRun,
+  evaluateReadOnlyConversation,
   fixtureTreeDigest,
   homeEnvironmentWork,
   isSignInError,
@@ -62,9 +62,11 @@ import {
   signedOutTurnReason,
   transcriptAssistantText,
   transcriptToolCalls,
+  withCodeModeCellDetails,
   type CoordinatorLivePlatformSummary,
   type CoordinatorTurnProjection,
   type ReadOnlyProbe,
+  type ToolDetails,
 } from "../../apps/desktop/scripts/dev/coordinator-live";
 
 type Status = {
@@ -402,8 +404,6 @@ test.describe("live coordinator", () => {
           after: after.digest,
           changes: describeDigestChanges(before, after),
         };
-        const calls = transcriptToolCalls(settled.messages);
-        summary.toolCalls = calls.map(({ name, state }) => ({ name, state }));
         summary.turn = {
           phase: settled.turn.phase,
           ...(settled.turn.error ? { error: settled.turn.error.slice(0, 500) } : {}),
@@ -411,15 +411,29 @@ test.describe("live coordinator", () => {
 
         const report = parseReadOnlyReport(transcriptAssistantText(settled.messages));
         if (!("error" in report)) summary.outcomes = report.outcomes;
-        const failures = evaluateReadOnlyRun({
+        // Codex's refused calls show as the code-mode cells that made them,
+        // whose output (the evidence) is fetched as opening the row does.
+        const messages =
+          platform === "codex"
+            ? await withCodeModeCellDetails(settled.messages, (detailRef) =>
+                invoke<ToolDetails | null>("get_native_agent_tool_details", {
+                  ...identity,
+                  detailRef,
+                }),
+              )
+            : settled.messages;
+        const { failures, toolCalls, cellRows, cellCalls } = evaluateReadOnlyConversation({
+          platform,
+          messages,
           before,
           after,
           report,
           probe,
-          toolCalls: calls,
           escapedInteractions: escaped,
           homeWork: { before: homeBefore, after: homeAfter },
         });
+        summary.toolCalls = toolCalls.map(({ name, state }) => ({ name, state }));
+        if (platform === "codex") summary.cellCalls = { rows: cellRows, counted: cellCalls };
         if (settled.turn.phase === "error") {
           const signedOut = signedOutTurnReason({
             projection: settled,

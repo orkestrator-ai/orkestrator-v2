@@ -479,28 +479,120 @@ export async function seedInstalledAgentToolchains(
 }
 
 /**
+ * Copy the provider logins an isolated profile cannot point at, re-read on
+ * every start so a refreshed or removed host login wins.
+ *
  * Grok has no documented home-directory override, so an isolated local test
  * cannot point only Grok at the host home. Copy just its credential into the
- * private profile instead. The source is re-read on every start so a refreshed
- * host login wins; sessions, prompts, logs, and the rest of HOME stay isolated.
+ * private profile instead; sessions, prompts, logs, and the rest of HOME stay
+ * isolated.
+ *
+ * Cursor's login is Orkestrator's own, in the production data directory: the
+ * stored key in `config.json`, else the key minted by the in-app sign-in. Only
+ * the effective key is written, owner-only, to a harness-owned file the backend
+ * reads in place of an inherited `CURSOR_API_KEY`. The file is removed when the
+ * profile does not authorize Cursor or the host has no usable key.
  */
 export async function seedAgentTestProviderCredentials(
   profile: RuntimeProfile,
   options: ModelCacheSeedOptions = {},
 ): Promise<string[]> {
-  if (!profile.credentialSources.includes("grok")) return [];
   const roots = options.roots ?? defaultRuntimeProfileRoots();
-  return seedBoundedFiles(
-    [
-      {
-        label: "grok/auth.json",
-        source: path.join(roots.homeDir, ".grok", "auth.json"),
-        destination: path.join(profile.dataDir, "agent-credentials", "home", ".grok", "auth.json"),
-        replace: true,
-      },
-    ],
-    options,
+  const grokDestination = path.join(
+    profile.dataDir,
+    "agent-credentials",
+    "home",
+    ".grok",
+    "auth.json",
   );
+  const seeded = profile.credentialSources.includes("grok")
+    ? await seedBoundedFiles(
+        [
+          {
+            label: "grok/auth.json",
+            source: path.join(roots.homeDir, ".grok", "auth.json"),
+            destination: grokDestination,
+            replace: true,
+          },
+        ],
+        options,
+      )
+    : [];
+  // An absent or failed refresh must not leave a previous account signed in.
+  if (!seeded.includes("grok/auth.json")) await rm(grokDestination, { force: true });
+  if (await seedAgentTestCursorCredential(profile, roots)) seeded.push(CURSOR_SNAPSHOT_LABEL);
+  return seeded;
+}
+
+const CURSOR_SNAPSHOT_LABEL = "cursor/host-api-key.json";
+const MAX_CURSOR_SOURCE_BYTES = 1024 * 1024;
+
+/** Read by `loadAgentTestHostCursorApiKey` in `apps/backend/src/core/agent-test-cursor-credential.ts`. */
+export function agentTestCursorSnapshotPath(profile: RuntimeProfile): string {
+  return path.join(profile.dataDir, "agent-credentials", "cursor", "host-api-key.json");
+}
+
+async function seedAgentTestCursorCredential(
+  profile: RuntimeProfile,
+  roots: RuntimeProfileRoots,
+): Promise<boolean> {
+  const destination = agentTestCursorSnapshotPath(profile);
+  const credential = profile.credentialSources.includes("cursor")
+    ? await hostCursorApiKey(roots.productionDataDir).catch(() => undefined)
+    : undefined;
+  if (!credential) {
+    // Not caught: a revoked key that cannot be removed must stop the start.
+    await rm(destination, { force: true });
+    return false;
+  }
+  // Like the Grok copy, a seed that cannot be written leaves Cursor signed out.
+  try {
+    await atomicWriteJson(destination, credential);
+    return true;
+  } catch {
+    // Fail closed even when replacing an existing account. Removal errors
+    // propagate so startup cannot load a stale credential.
+    await rm(destination, { force: true });
+    return false;
+  }
+}
+
+/** The key a production backend would run Cursor under, in its own order. */
+async function hostCursorApiKey(
+  productionDataDir: string,
+): Promise<{ apiKey: string; apiKeyExpiresAtMs?: number } | undefined> {
+  const config = await readBoundedJson(path.join(productionDataDir, "config.json"));
+  const configured = (config as { global?: { cursorApiKey?: unknown } } | undefined)?.global
+    ?.cursorApiKey;
+  if (typeof configured === "string" && configured.trim()) return { apiKey: configured.trim() };
+
+  const login = (await readBoundedJson(path.join(productionDataDir, "cursor-sdk", "auth.json"))) as
+    | { apiKey?: unknown; apiKeyExpiresAtMs?: unknown }
+    | undefined;
+  const minted = typeof login?.apiKey === "string" ? login.apiKey.trim() : "";
+  if (!minted) return undefined;
+  const expiresAt = login?.apiKeyExpiresAtMs;
+  if (typeof expiresAt === "number" && expiresAt <= Date.now()) return undefined;
+  return {
+    apiKey: minted,
+    ...(typeof expiresAt === "number" ? { apiKeyExpiresAtMs: expiresAt } : {}),
+  };
+}
+
+async function readBoundedJson(filePath: string): Promise<unknown> {
+  const handle = await open(filePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)).catch(
+    () => undefined,
+  );
+  if (!handle) return undefined;
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || info.size > MAX_CURSOR_SOURCE_BYTES) return undefined;
+    return JSON.parse(await handle.readFile("utf8")) as unknown;
+  } catch {
+    return undefined;
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
 }
 
 export async function readProfile(profilePath: string): Promise<RuntimeProfile> {

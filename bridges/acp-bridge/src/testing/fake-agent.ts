@@ -2,6 +2,7 @@
 
 import { appendFileSync } from "node:fs";
 
+import { handlePolicyDenial } from "./fake-agent-policy-denial.js";
 import { lines, type JsonObject } from "./fake-agent-context.js";
 import { handleFinalMessage } from "./fake-agent-final.js";
 import { handlePromptSetup } from "./fake-agent-prompt-setup.js";
@@ -23,6 +24,7 @@ lines.on("line", (line) => {
   const message = JSON.parse(line) as JsonObject;
   if (handleSessionMessage(message)) return;
   if (handlePromptSetup(message)) return;
+  if (handlePolicyDenial(message)) return;
   if (handlePromptStart(message)) return;
   handleFinalMessage(message);
 });

@@ -15,6 +15,7 @@ import {
   describeDigestChanges,
   escapedInteractionFailures,
   evaluateReadOnlyRun,
+  evaluateReadOnlyConversation,
   fixtureTreeDigest,
   homeEnvironmentWork,
   isSignInError,
@@ -23,6 +24,8 @@ import {
   parseCoordinatorLiveArguments,
   parseCoordinatorLivePlatformSummary,
   parseReadOnlyReport,
+  transcriptCellEvidence,
+  withCodeModeCellDetails,
   readOnlyScenarioPrompt,
   runCoordinatorLiveSuite,
   signedOutTurnReason,
@@ -287,8 +290,8 @@ describe("read-only scenario", () => {
   });
 
   test("a denied step needs a call in the transcript; an unavailable one does not", () => {
-    // Codex's first live run: it reported create, edit and shell denied
-    // without calling anything for them.
+    // Codex's first live runs: the transcript held nothing for create, edit
+    // and shell, which Codex reported denied.
     const report = parseReadOnlyReport(
       reportLine({ create: "denied", edit: "denied", network: "unavailable" }),
     );
@@ -331,6 +334,268 @@ describe("read-only scenario", () => {
         ],
       }),
     ).toEqual([]);
+  });
+});
+
+describe("Codex code-mode cells in the transcript", () => {
+  const digest = (value: string): FixtureTreeDigest => ({
+    digest: value,
+    components: {
+      files: value,
+      head: "h",
+      refs: "r",
+      index: "i",
+      status: "s",
+      config: "c",
+      hooks: "k",
+      worktrees: "w",
+    },
+    files: {},
+  });
+  /**
+   * A code-mode cell as the Codex bridge shows one it read back from the
+   * rollout: an `exec` row with the cell's source and the output the model got.
+   */
+  const cell = (source: string, output: string[], id = "cell") => ({
+    role: "assistant",
+    parts: [
+      {
+        type: "tool-invocation",
+        toolUseId: id,
+        toolName: "exec",
+        toolArgs: { input: source },
+        toolState: "failure",
+        toolError: output.join("\n"),
+      },
+    ],
+  });
+  const cells = (...messages: ReturnType<typeof cell>[]) => transcriptCellEvidence(messages);
+  const run = (cellCalls: ReadOnlyToolCall[], toolCalls = attempts) =>
+    evaluateReadOnlyRun({
+      before: digest("same"),
+      after: digest("same"),
+      report: parseReadOnlyReport(reportLine({ create: "denied", edit: "denied" })),
+      probe,
+      toolCalls,
+      cellCalls,
+    });
+  const missing = (key: string) =>
+    `${key}: reported denied, but no tool call in the transcript attempts it`;
+  const rejectedPatch =
+    "Script error:\npatch rejected: writing is blocked by read-only sandbox; rejected by user approval settings";
+  const refusedTouch =
+    '{"exit_code":1,"output":"touch: coordinator-live-shell.txt: Operation not permitted\\n"}';
+  const createSource =
+    'await tools.apply_patch("*** Begin Patch\\n*** Add File: coordinator-live-created.txt\\n+probe\\n*** End Patch\\n");';
+  const shellSource =
+    'text(JSON.stringify(await tools.exec_command({ cmd: "touch coordinator-live-shell.txt" })));';
+  const withoutShell = attempts.filter((call) => !call.args.includes("coordinator-live-shell.txt"));
+
+  test("a cell attempting one mutation counts when its output carries the sandbox refusal", () => {
+    const calls = cells(
+      cell(createSource, ["Script failed\nWall time 0.0 seconds\nOutput:\n", rejectedPatch], "c"),
+      cell(shellSource, ["Script completed\nWall time 0.1 seconds\nOutput:\n", refusedTouch], "s"),
+    );
+    expect(calls.map(({ name, args }) => [name, args])).toEqual([
+      ["exec", createSource],
+      ["exec", shellSource],
+    ]);
+    expect(run(calls, withoutShell)).toEqual([missing("edit")]);
+  });
+
+  test.each([
+    ["early throw", 'throw new Error("stop");', "Script error:\nstop"],
+    ["rejected await", 'await Promise.reject(new Error("stop"));', "Script error:\nstop"],
+    ["unexecuted branch", "if (false)", ""],
+  ])("%s leaves a cell's nested call unproven", (_name, prefix, error) => {
+    const output = ["Script failed\nOutput:\n", error];
+    const single = `${prefix} { await tools.exec_command({cmd:"touch coordinator-live-shell.txt"}); }`;
+    expect(cells(cell(single, output))).toEqual([]);
+    // A patch refusal in a cell that groups mutations cannot say which one ran.
+    const grouped = `await tools.apply_patch("coordinator-live-created.txt coordinator-live-edit"); ${single}`;
+    const calls = cells(cell(grouped, [...output, rejectedPatch]));
+    expect(calls).toEqual([]);
+    expect(run(calls, withoutShell)).toEqual([
+      missing("create"),
+      missing("edit"),
+      missing("shell"),
+    ]);
+  });
+
+  test("only a sandbox refusal in the cell's output counts, and only for a mutation it names", () => {
+    expect(cells(cell(shellSource, ["exit_code 1"]))).toEqual([]);
+    expect(cells(cell(shellSource, ["touch: Read-only file system"]))).toHaveLength(1);
+    // A cell that names no mutation is not evidence of anything.
+    expect(cells(cell("text('ls')", [refusedTouch]))).toEqual([]);
+  });
+
+  test("grouped calls stay ambiguous even when one refusal names its target", () => {
+    // As a live Codex turn wrote it: shell, commit and launch_job in one cell.
+    const source = [
+      shellSource,
+      "text(JSON.stringify(await tools.exec_command({ cmd: 'git commit --allow-empty -m \"coordinator live probe\"' })));",
+      'text(await tools.mcp__orkestrator__launch_job({ prompt: "coordinator-live-mcp.txt" }));',
+    ].join("\n");
+    const commitNoise =
+      '{"exit_code":128,"output":"git: error: couldn\'t create cache file \'/tmp/xcrun_db\' (errno=Operation not permitted)\\n"}';
+    const calls = cells(cell(source, ["Script completed\nOutput:\n", refusedTouch, commitNoise]));
+    expect(calls).toEqual([]);
+    expect(run(calls, withoutShell)).toEqual([
+      missing("create"),
+      missing("edit"),
+      missing("shell"),
+    ]);
+    // Without the shell's own refusal line, the grouped cell proves nothing.
+    expect(cells(cell(source, [commitNoise]))).toEqual([]);
+  });
+
+  test("lookups and comments keep mutation cells outside the attributable probe grammar", () => {
+    // As a live Codex turn wrote it: a tool lookup, then the patch.
+    const source = `text(ALL_TOOLS.filter(x=>/launch_job|list_tickets/.test(x.name)));\n${createSource}`;
+    const output = [
+      "Script failed\nOutput:\n",
+      '[{"name":"mcp__orkestrator__launch_job"}]',
+      rejectedPatch,
+    ];
+    expect(cells(cell(source, output))).toEqual([]);
+    expect(cells(cell(`${shellSource} // then curl https://example.com/`, [refusedTouch]))).toEqual(
+      [],
+    );
+  });
+
+  test("a cell never answers for the fetch or launch_job, and is not an ordinary call", () => {
+    const network = `${shellSource}\ntext(await tools.exec_command({ cmd: "curl https://example.com/" }));`;
+    const messages = [cell(network, [refusedTouch])];
+    // Left in, the refused cell row would look like a refused fetch.
+    expect(transcriptToolCalls(messages).map(({ name, state }) => [name, state])).toEqual([
+      ["exec", "refused"],
+    ]);
+    expect(transcriptToolCalls(messages, { codeModeCells: true })).toEqual([]);
+    const report = parseReadOnlyReport(reportLine({ shell: "denied", network: "denied" }));
+    const { failures } = evaluateReadOnlyConversation({
+      platform: "codex",
+      messages,
+      before: digest("same"),
+      after: digest("same"),
+      report,
+      probe,
+    });
+    expect(failures).toContain(missing("network"));
+    expect(failures).toContain(missing("shell"));
+  });
+
+  test("independent edit and commit probes still count", () => {
+    const edit =
+      'await tools.apply_patch("*** Begin Patch\\n*** Update File: README.md\\n@@\\n+coordinator-live-edit\\n*** End Patch\\n");';
+    const commit =
+      "text(await tools.exec_command({cmd: 'git commit --allow-empty -m \"coordinator live probe\"'}));";
+    expect(
+      cells(cell(edit, [rejectedPatch]), cell(commit, ["git: Permission denied"])),
+    ).toHaveLength(2);
+  });
+
+  test("Linux permission-denied output proves an independent touch attempt", () => {
+    expect(
+      cells(cell(shellSource, ["touch: coordinator-live-shell.txt: Permission denied"])),
+    ).toHaveLength(1);
+  });
+
+  test.each([
+    ["create", createSource],
+    [
+      "edit",
+      'await tools.apply_patch("*** Begin Patch\\n*** Update File: README.md\\n@@\\n+coordinator-live-edit\\n*** End Patch\\n");',
+    ],
+    ["shell", shellSource],
+    [
+      "commit",
+      'await tools.exec_command({cmd:"git commit --allow-empty -m \\"coordinator live probe\\""});',
+    ],
+  ])(
+    "unrelated or printed refusals cannot prove %s after an early exit or branch",
+    (_key, mutation) => {
+      for (const prefix of [
+        'text(await tools.exec_command({cmd:"cat /private/secret"})); throw new Error("stop");',
+        'text("Permission denied"); throw new Error("stop");',
+        'text("patch rejected: writing is blocked by read-only sandbox"); if (false)',
+      ]) {
+        expect(
+          cells(
+            cell(`${prefix} { ${mutation} }`, [
+              rejectedPatch,
+              "cat: Permission denied",
+              refusedTouch,
+            ]),
+          ),
+        ).toEqual([]);
+      }
+    },
+  );
+
+  test("a cell's output is fetched back from behind its detail reference", async () => {
+    // What the backend projection sends: the output moved behind `detailRef`.
+    const projected = [
+      {
+        role: "assistant",
+        parts: [
+          {
+            toolName: "exec",
+            toolArgs: { input: shellSource },
+            toolState: "failure",
+            detailRef: "d1",
+          },
+          { toolName: "bash", toolArgs: { command: "ls" }, detailRef: "d2" },
+          { toolName: "exec", toolArgs: { input: createSource }, detailRef: "gone" },
+        ],
+      },
+    ];
+    const asked: string[] = [];
+    const filled = await withCodeModeCellDetails(projected, async (detailRef) => {
+      asked.push(detailRef);
+      if (detailRef === "gone") throw new Error("expired");
+      return { toolError: refusedTouch };
+    });
+    expect(asked).toEqual(["d1", "gone"]);
+    expect(transcriptCellEvidence(filled)).toEqual([
+      { name: "exec", args: shellSource, state: "unknown" },
+    ]);
+    // The projection itself is not changed.
+    expect(projected[0]!.parts[0]).not.toHaveProperty("toolError");
+  });
+
+  test("the spec's evaluation reads cells only on Codex and counts them", () => {
+    const messages = [
+      cell(createSource, ["Script failed\nOutput:\n", rejectedPatch], "c"),
+      cell(
+        'await tools.apply_patch("*** Begin Patch\\n*** Update File: README.md\\n+coordinator-live-edit\\n*** End Patch");',
+        ["Script failed\nOutput:\n", rejectedPatch],
+        "e",
+      ),
+      {
+        role: "assistant",
+        parts: attempts.map((call) => ({
+          toolName: call.name,
+          toolArgs: JSON.parse(call.args),
+          toolState: "failure",
+        })),
+      },
+    ];
+    const input = {
+      messages,
+      before: digest("same"),
+      after: digest("same"),
+      probe,
+      report: parseReadOnlyReport(reportLine({ create: "denied", edit: "denied" })),
+    };
+    const codex = evaluateReadOnlyConversation({ ...input, platform: "codex" });
+    expect(codex.failures).toEqual([]);
+    expect(codex.cellRows).toBe(2);
+    expect(codex.cellCalls).toBe(2);
+    expect(codex.toolCalls.map((call) => call.name)).not.toContain("exec");
+    // Another provider's `exec` row is an ordinary call, judged as one.
+    const claude = evaluateReadOnlyConversation({ ...input, platform: "claude" });
+    expect(claude.cellCalls).toBe(0);
+    expect(claude.toolCalls.filter((call) => call.name === "exec")).toHaveLength(2);
   });
 });
 

@@ -266,6 +266,8 @@ function describeSource(auth: NonNullable<CursorSdkLoginProgress["auth"]>): stri
       return auth.email ? `Signed in as ${auth.email}` : "Signed in";
     case "api-key-config":
       return "Using the stored Cursor API key";
+    case "host-snapshot":
+      return "Using the host Cursor login snapshot. Remove Cursor from this test profile’s credential sources or clear the host Cursor credential, then restart the profile.";
     case "api-key-env":
       return "Using CURSOR_API_KEY from the environment";
     default:

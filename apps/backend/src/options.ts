@@ -28,6 +28,16 @@ export type BackendOptions = {
   allowedOrigins?: string[];
   tailscaleServe: boolean;
   desktopWebClient: boolean;
+  /**
+   * The desktop app that started this backend can install Orkestrator updates
+   * and applies remote update requests (`host-maintenance.ts`).
+   */
+  desktopUpdater: boolean;
+  /**
+   * Set by the standalone service launcher (`<dataDir>/backend`): this
+   * backend updates itself and is restarted by the launcher.
+   */
+  standaloneUpdaterDir?: string;
   tailscaleServePort: number;
   tailscaleExecutable: string;
   runtimeFlavor: "production" | "development" | "agent-test";
@@ -203,6 +213,8 @@ export function parseOptions(
       .filter(Boolean),
     tailscaleServe: args.includes("--tailscale-serve") || env.ORKESTRATOR_TAILSCALE_SERVE === "1",
     desktopWebClient: args.includes("--desktop-web-client"),
+    desktopUpdater: args.includes("--desktop-updater"),
+    standaloneUpdaterDir: valueAfter(args, "--standalone-updater"),
     tailscaleServePort,
     tailscaleExecutable:
       valueAfter(args, "--tailscale-bin") ??

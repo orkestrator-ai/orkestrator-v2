@@ -244,7 +244,12 @@ describe("build pipeline multi-model review", () => {
       expect(reviewSessions).toHaveLength(2);
       expect(reviewSessions.every((session) => session.status === "idle")).toBe(true);
       expect(reviewSessions.every((session) => session.reviewReport !== undefined)).toBe(true);
-      expect(reviewSessions.map((session) => session.model)).toEqual(["opus", "sonnet"]);
+      // Reviewers run concurrently and each session is mirrored when its
+      // reviewer is first observed, so array order is admission order. The
+      // panel slot lives in the label, which is what binds a model to it.
+      expect(
+        Object.fromEntries(reviewSessions.map((session) => [session.label, session.model])),
+      ).toEqual({ "Review 1": "opus", "Review 2": "sonnet" });
       expect(reviewSessions.every((session) => session.completedAt !== undefined)).toBe(true);
       expect(reviewSessions.map((session) => session.tokenCount)).toEqual([12_345, 12_345]);
       expect(reviewSessions.every((session) => session.structuredResultStatus === "accepted")).toBe(

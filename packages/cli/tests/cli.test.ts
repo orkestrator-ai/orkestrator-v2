@@ -270,6 +270,7 @@ describe("orkestrator CLI package", () => {
     const files = [...stdout.matchAll(/^packed\s+\S+\s+(.+)$/gm)].map((match) => match[1]!.trim());
     expect(files.sort()).toEqual([
       "README.md",
+      "bin/orkestrator-launcher.js",
       "bin/orkestrator.js",
       "dist/client.js",
       "dist/main.js",

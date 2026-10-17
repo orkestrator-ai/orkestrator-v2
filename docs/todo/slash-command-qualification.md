@@ -233,7 +233,7 @@ With that fix, Codex passed the combined live run. Claude's initial turn then
 failed with an SDK result diagnostic; the unchanged Claude-only owning file
 passed on rerun (one passed, zero skipped, 87.3 s), including the inactive and
 restart checks. This intermittent provider failure is recorded as
-[0266](../tests/flaky-tests/0266-claude-live-slash-provider-result.md), with the
+[0271](../tests/flaky-tests/0271-claude-live-slash-provider-result.md), with the
 failed combined command and evidence. Both providers therefore passed against
 the final code; the JSON report above now contains the final Claude-only run.
 

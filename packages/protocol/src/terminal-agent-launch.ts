@@ -18,6 +18,21 @@ export const OPENCODE_PINNED_RUNTIME_ENV = Object.freeze({
   OPENCODE_DISABLE_AUTOUPDATE: "1",
 });
 
+/**
+ * Environment for the managed, pinned `claude` Orkestrator starts on the host.
+ *
+ * Claude Code checks for and installs updates in the background. The managed
+ * binary is the version the Agent SDK pin was qualified with, and a newer one
+ * belongs to the next Orkestrator release, so its background updater is off.
+ * `DISABLE_AUTOUPDATER` also stops plugin auto-updates; `FORCE_AUTOUPDATE_PLUGINS`
+ * keeps those, which belong to the user. A `claude` found on PATH is the
+ * user's own install and is left to update itself.
+ */
+export const CLAUDE_PINNED_RUNTIME_ENV = Object.freeze({
+  DISABLE_AUTOUPDATER: "1",
+  FORCE_AUTOUPDATE_PLUGINS: "1",
+});
+
 function shellArg(value: string): string {
   const escaped = value
     .replace(/\\/g, "\\\\")

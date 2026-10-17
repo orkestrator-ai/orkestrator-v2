@@ -85,3 +85,10 @@ No assertion, timeout or skip changed; host contention remains a hypothesis.
 - The deletion-reap case timed out at 6812.46 ms.
 - Unchanged owning-file rerun: `mise run test:logged -- --name lifecycle-owner-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures` passed in 20.3 seconds, exit 0.
 - Shared-host contention and teardown after timeout remain hypotheses. No assertion, timeout, skip or implementation in this owner changed.
+
+## Codex phantom-denials branch validation (2026-10-17)
+
+Recurred in `mise run test` on `fix-codex-phantom-denials-8bdb8d15d820` (base
+`9da80451`), whose diff touches no backend source, at 6,636.73 ms, alongside 0178 and 0310.
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.6fSEkJ`.
+The test passed alone (`bun test --preload ../../tests/setup-node.ts tests/commands-registry-environments.test.ts -t "deletion cannot reap a server"` from `apps/backend`) in 1.4 s.

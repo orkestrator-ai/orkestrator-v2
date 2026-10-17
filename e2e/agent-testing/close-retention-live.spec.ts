@@ -319,14 +319,20 @@ test.describe("live close retention", () => {
         });
         const resumedTab = agentTabs(pane.root).find((tab) => tab.platform === platform);
         expect(resumedTab, "the resumed tab is in the saved layout").toBeTruthy();
-        expect((await projection(resumedTab!.id))?.sessionId).toBe(firstSessionId);
+        // OpenCode resumes the same session id. Cursor, Pi and Grok resume the
+        // same vendor conversation into a new bridge session, so for them the
+        // codeword below is what proves the conversation is the original one.
+        const sameSessionId = platform === "opencode";
+        const resumedSessionId = (await projection(resumedTab!.id))?.sessionId;
+        if (sameSessionId) expect(resumedSessionId).toBe(firstSessionId);
+        else expect(resumedSessionId).not.toBe(firstSessionId);
 
         const second =
           "What codeword did I ask you to remember? Reply with only the codeword. Do not use any tools.";
         const beforeSecond = await send(resumedTab!.id, second);
         await waitForReply(resumedTab!.id, beforeSecond, (reply) => reply.includes(codeword));
         const resumed = await projection(resumedTab!.id);
-        expect(resumed?.sessionId).toBe(firstSessionId);
+        expect(resumed?.sessionId).toBe(resumedSessionId);
         const userPrompts = resumed!.messages
           .filter((message) => message.role === "user")
           .map(textOf);

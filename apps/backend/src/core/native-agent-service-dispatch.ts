@@ -17,6 +17,10 @@ import {
   nativeCapabilities,
   nonBlank,
 } from "./native-agent-service-shared.js";
+import {
+  providerSessionHeldElsewhere,
+  withProviderSessionTeardownLock,
+} from "./provider-session-ownership.js";
 type BuildPipelineAgent = shared.BuildPipelineAgent;
 type PipelineSessionPhase = shared.PipelineSessionPhase;
 type TaskSnapshotImage = shared.TaskSnapshotImage;
@@ -709,7 +713,55 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
       sessionMode: input.controls?.mode,
       fastMode: input.controls?.fastMode,
     });
-    return this.refreshProjection(input, true);
+    const replacedId = existing?.providerSessionId;
+    const closingReplaced =
+      replacedId && replacedId !== resumedId
+        ? this.closeReplacedSession(provider, input.environmentId, input.agent, replacedId)
+        : undefined;
+    // The close runs beside the projection refresh; the resume answers once both settle.
+    return this.refreshProjection(input, true).finally(() => closingReplaced);
+  }
+
+  /**
+   * Close the session a resume replaced, which the tab no longer shows. A new
+   * tab is given an empty session before its resume picker opens, so without
+   * this every resume leaves one behind; for Grok, an agent process holding
+   * an `ACP_MAX_SESSIONS` slot that nothing reaps. Same last-owner rules and
+   * lock as tab teardown. The close keeps the vendor conversation.
+   *
+   * Best effort and never throws: the resume already succeeded. A bridge that
+   * cannot be reached has usually lost the session with its process; a close
+   * that stays pending leaves it registered (no durable retry yet).
+   */
+  private async closeReplacedSession(
+    provider: NativeAgentRuntimeProvider,
+    environmentId: string,
+    agent: NativeAgentProjectionInput["agent"],
+    providerSessionId: string,
+  ): Promise<void> {
+    try {
+      await withProviderSessionTeardownLock(
+        this.storage,
+        environmentId,
+        agent,
+        providerSessionId,
+        async () => {
+          if (!provider.closeSession) return;
+          const heldElsewhere = await providerSessionHeldElsewhere(this.storage, {
+            environmentId,
+            agent,
+            providerSessionId,
+          });
+          if (heldElsewhere) return;
+          await provider.closeSession(providerSessionId);
+        },
+      );
+    } catch (error) {
+      console.warn(
+        `[native-agent] The ${agent} session a resume replaced was not closed:`,
+        error instanceof Error ? error.name : "unknown error",
+      );
+    }
   }
 
   async forkProjectionSession(

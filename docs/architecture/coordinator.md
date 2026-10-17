@@ -513,8 +513,13 @@ noting that the earlier PR does not confirm it includes the new changes. A
 launched record without an identity, from before this change, is treated the
 same way. A failed or stopped Fix reports `fix-failed`
 or `fix-done` with "No PR session started"; the review stops there. A
-consolidation with nothing to fix reports `ready` with a line saying no Fix or PR
-started. A legacy structured Fix holds `completed` until its PR launch settles,
+consolidation with nothing to fix and auto-PR on queues the PR straight away
+(`autoPrLaunch.basis: clean-review`), is held the same way, and reports
+`pr-started`, `pr-opened` or `pr-failed` headed "found nothing to fix"; a
+skipped launch, such as one for an environment that already has a pull
+request, reports `ready` with the reason. Without auto-PR it reports `ready`
+with a line saying no Fix or PR started. A Fix started later is not covered by
+the clean report's PR. A legacy structured Fix holds `completed` until its PR launch settles,
 then lists the PR outcome in its details.
 
 **Setting.** **Settings → Messaging → Coordinator status updates**
@@ -636,7 +641,7 @@ field, whether they were `requested`, `default` or `implied`. A reused active
 review keeps its own rows and auto-actions.
 
 Optional `autoFix` and `autoPr` match the launch dialog's **Auto-fix after
-consolidation** and **Auto-PR after fix** checkboxes, which open on the saved
+consolidation** and **Auto-PR after fix or clean review** checkboxes, which open on the saved
 app-level settings. Omitted, they use those settings. With both on, the review
 runs end to end through the button's own code path in `MultiReviewService`:
 
@@ -649,8 +654,13 @@ runs end to end through the button's own code path in `MultiReviewService`:
 3. The supervisor launches the ordinary `PR` tab: the Create PR prompt and the
    `pr` action default, under the stable request id `multi-review-pr:<id>`.
 
-The PR intent is only ever recorded with proof that a Fix completed, so the PR
-cannot come first. A failed, stopped, superseded or unconfirmed Fix records
+Consolidation with nothing to fix skips the Fix: with `autoPr` on, the save
+that settles it at `ready` records `autoPrLaunch: { basis: "clean-review",
+state: "pending" }` (`queueCleanReviewAutoPr`) and step 3 follows, whatever
+`autoFix` says.
+
+The PR intent is only ever recorded with proof that a Fix completed or that
+there was nothing to fix, so the PR cannot come before a Fix. A failed, stopped, superseded or unconfirmed Fix records
 `skipped` with a reason or nothing at all, and no PR starts. A custom Fix never
 starts a PR. A Fix handoff that cannot be delivered fails the review after its
 bounded retries. The PR launch retries three times before `failed`. Each step

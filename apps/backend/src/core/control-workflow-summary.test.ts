@@ -15,7 +15,7 @@ describe("Multi Review automation summary", () => {
       (workflowSummary(workflow).automation as { next: string }).next;
     const fix = (status: string) => ({ sessionKey: "fix", status });
     expect(next({ ...auto, phase: "reviewing" })).toBe(
-      "The Fix starts automatically if consolidation reports findings, then a PR session once the Fix completes.",
+      "The Fix starts automatically if consolidation reports findings, then a PR session once the Fix completes; a clean report starts the PR session directly.",
     );
     expect(next({ autoFix: false, phase: "reviewing" })).toBe(
       "Stops at ready; address_multi_review starts the Fix.",
@@ -27,6 +27,25 @@ describe("Multi Review automation summary", () => {
       next({ autoFix: false, autoPr: true, phase: "ready", consolidatedReport: findings }),
     ).toBe(
       "Waiting for address_multi_review to start the Fix; a PR session starts once that Fix completes.",
+    );
+    const cleanLaunch = (state: string) => ({
+      ...auto,
+      phase: "ready",
+      consolidatedReport: { issues: [], testCoverageGaps: [] },
+      autoPrLaunch: { basis: "clean-review", state, requestId: "pr", tabId: "agent-job-pr" },
+    });
+    expect(next(cleanLaunch("pending"))).toBe(
+      "Consolidation found nothing to fix; the PR session is starting.",
+    );
+    expect(next(cleanLaunch("launched"))).toContain("The PR session started in tab agent-job-pr");
+    // A Fix started after the clean report's PR is not covered by that PR.
+    expect(
+      next({ ...cleanLaunch("launched"), phase: "interactive", fixSession: fix("running") }),
+    ).toBe(
+      "The Fix is running; the earlier PR does not confirm inclusion of this Fix's changes, so review and update it manually.",
+    );
+    expect(next({ autoFix: false, autoPr: true, phase: "reviewing" })).toBe(
+      "Stops at ready if consolidation reports findings; address_multi_review starts the Fix; a PR session starts once that Fix completes. A clean report starts the PR session directly.",
     );
     expect(next({ ...auto, phase: "interactive", addressPromptPending: true })).toBe(
       "The Fix handoff is being delivered; a PR session starts once that Fix completes.",

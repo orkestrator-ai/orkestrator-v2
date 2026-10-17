@@ -360,14 +360,20 @@ export type MultiReviewFixSession = MultiReviewSession;
 export type MultiReviewWorktreeSnapshot = ReviewWorktreeSnapshotRecord;
 
 /**
- * Durable intent to open the ordinary PR tab after a structured Fix proves completion.
+ * Durable intent to open the ordinary PR tab after a Fix proves completion, or
+ * after consolidation finds nothing to fix.
  *
- * Recorded atomically with the Fix completion, so a restart cannot lose the
- * handoff; the supervisor retries delivery under the same request id, which
- * the native-agent layer deduplicates.
+ * Recorded atomically with the Fix completion or the clean report, so a
+ * restart cannot lose the handoff; the supervisor retries delivery under the
+ * same request id, which the native-agent layer deduplicates.
  */
 export interface MultiReviewAutoPrLaunch {
-  /** Fix attempt that authorized this launch; absent on legacy records. */
+  /**
+   * `clean-review` when a consolidated report with no issues or coverage gaps
+   * authorized the launch, so no Fix ran; absent when a Fix authorized it.
+   */
+  basis?: "clean-review";
+  /** Fix attempt that authorized this launch; absent on legacy and clean-review records. */
   fixIdentity?: string;
   state: "pending" | "launched" | "skipped" | "failed";
   requestId: string;
@@ -385,10 +391,11 @@ export interface MultiReviewWorkflow {
   /**
    * Launch the ordinary PR tab once the Fix proves completion (a complete
    * structured result, or an interactive handoff turn that finished on its own
-   * as the conversation's last turn); absent means off.
+   * as the conversation's last turn), or straight after a consolidation that
+   * found nothing to fix; absent means off.
    */
   autoPr?: boolean;
-  /** Delivery state of the automatic PR launch; absent until the Fix turn completes. */
+  /** Delivery state of the automatic PR launch; absent until a Fix completes or a clean report settles. */
   autoPrLaunch?: MultiReviewAutoPrLaunch;
   version: typeof MULTI_REVIEW_WORKFLOW_VERSION;
   controller: "backend";
@@ -885,8 +892,17 @@ const AUTO_PR_LAUNCH_STATES = new Set<MultiReviewAutoPrLaunch["state"]>([
 function isAutoPrLaunch(value: unknown): value is MultiReviewAutoPrLaunch {
   return (
     record(value) &&
-    hasOnlyKeys(value, ["state", "requestId", "attempts", "tabId", "message", "fixIdentity"]) &&
+    hasOnlyKeys(value, [
+      "state",
+      "requestId",
+      "attempts",
+      "tabId",
+      "message",
+      "fixIdentity",
+      "basis",
+    ]) &&
     AUTO_PR_LAUNCH_STATES.has(value.state as MultiReviewAutoPrLaunch["state"]) &&
+    (value.basis === undefined || value.basis === "clean-review") &&
     optionalProgressDigest(value.fixIdentity) &&
     nonBlank(value.requestId, 256) &&
     (value.attempts === undefined ||

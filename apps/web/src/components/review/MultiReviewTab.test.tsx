@@ -297,6 +297,15 @@ describe("MultiReviewTab backend snapshot viewer", () => {
         message: "Review the interactive Fix, then use the PR button to create a pull request.",
       }).text,
     ).toContain("use the PR button");
+    expect(
+      autoPrLaunchNotice({ basis: "clean-review", state: "launched", requestId, tabId: "pr" }),
+    ).toEqual({
+      text: "The review found nothing to fix, so a PR tab was launched to commit, push, and open the pull request.",
+      tone: "success",
+    });
+    expect(autoPrLaunchNotice({ basis: "clean-review", state: "pending", requestId }).text).toMatch(
+      /^The review found nothing to fix\. /,
+    );
     const failed = autoPrLaunchNotice({ state: "failed", requestId, message: "tab limit" });
     expect(failed.tone).toBe("warning");
     expect(failed.text).toContain(": tab limit");

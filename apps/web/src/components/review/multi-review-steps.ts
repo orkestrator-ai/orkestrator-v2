@@ -272,14 +272,16 @@ export type FixSessionOpenOutcome =
   | "environment-unavailable"
   | "tab-rejected";
 
-/** Status copy for the backend-owned PR launch that follows a successful Fix. */
+/** Status copy for the backend-owned PR launch that follows a successful Fix or a clean report. */
 export function autoPrLaunchNotice(launch: NonNullable<MultiReviewWorkflow["autoPrLaunch"]>): {
   text: string;
   tone: "muted" | "success" | "warning";
 } {
+  const reason =
+    launch.basis === "clean-review" ? "The review found nothing to fix" : "The fix completed";
   if (launch.state === "launched") {
     return {
-      text: "The fix completed, so a PR tab was launched to commit, push, and open the pull request.",
+      text: `${reason}, so a PR tab was launched to commit, push, and open the pull request.`,
       tone: "success",
     };
   }
@@ -293,7 +295,7 @@ export function autoPrLaunchNotice(launch: NonNullable<MultiReviewWorkflow["auto
     };
   }
   return {
-    text: "The fix completed. The pull request agent is being launched in the background.",
+    text: `${reason}. The pull request agent is being launched in the background.`,
     tone: "muted",
   };
 }

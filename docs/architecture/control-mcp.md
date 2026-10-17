@@ -122,7 +122,8 @@ cancel/address a multi-review, and use durable mailbox read/send/ack operations.
 `autoPr` booleans. Omitted, they use the user's saved Multi Review settings, as
 the button does; a coordinator sets them only when the user asks. With both on
 the review runs consolidation, then Fix, then a PR session, and the PR never
-precedes a completed Fix. No tool merges. The launch result's `selection` and
+precedes a completed Fix. With `autoPr` on, a consolidation with nothing to fix
+starts the PR session directly. No tool merges. The launch result's `selection` and
 `get_multi_review`'s `automation` report the effective settings and the next
 step; see [`coordinator.md`](coordinator.md#complete-application-actions).
 Environment launch requires an explicit base branch and immutable 40-character

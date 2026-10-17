@@ -183,6 +183,7 @@ describe("multi review protocol", () => {
       { state: "pending", requestId: "multi-review-pr:1", attempts: 2, message: "tab limit" },
       { state: "launched", requestId: "multi-review-pr:1", fixIdentity: "a".repeat(64) },
       { state: "launched", requestId: "multi-review-pr:1", tabId: "agent-job-1" },
+      { state: "pending", requestId: "multi-review-pr:1", basis: "clean-review" },
       { state: "skipped", requestId: "multi-review-pr:1", message: "PR exists" },
       { state: "failed", requestId: "multi-review-pr:1", attempts: 3, message: "boom" },
     ]) {
@@ -198,6 +199,7 @@ describe("multi review protocol", () => {
       { state: "pending", requestId: "multi-review-pr:1", fixIdentity: "" },
       { state: "pending", requestId: "multi-review-pr:1", fixIdentity: "a".repeat(65) },
       { state: "pending", requestId: "multi-review-pr:1", fixIdentity: 42 },
+      { state: "pending", requestId: "multi-review-pr:1", basis: "fix" },
     ]) {
       expect(isMultiReviewWorkflow({ ...workflow, autoPrLaunch })).toBe(false);
     }

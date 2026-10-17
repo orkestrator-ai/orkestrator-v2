@@ -54,9 +54,12 @@ function automationNext(workflow: Record<string, unknown>): string {
   const fix = isRecord(workflow.fixSession) ? workflow.fixSession : undefined;
   const phase = workflow.phase;
   const customFix = isRecord(workflow.fixLaunch) && workflow.fixLaunch.kind === "custom";
+  const cleanReviewPr = launch?.basis === "clean-review";
   const earlierPr =
     launch?.state === "launched" &&
-    (launch.fixIdentity === undefined || launch.fixIdentity !== multiReviewFixIdentity(fix));
+    (cleanReviewPr ||
+      launch.fixIdentity === undefined ||
+      launch.fixIdentity !== multiReviewFixIdentity(fix));
   const manualPr = "; review its result and start or update the PR manually";
   const thenPr = customFix
     ? manualPr
@@ -73,7 +76,10 @@ function automationNext(workflow: Record<string, unknown>): string {
   if (phase === "cancelling") return "Cancelling; nothing else runs automatically.";
   if (phase === "interactive" && customFix)
     return `The custom Fix ${fix?.status === "failed" ? "failed" : fix?.status === "idle" ? "turn ended" : "is starting"}${manualPr}.`;
-  if (launch?.state === "pending") return "The Fix completed; the PR session is starting.";
+  if (launch?.state === "pending")
+    return cleanReviewPr
+      ? "Consolidation found nothing to fix; the PR session is starting."
+      : "The Fix completed; the PR session is starting.";
   if (phase === "interactive" && earlierPr)
     return "The Fix turn ended; the earlier PR does not confirm inclusion of this Fix's changes. Review the result and update the PR manually.";
   if (launch?.state === "launched")
@@ -99,8 +105,10 @@ function automationNext(workflow: Record<string, unknown>): string {
     return `The Fix is starting${thenPr}.`;
   }
   return autoFix
-    ? `The Fix starts automatically if consolidation reports findings${autoPr ? ", then a PR session once the Fix completes" : ""}.`
-    : `Stops at ready; address_multi_review starts the Fix${thenPr}.`;
+    ? `The Fix starts automatically if consolidation reports findings${autoPr ? ", then a PR session once the Fix completes; a clean report starts the PR session directly" : ""}.`
+    : autoPr
+      ? `Stops at ready if consolidation reports findings; address_multi_review starts the Fix${thenPr}. A clean report starts the PR session directly.`
+      : `Stops at ready; address_multi_review starts the Fix${thenPr}.`;
 }
 
 /** Auto-fix starts only for a report with issues or coverage gaps. */

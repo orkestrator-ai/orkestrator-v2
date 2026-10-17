@@ -86,6 +86,29 @@ export function queueAutoPr(workflow: MultiReviewWorkflow): void {
   };
 }
 
+/** Whether a consolidated report gives the Fix nothing to address. */
+export function consolidatedReportIsClean(workflow: MultiReviewWorkflow): boolean {
+  const report = workflow.consolidatedReport;
+  return report !== undefined && report.issues.length === 0 && report.testCoverageGaps.length === 0;
+}
+
+/**
+ * Records the auto-PR intent in the same save as a consolidated report with
+ * nothing to fix. No Fix runs, so the reviewed branch goes straight to the PR,
+ * whether the review was started by the button, a coordinator, or any other
+ * caller that turned auto-PR on.
+ */
+export function queueCleanReviewAutoPr(workflow: MultiReviewWorkflow): void {
+  if (workflow.autoPr !== true || !consolidatedReportIsClean(workflow)) return;
+  const state = workflow.autoPrLaunch?.state;
+  if (state === "pending" || state === "launched") return;
+  workflow.autoPrLaunch = {
+    basis: "clean-review",
+    state: "pending",
+    requestId: `multi-review-pr:${workflow.id}`,
+  };
+}
+
 /** Records why a settled Fix launched no PR, unless a launch is already queued or delivered. */
 export function skipAutoPr(workflow: MultiReviewWorkflow, message: string): void {
   if (workflow.autoPr !== true) return;
@@ -115,7 +138,8 @@ export type AutoPrLaunchOutcome =
   | { kind: "retry"; message: string };
 
 /**
- * Starts the ordinary PR agent for a workflow whose Fix completed.
+ * Starts the ordinary PR agent for a workflow whose Fix completed, or whose
+ * consolidated report found nothing to fix.
  *
  * This is the backend twin of the action bar's Create PR click: the same
  * prompt, the same `PR` tab title, and the same `pr` action default, launched

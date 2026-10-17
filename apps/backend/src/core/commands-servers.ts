@@ -133,6 +133,7 @@ import { dockerExec } from "./commands-container-exec.js";
 import { conciseError, cleanupErrorMessage } from "./commands-error-text.js";
 import {
   applyClaudeHostCredentialEnvironment,
+  applyPiHostCredentialEnvironment,
   resolveCursorHostCredentialMaterial,
 } from "./host-agent-credentials.js";
 import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
@@ -1256,8 +1257,9 @@ export async function startLocalServerUnlocked(
     // provider credentials. A local worktree runs as the user, so the default
     // `~/.pi/agent` is exactly the one they signed in with — leaving it unset
     // is what makes `pi` in a terminal tab and a Pi native tab share an
-    // account. Containers are handed an explicit path instead.
-    delete env.PI_AGENT_DIR;
+    // account. Containers are handed an explicit path instead, and an
+    // agent-test profile the host's `auth.json` alone when Pi is authorized.
+    await applyPiHostCredentialEnvironment(context, env);
     if (coordinatorId) {
       // Pi's project resources are arbitrary TypeScript from the checkout, and
       // a coordinator points at the user's own repository rather than a

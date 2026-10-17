@@ -5,6 +5,7 @@ import {
   isAgentInteractionPolicy,
 } from "@orkestrator/protocol/agent-interactions";
 import { isAgentSkillProvider } from "./agent-skills.js";
+import { inheritedCursorApiKey } from "./agent-test-cursor-credential.js";
 import { resolveGitHubRepository } from "./github.js";
 import { isStartFeaturePlanningInput } from "@orkestrator/protocol/feature-planning";
 import { assertValidPromptAttachments, assertValidPromptImages } from "./prompt-attachments.js";
@@ -170,7 +171,7 @@ export function resolveCursorApiKey(global: AppConfig["global"]): {
   apiKey?: string;
   source: ApiKeySource;
 } {
-  return resolveStoredOrInheritedApiKey(global.cursorApiKey, process.env.CURSOR_API_KEY);
+  return resolveStoredOrInheritedApiKey(global.cursorApiKey, inheritedCursorApiKey());
 }
 
 /**

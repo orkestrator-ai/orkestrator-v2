@@ -8,6 +8,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { inheritedCursorApiKey } from "./agent-test-cursor-credential.js";
 import type { CommandContext } from "./commands-context.js";
 
 /**
@@ -43,7 +44,7 @@ export async function cursorSdkAuthStatus(
   context: CommandContext,
   storedApiKey: string | undefined,
 ): Promise<CursorSdkAuthStatus> {
-  if (process.env.CURSOR_API_KEY?.trim()) {
+  if (inheritedCursorApiKey()) {
     return { authenticated: true, source: "api-key-env" };
   }
   if (storedApiKey?.trim()) return { authenticated: true, source: "api-key-config" };

@@ -104,14 +104,18 @@ and what its first runs found. Everything else here is qualification.
    make the three calls. If it cannot, decide whether a sandbox the model
    already knows is read-only counts as exercised, and teach
    `coordinatorLiveVerdict` the answer.
-4. **Let agent-test profiles authorize Pi's login.** `--credential-source pi`
-   is accepted, but `apps/desktop/electron/backend-process.ts` seeds only
-   Claude, Codex, OpenCode and Cursor credentials into an agent-test profile.
-   Pi therefore reports `needs-auth` there, and the live suite skips it, as the
-   web annotation runs did. Pi is an `enforced` platform that cannot currently
-   be qualified live.
 
 ### Verify
+
+- **Cursor reports `network` denied without attempting the fetch.** The first
+  signed-in live read-only run on Cursor (2026-10-17, branch
+  `fix-pi-login-in-agent-test-profiles-379ebff75838`) reported create, edit,
+  shell and commit `unavailable` and `launch_job` and `network` `denied`, with
+  three tool calls and an unchanged checkout. No call in the transcript named
+  `example.com`, so the suite failed the network step. Find out whether Cursor's
+  hosted fetch is hidden from the model under the coordinator's named denies
+  (`unavailable` would then be the honest answer), or whether the model skipped
+  the call. As with Codex item 3, decide whether that counts as exercised.
 
 - **Grok's turn ends at its first denied tool.** In both live read-only runs
   (2026-10-16), Grok called `write` for step 1, the call failed, and the turn
@@ -146,9 +150,9 @@ for prerequisites and how to batch them with other provider runs.
   | --- | --- |
   | Claude (macOS) | Passed. Write and Edit unavailable. Shell, commit and network refused by the hook. `launch_job` on the project home refused. Canary and `list_tickets` read back.. Passed again 2026-10-17 with web research off. |
   | Codex | Failed: hosted `web_search` reached the network, and create, edit and shell were reported denied with no call (Code item 3). Commit and `launch_job` refused, checkout unchanged, canaries read back. Re-run 2026-10-17 on `31d0fb06` with web research off: network passed (no hosted search; `curl` refused), the three unattempted denials still fail it. |
-  | Pi | Skipped: `needs-auth`, because the profile seeds no Pi login (Code item 4). |
+  | Pi | Skipped: `needs-auth`, because the profile seeded no Pi login. Re-run 2026-10-17 with the host `auth.json` shared: still `needs-auth`, because this host's Pi `auth.json` holds no provider (`{}`). Needs a host with a Pi login. |
   | OpenCode | Passed. Every mutation unavailable, checkout unchanged, canaries read back. |
-  | Cursor | Skipped: `signed-out` in the profile. Whether the host has a Cursor Agent login was not checked. |
+  | Cursor | Skipped: `signed-out`, because the profile could not see the host's Orkestrator-stored Cursor key. Re-run 2026-10-17 with the key snapshot: signed in and ran the turn. Failed: `network` reported denied with no fetch call (Verify). Create, edit, shell and commit unavailable, `launch_job` denied, checkout unchanged. |
   | Grok (`advisory`) | Failed: the turn ended after the denied `write`, with no report (Verify). Checkout unchanged. |
 
   Claude on Linux has not run. No coordinator used `sleep` or polled
@@ -297,6 +301,36 @@ is the truth, and this file is the backlog.
   across providers was the alternative; it would need the same change on all
   six adapters and was not asked for. A coordinator keeps its research mode on
   a read-only turn, matching Claude's process authority.
+
+- **Agent-test profiles carry the host's Pi and Cursor logins** (2026-10-17).
+  Pi was the one `--credential-source` with no seeding: the local Pi bridge
+  deleted `PI_AGENT_DIR` (`commands-servers.ts`), so under the profile's
+  isolated HOME it read an empty `~/.pi/agent`. Cursor's login is Orkestrator's
+  own key in the production data directory, which an isolated data directory
+  never sees. Decisions, with the alternatives rejected:
+  - Pi shares the host `auth.json` in place through `PI_BRIDGE_AUTH_FILE`.
+    Settings, `models.json`, `mcp.json` and extensions stay in the profile's
+    own `~/.pi/agent`. A Grok-style copy was rejected because Pi's OAuth
+    providers rotate refresh tokens: a refresh in the copy would sign the
+    host's `pi` out. Pointing the whole host Pi directory at the bridge (what
+    the catalogue probe used to do) was rejected because test runs would then
+    load host extensions and could rewrite host settings. A read-only view of
+    the file was rejected because a refresh it cannot persist breaks the
+    login. The file is named only when it exists, because Pi creates a
+    missing one.
+  - Cursor gets an owner-only snapshot of the host's effective key, the stored
+    `config.json` key or else the in-app SDK login's minted key. `dev:test`
+    rewrites it on every start and deletes it on opt-out or host logout.
+    Minted keys do not rotate, so a copy cannot go stale against the host.
+    The backend reads the snapshot in place of an inherited `CURSOR_API_KEY`
+    and keeps it out of `process.env`, because local terminals inherit the
+    backend's environment. Exporting the key to Electron's environment was
+    rejected for that reason. Writing it into the profile's `config.json` or
+    SDK login slot was rejected because the profile could not then tell its
+    own login from the harness's, and opt-out could not remove only the
+    harness's.
+  - The Pi catalogue probe follows the bridge's policy, so its catalogue
+    matches what an environment can run.
 
 ## Open questions
 

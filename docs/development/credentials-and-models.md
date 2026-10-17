@@ -43,11 +43,12 @@ but it cannot make a signed-out provider capable of running a request.
 | Claude | macOS Keychain or `~/.claude/.credentials.json`; optional `ANTHROPIC_API_KEY` | Host OAuth synchronized over stdin; optional `ANTHROPIC_API_KEY` | Shared cache plus per-environment snapshot | No additional portable model cache used here | Enabled |
 | Codex | `CODEX_HOME`/`~/.codex/auth.json`; optional `OPENAI_API_KEY` | Read-only Codex home import | Shared cache | `models_cache.json` and bridge `models-cache.json` | Enabled |
 | OpenCode | XDG config/data state; optional `OPENCODE_API_KEY` | Read-only XDG imports copied into the container | Project-scoped cache | Provider state and `model.json` preferences | Enabled |
-| Cursor | Host login where supported; stored or ambient `CURSOR_API_KEY` | `CURSOR_API_KEY`; host macOS login is not portable to Linux | Shared cache | No separate portable model catalogue found or used | Enabled |
+| Cursor | Stored or ambient `CURSOR_API_KEY`, else the in-app SDK login in Orkestrator's data directory | Effective key or stored SDK login over stdin | Shared cache | No separate portable model catalogue found or used | Enabled via an owner-only key snapshot |
 | Grok | `~/.grok` and `~/.config/grok` | Bounded import of Grok auth/config | Shared cache | `~/.grok/models_cache.json` | Enabled via an isolated auth snapshot |
+| Pi | `~/.pi/agent/auth.json` (or `PI_CODING_AGENT_DIR`); provider API-key variables | Bounded import of `~/.pi` | Shared cache | Pi's own `models-store.json` | Enabled: the host `auth.json` only |
 
 Credential authorization and UI platform selection are separate. Agent-test
-profiles authorize all five credential sources by default, while the initial
+profiles authorize all six credential sources by default, while the initial
 enabled-platform setting remains the legacy Claude/Codex/OpenCode set. Cursor
 and Grok must still be enabled in profile settings before their UI paths and
 managed toolchains are available.
@@ -227,6 +228,20 @@ There is no separate portable Cursor model-cache file in the current host state
 or container import. The shared Orkestrator catalogue is the durable warm-start
 source for Cursor model pickers.
 
+### Pi
+
+#### Credentials
+
+Pi fronts other vendors' models, so its login is one credential per provider
+in `~/.pi/agent/auth.json`, written by `/login` in a Pi terminal, plus any
+provider API-key variable. A local Pi bridge leaves `PI_AGENT_DIR` unset and
+reads that directory as `pi` does. Containers mount `~/.pi` as a portable
+input and the entrypoint copies a bounded allowlist. The bridge never serves
+sign-in itself; see [agent-engines.md](../architecture/agent-engines.md) § Pi.
+
+`PI_BRIDGE_AUTH_FILE` moves the credential file alone out of the agent
+directory. Only agent-test uses it (see below).
+
 ### Grok Build
 
 #### Credentials
@@ -268,6 +283,7 @@ Agent-test startup enables all provider credential sources by default:
 - Cursor
 - Grok
 - OpenCode
+- Pi
 
 Use `--credential-source <name>` to narrow a profile to any one of those providers.
 Use `--no-agent-credentials` for a deliberately signed-out profile. The two
@@ -277,15 +293,17 @@ forms cannot be combined.
 
 For an enabled source, local agent processes receive only the provider-specific
 host state below. Grok uses a snapshot because its CLI cannot isolate its home
-from the rest of `HOME`:
+from the rest of `HOME`, and Cursor because its login is in Orkestrator's
+production data directory rather than a provider home:
 
 | Platform | Agent-test host state exposed |
 | --- | --- |
 | Claude | Host `CLAUDE_CONFIG_DIR`/`~/.claude`, process-scoped OAuth access token, and `ANTHROPIC_API_KEY` when inherited |
 | Codex | Host `CODEX_HOME`/`~/.codex` and `OPENAI_API_KEY` when inherited |
-| Cursor | Provider-scoped owner-only `auth.json` copied from named Keychain records, or `CURSOR_API_KEY` when inherited; host Cursor configuration is mounted read-only for containers |
+| Cursor | Owner-only snapshot of the host's effective Orkestrator Cursor key (`CURSOR_API_KEY` when inherited still wins) |
 | Grok | Owner-only snapshot of host `~/.grok/auth.json` for local runs; bounded read-only host imports for containers |
 | OpenCode | Host XDG config/data/state directories and `OPENCODE_API_KEY` when inherited |
+| Pi | Host `~/.pi/agent/auth.json` (or `PI_CODING_AGENT_DIR`), shared in place; nothing else from the host Pi directory |
 
 For Claude, Codex, and OpenCode this makes real local agent calls work, but it
 also means a local provider can
@@ -302,10 +320,35 @@ directories, Cursor's inherited key is removed, and no Grok auth is copied.
 This prevents ambient provider logins from being discovered while still
 allowing model metadata to be seeded separately.
 
-Cursor and Grok follow the same explicit authorization gate as the other
-providers. A narrowed or credential-free profile removes `CURSOR_API_KEY`, does
-not mount their host directories, and does not copy Grok auth. The isolated
-Orkestrator config still does not inherit the production stored Cursor key.
+Cursor, Grok and Pi follow the same explicit authorization gate as the other
+providers. A narrowed or credential-free profile removes `CURSOR_API_KEY`,
+removes the Cursor key snapshot, does not mount their host directories, does
+not copy Grok auth, and names no host Pi file. The isolated Orkestrator config
+never inherits the production stored Cursor key; the snapshot below is a
+separate file the profile's settings do not show or store.
+
+Pi shares the host `auth.json` in place rather than copying it. Pi's OAuth
+providers rotate refresh tokens, so a copy that refreshed would sign the host's
+`pi` out. The bridge's `PI_BRIDGE_AUTH_FILE` names that one file, and
+`PI_AGENT_DIR` stays unset, so settings, `models.json`, `mcp.json` and
+extensions come from the isolated HOME's own `~/.pi/agent`. The desktop records
+only the host directory path (`ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR`). The
+backend names the file to the bridge, and to the host catalogue probe, only
+when it already exists, because Pi creates a missing one. A login made after
+startup applies from the next bridge start. The host side sees only what the
+host's own `pi` does: Pi's transient `auth.json.lock` directory beside the file
+on each read or write, and a refreshed login when a token expires.
+
+Cursor's login is Orkestrator's own rather than a provider home: the stored key
+in production `config.json`, else the in-app SDK login's minted key in
+production `cursor-sdk/auth.json`. `dev:test` writes the effective key, and
+nothing else, to `<profile data>/agent-credentials/cursor/host-api-key.json`
+(mode `0600`, directory `0700`) on every start, and deletes the file when Cursor
+is not authorized or the host key is missing or expired. The backend reads it
+once at startup in place of an inherited `CURSOR_API_KEY`. It is not exported
+into `process.env`, which terminals and other child processes inherit. A key
+stored in the profile's own settings still wins. Settings report the snapshot
+as `host-env`, and the sign-in card as `api-key-env`.
 
 Grok is the deliberate local-path exception: its CLI has no documented
 provider-home override, so pointing its process at the host `HOME` would also
@@ -315,11 +358,11 @@ refreshed from the host on each profile start and installed mode `0600`.
 
 ### macOS Keychain credential brokering
 
-Claude's and Cursor's host logins normally live in the macOS login Keychain. The
+Claude's host login normally lives in the macOS login Keychain. The
 backend and its terminals keep an isolated `HOME`; startup never links the host
 Keychain directory or its writable database into that tree. Instead, each
 authorized provider uses an explicit lookup against the host login Keychain path
-and its own fixed service names.
+and its own fixed service names. Cursor is SDK-only and uses no Keychain record.
 
 Pinning the lookup to `<host home>/Library/Keychains/login.keychain-db` is what
 makes an isolated profile deterministic, because that profile's `HOME` holds no
@@ -340,17 +383,6 @@ same explicit Claude service lookup and still sends the complete JSON over stdin
 so the container can retain refresh information. On hosts that keep credentials
 on disk, lookup prefers the recorded host `CLAUDE_CONFIG_DIR` before the host
 home fallback.
-
-Cursor's supported `AGENT_CLI_CREDENTIAL_STORE=file` mode provides a narrower
-path. Startup reads only `cursor-access-token`, `cursor-refresh-token`, and
-`cursor-api-key` for account `cursor-user`, then atomically writes those fields
-mode `0600` beneath a Cursor-specific process HOME. The Cursor bridge alone gets
-that HOME, and that directory is created on every start — including the revoke
-path — so the bridge is never handed a `HOME` that does not exist. A missing host
-record or disabled Cursor source removes the prior snapshot before launch, so
-host logout and profile opt-out revoke access. Those record values are folded
-into the bridge's credential fingerprint, so a host rotation or logout restarts
-the bridge instead of leaving it running on a superseded token.
 
 Startup also removes the legacy `<isolated HOME>/Library/Keychains` symlink from
 profiles created by earlier builds. Real profile-owned directories at that path
@@ -427,8 +459,9 @@ gateway token does not enter browser history or persistent browser state.
 1. **Allowed local provider homes are usually shared with the host.** This
    enables real Claude/Codex/OpenCode testing, but local test sessions can add
    or update provider-owned host state. Grok avoids this through its isolated
-   auth snapshot; changing the other providers requires provider-specific
-   writable overlays or supported home splits.
+   auth snapshot. Pi shares only `auth.json`, so the one host write it can make
+   is a refreshed login. Changing the other providers requires
+   provider-specific writable overlays or supported home splits.
 2. **OpenCode cache seeding is project-scoped.** Production project IDs do not
    automatically map to a new fixture project. Falling back to another
    project's catalogue would incorrectly expose models added by that project's
@@ -437,11 +470,10 @@ gateway token does not enter browser history or persistent browser state.
    Cursor expose optional write-only API-key overrides because those are needed
    for headless/container paths. Codex, OpenCode, and Grok continue to use their
    own login state rather than accumulating duplicate secrets in Orkestrator.
-4. **Signed-out Cursor runs use the provider's file-store control.** The
-   agent-test gate removes inherited Cursor keys, assigns a Cursor-specific HOME,
-   selects `AGENT_CLI_CREDENTIAL_STORE=file`, and removes any prior imported
-   `auth.json` when Cursor is not authorized. The CLI therefore cannot fall back
-   to the host macOS Keychain.
+4. **Signed-out Cursor runs have no host key to fall back to.** The agent-test
+   gate removes inherited Cursor keys and the key snapshot when Cursor is not
+   authorized. The bridge is pinned to the profile's own SDK login file, so it
+   never reads the SDK's default `~/.cursor/sdk/auth.json`.
 
 These are descriptions of current behavior, not assumptions that a visible
 cached model implies a usable credential.

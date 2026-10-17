@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { resolve } from "node:path";
+import { runtimeStorePaths } from "./config.js";
 import { modelRuntime, refreshRuntimeCatalog, setModelRuntimeFactoryForTests } from "./runtime.js";
 
 function fakeRuntime(overrides: Record<string, unknown> = {}): ModelRuntime {
@@ -70,5 +72,47 @@ describe("refreshRuntimeCatalog", () => {
     expect(refreshes).toBe(2);
     expect(options.map((entry) => entry.force)).toEqual([true, true]);
     expect(options.every((entry) => entry.signal instanceof AbortSignal)).toBe(true);
+  });
+});
+
+describe("runtimeStorePaths", () => {
+  const saved = {
+    PI_AGENT_DIR: process.env.PI_AGENT_DIR,
+    PI_BRIDGE_AUTH_FILE: process.env.PI_BRIDGE_AUTH_FILE,
+  };
+
+  afterEach(() => {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+
+  test("leaves both stores on the SDK default when nothing is configured", () => {
+    delete process.env.PI_AGENT_DIR;
+    delete process.env.PI_BRIDGE_AUTH_FILE;
+    expect(runtimeStorePaths()).toEqual({});
+  });
+
+  test("keeps both stores in an explicit agent directory", () => {
+    process.env.PI_AGENT_DIR = "/container/pi/agent";
+    delete process.env.PI_BRIDGE_AUTH_FILE;
+    expect(runtimeStorePaths()).toEqual({
+      authPath: resolve("/container/pi/agent/auth.json"),
+      modelsPath: resolve("/container/pi/agent/models.json"),
+    });
+  });
+
+  test("moves only the credential file when an auth file is named", () => {
+    // An agent-test profile: the host's login, the profile's own model config.
+    delete process.env.PI_AGENT_DIR;
+    process.env.PI_BRIDGE_AUTH_FILE = " /host/.pi/agent/auth.json ";
+    expect(runtimeStorePaths()).toEqual({ authPath: resolve("/host/.pi/agent/auth.json") });
+
+    process.env.PI_AGENT_DIR = "/profile/pi/agent";
+    expect(runtimeStorePaths()).toEqual({
+      authPath: resolve("/host/.pi/agent/auth.json"),
+      modelsPath: resolve("/profile/pi/agent/models.json"),
+    });
   });
 });

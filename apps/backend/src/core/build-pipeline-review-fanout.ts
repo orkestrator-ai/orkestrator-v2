@@ -108,6 +108,11 @@ const FANOUT_LABEL = "Multi-model review";
 /** What the fan-out needs from the supervisor that owns the pipeline. */
 export interface BuildPipelineReviewFanoutDeps {
   provider(pipeline: BuildPipeline, agent: BuildPipelineAgent): Promise<BuildPipelineProvider>;
+  providerUnavailable?(
+    pipeline: BuildPipeline,
+    agent: BuildPipelineAgent,
+    provider: BuildPipelineProvider,
+  ): Promise<void>;
   executionPolicy(pipeline: BuildPipeline): Promise<NativeAgentExecutionPolicy>;
   save(pipeline: BuildPipeline): Promise<void>;
   stepSettings(
@@ -309,6 +314,12 @@ export class BuildPipelineReviewFanout {
       sessionKeyFor: (reviewer) => `${pipeline.id}:review:${pipeline.iteration}:${reviewer.id}`,
       sessionLabelFor: (_reviewer, index) => pipelineIndependentReviewLabel(index),
       provider: (selection) => this.deps.provider(pipeline, selection.agent as BuildPipelineAgent),
+      providerUnavailable: (selection, provider) =>
+        this.deps.providerUnavailable?.(
+          pipeline,
+          selection.agent as BuildPipelineAgent,
+          provider,
+        ) ?? Promise.resolve(),
       executionPolicy: () => this.deps.executionPolicy(pipeline),
       agentMcp: async (selection, resultKey) =>
         this.deps.agentMcp?.(pipeline, resultKey, selection.agent, "build pipeline reviewer"),

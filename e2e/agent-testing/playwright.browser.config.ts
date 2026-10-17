@@ -21,6 +21,7 @@ export default defineConfig({
     "terminal-mobile-panes.spec.ts",
     "opencode-live.spec.ts",
     "slash-command-inactive.spec.ts",
+    "multi-review-live.spec.ts",
   ],
   fullyParallel: false,
   workers: 1,

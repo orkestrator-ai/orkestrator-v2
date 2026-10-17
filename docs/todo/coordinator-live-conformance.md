@@ -111,14 +111,33 @@ and what its first runs found. Everything else here is qualification.
    web annotation runs did. Pi is an `enforced` platform that cannot currently
    be qualified live.
 
+5. **Grok runs some shell commands without asking.** In a 2026-10-17 probe
+   against the pinned Grok 1.0.52 (no `--always-approve`, coordinator argv),
+   `touch shell.txt` ran and created the file without a
+   `session/request_permission`. `echo x > out.txt`, `rm`, `git init` and
+   `git commit` all asked and were refused. The coordinator's `advisory` note
+   already says a tool that does not ask is not stopped. Now that a refusal no
+   longer ends the turn, the live read-only case reaches its shell step, and a
+   command like this would change the checkout. Two switches verified on
+   `grok agent stdio` 1.0.52 could close it:
+   - an `--agent-profile` whose frontmatter has `disallowedTools` (`write`,
+     `search_replace`, `run_terminal_cmd`) removes those tools, and the model
+     reported the step refused with `end_turn`;
+   - `--sandbox read-only` (not yet tried on stdio).
+
+   Top-level `--deny`, `--permission-mode dontAsk`, a `permissionMode` in the
+   profile, `_meta.permissionMode` on `session/new` and a `GROK_CONFIG`
+   `permission` overlay were all ignored on stdio. A `[permission] deny` in
+   `config.toml` works, but only through the user's own Grok home. Whichever
+   switch is chosen also feeds the deferred "real read-only gate" item in
+   [coordinator-read-only-adapters.md](coordinator-read-only-adapters.md).
+6. **A continued ACP turn reports only its last attempt's usage.** Each
+   `session/prompt` result carries that attempt's usage, and `recordTurnUsage`
+   overwrites rather than adds. The retriable-provider continuation had the
+   same gap before the policy-denial continuation was added.
+
 ### Verify
 
-- **Grok's turn ends at its first denied tool.** In both live read-only runs
-  (2026-10-16), Grok called `write` for step 1, the call failed, and the turn
-  went idle with no further tool call and no answer. The suite fails it for a
-  missing report. Find out whether the ACP bridge's denial of an `advisory`
-  coordinator's permission request ends the Grok turn. If it does, a Grok
-  coordinator stops answering whenever it tries anything mutating.
 - **Claude coordinator permission mode.** `coordinator.md` says Claude runs
   with `permissionMode: dontAsk`. A live coordinator session reports
   `composer.selectedModeId: "plan"`, the renderer sends that mode, and the
@@ -149,7 +168,7 @@ for prerequisites and how to batch them with other provider runs.
   | Pi | Skipped: `needs-auth`, because the profile seeds no Pi login (Code item 4). |
   | OpenCode | Passed. Every mutation unavailable, checkout unchanged, canaries read back. |
   | Cursor | Skipped: `signed-out` in the profile. Whether the host has a Cursor Agent login was not checked. |
-  | Grok (`advisory`) | Failed: the turn ended after the denied `write`, with no report (Verify). Checkout unchanged. |
+  | Grok (`advisory`) | Failed: the turn ended after the denied `write`, with no report. Checkout unchanged. Fixed since by the policy-denial continuation (see Constraints and rationale); needs a re-run. |
 
   Claude on Linux has not run. No coordinator used `sleep` or polled
   `list_environments` in these single-turn runs, but nothing in the read-only
@@ -297,6 +316,43 @@ is the truth, and this file is the backlog.
   across providers was the alternative; it would need the same change on all
   six adapters and was not asked for. A coordinator keeps its research mode on
   a read-only turn, matching Claude's process authority.
+
+- **A Grok turn ended on a policy refusal is continued by the bridge.**
+  Reproduced on 2026-10-17 against the pinned Grok 1.0.52 with the
+  coordinator's argv in an isolated `GROK_HOME`. A refused `write` returns
+  `stopReason: "cancelled"` with `_meta.cancellationCategory`
+  `PermissionCancelled` when the answer is `cancelled` (what the bridge sent,
+  `acp-session.ts`). It returns `PermissionRejected` when the answer selects
+  `reject_once`. Grok ends its own turn on any answer except allow, so the
+  bridge's answer shape alone was not the cause. A denial from Grok's own rule
+  engine (`[permission] deny` in `config.toml`) instead fails the tool and lets
+  the model report (`end_turn`). Decisions:
+  - Refuse with `reject_once` (`policyDenialOutcome`). `cancelled` is ACP's
+    "the turn was cancelled" outcome. `reject_always` would persist a "never
+    allow" grant in the user's Grok approvals for that project.
+  - Keep the turn going in the bridge, not in Grok's configuration. After a
+    `cancelled` attempt during which the bridge refused a request, the prompt
+    loop sends the same session `POLICY_DENIAL_CONTINUATION`. That covers every
+    tool that asks, MCP calls included. A Grok-side switch (an agent profile,
+    a sandbox) covers only built-in tools, and its other effects on the pinned
+    build are unverified. Cost: one extra model request per refusal.
+  - Continue on the bridge's own refusal record. Grok's
+    `cancellationCategory` is only a veto: any category other than
+    `PermissionRejected` or `PermissionCancelled` ends the turn. A user
+    cancel or close (`retryCancelledPromptSequence`) is never continued.
+  - At most `POLICY_DENIAL_MAX_CONTINUATIONS` (8) per turn. After that the
+    turn is recorded as failed: "…kept ending the turn on tool calls this
+    session's policy refuses".
+  - The continuation is a fixed, content-free instruction, not the refused
+    call's title, so no agent-supplied text is fed back as an instruction.
+
+  Verified live through the built bridge
+  (`ORKESTRATOR_BRIDGE_EXECUTION_POLICY=coordinator-read-only`, a scratch Git
+  repository). Write, edit, `git commit` and an MCP `use_tool` were each
+  refused and continued, the read succeeded, and the turn finished
+  `completed` with the full report and the checkout unchanged. The same fix
+  covers Grok reviewers on read-only Multi Review turns. Tests:
+  `acp-policy-denial.test.ts`.
 
 ## Open questions
 

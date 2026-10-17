@@ -776,6 +776,27 @@ export function workflowResultPermissionOption(
   return allowOptionId(params);
 }
 
+/**
+ * The answer to a permission request this session's policy refuses.
+ *
+ * A refusal, not a cancellation: ACP's `cancelled` outcome says the prompt
+ * turn itself was cancelled. Only `reject_once` is chosen. Grok's
+ * `reject_always` stores a "never allow" grant in the user's per-project
+ * approvals, outliving this session's policy. A request offering no
+ * `reject_once` falls back to `cancelled`, which no agent treats as approval.
+ *
+ * Grok 1.0.52 ends its turn on either answer (`cancellationCategory`
+ * `PermissionRejected` or `PermissionCancelled`); the prompt loop continues
+ * such a turn (`acp-prompt.ts`).
+ */
+export function policyDenialOutcome(params: JsonObject): JsonObject {
+  const options = Array.isArray(params.options) ? params.options.filter(isObject) : [];
+  const reject = options.find((option) => option.kind === "reject_once");
+  return typeof reject?.optionId === "string"
+    ? { outcome: { outcome: "selected", optionId: reject.optionId } }
+    : { outcome: { outcome: "cancelled" } };
+}
+
 function allowOptionId(params: JsonObject): string | undefined {
   const options = Array.isArray(params.options) ? params.options.filter(isObject) : [];
   const allow =
@@ -952,7 +973,8 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
       return;
     }
     if (policy?.approvals === "deny") {
-      child.respond(requestId, { outcome: { outcome: "cancelled" } });
+      state.policyDeniedRequests = (state.policyDeniedRequests ?? 0) + 1;
+      child.respond(requestId, policyDenialOutcome(params));
       return;
     }
     const autoAllow = autoApprovedPermissionOption(

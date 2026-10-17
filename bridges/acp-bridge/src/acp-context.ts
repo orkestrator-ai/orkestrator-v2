@@ -470,6 +470,15 @@ export interface SessionState {
   /** `promptSequence` of the turn in which a held request expired unanswered. */
   expiredRequestPromptSequence?: number;
   /**
+   * Permission requests this bridge refused itself because the session's
+   * policy denies approvals. The prompt loop compares it across one
+   * `session/prompt` to tell a turn the agent ended on that refusal (see
+   * `acp-prompt.ts`). Never persisted.
+   */
+  policyDeniedRequests?: number;
+  /** `promptSequence` of the turn that ran out of policy-denial continuations. */
+  policyDenialExhaustedPromptSequence?: number;
+  /**
    * Bounded ACP command inventory (see `acp-commands.ts`); persisted so a
    * restart does not empty the picker. Undefined until anything is known.
    */
@@ -912,6 +921,12 @@ export const MAX_CURSOR_CHILD_PROMPT_RECORDS = 8;
 export const CURSOR_BACKGROUND_CONTINUATION_PREFIX = "Background subagent finished.";
 /** Auto-retries for transient provider errors (`resource_exhausted`, `unavailable`). */
 export const RETRIABLE_PROVIDER_MAX_RETRIES = 3;
+/**
+ * Continuations of one turn the agent ended on a policy refusal. A read-only
+ * coordinator turn that tries each kind of mutation once (create, edit, shell,
+ * commit) needs four; the rest is headroom for a model that retries.
+ */
+export const POLICY_DENIAL_MAX_CONTINUATIONS = 8;
 // The variable keeps the `ACP_RESOURCE_EXHAUSTED_` spelling from when capacity
 // was the only retriable code, deliberately: it is the one part of this
 // mechanism that has escaped the process, so renaming it would silently reset

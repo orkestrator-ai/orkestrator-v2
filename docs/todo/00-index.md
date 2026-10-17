@@ -59,8 +59,8 @@ it reaches. Some rules of thumb:
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
 | High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 25 |
 | Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 257 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 268 |
-| **Total** | | **551** |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 269 |
+| **Total** | | **552** |
 
 ## Very high
 
@@ -448,7 +448,8 @@ it reaches. Some rules of thumb:
 - [ ] Confirm Grok Orkestrator mail tools auto-allow under both naming forms on the pinned Grok build ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
 - [ ] Verify Cursor and Grok mailbox identity, injection, coordinator wake, resume and token rotation live ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
 - [ ] Decide whether Wake peers stays off by default and align `agent-messaging.md` with the code ([coordinator-live-conformance.md](coordinator-live-conformance.md), decision)
-- [ ] Find out why a Grok coordinator's turn ends at its first denied tool in the live read-only run ([coordinator-live-conformance.md](coordinator-live-conformance.md), verify)
+- [x] Find out why a Grok coordinator's turn ends at its first denied tool in the live read-only run ([coordinator-live-conformance.md](coordinator-live-conformance.md), verify)
+- [ ] Stop a Grok coordinator running shell commands Grok never asks about (`touch` ran unasked on 1.0.52) ([coordinator-live-conformance.md](coordinator-live-conformance.md))
 - [ ] Let agent-test profiles authorize Pi's host login so the live coordinator suite can qualify Pi ([coordinator-live-conformance.md](coordinator-live-conformance.md))
 - [ ] Get Codex to attempt create, edit and shell in the live read-only run, or decide a known read-only sandbox counts as exercised ([coordinator-live-conformance.md](coordinator-live-conformance.md))
 - [ ] Auto-close an unassigned, empty-draft coordinator conversation when a new one is created ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md))
@@ -771,6 +772,7 @@ it reaches. Some rules of thumb:
 
 - [ ] Add an argv0 deny for `sleep` on the Codex coordinator profile if live runs show Codex using it ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md))
 - [ ] Check the Claude coordinator's permission mode: `coordinator.md` says `dontAsk`, but live sessions start in plan mode ([coordinator-live-conformance.md](coordinator-live-conformance.md), verify)
+- [ ] Count usage across every attempt of an ACP turn the bridge continued, not only the last ([coordinator-live-conformance.md](coordinator-live-conformance.md))
 - [ ] Raise Grok above `advisory` only after adding a real read-only gate in the ACP bridge ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md), deferred)
 - [ ] Raise the Cursor coordinator tier only once a probe can prove a denied tool did not run ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md), blocked)
 - [ ] Report a Codex coordinator that fails the hosted web search mode check as not ready, not only as a refused turn ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md))
@@ -891,7 +893,7 @@ it reaches. Some rules of thumb:
 | [multi-review-flow-graph.md](multi-review-flow-graph.md) |  |  |  |  | 0 |
 | **Coordinator and agent mail** | | | | | |
 | [coordinator-read-only-adapters.md](coordinator-read-only-adapters.md) |  |  | 5 | 4 | 9 |
-| [coordinator-live-conformance.md](coordinator-live-conformance.md) |  | 4 | 9 | 1 | 14 |
+| [coordinator-live-conformance.md](coordinator-live-conformance.md) |  | 4 | 9 | 2 | 15 |
 | [coordinator-consistency-gaps.md](coordinator-consistency-gaps.md) |  |  | 1 | 10 | 11 |
 | **Backend structure** | | | | | |
 | [storage-service-repositories.md](storage-service-repositories.md) |  |  | 4 | 2 | 6 |

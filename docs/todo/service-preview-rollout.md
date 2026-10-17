@@ -55,8 +55,8 @@ partitions, and the evidence log where run results are now recorded.
   real-Electron spec opens a service preview: `testMatch` in
   `e2e/agent-testing/playwright.electron.config.ts` lists only
   `electron-main`, `web-annotations-electron` and
-  `terminal-input-resume-electron`. None of these suites has been re-run since
-  #831.
+  `terminal-input-resume-electron`. All of these suites, and every preview unit
+  file, were re-baselined on 2026-10-17 at `31d0fb06` (see the evidence log).
 
 ## Outstanding work
 
@@ -72,10 +72,17 @@ partitions, and the evidence log where run results are now recorded.
    `EnvironmentRelay.onData`) and a protocol-version mismatch (the relay
    script exits). Stdin errors, a silent relay and a wrong nonce are already
    covered.
-4. Diagnose or fix the open preview flakes
-   [0184](../tests/flaky-tests/0184-preview-tunnel-stopped-reader-queue.md),
-   [0195](../tests/flaky-tests/0195-preview-handoff-container-reconciliation.md)
-   and [0221](../tests/flaky-tests/0221-preview-first-chunk-timing.md).
+4. Pause the tunnel upstream before one read can trip the capacity close.
+   `pumpToClient` (`apps/backend/src/preview-tunnel-server.ts`) pauses the
+   upstream only after a whole `data` chunk is framed, and Bun reads 512 KiB
+   at a time. When the client's kernel buffer is full, the first such read
+   closes the tunnel with `capacity-exceeded` instead of pausing it, so a
+   reader that is slow but still reading loses the tunnel. Since 2026-10-17
+   the queue itself stays within twice the per-direction limit (flake
+   [0184](../tests/flaky-tests/0184-preview-tunnel-stopped-reader-queue.md)).
+   Bound the upstream read size (for example with the socket's
+   `highWaterMark`) or pause per frame, and add a slow-reader test that
+   expects a pause rather than a close.
 5. Optional: Playwright `firefox` and `webkit` projects in
    `playwright.preview.config.ts`, as early signal only (not Safari or iOS
    evidence). Optional: new mise tasks for the opt-in suites (for example
@@ -112,10 +119,6 @@ partitions, and the evidence log where run results are now recorded.
 Each run gates a default or an advertisement. Record every run in the evidence
 log below.
 
-- Re-baseline on current main. Run the opt-in commands from
-  `testing-guide.md` and all preview unit files. The 2026-09-23 file lists are
-  stale: #966 moved the Electron tests to `apps/desktop/tests/`, #967 moved the
-  protocol tests to `packages/protocol/src/node/`, and #969 replaced storage.
 - Real Electron window. Gates the desktop tunnel default. Run in an isolated
   profile with `ORKESTRATOR_PREVIEW_TRANSPORT=1`, through code item 1 and
   `mise run test:agent:electron`, or by hand. Cover:
@@ -148,7 +151,12 @@ log below.
   opening in Safari, background and foreground, and private browsing.
   Embedded surfaces are in [embedded-service-previews.md](embedded-service-previews.md).
 - Docker Desktop on macOS and Windows: resolver binding inspection, Auto host
-  ports, recreation onto a reused port, and the `docker exec` relay.
+  ports, recreation onto a reused port, and the `docker exec` relay. On
+  2026-10-17 the opt-in Docker suite passed on Docker Desktop 4.93.0 for macOS
+  (binding inspection, a same-port host decoy, recreation onto a reused port
+  and the exec relay). That run used Docker-assigned host ports, not
+  Orkestrator's Auto mapping (`hostPort: 0`). Windows and Auto mappings are
+  still open.
 - Hostile service worker (needs code item 2). Bootstrap and re-bootstrap with
   the worker installed. The documented outcome is that re-sign-in is blocked
   until site data is cleared, and that no other service and no control
@@ -190,8 +198,8 @@ capabilities and opt-in variables, exact commands, counts, skipped cases with
 reasons, and cleanup of profiles, CAs and containers. A row not run keeps the
 capability it gates off or unadvertised.
 
-2026-09-23, the #831 change set (merged as `4f02156b`). This is the current
-baseline.
+2026-09-23, the #831 change set (merged as `4f02156b`). Superseded as the
+baseline by the 2026-10-17 run below.
 
 | Item | Version |
 | --- | --- |
@@ -266,6 +274,109 @@ baseline.
   Its unchanged owning file passed alone in 33.0 seconds; the recurrence and
   compressed failure evidence are recorded in that case.
 
+2026-10-17, re-baseline after #966, #967 and #969 on `main` at `31d0fb06`.
+This replaces the 2026-09-23 file lists as the current baseline.
+
+| Item | Version |
+| --- | --- |
+| Host | macOS 27.0 (Darwin 27.0.0, arm64), one machine shared with nine other live-test worktrees (load average 19 to 37) |
+| Bun / Node (mise) | 1.4.3 / 22.23.1 |
+| Docker | Docker Desktop 4.93.0, engine 29.8.1; image `orkestrator-v2:latest` (`sha256:fa32f2248e1e`, Node 24.21.0 inside) re-tagged `orkestrator-v2:preview-rebaseline-084636` for the run |
+| Browser | Chrome for Testing headless shell 156.0.8078.4 (Playwright 1.64.0) |
+| Electron | 44.7.0 |
+| Vite fixture | 7.3.6, isolated copy at `/tmp/preview-vite-084636` |
+
+- Opt-in variables: `ORKESTRATOR_TEST_DOCKER_PREVIEW_IMAGE` and
+  `ORKESTRATOR_TEST_DOCKER_RELAY_IMAGE` (the re-tagged image),
+  `ORKESTRATOR_TEST_PREVIEW_VITE_DIR=/tmp/preview-vite-084636`,
+  `ORKESTRATOR_PREVIEW_BENCH=1`. Effective capabilities were the defaults
+  (`transport`, `relay` and publication off); the suites enable what they test
+  on their own harnesses.
+- Commands: the three opt-in commands from `testing-guide.md` §"Opt-in preview
+  checks" (Docker through `mise run test:logged`, browser and bench through
+  `mise exec`), then each owning file below alone with `bun test --cwd <package>
+  --preload ../../tests/setup-node.ts <file> --parallel=1` (web and root use
+  their own `bunfig.toml` preloads). Bun counts a skipped `describe`'s hooks as
+  skips, so the default-gate skip totals below are tests, not Bun's figure.
+- Counts, all passing, with default gates (opt-in gates on, where different):
+
+  | Package | File | Tests |
+  | --- | --- | --- |
+  | protocol | `src/node/preview-forward.test.ts` | 30 |
+  | protocol | `src/node/preview-http1.test.ts` | 19 |
+  | protocol | `src/node/preview-websocket.test.ts` | 7 |
+  | protocol | `src/preview-services.test.ts` | 21 |
+  | backend | `src/core/commands-registry-previews.test.ts` | 6 |
+  | backend | `src/core/preview-access.test.ts` | 11 |
+  | backend | `src/core/preview-docker.test.ts` | 0, 1 skipped (1 on Docker) |
+  | backend | `src/core/preview-port-publication.test.ts` | 4 |
+  | backend | `src/core/preview-service-registry.test.ts` | 15 |
+  | backend | `src/core/preview-target-resolver.test.ts` | 18 |
+  | backend | `src/preview-bench.test.ts` | 0, 1 skipped (1 with the bench flag) |
+  | backend | `src/preview-publication.test.ts` | 12 |
+  | backend | `src/preview-relay-supervisor.test.ts` | 14, 1 skipped (15 on Docker) |
+  | backend | `src/preview-tunnel-server.test.ts` | 11 |
+  | backend | `src/preview-vite.test.ts` | 0, 2 skipped (2 with the Vite fixture) |
+  | backend | `tests/gateway-preview.test.ts` (rollback drill) | 8 |
+  | backend | `tests/gateway-proxy.test.ts` (legacy route) | 31 |
+  | backend | `src/core/storage-writer-guards.test.ts` (#969 preview stores) | 20 |
+  | desktop | 15 `tests/*preview*.test.ts` files | 221 |
+  | desktop | `tests/desktop-window-lifecycle.test.ts` (partitions) | 6 |
+  | web | `ServiceBrowserTab`, `BrowserTab`, `EnvironmentPreviewServices`, `PreviewSettings` | 75 |
+  | web | `browser-address`, `native/browser-preview`, `pane-layout-preview-targets`, `preview-external`, `preview-service-display`, `previewServiceStore` | 34 |
+  | root | `tests/unit/protocol-browser-preview.test.ts`, `tests/unit/ios-mobile-contracts.test.ts` | 19 |
+  | real Chromium | `e2e/preview/private-origin.spec.ts` | 6 (Vite HMR included) |
+
+  Totals: protocol 77, backend 150 with 5 skipped (155 with every opt-in gate
+  on), desktop 227, web 109, root 19, real Chromium 6.
+- Docker Desktop for macOS: same-port containers with a host decoy,
+  recreation onto a reused port and the `docker exec` relay passed. This is
+  the first Docker Desktop evidence; see the Docker Desktop qualification item
+  for what remains.
+- Loopback latency (`preview-bench.test.ts`, 200 samples after 10 warm-ups):
+  direct p50 0.12 / p95 0.20 ms, desktop tunnel 0.25 / 0.33 ms, private
+  origin 0.77 / 0.90 ms. Same method as 2026-09-23; a different machine, so
+  not comparable.
+- `mise run test:agent:electron` did not start cleanly at first.
+  `electron-main.spec.ts` (two tests) and the first
+  `web-annotations-electron.spec.ts` test timed out waiting for the first
+  window. Cause: the specs' fixed profile names give fixed `safeStorage`
+  Keychain items (`Orkestrator AI — DEV [electron-smoke] Safe Storage`,
+  `… [annotation-smoke] …`), created on 2026-10-01 by an earlier Electron
+  build. Electron 44.7.0 is not on their access lists, so
+  `ConnectionManager.initialize()` waited on an unanswerable Keychain prompt
+  before any window existed. A standalone probe hung for over 20 s with those
+  names and returned in milliseconds with `[electron-resume]` (created
+  2026-10-15) or a fresh name. Agent-test profiles on macOS now launch with
+  Chromium's `use-mock-keychain` (`chromiumSwitchesForRuntime` in
+  `apps/desktop/electron/runtime-profile.ts`), which keeps encryption working
+  and writes nothing to the login Keychain. After the fix the suite had 10
+  passed, 1 skipped (the Linux Wayland case) and 1 failed: `real Electron
+  main process shares one backend across independent windows`. That test
+  failed in all six runs after the fix, in the suite and alone: four times at
+  the native OS-focus assertion and twice earlier at the 5-second window-title
+  check. It is recorded as environmental
+  ([0271](../tests/flaky-tests/0271-electron-native-focus-shared-macos-desktop.md)).
+  Flake [0157](../tests/flaky-tests/0157-electron-first-window-startup-timeout.md)
+  has the same symptom; the Keychain cause is recorded there.
+- Flakes: [0184](../tests/flaky-tests/0184-preview-tunnel-stopped-reader-queue.md)
+  was a real bound overrun (the capacity check ran once per 512 KiB upstream
+  read, not per frame) and is fixed in the tunnel server;
+  [0195](../tests/flaky-tests/0195-preview-handoff-container-reconciliation.md)
+  and [0221](../tests/flaky-tests/0221-preview-first-chunk-timing.md) were
+  test ordering and timing problems and are fixed in their tests. Before and
+  after stress counts are in each case file.
+- Cleanup: no containers from the re-tagged image remained. The two
+  `test:agent:electron` specs that timed out leaked their Vite dev servers
+  (detached process groups whose `finally` never ran); they were stopped by
+  hand, and the leak is tracked in
+  [test-suite-and-ci-health.md](test-suite-and-ci-health.md). Throwaway PKI and
+  preview harness directories were removed by the suites. The Keychain item
+  created by the probe was deleted.
+- Not run: real Electron service preview (code item 1 does not exist yet), two
+  machines, Firefox, Safari and iOS, Docker Desktop on Windows, Auto
+  mappings, real private DNS and certificates, a hostile service worker.
+
 ## Constraints and rationale
 
 - The threat boundaries, the credential and data path, and the resource-owner
@@ -310,10 +421,6 @@ baseline.
 
 ## Needs verification
 
-- Whether the opt-in suites still pass on main after #966, #967 and #969.
-- Whether `mise run test:agent:electron` starts cleanly on the run host. An
-  earlier Electron startup failure that blocked design-canvas runs was fixed
-  (#840), and #986 added an Electron spec on 2026-10-15.
 - How much disk the `orkestrator-preview-svc-*` partitions take on a
   long-lived profile, which decides how urgent retention is.
 

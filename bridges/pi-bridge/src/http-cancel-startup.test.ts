@@ -417,26 +417,41 @@ describe("cancel during cold attach", () => {
   });
 });
 
+/**
+ * Hold the prompt's mandatory journal barrier, and only that write.
+ *
+ * Recording the prepared journal entry also schedules a best-effort write,
+ * which reaches the write boundary while the route is still preparing. Counting
+ * that one as "the journal write" let a cancel land before the route's last
+ * pre-barrier check, so the prompt settled as cancelled-before-send instead of
+ * waiting on the write under test (flake 0264). Best-effort writes pass.
+ */
+function holdBarrierWrites(gate: Promise<void>): { readonly held: number } {
+  const barriers = { held: 0 };
+  setPersistWriteGateForTests(async ({ barrier }) => {
+    if (!barrier) return;
+    barriers.held += 1;
+    await gate;
+  });
+  return barriers;
+}
+
 describe("cancel during the mandatory journal write", () => {
   test("retains the intent across the write and settles the correct claim", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pi-cancel-write-"));
     const writeGate = deferred();
-    let writes = 0;
     const state = seedSession();
     const pi = controlledSession();
     state.session = pi.session;
     setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
     process.env.PI_BRIDGE_STATE_DIR = directory;
-    setPersistWriteGateForTests(async () => {
-      writes += 1;
-      await writeGate.promise;
-    });
+    const barriers = holdBarrierWrites(writeGate.promise);
     try {
       const prompt = post(`/session/${state.id}/prompt`, {
         prompt: "never sent",
         requestId: "write-cancel",
       });
-      await waitFor(() => writes >= 1);
+      await waitFor(() => barriers.held >= 1);
       const claim = state.promptClaim;
       expect(claim).toBeNumber();
 
@@ -465,22 +480,18 @@ describe("cancel during the mandatory journal write", () => {
   test("deleting the session while the write is held settles the prompt locally", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pi-cancel-write-delete-"));
     const writeGate = deferred();
-    let writes = 0;
     const state = seedSession();
     const pi = controlledSession();
     state.session = pi.session;
     setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
     process.env.PI_BRIDGE_STATE_DIR = directory;
-    setPersistWriteGateForTests(async () => {
-      writes += 1;
-      await writeGate.promise;
-    });
+    const barriers = holdBarrierWrites(writeGate.promise);
     try {
       const prompt = post(`/session/${state.id}/prompt`, {
         prompt: "never sent",
         requestId: "write-delete",
       });
-      await waitFor(() => writes >= 1);
+      await waitFor(() => barriers.held >= 1);
       expect((await call(`/session/${state.id}`, { method: "DELETE" })).status).toBe(200);
       expect(sessions.has(state.id)).toBe(false);
 
@@ -504,22 +515,18 @@ describe("cancel during the mandatory journal write", () => {
   test("a write failure after a cancel releases the claim and its intent", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pi-cancel-write-fail-"));
     const writeGate = deferred();
-    let writes = 0;
     const state = seedSession();
     const pi = controlledSession();
     state.session = pi.session;
     setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
     process.env.PI_BRIDGE_STATE_DIR = directory;
-    setPersistWriteGateForTests(async () => {
-      writes += 1;
-      await writeGate.promise;
-    });
+    const barriers = holdBarrierWrites(writeGate.promise);
     try {
       const prompt = post(`/session/${state.id}/prompt`, {
         prompt: "never sent",
         requestId: "write-fails",
       });
-      await waitFor(() => writes >= 1);
+      await waitFor(() => barriers.held >= 1);
       expect((await cancel(state)).status).toBe(202);
 
       writeGate.reject(new Error("disk refused"));

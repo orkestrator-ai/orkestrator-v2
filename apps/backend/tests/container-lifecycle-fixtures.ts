@@ -77,6 +77,9 @@ export function memoryLifecycleContext(
     removeEnvironment: async (id: string) => {
       store.delete(id);
     },
+    // Container creation resolves each platform's active account; none is
+    // configured, so every platform stays on its default account.
+    loadAgentAccounts: async () => ({ version: 1, accounts: [], active: {} }),
   };
   const context = {
     storage,

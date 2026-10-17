@@ -329,7 +329,7 @@ export const COORDINATOR_CONTROL_TOOL_NAMES = Object.freeze([
  * user's configured default. Kept short: it is injected on every turn.
  */
 export const COORDINATOR_LAUNCH_DEFAULTS_RULE =
-  "Defaults: omit modelId, reasoningId, Multi Review model rows and build agentType, steps and reviewers so environments, jobs, builds and Multi Reviews run the user's saved defaults. Override one only when the user asks for a specific model, agent, effort or reviewers, or agrees to one the task needs.";
+  "Defaults: omit modelId, reasoningId, Multi Review model rows, Multi Review autoFix and autoPr, and build agentType, steps and reviewers so environments, jobs, builds and Multi Reviews run the user's saved defaults. Override one only when the user asks for a specific model, agent, effort, reviewers or auto-fix/auto-PR, or agrees to one the task needs.";
 
 /** The mail-store hold reason that keeps worker progress from waking anyone. */
 export const COORDINATOR_DELEGATION_HOLD_REASON = "delegation-running";
@@ -353,7 +353,7 @@ export const COORDINATOR_ASYNC_CONTRACT =
  * know?", and without an answer the obvious move is to poll its status.
  */
 export const COORDINATOR_WORKFLOW_STATUS_WAKE =
-  "This conversation will be woken with a status update when this workflow settles: a Multi Review ready to address, its fix done or failed, a build paused on an error, a stall, and any workflow completing, failing or being cancelled. Updates that land together arrive in one wake. Do not poll its status.";
+  "This conversation will be woken with a status update when this workflow settles: a Multi Review ready to address, its fix done or failed, its automatic PR session started, opened or failed, a build paused on an error, a stall, and any workflow completing, failing or being cancelled. With auto-fix and auto-PR the review advances on its own, and you hear the outcome rather than each step. Updates that land together arrive in one wake. Do not poll its status.";
 
 export interface CoordinatorRepositoryContextEvent {
   revision: number;

@@ -1,3 +1,4 @@
+import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
 import { describe, expect, test } from "bun:test";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import { queueAutoPr, supersedePendingAutoPr } from "./multi-review-auto-pr.js";
@@ -29,6 +30,29 @@ describe("queueAutoPr", () => {
     });
     queueAutoPr(launched);
     expect(launched.autoPrLaunch?.state).toBe("launched");
+  });
+
+  test("binds a queued launch to the Fix attempt and retains it across later Fixes", () => {
+    const fix = {
+      sessionKey: "fix-a",
+      startedAt: "2026-10-16T10:10:00Z",
+    } as MultiReviewWorkflow["fixSession"];
+    const target = workflow({ autoPr: true, fixSession: fix });
+    queueAutoPr(target);
+    expect(target.autoPrLaunch?.fixIdentity).toBe(multiReviewFixIdentity(fix));
+    expect(target.autoPrLaunch?.fixIdentity).toMatch(/^[0-9a-f]{64}$/);
+    target.autoPrLaunch!.state = "launched";
+    const original = { ...target.autoPrLaunch! };
+    for (const laterFix of [
+      { ...fix!, sessionKey: "fix-b" },
+      { ...fix!, startedAt: "2026-10-16T11:10:00Z" },
+    ]) {
+      target.fixSession = laterFix;
+      expect(multiReviewFixIdentity(laterFix)).not.toBe(original.fixIdentity);
+      supersedePendingAutoPr(target);
+      queueAutoPr(target);
+      expect(target.autoPrLaunch).toEqual(original);
+    }
   });
 
   test.each(["skipped", "failed"] as const)("re-queues a %s launch after a later Fix", (state) => {

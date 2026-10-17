@@ -1934,6 +1934,70 @@ describe("native agent progressive remainder", () => {
     );
   });
 
+  test("publishes a slow cold command catalogue before the discovery cache expires", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const stub = createProviderStub("claude", {
+      slashCommands: async () => {
+        await held;
+        return [{ name: "/cold-command", description: "Cold project command", source: "project" }];
+      },
+    });
+    await withService(
+      {
+        prefix: "orkestrator-progressive-cold-commands-",
+        provider: async () => stub.provider,
+        // Never advance the clock: the cached placeholder cannot expire.
+        now: () => 1_000,
+      },
+      async ({ service }) => {
+        const input = {
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey: "env-env-1:cold-commands",
+          viewVersion: 1 as const,
+          sections: ["commands" as const],
+        };
+        await service.ensureSession(input);
+        let placeholderToken: string | undefined;
+        try {
+          await waitForCondition(async () => {
+            const update = await service.getDiscoveryUpdate(input);
+            if (
+              update.status !== "snapshot" ||
+              update.value.sections.commands?.availability !== "ready"
+            )
+              return false;
+            expect(
+              update.value.sections.commands.value?.some((row) => row.name === "/cold-command"),
+            ).toBe(false);
+            placeholderToken = update.token;
+            return true;
+          });
+          release();
+          await waitForCondition(async () => {
+            const update = await service.getDiscoveryUpdate({
+              ...input,
+              knownToken: placeholderToken,
+            });
+            if (update.status !== "snapshot") return false;
+            const commands = update.value.sections.commands;
+            if (!commands?.value?.some((row) => row.name === "/cold-command")) return false;
+            expect(commands.catalogue?.status).toBe("ready");
+            expect(commands.availability).toBe("ready");
+            expect(update.token).not.toBe(placeholderToken);
+            return true;
+          });
+          expect(stub.slashCommands).toHaveBeenCalledTimes(1);
+        } finally {
+          release();
+        }
+      },
+    );
+  });
+
   test("held discovery does not delay a progressive transcript snapshot", async () => {
     const discoveryHeld = new Promise<never>(() => undefined);
     const slashCommands = mock(async () => discoveryHeld);

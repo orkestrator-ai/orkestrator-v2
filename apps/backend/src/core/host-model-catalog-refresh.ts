@@ -1,5 +1,8 @@
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
-import { OPENCODE_PINNED_RUNTIME_ENV } from "@orkestrator/protocol/terminal-agent-launch";
+import {
+  CLAUDE_PINNED_RUNTIME_ENV,
+  OPENCODE_PINNED_RUNTIME_ENV,
+} from "@orkestrator/protocol/terminal-agent-launch";
 import { existsSync, promises as fs } from "node:fs";
 import { randomBytes, randomUUID } from "node:crypto";
 import path from "node:path";
@@ -151,6 +154,7 @@ async function refreshClaude(
     CWD: workingDirectory,
     CLAUDE_BRIDGE_TOKEN: token,
     CLAUDE_CLI_PATH: resolveClaudeBinary(context),
+    ...(resolveClaudeBinary(context) !== "claude" ? CLAUDE_PINNED_RUNTIME_ENV : {}),
     ORKESTRATOR_PARENT_PID: String(process.pid),
     ORKESTRATOR_BRIDGE_DEBUG:
       (await context.storage.loadConfig()).global.debugLogging === true ? "1" : "0",

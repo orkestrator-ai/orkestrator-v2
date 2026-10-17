@@ -481,7 +481,8 @@ stable key; a key is sent once, recorded on the association
 | Resource | Status | Setting that sends it |
 | --- | --- | --- |
 | Multi Review | consolidation `ready` (finding counts by severity, coverage gaps, verdict) | `settled` |
-| Multi Review | interactive fix turn finished (`fix-done`) or failed (`fix-failed`) | `settled` |
+| Multi Review | interactive fix turn finished (`fix-done`, with the reason when auto-PR started no PR) or failed (`fix-failed`) | `settled` |
+| Multi Review | auto-PR: PR session started (`pr-started`), its pull request open (`pr-opened`, with the URL) or already `pr-closed`, `pr-merged` or `pr-unknown`, or the launch failed (`pr-failed`) | `settled` |
 | Multi Review | a reviewer, consolidation or fix session `stalled` | `settled` |
 | Multi Review | `completed` (fix summary, files changed), `failed` (error), `cancelled` | always |
 | Multi Review | all reviewers finished and consolidation started (`reviews-finished`) | `stages` |
@@ -496,6 +497,25 @@ Individual reviewers finishing never wakes anyone: that is progress, and a
 seven-reviewer panel would otherwise be seven turns. A relaunched fix, a second
 consolidation, or a new stall or waiting episode has a new key and is sent
 again.
+
+A review with auto-fix and auto-PR advances on its own, so a state it is about
+to leave is not reported. Consolidation with findings goes straight to the Fix
+handoff and never reaches `ready`. A finished Fix that queued its PR is held
+until the PR launch settles, and the coordinator hears `pr-started` instead of
+a `fix-done` it would be expected to act on. `pr-opened` follows once the
+environment records `prUrl` with `prState: open`; the PR monitor sets them, and
+the next workflow save or the 60-second sweep reports it. A retained URL whose
+state is closed, merged or unknown is reported as that state, never as open.
+Each PR launch records the identity of the Fix attempt that authorized it
+(`autoPrLaunch.fixIdentity`, a hash of the Fix session key and start time). A
+later Fix, for example after a reviewer restart, is reported as `fix-done`,
+noting that the earlier PR does not confirm it includes the new changes. A
+launched record without an identity, from before this change, is treated the
+same way. A failed or stopped Fix reports `fix-failed`
+or `fix-done` with "No PR session started"; the review stops there. A
+consolidation with nothing to fix reports `ready` with a line saying no Fix or PR
+started. A legacy structured Fix holds `completed` until its PR launch settles,
+then lists the PR outcome in its details.
 
 **Setting.** **Settings → Messaging → Coordinator status updates**
 (`coordinatorStatusWakes`): *Finished work only* (`off`, what woke a
@@ -567,7 +587,7 @@ What an omitted choice resolves to:
 | --- | --- | --- |
 | `launch_environment`, `launch_job` | `modelId`, `reasoningId`, `fastMode` | The platform column across environment → repository → app settings, else the agent's own default (`defaultReasoningId` for effort) |
 | `launch_multi_review`, `start_multi_review` | `reviewers`, `reviewModel`, `fixModel` | The Multi Review button's rows: Review, Review 2, saved extra reviewers and reviewer count; Review preparation and Fix review issues, each falling back to Review |
-| `launch_multi_review`, `start_multi_review` | auto-fix and auto-PR (not exposed) | The saved Multi Review settings |
+| `launch_multi_review`, `start_multi_review` | `autoFix`, `autoPr` | The saved app-level Auto-fix and Auto-PR, which the button reads; a requested `autoPr: true` turns an omitted `autoFix` on |
 | `start_build_pipeline` | `agentType`, `steps`, `reviewers`, `reviewPreparation` | `buildPipelineConfiguredDefaults` (`packages/protocol/src/build-pipeline-defaults.ts`), the resolver the Build button uses |
 
 Every one of these can be overridden. A coordinator is told to override only
@@ -594,7 +614,9 @@ Every launch reports what will run. `launch_environment` and `launch_job` return
 `selection: { agent, model, reasoning, source }`, where `source` is `requested`
 if the call set `modelId` or `reasoningId` and `default` otherwise. `model` is
 null when no tier pins one and the agent picks its own. The Multi Review result
-reports its rows the same way. `start_build_pipeline` reports the pipeline's
+reports its rows the same way, plus `autoFix` and `autoPr` with a source of
+`default`, `requested` or `implied` (auto-fix turned on by a requested auto-PR).
+`start_multi_review` reports the same `selection`. `start_build_pipeline` reports the pipeline's
 `agentType`, `steps`, `reviewers` and `reviewPreparation`, with a per-step and
 per-field `source`. The environment and tab UI do not show a marker
 for overrides yet; that is a tracked follow-up.
@@ -609,8 +631,38 @@ optional `reasoningEffort`) replace them one field at a time. Omitted
 `targetBranch` and `reviewInstruction` use the repository's PR base branch
 (falling back to `main`) and the global review instruction. An empty
 instruction explicitly clears the instruction for this launch. The result's
-`selection` lists the rows the saved review runs and, per field, whether they
-were `requested` or `default`.
+`selection` lists the rows and auto-actions the saved review runs and, per
+field, whether they were `requested`, `default` or `implied`. A reused active
+review keeps its own rows and auto-actions.
+
+Optional `autoFix` and `autoPr` match the launch dialog's **Auto-fix after
+consolidation** and **Auto-PR after fix** checkboxes, which open on the saved
+app-level settings. Omitted, they use those settings. With both on, the review
+runs end to end through the button's own code path in `MultiReviewService`:
+
+1. Consolidation with findings saves the report and the default Fix handoff in
+   one save (`queueDefaultFix`). The supervisor delivers it like
+   `address_multi_review`.
+2. When the interactive Fix turn finishes on its own as the conversation's last
+   turn, the same save that settles it records `autoPrLaunch: pending`
+   (`queueAutoPr`).
+3. The supervisor launches the ordinary `PR` tab: the Create PR prompt and the
+   `pr` action default, under the stable request id `multi-review-pr:<id>`.
+
+The PR intent is only ever recorded with proof that a Fix completed, so the PR
+cannot come first. A failed, stopped, superseded or unconfirmed Fix records
+`skipped` with a reason or nothing at all, and no PR starts. A custom Fix never
+starts a PR. A Fix handoff that cannot be delivered fails the review after its
+bounded retries. The PR launch retries three times before `failed`. Each step
+is durable, so a restart resumes at the step it reached. Nothing in this flow
+merges.
+
+`autoPr: true` with `autoFix` omitted also turns auto-fix on, because a
+coordinator asking for an automatic PR wants the whole flow. An explicit
+`autoFix: false` with `autoPr: true` keeps the button's meaning: the PR follows a
+Fix started with `address_multi_review`. `get_multi_review` reports
+`automation: { autoFix, autoPr, prLaunch?, next }`, where `next` says in one
+sentence what runs next and whether the coordinator has to act.
 
 This action has no build-pipeline prerequisite. It reopens an active review
 regardless of the new selections, or reserves an immutable workflow ID and

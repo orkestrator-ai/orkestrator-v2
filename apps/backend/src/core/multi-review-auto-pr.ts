@@ -1,3 +1,4 @@
+import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
 import { resolveActionDefault } from "@orkestrator/protocol/action-defaults";
 import { normalizeAgentPlatforms } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -78,7 +79,11 @@ export function queueAutoPr(workflow: MultiReviewWorkflow): void {
   if (workflow.autoPr !== true) return;
   const state = workflow.autoPrLaunch?.state;
   if (state === "pending" || state === "launched") return;
-  workflow.autoPrLaunch = { state: "pending", requestId: `multi-review-pr:${workflow.id}` };
+  workflow.autoPrLaunch = {
+    state: "pending",
+    requestId: `multi-review-pr:${workflow.id}`,
+    fixIdentity: multiReviewFixIdentity(workflow.fixSession),
+  };
 }
 
 /** Records why a settled Fix launched no PR, unless a launch is already queued or delivered. */
@@ -88,6 +93,7 @@ export function skipAutoPr(workflow: MultiReviewWorkflow, message: string): void
   if (state === "pending" || state === "launched") return;
   workflow.autoPrLaunch = {
     state: "skipped",
+    fixIdentity: multiReviewFixIdentity(workflow.fixSession),
     requestId: `multi-review-pr:${workflow.id}`,
     message,
   };

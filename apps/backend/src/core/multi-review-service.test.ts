@@ -1,3 +1,4 @@
+import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
 import { multiReviewNativeFixOptions } from "./multi-review-native-fix.js";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
@@ -50,6 +51,7 @@ import {
   AmbiguousPromptDispatchError,
   ProviderSessionFailedError,
 } from "./build-pipeline-provider.js";
+import { ProviderUnreachableError } from "./agent-provider-contract.js";
 import { codexConnection, httpProvider } from "./agent-provider-test-support.js";
 import {
   REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
@@ -144,7 +146,7 @@ const consolidatedReport: StructuredReviewReport = {
 };
 
 class Provider implements BuildPipelineProvider {
-  readonly agent = "claude" as const;
+  readonly agent: BuildPipelineProvider["agent"] = "claude";
   readonly creates: Array<{ label: string; options?: ProviderCreateSessionOptions }> = [];
   readonly sends = new Map<string, { prompt: string; options: ProviderSendOptions }>();
   readonly aborted: string[] = [];
@@ -1067,6 +1069,7 @@ test("MultiReviewService launches a PR once an interactive Fix finishes on its o
       expect(settled.phase).toBe("interactive");
       expect(settled.autoPrLaunch).toEqual({
         state: "pending",
+        fixIdentity: multiReviewFixIdentity(settled.fixSession),
         requestId: `multi-review-pr:${started.id}`,
       });
       expect(reads).toEqual([
@@ -1080,6 +1083,7 @@ test("MultiReviewService launches a PR once an interactive Fix finishes on its o
       await service.advanceNow(started.id);
       expect((await snapshot(started.id))?.autoPrLaunch).toEqual({
         state: "launched",
+        fixIdentity: multiReviewFixIdentity(settled.fixSession),
         requestId: `multi-review-pr:${started.id}`,
         tabId: "agent-job-pr",
       });
@@ -1712,6 +1716,245 @@ test("MultiReviewService drops a pending PR when auto-fix is queued after consol
       autoPr: true,
       invoke: pr.invoke,
       serviceOptions: { dispatchAddressPrompt: autoPrFixDispatch },
+    },
+  );
+});
+
+/**
+ * Run explicit supervisor passes until `done` holds, recording every phase seen.
+ * Passes are driven directly, so no timer has to elapse.
+ */
+async function advanceUntil(
+  service: MultiReviewService,
+  snapshot: (workflowId: string) => Promise<MultiReviewWorkflow | undefined>,
+  workflowId: string,
+  done: (workflow: MultiReviewWorkflow) => boolean,
+  seen: string[] = [],
+  passes = 60,
+): Promise<MultiReviewWorkflow> {
+  for (let pass = 0; pass < passes; pass += 1) {
+    const workflow = (await snapshot(workflowId))!;
+    if (seen.at(-1) !== workflow.phase) seen.push(workflow.phase);
+    if (done(workflow)) return workflow;
+    await service.advanceNow(workflowId);
+  }
+  throw new Error(`Multi Review ${workflowId} did not reach the expected state`);
+}
+
+/** A Fix dispatch and PR launcher that log their order, for the auto-fix → auto-PR flow. */
+function orderedAutoFlow(events: string[]) {
+  const pr = autoPrInvoker();
+  const invoke = async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+    if (command === "launch_native_agent_job") events.push("pr");
+    return pr.invoke<T>(command, args);
+  };
+  const dispatchAddressPrompt: NonNullable<MultiReviewServiceOptions["dispatchAddressPrompt"]> = (
+    workflow,
+    ...rest
+  ) => {
+    events.push("fix");
+    return autoPrFixDispatch(workflow, ...rest);
+  };
+  return { pr, invoke, dispatchAddressPrompt };
+}
+
+test("MultiReviewService runs auto-fix then auto-PR in order without stopping at ready", async () => {
+  const provider = new Provider();
+  provider.reviewerReport = consolidatedReport;
+  const events: string[] = [];
+  const flow = orderedAutoFlow(events);
+  await withService(
+    "env-auto-fix-pr-flow",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      expect(started).toMatchObject({ autoFix: true, autoPr: true });
+      const fixSessionId = `provider-auto-pr-${started.id}`;
+      provider.statusOverrides.set(fixSessionId, "running");
+      const seen: string[] = [];
+      const fixing = await advanceUntil(
+        service,
+        snapshot,
+        started.id,
+        (workflow) => workflow.fixSession?.status === "running",
+        seen,
+      );
+      // Consolidation hands straight to the ordinary Fix; the review never waits at ready.
+      expect(seen).not.toContain("ready");
+      expect(fixing).toMatchObject({ phase: "interactive", fixLaunch: { kind: "default" } });
+      expect(fixing.addressPromptPending).toBeUndefined();
+      expect(events).toEqual(["fix"]);
+      await service.advanceNow(started.id);
+      expect(flow.pr.launches).toHaveLength(0);
+
+      provider.statusOverrides.set(fixSessionId, "idle");
+      const queued = await advanceUntil(
+        service,
+        snapshot,
+        started.id,
+        (workflow) => workflow.autoPrLaunch !== undefined,
+      );
+      // The PR intent is saved with the Fix's completion, before any PR launch.
+      expect(queued.fixSession?.status).toBe("idle");
+      expect(queued.autoPrLaunch?.state).toBe("pending");
+      expect(events).toEqual(["fix"]);
+
+      const launched = await advanceUntil(
+        service,
+        snapshot,
+        started.id,
+        (workflow) => workflow.autoPrLaunch?.state === "launched",
+      );
+      expect(launched.autoPrLaunch).toMatchObject({ tabId: "agent-job-pr" });
+      expect(events).toEqual(["fix", "pr"]);
+      await service.advanceNow(started.id);
+      expect(events).toEqual(["fix", "pr"]);
+    },
+    {
+      packageFlow: true,
+      autoFix: true,
+      autoPr: true,
+      invoke: flow.invoke,
+      serviceOptions: {
+        dispatchAddressPrompt: flow.dispatchAddressPrompt,
+        interactiveFixTurnOutcome: async () => "completed",
+      },
+    },
+  );
+});
+
+test("MultiReviewService raises no PR when the automatic Fix fails", async () => {
+  const provider = new Provider();
+  provider.reviewerReport = consolidatedReport;
+  const events: string[] = [];
+  const flow = orderedAutoFlow(events);
+  await withService(
+    "env-auto-fix-pr-failed-fix",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      const fixSessionId = `provider-auto-pr-${started.id}`;
+      provider.statusOverrides.set(fixSessionId, "running");
+      await advanceUntil(
+        service,
+        snapshot,
+        started.id,
+        (workflow) => workflow.fixSession?.status === "running",
+      );
+      provider.statusOverrides.set(fixSessionId, "missing");
+      const failed = await advanceUntil(
+        service,
+        snapshot,
+        started.id,
+        (workflow) => workflow.fixSession?.status === "failed",
+      );
+      for (let pass = 0; pass < 5; pass += 1) await service.advanceNow(started.id);
+      // The workflow stops at the Fix and reports it; it never skips ahead to the PR.
+      expect(failed.phase).toBe("interactive");
+      expect(failed.fixSession?.error).toContain("no longer exists");
+      expect((await snapshot(started.id))?.autoPrLaunch).toBeUndefined();
+      expect(events).toEqual(["fix"]);
+      expect(flow.pr.launches).toHaveLength(0);
+    },
+    {
+      packageFlow: true,
+      autoFix: true,
+      autoPr: true,
+      invoke: flow.invoke,
+      serviceOptions: {
+        dispatchAddressPrompt: flow.dispatchAddressPrompt,
+        interactiveFixTurnOutcome: async () => "completed",
+      },
+    },
+  );
+});
+
+test("MultiReviewService resumes auto-fix and auto-PR after a restart at each stage", async () => {
+  const provider = new Provider();
+  provider.reviewerReport = consolidatedReport;
+  const events: string[] = [];
+  const flow = orderedAutoFlow(events);
+  // The first Fix dispatch is lost, as if the backend stopped mid-handoff.
+  let dropFirstDispatch = true;
+  const dispatchAddressPrompt: NonNullable<MultiReviewServiceOptions["dispatchAddressPrompt"]> = (
+    ...args
+  ) => {
+    if (dropFirstDispatch) {
+      dropFirstDispatch = false;
+      throw new Error("backend stopped before the Fix was acknowledged");
+    }
+    return flow.dispatchAddressPrompt(...args);
+  };
+  const options = {
+    autoAdvance: false,
+    provider: async () => provider,
+    dispatchAddressPrompt,
+    interactiveFixTurnOutcome: async () => "completed" as const,
+  };
+  await withService(
+    "env-auto-fix-pr-restart",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      const fixSessionId = `provider-auto-pr-${started.id}`;
+      provider.statusOverrides.set(fixSessionId, "running");
+      const restart = async (current: MultiReviewService) => {
+        await current.shutdown();
+        return new MultiReviewService(storage, flow.invoke, options);
+      };
+
+      // Stage 1: consolidation queued the Fix, but it was not delivered.
+      const handoff = await advanceUntil(
+        service,
+        snapshot,
+        started.id,
+        (workflow) => workflow.addressPromptAttempts === 1,
+      );
+      expect(handoff).toMatchObject({ phase: "interactive", addressPromptPending: true });
+      let current = await restart(service);
+
+      // Stage 2: the restarted supervisor delivers the same Fix once; restart while it runs.
+      await advanceUntil(
+        current,
+        snapshot,
+        started.id,
+        (workflow) => workflow.fixSession?.status === "running",
+      );
+      expect(events).toEqual(["fix"]);
+      current = await restart(current);
+      provider.statusOverrides.set(fixSessionId, "idle");
+
+      // Stage 3: the Fix finishes and queues its PR; restart before the launch.
+      const queued = await advanceUntil(
+        current,
+        snapshot,
+        started.id,
+        (workflow) => workflow.autoPrLaunch !== undefined,
+      );
+      expect(queued.autoPrLaunch?.state).toBe("pending");
+      expect(events).toEqual(["fix"]);
+      current = await restart(current);
+
+      // Stage 4: the restarted supervisor launches the PR exactly once, after the Fix.
+      try {
+        await advanceUntil(
+          current,
+          snapshot,
+          started.id,
+          (workflow) => workflow.autoPrLaunch?.state === "launched",
+        );
+        for (let pass = 0; pass < 3; pass += 1) await current.advanceNow(started.id);
+        expect(events).toEqual(["fix", "pr"]);
+      } finally {
+        await current.shutdown();
+      }
+    },
+    {
+      packageFlow: true,
+      autoFix: true,
+      autoPr: true,
+      invoke: flow.invoke,
+      serviceOptions: { dispatchAddressPrompt, interactiveFixTurnOutcome: async () => "completed" },
     },
   );
 });
@@ -4684,7 +4927,13 @@ test.each([true, false])(
           return ["completed", "failed"].includes((await snapshot(workflowId))?.phase ?? "");
         });
         expect((await snapshot(workflowId))?.autoPrLaunch).toEqual(
-          complete ? { state: "pending", requestId: `multi-review-pr:${workflowId}` } : undefined,
+          complete
+            ? {
+                state: "pending",
+                requestId: `multi-review-pr:${workflowId}`,
+                fixIdentity: multiReviewFixIdentity((await snapshot(workflowId))?.fixSession),
+              }
+            : undefined,
         );
         expect(pr.launches).toHaveLength(0);
         await service.advanceNow(workflowId);
@@ -5830,6 +6079,156 @@ test("MultiReviewService fails a reviewer whose provider session errors or disap
       });
     });
   }
+});
+
+test("MultiReviewService retires a failed OpenCode provider after its peer dispatch and reader finish", async () => {
+  const dispatch = Promise.withResolvers<void>();
+  const reader = Promise.withResolvers<void>();
+  const failed = Promise.withResolvers<void>();
+  class SharedProvider extends Provider {
+    override readonly agent = "opencode" as const;
+    pendingDispatch = false;
+    pendingReader = false;
+    unsafeDisposal = false;
+    override async send(sessionId: string, prompt: string, options: ProviderSendOptions) {
+      await super.send(sessionId, prompt, options);
+      if (sessionId === "session-1") {
+        this.pendingDispatch = true;
+        await dispatch.promise;
+      }
+    }
+    override async status(sessionId: string): Promise<ProviderStatus> {
+      if (sessionId === "session-2") {
+        await failed.promise;
+        throw new ProviderUnreachableError("OpenCode is unreachable");
+      }
+      return "running";
+    }
+    override async messages(sessionId: string, options?: { limit?: number }) {
+      if (this.pendingDispatch) {
+        this.pendingReader = true;
+        await reader.promise;
+      }
+      return super.messages(sessionId, options);
+    }
+    override async dispose() {
+      // Model OpenCode's provider-wide abort controllers: immediate disposal
+      // would cancel both the dispatch and the UI read.
+      if (this.pendingDispatch || this.pendingReader) this.unsafeDisposal = true;
+      await super.dispose();
+    }
+  }
+  const provider = new SharedProvider();
+  const replacement = new Provider();
+  replacement.statusValue = "running";
+  let creations = 0;
+  await withService(
+    "env-shared-provider-retirement",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start([
+        { agent: "opencode", model: "provider/one" },
+        { agent: "opencode", model: "provider/two" },
+      ]);
+      const advancing = service.advanceNow(started.id);
+      let reading: Promise<unknown> | undefined;
+      try {
+        await waitUntil(() => provider.pendingDispatch);
+        const current = (await snapshot(started.id))!;
+        reading = service.reviewerTranscript(started.id, current.reviewers[0]!.id);
+        await waitUntil(() => provider.pendingReader);
+        failed.resolve();
+        await waitUntil(
+          async () => ((await snapshot(started.id))?.reviewers[1]?.idleResultPolls ?? 0) > 0,
+        );
+        expect(provider.disposeCalls).toBe(0);
+        provider.pendingDispatch = false;
+        dispatch.resolve();
+        await advancing;
+        expect(provider.disposeCalls).toBe(0);
+        expect((await snapshot(started.id))?.reviewers[0]).toMatchObject({
+          status: "running",
+          dispatchState: "sent",
+        });
+        expect(provider.aborted).toEqual([]);
+        expect(provider.sends.size).toBe(2);
+        provider.pendingReader = false;
+        reader.resolve();
+        await reading;
+        await waitUntil(() => provider.disposeCalls === 1);
+        await service.advanceNow(started.id);
+        expect(creations).toBe(2);
+        expect(provider.disposeCalls).toBe(1);
+        expect(provider.unsafeDisposal).toBe(false);
+      } finally {
+        provider.pendingDispatch = false;
+        provider.pendingReader = false;
+        failed.resolve();
+        dispatch.resolve();
+        reader.resolve();
+        await Promise.allSettled([advancing, ...(reading ? [reading] : [])]);
+      }
+    },
+    { createProvider: async () => (++creations === 1 ? provider : replacement) },
+  );
+});
+
+/*
+ * A local bridge that died cannot answer a status read. That is an
+ * observation fault, not the reviewer's: the reviewer keeps its session and
+ * request, and the cached provider is dropped so the next pass resolves the
+ * connection again, which restarts the bridge.
+ */
+test("MultiReviewService reconnects a reviewer whose bridge became unreachable", async () => {
+  class DeadBridgeProvider extends Provider {
+    down = false;
+    override async status(sessionId: string): Promise<ProviderStatus> {
+      if (this.down) throw new ProviderUnreachableError("claude bridge is not reachable");
+      return super.status(sessionId);
+    }
+  }
+  const provider = new DeadBridgeProvider();
+  let creations = 0;
+  await withService(
+    "env-reviewer-unreachable",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      provider.down = true;
+      await service.advanceNow(started.id);
+
+      const reconnecting = await snapshot(started.id);
+      expect(reconnecting?.phase).toBe("reviewing");
+      expect(reconnecting?.reviewers[0]).toMatchObject({
+        status: "running",
+        providerSessionId: "session-1",
+        dispatchState: "sent",
+      });
+      expect(reconnecting?.reviewers[0]?.idleResultPolls).toBeGreaterThanOrEqual(1);
+      expect(reconnecting?.reviewers[0]?.error).toBeUndefined();
+      expect(provider.aborted).toEqual([]);
+      // The unreachable instance was dropped, so the next pass reconnects.
+      const creationsBeforeReconnect = creations;
+      provider.down = false;
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      expect(creations).toBeGreaterThan(creationsBeforeReconnect);
+      const ready = await snapshot(started.id);
+      expect(ready?.reviewers[0]).toMatchObject({
+        status: "completed",
+        providerSessionId: "session-1",
+      });
+      expect(provider.aborted).toEqual([]);
+    },
+    {
+      createProvider: async () => {
+        creations += 1;
+        return provider;
+      },
+    },
+  );
 });
 
 /*

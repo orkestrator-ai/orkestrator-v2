@@ -8,6 +8,7 @@ import {
   Menu,
   nativeImage,
   net,
+  Notification,
   safeStorage,
   session,
   shell,
@@ -19,7 +20,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { LOCAL_CONNECTION_ID } from "@orkestrator/protocol/connections";
 import { BackendProcess, type BackendHttpClient } from "./backend-process.js";
-import { registerBackendShutdown } from "./backend-lifecycle.js";
+import { prepareAppImageInstall, registerBackendShutdown } from "./backend-lifecycle.js";
 import {
   LINUX_DESKTOP_ENTRY_FILENAME,
   PRODUCT_NAME,
@@ -80,12 +81,22 @@ import {
   type AutoUpdateController,
 } from "./auto-update.js";
 import {
+  confirmRestartWithCountdown,
+  createHostUpdateExecutor,
+  type HostUpdateExecutor,
+} from "./host-update-executor.js";
+import {
+  recoverRemoteBackendFailure,
+  readRemoteRelaunchMarker,
+  writeRemoteRelaunchMarker,
+} from "./remote-relaunch.js";
+import {
   applyWindowTitle,
   focusWindowById,
   projectMenuWindows,
   resolveFocusedWindowContext,
 } from "./window-menu.js";
-import { runtimeProfileFromEnvironment } from "./runtime-profile.js";
+import { chromiumSwitchesForRuntime, runtimeProfileFromEnvironment } from "./runtime-profile.js";
 import {
   installProductionApplicationLogging,
   registerApplicationLoggingShutdown,
@@ -120,6 +131,9 @@ const runtimeFlavor = runtimeProfile?.flavor ?? (isDev ? "development" : "produc
 const productName = runtimeProfile?.electronTitle ?? PRODUCT_NAME;
 
 app.setName(productName);
+for (const name of chromiumSwitchesForRuntime(runtimeFlavor, process.platform)) {
+  app.commandLine.appendSwitch(name);
+}
 if (process.platform === "linux") app.setDesktopName(LINUX_DESKTOP_ENTRY_FILENAME);
 app.setPath(
   "userData",
@@ -171,6 +185,7 @@ const quitReopen = registerQuitReopenRelaunch({
 });
 let startupComplete = false;
 let autoUpdate: AutoUpdateController | null = null;
+let hostUpdates: HostUpdateExecutor | null = null;
 const toolchainProgress = createToolchainProgressController({
   createWindow: () =>
     createToolchainBootstrapWindow({
@@ -356,18 +371,18 @@ function createWindowBrowserPreviews(
  * Updates are checked after the first window exists, so a slow or failing
  * update server can never delay or break startup.
  */
+function autoUpdateSupported(): boolean {
+  return isAutoUpdateSupported({
+    isPackaged: app.isPackaged,
+    runtimeFlavor,
+    platform: process.platform,
+    env: process.env,
+    resourcesPath: process.resourcesPath,
+  });
+}
+
 async function startAutoUpdate(): Promise<void> {
-  if (
-    !isAutoUpdateSupported({
-      isPackaged: app.isPackaged,
-      runtimeFlavor,
-      platform: process.platform,
-      env: process.env,
-      resourcesPath: process.resourcesPath,
-    })
-  ) {
-    return;
-  }
+  if (!autoUpdateSupported()) return;
   try {
     const { default: electronUpdater } = await import("electron-updater");
     autoUpdate = createAutoUpdateController({
@@ -377,12 +392,50 @@ async function startAutoUpdate(): Promise<void> {
       getWindow: () => focusedContext()?.window ?? null,
       showMessageBox: (window, options) =>
         window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options),
+      onCheckResult: (report) => hostUpdates?.reportCheck(report),
+      ...(process.platform === "linux"
+        ? { prepareForInstall: () => prepareAppImageInstall(app, backendProcess) }
+        : {}),
     });
     autoUpdate.start();
     createMenu();
+    startHostUpdates(autoUpdate);
   } catch (error) {
     console.error("[Updater] Auto-update is unavailable:", error);
   }
+}
+
+/** Applies update requests from remote clients of the Local backend. */
+function startHostUpdates(engine: AutoUpdateController): void {
+  const local = backend;
+  if (!local) return;
+  hostUpdates = createHostUpdateExecutor({
+    channel: {
+      snapshot: () => local.hostUpdaterSnapshot(),
+      report: (report) => local.reportHostUpdater(report),
+    },
+    engine,
+    beforeInstall: ({ jobId, version }) =>
+      writeRemoteRelaunchMarker(app.getPath("userData"), { jobId, version }),
+    confirmRestart: ({ version, restartAt, signal }) => {
+      if (process.platform === "darwin") app.dock?.bounce("critical");
+      return confirmRestartWithCountdown({
+        version,
+        restartAt,
+        signal,
+        productName,
+        window: focusedContext()?.window ?? BrowserWindow.getAllWindows()[0] ?? null,
+        showMessageBox: (window, options) =>
+          dialog.showMessageBox(window as BrowserWindow, options),
+        notify: (title, body) => {
+          if (Notification.isSupported()) new Notification({ title, body }).show();
+        },
+      });
+    },
+  });
+  void hostUpdates.start().catch((error: unknown) => {
+    console.error("[Updater] Remote updates are unavailable:", error);
+  });
 }
 
 function createMenu(): void {
@@ -666,6 +719,12 @@ async function startApplication(): Promise<void> {
     await applyAgentTestPlatformSelection(dataDir, enabledAgentPlatforms);
   }
   const artifacts = pinnedArtifactsForPlatforms(enabledAgentPlatforms);
+  // After a remote-requested update nobody may be at this computer: retry on
+  // our own before parking on a dialog the remote client cannot see.
+  const remoteRelaunch = isAgentTest ? null : readRemoteRelaunchMarker(dataDir);
+  if (remoteRelaunch) {
+    console.info(`[Updater] Relaunched to install ${remoteRelaunch.version} for a remote request`);
+  }
   const toolchainBinDir = await preparePinnedToolchains({
     dataDir,
     ensure: ensurePinnedToolchains,
@@ -683,6 +742,7 @@ async function startApplication(): Promise<void> {
     // profile never reaches ready, never exits, and the cause stays trapped in a
     // dialog rather than in the log directory dev:status points at.
     interactive: !isAgentTest,
+    ...(remoteRelaunch ? { unattendedRetries: { attempts: 10, delayMs: 30_000 } } : {}),
   });
   if (!toolchainBinDir) return;
   // Raise Files and Folders prompts before restored pipelines or agents can
@@ -717,6 +777,7 @@ async function startApplication(): Promise<void> {
     gatewayPort: runtimeProfile?.gatewayPort,
     allowNonTailscaleBind: runtimeFlavor === "agent-test",
     desktopWebClient: runtimeFlavor !== "agent-test",
+    desktopUpdater: autoUpdateSupported(),
     runtimeFlavor,
     runtimeProfileId: runtimeProfile?.id,
     worktreeDir: runtimeProfile?.worktreeDir,
@@ -725,12 +786,21 @@ async function startApplication(): Promise<void> {
     strictGatewayPort: runtimeFlavor === "agent-test",
     credentialSources: runtimeProfile?.credentialSources,
     onEvent: (event, payload) => {
+      hostUpdates?.handleEvent(event, payload);
       if (connectionManager) connectionManager.handleLocalEvent(event, payload);
     },
     onUnexpectedExit: (error) => {
       connectionManager?.markLocalBackendUnavailable();
       emitToConnection("local", "local-backend-unavailable", { message: error.message });
       publishConnectionLists();
+      // Shortly after a remote-requested update, relaunch instead of a modal
+      // nobody may answer, so the remote client gets its backend back.
+      if (recoverRemoteBackendFailure(dataDir, app)) {
+        console.error(
+          `[Desktop] Local backend exited after an update; applying unattended recovery: ${error.message}`,
+        );
+        return;
+      }
       dialog.showErrorBox(
         `${productName} backend stopped`,
         `${error.message}\n\nLocal work is unavailable. Remote windows remain connected; restart the application to recover Local.`,
@@ -806,6 +876,9 @@ if (isPrimaryInstance) {
     .catch((error: unknown) => {
       handleStartupFailure({
         isQuitting: quitReopen.isQuitting,
+        recover: () =>
+          runtimeFlavor !== "agent-test" &&
+          recoverRemoteBackendFailure(app.getPath("userData"), app),
         error,
         report: (failure) => {
           console.error("[Desktop] Startup failed:", failure);

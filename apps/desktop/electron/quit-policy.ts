@@ -88,9 +88,10 @@ export function handleStartupFailure(options: {
   isQuitting(): boolean;
   error: unknown;
   report(error: unknown): void;
+  recover?(): boolean;
   quit(): void;
 }): void {
-  if (options.isQuitting()) return;
+  if (options.isQuitting() || options.recover?.()) return;
   options.report(options.error);
   options.quit();
 }

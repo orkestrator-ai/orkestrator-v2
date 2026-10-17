@@ -231,6 +231,7 @@ export function TerminalContainer({
 
   const previousContainerIdRef = useRef<string | null>(null);
   const previousEnvironmentIdRef = useRef<string | null>(null);
+  const paneHydrationRequestsRef = useRef(new Map<string, symbol>());
   const setupSessionBindInFlightRef = useRef(new Map<string, symbol>());
   const setupSessionBindSettledTabsRef = useRef(new Set<string>());
   const setupSessionPostSetupCheckedTabsRef = useRef(new Set<string>());
@@ -818,6 +819,8 @@ export function TerminalContainer({
     if (!backendSetupRunning) {
       if (hydrationStatus === "pending") return;
       if (hydrationStatus === undefined) {
+        const request = Symbol();
+        paneHydrationRequestsRef.current.set(environmentId, request);
         beginHydration(environmentId);
         void Promise.allSettled([
           backend.getPaneLayout(environmentId),
@@ -838,6 +841,10 @@ export function TerminalContainer({
             }
           }
           const paneStore = usePaneLayoutStore.getState();
+          // A stop/replacement can clear hydration and start another request
+          // before this read settles. "pending" alone cannot identify it.
+          if (paneHydrationRequestsRef.current.get(environmentId) !== request) return;
+          paneHydrationRequestsRef.current.delete(environmentId);
           if (paneStore.hydration.get(environmentId) !== "pending") return;
 
           if (workflowResult.status === "rejected") {
@@ -1095,6 +1102,7 @@ export function TerminalContainer({
         environmentId,
         "resetting panes",
       );
+      paneHydrationRequestsRef.current.delete(environmentId);
       reset(environmentId);
       setHasAppliedClaudeOptions(false);
     }
@@ -1102,14 +1110,16 @@ export function TerminalContainer({
     previousEnvironmentIdRef.current = environmentId;
   }, [containerId, environmentId, reset]);
 
-  // Reset pane layout when the container stops.
-  // This clears all terminals and tabs since their backend sessions are destroyed
+  // Reset pane layout when the container stops: its terminal sessions are gone.
+  // Agent tabs and their sessions survive in the persisted layout, which the
+  // next start re-hydrates (`reset` clears this environment's hydration).
   useEffect(() => {
     if (!isContainerRunning && containerId) {
       rendererDebugLog(
         "[TerminalContainer] Container stopped, resetting panes for environment:",
         environmentId,
       );
+      paneHydrationRequestsRef.current.delete(environmentId);
       reset(environmentId);
     }
   }, [isContainerRunning, environmentId, containerId, reset]);

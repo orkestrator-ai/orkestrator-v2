@@ -258,13 +258,33 @@ export async function multiReviewInputWithDefaults(
     input.reviewers !== undefined && input.reviewModel !== undefined && input.fixModel !== undefined
       ? undefined
       : multiReviewDefaultRows(settings, await readCatalog());
-  const saved = settings.global?.multiReview;
   return {
     ...input,
     reviewers: input.reviewers ?? rows!.reviewers,
     reviewModel: input.reviewModel ?? rows!.reviewModel,
     fixModel: input.fixModel ?? rows!.fixModel,
-    autoFix: input.autoFix ?? saved?.autoFix ?? false,
-    autoPr: input.autoPr ?? saved?.autoPr ?? false,
+    ...multiReviewAutomation(input, settings.global?.multiReview),
   };
+}
+
+/**
+ * The auto-fix and auto-PR a coordinator Multi Review runs.
+ *
+ * Omitted values take the saved app-level settings, the ones the Multi Review
+ * button reads (`ActionBar.view.tsx`). A requested `autoPr: true` asks for the
+ * whole review → Fix → PR flow, so an omitted `autoFix` is turned on with it.
+ * An explicit `autoFix: false` is kept: the PR then follows a Fix started with
+ * `address_multi_review`, as the button allows. Either way the PR is queued
+ * only with proof that a Fix finished, never before.
+ */
+export function multiReviewAutomation(
+  input: { autoFix?: unknown; autoPr?: unknown },
+  saved: { autoFix?: boolean; autoPr?: boolean } | undefined,
+): { autoFix: boolean; autoPr: boolean } {
+  const autoPr = typeof input.autoPr === "boolean" ? input.autoPr : (saved?.autoPr ?? false);
+  const autoFix =
+    typeof input.autoFix === "boolean"
+      ? input.autoFix
+      : input.autoPr === true || (saved?.autoFix ?? false);
+  return { autoFix, autoPr };
 }

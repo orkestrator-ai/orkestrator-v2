@@ -144,19 +144,52 @@ describe("project coordinator", () => {
     }));
     const initial = await service.ensure(project.id);
     const originalConversationId = initial.workspace.conversations[0]!.id;
-
-    for (let index = 0; index < 64; index += 1) {
+    const cycle = async (index: number) => {
       const created = await service.createConversation(project.id, `Temporary ${index}`);
-      await service.closeConversation(project.id, created.workspace.selectedConversationId!);
-    }
+      const id = created.workspace.selectedConversationId!;
+      await service.closeConversation(project.id, id);
+      return id;
+    };
+    const oldestClosedId = await cycle(0);
+
+    // Fill the 64-conversation boundary in one mutation. 64 complete
+    // create/close cycles (128 durable writes) exceeded Bun's 5 s limit under
+    // aggregate load (flake 0266); retention itself runs on each create below.
+    await storage.mutateCoordinatorWorkspace(project.id, (current) => {
+      if (!current) throw new Error("Coordinator workspace disappeared");
+      const original = current.conversations.find((item) => item.id === originalConversationId)!;
+      const closed = current.conversations.find((item) => item.id === oldestClosedId)!;
+      return {
+        ...current,
+        conversations: [
+          original,
+          closed,
+          ...Array.from({ length: 62 }, (_, index) => ({
+            ...closed,
+            id: `closed-${index}`,
+            tabId: `closed-tab-${index}`,
+            logicalSessionKey: `closed-session-${index}`,
+            mailboxIncarnationId: `closed-mailbox-${index}`,
+          })),
+        ],
+      };
+    });
+    let newestClosedId = oldestClosedId;
+    for (let index = 1; index <= 3; index += 1) newestClosedId = await cycle(index);
 
     const retained = await service.get(project.id);
-    expect(retained!.workspace.conversations).toHaveLength(64);
+    const ids = retained!.workspace.conversations.map((item) => item.id);
+    expect(ids).toHaveLength(64);
     expect(
       retained!.workspace.conversations.some(
         (item) => item.id === originalConversationId && !item.closedAt,
       ),
     ).toBe(true);
+    // Each full create evicted the oldest closed conversation instead.
+    expect(ids).not.toContain(oldestClosedId);
+    expect(ids).not.toContain("closed-1");
+    expect(ids).toContain("closed-2");
+    expect(ids).toContain(newestClosedId);
   });
 
   test("retention removes attachment directories only after closed conversations are pruned", async () => {

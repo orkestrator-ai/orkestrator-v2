@@ -839,6 +839,28 @@ test("an explicit auto-fix override wins over the saved default", async () => {
   );
 });
 
+test("saved auto-PR alone applies as the button reads it", async () => {
+  await storage.updateGlobalConfig({
+    ...(await storage.loadConfig()).global,
+    agentSettings: { multiReview: { autoPr: true } },
+  });
+  const outcome = await launch();
+  expect(outcome.workflow).toMatchObject({ autoFix: false, autoPr: true });
+});
+
+test("a requested auto-PR brings its Fix even when saved auto-fix is off", async () => {
+  await storage.updateGlobalConfig({
+    ...(await storage.loadConfig()).global,
+    agentSettings: { multiReview: { autoFix: false, autoPr: false } },
+  });
+  const outcome = await launch({ autoPr: true });
+  expect(outcome.workflow).toMatchObject({ autoFix: true, autoPr: true });
+  expect(start).toHaveBeenCalledWith(
+    expect.objectContaining({ autoFix: true, autoPr: true }),
+    outcome.workflow.id,
+  );
+});
+
 test("omitted model rows use the saved Multi Review defaults and an explicit row still wins", async () => {
   await storage.updateGlobalConfig({
     ...(await storage.loadConfig()).global,

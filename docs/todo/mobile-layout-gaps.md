@@ -162,6 +162,18 @@ settings follow-ups and real-device qualification.
   no `moveBefore`, so this exercises the `appendChild` fallback, which the
   browser spec only emulates in Chromium.
 
+### Needs verification
+
+- **The mobile-switcher drop case fails on unchanged `main`.** On `31d0fb06`
+  (2026-10-17, macOS arm64, a loaded host), `e2e/CoordinatorPaneTree.spec.ts`
+  "drops in the mobile switcher land in the group on screen, not the one
+  stacked under it" (`desktop-chromium`) failed in the full browser suite and in
+  2 of 3 runs on its own (`--repeat-each=3`). After the first drop, clicking
+  the switcher's "1. Coordinator" tab left it `aria-selected="false"`
+  (line 210). The cause is unknown. It could be the drag leaving a pointer
+  capture or drag overlay that swallows the click, or a real switcher defect
+  after a drop. Reproduce on a quiet host before choosing a fix.
+
 ## Constraints and rationale
 
 - The narrow layout changes presentation only. Mounting, subscriptions and

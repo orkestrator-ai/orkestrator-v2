@@ -1,3 +1,4 @@
+import { ProviderUnreachableError } from "./agent-provider-contract.js";
 import { describe, expect, spyOn, test } from "bun:test";
 import { RecordingEfficiencyObserver } from "./multi-review-efficiency.js";
 import type { PipelineSession } from "@orkestrator/protocol/build-pipeline";
@@ -244,7 +245,12 @@ describe("build pipeline multi-model review", () => {
       expect(reviewSessions).toHaveLength(2);
       expect(reviewSessions.every((session) => session.status === "idle")).toBe(true);
       expect(reviewSessions.every((session) => session.reviewReport !== undefined)).toBe(true);
-      expect(reviewSessions.map((session) => session.model)).toEqual(["opus", "sonnet"]);
+      // Reviewers run concurrently and each session is mirrored when its
+      // reviewer is first observed, so array order is admission order. The
+      // panel slot lives in the label, which is what binds a model to it.
+      expect(
+        Object.fromEntries(reviewSessions.map((session) => [session.label, session.model])),
+      ).toEqual({ "Review 1": "opus", "Review 2": "sonnet" });
       expect(reviewSessions.every((session) => session.completedAt !== undefined)).toBe(true);
       expect(reviewSessions.map((session) => session.tokenCount)).toEqual([12_345, 12_345]);
       expect(reviewSessions.every((session) => session.structuredResultStatus === "accepted")).toBe(
@@ -1595,5 +1601,76 @@ describe("build pipeline multi-model review", () => {
       expect(provider.aborted).toEqual(expect.arrayContaining(liveIds));
       expect(await storage.getBuildPipeline(started.id)).toBeNull();
     });
+  });
+});
+
+test("pipeline fan-out evicts an unreachable generation and completes on reconnection", async () => {
+  await withPipeline(async ({ service, read, provider, providers }) => {
+    provider.runningModels.add("opus");
+    provider.runningModels.add("sonnet");
+    const started = await service.start(
+      startInput([
+        { agent: "claude", model: "opus" },
+        { agent: "claude", model: "sonnet" },
+      ]),
+    );
+    const running = await advanceUntil(service, read, started.id, "reviewing");
+    await service.advanceNow(started.id);
+    const before = (await read(started.id)).reviewFanout!.reviewers;
+    expect(before.every((reviewer) => reviewer.dispatchState === "sent")).toBe(true);
+    const dead = providers.get("claude")!;
+    const cache = (service as unknown as { providers: Map<string, unknown> }).providers;
+    const cached = cache.get("env-1:claude");
+    expect(cached).toBeDefined();
+    // A fresh wrapper around the same fixture state models a reconnected
+    // transport with the original session/report journal intact.
+    const status = dead.status.bind(dead);
+    const failure = spyOn(dead, "status").mockImplementation(async () => {
+      throw new ProviderUnreachableError("Connection refused");
+    });
+    let disposals = 0;
+    Object.assign(dead, {
+      dispose: async () => {
+        disposals += 1;
+      },
+    });
+    await service.advanceNow(started.id);
+    const interrupted = await read(started.id);
+    expect(interrupted.phase).toBe("reviewing");
+    expect(
+      interrupted.reviewFanout!.reviewers.every((reviewer) => reviewer.status === "running"),
+    ).toBe(true);
+    expect(disposals).toBe(1);
+    expect(cache.has("env-1:claude")).toBe(false);
+    failure.mockRestore();
+    const replacement = new Proxy(dead, {
+      get(target, key) {
+        return key === "status" ? status : Reflect.get(target, key);
+      },
+    });
+    providers.set("claude", replacement);
+    dead.runningModels.clear();
+    dead.runningConsolidation = true;
+    await service.advanceNow(started.id);
+    const recovered = await read(started.id);
+    expect(cache.get("env-1:claude")).toBeDefined();
+    expect(cache.get("env-1:claude")).not.toBe(cached);
+    expect(
+      recovered.reviewFanout!.reviewers.every((reviewer) => reviewer.status === "completed"),
+    ).toBe(true);
+    expect(
+      recovered.reviewFanout!.reviewers.map((reviewer) => [
+        reviewer.providerSessionId,
+        reviewer.requestId,
+      ]),
+    ).toEqual(before.map((reviewer) => [reviewer.providerSessionId, reviewer.requestId]));
+    dead.runningConsolidation = false;
+    const finished = await advanceUntil(service, read, started.id, "addressing");
+    expect(finished.phase).toBe("addressing");
+    expect(dead.aborted).toEqual([]);
+    expect(
+      dead.sent.filter((sent) => before.some((reviewer) => reviewer.requestId === sent.requestId)),
+    ).toHaveLength(2);
+    expect(running.reviewFanout).toBeDefined();
   });
 });

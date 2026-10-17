@@ -3314,9 +3314,30 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         // composer can tell ready-empty, unsupported and stale apart.
         const catalogue = this.commandCatalogues.peek(
           commandCatalogueKey(input.environmentId, input.agent, resolved.session.providerSessionId),
-        )?.state;
+        );
         const unsupported = !nativeCapabilities(input.agent).slashCommands;
-        const detail = unsupported ? unsupportedCommandCatalogueState() : catalogue;
+        const detail = unsupported ? unsupportedCommandCatalogueState() : catalogue?.state;
+        if (catalogue && !unsupported) {
+          // The first discovery job may have cached only session actions while
+          // a slow catalogue was still loading. Publish rows and state from
+          // the same authoritative snapshot when that read finishes, rather
+          // than keeping the empty placeholder until the discovery TTL ends.
+          Object.assign(state, {
+            value: withSessionActionSlashCommands(
+              catalogue.commands,
+              nativeCapabilities(input.agent),
+            ),
+            revision: catalogue.state.revision,
+            availability:
+              catalogue.state.status === "loading"
+                ? "loading"
+                : catalogue.state.status === "unavailable"
+                  ? "unavailable"
+                  : catalogue.state.status === "stale"
+                    ? "stale"
+                    : "ready",
+          });
+        }
         if (detail) Object.assign(state, { catalogue: detail });
       }
       Object.assign(sections, { [section]: state });
@@ -4562,9 +4583,13 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         return normalized ? [normalized.slice(0, 80)] : [];
       })[0];
       const snapshotTitle = snapshot.title?.trim();
+      // "Agent Session" is the title this service creates every provider
+      // session with, and "Session 1a2b3c" is Claude's own; neither names the
+      // conversation. Left in place they stay its title in the resume list, so
+      // every OpenCode conversation read "Agent Session" there.
       const placeholderTitle =
-        input.agent === "claude" &&
-        (snapshotTitle === "Agent Session" || /^Session [a-f0-9]{6}$/i.test(snapshotTitle ?? ""));
+        snapshotTitle === "Agent Session" ||
+        (input.agent === "claude" && /^Session [a-f0-9]{6}$/i.test(snapshotTitle ?? ""));
       const projectionTitle =
         (!placeholderTitle && snapshotTitle) || fallbackTitle || snapshotTitle;
       if (

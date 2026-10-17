@@ -7,6 +7,7 @@ import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import {
   buildPipelineInputWithDefaults,
+  multiReviewAutomation,
   multiReviewInputWithDefaults,
   readLaunchModelCatalog,
   multiReviewDefaultRows,
@@ -172,6 +173,32 @@ describe("coordinator launch overrides", () => {
       async () => [],
     );
     expect(saved).toMatchObject({ reviewModel: fixModel, autoFix: true, autoPr: true });
+  });
+  test("auto-fix and auto-PR follow the saved settings unless requested", () => {
+    const cases: Array<
+      [
+        { autoFix?: boolean; autoPr?: boolean },
+        { autoFix?: boolean; autoPr?: boolean } | undefined,
+        { autoFix: boolean; autoPr: boolean },
+      ]
+    > = [
+      [{}, undefined, { autoFix: false, autoPr: false }],
+      [{}, { autoFix: true, autoPr: true }, { autoFix: true, autoPr: true }],
+      // Saved Auto-PR alone keeps the button's meaning: a PR after a Fix the user starts.
+      [{}, { autoPr: true }, { autoFix: false, autoPr: true }],
+      [
+        { autoFix: false, autoPr: false },
+        { autoFix: true, autoPr: true },
+        { autoFix: false, autoPr: false },
+      ],
+      // A requested auto-PR asks for the whole flow, so an omitted auto-fix turns on.
+      [{ autoPr: true }, undefined, { autoFix: true, autoPr: true }],
+      [{ autoPr: true }, { autoFix: false }, { autoFix: true, autoPr: true }],
+      [{ autoFix: false, autoPr: true }, undefined, { autoFix: false, autoPr: true }],
+      [{ autoPr: false }, { autoFix: true, autoPr: true }, { autoFix: true, autoPr: false }],
+    ];
+    for (const [input, saved, expected] of cases)
+      expect(multiReviewAutomation(input, saved)).toEqual(expected);
   });
   test("complete explicit Multi Review rows skip catalogue reads", async () => {
     const row = { agent: "codex", model: "explicit" };

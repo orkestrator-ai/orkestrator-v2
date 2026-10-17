@@ -69,7 +69,6 @@ function replacementContext(environment: Environment) {
     credentialSources: new Set(),
   });
   Object.assign(fixture.context.storage, {
-    loadAgentAccounts: async () => ({ version: 1, accounts: [], active: {} }),
     getProject: async () => ({
       id: "project-1",
       name: "Project",

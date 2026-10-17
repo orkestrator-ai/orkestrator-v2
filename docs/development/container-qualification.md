@@ -32,18 +32,20 @@ the platforms and providers still waiting for evidence are in
 ## Suites
 
 Wrap any command in `mise run test:logged -- --name <name> --` for a logged
-run.
+run. Run the backend suites with `--cwd apps/backend`: the root `bunfig.toml`
+ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 
 | Suite | Command | Scenarios |
 | --- | --- | --- |
 | Unit and integration | `mise run test` | Every scenario without a live suite below, against a fake `docker` |
-| Live lifecycle | `RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test apps/backend/tests/container-live-qualification.test.ts` | C09, C11, C12, C20 |
-| Live replacement | same variables, `apps/backend/tests/container-live-replacement.test.ts` | C14–C19 |
-| Live network | same variables, `apps/backend/tests/container-live-network.test.ts` | C22, C24, C26 |
-| Live firewall | same variables, `apps/backend/tests/container-live-firewall.test.ts` | C23 |
-| Benchmarks | `RUN_CONTAINER_BENCHMARKS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test apps/backend/tests/container-benchmarks.test.ts` | C28 |
+| Live lifecycle | `RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-qualification.test.ts` | C09, C11, C12, C20 |
+| Live replacement | same command, `./tests/container-live-replacement.test.ts` | C14–C19 |
+| Live network | same command, `./tests/container-live-network.test.ts` | C22, C24, C26 |
+| Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 |
+| Benchmarks | `RUN_CONTAINER_BENCHMARKS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-benchmarks.test.ts` | C28 |
 | Final image | `bash docker/tests/final-image-smoke.sh <image>` (CI runs it on the native amd64 and arm64 builds in `validate-bun-runtime.yml`) | C27 |
-| Real stack, Docker | `mise run dev:test --profile <p> --fixture --fixture-environments local,container`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> mise run test:agent:docker` | C29 (`container-rebuild-cycle.spec.ts`), container settings (`container-settings.spec.ts`) |
+| Real stack, Docker | `mise run dev:test --profile <p> --fixture --fixture-environments local,container`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> mise run test:agent:docker` | C29 (`container-rebuild-cycle.spec.ts`), container settings (`container-settings.spec.ts`), deletion through the ledger (`browser-gateway.spec.ts`) |
+| Real stack, live approval | The Docker profile above started with `--credential-source claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_APPROVAL=1 mise run test:agent:docker` | C11 approval half (`container-approval-stop.spec.ts`, a real Claude turn) |
 | Real stack, local | `mise run test:agent:browser:isolated` | C30 |
 | Provider resume | `scripts/qualify-session-resume.sh <profile> <agent> [environment-name]` | C13 |
 
@@ -61,6 +63,45 @@ environment onto a new runtime generation and checks the resumed session
 repeats it: exit 0 pass, 1 fail, 2 setup error. A provider that passes is
 added to `RESUME_QUALIFIED_PROVIDERS` (`container-replacement.ts`); until then
 the rebuild preview marks its resume unverified.
+
+## Docker Desktop on Apple Silicon (2026-10-17)
+
+The full live set ran on `main` at `31d0fb06` on Docker Desktop 4.93.0 (Engine
+29.8.1, API 1.56, linuxkit 7.0.14) on macOS 27.0, Apple M5 Pro, 18 CPUs, with
+the Desktop VM reporting 8.3 GB. Everything was native arm64; nothing came from
+emulation. The image was the isolated development image
+`orkestrator-v2:dev-b4d6266ccb00`
+(`sha256:3f4603f57e80d06b9799aa91bdf9ae421cb51a3e0c72e01cd180cddc4269457c`,
+manifest source revision `31d0fb06`). Results:
+
+- Final-image smoke (C27, arm64 half): passed.
+- Live lifecycle 6/6, replacement 10/10, network 4/4 and firewall 2/2, with
+  nothing skipped. Two clean runs each, the first through `test:logged`.
+- Benchmarks: every target in the table below was met (the per-run figures
+  are in the todo file). The host was under heavy load from other runs.
+- `test:agent:docker`: 5/5 (C29, container settings at both widths, foreign
+  profile refusal, Playwright launched as both container users). In the live
+  approval spec (C11 approval half, a real Claude turn) the approval was
+  never granted. Two of its first five end-to-end runs then hit
+  "Connection Failed" when the restored Claude tab reconnected. The cause
+  was a teardown intent that the stop's pane reset left pending, which closed
+  the session after the restart. With that fixed, 4 of 4 runs passed.
+- `test:agent:browser:isolated` (C30): every local-worktree scenario passed.
+  The only failure was the narrow host picker, known flake 0224, which passed
+  alone.
+
+On Desktop the `host.docker.internal` path works without the host-gateway
+alias, IPv6 is blocked, and siblings are refused through their IP, the
+environment gateway and a published port (C22). `docker info` reports the
+VM's capacity, not the Mac's. Volume sub-path mounts work (Engine 29.8.1), and
+cgroup v2 CPU, memory and PID limits are enforced (C24). The host has Homebrew
+GNU `tar` and `date`.
+
+This run caught two problems. Three of the opt-in Docker suites (lifecycle,
+network and the benchmark harness) had not kept up with account switching
+(#889). And a stopped container lost its agent tabs
+from view when it was started again. Both are fixed. Detail and decisions are
+in [container-platform-qualification.md](../todo/container-platform-qualification.md).
 
 ## Provider-state review evidence (2026-10-16)
 

@@ -38,11 +38,12 @@ deleted once their behaviour is in a living doc; git history keeps them. The
 | [control-mcp.md](architecture/control-mcp.md) | Control MCP operator guide. |
 | [mcp-management.md](architecture/mcp-management.md) | Per-provider MCP server management: sources, precedence, safe writes, secrets, apply states, evidence. |
 | [remote-gateway.md](architecture/remote-gateway.md) | Standalone backend, Tailscale Serve, flags, troubleshooting. |
+| [host-updates.md](architecture/host-updates.md) | Maintaining the backend's computer from any client: Orkestrator updates (desktop app or standalone service; now or when idle; cancel; 60 s countdown; restart reconciliation; rollback), toolchain repair, gh channel, container image, UI and CLI. Remaining work: [remote-host-upgrades.md](todo/remote-host-upgrades.md). |
 | [public-cli.md](architecture/public-cli.md) | `orkestrator` client commands: backend selection, JSON/exit contract, request keys and retention, lifecycle waits, settings, sessions, request-specific completion, exec, scenarios. |
 | [event-snapshot-recovery.md](architecture/event-snapshot-recovery.md) | Which sequence each consumer may compare, revisioned view snapshots/outcomes, bounded client hydration, best-effort PR notifications, terminal input recovery. |
 | [web-page-annotations.md](architecture/web-page-annotations.md) | Preview notes, capture spool, backend threads, native dispatch, review, migration. Real-stack gates: [web-annotation-qualification.md](todo/web-annotation-qualification.md). |
 | [browser-previews.md](architecture/browser-previews.md) | Service previews: registry, desktop tunnel, private HTTPS origins, relay, kill switch, rollback. Rollout: [service-preview-rollout.md](todo/service-preview-rollout.md). |
-| [review-preparation.md](architecture/review-preparation.md) | Multi-review pipeline; queue wait is 30 minutes. Fan-out budgets and the efficiency benchmark. |
+| [review-preparation.md](architecture/review-preparation.md) | Multi-review pipeline; queue wait is 30 minutes. Auto-fix and auto-PR ordering and recovery. Fan-out budgets and the efficiency benchmark. |
 | [native-agent-commands.md](architecture/native-agent-commands.md) | Slash-command descriptors, bridge wire contract, intent resolution, collisions, catalogue lifecycle, per-provider support tables. |
 | [bridge-diagnostics.md](architecture/bridge-diagnostics.md) | Shared bridge debug logging. |
 | [storage.md](architecture/storage.md) | Backend SQLite database: stores and layouts, `updateStore`/leases/`atomically`, durability and deletion, migrations and the one-time JSON import. |
@@ -207,3 +208,4 @@ iOS, two machines) are the most common open gate. They are batched in
 | [test-suite-and-ci-health.md](todo/test-suite-and-ci-health.md) | Slow test owners, a skipped settings test, red CI on `main` and missing branch protection, deferred test-structure candidates. |
 | [mobile-layout-gaps.md](todo/mobile-layout-gaps.md) | Narrow-viewport follow-ups: one host for environment settings, focus return from settings, real-phone qualification. |
 | [dependency-upgrades.md](todo/dependency-upgrades.md) | Non-agent dependency upgrades still pending: Electron 46, React Compiler lint warnings, update-signing decision, and upgrades blocked upstream or deferred. |
+| [remote-host-upgrades.md](todo/remote-host-upgrades.md) | Real-release qualification of remote host maintenance (desktop update between signed releases, the standalone launchd/systemd service with rollback, image and gh updates) and two known limitations. |

@@ -8,6 +8,7 @@ import {
   REVIEW_VALIDATION_PLAN_SCHEMA,
 } from "./review-validation-prompts.js";
 import { validationPreparation } from "./review-validation-service.js";
+import { managedProvider, retainProvider, retireProvider } from "./provider-retirement.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE,
@@ -761,9 +762,14 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           fence: reviewer.sessionKey,
         });
         const started = Date.now();
-        transcript = await readReviewerTranscript(provider, readSessionId, knownSourceToken, {
-          key: reviewerHistoryKey(workflow.id, reviewer.id),
-        });
+        const release = retainProvider(provider);
+        try {
+          transcript = await readReviewerTranscript(provider, readSessionId, knownSourceToken, {
+            key: reviewerHistoryKey(workflow.id, reviewer.id),
+          });
+        } finally {
+          release();
+        }
         recordEfficiency(this.options.efficiency, {
           owner: "multi-review",
           operation:
@@ -846,7 +852,13 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           const key = this.providerKey(workflow, session);
           this.providerReaders.set(key, (this.providerReaders.get(key) ?? 0) + 1);
           try {
-            return await read(await this.providerInstance(workflow, session));
+            const provider = await this.providerInstance(workflow, session);
+            const release = retainProvider(provider);
+            try {
+              return await read(provider);
+            } finally {
+              release();
+            }
           } finally {
             await this.releaseProviderReaderByKey(key);
           }
@@ -943,15 +955,20 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         fence: reviewer.sessionKey,
       });
       const started = Date.now();
-      page = await readReviewerHistoryPage(
-        provider,
-        {
-          sessionKey: reviewerHistoryKey(workflow.id, reviewer.id),
-          providerSessionId: readSessionId,
-        },
-        before,
-        options,
-      );
+      const release = retainProvider(provider);
+      try {
+        page = await readReviewerHistoryPage(
+          provider,
+          {
+            sessionKey: reviewerHistoryKey(workflow.id, reviewer.id),
+            providerSessionId: readSessionId,
+          },
+          before,
+          options,
+        );
+      } finally {
+        release();
+      }
       recordEfficiency(this.options.efficiency, {
         owner: "multi-review",
         operation:
@@ -2686,6 +2703,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         workflow.fixSession?.status === "idle";
       if (!structuredFixCompleted && !interactiveFixSettled) {
         workflow.autoPrLaunch = {
+          fixIdentity: launch.fixIdentity,
           state: "skipped",
           requestId: launch.requestId,
           message: "Automatic PR requires a completed Fix",
@@ -2740,12 +2758,14 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       }
       if (outcome.kind === "launched") {
         workflow.autoPrLaunch = {
+          fixIdentity: launch.fixIdentity,
           state: "launched",
           requestId: launch.requestId,
           tabId: outcome.tabId,
         };
       } else if (outcome.kind === "skipped") {
         workflow.autoPrLaunch = {
+          fixIdentity: launch.fixIdentity,
           state: "skipped",
           requestId: launch.requestId,
           message: outcome.message.slice(0, 4_096),
@@ -2754,6 +2774,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         const attempts = (launch.attempts ?? 0) + 1;
         const exhausted = outcome.kind === "rejected" || attempts >= MAX_AUTO_PR_ATTEMPTS;
         workflow.autoPrLaunch = {
+          fixIdentity: launch.fixIdentity,
           state: exhausted ? "failed" : "pending",
           requestId: launch.requestId,
           attempts,
@@ -3300,6 +3321,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         reviewer.sessionKey ?? reviewerSessionKey(workflow.id, reviewer.id),
       sessionLabelFor: (_reviewer, index) => `Multi Review · Reviewer ${index + 1}`,
       provider: (selection) => this.provider(workflow, selection),
+      providerUnavailable: (selection, provider) =>
+        this.evictUnreachableProvider(workflow, selection, provider),
       executionPolicy: () => this.executionPolicy(workflow),
       agentMcp: (selection, resultKey) =>
         this.workflowAgentMcp(workflow, resultKey, selection.agent, "Multi Review reviewer"),
@@ -4408,6 +4431,24 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     await this.disposeProviderIfUnused(key);
   }
 
+  /**
+   * Drops a cached provider whose bridge stopped answering, so the next
+   * `provider()` call resolves the connection again. For a local environment
+   * that restarts a bridge that died. Only the instance that failed is
+   * dropped: a concurrent reviewer may already have reconnected. Users and
+   * readers keep their registrations.
+   */
+  private async evictUnreachableProvider(
+    workflow: MultiReviewWorkflow,
+    selection: MultiReviewModelSelection,
+    provider: BuildPipelineProvider,
+  ): Promise<void> {
+    const key = this.providerKey(workflow, selection);
+    if (this.providers.get(key) !== provider) return;
+    this.providers.delete(key);
+    retireProvider(provider);
+  }
+
   private async disposeProviderIfUnused(key: string): Promise<void> {
     if ((this.providerUsers.get(key)?.size ?? 0) > 0 || (this.providerReaders.get(key) ?? 0) > 0)
       return;
@@ -4677,8 +4718,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
               autoAnswerRequests: false,
             });
           })();
-      this.providers.set(key, provider);
-      return provider;
+      const managed = managedProvider(provider);
+      this.providers.set(key, managed);
+      return managed;
     })();
     this.providerCreations.set(key, creation);
     try {

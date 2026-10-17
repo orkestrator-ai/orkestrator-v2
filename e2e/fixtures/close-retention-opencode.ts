@@ -32,12 +32,15 @@ type Session = {
 export type OpenCodeVendorView = {
   sessions: Array<{ id: string; title: string; prompts: string[]; replies: string[] }>;
   deleted: string[];
+  /** Every session `abort` reached, in order; a retaining close aborts. */
+  aborted: string[];
 };
 
 export function createOpenCodeEngine(directory: string) {
   const fake = openCodeFake();
   const sessions = new Map<string, Session>();
   const deleted: string[] = [];
+  const aborted: string[] = [];
   let sequence = 0;
   const nextId = (prefix: string) => `${prefix}_${Date.now().toString(36)}${(sequence += 1)}`;
   const emit = (type: string, properties: Record<string, unknown>) => {
@@ -199,6 +202,7 @@ export function createOpenCodeEngine(directory: string) {
     async abort(parameters?: Record<string, unknown>) {
       const session = sessions.get(String(parameters?.sessionID ?? ""));
       if (!session) return notFound;
+      aborted.push(session.id);
       session.release?.();
       return { data: true };
     },
@@ -234,6 +238,7 @@ export function createOpenCodeEngine(directory: string) {
           replies: textsOf(session, "assistant").filter(Boolean),
         })),
         deleted: [...deleted],
+        aborted: [...aborted],
       };
     },
   };

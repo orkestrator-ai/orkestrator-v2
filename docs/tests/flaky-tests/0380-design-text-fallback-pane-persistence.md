@@ -1,6 +1,6 @@
 # Design text fallback tab missing from persisted pane layout
 
-- **ID:** 0279
+- **ID:** 0380
 - **Status:** open
 - **Date observed:** 2026-10-17
 - **Test:** `real gateway saves a design and rehydrates another client's edits`.

@@ -58,9 +58,9 @@ it reaches. Some rules of thumb:
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
 | High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 26 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 257 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 269 |
-| **Total** | | **553** |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 256 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 271 |
+| **Total** | | **554** |
 
 ## Very high
 
@@ -383,7 +383,7 @@ it reaches. Some rules of thumb:
 - [ ] Withdraw a dead-generation approval card after close and reload in an inactive environment ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
 - [ ] Verify an attachment-only Cursor or Grok draft survives a backend restart without losing its image ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), verify)
 - [ ] Check what a live Cursor resume row shows when every agent is created as `Orkestrator` ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), verify)
-- [ ] Close the empty session a resume into a new tab replaces; Grok keeps a process per resume ([session-lifecycle-consistency.md](session-lifecycle-consistency.md))
+- [x] Close the empty session a resume into a new tab replaces; Grok keeps a process per resume ([session-lifecycle-consistency.md](session-lifecycle-consistency.md))
 - [ ] Run live close retention for Cursor and Pi with both signed in to an isolated profile ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
 
 ### Transcripts, observation and bandwidth (medium)
@@ -708,6 +708,8 @@ it reaches. Some rules of thumb:
 - [ ] Decide whether to align idle cancel and abort responses across Claude, Codex and ACP ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), decision)
 - [ ] Decide whether Claude, Codex, Pi and ACP publish bounded-state occupancy in runtime health ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), decision)
 - [ ] Label untitled resume rows by detail or a readable id, not the first 8 characters of a Grok token or Pi path ([session-lifecycle-consistency.md](session-lifecycle-consistency.md))
+- [ ] Create no provider session for a tab opened only to resume; OpenCode and Grok keep one empty conversation per resume ([session-lifecycle-consistency.md](session-lifecycle-consistency.md))
+- [ ] Retry a replaced-session close that failed, through a durable intent, if the resume leak reappears ([session-lifecycle-consistency.md](session-lifecycle-consistency.md))
 
 ### Transcripts, observation and bandwidth (low)
 
@@ -882,7 +884,7 @@ it reaches. Some rules of thumb:
 | [composer-model-parameters.md](composer-model-parameters.md) |  | 1 | 2 | 4 | 7 |
 | [opencode-v2.md](opencode-v2.md) |  |  |  | 3 | 3 |
 | [provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md) |  |  | 2 | 15 | 17 |
-| [session-lifecycle-consistency.md](session-lifecycle-consistency.md) |  |  | 8 | 5 | 13 |
+| [session-lifecycle-consistency.md](session-lifecycle-consistency.md) |  |  | 7 | 7 | 14 |
 | **Transcripts, observation and bandwidth** | | | | | |
 | [transcript-history-efficiency.md](transcript-history-efficiency.md) |  | 4 | 11 | 5 | 20 |
 | [remote-client-bandwidth.md](remote-client-bandwidth.md) |  |  | 4 | 9 | 13 |

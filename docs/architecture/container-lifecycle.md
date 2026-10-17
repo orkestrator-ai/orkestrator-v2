@@ -254,9 +254,11 @@ longer lists it. Qualified live for Claude (C11,
 `e2e/agent-testing/container-approval-stop.spec.ts`).
 
 A stop also clears the renderer's local panes for that environment, together
-with its hydration state. Agent tabs and their sessions outlive the runtime,
-so the next start restores the persisted layout from the backend rather than
-seeding a default terminal. The backend refuses a layout written for another
+with its hydration state. It releases only local views: no native or tmux tab
+teardown is requested, since one queued against the stopped bridge would close
+the session after the restart. Agent tabs and their sessions outlive the
+runtime, so the next start restores the persisted layout from the backend
+rather than seeding a default terminal. The backend refuses a layout written for another
 runtime generation, so the cleared local copy can never overwrite the durable
 one.
 

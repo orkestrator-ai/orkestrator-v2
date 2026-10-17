@@ -88,7 +88,7 @@ running tests on the same host and daemon throughout, at a load average of
 | Live firewall (`container-live-firewall.test.ts`) | C23, policy-3 tuples | 2/2 pass |
 | Benchmarks (`container-benchmarks.test.ts`) | C28 | Three runs; see the table below |
 | `test:agent:docker` | C29, container settings (desktop and narrow), foreign-profile refusal, Playwright as both container users | 5/5 pass |
-| Live approval (`container-approval-stop.spec.ts`) | C11 approval half, Claude | No run granted the approval. With the layout fix, 3 of 5 runs passed end to end; the other 2 hit an intermittent reattach failure after the restart (see below) |
+| Live approval (`container-approval-stop.spec.ts`) | C11 approval half, Claude | No run granted the approval. With the layout fix, 3 of 5 runs passed end to end; the other 2 showed Connection Failed after the restart. After the review fix (`99263373`), 4 of 4 runs passed (see below) |
 | `test:agent:browser:isolated` | C30 | 25 passed, 15 opt-in skips, 1 failed: the narrow host picker, known flake [0224](../tests/flaky-tests/0224-host-picker-narrow-tools-popover.md), which passed alone. Every local-worktree scenario passed |
 
 After the fixture fix, the live suites ran twice each, both clean: once
@@ -170,16 +170,24 @@ outstanding item below checks whether any other surface reads it.
 In 2 of the 5 runs with the layout fix, the restored Claude tab showed
 **Connection Failed — Unable to connect to Claude** after the start. No error
 text was shown and nothing retried automatically. Meanwhile the Claude bridge
-in the container answered `/global/health` and the backend projection stayed
-`null`. The tab's `connect()` adopts the provider session, then reads the
-projection. An adopt that succeeds while the restarted bridge is still coming
-up is followed by a `null` read. `useNativeAgentSession` treats that read as
-an authoritative "no session" (`setHasCompletedRead(true)`,
-`useNativeAgentSession.ts:2488-2491`), and the controller turns it into the
-error state (`AgentNativeTab.controller.tsx:2090-2101`). **Retry** is the only
-way out. The race was seen on the path where the container is started from its
-own stopped view. Before the layout fix, that path lost the tab entirely.
-Tracked as an outstanding item below.
+in the container answered `/global/health`, but the backend projection stayed
+`null`. The first diagnosis blamed a read racing the bridge start. The Multi
+Review found the actual cause: `paneLayoutStore.reset` called
+`cleanupTabResources`, which requests `teardownTab` for native and tmux tabs.
+With the bridge stopped, that teardown could not complete. It stayed as a
+pending intent ("Tab teardown remains pending … bridge is unavailable" appears
+in the backend log for these runs' tabs). The periodic teardown sweep then
+closed the session once the restarted bridge answered. A `null` read follows,
+which `useNativeAgentSession` treats as "no session"
+(`useNativeAgentSession.ts:2488-2491`), so the controller shows the error
+state (`AgentNativeTab.controller.tsx:2090-2101`). The intermittency is the
+sweep's 60-second schedule. `99263373` makes `reset` release local views only,
+so no teardown intent is created. The spec now forces
+`reconcile_tab_teardowns` after the restart, sends a follow-up turn and checks
+that the provider session mapping is unchanged. It passed in the Fix session's
+run and in 3 of 3 runs on the merged branch (load average 15–20). If
+Connection Failed comes back after a restart without a pending teardown
+intent, reopen this as a bridge-start race.
 
 Also seen on this host: the backend's reachability probes from inside the
 container got `outcome=reachable http=405` from
@@ -255,6 +263,12 @@ Reset removed two exact-owner containers, four volumes, one network and the
 disposable profile state. No Electron-only or iOS behavior changed; those
 scenario suites were not selected.
 
+3. **A stop's pane reset closed native sessions after the restart.** Found by
+   the Multi Review and fixed in `99263373`; the diagnosis is in the C11
+   section above. The reset also cancels pending layout writes, and a
+   hydration request from before the stop can no longer settle the restore
+   the next start begins.
+
 Seen but not fixed: a dev or agent-test profile shows "Orkestrator has been
 updated … the server now runs 44.7.0". The dev launcher starts Electron on a
 bare script (`apps/desktop/scripts/dev/lifecycle.ts:629`), so
@@ -296,12 +310,12 @@ bare script (`apps/desktop/scripts/dev/lifecycle.ts:629`), so
    reload, which already restores the persisted layout.
 8. **The dev version banner.** It is unrelated to containers, so it was
    recorded as a low-scored follow-up rather than fixed here.
-9. **The Connection Failed race after a restart.** Options: fix it here, have
-   the spec press **Retry**, or file it and leave the spec strict. We filed
-   it as a High item and left the spec strict. The fix belongs in the native
-   session connect path (`useNativeAgentSession` and the backend projection
-   read), which this branch does not otherwise touch. Pressing **Retry** in
-   the spec would hide a real user-facing failure.
+9. **The Connection Failed after a restart.** It was first filed as a High
+   item with the spec left strict; pressing **Retry** in the spec would have
+   hidden the failure. The Multi Review then traced it to the teardown intent
+   that `reset` left pending, and `99263373` fixed it. The item is closed on
+   that diagnosis and 4 of 4 passing runs, including a forced teardown sweep.
+   It stays reopenable if the failure appears without a pending intent.
 
 ## Outstanding work
 
@@ -340,13 +354,6 @@ bare script (`apps/desktop/scripts/dev/lifecycle.ts:629`), so
   sync still refresh a running container; account switching
   (`apps/backend/src/core/agent-accounts-containers.ts`) is a natural
   rotation path to exercise.
-- A native tab restored by a container start can show **Connection Failed**
-  when its first projection read lands before the restarted bridge has the
-  session (C11 run, 2026-10-17; 2 of 5 runs). Make that read report
-  `connecting` or retry while the environment's runtime is fresh, rather than
-  treating a `null` after a successful adopt as "no session". See
-  [Results, 2026-10-17](#c11-approval-half-claude-real-provider) for the code
-  path. `container-approval-stop.spec.ts` reproduces it.
 - A stopped environment's pending interactions in the backend projection.
   After a stop the projection still lists the dead request as `pending` until
   the session reattaches on the next start (C11, 2026-10-17). The stopped view

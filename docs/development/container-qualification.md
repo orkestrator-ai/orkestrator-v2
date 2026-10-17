@@ -81,9 +81,10 @@ manifest source revision `31d0fb06`). Results:
 - `test:agent:docker`: 5/5 (C29, container settings at both widths, foreign
   profile refusal, Playwright launched as both container users). In the live
   approval spec (C11 approval half, a real Claude turn) the approval was
-  never granted. Two of its five end-to-end runs then hit an intermittent
-  "Connection Failed" when the restored Claude tab reconnected; that is
-  tracked in the todo file.
+  never granted. Two of its first five end-to-end runs then hit
+  "Connection Failed" when the restored Claude tab reconnected. The cause
+  was a teardown intent that the stop's pane reset left pending, which closed
+  the session after the restart. With that fixed, 4 of 4 runs passed.
 - `test:agent:browser:isolated` (C30): every local-worktree scenario passed.
   The only failure was the narrow host picker, known flake 0224, which passed
   alone.

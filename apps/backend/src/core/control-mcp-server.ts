@@ -165,7 +165,38 @@ function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
-function coordinatorLaunchBaseFromStatus(
+/**
+ * The default launch base: the newest commit of the repository's configured
+ * base branch, which is what a normal environment launch starts from too.
+ */
+function coordinatorLaunchBaseFromTip(tip: JsonRecord | null, failureReason?: string): JsonRecord {
+  const branch = nonEmptyString(tip?.branch);
+  const commit = nonEmptyString(tip?.commit);
+  const available = Boolean(branch && commit);
+  const unavailableReason =
+    failureReason ??
+    (available
+      ? undefined
+      : (nonEmptyString(tip?.unavailableReason) ?? "The base branch could not be resolved"));
+  const fetchError = nonEmptyString(tip?.fetchError);
+  return {
+    baseBranch: branch,
+    baseCommit: commit,
+    available,
+    source: "base-branch",
+    ...(nonEmptyString(tip?.ref) ? { ref: tip?.ref } : {}),
+    ...(available ? { remoteState: tip?.fetched === true ? "fresh" : "stale" } : {}),
+    ...(fetchError ? { fetchError } : {}),
+    ...(unavailableReason ? { unavailableReason } : {}),
+    requiredFor: "launch_environment",
+    guidance: available
+      ? "Default launch base: the latest commit of the repository's base branch. Pass baseBranch and baseCommit unchanged to launch_environment and start_build_pipeline. Refresh launch options before retrying if a launch reports a stale base."
+      : `The repository's base branch could not be resolved${unavailableReason ? ` (${unavailableReason})` : ""}. Report this blocked state instead of guessing; use checkoutBase only if the user asks to build on the current checkout.`,
+  };
+}
+
+/** The coordinator's own checkout, offered only as an explicit alternative. */
+function checkoutLaunchBaseFromStatus(
   status: JsonRecord | null,
   failureReason?: string,
 ): JsonRecord {
@@ -183,45 +214,49 @@ function coordinatorLaunchBaseFromStatus(
     baseBranch: branch,
     baseCommit: commit,
     available,
+    source: "checkout",
     ...(unavailableReason ? { unavailableReason } : {}),
-    requiredFor: "launch_environment",
     guidance: available
-      ? "Pass baseBranch and baseCommit unchanged to launch_environment. Refresh launch options before retrying if the repository context changed."
-      : `The current checkout does not expose a launchable branch and commit${unavailableReason ? ` (${unavailableReason})` : ""}. Report this blocked state instead of guessing.`,
+      ? "The coordinator checkout's current branch and HEAD. Use it instead of coordinatorBase only when the user asks to build on the current checkout. Uncommitted changes are never included."
+      : `The current checkout does not expose a launchable branch and commit${unavailableReason ? ` (${unavailableReason})` : ""}.`,
   };
 }
 
-function assertCoordinatorLaunchBaseMatchesCheckout(
+/**
+ * A coordinator launch must name a real branch that contains the commit.
+ *
+ * That admits the base branch's tip and the checkout's own HEAD alike, and
+ * rejects a commit copied from somewhere else or a branch that has moved away
+ * from it, instead of silently starting the worker somewhere unexpected.
+ */
+async function assertCoordinatorLaunchBaseOnBranch(
+  invoke: ControlMcpInvoker,
+  projectId: string,
   input: { baseBranch?: string; baseCommit?: string },
-  repository: unknown,
-): asserts repository is JsonRecord {
+): Promise<void> {
   if (!input.baseBranch || !input.baseCommit) {
     throw new Error("Coordinator launches require an explicit baseBranch and baseCommit");
   }
-  if (!isRecord(repository)) {
+  let verified: unknown;
+  try {
+    verified = await invoke<unknown>("verify_project_launch_base", {
+      projectId,
+      branch: input.baseBranch,
+      commit: input.baseCommit,
+    });
+  } catch (error) {
     throw new Error(
-      "The current checkout has no launchable branch and commit. Refresh get_launch_options and retry.",
+      `Coordinator launch base could not be verified: ${
+        error instanceof Error ? error.message : "git verification failed"
+      }. Refresh get_launch_options and retry.`,
     );
   }
-  const liveBranch = nonEmptyString(repository.branch);
-  const liveCommit = nonEmptyString(repository.headCommit);
-  if (!liveBranch || !liveCommit) {
-    const reason =
-      repository.unborn === true
-        ? "unborn repository"
-        : repository.detached === true || !liveBranch
-          ? "detached HEAD"
-          : "checkout has no HEAD commit";
+  if (!isRecord(verified) || verified.contained !== true) {
+    const reason = isRecord(verified) ? nonEmptyString(verified.reason) : null;
     throw new Error(
-      `The current checkout has no launchable branch and commit (${reason}). Refresh get_launch_options and retry.`,
-    );
-  }
-  if (
-    input.baseBranch !== liveBranch ||
-    input.baseCommit.toLowerCase() !== liveCommit.toLowerCase()
-  ) {
-    throw new Error(
-      `Coordinator launch base does not match the current checkout (${liveBranch} @ ${liveCommit}). Refresh get_launch_options and retry.`,
+      `Coordinator launch base ${input.baseBranch} @ ${input.baseCommit} is not valid${
+        reason ? ` (${reason})` : ""
+      }. Refresh get_launch_options and retry.`,
     );
   }
 }
@@ -489,7 +524,7 @@ async function createControlMcp(
         "Use launch_environment for a new workspace and launch_job for an independent " +
         "agent tab in an existing ready environment. " +
         (coordinatorScope
-          ? "Every launch_environment call requires baseBranch and baseCommit; copy the current values returned by get_launch_options. Prefer launch_multi_review for the complete environment Multi Review button action; start_multi_review is a backend-only recovery primitive. Use open_multi_review or open_multi_review_fix to focus saved work. "
+          ? "Every launch_environment call requires baseBranch and baseCommit; copy coordinatorBase from get_launch_options, the latest commit of the repository's base branch, unless the user asks to build on the current checkout (checkoutBase). Prefer launch_multi_review for the complete environment Multi Review button action; start_multi_review is a backend-only recovery primitive. Use open_multi_review or open_multi_review_fix to focus saved work. "
           : "") +
         "Reuse requestId when retrying mutations. " +
         (coordinatorScope ? COORDINATOR_LAUNCH_DEFAULTS_RULE : LAUNCH_DEFAULTS_GUIDANCE) +
@@ -574,36 +609,45 @@ async function createControlMcp(
         projectId: z.string().trim().min(1).max(200),
         environmentId: z.string().trim().min(1).max(200).optional(),
       }),
-      annotations: readAnnotations(),
+      annotations: coordinatorScope
+        ? { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true }
+        : readAnnotations(),
     },
     async ({ projectId, environmentId }) => {
       const options = await launchOptionsWithDefaults(projectId, environmentId);
       if (!coordinatorScope) return toolResult(options);
-      // Discovery stays read-only: reuse the persisted coordinator snapshot
-      // rather than running a lock-serialized, workspace-mutating git status.
-      try {
-        const snapshot = await invoke<unknown>("get_project_coordinator", {
-          projectId: coordinatorScope.projectId,
-        });
-        const workspace =
-          isRecord(snapshot) && isRecord(snapshot.workspace) ? snapshot.workspace : null;
-        const status =
-          workspace && isRecord(workspace.repositoryStatus) ? workspace.repositoryStatus : null;
-        return toolResult({
-          ...options,
-          coordinatorBase: coordinatorLaunchBaseFromStatus(status),
-        });
-      } catch (error) {
-        return toolResult({
-          ...options,
-          coordinatorBase: coordinatorLaunchBaseFromStatus(
-            null,
-            `Repository status is unavailable: ${
-              error instanceof Error ? error.message : "coordinator snapshot failed"
-            }`,
+      // Fetching the base branch moves remote-tracking refs only. The checkout
+      // side stays read-only: reuse the persisted coordinator snapshot rather
+      // than running a lock-serialized, workspace-mutating git status.
+      const [coordinatorBase, checkoutBase] = await Promise.all([
+        invoke<unknown>("get_project_base_branch_tip", { projectId: coordinatorScope.projectId })
+          .then((tip) => coordinatorLaunchBaseFromTip(isRecord(tip) ? tip : null))
+          .catch((error: unknown) =>
+            coordinatorLaunchBaseFromTip(
+              null,
+              `Base branch is unavailable: ${
+                error instanceof Error ? error.message : "base branch read failed"
+              }`,
+            ),
           ),
-        });
-      }
+        invoke<unknown>("get_project_coordinator", { projectId: coordinatorScope.projectId })
+          .then((snapshot) => {
+            const workspace =
+              isRecord(snapshot) && isRecord(snapshot.workspace) ? snapshot.workspace : null;
+            return checkoutLaunchBaseFromStatus(
+              workspace && isRecord(workspace.repositoryStatus) ? workspace.repositoryStatus : null,
+            );
+          })
+          .catch((error: unknown) =>
+            checkoutLaunchBaseFromStatus(
+              null,
+              `Repository status is unavailable: ${
+                error instanceof Error ? error.message : "coordinator snapshot failed"
+              }`,
+            ),
+          ),
+      ]);
+      return toolResult({ ...options, coordinatorBase, checkoutBase });
     },
   );
 
@@ -976,7 +1020,7 @@ async function createControlMcp(
           : z.string().trim().min(1).max(500).optional()
         ).describe(
           coordinatorScope
-            ? "Required coordinator base branch; copy coordinatorBase.baseBranch from get_launch_options."
+            ? "Required coordinator base branch; copy coordinatorBase.baseBranch from get_launch_options (checkoutBase.baseBranch only when the user asks to build on the current checkout)."
             : "Optional branch to use as the environment base.",
         ),
         baseCommit: (coordinatorScope
@@ -987,7 +1031,7 @@ async function createControlMcp(
               .optional()
         ).describe(
           coordinatorScope
-            ? "Required coordinator base commit; copy coordinatorBase.baseCommit from get_launch_options."
+            ? "Required coordinator base commit; copy coordinatorBase.baseCommit from get_launch_options (checkoutBase.baseCommit only when the user asks to build on the current checkout)."
             : "Optional 40-character commit to use as the environment base.",
         ),
       }),
@@ -1002,20 +1046,21 @@ async function createControlMcp(
       if (coordinatorScope && (!input.baseBranch || !input.baseCommit)) {
         throw new Error("Coordinator launches require an explicit baseBranch and baseCommit");
       }
-      let repository: unknown = null;
+      // Only a launch from the checkout's own HEAD can miss its uncommitted
+      // changes; for that case the result says whether there are any.
+      let checkoutHasUncommittedChanges: boolean | undefined;
       if (coordinatorScope) {
-        try {
-          repository = await invoke<unknown>("get_project_git_status", {
-            projectId: coordinatorScope.projectId,
-          });
-        } catch (error) {
-          throw new Error(
-            `Coordinator launch base could not be verified: ${
-              error instanceof Error ? error.message : "git status failed"
-            }. Refresh get_launch_options and retry.`,
-          );
+        await assertCoordinatorLaunchBaseOnBranch(invoke, coordinatorScope.projectId, input);
+        const repository = await invoke<unknown>("get_project_git_status", {
+          projectId: coordinatorScope.projectId,
+        }).catch(() => null);
+        if (
+          isRecord(repository) &&
+          nonEmptyString(repository.headCommit)?.toLowerCase() === input.baseCommit?.toLowerCase()
+        ) {
+          checkoutHasUncommittedChanges =
+            Number(repository.trackedChanges ?? 0) + Number(repository.untrackedChanges ?? 0) > 0;
         }
-        assertCoordinatorLaunchBaseMatchesCheckout(input, repository);
       }
       const options = await validateSelection(invoke, input);
       // A new environment's own tier pins no model, so repository and app
@@ -1118,13 +1163,13 @@ async function createControlMcp(
         status: startError ? "created" : "accepted",
         ...selection,
         ...(delegationOpened ? asyncDelegationResult() : {}),
-        ...(isRecord(repository)
+        ...(coordinatorScope
           ? {
               delegationBaseBranch: input.baseBranch,
               delegationBaseCommit: input.baseCommit,
-              liveCheckoutHasUncommittedChanges:
-                Number(repository.trackedChanges ?? 0) + Number(repository.untrackedChanges ?? 0) >
-                0,
+              ...(checkoutHasUncommittedChanges === undefined
+                ? {}
+                : { liveCheckoutHasUncommittedChanges: checkoutHasUncommittedChanges }),
             }
           : {}),
         ...(startError ? { error: startError } : {}),
@@ -1492,6 +1537,10 @@ async function createControlMcp(
         },
       },
       async ({ requestId, baseBranch, baseCommit, ...input }) => {
+        await assertCoordinatorLaunchBaseOnBranch(invoke, coordinatorScope.projectId, {
+          baseBranch,
+          baseCommit,
+        });
         if (input.existingEnvironmentId) {
           await invoke("get_environment", { environmentId: input.existingEnvironmentId });
         }

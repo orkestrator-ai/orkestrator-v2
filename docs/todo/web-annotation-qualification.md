@@ -221,7 +221,7 @@ Reviewer / date: Claude (worker agent), 2026-10-17; awaiting human review
 | `web-annotation-payloads.bench.test.ts`, alone | 6 passed (0.8 s) |
 | All 22 `web-annotation*.test.ts` files, `--parallel=2`, four times | 265 passed each time |
 | `mise run lint`, `mise run typecheck`, `mise run format:check` | Pass (lint warnings only, all in files this change does not touch) |
-| `mise run test` | FULLSUITE |
+| `mise run test`, twice | Workspace, bridge and protocol groups passed both times. The root group failed once each time, on causes unrelated to this change: first on `flaky-tests-index.test.ts`, because the 0265 case file on `main` had no ID or Status line (fixed here); then on known flake 0178 (`pi-bridge-vendor.test.ts`, 30 s timeout), whose file passed alone (4 passed, 14 s) |
 
 What the new native-window tests measured (this host, display scale factor 1):
 

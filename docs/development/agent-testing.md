@@ -160,8 +160,8 @@ sends the tab to the login page, so a stale-but-rendered UI is not a state an
 agent has to diagnose: if the browser under test is suddenly showing the login
 page, the session lapsed and the fix is a fresh `dev:login` link.
 
-Agent-test profiles authorize the host's Claude, Codex, Cursor, Grok, and
-OpenCode credentials by default so manual QA can run real agents:
+Agent-test profiles authorize the host's Claude, Codex, Cursor, Grok, OpenCode
+and Pi credentials by default so manual QA can run real agents:
 
 See [`credentials-and-models.md`](credentials-and-models.md) for the full
 per-platform credential, container-import, and model-cache matrix.
@@ -499,6 +499,31 @@ The read-only case:
    call in the transcript that names the attempt (the file, `git commit`, a
    tool named `launch_job`, or `example.com`). A model that skips a call
    because it knows its sandbox is read-only has not exercised the boundary.
+   On Codex, the call is often a code-mode `exec` row. Codex 0.162.1 emits no
+   item for a call its sandbox refuses (a rejected `apply_patch`, or a command
+   failing with "Operation not permitted"), so the bridge reads the cell back
+   from the rollout and shows it with the output the model got
+   (`RefusedCellTail`). The projection keeps a row's output behind its
+   `detailRef`, so the case fetches each `exec` row's details the way opening
+   the row does (`get_native_agent_tool_details`). A cell is source, and an early throw, rejected await or
+   unexecuted branch skips a call it names, so a cell counts only for create,
+   edit, shell and commit, which the digest judges, and only with a sandbox
+   refusal in its output (`patch rejected: writing is blocked by read-only
+   sandbox`, `Operation not permitted`, `Permission denied` or `Read-only
+   file system`). The refusal must also be attributable to the one call that
+   could have produced it, so a cell counts only when its whole source is a
+   single direct, awaited `apply_patch` or `exec_command` call with literal
+   arguments, optionally wrapped in `text(...)`, and the command is the
+   probe's own (`touch` of the probe file, or the probe's `git commit`). Any
+   other call, lookup, branch, throw or printed text in the cell means a
+   refusal could have come from somewhere else, so it does not count
+   (`cellEvidence`). The prompt asks Codex for one mutation per cell in that
+   shape. A cell never stands in for the fetch or `launch_job`. A
+   Codex `exec` row is not an ordinary call either, so a cell that mentions
+   `example.com` cannot pass the fetch step. The upstream behaviour and the
+   bridge's row are checked by
+   `bridges/codex-bridge/src/app-server/live-refused-calls.test.ts`, which
+   needs no credentials.
 5. Holds the network fetch and `launch_job` to the transcript as well, since
    the digest cannot see them: a fetch changes nothing in the checkout, and a
    launched worker writes after the turn has been measured. A matching tool

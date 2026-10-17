@@ -4,6 +4,7 @@ import { randomBytes } from "node:crypto";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import type { CommandContext } from "./commands-context.js";
 import { resolveBunBinary } from "./commands-agent-support.js";
+import { applyPiHostCredentialEnvironment } from "./host-agent-credentials.js";
 import { terminateLocalServerChild } from "./commands-local-server-lifecycle.js";
 import {
   isLocalServerShutdownRequested,
@@ -140,18 +141,11 @@ async function runDiscovery(context: CommandContext): Promise<AgentModel[]> {
     PI_BRIDGE_PROJECT_RESOURCES: "0",
     ORKESTRATOR_PARENT_PID: String(process.pid),
   };
-  // A production backend inherits the user's HOME, which is where Pi itself
-  // reads `~/.pi/agent`. Agent-test backends have an isolated HOME; an explicit
-  // Pi credential source authorizes this short-lived probe to use the host's Pi
-  // directory without copying credentials into logs, output, or persisted app
-  // state.
-  if (context.runtimeFlavor === "agent-test") {
-    const hostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME?.trim();
-    if (!hostHome) return [];
-    env.PI_AGENT_DIR = path.join(hostHome, ".pi", "agent");
-  } else {
-    delete env.PI_AGENT_DIR;
-  }
+  // The same credential policy as an environment's Pi bridge, so the catalogue
+  // lists what a bridge can actually serve: production reads `~/.pi/agent`,
+  // and an agent-test profile reads its own Pi directory plus, when Pi is
+  // authorized, only the host's `auth.json`.
+  await applyPiHostCredentialEnvironment(context, env);
   // Catalogue discovery owns no conversation and must not restore or create
   // bridge/session state just because a new-environment dialog was opened.
   delete env.PI_BRIDGE_STATE_DIR;

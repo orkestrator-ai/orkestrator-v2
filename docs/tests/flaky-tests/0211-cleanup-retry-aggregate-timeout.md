@@ -213,6 +213,25 @@ between-tests errors across 8865 tests in 472 files (541.38 seconds).
 Toolchain had 90 passed and one failed. Root, bridges, protocol and every
 other workspace package passed; aggregate exit 1 after 852.0 seconds.
 
+## Pi and Cursor agent-test logins main merge validation — 2026-10-17
+
+- Original command: `mise run test:logged -- --name merge-tests -- mise run test`, Bun 1.4.3, macOS arm64, with system Python and the testing guide's GNU tools preferred in PATH. Workspace/root/bridges/protocol reserved 4/1/2/1 worker slots; backend used two isolated workers. Other worktrees shared the host; bridges waited 614.1 seconds for capacity.
+- Aggregate: backend 8,930 passed, 41 skipped, three failed and one between-tests error across 8,974 tests in 477 files (660.67 seconds). Root/support had 3,037 passed, one skipped and one failed across 3,039 tests in 140 files (286.45 seconds). Every other workspace package, bridges and the protocol check passed. Aggregate exit 1 after 799.1 seconds.
+- Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.zGiSwY/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; root/support is in the same directory. Outer artifact: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.ay4g6L/merge-tests.log.gz`.
+- Failure: `persists safe cleanup failure details and permits a backend deletion retry` exceeded its 5000 ms deadline at 6403.68 ms.
+- First owning-file rerun: `mise run test:logged -- --name merge-cleanup-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed this case but timed out the artifact-excludes case (0187); 54 passed, one failed and one error (40.61 seconds). Artifact: `orkestrator-test-run.TCtpzn` under the host temporary directory.
+- Post-workspace owning-file rerun: `mise run test:logged -- --name merge-cleanup-post-workspace -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed unchanged, exit 0 (28.4 seconds).
+- The later owning-file pass confirms intermittence. Shared-host contention remains a hypothesis; no implementation, assertion, timeout or skip changed.
+
+## Refused-cell validation recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test`. No backend implementation or owning test changed.
+- **Workers:** workspace/root/bridges/protocol reserved 4/1/2/1 slots on the shared 18-slot host; backend used two isolated workers. The workspace group waited 686.3 seconds for capacity.
+- **Failure:** the cleanup-retry case exceeded its 5000 ms deadline at 5735.01 ms.
+- **Suite counts:** backend 8818 passed, 41 skipped and three failed across 8862 tests in 473 files (366.20 seconds). The other backend failures are the activity-batch cases in 0247; bridges separately hit 0214. Root/support and protocol passed. The aggregate exited 1 after 1101.3 seconds.
+- **Owning-file rerun:** `mise run test:logged -- --name cleanup-retry-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 22.8 seconds.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.nN9Z1G/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- Shared-host contention remains a hypothesis. No assertion, deadline or skip changed.
 
 ## Slash catalogue main merge recurrence — 2026-10-17
 
@@ -224,7 +243,6 @@ other workspace package passed; aggregate exit 1 after 852.0 seconds.
 - **Owning-file rerun:** `mise run test:logged -- --name merge-commands-integration-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 24.2 seconds).
 - **Assessment:** the isolated pass confirms intermittence. Shared-host contention remains a hypothesis. No owning implementation, assertion, timeout or skip changed.
 
-
 ## Clean-review branch main merge — 2026-10-17
 
 - **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, merging `origin/main` at `58566c9d` into `verify-fix-pr-b8cf5787ccea-r1` (Bun 1.4.3, macOS arm64).
@@ -234,3 +252,13 @@ other workspace package passed; aggregate exit 1 after 852.0 seconds.
 - **Failure:** `Electron backend command registry > persists safe cleanup failure details and permits a backend deletion retry` exceeded its 5000 ms deadline at 6347.48 ms.
 - **Owning-file rerun:** `mise run test:logged -- --name merge-cleanup-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 16.6 seconds).
 - **Assessment:** the unchanged isolated pass confirms intermittence; shared-host contention remains a hypothesis. No owning implementation, assertion, timeout or skip changed.
+
+## Coordinator pane drop-test main merge recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test` on Bun 1.4.3, macOS arm64. Workspace/root/bridge/protocol reserved 4/1/2/1 slots, with two backend workers, concurrent component browser validation and other worktrees sharing the host.
+- **Failure:** `Electron backend command registry > persists safe cleanup failure details and permits a backend deletion retry` in `apps/backend/tests/commands-integration.test.ts` exceeded its 5000 ms deadline at 5054.22 ms.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-commands-alone -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 19.6 seconds).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.xZ3kaR/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Assessment:** the isolated pass confirms intermittence. Shared-host contention remains an unconfirmed hypothesis; no owning implementation, assertion, timeout or skip changed.
+
+Final aggregate exited 1 after 477.8 seconds. Backend reported 8978 passed, 41 skipped and one failed across 9020 tests in 478 files (423.04 seconds). Root/support reported the Pi timeout above; all other workspace packages, bridges and the Codex protocol check passed. Both failing owning files passed unchanged alone. Formatting, lint, typechecking and the full component browser suite also passed. Additional real-stack, Electron, Docker and iOS scenario suites were omitted because the branch changes a component-browser test and documentation, and conflict resolution changes documentation only.

@@ -162,18 +162,6 @@ settings follow-ups and real-device qualification.
   no `moveBefore`, so this exercises the `appendChild` fallback, which the
   browser spec only emulates in Chromium.
 
-### Needs verification
-
-- **The mobile-switcher drop case fails on unchanged `main`.** On `31d0fb06`
-  (2026-10-17, macOS arm64, a loaded host), `e2e/CoordinatorPaneTree.spec.ts`
-  "drops in the mobile switcher land in the group on screen, not the one
-  stacked under it" (`desktop-chromium`) failed in the full browser suite and in
-  2 of 3 runs on its own (`--repeat-each=3`). After the first drop, clicking
-  the switcher's "1. Coordinator" tab left it `aria-selected="false"`
-  (line 210). The cause is unknown. It could be the drag leaving a pointer
-  capture or drag overlay that swallows the click, or a real switcher defect
-  after a drop. Reproduce on a quiet host before choosing a fix.
-
 ## Constraints and rationale
 
 - The narrow layout changes presentation only. Mounting, subscriptions and
@@ -235,6 +223,22 @@ settings follow-ups and real-device qualification.
   accessibility tree, and Chrome warns when `aria-hidden` lands on a pane that
   still holds focus. The cost is that hidden panes keep laying out (painting
   is skipped), as every pane does on desktop.
+- **A click straight after a drop is swallowed, by design.** Once a pointer
+  drag activates, dnd-kit's `PointerSensor` adds a capture-phase `click`
+  listener on the document that calls `stopPropagation()`, and removes it 50 ms
+  after the drop (`detach()` in `@dnd-kit/core` 6.3.1). That stops the click
+  the browser fires after the drag's own `pointerup` from selecting the tab
+  that was dragged. A click in that window never reaches React, so the
+  narrow-window drag case in `e2e/CoordinatorPaneTree.spec.ts` used to fail
+  whenever Playwright clicked the switcher tab within 50 ms of the first drop
+  (every run alone on a quiet host, on `31d0fb06` and `9da80451`). The fault was
+  in the test, not the switcher: no person clicks a second control within
+  50 ms of releasing a drag. The spec now installs Playwright's clock (time
+  still flows) and its `dragTo` helper runs the clock 50 ms after each drop,
+  which fires dnd-kit's cleanup timer before the next step. The product keeps
+  dnd-kit's stock sensor: a custom sensor that dropped only the drag's own
+  trailing click would be ours to keep in step with dnd-kit for no
+  user-visible gain.
 - **xterm re-anchors on every resize.** A terminal's first visible line moves
   by a few lines on any resize, crossing or not (50 to 52 for 1024 px to
   800 px wide). The browser spec therefore checks that the terminal is still

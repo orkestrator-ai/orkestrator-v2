@@ -1,7 +1,7 @@
 # Cursor steering-at-capacity restart case hits a hook timeout
 
 - **ID:** 0240
-- **Status:** resolved
+- **Status:** open (recurred 2026-10-17)
 - **Date observed:** 2026-10-15
 - **Test:** `steering at capacity across a restart > a lost refusal and a
   recovered run never produce a duplicate or a fabricated absent`
@@ -50,3 +50,20 @@ real, and the restart still loads the published file.
 simulated 10 ms fsync the case passes in 285 ms, and the owning file passed
 three consecutive runs. Case 0216, the 300-steer bound, had the same cause and
 the same fix.
+
+
+## ACP policy continuation validation recurrence — 2026-10-17
+
+- Original command: `mise run test:logged -- --name full-tests -- mise run test`
+  on `7f43ef60` plus ACP policy fixes, macOS arm64. Workspace/root/bridge/
+  protocol reserved 4/1/2/1 slots; Cursor used one isolated Bun worker on a
+  host shared with other worktrees and an isolated Grok live profile.
+- Same named case: beforeEach/afterEach hook timeout at 10005.07 ms. Cursor
+  reported 741 passed, one failed across 41 files in 68.04 seconds. The
+  existing fsync stubs were already present; their earlier fix is retained.
+- Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.lvavmO/bridges.log.gz`.
+- `mise run test:logged -- --name cursor-interactions-owner -- bun test --cwd bridges/cursor-bridge --preload ../../tests/setup-node.ts ./src/conformance-interactions.test.ts --parallel=1 --only-failures`
+  passed the unchanged owning file (four cases), exit 0, 5.2 seconds.
+- Reopened on the isolated pass. Shared-host I/O or hook contention is a
+  hypothesis; the original fsync diagnosis does not explain this recurrence
+  by itself. No owner implementation, assertion, timeout or skip changed.

@@ -146,3 +146,11 @@ Final aggregate totals: backend 8814 passed, 41 skipped, ten failed and three
 between-tests errors across 8865 tests in 472 files (541.38 seconds).
 Toolchain had 90 passed and one failed. Root, bridges, protocol and every
 other workspace package passed; aggregate exit 1 after 852.0 seconds.
+
+## Pi and Cursor agent-test logins main merge validation — 2026-10-17
+
+Aggregate command, worker configuration, counts and evidence are recorded in [0211](0211-cleanup-retry-aggregate-timeout.md#pi-and-cursor-agent-test-logins-main-merge-validation--2026-10-17).
+
+The first cleanup-owner rerun, `mise run test:logged -- --name merge-cleanup-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`, timed out `injects workspace artifact git excludes into local worktrees before status reads` at 5032.53 ms, followed by a late fixture-cleanup rejection (54 passed, one failed, one error; 40.61 seconds). Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.TCtpzn/merge-cleanup-owner.log.gz`.
+
+The unchanged owning file then passed `mise run test:logged -- --name merge-cleanup-post-workspace -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` after workspace validation ended (exit 0, 28.4 seconds). This confirms intermittence; host contention remains a hypothesis. No implementation, assertion, timeout or skip changed.

@@ -33,7 +33,7 @@ export function coordinatorProcessPolicy(): NativeAgentExecutionPolicy {
     // switch is verified on the pinned build.
     capabilityPolicy: coordinatorCapabilityPolicy("off"),
     networkAccess: "restricted",
-    note: "Grok's web search and web fetch are switched off. Every other tool is asked to request permission and every request is denied; a tool that does not ask is not stopped.",
+    note: "Grok's write, search_replace, shell, subagent, web search and web fetch tools are removed. Remaining permission requests are denied; other tools that do not ask remain advisory.",
   };
 }
 

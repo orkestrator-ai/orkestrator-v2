@@ -144,7 +144,8 @@ describe("the current turn's workflow-result attempt", () => {
   }
 
   const allowed = { outcome: { outcome: "selected", optionId: "allow" } };
-  const cancelled = { outcome: { outcome: "cancelled" } };
+  // A policy refusal picks the request's reject option, never `cancelled`.
+  const refused = { outcome: { outcome: "selected", optionId: "reject" } };
 
   test("a read-only reviewer turn, which denies everything else, may submit its report", () => {
     const { state, child, responses } = readOnlySession(reviewerTurn);
@@ -159,7 +160,7 @@ describe("the current turn's workflow-result attempt", () => {
       // Another reviewer's key and an ordinary write are still refused.
       ask(named("orkestrator__submit_review_report", { resultKey: OTHER_KEY, result: {} }));
       ask({ ...named("write_file", { path: "a.ts" }), kind: "edit" });
-      expect(responses).toEqual([allowed, allowed, allowed, allowed, cancelled, cancelled]);
+      expect(responses).toEqual([allowed, allowed, allowed, allowed, refused, refused]);
       expect(state.approvals.size).toBe(0);
     } finally {
       clearApprovals(state);
@@ -175,7 +176,7 @@ describe("the current turn's workflow-result attempt", () => {
         toolCall: named("orkestrator__submit_review_report"),
         options,
       });
-      expect(responses).toEqual([cancelled]);
+      expect(responses).toEqual([refused]);
     } finally {
       clearApprovals(state);
       sessions.delete(state.id);

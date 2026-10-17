@@ -1660,6 +1660,27 @@ describe("HTTP bridge provider", () => {
     });
   });
 
+  test("carries and validates root completion metadata", async () => {
+    for (const completionPending of [true, false]) {
+      const { provider } = httpProvider(
+        () => Response.json({ activity: "working", readyForInput: true, completionPending }),
+        claudeConnection,
+      );
+      await expect(provider.observeActivity?.("session-1")).resolves.toEqual({
+        state: "working",
+        readyForInput: true,
+        completionPending,
+      });
+    }
+    const { provider } = httpProvider(
+      () => Response.json({ activity: "working", completionPending: "no" }),
+      claudeConnection,
+    );
+    await expect(provider.observeActivity?.("session-1")).rejects.toBeInstanceOf(
+      ProviderUnavailableError,
+    );
+  });
+
   test("reads input readiness independently of working activity", async () => {
     const { provider } = httpProvider(
       () => Response.json({ activity: "working", readyForInput: true }),

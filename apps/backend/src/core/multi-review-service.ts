@@ -177,11 +177,13 @@ import {
 } from "./review-fanout.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import {
+  consolidatedReportIsClean,
   interactiveFixAutoPrSkipMessage,
   interactiveFixCanQueueAutoPr,
   launchMultiReviewAutoPr,
   MULTI_REVIEW_AUTO_PR_MANUAL_FIX_MESSAGE,
   queueAutoPr,
+  queueCleanReviewAutoPr,
   skipAutoPr,
   supersedePendingAutoPr,
   type AutoPrLaunchOutcome,
@@ -1385,6 +1387,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           workflow.phase = "reviewing";
         } else if (workflow.consolidatedReport && reviewSession(workflow)) {
           workflow.phase = "ready";
+          // A failed Fix may have superseded the clean report's pending PR.
+          // Restoring that report restores its intent under the same request id.
+          queueCleanReviewAutoPr(workflow);
           reviewSession(workflow)!.status = "idle";
           delete workflow.addressPromptPending;
           delete workflow.addressPromptAttempts;
@@ -2519,7 +2524,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     if (pendingAddress && (this.addressDispatchRetryAt.get(workflowId) ?? 0) > Date.now()) return;
     // Back off a retried PR launch only while it is the sole outstanding work.
     if (
-      (existingPhase === "completed" || existingPhase === "interactive") &&
+      (existingPhase === "completed" ||
+        existingPhase === "interactive" ||
+        existingPhase === "ready") &&
       !pendingAddress &&
       !observingInteractiveFix &&
       !existing.snapshot.pendingResultConsumptions?.length &&
@@ -2695,28 +2702,38 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   }
 
   /**
-   * Deliver the PR launch a successful Fix recorded. Like the address handoff,
-   * this runs without a mounted renderer and retries a bounded number of
-   * times under one request id, so neither a restart nor a lost
-   * acknowledgement can start a second PR agent.
+   * Deliver the PR launch a successful Fix or a clean report recorded. Like
+   * the address handoff, this runs without a mounted renderer and retries a
+   * bounded number of times under one request id, so neither a restart nor a
+   * lost acknowledgement can start a second PR agent.
    */
   private async advanceAutoPrLaunch(workflow: MultiReviewWorkflow, token: string): Promise<void> {
     const launch = workflow.autoPrLaunch!;
+    const basis = launch.basis ? { basis: launch.basis } : {};
     try {
+      const cleanReview = launch.basis === "clean-review";
+      // A clean report authorizes the PR only while the review still rests on
+      // it; a Fix, restart or cancellation since has moved the review on.
+      const cleanReviewReady =
+        cleanReview && workflow.phase === "ready" && consolidatedReportIsClean(workflow);
       const structuredFixCompleted =
-        workflow.phase === "completed" && workflow.fixResult?.complete === true;
+        !cleanReview && workflow.phase === "completed" && workflow.fixResult?.complete === true;
       // The interactive intent is recorded only once its handoff turn finished
       // on its own; it goes stale if the Fix was relaunched since.
       const interactiveFixSettled =
+        !cleanReview &&
         workflow.phase === "interactive" &&
         workflow.addressPromptPending !== true &&
         workflow.fixSession?.status === "idle";
-      if (!structuredFixCompleted && !interactiveFixSettled) {
+      if (!cleanReviewReady && !structuredFixCompleted && !interactiveFixSettled) {
         workflow.autoPrLaunch = {
+          ...basis,
           fixIdentity: launch.fixIdentity,
           state: "skipped",
           requestId: launch.requestId,
-          message: "Automatic PR requires a completed Fix",
+          message: cleanReview
+            ? "The review moved on from its clean report, so no PR agent was launched"
+            : "Automatic PR requires a completed Fix",
         };
         this.autoPrRetryAt.delete(workflow.id);
         await this.save(workflow, token);
@@ -2768,6 +2785,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       }
       if (outcome.kind === "launched") {
         workflow.autoPrLaunch = {
+          ...basis,
           fixIdentity: launch.fixIdentity,
           state: "launched",
           requestId: launch.requestId,
@@ -2775,6 +2793,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         };
       } else if (outcome.kind === "skipped") {
         workflow.autoPrLaunch = {
+          ...basis,
           fixIdentity: launch.fixIdentity,
           state: "skipped",
           requestId: launch.requestId,
@@ -2784,6 +2803,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         const attempts = (launch.attempts ?? 0) + 1;
         const exhausted = outcome.kind === "rejected" || attempts >= MAX_AUTO_PR_ATTEMPTS;
         workflow.autoPrLaunch = {
+          ...basis,
           fixIdentity: launch.fixIdentity,
           state: exhausted ? "failed" : "pending",
           requestId: launch.requestId,
@@ -4235,6 +4255,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         queueDefaultFix(workflow);
       } else {
         workflow.phase = "ready";
+        // Nothing to fix, so auto-PR moves straight on to the PR.
+        queueCleanReviewAutoPr(workflow);
       }
       session.status = "idle";
       session.completedAt = nowIso();

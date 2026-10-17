@@ -196,6 +196,30 @@ The isolated credential-free Codex browser run on `8a2f9444` plus the retired-di
 
 The unchanged full owning file passed on fresh credential-free Codex fixture profile `qa-retired-owner-b37f`: `ORKESTRATOR_AGENT_TEST_PROFILE=qa-retired-owner-b37f ORKESTRATOR_AGENT_TEST_RUN_ID=retired-gateway-owner mise run test:logged -- --name gateway-owner -- mise run test:agent:browser -- e2e/agent-testing/browser-gateway.spec.ts` (13 passed, six opt-in skips, 145.4 seconds including CLI build). Evidence: `output/agent-testing/retired-gateway-owner/browser/`. Both profiles were stopped and reset. No picker implementation, assertion, timeout or skip changed.
 
+## Clean-review PR status follow-up — 2026-10-17
+
+On branch `verify-fix-pr-b8cf5787ccea-r1`, the clean-review status and notice
+regressions passed, including the desktop/mobile Multi Review browser suite.
+The complete credential-free isolated browser run reproduced this existing
+narrow host-picker timeout at line 238: `Repository settings` became hidden
+after `Open tools`. Result: 27 passed, 25 opt-in skips, one failed (418.3 s).
+Profile: `qa-browser-f323498a-c68`. Failure log:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Bd8mJf/isolated-browser.log.gz`.
+
+The unchanged owning file was rerun on a fresh credential-free Codex fixture:
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-clean-review-owner-b8cf mise run test:logged -- --name browser-gateway-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1
+```
+
+It reproduced the same timeout: 12 passed, six opt-in skips, one failed
+(109.3 s). Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.BHn8NP/browser-gateway-owner.log.gz`
+and `output/agent-testing/qa-clean-review-owner-b8cf/browser/`.
+This recurrence fails in isolation too; it does not establish a passing
+owning-file rerun or resolve issue 0224. The picker, its assertions and
+deadlines were unchanged. Both disposable profiles were stopped and reset.
+
 ## Pending Resolve review recurrence — 2026-10-17
 
 - **Original command:** `mise run test:logged -- --name resolve-isolated-browser -- mise run test:agent:browser:isolated` on credential-free Codex fixture profile `qa-browser-17a015ee-6d4`, one Playwright worker alongside repository/component-browser validation.

@@ -5,6 +5,7 @@ import {
 } from "@orkestrator/protocol/session-activity-batch";
 import {
   getSessionActivity,
+  sessionCompletionPending,
   peekSession,
   type SessionActivity,
 } from "../services/session-manager.js";
@@ -25,15 +26,17 @@ import {
  */
 export async function readSessionActivityObservation(
   sessionId: string,
-): Promise<{ activity: SessionActivity; readyForInput?: true }> {
+): Promise<{ activity: SessionActivity; readyForInput?: true; completionPending?: boolean }> {
   const activity = await getSessionActivity(sessionId);
   const resident = peekSession(sessionId);
+  const completionPending = resident ? sessionCompletionPending(resident) : undefined;
   return {
-    activity,
+    activity: activity === "idle" && completionPending ? "working" : activity,
     // Readiness and activity deliberately diverge while background work is
-    // alive: the composer may accept a new prompt (and the bell may announce
-    // that fact) while the environment icon must remain blue and pulsing.
-    ...(resident?.status === "idle" ? { readyForInput: true as const } : {}),
+    // alive: the composer may accept a new prompt while the environment icon
+    // must remain blue and pulsing. Only an explicitly settled root turn can
+    // announce completion while a detached shell keeps the session working.
+    ...(resident?.status === "idle" ? { readyForInput: true as const, completionPending } : {}),
   };
 }
 

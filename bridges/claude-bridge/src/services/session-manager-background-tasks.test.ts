@@ -25,6 +25,7 @@ import {
   track,
   waitFor,
 } from "./session-manager-test-harness.js";
+import { readSessionActivityObservation } from "../routes/session-activity.js";
 import { setClaudeRuntimeIdleTimingForTesting } from "./session-manager-runtime-idle.js";
 
 // These cases pin the moment a turn stops owing anything to its CLI. With no
@@ -561,6 +562,11 @@ describe("background task reducer", () => {
       expect(inputClosed).toBe(false);
       expect(getSession(created.id)?.status).toBe("idle");
       expect(getSession(created.id)?.completionBlockedByBackgroundTasks).toBe(false);
+      expect(await readSessionActivityObservation(created.id)).toEqual({
+        activity: "working",
+        readyForInput: true,
+        completionPending: true,
+      });
 
       call.push({
         type: "system",
@@ -576,6 +582,15 @@ describe("background task reducer", () => {
       expect(inputClosed).toBe(false);
       expect(getSession(created.id)?.status).toBe("idle");
 
+      // Poll repeatedly in the delayed-first-frame interval: releasing the
+      // composer must not fabricate an idle completion before the root reply.
+      for (let poll = 0; poll < 3; poll += 1) {
+        expect(await readSessionActivityObservation(created.id)).toEqual({
+          activity: "working",
+          readyForInput: true,
+          completionPending: true,
+        });
+      }
       // Claude Code injects the notification into the root loop. The first
       // assistant frame proves the released query resumed and must reclaim the
       // foreground until its own result arrives.
@@ -620,6 +635,11 @@ describe("background task reducer", () => {
       // process to exit.
       expect(getSession(created.id)?.status).toBe("idle");
 
+      expect(await readSessionActivityObservation(created.id)).toEqual({
+        activity: "idle",
+        readyForInput: true,
+        completionPending: false,
+      });
       call.finish();
       await promptPromise;
       expect(getSession(created.id)?.status).toBe("idle");
@@ -1593,11 +1613,21 @@ describe("background task reducer", () => {
     });
     await waitFor(() => created.backgroundTasks?.["agent-silent"]?.status === "completed");
     expect(inputClosed).toBe(false);
+    expect(await readSessionActivityObservation(created.id)).toEqual({
+      activity: "working",
+      readyForInput: true,
+      completionPending: true,
+    });
 
     // Nothing further arrives. The idle window must close the held input
     // rather than strand the CLI child for the bridge's life.
     silence.elapse();
     expect(await inputCompletion).toEqual({ done: true, value: undefined });
+    expect(await readSessionActivityObservation(created.id)).toEqual({
+      activity: "idle",
+      readyForInput: true,
+      completionPending: false,
+    });
     call.finish();
     await promptPromise;
     expect(created.status).toBe("idle");

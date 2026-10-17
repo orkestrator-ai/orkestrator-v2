@@ -92,7 +92,7 @@ export async function getSessionActivity(sessionId: string): Promise<SessionActi
     const hasUnfinishedBackgroundTask = Object.values(session.backgroundTasks ?? {}).some((task) =>
       LIVE_BACKGROUND_TASK_STATUSES.has(task.status),
     );
-    if (hasUnfinishedBackgroundTask) return "working";
+    if (hasUnfinishedBackgroundTask || sessionCompletionPending(session)) return "working";
     return session.status === "running" ? "working" : "idle";
   }
 
@@ -101,6 +101,23 @@ export async function getSessionActivity(sessionId: string): Promise<SessionActi
   // cheap, certain `missing`.
   if (!sdkSessionId) return "missing";
   return (await persistedSessionExistsOnDisk(sdkSessionId)) ? "idle" : "missing";
+}
+
+/**
+ * A released composer can still owe a root response. Agent tasks (and unknown
+ * task kinds from older CLIs) owe that response; a detached local shell does
+ * not hold completion attention until its potentially unbounded exit. Once a
+ * notification arrives, even a shell can owe a continuation until its result
+ * or the runtime's bounded silence window settles it.
+ */
+export function sessionCompletionPending(session: SessionState): boolean {
+  const runtime = session.claudeRuntime;
+  return (
+    (runtime?.state === "open" && runtime.latestTurn.isAwaitingContinuation()) ||
+    Object.values(session.backgroundTasks ?? {}).some(
+      (task) => LIVE_BACKGROUND_TASK_STATUSES.has(task.status) && task.taskType !== "local_bash",
+    )
+  );
 }
 
 /**

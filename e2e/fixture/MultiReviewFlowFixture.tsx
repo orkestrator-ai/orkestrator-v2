@@ -424,7 +424,22 @@ export function MultiReviewFlowFixture() {
   const params = new URLSearchParams(window.location.search);
   const phase = (params.get("phase") ?? "reviewing") as FixturePhase;
   const count = Number(params.get("reviewers") ?? "4");
-  const [workflow] = useState(() => multiReviewFlowWorkflow(phase, count));
+  const [workflow] = useState(() => {
+    const snapshot = multiReviewFlowWorkflow(phase, count);
+    if (params.has("cleanReviewPr")) {
+      snapshot.autoPr = true;
+      snapshot.autoPrLaunch = {
+        basis: "clean-review",
+        state: "launched",
+        requestId: `multi-review-pr:${snapshot.id}`,
+        tabId: "earlier-pr",
+      };
+      if (params.has("cleanReport")) {
+        snapshot.consolidatedReport = { ...report([]), issues: [], testCoverageGaps: [] };
+      }
+    }
+    return snapshot;
+  });
   const [isActive, setIsActive] = useState(true);
   const paneControls = params.has("paneControls");
 

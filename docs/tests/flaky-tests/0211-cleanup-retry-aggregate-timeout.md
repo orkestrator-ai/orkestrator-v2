@@ -243,6 +243,16 @@ other workspace package passed; aggregate exit 1 after 852.0 seconds.
 - **Owning-file rerun:** `mise run test:logged -- --name merge-commands-integration-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 24.2 seconds).
 - **Assessment:** the isolated pass confirms intermittence. Shared-host contention remains a hypothesis. No owning implementation, assertion, timeout or skip changed.
 
+## Clean-review branch main merge — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, merging `origin/main` at `58566c9d` into `verify-fix-pr-b8cf5787ccea-r1` (Bun 1.4.3, macOS arm64).
+- **Workers:** workspace/root/bridge/protocol reserved 4/1/2/1 slots; backend used two isolated Bun workers while other worktrees shared the host.
+- **Aggregate:** backend reported 8,992 passed, 41 skipped, two failed and one between-tests error across 478 files (392.72 seconds). All other workspace packages and root, bridge and protocol groups passed. The logged aggregate exited 1 after 497.7 seconds.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.XctCGL/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer `orkestrator-test-run.OkaxRX/merge-tests.log.gz` in the same temporary root.
+- **Failure:** `Electron backend command registry > persists safe cleanup failure details and permits a backend deletion retry` exceeded its 5000 ms deadline at 6347.48 ms.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-cleanup-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 16.6 seconds).
+- **Assessment:** the unchanged isolated pass confirms intermittence; shared-host contention remains a hypothesis. No owning implementation, assertion, timeout or skip changed.
+
 ## Coordinator pane drop-test main merge recurrence — 2026-10-17
 
 - **Original command:** `mise run test:logged -- --name merge-tests -- mise run test` on Bun 1.4.3, macOS arm64. Workspace/root/bridge/protocol reserved 4/1/2/1 slots, with two backend workers, concurrent component browser validation and other worktrees sharing the host.

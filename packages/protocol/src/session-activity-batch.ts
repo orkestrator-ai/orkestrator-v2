@@ -53,6 +53,8 @@ export interface SessionActivityObservation {
   activity: SessionActivityState;
   /** The composer can accept input even if background work keeps it working. */
   readyForInput?: boolean;
+  /** A released root turn still owes a response, independently of composer readiness. */
+  completionPending?: boolean;
   /** Content-free provider item ids that require attention. */
   asyncQuestionItemIds?: string[];
   /** Cursor: the session is being permanently closed. */
@@ -104,9 +106,10 @@ export function parseSessionActivityObservation(
   value: unknown,
 ): SessionActivityObservation | undefined {
   if (!isRecord(value)) return undefined;
-  const { activity, readyForInput, asyncQuestionItemIds, closing } = value;
+  const { activity, readyForInput, completionPending, asyncQuestionItemIds, closing } = value;
   if (typeof activity !== "string" || !SESSION_ACTIVITY_STATES.has(activity)) return undefined;
   if (readyForInput !== undefined && typeof readyForInput !== "boolean") return undefined;
+  if (completionPending !== undefined && typeof completionPending !== "boolean") return undefined;
   if (closing !== undefined && typeof closing !== "boolean") return undefined;
   let itemIds: string[] | undefined;
   if (asyncQuestionItemIds !== undefined) {
@@ -127,6 +130,7 @@ export function parseSessionActivityObservation(
   return {
     activity: activity as SessionActivityState,
     ...(readyForInput !== undefined ? { readyForInput } : {}),
+    ...(completionPending !== undefined ? { completionPending } : {}),
     ...(itemIds !== undefined ? { asyncQuestionItemIds: itemIds } : {}),
     ...(closing !== undefined ? { closing } : {}),
   };

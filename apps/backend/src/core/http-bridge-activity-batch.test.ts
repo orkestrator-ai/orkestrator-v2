@@ -62,8 +62,12 @@ describe("HTTP bridge activity batch", () => {
 
   test("returns the same observation shape as the single route", async () => {
     const answers = {
-      a: { activity: "working", readyForInput: true },
-      b: { activity: "waiting", asyncQuestionItemIds: ["q-1", "q-1", "q-2"] },
+      a: { activity: "working", readyForInput: true, completionPending: false },
+      b: {
+        activity: "waiting",
+        completionPending: true,
+        asyncQuestionItemIds: ["q-1", "q-1", "q-2"],
+      },
       c: { activity: "idle", closing: true },
       d: { activity: "missing" },
       e: { activity: "unavailable" },
@@ -79,7 +83,11 @@ describe("HTTP bridge activity batch", () => {
       // Metadata parity: the reconciler cannot tell which route answered.
       expect(map.get(id)).toEqual(await single.observeActivity!(id));
     }
-    expect(map.get("b")).toEqual({ state: "waiting", asyncQuestionItemIds: ["q-1", "q-2"] });
+    expect(map.get("b")).toEqual({
+      state: "waiting",
+      completionPending: true,
+      asyncQuestionItemIds: ["q-1", "q-2"],
+    });
     expect(map.get("e")).toBe("unavailable");
     expect(map.get("f")).toBe("deferred");
   });

@@ -85,3 +85,34 @@ No assertion, timeout or skip changed; host contention remains a hypothesis.
 - The deletion-reap case timed out at 6812.46 ms.
 - Unchanged owning-file rerun: `mise run test:logged -- --name lifecycle-owner-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures` passed in 20.3 seconds, exit 0.
 - Shared-host contention and teardown after timeout remain hypotheses. No assertion, timeout, skip or implementation in this owner changed.
+
+
+## Codex catalogue review final validation — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name final-full-tests -- mise run test`
+  (Bun 1.4.3, macOS arm64; workspace/root/bridge/protocol reservations
+  4/1/2/1 slots, two isolated backend workers; other worktrees shared the host).
+- **Aggregate:** backend 8814 passed, 41 skipped, ten failed and three
+  between-tests errors across 8865 tests in 472 files (541.38 seconds).
+  Toolchain had one failure; every other package and root/bridge/protocol
+  group passed. Aggregate exited 1 after 852.0 seconds.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.NfVWIS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Failures:** deletion-reap exceeded its 5000 ms deadline at 7186.38 ms.
+  Companion `does not delete remote branches when a merged environment has no PR url`
+  exceeded the same deadline at 5042.19 ms.
+- **Post-aggregate owning-file rerun:** `mise run test:logged -- --name lifecycle-owner-post-aggregate -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures`
+  passed unchanged (exit 0, 19.4 seconds).
+- **Assessment:** the isolated pass confirms intermittence. Shared-host
+  contention remains a hypothesis; no lifecycle implementation, assertion,
+  timeout or skip changed.
+
+
+## Slash catalogue main merge recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, with the testing guide's GNU tools preferred in PATH (Bun 1.4.3, macOS arm64).
+- **Workers:** workspace/root/bridge/protocol reserved 4/1/2/1 slots; backend used two isolated Bun workers alongside other worktrees on the shared host.
+- **Failure:** `Electron backend environment lifecycle commands > retains the environment and process ownership when deletion cannot reap a server` exceeded its 5000 ms deadline at 5059.47 ms.
+- **Suite counts:** backend reported 8933 passed, 41 skipped and four failed across 8978 tests in 476 files (639.61 seconds). All other workspace packages and root/bridge/protocol groups passed; aggregate exited 1 after 738.6 seconds.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.lAr6wP/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer `orkestrator-test-run.S55BjO/merge-tests.log.gz` in the same temporary root.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-lifecycle-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 24.1 seconds).
+- **Assessment:** the isolated pass confirms intermittence. Shared-host contention remains a hypothesis. No owning implementation, assertion, timeout or skip changed.

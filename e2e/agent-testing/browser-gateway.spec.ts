@@ -2087,3 +2087,132 @@ for (const width of [1280, 390]) {
     await expect(settings.getByRole("button", { name: "Repair agent tools" })).toBeEnabled();
   });
 }
+
+test("persisted diff baselines keep Files, the badge and diff tabs aligned after background changes and reload", async ({
+  page,
+}) => {
+  page.setDefaultTimeout(15_000);
+  const status = await profileStatus();
+  expect(status.status).toBe("ready");
+  await page.route("**/__orkestrator/invoke", async (route) => {
+    if (route.request().postDataJSON()?.command === "check_claude_cli") {
+      await route.fulfill({ json: { result: false } });
+    } else await route.continue();
+  });
+  const invoke = await authenticatedInvoke(page, status);
+  const projects = await invoke<Project[]>("get_projects");
+  const fixture = projects.find((project) => project.localPath === status.testProject)!;
+  const git = (cwd: string, ...args: string[]) => {
+    const result = spawnSync(
+      "git",
+      ["-C", cwd, "-c", "user.name=Test", "-c", "user.email=t@e.invalid", ...args],
+      { encoding: "utf8" },
+    );
+    if (result.status !== 0) throw new Error(result.stderr || "fixture git command failed");
+    return result.stdout.trim();
+  };
+  const created = git(fixture.localPath!, "rev-parse", "HEAD");
+  const branch = `baseline-target-${Date.now()}`;
+  const target = await fs.mkdtemp(path.join(path.dirname(status.testProject!), "baseline-target-"));
+  const environments: Environment[] = [];
+  try {
+    git(fixture.localPath!, "worktree", "add", "-b", branch, target, created);
+    for (const suffix of ["worker", "other"]) {
+      const environment = await invoke<Environment>("create_environment", {
+        projectId: fixture.id,
+        name: `${branch}-${suffix}`,
+        environmentType: "local",
+        networkAccessMode: "restricted",
+        delegationBaseBranch: branch,
+        delegationBaseCommit: created,
+      });
+      environments.push(environment);
+      await invoke("start_environment", { environmentId: environment.id });
+      Object.assign(
+        environment,
+        await invoke<Environment>("get_environment", { environmentId: environment.id }),
+      );
+    }
+    const [worker, other] = environments as [Environment, Environment];
+    const checkout = worker.worktreePath!;
+    await fs.writeFile(path.join(checkout, "baseline-own.txt"), "worker\n");
+    git(checkout, "add", "baseline-own.txt");
+    git(checkout, "commit", "-m", "worker changes");
+    await page.reload();
+    const openWorker = async () => {
+      const expand = page.getByRole("button", {
+        name: `Expand project ${fixture.name}`,
+        exact: true,
+      });
+      const entry = page.getByText(worker.name, { exact: true }).first();
+      await expect(expand.or(entry)).toBeVisible({ timeout: 30_000 });
+      if (await expand.isVisible()) await expand.click();
+      await entry.click();
+      const showFiles = page.getByRole("button", { name: "Show file panel", exact: true });
+      if (await showFiles.isVisible()) await showFiles.click();
+      await page.getByRole("tab", { name: /^Changes(?: \d+)?$/ }).click();
+    };
+    const own = page.locator('button[title="baseline-own.txt"]');
+    const imported = page.locator('button[title="baseline-imported.txt"]');
+    await openWorker();
+    await expect(own).toBeVisible();
+    await page.getByText(other.name, { exact: true }).first().click();
+    await fs.writeFile(path.join(target, "baseline-imported.txt"), "upstream\n");
+    git(target, "add", "baseline-imported.txt");
+    git(target, "commit", "-m", "imported history");
+    const tip = git(target, "rev-parse", "HEAD");
+    git(checkout, "merge", "--no-edit", branch);
+    type BaselineEnvironment = Environment & { diffBaseline?: { commit: string } | null };
+    await expect
+      .poll(
+        async () =>
+          (await invoke<BaselineEnvironment>("get_environment", { environmentId: worker.id }))
+            .diffBaseline?.commit,
+        { timeout: 15_000 },
+      )
+      .toBe(tip);
+    await openWorker();
+    await expect(own).toBeVisible();
+    await expect(imported).toHaveCount(0);
+    const row = page
+      .getByRole("button")
+      .filter({ has: page.getByText(worker.name, { exact: true }) });
+    await expect(row.getByText("+1", { exact: true })).toBeVisible();
+    await own.click();
+    await expect(page.getByTitle(`vs ${tip}`, { exact: true })).toBeVisible();
+    await page.reload();
+    await openWorker();
+    await expect(own).toBeVisible();
+    await expect(imported).toHaveCount(0);
+    await own.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Revert", exact: true }).click();
+    const confirm = page.getByRole("alertdialog", { name: "Revert file?" });
+    await expect(confirm).toContainText(tip);
+    await confirm.getByRole("button", { name: "Revert", exact: true }).click();
+    await expect(page.getByText("No changes", { exact: true })).toBeVisible();
+    expect(await fs.readFile(path.join(checkout, "baseline-imported.txt"), "utf8")).toBe(
+      "upstream\n",
+    );
+    await expect(row.getByText("+1", { exact: true })).toHaveCount(0);
+    git(checkout, "reset", "--hard", created);
+    await expect
+      .poll(
+        async () =>
+          (await invoke<BaselineEnvironment>("get_environment", { environmentId: worker.id }))
+            .diffBaseline,
+        { timeout: 15_000 },
+      )
+      .toBeNull();
+    await page.reload();
+    await openWorker();
+    await expect(page.getByText("No changes", { exact: true })).toBeVisible();
+  } finally {
+    for (const environment of environments) {
+      await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
+      await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
+    }
+    git(fixture.localPath!, "worktree", "remove", "--force", target);
+    git(fixture.localPath!, "branch", "-D", branch);
+    await fs.rm(target, { recursive: true, force: true });
+  }
+});

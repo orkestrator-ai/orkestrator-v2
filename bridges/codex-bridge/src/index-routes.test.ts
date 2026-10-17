@@ -174,6 +174,31 @@ describe("sign-in routes carry no credential", () => {
     );
   });
 
+  test("GET /global/auth rehydrates only the live login display fields, without logging them", async () => {
+    const pendingSignIn = {
+      url: CANARY_LOGIN_URL,
+      code: CANARY_USER_CODE,
+      expiresAt: Date.now() + 60_000,
+    };
+    await withRuntimeMethod(
+      "readAuthStatus",
+      async () => ({
+        account: null,
+        requiresOpenaiAuth: true,
+        pendingSignIn: { ...pendingSignIn, ...tokens },
+      }),
+      async () => {
+        const { result: body, output } = await captureOutput(async () =>
+          (await app.request("/global/auth")).json(),
+        );
+        expectAuthStatusShape(body);
+        expect(body).toMatchObject({ state: "needs-auth", pendingSignIn });
+        expectOnlyLoginSecrets(body, "pending sign-in");
+        expectNothingSecretLogged(output, "pending sign-in");
+      },
+    );
+  });
+
   test("POST /global/auth/login returns only the URL and code, and logs neither", async () => {
     await withRuntimeMethod(
       "beginAuthLogin",
@@ -194,6 +219,36 @@ describe("sign-in routes carry no credential", () => {
         expectNothingSecretLogged(output, "Codex sign-in");
       },
     );
+  });
+
+  test("POST /global/auth/login starts device code only when asked", async () => {
+    const methods: unknown[] = [];
+    await withRuntimeMethod(
+      "beginAuthLogin",
+      async (method: unknown) => {
+        methods.push(method);
+        return {
+          type: "chatgptDeviceCode",
+          verificationUrl: CANARY_LOGIN_URL,
+          userCode: CANARY_USER_CODE,
+        };
+      },
+      async () => {
+        const body = await (
+          await app.request("/global/auth/login", {
+            method: "POST",
+            body: JSON.stringify({ method: "device-code" }),
+          })
+        ).json();
+        expect(body).toEqual({ url: CANARY_LOGIN_URL, code: CANARY_USER_CODE });
+        await app.request("/global/auth/login", { method: "POST" });
+        await app.request("/global/auth/login", {
+          method: "POST",
+          body: JSON.stringify({ method: "something-else" }),
+        });
+      },
+    );
+    expect(methods).toEqual(["device-code", "browser", "browser"]);
   });
 
   test("a failed account read redacts its message and excludes app-server's error data", async () => {

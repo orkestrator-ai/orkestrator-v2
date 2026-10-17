@@ -274,8 +274,9 @@ The disposable profile was stopped and reset; no live launcher remains.
 ### Found outside slash commands
 
 - Fresh installs: the default Codex model `gpt-5.4` is not offered to a
-  ChatGPT login, the picker shows another model, and every turn fails
-  ([composer-model-parameters.md](composer-model-parameters.md), item 5).
+  ChatGPT login, the picker shows another model, and every turn fails. Fixed
+  on `fix/codex-stored-model-mismatch`; see "Constraints and rationale" in
+  [composer-model-parameters.md](composer-model-parameters.md).
 - A dev profile's backend reports the Electron version, which raises a
   version reminder over the composer's Send button
   ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md),

@@ -356,6 +356,17 @@ Defaults from `PREVIEW_LIMITS` (`packages/protocol/src/preview-services.ts`):
 When a limit is exceeded, the request fails with `capacity-exceeded`: HTTP 503
 with `x-orkestrator-preview-error`, or tunnel close code 4429.
 
+A full tunnel queue is backpressure, not a failure. When the queue toward the
+client reaches 256 KiB, the backend pauses the upstream and returns the rest of
+the current read to the upstream's buffer. It resumes once the queue drains,
+so the queue never exceeds the limit by more than one frame. A reader that
+stops entirely is closed by the 30-second liveness ping, not by the queue.
+When a tunnel closes, a slow reader still receives the queued bytes. The
+2-second close-handshake grace starts once the close frame has been flushed,
+and a peer that stops reading is cut off 30 seconds after the close.
+Liveness pings stop once the tunnel starts closing, so an unanswered ping
+cannot cut off the drain.
+
 ## Framework configuration
 
 New routes do not rewrite response bodies. Upstream requests carry

@@ -1,6 +1,29 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
+import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+
+const electronDir = new URL("../electron/", import.meta.url);
+
+/**
+ * Every value the main-process sources import from "electron", so the stub
+ * below keeps resolving when main gains an Electron import.
+ */
+function electronValueImports(): string[] {
+  const names = new Set<string>();
+  for (const file of readdirSync(electronDir)) {
+    if (!file.endsWith(".ts") || file.endsWith(".test.ts")) continue;
+    const source = readFileSync(new URL(file, electronDir), "utf8");
+    for (const match of source.matchAll(/import\s+(type\s+)?\{([^}]*)\}\s+from\s+"electron"/g)) {
+      if (match[1]) continue;
+      for (const specifier of match[2]!.split(",")) {
+        const name = specifier.trim().split(/\s+as\s+/)[0]!;
+        if (name && !name.startsWith("type ")) names.add(name);
+      }
+    }
+  }
+  return [...names].sort();
+}
 
 describe("main process startup switches", () => {
   for (const [flavor, platform, switches] of [
@@ -29,6 +52,7 @@ describe("main process startup switches", () => {
         const calls = [];
         const boundary = new Error("startup boundary");
         mock.module("electron", () => ({
+          ...Object.fromEntries(${JSON.stringify(electronValueImports())}.map((name) => [name, {}])),
           app: {
             setName() {},
             setDesktopName() {},
@@ -36,9 +60,6 @@ describe("main process startup switches", () => {
             setPath() { throw boundary; },
             whenReady() { throw new Error("readiness reached before startup boundary"); },
           },
-          BrowserWindow: {}, clipboard: {}, ClipboardItem: {}, dialog: {},
-          ipcMain: {}, Menu: {}, nativeImage: {}, net: {}, safeStorage: {},
-          session: {}, shell: {}, WebContentsView: {},
         }));
         let stopped = false;
         try {

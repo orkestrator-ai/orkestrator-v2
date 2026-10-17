@@ -356,7 +356,7 @@ This replaces the 2026-09-23 file lists as the current baseline.
   failed in all six runs after the fix, in the suite and alone: four times at
   the native OS-focus assertion and twice earlier at the 5-second window-title
   check. It is recorded as environmental
-  ([0266](../tests/flaky-tests/0266-electron-native-focus-shared-macos-desktop.md)).
+  ([0271](../tests/flaky-tests/0271-electron-native-focus-shared-macos-desktop.md)).
   Flake [0157](../tests/flaky-tests/0157-electron-first-window-startup-timeout.md)
   has the same symptom; the Keychain cause is recorded there.
 - Flakes: [0184](../tests/flaky-tests/0184-preview-tunnel-stopped-reader-queue.md)

@@ -475,6 +475,15 @@ Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run
 This recurrence remains an unresolved staging limitation; the isolated failure
 does not establish a flake. The new real SDK auth-only runtime test passes.
 
+## Pending Resolve review recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name resolve-full-suite -- mise run test`; the root group used one Bun worker alongside browser validation and other host work.
+- **Failure:** The staged-runtime SDK load timed out at 30000.03 ms.
+- **Root counts:** 3036 passed, one skipped, two failed across 3039 cases in 327.65 seconds. The other failure was a diagnostic-bounds assertion in the new ActionBar regression; that assertion was corrected and its owning guard passed separately.
+- **Owning-file rerun:** `mise run test:logged -- --name resolve-pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the unchanged file (exit 0, 31.0 seconds including all four cases).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.NMzwfo/root-and-agent-support-tests.log.gz`.
+- **Assessment:** Recurrence of the existing timeout with an unchanged owning-file pass; shared-host contention remains unconfirmed. No timeout, assertion or skip in the Pi tests changed.
+
 ## Codex catalogue review follow-up recurrence — 2026-10-17
 
 - **Original command:** `mise run test:logged -- --name full-tests -- mise run test`

@@ -69,3 +69,12 @@ five failures across 420 cases).
 `mise run test:logged -- --name browser-diff-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DiffViewerMobile.spec.ts --workers=1`
 then passed the owning file in 25.7 seconds. Browser reruns ran sequentially.
 Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.iMEuX0/browser.log.gz`.
+
+## Pending Resolve review recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name resolve-browser -- mise run test:browser`, nine Playwright workers alongside repository and isolated-browser validation.
+- **Failure:** The mobile `the diff header fits a phone and the editor uses the full width` case found no `.monaco-diff-editor` within 5000 ms.
+- **Suite counts:** 338 passed, 80 skipped, two failed across 420 cases in 291.7 seconds. The other failure is case 0342.
+- **Owning-file rerun:** `mise run test:logged -- --name resolve-browser-owner-rerun -- bunx playwright test --config e2e/playwright.config.ts e2e/DiffViewerMobile.spec.ts e2e/PaneBreakpoint.spec.ts --workers=1` passed both unchanged files (exit 0, 42.1 seconds).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.NgqDST/resolve-browser.log.gz`.
+- **Assessment:** Matches the existing startup symptom. Host contention and overlapping Vite updates remain possible contributors; no diff-viewer code or test changed.

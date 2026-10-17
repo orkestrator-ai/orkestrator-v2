@@ -1,6 +1,6 @@
 # Claude live slash turn returns an SDK result error
 
-- **ID:** 0271
+- **ID:** 0273
 - **Status:** open
 - **Date observed:** 2026-10-17
 - **Test:** `live slash commands in an inactive environment (claude) > a selected command completes while inactive, survives reload and restarts, and never runs twice`

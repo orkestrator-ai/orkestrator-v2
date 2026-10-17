@@ -102,3 +102,27 @@ No assertion, deadline or skip was changed.
 - **Disposition:** isolated pass confirms an intermittent recurrence. Host
   contention remains a hypothesis; no implementation, assertion, timeout or
   skip changed.
+
+## Read-only Codex networking validation — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name all-tests -- mise run test`
+  at `f757d022`, with the Codex networking fixes in the working tree.
+- **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1
+  slots; backend used two isolated Bun workers. Other worktrees were validating
+  on the same host.
+- **Failure:** `Electron backend command registry > deletes an environment only
+  after all three local server kinds exit` in
+  `apps/backend/tests/commands-integration.test.ts` exceeded its 5000 ms limit
+  at 5356.05 ms.
+- **Owning-file rerun:** `mise run test:logged -- --name backend-deletion-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`
+  passed the unchanged owning file in 18.8 seconds (exit 0).
+- **Suite counts:** backend 8618 passed, 41 skipped and one failed across
+  8660 tests in 461 files (384.25 seconds). The aggregate exited 1 after
+  424.8 seconds; it also reported the existing flake-register metadata error
+  for case 0265 and a Codex close-route assertion subsequently corrected and
+  verified by a passing complete Codex package run.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.UC2B1d/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
+  outer artifact `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.tSfnBT/all-tests.log.gz`.
+- **Disposition:** the isolated pass confirms an intermittent recurrence. Shared
+  host contention remains an unconfirmed hypothesis. No backend implementation,
+  assertion, deadline or skip changed.

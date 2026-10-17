@@ -440,15 +440,43 @@ describeLive("live read-only turn network lock", () => {
       projectResources: true,
       networkAccess: "full",
     } as const;
-    const build: EngineTurnConfig = { mode: "build", cwd: workspace, policy };
+    const build: EngineTurnConfig = {
+      mode: "build",
+      cwd: workspace,
+      policy,
+      networkAccessEnabled: true,
+    };
     // What `promptConfig` builds for a `readOnly` dispatch on that session.
     const readOnly: EngineTurnConfig = {
       ...build,
+      networkAccessEnabled: false,
       sandbox: "read-only",
       approvalPolicy: "never",
       approvalsReviewer: "user",
       policy: codexReadOnlyTurnPolicy(policy),
     };
+    let commandRequests = 0;
+    const loopback = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() {
+        commandRequests += 1;
+        return new NativeResponse("reachable");
+      },
+    });
+    // Use the turn's resolved read-only network flag with the real command
+    // sandbox. Controls before and after rule out a broken curl/server probe.
+    const shellRequest = (config: EngineTurnConfig) =>
+      engine.getSupervisor().request<{ exitCode: number; stdout: string }>("command/exec", {
+        command: [
+          "/bin/sh",
+          "-c",
+          `exec /usr/bin/curl --noproxy '*' --max-time 3 --fail http://127.0.0.1:${loopback.port}/`,
+        ],
+        cwd: workspace,
+        timeoutMs: 10_000,
+        sandboxPolicy: { type: "readOnly", networkAccess: config.networkAccessEnabled },
+      });
     /** One turn on the bound thread; returns its model request once the turn has ended. */
     const turnOn = async (
       handle: string,
@@ -472,12 +500,16 @@ describeLive("live read-only turn network lock", () => {
       const first = await turnOn(thread.handle, build);
       expect(offersTools(first)).toBe(true);
       expect(offersWebSearch(first)).toBe(true);
+      expect(await shellRequest(build)).toMatchObject({ exitCode: 0, stdout: "reachable" });
+      expect(commandRequests).toBe(1);
 
       // The runtime reloads the thread when a read-only turn changes the mode.
       const reviewing = await engine.reloadThread(thread.handle, { config: readOnly });
       const review = await turnOn(reviewing.handle, readOnly);
       expect(offersTools(review)).toBe(true);
       expect(offersWebSearch(review)).toBe(false);
+      expect((await shellRequest(readOnly)).exitCode).not.toBe(0);
+      expect(commandRequests).toBe(1);
 
       // The rollout does not keep the thread override: the next build turn's
       // reload, which names no mode, is offered search again.
@@ -485,7 +517,10 @@ describeLive("live read-only turn network lock", () => {
       const after = await turnOn(building.handle, build);
       expect(offersTools(after)).toBe(true);
       expect(offersWebSearch(after)).toBe(true);
+      expect(await shellRequest(build)).toMatchObject({ exitCode: 0, stdout: "reachable" });
+      expect(commandRequests).toBe(2);
     } finally {
+      await loopback.stop(true);
       await engine.stop();
       await responses.stop();
     }

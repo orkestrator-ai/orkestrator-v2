@@ -16,7 +16,7 @@ import type { AppServerEngine } from "./engine/app-server-engine.js";
 
 import type { EngineGeneration, EngineTurnConfig, EngineUserInput } from "./engine/types.js";
 import { codexApprovalConfig, type CodexApprovalMode } from "./codex-approval-mode.js";
-import { codexNetworkDeniedConfig, codexReadOnlyTurnPolicy } from "./codex-config.js";
+import { codexReadOnlyTurnPolicy } from "./codex-config.js";
 import {
   OverlappingTurnError,
   phaseToExternalStatus,
@@ -48,6 +48,8 @@ import { stripSystemInstructions } from "@orkestrator/protocol/review-evidence-f
 
 import type { BridgeModel } from "./models-cache.js";
 import { structuredOutputFailure, type JsonSchema } from "@orkestrator/protocol/structured-output";
+
+import { promptThreadConfig } from "./prompt-thread-config.js";
 
 import { toEngineInput, withSkillInput } from "./app-server-runtime-helpers.js";
 
@@ -370,6 +372,7 @@ export class CodexRuntimePrompt {
       ...(input.readOnly
         ? {
             sandbox: "read-only",
+            networkAccessEnabled: false,
             approvalPolicy: "never",
             approvalsReviewer: "user",
             policy: codexReadOnlyTurnPolicy(session.config.policy),
@@ -380,28 +383,6 @@ export class CodexRuntimePrompt {
     // Thread-scoped configuration a prompt can change: MCP approvals, and
     // hosted web search when a read-only turn denies a network the session
     // allows. app-server applies both only when a thread starts or resumes.
-    // Undefined means the durable session configuration a re-attach applies.
-    const promptThreadConfig = (config: EngineTurnConfig): string | undefined => {
-      const search = JSON.stringify(codexNetworkDeniedConfig(config.policy));
-      const searchOverride =
-        search === JSON.stringify(codexNetworkDeniedConfig(session.config.policy))
-          ? undefined
-          : search;
-      if (!config.agentMcp && searchOverride === undefined) return undefined;
-      return JSON.stringify([
-        ...(config.agentMcp
-          ? [
-              config.approvalPolicy ?? "never",
-              config.approvalsReviewer ?? "user",
-              config.policy?.approvals,
-              config.sandbox,
-              config.permissionProfile,
-              config.workflowResultTool,
-            ]
-          : []),
-        searchOverride ?? null,
-      ]);
-    };
     const needsThreadReload = (config: EngineTurnConfig): boolean =>
       Boolean(input.workflowResultTool) ||
       context?.promptThreadConfig !== promptThreadConfig(config);
@@ -416,7 +397,8 @@ export class CodexRuntimePrompt {
     // 4. Lazily create the Codex thread on first prompt.
     if (!context) {
       if (this.sessions.sessionAdmissionClosed(session)) return closingRefusal();
-      const thread = await this.ctx.options.engine.startThread({ config: promptConfig() });
+      const initialConfig = promptConfig();
+      const thread = await this.ctx.options.engine.startThread({ config: initialConfig });
       if (!thread.id) return { ok: false, status: 503, error: "Codex did not return a thread id" };
       if (this.sessions.sessionAdmissionClosed(session)) {
         // Close retired the session during `thread/start`. Attaching now would
@@ -435,6 +417,7 @@ export class CodexRuntimePrompt {
         modelId: thread.model,
         transcriptHydrated: true,
       });
+      context.promptThreadConfig = promptThreadConfig(initialConfig);
       await this.ctx.callbacks.persistSession(session);
     }
     // Re-read after thread/start: updateConfig can be accepted while that RPC is
@@ -949,8 +932,10 @@ export class CodexRuntimePrompt {
       thread = await this.ctx.options.engine.reloadThread(context.engineHandle, { config });
     } catch (error) {
       // Unsubscribe or resume failed. Make the next request re-attach rather
-      // than dispatch through the dropped handle; result turns still reload
-      // that attachment and require a successful unsubscribe before dispatch.
+      // than dispatch through the dropped handle. A plain resume may rejoin
+      // the still-loaded thread, so no configuration is certified until a
+      // successful reload (or a new process generation).
+      context.promptThreadConfig = undefined;
       context.unsubscribed = true;
       throw error;
     }

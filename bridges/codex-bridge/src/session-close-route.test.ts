@@ -204,9 +204,16 @@ describe("POST /session/:id/close", () => {
     const b = await h.runtime.resumeSession({ threadId: "thread-7", mode: "build" });
     await h.runtime.prompt(b!.sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
 
+    // Prompt preparation can reload unknown thread settings. Closing a tab
+    // must leave the shared thread alone once the other tab is running.
+    const beforeClose = h.child().requests.length;
     expect((await close(app, a!.sessionId)).body).toEqual({ closed: true, retained: true });
-    expect(methods(h)).not.toContain("turn/interrupt");
-    expect(methods(h)).not.toContain("thread/unsubscribe");
+    const closeMethods = h
+      .child()
+      .requests.slice(beforeClose)
+      .map((request) => request.method);
+    expect(closeMethods).not.toContain("turn/interrupt");
+    expect(closeMethods).not.toContain("thread/unsubscribe");
     expect(h.runtime.getStatus(b!.sessionId)?.phase).toBe("running");
   });
 

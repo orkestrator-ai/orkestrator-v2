@@ -85,9 +85,9 @@ const READ_ONLY_TURN_FALLBACK_POLICY: NativeAgentExecutionPolicy = Object.freeze
  * The policy a `readOnly` turn runs under: the session's, with the network
  * denied.
  *
- * The turn's read-only sandbox already stops commands reaching the network,
- * but hosted web search runs on OpenAI's servers, so only the denial takes it
- * away (`codexNetworkDeniedConfig`). Every other bridge's read-only turn
+ * The prompt override separately sets networkAccessEnabled:false to stop
+ * command networking. Hosted web search runs on OpenAI's servers, so this
+ * denial takes it away (`codexNetworkDeniedConfig`). Every other bridge's read-only turn
  * denies `network` too. Search exceptions are dropped with it: an ordinary
  * review never searches. A policy that already denies the network is kept as
  * it is, so a coordinator keeps its launcher-approved research mode, which its

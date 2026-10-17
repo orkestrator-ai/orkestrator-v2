@@ -180,8 +180,8 @@ export interface ThreadContext {
   engineGeneration: EngineGeneration;
   /**
    * Prompt-scoped thread configuration (MCP approvals, hosted web search)
-   * actually applied to the loaded thread; undefined after a re-attach with
-   * the session's own configuration.
+   * actually applied to the loaded thread. Undefined means unknown: a plain
+   * resume in the same generation cannot certify configuration was applied.
    */
   promptThreadConfig?: string;
   bridgeSessionIds: Set<string>;

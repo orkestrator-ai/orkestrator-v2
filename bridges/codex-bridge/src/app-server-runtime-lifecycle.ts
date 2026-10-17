@@ -1,3 +1,4 @@
+import { promptThreadConfig } from "./prompt-thread-config.js";
 import { codexCoordinatorPolicy, isCoordinatorReadOnlyEnvironment } from "./codex-config.js";
 import {
   ThreadRuntimeState,
@@ -504,9 +505,12 @@ export class CodexRuntimeLifecycle {
     const threadId = session.threadId;
     try {
       const modelsBeforeAttach = this.snapshotBoundModelOverrides(threadId);
-      const thread = await this.ctx.options.engine.resumeThread(threadId, {
-        config: session.config,
-      });
+      const config = session.config;
+      const appliedConfig =
+        existing && existing.engineGeneration !== generation
+          ? promptThreadConfig(config)
+          : existing?.promptThreadConfig;
+      const thread = await this.ctx.options.engine.resumeThread(threadId, { config });
       if (
         this.ctx.registry.getSession(sessionId) !== session ||
         this.ctx.closingSessionIds.has(sessionId)
@@ -523,7 +527,9 @@ export class CodexRuntimeLifecycle {
         name: thread.name,
         modelId: thread.model,
       });
-      context.promptThreadConfig = undefined;
+      // A same-generation resume can rejoin a loaded thread and ignore config.
+      // Preserve its known settings, or leave them unknown after a failed reload.
+      context.promptThreadConfig = appliedConfig;
       context.cwd = thread.cwd ?? context.cwd;
       context.name = thread.name ?? context.name;
       // It had a rollout to resume from, so it is materialized by definition.
@@ -1476,10 +1482,9 @@ export class CodexRuntimeLifecycle {
 
         // app-server subscriptions are connection-local. Even an idle context
         // needs thread/resume after a controlled restart before its next turn.
-        const thread = await this.ctx.options.engine.resumeThread(context.threadId, {
-          config: session.config,
-        });
-        context.promptThreadConfig = undefined;
+        const config = session.config;
+        const thread = await this.ctx.options.engine.resumeThread(context.threadId, { config });
+        context.promptThreadConfig = promptThreadConfig(config);
         context.engineHandle = thread.handle;
         context.cwd = thread.cwd ?? context.cwd;
         context.name = thread.name ?? context.name;

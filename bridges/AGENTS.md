@@ -106,7 +106,10 @@ When touching any of them:
   that table without evidence from every released version of its DELETE.
 - **The last owner closes.** Two tabs can map to one provider session. Backend
   teardown is serialized per (environment, agent, provider session) and only
-  the tab that finds no other mapping performs the provider close.
+  the tab that finds no other mapping performs the provider close. A resume
+  that replaces a tab's session closes the replaced one under the same lock
+  and rules (`provider-session-ownership.ts`): never while another tab maps it
+  or a Multi Review owns it.
 
 ## Interaction deadlines and pauses
 

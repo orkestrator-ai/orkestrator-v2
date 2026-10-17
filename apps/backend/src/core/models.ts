@@ -7,6 +7,7 @@ import type {
   FrontendAgentActivityObserverSnapshot,
 } from "@orkestrator/protocol/agent-activity";
 import type { TabTeardownKind } from "@orkestrator/protocol/tab-teardown";
+import type { EnvironmentDiffBaseline } from "@orkestrator/protocol/diff-stats";
 import type {
   ContainerLifecycleSnapshot,
   EnvironmentContainerLifecycle,
@@ -346,6 +347,12 @@ export interface Environment {
    */
   frontendAgentActivityObservers?: Record<string, FrontendAgentActivityObserverSnapshot>;
   createdFromCommit?: string;
+  /**
+   * Where the branch now leaves its target branch, once it has taken in newer
+   * target history. Backend-owned (`diff-baseline.ts`); read through
+   * `environmentBaselineCommit`. Cleared as an explicit `null`.
+   */
+  diffBaseline?: EnvironmentDiffBaseline | null;
   /** Immutable source selected by a coordinator delegation. */
   delegationBaseBranch?: string;
   delegationBaseCommit?: string;

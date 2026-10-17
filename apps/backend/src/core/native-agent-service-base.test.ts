@@ -3809,8 +3809,12 @@ describe("NativeAgentService", () => {
       expect(sent).toContain("Inspect this");
       expect(sent).toContain("create workers with the Orkestrator launch_environment tool");
       expect(sent).toContain("Provider sub-agents remain inside this coordinator session");
+      // Workers default to the base branch's latest commit, not this checkout.
       expect(sent).toContain(
-        "Launch base: every launch_environment call must include baseBranch and baseCommit exactly as shown",
+        "By default start workers from the latest commit of the base branch main: call get_launch_options and pass coordinatorBase.baseBranch and coordinatorBase.baseCommit unchanged.",
+      );
+      expect(sent).toContain(
+        "Use checkoutBase, the branch and commit of this checkout shown below, only when the user asks to build on the current checkout.",
       );
       expect(sent).toContain("Branch: main");
       expect(sent).toContain(`Commit: ${"a".repeat(40)}`);
@@ -3893,9 +3897,10 @@ describe("NativeAgentService", () => {
       const sentUnknownBase = provider.send.mock.calls[2]![1];
       expect(sentUnknownBase).toContain("Branch: unknown");
       expect(sentUnknownBase).toContain("Commit: unknown");
-      expect(sentUnknownBase).toContain("no launchable branch and commit");
-      expect(sentUnknownBase).toContain("Report this blocked state instead of guessing values");
-      expect(sentUnknownBase).not.toContain("exactly as shown in the repository context below");
+      // A detached checkout no longer blocks launches from the base branch.
+      expect(sentUnknownBase).toContain(
+        "By default start workers from the latest commit of the base branch main",
+      );
 
       delegationAvailable = false;
       await service.dispatchPrompt({

@@ -3,6 +3,7 @@ import {
   nativeAgentCapabilities,
   type NativeAgentSessionStateUpdate,
   type NativeAgentViewIdentity,
+  type NativeAgentPendingSignIn,
 } from "@orkestrator/protocol/native-agent";
 import { AgentNativeTab } from "../../apps/web/src/components/native-agent/AgentNativeTab";
 import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
@@ -18,7 +19,10 @@ const identity: NativeAgentViewIdentity = {
 
 function installBackend() {
   let ready = sessionStorage.getItem("held-send-ready") === "true";
-  let authenticationRequired = false;
+  let authenticationRequired = sessionStorage.getItem("held-send-auth-required") === "true";
+  let pendingSignIn = JSON.parse(
+    sessionStorage.getItem("held-sign-in") ?? "null",
+  ) as NativeAgentPendingSignIn | null;
   let dispatchCount = Number(sessionStorage.getItem("held-send-count") ?? "0");
   const waiting = new Set<(value: NativeAgentSessionStateUpdate) => void>();
   const snapshot = (): NativeAgentSessionStateUpdate => ({
@@ -113,8 +117,24 @@ function installBackend() {
           result = [];
           break;
         case "get_native_agent_auth_status":
-          result = { authenticated: false };
+          result = { state: "needs-auth", signIn: { kind: "browser-url" }, pendingSignIn };
           break;
+        case "begin_native_agent_sign_in":
+          pendingSignIn = {
+            url: "https://auth.example.test/device",
+            code: "SAME-CODE",
+            expiresAt: Date.now() + 15 * 60_000,
+          };
+          // Fixture-only persistence models the bridge outliving a renderer reload.
+          sessionStorage.setItem("held-sign-in", JSON.stringify(pendingSignIn));
+          sessionStorage.setItem(
+            "held-sign-in-count",
+            String(Number(sessionStorage.getItem("held-sign-in-count") ?? "0") + 1),
+          );
+          result = pendingSignIn;
+          break;
+        case "open_in_browser":
+          throw new Error("Fixture browser opening failed");
         default:
           throw new Error(`Unexpected held-send fixture command: ${command}`);
       }
@@ -125,6 +145,7 @@ function installBackend() {
     release: (requireSignIn = false) => {
       ready = true;
       authenticationRequired = requireSignIn;
+      sessionStorage.setItem("held-send-auth-required", String(requireSignIn));
       sessionStorage.setItem("held-send-ready", "true");
       for (const resolve of Array.from(waiting)) resolve(snapshot());
       waiting.clear();

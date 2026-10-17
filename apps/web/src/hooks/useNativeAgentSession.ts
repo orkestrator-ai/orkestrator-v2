@@ -6,7 +6,9 @@ import type {
   AgentInteractionResolution,
 } from "@orkestrator/protocol/agent-interactions";
 import type {
+  AgentModel,
   NativeAgentCommandIntent,
+  NativeAgentComposerState,
   NativeAgentControlUpdate,
   NativeAgentDispatchOutcome,
   NativeAgentMessageWindow,
@@ -569,6 +571,23 @@ function retainedCommandFields(
     ...(commands ? { slashCommands: commands } : {}),
     ...(catalogue ? { slashCommandCatalogue: catalogue } : {}),
   };
+}
+
+/**
+ * Discovery's models section is the platform catalogue alone. The session's
+ * composer can carry a row for its selected model that the catalogue lacks,
+ * such as a Codex session-held model the login does not offer. Without that
+ * row the picker would fall back to the first catalogue model, which is not
+ * the one the next turn runs.
+ */
+function withRetainedSelectedModelRow(
+  models: AgentModel[],
+  composer: Pick<NativeAgentComposerState, "models" | "selectedModelId">,
+): AgentModel[] {
+  const selected = composer.selectedModelId;
+  if (!selected || models.some((model) => model.id === selected)) return models;
+  const row = composer.models.find((model) => model.id === selected);
+  return row ? [...models, row] : models;
 }
 
 function sameProgressiveIdentity(
@@ -1953,7 +1972,10 @@ export function useNativeAgentSession<TMessage = unknown>({
           ...(models
             ? {
                 composer: current.composer
-                  ? { ...current.composer, models }
+                  ? {
+                      ...current.composer,
+                      models: withRetainedSelectedModelRow(models, current.composer),
+                    }
                   : {
                       models,
                       fastModeEnabled: null,

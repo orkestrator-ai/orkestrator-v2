@@ -38,6 +38,7 @@ import {
   resolveOpenCodeDefaultModel,
 } from "./opencode-model-catalog.js";
 import { OPENCODE_GO_ONLY_PROVIDER_LIST_RESPONSE } from "./opencode-provider-list-test-fixtures.js";
+import { resolveCodexDefaultModel } from "./session-held-model.js";
 
 import type {
   BuildPipelineProvider,
@@ -523,6 +524,72 @@ describe("BuildPipelineService", () => {
         });
 
         expect(session.model).toBe(LEGACY_OPENCODE_DEFAULT_MODEL_ID);
+        expect(session.modelSubstitution).toBeUndefined();
+      });
+    });
+  });
+
+  describe("on a Codex login whose model list does not offer the default", () => {
+    const answerFromChatGptLogin = async (modelId: string | undefined) =>
+      resolveCodexDefaultModel(modelId, {
+        source: "app-server",
+        supportedModelIds: ["gpt-6.1-sol", "gpt-6.1-sol-mini"],
+        models: [{ id: "gpt-6.1-sol", name: "GPT-6.1-Sol" }],
+      });
+    const configureCodexModel = async (storage: StorageService, model: string) => {
+      const config = await storage.loadConfig();
+      config.global.agentSettings = {
+        ...config.global.agentSettings,
+        platforms: { ...config.global.agentSettings?.platforms, codex: { mode: "native", model } },
+      };
+      await storage.saveConfig(config);
+      return storage.loadConfig();
+    };
+
+    test("starts a build with no step model on an offered model", async () => {
+      await withService(async (service, storage, provider) => {
+        provider.resolveDefaultModel = answerFromChatGptLogin;
+        const config = await configureCodexModel(storage, "gpt-5.4");
+
+        const { session } = await startBuilding(service, storage, { agentType: "codex" });
+
+        expect(session.model).toBe("gpt-6.1-sol");
+        expect(provider.created[0]?.options?.model).toBe("gpt-6.1-sol");
+        expect(session.modelSubstitution).toEqual({
+          requestedModelId: "gpt-5.4",
+          modelId: "gpt-6.1-sol",
+          message: "gpt-5.4 isn't available with your Codex login; using GPT-6.1-Sol.",
+        });
+        expect((await storage.loadConfig()).global.agentSettings).toEqual(
+          config.global.agentSettings,
+        );
+      });
+    });
+
+    test("retains an offered configured default on an unpinned Codex step", async () => {
+      await withService(async (service, storage, provider) => {
+        provider.resolveDefaultModel = answerFromChatGptLogin;
+        const config = await configureCodexModel(storage, "gpt-6.1-sol");
+        const { session } = await startBuilding(service, storage, { agentType: "codex" });
+        expect(session.model).toBe("gpt-6.1-sol");
+        expect(provider.created[0]?.options?.model).toBe("gpt-6.1-sol");
+        expect(session.modelSubstitution).toBeUndefined();
+        expect((await storage.loadConfig()).global.agentSettings).toEqual(
+          config.global.agentSettings,
+        );
+      });
+    });
+
+    test("keeps a Codex model the step pinned", async () => {
+      await withService(async (service, storage, provider) => {
+        provider.resolveDefaultModel = answerFromChatGptLogin;
+
+        const { session } = await startBuilding(service, storage, {
+          agentType: "codex",
+          steps: { build: { agent: "codex", model: "gpt-5.4" } },
+        });
+
+        expect(session.model).toBe("gpt-5.4");
         expect(session.modelSubstitution).toBeUndefined();
       });
     });

@@ -2189,26 +2189,30 @@ describe("rewindSessionFiles", () => {
     try {
       const state = await rewindableSession();
       const rewindFiles = mock(async () => ({ canRewind: true }));
-      const returnSpy = mock(async () => ({ done: true, value: undefined }));
+      const closeSpy = mock(() => undefined);
       queryControlOverrides.rewindFiles = rewindFiles;
-      queryControlOverrides.return = returnSpy;
+      queryControlOverrides.close = closeSpy;
 
       const rewindPromise = rewindSessionFiles(state.id, U1);
       const call = await nextQueryCall();
-      call.push({ type: "system", subtype: "init" });
 
       await expect(rewindPromise).resolves.toEqual({ canRewind: true });
+      // Purely a control handle. The SDK drops `maxTurns: 0`, so any message
+      // would append a user turn and a model reply to the rollout itself.
+      expect(typeof call.prompt).not.toBe("string");
+      const firstMessage = (call.prompt as AsyncIterable<unknown>)[Symbol.asyncIterator]().next();
+      expect(
+        await Promise.race([firstMessage.then(() => "message"), Bun.sleep(20).then(() => "none")]),
+      ).toBe("none");
       expect(call.options).toMatchObject({
         resume: PERSISTED_SDK_ID,
         enableFileCheckpointing: true,
-        // Purely a control handle: a real turn would write to the rollout.
-        maxTurns: 0,
         env: { ORKESTRATOR_NATIVE_AGENT_BRIDGE: "claude" },
       });
       expect(call.options.abortController).toBeInstanceOf(AbortController);
       expect(rewindFiles).toHaveBeenCalledWith(U1, { dryRun: false });
       // The transient query is closed on every exit path.
-      expect(returnSpy).toHaveBeenCalled();
+      expect(closeSpy).toHaveBeenCalled();
     } finally {
       if (previousBridgeMarker === undefined) delete process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE;
       else process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE = previousBridgeMarker;
@@ -2217,38 +2221,37 @@ describe("rewindSessionFiles", () => {
 
   test("closes the transient query when the SDK cannot rewind", async () => {
     const state = await rewindableSession();
-    const returnSpy = mock(async () => ({ done: true, value: undefined }));
-    queryControlOverrides.return = returnSpy;
+    const closeSpy = mock(() => undefined);
+    queryControlOverrides.close = closeSpy;
 
-    const rewindPromise = rewindSessionFiles(state.id, U1);
-    const call = await nextQueryCall();
-    call.push({ type: "system", subtype: "init" });
-
-    await expect(rewindPromise).rejects.toMatchObject({
+    await expect(rewindSessionFiles(state.id, U1)).rejects.toMatchObject({
       code: "conflict",
       message: "Installed Claude Agent SDK does not support file rewind",
     });
-    expect(returnSpy).toHaveBeenCalled();
+    expect(closeSpy).toHaveBeenCalled();
   });
 
-  test("fails closed when the CLI never produces a message", async () => {
+  test("fails closed when the CLI exits before answering", async () => {
     const state = await rewindableSession();
-    const returnSpy = mock(async () => ({ done: true, value: undefined }));
-    queryControlOverrides.return = returnSpy;
+    const closeSpy = mock(() => undefined);
+    queryControlOverrides.close = closeSpy;
+    queryControlOverrides.rewindFiles = mock(async () => {
+      throw new Error("Query closed before response received");
+    });
 
-    const rewindPromise = rewindSessionFiles(state.id, U1);
-    const call = await nextQueryCall();
-    call.finish();
-
-    await expect(rewindPromise).rejects.toMatchObject({ code: "conflict" });
-    expect(returnSpy).toHaveBeenCalled();
+    await expect(rewindSessionFiles(state.id, U1)).rejects.toMatchObject({
+      code: "conflict",
+      message: "Claude session could not be opened for file rewind",
+    });
+    expect(closeSpy).toHaveBeenCalled();
     expect(getSession(state.id)?.rewindInProgress).toBe(false);
   });
 
-  test("times out and closes a transient query that never produces a message", async () => {
+  test("times out and closes a transient query that never answers", async () => {
     const state = await rewindableSession();
-    const returnSpy = mock(async () => ({ done: true, value: undefined }));
-    queryControlOverrides.return = returnSpy;
+    const closeSpy = mock(() => undefined);
+    queryControlOverrides.close = closeSpy;
+    queryControlOverrides.rewindFiles = mock(() => new Promise(() => undefined));
     // Warm the dynamic SDK import before faking timers; Bun otherwise leaves
     // the import continuation behind the fake-timer boundary.
     await import("@anthropic-ai/claude-agent-sdk");
@@ -2267,7 +2270,7 @@ describe("rewindSessionFiles", () => {
         code: "conflict",
         message: "Timed out opening the Claude session for file rewind",
       });
-      expect(returnSpy).toHaveBeenCalledTimes(1);
+      expect(closeSpy).toHaveBeenCalledTimes(1);
       expect(getSession(state.id)?.rewindInProgress).toBe(false);
     } finally {
       jest.useRealTimers();

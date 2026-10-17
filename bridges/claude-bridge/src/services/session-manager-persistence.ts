@@ -2,7 +2,7 @@ import { openClaudeRuntime, retireDrainingClaudeRuntime } from "./session-manage
 // Session Manager Service
 // Handles session state and interacts with Claude Agent SDK
 
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { controlOnlyQuery } from "./control-only-query.js";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type {
   ImageBlockParam,
@@ -795,9 +795,9 @@ export async function resolvePersistedMessageId(
 }
 
 /**
- * How long a transient rewind query may take to produce its first message.
+ * How long a transient rewind query may take to answer.
  *
- * Without a bound, a CLI that never speaks leaves the HTTP request hanging
+ * Without a bound, a CLI that never answers leaves the HTTP request hanging
  * forever with the session flagged busy.
  */
 export const REWIND_OPEN_TIMEOUT_MS = 30_000;
@@ -808,42 +808,49 @@ export async function rewindViaTransientQuery(
   dryRun: boolean,
 ): Promise<unknown> {
   const abortController = new AbortController();
+  const timedOut = new Promise<never>((_, reject) => {
+    abortController.signal.addEventListener(
+      "abort",
+      () =>
+        reject(
+          sessionOperationError("conflict", "Timed out opening the Claude session for file rewind"),
+        ),
+      { once: true },
+    );
+  });
+  timedOut.catch(() => undefined);
   const timeout = setTimeout(() => abortController.abort(), REWIND_OPEN_TIMEOUT_MS);
-  const iterator = query({
-    prompt: "",
-    options: {
-      cwd: currentWorkingDirectory(),
-      env: { ...process.env },
-      ...claudeExecutableOptions(),
-      resume: sdkSessionId,
-      enableFileCheckpointing: true,
-      // This query exists only to obtain a control handle. `maxTurns: 0` keeps
-      // it from running a turn that would append to the very rollout the
-      // checkpoints are indexed against.
-      maxTurns: 0,
-      abortController,
-    },
+  // Control only. A prompt — even an empty one — would append a user message
+  // and a model reply to the very rollout the checkpoints are indexed
+  // against; `maxTurns: 0` does not stop it (see control-only-query.ts).
+  const control = controlOnlyQuery({
+    cwd: currentWorkingDirectory(),
+    env: { ...process.env },
+    ...claudeExecutableOptions(),
+    resume: sdkSessionId,
+    enableFileCheckpointing: true,
+    abortController,
   });
   try {
-    for await (const _message of iterator) {
-      if (typeof iterator.rewindFiles !== "function") {
-        throw sessionOperationError(
-          "conflict",
-          "Installed Claude Agent SDK does not support file rewind",
-        );
-      }
-      return await iterator.rewindFiles(persistedMessageId, { dryRun });
+    if (typeof control.rewindFiles !== "function") {
+      throw sessionOperationError(
+        "conflict",
+        "Installed Claude Agent SDK does not support file rewind",
+      );
     }
-    throw sessionOperationError(
-      "conflict",
-      abortController.signal.aborted
-        ? "Timed out opening the Claude session for file rewind"
-        : "Claude session could not be opened for file rewind",
-    );
+    const rewind = control.rewindFiles(persistedMessageId, { dryRun });
+    rewind.catch(() => undefined);
+    try {
+      return await Promise.race([rewind, timedOut]);
+    } catch (error) {
+      if (abortController.signal.aborted) throw error;
+      debugLog("[session-manager] Transient rewind query failed:", error);
+      throw sessionOperationError("conflict", "Claude session could not be opened for file rewind");
+    }
   } finally {
     clearTimeout(timeout);
     try {
-      await iterator.return?.();
+      await Promise.resolve(control.close());
     } catch (error) {
       debugLog("[session-manager] Failed to close rewind query:", error);
     }

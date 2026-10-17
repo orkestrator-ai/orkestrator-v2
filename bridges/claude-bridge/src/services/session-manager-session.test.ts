@@ -44,8 +44,8 @@ describe("catalog discovery caching", () => {
       queryControlOverrides.accountInfo = mock(async () => ({}));
       await readClaudeAuthStatus();
       const probe = await nextQueryCall();
+      expect(typeof probe.prompt).not.toBe("string");
       expect(probe.options).toMatchObject({
-        maxTurns: 0,
         env: { ORKESTRATOR_NATIVE_AGENT_BRIDGE: "claude" },
       });
       expect(probe.isClosed()).toBe(true);

@@ -24,7 +24,7 @@
  * under an invented `/skill:<name>` spelling.
  */
 import { randomUUID } from "node:crypto";
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { controlOnlyQuery } from "./control-only-query.js";
 import type { Query, SlashCommand } from "@anthropic-ai/claude-agent-sdk";
 import {
   COMMAND_CATALOGUE_LIMITS,
@@ -447,7 +447,7 @@ async function probeCommands(session: SessionState, force: boolean): Promise<voi
 }
 
 /**
- * Spawn a zero-turn CLI configured like the session's turns and read its
+ * Spawn a control-only CLI configured like the session's turns and read its
  * inventory. Bounded by {@link COMMAND_PROBE_TIMEOUT_MS} and closed on every
  * outcome; every promise it creates has a rejection handler.
  */
@@ -458,16 +458,12 @@ async function runDiscoveryProbe(
   let probe: Query | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    probe = query({
-      prompt: "",
-      options: {
-        maxTurns: 0,
-        cwd: config.cwd,
-        env,
-        settingSources: config.settingSources,
-        ...(config.plugins.length > 0 ? { plugins: config.plugins } : {}),
-        ...claudeExecutableOptions(),
-      },
+    probe = controlOnlyQuery({
+      cwd: config.cwd,
+      env,
+      settingSources: config.settingSources,
+      ...(config.plugins.length > 0 ? { plugins: config.plugins } : {}),
+      ...claudeExecutableOptions(),
     });
     const read = probe.supportedCommands();
     const timeout = new Promise<never>((_, reject) => {

@@ -58,9 +58,9 @@ it reaches. Some rules of thumb:
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
 | High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 25 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 257 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 268 |
-| **Total** | | **551** |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 255 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 269 |
+| **Total** | | **550** |
 
 ## Very high
 
@@ -254,8 +254,8 @@ it reaches. Some rules of thumb:
 - [ ] Check that slash skill and template paths resolve inside the provider's container environment ([slash-command-qualification.md](slash-command-qualification.md), qualification)
 - [ ] Run the slash-command mixed-version matrix across backend, bridge and renderer versions ([slash-command-qualification.md](slash-command-qualification.md), qualification)
 - [ ] Measure slash catalogue discovery latency, refresh coalescing, cache bytes and probe counts ([slash-command-qualification.md](slash-command-qualification.md), qualification)
-- [ ] Mark Claude terminal-only commands unavailable before a tab's first turn ([slash-command-catalogue.md](slash-command-catalogue.md))
-- [ ] Load OpenCode command files added while its server runs, or tell the user a restart is needed ([slash-command-catalogue.md](slash-command-catalogue.md))
+- [x] Mark Claude terminal-only commands unavailable before a tab's first turn ([slash-command-catalogue.md](slash-command-catalogue.md))
+- [x] Load OpenCode command files added while its server runs, or tell the user a restart is needed ([slash-command-catalogue.md](slash-command-catalogue.md))
 - [ ] Run the live slash-command probes on Pi 1.2.0 with credentials, and qualify Codex disabled skills with a disposable `CODEX_HOME` ([slash-command-qualification.md](slash-command-qualification.md), qualification)
 - [ ] Verify whether Grok loads project skills and commands from a host worktree it has not trusted ([slash-command-qualification.md](slash-command-qualification.md), verify)
 - [ ] Verify that a Claude user is told a command parked by a bridge restart did not run after a same-id retry ([slash-command-qualification.md](slash-command-qualification.md), verify)
@@ -586,10 +586,11 @@ it reaches. Some rules of thumb:
 - [ ] Support Claude session-changing commands by adopting the new conversation, or keep them unavailable ([slash-command-catalogue.md](slash-command-catalogue.md))
 - [ ] Build a policy-reviewed executor for Codex inline-shell templates, or keep them unavailable ([slash-command-catalogue.md](slash-command-catalogue.md))
 - [ ] Add further Orkestrator slash shortcuts beyond `/steer` and `/compact` with qualified semantics ([slash-command-catalogue.md](slash-command-catalogue.md))
-- [ ] Update stale SDK pin facts in the OpenCode, Claude and Cursor command owner comments ([slash-command-catalogue.md](slash-command-catalogue.md))
+- [ ] Update the stale Cursor SDK pin fact in the Cursor command owner comment ([slash-command-catalogue.md](slash-command-catalogue.md))
 - [ ] Update the pins and tables in `native-agent-commands.md` ("Provider support") and the owner comments after a qualification pass ([slash-command-qualification.md](slash-command-qualification.md), qualification)
 - [ ] Check whether any slash-command live runs happened informally after #827 ([slash-command-qualification.md](slash-command-qualification.md), verify)
 - [ ] Report a cold Codex skill list `stale` until its plugin skills have loaded ([slash-command-catalogue.md](slash-command-catalogue.md))
+- [ ] Use an Agent SDK terminal marker on `SlashCommand` once one exists, and drop the remembered Claude terminal list ([slash-command-catalogue.md](slash-command-catalogue.md), blocked)
 - [ ] Give a dev profile's backend the workspace version so no version reminder covers the composer ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
 
 ### Containers and environments (low)
@@ -853,7 +854,7 @@ it reaches. Some rules of thumb:
 | **CLI and slash commands** | | | | | |
 | [cli-command-surface.md](cli-command-surface.md) |  |  | 6 | 7 | 13 |
 | [cli-qualification.md](cli-qualification.md) |  | 1 | 6 | 1 | 8 |
-| [slash-command-catalogue.md](slash-command-catalogue.md) |  |  | 7 | 5 | 12 |
+| [slash-command-catalogue.md](slash-command-catalogue.md) |  |  | 5 | 6 | 11 |
 | [slash-command-qualification.md](slash-command-qualification.md) |  |  | 6 | 2 | 8 |
 | **Containers and environments** | | | | | |
 | [container-platform-qualification.md](container-platform-qualification.md) |  |  | 12 | 2 | 14 |

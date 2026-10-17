@@ -18,6 +18,10 @@ import type {
   AgentInteractionWorkflowSummary,
 } from "@orkestrator/protocol/agent-interactions";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type {
+  CoordinatorResearchMcpServer,
+  CoordinatorWebResearch,
+} from "@orkestrator/protocol/coordinator-web-research";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import type { TrustedUserPromptPresentation } from "@orkestrator/protocol/review-evidence-frames";
@@ -227,6 +231,24 @@ export interface StartupAgentSessionSnapshot {
   error?: string;
 }
 
+/**
+ * Content-free cause of an environment's unread badge.
+ *
+ * - `agent_finished`: an agent turn ended.
+ * - `agent_ready`: the composer is ready while background work continues.
+ * - `agent_waiting`: an agent stopped to wait on the user (approval, plan, prompt).
+ * - `agent_question`: an agent asked a question that needs an answer.
+ * - `terminal_finished`: a terminal-hosted agent finished.
+ * - `marked_unread`: a client marked the environment unread.
+ */
+export type EnvironmentUnreadReason =
+  | "agent_finished"
+  | "agent_ready"
+  | "agent_waiting"
+  | "agent_question"
+  | "terminal_finished"
+  | "marked_unread";
+
 export interface Environment {
   /** Monotonic fence for mail-triggered starts across explicit stop transitions. */
   stopGeneration?: number;
@@ -406,6 +428,8 @@ export interface Environment {
    * it clears the badge everywhere, because the work has now been seen.
    */
   hasUnreadWork?: boolean;
+  /** What most recently lit `hasUnreadWork`; cleared with it. */
+  unreadReason?: EnvironmentUnreadReason;
   /** Bounded content-free dedupe keys for agent events that requested attention. */
   agentAttentionKeys?: string[];
   /** Durable intent to open the configured agent once setup is ready. */
@@ -876,6 +900,14 @@ export interface AppConfig {
     coordinatorProviderTiers?: "enforced" | "provider-configured" | "advisory";
     /** Internal marker for the one-time coordinator safety-default migration. */
     coordinatorProviderTierDefaultVersion?: number;
+    /**
+     * Web research a coordinator may do. Absent means the product default
+     * (`search-and-mcp`). Commands and hosted page fetches stay off in every
+     * mode; see `@orkestrator/protocol/coordinator-web-research`.
+     */
+    coordinatorWebResearch?: CoordinatorWebResearch;
+    /** Remote research MCP servers; absent means the default list (Context7). */
+    coordinatorResearchMcpServers?: CoordinatorResearchMcpServer[];
     favoriteModels?: Array<{ platform: AgentPlatform; modelId: string }>;
     containerResources: { cpuCores: number; memoryGb: number };
     envFilePatterns: string[];

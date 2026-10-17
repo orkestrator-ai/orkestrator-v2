@@ -21,8 +21,10 @@ import {
   mcpSourceScopeForPolicy,
 } from "./mcp-config.js";
 import { getPluginsForSdk } from "./plugin-config.js";
+import { coordinatorResearchMcpServersFromEnv } from "@orkestrator/protocol/coordinator-web-research";
 import {
   claudeDeniedTools,
+  claudeDisallowedTools,
   claudeReadOnlyAllowedTools,
   createCoordinatorReadOnlyHook,
   isCoordinatorReadOnlyPolicy,
@@ -142,6 +144,12 @@ export async function resolveQueryPlan(
         agentMcpServerNames: mcpServerNames.has(AGENT_MCP_SERVER_NAME)
           ? [AGENT_MCP_SERVER_NAME]
           : [],
+        policy,
+        // Only research servers this session actually loaded: a coordinator's
+        // inline set is the launcher's, so these are exactly the user's list.
+        researchMcpServerNames: coordinatorResearchMcpServersFromEnv(process.env)
+          .map((server) => server.name)
+          .filter((name) => mcpServerNames.has(name)),
       })
     : [
         ...(policy?.toolPolicy?.allow ?? defaultAllowedTools),
@@ -150,9 +158,11 @@ export async function resolveQueryPlan(
       ];
   // Provider tool names, not the policy's own: `toolPolicy.deny` carries
   // Codex's vocabulary, and passing it to `disallowedTools` matches nothing.
+  // Any other policy keeps its override and also loses the tools for each
+  // capability it denies (a network denial takes WebFetch and WebSearch).
   const disallowedTools = coordinatorReadOnly
     ? claudeDeniedTools(policy)
-    : policy?.toolPolicy?.deny;
+    : claudeDisallowedTools(policy);
 
   const fastMode = options?.fastMode === true;
   const ultracode = requestsUltracode(options?.parameterValues);

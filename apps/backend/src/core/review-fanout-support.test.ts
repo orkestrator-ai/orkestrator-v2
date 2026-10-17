@@ -82,6 +82,57 @@ describe("bounded fan-out task pool", () => {
     expect(started).toEqual([0]);
   });
 
+  test("reports the waiting queue in start order as tasks leave it", async () => {
+    const gates = Array.from({ length: 5 }, deferred);
+    const tasks = gates.map((gate, index) => ({
+      id: index,
+      pool: "admission" as const,
+      group: "g",
+      run: () => gate.promise,
+    }));
+    const reports: number[][] = [];
+    const done = runBoundedTasks(
+      tasks,
+      { admission: 2, observation: 1, provider: 4 },
+      () => true,
+      (waiting) => reports.push(waiting.map((task) => task.id)),
+    );
+    // Before anything starts, then once per start.
+    expect(reports).toEqual([
+      [0, 1, 2, 3, 4],
+      [1, 2, 3, 4],
+      [2, 3, 4],
+    ]);
+    gates[1]!.resolve();
+    await flush();
+    expect(reports.at(-1)).toEqual([3, 4]);
+    for (const gate of gates) gate.resolve();
+    await done;
+    expect(reports.at(-1)).toEqual([]);
+    // Every report is a change; an unchanged queue is not reported again.
+    expect(new Set(reports.map((report) => report.length)).size).toBe(reports.length);
+  });
+
+  test("reports an empty queue once it stops starting work", async () => {
+    let stop = false;
+    const reports: number[] = [];
+    const tasks = Array.from({ length: 4 }, () => ({
+      pool: "admission" as const,
+      group: "g",
+      run: async () => {
+        stop = true;
+        await flush();
+      },
+    }));
+    await runBoundedTasks(
+      tasks,
+      { admission: 1, observation: 1, provider: 4 },
+      () => !stop,
+      (waiting) => reports.push(waiting.length),
+    );
+    expect(reports).toEqual([4, 3, 0]);
+  });
+
   test("a rejected task frees its slot without an unhandled rejection", async () => {
     const tasks: BoundedTask[] = [
       { pool: "admission", group: "g", run: async () => Promise.reject(new Error("boom")) },

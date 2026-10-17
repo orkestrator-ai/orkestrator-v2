@@ -23,6 +23,7 @@ with [agent-testing.md](agent-testing.md).
 | Run design-only real-stack tests | `mise run test:agent:design:isolated` | Same lifecycle, only `design-canvas.spec.ts` |
 | Run Electron agent tests | `mise run test:logged -- --name agent-electron -- mise run test:agent:electron` | Main process, preload, IPC, clipboard, and shutdown |
 | Run Docker agent tests | `mise run test:logged -- --name agent-docker -- mise run test:agent:docker` | Opt-in container ownership and fixture coverage |
+| Run the live coordinator suite | `mise run test:agent:coordinator --credential-source <platform>` | Manual and opt-in: real provider turns, one disposable profile per platform ([agent-testing.md](agent-testing.md#live-coordinator-suite)) |
 
 A normal implementation loop is:
 
@@ -364,7 +365,11 @@ Generate the reference before making the change; no artifact is committed
   in rollback and shared modes. `workflows` (`recurring-baseline-workflows.ts`)
   runs the real feature-planning, build-pipeline and looped-review
   supervisors over a temporary store, in whole-store rollback and keyed modes.
-  Multi review is not driven.
+  Each domain reports `storageReads` (store content decoded, cached or not)
+  beside `storageStats` (reuse of already-decoded records). The test holds
+  every attempt to a per-domain budget (`STORAGE_PER_ATTEMPT` in
+  `recurring-baseline.test.ts`), so one extra read per pass fails it. Multi
+  review is not driven.
 
 It is a call-count model, not a profile. It does not measure durations, CPU,
 RSS or I/O bytes; provider, transcript and storage cost behind the modelled

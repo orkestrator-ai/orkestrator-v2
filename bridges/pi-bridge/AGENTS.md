@@ -91,6 +91,10 @@ entry, so live and resumed transcripts have the same shape.
   disconnect, closing session and unparseable answer **denies**. A turn that
   ends with a call still parked denies it too — leaving it unanswered wedges the
   turn and, with it, the environment's activity state.
+- A pause (`POST …/approvals/:approvalId/hold`) only moves the approval's
+  deadline — to the 24 h ceiling, capped by the turn budget
+  (`turnDeadlineAt`) — and expiry there still denies. It never answers the
+  call; keep it routed ahead of the decision route, which denies by default.
 - A prompt claims a process-local token (`promptClaim`) synchronously at route
   entry, before its body is read, when nothing else owns the session; an
   unused reservation (validation error, duplicate, local answer, busy refusal)

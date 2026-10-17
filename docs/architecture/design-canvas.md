@@ -80,6 +80,18 @@ Edits are **recoverable operations** (`design/service.ts`,
    incarnation. A repeated prepare with the same correlation id returns the
    same token. Creating a canvas reserves its identity and quota in a
    provisional record.
+
+   A correlation id is bound to an intent digest of the whole validated
+   descriptor (canonical JSON, so key order does not matter, except inside
+   a `styles` map, which applies in order: `margin` before or after
+   `margin-top` is a different edit) while pending and after it settles; the record keeps a private digest per correlated
+   receipt, inside the receipt budget. The same id with the same descriptor
+   replays (a pending token, or the stored receipt through
+   `submit_operation`); the same id with a different descriptor fails
+   `invalid-input` ("already used for a different edit", `details.token`,
+   retry `never`) and runs nothing. A receipt settled before digests were
+   kept is compared on the fields it carries (kind, preconditions, gesture
+   and client ids).
 2. **Execute** runs a token once. The computation reads an immutable snapshot;
    Chromium work happens with no lock held. The result is re-verified against
    the latest record (revisions, structure identity, deletion) under the
@@ -196,7 +208,16 @@ checkpoint preview/compare or explicit restore. One gesture is one entry.
 
 Live hints (`design-canvas-changed`) stay content-free: canvas id, revision,
 optional frame id, kind (`document`/`status`/`deleted`/`restored`), status
-version and generation. `design_sync` answers from one immutable record:
+version and generation. They are published inside the canvas lane, after the
+commit they describe, so one backend emits a canvas's hints in commit order
+with non-decreasing revision and status version. Delivery is at most once and
+best effort. A crash after the rename loses the hint; other processes sharing
+the data directory publish only to their own clients; there is no per-hint
+sequence number and no dedupe. A commit may be followed by later hints of its
+own: HTML edits validate in the background and publish a `status` hint with
+the same revision. A validation result for replaced content is dropped
+without a hint. Clients never count hints; the cursor (`generation`,
+revision, status version) and `design_sync` are authoritative. `design_sync` answers from one immutable record:
 `unchanged`, `status` (metadata only), `delta` (exact base → current revision;
 geometry patches omit HTML; HTML only for new content), `reset` (generation,
 future cursor, expired range, too large: >256 KiB or >64 frames), or a
@@ -307,7 +328,11 @@ credentials or prompts.
 Backend: the `core/design/` `service`, `operations`, `history`, `lifecycle`,
 `sync`, `records`, `exports`, `export-writer`, `renderer` and `mcp` tests, and
 `commands-registry-design` (a happy-dom runtime renderer from `design/test-support.ts`
-plus one real-Chromium renderer test). Web: controller, drafts, viewport,
+plus one real-Chromium renderer test). Backend tests reach a storage bound
+(change log, history entries) by lowering it with `withDesignLimit`, not with
+hundreds of fsynced commits, and check the shipped bound in memory. A test
+that counts hints after an HTML edit first holds the background validation
+with `renderer.block`. Web: controller, drafts, viewport,
 canvas tab, inspector, layer tree, history/export, entry and agent
 context tests. Browser: `e2e/DesignCanvas.spec.ts` runs the real runtime and
 command registry at desktop and phone widths;

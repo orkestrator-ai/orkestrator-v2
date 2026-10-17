@@ -353,12 +353,6 @@ export function resolveSidebarReorder(
   return null;
 }
 
-export function createEnvironmentUpdateHandler(
-  updateEnvironment: (environmentId: string, environment: Environment) => void,
-): (environment: Environment) => void {
-  return (environment) => updateEnvironment(environment.id, environment);
-}
-
 export async function forkSidebarEnvironment(
   environmentId: string,
   environmentType: EnvironmentType,
@@ -986,11 +980,6 @@ export function HierarchicalSidebar() {
     );
   });
 
-  const handleUpdateEnvironment = useMemo(
-    () => createEnvironmentUpdateHandler(updateEnvironment),
-    [updateEnvironment],
-  );
-
   const handleForkEnvironment = useCallback(
     (environmentId: string, environmentType: EnvironmentType) =>
       forkSidebarEnvironment(environmentId, environmentType, {
@@ -1056,7 +1045,6 @@ export function HierarchicalSidebar() {
       onStopEnvironment={stopEnvironment}
       onRestartEnvironment={restartEnvironment}
       onForkEnvironment={handleForkEnvironment}
-      onUpdateEnvironment={handleUpdateEnvironment}
       onCreateEnvironment={() => handleOpenCreateEnvDialog(project.id)}
       onAddToFolder={() => setFolderDialogProjectId(project.id)}
       onRemoveFromFolder={project.folder ? () => handleRemoveFromFolder(project.id) : undefined}
@@ -1334,7 +1322,6 @@ export function HierarchicalSidebar() {
                           onStop={stopEnvironment}
                           onRestart={restartEnvironment}
                           onFork={handleForkEnvironment}
-                          onUpdate={handleUpdateEnvironment}
                           isMultiSelectMode={isMultiSelectMode}
                           isChecked={selectedEnvironmentIds.includes(environment.id)}
                         />

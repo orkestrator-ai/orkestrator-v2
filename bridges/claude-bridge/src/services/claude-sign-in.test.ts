@@ -16,6 +16,13 @@ import {
   noteClaudeAuthenticationWorked,
   readClaudeAuthStatus,
 } from "./claude-sign-in.js";
+import {
+  AUTH_SECRET_CANARIES,
+  captureOutput,
+  expectAuthStatusShape,
+  expectNoCanary,
+  expectNothingSecretLogged,
+} from "../../../../tests/helpers/auth-secret-canaries.js";
 
 // What `accountInfo()` answers with an empty config directory (Claude 0.3.296).
 const SIGNED_OUT = { tokenSource: "none", apiProvider: "firstParty" } as const;
@@ -221,5 +228,71 @@ describe("Claude prompt admission", () => {
       clock.mockRestore();
     }
     expect(accountInfo).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("Claude auth status carries no credential", () => {
+  test("drops every token the environment and the SDK hold, and logs none of them", async () => {
+    const planted = {
+      ANTHROPIC_API_KEY: AUTH_SECRET_CANARIES.anthropicApiKey,
+      CLAUDE_CODE_OAUTH_TOKEN: AUTH_SECRET_CANARIES.claudeOAuthToken,
+    };
+    const previous = Object.fromEntries(
+      [...Object.keys(planted), "CLAUDE_BRIDGE_NO_SERVER"].map((key) => [key, process.env[key]]),
+    );
+    Object.assign(process.env, planted);
+    // Everything `accountInfo()` reports, plus fields a future SDK might add.
+    queryControlOverrides.accountInfo = mock(async () => ({
+      email: "user@example.test",
+      organization: "Example Org",
+      subscriptionType: "max",
+      tokenSource: "CLAUDE_CODE_OAUTH_TOKEN",
+      apiKeySource: "ANTHROPIC_API_KEY",
+      apiProvider: "firstParty",
+      accessToken: AUTH_SECRET_CANARIES.accessToken,
+      refreshToken: AUTH_SECRET_CANARIES.refreshToken,
+      apiKey: AUTH_SECRET_CANARIES.anthropicApiKey,
+    }));
+    try {
+      process.env.CLAUDE_BRIDGE_NO_SERVER = "1";
+      const { app } = await import("../index.js");
+      const { result: status, output } = await captureOutput(() => readClaudeAuthStatus());
+      expectAuthStatusShape(status);
+      expect(status).toMatchObject({
+        state: "signed-in",
+        account: { label: "Example Org", plan: "max" },
+      });
+      expectNoCanary(status, "Claude auth status");
+      expectNothingSecretLogged(output, "Claude auth status");
+      const { result: responses, output: routeOutput } = await captureOutput(async () => {
+        const headers = { Authorization: "Bearer test-auth-secret-token" };
+        const { __testing } = await import("../index.js");
+        __testing.setBridgeAuthForTesting("test-auth-secret-token");
+        try {
+          return await Promise.all([
+            app.request("/global/auth", { headers }),
+            app.request("/global/auth/login", { method: "POST", headers }),
+            app.request("/global/auth/logout", { method: "POST", headers }),
+          ]);
+        } finally {
+          __testing.setBridgeAuthForTesting(undefined);
+        }
+      });
+      expect(responses.map((response) => response.status)).toEqual([200, 405, 405]);
+      const [authBody, loginBody, logoutBody] = await Promise.all(
+        responses.map((response) => response.json()),
+      );
+      expectAuthStatusShape(authBody);
+      expect(authBody).toEqual(status);
+      expect(loginBody).toEqual({ error: "Open a Claude terminal tab and run /login." });
+      expect(logoutBody).toEqual({ error: "Claude sign-out is available from a terminal tab." });
+      expectNoCanary([authBody, loginBody, logoutBody], "Claude auth routes");
+      expectNothingSecretLogged(routeOutput, "Claude auth routes");
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 });

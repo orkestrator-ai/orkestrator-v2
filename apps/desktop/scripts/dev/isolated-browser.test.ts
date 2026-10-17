@@ -21,7 +21,7 @@ const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE;
 const args = process.argv.slice(2);
 const browser = path.basename(process.argv[1]) === "bunx";
 const task = browser ? "playwright" : args[1];
-fs.appendFileSync(path.join(root, "events"), JSON.stringify({ task, profile, args, pid: process.pid, scheduler: process.env.ORKESTRATOR_TEST_SCHEDULER_DIR, workers: process.env.ORKESTRATOR_TEST_HOST_WORKERS }) + "\\n");
+fs.appendFileSync(path.join(root, "events"), JSON.stringify({ task, profile, args, pid: process.pid, scheduler: process.env.ORKESTRATOR_TEST_SCHEDULER_DIR, workers: process.env.ORKESTRATOR_TEST_HOST_WORKERS, coordinator: process.env.ORKESTRATOR_AGENT_TEST_LIVE_COORDINATOR }) + "\\n");
 if (task === "dev:test") {
   if (mode === "startup-fail") process.exit(3);
   fs.writeFileSync(path.join(root, "launcher"), String(process.pid));
@@ -67,6 +67,7 @@ if (task === "dev:test") {
             pid: number;
             scheduler: string;
             workers: string;
+            coordinator?: string;
           },
       );
   return { root, env, events };
@@ -140,6 +141,44 @@ test("profile flags replace the credential-free Codex defaults they name", async
     "--agent-platforms",
     "opencode",
   ]);
+});
+
+test("another suite runs its own config and opt-in in a profile the caller names", async () => {
+  const f = await fixture();
+  expect(
+    await runIsolatedBrowser({
+      ...f,
+      design: true,
+      profile: "qa-coordinator-claude-test",
+      profileArgs: ["--credential-source", "claude", "--agent-platforms", "claude"],
+      suite: {
+        label: "live coordinator (claude)",
+        config: "e2e/agent-testing/playwright.coordinator.config.ts",
+        env: { ORKESTRATOR_AGENT_TEST_LIVE_COORDINATOR: "1" },
+      },
+    }),
+  ).toBe(0);
+  const events = await f.events();
+  expect(new Set(events.map((event) => event.profile))).toEqual(
+    new Set(["qa-coordinator-claude-test"]),
+  );
+  const tests = events.find((event) => event.task === "playwright")!;
+  expect(tests.args).toEqual([
+    "playwright",
+    "test",
+    "--config",
+    "e2e/agent-testing/playwright.coordinator.config.ts",
+    "--workers=1",
+  ]);
+  expect(tests.coordinator).toBe("1");
+  expect(events.find((event) => event.task === "dev:test")!.args.slice(4)).toEqual([
+    "--fixture",
+    "--credential-source",
+    "claude",
+    "--agent-platforms",
+    "claude",
+  ]);
+  expect(events.slice(-2).map((event) => event.task)).toEqual(["dev:stop", "dev:reset"]);
 });
 
 test("full task runs the whole configured suite and preserves Playwright failure", async () => {

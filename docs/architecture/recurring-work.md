@@ -30,7 +30,10 @@ vocabulary:
 - `RECURRING_WORK_UNITS` counts physical work (`git-spawn`, `gh-spawn`,
   `docker-exec`, `directory-read`, `provider-request`, `storage-read`,
   `record-scanned`, …) at the boundary that performs it, attributed to the
-  innermost recurring job.
+  innermost recurring job. `storage-read` counts stored content decoded for a
+  caller, whether the database or its revision-validated row cache served it;
+  `storage-stat` counts a revision or stat check that reused values already
+  decoded (see [storage.md](storage.md)).
 
 The backend recorder, `recurringWorkMetrics`
 (`apps/backend/src/core/recurring-work-metrics.ts`), keeps one fixed record
@@ -171,7 +174,7 @@ the running attempt.
 | B14 | `build-supervisor-tick` | `build-pipeline-service-lifecycle.ts` | Keyed: one pass per pipeline with an obligation every 1.5 s, 30 s discovery. A pass looks at a session's transcript only at the 5 s persist boundary, when a turn ends or while a stall warning shows, through a conditional progress probe; the whole body is read only when the probe moved since the committed copy, and always once when a turn ends (`refreshMovedTranscript`). |
 | B15, B16 | `looped-review-tick`, `multi-review-tick`, `*-lease-renewal` | `looped-review-service.ts`, `multi-review-service.ts` | Keyed per-workflow 1 s passes, 30 s discovery. Controller lease 15 s, renewed every 5 s (critical). Multi review keeps `adaptiveScheduling: false` as a legacy 1 s tick. |
 | B17 | `feature-planning-tick` | `feature-planning.ts` | Keyed per-record 1 s passes, 30 s discovery. |
-| B18 | `tmux-poll` | `tmux-poll.ts` | 1 s per tracked running Claude terminal container: one `docker exec` each. Change-only writes. This dominates container idle cost. |
+| B18 | `tmux-poll` | `tmux-poll.ts` | One `docker exec` per read, change-only writes. On `claude-state-signal` images the hooks ring the backend, which reads on each ring plus a 30 s safety read (2 reads a minute idle); a change the safety read finds unannounced returns the container to 1 s. Older images, and containers whose doorbell has not rung, keep the 1 s poll, which dominates their idle cost. See [container-lifecycle.md](container-lifecycle.md#claude-terminal-state-signal-claude-state-signal1). |
 | B19 | `tmux-interactive-capture` | `tmux-interactive.ts` | Completion-scheduled 250 ms, doubling to 1 s while output is unchanged, per attached interactive terminal. Bounded line patches; exact screen recovery. |
 | B20 | `validation-heartbeat` | `review-validation-worker.ts` | 500 ms persistence and cancel heartbeat; 100 ms cooperative clock. Cross-process liveness, so partly correctness-related. |
 | B21 | `storage-lock-heartbeat` | `storage-base.ts`, `storage-database.ts` | Lease holders heartbeat at least every third of the stale threshold. Critical. |

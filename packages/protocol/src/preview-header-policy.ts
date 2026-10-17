@@ -2,10 +2,13 @@
  * Header policy for full-origin preview forwarding, shared by the backend's
  * published-origin proxy and Electron's local ingress.
  *
- * - Upstream sees its private authority (`Host: localhost:<appPort>`), so dev
- *   servers' host checks pass without permissive allowlists. The public origin
- *   travels in a rebuilt, trusted `X-Forwarded-*` set; inbound forwarding
- *   headers are always discarded.
+ * - Upstream sees its canonical private authority (`Host: localhost:<appPort>`),
+ *   so dev servers' host checks pass without permissive allowlists. The public
+ *   origin travels in a rebuilt, trusted `X-Forwarded-*` set, except on requests whose
+ *   same-service `Origin` was mapped to the private origin: those omit
+ *   `X-Forwarded-Host` so CSRF checks fall back to `Host`. `X-Forwarded-Proto`
+ *   always describes the public transport. Inbound forwarding headers are
+ *   always discarded.
  * - Application `Authorization` and non-reserved cookies pass through
  *   untouched. Transport credentials, reserved cookies, and every
  *   `x-orkestrator-*` header are stripped.
@@ -165,7 +168,8 @@ export function upstreamRequestHeaders(
   const strip = new Set((policy.stripRequestHeaders ?? []).map((name) => name.toLowerCase()));
   const privateOrigin = privateOriginSet(policy)[0]!;
   const publicUrl = new URL(policy.publicOrigin);
-  const out: HeaderList = [["host", policy.privateAuthority]];
+  const out: HeaderList = [["host", new URL(privateOrigin).host]];
+  let sameServiceOrigin = false;
   for (const [name, value] of incoming) {
     const lower = name.toLowerCase();
     if (options.upgrade && (UPGRADE_KEEP.has(lower) || lower === "connection")) {
@@ -183,6 +187,7 @@ export function upstreamRequestHeaders(
     if (lower === "origin") {
       // Same-service origin maps to the private origin; anything else is kept
       // so the application's own cross-origin checks still apply.
+      if (value === policy.publicOrigin) sameServiceOrigin = true;
       out.push([name, value === policy.publicOrigin ? privateOrigin : value]);
       continue;
     }
@@ -193,7 +198,11 @@ export function upstreamRequestHeaders(
     out.push([name, value]);
   }
   if (options.upgrade) out.push(["connection", "Upgrade"]);
-  out.push(["x-forwarded-host", publicUrl.host]);
+  // Next.js Server Actions compare Origin with X-Forwarded-Host, falling back
+  // to Host when absent. Let mapped origins use that private Host comparison
+  // without advertising localhost as a public forwarded host. Keep the public
+  // protocol even on writes: apps use it to decide whether cookies are secure.
+  if (!sameServiceOrigin) out.push(["x-forwarded-host", publicUrl.host]);
   out.push(["x-forwarded-proto", publicUrl.protocol.replace(":", "")]);
   if (policy.forwardedFor) out.push(["x-forwarded-for", policy.forwardedFor]);
   return out;

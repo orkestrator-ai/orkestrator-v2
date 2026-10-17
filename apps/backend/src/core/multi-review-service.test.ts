@@ -1,4 +1,5 @@
 import { multiReviewNativeFixOptions } from "./multi-review-native-fix.js";
+import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import type { NativeAgentRuntimeProvider } from "./native-agent-provider.js";
 import { dispatchMultiReviewAddressPrompt } from "./multi-review-address-dispatch.js";
@@ -4481,6 +4482,173 @@ async function seedLegacyFixingWorkflow(
   return workflowId;
 }
 
+test("MultiReviewService reads a step's session tail only for the step using it", async () => {
+  const provider = new Provider();
+  provider.messagesValue = [
+    {
+      id: "assistant-1",
+      role: "assistant",
+      content: "Fixing the findings",
+      parts: [{ type: "text", content: "Fixing the findings" }],
+    },
+  ];
+  await withService("env-step-tail", provider, async ({ service, storage }) => {
+    // Every step of this older workflow ran in the one fix session.
+    const workflowId = await seedLegacyFixingWorkflow(storage, "env-step-tail");
+
+    await expect(service.stepTranscript(workflowId, "fix")).resolves.toMatchObject({
+      workflowId,
+      step: "fix",
+      workflowPhase: "fixing",
+      session: "own",
+      agent: "claude",
+      sessionStatus: "running",
+      transcript: "snapshot",
+      messages: provider.messagesValue,
+    });
+    await expect(service.stepTranscript(workflowId, "consolidate")).resolves.toMatchObject({
+      session: "other-step",
+      sessionStep: "fix",
+      messages: [],
+    });
+    await expect(service.stepTranscript("missing-workflow", "fix")).rejects.toThrow(
+      "Multi review workflow not found",
+    );
+  });
+});
+
+const reportedFinding = {
+  severity: "P1" as const,
+  confidence: 85,
+  category: "correctness" as const,
+  title: "Restart resets the shared clock",
+  file: "src/review.ts",
+  line: 12,
+  symbol: "restartStep",
+  description: "Restarting a step clears the runtime the shared session still uses.",
+  evidence: "restartStep deletes stepRuntimes",
+  suggestion: "Keep the previous runtime",
+  verification: "Restart a step and read its runtime",
+};
+
+test("MultiReviewService collects a live reviewer's reported findings on its next pass", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  await withService(
+    "env-live-findings",
+    provider,
+    async ({ service, storage, snapshot, workflowResults }) => {
+      const resultKey = randomUUID();
+      const timestamp = new Date().toISOString();
+      await workflowResults!.prepare({
+        resultKey,
+        kind: "review-report",
+        environmentId: "env-live-findings",
+        projectId: "project-1",
+        provider: "claude",
+      });
+      const workflow: MultiReviewWorkflow = {
+        version: 1,
+        controller: "backend",
+        id: "live-findings",
+        environmentId: "env-live-findings",
+        projectId: "project-1",
+        targetBranch: "main",
+        reviewers: [
+          {
+            id: "reviewer-1",
+            agent: "claude",
+            model: "opus",
+            status: "running",
+            sessionKey: "multi-review:live-findings:reviewer-1",
+            providerSessionId: "session-live",
+            requestId: resultKey,
+            dispatchState: "sent",
+            resultTransport: "tool-v1",
+            startedAt: timestamp,
+          },
+        ],
+        fixModel: { agent: "claude", model: "opus" },
+        phase: "reviewing",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        backendRevision: 0,
+        reviewWorktreeSnapshot: await captureReviewWorktreeSnapshot(
+          stableReviewInvoker,
+          "env-live-findings",
+          "Multi Review",
+        ),
+      };
+      await storage.createMultiReviewWorkflowIfNoActive(
+        workflow.id,
+        workflow.environmentId,
+        1,
+        workflow,
+      );
+      const sink = service.provisionalFindingSink();
+      const scope = { environmentId: "env-live-findings", projectId: "project-1" };
+      // Nothing is accepted before the backend has seen the reviewer live.
+      expect(sink.accepts(scope, resultKey)).toBe(false);
+
+      await service.advanceNow(workflow.id);
+      expect(sink.accepts(scope, resultKey)).toBe(true);
+      expect(await sink.report(scope, resultKey, reportedFinding)).toMatchObject({
+        ok: true,
+        duplicate: false,
+      });
+      expect((await snapshot(workflow.id))!.reviewers[0]!.provisionalFindings).toBeUndefined();
+
+      await service.advanceNow(workflow.id);
+      const stored = (await snapshot(workflow.id))!.reviewers[0]!;
+      expect(stored.provisionalFindings?.map((finding) => finding.issue)).toEqual([
+        reportedFinding,
+      ]);
+      // A retry after the pass recorded it is still the same finding.
+      expect(await sink.report(scope, resultKey, reportedFinding)).toMatchObject({
+        ok: true,
+        duplicate: true,
+      });
+      // Another reviewer's attempt key reaches nothing.
+      expect(await sink.report(scope, randomUUID(), reportedFinding)).toMatchObject({
+        ok: false,
+        error: { code: "not_accepting" },
+      });
+    },
+    { toolMode: true },
+  );
+});
+
+test("MultiReviewService keeps only accepted reports once the review has run its course", async () => {
+  const provider = new Provider();
+  await withService("env-findings-complete", provider, async ({ service, storage, snapshot }) => {
+    const workflowId = await seedLegacyFixingWorkflow(storage, "env-findings-complete");
+    // A reviewer that stopped before its report was accepted left findings behind.
+    await mutateStoredWorkflow(storage, workflowId, (workflow) => {
+      workflow.reviewers.push({
+        id: "reviewer-2",
+        agent: "claude",
+        model: "sonnet",
+        status: "cancelled",
+        provisionalFindings: [
+          {
+            id: "0123456789abcdef01234567",
+            reportedAt: new Date(0).toISOString(),
+            issue: reportedFinding,
+          },
+        ],
+      });
+    });
+    for (let pass = 0; pass < 6; pass += 1) {
+      await service.advanceNow(workflowId);
+      if ((await snapshot(workflowId))?.phase === "completed") break;
+    }
+    const completed = (await snapshot(workflowId))!;
+    expect(completed.phase).toBe("completed");
+    expect(completed.reviewers[1]).toMatchObject({ status: "cancelled" });
+    expect(completed.reviewers[1]).not.toHaveProperty("provisionalFindings");
+  });
+});
+
 test("MultiReviewService finishes a fix turn persisted before the interactive handoff", async () => {
   const provider = new Provider();
   await withService("env-legacy-fixing", provider, async ({ service, storage, snapshot }) => {
@@ -5981,6 +6149,89 @@ test("MultiReviewService leaves a workflow that is not failed untouched on retry
   });
 });
 
+test("MultiReviewService progresses with its session viewer closed and no active renderer, then rehydrates and cleans up", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  await withService(
+    "env-hidden-review",
+    provider,
+    async ({ service, storage, start, snapshot, dataDir }) => {
+      await service.init();
+      const started = await start();
+      await waitUntil(async () =>
+        Boolean((await snapshot(started.id))?.reviewers[0]?.providerSessionId),
+      );
+      const reviewer = (await snapshot(started.id))!.reviewers[0]!;
+      const logicalSessionKey = "env-env-hidden-review:reviewer-viewer";
+      const key = nativeAgentSessionStorageKey(
+        started.environmentId,
+        reviewer.agent,
+        logicalSessionKey,
+      );
+      await storage.adoptNativeAgentSession({
+        key,
+        environmentId: started.environmentId,
+        agent: reviewer.agent,
+        logicalSessionKey,
+        providerSessionId: reviewer.providerSessionId!,
+        origin: "interactive-native",
+        interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+      });
+      const commands = createCommandRegistry();
+      const context = { storage, multiReviews: service } as unknown as CommandContext;
+      await commands.get("teardown_tab")!(
+        {
+          environmentId: started.environmentId,
+          tabId: "reviewer-viewer",
+          kind: "claude-native",
+        },
+        context,
+      );
+      expect(await storage.getNativeAgentSession(key)).toBeNull();
+      expect(provider.closed).toEqual([]);
+      expect(provider.aborted).toEqual([]);
+
+      // The renderer is absent throughout this progression; no tab subscription
+      // or active-environment callback drives the backend supervisor.
+      provider.statusValue = "idle";
+      await waitUntil(async () => (await snapshot(started.id))?.phase === "ready");
+      const authoritative = (await snapshot(started.id))!;
+      expect(authoritative.reviewers[0]?.status).toBe("completed");
+      expect(authoritative.consolidatedReport).toBeDefined();
+      // Returning to the environment reads persisted state, including a fresh
+      // storage instance to prove recovery does not depend on missed events.
+      const reloaded = new StorageService(dataDir);
+      await reloaded.init();
+      const returned = await commands.get("get_multi_review_workflow")!(
+        { workflowId: started.id },
+        { storage: reloaded } as CommandContext,
+      );
+      expect(returned).toMatchObject({
+        snapshot: {
+          phase: "ready",
+          reviewers: [{ status: "completed" }],
+          consolidatedReport: authoritative.consolidatedReport,
+        },
+      });
+      const transcript = await service.reviewerTranscript(started.id, reviewer.id);
+      expect(transcript.status).toBe("completed");
+      await service.cancel(started.id);
+      await commands.get("delete_multi_review_workflow")!({ workflowId: started.id }, context);
+      expect(provider.closed).toContain(reviewer.providerSessionId!);
+      expect(await storage.getMultiReviewWorkflow(started.id)).toBeNull();
+      expect(await storage.listNativeAgentSessions()).toEqual([]);
+    },
+    {
+      serviceOptions: {
+        autoAdvance: true,
+        pollIntervalMs: 10,
+        observationIntervalMs: 10,
+        reconcileIntervalMs: 30,
+      },
+    },
+  );
+});
+
 test("MultiReviewService closes every child session and pane tab before allowing a replacement", async () => {
   const provider = new Provider();
   await withService(
@@ -6342,6 +6593,62 @@ test("MultiReviewService keeps reviewing when a reviewer cannot be attached", as
     // Attach is best-effort: the prompt request performs the same work and is
     // the one that answers authoritatively.
     expect((await snapshot(started.id))?.reviewers[0]?.status).toBe("completed");
+  });
+});
+
+test("MultiReviewService moves the queued reviewers up when one is stopped", async () => {
+  const provider = new Provider();
+  await withService("env-stop-queued", provider, async ({ service, storage }) => {
+    const timestamp = new Date().toISOString();
+    const workflow: MultiReviewWorkflow = {
+      version: 1,
+      controller: "backend",
+      id: "queued-panel",
+      environmentId: "env-stop-queued",
+      projectId: "project-1",
+      targetBranch: "main",
+      // As a pass that stopped early leaves its panel: waiting in panel order.
+      reviewers: Array.from({ length: 4 }, (_, index) => ({
+        id: `reviewer-${index + 1}`,
+        agent: "claude" as const,
+        model: "opus",
+        status: "pending" as const,
+        admissionState: "queued" as const,
+        queuePosition: index + 1,
+      })),
+      fixModel: { agent: "claude", model: "opus" },
+      phase: "reviewing",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      backendRevision: 0,
+      reviewWorktreeSnapshot: await captureReviewWorktreeSnapshot(
+        stableReviewInvoker,
+        "env-stop-queued",
+        "Multi Review",
+      ),
+    };
+    expect(
+      await storage.createMultiReviewWorkflowIfNoActive(
+        workflow.id,
+        workflow.environmentId,
+        1,
+        workflow,
+      ),
+    ).not.toBeNull();
+
+    const stopped = await service.stopReviewer(workflow.id, "reviewer-2");
+    expect(
+      stopped.reviewers.map((reviewer) => [
+        reviewer.status,
+        reviewer.admissionState ?? null,
+        reviewer.queuePosition ?? null,
+      ]),
+    ).toEqual([
+      ["pending", "queued", 1],
+      ["cancelled", null, null],
+      ["pending", "queued", 2],
+      ["pending", "queued", 3],
+    ]);
   });
 });
 

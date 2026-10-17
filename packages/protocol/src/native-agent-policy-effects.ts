@@ -35,6 +35,8 @@ export interface NativeAgentPolicyEffects {
   projectResources: boolean;
   /** Whether the agent's commands can reach the network. */
   network: "full" | "restricted";
+  /** A capability denial also removes provider-hosted internet tools. */
+  networkDenial?: "all" | "except-hosted-search";
   /**
    * What holds a restriction: the container's firewall, the provider sandbox,
    * or a toolset with nothing that can reach the network. Absent for full access.
@@ -56,6 +58,15 @@ export function nativeAgentPolicyEffects(
     approvals: policy.approvals,
     projectResources: policy.projectResources,
     network: policy.networkAccess,
+    ...(policy.capabilityPolicy?.deny.includes("network")
+      ? {
+          networkDenial:
+            !policy.capabilityPolicy.deny.includes("web.search") &&
+            policy.capabilityPolicy.allow?.includes("web.search")
+              ? ("except-hosted-search" as const)
+              : ("all" as const),
+        }
+      : {}),
     ...(policy.networkAccess === "restricted"
       ? {
           networkHeldBy:
@@ -85,7 +96,13 @@ export function describeNativeAgentPolicyEffects(effects: NativeAgentPolicyEffec
       : effects.approvals === "deny"
         ? "approvals denied"
         : "approvals off";
-  return `${isolation}, ${approvals}, project resources ${effects.projectResources ? "on" : "off"}, ${effects.network} network`;
+  const network =
+    effects.networkDenial === "all"
+      ? "no network, web search and web fetch off"
+      : effects.networkDenial === "except-hosted-search"
+        ? "no network except hosted web search, web fetch off"
+        : `${effects.network} network`;
+  return `${isolation}, ${approvals}, project resources ${effects.projectResources ? "on" : "off"}, ${network}`;
 }
 
 /** Add a caveat to a policy, keeping any it already carries. */

@@ -18,6 +18,7 @@ export default defineConfig({
     "container-settings.spec.ts",
     "container-rebuild-cycle.spec.ts",
     "terminal-input-resume.spec.ts",
+    "terminal-mobile-panes.spec.ts",
     "opencode-live.spec.ts",
   ],
   fullyParallel: false,

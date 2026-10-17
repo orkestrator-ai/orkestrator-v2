@@ -49,6 +49,7 @@ describe("preview header policy", () => {
         ["Authorization", "Bearer app-token"],
         ["Cookie", "app=1; __Host-orkestrator-preview=secret; orkestrator_gateway_auth=gw"],
         ["X-Forwarded-Host", "evil.test"],
+        ["X-Forwarded-Proto", "http"],
         ["Forwarded", "for=1.2.3.4"],
         ["X-Orkestrator-Opencode-Token", "x"],
         ["x-orkestrator-preview-ingress", "local"],
@@ -67,14 +68,30 @@ describe("preview header policy", () => {
       ["Origin", "http://localhost:3000"],
       ["Referer", "http://localhost:3000/page?q=1"],
       ["Accept", "text/html"],
-      ["x-forwarded-host", "s-abc.preview.test"],
       ["x-forwarded-proto", "https"],
     ]);
+  });
+
+  test("mapped origins use Host for CSRF while retaining the public transport protocol", () => {
+    // Next.js Server Actions fall back to Host when X-Forwarded-Host is absent.
+    const mapped = upstreamRequestHeaders([["Origin", "https://s-abc.preview.test"]], policy);
+    expect(mapped).toContainEqual(["Origin", "http://localhost:3000"]);
+    expect(mapped).toContainEqual(["host", "localhost:3000"]);
+    expect(mapped.some(([name]) => name.toLowerCase() === "x-forwarded-host")).toBe(false);
+    expect(mapped).toContainEqual(["x-forwarded-proto", "https"]);
+
+    // Without a same-service Origin the public origin is forwarded, so
+    // absolute URLs the app builds point at the preview host.
+    const navigation = upstreamRequestHeaders([["Accept", "text/html"]], policy);
+    expect(navigation).toContainEqual(["x-forwarded-host", "s-abc.preview.test"]);
+    expect(navigation).toContainEqual(["x-forwarded-proto", "https"]);
   });
 
   test("foreign origins are forwarded unchanged for the app's own checks", () => {
     const headers = upstreamRequestHeaders([["Origin", "https://evil.test"]], policy);
     expect(headers).toContainEqual(["Origin", "https://evil.test"]);
+    expect(headers).toContainEqual(["x-forwarded-host", "s-abc.preview.test"]);
+    expect(headers).toContainEqual(["x-forwarded-proto", "https"]);
   });
 
   test("upgrade mode keeps the websocket handshake fields", () => {
@@ -84,6 +101,7 @@ describe("preview header policy", () => {
         ["Upgrade", "websocket"],
         ["Sec-WebSocket-Key", "k"],
         ["Sec-WebSocket-Protocol", "fixture.v1"],
+        ["Origin", policy.publicOrigin],
       ],
       policy,
       { upgrade: true },
@@ -93,10 +111,13 @@ describe("preview header policy", () => {
       "upgrade",
       "sec-websocket-key",
       "sec-websocket-protocol",
+      "origin",
       "connection",
-      "x-forwarded-host",
       "x-forwarded-proto",
     ]);
+    expect(headers).toContainEqual(["Origin", "http://localhost:3000"]);
+    expect(headers).toContainEqual(["host", "localhost:3000"]);
+    expect(headers).toContainEqual(["x-forwarded-proto", "https"]);
   });
 
   test("cookies: reserved names dropped, Domain removed, __Host- path preserved", () => {
@@ -166,6 +187,9 @@ describe("preview header policy", () => {
       // The Origin a browser would send for this app: no explicit default port.
       expect(headers).toContainEqual(["Origin", `${scheme}://localhost`]);
       expect(headers).toContainEqual(["Referer", `${scheme}://localhost/page`]);
+      expect(headers).toContainEqual(["host", "localhost"]);
+      expect(headers.some(([name]) => name.toLowerCase() === "x-forwarded-host")).toBe(false);
+      expect(headers).toContainEqual(["x-forwarded-proto", "https"]);
     }
   });
 
@@ -329,6 +353,28 @@ describe("forwardPreviewRequest and forwardPreviewUpgrade", () => {
     });
   });
 
+  test("same-service fetches and writes retain public protocol and omit forwarded host", async () => {
+    for (const method of ["GET", "POST"]) {
+      const response = await get(
+        "/echo",
+        {
+          origin: `http://127.0.0.1:${ingressPort}`,
+          "x-forwarded-host": "evil.test",
+          "x-forwarded-proto": "https",
+        },
+        method,
+      );
+      expect(response.status).toBe(200);
+      expect(fixture.requests.at(-1)).toMatchObject({
+        method,
+        host: `localhost:${fixture.port}`,
+        origin: `http://localhost:${fixture.port}`,
+        forwardedHost: undefined,
+        forwardedProto: "http",
+      });
+    }
+  });
+
   test("application cookies survive; reserved and widened cookies do not", async () => {
     const result = await get("/cookies/set");
     expect(result.headers["set-cookie"]).toEqual([
@@ -473,7 +519,14 @@ describe("forwardPreviewRequest and forwardPreviewUpgrade", () => {
   });
 
   test("websocket upgrade is transparent: subprotocol, text and binary echo", async () => {
-    const socket = new WebSocket(`ws://127.0.0.1:${ingressPort}/ws`, ["fixture.v1"]);
+    // lib.dom hides Bun's constructor overload for custom handshake headers.
+    const BunWebSocket = WebSocket as typeof WebSocket & {
+      new (url: string, options: Bun.WebSocketOptions): WebSocket;
+    };
+    const socket = new BunWebSocket(`ws://127.0.0.1:${ingressPort}/ws`, {
+      protocols: ["fixture.v1"],
+      headers: { Origin: `http://127.0.0.1:${ingressPort}` },
+    });
     socket.binaryType = "arraybuffer";
     const messages: Array<string | ArrayBuffer> = [];
     await new Promise<void>((resolve, reject) => {
@@ -481,6 +534,12 @@ describe("forwardPreviewRequest and forwardPreviewUpgrade", () => {
       socket.onerror = () => reject(new Error("socket error"));
     });
     expect(socket.protocol).toBe("fixture.v1");
+    expect(fixture.requests.at(-1)).toMatchObject({
+      host: `localhost:${fixture.port}`,
+      origin: `http://localhost:${fixture.port}`,
+      forwardedHost: undefined,
+      forwardedProto: "http",
+    });
     const received = new Promise<void>((resolve) => {
       socket.onmessage = (event) => {
         messages.push(event.data as string | ArrayBuffer);

@@ -232,6 +232,16 @@ gets one workflow notice per budget (or per hour), so it can read the held
 mail and decide. Peers get no notice; the sender's `send_message` result and
 the recipient's banner show the hold.
 
+A coordinator's status notices (see [`coordinator.md`](coordinator.md#status-wakes))
+have no sending mailbox, so each carries `statusBudgetKey`
+(`agentMailStatusBudgetKey`): a stand-in sender per resource. That makes a
+Multi Review, a build pipeline or a delegated tab and its coordinator a routed
+pair like any worker, and both budgets above hold its notices. The other
+workflow notices (a delegation's finished notice, held-mail and terminal
+notices) stay outside the budgets. A status notice is also placed with a
+10-second coalescing hold (`coalesceMs`): it joins a hold already open for the
+same mailbox, so notices that land together are delivered as one batch.
+
 Mail that is only stored records why in `placementReason`: `inject-policy-off`,
 `isolated-route`, `reply-to-injected-turn`, `recipient-cannot-inject`,
 `untrusted-sender`, or `hop-limit`. `get_message_status` returns it to the
@@ -261,6 +271,18 @@ are put back (`held` / `batch-full`) for the next pass.
 cannot close the tag. The wrapper states trust, tells the model to use
 `reply_message` / `ack_message`, and says paths refer to the sender’s
 filesystem.
+
+The JSON payload is also the transcript's structured marker. Besides `from`,
+`subject` and `body` it carries `kind` (`message`, `coordinator`, `user`,
+`external` or `notice`), which `agentMailKind` derives from the authenticated
+sender and trust, so a tab cannot make its mail look like a workflow notice. A
+workflow notice (`from.kind === "system"`) may also carry `notice`: the
+resource it reports on (`agent-tab`, `multi-review`, `build-pipeline`, with
+ids and a label), a lower-case `state` (`completed`, `failed`, `waiting`,
+`ready`…) and a `tone` (`success`, `failure`, `attention`, `info`). The store
+persists it on the message (`AgentMailMessage.notice`, only for system senders,
+checked by `normalizeAgentMailNotice`), so `read_messages` and `get_message`
+return it too.
 
 **Presence.** Native inject uses `mailInjectPresence` (queue, compose draft,
 pending dispatch, environment readiness, then turn activity). Drain admits
@@ -301,6 +323,11 @@ the next drain; ambiguous rows are never cleared through this path.
 ## Three MCP surfaces
 
 The tool *names* overlap. The credentials do not.
+
+A fourth, narrower surface is the attempt-scoped workflow-result server: one
+backend-owned turn's result tools, plus `report_finding` for a live Multi
+Review reviewer. It carries no mail or ticket tools; see "Workflow results
+through tool calls" in [agent-engines.md](agent-engines.md).
 
 ### Agent Tools MCP — tab identity
 
@@ -354,7 +381,8 @@ policy is. Mute, explicit Off, pause, hop budget, and `canInject` still apply.
 
 | Surface | Location | Notes |
 | --- | --- | --- |
-| Settings | Settings → Messaging | `enabled`, `paused`, `allowCrossProject`, `wakePeers`, `autonomousWakeBudget`, `hourlyWakeLimit`, `defaultInjectPolicy` (`off` / `idle`), `retentionDays` |
+| Transcript | `MailTile` (`apps/web/src/components/chat/`) | Each injected message is a collapsed tile: an icon for its kind or notice tone, sender, subject and about three clamped lines of the body. The header is a button (`aria-expanded`); clicking it, or the clipped preview, expands the Markdown body, and the choice survives remounts and paging for the session. A batched prompt becomes one tile per message |
+| Settings | Settings → Messaging | `enabled`, `paused`, `allowCrossProject`, `wakePeers`, `autonomousWakeBudget`, `hourlyWakeLimit`, `coordinatorStatusWakes` (`off` / `settled` / `stages`), `defaultInjectPolicy` (`off` / `idle`), `retentionDays` |
 | Global inbox | `AgentMailButton` | Compose, sent, seen; destinations filtered to `canPull` |
 | Per-tab banner | `AgentMailBanner` | Pending, failed, pull-only, budget or hourly-limit held; retry / resume / discard |
 | Tab menu | `DraggableTab` | “Message this tab” / inbox settings when `canPull` |
@@ -488,6 +516,7 @@ Defaults (`DEFAULT_AGENT_MESSAGING_SETTINGS`):
 - `wakePeers: true`
 - `autonomousWakeBudget: 16`
 - `hourlyWakeLimit: 40`
+- `coordinatorStatusWakes: "settled"`
 - `retentionDays: 14`
 
 Disable messaging and the Agent Tools server omits the mail tools.
@@ -576,5 +605,7 @@ capability row says so.
 | Delegation = MCP ∧ inject | `apps/backend/src/core/coordinator-providers.ts` |
 | UI commands | `apps/backend/src/core/commands-registry-mail.ts` |
 | Settings / inbox / banner | `apps/web/src/components/settings/MessagingSettings.tsx`, `apps/web/src/components/agent-mail/` |
+| Transcript tiles | `apps/web/src/lib/chat/client-only-messages.ts` (carrier → rows), `apps/web/src/components/chat/MailTile.tsx` |
 | Main / side coordinator, respawn | `apps/backend/src/core/coordinator-service.ts`, `packages/protocol/src/coordinator.ts` |
+| Coordinator status wakes | `apps/backend/src/core/coordinator-status-wakes.ts` |
 | Multi-actor scenarios | `apps/backend/src/core/agent-mail-scenarios.test.ts` on `agent-mail-world-test-support.ts` |

@@ -359,10 +359,15 @@ with `x-orkestrator-preview-error`, or tunnel close code 4429.
 ## Framework configuration
 
 New routes do not rewrite response bodies. Upstream requests carry
-`Host: localhost:<application port>`. A same-service `Origin` or `Referer` is
-mapped to `http://localhost:<port>`, and `X-Forwarded-Host`/`-Proto` carry the
-public origin. So development servers that only accept `localhost` work
-unchanged.
+`Host: localhost:<application port>` (with default ports omitted). A same-service
+`Origin` or `Referer` is mapped to the canonical private origin, normally
+`http://localhost:<port>`. Development servers that only accept `localhost` work
+unchanged. `X-Forwarded-Proto` always carries the public scheme, including on
+writes, fetches, and WebSocket upgrades, so HTTPS-dependent secure-cookie
+decisions remain consistent. `X-Forwarded-Host` carries the public host only
+when no same-service `Origin` was mapped. On mapped-Origin requests it is
+omitted, allowing CSRF checks such as Next.js Server Actions to compare against
+the private `Host` instead. Inbound forwarding headers are always discarded.
 
 - **Vite 7.3.6** (pinned fixture): the page, module graph, and HMR updates work
   over a private origin with an empty config. No `allowedHosts` or `hmr`
@@ -370,13 +375,17 @@ unchanged.
   in a real Chromium page is covered by `e2e/preview/private-origin.spec.ts`
   (opt-in Vite fixture); HMR over the desktop tunnel in a real Electron window
   is not yet validated.
-- **OAuth**: register the service host `https://s-….<domain>` as a redirect
-  URI. The desktop ingress port can change between sessions, so use the
-  private origin for OAuth flows.
+- **OAuth**: configure the application with the public service origin
+  `https://s-….<domain>` and register its callback URL with the OAuth provider.
+  Use that configured origin when generating redirect URIs on writes or
+  fetches too. The desktop ingress port can change between sessions, so use
+  the published service origin for OAuth flows.
 - Applications that build absolute URLs from `Host` produce `localhost` links.
-  Configure them to use `X-Forwarded-Host`, or set their public origin. An
-  application that hardcodes a different `localhost` API origin needs that
-  origin configured. Both are configuration limitations, not transport bugs.
+  Set an explicit public origin for URL generation across all request types;
+  `X-Forwarded-Host` is absent on mapped-Origin requests, and falling back to
+  `Host` there produces private URLs. An application that hardcodes a different
+  `localhost` API origin needs that origin configured. Both are configuration
+  limitations, not transport bugs.
 
 ## Known limitations
 

@@ -84,6 +84,43 @@ not establish a root cause. No assertion, timeout or skip was changed.
 - **Evidence:** `/tmp/orkestrator-test-run.LW4SBd/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `/tmp/orkestrator-test-run.LW4SBd/summary.json`; outer wrapper: `/tmp/orkestrator-test-run.dDf2wg/merge-tests.log.gz`.
 - **Hypothesis:** this repeats the existing intermittent queue-sampling failure under aggregate load. The isolated pass does not establish its root cause. No assertion, timeout or skip was changed.
 
+## Recurrence during coordinator research fixes (2026-10-16)
+
+- **Original command:** `mise run test:logged -- --name stable-final-tests -- mise run test`; Bun 1.4.3, macOS arm64.
+- **Worker configuration:** workspace/root/bridges/protocol used 4/1/2/1 slots; workspace allowed two packages with two Bun workers each.
+- **Failure:** expected `aggregateQueuedBytes <= 557056`; received `557298` at line 279 (311.33 ms).
+- **Suite counts:** backend: 8,141 total, 8,099 passed, 40 skipped, 2 failed across 440 files, with 40,463 assertions in 255.40 seconds. The other failure was the pre-existing `http-bridge-provider.ts` 1,500-line boundary (1,505 lines). Root/support, bridges and protocol passed.
+- **Isolated rerun:** `mise run test:logged -- --name preview-isolated -- bun test --cwd apps/backend ./src/preview-tunnel-server.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 0.7 seconds.
+- **Evidence:** `/tmp/orkestrator-test-run.5JXfax/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer wrapper: `/tmp/orkestrator-test-run.nBYbNf/stable-final-tests.log.gz`.
+- **Hypothesis:** same intermittent queue-sampling failure as the prior observations. No assertion, timeout, skip or tunnel behavior was changed.
+
+## Recurrence during live coordinator suite main merge (2026-10-16)
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`.
+- **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1
+  slots; backend used two isolated Bun workers on a shared 18-slot host.
+- **Suite counts:** backend 8,280 passed, 40 skipped, four failed and two
+  between-tests errors across 441 files (452.96 seconds). The aggregate exited
+  1 after 600.8 seconds. All other workspace packages and the bridge/protocol
+  groups passed; root had the Pi staged-runtime timeout tracked as 0178.
+- **Evidence:** `/tmp/orkestrator-test-run.3yIsw1/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
+  outer artifact `/tmp/orkestrator-test-run.i4Amls/merge-tests.log.gz`.
+
+- **Failure:** `PreviewTunnelServer > a stopped reader cannot grow the queue without bound`
+  in `apps/backend/src/preview-tunnel-server.test.ts` expected queued bytes
+  `<= 557056` but received `574286` at line 279 (325.80 ms).
+- **Isolated rerun:** `mise run test:logged -- --name merge-preview-tunnel-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/preview-tunnel-server.test.ts --parallel=1 --only-failures`
+  passed the unchanged owning file in 2.1 seconds, exit 0.
+- **Hypothesis:** this repeats the intermittent queue-sampling failure under
+  aggregate load; its root cause remains unconfirmed. No test, timeout,
+  assertion or skip was changed.
+
+## Recurrence during Multi Review follow-up validation (2026-10-16)
+
+- **Command:** `mise run test:logged -- --name full-suite -- mise run test`, with 4/1/2/1 workspace/root/bridge/protocol slots and two backend workers.
+- **Failure:** the queue sample was 557298 bytes against the 557056-byte bound (323.02 ms test duration). No tunnel implementation changed.
+- **Owning-file rerun:** `mise run test:logged -- --name preview-queue-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/preview-tunnel-server.test.ts --parallel=1 --only-failures` passed unchanged in 0.8 seconds (exit 0).
+- **Evidence:** `/tmp/orkestrator-test-run.1PZf4j/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`. No assertion, bound, timeout or skip changed; the root cause remains unconfirmed.
 
 ## Recurrence during execution-policy review fixes (2026-10-17)
 

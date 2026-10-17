@@ -35,6 +35,7 @@ import {
   hydrateMessagesFromPersistedSession,
   invalidateTranscriptCatalogCache,
 } from "./history/rollout.js";
+import { normalizeExplicitSessionTitle, persistSessionTitle } from "./session-titles.js";
 
 import { AppServerRpcError, isMissingRolloutError } from "./app-server/errors.js";
 import { codexReportedPolicy } from "./codex-reported-policy.js";
@@ -1016,9 +1017,33 @@ export class CodexRuntimeSessions {
   async setSessionTitle(sessionId: string, title: string): Promise<boolean> {
     const session = this.ctx.registry.getSession(sessionId);
     if (!session) return false;
-    session.title = title;
-    session.titleSource = "explicit";
-    if (session.threadId) await this.ctx.options.engine.setThreadName(session.threadId, title);
+    title = normalizeExplicitSessionTitle(title);
+    if (!title) return false;
+    const siblings = session.threadId
+      ? this.ctx.registry.listSessions().filter((entry) => entry.threadId === session.threadId)
+      : [session];
+    for (const entry of siblings) {
+      entry.title = title;
+      entry.titleSource = "explicit";
+      entry.titleGenerationAttempted = true;
+      entry.titleGenerationToken = undefined;
+    }
+    if (session.threadId) {
+      await this.ctx.options.engine.setThreadName(session.threadId, title);
+      // Codex keeps the name in `session_index.jsonl` at its home root, which a
+      // container rebuild does not preserve; the bridge index is preserved.
+      await persistSessionTitle(this.ctx.options.codexHome, session.threadId, title, {
+        source: "explicit",
+      }).catch(() => undefined);
+    }
+    for (const entry of siblings) {
+      await this.ctx.callbacks.persistSession(entry);
+      this.ctx.options.emit({
+        type: "session.title-updated",
+        sessionId: entry.id,
+        data: { title },
+      });
+    }
     return true;
   }
 

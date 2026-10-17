@@ -14,6 +14,7 @@ import { dispatchPrompt, journal, setStructuredResult, type DispatchInput } from
 import { applySessionEvent } from "./translate.js";
 import { publicContextUsage, publicSteerDispatch } from "./public.js";
 import type { SessionState } from "./state.js";
+import { testApprovalDeadline } from "./testing/approval-fixtures.js";
 
 // The timeout is read from the environment at import, and six hours is not a
 // thing a test can wait for. Set before `config.ts` is first loaded by the
@@ -373,7 +374,7 @@ describe("dispatchPrompt", () => {
       toolName: "bash",
       input: { command: "deploy" },
       createdAt: Date.now(),
-      expiresAt: Date.now() + 60_000,
+      deadline: testApprovalDeadline(),
       settle: (decision) => {
         state.approvals.delete("a1");
         order.push(decision);

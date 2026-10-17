@@ -1,3 +1,4 @@
+import { coordinatorCapabilityPolicy } from "@orkestrator/protocol/coordinator-web-research";
 import {
   appendNativeAgentPolicyNote,
   withoutProviderSandbox,
@@ -26,9 +27,13 @@ export function coordinatorProcessPolicy(): NativeAgentExecutionPolicy {
     sandbox: "provider",
     approvals: "deny",
     projectResources: false,
-    capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
+    // Research mode is not honoured here: Grok's only verified switch,
+    // `--disable-web-search`, removes search and fetch together, and a
+    // coordinator never gets fetch. Search stays off until a fetch-only
+    // switch is verified on the pinned build.
+    capabilityPolicy: coordinatorCapabilityPolicy("off"),
     networkAccess: "restricted",
-    note: "The agent is asked to request permission and every request is denied. A tool that does not ask is not stopped.",
+    note: "Grok's web search and web fetch are switched off. Every other tool is asked to request permission and every request is denied; a tool that does not ask is not stopped.",
   };
 }
 

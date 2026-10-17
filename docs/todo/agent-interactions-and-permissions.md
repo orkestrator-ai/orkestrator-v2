@@ -109,6 +109,25 @@ per-bridge environment overrides that predate the execution policy.
     shapes it captures the options the SDK or CLI receives, decodes them into
     the same effects and compares them with the summary. The only tolerated
     differences are the stricter ones listed in `narrowings.ts`.
+- Pausing a countdown. Clicking the timer on a native question, plan, command,
+  file or permission card pauses the deadline where it is enforced, and
+  clicking again restarts a fresh window:
+  - Every bridge timer is an `InteractionDeadline`
+    (`packages/protocol/src/agent-interaction-deadline.ts`). A pause re-arms it
+    at `AGENT_INTERACTION_HOLD_CEILING_MS` (24 h) or the provider's own sooner
+    limit, so an unanswered request is still declined in the end and older
+    backends, which require a deadline, keep the card.
+  - Bridges publish `hold` (`AgentInteractionHold`) beside `expiresAt` and serve
+    `POST /session/:id/{family}/:requestId/hold` with `{ held }`. The backend
+    calls it through `holdInteraction` (`http-bridge-interactions.ts`) and the
+    `hold_native_agent_interaction` command. A bridge that publishes no `hold`
+    is mapped to `bridge-outdated`: the countdown shows but is not clickable.
+  - Limits: Grok pauses only until its turn deadline (`ACP_PROMPT_TIMEOUT_MS`)
+    and, for questions, its own `ask_user_question` timeout; Pi until its turn
+    budget; a Codex question with `autoResolutionMs` until then; MCP prompts
+    pause but warn that their server may stop waiting first. OpenCode publishes
+    no deadline, so there is nothing to pause.
+  - Claude in tmux shows the countdown as not pausable yet (item 9).
 - Deprecated overrides still read by the bridges, with a one-time deprecation
   warning:
   - Cursor: `CURSOR_BRIDGE_SANDBOX` and `CURSOR_BRIDGE_PROJECT_SETTINGS`
@@ -198,7 +217,34 @@ per-bridge environment overrides that predate the execution policy.
    `ask` the bridge now runs it as `untrusted`; decide whether the composer
    should do the same, or describe the mode honestly there.
 
+9. **Pause in Claude tmux mode.** The deadline there is the `sleep` in the hook
+   script (`tmux-hooks.ts` `hookScript`), and Claude Code kills a command hook
+   after its own 600 s default. Pausing needs: a hold sidecar the script's wait
+   loop honours (re-arming on resume), a `timeout` on the PreToolUse,
+   PermissionRequest and Elicitation hooks above the hold ceiling,
+   `parseBlockingHookTiming` accepting a moved deadline, a backend command, and
+   re-emitting the hook event (blocking ids are emitted once today). Cards then
+   drop `TMUX_PROMPT_DEADLINE`. Detect an installed script that predates the
+   sidecar and keep its countdown unpausable.
+10. **Pause Grok past its own limits.** A Grok pause ends at the 30-minute turn
+    deadline, and a question also at Grok's `ask_user_question` timeout. Lifting
+    that means pausing the bridge's `session/prompt` timeout while a request is
+    held and raising Grok's question timeout to match; the bridge also does not
+    read Grok's `config.toml` `[toolset.ask_user_question]`, so a shorter value
+    set there is not reflected in the published limit.
+11. **Pause from the public CLI and API.** `session interactions list` shows the
+    moved `expiresAt` but not `hold`, and there is no hold action. Add `hold` to
+    the listing and a `session.interaction.hold` action that calls
+    `hold_native_agent_interaction`.
+
 ### Qualification
+
+- Live pause on each provider: pause a Claude question, a Claude tool approval
+  under `ask`, a Codex command approval, a Grok permission and a Pi approval;
+  leave each paused past ten minutes, then answer it and confirm the turn
+  continues with that answer. Only the Claude bridge is covered end to end, by
+  `e2e/ClaudeInteractions.spec.ts` against a fake SDK; no real CLI has been
+  left waiting longer than the old five minutes.
 
 - Browser: raise an MCP elicitation (Codex or Claude), answer it, reload
   mid-question, and confirm it rehydrates from `/session/:id/interactions`. On
@@ -260,7 +306,8 @@ per-bridge environment overrides that predate the execution policy.
     stops being observed, so an entry cannot outlive its cause.
   - "Restricted network" means the agent's own commands. Hosted tools that
     reach the internet without running a command here (web fetch, web search)
-    are a separate axis owned by the network-denial work.
+    are described by the effects model's network denial and hosted-search
+    exception; the provider network-policy tests verify their tool restrictions.
   - A provider sandbox that the model can leave unseen holds nothing, so
     Claude only offers the way out (`allowUnsandboxedCommands`) when a person
     approves it, and a restricted sandbox uses a strict allowlist.

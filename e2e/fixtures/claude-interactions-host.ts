@@ -59,8 +59,27 @@ const server = Bun.serve({
     }
     const sessionId = new URL(req.url).searchParams.get("session")!;
     if (path === "/raise") {
-      const { mode } = (await req.json()) as { mode: "form" | "url" | "unsupported" };
+      const { mode } = (await req.json()) as {
+        mode: "form" | "url" | "unsupported" | "question";
+      };
       const call = turns.get(sessionId)!;
+      if (mode === "question") {
+        const decision = call.options.canUseTool!(
+          "AskUserQuestion",
+          {
+            questions: [
+              {
+                question: "Which fixture team?",
+                header: "Team",
+                options: [{ label: "Core" }, { label: "Docs" }],
+              },
+            ],
+          },
+          { signal: new AbortController().signal, requestId: "request-question" } as never,
+        );
+        void Promise.resolve(decision).then((value) => results.set(sessionId, value));
+        return Response.json({ raised: true });
+      }
       const result = call.options.onElicitation!(
         {
           serverName: "fixture-server",
@@ -97,6 +116,13 @@ const server = Bun.serve({
           .getSession(sessionId)
           ?.messages.flatMap((message) => message.parts.filter((part) => part.type === "status")),
       });
+    if (path === "/hold") {
+      const { interactionId, held } = (await req.json()) as {
+        interactionId: string;
+        held: boolean;
+      };
+      return Response.json(await adapter.holdInteraction(sessionId, interactionId, held));
+    }
     if (path === "/resolve") {
       const resolution = await req.json();
       return Response.json(

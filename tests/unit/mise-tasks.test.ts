@@ -304,3 +304,29 @@ test("one-shot browser tasks own setup/cleanup and reserve their workspace witho
   }
   expect(policy.commandProfiles[full].covers).toContain(design);
 });
+
+test("the live coordinator suite runs only when asked for", () => {
+  const tasks = miseTasks();
+  const policy = JSON.parse(read(".orkestrator-test-scheduler.json"));
+  // Real provider turns cost tokens: the suite has its own task and its own
+  // Playwright config, and nothing that runs by default may reach its spec.
+  expect(tasks["test:agent:coordinator"]!.run).toBe(
+    "bun apps/desktop/scripts/test-agent-coordinator-live.ts",
+  );
+  expect(read("e2e/agent-testing/playwright.coordinator.config.ts")).toContain(
+    'testMatch: ["coordinator-live.spec.ts"]',
+  );
+  for (const config of [
+    "e2e/agent-testing/playwright.browser.config.ts",
+    "e2e/agent-testing/playwright.electron.config.ts",
+  ]) {
+    expect(read(config)).not.toContain("coordinator-live");
+  }
+  // The component suite's `*.spec.ts` would otherwise sweep it in.
+  expect(read("e2e/playwright.config.ts")).toContain('"agent-testing/**"');
+  expect(JSON.stringify(policy)).not.toContain("test:agent:coordinator");
+  expect(read("scripts/test-all.ts")).not.toContain("coordinator-live");
+  for (const workflow of workflowFiles()) {
+    expect(read(workflow)).not.toContain("test:agent:coordinator");
+  }
+});

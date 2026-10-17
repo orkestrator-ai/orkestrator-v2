@@ -157,6 +157,12 @@ describe("review fan-out dispatch preparation", () => {
     });
     expect(testHarness.sends).toHaveLength(2);
     expect(testHarness.reviewer.dispatchState).toBe("sent");
+    // The prompt names the attempt, so a bridge gating tools itself (Grok,
+    // Pi) can let this reviewer's own result tools through a read-only turn.
+    expect(testHarness.sends[1]?.options).toMatchObject({
+      workflowResultTool: "submit_review_report",
+      workflowResultKey: testHarness.reviewer.requestId,
+    });
   });
 
   test("does not resolve or supply review shell policy in build mode", async () => {

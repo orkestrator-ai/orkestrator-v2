@@ -14,7 +14,7 @@ import {
   formatContainerFetchResponse,
 } from "../src/core/container-git-fetch.js";
 import { PrMonitorService, type PrMonitorTarget } from "../src/core/pr-monitor.js";
-import { CLAUDE_STATE_POLL_INTERVAL_MS, ClaudeStatePollManager } from "../src/core/tmux-poll.js";
+import { ClaudeStatePollManager } from "../src/core/tmux-poll.js";
 import { RecurringWorkMetrics } from "../src/core/recurring-work-metrics.js";
 import { ManualTime } from "../src/core/recurring-test-support.js";
 import {
@@ -77,6 +77,12 @@ export const PHYSICAL_COST = {
   localTreeDirectoryReads: 40,
   /** Branch resolution before discovery: one `git`/`docker exec`. */
   prBranchResolutionSpawns: 1,
+  /**
+   * Arming the Claude state doorbell (`claude-state-signal.ts`): the host
+   * alias check (2 `docker exec`), the firewall's service-port read (1) and
+   * the config write that rings once (1). Once per poll lineage.
+   */
+  claudeStateSignalInstallDockerExecs: 4,
 } as const;
 
 export interface BaselineScenario {
@@ -91,6 +97,8 @@ export interface BaselineScenario {
   /** Completed (inactive) records per workflow store, for modelled scans. */
   completedWorkflows: number;
   untrackedFilesPerEnvironment: number;
+  /** Container images implement `claude-state-signal`, so state polls arm the doorbell. */
+  claudeStateSignal?: boolean;
 }
 
 export const DEFAULT_SCENARIOS: readonly BaselineScenario[] = [
@@ -109,6 +117,9 @@ export const DEFAULT_SCENARIOS: readonly BaselineScenario[] = [
   // where joined reads matter most.
   scenario("env1-local-c2", 1, 1, 2, "none", 0),
   scenario("env1-container-c2", 1, 0, 2, "none", 0),
+  // Added with the Claude state signal: the 50-container scenario on images
+  // that ring on change, so state reads drop to the safety read.
+  { ...scenario("env50-container-c1-pr-signal", 50, 0, 1, "mixed", 0), claudeStateSignal: true },
 ];
 
 function scenario(
@@ -228,7 +239,7 @@ export const BASELINE_LIMITATIONS = [
   "Physical units per seam call come from PHYSICAL_COST, read from the production scanners at this commit; the real scanners are not executed.",
   "Driven owners: the worktree snapshot owner (diff statistics, Files-panel file-list and tree reads; watched local / polled container) behind the git-docker-scan admission pool, local git fetch scheduling, the container fetch policy (step 04; fetches share the admission pool), PR monitoring with check rollups, and Claude terminal-state polls (one per running container).",
   "Native activity sweep, launch/queue scans, mail, coordinator repair, retention and tab cleanup are modelled from nominal cadence only in the per-scenario blocks; their provider reads and storage costs need a live isolated profile.",
-  "The workflows block (step 08) drives the real feature-planning, build-pipeline and looped-review supervisors over a real temporary store with many completed and a few active records whose fake provider turns stay running, in rollback (whole-store tick) and keyed modes; storage reads count calls, not bytes (each store is one JSON file, so a read still parses every retained record). Multi Review is not driven.",
+  "The workflows block (step 08) drives the real feature-planning, build-pipeline and looped-review supervisors over a real temporary store with many completed and a few active records whose fake provider turns stay running, in rollback (whole-store tick) and keyed modes. Storage counts calls, not bytes: storageReads counts every whole-store, owner or row read whether SQLite or the connection's revision-validated row cache served it (a whole-store read parses every retained row either way), and storageStats counts revision checks that reused already-decoded records (the build-pipeline control cache). Multi Review is not driven.",
   "The nativeObservation block (step 07) drives the real native activity sweep and native queue scan with fake providers counted at the provider boundary, over one 10-environment fixture, in rollback and shared modes; bridge-side cost per read and mail, coordinator and workflow consumers are not driven.",
   "Multi review uses an adaptive due scheduler by default (reconcile every 15 s plus per-workflow due passes); it is not modelled because idle cost depends on active workflows.",
   "Local and container environments use a branch baseline (`main`), so every scan consults its fetch owner; environments created from an immutable commit skip that path. The modelled remote is idle: container fetches succeed and never move `origin/main`, so no fetch-triggered rescan occurs.",
@@ -434,16 +445,29 @@ export async function runScenario(
     },
   });
 
+  // Doorbells by token. The fake install rings once, as the real one's probe does.
+  const stateSignals = new Map<string, () => void>();
   const statePolls = new ClaudeStatePollManager({
     metrics,
-    schedule: (callback) => time.setInterval(callback, CLAUDE_STATE_POLL_INTERVAL_MS),
+    schedule: (callback, intervalMs) => time.setInterval(callback, intervalMs),
     cancel: (timer) => time.clear(timer),
     now: () => new Date(0).toISOString(),
     nowMs: time.now,
     readState: async () => {
       metrics.work("docker-exec");
-      return "idle";
+      return input.claudeStateSignal ? "idle 0 0" : "idle";
     },
+    ...(input.claudeStateSignal
+      ? {
+          signal: {
+            support: async () => "supported" as const,
+            install: async (_containerId: string, credential: { token: string }) => {
+              metrics.work("docker-exec", PHYSICAL_COST.claudeStateSignalInstallDockerExecs);
+              stateSignals.get(credential.token)?.();
+            },
+          },
+        }
+      : {}),
   });
   const environments = fixtures
     .filter((fixture) => fixture.target.kind === "container")
@@ -455,10 +479,26 @@ export async function runScenario(
     }));
   const pollContext = {
     emit: () => undefined,
+    ...(input.claudeStateSignal
+      ? {
+          agentTools: {
+            issueStateSignal: (onSignal: () => void) => {
+              const token = `state-signal-${stateSignals.size}`;
+              stateSignals.set(token, onSignal);
+              return {
+                url: "http://agent-tools.invalid/claude-state-signal",
+                token,
+                revoke: () => stateSignals.delete(token),
+              };
+            },
+          },
+        }
+      : {}),
     storage: {
       loadEnvironments: async () => {
-        // A stat-validated cached read in production.
-        metrics.work("storage-stat");
+        // A whole-store read in production: served from the revision-validated
+        // row cache, but every row is still parsed.
+        metrics.work("storage-read");
         return environments;
       },
       setEnvironmentAgentActivity: async () => {

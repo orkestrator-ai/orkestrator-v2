@@ -7,8 +7,10 @@ that have a tested executor, and a selected command never turns into ordinary
 prompt text. The core shipped in #827 and is described in
 [`native-agent-commands.md`](../architecture/native-agent-commands.md). What
 remains is the legacy catalogue surface, which still shows guessed Claude rows
-to old clients and possibly to pre-session tabs, and a set of command classes
-that were left unavailable on purpose and need a decision.
+when a bridge answers the session route with a 404 (a bridge older than the
+contract), and a set of command classes that were left unavailable on purpose
+and need a decision. A new tab on a current bridge never sees those rows (see
+"Constraints and rationale").
 
 ## Current state
 
@@ -24,7 +26,10 @@ that were left unavailable on purpose and need a decision.
 - `HttpBridgeCatalogAdapter.commandCatalogue`
   (`apps/backend/src/core/http-bridge-catalog.ts`) reads the session route
   when it has a session ID, falls back to a legacy global route on 404, and
-  reads the global route directly when it has no session ID. Codex and Cursor
+  reads the global route directly when it has no session ID. Only
+  `refreshProjectionCommands` for a tab with no stored session reads without
+  one (`native-agent-service-base.ts`), and its projection is `null`, so those
+  rows are cached under `global` but never shown. Codex and Cursor
   map to `/global/slash-commands`; Claude, Pi and Grok map to
   `/plugins/commands`. Legacy rows are normalised as non-enhanced rows with a
   `legacyCommandId` and run as typed text, never as an enhanced selection.
@@ -73,9 +78,13 @@ that were left unavailable on purpose and need a decision.
 1. **Retire the legacy catalogue surface.**
    - Agree the mixed-version support window (see
      [mixed-version-compatibility.md](mixed-version-compatibility.md)).
-   - Stop pre-session tabs showing guessed rows. Either give them a catalogue
-     from an enhanced source, or mark legacy rows display-only and
-     unavailable, so the Claude picker never shows `BUILTIN_COMMANDS`.
+   - Stop the 404 fallback showing guessed rows: mark legacy rows
+     display-only and unavailable, or drop the fallback, so the Claude picker
+     never shows `BUILTIN_COMMANDS` even against an old bridge. (Pre-session
+     tabs on a current bridge already never see them.)
+   - Make `refreshProjectionCommands` skip the provider read when no session
+     is stored, instead of reading the global route for a projection that is
+     `null` (a wasted filesystem scan on Claude, a 404 on Grok).
    - Count legacy-route use without logging command names.
    - After the window, delete `services/slash-commands.ts`, the Claude and Pi
      `/plugins/commands` routes, the Codex and Cursor `/global/slash-commands`
@@ -134,6 +143,39 @@ that were left unavailable on purpose and need a decision.
 - Out of scope: terminal keystroke injection, re-implementing provider TUIs, a
   generic extension UI host, cross-provider skill conversion, installing
   commands or plugins, and destructive session reset.
+- A new tab never shows legacy or guessed rows before its first query.
+  Verified against `9906db30` (2026-10-16); the earlier premise that a
+  persisted session can lack `providerSessionId` was wrong:
+  - The renderer creates the provider session when the tab opens
+    (`ensureNativeAgentSession`, `apps/web/src/hooks/useNativeAgentSession.ts:2602`),
+    and the Claude bridge's `createSession` makes it without a query
+    (`bridges/claude-bridge/src/services/session-manager-core.ts:1576`).
+  - A persisted mapping always carries `providerSessionId`
+    (`apps/backend/src/core/models.ts:648`). Without one there is no
+    projection at all (`native-agent-service-dispatch.ts:1121`), so the picker
+    is empty, and every projection catalogue read passes the session ID
+    (`native-agent-service-projection.ts:2824`, `:3287`, `:4344`).
+  - On the session route, a Claude session with no turn yet gets one zero-turn
+    CLI probe, reported `stale` ("may be out of date"); while that read is in
+    flight the picker shows `loading` (`native-agent-command-catalogue.ts:228`).
+    Bridge test: "a cold read runs one probe configured like the session's
+    turns" (`session-manager-catalog-transport.test.ts`).
+  - Backend regression test: "a new tab's catalogue comes from its own session
+    before the first prompt, never the global list"
+    (`apps/backend/src/core/native-agent-service-commands.test.ts`).
+  - Grok follows the same path, so a Grok tab never reads its catalogue
+    without a session ID for display. The only read without one is an explicit
+    refresh before the session exists; it fails on the ACP bridge's 404 and
+    reports `failed` with a `null` projection (see Code item 1).
+- What a pre-session tab shows was therefore not changed: nothing until the
+  session exists, `loading` during the first read, then the session's own
+  probed rows marked `stale` until a turn reads the live inventory. No rows
+  are cached across sessions, and `BUILTIN_COMMANDS` is left in place only for
+  the legacy route until that route is retired.
+- The Claude Tmux tab's fixed `TMUX_BUILTIN_SLASH_COMMANDS` list is a
+  separate surface: it forwards text to the real CLI's terminal UI, where those
+  commands work (see `platform-inconsistencies.md`). It is not the native
+  picker and is out of scope here.
 
 ## Open questions
 
@@ -144,13 +186,6 @@ that were left unavailable on purpose and need a decision.
 
 ## Needs verification
 
-- Whether a new Claude tab, before its first query, shows the
-  `/plugins/commands` rows (including `BUILTIN_COMMANDS`) in the picker. The
-  projection reads the `global` key when the persisted session has no
-  `providerSessionId`, which suggests it does.
-- Whether a Grok tab ever reads the catalogue without a session ID. If it does,
-  the adapter requests `/plugins/commands`, which the ACP bridge does not
-  serve, so the read fails rather than returning an empty list.
 - Whether old-backend/new-bridge and old/new renderer projections are tested.
   Only the backend 404-fallback test in `http-bridge-commands.test.ts` was
   found.
@@ -165,7 +200,7 @@ that were left unavailable on purpose and need a decision.
   the CLI.
 - [`native-agent-commands.md`](../architecture/native-agent-commands.md#provider-support)
   for the per-provider support, unavailable-command and literal-suppression
-  tables, and the pre-session legacy read ("Lifecycle").
+  tables, and when the legacy route is read ("Lifecycle").
 
 ## Replaces
 

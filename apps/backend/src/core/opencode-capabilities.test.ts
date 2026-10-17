@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { OpencodeClient } from "@opencode-ai/sdk/v2/client";
 import { OpenCodeCapabilities } from "./opencode-capabilities.js";
+import {
+  AUTH_SECRET_CANARIES,
+  captureOutput,
+  expectAuthStatusShape,
+  expectNoCanary,
+  expectNothingSecretLogged,
+} from "../../../../tests/helpers/auth-secret-canaries.js";
 
 function capabilities(data: unknown, allowedProviders: readonly string[]) {
   const client = {
@@ -35,6 +42,39 @@ describe("OpenCodeCapabilities.authStatus", () => {
       label: "OpenCode Go",
       state: "signed-in",
     });
+  });
+
+  test("reports provider names only, never the keys OpenCode lists with them", async () => {
+    // `provider.list` returns each provider's resolved options and key.
+    const data = {
+      all: [
+        {
+          id: "anthropic",
+          name: "Anthropic",
+          key: AUTH_SECRET_CANARIES.anthropicApiKey,
+          env: ["ANTHROPIC_API_KEY"],
+          options: { apiKey: AUTH_SECRET_CANARIES.anthropicApiKey },
+        },
+        {
+          id: "openai",
+          name: "OpenAI",
+          options: {
+            apiKey: AUTH_SECRET_CANARIES.openAiApiKey,
+            headers: { authorization: `Bearer ${AUTH_SECRET_CANARIES.accessToken}` },
+          },
+        },
+      ],
+      connected: ["anthropic", { id: "openai", key: AUTH_SECRET_CANARIES.openAiApiKey }],
+      default: {},
+    };
+    const { result: status, output } = await captureOutput(() =>
+      capabilities(data, []).authStatus(),
+    );
+
+    expectAuthStatusShape(status);
+    expect(status.state).toBe("signed-in");
+    expectNoCanary(status, "OpenCode auth status");
+    expectNothingSecretLogged(output, "OpenCode auth status");
   });
 
   test("is signed in with an unrestricted allowlist", async () => {

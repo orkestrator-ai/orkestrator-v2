@@ -23,16 +23,32 @@ owns each.
     A dismissal lasts for the session, until either version changes. It warns
     only; it never blocks or translates anything. "Version reminders" in
     [`remote-gateway.md`](../architecture/remote-gateway.md) documents it.
+  - MCP apply runtimes may carry an optional `cancelReason`
+    (`superseded-external` / `superseded-local`, `packages/protocol/src/mcp-management.ts`)
+    when the saved change is no longer in its file. It is additive in both
+    directions: an older renderer ignores it and still offers "Retry apply",
+    which a current backend refuses with `revision-conflict` and a reason the
+    toast shows; a newer renderer on an older backend never sees it and keeps
+    Retry, which that backend re-plans as before. No compatibility path to
+    retire.
   - A newer renderer meets an older backend in two supported ways.
     `apps/web-public` (orkestrator.dev, deployed from `main`) lazy-loads the
     full web app (`PublicApp.tsx`) and connects to any user's backend. The
     Electron app loads its bundled renderer but can connect to a remote backend
     (`apps/desktop/electron/connection-manager.ts`).
-  - Since #980 the backend normalises OpenCode build-pipeline and Multi Review
-    transcripts (`apps/backend/src/core/opencode-display-transcript.ts`), and
-    the renderer has no OpenCode normaliser. A newer renderer on an older
-    backend therefore shows raw `{ info, parts }` envelopes as nearly empty
-    rows. The reverse skew (old gateway tab, new backend) is benign for this.
+  - Since #970 and #971 (first released in 2.19.17) the backend normalises
+    OpenCode build-pipeline and Multi Review transcripts
+    (`apps/backend/src/core/opencode-display-transcript.ts`), and the renderer
+    has no OpenCode normaliser. A backend at 2.19.16 or older still sends the
+    stored `{ info, parts }` envelopes. A current renderer used to drop most
+    of them without a trace (text, reasoning and tool parts) and show the rest
+    as empty rows, so the stage read as silent. Now `toPipelineTranscript`
+    classifies each entry by shape (`apps/web/src/lib/chat/transcript-skew.ts`,
+    checked at `9906db30`) and puts one muted system row in place of each run
+    of raw envelopes, naming the count and telling the user to update the
+    backend to 2.19.17 or later. Entries with no field of a display row get the
+    same treatment with a neutral "update the older one" note. The reverse
+    skew (old gateway tab, new backend) is benign for this.
   - The authenticated `/__orkestrator/status` route (`apps/backend/src/gateway-auth.ts`)
     answers only `{ ok: true }`. The desktop (`backend-process.ts`,
     `connection-manager.ts`), `apps/web-public/src/connection.ts` and the iOS
@@ -71,11 +87,7 @@ owns each.
    four storage methods and their storage tests, unless the drainer's
    reservation path still shares their claim state. Done when no storage
    method is left without a production caller.
-2. **Decide and implement the renderer–backend skew guard** (see Open
-   questions). Whatever is chosen, add one sentence to "Version reminders" in
-   `remote-gateway.md` naming the near-empty OpenCode rows as the known
-   symptom.
-3. **Give `export_build_pipeline_for_downgrade` an owner.** It was added in
+2. **Give `export_build_pipeline_for_downgrade` an owner.** It was added in
    #875 (`commands-registry-build.ts` →
    `StorageService.exportBuildPipelineForDowngrade` in
    `storage-build-pipelines.ts`). It is a read-only export of one pipeline in
@@ -84,7 +96,7 @@ owns each.
    doc describes it. This file owns it: either document it in
    [`storage.md`](../architecture/storage.md) as the supported downgrade aid
    until the support window ends, or remove it with its tests.
-4. **Count legacy-path use.** Once the window is agreed, each path in the index
+3. **Count legacy-path use.** Once the window is agreed, each path in the index
    should report a content-free counter, so retirement rests on evidence
    rather than a guess. Some already count, such as `transcript.ui_fallback`,
    but nothing records them in production.
@@ -105,7 +117,9 @@ in code at `2459b05c`.
 | Deprecated execution-policy env overrides | `CURSOR_BRIDGE_SANDBOX`, `CURSOR_BRIDGE_PROJECT_SETTINGS` (`bridges/cursor-bridge/src/config.ts`); `PI_BRIDGE_REQUIRE_APPROVAL`, `PI_BRIDGE_PROJECT_RESOURCES` (`bridges/pi-bridge/src/config.ts`); `ACP_APPROVE_PROJECT_MCPS`, still set by `host-model-catalog-refresh.ts` but no longer read by the ACP bridge | [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md) |
 | Legacy `DELETE` close for bridges that predate `POST /session/:id/close`, and the `bridge-upgrade-required` restart notice for old Claude bridges | `closeBridgeSessionRetaining`, `LEGACY_DELETE_RETAINS_HISTORY` (`apps/backend/src/core/bridge-session-close.ts`) | [session-lifecycle-consistency.md](session-lifecycle-consistency.md) |
 | Bridges that predate `/transcript`: progressive reads fall back to the whole `/messages` body | `readHttpBridgeTranscriptSnapshot` (`apps/backend/src/core/http-bridge-progressive.ts`) | [transcript-history-efficiency.md](transcript-history-efficiency.md) (decided with the sync-v1 fallback) |
-| Build-pipeline downgrade export | `export_build_pipeline_for_downgrade` | This file (Code item 3) |
+| Bridges older than the MCP configuration report: an `mcpConfig` without the `mcpConfigReporting` marker still counts as reporting, and a body with neither gets the older-bridge apply outcome | `bridgeReportsMcpConfig` (`apps/backend/src/core/http-bridge-runtime-health.ts`), `olderBridgeOutcome` (`apps/backend/src/core/mcp-management/evidence.ts`) | [mcp-management.md](mcp-management.md) |
+| Build-pipeline downgrade export | `export_build_pipeline_for_downgrade` | This file (Code item 2) |
+| Renderer recognition of raw OpenCode envelopes from backends older than 2.19.17 (the "unrecognized" fallback stays) | The `opencode-envelope` entry of `LEGACY_TRANSCRIPT_SHAPES` (`apps/web/src/lib/chat/transcript-skew.ts`) | This file; retire once the window no longer covers backends older than 2.19.17 |
 
 Downgrade fences are a separate class. They let older software refuse or
 safely ignore newer data, so they stay while downgrade to those versions is
@@ -130,6 +144,42 @@ supported:
 - Every gate needs an owner and a removal condition. "Kept for one release"
   without a window is how this backlog formed.
 - Persisted format changes stay additive, with a recorded downgrade behaviour.
+- **Renderer–backend skew is guarded by shape, not by version** (decided
+  2026-10-16). Three options were considered: a version or capability check,
+  per-entry shape detection, and restoring a renderer OpenCode normaliser.
+  - A capability check cannot help with the backends that exist today. Older
+    backends will never report a capability, so its absence would just mean
+    "older than 2.19.17", which is a version comparison. Version comparisons
+    misfire when a backend reports no version (dev builds, `0.0.0`), and they
+    need an async read in pure display code.
+  - Shape detection is exact, synchronous and free. It runs at the single
+    chokepoint both views share (`toPipelineTranscript`, which feeds
+    `BuildChatTab`, `MultiReviewReviewerTab` and the Multi Review inspector
+    tail), and it cannot fire on what a current backend serves. A test runs
+    the backend normaliser's own output through it to prove that.
+  - Restoring a normaliser would undo #970's reason for moving it.
+- **Unreadable entries become one notice row per run.** The rejected options
+  were a banner above the view and refusing to render. The row is a muted
+  system row, styled like the auto-decline record, and sits where the entries
+  were. That needs no change to either view (Multi Review is busy in other
+  branches), keeps the stage from reading as empty, and stays in place when
+  interactions are merged by time. Its id comes from the run's first entry,
+  so it keeps its identity as the run grows. The `BackendVersionReminder`
+  toast still names the versions. To make the notice louder, give it the
+  inline-error id prefix (`ERROR_MESSAGE_PREFIX`) instead of the system role.
+- **The guard is provider-neutral.** `LEGACY_TRANSCRIPT_SHAPES` lists each
+  known old shape with the first backend version that stopped sending it. Any
+  record with no display-row field (`role`, `content` or `parts`) is
+  "unrecognized" and gets a neutral note, so a future shape change in either
+  direction is visible instead of silent. Non-record entries are still
+  dropped silently as corruption. The unrecognized fallback is permanent.
+  Each legacy entry retires with the support window.
+- **No version handshake for now.** `/__orkestrator/status` is authenticated
+  and every client already probes it, so it could later carry the app version
+  and a capability revision without exposing them to anonymous callers.
+  Nothing needs that yet. Revisit when a change cannot be detected from the
+  payload (a behavioural rather than a shape change), together with the
+  support window.
 
 ## Open questions
 
@@ -140,12 +190,6 @@ supported:
   remote desktop-to-backend, iOS, container bridges that run until restarted?
   Once agreed, record it in an architecture doc and use it as every retirement
   condition in the index.
-- **Renderer–backend skew.** Is the reminder enough? The alternatives are a
-  renderer-side guard (detect a raw `{ info, parts }` envelope and say "update
-  the backend" instead of rendering an empty row), or a version handshake.
-  `/__orkestrator/status` is authenticated, so it could carry the app version
-  and a protocol or capability revision without disclosing them to anonymous
-  callers, and every client already probes it.
 
 ## Needs verification
 

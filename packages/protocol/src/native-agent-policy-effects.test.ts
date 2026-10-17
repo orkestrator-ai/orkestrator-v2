@@ -17,6 +17,27 @@ const host: NativeAgentExecutionPolicy = {
 };
 
 describe("nativeAgentPolicyEffects", () => {
+  test("distinguishes a hosted search exception from a complete network denial", () => {
+    const denied: NativeAgentExecutionPolicy = {
+      ...host,
+      capabilityPolicy: { deny: ["network"] },
+    };
+    expect(nativeAgentPolicyEffects(denied).networkDenial).toBe("all");
+    expect(
+      nativeAgentPolicyEffects({
+        ...denied,
+        capabilityPolicy: { deny: ["network"], allow: ["web.search"] },
+      }).networkDenial,
+    ).toBe("except-hosted-search");
+    expect(
+      nativeAgentPolicyEffects({
+        ...denied,
+        capabilityPolicy: { deny: ["network", "web.search"], allow: ["web.search"] },
+      }).networkDenial,
+    ).toBe("all");
+    expect(nativeAgentPolicyEffects(host)).not.toHaveProperty("networkDenial");
+  });
+
   test("names what holds a network restriction", () => {
     expect(
       nativeAgentPolicyEffects({ ...host, sandbox: "provider", networkAccess: "restricted" }),

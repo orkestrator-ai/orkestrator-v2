@@ -97,6 +97,12 @@ runExecutionPolicyConformance({
     const coordinator = shape.policy.id === "coordinator-read-only";
     return withEnvironment(coordinator ? COORDINATOR_ENV : {}, async () => {
       const h = await harness({
+        // Coordinators must read back the hosted-network lock before dispatch.
+        "config/read": () => ({
+          config: { web_search: "disabled", features: { standalone_web_search: false } },
+          origins: {},
+          layers: null,
+        }),
         "thread/start": () => ({
           thread: threadPayload("thread-1"),
           ...(coordinator

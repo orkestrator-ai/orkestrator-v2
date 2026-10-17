@@ -10,6 +10,12 @@
  * hold a shape this client no longer expects, so everything here is validated
  * rather than cast — an entry that cannot be understood is dropped, not
  * rendered as raw JSON.
+ *
+ * A whole entry in a shape this renderer does not read at all (`transcript-skew`)
+ * is not dropped silently: an older backend's raw OpenCode envelopes, or an
+ * entry with no field of a display row, would leave the stage looking silent.
+ * Each run of those becomes one notice row saying how many were not shown and
+ * what to update.
  */
 
 import type {
@@ -25,6 +31,12 @@ import {
   normalizeClaudeMessagesForDisplay,
   normalizeNativeMessages,
 } from "@/lib/chat/native-message-adapters";
+import {
+  classifyTranscriptEntry,
+  transcriptEntryId,
+  transcriptSkewNoticeMessage,
+  type TranscriptSkewKind,
+} from "@/lib/chat/transcript-skew";
 import type { ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-types";
 import type {
   NativeAgentActivityPart,
@@ -416,12 +428,37 @@ export function toPipelineTranscript(
 ): NativeMessage[] {
   const transcript: NativeMessage[] = [];
   let hasSeenProviderEntry = false;
+  /** The current run of entries this renderer cannot show, awaiting its notice. */
+  let skipped: { kind: TranscriptSkewKind; count: number; anchor: string } | null = null;
+  const flushSkipped = () => {
+    if (!skipped) return;
+    transcript.push(
+      transcriptSkewNoticeMessage({
+        ...skipped,
+        // The time of the row it follows, so the merge with interaction
+        // entries below leaves it where the skipped entries were.
+        createdAt: transcript[transcript.length - 1]?.createdAt ?? fallbackCreatedAt,
+      }),
+    );
+    skipped = null;
+  };
 
   (messages ?? []).forEach((entry, index) => {
     const raw = asRecord(entry);
     if (!raw) return;
     const isFirstProviderEntry = !hasSeenProviderEntry;
     hasSeenProviderEntry = true;
+    const shape = classifyTranscriptEntry(raw);
+    if (shape !== "display") {
+      if (skipped?.kind === shape) {
+        skipped.count += 1;
+      } else {
+        flushSkipped();
+        skipped = { kind: shape, count: 1, anchor: transcriptEntryId(raw) ?? String(index) };
+      }
+      return;
+    }
+    flushSkipped();
     if (isFirstProviderEntry && isInitialPipelineHandoff(raw)) return;
 
     const role = asRole(raw.role) ?? "assistant";
@@ -457,6 +494,7 @@ export function toPipelineTranscript(
     };
     transcript.push(...normalizeNativeMessages([message]).filter(hasRenderableContent));
   });
+  flushSkipped();
 
   if (interactions.length === 0) return transcript;
 

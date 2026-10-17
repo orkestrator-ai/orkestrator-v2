@@ -3,6 +3,7 @@ import type {
   MultiReviewPhase,
   MultiReviewReviewerTranscript,
   MultiReviewStepKind,
+  MultiReviewStepTranscript,
   MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import type { ReviewIssue, StructuredReviewReport } from "@orkestrator/protocol/structured-review";
@@ -112,6 +113,15 @@ function report(issues: ReviewIssue[]): StructuredReviewReport {
 
 const minutesAgo = (now: number, minutes: number) => new Date(now - minutes * 60_000).toISOString();
 
+/** A finding a reviewer reported through `report_finding` before its report. */
+function reported(issueValue: ReviewIssue, index: number, now: number) {
+  return {
+    id: index.toString(16).padStart(24, "a"),
+    reportedAt: minutesAgo(now, 1),
+    issue: issueValue,
+  };
+}
+
 export function multiReviewFlowWorkflow(
   phase: FixturePhase,
   reviewerCount: number,
@@ -147,7 +157,9 @@ export function multiReviewFlowWorkflow(
     return order.indexOf(step) <= position;
   };
   const reviewersDone = reached("consolidate") || phase === "failed";
-  const reviewers = PANEL.slice(0, reviewerCount).map((selection, index) => {
+  // Panels larger than the eight models repeat them, up to the 32-reviewer maximum.
+  const panel = Array.from({ length: reviewerCount }, (_, index) => PANEL[index % PANEL.length]!);
+  const reviewers = panel.map((selection, index) => {
     const id = `reviewer-${index + 1}`;
     const base = { id, ...selection };
     if (!reached("review")) return { ...base, status: "pending" as const };
@@ -160,7 +172,15 @@ export function multiReviewFlowWorkflow(
         startedAt,
         completedAt: minutesAgo(now, 2),
         tokenCount: 41_200,
-        error: "The reviewer session ended before it filed a report",
+        provisionalFindings: [
+          reported(
+            issue("P1", "Fix tab id ignores a custom fix launch", "multi-review-service.ts", 2_471),
+            1,
+            now,
+          ),
+        ],
+        error:
+          "The reviewer session ended before it filed a report: the provider closed the stream after 3 retries (HTTP 529, overloaded)",
       };
     }
     if (reviewersDone || index === 0 || index === 2) {
@@ -190,10 +210,33 @@ export function multiReviewFlowWorkflow(
         dispatchState: "sent" as const,
         startedAt: minutesAgo(now, 2.8),
         tokenCount: 81_000,
+        provisionalFindings: [
+          reported(ISSUES[1]![0]!, 2, now),
+          reported(
+            issue("P2", "Zoom level label reads 99% after Fit", "MultiReviewFlowViewport.tsx", 88),
+            3,
+            now,
+          ),
+        ],
       };
     }
     return { ...base, status: "pending" as const };
   });
+  // While the panel is admitted, the first waiting reviewer is starting and
+  // the rest hold their place in the admission queue.
+  if (workflowPhase === "reviewing") {
+    let position = 0;
+    for (const reviewer of reviewers) {
+      if (reviewer.status !== "pending") continue;
+      Object.assign(
+        reviewer,
+        position === 0
+          ? { admissionState: "admitting" }
+          : { admissionState: "queued", queuePosition: position },
+      );
+      position += 1;
+    }
+  }
 
   const stepRuntimes: MultiReviewWorkflow["stepRuntimes"] = {
     prepare: {
@@ -344,11 +387,46 @@ async function fixtureTranscript(
   };
 }
 
+const STEP_LINES: Record<MultiReviewStepKind, string[]> = {
+  prepare: ["Discovering validation commands from mise.toml", "Running typecheck and lint"],
+  consolidate: [
+    "Merging four reviewer reports",
+    "Two reviewers raised the paused-prepare finding; keeping the higher severity",
+  ],
+  fix: ["Addressing the P0 shared fix session runtime", "Running the focused tests"],
+};
+
+async function fixtureStepTranscript(
+  workflowId: string,
+  step: MultiReviewStepKind,
+): Promise<MultiReviewStepTranscript> {
+  const createdAt = new Date().toISOString();
+  return {
+    workflowId,
+    step,
+    workflowPhase: "consolidating",
+    session: "own",
+    agent: "codex",
+    model: "gpt-6-luna",
+    transcript: "snapshot",
+    sourceToken: "fixture",
+    messages: STEP_LINES[step].map((text, index) => ({
+      id: `${step}-${index}`,
+      role: "assistant",
+      content: text,
+      createdAt,
+      parts: [{ type: "thinking", content: text }],
+    })),
+  };
+}
+
 export function MultiReviewFlowFixture() {
   const params = new URLSearchParams(window.location.search);
   const phase = (params.get("phase") ?? "reviewing") as FixturePhase;
   const count = Number(params.get("reviewers") ?? "4");
   const [workflow] = useState(() => multiReviewFlowWorkflow(phase, count));
+  const [isActive, setIsActive] = useState(true);
+  const paneControls = params.has("paneControls");
 
   useEffect(() => {
     useMultiReviewStore.getState().replaceWorkflow(workflow);
@@ -356,13 +434,24 @@ export function MultiReviewFlowFixture() {
   }, [workflow]);
 
   return (
-    <main className="h-screen bg-background text-foreground">
-      <MultiReviewTab
-        data={{ environmentId: workflow.environmentId, workflowId: workflow.id, isLocal: true }}
-        isActive
-        hydrateWorkflow={async () => workflow}
-        loadReviewerTranscript={fixtureTranscript}
-      />
+    <main className="flex h-screen flex-col bg-background text-foreground">
+      {paneControls && (
+        <div>
+          <button onClick={() => setIsActive(!isActive)}>
+            {isActive ? "Activate other pane" : "Activate review pane"}
+          </button>
+          <input aria-label="Other pane input" />
+        </div>
+      )}
+      <div hidden={!isActive} data-testid="review-pane" className="min-h-0 flex-1">
+        <MultiReviewTab
+          data={{ environmentId: workflow.environmentId, workflowId: workflow.id, isLocal: true }}
+          isActive={isActive}
+          hydrateWorkflow={async () => workflow}
+          loadReviewerTranscript={fixtureTranscript}
+          loadStepTranscript={fixtureStepTranscript}
+        />
+      </div>
     </main>
   );
 }

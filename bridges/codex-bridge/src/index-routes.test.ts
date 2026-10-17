@@ -1,6 +1,19 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { CompressionStream as NodeCompressionStream } from "node:stream/web";
 import { gunzipSync } from "node:zlib";
+import { HTTPException } from "hono/http-exception";
+import {
+  AUTH_SECRET_CANARIES,
+  CANARY_LOGIN_URL,
+  CANARY_USER_CODE,
+  captureOutput,
+  expectAuthStatusShape,
+  expectNoCanary,
+  expectNothingSecretLogged,
+  expectOnlyLoginSecrets,
+  expectSignInShape,
+} from "../../../tests/helpers/auth-secret-canaries.js";
+import { AppServerRpcError } from "./app-server/errors.js";
 
 process.env.CODEX_BRIDGE_NO_ENGINE = "1";
 process.env.CODEX_BRIDGE_NO_SERVER = "1";
@@ -110,6 +123,168 @@ describe("global route outcomes", () => {
         expect(await response.json()).toEqual({
           account: [{ window: "primary", label: "Weekly limit", usedPercent: 10 }],
         });
+      },
+    );
+  });
+});
+
+describe("sign-in routes carry no credential", () => {
+  // What app-server answers, plus the token fields its auth file holds, in
+  // case a future `account/read` starts returning them.
+  const tokens = {
+    accessToken: AUTH_SECRET_CANARIES.accessToken,
+    refreshToken: AUTH_SECRET_CANARIES.refreshToken,
+    idToken: AUTH_SECRET_CANARIES.idToken,
+    apiKey: AUTH_SECRET_CANARIES.openAiApiKey,
+  };
+
+  test.each([
+    [
+      "a ChatGPT login",
+      {
+        account: { type: "chatgpt", email: "user@example.test", planType: "pro", ...tokens },
+        requiresOpenaiAuth: true,
+        authToken: AUTH_SECRET_CANARIES.accessToken,
+      },
+      { state: "signed-in", account: { label: "user@example.test", plan: "pro" } },
+    ],
+    [
+      "an API key",
+      { account: { type: "apiKey", ...tokens }, requiresOpenaiAuth: true },
+      { state: "signed-in", account: { label: "apiKey" } },
+    ],
+    [
+      "no login",
+      { account: null, requiresOpenaiAuth: true, authToken: AUTH_SECRET_CANARIES.accessToken },
+      { state: "needs-auth" },
+    ],
+  ])("GET /global/auth with %s", async (_name, raw, expected) => {
+    await withRuntimeMethod(
+      "readAuthStatus",
+      async () => raw,
+      async () => {
+        const { result: body, output } = await captureOutput(async () =>
+          (await app.request("/global/auth")).json(),
+        );
+        expectAuthStatusShape(body);
+        expect(body).toMatchObject(expected);
+        expectNoCanary(body, "Codex auth status");
+        expectNothingSecretLogged(output, "Codex auth status");
+      },
+    );
+  });
+
+  test("POST /global/auth/login returns only the URL and code, and logs neither", async () => {
+    await withRuntimeMethod(
+      "beginAuthLogin",
+      async () => ({
+        type: "chatgpt",
+        loginId: AUTH_SECRET_CANARIES.oauthCode,
+        authUrl: CANARY_LOGIN_URL,
+        userCode: CANARY_USER_CODE,
+        ...tokens,
+      }),
+      async () => {
+        const { result: body, output } = await captureOutput(async () =>
+          (await app.request("/global/auth/login", { method: "POST" })).json(),
+        );
+        expect(body).toEqual({ url: CANARY_LOGIN_URL, code: CANARY_USER_CODE });
+        expectSignInShape(body);
+        expectOnlyLoginSecrets(body, "Codex sign-in");
+        expectNothingSecretLogged(output, "Codex sign-in");
+      },
+    );
+  });
+
+  test("a failed account read redacts its message and excludes app-server's error data", async () => {
+    await withRuntimeMethod(
+      "readAuthStatus",
+      async () => {
+        throw new AppServerRpcError("account/read", {
+          code: -32000,
+          message: `refresh failed for Bearer ${AUTH_SECRET_CANARIES.accessToken} (${AUTH_SECRET_CANARIES.openAiApiKey}) at ${CANARY_LOGIN_URL}`,
+          data: { refreshToken: AUTH_SECRET_CANARIES.refreshToken, authUrl: CANARY_LOGIN_URL },
+        });
+      },
+      async () => {
+        const { result: response, output } = await captureOutput(async () => {
+          const failed = await app.request("/global/auth");
+          return { status: failed.status, body: await failed.text() };
+        });
+        expect(response).toEqual({ status: 500, body: "Internal Server Error" });
+        expect(output).toContain("[codex-bridge] GET /global/auth failed: AppServerRpcError");
+        expectNothingSecretLogged(output, "Codex auth failure");
+      },
+    );
+  });
+
+  test("unexpected route errors retain redacted stack frames", async () => {
+    await withRuntimeMethod(
+      "readAuthStatus",
+      async function unexpectedAccountRead() {
+        throw new Error(
+          `account read failed: ${CANARY_LOGIN_URL} Bearer ${AUTH_SECRET_CANARIES.accessToken}`,
+          { cause: { refreshToken: AUTH_SECRET_CANARIES.refreshToken } },
+        );
+      },
+      async () => {
+        const { result: response, output } = await captureOutput(async () => {
+          const failed = await app.request("/global/auth");
+          return { status: failed.status, body: await failed.text() };
+        });
+        expect(response).toEqual({ status: 500, body: "Internal Server Error" });
+        expect(output).toContain("Error: account read failed:");
+        expect(output).toMatch(/\n\s+at unexpectedAccountRead/);
+        expectNothingSecretLogged(output, "Codex unexpected route failure");
+      },
+    );
+  });
+
+  test("HTTPException preserves its response without logging its secret cause", async () => {
+    await withRuntimeMethod(
+      "readAuthStatus",
+      async () => {
+        throw new HTTPException(409, {
+          res: new Response("Account unavailable", { headers: { "Retry-After": "3" } }),
+          cause: new Error(CANARY_LOGIN_URL),
+        });
+      },
+      async () => {
+        const { result: response, output } = await captureOutput(() => app.request("/global/auth"));
+        expect(response.status).toBe(409);
+        expect(response.headers.get("Retry-After")).toBe("3");
+        expect(await response.text()).toBe("Account unavailable");
+        expect(output).toBe("");
+        expectNothingSecretLogged(output, "Codex HTTPException");
+      },
+    );
+  });
+
+  test("MCP OAuth returns only the authorization URL and never logs it", async () => {
+    await withRuntimeMethod(
+      "performMcpAction",
+      async () => ({ authorizationUrl: CANARY_LOGIN_URL, ...tokens }),
+      async () => {
+        const { result: response, output } = await captureOutput(() =>
+          app.request("/session/test-session/mcp/example/sign-in", { method: "POST" }),
+        );
+        expect(response.status).toBe(200);
+        const body = await response.json();
+        expect(body).toEqual({ url: CANARY_LOGIN_URL });
+        expectSignInShape(body);
+        expectOnlyLoginSecrets(body, "Codex MCP OAuth");
+        expectNothingSecretLogged(output, "Codex MCP OAuth");
+      },
+    );
+  });
+
+  test("POST /global/auth/logout answers without account detail", async () => {
+    await withRuntimeMethod(
+      "logoutAuth",
+      async () => undefined,
+      async () => {
+        const response = await app.request("/global/auth/logout", { method: "POST" });
+        expect(await response.json()).toEqual({ ok: true });
       },
     );
   });
@@ -1229,6 +1404,154 @@ describe("interaction route outcomes", () => {
       },
       { sessionId: "session-1", interactionId: "ask-2", answer: { action: "cancel" } },
     ]);
+  });
+});
+
+describe("deadline hold route outcomes", () => {
+  const HOLD_ROUTES = [
+    {
+      method: "holdApproval",
+      path: "/session/session-1/approvals/apr-1-1/hold",
+      id: "apr-1-1",
+      subject: "Approval",
+    },
+    {
+      method: "holdInteraction",
+      path: "/session/session-1/interactions/ask-1-srv/hold",
+      id: "ask-1-srv",
+      subject: "Interaction",
+    },
+  ] as const;
+
+  test.each(HOLD_ROUTES)("$method maps every outcome to its status and body", async (route) => {
+    const held = { available: true, heldAt: 1_000, reason: "upstream-may-expire" };
+    let outcome: unknown = { status: "applied", expiresAt: 86_401_000, hold: held };
+    const calls: unknown[][] = [];
+    await withRuntimeMethod(
+      route.method,
+      (...args: unknown[]) => {
+        calls.push(args);
+        return outcome;
+      },
+      async () => {
+        const cases = [
+          [
+            { status: "applied", expiresAt: 86_401_000, hold: held },
+            200,
+            { status: "applied", expiresAt: 86_401_000, hold: held },
+          ],
+          [
+            { status: "unchanged", expiresAt: 301_000, hold: { available: true } },
+            200,
+            { status: "unchanged", expiresAt: 301_000, hold: { available: true } },
+          ],
+          [
+            { status: "wrong-session" },
+            403,
+            { error: `${route.subject} does not belong to this session` },
+          ],
+          [
+            { status: "unknown" },
+            409,
+            { error: `${route.subject} is no longer pending`, status: "stale" },
+          ],
+          [
+            { status: "unavailable" },
+            422,
+            { error: "This request's deadline cannot be extended", status: "unavailable" },
+          ],
+        ] as const;
+
+        for (const [nextOutcome, status, body] of cases) {
+          outcome = nextOutcome;
+          const response = await jsonRequest(route.path, "POST", { held: true });
+          expect(response.status).toBe(status);
+          expect(await response.json()).toEqual(body);
+        }
+        await jsonRequest(route.path, "POST", { held: false });
+      },
+    );
+    expect(calls.at(0)).toEqual(["session-1", route.id, true]);
+    expect(calls.at(-1)).toEqual(["session-1", route.id, false]);
+  });
+
+  test.each(HOLD_ROUTES)("$method rejects a body without a boolean held", async (route) => {
+    let called = false;
+    await withRuntimeMethod(
+      route.method,
+      () => {
+        called = true;
+        return { status: "unknown" };
+      },
+      async () => {
+        for (const body of [{}, { held: "true" }, { held: 1 }, { held: null }, [true], null]) {
+          const response = await jsonRequest(route.path, "POST", body);
+          expect(response.status).toBe(400);
+          expect(await response.json()).toEqual({ error: "held must be a boolean" });
+        }
+        const notJson = await app.request(route.path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "not json",
+        });
+        expect(notJson.status).toBe(400);
+      },
+    );
+    expect(called).toBe(false);
+  });
+
+  test("a hold is stale for a request the runtime does not hold", async () => {
+    // The real runtime, with nothing parked: the card's window has closed.
+    const approval = await jsonRequest("/session/session-1/approvals/apr-nope/hold", "POST", {
+      held: true,
+    });
+    expect(approval.status).toBe(409);
+    expect(await approval.json()).toEqual({
+      error: "Approval is no longer pending",
+      status: "stale",
+    });
+    const interaction = await jsonRequest("/session/session-1/interactions/ask-nope/hold", "POST", {
+      held: false,
+    });
+    expect(interaction.status).toBe(409);
+    expect(await interaction.json()).toEqual({
+      error: "Interaction is no longer pending",
+      status: "stale",
+    });
+  });
+
+  test("the rehydration routes publish the deadline and hold the runtime holds", async () => {
+    const approvals = [
+      {
+        approvalId: "apr-1-1",
+        requestedAt: 1_000,
+        expiresAt: 86_401_000,
+        hold: { available: true, heldAt: 1_000 },
+      },
+    ];
+    const interactions = [
+      {
+        interactionId: "ask-1-srv",
+        requestedAt: 1_000,
+        expiresAt: 3_601_000,
+        hold: { available: true, heldAt: 2_000, reason: "provider-limit" },
+      },
+    ];
+    await withRuntimeMethod(
+      "listApprovals",
+      () => approvals,
+      () =>
+        withRuntimeMethod(
+          "listInteractions",
+          () => interactions,
+          async () => {
+            const listedApprovals = await app.request("/session/session-1/approvals");
+            expect(await listedApprovals.json()).toEqual({ approvals });
+            const listedInteractions = await app.request("/session/session-1/interactions");
+            expect(await listedInteractions.json()).toEqual({ interactions });
+          },
+        ),
+    );
   });
 });
 

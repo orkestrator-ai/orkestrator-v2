@@ -17,6 +17,14 @@ import { AGENT_PLATFORMS, type AgentPlatform, isAgentPlatform } from "./agent-pl
 /** Bumped when a wire shape in this module changes incompatibly. */
 export const MCP_MANAGEMENT_PROTOCOL_VERSION = 1;
 
+/**
+ * Bridges that report which saved MCP files a runtime loaded put this number
+ * in every `/session/:id/runtime-health` body as `mcpConfigReporting`, even
+ * for a session they do not hold. A body without it (and without `mcpConfig`)
+ * comes from a bridge older than the report, which cannot prove an apply.
+ */
+export const MCP_CONFIG_REPORTING_VERSION = 1;
+
 /** Compact invalidation. Payload is {@link McpManagementChangedEvent}. */
 export const MCP_MANAGEMENT_CHANGED_EVENT = "mcp-management-changed";
 
@@ -57,7 +65,13 @@ export const MCP_MANAGEMENT_LIMITS = {
   retainedOperations: 128,
   operationRetentionMs: 7 * 24 * 60 * 60_000,
   operationStoreMaxBytes: 4 * 1024 * 1024,
+  /** Runtimes an operation snapshot lists; the rest are counted in `omitted`. */
   runtimesPerOperation: 64,
+  /**
+   * Runtimes one apply schedules and tracks, listed or not. Past it the plan
+   * keeps one runtime per environment first and says how many it left out.
+   */
+  runtimesTrackedPerOperation: 256,
   // Apply concurrency needs no separate budget: the backend scheduler runs one
   // provider reload at a time, and a newer apply supersedes the queued runtime
   // work it covers, so at most one reload per runtime is ever pending.
@@ -454,6 +468,16 @@ export const MCP_APPLY_STATES = [
 ] as const;
 export type McpApplyState = (typeof MCP_APPLY_STATES)[number];
 
+/**
+ * Why a runtime is `cancelled`, when retrying cannot help: the file no longer
+ * holds the change, because it was edited outside Orkestrator
+ * (`superseded-external`) or a later save here replaced it
+ * (`superseded-local`). Applying such a change again is refused. Absent for
+ * every other cancellation, which a retry can still apply.
+ */
+export const MCP_APPLY_CANCEL_REASONS = ["superseded-external", "superseded-local"] as const;
+export type McpApplyCancelReason = (typeof MCP_APPLY_CANCEL_REASONS)[number];
+
 export interface McpRuntimeApplyEntry {
   runtimeId: string;
   environmentId: string | null;
@@ -463,7 +487,14 @@ export interface McpRuntimeApplyEntry {
   updatedAt: string;
   /** Saved source revision this runtime entry is adopting. */
   savedRevision?: string;
-  /** Runtime generation the state was observed against, when the backend knows it. */
+  /** Set only on a `cancelled` runtime that a retry cannot apply. */
+  cancelReason?: McpApplyCancelReason;
+  /**
+   * Runtime generation the state was observed against, when the backend knows
+   * it: an opaque label of the provider bridge process and provider session
+   * behind the runtime. A restart or a new conversation is a new generation,
+   * and `applied` names the generation that proved it.
+   */
   generation?: string;
 }
 
@@ -487,6 +518,11 @@ export interface McpOperationSnapshot {
     runtimes: McpRuntimeApplyEntry[];
     /** Runtimes not listed because fan-out exceeded the per-operation page. */
     omitted: number;
+    /**
+     * States of the omitted runtimes the backend still tracks. Any remainder of
+     * `omitted` was beyond what one apply tracks and was not scheduled.
+     */
+    omittedStates?: Partial<Record<McpApplyState, number>>;
     terminalGuidance?: string;
   };
   /** Impact scope recorded when the change was saved (bounded, names only). */

@@ -1,3 +1,7 @@
+import {
+  coordinatorCapabilityPolicy,
+  type CoordinatorWebResearch,
+} from "@orkestrator/protocol/coordinator-web-research";
 import type { AgentInteractionOrigin } from "@orkestrator/protocol/agent-interactions";
 import {
   appendNativeAgentPolicyNote,
@@ -32,6 +36,8 @@ export function resolveNativeAgentExecutionPolicy(
   environment: Pick<Environment, "environmentType" | "networkAccessMode">,
   origin: AgentInteractionOrigin,
   override?: NativeAgentExecutionPolicyOverride,
+  /** The coordinator research setting; absent keeps search off. */
+  coordinatorWebResearch: CoordinatorWebResearch = "off",
 ): NativeAgentExecutionPolicy {
   const container = environment.environmentType === "containerized";
   const pipeline = origin === "build-pipeline" || origin === "looped-review";
@@ -47,7 +53,9 @@ export function resolveNativeAgentExecutionPolicy(
         // directly. Every other bridge reads `capabilityPolicy` instead, which
         // is why the same policy object can now be handed to any of them.
         toolPolicy: { deny: ["write", "edit", "apply_patch", "shell"] },
-        capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
+        // Search is the only research exception, and only when the setting
+        // allows it; commands and hosted page fetches stay off in every mode.
+        capabilityPolicy: coordinatorCapabilityPolicy(coordinatorWebResearch),
         networkAccess: "restricted",
       }
     : {

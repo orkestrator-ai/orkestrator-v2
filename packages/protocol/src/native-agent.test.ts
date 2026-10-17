@@ -10,6 +10,10 @@ import {
   fallbackReasoningId,
   isNativeAgentExecutionPolicy,
   isNativeAgentTabData,
+  describeNativeAgentExecutionPolicy,
+  nativeAgentPolicyDeniesNetwork,
+  nativeAgentPolicyDeniesWebSearch,
+  type NativeAgentExecutionPolicy,
   normalizeNativeAgentTurnActivity,
   isSelectableOpenCodeModelId,
   isSelectableOpenCodeProvider,
@@ -1220,6 +1224,85 @@ describe("native agent execution policy guard", () => {
     ).toBe(false);
     expect(isNativeAgentExecutionPolicy({ ...valid, capabilityPolicy: {} })).toBe(false);
     expect(isNativeAgentExecutionPolicy({ ...valid, capabilityPolicy: { deny: [1] } })).toBe(false);
+  });
+});
+
+describe("native agent network denial", () => {
+  const coordinator: NativeAgentExecutionPolicy = {
+    id: "coordinator-read-only",
+    sandbox: "provider",
+    approvals: "deny",
+    projectResources: false,
+    capabilityPolicy: { deny: ["file.write", "file.patch", "shell.mutate", "network"] },
+    networkAccess: "restricted",
+  };
+
+  test("only a capability denial denies the network", () => {
+    expect(nativeAgentPolicyDeniesNetwork(coordinator)).toBe(true);
+    expect(
+      nativeAgentPolicyDeniesNetwork({
+        ...coordinator,
+        capabilityPolicy: { deny: ["file.write"] },
+      }),
+    ).toBe(false);
+    // `restricted` narrows what a sandboxed command reaches; it is not a denial.
+    const { capabilityPolicy: _omitted, ...restricted } = coordinator;
+    expect(nativeAgentPolicyDeniesNetwork(restricted)).toBe(false);
+    expect(nativeAgentPolicyDeniesNetwork(undefined)).toBe(false);
+  });
+
+  test("search is off under a network denial unless allowed, and can be denied alone", () => {
+    expect(nativeAgentPolicyDeniesWebSearch(coordinator)).toBe(true);
+    const research: NativeAgentExecutionPolicy = {
+      ...coordinator,
+      capabilityPolicy: { ...coordinator.capabilityPolicy!, allow: ["web.search"] },
+    };
+    expect(nativeAgentPolicyDeniesNetwork(research)).toBe(true);
+    expect(nativeAgentPolicyDeniesWebSearch(research)).toBe(false);
+    // A denial by name wins over an exception.
+    expect(
+      nativeAgentPolicyDeniesWebSearch({
+        ...research,
+        capabilityPolicy: { deny: ["network", "web.search"], allow: ["web.search"] },
+      }),
+    ).toBe(true);
+    expect(
+      nativeAgentPolicyDeniesWebSearch({
+        ...coordinator,
+        capabilityPolicy: { deny: ["web.search"] },
+      }),
+    ).toBe(true);
+    expect(nativeAgentPolicyDeniesWebSearch(undefined)).toBe(false);
+    expect(describeNativeAgentExecutionPolicy(research)).toBe(
+      "Provider sandbox, approvals denied, project resources off, no network except hosted web search, web fetch off",
+    );
+  });
+
+  test("an exception list is validated like the denials", () => {
+    expect(
+      isNativeAgentExecutionPolicy({
+        ...coordinator,
+        capabilityPolicy: { deny: ["network"], allow: ["web.search"] },
+      }),
+    ).toBe(true);
+    for (const allow of [["web.fetch"], "web.search", [1], null]) {
+      expect(
+        isNativeAgentExecutionPolicy({
+          ...coordinator,
+          capabilityPolicy: { deny: ["network"], allow },
+        }),
+      ).toBe(false);
+    }
+  });
+
+  test("the information panel says the hosted web tools are off, not just restricted", () => {
+    expect(describeNativeAgentExecutionPolicy(coordinator)).toBe(
+      "Provider sandbox, approvals denied, project resources off, no network, web search and web fetch off",
+    );
+    const { capabilityPolicy: _omitted, ...restricted } = coordinator;
+    expect(describeNativeAgentExecutionPolicy(restricted)).toBe(
+      "Provider sandbox, approvals denied, project resources off, restricted network",
+    );
   });
 });
 

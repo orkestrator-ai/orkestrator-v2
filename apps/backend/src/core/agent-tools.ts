@@ -18,6 +18,7 @@ import {
   registerWorkflowResultTools,
 } from "./workflow-result-tools.js";
 import type { WebAnnotationToolHost } from "./web-annotation-contracts.js";
+import type { ProvisionalFindingSink } from "./review-provisional-findings.js";
 import { registerWebAnnotationTools, WebAnnotationToolLimiter } from "./web-annotation-tools.js";
 
 const MAX_MCP_REQUEST_BYTES = 512 * 1024;
@@ -32,6 +33,8 @@ const MAX_TITLE_OUTPUT_BYTES = 1024;
 const MAX_DESCRIPTION_OUTPUT_BYTES = 96 * 1024;
 const MAX_COMMENT_OUTPUT_BYTES = 24 * 1024;
 const AGENT_MCP_PATH = "/mcp";
+/** Claude terminal state doorbell (`orkestrator-state-signal`); carries no state. */
+export const CLAUDE_STATE_SIGNAL_PATH = "/claude-state-signal";
 
 export const ORKESTRATOR_AGENT_MCP_URL_ENV = "ORKESTRATOR_AGENT_MCP_URL";
 export const ORKESTRATOR_AGENT_MCP_TOKEN_ENV = "ORKESTRATOR_AGENT_MCP_TOKEN";
@@ -55,6 +58,13 @@ export type AgentToolScope = {
 
 type StoredCredential = AgentToolScope & {
   token: string;
+};
+
+/** One container's right to ring a state-change doorbell, and nothing else. */
+export type StateSignalCredential = {
+  url: string;
+  token: string;
+  revoke(): void;
 };
 
 export function consumeAgentMailRateLimit(
@@ -251,6 +261,7 @@ async function createAgentToolServer(
   consumeRateLimit: (kind: AgentMessagingRateLimitKind) => void,
   workflowResults?: WorkflowResultService,
   webAnnotations?: { host: WebAnnotationToolHost; limiter: WebAnnotationToolLimiter } | null,
+  provisionalFindings?: ProvisionalFindingSink | null,
 ): Promise<McpServer> {
   if (scope.workflowResultBroker) {
     const server = new McpServer(
@@ -261,10 +272,12 @@ async function createAgentToolServer(
       },
     );
     if (!workflowResults) throw new Error("Workflow result tools are unavailable");
-    registerWorkflowResultBrokerTools(server, workflowResults, {
-      environmentId: scope.environmentId,
-      projectId: scope.projectId,
-    });
+    registerWorkflowResultBrokerTools(
+      server,
+      workflowResults,
+      { environmentId: scope.environmentId, projectId: scope.projectId },
+      provisionalFindings,
+    );
     return server;
   }
   if (scope.workflowResultKey) {
@@ -282,11 +295,12 @@ async function createAgentToolServer(
     };
     const binding = await workflowResults.binding(callerScope, scope.workflowResultKey);
     if (!binding) throw new Error("Workflow result capability is unavailable");
-    registerWorkflowResultTools(server, workflowResults, {
-      ...callerScope,
-      workflowResultKey: scope.workflowResultKey,
-      kind: binding.kind,
-    });
+    registerWorkflowResultTools(
+      server,
+      workflowResults,
+      { ...callerScope, workflowResultKey: scope.workflowResultKey, kind: binding.kind },
+      provisionalFindings,
+    );
     return server;
   }
   const messagingEnabled = (await storage.loadConfig()).global.agentMessaging?.enabled === true;
@@ -509,11 +523,13 @@ export class AgentToolsServer {
   }
   private readonly credentialsByEnvironment = new Map<string, StoredCredential>();
   private readonly scopesByDigest = new Map<string, AgentToolScope>();
+  private readonly stateSignalsByDigest = new Map<string, () => void>();
   private lifecycle: Promise<void> = Promise.resolve();
   private designRequests = 0;
   private readonly mailRateWindows = new Map<string, number[]>();
   private webAnnotationToolHost: WebAnnotationToolHost | null = null;
   private readonly webAnnotationToolLimiter = new WebAnnotationToolLimiter();
+  private provisionalFindingSink: ProvisionalFindingSink | null = null;
 
   constructor(
     private readonly storage: StorageService,
@@ -663,12 +679,39 @@ export class AgentToolsServer {
   }
 
   /**
+   * Issues a container credential that rings `onSignal` and opens nothing
+   * else: `/mcp` never accepts it and the request carries no data, so the
+   * receiver must read the state it is told about itself. Null before the
+   * server listens.
+   */
+  issueStateSignal(onSignal: () => void): StateSignalCredential | null {
+    if (!this.server || !this.port) return null;
+    const token = randomBytes(32).toString("base64url");
+    const digest = credentialDigest(token);
+    this.stateSignalsByDigest.set(digest, onSignal);
+    return {
+      url: `http://host.docker.internal:${this.port}${CLAUDE_STATE_SIGNAL_PATH}`,
+      token,
+      revoke: () => {
+        if (this.stateSignalsByDigest.get(digest) === onSignal) {
+          this.stateSignalsByDigest.delete(digest);
+        }
+      },
+    };
+  }
+
+  /**
    * Installs (or removes, with null) the optional web annotation tool host.
    * Tools are advertised only while a host is installed, and only to
    * tab-scoped credentials.
    */
   setWebAnnotationToolHost(host: WebAnnotationToolHost | null): void {
     this.webAnnotationToolHost = host;
+  }
+
+  /** Where Multi Review reviewers' `report_finding` calls go. */
+  setProvisionalFindingSink(sink: ProvisionalFindingSink | null): void {
+    this.provisionalFindingSink = sink;
   }
 
   hasWebAnnotationTools(): boolean {
@@ -698,6 +741,7 @@ export class AgentToolsServer {
       this.port = null;
       this.credentialsByEnvironment.clear();
       this.scopesByDigest.clear();
+      this.stateSignalsByDigest.clear();
       if (!server) return;
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -720,8 +764,31 @@ export class AgentToolsServer {
     consumeAgentMailRateLimit(this.mailRateWindows, scope, kind);
   }
 
+  private handleStateSignal(request: IncomingMessage, response: ServerResponse): void {
+    // A doorbell has no body. Discard anything sent rather than buffer it.
+    request.resume();
+    if (request.method !== "POST") {
+      response.writeHead(405, { allow: "POST", "cache-control": "no-store" });
+      response.end();
+      return;
+    }
+    const token = bearerToken(request);
+    const ring = token ? this.stateSignalsByDigest.get(credentialDigest(token)) : undefined;
+    if (!ring) {
+      jsonResponse(response, 401, { error: "Invalid state signal credential" });
+      return;
+    }
+    ring();
+    response.writeHead(204, { "cache-control": "no-store" });
+    response.end();
+  }
+
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? "/", "http://agent-tools.invalid");
+    if (url.pathname === CLAUDE_STATE_SIGNAL_PATH) {
+      this.handleStateSignal(request, response);
+      return;
+    }
     if (url.pathname !== AGENT_MCP_PATH && !(url.pathname === "/design-mcp" && this.design)) {
       jsonResponse(response, 404, { error: "Not found" });
       return;
@@ -810,6 +877,7 @@ export class AgentToolsServer {
                 this.webAnnotationToolHost
                   ? { host: this.webAnnotationToolHost, limiter: this.webAnnotationToolLimiter }
                   : null,
+                this.provisionalFindingSink,
               ),
         { legacy: "stateless" },
       );

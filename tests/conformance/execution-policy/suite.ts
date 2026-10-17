@@ -21,6 +21,7 @@ import {
   isNativeAgentExecutionPolicy,
   nativeAgentPolicyEffects,
   resolveNativeAgentApprovalMode,
+  SANDBOXED_FOR_NETWORK_RESTRICTION_NOTE,
   type NativeAgentExecutionPolicy,
 } from "@orkestrator/protocol/native-agent";
 import { EXECUTION_POLICY_NARROWINGS, type Narrowing } from "./narrowings.js";
@@ -111,17 +112,29 @@ export function narrowingIsStricter(expected: AdapterEffects, narrowing: Narrowi
 
 export function runExecutionPolicyConformance(
   adapter: ExecutionPolicyAdapter,
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; skipReason?: string } = {},
 ): void {
   const narrowings = EXECUTION_POLICY_NARROWINGS[adapter.platform];
   describe(`execution policy conformance: ${adapter.platform}`, () => {
     for (const shape of POLICY_SHAPES as readonly PolicyShape[]) {
-      test(
-        `${shape.id}: ${shape.title}`,
+      (options.skipReason ? test.skip : test)(
+        `${shape.id}: ${shape.title}${options.skipReason ? ` (${options.skipReason})` : ""}`,
         async () => {
           const { reported, observed } = await adapter.apply(shape);
           expect(isNativeAgentExecutionPolicy(reported)).toBe(true);
           const expected = expectedAdapterEffects(reported);
+          if (!expected.providerSandbox) {
+            expect(reported.note ?? "").not.toContain(SANDBOXED_FOR_NETWORK_RESTRICTION_NOTE);
+          }
+          if (shape.policy.containerNetworkAccess && !expected.providerSandbox) {
+            expect(reported.sandbox).toBe("container");
+            if (shape.environment.networkAccessMode === "restricted") {
+              expect(reported.networkAccess).toBe("restricted");
+              expect(nativeAgentPolicyEffects(reported).networkHeldBy).toBe("container");
+            } else if (reported.networkAccess === "restricted") {
+              expect(nativeAgentPolicyEffects(reported).networkHeldBy).toBe("toolset");
+            }
+          }
           const narrowing = narrowings[shape.id as keyof typeof narrowings] as
             | Narrowing
             | undefined;

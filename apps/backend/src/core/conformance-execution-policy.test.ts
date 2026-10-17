@@ -10,6 +10,13 @@
  * captured from the `session.create` call itself.
  */
 import { describe, expect, test } from "bun:test";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import {
+  policyQualificationCli,
+  policyCliOutput,
+  withPolicyCliFixture,
+} from "../../../../tests/conformance/execution-policy/vendor-cli.js";
 import type { OpencodeClient } from "@opencode-ai/sdk/v2/client";
 import {
   nativeAgentPolicyEffects,
@@ -88,42 +95,63 @@ function ruleAction(rules: readonly OpenCodeRule[], permission: string) {
 }
 
 /** What OpenCode does with the rules it was created with. */
-function observeOpenCode(rules: readonly OpenCodeRule[]): AdapterEffects {
+function observeOpenCode(
+  rules: readonly OpenCodeRule[],
+  projectResources: boolean,
+): AdapterEffects {
   const shell = ruleAction(rules, "bash");
   return {
     // OpenCode has no sandbox; its rules are the only boundary.
     providerSandbox: false,
     approvals: shell === "allow" ? "auto-approve" : shell === "ask" ? "ask" : "deny",
-    // It always reads the checkout's configuration for its session directory.
-    projectResources: true,
+    // Observed independently from the pinned CLI loading a fixture in that directory.
+    projectResources,
     restrictsNetwork: shell === "deny" && ruleAction(rules, "webfetch") === "deny",
   };
 }
 
-runExecutionPolicyConformance({
-  platform: "opencode",
-  async apply(shape) {
-    const created: Array<Record<string, unknown>> = [];
-    const client = {
-      session: {
-        create: async (body: Record<string, unknown>) => {
-          created.push(body);
-          return { data: { id: `session-${shape.id}` } };
-        },
-      },
-    } as unknown as OpencodeClient;
-    const permissions = new OpenCodeReviewSessionPermissions(
-      client,
-      "/workspace",
-      () => ({ signal: new AbortController().signal }),
-      () => undefined,
-    );
-    const { policy } = await permissions.createSession("conformance", { policy: shape.policy });
-    expect(created).toHaveLength(1);
-    return {
-      // The provider reports this policy in its session snapshots.
-      reported: policy!,
-      observed: observeOpenCode(created[0]!.permission as OpenCodeRule[]),
-    };
+const opencode = policyQualificationCli("opencode");
+
+runExecutionPolicyConformance(
+  {
+    platform: "opencode",
+    async apply(shape) {
+      return withPolicyCliFixture(async (fixture) => {
+        await writeFile(
+          join(fixture.cwd, "opencode.json"),
+          JSON.stringify({ instructions: ["POLICY_PROBE.md"] }),
+        );
+        const created: Array<Record<string, unknown>> = [];
+        const client = {
+          session: {
+            create: async (body: Record<string, unknown>) => {
+              created.push(body);
+              return { data: { id: `session-${shape.id}` } };
+            },
+          },
+        } as unknown as OpencodeClient;
+        const permissions = new OpenCodeReviewSessionPermissions(
+          client,
+          fixture.cwd,
+          () => ({ signal: new AbortController().signal }),
+          () => undefined,
+        );
+        const { policy } = await permissions.createSession("conformance", { policy: shape.policy });
+        expect(created).toHaveLength(1);
+        expect(await policyCliOutput(opencode!, ["--version"], fixture)).toContain("1.19.0");
+        const config = JSON.parse(await policyCliOutput(opencode!, ["debug", "config"], fixture));
+        const projectResources = config.instructions?.includes("POLICY_PROBE.md") === true;
+        expect(projectResources).toBe(true);
+        return {
+          // The provider reports this policy in its session snapshots.
+          reported: policy!,
+          observed: observeOpenCode(created[0]!.permission as OpenCodeRule[], projectResources),
+        };
+      });
+    },
   },
-});
+  {
+    timeoutMs: 20_000,
+    skipReason: opencode ? undefined : "install the pinned OpenCode CLI for offline qualification",
+  },
+);

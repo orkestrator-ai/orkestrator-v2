@@ -6,8 +6,8 @@
  * and prompted with the controls the backend sends, and the observation is
  * read from the `thread/start` and `turn/start` requests the child received
  * plus the `-c` overrides the app-server process is launched with
- * (`codexAppServerConfigOverrides`). The reported policy is `getConfig`'s,
- * which the backend projects into Agent Info.
+ * (`codexAppServerConfigOverrides`). The reported policy is `getStatus`'s,
+ * which the progressive backend projects into Agent Info; config must agree.
  */
 import { expect } from "bun:test";
 import {
@@ -120,7 +120,8 @@ runExecutionPolicyConformance({
       const thread = requests.find((request) => request.method === "thread/start")!.params;
       const turn = requests.find((request) => request.method === "turn/start")!.params;
       const overrides = codexAppServerConfigOverrides({ ...process.env, CWD: "/tmp/ws" });
-      const reported = (await h.runtime.getConfig(sessionId))!.policy!;
+      const reported = h.runtime.getStatus(sessionId)!.policy!;
+      expect(reported).toEqual((await h.runtime.getConfig(sessionId))!.policy!);
       h.child().notify("turn/completed", {
         threadId: "thread-1",
         turn: { id: "turn-1", status: "completed" },

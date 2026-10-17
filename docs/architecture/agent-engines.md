@@ -500,8 +500,11 @@ resources off, and full network access: every vendor sandbox holds `.git`
 read-only, which stalls ordinary Git work in a worktree (#613). Container
 sessions use the container as their sandbox, automatically approve inside that
 boundary, enable project resources, and follow the environment network
-setting, which an override cannot change because the container's firewall
-follows the environment. Pipeline runs are unattended. The coordinator always
+setting. An override cannot widen the container firewall; an override that
+narrows a full-network container enables a provider sandbox inside it. The
+resolved policy retains `containerNetworkAccess` alongside that optional inner
+sandbox, so adapters without a provider sandbox still report the outer boundary.
+Pipeline runs are unattended. The coordinator always
 uses the immutable `coordinator-read-only` policy regardless of an environment
 override.
 

@@ -1217,6 +1217,8 @@ export interface NativeAgentExecutionPolicy {
   /** Provider-neutral denials each bridge translates into its own tool names. */
   capabilityPolicy?: { deny: NativeAgentCapability[] };
   networkAccess: "restricted" | "full";
+  /** Outer firewall retained when an optional provider sandbox runs in a container. */
+  containerNetworkAccess?: "restricted" | "full";
   /** Provider caveat when one policy axis cannot be enforced exactly. */
   note?: string;
 }
@@ -1255,6 +1257,9 @@ export function isNativeAgentExecutionPolicy(value: unknown): value is NativeAge
       policy.approvals === "deny") &&
     typeof policy.projectResources === "boolean" &&
     (policy.networkAccess === "restricted" || policy.networkAccess === "full") &&
+    (policy.containerNetworkAccess === undefined ||
+      policy.containerNetworkAccess === "restricted" ||
+      policy.containerNetworkAccess === "full") &&
     (policy.note === undefined || typeof policy.note === "string") &&
     (toolPolicy === undefined ||
       ((toolPolicy.allow === undefined ||

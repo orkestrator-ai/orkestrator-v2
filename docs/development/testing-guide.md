@@ -94,6 +94,31 @@ The fixtures replace privileged commands and root paths; this does not run the
 container firewall against the host. Keep Docker archive fixtures free of macOS
 AppleDouble metadata with `COPYFILE_DISABLE=1` and an explicit archive format.
 
+### Execution policy qualification
+
+The shared matrix in `tests/conformance/execution-policy/` checks resolver output,
+adapter requests, and the policy projected into Agent Info. Container shapes
+include optional provider sandboxes under both full and restricted firewalls.
+
+Pi loads a fixture extension through the production SDK resource setup. Claude's
+`conformance-execution-policy-live.test.ts` drives the pinned SDK's real CLI with
+a scripted local model endpoint, including an unsandboxed control, an explicit
+sandbox escape, an unlisted destination, and a failed sandbox launch. These tests
+use temporary homes, fake credentials, and no external model service. macOS uses
+an enclosing `sandbox-exec` profile to deny only the nested sandbox launch; Linux
+removes sandbox dependencies from the child's PATH. Working sandbox dependencies
+are required for the escape and network cases.
+
+OpenCode and Grok conformance read actual fixture project configuration using
+the pinned CLI's `debug config` and `inspect --json`. They discover the managed
+binary in the normal toolchain directory, or accept explicit
+`ORKESTRATOR_POLICY_OPENCODE_PATH` / `ORKESTRATOR_POLICY_GROK_PATH` paths. Explicit
+paths must exist and report the pinned version. When a managed binary is absent,
+those adapter cases are visibly skipped with an installation reason; resolver,
+protocol and other adapter checks still run. Install both pinned CLIs for full
+execution-policy qualification evidence. The fixtures do not read user credentials
+or start a production backend.
+
 ## What the aggregate runner does
 
 `mise run test` submits four independent groups to the host capacity queue:

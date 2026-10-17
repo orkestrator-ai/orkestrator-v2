@@ -128,6 +128,31 @@ export const POLICY_SHAPES = [
     origin: "interactive-native",
     policy: container("full"),
   },
+  ...(["full", "restricted"] as const).map((networkAccessMode) => ({
+    id: `container-${networkAccessMode}-provider` as const,
+    title: `container with ${networkAccessMode} firewall and a provider sandbox`,
+    environment: { environmentType: "containerized" as const, networkAccessMode },
+    origin: "interactive-native" as const,
+    override: { sandbox: "provider" as const },
+    policy: {
+      ...container(networkAccessMode),
+      sandbox: "provider" as const,
+      containerNetworkAccess: networkAccessMode,
+    },
+  })),
+  ...(["none", "container"] as const).map((sandbox) => ({
+    id: `container-full-restricted-${sandbox}` as const,
+    title: `full-network container with ${sandbox} sandbox and restricted override`,
+    environment: { environmentType: "containerized" as const, networkAccessMode: "full" as const },
+    origin: "interactive-native" as const,
+    override: { sandbox, networkAccess: "restricted" as const },
+    policy: {
+      ...container("restricted"),
+      sandbox: "provider" as const,
+      containerNetworkAccess: "full" as const,
+      note: SANDBOXED_FOR_NETWORK_RESTRICTION_NOTE,
+    },
+  })),
   {
     id: "container-ask",
     title: "container with approvals on request",

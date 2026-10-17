@@ -1205,6 +1205,15 @@ describe("native agent execution policy guard", () => {
     }
   });
 
+  test("validates the optional outer container firewall", () => {
+    for (const containerNetworkAccess of ["full", "restricted"]) {
+      expect(isNativeAgentExecutionPolicy({ ...valid, containerNetworkAccess })).toBe(true);
+    }
+    for (const containerNetworkAccess of [null, true, "off", 1, {}]) {
+      expect(isNativeAgentExecutionPolicy({ ...valid, containerNetworkAccess })).toBe(false);
+    }
+  });
+
   test("rejects a capability that is not one this protocol names", () => {
     expect(
       isNativeAgentExecutionPolicy({ ...valid, capabilityPolicy: { deny: ["fs.write"] } }),

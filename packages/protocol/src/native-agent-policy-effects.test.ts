@@ -4,6 +4,7 @@ import {
   describeNativeAgentExecutionPolicy,
   nativeAgentPolicyEffects,
   withoutProviderSandbox,
+  SANDBOXED_FOR_NETWORK_RESTRICTION_NOTE,
   type NativeAgentExecutionPolicy,
 } from "./native-agent.js";
 
@@ -71,6 +72,60 @@ describe("withoutProviderSandbox", () => {
     expect(applied.note).toBe(
       "Backend note. Pi has no sandbox of its own, so this session runs unsandboxed with full network access.",
     );
+  });
+
+  test.each([false, true])(
+    "removes obsolete sandbox notes (toolset blocks: %s)",
+    (toolsetBlocksNetwork) => {
+      const applied = withoutProviderSandbox(
+        {
+          ...host,
+          sandbox: "provider",
+          networkAccess: "restricted",
+          note: `Other caveat. ${SANDBOXED_FOR_NETWORK_RESTRICTION_NOTE}`,
+        },
+        { agent: "Pi", toolsetBlocksNetwork },
+      );
+      expect(applied.note).not.toContain(SANDBOXED_FOR_NETWORK_RESTRICTION_NOTE);
+      expect(applied.note).toContain("Other caveat.");
+    },
+  );
+
+  test.each(["full", "restricted"] as const)(
+    "keeps an outer %s container firewall",
+    (containerNetworkAccess) => {
+      const applied = withoutProviderSandbox(
+        { ...host, sandbox: "provider", networkAccess: "restricted", containerNetworkAccess },
+        { agent: "Pi", toolsetBlocksNetwork: false },
+      );
+      expect(nativeAgentPolicyEffects(applied)).toMatchObject({
+        isolation: "container",
+        network: containerNetworkAccess,
+      });
+      expect(nativeAgentPolicyEffects(applied).networkHeldBy).toBe(
+        containerNetworkAccess === "restricted" ? "container" : undefined,
+      );
+      expect(applied.note).not.toContain("runs unsandboxed");
+    },
+  );
+
+  test("tool denials can narrow a full-network container after removing its provider sandbox", () => {
+    const applied = withoutProviderSandbox(
+      {
+        ...host,
+        sandbox: "provider",
+        networkAccess: "restricted",
+        containerNetworkAccess: "full",
+        approvals: "deny",
+      },
+      { agent: "Pi", toolsetBlocksNetwork: true },
+    );
+    expect(nativeAgentPolicyEffects(applied)).toMatchObject({
+      isolation: "container",
+      network: "restricted",
+      networkHeldBy: "toolset",
+    });
+    expect(applied.note).toContain("Tool denials restrict network access.");
   });
 
   test("keeps a restriction the toolset holds", () => {

@@ -1227,6 +1227,7 @@ export class CodexRuntimeSessions {
     messageRevision: number;
     contentEpoch: number;
     commandRevision?: number;
+    policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
     readiness?: NativeAgentReadiness;
   } | null {
     const session = this.ctx.registry.getSession(sessionId);
@@ -1246,6 +1247,7 @@ export class CodexRuntimeSessions {
     return {
       // Keeps the pre-migration contract; `phase` carries the new detail.
       status: phaseToExternalStatus(phase),
+      ...(session.config.policy ? { policy: codexReportedPolicy(session.config.policy) } : {}),
       phase,
       title: session.title,
       error:

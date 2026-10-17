@@ -57,10 +57,19 @@ export function nativeAgentPolicyEffects(
     projectResources: policy.projectResources,
     network: policy.networkAccess,
     ...(policy.networkAccess === "restricted"
-      ? { networkHeldBy: isolation === "none" ? ("toolset" as const) : isolation }
+      ? {
+          networkHeldBy:
+            isolation === "none" ||
+            (isolation === "container" && policy.containerNetworkAccess === "full")
+              ? ("toolset" as const)
+              : isolation,
+        }
       : {}),
   };
 }
+
+export const SANDBOXED_FOR_NETWORK_RESTRICTION_NOTE =
+  "Restricted network access is enforced by the provider sandbox, so this session runs sandboxed.";
 
 /** Stable, provider-neutral copy for the agent information panel. */
 export function describeNativeAgentPolicyEffects(effects: NativeAgentPolicyEffects): string {
@@ -104,11 +113,18 @@ export function withoutProviderSandbox(
 ): NativeAgentExecutionPolicy {
   if (policy.sandbox === "container") return policy;
   const sandboxed = policy.sandbox === "provider";
-  const losesRestriction = policy.networkAccess === "restricted" && !options.toolsetBlocksNetwork;
+  const container = policy.containerNetworkAccess !== undefined;
+  const losesRestriction =
+    policy.networkAccess === "restricted" &&
+    policy.containerNetworkAccess !== "restricted" &&
+    !options.toolsetBlocksNetwork;
   if (!sandboxed && !losesRestriction) return policy;
   const applied: NativeAgentExecutionPolicy = {
     ...policy,
-    sandbox: "none",
+    sandbox: container ? "container" : "none",
+    // The old sandbox explanation is no longer true, even if the toolset or
+    // outer firewall still holds the restriction. Keep unrelated caveats.
+    note: policy.note?.replace(SANDBOXED_FOR_NETWORK_RESTRICTION_NOTE, "").trim() || undefined,
     ...(losesRestriction ? { networkAccess: "full" as const } : {}),
   };
   const network = losesRestriction
@@ -118,6 +134,8 @@ export function withoutProviderSandbox(
       : "";
   return appendNativeAgentPolicyNote(
     applied,
-    `${options.agent} has no sandbox of its own, so this session runs unsandboxed${network}.`,
+    container
+      ? `${options.agent} has no sandbox of its own; this session keeps the container boundary.${applied.networkAccess === "restricted" && policy.containerNetworkAccess === "full" ? " Tool denials restrict network access." : ""}`
+      : `${options.agent} has no sandbox of its own, so this session runs unsandboxed${network}.`,
   );
 }

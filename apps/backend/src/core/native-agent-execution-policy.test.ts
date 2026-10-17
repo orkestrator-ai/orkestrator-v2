@@ -224,7 +224,7 @@ describe("resolveNativeAgentExecutionPolicy", () => {
 
   test("a container reports the network its firewall gives, not the override's", () => {
     // The firewall follows the environment (`commands-containers.ts`), so an
-    // override that widens or narrows the network would only change the label.
+    // override cannot widen the network beyond the firewall.
     expect(
       resolveNativeAgentExecutionPolicy(container, "interactive-native", { networkAccess: "full" }),
     ).toEqual({
@@ -235,18 +235,25 @@ describe("resolveNativeAgentExecutionPolicy", () => {
       networkAccess: "restricted",
       note: CONTAINER_NETWORK_FOLLOWS_ENVIRONMENT_NOTE,
     });
-    expect(
-      resolveNativeAgentExecutionPolicy(
-        { environmentType: "containerized", networkAccessMode: "full" },
-        "interactive-native",
-        { networkAccess: "restricted" },
-      ),
-    ).toMatchObject({
-      sandbox: "container",
-      networkAccess: "full",
-      note: CONTAINER_NETWORK_FOLLOWS_ENVIRONMENT_NOTE,
-    });
   });
+
+  test.each([undefined, "none", "container"] as const)(
+    "a full-network container retains restricted overrides with sandbox %s",
+    (sandbox) => {
+      expect(
+        resolveNativeAgentExecutionPolicy(
+          { environmentType: "containerized", networkAccessMode: "full" },
+          "interactive-native",
+          { ...(sandbox ? { sandbox } : {}), networkAccess: "restricted" },
+        ),
+      ).toMatchObject({
+        sandbox: "provider",
+        networkAccess: "restricted",
+        containerNetworkAccess: "full",
+        note: SANDBOXED_FOR_NETWORK_RESTRICTION_NOTE,
+      });
+    },
+  );
 
   test("a provider sandbox inside a container can narrow its network but not widen it", () => {
     expect(

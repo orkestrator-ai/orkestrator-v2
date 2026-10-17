@@ -13,6 +13,7 @@ import {
   claudeTurnPolicy,
   claudeWorkspaceCwd,
 } from "./claude-query-config.js";
+import { claudeExecutionSandbox } from "./claude-execution-sandbox.js";
 import { debugLog } from "./logger.js";
 import {
   AGENT_MCP_SERVER_NAME,
@@ -23,7 +24,6 @@ import { getPluginsForSdk } from "./plugin-config.js";
 import {
   claudeDeniedTools,
   claudeReadOnlyAllowedTools,
-  claudeReadOnlySandbox,
   createCoordinatorReadOnlyHook,
   isCoordinatorReadOnlyPolicy,
 } from "./read-only-policy.js";
@@ -336,28 +336,9 @@ export function claudeQueryOptions(
     forwardSubagentText: true,
     allowedTools,
     ...(disallowedTools?.length ? { disallowedTools } : {}),
-    ...(coordinatorReadOnly && policy
-      ? { sandbox: claudeReadOnlySandbox(policy) }
-      : policy?.sandbox === "provider"
-        ? {
-            sandbox: {
-              enabled: true,
-              autoAllowBashIfSandboxed:
-                policy.approvals === "auto-approve" && !claudeAsksForApproval(policy, options),
-              // The model may ask to run a command outside the sandbox, and
-              // that request goes to the permission system. With nobody to
-              // ask, it would be granted unseen and the sandbox would hold
-              // nothing, so the way out exists only when a person decides.
-              allowUnsandboxedCommands: claudeAsksForApproval(policy, options),
-              network: {
-                allowLocalBinding: policy.networkAccess === "full",
-                // Without it, a domain off the (empty) allowlist becomes a
-                // permission request, which an auto-approved session grants.
-                strictAllowlist: policy.networkAccess === "restricted",
-              },
-            },
-          }
-        : {}),
+    ...(policy?.sandbox === "provider" || coordinatorReadOnly
+      ? { sandbox: claudeExecutionSandbox(policy, claudeAsksForApproval(policy, options)) }
+      : {}),
     abortController,
     // A deterministic UUID makes the bridge id recoverable from the SDK's
     // persisted session store after a bridge restart.

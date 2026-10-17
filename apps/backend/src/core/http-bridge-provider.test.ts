@@ -2444,6 +2444,22 @@ describe("HTTP bridge progressive transcript", () => {
     expect(state).not.toHaveProperty("messages");
   });
 
+  test("progressive Codex state retains the applied project-trust policy from config", async () => {
+    const policy: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy = {
+      id: "interactive-host",
+      sandbox: "none",
+      approvals: "auto-approve",
+      projectResources: true,
+      networkAccess: "full",
+      note: "Codex loads a trusted project's own configuration, including its MCP servers and hooks, whatever this session's policy says.",
+    };
+    const { provider } = httpProvider(
+      (url) => Response.json(url.includes("/config") ? { policy } : { status: "idle" }),
+      codexConnection,
+    );
+    expect((await provider.sessionStateSnapshot!("session-1")).policy).toEqual(policy);
+  });
+
   test("prefers an explicit resumable identity and drops invalid identities", async () => {
     for (const [resumableSessionId, expected] of [
       ["  external-session  ", "external-session"],

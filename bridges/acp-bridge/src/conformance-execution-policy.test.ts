@@ -9,6 +9,14 @@
  * reported policy is `publicSession`'s, which Agent Info renders.
  */
 import "./testing/unit-test-env.js";
+import { expect } from "bun:test";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import {
+  policyQualificationCli,
+  policyCliOutput,
+  withPolicyCliFixture,
+} from "../../../tests/conformance/execution-policy/vendor-cli.js";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import {
   runExecutionPolicyConformance,
@@ -22,6 +30,7 @@ import { attachChild, clearApprovals } from "./acp-session.js";
 
 // The process-wide provider is the unit-test fixture; Grok's command line is
 // built from its own built-in configuration, as its launcher's would be.
+const grokExecutable = policyQualificationCli("grok");
 const grok = loadAcpProviderConfig({ ACP_PROVIDER: "grok", ACP_AGENT_PATH: "/opt/grok/bin/grok" });
 type AcpSession = Parameters<typeof publicSession>[0];
 
@@ -50,47 +59,81 @@ function permissionAnswer(state: AcpSession) {
     : ("deny" as const);
 }
 
-runExecutionPolicyConformance({
-  platform: "grok",
-  async apply(shape) {
-    const state = {
-      id: `conformance-${shape.id}`,
-      acpSessionId: "vendor-session",
-      status: "running",
-      // What the create route stores.
-      policy: effectiveExecutionPolicy(shape.policy),
-      messages: [],
-      approvals: new Map(),
-      interactions: new Map(),
-      revision: 0,
-      sessionConfig: { composer: {} },
-      health: new RuntimeHealthRecorder(),
-    } as unknown as AcpSession;
-    sessions.set(state.id, state);
-    try {
-      const argv = providerArgv(grok, {
-        approvals: effectiveTurnExecutionPolicy(state)?.approvals,
+runExecutionPolicyConformance(
+  {
+    platform: "grok",
+    async apply(shape) {
+      return withPolicyCliFixture(async (fixture) => {
+        await mkdir(join(fixture.cwd, ".grok"));
+        await writeFile(join(fixture.cwd, ".grok", "config.toml"), 'model = "policy-probe"\n');
+        const state = {
+          id: `conformance-${shape.id}`,
+          acpSessionId: "vendor-session",
+          status: "running",
+          // What the create route stores.
+          policy: effectiveExecutionPolicy(shape.policy),
+          messages: [],
+          approvals: new Map(),
+          interactions: new Map(),
+          revision: 0,
+          sessionConfig: { composer: {} },
+          health: new RuntimeHealthRecorder(),
+        } as unknown as AcpSession;
+        sessions.set(state.id, state);
+        try {
+          const argv = providerArgv(grok, {
+            approvals: effectiveTurnExecutionPolicy(state)?.approvals,
+          });
+          // With `--always-approve` Grok runs its tools without asking at all;
+          // otherwise each request reaches the bridge, which answers it.
+          const approvals: AdapterEffects["approvals"] = argv.includes("--always-approve")
+            ? "auto-approve"
+            : permissionAnswer(state);
+          // Inspect the pinned CLI's actual project discovery, in an empty home.
+          expect(await policyCliOutput(grokExecutable!, ["--version"], fixture)).toContain(
+            "1.0.52",
+          );
+          const inspection = JSON.parse(
+            await policyCliOutput(grokExecutable!, ["inspect", "--json"], fixture),
+          );
+          const projectResources =
+            inspection.projectTrusted === true &&
+            inspection.configSources.layers.some(
+              (layer: { role: string; path: string }) =>
+                layer.role === "project" && layer.path.endsWith("/.grok/config.toml"),
+            );
+          expect(projectResources).toBe(true);
+          // Decode the emitted launch arguments: no profile or tool removal means
+          // commands retain their default filesystem and network access. The
+          // permission handler above is exercised even for deny policies.
+          const providerSandbox = argv.some(
+            (arg) => arg === "--sandbox" || arg.startsWith("--sandbox="),
+          );
+          expect(argv).not.toContain("--tools");
+          expect(argv).not.toContain("--disallowed-tools");
+          return {
+            reported: publicSession(state).policy as never,
+            observed: {
+              // Grok is given no sandbox, network or project-configuration option:
+              // it loads project MCP servers by its own folder trust.
+              providerSandbox,
+              approvals,
+              projectResources,
+              // A tool that does not ask is never stopped, so even `deny` holds
+              // nothing off the network.
+              restrictsNetwork: providerSandbox,
+            },
+          };
+        } finally {
+          sessions.delete(state.id);
+        }
       });
-      // With `--always-approve` Grok runs its tools without asking at all;
-      // otherwise each request reaches the bridge, which answers it.
-      const approvals: AdapterEffects["approvals"] = argv.includes("--always-approve")
-        ? "auto-approve"
-        : permissionAnswer(state);
-      return {
-        reported: publicSession(state).policy as never,
-        observed: {
-          // Grok is given no sandbox, network or project-configuration option:
-          // it loads project MCP servers by its own folder trust.
-          providerSandbox: false,
-          approvals,
-          projectResources: true,
-          // A tool that does not ask is never stopped, so even `deny` holds
-          // nothing off the network.
-          restrictsNetwork: false,
-        },
-      };
-    } finally {
-      sessions.delete(state.id);
-    }
+    },
   },
-});
+  {
+    timeoutMs: 20_000,
+    skipReason: grokExecutable
+      ? undefined
+      : "install the pinned Grok CLI for offline qualification",
+  },
+);

@@ -44,6 +44,11 @@ export const EXECUTION_POLICY_NARROWINGS: Record<
       reason:
         "The Cursor SDK has no approval callback, so a non-coordinator `deny` session is refused before attach rather than run unenforced.",
     },
+    "container-full-provider": {
+      observed: { restrictsNetwork: true },
+      reason:
+        "Cursor always applies its sandbox network rules when its provider sandbox is on, including inside a full-network container.",
+    },
     "host-provider-sandbox": {
       observed: { restrictsNetwork: true },
       reason:

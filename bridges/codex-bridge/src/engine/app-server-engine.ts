@@ -24,7 +24,7 @@
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { open } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import {
   AppServerSupervisor,
   type AppServerHealth,
@@ -728,6 +728,8 @@ export class AppServerEngine implements CodexEngine {
   private readonly listeners = new Set<EngineEventListener>();
   /** handle → binding. For app-server the handle *is* the thread id. */
   private readonly bindings = new Map<string, ThreadBinding>();
+  /** Thread id → the rollout file app-server reported for it, while bound. */
+  private readonly rolloutPaths = new Map<string, string>();
   private readonly terminalWaiters = new Map<string, TerminalWaiter[]>();
   private readonly interruptTimeoutMs: number;
   private unknownNotificationCount = 0;
@@ -2029,6 +2031,11 @@ export class AppServerEngine implements CodexEngine {
       thread.model = confirmedModel.trim();
     }
     if (thread.id) {
+      // app-server names the rollout before the thread is materialized, so
+      // the file may not exist yet.
+      if (typeof raw.path === "string" && isAbsolute(raw.path)) {
+        this.rolloutPaths.set(thread.id, raw.path);
+      }
       // The thread id doubles as the engine handle: app-server addresses
       // everything by thread id, so a second indirection would add nothing.
       this.bindings.set(thread.id, {
@@ -2136,12 +2143,21 @@ export class AppServerEngine implements CodexEngine {
   }
 
   /**
+   * The rollout file app-server reported for a bound thread. The bridge reads
+   * it for calls app-server reports no item for (`RefusedCellTail`).
+   */
+  rolloutPath(threadId: string): string | undefined {
+    return this.rolloutPaths.get(threadId);
+  }
+
+  /**
    * Releases a thread. Deliberately `thread/unsubscribe`, never `thread/delete`:
    * closing a tab must not destroy the user's conversation or its descendants.
    */
   async unsubscribeThread(handle: string): Promise<void> {
     const binding = this.bindings.get(handle);
     this.accountProofTurns.delete(binding?.threadId ?? handle);
+    this.rolloutPaths.delete(binding?.threadId ?? handle);
     this.bindings.delete(handle);
     if (!binding) return;
     try {

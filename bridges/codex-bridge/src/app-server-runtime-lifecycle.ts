@@ -35,6 +35,7 @@ import {
   type ThreadContext,
 } from "./sessions/thread-registry.js";
 import { TurnAccumulator } from "./sessions/turn-accumulator.js";
+import { RefusedCellTail, type RefusedCell } from "./sessions/refused-cell-tail.js";
 import { compareDispatchRecordsNewestFirst, DispatchJournal } from "./sessions/dispatch-journal.js";
 
 import {
@@ -213,6 +214,10 @@ export class CodexRuntimeLifecycle {
         ...[...this.ctx.threadState.values()]
           .filter((state) => state.orderedEventDraining)
           .map((state) => state.orderedEventTail),
+        ...[...this.ctx.threadState.values()].flatMap((state) => {
+          const reading = state.refusedCellTail?.tail.busy();
+          return reading ? [reading] : [];
+        }),
       ];
       if (pending.length === 0) return;
       await Promise.allSettled(pending);
@@ -459,6 +464,8 @@ export class CodexRuntimeLifecycle {
     state.historicalAssistantSegments.clear();
     state.releasedAssistantRows.clear();
     state.pendingEvents.clear();
+    state.refusedCellTail?.tail.close();
+    state.refusedCellTail = undefined;
     this.ctx.threadState.delete(threadId);
   }
 
@@ -946,7 +953,10 @@ export class CodexRuntimeLifecycle {
       }
       case "turn.started": {
         const turn = context.activeTurn;
-        if (turn && turn.turnId === event.turnId) turn.markRunning(event.turnId);
+        if (turn && turn.turnId === event.turnId) {
+          turn.markRunning(event.turnId);
+          this.startRefusedCellTail(context, turn);
+        }
         return;
       }
       case "model.tool.called": {
@@ -970,6 +980,9 @@ export class CodexRuntimeLifecycle {
         // `item/completed` is authoritative; show it without waiting a tick.
         if (event.kind === "item.completed") void this.stateFor(threadId).coalescer.flushNow();
         else this.stateFor(threadId).coalescer.schedule(this.ctx.now());
+        // A backstop for the rollout watch: a refused cell is on disk before
+        // the model's next response, whose items arrive here.
+        if (event.kind !== "item.updated") this.pollRefusedCellTail(threadId, turn);
         return;
       }
       case "item.dynamic.started": {
@@ -1060,17 +1073,96 @@ export class CodexRuntimeLifecycle {
         if (!turn || !turn.accepts(event)) return;
         this.discardOutlivingCommandWindows(turn);
         turn.complete(event.status, event.error);
-        void this.runFinalization(context, turn).catch((error) => {
-          console.error(
-            `[codex-bridge] Failed to finalize turn ${turn.turnId}:`,
-            error instanceof Error ? error.message : error,
-          );
-        });
+        const finalize = () =>
+          this.runFinalization(context, turn).catch((error) => {
+            console.error(
+              `[codex-bridge] Failed to finalize turn ${turn.turnId}:`,
+              error instanceof Error ? error.message : error,
+            );
+          });
+        // The last cells are read before the turn's rows are rendered for good.
+        const tail = this.takeRefusedCellTail(threadId, turn);
+        if (!tail) {
+          void finalize();
+          return;
+        }
+        const work = tail.finish().then(finalize, finalize);
+        this.ctx.pendingFinalizations.add(work);
+        void work.then(() => this.ctx.pendingFinalizations.delete(work));
         return;
       }
       default:
         return;
     }
+  }
+
+  /**
+   * Follows the turn's rollout records for code-mode cells app-server reports
+   * no item for, and shows them as rows (`RefusedCellTail`). Needs the rollout
+   * path app-server reported for the thread; without one nothing changes.
+   */
+  startRefusedCellTail(context: ThreadContext, turn: TurnAccumulator): void {
+    const state = this.stateFor(context.threadId);
+    if (state.refusedCellTail?.turnId === turn.turnId) return;
+    state.refusedCellTail?.tail.close();
+    state.refusedCellTail = undefined;
+    const path = this.ctx.options.engine.rolloutPath(context.threadId);
+    if (!path) return;
+    const watch = this.ctx.options.watchRolloutFile;
+    const tail = new RefusedCellTail({
+      path,
+      turnId: turn.turnId,
+      ...(watch ? { watch } : {}),
+      itemStartedBetween: (fromMs, toMs) => turn.clientToolItemStartedBetween(fromMs, toMs),
+      onCell: (cell) => this.applyRefusedCell(context, turn, cell),
+    });
+    state.refusedCellTail = { turnId: turn.turnId, tail };
+    void tail.poll().catch(() => undefined);
+  }
+
+  pollRefusedCellTail(threadId: string, turn: TurnAccumulator): void {
+    const entry = this.ctx.threadState.get(threadId)?.refusedCellTail;
+    if (entry?.turnId === turn.turnId) void entry.tail.poll().catch(() => undefined);
+  }
+
+  /** Detaches the turn's tail so its last read can run before finalization. */
+  takeRefusedCellTail(threadId: string, turn: TurnAccumulator): RefusedCellTail | undefined {
+    const state = this.ctx.threadState.get(threadId);
+    const entry = state?.refusedCellTail;
+    if (!state || !entry) return undefined;
+    state.refusedCellTail = undefined;
+    if (entry.turnId === turn.turnId) return entry.tail;
+    entry.tail.close();
+    return undefined;
+  }
+
+  /**
+   * Shows a recovered cell as the item app-server never sent: a completed
+   * dynamic tool call, rendered like the `exec` row a reload builds from the
+   * same rollout record. Failed when the model was told of a refusal.
+   */
+  applyRefusedCell(context: ThreadContext, turn: TurnAccumulator, cell: RefusedCell): void {
+    if (context.activeTurn !== turn) return;
+    const duration =
+      cell.startedAtMs !== undefined && cell.completedAtMs !== undefined
+        ? Math.max(0, Math.round(cell.completedAtMs - cell.startedAtMs))
+        : undefined;
+    this.applyEvent(context, {
+      kind: "item.completed",
+      threadId: context.threadId,
+      turnId: turn.turnId,
+      item: {
+        id: cell.callId,
+        type: "dynamic_tool_call",
+        tool: "exec",
+        arguments: cell.source,
+        content_items: cell.output ? [{ type: "inputText", text: cell.output }] : [],
+        status: cell.failed ? "failed" : "completed",
+        ...(duration === undefined ? {} : { duration_ms: duration }),
+      },
+      ...(cell.completedAtMs === undefined ? {} : { completedAtMs: cell.completedAtMs }),
+      engineGeneration: turn.engineGeneration,
+    });
   }
 
   /** Gives the next model response a row of its own (see `openModelResponseRow`). */
@@ -1721,6 +1813,8 @@ export class CodexRuntimeLifecycle {
   }
 
   runFinalization(context: ThreadContext, turn: TurnAccumulator): Promise<void> {
+    // A turn settled by recovery rather than `turn/completed` stops its tail here.
+    this.takeRefusedCellTail(context.threadId, turn)?.close();
     const work = this.ctx.callbacks.finalizeTurn(context, turn);
     this.ctx.pendingFinalizations.add(work);
     work.then(

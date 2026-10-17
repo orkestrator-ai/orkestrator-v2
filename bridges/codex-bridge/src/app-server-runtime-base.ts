@@ -7,6 +7,7 @@
 
 import type { AppServerEngine } from "./engine/app-server-engine.js";
 import type { CommandChangeProbe } from "./sessions/command-changes.js";
+import type { RefusedCellTail, WatchRolloutFile } from "./sessions/refused-cell-tail.js";
 import type {
   EngineEvent,
   EngineAccountUsageWindow,
@@ -93,6 +94,12 @@ export interface AppServerRuntimeOptions {
    * omitted, commands are simply not measured.
    */
   commandChangeProbe?: CommandChangeProbe;
+  /**
+   * Asks for a read of a turn's rollout records, for code-mode cells
+   * app-server reports no item for (`RefusedCellTail`). A 200 ms timer by
+   * default; tests drive it by hand.
+   */
+  watchRolloutFile?: WatchRolloutFile;
 }
 
 export interface OrderedRuntimeEvent {
@@ -210,6 +217,8 @@ export interface ThreadRuntimeState {
    * they are parked by turn id and replayed once the accumulator exists.
    */
   pendingEvents: Map<string, EngineEvent[]>;
+  /** Follows the active turn's rollout records; see `RefusedCellTail`. */
+  refusedCellTail?: { turnId: string; tail: RefusedCellTail };
 }
 
 /** Bounds the pre-registration buffer so a misbehaving peer cannot grow it. */

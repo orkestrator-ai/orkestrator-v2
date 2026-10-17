@@ -268,6 +268,17 @@ session unsubscribes, whereas deleting would destroy the user's rollout. Tab
 close (`POST /session/:id/close`) additionally confirms that a last-reference
 turn has actually stopped before releasing the thread.
 
+Calls a sandbox refuses are the one thing the item stream leaves out. The
+models Codex serves run in code mode, so the model sends a JavaScript `exec`
+cell that calls `apply_patch` or `exec_command`. Under a `read-only` or
+`workspace-write` sandbox, app-server emits no item for a rejected patch, nor
+for a failing command whose output looks like a sandbox denial. The model is
+still told, and usually says the call was denied. `sessions/refused-cell-tail.ts`
+reads the active turn's records from the rollout app-server reported
+(`thread.path`) and shows such a cell as a failed `exec` row, the same row a
+reload builds from that record. A cell whose calls already have rows is
+skipped unless its output reports a refusal.
+
 `session-titles.ts` is the one deliberate exception to all of the above — it
 still spawns a hermetic `codex exec` with a custom model catalog, a read-only
 sandbox, and user config ignored, so title generation cannot inherit the user's

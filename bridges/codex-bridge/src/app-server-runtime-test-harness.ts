@@ -38,6 +38,7 @@ import {
   type RuntimeSseEvent,
 } from "./app-server-runtime.js";
 
+import type { WatchRolloutFile } from "./sessions/refused-cell-tail.js";
 import { AppServerEngine } from "./engine/app-server-engine.js";
 
 import type { AppServerSupervisorOptions } from "./app-server/process-supervisor.js";
@@ -317,6 +318,7 @@ export async function harness(
     /** Leaves `runtime.start()` to the caller, so startup itself can be observed. */
     deferStart?: boolean;
     commandChangeProbe?: CommandChangeProbe;
+    watchRolloutFile?: WatchRolloutFile;
   } = {},
 ): Promise<Harness> {
   const merged = { ...BASE_HANDLERS, ...handlers };
@@ -407,6 +409,7 @@ export async function harness(
       ? { skillRefreshDebounceMs: options.skillRefreshDebounceMs }
       : {}),
     ...(options.commandChangeProbe ? { commandChangeProbe: options.commandChangeProbe } : {}),
+    ...(options.watchRolloutFile ? { watchRolloutFile: options.watchRolloutFile } : {}),
   });
   if (options.deferStart !== true) await runtime.start();
 

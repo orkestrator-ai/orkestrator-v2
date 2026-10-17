@@ -1,6 +1,6 @@
 /**
- * What the **real** pinned `codex app-server` reports when a coordinator's
- * sandbox refuses a call.
+ * What the **real** pinned `codex app-server` reports when a sandbox refuses a
+ * call, and how the bridge still shows it.
  *
  * A loopback Responses endpoint plays the model: its first response is one
  * code-mode `exec` cell that tries to add a file, run `touch`, and run a
@@ -14,18 +14,17 @@
  *
  * Codex 0.162.1 refuses both mutations and tells the model so, but emits no
  * item for either: only the control becomes a `commandExecution`. The model's
- * call survives only in the rollout, with the refusal in the cell's output. The
- * live coordinator suite reads the rollout for that reason
- * (`readCodexCoordinatorToolCalls` in
- * `apps/desktop/scripts/dev/coordinator-live.ts`), and counts a cell that
- * attempts one mutation when its output carries these refusal texts. If this
- * test starts failing because the refusals now arrive as items, that reader
- * can go; if the refusal wording changes, update `SANDBOX_REFUSALS` there.
+ * call survives only in the rollout, with the refusal in the cell's output.
+ * The bridge reads it there (`RefusedCellTail`) and shows the cell as a failed
+ * `exec` row; the second test runs that path through the runtime with the
+ * real file watch. If the refusals ever arrive as items, the tail can go.
  */
 import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, readdir, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { AppServerRuntime } from "../app-server-runtime.js";
+import type { RuntimeSseEvent } from "../app-server-runtime-base.js";
 import { codexAppServerConfigOverrides, codexCoordinatorPolicy } from "../codex-config.js";
 import { AppServerEngine } from "../engine/app-server-engine.js";
 import type { EngineEvent, EngineItem } from "../engine/types.js";
@@ -71,7 +70,7 @@ const SINGLE_CELLS = [
  * {@link SINGLE_CELLS}, and the last with a closing message. It records each
  * cell's output, which is what Codex told the model.
  */
-function startScriptedResponses() {
+function startScriptedResponses(options: { responseDelayMs?: number } = {}) {
   let sampled = 0;
   const cellOutputs = new Map<string, unknown>();
   const cells = [CELL, ...SINGLE_CELLS];
@@ -92,43 +91,61 @@ function startScriptedResponses() {
           input?: Array<{ type?: string; call_id?: string; output?: unknown }>;
         };
         if (frame.type !== "response.create") return;
-        const id = `resp_${randomSuffix()}`;
-        const send = (event: unknown) => socket.send(JSON.stringify(event));
-        send({ type: "response.created", response: { id } });
-        if (frame.generate !== false) {
-          sampled += 1;
-          for (const item of frame.input ?? []) {
-            if (item.type === "custom_tool_call_output" && item.call_id) {
-              cellOutputs.set(item.call_id, item.output);
-            }
-          }
-          const cell = cells[sampled - 1];
-          const item =
-            cell !== undefined
-              ? {
-                  type: "custom_tool_call",
-                  id: `ctc_probe_${sampled}`,
-                  call_id: `call_probe_${sampled}`,
-                  name: "exec",
-                  input: cell,
-                  status: "completed",
-                }
-              : {
-                  type: "message",
-                  id: "msg_probe",
-                  role: "assistant",
-                  content: [{ type: "output_text", text: "done", annotations: [] }],
-                  status: "completed",
-                };
-          send({ type: "response.output_item.done", output_index: 0, item });
+        // A model takes a moment to answer, which is when the bridge reads a
+        // refused cell back; without the delay the turn ends first.
+        if (frame.generate !== false && options.responseDelayMs) {
+          setTimeout(() => respond(socket, frame), options.responseDelayMs);
+          return;
         }
-        send({
-          type: "response.completed",
-          response: { id, usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } },
-        });
+        respond(socket, frame);
       },
     },
   });
+
+  function respond(
+    socket: { send: (data: string) => void },
+    frame: {
+      type?: string;
+      generate?: boolean;
+      input?: Array<{ type?: string; call_id?: string; output?: unknown }>;
+    },
+  ): void {
+    const id = `resp_${randomSuffix()}`;
+    const send = (event: unknown) => socket.send(JSON.stringify(event));
+    send({ type: "response.created", response: { id } });
+    if (frame.generate !== false) {
+      sampled += 1;
+      for (const item of frame.input ?? []) {
+        if (item.type === "custom_tool_call_output" && item.call_id) {
+          cellOutputs.set(item.call_id, item.output);
+        }
+      }
+      const cell = cells[sampled - 1];
+      const item =
+        cell !== undefined
+          ? {
+              type: "custom_tool_call",
+              id: `ctc_probe_${sampled}`,
+              call_id: `call_probe_${sampled}`,
+              name: "exec",
+              input: cell,
+              status: "completed",
+            }
+          : {
+              type: "message",
+              id: "msg_probe",
+              role: "assistant",
+              content: [{ type: "output_text", text: "done", annotations: [] }],
+              status: "completed",
+            };
+      send({ type: "response.output_item.done", output_index: 0, item });
+    }
+    send({
+      type: "response.completed",
+      response: { id, usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } },
+    });
+  }
+
   return {
     baseUrl: `http://127.0.0.1:${server.port}/v1`,
     cellOutput: (index = 1) => JSON.stringify(cellOutputs.get(`call_probe_${index}`) ?? null),
@@ -259,6 +276,89 @@ describeLive("live refused calls", () => {
     } finally {
       await engine.stop();
       await responses.stop();
+    }
+  }, 120_000);
+
+  test("the bridge shows each refused cell as a failed exec row in a read-only turn", async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), "ork-refused-runtime-home-"));
+    const workspace = await realpath(await mkdtemp(join(tmpdir(), "ork-refused-runtime-ws-")));
+    await mkdir(join(workspace, ".git"), { recursive: true });
+    await writeFile(join(workspace, ".git", "HEAD"), "ref: refs/heads/main\n", "utf8");
+    await writeFile(
+      join(codexHome, "auth.json"),
+      JSON.stringify({ OPENAI_API_KEY: "sk-orkestrator-loopback-probe" }),
+      { mode: 0o600 },
+    );
+    // History lookups resolve through CODEX_HOME; keep them off the real one.
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+    const responses = startScriptedResponses({ responseDelayMs: 1_000 });
+    const engine = new AppServerEngine({
+      codexPath: await resolveCodexBinary(),
+      cwd: workspace,
+      codexHome,
+      clientInfo: CLIENT_INFO,
+      configOverrides: { openai_base_url: JSON.stringify(responses.baseUrl) },
+      supervisorOverrides: { pidFileEnabled: false },
+    });
+    let idle!: () => void;
+    const turnIdle = new Promise<void>((resolve) => {
+      idle = resolve;
+    });
+    const runtime = new AppServerRuntime({
+      engine,
+      codexHome,
+      cwd: workspace,
+      emit: (event: RuntimeSseEvent) => {
+        if (event.type === "session.idle") idle();
+      },
+      loadCachedModels: async () => ({ models: [], source: "fallback" }),
+      generateTitle: async () => "refused cells probe",
+      sweepIntervalMs: 0,
+    });
+    try {
+      await runtime.start();
+      const { sessionId } = runtime.createSession({ mode: "build" });
+      // A Multi Review reviewer's turn: read-only whatever the session allows.
+      await runtime.prompt(sessionId, {
+        prompt: "Run the probe.",
+        requestId: "refused-cells-probe",
+        attachments: [],
+        readOnly: true,
+      });
+      await withTimeout(turnIdle, 90_000, "the turn to finish");
+      await runtime.drainPendingWork();
+
+      const parts = (await runtime.getMessages(sessionId))!
+        .filter((message) => message.role === "assistant")
+        .flatMap((message) => message.parts);
+      const cells = parts.filter((part) => part.toolName === "exec");
+      // Each row lands where its cell ran: before the turn's closing message.
+      expect(parts.map((part) => part.toolUseId ?? part.type).slice(-4)).toEqual([
+        "call_probe_1",
+        "call_probe_2",
+        "call_probe_3",
+        "text",
+      ]);
+      expect(cells.map((part) => [part.toolUseId, part.toolState])).toEqual([
+        ["call_probe_1", "failure"],
+        ["call_probe_2", "failure"],
+        ["call_probe_3", "failure"],
+      ]);
+      expect(cells[0]?.toolError).toContain("Operation not permitted");
+      expect(cells[1]?.toolError).toContain("patch rejected");
+      expect(cells[2]?.toolError).toContain(`${TOUCHED}: Operation not permitted`);
+      // The control still has its own row; the cell holding it is shown for
+      // the refusals beside it.
+      expect(
+        parts.some((part) => part.toolName === "bash" && part.content?.includes("false")),
+      ).toBe(true);
+    } finally {
+      await runtime.stop();
+      await engine.stop();
+      await responses.stop();
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
     }
   }, 120_000);
 });

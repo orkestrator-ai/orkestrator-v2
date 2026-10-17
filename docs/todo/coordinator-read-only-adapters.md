@@ -172,28 +172,20 @@ advertises.
     under names its project configuration cannot claim, Cursor through its
     in-process hosted tools, and Pi through its bridge-owned MCP client.
 
-11. **Show Codex sandbox refusals in the live transcript.** Codex 0.162.1
-    emits no item for a call its sandbox refuses under `approvalPolicy:
-    "never"`: a rejected `apply_patch`, or a command failing with "Operation
-    not permitted" (`live-refused-calls.test.ts`). The model gets the refusal
-    and usually says so, but the live transcript shows no row for it, so a
-    Codex coordinator or Multi Review reviewer appears to claim a denial it
-    never tried. A reload should show it, because hydration builds a row from
-    every rollout call record, the `exec` cell included
-    (`createPersistedToolParts` in `history/rollout.ts`; not checked live). So
-    the live and reloaded transcripts disagree. The live coordinator suite reads the
-    rollout itself (see
-    [coordinator-live-conformance.md](coordinator-live-conformance.md)). Two
-    ways to fix the view:
-    - opt in to `experimentalApi` with `experimentalRawEvents` on thread start,
-      which streams the cell as `rawResponseItem/completed` (checked on
-      0.162.1), and extend the reducer's raw `apply_patch` fallback to `exec`
-      cells. The bridge declines `experimentalApi` today because the router
-      cannot type-check experimental shapes;
-    - read the turn's new rollout records at `turn/completed` and add the cells
-      the stream missed.
-
-    Either way, a cell that also produced items needs one row, not two.
+11. **Show Codex sandbox refusals in the live transcript.** Done. Under a
+    `read-only` or `workspace-write` sandbox, Codex 0.162.1 emits no item for
+    a rejected `apply_patch`, nor for a failing command whose output looks
+    like a sandbox denial ("Operation not permitted", "Permission denied",
+    "Read-only file system", "sandbox", "landlock", "seccomp", "failed to
+    write file"). This was mapped on the pinned binary; full access itemizes
+    everything. The model is told and usually says the call was denied, so a
+    Codex coordinator, reviewer or sandboxed session looked as if it claimed a
+    denial it never tried. `RefusedCellTail` (`bridges/codex-bridge/src/sessions/refused-cell-tail.ts`)
+    now reads the active turn's records from the rollout app-server names in
+    `thread.path`, and shows a code-mode cell as a failed `exec` row in two
+    cases: no item of the turn started while it ran, or its output carries a
+    refusal. It reads every 200 ms, on item events, and once before the turn
+    is finalized. See "Constraints and rationale" for the choices.
 
 ### Qualification
 
@@ -203,6 +195,36 @@ advertises.
   decisions above for Codex, Cursor and OpenCode depend on its results.
 
 ## Constraints and rationale
+
+- Refused Codex calls are read from the rollout, not from app-server's raw
+  events. `experimentalRawEvents` streams the cell as
+  `rawResponseItem/completed` (checked on 0.162.1), but only `thread/start`
+  accepts it. A thread resumed in a new app-server process never gets raw
+  events, with or without the flag, and neither does a fork. Every session and
+  coordinator conversation that outlives an app restart would lose the rows
+  again. Raw events would also have needed `experimentalApi` for the whole
+  connection. The rollout covers started, resumed and reloaded threads alike.
+- The tail polls every 200 ms while a turn runs, plus on item events and once
+  before the turn is finalized. `fs.watch` fired nothing on macOS for Codex's
+  appends (same inode, growing size), and item events alone place the row
+  after the next response's first item. Codex writes the cell's output about
+  50 ms before it asks the model for the next response, so the poll lands the
+  row where the cell ran. A poll with nothing new costs one `stat`.
+- A cell becomes a row in two cases: no client tool item of the turn started
+  while it ran, or its output carries "patch rejected", "Operation not
+  permitted", "Permission denied" or "Read-only file system". Codex's own
+  heuristic also suppresses on "sandbox", "landlock", "seccomp" and "failed to
+  write file", but ordinary output says those words (this repository's files
+  do), and a cell whose calls already have rows would gain a duplicate. The
+  no-item rule still shows such a cell when nothing else does. Showing every
+  cell, as a reload does, was rejected for the same reason: each nested
+  command would appear twice in the live view.
+- The row is a completed `dynamic_tool_call` named `exec`, failed when the
+  output reports a refusal or a failed script. That is the row a reload
+  builds from the same rollout record, with the same id (the `call_id`).
+- Only code-mode cells are read. Every model Codex 0.162.1 serves runs in
+  code mode. A direct `apply_patch` or `exec_command` call from a model that
+  does not would still be missing, as before.
 
 - Do not cover a missing adapter half with prompt text. A platform joins the
   unified set only when its adapter holds the same contract as the others.

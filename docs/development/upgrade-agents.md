@@ -682,13 +682,15 @@ hermetic `codex exec` exception.
    ```
 
    It expects 0.162.1's behaviour: no item for a refused `apply_patch` or
-   refused command, and the call kept in the rollout. If the refusals now
-   arrive as items, the live coordinator suite's rollout reader
-   (`readCodexCoordinatorToolCalls`) can go. That reader counts a code-mode
-   cell that attempts one mutation only when its output carries the refusal
-   text this test pins, so if the wording changes, update `SANDBOX_REFUSALS`
-   in `apps/desktop/scripts/dev/coordinator-live.ts` or the suite fails Codex
-   on create, edit and shell again.
+   refused command, the cell and its refusal kept in the rollout, and the
+   bridge showing each refused cell as a failed `exec` row in the order it
+   ran. If the refusals now arrive as items, `RefusedCellTail` can go. If
+   app-server stops reporting `thread.path`, or the rollout stops recording
+   the cell, the rows disappear again. If the refusal wording changes,
+   update `STRONG_REFUSAL_MARKERS` in
+   `bridges/codex-bridge/src/sessions/refused-cell-tail.ts` and
+   `SANDBOX_REFUSALS` in `apps/desktop/scripts/dev/coordinator-live.ts`, or
+   the live coordinator suite fails Codex on create, edit and shell.
 
    Treat a failure in the "live MCP protocol era" block as a release blocker
    rather than a flaky test. Those two contracts stand in for every third-party

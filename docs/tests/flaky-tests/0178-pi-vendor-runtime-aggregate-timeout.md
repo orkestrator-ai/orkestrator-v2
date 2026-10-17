@@ -408,6 +408,17 @@ This observation does not independently establish a flake. Runtime staging
 remains an unresolved validation limitation; no source, assertion, timeout or
 skip changed.
 
+## Coordinator launch-base review recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name review-aggregate -- mise run test` (Bun 1.4.3, macOS arm64).
+- **Workers:** workspace/root/bridges/protocol reserved 4/1/2/1 slots. The component browser suite ran alongside the aggregate.
+- **Failure:** the staged-runtime load exceeded its 30000 ms budget at 30006.25 ms.
+- **Suite counts:** root/support reported 3035 passed, one skipped and three failed across 3039 tests in 288.74 seconds. The other two failures required a working system Python, verified separately.
+- **Isolated rerun:** `mise run test:logged -- --name review-pi-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 7.1 seconds after the component browser suite ended. The rerun preferred system Python and the testing guide's GNU utilities in PATH.
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.HDY6ow/root-and-agent-support-tests.log.gz`.
+- **Assessment:** an unchanged owning-file pass confirms a recurrence. Shared-host contention remains an unconfirmed hypothesis; no implementation, assertion, timeout or skip changed.
+- **Subsequent aggregate:** `mise run test:logged -- --name review-aggregate-system-tools -- mise run test` passed all four groups (exit 0, 339.7 seconds) with system Python and the documented GNU utilities preferred in PATH, after component browser validation ended. This pass does not establish a root cause or resolve the tracked flake.
+
 ## Codex phantom-denials branch validation (2026-10-17)
 
 Recurred in `mise run test` on `fix-codex-phantom-denials-8bdb8d15d820` (base

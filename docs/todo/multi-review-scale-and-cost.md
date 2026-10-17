@@ -1,14 +1,16 @@
 # Multi Review scale and cost
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `2459b05c` (2026-10-15). The browser suites and the
+real-stack inactive-environment cycle were run against `31d0fb06` on
+2026-10-17; see [Qualification results](#qualification-results-2026-10-17).
 
 Multi Review's control plane covers reviewer admission, observation,
 persistence, evidence verification and consolidation input. Its cost must stay
 bounded, and independent of retained review history, as a panel grows towards
 the 32-reviewer maximum. The mechanisms shipped in #833, and #852 made the keyed
 supervisor the default driver. What remains is rollback gates that outlived
-their one-release window, a timing-sensitive benchmark, and scale evidence that
-was never collected.
+their one-release window, two recovery gaps the real-stack cycle found, and
+scale evidence that was never collected.
 
 ## Current state
 
@@ -56,6 +58,21 @@ was never collected.
   an 8-reviewer panel over 50 retained workflows, a mixed-provider panel and a
   slow reviewer. Production passes no observer, so
   `recordEfficiency` events go to `NOOP_EFFICIENCY_OBSERVER`.
+- **Unreachable bridges.** A reviewer whose bridge cannot be reached (a
+  `ProviderUnavailableError` from its status read or unattended-interaction
+  sweep) keeps its session, request and state. The runner asks the host to
+  drop that cached provider (`ReviewFanoutHost.providerUnavailable`), so the
+  next pass resolves the connection again, which restarts a local bridge that
+  died. The idle-poll bound (`REVIEW_FANOUT_MAX_IDLE_RESULT_POLLS`) still fails
+  a reviewer whose bridge never answers. Multi Review evicts its provider
+  (`MultiReviewService.evictUnreachableProvider`); Build Pipeline review stages
+  get the bounded retry but do not evict yet.
+- **Live cycle.** `e2e/agent-testing/multi-review-live.spec.ts`
+  (`ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW=1`) runs the inactive-environment
+  cycle on the real stack: unmount, renderer reload, backend restart and a
+  killed reviewer bridge. Each case is a real two-reviewer review launched
+  through the launcher. How to run it is in
+  [agent-testing.md](../development/agent-testing.md#automated-checks).
 - **Storage.** `multi-reviews` is a SQLite `record` store (`STORE_LAYOUTS` in
   `storage-stores.ts`), one row per workflow. `StorageReviews`
   (`storage-reviews.ts`) reads and writes one row at a time (`loadStoreRow`,
@@ -95,10 +112,47 @@ was never collected.
    lower down, in `readHttpBridgeTranscriptSnapshot`
    (`http-bridge-progressive.ts`), and never sets `fallback: true` (see
    [mixed-version-compatibility.md](mixed-version-compatibility.md)).
-3. **Add seeded, CI-sized randomised interleaving tests** across concurrent
+3. **Continue a reviewer whose turn a backend restart cut short.** A restart
+   while reviewers run fails every Codex reviewer mid-turn: the Codex bridge
+   restores the session and reports the turn as `failed` with
+   `CODEX_RESTARTED_MID_TURN_MESSAGE` ("Codex restarted before this turn
+   finished … Send a message to continue",
+   `bridges/codex-bridge/src/sessions/thread-registry.ts`). The runner treats
+   any `error` status as terminal (`review-fanout.ts`, the `status === "error"`
+   branch), so the reviewer's work is thrown away and the review consolidates
+   without it. When every reviewer is mid-turn the whole review fails (seen in
+   the first restart run on 2026-10-17). A Claude reviewer can survive by
+   luck: its resumed session goes idle without a report, and the one result
+   reminder continues it. That reminder says the analysis is done, though,
+   which is false for a cut-short turn. After a killed bridge, the Claude
+   reviewer's in-flight Read came back declined on the resumed session. The
+   model then refused the reminder because it had never seen the diff, and
+   failed (2 of 2 runs). Proposed fix: the bridge reports a structured
+   interruption (for example `interruption: "restart"` beside
+   `phase: "failed"`) rather than only text, `readProviderStatus` carries it,
+   and the runner queues one continuation turn in the same session under a
+   new request id. It works like the result reminder but asks the reviewer to
+   continue its review, and is bounded once and persisted so a second restart
+   cannot loop. The same gap applies to the preparation, consolidation and Fix
+   steps and to Build Pipeline review stages. Fail-closed is still the
+   contract (invariant 5) once the continuation is spent.
+4. **Give preparation and consolidation the reviewers' one result-reminder
+   turn.** A reviewer that goes idle without calling its result tool gets one
+   reminder (`prepareReviewerResultReminder`). The preparation and
+   consolidation steps fail the whole workflow at once
+   (`MultiReviewService`, the `missingWorkflowResultMessage` throw after
+   `MAX_IDLE_RESULT_POLLS`). On 2026-10-17 one of 15 preparations on
+   GPT-6-Luna (low) ended with "The preparation model finished without calling
+   submit_validation_plan to submit its review package preparation"; Restart
+   step recovered it. Reuse the step's `schemaRepairPrompt` dispatch path with
+   `workflowResultReminderPrompt`, once per step.
+5. **Evict the cached provider in Build Pipeline review stages** when a
+   reviewer's bridge is unreachable, as Multi Review does. Their reviewers get
+   the bounded retry today but keep reading the dead port until it expires.
+6. **Add seeded, CI-sized randomised interleaving tests** across concurrent
    reviewers. They should interleave commit resolution, provider completion,
    cancellation, fence loss and restart. They were planned but never written.
-4. **Close the measurement gaps.**
+7. **Close the measurement gaps.**
    - Verification counts only the package's declared size. Referenced artifact
      bytes are not reported.
    - There is no opt-in large-evidence case (hundreds of MiB, real hashing).
@@ -109,15 +163,10 @@ was never collected.
 
 ### Qualification
 
-- **Real-stack inactive-environment cycle.** Start a panel and wait until a
-  reviewer is running. Switch to another environment and leave the review
-  unmounted. Let it finish, then return. Repeat with a backend restart, with a
-  renderer reload, and with one bridge interrupted. Check phase, reviewer
-  state, pending interactions, transcript tail, reports, consolidation and
-  controls, and that no turn was duplicated or cancelled by the unmount.
-- **Browser suites.** Run `mise run test:browser` (`e2e/MultiReviewLaunchDialog.spec.ts`,
-  `e2e/MultiReviewOverview.spec.ts`) and `mise run test:agent:browser` for the
-  reviewer tab and launcher.
+- **Real-stack inactive-environment cycle** and **browser suites**: done on
+  2026-10-17, see [Qualification results](#qualification-results-2026-10-17).
+  Re-run `multi-review-live.spec.ts` after any change to the fan-out, the
+  reviewer tab or bridge session recovery.
 - **Scale.** Run a mixed real-provider panel at 8 to 32 reviewers. Record that
   the caps hold under real rate limits, plus tail latency and peak RSS. This
   needs several providers' credentials; batch it with the runs in
@@ -144,6 +193,53 @@ was never collected.
   whole workflow on every `multi-review` announcement. `resource-sync.ts`
   already coalesces per key. A real skip needs a per-workflow revision in
   resource-change events; the current revision is a global counter.
+
+## Qualification results (2026-10-17)
+
+Run on `31d0fb06` plus this change, on a macOS arm64 host with about ten other
+live test environments. Profiles: `mrq-a5927117` (`dev:test --fixture
+--credential-source claude --credential-source codex --agent-platforms
+codex,claude`) for the live runs, and the disposable profiles the isolated
+runner creates. Reviewers were Claude Haiku 4.5 and Codex GPT-6-Luna (low);
+Codex GPT-6-Luna (low) prepared and consolidated.
+
+| Suite or scenario | Command | Result |
+| --- | --- | --- |
+| Multi Review component specs | `ORKESTRATOR_E2E_PORT=14731 bunx playwright test --config e2e/playwright.config.ts e2e/MultiReviewLaunchDialog.spec.ts e2e/MultiReviewOverview.spec.ts e2e/MultiReviewFlow.spec.ts e2e/ReviewLaunchDialog.spec.ts` | Pass |
+| Full component browser suite | `mise run test:browser` (on port 14732) | 326 passed, 69 skipped, 1 failed. All 73 Multi Review cases passed. The failure was `CoordinatorPaneTree` "drops in the mobile switcher…", which fails 2 of 3 times on its own on unchanged `main` ([mobile-layout-gaps.md](mobile-layout-gaps.md#needs-verification)). |
+| Agent-browser suite | `mise run test:agent:browser:isolated` | 25 passed, 18 skipped (opt-in live cases), 1 failed: known flake [0224](../tests/flaky-tests/0224-host-picker-narrow-tools-popover.md), which passed 4 of 4 alone. The suite has no credential-free Multi Review case; the launcher and reviewer tab are covered by the live cycle below. |
+| Coordinator Multi Review action (opt-in) | `ORKESTRATOR_AGENT_TEST_REVIEW=1 … --grep "coordinator Multi Review action"` | Failed on a stale assertion: the exact text "Cancelled" is gone since the flow graph. It now matches the status line "Multi Review cancelled", and passes. |
+| Live cycle: unmount | `multi-review-live.spec.ts` "settles while unmounted…" | Pass (2 full runs; an earlier run passed every snapshot check and failed on a spec selector). Settled to `ready` while unmounted. No cancellation, one prompt per reviewer, same sessions, `unchanged` conditional reads, no fallback. The graph, inspector, Fix control and the reviewer's read-only tab are right on return and after reloads. |
+| Live cycle: renderer reload | "survives a renderer reload while reviewers run" | Pass (2 runs; one earlier attempt failed in preparation before the reload, see Code item 4). |
+| Live cycle: backend restart | "converges after a backend restart while reviewers run" | Pass under the fail-closed contract (2 runs). The Claude reviewer completed after its result reminder. The Codex reviewer failed with the restart message, and the review consolidated from Claude's report. Two earlier runs failed the stricter spec that required both reviewers to complete. One had the same split; in the other, both reviewers were cut short and the whole review failed. See Code item 3. |
+| Live cycle: killed reviewer bridge | "isolates an interrupted reviewer bridge to that reviewer" | Before the fix the Claude reviewer failed at once with "claude bridge is not reachable" (the outcome of one of the two pre-fix runs was not recorded). After the fix (3 runs) the bridge was restarted and the reviewer continued in its session, then failed closed after the reminder (Code item 3). The Codex peer completed every time. |
+
+Fixed in this change:
+
+- **An unreachable bridge failed its reviewer at once.** That contradicted the
+  error-scope table below, and Build Pipeline stages already reconnect on the
+  same fault. Now the runner keeps the reviewer's state, Multi Review drops
+  the dead provider so the next pass restarts the bridge, and the idle-poll
+  bound still ends a bridge that never returns
+  (`review-fanout-unreachable.test.ts`, and "reconnects a reviewer whose
+  bridge became unreachable" in `multi-review-service.test.ts`).
+- **The coordinator Multi Review agent-browser case** asserted text the flow
+  graph no longer renders.
+
+Decisions taken during the run:
+
+- The live cycle has its own opt-in rather than `ORKESTRATOR_AGENT_TEST_REVIEW`,
+  because its restart case stops and relaunches the profile, which would break
+  any other case sharing the run.
+- A backend restart is `dev:stop` then a relaunch with the stored credential and
+  platform selection, without `--fixture`, which would recreate the fixture
+  repository under live worktrees. That matches quitting and reopening the app.
+- Restart and bridge outcomes are accepted per reviewer as completed or failed
+  with a stated reason, and recorded as annotations, because fail-closed is the
+  documented contract. Everything else is held strictly.
+- The spec restarts preparation once if it fails before any reviewer starts,
+  and records it, because that flake (Code item 4) is outside what the cycle
+  tests.
 
 ## Constraints and rationale
 
@@ -219,7 +315,8 @@ was never collected.
   | Package or snapshot verification failure | Workflow or stage | Stop admission, abandon live work, fail the owner |
   | Retryable provider create or prepare error | Reviewer | Stay pending or retrying; peers continue |
   | Ambiguous prompt send | Reviewer | Park the same request ID; peers continue |
-  | Transient status or transcript read error | Reviewer observation | Keep prior state; retry when due |
+  | Transient status or transcript read error, including an unreachable bridge | Reviewer observation | Keep prior state; reconnect and retry when due; fail after the idle-poll bound |
+| Turn cut short by a backend restart | Reviewer | Fails the reviewer today (Codex); see Code item 3 |
   | Structured result still invalid after repair | Reviewer | Fail that reviewer; keep the other reports |
   | Controller fence lost | Whole runner | Reject commits, stop new I/O; the new owner reconciles |
   | User cancellation | Whole owner | Drop queued work; decline or abort live sessions safely |
@@ -240,9 +337,9 @@ was never collected.
 ## Needs verification
 
 - Whether any supported reviewer platform still reaches the reviewer-transcript
-  fallback in production.
-- Whether the browser and agent suites were ever run for #833's launcher and
-  reviewer-tab changes. No run is recorded.
+  fallback in production. On 2026-10-17 every completed Claude and Codex
+  reviewer read in the live cycle answered without `fallback: true`; Cursor,
+  Grok, OpenCode and Pi reviewers were not run.
 
 ## Related
 

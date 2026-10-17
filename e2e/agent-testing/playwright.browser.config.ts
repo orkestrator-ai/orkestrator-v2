@@ -17,6 +17,7 @@ export default defineConfig({
     "cli-ui.spec.ts",
     "container-settings.spec.ts",
     "container-rebuild-cycle.spec.ts",
+    "container-approval-stop.spec.ts",
     "terminal-input-resume.spec.ts",
     "terminal-mobile-panes.spec.ts",
     "opencode-live.spec.ts",

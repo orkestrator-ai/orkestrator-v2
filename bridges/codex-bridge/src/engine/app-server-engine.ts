@@ -1419,7 +1419,7 @@ export class AppServerEngine implements CodexEngine {
       const response = await this.supervisor.request<{
         data: Array<Record<string, unknown>>;
         nextCursor: string | null;
-      }>("model/list", { ...(cursor ? { cursor } : {}), limit: 50 });
+      }>("model/list", { ...(cursor ? { cursor } : {}), limit: 50, includeHidden: true });
 
       for (const model of response.data ?? []) {
         const id = typeof model.id === "string" ? model.id : undefined;
@@ -1458,9 +1458,10 @@ export class AppServerEngine implements CodexEngine {
       }
 
       cursor = response.nextCursor ?? undefined;
-      if (!cursor) break;
+      if (!cursor) return models;
     }
-    return models;
+    // A partial picker cannot establish that an inherited model is unavailable.
+    throw new Error("Codex model catalogue exceeded its page limit");
   }
 
   // --------------------------------------------------------------- threads

@@ -64,3 +64,11 @@ No assertion, timeout or skip changed.
 - **Owning-file rerun:** `mise run test:logged -- --name merge-coordinator-fixture-owner -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev/coordinator-live.test.ts --parallel=1 --only-failures`, with the same PATH preference, passed unchanged (exit 0) in 2.4 seconds.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.d6VeYP/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer artifact `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.teb7ai/merge-tests.log.gz`.
 - **Assessment:** the unchanged owning-file pass confirms an intermittent recurrence. Shared-host contention remains unconfirmed; no implementation, assertion, timeout or skip changed. Conflict resolutions only combined documentation histories.
+
+## Codex stored-model main merge recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test` (Bun 1.4.3, macOS arm64; workspace/root/bridge/protocol reserved 4/1/2/1 slots).
+- **Failure:** the fixture digest case exceeded its 5000 ms deadline at 5011.64 ms.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-desktop-digest-owner -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev/coordinator-live.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 3.5 seconds).
+- **Evidence:** `orkestrator-test-run.bQMvqV/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory; outer run `orkestrator-test-run.4bGaMi/merge-tests.log.gz`.
+- **Assessment:** the isolated pass confirms an intermittent recurrence. No implementation, assertion, timeout or skip changed.

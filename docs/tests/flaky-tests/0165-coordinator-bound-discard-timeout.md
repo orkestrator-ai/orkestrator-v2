@@ -284,6 +284,37 @@ passed the unchanged owning file in 23.8 seconds (exit 0). Evidence:
 - After the aggregate and browser runs ended, the unchanged owning file passed: `mise run test:logged -- --name coordinator-post-aggregate -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`, 19.1 seconds, exit 0.
 - Shared-host contention and teardown after timeout remain hypotheses. No assertion, timeout, skip or implementation in this owner changed.
 
+
+## Codex catalogue review final validation — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name final-full-tests -- mise run test`
+  (Bun 1.4.3, macOS arm64; workspace/root/bridge/protocol reservations
+  4/1/2/1 slots, two isolated backend workers; other worktrees shared the host).
+- **Aggregate:** backend 8814 passed, 41 skipped, ten failed and three
+  between-tests errors across 8865 tests in 472 files (541.38 seconds).
+  Toolchain had one failure; every other package and root/bridge/protocol
+  group passed. Aggregate exited 1 after 852.0 seconds.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.NfVWIS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Failure:** bound-discard exceeded its 5000 ms deadline at 5120.72 ms.
+- **First owning-file rerun:** `mise run test:logged -- --name coordinator-owner-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`
+  also timed out (5133.27 ms; 47 passed, one failed and one between-tests
+  error, 29.5 seconds overall). Late fixture work reported `disk I/O error`
+  instead of the expected nested-repository refusal. Evidence:
+  `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.xchrod/coordinator-owner-rerun.log.gz`.
+- **Post-aggregate rerun:** the unchanged file passed `mise run test:logged -- --name coordinator-post-aggregate -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`
+  (exit 0, 17.7 seconds).
+- **Assessment:** the later isolated pass confirms intermittence. Shared-host
+  contention and teardown after timeout remain hypotheses; no coordinator
+  implementation, assertion, timeout or skip changed.
+
+## Codex default-model PR-stage main merge — 2026-10-17
+
+- **Original command:** `bun run --cwd apps/backend test:workspace` (Bun 1.4.2, macOS arm64, two workers; host load average 13–27 with other worktrees running).
+- **Failure:** bound-discard (5527.56 ms), every-remote fetch (5262.23 ms) and fetch force/fast-forward (5287.73 ms) exceeded their 5000 ms deadlines. Backend reported 8850 passed, 41 skipped and four failed across 8895 tests in 474 files (459.31 seconds).
+- **Owning-file rerun:** `bun test --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts` again timed out bound-discard alone (5082.72 ms; 51 passed, one failed, 28.3 seconds).
+- **Case rerun:** the same file filtered to the three cases (`-t "bound discard|fetch force|every configured remote"`) passed unchanged (3 passed, 10.3 seconds).
+- **Assessment:** the branch changes no coordinator code. The filtered pass confirms intermittence; host load remains the hypothesis. No implementation, assertion, timeout or skip changed.
+
 ## Recurrence — 2026-10-17 (device-login review fixes)
 
 `mise run test:logged -- --name login-full-tests -- mise run test` timed out

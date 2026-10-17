@@ -465,6 +465,33 @@ source, assertion, timeout or skip changed.
 - **Assessment:** an unchanged owning-file pass confirms a recurrence. Shared-host contention remains an unconfirmed hypothesis; no implementation, assertion, timeout or skip changed.
 - **Subsequent aggregate:** `mise run test:logged -- --name review-aggregate-system-tools -- mise run test` passed all four groups (exit 0, 339.7 seconds) with system Python and the documented GNU utilities preferred in PATH, after component browser validation ended. This pass does not establish a root cause or resolve the tracked flake.
 
+## Codex catalogue review follow-up recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name full-tests -- mise run test`
+  (Bun 1.4.3, macOS arm64; workspace/root/bridge/protocol reservations
+  4/1/2/1 slots, alongside an isolated browser run and other worktrees).
+- **Failure:** `Pi bridge runtime vendoring > loads Pi's supported SDK from
+  the staged runtime closure` in `tests/unit/pi-bridge-vendor.test.ts`
+  exceeded its 30-second deadline at 30000.11 ms. Root/support reported
+  3037 passed, one skipped, two failed and one error across 3040 tests in
+  303.68 seconds. The additional failure/error was discovery of an integration
+  test moved during the run; a fresh aggregate passed root/support with
+  3038 passed, one skipped and zero failures across 3039 tests in 195.41 seconds.
+- **Owning-file rerun:** `mise run test:logged -- --name pi-vendor-rerun -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+  passed the unchanged four-test file (exit 0) in 31.8 seconds overall.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.jlxHbv/root-and-agent-support-tests.log.gz`
+  (compressed when the aggregate completes).
+- **Assessment:** the isolated pass confirms intermittence. Host filesystem
+  contention remains a hypothesis; no Pi source, assertion, timeout or skip
+  changed.
+
+## Codex stored-model main merge recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test` (Bun 1.4.3, macOS arm64; workspace/root/bridge/protocol reserved 4/1/2/1 slots).
+- **Failure:** the staged-runtime load test exceeded its 30000 ms deadline at 30017.19 ms.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-pi-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 13.9 seconds).
+- **Evidence:** `orkestrator-test-run.bQMvqV/root-and-agent-support-tests.log.gz` under the host temporary directory; outer run `orkestrator-test-run.4bGaMi/merge-tests.log.gz`.
+- **Assessment:** the isolated pass confirms an intermittent recurrence. No implementation, assertion, timeout or skip changed.
 
 ## Diff-baseline review recurrence — 2026-10-17
 

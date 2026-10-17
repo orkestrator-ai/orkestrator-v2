@@ -83,8 +83,8 @@ forward that nothing in the backend supplies.
    ChatGPT account". Work out which layer binds the saved model (a tab that
    mounts creates the session before any explicit `ensure` runs), then either
    launch what the picker shows or show the saved model as unavailable. Done
-   when the picker and the launched model always agree. This observation has
-   no separate qualification evidence recorded yet.
+   when the picker and the launched model always agree. Evidence:
+   [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md#codex-sub-agent-cards-evidence).
 
 ### Qualification
 

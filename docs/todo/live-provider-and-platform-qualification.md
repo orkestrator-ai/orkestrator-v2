@@ -195,6 +195,15 @@ prompt asked for three sub-agents (`alpha_check`, `beta_check`,
   (`Exec echo alpha_check`, success, `done`).
 - After `dev:stop` and `dev:test` on the same profile (new app-server process):
   the same three cards, ids, statuses and nested transcript.
+- Model: the profile's saved Codex default
+  (`agentSettings.platforms.codex.model`) was `gpt-5.4`, which this ChatGPT
+  account's live catalogue no longer lists. The composer showed GPT-6.1-Sol,
+  yet the first four attempts (composer, and `ensure_native_agent_session` /
+  `dispatch_native_agent_prompt` with `model: "gpt-6.1-sol"`) all ran
+  `gpt-5.4` per the rollout's `turn_context` and failed with 400 "The
+  'gpt-5.4' model is not supported when using Codex with a ChatGPT account".
+  Setting the saved default to `gpt-6.1-sol` let the run proceed. Tracked in
+  [composer-model-parameters.md](composer-model-parameters.md).
 - Cleanup: `dev:stop` and `dev:reset` on the profile. The profile's Codex home
   is the host `~/.codex`, so the run's six rollouts under
   `~/.codex/sessions/2026/10/17/` (synthetic prompts only) were left in place.

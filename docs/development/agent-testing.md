@@ -466,10 +466,17 @@ reads the login-keychain item named after the fixed profile title, which every
 worktree shares. Electron from another worktree then waits on an access prompt
 nobody answers, and startup never opens a window. The annotation spec also
 renders the real Notes column beside the native view. It checks the view's
-bounds at app zoom 0.8, 1 and 1.5, overlays, the narrow Preview/Notes switch,
-and keyboard-only create and send, and compares capture pixels with the target
-at preview zoom 0.8, 1 and 1.5 at DPR 1 and 2 (the missing one forced with
-`--force-device-scale-factor`).
+bounds at app zoom 0.8, 1 and 1.25, overlays, the narrow Preview/Notes switch
+at app zoom 1.5, and keyboard traversal for create and send. The held Discuss
+request is cancelled and verified absent from the queue before its compose-draft
+hold is removed;
+a profile-local Codex probe refuses and records accidental provider launches.
+Capture pixels are compared with the target at preview zoom 0.8, 1 and 1.5 in
+both fixed and Notes-offset views, at natural DPR and forced DPR 1 and 2 with
+`--force-device-scale-factor`. Views stay small enough to assert native image
+scale without reduction. The Window-menu test always checks the selected label;
+its OS-focus predicate runs only when the host exposes a key window (and an
+active app on macOS).
 The opt-in Docker suite verifies the seeded container and proves that a direct
 container command is rejected for an otherwise valid Orkestrator container
 owned by another profile.

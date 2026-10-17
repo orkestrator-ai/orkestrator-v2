@@ -40,8 +40,9 @@ that names what was actually tested.
     and in a 900 px window, the narrow Preview/Notes switch takes over.
   - Create and send by keyboard alone.
   - Capture pixels and the selection highlight stay on the target at preview
-    zoom 0.8, 1 and 1.5 and at DPR 1 and 2. The DPR the display lacks is forced
-    with `--force-device-scale-factor`.
+    zoom 0.8, 1 and 1.5 in both fixed and Notes-offset views, without image
+    reduction. Natural DPR plus forced DPR 1 and 2 run on every host with
+    `--force-device-scale-factor`.
 - `e2e/agent-testing/web-annotations-gateway.spec.ts` (3 tests, run by
   `mise run test:agent:browser:isolated`). Its two batch tests use
   `holdQueue: true`, so nothing is dispatched or materialized. The live
@@ -101,7 +102,8 @@ Test code the runs below depend on.
    2026-10-17 and not reproduced, so it stays open. Its sibling
    [0225](../tests/flaky-tests/0225-design-and-bench-aggregate-timeouts.md)
    (the `web-annotation-payloads.bench.test.ts` creation-cost bound) was
-   resolved the same day: the case now compares median creates.
+   resolved the same day: the case now bounds actual SQLite writes per create;
+   median timings remain diagnostic.
 
 ### Qualification
 
@@ -502,3 +504,55 @@ Partial evidence only; no milestone was signed off. Linux (Wayland, display
   (web and iOS review proof)
 - `docs/improvements/web-page-annotations/plan/14-validation-observability-and-release.md`
   (gates, commands, sign-off template, evidence record)
+
+## Review follow-up (2026-10-17)
+
+The Electron keyboard case now reaches renderer controls with Tab and checks
+Shift+Tab backtracking. Native page keys reach the selected element without
+assigning DOM focus to it. Its Discuss receipt is cancelled and checked absent
+from the prompt queue before the compose-draft hold is removed; a failed or
+ambiguous cleanup retains the hold until profile disposal. A profile-local
+Codex executable probe refuses and records accidental `app-server`/`exec`
+launches through cleanup and subsequent profile relaunches.
+
+Capture qualification now uses an 800-DIP fixed preview and the actual Notes
+layout (with nonzero view offsets), checking all three preview zooms in both.
+The smaller view keeps DPR 2 images under the reduction bound, so native image
+scale is asserted unconditionally. Natural capture plus forced DPR 1 and forced
+DPR 2 run on every host, removing the old host-dependent forced-DPR branch.
+A physical Retina display still requires separate hardware qualification.
+
+The creation benchmark now gates on SQLite row writes and bytes per create,
+including document-envelope updates; the former 33.33 ms timing floor could
+hide a rewrite. See the correction in flake 0225. The score-table total is 546,
+matching its category counts and all five by-file column totals.
+
+The Window-menu focus resolver also ignores a `getFocusedWindow()` candidate
+whose host is not key: Electron can return a DevTools-focused owner while
+another app owns native focus. The recorded explicit menu selection is then
+authoritative. A unit regression verifies the selected label in that state;
+the Electron test continues to require that label and gates only the OS-focus
+predicate on actual native focus availability. Initial Home reload flake
+[0266](../tests/flaky-tests/0266-annotation-home-reload-native-view.md) is
+recorded separately; its owning spec passed unchanged on rerun.
+
+Follow-up validation on `annotation-native-window-signoff`:
+
+- `mise run test:logged -- --name agent-electron-final -- mise run test:agent:electron`
+  with `ORKESTRATOR_AGENT_TEST_RUN_ID=review-final`: **14 passed, 1 skipped**
+  (the Linux-only Wayland case), 80.4 seconds. All ten annotation cases passed,
+  including the selected-element identity after keyboard capture. The Codex
+  probe recorded no launch during cleanup, later tests or relaunches.
+- All 12 forced-DPR/layout/zoom combinations kept unreduced images; reported
+  scales matched DPR × preview zoom (DPR 2: 1.6, 2, 3, within pixel rounding).
+- Window-menu unit tests, all six payload benchmarks, format, lint and full
+  typecheck passed. The negative rewrite control failed as expected.
+- Artifacts: `output/agent-testing/review-final/electron/results.json`; all
+  temporary profiles and supervised processes were stopped and removed by
+  the suite. Native foreground focus and physical Retina hardware remain
+  outside this shared-desktop run. Browser, Docker, CLI and iOS scenario suites
+  were omitted because those product paths were unchanged.
+
+- Full non-iOS validation: `mise run test:logged -- --name review-full-suite -- mise run test`
+  **passed**, 728.4 seconds including a 234-second workspace capacity wait.
+  Workspace, root/agent-support, bridge and protocol groups all passed.

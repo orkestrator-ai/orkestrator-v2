@@ -26,7 +26,7 @@ import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { _electron as electron } from "playwright";
 import type { ElectronApplication } from "playwright";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, writeFile, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -41,6 +41,8 @@ import {
   webAnnotationPageKey,
   type WebAnnotationCaptureInput,
   type WebAnnotationRect,
+  type WebAnnotationRequest,
+  type WebAnnotationGetResult,
 } from "@orkestrator/protocol/web-annotations";
 
 import {
@@ -123,6 +125,8 @@ async function launchElectron(
     cwd: repositoryRoot,
     env: {
       ...process.env,
+      PATH: `${path.join(current.profile.dataDir, "probe-bin")}${path.delimiter}${process.env.PATH ?? ""}`,
+      ORKESTRATOR_ANNOTATION_CODEX_PROBE: path.join(current.profile.dataDir, "codex-launches"),
       ELECTRON_DEV: "1",
       VITE_DEV_SERVER_URL: current.rendererUrl,
       ORKESTRATOR_RUNTIME_PROFILE_FILE: current.profilePath,
@@ -393,10 +397,10 @@ async function waitForFixturePage(route: string): Promise<void> {
 }
 
 /** `zoom` is the preview's page zoom: input events take DIPs, rects are CSS px. */
-async function captureElement(selector: string, index = 0, zoom = 1) {
+async function captureElement(selector: string, index = 0, zoom = 1, tabId = TAB_ID) {
   const rect = await settledRect(selector, index);
   const started = await preview<BrowserPreviewSelectionStatus>("startCapture", {
-    tabId: TAB_ID,
+    tabId,
     mode: "element",
     environmentId: s().environmentId,
   });
@@ -406,7 +410,7 @@ async function captureElement(selector: string, index = 0, zoom = 1) {
   await expect
     .poll(
       async () => {
-        status = await preview<BrowserPreviewSelectionStatus>("getCaptureStatus", TAB_ID);
+        status = await preview<BrowserPreviewSelectionStatus>("getCaptureStatus", tabId);
         return status.status;
       },
       { timeout: 20_000 },
@@ -545,6 +549,22 @@ test.beforeAll(async () => {
     },
   });
   const profilePath = await initializeProfile(profile);
+  // Refuse and record any accidental provider launch, including after cleanup
+  // and across relaunches of this persisted profile. No real Codex can run.
+  const probeBin = path.join(profile.dataDir, "probe-bin");
+  await mkdir(probeBin, { recursive: true });
+  await writeFile(path.join(profile.dataDir, "codex-launches"), "");
+  await writeFile(
+    path.join(probeBin, "codex"),
+    `#!/bin/sh
+case "$1" in
+  --version) echo 'codex-cli 0.158.0'; exit 0 ;;
+  app-server|exec) printf 'provider-launch\n' >> "$ORKESTRATOR_ANNOTATION_CODEX_PROBE" ;;
+esac
+exit 91
+`,
+    { mode: 0o700 },
+  );
   // Enable only the isolated onboarding read and seed its empty marker. This
   // fixture copies no host credentials and runs no Claude turns.
   const isolatedHome = path.join(profile.dataDir, "agent-credentials", "home");
@@ -605,6 +625,10 @@ test.afterAll(async () => {
     // Playwright throws once the application has been closed.
   }
   if (running) await closeElectron().catch(() => undefined);
+  const launches = await readFile(
+    path.join(current.profile.dataDir, "codex-launches"),
+    "utf8",
+  ).catch(() => "probe-unreadable");
   stack = null;
   await current.fixture?.stop().catch(() => undefined);
   if (current.vite?.pid) {
@@ -613,6 +637,7 @@ test.afterAll(async () => {
     } catch {}
   }
   await rm(current.temporaryRoot, { recursive: true, force: true });
+  expect(launches, "no Codex session/prompt launch through cleanup or relaunch").toBe("");
 });
 
 test.beforeEach(async () => {
@@ -1438,6 +1463,27 @@ test("the real Notes column shrinks the native view, overlays hide it, and the n
   }
 });
 
+/** Reach controls through Chromium's tab order, without locator.focus(). */
+async function tabTo(locator: ReturnType<Page["locator"]>, backwards = false): Promise<void> {
+  await expect(locator).toBeVisible();
+  const key = backwards ? "Shift+Tab" : "Tab";
+  for (let step = 0; step < 100; step++) {
+    if (await locator.evaluate((element) => element === document.activeElement)) return;
+    await s().window.keyboard.press(key);
+  }
+  await expect(locator, `unreachable through ${key}`).toBeFocused();
+}
+
+async function tabActivate(locator: ReturnType<Page["locator"]>, key = "Enter") {
+  await tabTo(locator);
+  await expect(locator).toBeFocused();
+  await s().window.keyboard.press(key);
+}
+
+async function expectNoCodexLaunch(): Promise<void> {
+  expect(await readFile(path.join(s().profile.dataDir, "codex-launches"), "utf8")).toBe("");
+}
+
 test("keyboard alone creates a note and sends it, with focus handed to the native view and back", async () => {
   const testInfo = test.info();
   testInfo.setTimeout(180_000);
@@ -1450,6 +1496,9 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
     },
   ]);
   let draftKey: string | null = null;
+  let annotationId: string | null = null;
+  let sent = false;
+  let requestId: string | null = null;
   try {
     // Hold the destination's queue with an unsent chat draft (as the gateway
     // suite does), so the send is durable and observable but never executed.
@@ -1479,12 +1528,39 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
     });
     record(testInfo, "window-focused", String(windowFocused));
 
-    await pressControl(s().window.getByRole("button", { name: /^Annotations, / }));
-    // The page's focused element is the keyboard starting target.
-    await inPreview(
-      `document.querySelector('[data-testid="${TEST_IDS.saveSettings}"]').focus(); true`,
+    await tabActivate(s().window.getByRole("button", { name: /^Annotations, / }));
+    // Start in the native page, then reach its target with real Tab events.
+    // The inspector seeds its candidate from that focused element on start.
+    await s().app.evaluate(({ webContents }, origin) => {
+      webContents
+        .getAllWebContents()
+        .find((contents) => !contents.isDestroyed() && contents.getURL().startsWith(origin))
+        ?.focus();
+    }, s().fixture.url);
+    for (let step = 0; step < 100; step++) {
+      const onTarget = await inPreview<boolean>(
+        `document.activeElement?.getAttribute('data-testid') === ${JSON.stringify(TEST_IDS.saveSettings)}`,
+      );
+      if (onTarget) break;
+      await trustedInput([
+        { type: "keyDown", keyCode: "Tab" },
+        { type: "keyUp", keyCode: "Tab" },
+      ]);
+    }
+    expect(await inPreview(`document.activeElement?.getAttribute('data-testid')`)).toBe(
+      TEST_IDS.saveSettings,
     );
-    await pressControl(s().window.getByRole("button", { name: "Add note" }));
+    await s().app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0]!.webContents.focus(),
+    );
+    const addNote = s().window.getByRole("button", { name: "Add note" });
+    await tabTo(addNote);
+    // Reverse and return to establish both directions of the local tab order.
+    await s().window.keyboard.press("Shift+Tab");
+    await expect(addNote).not.toBeFocused();
+    await s().window.keyboard.press("Tab");
+    await expect(addNote).toBeFocused();
+    await tabActivate(s().window.getByRole("button", { name: "Add note" }));
     await expect(s().window.getByRole("button", { name: "Cancel selection" })).toBeVisible();
     const previewFocus = () =>
       s().app.evaluate(({ webContents }, origin) => {
@@ -1506,18 +1582,29 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
     await expect(editor).toBeFocused({ timeout: 20_000 });
     const body = "Keyboard-only note: align the Save button with Cancel.";
     await s().window.keyboard.type(body);
-    await pressControl(s().window.getByRole("button", { name: "Save note", exact: true }));
+    await tabActivate(s().window.getByRole("button", { name: "Save note", exact: true }));
     await expect
       .poll(async () => (await listAnnotations()).items.find((item) => !before.has(item.id)))
       .toBeTruthy();
     const created = (await listAnnotations()).items.find((item) => !before.has(item.id))!;
+    annotationId = created.id;
     expect(created.latestIntent).toBe(body);
+    const saved = await invoke<WebAnnotationGetResult>(C.get, {
+      environmentId: s().environmentId,
+      annotationId: created.id,
+    });
+    expect(saved.capture?.target.kind).toBe("element");
+    if (saved.capture?.target.kind !== "element") throw new Error("Missing keyboard capture");
+    expect(saved.capture.target.anchor.stableId).toEqual({
+      kind: "test-id",
+      value: TEST_IDS.saveSettings,
+    });
 
     // Send by keyboard: Discuss…, the session, Discuss with <agent>, then Send.
     const thread = s().window.locator(NOTES_PANEL);
     const discuss = thread.getByRole("button", { name: "Discuss…" });
     await expect(discuss).toBeVisible({ timeout: 20_000 });
-    await pressControl(discuss);
+    await tabActivate(discuss);
     const composer = thread.getByRole("region", { name: "Ask an agent" });
     await expect(composer).toBeVisible();
     // Choose the codex session (Space on its radio), then the operation, which
@@ -1527,26 +1614,70 @@ test("keyboard alone creates a note and sends it, with focus handed to the nativ
       .getByRole("radio")
       .first();
     await expect(session).toBeVisible({ timeout: 20_000 });
-    await pressControl(session, "Space");
+    await tabActivate(session, "Space");
     await expect(session).toHaveAttribute("aria-checked", "true");
     const prepare = composer.getByRole("button", { name: /^Discuss with / });
     await expect(prepare).toBeEnabled({ timeout: 20_000 });
-    await pressControl(prepare);
+    await tabActivate(prepare);
     const send = composer.getByRole("button", { name: "Send", exact: true });
     await expect(send).toBeEnabled({ timeout: 20_000 });
-    await pressControl(send);
+    sent = true;
+    await tabActivate(send);
     await expect
       .poll(async () => {
-        const got = await invoke<{ requests: Array<{ state: string; operation: string }> }>(C.get, {
+        const got = await invoke<{ requests: WebAnnotationRequest[] }>(C.get, {
           environmentId: s().environmentId,
           annotationId: created.id,
         });
+        requestId = got.requests[0]?.id ?? null;
         return got.requests.map((request) => `${request.operation}:${request.state}`);
       })
       .toEqual(["discuss:queued"]);
   } finally {
-    if (draftKey) await invoke("delete_compose_draft", { draftKey }).catch(() => undefined);
-    await restoreDirectPreview();
+    try {
+      if (draftKey) {
+        // Discover receipts again even if an assertion failed immediately after
+        // Send. Never release the hold on an unreadable/ambiguous request.
+        const { requests } = await invoke<{ requests: WebAnnotationRequest[] }>(C.requestList, {
+          environmentId: s().environmentId,
+          ...(annotationId ? { annotationId } : {}),
+        });
+        if (sent)
+          expect(requests.length, "Send receipt before releasing draft hold").toBeGreaterThan(0);
+        if (requestId) expect(requests.some((request) => request.id === requestId)).toBe(true);
+        for (const request of requests) {
+          if (request.state !== "cancelled") {
+            const cancelled = await invoke<{ request: WebAnnotationRequest; outcome: string }>(
+              C.requestCancel,
+              {
+                environmentId: s().environmentId,
+                requestId: request.id,
+                expectedRevision: request.revision,
+              },
+            );
+            expect(cancelled.outcome).toBe("cancelled");
+          }
+          const got = await invoke<{ request: WebAnnotationRequest }>(C.requestGet, {
+            environmentId: s().environmentId,
+            requestId: request.id,
+          });
+          expect(got.request.state).toBe("cancelled");
+          const queue = await invoke<{
+            messages: Array<{ id: string }>;
+            inFlight?: unknown;
+            outstandingClaim?: unknown;
+          } | null>("get_prompt_queue", { queueKey: request.queueKey });
+          expect(queue?.messages.some((message) => message.id === request.id) ?? false).toBe(false);
+          expect(queue?.inFlight ?? null).toBeNull();
+          expect(queue?.outstandingClaim ?? null).toBeNull();
+        }
+        await expectNoCodexLaunch();
+        await invoke("delete_compose_draft", { draftKey });
+      }
+    } finally {
+      // A failed cancellation leaves its draft in place until profile disposal.
+      await restoreDirectPreview();
+    }
   }
 });
 
@@ -1652,15 +1783,12 @@ test("capture pixels stay on the target at preview zoom 0.8, 1 and 1.5 and at DP
   testInfo.setTimeout(420_000);
   const natural = await s().app.evaluate(({ screen }) => screen.getPrimaryDisplay().scaleFactor);
   record(testInfo, "natural-scale-factor", String(natural));
-  const runs: Array<{ dpr: number; switches: string[] }> = [];
-  for (const dpr of [1, 2]) {
-    runs.push({
-      dpr,
-      switches: dpr === natural ? [] : [`--force-device-scale-factor=${dpr}`],
-    });
-  }
-  // Natural first, so only forced runs relaunch.
-  runs.sort((a, b) => a.switches.length - b.switches.length);
+  // Exercise both forced branches on every host, including forced DPR 1 on
+  // non-Retina machines. Natural capture remains a separate baseline.
+  const runs = [
+    { dpr: natural, switches: [] as string[] },
+    ...[1, 2].map((dpr) => ({ dpr, switches: [`--force-device-scale-factor=${dpr}`] })),
+  ];
   let forced = false;
   try {
     for (const run of runs) {
@@ -1672,66 +1800,90 @@ test("capture pixels stay on the target at preview zoom 0.8, 1 and 1.5 and at DP
         ({ screen }) => screen.getPrimaryDisplay().scaleFactor,
       );
       expect(scaleFactor).toBe(run.dpr);
-      await navigate(ROUTE_VARIANTS.settings);
-      for (const zoom of [0.8, 1, 1.5]) {
-        await setPreviewZoom(zoom);
-        await inPreview(
-          `(() => { document.getElementById(${JSON.stringify(MARKER_ID)})?.remove(); const marker = document.createElement("div"); marker.id = ${JSON.stringify(MARKER_ID)}; Object.assign(marker.style, { position: "fixed", left: "200px", top: "140px", width: "160px", height: "90px", background: "rgb(255, 0, 255)", zIndex: "2147480000" }); document.body.append(marker); return true; })()`,
-        );
-        const { descriptor, rect } = await captureElement(`#${MARKER_ID}`, 0, zoom);
-        const pending = await readPending(descriptor.captureId);
-        const label = `dpr-${run.dpr}-zoom-${zoom}`;
-        try {
-          expect(pending.capture.target.kind).toBe("element");
-          const geometry = pending.capture.geometry!;
-          expect(geometry.zoomFactor).toBeCloseTo(zoom, 2);
-          expect(geometry.devicePixelRatio).toBeCloseTo(run.dpr * zoom, 1);
-          expect(pending.imageDataUrl, `${label}: image`).toBeTruthy();
-          const scale = geometry.image!.scale;
-          if (!geometry.image!.reduced) expect(scale).toBeCloseTo(run.dpr * zoom, 1);
-          if (pending.capture.target.kind !== "element") throw new Error(label);
-          const target = pending.capture.target.rect;
-          record(
-            testInfo,
-            label,
-            JSON.stringify({
-              geometry,
-              target,
-              rect,
-              tag: pending.capture.target.anchor.semantic.tagName,
-            }),
-          );
-          // The recorded target matches the page's own layout.
-          expect(Math.abs(target.x - rect.x)).toBeLessThanOrEqual(1);
-          expect(Math.abs(target.y - rect.y)).toBeLessThanOrEqual(1);
-          expect(Math.abs(target.width - rect.width)).toBeLessThanOrEqual(1);
-          // The highlight's border box is the target, and the marker shows
-          // inside its 2 CSS px border, both within a device pixel or two.
-          const tolerance = Math.max(2, Math.ceil(scale) + 1);
-          const expected = scaled(target, scale);
-          const search = {
-            x: expected.x - 12,
-            y: expected.y - 12,
-            width: expected.width + 24,
-            height: expected.height + 24,
-          };
-          const highlight = await colorBox(pending.imageDataUrl!, HIGHLIGHT_RGB, search);
-          const marker = await colorBox(pending.imageDataUrl!, TINTED_MARKER_RGB, search);
-          record(testInfo, `${label}-pixels`, JSON.stringify({ highlight, marker, expected }));
-          expectBoxNear(`${label} highlight`, highlight, expected, tolerance);
-          expectBoxNear(`${label} marker`, marker, scaled(target, scale, 2), tolerance);
-          if (zoom === 1) {
-            await testInfo.attach(`${label}.png`, {
-              body: Buffer.from(pending.imageDataUrl!.split(",")[1]!, "base64"),
-              contentType: "image/png",
-            });
-          }
-        } finally {
-          await preview("discardPendingCapture", descriptor.captureId);
+      for (const layout of ["direct", "notes"] as const) {
+        const tabId = layout === "direct" ? TAB_ID : UI_TAB_ID;
+        if (layout === "direct") {
+          // 800 DIPs keeps DPR 2 below the 2000-pixel reduction bound.
+          await preview("attach", {
+            tabId,
+            url: `${s().fixture.url}${ROUTE_VARIANTS.settings}`,
+            bounds: { x: 0, y: 0, width: 800, height: 600 },
+            visible: true,
+          });
+          await waitForFixturePage(ROUTE_VARIANTS.settings);
+        } else {
+          await setHostWindowSize(1280, 900);
+          await showRendererPreview();
+          const notes = s().window.getByRole("button", { name: /^Annotations, / });
+          if ((await notes.getAttribute("aria-expanded")) === "false") await pressControl(notes);
+          const bounds = await expectViewOnHost(testInfo, `capture-notes-dpr-${run.dpr}`);
+          expect(bounds.x).toBeGreaterThan(0);
+          expect(bounds.y).toBeGreaterThan(0);
+          expect(bounds.width).toBeLessThanOrEqual(1000);
         }
+        for (const zoom of [0.8, 1, 1.5]) {
+          await setPreviewZoom(zoom);
+          await inPreview(
+            `(() => { document.getElementById(${JSON.stringify(MARKER_ID)})?.remove(); const marker = document.createElement("div"); marker.id = ${JSON.stringify(MARKER_ID)}; Object.assign(marker.style, { position: "fixed", left: "200px", top: "140px", width: "160px", height: "90px", background: "rgb(255, 0, 255)", zIndex: "2147480000" }); document.body.append(marker); return true; })()`,
+          );
+          const { descriptor, rect } = await captureElement(`#${MARKER_ID}`, 0, zoom, tabId);
+          const pending = await readPending(descriptor.captureId);
+          const label = `${run.switches.length ? "forced" : "natural"}-${layout}-dpr-${run.dpr}-zoom-${zoom}`;
+          try {
+            expect(pending.capture.target.kind).toBe("element");
+            const geometry = pending.capture.geometry!;
+            expect(geometry.zoomFactor).toBeCloseTo(zoom, 2);
+            expect(geometry.devicePixelRatio).toBeCloseTo(run.dpr * zoom, 1);
+            expect(pending.imageDataUrl, `${label}: image`).toBeTruthy();
+            const scale = geometry.image!.scale;
+            expect(geometry.image!.reduced, `${label}: full native scale`).toBe(false);
+            expect(scale).toBeCloseTo(run.dpr * zoom, 1);
+            if (pending.capture.target.kind !== "element") throw new Error(label);
+            const target = pending.capture.target.rect;
+            record(
+              testInfo,
+              label,
+              JSON.stringify({
+                geometry,
+                target,
+                rect,
+                tag: pending.capture.target.anchor.semantic.tagName,
+              }),
+            );
+            // The recorded target matches the page's own layout.
+            expect(Math.abs(target.x - rect.x)).toBeLessThanOrEqual(1);
+            expect(Math.abs(target.y - rect.y)).toBeLessThanOrEqual(1);
+            expect(Math.abs(target.width - rect.width)).toBeLessThanOrEqual(1);
+            // The highlight's border box is the target, and the marker shows
+            // inside its 2 CSS px border, both within a device pixel or two.
+            const tolerance = Math.max(2, Math.ceil(scale) + 1);
+            const expected = scaled(target, scale);
+            const search = {
+              x: expected.x - 12,
+              y: expected.y - 12,
+              width: expected.width + 24,
+              height: expected.height + 24,
+            };
+            const highlight = await colorBox(pending.imageDataUrl!, HIGHLIGHT_RGB, search);
+            const marker = await colorBox(pending.imageDataUrl!, TINTED_MARKER_RGB, search);
+            record(testInfo, `${label}-pixels`, JSON.stringify({ highlight, marker, expected }));
+            expectBoxNear(`${label} highlight`, highlight, expected, tolerance);
+            expectBoxNear(`${label} marker`, marker, scaled(target, scale, 2), tolerance);
+            if (zoom === 1) {
+              await testInfo.attach(`${label}.png`, {
+                body: Buffer.from(pending.imageDataUrl!.split(",")[1]!, "base64"),
+                contentType: "image/png",
+              });
+            }
+          } finally {
+            await preview("discardPendingCapture", descriptor.captureId);
+          }
+        }
+        await setPreviewZoom(1);
+        await inPreview(`document.getElementById(${JSON.stringify(MARKER_ID)})?.remove(); true`);
+        if (layout === "notes") await restoreDirectPreview();
       }
-      await setPreviewZoom(1);
-      await inPreview(`document.getElementById(${JSON.stringify(MARKER_ID)})?.remove(); true`);
+      await expectNoCodexLaunch();
     }
   } finally {
     if (forced) await relaunch([]);
@@ -1742,6 +1894,7 @@ test("capture pixels stay on the target at preview zoom 0.8, 1 and 1.5 and at DP
 test("profile storage and logs contain no synthetic secret", async () => {
   // Stop the app first so every buffered log and spool write is on disk.
   await closeElectron();
+  await expectNoCodexLaunch();
   const scan = await findSyntheticSecrets([s().profile.dataDir, s().profile.logDir]);
   expect(scan.scannedFiles).toBeGreaterThan(0);
   expect(scan.hits).toEqual([]);

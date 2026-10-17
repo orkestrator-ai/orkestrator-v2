@@ -428,12 +428,31 @@ describe("large collections", () => {
 
   test("creation cost stays flat as the collection grows (no whole-history rewrite)", async () => {
     harness = await createHarness();
+    // Count actual persisted row writes, including unchanged rows a regressed
+    // whole-history writer might rewrite. Wall time alone cannot distinguish
+    // that from fsync contention on a shared host (flake 0225).
+    await harness.service.storage.environment(ENV_A);
+    const db = harness.service.storage.database().db;
+    db.exec(`
+      CREATE TEMP TABLE growth_writes (bytes INTEGER NOT NULL);
+      CREATE TEMP TRIGGER growth_insert AFTER INSERT ON store_rows BEGIN
+        INSERT INTO growth_writes VALUES (length(CAST(NEW.value AS BLOB)));
+      END;
+      CREATE TEMP TRIGGER growth_update AFTER UPDATE ON store_rows BEGIN
+        INSERT INTO growth_writes VALUES (length(CAST(NEW.value AS BLOB)));
+      END;
+      CREATE TEMP TRIGGER growth_document AFTER UPDATE ON stores BEGIN
+        INSERT INTO growth_writes VALUES (coalesce(length(CAST(NEW.document AS BLOB)), 0));
+      END;
+    `);
     const batch = 60;
+    const writes: Array<{ rows: number; bytes: number }> = [];
     const batchMs: number[] = [];
     const medianMs: number[] = [];
     for (let round = 0; round < 3; round++) {
       const samples: number[] = [];
       for (let index = 0; index < batch; index++) {
+        db.exec("DELETE FROM growth_writes");
         const { ms } = await timed(() =>
           harness!.service.create({
             environmentId: ENV_A,
@@ -443,6 +462,17 @@ describe("large collections", () => {
           }),
         );
         samples.push(ms);
+        const written = db
+          .query<{ rows: number; bytes: number }, []>(
+            "SELECT count(*) AS rows, coalesce(sum(bytes), 0) AS bytes FROM growth_writes",
+          )
+          .get()!;
+        writes.push(written);
+        expect(written.rows).toBeGreaterThan(0);
+        expect(written.rows).toBeLessThanOrEqual(writes[0]!.rows);
+        // Identifiers/timestamps may vary slightly in size. A history blob or
+        // rewriting old rows grows beyond this fixed allowance well before 180.
+        expect(written.bytes).toBeLessThan(writes[0]!.bytes + 2 * KiB);
       }
       batchMs.push(samples.reduce((sum, ms) => sum + ms, 0));
       medianMs.push(samples.sort((a, b) => a - b)[batch / 2]!);
@@ -453,12 +483,13 @@ describe("large collections", () => {
       third: batchMs[2]!,
       firstMedian: medianMs[0]!,
       thirdMedian: medianMs[2]!,
+      firstWriteRows: writes[0]!.rows,
+      lastWriteRows: writes.at(-1)!.rows,
+      firstWriteBytes: writes[0]!.bytes,
+      lastWriteBytes: writes.at(-1)!.bytes,
     };
-    // A whole-history rewrite makes every create cost grow with the collection,
-    // so the typical create of the third batch would be several times slower.
-    // Compare medians, not batch totals: a few writes stalled by a contended
-    // disk move a total past its bound but leave the median alone (flake 0225).
-    expect(medianMs[2]!).toBeLessThan(Math.max(medianMs[0]! * 4, 2_000 / batch));
+    // Write amplification above is the regression gate. Medians remain useful
+    // diagnostics; the total deadline only catches a stalled benchmark.
     expect(batchMs.reduce((sum, ms) => sum + ms, 0)).toBeLessThan(60_000);
   });
 });

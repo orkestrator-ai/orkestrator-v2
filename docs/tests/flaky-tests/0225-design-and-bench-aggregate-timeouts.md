@@ -64,3 +64,21 @@ No bound was raised, and the 60-second total bound stays.
   4.11 ms at 1,900 annotations). That is not quadratic and not a flake. It is
   recorded as a follow-up in
   [web-annotation-qualification.md](../../todo/web-annotation-qualification.md).
+
+## Review correction (2026-10-17)
+
+The median gate above retained a `2 s / 60` floor (33.33 ms per create), so
+it did not reliably detect the named whole-history rewrite. The benchmark now
+uses temporary SQLite triggers on its real storage connection to count inserted
+and updated rows and their UTF-8 bytes for every create, including the store's
+document envelope. Later creates must write no more rows than the first and
+stay within a fixed 2 KiB byte allowance. Rewriting unchanged history therefore
+fails independently of fsync stalls. Median timings remain diagnostic and the
+60-second total deadline remains a stalled-run guard. The known in-memory
+collection cost remains the separate follow-up above.
+
+Negative control: a temporary copy that executes `UPDATE store_rows SET value = value`
+after every create failed on the second create (25 writes against the initial
+18-write allowance). The probe was removed. Its expected-failure evidence is
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.FVOrgp/annotation-rewrite-negative.log.gz`.
+The unmodified benchmark passed all six cases with the new gate.

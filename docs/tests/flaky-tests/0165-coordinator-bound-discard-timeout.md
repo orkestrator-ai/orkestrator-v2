@@ -217,6 +217,32 @@ Aggregate backend counts for this observation: 8,341 passed, 40 skipped,
 
 Aggregate backend counts for this recurrence: 8,456 passed, 40 skipped, two failed and one error across 8,498 tests (481.96 s); aggregate exited 1 after 645.7 s.
 
+## Container platform qualification recurrence — 2026-10-17
+
+`mise run test` on branch `todo-container-live-qualification-8efe5278910a-r1`
+(based on `31d0fb06`, no backend source changes) timed out on the bound-discard
+case at 5149.19 ms. Host load average was about 20–33 on 18 cores, with nine
+other environments testing. Unlike earlier recurrences, the unchanged owning
+file also failed alone at that load, twice:
+`mise exec -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`
+reported 46 passed and 2 failed (bound discard at 5178.91 ms, and the
+remote-fetch case at 5183.14 ms, `git switch --discard-changes` failing), in
+40.6 s; the `--parallel=2` run before it had 47 passed and 1 failed. Both are
+real `git` work inside a five-second deadline. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.v19VcP`.
+No assertion, timeout or skip changed.
+
+## Pane reset review recurrence — 2026-10-17
+
+`mise run test:logged -- --name full-suite -- mise run test` used workspace,
+root, bridge and protocol reservations of 4/1/2/1 slots while browser checks
+and other worktrees used the host. The bound-discard case timed out at 5143.01 ms and emitted a late ENOENT for the removed checkout.
+
+`mise run test:logged -- --name coordinator-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`
+passed the unchanged owning file in 23.8 seconds (exit 0). Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.XKPva3/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+(compressed when the aggregate completes). No assertion, timeout or skip changed.
+
 ## Cleanup review follow-up recurrence (2026-10-17)
 
 - **Original command:** the testing guide's macOS GNU-tool PATH with

@@ -79,6 +79,30 @@ run it against a manual profile, export those two variables and
 `ORKESTRATOR_TEST_HOST_MEMORY_MIB=2048` for both `dev:test` and the browser
 suite.
 
+## Claude warm-runtime qualification
+
+`e2e/agent-testing/claude-warm-runtime.spec.ts` exercises real Claude follow-up
+prompts, plan and permission changes, a paused approval across an inactive
+environment, an MCP configuration edit and transcript rehydration after reload.
+It enables project resources only for the disposable fixture, uses the harmless
+MCP stdio server and changes only disposable worktrees.
+It requires an explicit live opt-in and usable Claude credentials; a provider
+failure is a failed qualification, never a passing smoke check.
+
+Start a profile in one terminal:
+
+```bash
+mise run dev:test --profile claude-warm-qa --fixture --credential-source claude --agent-platforms claude
+```
+
+Run the test from another terminal, then stop and reset that exact profile:
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=claude-warm-qa ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE=1 mise run test:logged -- --name claude-warm-app -- bunx playwright test --config e2e/agent-testing/playwright.claude-warm.config.ts --workers=1
+mise run dev:stop --profile claude-warm-qa
+mise run dev:reset --profile claude-warm-qa
+```
+
 ## Start or reuse a profile manually
 
 `dev:test` is a **foreground supervisor**. After printing `ready`, it stays

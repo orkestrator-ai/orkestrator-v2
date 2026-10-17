@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 
 import {
   abortSession,
+  answerQuestion,
+  getPendingQuestions,
   captureEvents,
   createSession,
   getSession,
@@ -14,12 +18,18 @@ import {
   sendPrompt,
   track,
   waitFor,
+  withTemporaryClaudeHome,
 } from "./session-manager-test-harness.js";
-import { pendingQuestions } from "./session-manager-core.js";
 import {
   CONTINUATION_SILENCE_MS,
+  CLAUDE_RUNTIME_IDLE_MS_ENV,
+  CLAUDE_MAX_IDLE_RUNTIMES_ENV,
+  DEFAULT_CLAUDE_RUNTIME_IDLE_MS,
+  DEFAULT_MAX_IDLE_CLAUDE_RUNTIMES,
+  claudeRuntimeIdleMs,
   setClaudeRuntimeIdleTimingForTesting,
 } from "./session-manager-runtime-idle.js";
+import { admitPrompt, applyPromptPlanMode } from "./session-manager-prompt-admission.js";
 import { assertClaudeRuntimeStaticAccepts } from "./session-manager-runtime.js";
 
 // The session's CLI stays open after a turn that leaves nothing owed, so the
@@ -58,7 +68,15 @@ function controlIdleWindow(timing: { idleMs?: number; maxIdle?: number } = {}) {
   };
 }
 
-afterEach(() => setClaudeRuntimeIdleTimingForTesting());
+const envKeys = [CLAUDE_RUNTIME_IDLE_MS_ENV, CLAUDE_MAX_IDLE_RUNTIMES_ENV];
+const originalEnv = envKeys.map((key) => process.env[key]);
+afterEach(() => {
+  setClaudeRuntimeIdleTimingForTesting();
+  envKeys.forEach((key, index) => {
+    if (originalEnv[index] === undefined) delete process.env[key];
+    else process.env[key] = originalEnv[index];
+  });
+});
 
 type QueryCall = Awaited<ReturnType<typeof nextQueryCall>>;
 
@@ -210,19 +228,16 @@ describe("a warm Claude CLI between turns", () => {
   test("a card waiting on the user keeps the CLI", async () => {
     const window = controlIdleWindow();
     const { session, call } = await idleAfterOneTurn("parked card");
-    pendingQuestions.set("idle-question", {
-      requestId: "idle-question",
-      sessionId: session.id,
-      questions: [],
-      requestedAt: Date.now(),
-      expiresAt: Date.now() + IDLE_MS,
-    } as never);
-    try {
-      window.elapse();
-      expect(session.claudeRuntime?.state).toBe("open");
-    } finally {
-      pendingQuestions.delete("idle-question");
-    }
+    const decision = call.options.canUseTool!("AskUserQuestion", {
+      questions: [{ question: "Which?", header: "Pick", options: [] }],
+    });
+    await waitFor(() => getPendingQuestions(session.id).length === 1);
+    window.elapse();
+    expect(session.claudeRuntime?.state).toBe("open");
+    const [question] = getPendingQuestions(session.id);
+    expect(answerQuestion(question!.id, { "Which?": "First" })).toBe(true);
+    await decision;
+    expect(getPendingQuestions(session.id)).toHaveLength(0);
     window.elapse();
     expect(session.claudeRuntime?.state).toBe("draining");
     call.finish();
@@ -258,15 +273,140 @@ describe("a warm Claude CLI between turns", () => {
     await waitFor(() => setModel.mock.calls.length === 1);
     // The window runs out while the joining turn holds the foreground.
     window.elapse();
+    const [busyWindow] = window.armed();
     expect(session.claudeRuntime?.state).toBe("open");
     failJoin!(new Error("Setting failed"));
     await expect(second).rejects.toThrow("Setting failed");
 
-    // Still bounded: the next window releases the CLI the failed join left.
-    expect(window.armed().length).toBe(1);
+    // Rollback preserves the existing silence deadline, then the next window
+    // releases the CLI the failed join left.
+    expect(window.armed()).toEqual([busyWindow!]);
     window.elapse();
     expect(session.claudeRuntime?.state).toBe("draining");
     call.finish();
+  });
+
+  test("a frame restarts an armed silence window", async () => {
+    const window = controlIdleWindow();
+    const { session, call } = await idleAfterOneTurn("frame resets silence");
+    const [before] = window.armed();
+    call.push({ type: "system", subtype: "status", status: null });
+    await waitFor(() => before!.done);
+    expect(window.armed()).toHaveLength(1);
+    expect(window.armed()[0]).not.toBe(before);
+    expect(window.armed()[0]!.delayMs).toBe(IDLE_MS);
+    expect(session.claudeRuntime?.state).toBe("open");
+    window.elapse();
+    expect(session.claudeRuntime?.state).toBe("draining");
+    call.finish();
+  });
+
+  test("a failed join rechecks capacity after restoring idle ownership", async () => {
+    controlIdleWindow({ maxIdle: 1 });
+    let rejectJoin!: (error: Error) => void;
+    const setModel = mock(
+      () =>
+        new Promise<void>((_, reject) => {
+          rejectJoin = reject;
+        }),
+    );
+    queryControlOverrides.setModel = setModel;
+    const older = await idleAfterOneTurn("failed join oldest");
+    older.session.claudeRuntime!.lastFrameAt -= 1_000;
+    const joining = sendPrompt(older.session.id, "join fails");
+    // Attach rejection handling before releasing the deferred control call.
+    const rejected = joining.catch((error: unknown) => error);
+    await waitFor(() => setModel.mock.calls.length === 1);
+    const newer = await idleAfterOneTurn("fills cap during join");
+    expect(older.session.claudeRuntime?.state).toBe("open");
+    rejectJoin(new Error("join rejected"));
+    expect(await rejected).toMatchObject({ message: "join rejected" });
+    expect(older.session.status).toBe("idle");
+    expect(older.session.claudeRuntime?.state).toBe("draining");
+    expect(newer.session.claudeRuntime?.state).toBe("open");
+    older.call.finish();
+    newer.call.finish();
+  });
+
+  test("failed plan-mode admission rechecks capacity after restoring idle ownership", async () => {
+    controlIdleWindow({ maxIdle: 1 });
+    const older = await idleAfterOneTurn("failed admission oldest");
+    older.session.claudeRuntime!.lastFrameAt -= 1_000;
+    const admission = admitPrompt(older.session.id)!;
+    const newer = await idleAfterOneTurn("fills cap during admission");
+    await withTemporaryClaudeHome("claude-idle-admission-", async (directory) => {
+      await writeFile(join(directory, ".claude"), "not a directory");
+      await expect(applyPromptPlanMode(admission, true)).rejects.toBeTruthy();
+    });
+    expect(older.session.status).toBe("idle");
+    expect(older.session.claudeRuntime?.state).toBe("draining");
+    expect(newer.session.claudeRuntime?.state).toBe("open");
+    older.call.finish();
+    newer.call.finish();
+  });
+
+  test("successful turns settling together obey the idle cap", async () => {
+    controlIdleWindow({ maxIdle: 1 });
+    const turns = [];
+    for (const name of ["simultaneous A", "simultaneous B"]) {
+      const session = createSession(name);
+      track(session.id);
+      const prompt = sendPrompt(session.id, "hello");
+      const call = await nextQueryCall();
+      turns.push({ session, prompt, call });
+    }
+    for (const { call } of turns) call.push({ type: "result", subtype: "success" });
+    await Promise.all(turns.map(({ prompt }) => prompt));
+    expect(turns.filter(({ session }) => session.claudeRuntime?.state === "open")).toHaveLength(1);
+    expect(turns.filter(({ session }) => session.claudeRuntime?.state === "draining")).toHaveLength(
+      1,
+    );
+    for (const { call } of turns) call.finish();
+  });
+
+  test("capacity never evicts a runtime owing a continuation", async () => {
+    controlIdleWindow({ maxIdle: 1 });
+    const owed = await releaseWithBackgroundWork("capacity continuation");
+    owed.call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "agent-bg",
+      tool_use_id: "agent-call",
+      status: "completed",
+    });
+    await waitFor(() => owed.session.claudeRuntime!.latestTurn.isAwaitingContinuation());
+    const older = await idleAfterOneTurn("capacity ordinary older");
+    older.session.claudeRuntime!.lastFrameAt -= 1_000;
+    const newer = await idleAfterOneTurn("capacity ordinary newer");
+    expect(owed.session.claudeRuntime?.state).toBe("open");
+    expect(older.session.claudeRuntime?.state).toBe("draining");
+    expect(newer.session.claudeRuntime?.state).toBe("open");
+    owed.call.finish();
+    older.call.finish();
+    newer.call.finish();
+    await owed.firstPrompt;
+  });
+
+  test("stop aborts an idle runtime that owes a continuation", async () => {
+    controlIdleWindow();
+    const { session, call, firstPrompt } =
+      await releaseWithBackgroundWork("stop owed continuation");
+    call.push({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "agent-bg",
+      tool_use_id: "agent-call",
+      status: "completed",
+    });
+    await waitFor(() => session.claudeRuntime!.latestTurn.isAwaitingContinuation());
+    expect(session.status).toBe("idle");
+    expect(session.abortController).toBeUndefined();
+    const runtime = session.claudeRuntime!;
+    expect(abortSession(session.id)).toBe(true);
+    await firstPrompt;
+    await runtime.ended;
+    expect(session.claudeRuntime).toBeUndefined();
+    expect(session.retainedContinuationRequestIds).toBeUndefined();
   });
 
   test("a stop with nothing running leaves the warm CLI alone", async () => {
@@ -304,6 +444,69 @@ describe("launch-only changes on a warm CLI", () => {
     relaunch.push({ type: "result", subtype: "success" });
     await replaced;
     relaunch.finish();
+  });
+
+  test.each([false, true])("changing Chrome from %s replaces an idle CLI", async (chrome) => {
+    controlIdleWindow();
+    const { session, call, input } = await idleAfterOneTurn("Chrome toggle", {
+      parameterValues: { chrome },
+    });
+    expect(call.options.extraArgs).toEqual(chrome ? { chrome: null } : { "no-chrome": null });
+    const next = sendPrompt(session.id, "toggle Chrome", { parameterValues: { chrome: !chrome } });
+    expect(await input.next()).toEqual({ done: true, value: undefined });
+    expect(pendingCalls).toHaveLength(0);
+    call.finish();
+    const relaunched = await nextQueryCall();
+    expect(relaunched.options.extraArgs).toEqual(chrome ? { "no-chrome": null } : { chrome: null });
+    relaunched.push({ type: "result", subtype: "success" });
+    await next;
+    relaunched.finish();
+  });
+
+  test("Chrome stays disabled on a read-only coordinator across toggles", async () => {
+    controlIdleWindow();
+    const { session, call, input } = await idleAfterOneTurn("coordinator Chrome", {
+      readOnly: true,
+      parameterValues: { chrome: true },
+    });
+    expect(call.options.extraArgs).toEqual({ "no-chrome": null });
+    const next = sendPrompt(session.id, "still read-only", {
+      readOnly: true,
+      parameterValues: { chrome: false },
+    });
+    expect((await input.next()).done).toBe(false);
+    expect(session.claudeRuntime!.launch.chrome).toBe(false);
+    expect(pendingCalls).toHaveLength(0);
+    call.push({ type: "result", subtype: "success" });
+    await next;
+    call.finish();
+  });
+
+  test("Chrome changes conflict before dispatch while work is owed", async () => {
+    controlIdleWindow();
+    const { session, call, firstPrompt } = await releaseWithBackgroundWork("busy Chrome toggle");
+    expect(() =>
+      assertClaudeRuntimeStaticAccepts(session, { parameterValues: { chrome: true } }),
+    ).toThrow(/Chrome/);
+    await expect(
+      sendPrompt(session.id, "toggle", { parameterValues: { chrome: true } }),
+    ).rejects.toThrow(/Chrome/);
+    expect(pendingCalls).toHaveLength(0);
+    call.finish();
+    await firstPrompt;
+  });
+
+  test("a changed launch budget replaces an idle CLI", async () => {
+    controlIdleWindow();
+    const { session, call, input } = await idleAfterOneTurn("budget toggle", { maxBudgetUsd: 1 });
+    const next = sendPrompt(session.id, "new budget", { maxBudgetUsd: 2 });
+    expect(await input.next()).toEqual({ done: true, value: undefined });
+    call.finish();
+    const relaunched = await nextQueryCall();
+    expect(relaunched.options.maxBudgetUsd).toBe(2);
+    relaunched.push({ type: "result", subtype: "success" });
+    await next;
+    relaunched.finish();
   });
 
   test("a CLI that still runs background work refuses them", async () => {
@@ -360,5 +563,36 @@ describe("a root turn the warm CLI starts on its own", () => {
     await waitFor(() => session.claudeRuntime === undefined);
     expect(session.status).toBe("idle");
     expect(session.abortController).toBeUndefined();
+  });
+});
+
+describe("idle environment settings", () => {
+  const settings = [undefined, "", "bad", "-1", "1.5", "Infinity", "9007199254740992", "0", " 1 "];
+  test.each(settings)("idle window parses %s", (raw) => {
+    if (raw === undefined) delete process.env[CLAUDE_RUNTIME_IDLE_MS_ENV];
+    else process.env[CLAUDE_RUNTIME_IDLE_MS_ENV] = raw;
+    expect(claudeRuntimeIdleMs()).toBe(
+      raw === "0" ? 0 : raw === " 1 " ? 1 : DEFAULT_CLAUDE_RUNTIME_IDLE_MS,
+    );
+  });
+  test.each(settings)("idle cap parses %s", async (raw) => {
+    if (raw === undefined) delete process.env[CLAUDE_MAX_IDLE_RUNTIMES_ENV];
+    else process.env[CLAUDE_MAX_IDLE_RUNTIMES_ENV] = raw;
+    controlIdleWindow();
+    const cap = raw === "0" ? 0 : raw === " 1 " ? 1 : DEFAULT_MAX_IDLE_CLAUDE_RUNTIMES;
+    const turns = [];
+    for (let i = 0; i <= DEFAULT_MAX_IDLE_CLAUDE_RUNTIMES; i++) {
+      const session = createSession(`env cap ${i}`);
+      track(session.id);
+      const prompt = sendPrompt(session.id, "hello");
+      const call = await nextQueryCall();
+      call.push({ type: "result", subtype: "success" });
+      await prompt;
+      turns.push({ session, call });
+    }
+    expect(turns.filter(({ session }) => session.claudeRuntime?.state === "open")).toHaveLength(
+      cap,
+    );
+    for (const { call } of turns) call.finish();
   });
 });

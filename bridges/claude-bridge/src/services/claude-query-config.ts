@@ -171,3 +171,11 @@ export async function resolveClaudeDiscoveryConfig(
     fingerprint: JSON.stringify([cwd, settingSources, plugins.map((plugin) => plugin.path)]),
   };
 }
+
+/** Chrome is opt-in and never available inside the coordinator boundary. */
+export function effectiveClaudeChrome(
+  policy: NativeAgentExecutionPolicy | undefined,
+  options: PromptOptions | undefined,
+): boolean {
+  return options?.parameterValues?.chrome === true && !isCoordinatorReadOnlyPolicy(policy);
+}

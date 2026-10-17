@@ -16,6 +16,7 @@ import {
   ownsActiveTurn,
   recordInterruptedStructuredOutputIfCurrent,
 } from "./session-manager-prompt-turn-lifecycle.js";
+import { reconcileIdleClaudeRuntime } from "./session-manager-runtime-idle.js";
 import type { TurnState } from "./session-manager-prompt-turn.js";
 import { markTranscriptChanged, resetTranscriptEpoch } from "./transcript-revision.js";
 
@@ -360,5 +361,9 @@ export function finalizeTurn(turn: TurnState): void {
     session.persistedMessagesLoaded = false;
     resetTranscriptEpoch(session);
   }
+  // Both successful settlement and failed join rollback can restore idle
+  // ownership after another session filled the warm cap. Enforce only once
+  // the foreground is actually free, including when turns settle together.
+  reconcileIdleClaudeRuntime(session);
   stream.clearFlushTimer();
 }

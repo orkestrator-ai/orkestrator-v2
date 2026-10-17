@@ -39,7 +39,7 @@ writers on one `.jsonl`. When touching the prompt path:
   ends under such a turn hands the foreground back (`endClaudeRuntime`).
 - **Launch-only settings are refused, not ignored.** Output schema, execution
   policy, agent, settings sources, effective context beta, prompt suggestions,
-  plugins and managed credentials cannot change on a live CLI. Adaptive thinking
+  effective Chrome access, cost budget, plugins and managed credentials cannot change on a live CLI. Adaptive thinking
   can only reset a runtime launched in adaptive mode; bypass mode requires the
   launch capability. A prompt that changes them while the runtime still owes
   work (a live task, an owed continuation, a parked card) is a 409 before
@@ -108,8 +108,9 @@ When touching the session catalogue (`session-manager-catalog.ts`):
   marker is set in two places only: `drainClaudeRuntime()` in
   `session-manager-runtime.ts`, and teardown (`takeQueryControls`). Route a new
   close site through the first so it cannot forget the marker. A turn hands
-  `session.queryControl` back when it releases the foreground, so a warm idle
-  CLI is not read through it.
+  `session.queryControl` back when it releases the foreground. `readableControl`
+  then uses the open runtime's control directly for catalogues and MCP actions;
+  configuration writes use it too. None of these reads extends the idle window.
 - **Reads fall back, writes conflict.** `isClosedTransportError` maps a dead
   transport onto the cached answer for `/commands` and `/mcp`, and onto 409 for
   `/config` — a settings change that never reached the CLI must not look like it

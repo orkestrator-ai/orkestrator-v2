@@ -13,6 +13,7 @@
 // for an open tab and `/session/:id/activity` for every session, so a window
 // that reads counted as use would never let an open tab's CLI go.
 
+import type { SessionState } from "../types/index.js";
 import { debugLog } from "./logger.js";
 import { claudeRuntimeOwnsLiveWork } from "./session-manager-background-tasks.js";
 import { sessions } from "./session-manager-core.js";
@@ -195,27 +196,32 @@ export function idleClaudeRuntime(runtime: ClaudeRuntime): void {
     return;
   }
   armClaudeRuntimeIdleDetach(runtime);
-  releaseIdleClaudeRuntimesOverCap(runtime);
+  releaseIdleClaudeRuntimesOverCap();
+}
+
+/** Recheck capacity after foreground settlement or a failed admission restores it. */
+export function reconcileIdleClaudeRuntime(session: SessionState): void {
+  const runtime = openClaudeRuntime(session);
+  if (runtime && claudeRuntimeIsIdle(runtime) && !runtime.latestTurn.isAwaitingContinuation()) {
+    // Settlement is not a new SDK frame: preserve the silence deadline that
+    // the result (or the failed join's previous turn) already armed.
+    releaseIdleClaudeRuntimesOverCap();
+  }
 }
 
 /**
- * Release the CLIs idle longest until at most the cap stay warm, counting
- * `joining` (whose turn is still settling its foreground) as the newest.
+ * Release the CLIs idle longest until at most the cap stay warm. Only count
+ * settled foregrounds; settlement rechecks this after clearing ownership.
  */
-function releaseIdleClaudeRuntimesOverCap(joining: ClaudeRuntime): void {
+function releaseIdleClaudeRuntimesOverCap(): void {
   const idle: ClaudeRuntime[] = [];
   for (const session of sessions.values()) {
     const runtime = openClaudeRuntime(session);
-    if (
-      runtime &&
-      runtime !== joining &&
-      claudeRuntimeIsIdle(runtime) &&
-      !runtime.latestTurn.isAwaitingContinuation()
-    ) {
+    if (runtime && claudeRuntimeIsIdle(runtime) && !runtime.latestTurn.isAwaitingContinuation()) {
       idle.push(runtime);
     }
   }
-  const excess = idle.length + 1 - maxIdleClaudeRuntimes();
+  const excess = idle.length - maxIdleClaudeRuntimes();
   if (excess <= 0) return;
   idle.sort((left, right) => left.lastFrameAt - right.lastFrameAt);
   for (const runtime of idle.slice(0, excess)) detachClaudeRuntime(runtime, "capacity");

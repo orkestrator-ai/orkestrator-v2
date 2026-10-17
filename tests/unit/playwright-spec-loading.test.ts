@@ -22,6 +22,7 @@ describe("Playwright suites", () => {
   test.each([
     "e2e/playwright.config.ts",
     "e2e/agent-testing/playwright.browser.config.ts",
+    "e2e/agent-testing/playwright.claude-warm.config.ts",
     "e2e/agent-testing/playwright.electron.config.ts",
   ])(
     "%s loads every spec under Node",

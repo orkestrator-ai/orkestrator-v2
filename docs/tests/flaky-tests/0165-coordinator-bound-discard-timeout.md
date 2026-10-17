@@ -289,3 +289,11 @@ passed the unchanged owning file in 23.8 seconds (exit 0). Evidence:
 The full `mise run test:logged -- --name full-tests -- mise run test` run timed out bound-discard at 5148.81 ms (five-second budget). The backend had 8784 passes and ten timeout failures; aggregate evidence is `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.YP2Uc2/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 
 `mise run test:logged -- --name coordinator-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` passed the unchanged owning file alone in 18.2 seconds. No coordinator implementation, assertion, timeout or skip changed.
+
+## Grok-trust PR-stage merge recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name pr-stage-full -- mise run test`, on `verify-grok-trust-claude-parked-retry` merged with `origin/main` at `607d12e2`, host load average about 27.
+- **Failure:** `project coordinator > bound discard confirmations refuse stale, sequencer, nested, and failed switches` timed out at 5196.01 ms. The workspace group had three failures in total (8821 backend tests passed); root, bridges and the protocol lockfile groups passed.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.rEfkv1/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Isolated rerun:** `bun test --preload ../../tests/setup-node.ts src/core/coordinator-service.test.ts` from `apps/backend` passed unchanged: 52 pass, 0 fail in about 24 seconds.
+- **Assessment:** an unchanged owning-file pass confirms a recurrence. The branch does not touch this code. No source, assertion, timeout or skip changed.

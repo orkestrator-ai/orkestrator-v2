@@ -208,7 +208,7 @@ reliably green on `main`, and nothing requires it to be.
    were resolved on 2026-10-15 with a controlled deadline and an ordering
    check. Resolve 0246 (real-Chromium launch) as item 1 describes.
 8. **Electron specs leak their Vite server on a timeout.** The
-   `e2e/agent-testing/*-electron.spec.ts` helpers spawn `bun run dev` detached
+   `e2e/agent-testing/*-electron.spec.ts` helpers spawn a detached Vite dev server
    and stop its process group in a `finally`. When the test times out while
    `ElectronApplication.close()` hangs, Playwright tears the worker down and
    the `finally` never runs, so the dev server keeps its port. Two leaked on

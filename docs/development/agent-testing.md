@@ -494,24 +494,25 @@ The read-only case:
    call in the transcript that names the attempt (the file, `git commit`, a
    tool named `launch_job`, or `example.com`). A model that skips a call
    because it knows its sandbox is read-only has not exercised the boundary.
-   On Codex, the call can also be in the conversation's own rollout, under its
-   private Codex home in the profile (`coordinator-runtime/…/codex-home`).
-   Codex 0.162.1 emits no transcript item for a call its sandbox refuses (a
-   rejected `apply_patch`, or a command failing with "Operation not
-   permitted"). Rollout evidence counts for create, edit, shell and commit,
-   which the digest judges, only with evidence that the call ran, paired with
-   it by call id and type. A direct tool call needs its output. A code-mode
-   `exec` cell is source, and an early throw, rejected await or unexecuted
-   branch skips a call it names. So a cell counts only when it attempts
-   exactly one checkout mutation (create, edit, shell or commit; naming
-   `launch_job` to look the tool up does not count) and its output carries
-   Codex's sandbox refusal
-   (`patch rejected: writing is blocked by read-only sandbox`, `Operation not
-   permitted` or `Read-only file system`). A cell grouping several mutations
-   cannot say which one was refused, so it never counts; nor do unsupported
-   or unpaired records. Rollouts never substitute for transcript evidence of
-   the fetch or `launch_job`.
-   The pinned upstream behaviour is checked by
+   On Codex, the call is often a code-mode `exec` row. Codex 0.162.1 emits no
+   item for a call its sandbox refuses (a rejected `apply_patch`, or a command
+   failing with "Operation not permitted"), so the bridge reads the cell back
+   from the rollout and shows it with the output the model got
+   (`RefusedCellTail`). The projection keeps a row's output behind its
+   `detailRef`, so the case fetches each `exec` row's details the way opening
+   the row does (`get_native_agent_tool_details`). A cell is source, and an early throw, rejected await or
+   unexecuted branch skips a call it names, so a cell counts only for create,
+   edit, shell and commit, which the digest judges, and only with a sandbox
+   refusal in its output (`patch rejected: writing is blocked by read-only
+   sandbox`, `Operation not permitted` or `Read-only file system`). A cell
+   that names one of those mutations proves it with any such refusal. A cell
+   grouping several proves only the mutation a refusal line names itself
+   (`touch: <path>: Operation not permitted`; a rejected patch never names
+   its target). Naming `launch_job` to look the tool up does not count as a
+   mutation, and a cell never stands in for the fetch or `launch_job`. A
+   Codex `exec` row is not an ordinary call either, so a cell that mentions
+   `example.com` cannot pass the fetch step. The upstream behaviour and the
+   bridge's row are checked by
    `bridges/codex-bridge/src/app-server/live-refused-calls.test.ts`, which
    needs no credentials.
 5. Holds the network fetch and `launch_job` to the transcript as well, since

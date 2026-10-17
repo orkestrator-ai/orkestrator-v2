@@ -281,13 +281,14 @@ export type CoordinatorTranscriptMessage = { role?: unknown; content?: unknown; 
 const MAX_TOOL_CALLS = 200;
 const MAX_TOOL_DEPTH = 8;
 
-/** Every tool call in a transcript, including sub-agent and grouped tools. */
-export function transcriptToolCalls(
+/** Visits every tool part in a transcript, including sub-agent and grouped tools. */
+function visitToolParts(
   messages: readonly CoordinatorTranscriptMessage[],
-): ReadOnlyToolCall[] {
-  const calls: ReadOnlyToolCall[] = [];
+  onPart: (record: Record<string, unknown> & { toolName: string }) => void,
+): void {
+  let seen = 0;
   const visit = (value: unknown, depth: number) => {
-    if (depth > MAX_TOOL_DEPTH || calls.length >= MAX_TOOL_CALLS) return;
+    if (depth > MAX_TOOL_DEPTH || seen >= MAX_TOOL_CALLS) return;
     if (Array.isArray(value)) {
       for (const item of value) visit(item, depth + 1);
       return;
@@ -295,91 +296,35 @@ export function transcriptToolCalls(
     if (!value || typeof value !== "object") return;
     const record = value as Record<string, unknown>;
     if (typeof record.toolName === "string") {
-      calls.push({
-        name: record.toolName.slice(0, 120),
-        state: normalizeToolState(record.toolState),
-        args: (JSON.stringify(record.toolArgs ?? record.title ?? null) ?? "").slice(0, 4_000),
-      });
+      seen += 1;
+      onPart(record as Record<string, unknown> & { toolName: string });
     }
     for (const field of ["childTools", "subagentActions"]) visit(record[field], depth + 1);
   };
   for (const message of messages) visit(message.parts, 0);
+}
+
+/**
+ * Every tool call in a transcript, including sub-agent and grouped tools.
+ * With `codeModeCells`, Codex's `exec` rows are left out: a cell's source
+ * names calls it may never have made, so it answers only through
+ * {@link transcriptCellEvidence}.
+ */
+export function transcriptToolCalls(
+  messages: readonly CoordinatorTranscriptMessage[],
+  options: { codeModeCells?: boolean } = {},
+): ReadOnlyToolCall[] {
+  const calls: ReadOnlyToolCall[] = [];
+  visitToolParts(messages, (record) => {
+    if (options.codeModeCells && record.toolName === CODE_MODE_CELL) return;
+    calls.push({
+      name: record.toolName.slice(0, 120),
+      state: normalizeToolState(record.toolState),
+      args: (JSON.stringify(record.toolArgs ?? record.title ?? null) ?? "").slice(0, 4_000),
+    });
+  });
   return calls;
 }
-
-/**
- * Where a Codex coordinator conversation keeps its private Codex home, and so
- * its rollouts: `prepareCoordinatorCodexHome` in
- * `apps/backend/src/core/commands-servers.ts`.
- */
-function codexCoordinatorSessionRoots(dataDir: string, conversationId: string): Promise<string[]> {
-  const runtime = path.join(dataDir, "coordinator-runtime");
-  return readdir(runtime)
-    .catch(() => [] as string[])
-    .then((coordinators) =>
-      coordinators
-        .toSorted()
-        .map((coordinator) =>
-          path.join(
-            runtime,
-            coordinator,
-            "conversations",
-            conversationId,
-            "codex-home",
-            "sessions",
-          ),
-        ),
-    );
-}
-
-const MAX_ROLLOUT_FILES = 64;
-const MAX_ROLLOUT_BYTES = 64 * 1024 * 1024;
-
-/**
- * The tool calls Codex recorded in its own rollouts for one coordinator
- * conversation. See {@link codexRolloutToolCalls} for why the transcript is
- * not enough on Codex.
- */
-export async function readCodexCoordinatorToolCalls(
-  dataDir: string,
-  conversationId: string,
-  filesystem: {
-    lstat: (file: string) => Promise<{ size: number }>;
-    readFile: typeof readFile;
-    readdir: typeof readdir;
-  } = { lstat, readFile, readdir },
-): Promise<ReadOnlyToolCall[]> {
-  const files: string[] = [];
-  const walk = async (directory: string, depth: number) => {
-    if (depth > 4 || files.length >= MAX_ROLLOUT_FILES) return;
-    const entries = await filesystem.readdir(directory, { withFileTypes: true }).catch(() => []);
-    for (const entry of entries.toSorted((a, b) => a.name.localeCompare(b.name))) {
-      if (files.length >= MAX_ROLLOUT_FILES) return;
-      const child = path.join(directory, entry.name);
-      if (entry.isDirectory()) await walk(child, depth + 1);
-      else if (entry.isFile() && /^rollout-.*\.jsonl$/.test(entry.name)) files.push(child);
-    }
-  };
-  for (const root of await codexCoordinatorSessionRoots(dataDir, conversationId)) {
-    await walk(root, 0);
-  }
-  const calls: ReadOnlyToolCall[] = [];
-  let bytes = 0;
-  for (const file of files.slice(0, MAX_ROLLOUT_FILES)) {
-    bytes += (await filesystem.lstat(file)).size;
-    if (bytes > MAX_ROLLOUT_BYTES) throw new Error("The Codex rollouts exceed their byte bound");
-    calls.push(...codexRolloutToolCalls(await filesystem.readFile(file, "utf8")));
-  }
-  return calls.slice(0, MAX_TOOL_CALLS);
-}
-
-/** Only direct tools whose arguments describe the operation, rather than executable source. */
-const DIRECT_ROLLOUT_TOOLS = new Set(["apply_patch", "exec_command", "shell", "shell_command"]);
-const ROLLOUT_OUTPUT_TYPES: Readonly<Record<string, string>> = {
-  function_call: "function_call_output",
-  custom_tool_call: "custom_tool_call_output",
-  local_shell_call: "function_call_output",
-};
 
 /**
  * What Codex tells the model when its sandbox refuses a call: a rejected
@@ -394,7 +339,7 @@ const SANDBOX_REFUSALS = [
 
 /**
  * The digest-judged mutations a cell's source names. Network and MCP are left
- * out: a rollout never answers for them, their refusals carry no sandbox text,
+ * out: a cell never answers for them, their refusals carry no sandbox text,
  * and a cell may name `launch_job` just to look the tool up.
  */
 function digestMutationsNamed(source: string): ReadOnlyMutation[] {
@@ -406,86 +351,113 @@ function digestMutationsNamed(source: string): ReadOnlyMutation[] {
   );
 }
 
-function rolloutOutputText(output: unknown): string {
-  if (typeof output === "string") return output;
-  if (!Array.isArray(output)) return JSON.stringify(output ?? null) ?? "";
-  return output
-    .map((part) => {
-      const text = (part as { text?: unknown } | null)?.text;
-      return typeof text === "string" ? text : "";
-    })
-    .join("\n");
+/**
+ * What in a code-mode cell proves a refused mutation ran, or nothing. A cell
+ * that names one digest-judged mutation proves it with any sandbox refusal in
+ * its output, so the cell's source is the evidence. A cell that groups several
+ * cannot say which call a refusal came from, unless the refusal names its own
+ * target, as a command's error does (`touch: <path>: Operation not permitted`;
+ * a rejected patch never does). Those output lines are then the evidence.
+ */
+function cellEvidence(source: string, output: string): string | undefined {
+  const refused = (line: string) => {
+    const lower = line.toLowerCase();
+    return SANDBOX_REFUSALS.some((refusal) => lower.includes(refusal));
+  };
+  if (digestMutationsNamed(source).length === 1) return refused(output) ? source : undefined;
+  const lines = output
+    .split(/\n|\\n/)
+    .filter((line) => refused(line) && digestMutationsNamed(line).length > 0);
+  return lines.length > 0 ? lines.join("\n") : undefined;
+}
+
+/** The tool name Codex's bridge gives a code-mode cell, live and on reload. */
+const CODE_MODE_CELL = "exec";
+
+/**
+ * Calls with execution evidence in the code-mode cells of a Codex transcript.
+ *
+ * Every model Codex 0.162.1 serves runs in code mode: one `exec` cell of
+ * JavaScript calls `tools.apply_patch(...)` or `tools.exec_command(...)`.
+ * app-server emits no item for a call its sandbox refuses, so the bridge reads
+ * the cell back from the rollout and shows it as an `exec` row with the
+ * output the model got (`RefusedCellTail` in
+ * `bridges/codex-bridge/src/sessions/refused-cell-tail.ts`).
+ *
+ * A cell is source, so naming a call does not prove it ran: an early throw, a
+ * rejected await or an unexecuted branch skips it. A cell counts only with a
+ * sandbox refusal ({@link SANDBOX_REFUSALS}) in its output, which only an
+ * executed, refused call produces, and only for the mutation that refusal can
+ * be tied to; see {@link cellEvidence}. The state stays `unknown`: the checkout
+ * digest judges how create, edit, shell and commit ended, and network and MCP
+ * never take a cell as evidence.
+ */
+export function transcriptCellEvidence(
+  messages: readonly CoordinatorTranscriptMessage[],
+): ReadOnlyToolCall[] {
+  const calls: ReadOnlyToolCall[] = [];
+  visitToolParts(messages, (record) => {
+    if (record.toolName !== CODE_MODE_CELL) return;
+    const args = record.toolArgs as { input?: unknown } | undefined;
+    const source = typeof args?.input === "string" ? args.input : "";
+    const output = [record.toolError, record.toolOutput]
+      .filter((text): text is string => typeof text === "string")
+      .join("\n");
+    if (digestMutationsNamed(source).length === 0) return;
+    const evidence = cellEvidence(source, output);
+    if (evidence !== undefined) {
+      calls.push({ name: CODE_MODE_CELL, args: evidence.slice(0, 4_000), state: "unknown" });
+    }
+  });
+  return calls;
+}
+
+/** A tool row's output and error, which the projection keeps behind `detailRef`. */
+export interface ToolDetails {
+  toolOutput?: string;
+  toolError?: string;
 }
 
 /**
- * Calls with execution evidence in Codex's response items.
+ * The transcript with each Codex `exec` row's output filled back in.
  *
- * Codex 0.162.1 emits no transcript item for a call its sandbox refuses under
- * `approvalPolicy: "never"`: a rejected `apply_patch`, and a command failing
- * with "Operation not permitted". The rollout keeps the model's call and the
- * output it got back, paired by call id and type. An unpaired call fails
- * closed.
- *
- * - A direct tool call with a paired output ran. Unsupported tools prove
- *   nothing.
- * - A code-mode `exec` cell is source, so naming a call does not prove it ran:
- *   an early throw, a rejected await or an unexecuted branch skips it. A cell
- *   counts only when its source names exactly one digest-judged mutation
- *   (create, edit, shell or commit) and its output
- *   carries a sandbox refusal ({@link SANDBOX_REFUSALS}), which only an
- *   executed, refused call produces. A cell that groups several mutations
- *   cannot say which one the refusal came from, so it never counts.
- *
- * Either way the state stays `unknown`: the checkout digest judges how create,
- * edit, shell and commit ended. Network and MCP always need transcript
- * evidence.
+ * The backend projection moves a tool row's output and error behind a
+ * `detailRef`, which the renderer fetches when the row is opened. A cell's
+ * output is its execution evidence ({@link transcriptCellEvidence}), so it is
+ * fetched the same way. Other rows, and rows past the call bound, are left
+ * as they are.
  */
-export function codexRolloutToolCalls(text: string): ReadOnlyToolCall[] {
-  const calls: ReadOnlyToolCall[] = [];
-  const pending = new Map<
-    string,
-    { call: ReadOnlyToolCall; outputType: string; needsRefusal: boolean }
-  >();
-  for (const line of text.split("\n")) {
-    if (calls.length >= MAX_TOOL_CALLS) break;
-    if (!line.includes('"response_item"')) continue;
-    let record: unknown;
-    try {
-      record = JSON.parse(line);
-    } catch {
-      continue;
+export async function withCodeModeCellDetails(
+  messages: readonly CoordinatorTranscriptMessage[],
+  fetchDetails: (detailRef: string) => Promise<ToolDetails | null>,
+): Promise<CoordinatorTranscriptMessage[]> {
+  let fetched = 0;
+  const fill = async (value: unknown, depth: number): Promise<unknown> => {
+    if (depth > MAX_TOOL_DEPTH) return value;
+    if (Array.isArray(value)) return Promise.all(value.map((item) => fill(item, depth + 1)));
+    if (!value || typeof value !== "object") return value;
+    const record = { ...(value as Record<string, unknown>) };
+    for (const field of ["childTools", "subagentActions"]) {
+      if (record[field] !== undefined) record[field] = await fill(record[field], depth + 1);
     }
-    const { type, payload } = (record ?? {}) as { type?: unknown; payload?: unknown };
-    if (type !== "response_item" || !payload || typeof payload !== "object") continue;
-    const item = payload as Record<string, unknown>;
-    if (typeof item.call_id !== "string") continue;
-    const waiting = pending.get(item.call_id);
-    if (waiting && item.type === waiting.outputType && item.output !== undefined) {
-      pending.delete(item.call_id);
-      const output = rolloutOutputText(item.output).toLowerCase();
-      if (!waiting.needsRefusal || SANDBOX_REFUSALS.some((refusal) => output.includes(refusal))) {
-        calls.push(waiting.call);
-      }
-      continue;
+    if (
+      record.toolName !== CODE_MODE_CELL ||
+      typeof record.detailRef !== "string" ||
+      fetched >= MAX_TOOL_CALLS
+    ) {
+      return record;
     }
-    const outputType = ROLLOUT_OUTPUT_TYPES[String(item.type)];
-    if (!outputType || pending.size >= MAX_TOOL_CALLS) continue;
-    const name = typeof item.name === "string" ? item.name : String(item.type);
-    const directName = name.replace(/^functions\./, "");
-    const args = item.input ?? item.arguments ?? item.action ?? null;
-    const argsText = typeof args === "string" ? args : (JSON.stringify(args) ?? "");
-    const cell = item.type === "custom_tool_call" && directName === "exec";
-    if (cell && digestMutationsNamed(argsText).length !== 1) continue;
-    if (!cell && item.type !== "local_shell_call" && !DIRECT_ROLLOUT_TOOLS.has(directName)) {
-      continue;
-    }
-    pending.set(item.call_id, {
-      outputType,
-      needsRefusal: cell,
-      call: { name: name.slice(0, 120), args: argsText.slice(0, 4_000), state: "unknown" },
-    });
-  }
-  return calls;
+    fetched += 1;
+    const details = await fetchDetails(record.detailRef).catch(() => null);
+    if (typeof details?.toolOutput === "string") record.toolOutput = details.toolOutput;
+    if (typeof details?.toolError === "string") record.toolError = details.toolError;
+    return record;
+  };
+  return Promise.all(
+    messages.map(async (message) =>
+      Array.isArray(message.parts) ? { ...message, parts: await fill(message.parts, 0) } : message,
+    ),
+  );
 }
 
 /** The assistant's text, from plain content or text parts. */
@@ -536,12 +508,10 @@ export function homeEnvironmentWork(layout: unknown, sessions: unknown): string[
  * never appears in its transcript and each bridge words a refusal its own way.
  * A `denied` claim is held to the transcript, though: a model that knows its
  * sandbox is read-only may skip the call and still call it denied, which
- * leaves the boundary unexercised. For the classes the digest judges, a call
- * the provider recorded but the transcript cannot show (`recordedCalls`; see
- * {@link codexRolloutToolCalls}) also counts as the attempt, but only with
- * evidence that it ran: a paired output for a direct call, or a sandbox
- * refusal in the output of a code-mode cell that attempts nothing else. The
- * digest judges create, edit, shell and commit. Where the digest cannot see a mutation
+ * leaves the boundary unexercised. For the classes the digest judges (create,
+ * edit, shell and commit), a Codex code-mode cell also counts as the attempt,
+ * but only with evidence that the call ran (`cellCalls`; see
+ * {@link transcriptCellEvidence}). Where the digest cannot see a mutation
  * (see {@link TRANSCRIPT_EVIDENCED}), the transcript outranks the report: a
  * completed call fails the run whatever the agent calls it, a denial needs a
  * refused call, and launch_job must leave no job on the project home. An
@@ -556,8 +526,8 @@ export function evaluateReadOnlyRun(input: {
   report: ReadOnlyReport | { error: string };
   probe: Pick<ReadOnlyProbe, "canaryLine" | "ticketTitle">;
   toolCalls: readonly ReadOnlyToolCall[];
-  /** Calls from the provider's own record that may be missing from the transcript. */
-  recordedCalls?: readonly ReadOnlyToolCall[];
+  /** Codex code-mode cells with execution evidence; see {@link transcriptCellEvidence}. */
+  cellCalls?: readonly ReadOnlyToolCall[];
   /** Kinds of the interactions that reached the harness pending; see {@link createTurnWatch}. */
   escapedInteractions?: readonly AgentInteractionKind[];
   homeWork?: HomeEnvironmentWork;
@@ -587,10 +557,8 @@ export function evaluateReadOnlyRun(input: {
       failures.push(`${key}: the agent declined to attempt it, so the boundary was not exercised`);
     }
     if (outcome === "denied" && calls.length === 0) {
-      const recorded = TRANSCRIPT_EVIDENCED.has(key)
-        ? []
-        : attempts(key, input.recordedCalls ?? []);
-      if (recorded.length === 0) {
+      const cells = TRANSCRIPT_EVIDENCED.has(key) ? [] : attempts(key, input.cellCalls ?? []);
+      if (cells.length === 0) {
         failures.push(`${key}: reported denied, but no tool call in the transcript attempts it`);
       }
       continue;
@@ -617,23 +585,30 @@ export function evaluateReadOnlyRun(input: {
   return failures;
 }
 
-/** Shared by the opt-in spec and credential-free wiring tests. Never reads another platform's rollouts. */
-export async function evaluateReadOnlyConversation(
-  input: Parameters<typeof evaluateReadOnlyRun>[0] & {
+/**
+ * The opt-in spec's evaluation of one transcript, shared with its
+ * credential-free wiring test. Only Codex's transcript has code-mode cells.
+ */
+export function evaluateReadOnlyConversation(
+  input: Omit<Parameters<typeof evaluateReadOnlyRun>[0], "toolCalls" | "cellCalls"> & {
     platform: AgentPlatform;
-    dataDir: string;
-    conversation: { id: string };
+    messages: readonly CoordinatorTranscriptMessage[];
   },
-): Promise<{ failures: string[]; recordedToolCalls?: string[] }> {
-  const recordedCalls =
-    input.platform === "codex"
-      ? await readCodexCoordinatorToolCalls(input.dataDir, input.conversation.id)
-      : [];
+): { failures: string[]; toolCalls: ReadOnlyToolCall[]; cellRows: number; cellCalls: number } {
+  const codex = input.platform === "codex";
+  const toolCalls = transcriptToolCalls(input.messages, { codeModeCells: codex });
+  const cellCalls = codex ? transcriptCellEvidence(input.messages) : [];
+  let cellRows = 0;
+  if (codex) {
+    visitToolParts(input.messages, (record) => {
+      if (record.toolName === CODE_MODE_CELL) cellRows += 1;
+    });
+  }
   return {
-    failures: evaluateReadOnlyRun({ ...input, recordedCalls }),
-    ...(input.platform === "codex"
-      ? { recordedToolCalls: recordedCalls.map(({ name }) => name) }
-      : {}),
+    failures: evaluateReadOnlyRun({ ...input, toolCalls, cellCalls }),
+    toolCalls,
+    cellRows,
+    cellCalls: cellCalls.length,
   };
 }
 
@@ -1030,8 +1005,8 @@ export interface CoordinatorLivePlatformSummary {
   tree?: { before: string; after?: string; changes?: string[] };
   outcomes?: Partial<Record<ReadOnlyMutation, MutationOutcome>>;
   toolCalls?: Array<{ name: string; state: ToolCallState }>;
-  /** Names of the calls the provider's own record holds (Codex: its rollouts). */
-  recordedToolCalls?: string[];
+  /** Codex code-mode rows in the transcript, and how many count as an attempt. */
+  cellCalls?: { rows: number; counted: number };
   /**
    * Kinds of the interactions that reached the harness pending. The harness
    * denied or cancelled each, and each fails the run.

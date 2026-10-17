@@ -174,6 +174,22 @@ advertises.
     under names its project configuration cannot claim, Cursor through its
     in-process hosted tools, and Pi through its bridge-owned MCP client.
 
+11. **Show Codex sandbox refusals in the live transcript.** Done. Under a
+    `read-only` or `workspace-write` sandbox, Codex 0.162.1 emits no item for
+    a rejected `apply_patch`, nor for a failing command whose output looks
+    like a sandbox denial ("Operation not permitted", "Permission denied",
+    "Read-only file system", "sandbox", "landlock", "seccomp", "failed to
+    write file"). This was mapped on the pinned binary; full access itemizes
+    everything. The model is told and usually says the call was denied, so a
+    Codex coordinator, reviewer or sandboxed session looked as if it claimed a
+    denial it never tried. `RefusedCellTail` (`bridges/codex-bridge/src/sessions/refused-cell-tail.ts`)
+    now reads the active turn's records from the rollout app-server names in
+    `thread.path`, and shows a code-mode cell as a failed `exec` row in two
+    cases: no item of the turn started while it ran, or its output carries a
+    refusal. It reads from the rollout size captured before `turn/start`,
+    every 200 ms, and before each new model response and the turn's
+    completion are applied. See "Constraints and rationale" for the choices.
+
 ### Qualification
 
 - The live read-only scenario (tree hash unchanged, every mutation denied,
@@ -182,6 +198,44 @@ advertises.
   decisions above for Codex, Cursor and OpenCode depend on its results.
 
 ## Constraints and rationale
+
+- Refused Codex calls are read from the rollout, not from app-server's raw
+  events. `experimentalRawEvents` streams the cell as
+  `rawResponseItem/completed` (checked on 0.162.1), but only `thread/start`
+  accepts it. A thread resumed in a new app-server process never gets raw
+  events, with or without the flag, and neither does a fork. Every session and
+  coordinator conversation that outlives an app restart would lose the rows
+  again. Raw events would also have needed `experimentalApi` for the whole
+  connection. The rollout covers started, resumed and reloaded threads alike.
+- The tail polls every 200 ms while a turn runs. `fs.watch` fired nothing on
+  macOS for Codex's appends (same inode, growing size). The poll alone can
+  still lose a race with a fast next response, so while a tail is active the
+  turn's events are applied in order: an event that opens a new model
+  response, and `turn.completed`, wait for a rollout read, and cells that
+  finished before it are placed first. Only this thread waits; app-server's
+  notification stream keeps being consumed. The queue is bounded; on overflow
+  the bridge stops reading the rollout, applies every queued event and tells
+  readers to reconcile. A poll with nothing new costs one `stat`.
+- The tail starts at the rollout size captured before `turn/start` is sent,
+  not at the end of the file when `turn/started` is applied: a fast turn can
+  write its cells before that. A turn that did not go through the prompt path
+  (an inline review) reads a bounded window and keeps only records carrying
+  its own turn id.
+- A cell becomes a row in two cases: no client tool item of the turn started
+  while it ran, or its output carries "patch rejected", "Operation not
+  permitted", "Permission denied" or "Read-only file system". Codex's own
+  heuristic also suppresses on "sandbox", "landlock", "seccomp" and "failed to
+  write file", but ordinary output says those words (this repository's files
+  do), and a cell whose calls already have rows would gain a duplicate. The
+  no-item rule still shows such a cell when nothing else does. Showing every
+  cell, as a reload does, was rejected for the same reason: each nested
+  command would appear twice in the live view.
+- The row is a completed `dynamic_tool_call` named `exec`, failed when the
+  output reports a refusal or a failed script. That is the row a reload
+  builds from the same rollout record, with the same id (the `call_id`).
+- Only code-mode cells are read. Every model Codex 0.162.1 serves runs in
+  code mode. A direct `apply_patch` or `exec_command` call from a model that
+  does not would still be missing, as before.
 
 - Do not cover a missing adapter half with prompt text. A platform joins the
   unified set only when its adapter holds the same contract as the others.

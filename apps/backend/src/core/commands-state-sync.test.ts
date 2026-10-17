@@ -6268,7 +6268,7 @@ describe("pr monitor commands", () => {
         const first = (await invoke("arm_pr_refresh_after_agent_completion", {
           environmentId: "e1",
         })) as string;
-        await storage.updateEnvironment("e1", { hasMergeConflicts: null });
+        await storage.updateEnvironment("e1", { hasMergeConflicts: false });
 
         expect(
           await invoke("arm_pr_refresh_after_agent_completion", {

@@ -212,6 +212,16 @@ describe("reporting which credential is in play", () => {
     expect(screen.queryByRole("button", { name: /Sign out/ }) === null).toBe(true);
   });
 
+  test("explains how to remove a host snapshot without environment-key advice", async () => {
+    progress = { state: "idle", auth: { authenticated: true, source: "host-snapshot" } };
+    await mount();
+    await waitFor(() =>
+      expect(screen.getByText(/Remove Cursor from this test profile/)).toBeDefined(),
+    );
+    expect(screen.queryByText(/CURSOR_API_KEY/) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: /Sign out/ }) === null).toBe(true);
+  });
+
   test("surfaces a failed login without pretending it is still pending", async () => {
     progress = {
       state: "failed",

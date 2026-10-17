@@ -50,8 +50,11 @@ export function workflowResultReminderPrompt(input: {
   toolName: string;
   submission: WorkflowResultSubmissionState | undefined;
   finalText?: string;
+  /** What is already done, e.g. "discovery work". Defaults to "analysis". */
+  workLabel?: string;
 }): string {
   const { resultLabel, toolName } = input;
+  const workLabel = input.workLabel ?? "analysis";
   const cause =
     input.submission === "correcting"
       ? `Your last submission was rejected. Correct only the problems it reported and submit again.`
@@ -59,9 +62,38 @@ export function workflowResultReminderPrompt(input: {
         ? `You wrote the ${resultLabel} as reply text. Reply text is not read; pass it to \`${toolName}\` instead.`
         : `No call to \`${toolName}\` was accepted.`;
   return [
-    `Orkestrator has not received your ${resultLabel}. ${cause} Your analysis is already done: do not repeat it, only submit the result.`,
+    `Orkestrator has not received your ${resultLabel}. ${cause} Your ${workLabel} is already done: do not repeat it, only submit the result.`,
     `The result tools are working. ${WORKFLOW_RESULT_MALFORMED_CALL_GUIDANCE} Only call tools that were offered to you: never call a tool named \`invalid\`, and never write a tool error yourself.`,
     `The earlier resultKey is closed. Use only the resultKey (and capability, when one is given) from the instructions below.`,
+  ].join("\n\n");
+}
+
+/**
+ * The one follow-up turn sent when a provider restart cut a workflow turn
+ * short (`ProviderSessionObservation.interruption`).
+ *
+ * Unlike the result reminder, the work is not done: the turn stopped partway,
+ * and telling the model its analysis is complete made it refuse a task it had
+ * never finished. The session keeps the earlier messages and tool results, so
+ * it can pick up rather than start over. Bounded well below the 4 KiB durable
+ * continuation-prompt limit; the fresh result instruction is appended at
+ * dispatch.
+ */
+export function workflowRestartContinuationPrompt(input: {
+  /** e.g. "review". */
+  workLabel: string;
+  /** e.g. "structured report". */
+  resultLabel: string;
+  /** The result tool, when the turn reports through one. */
+  toolName?: string;
+}): string {
+  const { workLabel, resultLabel, toolName } = input;
+  return [
+    `Orkestrator restarted while you were working, so your last turn stopped partway. Your earlier messages and tool results are still in this conversation.`,
+    `Continue the ${workLabel} from where it stopped. Do not start over: repeat a step only if you no longer have its result.`,
+    toolName
+      ? `When you are done, submit your ${resultLabel} by calling \`${toolName}\`. The earlier resultKey is closed. Use only the resultKey (and capability, when one is given) from the instructions below.`
+      : `When you are done, return your ${resultLabel} as instructed.`,
   ].join("\n\n");
 }
 

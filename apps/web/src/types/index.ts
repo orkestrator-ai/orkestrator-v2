@@ -509,7 +509,7 @@ export interface TerminalAppearance {
 /** Which credential the Cursor SDK bridge is using. */
 export interface CursorSdkAuthStatus {
   authenticated: boolean;
-  source: "api-key-env" | "api-key-config" | "stored-login" | "none";
+  source: "api-key-env" | "api-key-config" | "host-snapshot" | "stored-login" | "none";
   email?: string;
   expiresAt?: string;
 }
@@ -547,9 +547,10 @@ export interface GlobalConfig {
   /**
    * Which key a new container would actually receive. `host-env` means the
    * backend process inherited `CURSOR_API_KEY`, which no stored-key edit in
-   * this pane can change.
+   * this pane can change. `host-snapshot` is a test profile’s authorized copy
+   * of the host credential, refreshed on profile restart.
    */
-  cursorApiKeySource?: "config" | "host-env" | "none";
+  cursorApiKeySource?: "config" | "host-env" | "host-snapshot" | "none";
   /** Whether a write-only OpenCode Zen API key is stored by the backend. */
   openCodeZenApiKeyConfigured?: boolean;
   /** Effective OpenCode Zen key source; the key value is never returned. */

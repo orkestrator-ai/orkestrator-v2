@@ -72,3 +72,22 @@ No assertion, timeout or skip changed.
 - **Owning-file rerun:** `mise run test:logged -- --name merge-desktop-digest-owner -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev/coordinator-live.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 3.5 seconds).
 - **Evidence:** `orkestrator-test-run.bQMvqV/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory; outer run `orkestrator-test-run.4bGaMi/merge-tests.log.gz`.
 - **Assessment:** the isolated pass confirms an intermittent recurrence. No implementation, assertion, timeout or skip changed.
+
+## Codex phantom-denials PR-stage recurrence — 2026-10-17
+
+- **Original command:** `bun test scripts/dev/coordinator-live.test.ts` from `apps/desktop`, alone rather than in the aggregate, on `fix-codex-phantom-denials-8bdb8d15d820` while other worktrees validated (load average about 26–31 on 18 cores).
+- **Failure:** the same case exceeded its 5000 ms budget at 5033.25 ms, with a racing `git status exited -1` between-tests error.
+- **Suite counts:** 45 passed, one failed and one between-tests error across 46 tests in 6.12 seconds.
+- **Rerun:** the same command passed all 46 unchanged; so did the case alone (`-t "fixture tree digest"`, 3 passed) and the file with the runner tests under `--preload ../../tests/setup-node.ts` (52 passed).
+- **Evidence:** terminal output only; no log file was kept.
+- **Assessment:** the first case outside the aggregate. The branch changes the rollout reader in the same file but not the digest. Shared-host contention remains an unconfirmed hypothesis; no implementation, assertion, timeout or skip changed.
+
+## Multi Review restart/reminders main merge recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name merge-full-tests -- mise run test`, Bun 1.4.3 on macOS arm64, with system Python and the testing guide's GNU utilities preferred in PATH. Workspace/root/bridges/protocol reserved 4/1/2/1 slots; workspace admission waited 730.8 seconds on the shared 18-slot host, then package suites used two isolated Bun workers.
+- **Failure:** `fixture tree digest > names every class of change a coordinator could make` in `apps/desktop/scripts/dev/coordinator-live.test.ts` exceeded its 5000 ms deadline at 5033.88 ms. A late `git rev-parse` reported that its working directory no longer existed after fixture teardown. Desktop reported 778 passed, one failed and one between-tests error across 779 tests in 59 files (29.02 seconds).
+- **Owning-file rerun:** `mise run test:logged -- --name merge-desktop-owner -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev/coordinator-live.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 4.1 seconds logged).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.6MFbQs/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer run `orkestrator-test-run.6OCSFI/merge-full-tests.log.gz`.
+- **Assessment:** the isolated pass confirms an intermittent recurrence. Shared-host contention remains a hypothesis. The conflict resolution changes documentation only; no source, assertion, timeout or skip changed.
+
+Final aggregate: exit 1 after 1252.7 seconds logged. Backend passed 8964 tests with 41 skipped and no failures; all other workspace packages except desktop passed. Bridges and the Codex protocol check passed. The only failed cases were this runtime-staging timeout and the desktop fixture-digest timeout (0178/0258).

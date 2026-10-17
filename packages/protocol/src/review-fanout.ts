@@ -135,6 +135,12 @@ export interface ReviewerRecord extends ReviewerModelSelection {
    * survives a restart so a reviewer that ignores it fails instead of looping.
    */
   resultReminderSent?: boolean;
+  /**
+   * The one automatic continuation after a provider restart cut the turn short
+   * was already spent. Durable for the same reason as `resultReminderSent`: a
+   * second restart fails the reviewer instead of looping.
+   */
+  restartContinuationSent?: boolean;
   idleResultPolls?: number;
   /** Last time the supervisor observed this reviewer's transcript change. */
   progressAt?: string;
@@ -310,6 +316,7 @@ const REVIEWER_KEYS = [
   "schemaRepairPrompt",
   "continuationPrompt",
   "resultReminderSent",
+  "restartContinuationSent",
   "error",
   "tokenCount",
   "usageFinalizationPolls",
@@ -354,6 +361,8 @@ export function isReviewerRecord(value: unknown): value is ReviewerRecord {
     optionalString(value.schemaRepairPrompt, 100_000) &&
     optionalString(value.continuationPrompt, 4_096) &&
     (value.resultReminderSent === undefined || typeof value.resultReminderSent === "boolean") &&
+    (value.restartContinuationSent === undefined ||
+      typeof value.restartContinuationSent === "boolean") &&
     optionalPollCount(value.idleResultPolls) &&
     optionalString(value.error, 4_096) &&
     (value.tokenCount === undefined ||

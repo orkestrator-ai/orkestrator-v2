@@ -138,6 +138,11 @@ changed. Both profiles were stopped and reset after validation.
 - The full unchanged owning file on fresh credential-free Codex fixture profile `qa-unread-merge-owner` used `ORKESTRATOR_AGENT_TEST_PROFILE=qa-unread-merge-owner ORKESTRATOR_AGENT_TEST_RUN_ID=qa-unread-merge-owner mise run test:logged -- --name merge-gateway-browser-owner -- mise run test:agent:browser -- e2e/agent-testing/browser-gateway.spec.ts`. It reported 10 passed, five opt-in skips and one failure (110.1 s). The same narrow case failed earlier, with `Repository settings` hidden after `Open tools` (line 238, 15-second timeout). Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.PU8KT2/merge-gateway-browser-owner.log.gz` and `output/agent-testing/qa-unread-merge-owner/browser/`.
 - The changed project-home unread/background path passed in both runs. These results do not establish a new flake or resolve the existing picker issue; neither test nor picker code was changed in this merge. Both profiles were stopped and reset after validation.
 
+## Environment cleanup qualification — 2026-10-17
+
+- `mise run test:agent:browser:isolated` on credential-free Codex profile `qa-browser-8311cc1a-7e5` (`main` `31d0fb06` plus the environment cleanup branch) reported 25 passed, 15 opt-in skips and one failure: this narrow case, `Repository settings` hidden after `Open tools` (line 238, 15-second timeout). Evidence: `output/agent-testing/qa-browser-8311cc1a-7e5/browser/`.
+- Run alone three times on fresh profile `qa-envclean-05b87b2c`: failed once, then passed twice (9.3 s, 9.8 s). That is the first reproduction in a single-test run, so the race does not need suite load. The branch changes neither the picker, the mobile shell nor this test. The profile was stopped and reset.
+
 ## Multi Review qualification — 2026-10-17
 
 - `mise run test:agent:browser:isolated` on `31d0fb06` (credential-free Codex profile `qa-browser-bca24bc9-5a5`, macOS arm64, about ten other live test environments on the host) reported 25 passed, 18 opt-in skips and one failure (6.8 min). The narrow case timed out with `Repository settings` resolved but "not stable" then "not visible" after `Open tools` (line 238, 15-second timeout).

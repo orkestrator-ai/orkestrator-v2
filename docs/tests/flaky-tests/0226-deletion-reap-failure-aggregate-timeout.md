@@ -57,6 +57,15 @@ No assertion, deadline or skip was changed.
 - **Isolated rerun:** `mise run test:logged -- --name merge-lifecycle-isolated -- bun test --cwd apps/backend ./tests/commands-registry-environments.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed the unchanged owning file (exit 0) in 40.4 seconds. Each owning file ran in its own process; other focused reruns were active on the host.
 - **Disposition:** intermittent failure confirmed by the owning-file pass; the cause remains unconfirmed. No product code, assertion, timeout or skip was changed.
 
+## Cleanup review follow-up recurrence (2026-10-17)
+
+The same case timed out at 7434.46 ms in
+`mise run test:logged -- --name review-tests -- mise run test`. The unchanged
+owning file passed after the aggregate with one worker in 18.9 seconds.
+Exact commands, worker configuration, suite counts and evidence are recorded
+in [0194](0194-environment-lifecycle-deletion-aggregate-timeout.md#cleanup-review-follow-up-recurrence-2026-10-17).
+No assertion, timeout or skip changed; host contention remains a hypothesis.
+
 ## Multi Review recovery validation — 2026-10-17
 
 - Original command: `mise run test:logged -- --name full-review-recovery -- mise run test` on `4443c027` plus the recovery changes, macOS arm64 under shared-host load. Workspace/root/bridge/protocol reserved 4/1/2/1 slots; backend used two isolated workers.

@@ -217,6 +217,28 @@ Aggregate backend counts for this observation: 8,341 passed, 40 skipped,
 
 Aggregate backend counts for this recurrence: 8,456 passed, 40 skipped, two failed and one error across 8,498 tests (481.96 s); aggregate exited 1 after 645.7 s.
 
+## Cleanup review follow-up recurrence (2026-10-17)
+
+- **Original command:** the testing guide's macOS GNU-tool PATH with
+  `mise run test:logged -- --name review-tests -- mise run test` on
+  `todo/env-cleanup-realstack-qualification` (`160610af` plus review fixes).
+- **Workers:** workspace/root/bridges/protocol reserved 4/1/2/1 slots;
+  backend used two isolated Bun workers while other worktrees validated.
+- **Failure:** `project coordinator > bound discard confirmations refuse stale, sequencer, nested, and failed switches`
+  exceeded its 5000 ms budget at 5159.70 ms. A late `SQLITE_IOERR_VNODE`
+  arose in `storeRevision` through `resolveProjectGitRoot` after the timeout.
+- **Counts:** backend 8612 passed, 41 skipped, eight failed and one late error
+  across 8661 tests in 461 files (442.50 seconds). Seven lifecycle timeouts
+  are recorded in 0194. All other workspace packages, root, bridges and
+  protocol passed; aggregate exited 1 after 840.1 seconds.
+- **Isolated rerun:** the same GNU-tool PATH with
+  `mise run test:logged -- --name review-coordinator-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`
+  passed the unchanged owning file (exit 0) in 20.2 seconds after the aggregate.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.qwtTNi/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
+  outer artifact `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.wJM0al/review-tests.log.gz`.
+- **Assessment:** isolated pass confirms an intermittent recurrence. Host
+  contention remains a hypothesis. No product code, assertion, timeout or skip changed.
+
 ## Multi Review recovery validation — 2026-10-17
 
 - Original command: `mise run test:logged -- --name full-review-recovery -- mise run test` on `4443c027` plus the recovery changes, macOS arm64 under shared-host load. Workspace/root/bridge/protocol reserved 4/1/2/1 slots; backend used two isolated workers.

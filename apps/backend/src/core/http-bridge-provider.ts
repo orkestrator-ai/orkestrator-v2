@@ -63,7 +63,7 @@ import {
 } from "./agent-provider-runtime.js";
 import { HttpBridgeInteractionAdapter } from "./http-bridge-interactions.js";
 import { HttpBridgeCatalogAdapter, type HttpBridgeAgent } from "./http-bridge-catalog.js";
-import { bridgePromptBody } from "./http-bridge-prompt-body.js";
+import { assertPromptOutcomeKnown, bridgePromptBody } from "./http-bridge-prompt-body.js";
 import { contextUsageWithPlanUsage } from "./plan-usage-cache.js";
 import {
   claudeBackgroundObservation,
@@ -359,10 +359,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       );
     }
     if (!response.ok) {
-      // Bridges answer terminal rejections with an actionable message (e.g. an
-      // ACP prompt whose outcome is unknown after a restart). Surface it so the
-      // pipeline failure tells the user what to do instead of a bare status.
+      // Bridges answer terminal rejections with an actionable message. Surface it
+      // so a failure says what to do instead of a bare status.
       const detail = asRecord(await response.json().catch(() => null));
+      assertPromptOutcomeKnown(this.agent, response.status, detail);
       const detailText = nonEmptyString(detail?.error)?.trim() ?? "";
       // A bridge answers 401 both for a missing provider login and for its own
       // transport token. Only the former carries `kind`, and it is an expected,

@@ -122,9 +122,17 @@ export interface AgentInteractionProviderCapability {
 }
 
 export class PromptRejectedError extends Error {
-  constructor(message: string) {
+  /**
+   * The bridge recorded this request id before it restarted and cannot say
+   * whether its turn ran. It refuses the id for good, so retrying it can never
+   * succeed; a resend needs a new id.
+   */
+  readonly requestIdRetired: boolean;
+
+  constructor(message: string, options?: { requestIdRetired?: boolean }) {
     super(message);
     this.name = "PromptRejectedError";
+    this.requestIdRetired = options?.requestIdRetired === true;
   }
 }
 

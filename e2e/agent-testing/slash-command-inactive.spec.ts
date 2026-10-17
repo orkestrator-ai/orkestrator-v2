@@ -43,6 +43,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import type { NativeAgentDispatchOutcome } from "@orkestrator/protocol/native-agent";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 
 type Status = {
@@ -71,11 +72,9 @@ const DESKTOP_VIEWPORT = { width: 1440, height: 1600 };
 
 /**
  * Where each provider reads a project command, and how its catalogue picks up
- * a change. Codex rescans on an explicit refresh (`reloaded`). Claude answers
- * `deferred` and loads changed commands when the session starts its next turn,
- * so its new row is checked after the next command rather than straight after
- * the refresh, and its stale-draft check runs only where a removal can land
- * without a turn.
+ * a change. Codex rescans on an explicit refresh (`reloaded`). Claude does too
+ * now that its CLI stays warm between turns (#1055); before that it answered
+ * `deferred` and loaded changes only when its next turn started.
  */
 const PROVIDERS = {
   codex: {
@@ -87,7 +86,7 @@ const PROVIDERS = {
   claude: {
     label: "Claude",
     commandFile: (name: string) => `.claude/commands/${name}.md`,
-    refreshLoadsChanges: false,
+    refreshLoadsChanges: true,
     launchModel: undefined,
   },
 } as const;
@@ -562,9 +561,22 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
                     type: "parked",
                     description: `${typed}: parked after the restart; retried under the same request id`,
                   });
-                  await invoke("retry_native_agent_dispatch", {
-                    ...identity,
-                    requestId: parked.requestId,
+                  const outcome = await invoke<NativeAgentDispatchOutcome>(
+                    "retry_native_agent_dispatch",
+                    { ...identity, requestId: parked.requestId },
+                  );
+                  // A restarted bridge cannot say whether an earlier process ran
+                  // the id. It must say so, never a generic error or "accepted"
+                  // for a turn that never ran, and the card must not stay up.
+                  if (outcome.outcome === "rejected") {
+                    expect(outcome, `${typed}: retry refused without saying why`).toMatchObject({
+                      requestIdRetired: true,
+                      error: expect.stringMatching(/restarted before it confirmed this message/),
+                    });
+                  }
+                  testInfo.annotations.push({
+                    type: "retry-outcome",
+                    description: `${typed}: ${outcome.outcome}${outcome.outcome === "rejected" && outcome.requestIdRetired ? " (retired)" : ""}`,
                   });
                   return false;
                 }

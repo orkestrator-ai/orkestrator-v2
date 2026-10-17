@@ -216,6 +216,7 @@ export async function reconcilePersistedSessions(): Promise<void> {
       ...(storedPreferences?.dispatchedRequestIds?.length
         ? {
             dispatchedRequestIds: new Set(storedPreferences.dispatchedRequestIds),
+            inheritedDispatchedRequestIds: new Set(storedPreferences.dispatchedRequestIds),
           }
         : {}),
       ...(storedPreferences?.steerJournal?.length
@@ -277,7 +278,10 @@ export async function materializePersistedSessionState(
     persistedMessagesLoaded: false,
     ...(preferences?.planMode !== undefined ? { planMode: preferences.planMode } : {}),
     ...(preferences?.dispatchedRequestIds?.length
-      ? { dispatchedRequestIds: new Set(preferences.dispatchedRequestIds) }
+      ? {
+          dispatchedRequestIds: new Set(preferences.dispatchedRequestIds),
+          inheritedDispatchedRequestIds: new Set(preferences.dispatchedRequestIds),
+        }
       : {}),
     ...(preferences?.steerJournal?.length
       ? { steerJournal: steerJournalMapFromPreferences(preferences.steerJournal) }

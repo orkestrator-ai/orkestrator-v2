@@ -119,6 +119,18 @@ collects the live evidence the shipped behaviour has never had.
    then replaced the same way does too. Neither is offered to the model.
    Report it to Anthropic, then add the old process's exit to
    `session-manager-prompt-mcp-sync.live-probe.ts` once fixed.
+10. **Grok project trust verdict.** `grokFolderTrust` (`native-policy.ts`)
+    disagrees with Grok 1.0.52 in three ways, checked with `grok inspect`:
+    - A grant on a non-git parent does not cover a repository below it, yet the
+      verdict says it does.
+    - A linked worktree of a trusted repository is trusted, yet the verdict
+      says `unknown`. That is the usual Orkestrator host worktree.
+    - A session whose policy turns project resources on now runs Grok with the
+      gate off (`GROK_FOLDER_TRUST=0` from the ACP bridge), including every
+      container session, which is reported `unknown`.
+
+    Resolve the worktree's main checkout, stop walking past the git root, and
+    take the session's policy into account.
 
 ### Qualification
 

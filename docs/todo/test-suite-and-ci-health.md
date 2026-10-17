@@ -226,6 +226,16 @@ reliably green on `main`, and nothing requires it to be.
    [service-preview-rollout.md](service-preview-rollout.md) evidence log). Stop
    the group from a fixture teardown or a worker-exit hook as well, and bound
    the `close()` wait.
+10. **A backend environment test fails on `main`.**
+    `Electron backend environment lifecycle commands > removes a newly created
+    worktree and its branch when persisting them fails`
+    (`apps/backend/tests/commands-registry-environments.test.ts:1451`) expects
+    `start_environment` to reject with "storage unavailable", but the promise
+    resolves. It fails alone on a clean `origin/main` at `9da80451`
+    (2026-10-17), so it is a deterministic failure rather than a flake, and
+    every `mise run test` reports it. Find the change that made the start
+    path stop surfacing the persistence failure, then fix the code or the
+    test.
 
 ### Qualification
 

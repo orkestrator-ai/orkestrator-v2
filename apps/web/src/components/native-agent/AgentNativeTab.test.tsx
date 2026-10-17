@@ -217,8 +217,8 @@ const dispatchNativeAgentIntentMock = mock(
     requestId: input.requestId,
   }),
 );
-const retryNativeAgentDispatchMock = mock(async () => ({
-  outcome: "accepted" as const,
+const retryNativeAgentDispatchMock = mock(async (): Promise<NativeAgentDispatchOutcome> => ({
+  outcome: "accepted",
   requestId: "recoverable-1",
 }));
 const discardNativeAgentDispatchMock = mock(async () => ({ discarded: true }));
@@ -3980,6 +3980,52 @@ describe("AgentNativeTab", () => {
     ).toBeTruthy();
     expect(screen.getByText(/could not confirm delivery of your last message/i)).toBeTruthy();
     expect(screen.queryByText(/Confirming delivery with Codex/i) === null).toBe(true);
+  });
+
+  test("says a retired retry may not have run and resends the draft under a new id", async () => {
+    const tabId = "tab-retired-retry";
+    const sessionKey = createSessionKey("env-1", tabId);
+    const lost =
+      "Claude Code restarted before it confirmed this message, so it may not have run. Check the conversation and send it again if it did not.";
+    useNativeComposeStore
+      .getState()
+      .updateDraft(sessionKey, { text: "Deploy the preview", requestId: "lost-1" });
+    let parked = true;
+    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+      ...(await defaultProjection(projectionInput)),
+      ...(parked
+        ? {
+            recoverableDispatch: {
+              requestId: "lost-1",
+              createdAt: "2026-09-09T19:12:51.000Z",
+              status: "action-required" as const,
+            },
+          }
+        : {}),
+    }));
+    retryNativeAgentDispatchMock.mockImplementationOnce(async () => {
+      parked = false;
+      return { outcome: "rejected" as const, error: lost, requestIdRetired: true as const };
+    });
+
+    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    fireEvent.click(await screen.findByRole("button", { name: "Retry send" }));
+
+    // Told plainly, never shown as delivered, and the text is kept to resend.
+    expect(await screen.findByText(lost)).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Retry send" }) === null).toBe(true),
+    );
+    const draft = useNativeComposeStore.getState().drafts.get(sessionKey);
+    expect(draft?.text).toBe("Deploy the preview");
+    expect(draft?.requestId).toBeUndefined();
+
+    // The bridge refuses the old id for good, so a resend needs a new one.
+    fireEvent.keyDown(await screen.findByRole("textbox"), { key: "Enter" });
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    const resent = dispatchNativeAgentIntentMock.mock.calls[0]![0] as { requestId?: string };
+    expect(resent.requestId).toBeString();
+    expect(resent.requestId).not.toBe("lost-1");
   });
 
   test("keeps the recovery card mounted and disabled while a retry is running", async () => {

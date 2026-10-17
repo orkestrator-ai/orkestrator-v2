@@ -396,6 +396,17 @@ retry-under-the-same-id or discard. `/dispatch?requestId=` answers `dispatched`
 only on an explicit journal positive; `unknown` must never be treated as “never
 sent”.
 
+A request id that an earlier bridge process recorded is refused for good after a
+restart: HTTP 410 with `kind: "dispatch-outcome-lost"` (Claude, Cursor, Pi and
+ACP). The bridge cannot tell whether the turn ran, and must never run it twice.
+The backend raises `PromptRejectedError` with `requestIdRetired`
+(`assertPromptOutcomeKnown`), clears the parked record even on a
+retry, and answers `rejected` with `requestIdRetired: true` and "… restarted
+before it confirmed this message, so it may not have run". The tab keeps the
+text but drops the id, so sending it again mints a new one. Claude used to
+answer such an id with `already-processed`, which cleared the card as if the
+command had run.
+
 ### 3.7 Product workflows
 
 Build pipeline, looped review, and multi-review accept all **five** native

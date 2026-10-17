@@ -107,6 +107,55 @@ const NETWORK_DENIED_ARGUMENTS: Readonly<
   },
 };
 
+/**
+ * What makes a provider load the checkout's own configuration when the
+ * session's policy turns project resources on.
+ *
+ * Grok skips a git checkout's AGENTS.md, skills, `.grok/commands`, hooks,
+ * project MCP and LSP servers and project permission rules until the folder is
+ * trusted in `$GROK_HOME/trusted_folders.toml`, and says nothing when it does.
+ * Every environment is a git checkout Grok has not seen: a container's
+ * `/workspace` never matches the host paths in a staged trust store, and a
+ * host worktree is covered only when its main checkout was trusted. Headless,
+ * it never asks. `GROK_FOLDER_TRUST=0` turns the gate off for this process
+ * only and records nothing (`grok --trust` would write a lasting grant to the
+ * user's store). A shared leader resolves trust in its own process, which this
+ * environment does not reach, hence `--no-leader` as for network denial.
+ *
+ * Keyed by provider id for the same reason as `NETWORK_DENIED_ARGUMENTS`.
+ */
+const PROJECT_TRUST: Readonly<
+  Record<
+    string,
+    {
+      env: Readonly<Record<string, string>>;
+      subcommand: string;
+      afterSubcommand: readonly string[];
+    }
+  >
+> = {
+  grok: {
+    env: { GROK_FOLDER_TRUST: "0" },
+    subcommand: "agent",
+    afterSubcommand: ["--no-leader"],
+  },
+};
+
+function projectTrust(config: AcpProviderConfig, trustProject: boolean | undefined) {
+  return trustProject && Object.hasOwn(PROJECT_TRUST, config.id)
+    ? PROJECT_TRUST[config.id]!
+    : undefined;
+}
+
+/** The environment a provider child is spawned with. */
+export function providerEnv(
+  config: AcpProviderConfig,
+  options: { trustProject?: boolean },
+  base: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  return { ...base, ...config.env, ...projectTrust(config, options.trustProject)?.env };
+}
+
 export function providerArgv(
   config: AcpProviderConfig,
   options: {
@@ -115,12 +164,15 @@ export function providerArgv(
     approvals?: "ask" | "auto-approve" | "deny";
     /** The session's policy denies `network`. */
     denyNetwork?: boolean;
+    /** The session's policy turns project resources on. */
+    trustProject?: boolean;
   },
 ): string[] {
   const network =
     options.denyNetwork && Object.hasOwn(NETWORK_DENIED_ARGUMENTS, config.id)
       ? NETWORK_DENIED_ARGUMENTS[config.id]!
       : undefined;
+  const trust = projectTrust(config, options.trustProject);
   const argv = config.argv.flatMap((argument) => {
     if (
       argument === "--always-approve" &&
@@ -133,10 +185,11 @@ export function providerArgv(
     if (argument === "{{effort}}") {
       return options.effort ? ["--reasoning-effort", options.effort] : [];
     }
-    if (network && argument === network.subcommand) {
-      return [argument, ...network.afterSubcommand];
-    }
-    return [argument];
+    const after = [
+      ...(network && argument === network.subcommand ? network.afterSubcommand : []),
+      ...(trust && argument === trust.subcommand ? trust.afterSubcommand : []),
+    ];
+    return [argument, ...new Set(after)];
   });
   return network ? [...network.leading, ...argv] : argv;
 }

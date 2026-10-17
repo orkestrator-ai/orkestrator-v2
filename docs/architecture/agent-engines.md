@@ -527,7 +527,11 @@ them from the policy the bridge reports, and each bridge reports what it
 applies. Pi, Grok and OpenCode have no sandbox, so a `provider` sandbox and the
 network restriction it would hold are reported as unsandboxed with a note;
 Codex and Grok report project resources as on, because their own project trust
-decides; Cursor reports `ask` as the auto-approval it runs.
+decides; Cursor reports `ask` as the auto-approval it runs. When the policy turns
+project resources on, the ACP bridge launches Grok with `GROK_FOLDER_TRUST=0` and
+`agent --no-leader` (`providerEnv`), so a checkout Grok never trusted, such as a
+container's `/workspace`, still loads its AGENTS.md, skills, commands, hooks and
+project MCP servers. Otherwise Grok skips them silently.
 
 The execution-policy conformance suite (`tests/conformance/execution-policy/`)
 keeps the two honest. Each platform's runner sends ten policy shapes through
@@ -542,7 +546,7 @@ decoder together.
 | Claude | `permissionMode` and the approval callback; `allowedTools`/`disallowedTools`; `settingSources`; SDK sandbox options | WebFetch, and WebSearch unless allowed, in `disallowedTools` (`claudeDisallowedTools`) |
 | Codex | `approvalPolicy`, thread sandbox and sandbox network; the coordinator's verified permission profile | `web_search = "disabled"`, or `"cached"` when search is allowed, on the thread; a coordinator also sets it as process configuration and has it read back through `config/read` |
 | Cursor | local SDK sandbox/auto-review; `settingSources`; `tools`/`disallowedTools`, re-applied on resume | `webFetch`, `webSearch` and `task` in `disallowedTools`; the read-only allowlist never includes `webFetch`, and includes `webSearch` only when allowed |
-| Grok | `--always-approve` only for auto-approval, and under auto-approval the bridge also answers the ACP permission requests Grok still sends (allow option), except for a kind the policy denies (`autoApprovedPermissionOption`); ACP permission requests otherwise; project MCP trust at the launcher boundary | `--disable-web-search` and `agent --no-leader`, which remove search with fetch; an allowed search is not honoured |
+| Grok | `--always-approve` only for auto-approval, and under auto-approval the bridge also answers the ACP permission requests Grok still sends (allow option), except for a kind the policy denies (`autoApprovedPermissionOption`); ACP permission requests otherwise; `GROK_FOLDER_TRUST=0` and `agent --no-leader` when project resources are on, Grok's own folder trust otherwise | `--disable-web-search` and `agent --no-leader`, which remove search with fetch; an allowed search is not honoured |
 | Pi | approval extension; resource-loader exclusions and project trust; active SDK tool selection | No hosted tools; the read-only gate admits only its read tools by name |
 | OpenCode | session permission rules; project resources remain enabled because OpenCode owns config discovery, which is stated in the effective policy note | A deny rule for `webfetch` after every allow; `websearch` and `codesearch` denied, or allowed by name when search is allowed |
 

@@ -3,7 +3,10 @@ import { type IncomingMessage, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import { gzip } from "node:zlib";
 import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
-import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import {
+  DISPATCH_OUTCOME_LOST_KIND,
+  isNativeAgentExecutionPolicy,
+} from "@orkestrator/protocol/native-agent";
 import { parseWorkflowResultTurn } from "@orkestrator/protocol/workflow-results";
 import {
   commandUnavailableResponse,
@@ -568,6 +571,7 @@ export async function route(
       if (journaled.state === "ambiguous") {
         return json(response, 410, {
           error: `${provider} prompt outcome is unknown after a bridge restart; resubmit with a new requestId`,
+          kind: DISPATCH_OUTCOME_LOST_KIND,
         });
       }
       if (journaled.state === "prepared") {

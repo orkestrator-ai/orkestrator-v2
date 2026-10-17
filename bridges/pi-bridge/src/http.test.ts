@@ -2649,6 +2649,7 @@ describe("at-most-once dispatch", () => {
       body: JSON.stringify({ prompt: "go", requestId: "req-1" }),
     });
     expect(response.status).toBe(410);
+    expect(await response.json()).toMatchObject({ kind: "dispatch-outcome-lost" });
   });
 
   test("acknowledges a completed request id as a duplicate rather than rerunning it", async () => {

@@ -1182,6 +1182,63 @@ describe("session routes", () => {
       expect(mockSendPrompt).not.toHaveBeenCalled();
     });
 
+    test("refuses a request id an earlier bridge process claimed and this one never saw", async () => {
+      // Restored from disk: the turn may have run or died with that process.
+      mockGetSession.mockImplementation((id) =>
+        id === "s-1"
+          ? {
+              ...defaultGetSession(id)!,
+              dispatchedRequestIds: new Set(["before-restart"]),
+              inheritedDispatchedRequestIds: new Set(["before-restart"]),
+            }
+          : undefined,
+      );
+
+      const res = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "/deploy now",
+        requestId: "before-restart",
+      });
+
+      expect(res.status).toBe(410);
+      expect(await jsonBody(res)).toEqual({
+        error:
+          "Claude prompt outcome is unknown after a bridge restart; resubmit with a new requestId",
+        kind: "dispatch-outcome-lost",
+      });
+      expect(mockClaimPromptDispatch).not.toHaveBeenCalled();
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
+    test("keeps answering this process's own claims and local replies as processed", async () => {
+      mockGetSession.mockImplementation((id) =>
+        id === "s-1"
+          ? {
+              ...defaultGetSession(id)!,
+              dispatchedRequestIds: new Set(["claimed-here", "idle-steer"]),
+              inheritedDispatchedRequestIds: new Set(["idle-steer"]),
+            }
+          : undefined,
+      );
+
+      // Claimed by this process, still persisting its claim.
+      const own = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "Launch once",
+        requestId: "claimed-here",
+      });
+      expect(own.status).toBe(200);
+      expect(await jsonBody(own)).toMatchObject({ status: "already-processed", duplicate: true });
+
+      // An idle `/steer` reply is answered locally and kept with the session,
+      // so it never ran a turn that a restart could have lost.
+      const local = await jsonRequest("POST", "/session/s-1/prompt", {
+        prompt: "/steer keep going",
+        requestId: "idle-steer",
+      });
+      expect(local.status).toBe(200);
+      expect(await jsonBody(local)).toMatchObject({ status: "already-processed", local: true });
+      expect(mockSendPrompt).not.toHaveBeenCalled();
+    });
+
     test("routes a running session's same-id retry through the duplicate claim", async () => {
       mockGetSession.mockImplementationOnce(() => ({
         id: "s-1",

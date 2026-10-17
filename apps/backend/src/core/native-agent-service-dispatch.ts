@@ -4,6 +4,7 @@ import {
   nativeAgentSteerRejectionMessage,
   nativeAsyncQuestionItemId,
 } from "@orkestrator/protocol/native-agent";
+import { PromptRejectedError } from "./agent-provider-contract.js";
 import {
   AmbiguousPromptDispatchError,
   BUILD_PIPELINE_AGENTS,
@@ -236,12 +237,17 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
           error: error.message,
         };
       }
-      if (!preserveExistingPending) {
+      // A retry of an id the bridge has retired can never succeed, so the
+      // parked record is resolved here too rather than left asking for one.
+      const retired = error instanceof PromptRejectedError && error.requestIdRetired;
+      if (!preserveExistingPending || retired) {
         await this.storage.clearPendingNativeAgentDispatch(key, input.requestId).catch(() => false);
       }
+      if (retired) void this.refreshProjection(input, true).catch(() => undefined);
       return {
         outcome: "rejected",
         error: error instanceof Error ? error.message : "Prompt dispatch failed",
+        ...(retired ? { requestIdRetired: true as const } : {}),
       };
     }
   }

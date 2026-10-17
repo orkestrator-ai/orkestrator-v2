@@ -35,6 +35,7 @@ import { AcpClientMethods, UnsupportedClientMethodError } from "./acp-client-met
 import {
   loadAcpProviderConfig,
   providerArgv,
+  providerEnv,
   undeclaredPromptCapabilities,
 } from "./acp-provider-config.js";
 import { effectiveExecutionPolicy } from "./acp-policy.js";
@@ -987,10 +988,14 @@ export class AcpProcess {
     // (catalog probe, session list, replay) still runs under the process
     // authority, so a coordinator bridge never starts Grok with its web tools.
     const policy = spawnOptions.policy ?? effectiveExecutionPolicy(undefined);
+    // Only a session whose policy turns project resources on trusts the
+    // checkout; a probe, a coordinator or a read-only turn keeps Grok's gate.
+    const trustProject = policy?.projectResources === true;
     const args = providerArgv(providerConfig, {
       ...spawnOptions,
       approvals: policy?.approvals,
       denyNetwork: nativeAgentPolicyDeniesNetwork(policy),
+      trustProject,
     });
     // Read before the child starts, so an edit racing the spawn is reported
     // as a change rather than missed.
@@ -999,7 +1004,7 @@ export class AcpProcess {
     );
     this.child = spawn(executable, args, {
       cwd: workingDirectory,
-      env: { ...process.env, ...providerConfig.env },
+      env: providerEnv(providerConfig, { trustProject }),
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.#diagnostics = createBridgeDiagnostics("acp", { id: `process-${this.child.pid}` }, () => ({

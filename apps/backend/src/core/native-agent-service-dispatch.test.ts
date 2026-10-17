@@ -1187,6 +1187,60 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test("resolves a parked dispatch whose id the restarted bridge has retired", async () => {
+    let sendOutcome: "ambiguous" | "lost" = "ambiguous";
+    const lost = "Claude Code restarted before it confirmed this message, so it may not have run.";
+    const stub = createProviderStub("claude", {
+      send: async () => {
+        if (sendOutcome === "ambiguous") {
+          throw new AmbiguousPromptDispatchError("Response was lost");
+        }
+        throw new PromptRejectedError(lost, { requestIdRetired: true });
+      },
+      dispatchStatus: async () => "unknown" as const,
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-dispatch-retry-lost-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const base = {
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey: "env-env-1:tab-1",
+          prompt: "/deploy now",
+        };
+        const key = nativeAgentSessionStorageKey(
+          base.environmentId,
+          base.agent,
+          base.logicalSessionKey,
+        );
+        await expect(
+          service.dispatchIntent({ ...base, requestId: "parked" }),
+        ).resolves.toMatchObject({ outcome: "unknown" });
+
+        // Retrying can never succeed, so the record is resolved, not left
+        // asking for another retry, and the caller learns the id is spent.
+        sendOutcome = "lost";
+        await expect(
+          service.retryRecoverableDispatch({ ...base, requestId: "parked" }),
+        ).resolves.toEqual({ outcome: "rejected", error: lost, requestIdRetired: true });
+        const session = await storage.getNativeAgentSession(key);
+        expect(session?.pendingDispatch).toBeUndefined();
+        expect(session?.dispatchedRequestIds ?? []).not.toContain("parked");
+
+        // The session is no longer blocked.
+        await expect(service.dispatchIntent({ ...base, requestId: "parked" })).resolves.toEqual({
+          outcome: "rejected",
+          error: lost,
+          requestIdRetired: true,
+        });
+        expect((await storage.getNativeAgentSession(key))?.pendingDispatch).toBeUndefined();
+      },
+    );
+  });
+
   test("retries once past a parked dispatch the provider can now vouch for", async () => {
     let sendOutcome: "ambiguous" | "accepted" = "ambiguous";
     let dispatched = false;

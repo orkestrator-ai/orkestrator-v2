@@ -137,6 +137,36 @@ describe("HTTP bridge command transport", () => {
     expect(second.command).toBeUndefined();
   });
 
+  test("a bridge's refusal of an id an earlier process claimed is a lost outcome", async () => {
+    const { provider } = httpProvider(
+      () =>
+        Response.json(
+          {
+            error:
+              "Claude prompt outcome is unknown after a bridge restart; resubmit with a new requestId",
+            kind: "dispatch-outcome-lost",
+          },
+          { status: 410 },
+        ),
+      claudeConnection,
+    );
+    const failure = provider.send("session-1", "/deploy", { requestId: "r-1" });
+    await expect(failure).rejects.toMatchObject({ requestIdRetired: true });
+    // In the user's terms, not the bridge's request-id wording.
+    await expect(failure).rejects.toThrow(
+      /^Claude Code restarted before it confirmed this message, so it may not have run\. Check the conversation and send it again if it did not\.$/,
+    );
+
+    // Any other 410 is still a plain rejection.
+    const { provider: other } = httpProvider(
+      () => Response.json({ error: "cannot reload" }, { status: 410 }),
+      claudeConnection,
+    );
+    const plain = other.send("session-1", "hi", { requestId: "r-2" });
+    await expect(plain).rejects.toBeInstanceOf(PromptRejectedError);
+    await expect(plain).rejects.toMatchObject({ requestIdRetired: false });
+  });
+
   test("a bridge refusing a selected command is a plain rejection with its own message", async () => {
     const { provider } = httpProvider(
       () =>

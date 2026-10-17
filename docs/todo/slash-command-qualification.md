@@ -138,7 +138,8 @@ Per provider:
     `available_commands_update`, and the selection was revalidated against
     the live list. So Grok **does** re-send after `session/load`.
   - Project skills (`.agents/skills`) and a `.grok/commands` file in the
-    worktree were not listed (see "Needs verification").
+    worktree were not listed: Grok had not trusted the folder (see "Verified
+    after the run").
 - **Cursor 1.0.37.**
   - The catalogue is `unsupported` and refresh answers `unsupported`; only
     `/steer` is listed.
@@ -185,8 +186,8 @@ The spec checks the following:
     and still did not run. The second did not run. The session then ran
     another command normally.
 
-On Claude the stale-draft step is skipped: a removed command leaves Claude's
-list only at its next turn.
+On Claude the stale-draft step was skipped here: a removed command left Claude's
+list only at its next turn. Since #1055 it runs (see "Verified after the run").
 
 Not run: the scenario on a container environment (item 1 below), with a
 backend restart (a `dev:test` profile cannot restart its backend alone), and
@@ -280,6 +281,75 @@ The disposable profile was stopped and reset; no live launcher remains.
   ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md),
   code item 3).
 
+### Verified after the run (2026-10-17)
+
+Both "Needs verification" items from the run were real and are fixed.
+
+**Grok skipped project commands in every Orkestrator environment by default.**
+Grok gates a git checkout's AGENTS.md, skills, `.grok/commands`, hooks,
+project MCP and LSP servers and project permission rules behind folder trust
+(`$GROK_HOME/trusted_folders.toml`), and skips them without saying so. Headless
+`grok agent stdio` never asks: over ACP it sent no `x.ai/folder_trust/request`.
+`.grok/commands/*.md` is a Grok convention (legacy flat commands, listed as
+skills). Evidence from the pinned 1.0.52 binary, in an isolated `GROK_HOME`:
+
+- `grok inspect` in a git repo holding AGENTS.md, a `.grok/commands` file and
+  two project skills: "Project trusted: no", no instructions, no skills. A
+  grant for the repo, or `GROK_FOLDER_TRUST=0`, loads all four.
+- A grant on a non-git parent does not cover a repository below it. A git
+  worktree of a trusted repository is trusted. So a host worktree loads only
+  when the user trusted its main checkout in Grok. A container's `/workspace`
+  never matches the host paths in the staged trust store.
+- A folder outside git, or a repository holding nothing the gate holds back
+  (a `.grok/config.toml` setting only `model`), reports trusted. That is why
+  the execution-policy conformance runner, whose fixture was not a git
+  repository, saw project resources load.
+- Live ACP session, signed in from an owner-only `auth.json` snapshot: the
+  untrusted repository listed none of its three project rows; with
+  `GROK_FOLDER_TRUST=0` and `agent --no-leader` it listed
+  `probe-grok-cmd`, `probe-grok-skill` and `probe-agents-skill`, and wrote no
+  trust store.
+
+Fix: the ACP bridge launches Grok with `GROK_FOLDER_TRUST=0` and
+`agent --no-leader` when the session's policy turns project resources on
+(`PROJECT_TRUST` and `providerEnv` in `bridges/acp-bridge/src/acp-provider-config.ts`,
+used by `AcpProcess`). Containers do by default, and so does a host
+environment with the override. The conformance runner now uses a git fixture
+with instructions and a command, and launches `grok inspect` with the bridge's
+environment. Without the fix it fails all eight project-resources-on shapes.
+
+**Claude told the user nothing when a restart lost a command.** The bridge
+writes a prompt's request id to `dispatchedRequestIds` on disk before the turn
+starts. After a restart, a same-id retry found the id there and answered 200
+`already-processed` (`routes/session.ts`). The backend read any 2xx as
+accepted. The web tab then removed the recovery card, the user's bubble and
+the draft, with no notice. So "Retry send" looked like it delivered a command
+that never ran. ACP, Cursor and Pi already refused such an id with 410
+"outcome is unknown after a bridge restart".
+
+Fix:
+
+- The Claude bridge refuses an id inherited from an earlier process
+  (`inheritedDispatchedRequestIds`, set on restore) with 410 and
+  `kind: "dispatch-outcome-lost"`. ACP, Cursor and Pi add the same kind.
+- The backend raises `PromptRejectedError` with `requestIdRetired`
+  (`assertPromptOutcomeKnown`), clears the parked record even on
+  a retry, and answers `rejected` with `requestIdRetired: true` and "Claude Code
+  restarted before it confirmed this message, so it may not have run. Check the
+  conversation and send it again if it did not."
+- The tab shows that message, keeps the text and drops the id, so Send runs it
+  under a new id.
+
+Live, in disposable profile `qa-slash-retired-a77b` (Claude only):
+`slash-command-inactive.spec.ts` passed (1 passed, 100 s). The restart right
+after Send parked, and the same-id retry returned `rejected (retired)` with the
+message. The running-turn restart still executed exactly once.
+
+The same run found the spec's Claude refresh expectation out of date. Since
+#1055 keeps the CLI warm, Claude's refresh answers `reloaded`, so the spec now
+treats Claude like Codex. That also runs Claude's stale-draft check, which
+passed.
+
 ## Outstanding work
 
 ### Qualification
@@ -312,6 +382,15 @@ The disposable profile was stopped and reset; no live launcher remains.
    session" caveat for what passed), and the owner comments listed in
    [slash-command-catalogue.md](slash-command-catalogue.md).
 
+### Follow-ups
+
+1. **Settle a lost Claude dispatch without a click.** After a restart Claude's
+   `GET /:id/dispatch` still answers `unknown` for an id an earlier process
+   claimed, so the card waits out the grace window and asks for a Retry that
+   can only report the lost outcome. Answer that case from
+   `inheritedDispatchedRequestIds` so the backend can resolve the card and
+   show the message on its own.
+
 ## Constraints and rationale
 
 - Mocks do not confer support. A category that is not qualified stays
@@ -325,6 +404,17 @@ The disposable profile was stopped and reset; no live launcher remains.
   template paths, prompts or file contents.
 - Do not describe a release as "full slash-command parity"; name the provider
   surfaces that were qualified.
+- Orkestrator's `projectResources` decides Grok's folder trust when it is on.
+  The bridge sets `GROK_FOLDER_TRUST=0` for that child only. It does not write
+  a durable grant with `--trust`: that would change the user's own
+  `~/.grok/trusted_folders.toml`, and outlive the session and its policy. It
+  does not answer Grok's `x.ai/folder_trust/request` either: that is
+  undocumented, and the pinned build never sent it headless. When the policy
+  is off, Grok's own trust still decides; see the follow-up in the index.
+- A restarted bridge refuses a request id an earlier process claimed. It does
+  not run it again, because the turn may already have run, as in the
+  running-turn restart. The backend tells the user it may not have run, rather
+  than leaving a retry card that can never succeed.
 
 ## Open questions
 
@@ -335,17 +425,6 @@ The disposable profile was stopped and reset; no live launcher remains.
 
 - Whether any of these runs happened informally after #827. No artifacts or
   records were found.
-- Whether Grok 1.0.52 loads project skills and commands in a host worktree it
-  has not trusted. The ACP bridge reports `projectResources: true`
-  (`acp-policy.ts`), yet a worktree's `.agents/skills` skill and a
-  `.grok/commands` file were not listed on 2026-10-17, while a user skill
-  was. Check Grok's folder-trust state for the worktree and whether
-  `.grok/commands` is a Grok convention at all.
-- What a Claude user sees after a bridge restart right after Send. On
-  2026-10-17 the dispatch parked (`action-required`), a retry under the same
-  request id settled, and the command never ran. That is safe, but the
-  command is lost after a retry. Check that the reconciling card and the
-  transcript tell the user it did not run.
 
 ## Related
 

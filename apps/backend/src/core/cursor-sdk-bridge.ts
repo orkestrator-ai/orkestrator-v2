@@ -8,7 +8,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { inheritedCursorApiKey } from "./agent-test-cursor-credential.js";
+import { resolveCursorCredential } from "./agent-test-cursor-credential.js";
 import type { CommandContext } from "./commands-context.js";
 
 /**
@@ -27,7 +27,7 @@ export const CONTAINER_CURSOR_SDK_AUTH_FILE = "/tmp/orkestrator-ai/cursor-sdk-au
 
 export interface CursorSdkAuthStatus {
   authenticated: boolean;
-  source: "api-key-env" | "api-key-config" | "stored-login" | "none";
+  source: "api-key-env" | "api-key-config" | "host-snapshot" | "stored-login" | "none";
   email?: string;
   expiresAt?: string;
 }
@@ -44,10 +44,21 @@ export async function cursorSdkAuthStatus(
   context: CommandContext,
   storedApiKey: string | undefined,
 ): Promise<CursorSdkAuthStatus> {
-  if (inheritedCursorApiKey()) {
-    return { authenticated: true, source: "api-key-env" };
+  const selected = resolveCursorCredential(storedApiKey);
+  if (selected.apiKey) {
+    return {
+      authenticated: true,
+      source:
+        selected.source === "config"
+          ? "api-key-config"
+          : selected.source === "host-snapshot"
+            ? "host-snapshot"
+            : "api-key-env",
+      ...(selected.apiKeyExpiresAtMs !== undefined
+        ? { expiresAt: new Date(selected.apiKeyExpiresAtMs).toISOString() }
+        : {}),
+    };
   }
-  if (storedApiKey?.trim()) return { authenticated: true, source: "api-key-config" };
 
   const credentials = await readStoredCredentials(cursorSdkCredentialPath(context));
   if (!credentials) return { authenticated: false, source: "none" };

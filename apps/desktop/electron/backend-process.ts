@@ -286,7 +286,13 @@ export function createBackendProcessEnvironment(
       const piAgentDir =
         inherited.PI_CODING_AGENT_DIR?.trim() ||
         (inheritedHome ? path.join(inheritedHome, ".pi", "agent") : undefined);
-      if (piAgentDir) env.ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR = piAgentDir;
+      if (piAgentDir) {
+        const expanded =
+          inheritedHome && (piAgentDir === "~" || piAgentDir.startsWith("~/"))
+            ? path.join(inheritedHome, piAgentDir.slice(2))
+            : piAgentDir;
+        env.ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR = path.resolve(expanded);
+      }
     }
     if (allowed.has("cursor") && inherited.CURSOR_API_KEY) {
       env.CURSOR_API_KEY = inherited.CURSOR_API_KEY;

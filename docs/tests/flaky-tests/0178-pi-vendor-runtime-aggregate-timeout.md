@@ -407,3 +407,13 @@ and `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.w0udE
 This observation does not independently establish a flake. Runtime staging
 remains an unresolved validation limitation; no source, assertion, timeout or
 skip changed.
+
+## Agent-test credential review observation — 2026-10-17
+
+The unchanged SDK staging test exceeded 30000 ms in `mise run test` and again
+in its owning-file rerun:
+`mise run test:logged -- --name pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`.
+The isolated result was three passed and one timeout (31.0 seconds overall).
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.5SclER`.
+This recurrence remains an unresolved staging limitation; the isolated failure
+does not establish a flake. The new real SDK auth-only runtime test passes.

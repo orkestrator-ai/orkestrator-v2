@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, spyOn, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -33,7 +33,7 @@ afterEach(async () => {
 });
 
 describe("agent-test host Cursor key", () => {
-  test("reads as an inherited key for an authorized profile", async () => {
+  test("reads as a snapshot key for an authorized profile", async () => {
     await writeSnapshot(JSON.stringify({ apiKey: " host-key " }));
     loadAgentTestHostCursorApiKey({
       dataDir,
@@ -41,7 +41,10 @@ describe("agent-test host Cursor key", () => {
       credentialSources: new Set(["cursor"]),
     });
 
-    expect(resolveCursorApiKey({} as never)).toEqual({ apiKey: "host-key", source: "host-env" });
+    expect(resolveCursorApiKey({} as never)).toEqual({
+      apiKey: "host-key",
+      source: "host-snapshot",
+    });
     // A key the profile stored in its own settings still wins.
     expect(resolveCursorApiKey({ cursorApiKey: "profile-key" } as never)).toEqual({
       apiKey: "profile-key",
@@ -50,7 +53,11 @@ describe("agent-test host Cursor key", () => {
     const context = { storage: { getDataDir: () => dataDir } } as unknown as CommandContext;
     await expect(cursorSdkAuthStatus(context, undefined)).resolves.toEqual({
       authenticated: true,
-      source: "api-key-env",
+      source: "host-snapshot",
+    });
+    await expect(cursorSdkAuthStatus(context, "profile-key")).resolves.toEqual({
+      authenticated: true,
+      source: "api-key-config",
     });
     // Never exported to the environment that terminals and children inherit.
     expect(process.env.CURSOR_API_KEY).toBeUndefined();
@@ -66,6 +73,36 @@ describe("agent-test host Cursor key", () => {
     });
 
     expect(resolveCursorApiKey({} as never).apiKey).toBe("shell-key");
+  });
+
+  test("expires a snapshot at load time and while the backend stays running", async () => {
+    const expiresAt = Date.now() + 60_000;
+    await writeSnapshot(JSON.stringify({ apiKey: "expiring-key", apiKeyExpiresAtMs: expiresAt }));
+    const clock = spyOn(Date, "now").mockReturnValue(expiresAt - 1);
+    const options = {
+      dataDir,
+      runtimeFlavor: "agent-test",
+      credentialSources: new Set(["cursor"] as const),
+    };
+    const context = { storage: { getDataDir: () => dataDir } } as unknown as CommandContext;
+    try {
+      loadAgentTestHostCursorApiKey(options);
+      expect(resolveCursorApiKey({} as never).apiKey).toBe("expiring-key");
+      await expect(cursorSdkAuthStatus(context, undefined)).resolves.toMatchObject({
+        source: "host-snapshot",
+        expiresAt: new Date(expiresAt).toISOString(),
+      });
+      clock.mockReturnValue(expiresAt);
+      expect(resolveCursorApiKey({} as never)).toEqual({ source: "none" });
+      await expect(cursorSdkAuthStatus(context, undefined)).resolves.toEqual({
+        authenticated: false,
+        source: "none",
+      });
+      loadAgentTestHostCursorApiKey(options);
+      expect(resolveCursorApiKey({} as never)).toEqual({ source: "none" });
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   test("is ignored unless an agent-test profile authorizes Cursor", async () => {

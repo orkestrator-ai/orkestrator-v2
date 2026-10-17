@@ -23,6 +23,7 @@ with full history. Status lives in this index so a model can skip those files.
 ## Open
 
 | ID | Status | Test | File | Symptom | Case |
+| 0351 | open | `split panes keep terminal output, scroll positions and the draft across the breakpoint` | e2e/PaneBreakpoint.spec.ts:98 | Three mobile fixture startup failures in the nine-worker browser suite; unchanged owning file passed alone with one worker in 33.8 s. | [0351-pane-breakpoint-parallel-startup.md](0351-pane-breakpoint-parallel-startup.md) |
 | --- | --- | --- | --- | --- | --- |
 | 0350 | open | `desktop backend lifecycle > stops the backend once and holds the quit until it has exited` | apps/desktop/tests/backend-lifecycle.test.ts | Held quit not re-issued five milliseconds after the backend exit resolved, in the two-worker desktop suite under host load; unchanged owning file passed alone (5/5, 135 ms). | [0350-backend-lifecycle-quit-after-exit-sleep.md](0350-backend-lifecycle-quit-after-exit-sleep.md) |
 | 0278 | open | Mobile environment settings opened from the projects drawer (touch and keyboard) | e2e/EnvironmentSettingsDrawer.spec.ts | Dialog absent at the five-second deadline in the nine-worker browser suite; unchanged owning file passed with one worker in 6.2 seconds. | [0278-environment-settings-drawer-browser-timeout.md](0278-environment-settings-drawer-browser-timeout.md) |

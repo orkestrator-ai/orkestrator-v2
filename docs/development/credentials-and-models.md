@@ -199,14 +199,16 @@ is not the source of the complete model catalogue.
 Cursor is SDK-only. For local environments, Orkestrator resolves credentials in
 this order:
 
-1. the backend process's `CURSOR_API_KEY` environment variable;
-2. the stored global Cursor API-key setting; or
-3. a login minted through the Cursor SDK browser flow and stored in
+1. the stored global Cursor API-key setting;
+2. the backend process's `CURSOR_API_KEY` environment variable;
+3. an authorized agent-test host credential snapshot, when present and unexpired; or
+4. a login minted through the Cursor SDK browser flow and stored in
    Orkestrator's data directory.
 
 The stored Cursor key is write-only through the renderer API. Reads return only
 whether a key is configured and whether the effective source is `config`,
-`host-env`, or `none`.
+`host-env`, `host-snapshot`, or `none`. Auth status uses the same precedence as
+bridge launches.
 
 For containers, the backend sends either the effective API key or the stored SDK
 login over stdin to an owner-only temporary file. The key value is not placed in
@@ -303,7 +305,15 @@ production data directory rather than a provider home:
 | Cursor | Owner-only snapshot of the host's effective Orkestrator Cursor key (`CURSOR_API_KEY` when inherited still wins) |
 | Grok | Owner-only snapshot of host `~/.grok/auth.json` for local runs; bounded read-only host imports for containers |
 | OpenCode | Host XDG config/data/state directories and `OPENCODE_API_KEY` when inherited |
-| Pi | Host `~/.pi/agent/auth.json` (or `PI_CODING_AGENT_DIR`), shared in place; nothing else from the host Pi directory |
+| Pi | Host `~/.pi/agent/auth.json` (or `PI_CODING_AGENT_DIR`), shared in place; nothing else from the host Pi directory. Tilde overrides expand against the host home and relative overrides resolve before HOME changes. |
+
+Cursor and Grok snapshots refresh on every profile start. Opting out or losing
+the host credential removes the previous snapshot. A failed refresh also removes
+the old snapshot; a removal failure stops startup. Cursor snapshots preserve a
+minted key's expiry, and the backend stops resolving the key when it expires.
+Settings identifies this source separately from an environment key. To remove
+it, narrow the profile's credential sources or clear the host Cursor credential,
+then restart the profile.
 
 For Claude, Codex, and OpenCode this makes real local agent calls work, but it
 also means a local provider can

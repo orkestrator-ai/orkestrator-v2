@@ -498,25 +498,28 @@ export async function seedAgentTestProviderCredentials(
   options: ModelCacheSeedOptions = {},
 ): Promise<string[]> {
   const roots = options.roots ?? defaultRuntimeProfileRoots();
+  const grokDestination = path.join(
+    profile.dataDir,
+    "agent-credentials",
+    "home",
+    ".grok",
+    "auth.json",
+  );
   const seeded = profile.credentialSources.includes("grok")
     ? await seedBoundedFiles(
         [
           {
             label: "grok/auth.json",
             source: path.join(roots.homeDir, ".grok", "auth.json"),
-            destination: path.join(
-              profile.dataDir,
-              "agent-credentials",
-              "home",
-              ".grok",
-              "auth.json",
-            ),
+            destination: grokDestination,
             replace: true,
           },
         ],
         options,
       )
     : [];
+  // An absent or failed refresh must not leave a previous account signed in.
+  if (!seeded.includes("grok/auth.json")) await rm(grokDestination, { force: true });
   if (await seedAgentTestCursorCredential(profile, roots)) seeded.push(CURSOR_SNAPSHOT_LABEL);
   return seeded;
 }
@@ -534,27 +537,34 @@ async function seedAgentTestCursorCredential(
   roots: RuntimeProfileRoots,
 ): Promise<boolean> {
   const destination = agentTestCursorSnapshotPath(profile);
-  const apiKey = profile.credentialSources.includes("cursor")
+  const credential = profile.credentialSources.includes("cursor")
     ? await hostCursorApiKey(roots.productionDataDir).catch(() => undefined)
     : undefined;
-  if (!apiKey) {
+  if (!credential) {
     // Not caught: a revoked key that cannot be removed must stop the start.
     await rm(destination, { force: true });
     return false;
   }
   // Like the Grok copy, a seed that cannot be written leaves Cursor signed out.
-  return atomicWriteJson(destination, { apiKey }).then(
-    () => true,
-    () => false,
-  );
+  try {
+    await atomicWriteJson(destination, credential);
+    return true;
+  } catch {
+    // Fail closed even when replacing an existing account. Removal errors
+    // propagate so startup cannot load a stale credential.
+    await rm(destination, { force: true });
+    return false;
+  }
 }
 
 /** The key a production backend would run Cursor under, in its own order. */
-async function hostCursorApiKey(productionDataDir: string): Promise<string | undefined> {
+async function hostCursorApiKey(
+  productionDataDir: string,
+): Promise<{ apiKey: string; apiKeyExpiresAtMs?: number } | undefined> {
   const config = await readBoundedJson(path.join(productionDataDir, "config.json"));
   const configured = (config as { global?: { cursorApiKey?: unknown } } | undefined)?.global
     ?.cursorApiKey;
-  if (typeof configured === "string" && configured.trim()) return configured.trim();
+  if (typeof configured === "string" && configured.trim()) return { apiKey: configured.trim() };
 
   const login = (await readBoundedJson(path.join(productionDataDir, "cursor-sdk", "auth.json"))) as
     | { apiKey?: unknown; apiKeyExpiresAtMs?: unknown }
@@ -563,7 +573,10 @@ async function hostCursorApiKey(productionDataDir: string): Promise<string | und
   if (!minted) return undefined;
   const expiresAt = login?.apiKeyExpiresAtMs;
   if (typeof expiresAt === "number" && expiresAt <= Date.now()) return undefined;
-  return minted;
+  return {
+    apiKey: minted,
+    ...(typeof expiresAt === "number" ? { apiKeyExpiresAtMs: expiresAt } : {}),
+  };
 }
 
 async function readBoundedJson(filePath: string): Promise<unknown> {

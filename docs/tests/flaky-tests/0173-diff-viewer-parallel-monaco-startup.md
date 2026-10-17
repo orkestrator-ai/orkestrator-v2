@@ -60,3 +60,12 @@ suite passed (257 passed, 61 skipped).
 - **Owning-file rerun:** `mise run test:logged -- --name merge-diff-browser-isolated -- bunx playwright test --config e2e/playwright.config.ts e2e/DiffViewerMobile.spec.ts --workers=1` passed the unchanged file (exit 0) in 12.3 seconds. Browser reruns ran sequentially.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.2CnKQx/merge-browser.log.gz`.
 - **Assessment:** intermittent under the aggregate browser run; root cause remains unconfirmed. No assertion, timeout or skip changed.
+
+## Agent-test credential review recurrence — 2026-10-17
+
+The nine-worker `mise run test:browser` run found no `.monaco-diff-editor`
+within five seconds in the unchanged mobile header case (335 passed, 80 skipped,
+five failures across 420 cases).
+`mise run test:logged -- --name browser-diff-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DiffViewerMobile.spec.ts --workers=1`
+then passed the owning file in 25.7 seconds. Browser reruns ran sequentially.
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.iMEuX0/browser.log.gz`.

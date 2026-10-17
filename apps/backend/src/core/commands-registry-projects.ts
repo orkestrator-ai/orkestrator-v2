@@ -934,11 +934,10 @@ export function registerProjectCommands(
   });
   register("cursor_sdk_login_status", async (_payload, context) => {
     const { cursorSdkLoginProgress } = await import("./cursor-sdk-bridge.js");
-    const { resolveCursorApiKey } = await import("./commands-validation.js");
     const config = await context.storage.loadConfig();
     // The stored key is read only to report *which* credential is in play; it
     // is never returned.
-    return cursorSdkLoginProgress(context, resolveCursorApiKey(config.global).apiKey);
+    return cursorSdkLoginProgress(context, config.global.cursorApiKey);
   });
   register("cursor_sdk_login_cancel", async () => {
     const { cancelCursorSdkLogin } = await import("./cursor-sdk-bridge.js");
@@ -948,11 +947,10 @@ export function registerProjectCommands(
   register("cursor_sdk_logout", async (_payload, context) => {
     const { cancelCursorSdkLogin, cursorSdkAuthStatus, cursorSdkLogout } =
       await import("./cursor-sdk-bridge.js");
-    const { resolveCursorApiKey } = await import("./commands-validation.js");
     cancelCursorSdkLogin();
     await cursorSdkLogout(context);
     const config = await context.storage.loadConfig();
-    return cursorSdkAuthStatus(context, resolveCursorApiKey(config.global).apiKey);
+    return cursorSdkAuthStatus(context, config.global.cursorApiKey);
   });
   register("set_anthropic_api_key", async ({ apiKey }, { storage }) => {
     const nextApiKey = apiKey === null ? null : asString(apiKey, "apiKey").trim();

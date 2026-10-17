@@ -5,7 +5,10 @@ import {
   isAgentInteractionPolicy,
 } from "@orkestrator/protocol/agent-interactions";
 import { isAgentSkillProvider } from "./agent-skills.js";
-import { inheritedCursorApiKey } from "./agent-test-cursor-credential.js";
+import {
+  resolveCursorCredential,
+  type CursorApiKeySource,
+} from "./agent-test-cursor-credential.js";
 import { resolveGitHubRepository } from "./github.js";
 import { isStartFeaturePlanningInput } from "@orkestrator/protocol/feature-planning";
 import { assertValidPromptAttachments, assertValidPromptImages } from "./prompt-attachments.js";
@@ -128,7 +131,7 @@ export type RendererGlobalConfig = Omit<
   anthropicApiKeyConfigured: boolean;
   anthropicApiKeySource: ApiKeySource;
   cursorApiKeyConfigured: boolean;
-  cursorApiKeySource: ApiKeySource;
+  cursorApiKeySource: CursorApiKeySource;
   openCodeZenApiKeyConfigured: boolean;
   openCodeZenApiKeySource: ApiKeySource;
 };
@@ -169,9 +172,9 @@ export function resolveAnthropicApiKey(global: AppConfig["global"]): {
  */
 export function resolveCursorApiKey(global: AppConfig["global"]): {
   apiKey?: string;
-  source: ApiKeySource;
+  source: CursorApiKeySource;
 } {
-  return resolveStoredOrInheritedApiKey(global.cursorApiKey, inheritedCursorApiKey());
+  return resolveCursorCredential(global.cursorApiKey);
 }
 
 /**

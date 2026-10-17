@@ -8,8 +8,10 @@ import {
   nextQueryCall,
   queryControlOverrides,
   sendPrompt,
+  terminalSlashCommandWritesForTesting,
   track,
   waitFor,
+  withTemporaryClaudeHome,
 } from "./session-manager-test-harness.js";
 import {
   configureClaudeSession,
@@ -442,6 +444,104 @@ describe("Claude command catalogue", () => {
       if (previousBridgeMarker === undefined) delete process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE;
       else process.env.ORKESTRATOR_NATIVE_AGENT_BRIDGE = previousBridgeMarker;
     }
+  });
+});
+
+describe("Claude terminal-only commands before a session's first turn", () => {
+  const inventory = [
+    { name: "focus", description: "Toggle focus view", argumentHint: "", builtin: true },
+    { name: "color", description: "Prompt bar color", argumentHint: "", builtin: true },
+    { name: "context", description: "Context usage", argumentHint: "", builtin: true },
+  ];
+
+  /** One finished turn on CLI `version`, whose init tags `terminal`. */
+  async function earlierTurn(version: string, terminal: string[]): Promise<void> {
+    const session = idleSession(`earlier turn on ${version}`);
+    await runTurn(session.id, [
+      init({ claude_code_version: version, terminal_slash_commands: terminal }),
+      { type: "result", subtype: "success" },
+    ]);
+    await terminalSlashCommandWritesForTesting();
+  }
+
+  async function probedRows(probeVersion: string | undefined) {
+    if (probeVersion) {
+      queryControlOverrides.initializationResult = mock(async () => ({
+        claude_code_version: probeVersion,
+      }));
+    }
+    const session = idleSession("new tab");
+    const catalogue = await readClaudeCommandCatalogue(session.id);
+    expect(session.commandInventoryState?.authority).toBe("probe");
+    // Take the probe's query off the queue so a later turn gets its own.
+    expect((await nextQueryCall()).isClosed()).toBe(true);
+    return {
+      session,
+      catalogue,
+      byName: new Map(catalogue.commands.map((command) => [command.name, command])),
+    };
+  }
+
+  test("a new tab's probe marks what the same CLI version tagged on an earlier turn", async () => {
+    await withTemporaryClaudeHome("claude-terminal-probe-", async () => {
+      queryControlOverrides.supportedCommands = mock(async () => inventory);
+      await earlierTurn("2.1.296", ["focus", "color"]);
+
+      const { session, catalogue, byName } = await probedRows("2.1.296");
+      expect(catalogue.status).toBe("stale");
+      for (const name of ["/focus", "/color"]) {
+        expect(byName.get(name)?.availability).toMatchObject({
+          state: "unavailable",
+          reason: "requires-interactive-ui",
+        });
+      }
+      expect(byName.get("/context")?.availability).toBeUndefined();
+      // Selected and typed spellings are refused before anything is sent.
+      await expect(
+        resolveClaudeCommandInvocation(session, {
+          id: "claude:/focus",
+          name: "/focus",
+          executionKind: "provider-prompt",
+          arguments: "",
+        }),
+      ).resolves.toMatchObject({ ok: false, message: expect.stringContaining("terminal") });
+      expect(typedCommandUnavailableMessage(session, "/focus on")).toContain("terminal");
+    });
+  });
+
+  test("an unseen CLI version gets no borrowed list, so its rows stay available", async () => {
+    await withTemporaryClaudeHome("claude-terminal-unseen-", async () => {
+      queryControlOverrides.supportedCommands = mock(async () => inventory);
+      await earlierTurn("2.1.296", ["focus", "color"]);
+      for (const version of ["2.1.297", undefined]) {
+        const { byName } = await probedRows(version);
+        expect(byName.get("/focus")?.availability, String(version)).toBeUndefined();
+      }
+    });
+  });
+
+  test("the session's own init replaces the remembered list", async () => {
+    await withTemporaryClaudeHome("claude-terminal-own-init-", async () => {
+      queryControlOverrides.supportedCommands = mock(async () => inventory);
+      await earlierTurn("2.1.296", ["focus", "color"]);
+      const { session } = await probedRows("2.1.296");
+      expect(
+        session.commandInventory?.find((row) => row.name === "/focus")?.availability,
+      ).toBeDefined();
+
+      await runTurn(session.id, [
+        init({ claude_code_version: "2.1.296", terminal_slash_commands: ["color"] }),
+        { type: "result", subtype: "success" },
+      ]);
+      await waitFor(() => session.commandInventoryState?.authority === "live");
+      const byName = new Map(
+        (await readClaudeCommandCatalogue(session.id)).commands.map((row) => [row.name, row]),
+      );
+      expect(byName.get("/focus")?.availability).toBeUndefined();
+      expect(byName.get("/color")?.availability).toMatchObject({
+        reason: "requires-interactive-ui",
+      });
+    });
   });
 });
 

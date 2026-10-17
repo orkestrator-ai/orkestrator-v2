@@ -88,6 +88,32 @@ function gitError(operation: ProjectGitError["operation"], error: unknown): Proj
 
 type Operation = ProjectGitStatus["operationState"];
 
+/** The newest commit of the configured base branch, as worker launches use it. */
+export type ProjectBaseBranchTip = {
+  branch: string;
+  commit: string | null;
+  /** `origin/<branch>` when the remote has it, otherwise the local branch. */
+  ref: string | null;
+  /** True only when `ref` was refreshed from the remote by this read. */
+  fetched: boolean;
+  fetchError?: string;
+  unavailableReason?: string;
+};
+
+export type ProjectBaseContainment = { contained: true } | { contained: false; reason: string };
+
+async function readCommit(root: string, ref: string): Promise<string | null> {
+  const resolved = await runCommand(
+    "git",
+    ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`],
+    {
+      cwd: root,
+      timeoutMs: 10_000,
+    },
+  ).catch(() => ({ stdout: "" }));
+  return resolved.stdout.trim() || null;
+}
+
 export { resolveProjectGitRoot } from "./project-git-root.js";
 import { resolveProjectGitRoot } from "./project-git-root.js";
 
@@ -100,6 +126,8 @@ export class ProjectGitService {
     string,
     { force: boolean; promise: Promise<ProjectGitStatus> }
   >();
+  private readonly baseFetches = new Map<string, Promise<{ fetchError?: string }>>();
+  private readonly baseFetchAttempts = new Map<string, { at: number; fetchError?: string }>();
   private readonly confirmations = new Map<
     string,
     {
@@ -612,6 +640,143 @@ export class ProjectGitService {
     });
     this.fetches.set(projectId, { force, promise: operation });
     return operation;
+  }
+
+  /**
+   * Fetches the base branch with a per-project/branch cooldown and reads its tip.
+   *
+   * Workers start from the project's base branch rather than from wherever the
+   * coordinator's checkout happens to be, matching a normal environment launch,
+   * which branches from `origin/<base>`. A failed fetch still answers from the
+   * last remote-tracking ref, and a repository without that remote branch falls
+   * back to the local branch. Only refs move; the checkout is never touched.
+   */
+  async baseBranchTip(projectId: string, branch: string): Promise<ProjectBaseBranchTip> {
+    const root = await this.root(projectId);
+    await runCommand("git", ["check-ref-format", "--branch", branch], { cwd: root });
+    const key = JSON.stringify([projectId, root, branch]);
+    let fetched = false;
+    let fetchError: string | undefined;
+    const existing = this.baseFetches.get(key);
+    const previous = this.baseFetchAttempts.get(key);
+    if (existing) {
+      ({ fetchError } = await existing);
+    } else if (previous && Date.now() - previous.at < FETCH_COOLDOWN_MS) {
+      fetchError = previous.fetchError;
+    } else {
+      // Network I/O must not hold the checkout lock. Git updates the destination
+      // ref atomically; serialize only our reads with checkout mutations.
+      const operation = (async () => {
+        const remotes = (
+          await runCommand("git", ["remote"], { cwd: root, timeoutMs: 10_000 })
+        ).stdout
+          .split("\n")
+          .map((remote) => remote.trim());
+        let error: string | undefined;
+        if (remotes.includes("origin")) {
+          try {
+            await runRemoteGit(
+              "fetch",
+              ["origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`],
+              {
+                cwd: root,
+                timeoutMs: 60_000,
+              },
+            );
+            fetched = true;
+          } catch (cause) {
+            error = gitError("fetch", cause).message;
+          }
+        }
+        // Bound completed-attempt metadata; in-flight requests stay deduplicated
+        // until settlement. Failed attempts also cool down unreachable remotes.
+        this.baseFetchAttempts.delete(key);
+        this.baseFetchAttempts.set(key, {
+          at: Date.now(),
+          ...(error ? { fetchError: error } : {}),
+        });
+        if (this.baseFetchAttempts.size > 128) {
+          const oldest = this.baseFetchAttempts.keys().next().value;
+          if (oldest !== undefined) this.baseFetchAttempts.delete(oldest);
+        }
+        return error ? { fetchError: error } : {};
+      })().finally(() => {
+        this.baseFetches.delete(key);
+      });
+      this.baseFetches.set(key, operation);
+      ({ fetchError } = await operation);
+    }
+    return this.serialize(root, async () => {
+      const remoteCommit = await readCommit(root, `refs/remotes/origin/${branch}`);
+      if (remoteCommit) {
+        return {
+          branch,
+          commit: remoteCommit,
+          ref: `origin/${branch}`,
+          fetched,
+          ...(fetchError ? { fetchError } : {}),
+        };
+      }
+      const localCommit = await readCommit(root, `refs/heads/${branch}`);
+      return {
+        branch,
+        commit: localCommit,
+        ref: localCommit ? branch : null,
+        fetched: false,
+        ...(fetchError ? { fetchError } : {}),
+        ...(localCommit
+          ? {}
+          : { unavailableReason: `Base branch ${branch} was not found locally or on origin` }),
+      };
+    });
+  }
+
+  /**
+   * Whether a launch base names a real branch that contains the commit, locally
+   * or on any remote. Covers both the base branch's tip and the checkout's own
+   * HEAD, so either is a valid choice and nothing else is.
+   */
+  async branchContainsCommit(
+    projectId: string,
+    branch: string,
+    commit: string,
+  ): Promise<ProjectBaseContainment> {
+    const root = await this.root(projectId);
+    try {
+      await runCommand("git", ["check-ref-format", "--branch", branch], { cwd: root });
+    } catch {
+      return { contained: false, reason: `${branch} is not a valid branch name` };
+    }
+    if (!(await readCommit(root, commit))) {
+      return { contained: false, reason: "the commit does not exist in the project checkout" };
+    }
+    const remoteRefs = (
+      await runCommand("git", ["for-each-ref", "--format=%(refname)", `refs/remotes/*/${branch}`], {
+        cwd: root,
+        timeoutMs: 10_000,
+      }).catch(() => ({ stdout: "" }))
+    ).stdout
+      .split("\n")
+      .filter(Boolean);
+    let found = false;
+    for (const ref of [`refs/heads/${branch}`, ...remoteRefs]) {
+      if (!(await readCommit(root, ref))) continue;
+      found = true;
+      const ancestor = await runCommand("git", ["merge-base", "--is-ancestor", commit, ref], {
+        cwd: root,
+        timeoutMs: 10_000,
+      }).then(
+        () => true,
+        () => false,
+      );
+      if (ancestor) return { contained: true };
+    }
+    return {
+      contained: false,
+      reason: found
+        ? `the commit is not on ${branch}`
+        : `${branch} does not exist in the project checkout`,
+    };
   }
 
   private async mutation(

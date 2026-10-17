@@ -55,6 +55,7 @@ import {
   lastAssistantText,
   missingWorkflowResultMessage,
   workflowResultReminderPrompt,
+  workflowRestartContinuationPrompt,
 } from "./workflow-result-missing.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
@@ -1418,7 +1419,7 @@ export class ReviewFanoutRunner {
         "The reviewer stayed blocked without a resolvable interaction",
       );
     }
-    if (status === "error" || status === "missing") {
+    const failReviewerSession = async (): Promise<"continue"> => {
       await finalUsage();
       reviewer.status = "failed";
       reviewer.completedAt = nowIso();
@@ -1430,6 +1431,13 @@ export class ReviewFanoutRunner {
             : "The reviewer session failed";
       await this.commit();
       return "continue";
+    };
+    // A provider restart that cut the turn short is not the reviewer's
+    // failure: a report it already submitted is still accepted below, and
+    // otherwise the same session continues the review once.
+    const restartInterrupted = status === "error" && observation.interruption === "restart";
+    if ((status === "error" && !restartInterrupted) || status === "missing") {
+      return failReviewerSession();
     }
     if (reviewer.resultTransport === "tool-v1") {
       reviewer.resultSubmission = await host.projectResult?.(reviewer.requestId);
@@ -1439,6 +1447,13 @@ export class ReviewFanoutRunner {
         ? ((await host.readResult?.<unknown>(reviewer.requestId)) ?? null)
         : await provider.structured<unknown>(reviewer.providerSessionId, reviewer.requestId);
     await host.assertFence();
+    // An interrupted structured-output turn records a provider failure, not a
+    // report; only an accepted report outlives the restart.
+    if (restartInterrupted && result?.ok !== true) {
+      await finalUsage();
+      if (await this.prepareReviewerRestartContinuation(reviewer)) return "stop";
+      return failReviewerSession();
+    }
     if (!result) {
       if (observation.backgroundWorkLive) {
         // The reviewer ended its turn to wait on background agents it launched;
@@ -1872,6 +1887,38 @@ export class ReviewFanoutRunner {
     reviewer.resultSubmission = "preparing";
     // The reminder is a new turn; the stall clock measures it, not the wait
     // that preceded it.
+    reviewer.progressAt = nowIso();
+    delete reviewer.stalledSince;
+    delete reviewer.idleResultPolls;
+    this.host.pollGate?.clear(`${this.host.workflowId}\0${reviewer.id}\0idle`);
+    await this.commit();
+    return true;
+  }
+
+  /**
+   * Queues the single continuation turn for a reviewer whose turn a provider
+   * restart cut short. Returns false once it was spent, so a second restart
+   * fails the reviewer instead of looping.
+   *
+   * The session still holds the partial review, so it continues there under a
+   * new request id, exactly like the result reminder; only the prompt differs,
+   * because this review is not finished.
+   */
+  private async prepareReviewerRestartContinuation(reviewer: ReviewerRecord): Promise<boolean> {
+    if (reviewer.restartContinuationSent === true || !reviewer.providerSessionId) return false;
+    const toolResult = reviewer.resultTransport === "tool-v1";
+    const prompt = workflowRestartContinuationPrompt({
+      workLabel: "review",
+      resultLabel: "structured report",
+      ...(toolResult ? { toolName: workflowResultToolName("review-report") } : {}),
+    });
+    if (toolResult && reviewer.requestId) await this.host.closeResult?.(reviewer.requestId);
+    reviewer.restartContinuationSent = true;
+    reviewer.continuationPrompt = prompt;
+    delete reviewer.schemaRepairPrompt;
+    reviewer.requestId = randomUUID();
+    reviewer.dispatchState = "prepared";
+    reviewer.resultSubmission = toolResult ? "preparing" : undefined;
     reviewer.progressAt = nowIso();
     delete reviewer.stalledSince;
     delete reviewer.idleResultPolls;

@@ -269,6 +269,30 @@ session unsubscribes, whereas deleting would destroy the user's rollout. Tab
 close (`POST /session/:id/close`) additionally confirms that a last-reference
 turn has actually stopped before releasing the thread.
 
+A Codex turn runs the model in its session's config; the prompt carries no
+model. Two rules in `apps/backend/src/core/session-held-model.ts` keep the
+picker and the run on the same model:
+
+- **New sessions.** A session created on an inherited default that the login's
+  live `model/list` does not offer starts on the picker's first model, the same
+  row the picker would show. The user gets a toast, Build stages record a
+  `modelSubstitution`, and the setting is not changed. A pinned or explicit
+  model is kept. Availability is the complete list, including models hidden
+  from the picker (`includeHidden`), returned as `supportedModelIds` by
+  `/global/models`. The bridge reads `model/list` on every request rather than
+  keeping it for the process lifetime, so a login change cannot leave the old
+  account's list counted as live. The bridge's cache or fallback catalogue, a
+  response without `supportedModelIds`, or a list longer than the page bound is
+  never grounds for a swap.
+- **Existing sessions.** If a session holds a model the picker does not list,
+  the picker shows that model, labelled "session model", instead of the first
+  catalogue row. The label makes no claim about the login, because the
+  durable catalogue does not record where it came from. Picking any listed
+  model replaces it.
+  The renderer keeps that row when a later discovery update replaces the
+  composer's models with the bare catalogue
+  (`withRetainedSelectedModelRow` in `useNativeAgentSession.ts`).
+
 `session-titles.ts` is the one deliberate exception to all of the above — it
 still spawns a hermetic `codex exec` with a custom model catalog, a read-only
 sandbox, and user config ignored, so title generation cannot inherit the user's
@@ -860,6 +884,26 @@ seeing the rejection:
 
 The shared instruction and reminder text (`WORKFLOW_RESULT_MALFORMED_CALL_GUIDANCE`)
 names both directions of the brace fault and forbids shortening the report.
+
+**Follow-up turns.** A Multi Review reviewer, and the preparation,
+consolidation and Fix steps, each get two bounded follow-up turns in the same
+session, under a fresh request id and result slot
+(`workflow-result-missing.ts`):
+
+- **Result reminder.** A tool-mode turn that went idle with no accepted result
+  gets one `workflowResultReminderPrompt` after the idle-poll bound, then fails
+  (`resultReminderSent`). It says the work is done and only the submission is
+  missing.
+- **Restart continuation.** A turn the provider itself cut short is not failed.
+  The Codex bridge reports that on `/session/:id/status` as
+  `interruption: "restart"` beside `phase: "failed"`, and
+  `readProviderStatus` carries it. A result accepted before the restart still
+  counts. Otherwise the turn gets one `workflowRestartContinuationPrompt`
+  (`restartContinuationSent`), which asks the model to continue rather than
+  resubmit, and a second interruption fails it. No other bridge reports
+  interruptions yet, so their cut-short turns fail as before.
+
+Both flags are persisted, so a backend restart cannot reset either budget.
 
 ### Provisional findings (`report_finding`)
 

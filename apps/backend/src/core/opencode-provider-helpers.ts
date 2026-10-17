@@ -705,3 +705,17 @@ export function waitForOpenCodeRetry(ms: number, signal: AbortSignal): Promise<v
     signal.addEventListener("abort", abort, { once: true });
   });
 }
+
+/** Keep plain prompt tool masks consistent with the session permission grant. */
+export function openCodePromptToolOptions(
+  options: Pick<ProviderSendOptions, "readOnly" | "workflowResultTool">,
+  reviewEnabled: boolean,
+): { tools?: Record<string, boolean> } {
+  if (!options.readOnly || reviewEnabled) return {};
+  return {
+    tools: {
+      ...OPENCODE_READ_ONLY_TURN_TOOLS,
+      ...openCodeWorkflowResultTurnTools(options.workflowResultTool),
+    },
+  };
+}

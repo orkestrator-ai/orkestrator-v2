@@ -198,3 +198,18 @@ profile was stopped and reset.
 - **Owning-file rerun:** `ORKESTRATOR_AGENT_TEST_PROFILE=qa-resolve-review-9f1a4 ORKESTRATOR_AGENT_TEST_RUN_ID=qa-resolve-review-9f1a4-gateway mise run test:logged -- --name resolve-gateway-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1` passed the unchanged file: 13 passed, six skipped, exit 0 in 135.6 seconds.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.FifXht/resolve-isolated-browser.log.gz`; sanitized browser results under `output/agent-testing/qa-browser-17a015ee-6d4/browser/` and `output/agent-testing/qa-resolve-review-9f1a4-gateway/browser/`.
 - **Assessment:** Matches the existing intermittent tools-popover symptom. The Pending Resolve change does not alter project selection or popover dismissal. Both profiles were stopped and reset; no timeout, assertion or skip changed.
+
+## Device-login review validation (2026-10-17)
+
+`mise run test:logged -- --name login-isolated-browser -- mise run test:agent:browser:isolated`
+reproduced the same hidden Repository settings button at line 238 after
+Open tools (15-second click timeout). The run finished with 27 passed,
+25 skipped and one failed in 8.7 minutes. Account switching and signed-out
+Codex recovery through inactive environments and reload passed. The
+credential-free profile `qa-browser-bdfd649e-0a6` was stopped and reset by the
+runner. No assertion, timeout or skip was changed; this run does not establish
+an additional flaky classification or resolve the existing issue.
+
+Evidence: `orkestrator-test-run.SROwT8/login-isolated-browser.log.gz` in the
+host temporary directory and
+`output/agent-testing/qa-browser-bdfd649e-0a6/browser/`.

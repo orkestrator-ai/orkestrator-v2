@@ -57,9 +57,9 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 25 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 255 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 271 |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 24 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 254 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 273 |
 | **Total** | | **552** |
 
 ## Very high
@@ -138,7 +138,7 @@ it reaches. Some rules of thumb:
 - [x] Report `authentication-required` readiness on Claude, Pi, ACP and OpenCode; drop the Cursor-only 401 branch ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
 - [x] Confirm no auth response body carries a token or key except the login URL, and the URL is never logged ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)
 - [x] Confirm close retains the conversation through the UI for Cursor, Pi, OpenCode and Grok ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
-- [ ] Make the shown and the run model match when a stored model is not in the catalogue; a new install's Codex `gpt-5.4` fails every turn on a ChatGPT login ([composer-model-parameters.md](composer-model-parameters.md))
+- [x] Make the shown and the run model match when a stored model is not in the catalogue; a new install's Codex `gpt-5.4` fails every turn on a ChatGPT login ([composer-model-parameters.md](composer-model-parameters.md))
 
 ### Transcripts, observation and bandwidth (high)
 
@@ -159,7 +159,8 @@ it reaches. Some rules of thumb:
 - [x] Make the slow-reviewer admission benchmark deterministic with deferred fakes or a controllable clock ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
 - [x] Run the real-stack Multi Review inactive-environment cycle with restart, reload and bridge interruption ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), qualification)
 - [x] Run the Multi Review browser and agent-browser suites for the #833 launcher and reviewer tab ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), qualification)
-- [ ] Continue a Multi Review reviewer whose turn a backend restart cut short, instead of failing it ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
+- [x] Continue a Multi Review reviewer whose turn a backend restart cut short, instead of failing it ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
+- [ ] Report a Claude turn a restart cut short as `interruption: "restart"`, so Multi Review continues it instead of failing ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
 - [ ] Compare full and compact consolidation on real providers over the corpus for recall and provenance ([multi-review-panel-value.md](multi-review-panel-value.md), qualification)
 
 ### Coordinator and agent mail (high)
@@ -254,8 +255,8 @@ it reaches. Some rules of thumb:
 - [ ] Check that slash skill and template paths resolve inside the provider's container environment ([slash-command-qualification.md](slash-command-qualification.md), qualification)
 - [ ] Run the slash-command mixed-version matrix across backend, bridge and renderer versions ([slash-command-qualification.md](slash-command-qualification.md), qualification)
 - [ ] Measure slash catalogue discovery latency, refresh coalescing, cache bytes and probe counts ([slash-command-qualification.md](slash-command-qualification.md), qualification)
-- [ ] Mark Claude terminal-only commands unavailable before a tab's first turn ([slash-command-catalogue.md](slash-command-catalogue.md))
-- [ ] Load OpenCode command files added while its server runs, or tell the user a restart is needed ([slash-command-catalogue.md](slash-command-catalogue.md))
+- [x] Mark Claude terminal-only commands unavailable before a tab's first turn ([slash-command-catalogue.md](slash-command-catalogue.md))
+- [x] Load OpenCode command files added while its server runs, or tell the user a restart is needed ([slash-command-catalogue.md](slash-command-catalogue.md))
 - [ ] Run the live slash-command probes on Pi 1.2.0 with credentials, and qualify Codex disabled skills with a disposable `CODEX_HOME` ([slash-command-qualification.md](slash-command-qualification.md), qualification)
 - [ ] Verify whether Grok loads project skills and commands from a host worktree it has not trusted ([slash-command-qualification.md](slash-command-qualification.md), verify)
 - [ ] Verify that a Claude user is told a command parked by a bridge restart did not run after a same-id retry ([slash-command-qualification.md](slash-command-qualification.md), verify)
@@ -369,6 +370,7 @@ it reaches. Some rules of thumb:
 - [ ] Run a Codex sign-out then sign-in round trip on a fixture profile with Codex credentials ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)
 - [ ] Confirm an expired Claude login mid-turn shows the `auth` notice and actionable readiness, not a spawn failure ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)
 - [ ] Migrate reasoning and speed axes onto generic `parameters`, or record the decision to keep both models ([composer-model-parameters.md](composer-model-parameters.md))
+- [ ] Apply or reject a per-turn `model` on a Codex dispatch; the Codex prompt body drops it, so an explicit dispatch model on an existing session is ignored ([composer-model-parameters.md](composer-model-parameters.md))
 - [ ] Change an extra Cursor model axis, send a turn, reload, and confirm the value returns from the backend ([composer-model-parameters.md](composer-model-parameters.md), qualification)
 - [ ] Re-arm pending Claude permissions on (re)initialize via `pending_permission_requests` and `reinitialize()` ([provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md), deferred)
 - [ ] Surface Claude MCP permission provenance (`McpServerProvenance`) in the shared interaction card ([provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md), deferred)
@@ -427,7 +429,8 @@ it reaches. Some rules of thumb:
 - [ ] Add seeded randomised interleaving tests across concurrent reviewers (commits, cancellation, fence loss) ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
 - [ ] Add a production sink for `recordEfficiency` or stop treating rollout observation as a gate ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
 - [ ] Run a mixed real-provider Multi Review panel at 8 to 32 reviewers, recording caps, latency and RSS ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), qualification)
-- [ ] Give Multi Review preparation and consolidation the one result-reminder turn reviewers get ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
+- [x] Give Multi Review preparation and consolidation the one result-reminder turn reviewers get ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
+- [ ] Give Build Pipeline's consolidation and stage turns the restart continuation and result reminder ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
 - [x] Count Multi Review fence checks per pass at 8 to 32 reviewers, before and after the per-row fix ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), verify)
 - [x] Decide whether Multi Review fence reads need the cross-process mutation lease at all ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), decision)
 - [ ] Add a content-free reviewer overlap metric from `reviewSourceIds` per run and reviewer position ([multi-review-panel-value.md](multi-review-panel-value.md))
@@ -587,10 +590,11 @@ it reaches. Some rules of thumb:
 - [ ] Support Claude session-changing commands by adopting the new conversation, or keep them unavailable ([slash-command-catalogue.md](slash-command-catalogue.md))
 - [ ] Build a policy-reviewed executor for Codex inline-shell templates, or keep them unavailable ([slash-command-catalogue.md](slash-command-catalogue.md))
 - [ ] Add further Orkestrator slash shortcuts beyond `/steer` and `/compact` with qualified semantics ([slash-command-catalogue.md](slash-command-catalogue.md))
-- [ ] Update stale SDK pin facts in the OpenCode, Claude and Cursor command owner comments ([slash-command-catalogue.md](slash-command-catalogue.md))
+- [ ] Update the stale Cursor SDK pin fact in the Cursor command owner comment ([slash-command-catalogue.md](slash-command-catalogue.md))
 - [ ] Update the pins and tables in `native-agent-commands.md` ("Provider support") and the owner comments after a qualification pass ([slash-command-qualification.md](slash-command-qualification.md), qualification)
 - [ ] Check whether any slash-command live runs happened informally after #827 ([slash-command-qualification.md](slash-command-qualification.md), verify)
 - [ ] Report a cold Codex skill list `stale` until its plugin skills have loaded ([slash-command-catalogue.md](slash-command-catalogue.md))
+- [ ] Use an Agent SDK terminal marker on `SlashCommand` once one exists, and drop the remembered Claude terminal list ([slash-command-catalogue.md](slash-command-catalogue.md), blocked)
 - [ ] Give a dev profile's backend the workspace version so no version reminder covers the composer ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
 
 ### Containers and environments (low)
@@ -680,6 +684,7 @@ it reaches. Some rules of thumb:
 - [ ] Source Codex reasoning `summary` and `personality` from a setting, or remove the bridge plumbing ([composer-model-parameters.md](composer-model-parameters.md))
 - [ ] Decide whether Claude `acceptEdits` joins the `mode` axis, or stop forwarding `permissionMode` ([composer-model-parameters.md](composer-model-parameters.md))
 - [ ] Add a backend per-environment `maxBudgetUsd` setting mapped to a stopped notice, or drop the option ([composer-model-parameters.md](composer-model-parameters.md))
+- [ ] Refuse a Codex send on a session model the live `model/list` does not offer, keeping the draft, instead of Codex's HTTP 400 ([composer-model-parameters.md](composer-model-parameters.md))
 - [ ] After the axis migration, round trip reasoning and speed controls on every platform through a reload ([composer-model-parameters.md](composer-model-parameters.md), qualification)
 - [ ] Make `checkHttpHealth` reject HTML so an OpenCode 2.x server is never reported healthy ([opencode-v2.md](opencode-v2.md))
 - [ ] Recheck upstream OpenCode 2.x since 2.0.18: new release, storage policy, steer precondition, MCP endpoints ([opencode-v2.md](opencode-v2.md), verify)
@@ -856,7 +861,7 @@ it reaches. Some rules of thumb:
 | **CLI and slash commands** | | | | | |
 | [cli-command-surface.md](cli-command-surface.md) |  |  | 6 | 7 | 13 |
 | [cli-qualification.md](cli-qualification.md) |  | 1 | 6 | 1 | 8 |
-| [slash-command-catalogue.md](slash-command-catalogue.md) |  |  | 7 | 5 | 12 |
+| [slash-command-catalogue.md](slash-command-catalogue.md) |  |  | 5 | 6 | 11 |
 | [slash-command-qualification.md](slash-command-qualification.md) |  |  | 6 | 2 | 8 |
 | **Containers and environments** | | | | | |
 | [container-platform-qualification.md](container-platform-qualification.md) |  |  | 12 | 2 | 14 |
@@ -878,7 +883,7 @@ it reaches. Some rules of thumb:
 | [mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md) |  |  | 3 | 5 | 8 |
 | [session-titles-and-history.md](session-titles-and-history.md) |  |  | 4 | 4 | 8 |
 | [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md) |  |  | 8 | 6 | 14 |
-| [composer-model-parameters.md](composer-model-parameters.md) |  | 1 | 2 | 4 | 7 |
+| [composer-model-parameters.md](composer-model-parameters.md) |  |  | 3 | 5 | 8 |
 | [opencode-v2.md](opencode-v2.md) |  |  |  | 3 | 3 |
 | [provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md) |  |  | 2 | 15 | 17 |
 | [session-lifecycle-consistency.md](session-lifecycle-consistency.md) |  |  | 7 | 7 | 14 |

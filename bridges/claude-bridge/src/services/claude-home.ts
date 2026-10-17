@@ -31,6 +31,11 @@ export function claudePluginsDir(): string {
   return join(claudeHome(), ".claude", "plugins");
 }
 
+/** Bridge-owned files that are not per session (see `claude-terminal-commands.ts`). */
+export function claudeOrkestratorDir(): string {
+  return join(claudeHome(), ".claude", "orkestrator");
+}
+
 /**
  * Bridge-owned directory for per-session preference files.
  *

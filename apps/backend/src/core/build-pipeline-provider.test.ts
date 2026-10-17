@@ -28,6 +28,30 @@ function goOnlyProvider(model?: string) {
 }
 
 describe("createBuildPipelineProvider", () => {
+  test("leaves a model-less Codex session unset without requesting the catalogue", async () => {
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const provider = createBuildPipelineProvider(
+      { agent: "codex", baseUrl: "http://codex.test", authToken: "test-token" },
+      {
+        fetch: (async (input, init) => {
+          requests.push({
+            url: String(input),
+            body: init?.body ? JSON.parse(String(init.body)) : {},
+          });
+          return Response.json({ sessionId: "codex-unpinned" });
+        }) as typeof fetch,
+      },
+    );
+    try {
+      expect(await provider.createSession("review", "Default")).toBe("codex-unpinned");
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.url).toBe("http://codex.test/session/create");
+      expect(requests[0]?.body.model).toBeUndefined();
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("recovers the durable session model after provider recreation", async () => {
     const first = goOnlyProvider();
     const sessionId = await first.provider.createSession("review", "Recover");

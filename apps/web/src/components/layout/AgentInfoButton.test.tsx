@@ -24,6 +24,8 @@ import {
 } from "@/lib/agent-handoff";
 import {
   mockToastError,
+  mockToastInfo,
+  mockToastDismiss,
   mockToastSuccess,
   mockToastWarning,
 } from "../../../../../tests/mocks/sonner";
@@ -4566,6 +4568,164 @@ describe("AgentInfoButton ACP agents", () => {
       expect(screen.getByText("signed in · Pro")).toBeTruthy();
     },
   );
+
+  test("forwards remote device-code login, keeps the scoped toast after browser opening fails, and dismisses it on its own completion", async () => {
+    const previousGateway = window.orkestratorGateway;
+    window.orkestratorGateway = { enabled: true, desktop: true };
+    let signedIn = false;
+    let started = false;
+    const expiresAt = Date.now() + 60_000;
+    const pendingSignIn = {
+      url: "https://auth.example.test/device",
+      code: "REMOTE-CODE",
+      expiresAt,
+    };
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_native_agent_auth_status")
+        return signedIn
+          ? { state: "signed-in", signOut: true }
+          : {
+              state: "signed-out",
+              signIn: { kind: "device-code" },
+              ...(started ? { pendingSignIn } : {}),
+            };
+      if (command === "begin_native_agent_sign_in") {
+        started = true;
+        return pendingSignIn;
+      }
+      if (command === "open_in_browser") throw new Error("No browser");
+      return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
+    });
+    try {
+      useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+      render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+      open();
+      fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith("Could not open the sign-in link"),
+      );
+      const loginCall = nativeInvokeMock.mock.calls.find(
+        ([command]) => command === "begin_native_agent_sign_in",
+      );
+      expect(loginCall?.[1]).toMatchObject({
+        environmentId: ENVIRONMENT_ID,
+        agent: "cursor",
+        deviceCode: true,
+      });
+      const toastCall = mockToastInfo.mock.calls.find(
+        ([message]) => message === "Device code: REMOTE-CODE",
+      );
+      expect(toastCall).toBeTruthy();
+      const options = toastCall![1] as {
+        id: string;
+        duration: number;
+        closeButton: boolean;
+        action: { label: string };
+      };
+      expect(options.id).toContain(ENVIRONMENT_ID);
+      expect(options.id).toContain("cursor");
+      // Stable across reads and long-lived, but never outliving the bridge's login deadline.
+      expect(options.duration).toBe(15 * 60_000);
+      expect(options.closeButton).toBe(true);
+      expect(options.action.label).toBe("Open sign-in link");
+      expect(
+        mockToastInfo.mock.calls.every(([, value]) => (value as { id: string }).id === options.id),
+      ).toBe(true);
+      expect(mockToastDismiss.mock.calls.some(([id]) => id === options.id)).toBe(false);
+      signedIn = true;
+      fireEvent.focus(window);
+      await screen.findByRole("button", { name: "Sign out" });
+      expect(mockToastDismiss).toHaveBeenCalledWith(options.id);
+    } finally {
+      window.orkestratorGateway = previousGateway;
+    }
+  });
+
+  test.each(["environment", "provider"])(
+    "an authenticated unrelated %s cannot dismiss another login's toast",
+    async (change) => {
+      let started = false;
+      const pendingSignIn = {
+        url: "https://auth.example.test/device",
+        code: "KEEP-CODE",
+        expiresAt: Date.now() + 60_000,
+      };
+      nativeInvokeMock.mockImplementation(async (command: string, input: unknown) => {
+        const scope = input as { environmentId?: string; agent?: string } | undefined;
+        if (command === "get_native_agent_auth_status") {
+          if (scope?.environmentId !== ENVIRONMENT_ID || scope.agent !== "cursor")
+            return { state: "signed-in", signOut: true };
+          return {
+            state: "signed-out",
+            signIn: { kind: "device-code" },
+            ...(started ? { pendingSignIn } : {}),
+          };
+        }
+        if (command === "begin_native_agent_sign_in") {
+          started = true;
+          return pendingSignIn;
+        }
+        return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
+      });
+      useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+      const view = render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+      open();
+      fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+      await waitFor(() => expect(mockToastInfo).toHaveBeenCalled());
+      const originalId = (mockToastInfo.mock.calls[0]![1] as { id: string }).id;
+      const otherTab =
+        change === "provider"
+          ? acpTab("grok")
+          : {
+              ...acpTab("cursor"),
+              nativeAgentData: { ...acpTab("cursor").nativeAgentData!, environmentId: "env-other" },
+            };
+      view.rerender(<AgentInfoButton activeTab={otherTab} />);
+      open();
+      await screen.findByRole("button", { name: "Sign out" });
+      expect(mockToastDismiss.mock.calls.some(([id]) => id === originalId)).toBe(false);
+      view.unmount();
+      // Reopening the owning scope recovers the code and URL through an account read.
+      render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+      open();
+      await waitFor(() => expect(mockToastInfo.mock.calls.length).toBeGreaterThan(1));
+      expect(
+        nativeInvokeMock.mock.calls.filter(([command]) => command === "begin_native_agent_sign_in"),
+      ).toHaveLength(1);
+      expect((mockToastInfo.mock.calls.at(-1)![1] as { id: string }).id).toBe(originalId);
+    },
+  );
+
+  test("withdraws a code when its bridge confirms the login ended without signing in", async () => {
+    let pendingSignIn: { url: string; code: string; expiresAt: number } | null = null;
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_native_agent_auth_status")
+        return {
+          state: "signed-out",
+          signIn: { kind: "device-code" },
+          pendingSignIn,
+        };
+      if (command === "begin_native_agent_sign_in") {
+        pendingSignIn = {
+          url: "https://auth.example.test/device",
+          code: "CANCELLED-CODE",
+          expiresAt: Date.now() + 60_000,
+        };
+        return pendingSignIn;
+      }
+      return command === "get_cursor_account_usage" ? new Promise(() => undefined) : {};
+    });
+    useNativeAgentProjectionStore.getState().setProjection(ACP_KEY, acpProjection("cursor"));
+    render(<AgentInfoButton activeTab={acpTab("cursor")} />);
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+    await waitFor(() => expect(mockToastInfo).toHaveBeenCalled());
+    const id = (mockToastInfo.mock.calls[0]![1] as { id: string }).id;
+    mockToastDismiss.mockClear();
+    pendingSignIn = null;
+    fireEvent.focus(window);
+    await waitFor(() => expect(mockToastDismiss).toHaveBeenCalledWith(id));
+  });
 
   test("polls until browser sign-in finishes while the panel stays open", async () => {
     let reads = 0;

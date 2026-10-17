@@ -53,6 +53,8 @@ import {
   LAST_ASSISTANT_TEXT_READ_LIMIT,
   lastAssistantText,
   missingWorkflowResultMessage,
+  workflowRestartContinuationPrompt,
+  workflowResultReminderPrompt,
 } from "./workflow-result-missing.js";
 import type { AppConfig, Environment } from "./models.js";
 import type { StorageService } from "./storage.js";
@@ -270,6 +272,11 @@ function stepResultLabel(
       : "fix result";
 }
 
+/** What a step's follow-up turn says is done, or is to be continued. */
+function stepWorkLabel(kind: MultiReviewStepKind): string {
+  return kind === "prepare" ? "discovery work" : kind === "consolidate" ? "consolidation" : "fix";
+}
+
 function clearReviewSession(workflow: MultiReviewWorkflow): void {
   if (workflow.reviewModel || workflow.consolidationModel) {
     delete workflow.reviewSession;
@@ -402,6 +409,7 @@ function resetReviewerForRestart(
   delete reviewer.resultSubmission;
   delete reviewer.schemaRepairAttempts;
   delete reviewer.resultReminderSent;
+  delete reviewer.restartContinuationSent;
   delete reviewer.schemaRepairPrompt;
   delete reviewer.continuationPrompt;
   delete reviewer.idleResultPolls;
@@ -1264,6 +1272,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           delete reviewer.dispatchState;
           delete reviewer.schemaRepairAttempts;
           delete reviewer.resultReminderSent;
+          delete reviewer.restartContinuationSent;
           delete reviewer.schemaRepairPrompt;
           delete reviewer.idleResultPolls;
           delete reviewer.progressAt;
@@ -1363,6 +1372,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             delete reviewer.dispatchState;
             delete reviewer.schemaRepairAttempts;
             delete reviewer.resultReminderSent;
+            delete reviewer.restartContinuationSent;
             delete reviewer.schemaRepairPrompt;
             delete reviewer.idleResultPolls;
             delete reviewer.progressAt;
@@ -3808,9 +3818,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     if (request.state === "prepared") {
       // Built while the dispatch is still unjournaled, for the same reason the
       // reviewer prompt is: the worktree probe must not widen the window in
-      // which a crash leaves the turn ambiguous. A schema repair re-sends an
-      // already-answered prompt and is not re-gated.
-      let prompt = request.schemaRepairPrompt;
+      // which a crash leaves the turn ambiguous. A schema repair, result
+      // reminder or restart continuation follows up in the same session, on
+      // evidence it already has, and is not re-gated.
+      let prompt = request.schemaRepairPrompt ?? request.continuationPrompt;
       if (!prompt) {
         if (request.kind === "prepare") {
           prompt = reviewValidationDiscoveryPrompt(workflow.targetBranch);
@@ -3921,10 +3932,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       }
       await this.assertFence(workflow.id, token);
       request.state = "sent";
+      delete request.continuationPrompt;
       await this.save(workflow, token);
     }
     if (request.state === "dispatching") {
       request.state = "sent";
+      delete request.continuationPrompt;
       await this.save(workflow, token);
     }
     await this.resolveUnattendedInteractions(workflow, token, provider, session.providerSessionId);
@@ -3984,14 +3997,20 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       }
       return;
     }
-    if (status === "error" || status === "missing") {
-      throw new Error(
+    const sessionFailure = () =>
+      new Error(
         status === "missing"
           ? `The ${modelLabel} session no longer exists`
           : statusDetail
             ? `The ${modelLabel} session failed: ${statusDetail}`
             : `The ${modelLabel} session failed`,
       );
+    // A provider restart that cut the turn short is not the model's failure:
+    // a result it already submitted is still accepted below, and otherwise
+    // the same session continues the step once.
+    const restartInterrupted = status === "error" && observation.interruption === "restart";
+    if ((status === "error" && !restartInterrupted) || status === "missing") {
+      throw sessionFailure();
     }
     if (request.resultTransport === "tool-v1") {
       request.resultSubmission = await this.options.workflowResults?.projection(request.requestId);
@@ -4001,6 +4020,23 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         ? ((await this.options.workflowResults?.structured<unknown>(request.requestId)) ?? null)
         : await provider.structured<unknown>(session.providerSessionId, request.requestId);
     await this.assertFence(workflow.id, token);
+    // An interrupted structured-output turn records a provider failure, not a
+    // result; only an accepted result outlives the restart.
+    if (restartInterrupted && result?.ok !== true) {
+      if (request.restartContinuationSent === true) throw sessionFailure();
+      const toolResult = request.resultTransport === "tool-v1";
+      await this.prepareStepFollowUp(workflow, token, request, session, {
+        prompt: workflowRestartContinuationPrompt({
+          workLabel: stepWorkLabel(request.kind),
+          resultLabel,
+          ...(toolResult
+            ? { toolName: workflowResultToolName(this.stepResultKind(request.kind)) }
+            : {}),
+        }),
+        spend: "restartContinuationSent",
+      });
+      return;
+    }
     if (!result) {
       if (observation.backgroundWorkLive) {
         // Waiting on background agents it launched is progress, not idleness;
@@ -4043,6 +4079,25 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             ),
           })
           .then(lastAssistantText, () => undefined);
+        // The same one reminder a reviewer gets. Accepted-but-unread and
+        // budget-exhausted slots are not a delivery gap another turn can close.
+        if (
+          request.resultReminderSent !== true &&
+          request.resultSubmission !== "received" &&
+          request.resultSubmission !== "needs-attention"
+        ) {
+          await this.prepareStepFollowUp(workflow, token, request, session, {
+            prompt: workflowResultReminderPrompt({
+              resultLabel,
+              toolName: workflowResultToolName(this.stepResultKind(request.kind)),
+              submission: request.resultSubmission,
+              finalText,
+              workLabel: stepWorkLabel(request.kind),
+            }),
+            spend: "resultReminderSent",
+          });
+          return;
+        }
         throw new Error(
           missingWorkflowResultMessage({
             subject: `The ${modelLabel} model`,
@@ -4290,6 +4345,41 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     if (previousTransport === "tool-v1") {
       await this.options.workflowResults?.close(previousRequestId, "superseded");
     }
+    await this.save(workflow, token);
+  }
+
+  /**
+   * Queues a step's one result reminder or restart continuation in the same
+   * session under a fresh request id, the way a schema repair does. The spent
+   * flag is durable, so a step that needs the same follow-up twice fails
+   * instead of looping.
+   */
+  private async prepareStepFollowUp(
+    workflow: MultiReviewWorkflow,
+    token: string,
+    request: NonNullable<MultiReviewWorkflow["activeRequest"]>,
+    session: NonNullable<MultiReviewWorkflow["fixSession"]>,
+    followUp: { prompt: string; spend: "resultReminderSent" | "restartContinuationSent" },
+  ): Promise<void> {
+    const previousRequestId = request.requestId;
+    if (request.resultTransport === "tool-v1") {
+      await this.options.workflowResults?.close(previousRequestId, "superseded");
+    }
+    const requestId = randomUUID();
+    request.requestId = requestId;
+    request.state = "prepared";
+    request.createdAt = nowIso();
+    request[followUp.spend] = true;
+    request.continuationPrompt = followUp.prompt;
+    delete request.schemaRepairPrompt;
+    if (request.resultTransport === "tool-v1") request.resultSubmission = "preparing";
+    delete request.idleResultPolls;
+    this.pollGate.clear(`${workflow.id}\0${previousRequestId}\0idle`);
+    session.requestIds.push(requestId);
+    // The follow-up is a new turn; the stall clock measures it, not the wait
+    // before it.
+    session.progressAt = nowIso();
+    delete session.stalledSince;
     await this.save(workflow, token);
   }
 

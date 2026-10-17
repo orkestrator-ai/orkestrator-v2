@@ -4214,3 +4214,66 @@ describe("host agent model catalogue cache", () => {
     });
   });
 });
+
+describe("environment diff baseline persistence", () => {
+  test("normalizes SHA pairs, persists across reload and explicitly clears null and undefined", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
+      const environment = createEnvironment("project");
+      await storage.addEnvironment(environment);
+      for (const clear of [null, undefined]) {
+        await storage.updateEnvironment(environment.id, {
+          diffBaseline: { createdFromCommit: "A".repeat(40), commit: "B".repeat(40) },
+        });
+        const restarted = new StorageService(dataDir);
+        await restarted.init();
+        expect((await restarted.getEnvironment(environment.id))?.diffBaseline).toEqual({
+          createdFromCommit: "a".repeat(40),
+          commit: "b".repeat(40),
+        });
+        await storage.updateEnvironment(environment.id, { diffBaseline: clear });
+        expect((await restarted.getEnvironment(environment.id))?.diffBaseline).toBeNull();
+      }
+    });
+  });
+
+  test("rejects malformed baselines without altering the saved pair", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project");
+      const baseline = { createdFromCommit: "a".repeat(40), commit: "b".repeat(40) };
+      await storage.addEnvironment({ ...environment, diffBaseline: baseline });
+      for (const value of [
+        {},
+        [],
+        "main",
+        42,
+        { commit: baseline.commit },
+        { ...baseline, commit: "b".repeat(39) },
+        { ...baseline, commit: "z".repeat(40) },
+        { ...baseline, createdFromCommit: "origin/main" },
+        { ...baseline, createdFromCommit: 42 },
+      ]) {
+        await expect(
+          storage.updateEnvironment(environment.id, { diffBaseline: value }),
+        ).rejects.toThrow("Invalid environment diff baseline");
+        expect((await storage.getEnvironment(environment.id))?.diffBaseline).toEqual(baseline);
+      }
+    });
+  });
+
+  test("conditional updates observe preceding queued mutations under the storage lock", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project");
+      await storage.addEnvironment({ ...environment, prState: "open" });
+      const merged = storage.updateEnvironment(environment.id, { prState: "merged" });
+      const baseline = storage.updateEnvironment(
+        environment.id,
+        {
+          diffBaseline: { createdFromCommit: "a".repeat(40), commit: "b".repeat(40) },
+        },
+        (current) => current.prState !== "merged",
+      );
+      await Promise.all([merged, baseline]);
+      expect((await storage.getEnvironment(environment.id))?.diffBaseline).toBeUndefined();
+    });
+  });
+});

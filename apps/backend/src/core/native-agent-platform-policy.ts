@@ -27,13 +27,23 @@ export interface NativeAgentPlatformPolicy {
    * persisted as the session's inferred selection.
    */
   infersComposerSelection?: boolean;
+  /**
+   * Turns run the model held in the runtime's session config; the prompt
+   * carries none (Codex).
+   *
+   * The picker's usual answer for a selected model the catalogue does not
+   * list is the catalogue's first row. Here that row is not what the next turn
+   * runs, so the selected model is shown as itself, marked as not offered,
+   * until the user picks another.
+   */
+  runsSessionHeldModel?: boolean;
 }
 
 const NO_POLICY: NativeAgentPlatformPolicy = Object.freeze({});
 
 const POLICIES: Readonly<Record<BuildPipelineAgent, NativeAgentPlatformPolicy>> = Object.freeze({
   claude: NO_POLICY,
-  codex: NO_POLICY,
+  codex: Object.freeze({ runsSessionHeldModel: true }),
   cursor: NO_POLICY,
   grok: NO_POLICY,
   opencode: Object.freeze({

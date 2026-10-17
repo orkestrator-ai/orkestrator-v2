@@ -512,6 +512,13 @@ source, assertion, timeout or skip changed.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.r499sA/root-and-agent-support-tests.log.gz` (compressed when the aggregate completes).
 - **Assessment:** the isolated pass confirms intermittence. Shared-host filesystem contention remains an unconfirmed hypothesis. No source, assertion, timeout or skip changed.
 
+## Codex phantom-denials branch validation (2026-10-17)
+
+Recurred in `mise run test` on `fix-codex-phantom-denials-8bdb8d15d820` (base
+`9da80451`), whose diff touches no Pi source, at 30,002.02 ms, alongside 0226 and 0310.
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.6fSEkJ`.
+The unchanged owning file passed alone (`bun test --preload ./tests/setup-node.ts tests/unit/pi-bridge-vendor.test.ts` from the root): 4 passed in 23.4 s.
+
 ## Slash catalogue accuracy review recurrence — 2026-10-17
 
 `mise run test:logged -- --name full-tests -- mise run test` on macOS arm64

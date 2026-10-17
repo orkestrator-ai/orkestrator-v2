@@ -184,8 +184,9 @@ advertises.
     now reads the active turn's records from the rollout app-server names in
     `thread.path`, and shows a code-mode cell as a failed `exec` row in two
     cases: no item of the turn started while it ran, or its output carries a
-    refusal. It reads every 200 ms, on item events, and once before the turn
-    is finalized. See "Constraints and rationale" for the choices.
+    refusal. It reads from the rollout size captured before `turn/start`,
+    every 200 ms, and before each new model response and the turn's
+    completion are applied. See "Constraints and rationale" for the choices.
 
 ### Qualification
 
@@ -204,12 +205,20 @@ advertises.
   coordinator conversation that outlives an app restart would lose the rows
   again. Raw events would also have needed `experimentalApi` for the whole
   connection. The rollout covers started, resumed and reloaded threads alike.
-- The tail polls every 200 ms while a turn runs, plus on item events and once
-  before the turn is finalized. `fs.watch` fired nothing on macOS for Codex's
-  appends (same inode, growing size), and item events alone place the row
-  after the next response's first item. Codex writes the cell's output about
-  50 ms before it asks the model for the next response, so the poll lands the
-  row where the cell ran. A poll with nothing new costs one `stat`.
+- The tail polls every 200 ms while a turn runs. `fs.watch` fired nothing on
+  macOS for Codex's appends (same inode, growing size). The poll alone can
+  still lose a race with a fast next response, so while a tail is active the
+  turn's events are applied in order: an event that opens a new model
+  response, and `turn.completed`, wait for a rollout read, and cells that
+  finished before it are placed first. Only this thread waits; app-server's
+  notification stream keeps being consumed. The queue is bounded; on overflow
+  the bridge stops reading the rollout, applies every queued event and tells
+  readers to reconcile. A poll with nothing new costs one `stat`.
+- The tail starts at the rollout size captured before `turn/start` is sent,
+  not at the end of the file when `turn/started` is applied: a fast turn can
+  write its cells before that. A turn that did not go through the prompt path
+  (an inline review) reads a bounded window and keeps only records carrying
+  its own turn id.
 - A cell becomes a row in two cases: no client tool item of the turn started
   while it ran, or its output carries "patch rejected", "Operation not
   permitted", "Permission denied" or "Read-only file system". Codex's own

@@ -108,9 +108,12 @@ newest row, which every window holds.
   looks like a denial ("Operation not permitted", "Permission denied",
   "Read-only file system"…). The model still gets the refusal; only the
   rollout keeps the code-mode `exec` cell and its output. `RefusedCellTail`
-  reads the active turn's rollout records (path from `thread.path`, polled
-  every 200 ms, on item events and once at turn end) and shows a cell as a
-  failed `exec` row when no item of the turn started while it ran, or its
+  reads the active turn's rollout records (path from `thread.path`) from the
+  file size captured before `turn/start`, so a fast turn's cells are not
+  skipped. It polls every 200 ms, and the turn's events are applied in order
+  behind a read before each new model response and before `turn.completed`,
+  so a cell lands in the row of the response that ran it. It shows a cell as
+  a failed `exec` row when no item of the turn started while it ran, or its
   output reports a refusal. `fs.watch` cannot replace the poll: on macOS it
   reports nothing for Codex's appends through its open descriptor. Raw
   response events cannot either: `experimentalRawEvents` exists only on

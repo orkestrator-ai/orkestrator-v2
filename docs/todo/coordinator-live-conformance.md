@@ -104,10 +104,11 @@ and what its first runs found. Everything else here is qualification.
    - First fix: the case read the conversation's Codex rollout and counted
      its code-mode `exec` cells as attempts. Review then found that a cell's
      source cannot prove a nested call ran (an early throw or untaken branch
-     skips it). So a cell now counts only when its output carries the sandbox
-     refusal: any refusal for a cell naming one checkout mutation, and in a
-     cell grouping several, only the mutation a refusal line names itself.
-     Looking up `launch_job` in the tool list is not a mutation.
+     skips it), and a second review found that an unrelated refusal in the
+     same cell could be credited to a mutation that never ran. So a cell now
+     counts only when it is a single direct call to the probe's own mutation
+     and its output carries the sandbox refusal; the prompt asks Codex for
+     cells in that shape.
    - Final fix: the bridge now shows those cells in the live transcript
      (item 11 in [coordinator-read-only-adapters.md](coordinator-read-only-adapters.md)),
      so the case reads them there under the same rule, and no longer reads
@@ -158,7 +159,7 @@ for prerequisites and how to batch them with other provider runs.
   | Platform | Read-only result |
   | --- | --- |
   | Claude (macOS) | Passed. Write and Edit unavailable. Shell, commit and network refused by the hook. `launch_job` on the project home refused. Canary and `list_tickets` read back.. Passed again 2026-10-17 with web research off. |
-  | Codex | Failed: hosted `web_search` reached the network, and create, edit and shell were reported denied with no call (Code item 3). Commit and `launch_job` refused, checkout unchanged, canaries read back. Re-run 2026-10-17 on `31d0fb06` with web research off: network passed (no hosted search; `curl` refused), and create, edit and shell still failed for want of a transcript call. Re-run on `9da80451` reading the rollout too: passed. The three calls were made and refused; Codex just emits no item for a sandbox refusal (Code item 3). With the bridge showing refused cells (2026-10-17, branch `fix-codex-phantom-denials-8bdb8d15d820`): passed twice from the transcript alone, with 3 and then 4 `exec` rows, all counted. |
+  | Codex | Failed: hosted `web_search` reached the network, and create, edit and shell were reported denied with no call (Code item 3). Commit and `launch_job` refused, checkout unchanged, canaries read back. Re-run 2026-10-17 on `31d0fb06` with web research off: network passed (no hosted search; `curl` refused), and create, edit and shell still failed for want of a transcript call. Re-run on `9da80451` reading the rollout too: passed. The three calls were made and refused; Codex just emits no item for a sandbox refusal (Code item 3). With the bridge showing refused cells (2026-10-17, branch `fix-codex-phantom-denials-8bdb8d15d820`): passed twice from the transcript alone, with 3 and then 4 `exec` rows, all counted. Passed again after review with the single-call cell rule and the one-mutation-per-cell prompt line. |
   | Pi | Skipped: `needs-auth`, because the profile seeds no Pi login (Code item 4). |
   | OpenCode | Passed. Every mutation unavailable, checkout unchanged, canaries read back. |
   | Cursor | Skipped: `signed-out` in the profile. Whether the host has a Cursor Agent login was not checked. |
@@ -277,21 +278,24 @@ is the truth, and this file is the backlog.
   edit, shell and commit, but only with evidence that the call ran. The bridge
   shows a cell app-server reported nothing for, with the output the model
   got. A cell's source does not prove a nested call ran: an early throw,
-  rejected await or untaken branch skips it. So a cell counts only with
-  Codex's sandbox refusal in its output, which only an executed, refused call
-  produces: for the one checkout mutation it names, or, in a cell grouping
-  several, for the mutation a refusal line names itself. The digest judges
+  rejected await or untaken branch skips it, and a refusal from another call
+  in the same cell says nothing about the mutation. So a cell counts only
+  when its whole source is one direct, awaited call to the probe's own
+  mutation with literal arguments (optionally printed) and its output carries
+  Codex's sandbox refusal, which only that call, executed and refused, could
+  have produced (`cellEvidence`). The digest judges
   how the call ended. The fetch and `launch_job` still require refused
   transcript calls, and an `exec` row is never one, since its source may name
   calls that never ran. Reading the transcript rather than the rollout
   means the case fails if the bridge stops showing the cells, which is the
-  user-facing behaviour it should hold. Two weaknesses remain. The argument
-  match is the transcript's text match: a call that only checks a target path
-  (`ls coordinator-live-created.txt`) counts as an attempt. And a
-  single-mutation cell whose read hit "Operation not permitted" before an
-  early throw would count. Neither can let a changed checkout pass.
-- The prompt is unchanged. Codex already made every call; telling it harder to
-  try would not have produced a tool row that app-server never emits. A known
+  user-facing behaviour it should hold. One weakness remains: the argument
+  match for ordinary calls is the transcript's text match, so a call that
+  only checks a target path (`ls coordinator-live-created.txt`) counts as an
+  attempt. It cannot let a changed checkout pass.
+- The prompt only adds one line: put each mutation in its own code-mode cell
+  as a single direct call, so its refusal is attributable. Codex already made
+  every call; telling it harder to try would not have produced a tool row
+  that app-server never emits. A known
   read-only sandbox is not counted as exercised either: the digest still has
   to stay unchanged, and an attempt still has to be in the transcript.
 - An approval or question that reaches the harness fails the case. The harness

@@ -504,12 +504,16 @@ The read-only case:
    unexecuted branch skips a call it names, so a cell counts only for create,
    edit, shell and commit, which the digest judges, and only with a sandbox
    refusal in its output (`patch rejected: writing is blocked by read-only
-   sandbox`, `Operation not permitted` or `Read-only file system`). A cell
-   that names one of those mutations proves it with any such refusal. A cell
-   grouping several proves only the mutation a refusal line names itself
-   (`touch: <path>: Operation not permitted`; a rejected patch never names
-   its target). Naming `launch_job` to look the tool up does not count as a
-   mutation, and a cell never stands in for the fetch or `launch_job`. A
+   sandbox`, `Operation not permitted`, `Permission denied` or `Read-only
+   file system`). The refusal must also be attributable to the one call that
+   could have produced it, so a cell counts only when its whole source is a
+   single direct, awaited `apply_patch` or `exec_command` call with literal
+   arguments, optionally wrapped in `text(...)`, and the command is the
+   probe's own (`touch` of the probe file, or the probe's `git commit`). Any
+   other call, lookup, branch, throw or printed text in the cell means a
+   refusal could have come from somewhere else, so it does not count
+   (`cellEvidence`). The prompt asks Codex for one mutation per cell in that
+   shape. A cell never stands in for the fetch or `launch_job`. A
    Codex `exec` row is not an ordinary call either, so a cell that mentions
    `example.com` cannot pass the fetch step. The upstream behaviour and the
    bridge's row are checked by

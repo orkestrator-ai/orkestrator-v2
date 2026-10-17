@@ -7,9 +7,11 @@
  *
  * `build` runs once per platform (macOS on a Mac, Linux on the Linux machine).
  * Each run uploads its artifacts and updater feed to the same draft release for
- * the `v<version>` tag. `publish` checks that every platform made it and then
- * makes the draft public, so users and installed apps never see a partial
- * release. `--no-publish` builds without touching git state or GitHub.
+ * the `v<version>` tag; the first run creates that draft before packaging, and
+ * every run and `publish` refuse to continue if the tag has more than one
+ * release. `publish` checks that every platform made it and then makes the
+ * draft public, so users and installed apps never see a partial release.
+ * `--no-publish` builds without touching git state or GitHub.
  *
  * Every build also uploads `toolchain-pins.json` (the agent CLI and gh pins
  * this release carries), which a running Orkestrator reads to show what an
@@ -167,6 +169,90 @@ function githubToken(runtime: ReleaseRuntime): string {
   return token;
 }
 
+type TagRelease = { id: number; draft: boolean; assets: string[] };
+
+/**
+ * Every release, draft or public, for `tag`. GitHub allows several drafts for
+ * one tag, and `gh release view <tag>` silently picks one of them, so anything
+ * that has to see all of them lists them here.
+ */
+function releasesForTag(tag: string, captureOutput: ReleaseRuntime["capture"]): TagRelease[] {
+  const output = captureOutput([
+    "gh",
+    "api",
+    "--paginate",
+    `repos/${REPOSITORY}/releases?per_page=100`,
+    "--jq",
+    `.[] | select(.tag_name == "${tag}") | {id, draft, assets: [.assets[].name]}`,
+  ]);
+  return output
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line) as TagRelease);
+}
+
+function splitReleaseMessage(tag: string, releases: TagRelease[]): string {
+  const listing = releases
+    .map((release) => `  ${release.id}: ${release.assets.join(", ") || "(no assets)"}`)
+    .join("\n");
+  return (
+    `tag ${tag} has ${releases.length} releases on GitHub, so platform builds would be split across them:\n` +
+    `${listing}\nMove every asset onto one draft and delete the others before continuing.`
+  );
+}
+
+/** Exactly one release for `tag`, or a failure that names every one found. */
+function soleRelease(tag: string, releases: TagRelease[]): TagRelease {
+  if (releases.length === 0)
+    fail(`release ${tag} does not exist. Run \`mise run release:desktop\` first.`);
+  if (releases.length > 1) fail(splitReleaseMessage(tag, releases));
+  return releases[0]!;
+}
+
+/**
+ * Make sure the tag has exactly one draft before electron-builder runs. Left to
+ * itself, electron-builder uploads several files at once and each upload that
+ * finds no release creates its own, which splits one platform's artifacts
+ * across several drafts. With the draft already there, every upload finds it.
+ */
+function claimDraftRelease(tag: string, runtime: ReleaseRuntime, env: NodeJS.ProcessEnv): void {
+  const existing = releasesForTag(tag, runtime.capture);
+  if (existing.some((release) => !release.draft)) fail(`release ${tag} is already published.`);
+  if (existing.length === 1) return;
+  if (existing.length > 1) fail(splitReleaseMessage(tag, existing));
+
+  console.log(`\nCreating the draft release for ${tag}.`);
+  const created = Number(
+    runtime.capture([
+      "gh",
+      "api",
+      "--method",
+      "POST",
+      `repos/${REPOSITORY}/releases`,
+      "-f",
+      `tag_name=${tag}`,
+      "-f",
+      `name=${tag.replace(/^v/, "")}`,
+      "-F",
+      "draft=true",
+      "--jq",
+      ".id",
+    ]),
+  );
+  // Two machines that both found no draft each create one. Release ids only
+  // grow, so the oldest wins everywhere and each loser deletes the empty draft
+  // it just made, never anyone else's. The winner may still see the loser's
+  // draft here; the check before packaging confirms it has gone.
+  const drafts = releasesForTag(tag, runtime.capture);
+  const oldest = Math.min(...drafts.map((release) => release.id));
+  if (created !== oldest) {
+    runtime.run(
+      ["gh", "api", "--method", "DELETE", `repos/${REPOSITORY}/releases/${created}`],
+      env,
+    );
+  }
+}
+
 function build(publish: boolean, runtime: ReleaseRuntime): void {
   const { arch, platform, run, releaseTag } = runtime;
   let platformFlags: string[];
@@ -194,9 +280,12 @@ function build(publish: boolean, runtime: ReleaseRuntime): void {
     env = { ...env, APPLE_KEYCHAIN_PROFILE: DEFAULT_NOTARY_KEYCHAIN_PROFILE };
   }
 
+  if (publish) claimDraftRelease(tag, runtime, env);
+
   run(["bun", "install", "--frozen-lockfile"]);
   run(["mise", "run", "download:bun"]);
   run(["mise", "run", "build:all"], { ...env, NODE_OPTIONS: "--max-old-space-size=4096" });
+  if (publish) soleRelease(tag, releasesForTag(tag, runtime.capture));
   run(
     [
       "bunx",
@@ -209,6 +298,9 @@ function build(publish: boolean, runtime: ReleaseRuntime): void {
     ],
     env,
   );
+  // The `gh release upload <tag>` calls below go to whichever release gh picks,
+  // so confirm electron-builder left exactly one.
+  if (publish) soleRelease(tag, releasesForTag(tag, runtime.capture));
 
   if (platform === "darwin") {
     // Builder 26 omits mac.minimumSystemVersion from updater metadata. Its
@@ -233,12 +325,10 @@ function build(publish: boolean, runtime: ReleaseRuntime): void {
 function publish(runtime: ReleaseRuntime, options: { npm: boolean }): void {
   const { releaseTag, capture, run } = runtime;
   const tag = releaseTag();
-  const release = JSON.parse(
-    capture(["gh", "release", "view", tag, "--repo", REPOSITORY, "--json", "isDraft,assets"]),
-  ) as { isDraft: boolean; assets: Array<{ name: string }> };
-  if (!release.isDraft) fail(`release ${tag} is already published.`);
+  const release = soleRelease(tag, releasesForTag(tag, capture));
+  if (!release.draft) fail(`release ${tag} is already published.`);
 
-  const names = release.assets.map((asset) => asset.name);
+  const names = release.assets;
   const missing: string[] = REQUIRED_ASSET_SUFFIXES.filter(
     (suffix) => !names.some((n) => n.endsWith(suffix)),
   );

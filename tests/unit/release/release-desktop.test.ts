@@ -22,12 +22,37 @@ const assets = [
   "toolchain-pins.json",
 ];
 
-function harness(overrides: Partial<ReleaseRuntime> = {}) {
-  const run = mock((_command: string[], _env?: NodeJS.ProcessEnv) => {});
+type FakeRelease = { id: number; draft: boolean; assets: string[] };
+
+const isReleaseList = (command: string[]) => command[1] === "api" && command.includes("--paginate");
+
+/** What the GitHub releases API lists for `tag`, as `gh api --jq` prints it. */
+function listing(releases: FakeRelease[]): string {
+  return releases.map((release) => JSON.stringify(release)).join("\n");
+}
+
+function harness(
+  overrides: Partial<ReleaseRuntime> = {},
+  releases: FakeRelease[] = [{ id: 100, draft: true, assets: [...assets] }],
+) {
+  let nextId = Math.max(100, ...releases.map((release) => release.id)) + 1;
+  const run = mock((command: string[], _env?: NodeJS.ProcessEnv) => {
+    if (command[1] === "api" && command.includes("DELETE")) {
+      const id = Number(command.at(-1)?.split("/").at(-1));
+      releases.splice(
+        releases.findIndex((release) => release.id === id),
+        1,
+      );
+    }
+  });
   const capture = mock((command: string[]) => {
     if (command[0] === "gh" && command[2] === "download") return "minimumSystemVersion: '22.0.0'\n";
-    if (command[0] === "gh")
-      return JSON.stringify({ isDraft: true, assets: assets.map((name) => ({ name })) });
+    if (command[0] === "gh" && isReleaseList(command)) return listing(releases);
+    if (command[0] === "gh" && command.includes("POST")) {
+      const id = nextId++;
+      releases.push({ id, draft: true, assets: [] });
+      return String(id);
+    }
     if (command[1] === "status") return "";
     if (command[1] === "rev-parse") return head;
     if (command[1] === "ls-remote") return `${head}\trefs/tags/${tag}`;
@@ -47,7 +72,7 @@ function harness(overrides: Partial<ReleaseRuntime> = {}) {
     npmHasVersion: () => false,
     ...overrides,
   };
-  return { runtime, run, capture };
+  return { runtime, run, capture, releases };
 }
 
 const directories: string[] = [];
@@ -270,13 +295,9 @@ describe("desktop release commands", () => {
   });
 
   test.each(assets)("refuses to publish a draft missing required %s", (missing) => {
-    const { runtime, run } = harness({
-      capture: () =>
-        JSON.stringify({
-          isDraft: true,
-          assets: assets.filter((name) => name !== missing).map((name) => ({ name })),
-        }),
-    });
+    const { runtime, run } = harness({}, [
+      { id: 100, draft: true, assets: assets.filter((name) => name !== missing) },
+    ]);
     expect(() => runDesktopRelease(["publish"], runtime)).toThrow("is missing");
     expect(run).not.toHaveBeenCalled();
   });
@@ -301,11 +322,15 @@ describe("desktop release commands", () => {
   });
 
   test("accepts the architecture-specific arm64 Linux updater feed", () => {
-    const { runtime, run, capture } = harness();
-    const original = capture.getMockImplementation()!;
-    capture.mockImplementation((command) => command[0] === "gh" && command[2] === "view"
-      ? JSON.stringify({ isDraft: true, assets: assets.map((name) => ({ name: name === "latest-linux.yml" ? "latest-linux-arm64.yml" : name })) })
-      : original(command));
+    const { runtime, run } = harness({}, [
+      {
+        id: 100,
+        draft: true,
+        assets: assets.map((name) =>
+          name === "latest-linux.yml" ? "latest-linux-arm64.yml" : name,
+        ),
+      },
+    ]);
     runDesktopRelease(["publish"], runtime);
     // publish:cli, then the release edit.
     expect(run).toHaveBeenCalledTimes(2);
@@ -314,10 +339,9 @@ describe("desktop release commands", () => {
   test("publishes the npm package before making the release public, once", () => {
     const { runtime, run } = harness();
     runDesktopRelease(["publish"], runtime);
-    expect(run.mock.calls.map(([command]) => command[0] === "mise" ? command.join(" ") : command[2])).toEqual([
-      "mise run publish:cli",
-      "edit",
-    ]);
+    expect(
+      run.mock.calls.map(([command]) => (command[0] === "mise" ? command.join(" ") : command[2])),
+    ).toEqual(["mise run publish:cli", "edit"]);
 
     const already = harness({ npmHasVersion: () => true });
     runDesktopRelease(["publish"], already.runtime);
@@ -335,11 +359,162 @@ describe("desktop release commands", () => {
   });
 
   test("refuses an already-public release", () => {
-    const { runtime, run } = harness({
-      capture: () => JSON.stringify({ isDraft: false, assets: [] }),
-    });
+    const { runtime, run } = harness({}, [{ id: 100, draft: false, assets: [] }]);
     expect(() => runDesktopRelease(["publish"], runtime)).toThrow("already published");
     expect(run).not.toHaveBeenCalled();
+  });
+
+  test("refuses to publish when the tag's assets are split across two drafts", () => {
+    // The v2.22.2 shape: each platform's files landed in a different draft.
+    const { runtime, run } = harness({}, [
+      {
+        id: 100,
+        draft: true,
+        assets: ["app.dmg", "app.zip", "latest-mac.yml", "toolchain-pins.json"],
+      },
+      { id: 102, draft: true, assets: ["app.AppImage", "app.pacman", "latest-linux.yml"] },
+    ]);
+    expect(() => runDesktopRelease(["publish"], runtime)).toThrow("has 2 releases");
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  test("refuses to publish a tag with no release", () => {
+    const { runtime, run } = harness({}, []);
+    expect(() => runDesktopRelease(["publish"], runtime)).toThrow("does not exist");
+    expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("draft release ownership", () => {
+  const buildRuns = (run: ReturnType<typeof harness>["run"]) =>
+    run.mock.calls.map(([command]) => command.slice(0, 3).join(" "));
+
+  test("the first build creates the one draft before electron-builder runs", () => {
+    const { runtime, run, capture, releases } = harness({}, []);
+    runDesktopRelease(["build"], runtime);
+    const created = capture.mock.calls.findIndex(([command]) => command.includes("POST"));
+    expect(capture.mock.calls[created]?.[0]).toEqual([
+      "gh",
+      "api",
+      "--method",
+      "POST",
+      "repos/orkestrator-ai/orkestrator-v2/releases",
+      "-f",
+      `tag_name=${tag}`,
+      "-f",
+      "name=2.19.9",
+      "-F",
+      "draft=true",
+      "--jq",
+      ".id",
+    ]);
+    expect(releases).toEqual([{ id: 101, draft: true, assets: [] }]);
+    expect(buildRuns(run)[0]).toBe("bun install --frozen-lockfile");
+  });
+
+  test("a later build reuses the existing draft", () => {
+    const { runtime, capture, releases } = harness({ platform: "linux", arch: "x64" }, [
+      { id: 100, draft: true, assets: ["app.dmg"] },
+    ]);
+    runDesktopRelease(["build"], runtime);
+    expect(capture.mock.calls.some(([command]) => command.includes("POST"))).toBe(false);
+    expect(releases.map((release) => release.id)).toEqual([100]);
+  });
+
+  test("a build that loses a creation race deletes only its own empty draft", () => {
+    const { runtime, run, capture, releases } = harness({}, []);
+    const original = capture.getMockImplementation()!;
+    capture.mockImplementation((command) => {
+      const output = original(command);
+      // Another machine created its draft first, between our list and our create.
+      if (command.includes("POST")) releases.unshift({ id: 50, draft: true, assets: [] });
+      return output;
+    });
+    runDesktopRelease(["build"], runtime);
+    expect(run.mock.calls[0]?.[0]).toEqual([
+      "gh",
+      "api",
+      "--method",
+      "DELETE",
+      "repos/orkestrator-ai/orkestrator-v2/releases/101",
+    ]);
+    expect(releases.map((release) => release.id)).toEqual([50]);
+  });
+
+  test.each([
+    ["deletes its draft", true],
+    ["leaves its draft behind", false],
+  ])(
+    "the race winner keeps its draft and packages only once the loser %s",
+    (_name, loserCleansUp) => {
+      const { runtime, run, capture, releases } = harness({}, []);
+      const capturing = capture.getMockImplementation()!;
+      capture.mockImplementation((command) => {
+        const output = capturing(command);
+        // The other machine creates just after us, so its draft is the newer one.
+        if (command.includes("POST")) releases.push({ id: 200, draft: true, assets: [] });
+        return output;
+      });
+      const running = run.getMockImplementation()!;
+      run.mockImplementation((command, env) => {
+        running(command, env);
+        // The loser removes its own draft while this machine installs and builds.
+        if (
+          loserCleansUp &&
+          command[0] === "bun" &&
+          releases.some((release) => release.id === 200)
+        ) {
+          releases.splice(
+            releases.findIndex((release) => release.id === 200),
+            1,
+          );
+        }
+      });
+
+      const build = () => runDesktopRelease(["build"], runtime);
+      if (loserCleansUp) {
+        expect(build).not.toThrow();
+        expect(releases.map((release) => release.id)).toEqual([101]);
+      } else {
+        expect(build).toThrow("has 2 releases");
+        expect(run.mock.calls.some(([command]) => command[1] === "electron-builder")).toBe(false);
+      }
+      expect(run.mock.calls.some(([command]) => command.includes("DELETE"))).toBe(false);
+    },
+  );
+
+  test.each([
+    [
+      "already split",
+      [
+        { id: 100, draft: true, assets: ["app.dmg"] },
+        { id: 102, draft: true, assets: ["app.AppImage"] },
+      ],
+      "has 2 releases",
+    ],
+    ["already published", [{ id: 100, draft: false, assets: [] }], "already published"],
+  ] as const)(
+    "refuses to build into a tag that is %s, before packaging",
+    (_name, existing, message) => {
+      const { runtime, run } = harness(
+        {},
+        existing.map((release) => ({ ...release, assets: [...release.assets] })),
+      );
+      expect(() => runDesktopRelease(["build"], runtime)).toThrow(message);
+      expect(run).not.toHaveBeenCalled();
+    },
+  );
+
+  test("refuses to upload pins and feeds if electron-builder split the release", () => {
+    const { runtime, run, releases } = harness();
+    const original = run.getMockImplementation()!;
+    run.mockImplementation((command, env) => {
+      original(command, env);
+      if (command[1] === "electron-builder")
+        releases.push({ id: 300, draft: true, assets: ["app.dmg.blockmap"] });
+    });
+    expect(() => runDesktopRelease(["build"], runtime)).toThrow("has 2 releases");
+    expect(run.mock.calls.some(([command]) => command[1] === "release")).toBe(false);
   });
 
   test.each([[], ["publish", "--no-publish"], ["build", "--pubish"], ["unknown"]])(
@@ -352,14 +527,19 @@ describe("desktop release commands", () => {
   );
 });
 
-test.each(["dirty", "wrong-head"])("npm publication refuses %s checkout before building", (mode) => {
-  const { runtime, run, capture } = harness();
-  const original = capture.getMockImplementation()!;
-  capture.mockImplementation((command) => {
-    if (mode === "dirty" && command[1] === "status") return " M source.ts";
-    if (mode === "wrong-head" && command[2] === `${tag}^{commit}`) return other;
-    return original(command);
-  });
-  expect(() => runDesktopRelease(["publish"], runtime)).toThrow(mode === "dirty" ? "uncommitted changes" : "does not point at HEAD");
-  expect(run).not.toHaveBeenCalled();
-});
+test.each(["dirty", "wrong-head"])(
+  "npm publication refuses %s checkout before building",
+  (mode) => {
+    const { runtime, run, capture } = harness();
+    const original = capture.getMockImplementation()!;
+    capture.mockImplementation((command) => {
+      if (mode === "dirty" && command[1] === "status") return " M source.ts";
+      if (mode === "wrong-head" && command[2] === `${tag}^{commit}`) return other;
+      return original(command);
+    });
+    expect(() => runDesktopRelease(["publish"], runtime)).toThrow(
+      mode === "dirty" ? "uncommitted changes" : "does not point at HEAD",
+    );
+    expect(run).not.toHaveBeenCalled();
+  },
+);

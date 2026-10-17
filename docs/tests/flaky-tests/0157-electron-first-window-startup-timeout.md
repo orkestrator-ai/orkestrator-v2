@@ -28,6 +28,35 @@ The Playwright trace was under
 `output/agent-testing/electron-smoke/electron/artifacts/`; the successful rerun
 replaces that run-id's artifacts.
 
+## A confirmed cause with the same symptom (2026-10-17)
+
+On macOS 27.0 (arm64, Electron 44.7.0, `main` at `31d0fb06`), `mise run
+test:agent:electron` failed this test and `remote nicknames refresh all native
+titles and Window menu entries` with `electronApplication.firstWindow`
+timeouts, and the first `web-annotations-electron.spec.ts` test the same way.
+This test failed again alone. The backend started and listened, but no window
+appeared.
+
+The cause was the login Keychain. The specs' fixed profile names give fixed
+`safeStorage` items (`Orkestrator AI — DEV [electron-smoke] Safe Storage`,
+created 2026-10-01 by an earlier Electron build). The current binary is not on
+the item's access list, so `ConnectionManager.initialize()` awaited
+`safeStorage.isAsyncEncryptionAvailable()` behind an access prompt nobody
+answered. A standalone Electron probe with that app name stayed pending for
+20 s; with `[electron-resume]` (an item created 2026-10-15) or a fresh name it
+returned in milliseconds; with `use-mock-keychain` it returned in 4 ms and
+round-tripped encryption without touching the Keychain.
+
+Agent-test profiles on macOS now append `use-mock-keychain`
+(`chromiumSwitchesForRuntime` in `apps/desktop/electron/runtime-profile.ts`).
+After that, `firstWindow` succeeded in every launch: the whole Electron suite
+(10 passed, 1 skipped) and five further runs of this test. This test still
+fails later, at native focus, on this shared host; see
+[0271](0271-electron-native-focus-shared-macos-desktop.md).
+
+The 2026-09-22 observation passed on rerun, which an unanswered Keychain
+prompt would not do, so its cause stays unconfirmed and this case stays open.
+
 ## Startup title recurrence (2026-10-17)
 
 During annotation review validation, the same independent-windows case failed

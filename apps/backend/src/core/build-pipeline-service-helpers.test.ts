@@ -27,6 +27,7 @@ import {
   fastModeForModel,
   legacyTranscriptFingerprint,
   normalizeTranscriptFingerprint,
+  resumePromptFor,
   transcriptFingerprint,
 } from "./build-pipeline-service-helpers.js";
 
@@ -86,6 +87,37 @@ const cleanReview: StructuredReviewReport = {
   summaryOfChange: "Implemented the task.",
   reviewSummary: "No findings.",
 };
+
+describe("conflict resolution resume prompt", () => {
+  test("preserves the narrow prose-only exception and required documentation checks", () => {
+    const prompt = resumePromptFor("resolving-conflicts");
+
+    expect(prompt).toContain("Incorporate any messages sent while the pipeline was paused");
+    expect(prompt).toContain(
+      "Skip tests, typechecking, and builds only when every changed path is prose documentation with no test, build, or tooling consumers and repository instructions permit skipping those checks",
+    );
+    expect(prompt).toContain("Always run repository-required checks");
+    expect(prompt).toContain("documentation, formatting, and link checks");
+    expect(prompt).toContain("confirm no conflict markers remain");
+  });
+
+  test("recovers the full merge scope and validates auto-merged code and consumed Markdown", () => {
+    const prompt = resumePromptFor("resolving-conflicts");
+
+    expect(prompt).toContain("original pre-merge HEAD");
+    expect(prompt).toContain("recover that baseline from merge metadata or history");
+    expect(prompt).toContain("if the full scope cannot be established, run relevant validation");
+    expect(prompt).toContain("including auto-merged changes and conflict resolutions");
+    expect(prompt).toContain(
+      "If documentation conflicts accompany auto-merged code, configuration, or tests, run relevant tests, typechecking, and build validation for the merged result",
+    );
+    expect(prompt).toContain("source files (including .ts and .mdx under docs/)");
+    expect(prompt).toContain(
+      "Markdown consumed by tests, builds, or tooling require relevant validation",
+    );
+    expect(prompt).not.toContain("when every conflicted file is documentation");
+  });
+});
 
 describe("build pipeline connection defaults", () => {
   test("resolves repository speed independently and preserves explicit Normal", () => {

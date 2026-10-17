@@ -676,5 +676,33 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("origin/develop");
     expect(prompt).toContain("resolve every merge conflict");
     expect(prompt).toContain("run relevant validation");
+    expect(prompt).toContain(
+      "Skip tests, typechecking, and builds only when every changed path is prose documentation with no test, build, or tooling consumers and repository instructions permit skipping those checks",
+    );
+    expect(prompt).toContain("Always run repository-required checks");
+    expect(prompt).toContain("confirm no conflict markers remain");
+  });
+
+  test("documentation conflicts with auto-merged code still require merged-result validation", () => {
+    const prompt = resolveConflictsPrompt("develop");
+
+    expect(prompt).toContain(
+      "all paths changed by the merge relative to the original pre-merge HEAD",
+    );
+    expect(prompt).toContain("including auto-merged changes and conflict resolutions");
+    expect(prompt).toContain(
+      "If documentation conflicts accompany auto-merged code, configuration, or tests, run relevant tests, typechecking, and build validation for the merged result",
+    );
+    expect(prompt).not.toContain("when every conflicted file is documentation");
+  });
+
+  test("documentation location or extension cannot exempt executable or test-consumed files", () => {
+    const prompt = resolveConflictsPrompt("develop");
+
+    expect(prompt).toContain("File role takes precedence over location or extension");
+    expect(prompt).toContain("source files (including .ts and .mdx under docs/)");
+    expect(prompt).toContain(
+      "Markdown consumed by tests, builds, or tooling require relevant validation",
+    );
   });
 });

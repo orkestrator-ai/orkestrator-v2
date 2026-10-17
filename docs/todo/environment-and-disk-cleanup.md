@@ -58,7 +58,7 @@ leak, and a way to see cleanup that has stopped retrying.
 - Evidence: unit suites; the real-stack specs "deletion during local setup
   clears worktree, bridge state, branch and ledger" (run by
   `mise run test:agent:browser:isolated`) and "Docker fixture deletion removes
-  the container, volumes, network and ledger entry" (run by
+  only the target container, volumes, network and ledger entry" (run by
   `mise run test:agent:docker`), both in
   `e2e/agent-testing/browser-gateway.spec.ts`; live C19
   (`apps/backend/tests/container-live-replacement.test.ts`) on Linux Engine
@@ -137,6 +137,48 @@ Decisions taken in this run:
 - The sweep pass was run by hand rather than as a spec. It needs a backend
   restart and backdated mtimes, which the browser suite cannot do inside one
   profile.
+
+### Review follow-up (2026-10-17)
+
+On branch `todo/env-cleanup-realstack-qualification` (base `160610af` plus
+the review fixes), the Docker deletion spec now captures the seeded fixture's
+container, volume and network identities before creating the deletion target.
+After deletion it checks those same resources remain, the fixture still maps
+to the same container, and Docker reports that container running. The target's
+resource-removal and settled-ledger assertions remain in place.
+
+The credential-free profile `qa-cleanup-review-1017` was started with
+`mise run dev:test --profile qa-cleanup-review-1017 --fixture --fixture-environments local,container --no-agent-credentials --agent-platforms codex`.
+It built this worktree's image, `orkestrator-v2:dev-2a06b889134b`, on Docker
+Desktop Engine 29.8.1 with Bun 1.4.3.
+
+| Logged command | Result |
+| --- | --- |
+| `ORKESTRATOR_AGENT_TEST_PROFILE=qa-cleanup-review-1017 ORKESTRATOR_AGENT_TEST_RUN_ID=qa-cleanup-review-1017 mise run test:logged -- --name review-agent-docker -- mise run test:agent:docker` | 6 passed, 0 skipped, 0 failed (59.7 s). Includes deletion with fixture-preservation assertions, foreign-owner rejection, Chromium launch for both users, inactive-environment rebuild and desktop/narrow settings rehydration. |
+| `ORKESTRATOR_AGENT_TEST_PROFILE=qa-cleanup-review-1017 ORKESTRATOR_AGENT_TEST_RUN_ID=qa-cleanup-review-1017-local mise run test:logged -- --name review-local-deletion -- mise run test:agent:browser -- e2e/agent-testing/browser-gateway.spec.ts --grep 'deletion during local setup'` | 1 passed, 0 skipped, 0 failed (7.1 s). |
+
+Sanitized browser reports are under
+`output/agent-testing/qa-cleanup-review-1017/browser/results.json` and
+`output/agent-testing/qa-cleanup-review-1017-local/browser/results.json`
+(ignored artifacts). The profile was stopped and reset after validation.
+The focused flaky-test register test passed after restoring case 0265's ID
+and open-status metadata to match `origin/main`; format, lint and repository
+typechecks passed as well.
+
+`mise run test:logged -- --name review-tests -- mise run test` (with the
+testing guide's GNU-tool PATH) exited 1 after 840.1 seconds. Root, bridges,
+protocol and every workspace package except backend passed. Backend reported
+8612 passed, 41 skipped, eight timeouts and one late SQLite error. The two
+unchanged owning files then passed separately with `--parallel=1`: lifecycle
+in 18.9 seconds and coordinator in 20.2 seconds. The existing flaky-test cases
+[0194](../tests/flaky-tests/0194-environment-lifecycle-deletion-aggregate-timeout.md),
+[0226](../tests/flaky-tests/0226-deletion-reap-failure-aggregate-timeout.md) and
+[0165](../tests/flaky-tests/0165-coordinator-bound-discard-timeout.md) record
+the exact commands, failures, worker counts and compressed evidence. This
+aggregate run is not a clean full-suite pass.
+
+Electron, CLI and iOS scenario suites were omitted because this follow-up
+changes test assertions and documentation only.
 
 ## Constraints and rationale
 

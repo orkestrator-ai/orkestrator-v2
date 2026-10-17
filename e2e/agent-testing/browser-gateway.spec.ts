@@ -1594,7 +1594,7 @@ test("Docker fixture rejects containers owned by another profile", async ({ page
   }
 });
 
-test("Docker fixture deletion removes the container, volumes, network and ledger entry", async ({
+test("Docker fixture deletion removes only the target container, volumes, network and ledger entry", async ({
   page,
 }) => {
   test.skip(
@@ -1623,8 +1623,23 @@ test("Docker fixture deletion removes the container, volumes, network and ledger
         : [kind, "ls", "-q", "--filter", filter];
     const result = spawnSync("docker", args, { encoding: "utf8" });
     expect(result.status, result.stderr).toBe(0);
-    return result.stdout.split("\n").filter(Boolean);
+    return result.stdout.split("\n").filter(Boolean).sort();
   };
+  const containerFixture = (
+    await invoke<Environment[]>("get_environments", {
+      projectId: fixture!.id,
+    })
+  ).find((environment) => environment.name === "fixture-container");
+  expect(containerFixture?.containerId).toBeTruthy();
+  expect(containerFixture?.status).toBe("running");
+  const fixtureResources = {
+    containers: owned("container", containerFixture!.id),
+    volumes: owned("volume", containerFixture!.id),
+    networks: owned("network", containerFixture!.id),
+  };
+  for (const resources of Object.values(fixtureResources)) {
+    expect(resources).not.toHaveLength(0);
+  }
   const environment = await invoke<Environment>("create_environment", {
     projectId: fixture!.id,
     name: `delete-container-${Date.now()}`,
@@ -1647,6 +1662,22 @@ test("Docker fixture deletion removes the container, volumes, network and ledger
     expect(owned("volume", environment.id)).toEqual([]);
     expect(owned("network", environment.id)).toEqual([]);
     expect(pendingCleanupEnvironmentIds(runtime.dataDir)).not.toContain(environment.id);
+
+    const retainedFixture = await invoke<Environment>("get_environment", {
+      environmentId: containerFixture!.id,
+    });
+    expect(retainedFixture.containerId).toBe(containerFixture!.containerId);
+    expect(retainedFixture.status).toBe("running");
+    expect(owned("container", containerFixture!.id)).toEqual(fixtureResources.containers);
+    expect(owned("volume", containerFixture!.id)).toEqual(fixtureResources.volumes);
+    expect(owned("network", containerFixture!.id)).toEqual(fixtureResources.networks);
+    const running = spawnSync(
+      "docker",
+      ["inspect", "--format", "{{.State.Running}}", containerFixture!.containerId!],
+      { encoding: "utf8" },
+    );
+    expect(running.status, running.stderr).toBe(0);
+    expect(running.stdout.trim()).toBe("true");
   } finally {
     await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
   }

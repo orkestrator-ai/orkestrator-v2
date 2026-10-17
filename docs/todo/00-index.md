@@ -57,10 +57,10 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 39 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 247 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 259 |
-| **Total** | | **546** |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 38 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 252 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 261 |
+| **Total** | | **552** |
 
 ## Very high
 
@@ -101,8 +101,8 @@ it reaches. Some rules of thumb:
 
 - [ ] Re-run CLI credential-free, container and live Claude, Codex and OpenCode matrices at current main ([cli-qualification.md](cli-qualification.md), qualification)
 - [x] Verify whether a new Claude tab shows legacy `BUILTIN_COMMANDS` rows in the picker before its first query ([slash-command-catalogue.md](slash-command-catalogue.md), verify)
-- [ ] Run live slash-command probes for every provider at current pins in a disposable isolated profile ([slash-command-qualification.md](slash-command-qualification.md), qualification)
-- [ ] Run the inactive-environment slash-command browser scenario, including restarts at dispatch boundaries ([slash-command-qualification.md](slash-command-qualification.md), qualification)
+- [x] Run live slash-command probes for every provider at current pins in a disposable isolated profile ([slash-command-qualification.md](slash-command-qualification.md), qualification)
+- [x] Run the inactive-environment slash-command browser scenario, including restarts at dispatch boundaries ([slash-command-qualification.md](slash-command-qualification.md), qualification)
 
 ### Containers and environments (high)
 
@@ -137,6 +137,7 @@ it reaches. Some rules of thumb:
 - [x] Report `authentication-required` readiness on Claude, Pi, ACP and OpenCode; drop the Cursor-only 401 branch ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
 - [x] Confirm no auth response body carries a token or key except the login URL, and the URL is never logged ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)
 - [ ] Confirm close retains the conversation through the UI for Cursor, Pi, OpenCode and Grok ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
+- [ ] Make the shown and the run model match when a stored model is not in the catalogue; a new install's Codex `gpt-5.4` fails every turn on a ChatGPT login ([composer-model-parameters.md](composer-model-parameters.md))
 
 ### Transcripts, observation and bandwidth (high)
 
@@ -247,6 +248,11 @@ it reaches. Some rules of thumb:
 - [ ] Check that slash skill and template paths resolve inside the provider's container environment ([slash-command-qualification.md](slash-command-qualification.md), qualification)
 - [ ] Run the slash-command mixed-version matrix across backend, bridge and renderer versions ([slash-command-qualification.md](slash-command-qualification.md), qualification)
 - [ ] Measure slash catalogue discovery latency, refresh coalescing, cache bytes and probe counts ([slash-command-qualification.md](slash-command-qualification.md), qualification)
+- [ ] Mark Claude terminal-only commands unavailable before a tab's first turn ([slash-command-catalogue.md](slash-command-catalogue.md))
+- [ ] Load OpenCode command files added while its server runs, or tell the user a restart is needed ([slash-command-catalogue.md](slash-command-catalogue.md))
+- [ ] Run the live slash-command probes on Pi 1.2.0 with credentials, and qualify Codex disabled skills with a disposable `CODEX_HOME` ([slash-command-qualification.md](slash-command-qualification.md), qualification)
+- [ ] Verify whether Grok loads project skills and commands from a host worktree it has not trusted ([slash-command-qualification.md](slash-command-qualification.md), verify)
+- [ ] Verify that a Claude user is told a command parked by a bridge restart did not run after a same-id retry ([slash-command-qualification.md](slash-command-qualification.md), verify)
 
 ### Containers and environments (medium)
 
@@ -542,6 +548,8 @@ it reaches. Some rules of thumb:
 - [ ] Update stale SDK pin facts in the OpenCode, Claude and Cursor command owner comments ([slash-command-catalogue.md](slash-command-catalogue.md))
 - [ ] Update the pins and tables in `native-agent-commands.md` ("Provider support") and the owner comments after a qualification pass ([slash-command-qualification.md](slash-command-qualification.md), qualification)
 - [ ] Check whether any slash-command live runs happened informally after #827 ([slash-command-qualification.md](slash-command-qualification.md), verify)
+- [ ] Report a cold Codex skill list `stale` until its plugin skills have loaded ([slash-command-catalogue.md](slash-command-catalogue.md))
+- [ ] Give a dev profile's backend the workspace version so no version reminder covers the composer ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
 
 ### Containers and environments (low)
 
@@ -793,8 +801,8 @@ it reaches. Some rules of thumb:
 | **CLI and slash commands** | | | | | |
 | [cli-command-surface.md](cli-command-surface.md) |  |  | 6 | 7 | 13 |
 | [cli-qualification.md](cli-qualification.md) |  | 1 | 6 | 1 | 8 |
-| [slash-command-catalogue.md](slash-command-catalogue.md) |  |  | 5 | 4 | 9 |
-| [slash-command-qualification.md](slash-command-qualification.md) |  | 2 | 3 | 2 | 7 |
+| [slash-command-catalogue.md](slash-command-catalogue.md) |  |  | 7 | 5 | 12 |
+| [slash-command-qualification.md](slash-command-qualification.md) |  |  | 6 | 2 | 8 |
 | **Containers and environments** | | | | | |
 | [container-platform-qualification.md](container-platform-qualification.md) |  | 3 | 11 | 1 | 15 |
 | [container-rebuild-state-preservation.md](container-rebuild-state-preservation.md) |  |  | 2 | 2 | 4 |
@@ -815,7 +823,7 @@ it reaches. Some rules of thumb:
 | [mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md) |  | 1 | 3 | 5 | 9 |
 | [session-titles-and-history.md](session-titles-and-history.md) |  |  | 4 | 4 | 8 |
 | [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md) |  |  | 8 | 6 | 14 |
-| [composer-model-parameters.md](composer-model-parameters.md) |  |  | 2 | 4 | 6 |
+| [composer-model-parameters.md](composer-model-parameters.md) |  | 1 | 2 | 4 | 7 |
 | [opencode-v2.md](opencode-v2.md) |  |  |  | 3 | 3 |
 | [provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md) |  |  | 2 | 15 | 17 |
 | [session-lifecycle-consistency.md](session-lifecycle-consistency.md) |  | 1 | 7 | 5 | 13 |
@@ -840,7 +848,7 @@ it reaches. Some rules of thumb:
 | [backend-core-domain-folders.md](backend-core-domain-folders.md) |  |  | 4 | 3 | 7 |
 | [backend-runtime-state-ownership.md](backend-runtime-state-ownership.md) |  |  | 4 | 3 | 7 |
 | **Cross-cutting** | | | | | |
-| [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md) |  | 1 | 10 | 3 | 14 |
+| [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md) |  | 1 | 10 | 4 | 15 |
 | [mixed-version-compatibility.md](mixed-version-compatibility.md) |  |  | 2 | 3 | 5 |
 | [test-suite-and-ci-health.md](test-suite-and-ci-health.md) | 1 |  | 4 | 11 | 16 |
 | [mobile-layout-gaps.md](mobile-layout-gaps.md) |  |  | 1 | 4 | 5 |

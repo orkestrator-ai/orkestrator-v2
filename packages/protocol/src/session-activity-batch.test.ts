@@ -60,12 +60,14 @@ describe("session activity observation", () => {
       parseSessionActivityObservation({
         activity: "waiting",
         readyForInput: true,
+        completionPending: true,
         asyncQuestionItemIds: ["q-1"],
         closing: false,
       }),
     ).toEqual({
       activity: "waiting",
       readyForInput: true,
+      completionPending: true,
       asyncQuestionItemIds: ["q-1"],
       closing: false,
     });
@@ -79,6 +81,7 @@ describe("session activity observation", () => {
       { activity: "blocked" },
       { activity: "unavailable" },
       { activity: "idle", readyForInput: "yes" },
+      { activity: "idle", completionPending: "yes" },
       { activity: "idle", closing: 1 },
       { activity: "idle", asyncQuestionItemIds: [""] },
       { activity: "idle", asyncQuestionItemIds: "q" },

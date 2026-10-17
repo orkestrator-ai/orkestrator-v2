@@ -329,7 +329,12 @@ export abstract class NativeAgentServiceBase {
   /** Last provider-owned state per durable session, used for exact turn edges. */
   protected readonly observedSessionActivity = new Map<
     string,
-    { providerSessionId: string; state: AgentActivityState; readyForInput?: boolean }
+    {
+      providerSessionId: string;
+      state: AgentActivityState;
+      readyForInput?: boolean;
+      completionPending?: boolean;
+    }
   >();
   /**
    * Shared observation records, dispatch/generation fences and next-due

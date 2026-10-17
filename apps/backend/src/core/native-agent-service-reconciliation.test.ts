@@ -1310,7 +1310,7 @@ describe("NativeAgentService", () => {
         await service.reconcileAgentActivity();
         expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).not.toBe(true);
 
-        observation = { state: "working", readyForInput: true };
+        observation = { state: "working", readyForInput: true, completionPending: true };
         await service.reconcileAgentActivity();
 
         expect(await storage.getEnvironment("env-1")).toMatchObject({
@@ -1319,7 +1319,8 @@ describe("NativeAgentService", () => {
         expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).not.toBe(true);
         expect(await service.hasObservedLiveWork("env-1", "claude")).toBe(true);
 
-        observation = { state: "idle", readyForInput: true };
+        // Both the resumed response and its result can arrive between polls.
+        observation = { state: "idle", readyForInput: true, completionPending: false };
         await service.reconcileAgentActivity();
 
         expect(await storage.getEnvironment("env-1")).toMatchObject({
@@ -1334,9 +1335,8 @@ describe("NativeAgentService", () => {
   test("rings once the turn resumed after background work ends", async () => {
     // The production sequence for a Claude session that parks on its own
     // background tasks: readiness is *absent* while the turn runs, appears when
-    // the parent turn releases the composer, disappears when a task
-    // notification resumes the root loop, and the resumed turn then ends idle.
-    // `false` never crosses the wire.
+    // the parent turn releases the composer, and remains while a notification
+    // owes a delayed root response. That response can finish between polls.
     let observation: ProviderActivityObservation = { state: "working" };
     const { provider } = createProviderStub("claude", {
       observeActivity: async () => observation,
@@ -1360,16 +1360,21 @@ describe("NativeAgentService", () => {
 
         // The bridge repeats `readyForInput: true` on every poll for as long as
         // the tasks run. None of those polls is news.
-        observation = { state: "working", readyForInput: true };
+        observation = { state: "working", readyForInput: true, completionPending: true };
         await service.reconcileAgentActivity();
         await service.reconcileAgentActivity();
         expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).not.toBe(true);
 
-        observation = { state: "working" };
+        // The last task has finished, but its root continuation has not sent
+        // its first frame. The bridge still reports working until it settles.
+        observation = { state: "working", readyForInput: true, completionPending: true };
+        await service.reconcileAgentActivity();
+        await storage.setEnvironmentUnread("env-1", false);
         await service.reconcileAgentActivity();
         expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).not.toBe(true);
 
-        observation = { state: "idle", readyForInput: true };
+        // Both the resumed response and its result can arrive between polls.
+        observation = { state: "idle", readyForInput: true, completionPending: false };
         await service.reconcileAgentActivity();
         expect(await storage.getEnvironment("env-1")).toMatchObject({
           agentActivityState: "idle",
@@ -1381,6 +1386,105 @@ describe("NativeAgentService", () => {
         await service.reconcileAgentActivity();
         await service.reconcileAgentActivity();
         expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).not.toBe(true);
+      },
+    );
+  });
+
+  test("announces a completed root turn once while a detached shell stays working", async () => {
+    let observation: ProviderActivityObservation = { state: "working" };
+    const { provider } = createProviderStub("claude", {
+      observeActivity: async () => observation,
+    });
+    await withService(
+      { prefix: "orkestrator-detached-shell-attention-", provider: async () => provider },
+      async ({ storage, service }) => {
+        await storage.adoptNativeAgentSession({
+          key: nativeAgentSessionStorageKey("env-1", "claude", "tab-1"),
+          environmentId: "env-1",
+          agent: "claude",
+          logicalSessionKey: "tab-1",
+          providerSessionId: "provider-1",
+        });
+        await service.reconcileAgentActivity();
+        observation = { state: "working", readyForInput: true, completionPending: false };
+        await service.reconcileAgentActivity();
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          agentActivityState: "working",
+          hasUnreadWork: true,
+          unreadReason: "agent_finished",
+        });
+        await storage.setEnvironmentUnread("env-1", false);
+        for (let poll = 0; poll < 3; poll += 1) await service.reconcileAgentActivity();
+        expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).toBe(false);
+        // The shell's eventual exit must not replay that root completion.
+        observation = { state: "idle", readyForInput: true, completionPending: false };
+        await service.reconcileAgentActivity();
+        expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).toBe(false);
+      },
+    );
+  });
+
+  test("retains aggregate completion attention when the backend restarts during a turn", async () => {
+    const { provider } = createProviderStub("claude", {
+      observeActivity: async () => ({ state: "idle" }),
+    });
+    await withService(
+      { prefix: "orkestrator-completion-after-restart-", provider: async () => provider },
+      async ({ storage, service }) => {
+        await storage.adoptNativeAgentSession({
+          key: nativeAgentSessionStorageKey("env-1", "claude", "tab-1"),
+          environmentId: "env-1",
+          agent: "claude",
+          logicalSessionKey: "tab-1",
+          providerSessionId: "provider-1",
+        });
+        // Durable working state survives, but this fresh service has no prior
+        // per-session observation from which to derive the completion edge.
+        await storage.setEnvironmentAgentActivity(
+          "env-1",
+          "working",
+          new Date().toISOString(),
+          "native-agent",
+        );
+        await service.reconcileAgentActivity();
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          agentActivityState: "idle",
+          hasUnreadWork: true,
+          unreadReason: "agent_finished",
+        });
+      },
+    );
+  });
+
+  test("announces completion when the bounded continuation wait expires", async () => {
+    let observation: ProviderActivityObservation = {
+      state: "working",
+      readyForInput: true,
+      completionPending: true,
+    };
+    const { provider } = createProviderStub("claude", { observeActivity: async () => observation });
+    await withService(
+      { prefix: "orkestrator-continuation-expiry-", provider: async () => provider },
+      async ({ storage, service }) => {
+        await storage.adoptNativeAgentSession({
+          key: nativeAgentSessionStorageKey("env-1", "claude", "tab-1"),
+          environmentId: "env-1",
+          agent: "claude",
+          logicalSessionKey: "tab-1",
+          providerSessionId: "provider-1",
+        });
+        await service.reconcileAgentActivity();
+        await service.reconcileAgentActivity();
+        expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).not.toBe(true);
+        observation = { state: "idle", readyForInput: true, completionPending: false };
+        await service.reconcileAgentActivity();
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          hasUnreadWork: true,
+          unreadReason: "agent_finished",
+        });
+        await storage.setEnvironmentUnread("env-1", false);
+        await service.reconcileAgentActivity();
+        expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).toBe(false);
       },
     );
   });
@@ -1521,6 +1625,13 @@ describe("NativeAgentService", () => {
         });
 
         await service.reconcileAgentActivity();
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          hasUnreadWork: true,
+          unreadReason: "agent_waiting",
+        });
+        await storage.setEnvironmentUnread("env-1", false);
+        await service.reconcileAgentActivity();
+        expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).toBe(false);
         expect(service.sessionTurnActivitySnapshot("env-1", "claude", "tab-1")).toBe("waiting");
         expect(
           await service.mailInjectPresence({

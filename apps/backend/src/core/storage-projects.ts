@@ -1148,6 +1148,7 @@ export abstract class StorageProjects extends StorageBase {
     source: AgentActivitySource = "frontend",
     observerId?: string,
     stale = false,
+    options: { completionAttention?: boolean } = {},
   ): Promise<Environment> {
     if (!isOneOf(state, AGENT_ACTIVITY_STATES)) {
       throw new Error("state must be idle, working, or waiting");
@@ -1250,7 +1251,11 @@ export abstract class StorageProjects extends StorageBase {
         (nextAggregate === "working" ||
           nextAggregate === "waiting" ||
           (previousAggregate === "working" && nextAggregate === "idle"));
+      // Native reconciliation owns exact per-session attention edges. Its
+      // aggregate can later go idle when a detached shell exits, after the
+      // root completion was already announced and read.
       const completionTransition =
+        options.completionAttention !== false &&
         previousAggregate === "working" &&
         (nextAggregate === "idle" || nextAggregate === "waiting");
       if (activityTransition) {

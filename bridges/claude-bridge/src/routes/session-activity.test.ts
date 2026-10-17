@@ -15,6 +15,7 @@ import {
   sdkSessionInfo,
   sendPrompt,
   track,
+  waitFor,
 } from "../services/session-manager-test-harness.js";
 import { describe, expect, test } from "bun:test";
 import { Hono } from "hono";
@@ -64,13 +65,44 @@ describe("POST /sessions/activity", () => {
 
     const observations = await batch([idle.id, background.id, "not-a-session-id"]);
     expect(observations).toEqual({
-      [idle.id]: { activity: "idle", readyForInput: true },
+      [idle.id]: { activity: "idle", readyForInput: true, completionPending: false },
       // Background work keeps the environment working while input is ready.
-      [background.id]: { activity: "working", readyForInput: true },
+      [background.id]: { activity: "working", readyForInput: true, completionPending: true },
       "not-a-session-id": { activity: "missing" },
     });
     for (const id of [idle.id, background.id, "not-a-session-id"]) {
       expect(observations[id]).toEqual(await single(id));
+    }
+  });
+
+  test("distinguishes detached local shells from tasks that owe a root response", async () => {
+    for (const taskType of ["local_bash", "local_agent"]) {
+      const state = createSession(taskType);
+      track(state.id);
+      const promptPromise = sendPrompt(state.id, "start background work");
+      const call = await nextQueryCall();
+      try {
+        call.push({
+          type: "system",
+          subtype: "background_tasks_changed",
+          tasks: [{ task_id: "task-1", task_type: taskType, description: "Background work" }],
+        });
+        call.push({ type: "result", subtype: "success" });
+        await waitFor(() => state.status === "idle");
+        const readAt = state.lastAccessedAt;
+        for (let poll = 0; poll < 3; poll += 1) {
+          expect(await single(state.id)).toEqual({
+            activity: "working",
+            readyForInput: true,
+            completionPending: taskType !== "local_bash",
+          });
+          expect((await batch([state.id]))[state.id]).toEqual(await single(state.id));
+        }
+        expect(state.lastAccessedAt).toBe(readAt);
+      } finally {
+        call.finish();
+        await promptPromise;
+      }
     }
   });
 

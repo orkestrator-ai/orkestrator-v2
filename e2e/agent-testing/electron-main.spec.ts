@@ -10,6 +10,7 @@ import { pathToFileURL } from "node:url";
 
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
+import { ELECTRON_TEST_SWITCHES } from "./electron-launch-switches";
 import { dismissStartupDialogs } from "./electron-startup-dialogs";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
@@ -165,7 +166,10 @@ async function testIndependentWindows(nicknamesOnly = false): Promise<void> {
     await waitForUrl(rendererUrl);
     const app = await electron.launch({
       executablePath: electronExecutable,
-      args: [path.join(repositoryRoot, "apps", "desktop", "dist", "electron", "main.js")],
+      args: [
+        ...ELECTRON_TEST_SWITCHES,
+        path.join(repositoryRoot, "apps", "desktop", "dist", "electron", "main.js"),
+      ],
       cwd: repositoryRoot,
       env: {
         ...process.env,
@@ -609,7 +613,7 @@ test("a real window with a missing preload reaches recovery without mounting the
 
     const app = await electron.launch({
       executablePath: electronExecutable,
-      args: [entrypoint],
+      args: [...ELECTRON_TEST_SWITCHES, entrypoint],
       cwd: repositoryRoot,
     });
     launchedApp = app;
@@ -676,7 +680,12 @@ test("bootstrap window repaints a resized native Wayland surface at fractional s
     );
     const app = await electron.launch({
       executablePath: electronExecutable,
-      args: ["--ozone-platform=wayland", "--force-device-scale-factor=1.25", entrypoint],
+      args: [
+        ...ELECTRON_TEST_SWITCHES,
+        "--ozone-platform=wayland",
+        "--force-device-scale-factor=1.25",
+        entrypoint,
+      ],
       cwd: repositoryRoot,
     });
     launchedApp = app;

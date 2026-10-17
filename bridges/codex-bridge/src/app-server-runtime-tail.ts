@@ -1,132 +1,18 @@
-import {
-  RuntimeSseEvent,
-  AppServerRuntimeOptions,
-  OrderedRuntimeEvent,
-  SteerOrdering,
-  HistoricalAssistantSegmentState,
-  ThreadRuntimeState,
-  MAX_PENDING_EVENTS_PER_TURN,
-  MAX_PENDING_TURNS,
-  MAX_ORDERED_EVENTS_PER_THREAD,
-  MAX_ORDERED_EVENT_BYTES_PER_THREAD,
-  LARGE_MESSAGE_CHARS,
-  VERY_LARGE_MESSAGE_CHARS,
-  ORDERED_EVENT_ESTIMATE_MAX_DEPTH,
-  ORDERED_EVENT_ESTIMATE_NODE_BYTES,
-  DEFAULT_INITIAL_PROMPT_RETRY_DELAY_MS,
-  estimateOrderedEventBytes,
-  messageSnapshotIntervalMs,
-  isSamePublishedPart,
-  normalizedMessageSnapshotChars,
-  DEFAULT_THREAD_IDLE_MS,
-  DEFAULT_SESSION_RETENTION_MS,
-  DEFAULT_SWEEP_INTERVAL_MS,
-  DEFAULT_SESSION_ACTIVITY_PERSIST_INTERVAL_MS,
-  DEFAULT_ENVIRONMENT_DRAIN_TIMEOUT_MS,
-  DEFAULT_AMBIGUOUS_RECOVERY_TIMEOUT_MS,
-  MAX_RECOVERED_CONTEXT_CHARS,
-  IDLE_WAIT_POLL_MS,
-  AMBIGUOUS_DISPATCH_FAILURE_MESSAGE,
-  AmbiguousDispatchResolution,
-  mergeRateLimitWindows,
-  isJsonObject,
-  DEFAULT_COMPACTION_TIMEOUT_MS,
-  MAX_STEER_REQUESTS,
-  codexStructuredOutputFailure,
-  parseCodexStructuredOutput,
-  buildRecoveredContextPrompt,
-  PromptAcceptedResult,
-  accountUsageFromLimits,
-} from "./app-server-runtime-base.js";
+import { accountUsageFromLimits } from "./app-server-runtime-base.js";
 import type { CodexRuntimeContext } from "./app-server-runtime-context.js";
 import type { CodexRuntimeLifecycle } from "./app-server-runtime-lifecycle.js";
 import type { CodexRuntimeSessions } from "./app-server-runtime-sessions.js";
-import { createHash } from "node:crypto";
 import type { AppServerEngine } from "./engine/app-server-engine.js";
-import type {
-  ApprovalDecision,
-  ApprovalRequest,
-  ApprovalResolution,
-} from "./app-server/approvals.js";
-import {
-  isInteractionAnswerMap,
-  type InteractionAnswer,
-  type InteractionRequest,
-  type InteractionResolution,
-} from "./app-server/interactions.js";
-import type {
-  EngineEvent,
-  EngineAccountUsageWindow,
-  EngineGeneration,
-  EngineRateLimitWindow,
-  EngineRateLimitWindowUpdate,
-  EngineThread,
-  EngineTurnConfig,
-  EngineUsageSnapshot,
-  EngineUserInput,
-} from "./engine/types.js";
-import {
-  OverlappingTurnError,
-  ThreadRegistry,
-  phaseToExternalStatus,
-  type BridgeSession,
-  type PromptAttachmentInput,
-  type SessionPhase,
-  type SessionTitleSource,
-  type ThreadContext,
-} from "./sessions/thread-registry.js";
-import {
-  TurnAccumulator,
-  unconfirmedTurnId,
-  type AssistantSegment,
-} from "./sessions/turn-accumulator.js";
-import {
-  compareDispatchRecordsNewestFirst,
-  DispatchJournal,
-  DispatchJournalAdmissionError,
-} from "./sessions/dispatch-journal.js";
-import { BridgeSessionStore } from "./sessions/persistence.js";
-import {
-  beginTurnRenderState,
-  createTurnRenderState,
-  releaseTurnRenderState,
-  renderTurn,
-  SUBAGENT_TRANSCRIPT_PROBE_INTERVAL_MS,
-  type TurnRenderState,
-} from "./messages/render-turn.js";
-import { UpdateCoalescer } from "./messages/coalescer.js";
-import { describeDiffBudget } from "./messages/diff-budget.js";
-import { getTranscriptCacheStats } from "./transcript-cache.js";
-import {
-  createMessageId,
-  createSessionId,
-  type MessagePatchEventData,
-  type NormalizedMessage,
-  type NormalizedPart,
-} from "./messages/types.js";
-import { appendAttachmentTags } from "./messages/attachment-tags.js";
+import type { EngineAccountUsageWindow } from "./engine/types.js";
+import type { SessionPhase } from "./sessions/thread-registry.js";
+import type { TurnAccumulator } from "./sessions/turn-accumulator.js";
 import {
   getWorkingDirectory,
-  hydrateMessagesFromPersistedSession,
-  invalidateTranscriptCatalogCache,
   listPersistedSessionsWithTitlesForCwd,
   type PersistedSessionMeta,
 } from "./history/rollout.js";
-import {
-  buildFallbackSessionTitle,
-  persistSessionTitle,
-  readPersistedSessionTitleEntries,
-  type PersistedSessionTitleSource,
-} from "./session-titles.js";
-import { AppServerRpcError, isMissingRolloutError } from "./app-server/errors.js";
+import { readPersistedSessionTitleEntries } from "./session-titles.js";
 import type { BridgeModel } from "./models-cache.js";
-import {
-  structuredOutputFailure,
-  tryParseStructuredOutputText,
-  type JsonSchema,
-  type StructuredOutputResult,
-} from "@orkestrator/protocol/structured-output";
-import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
 import { toBridgeModel } from "./app-server-runtime-helpers.js";
 
 export class CodexRuntimeTail {
@@ -160,6 +46,7 @@ export class CodexRuntimeTail {
       };
     }
 
+    this.ctx.threadState.get(context.threadId)?.refusedCellTail?.tail.close();
     turn.markCancelling();
     this.ctx.registry.setPhase(context, "cancelling");
     this.lifecycle.emitStatus(context);

@@ -75,7 +75,10 @@ describe("RefusedCellTail", () => {
   test("a cell nothing else shows is reported, failed when the model was told of a refusal", async () => {
     const path = await rolloutPath();
     // An earlier turn's cell is before the tail starts and never reported.
-    await writeFile(path, cell("old", TOUCH, 0) + output("old", [REFUSED_TOUCH], 10));
+    await writeFile(
+      path,
+      cell("old", TOUCH, 0, "turn-0") + output("old", [REFUSED_TOUCH], 10, "turn-0"),
+    );
     const { tail, cells } = tailFor(path);
     await tail.poll();
 
@@ -207,6 +210,51 @@ describe("RefusedCellTail", () => {
     changes[0]!();
     await tail.busy();
     expect(cells).toHaveLength(3);
+  });
+
+  test("the production timer reads appends, finish reads once more, and close stops it", async () => {
+    const path = await rolloutPath();
+    await writeFile(path, "");
+    const { tail, cells } = tailFor(path, { watch: undefined });
+    let polls = 0;
+    const poll = tail.poll.bind(tail);
+    tail.poll = () => {
+      polls += 1;
+      return poll();
+    };
+    await tail.poll();
+    try {
+      await appendFile(path, cell("timer", TOUCH, 100) + output("timer", [REFUSED_TOUCH], 200));
+      const deadline = Date.now() + 2_000;
+      while (cells.length === 0 && Date.now() < deadline)
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(cells).toHaveLength(1);
+      await appendFile(path, cell("final", TOUCH, 300) + output("final", [REFUSED_TOUCH], 400));
+      await tail.finish();
+      const pollsAtFinish = polls;
+      await appendFile(path, cell("late", TOUCH, 500) + output("late", [REFUSED_TOUCH], 600));
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(tail.busy()).toBeUndefined();
+      expect(polls).toBe(pollsAtFinish);
+      expect(cells.map((found) => found.callId)).toEqual(["timer", "final"]);
+    } finally {
+      tail.close();
+    }
+  });
+
+  test("the first read recovers current-turn cells and excludes older turns", async () => {
+    const path = await rolloutPath();
+    await writeFile(
+      path,
+      cell("old", TOUCH, 0, "turn-0") +
+        output("old", [REFUSED_TOUCH], 10, "turn-0") +
+        cell("fast", TOUCH, 100) +
+        output("fast", [REFUSED_TOUCH], 200),
+    );
+    const { tail, cells } = tailFor(path);
+    await tail.poll();
+    await tail.finish();
+    expect(cells.map((found) => found.callId)).toEqual(["fast"]);
   });
 
   test("only refusal text a sandbox writes counts as a refusal", () => {

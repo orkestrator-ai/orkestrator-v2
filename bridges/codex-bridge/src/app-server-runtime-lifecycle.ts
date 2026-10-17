@@ -35,7 +35,7 @@ import {
   type ThreadContext,
 } from "./sessions/thread-registry.js";
 import { TurnAccumulator } from "./sessions/turn-accumulator.js";
-import { RefusedCellTail, type RefusedCell } from "./sessions/refused-cell-tail.js";
+import { RefusedCellTail, reportsRefusal, type RefusedCell } from "./sessions/refused-cell-tail.js";
 import { compareDispatchRecordsNewestFirst, DispatchJournal } from "./sessions/dispatch-journal.js";
 
 import {
@@ -164,6 +164,7 @@ export class CodexRuntimeLifecycle {
 
   async stop(): Promise<void> {
     this.ctx.stopping = true;
+    for (const state of this.ctx.threadState.values()) state.refusedCellTail?.tail.close();
     this.ctx.resolveDispatchAdmissionStop();
     if (this.ctx.sweepTimer) clearInterval(this.ctx.sweepTimer);
     this.ctx.sweepTimer = null;
@@ -733,6 +734,7 @@ export class CodexRuntimeLifecycle {
       // idle, which would let the build pipeline advance on a lost turn.
       if (event.state === "restarting" || event.state === "failed") {
         for (const context of this.ctx.registry.markAllRecovering()) {
+          this.ctx.threadState.get(context.threadId)?.refusedCellTail?.tail.close();
           this.emitStatus(context);
         }
       }
@@ -898,8 +900,13 @@ export class CodexRuntimeLifecycle {
     for (const event of queue) this.applyEvent(context, event);
   }
 
-  applyEvent(context: ThreadContext, event: EngineEvent): void {
+  applyEvent(context: ThreadContext, event: EngineEvent, ordered = false): void {
     const threadId = context.threadId;
+    const entry = this.ctx.threadState.get(threadId)?.refusedCellTail;
+    if (!ordered && entry && "turnId" in event && event.turnId === entry.turnId) {
+      this.queueRefusedCellEvent(context, entry, event);
+      return;
+    }
 
     switch (event.kind) {
       case "thread.name.updated":
@@ -980,9 +987,6 @@ export class CodexRuntimeLifecycle {
         // `item/completed` is authoritative; show it without waiting a tick.
         if (event.kind === "item.completed") void this.stateFor(threadId).coalescer.flushNow();
         else this.stateFor(threadId).coalescer.schedule(this.ctx.now());
-        // A backstop for the rollout watch: a refused cell is on disk before
-        // the model's next response, whose items arrive here.
-        if (event.kind !== "item.updated") this.pollRefusedCellTail(threadId, turn);
         return;
       }
       case "item.dynamic.started": {
@@ -1112,17 +1116,119 @@ export class CodexRuntimeLifecycle {
     const tail = new RefusedCellTail({
       path,
       turnId: turn.turnId,
+      offset: state.refusedCellOffset,
       ...(watch ? { watch } : {}),
       itemStartedBetween: (fromMs, toMs) => turn.clientToolItemStartedBetween(fromMs, toMs),
-      onCell: (cell) => this.applyRefusedCell(context, turn, cell),
+      onCell: (cell) => {
+        if (
+          this.ctx.stopping ||
+          this.ctx.threadState.get(context.threadId) !== state ||
+          context.activeTurn !== turn ||
+          context.phase === "recovering" ||
+          context.phase === "cancelling" ||
+          context.engineGeneration !== turn.engineGeneration
+        )
+          return;
+        // Bound cells waiting behind notification delivery as well as the disk parser.
+        if (entry.cells.length < 256) entry.cells.push(cell);
+        else {
+          tail.close();
+          for (const sessionId of context.bridgeSessionIds)
+            this.ctx.options.emit({
+              type: "session.reconcile-required",
+              sessionId,
+              data: { reason: "rollout-cell-queue-overflow" },
+            });
+        }
+      },
     });
-    state.refusedCellTail = { turnId: turn.turnId, tail };
+    const entry: NonNullable<ThreadRuntimeState["refusedCellTail"]> = {
+      turnId: turn.turnId,
+      tail,
+      cells: [],
+      events: [],
+      bytes: 0,
+      draining: false,
+    };
+    state.refusedCellTail = entry;
     void tail.poll().catch(() => undefined);
   }
 
-  pollRefusedCellTail(threadId: string, turn: TurnAccumulator): void {
-    const entry = this.ctx.threadState.get(threadId)?.refusedCellTail;
-    if (entry?.turnId === turn.turnId) void entry.tail.poll().catch(() => undefined);
+  /** Disk barriers serialize only this thread; stdout continues consuming notifications. */
+  queueRefusedCellEvent(
+    context: ThreadContext,
+    entry: NonNullable<ThreadRuntimeState["refusedCellTail"]>,
+    event: EngineEvent,
+  ): void {
+    const bytes = estimateOrderedEventBytes(event);
+    if (
+      entry.events.length >= MAX_PENDING_EVENTS_PER_TURN ||
+      entry.bytes + bytes > MAX_ORDERED_EVENT_BYTES_PER_THREAD
+    ) {
+      // Preserve every authoritative event under backpressure. Stop disk recovery,
+      // apply the bounded backlog synchronously, and explicitly invalidate readers.
+      entry.tail.close();
+      this.ctx.threadState.get(context.threadId)!.refusedCellTail = undefined;
+      for (const queued of entry.events.splice(0)) this.applyEvent(context, queued, true);
+      this.applyEvent(context, event, true);
+      for (const sessionId of context.bridgeSessionIds)
+        this.ctx.options.emit({
+          type: "session.reconcile-required",
+          sessionId,
+          data: { reason: "rollout-event-queue-overflow" },
+        });
+      return;
+    }
+    entry.events.push(event);
+    entry.bytes += bytes;
+    if (entry.draining) return;
+    entry.draining = true;
+    const state = this.ctx.threadState.get(context.threadId)!;
+    const turn = context.activeTurn!;
+    const work = (async () => {
+      try {
+        while (entry.events.length > 0) {
+          const next = entry.events[0]!;
+          const newResponse =
+            ((next.kind === "item.started" || next.kind === "item.completed") &&
+              (next.item.type === "reasoning" || next.item.type === "agent_message") &&
+              !turn.items.has(next.item.id)) ||
+            ((next.kind === "item.text.delta" || next.kind === "item.reasoning.delta") &&
+              !turn.items.has(next.itemId));
+          if (next.kind === "turn.completed") await entry.tail.finish();
+          else if (newResponse) await entry.tail.poll().catch(() => undefined);
+          if (
+            this.ctx.stopping ||
+            this.ctx.threadState.get(context.threadId) !== state ||
+            state.refusedCellTail !== entry ||
+            context.activeTurn !== turn ||
+            context.phase === "recovering" ||
+            context.engineGeneration !== turn.engineGeneration
+          )
+            return;
+          if (newResponse || next.kind === "turn.completed") {
+            const before =
+              next.kind === "item.started"
+                ? (next.startedAtMs ?? this.ctx.now())
+                : next.kind === "item.completed"
+                  ? (next.completedAtMs ?? this.ctx.now())
+                  : this.ctx.now();
+            const ready = entry.cells.filter(
+              (cell) => next.kind === "turn.completed" || (cell.completedAtMs ?? 0) <= before,
+            );
+            entry.cells = entry.cells.filter((cell) => !ready.includes(cell));
+            for (const cell of ready) this.applyRefusedCell(context, turn, cell);
+          }
+          entry.events.shift();
+          entry.bytes -= estimateOrderedEventBytes(next);
+          this.applyEvent(context, next, true);
+        }
+      } finally {
+        entry.draining = false;
+      }
+    })();
+    this.ctx.pendingFinalizations.add(work);
+    void work.catch(() => undefined).finally(() => this.ctx.pendingFinalizations.delete(work));
   }
 
   /** Detaches the turn's tail so its last read can run before finalization. */
@@ -1142,27 +1248,46 @@ export class CodexRuntimeLifecycle {
    * same rollout record. Failed when the model was told of a refusal.
    */
   applyRefusedCell(context: ThreadContext, turn: TurnAccumulator, cell: RefusedCell): void {
-    if (context.activeTurn !== turn) return;
+    if (
+      this.ctx.stopping ||
+      context.activeTurn !== turn ||
+      !this.ctx.threadState.has(context.threadId) ||
+      context.phase === "recovering" ||
+      context.phase === "cancelling" ||
+      context.engineGeneration !== turn.engineGeneration
+    )
+      return;
+    if (
+      !reportsRefusal(cell.output) &&
+      cell.startedAtMs !== undefined &&
+      cell.completedAtMs !== undefined &&
+      turn.clientToolItemStartedBetween(cell.startedAtMs, cell.completedAtMs)
+    )
+      return;
     const duration =
       cell.startedAtMs !== undefined && cell.completedAtMs !== undefined
         ? Math.max(0, Math.round(cell.completedAtMs - cell.startedAtMs))
         : undefined;
-    this.applyEvent(context, {
-      kind: "item.completed",
-      threadId: context.threadId,
-      turnId: turn.turnId,
-      item: {
-        id: cell.callId,
-        type: "dynamic_tool_call",
-        tool: "exec",
-        arguments: cell.source,
-        content_items: cell.output ? [{ type: "inputText", text: cell.output }] : [],
-        status: cell.failed ? "failed" : "completed",
-        ...(duration === undefined ? {} : { duration_ms: duration }),
+    this.applyEvent(
+      context,
+      {
+        kind: "item.completed",
+        threadId: context.threadId,
+        turnId: turn.turnId,
+        item: {
+          id: cell.callId,
+          type: "dynamic_tool_call",
+          tool: "exec",
+          arguments: cell.source,
+          content_items: cell.output ? [{ type: "inputText", text: cell.output }] : [],
+          status: cell.failed ? "failed" : "completed",
+          ...(duration === undefined ? {} : { duration_ms: duration }),
+        },
+        ...(cell.completedAtMs === undefined ? {} : { completedAtMs: cell.completedAtMs }),
+        engineGeneration: turn.engineGeneration,
       },
-      ...(cell.completedAtMs === undefined ? {} : { completedAtMs: cell.completedAtMs }),
-      engineGeneration: turn.engineGeneration,
-    });
+      true,
+    );
   }
 
   /** Gives the next model response a row of its own (see `openModelResponseRow`). */

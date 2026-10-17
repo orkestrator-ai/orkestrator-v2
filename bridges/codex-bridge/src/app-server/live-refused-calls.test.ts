@@ -70,7 +70,7 @@ const SINGLE_CELLS = [
  * {@link SINGLE_CELLS}, and the last with a closing message. It records each
  * cell's output, which is what Codex told the model.
  */
-function startScriptedResponses(options: { responseDelayMs?: number } = {}) {
+function startScriptedResponses() {
   let sampled = 0;
   const cellOutputs = new Map<string, unknown>();
   const cells = [CELL, ...SINGLE_CELLS];
@@ -91,12 +91,6 @@ function startScriptedResponses(options: { responseDelayMs?: number } = {}) {
           input?: Array<{ type?: string; call_id?: string; output?: unknown }>;
         };
         if (frame.type !== "response.create") return;
-        // A model takes a moment to answer, which is when the bridge reads a
-        // refused cell back; without the delay the turn ends first.
-        if (frame.generate !== false && options.responseDelayMs) {
-          setTimeout(() => respond(socket, frame), options.responseDelayMs);
-          return;
-        }
         respond(socket, frame);
       },
     },
@@ -279,7 +273,7 @@ describeLive("live refused calls", () => {
     }
   }, 120_000);
 
-  test("the bridge shows each refused cell as a failed exec row in a read-only turn", async () => {
+  test("the bridge recovers refused cells with immediate model responses and the default watcher", async () => {
     const codexHome = await mkdtemp(join(tmpdir(), "ork-refused-runtime-home-"));
     const workspace = await realpath(await mkdtemp(join(tmpdir(), "ork-refused-runtime-ws-")));
     await mkdir(join(workspace, ".git"), { recursive: true });
@@ -292,7 +286,7 @@ describeLive("live refused calls", () => {
     // History lookups resolve through CODEX_HOME; keep them off the real one.
     const previousCodexHome = process.env.CODEX_HOME;
     process.env.CODEX_HOME = codexHome;
-    const responses = startScriptedResponses({ responseDelayMs: 1_000 });
+    const responses = startScriptedResponses();
     const engine = new AppServerEngine({
       codexPath: await resolveCodexBinary(),
       cwd: workspace,

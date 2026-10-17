@@ -429,7 +429,7 @@ describe("Codex code-mode cells in the transcript", () => {
     expect(cells(cell("text('ls')", [refusedTouch]))).toEqual([]);
   });
 
-  test("in a grouped cell, only a refusal that names its own target counts", () => {
+  test("grouped calls stay ambiguous even when one refusal names its target", () => {
     // As a live Codex turn wrote it: shell, commit and launch_job in one cell.
     const source = [
       shellSource,
@@ -439,15 +439,17 @@ describe("Codex code-mode cells in the transcript", () => {
     const commitNoise =
       '{"exit_code":128,"output":"git: error: couldn\'t create cache file \'/tmp/xcrun_db\' (errno=Operation not permitted)\\n"}';
     const calls = cells(cell(source, ["Script completed\nOutput:\n", refusedTouch, commitNoise]));
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.args).toContain("touch: coordinator-live-shell.txt: Operation not permitted");
-    expect(calls[0]?.args).not.toContain("git commit");
-    expect(run(calls, withoutShell)).toEqual([missing("create"), missing("edit")]);
+    expect(calls).toEqual([]);
+    expect(run(calls, withoutShell)).toEqual([
+      missing("create"),
+      missing("edit"),
+      missing("shell"),
+    ]);
     // Without the shell's own refusal line, the grouped cell proves nothing.
     expect(cells(cell(source, [commitNoise]))).toEqual([]);
   });
 
-  test("naming launch_job or the fetch in a cell does not make it a grouped mutation", () => {
+  test("lookups and comments keep mutation cells outside the attributable probe grammar", () => {
     // As a live Codex turn wrote it: a tool lookup, then the patch.
     const source = `text(ALL_TOOLS.filter(x=>/launch_job|list_tickets/.test(x.name)));\n${createSource}`;
     const output = [
@@ -455,10 +457,10 @@ describe("Codex code-mode cells in the transcript", () => {
       '[{"name":"mcp__orkestrator__launch_job"}]',
       rejectedPatch,
     ];
-    expect(cells(cell(source, output))).toHaveLength(1);
-    expect(
-      cells(cell(`${shellSource} // then curl https://example.com/`, [refusedTouch])),
-    ).toHaveLength(1);
+    expect(cells(cell(source, output))).toEqual([]);
+    expect(cells(cell(`${shellSource} // then curl https://example.com/`, [refusedTouch]))).toEqual(
+      [],
+    );
   });
 
   test("a cell never answers for the fetch or launch_job, and is not an ordinary call", () => {
@@ -479,8 +481,56 @@ describe("Codex code-mode cells in the transcript", () => {
       probe,
     });
     expect(failures).toContain(missing("network"));
-    expect(failures).not.toContain(missing("shell"));
+    expect(failures).toContain(missing("shell"));
   });
+
+  test("independent edit and commit probes still count", () => {
+    const edit =
+      'await tools.apply_patch("*** Begin Patch\\n*** Update File: README.md\\n@@\\n+coordinator-live-edit\\n*** End Patch\\n");';
+    const commit =
+      "text(await tools.exec_command({cmd: 'git commit --allow-empty -m \"coordinator live probe\"'}));";
+    expect(
+      cells(cell(edit, [rejectedPatch]), cell(commit, ["git: Permission denied"])),
+    ).toHaveLength(2);
+  });
+
+  test("Linux permission-denied output proves an independent touch attempt", () => {
+    expect(
+      cells(cell(shellSource, ["touch: coordinator-live-shell.txt: Permission denied"])),
+    ).toHaveLength(1);
+  });
+
+  test.each([
+    ["create", createSource],
+    [
+      "edit",
+      'await tools.apply_patch("*** Begin Patch\\n*** Update File: README.md\\n@@\\n+coordinator-live-edit\\n*** End Patch\\n");',
+    ],
+    ["shell", shellSource],
+    [
+      "commit",
+      'await tools.exec_command({cmd:"git commit --allow-empty -m \\"coordinator live probe\\""});',
+    ],
+  ])(
+    "unrelated or printed refusals cannot prove %s after an early exit or branch",
+    (_key, mutation) => {
+      for (const prefix of [
+        'text(await tools.exec_command({cmd:"cat /private/secret"})); throw new Error("stop");',
+        'text("Permission denied"); throw new Error("stop");',
+        'text("patch rejected: writing is blocked by read-only sandbox"); if (false)',
+      ]) {
+        expect(
+          cells(
+            cell(`${prefix} { ${mutation} }`, [
+              rejectedPatch,
+              "cat: Permission denied",
+              refusedTouch,
+            ]),
+          ),
+        ).toEqual([]);
+      }
+    },
+  );
 
   test("a cell's output is fetched back from behind its detail reference", async () => {
     // What the backend projection sends: the output moved behind `detailRef`.
@@ -517,7 +567,7 @@ describe("Codex code-mode cells in the transcript", () => {
     const messages = [
       cell(createSource, ["Script failed\nOutput:\n", rejectedPatch], "c"),
       cell(
-        'await tools.apply_patch("*** Update File: README.md\\n+coordinator-live-edit");',
+        'await tools.apply_patch("*** Begin Patch\\n*** Update File: README.md\\n+coordinator-live-edit\\n*** End Patch");',
         ["Script failed\nOutput:\n", rejectedPatch],
         "e",
       ),

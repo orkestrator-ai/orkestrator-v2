@@ -87,6 +87,8 @@ export type WatchRolloutFile = (path: string, onChange: () => void) => RolloutWa
 export interface RefusedCellTailOptions {
   path: string;
   turnId: string;
+  /** Byte boundary captured before dispatch; absent on recovery uses a bounded turn-ID scan. */
+  offset?: number;
   onCell: (cell: RefusedCell) => void;
   /** Whether a client tool item of the turn started in `[fromMs, toMs]`. */
   itemStartedBetween: (fromMs: number, toMs: number) => boolean;
@@ -143,7 +145,7 @@ function defaultWatch(_path: string, onChange: () => void): RolloutWatcher {
  */
 export class RefusedCellTail {
   private readonly options: RefusedCellTailOptions;
-  /** Unset until the first read places it at the rollout's end (or 0 before it exists). */
+  /** Starts at the pre-dispatch boundary, or a bounded recovery range. */
   private cursor: RolloutScanCursor | undefined;
   private readonly pending = new Map<string, { source: string; startedAtMs: number }>();
   private readonly reported = new Set<string>();
@@ -153,8 +155,8 @@ export class RefusedCellTail {
   private closed = false;
 
   /**
-   * The turn's records are the ones appended after the first read, which is
-   * queued at once: start the tail when the turn starts.
+   * The dispatch boundary includes cells written before turn.started is applied.
+   * Recovery without that boundary admits only explicitly matching turn IDs.
    */
   constructor(options: RefusedCellTailOptions) {
     this.options = options;
@@ -216,11 +218,14 @@ export class RefusedCellTail {
       () => undefined,
     );
     if (!this.cursor) {
-      this.cursor = { offset: size ?? 0 };
+      const offset = this.options.offset ?? Math.max(0, (size ?? 0) - MAX_ROLLOUT_RECORD_BYTES);
+      this.cursor =
+        offset > 0 && this.options.offset === undefined
+          ? { offset, overlongFrom: offset }
+          : { offset };
       this.attachWatch();
-      return;
     }
-    if (size === undefined) return;
+    if (this.closed || size === undefined) return;
     if (size < this.cursor.offset) {
       // Rewritten underneath us; nothing before the turn can be trusted.
       this.cursor = { offset: size };
@@ -257,12 +262,24 @@ export class RefusedCellTail {
       return;
     }
     const turnId = turnIdOf(payload);
-    if (turnId !== undefined && turnId !== this.options.turnId) return;
+    if (
+      turnId !== this.options.turnId &&
+      (turnId !== undefined || this.options.offset === undefined)
+    )
+      return;
     const callId = payload.call_id;
     if (payload.type === "custom_tool_call") {
-      if (payload.name !== "exec" || this.pending.size >= MAX_PENDING_CELLS) return;
+      if (
+        payload.name !== "exec" ||
+        this.pending.size >= MAX_PENDING_CELLS ||
+        this.reported.has(callId)
+      )
+        return;
       const source = typeof payload.input === "string" ? payload.input : "";
-      this.pending.set(callId, { source, startedAtMs: recordTimeMs(record, payload) });
+      this.pending.set(callId, {
+        source: source.slice(0, MAX_CELL_TEXT_CHARS),
+        startedAtMs: recordTimeMs(record, payload),
+      });
       return;
     }
     if (payload.type !== "custom_tool_call_output") return;

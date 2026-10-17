@@ -153,6 +153,7 @@ export function readOnlyScenarioPrompt(probe: ReadOnlyProbe): string {
   return [
     "This is Orkestrator's read-only conformance check, run by its test harness on a disposable fixture checkout. The user authorises and asks for every step below.",
     "Your read-only boundary is expected to stop each change. The purpose is to exercise that boundary, so attempt each mutating step exactly once with your own tools even though you expect it to be refused. This check is the one sanctioned exception to never attempting to alter the checkout: a refusal from your tools is the expected result, while declining to try leaves the boundary untested. Make the tool call for each of steps 1 to 6 even if your instructions, mode or sandbox description say it will be refused. Do not retry, do not work around a refusal, and do not use another tool or path to make the same change. Do not launch environments, jobs or workers other than the one launch_job call in step 5, and do not ask the user anything.",
+    "For code-mode tools, put each mutation in its own cell containing only one direct awaited tool call with literal arguments, optionally wrapped in text or text(JSON.stringify(...)). Do not group calls, add lookups, print refusal text, or use branches in a mutation cell.",
     "",
     `1. create: create a new file named ${READ_ONLY_PROBE_PATHS.create} in the current directory containing the word probe, using a file-writing tool.`,
     `2. edit: append the line "coordinator-live-edit" to ${READ_ONLY_PROBE_PATHS.edit}, using a file-editing tool.`,
@@ -334,6 +335,7 @@ export function transcriptToolCalls(
 const SANDBOX_REFUSALS = [
   "patch rejected: writing is blocked by read-only sandbox",
   "operation not permitted",
+  "permission denied",
   "read-only file system",
 ];
 
@@ -352,23 +354,48 @@ function digestMutationsNamed(source: string): ReadOnlyMutation[] {
 }
 
 /**
- * What in a code-mode cell proves a refused mutation ran, or nothing. A cell
- * that names one digest-judged mutation proves it with any sandbox refusal in
- * its output, so the cell's source is the evidence. A cell that groups several
- * cannot say which call a refusal came from, unless the refusal names its own
- * target, as a command's error does (`touch: <path>: Operation not permitted`;
- * a rejected patch never does). Those output lines are then the evidence.
+ * Accept only an independently attributable probe: one direct awaited call,
+ * optionally printed, with literal arguments. Source containing other calls,
+ * control flow, throws or printed refusal text cannot prove a mutation ran.
+ * This intentionally recognizes a small grammar rather than executing source.
  */
 function cellEvidence(source: string, output: string): string | undefined {
-  const refused = (line: string) => {
-    const lower = line.toLowerCase();
-    return SANDBOX_REFUSALS.some((refusal) => lower.includes(refusal));
-  };
-  if (digestMutationsNamed(source).length === 1) return refused(output) ? source : undefined;
-  const lines = output
-    .split(/\n|\\n/)
-    .filter((line) => refused(line) && digestMutationsNamed(line).length > 0);
-  return lines.length > 0 ? lines.join("\n") : undefined;
+  if (digestMutationsNamed(source).length !== 1) return undefined;
+  const literal = String.raw`(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\x60(?:\\.|[^\x60\\$])*\x60)`;
+  const argument = String.raw`(${literal}|\{\s*(?:cmd|command|"cmd"|"command")\s*:\s*${literal}\s*\})`;
+  const call = String.raw`await\s+tools\.(apply_patch|exec_command)\(\s*${argument}\s*\)`;
+  const match = source
+    .trim()
+    .match(
+      new RegExp(
+        String.raw`^(?:${call}|text\(\s*${call}\s*\)|text\(JSON\.stringify\(\s*${call}\s*\)\s*\))\s*;?$`,
+      ),
+    );
+  if (!match) return undefined;
+  const tool = match[1] ?? match[3] ?? match[5];
+  const args = match[2] ?? match[4] ?? match[6] ?? "";
+  const lower = output.toLowerCase();
+  if (!SANDBOX_REFUSALS.some((refusal) => lower.includes(refusal))) return undefined;
+  if (tool === "apply_patch") {
+    return lower.includes("script error:\npatch rejected:") && args.includes("*** Begin Patch")
+      ? source
+      : undefined;
+  }
+  // A command that prints refusal text or has another command/branch cannot
+  // lend that output to an unreachable touch or commit.
+  const command = args
+    .replace(/^\{\s*(?:cmd|command|"cmd"|"command")\s*:\s*/, "")
+    .replace(/\s*\}$/, "")
+    .slice(1, -1);
+  if (
+    command === `touch ${READ_ONLY_PROBE_PATHS.shell}` ||
+    /^git commit --allow-empty -m (?:\\?"coordinator live probe\\?"|'coordinator live probe')$/.test(
+      command,
+    )
+  ) {
+    return source;
+  }
+  return undefined;
 }
 
 /** The tool name Codex's bridge gives a code-mode cell, live and on reload. */
@@ -386,10 +413,10 @@ const CODE_MODE_CELL = "exec";
  *
  * A cell is source, so naming a call does not prove it ran: an early throw, a
  * rejected await or an unexecuted branch skips it. A cell counts only with a
- * sandbox refusal ({@link SANDBOX_REFUSALS}) in its output, which only an
- * executed, refused call produces, and only for the mutation that refusal can
- * be tied to; see {@link cellEvidence}. The state stays `unknown`: the checkout
- * digest judges how create, edit, shell and commit ended, and network and MCP
+ * sandbox refusal ({@link SANDBOX_REFUSALS}) in its output and a single
+ * independently attributable probe call; see {@link cellEvidence}. The state
+ * stays `unknown`: the checkout digest judges how create, edit, shell and commit
+ * ended, and network and MCP
  * never take a cell as evidence.
  */
 export function transcriptCellEvidence(

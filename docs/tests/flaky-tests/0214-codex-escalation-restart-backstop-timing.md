@@ -19,3 +19,13 @@
 - **Owning-file rerun:** `mise run test:logged -- --name codex-lifecycle-rerun -- bun test ./bridges/codex-bridge/src/app-server-runtime-lifecycle.test.ts --parallel=1 --only-failures` passed unchanged in 2.5 seconds (exit 0).
 - **Evidence:** `/tmp/orkestrator-test-run.1PZf4j/bridges.log.gz` after aggregate finalization.
 - The timer-delivery hypothesis remains unconfirmed; no assertion, timeout or skip was changed.
+
+## Recurrence — 2026-10-17
+
+- **Change:** Codex refused-cell rollout recovery and coordinator conformance evidence. The failing test and restart-backstop implementation are unchanged.
+- **Command:** `mise run test:logged -- --name full-suite -- mise run test`.
+- **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1 slots on the shared 18-slot host; Codex used one isolated Bun worker. The bridge group waited 426.6 seconds for capacity.
+- **Failure:** line 907 observed `restartAttempts = 1` after the 80 ms observation window; test duration 136.08 ms. Codex reported 2215 passed, 34 skipped and 1 failed across 81 files.
+- **Owning-file rerun:** `mise run test:logged -- --name lifecycle-isolated -- bun test ./bridges/codex-bridge/src/app-server-runtime-lifecycle.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 2.0 seconds.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.nN9Z1G/bridges.log.gz` after aggregate finalization.
+- The repeated failure matches the existing timer-delivery hypothesis under host contention. No assertion, timeout or skip was changed.

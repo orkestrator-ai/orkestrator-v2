@@ -33,6 +33,7 @@ import {
   codexAppServerConfigOverrides,
   codexCoordinatorPolicy,
   codexHostedNetworkLockGaps,
+  codexReadOnlyTurnPolicy,
 } from "../codex-config.js";
 import { AppServerEngine } from "../engine/app-server-engine.js";
 import type { EngineTurnConfig } from "../engine/types.js";
@@ -365,6 +366,165 @@ describeLive("live hosted network lock", () => {
       await responses.stop();
     }
   }, 120_000);
+});
+
+/**
+ * Every `response.create` frame Codex sends, in order. Codex retries a closed
+ * socket, so one turn can send several; a caller reads the first after a mark.
+ */
+function startRecordingResponses(): {
+  baseUrl: string;
+  frames: Record<string, unknown>[];
+  frameAfter: (index: number) => Promise<Record<string, unknown>>;
+  stop: () => Promise<void>;
+} {
+  const frames: Record<string, unknown>[] = [];
+  let waiters: Array<() => void> = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request, bun) {
+      if (request.headers.get("upgrade")?.toLowerCase() === "websocket" && bun.upgrade(request)) {
+        return undefined;
+      }
+      return new NativeResponse("not served", { status: 400 });
+    },
+    websocket: {
+      message(socket, message) {
+        try {
+          const frame = JSON.parse(String(message)) as Record<string, unknown>;
+          if (frame.type === "response.create") {
+            frames.push(frame);
+            const ready = waiters;
+            waiters = [];
+            for (const wake of ready) wake();
+          }
+        } catch {
+          // Only the request frame matters.
+        }
+        socket.close(1011, "recorded");
+      },
+    },
+  });
+  const frameAfter = async (index: number): Promise<Record<string, unknown>> => {
+    while (frames.length <= index) {
+      await new Promise<void>((resolve) => waiters.push(resolve));
+    }
+    return frames[index]!;
+  };
+  return {
+    baseUrl: `http://127.0.0.1:${server.port}/v1`,
+    frames,
+    frameAfter,
+    stop: async () => {
+      await server.stop(true);
+    },
+  };
+}
+
+describeLive("live read-only turn network lock", () => {
+  test("a read-only turn's reload takes web search away, and a build turn's gives it back", async () => {
+    const { codexHome, workspace } = await sandbox();
+    const responses = startRecordingResponses();
+    const engine = engineFor({
+      codexPath: await resolveCodexBinary(),
+      codexHome,
+      workspace,
+      configOverrides: { openai_base_url: JSON.stringify(responses.baseUrl) },
+    });
+    // An ordinary worker session: no coordinator overrides, network allowed.
+    const policy = {
+      id: "interactive-host",
+      sandbox: "none",
+      approvals: "auto-approve",
+      projectResources: true,
+      networkAccess: "full",
+    } as const;
+    const build: EngineTurnConfig = {
+      mode: "build",
+      cwd: workspace,
+      policy,
+      networkAccessEnabled: true,
+    };
+    // What `promptConfig` builds for a `readOnly` dispatch on that session.
+    const readOnly: EngineTurnConfig = {
+      ...build,
+      networkAccessEnabled: false,
+      sandbox: "read-only",
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
+      policy: codexReadOnlyTurnPolicy(policy),
+    };
+    let commandRequests = 0;
+    const loopback = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() {
+        commandRequests += 1;
+        return new NativeResponse("reachable");
+      },
+    });
+    // Use the turn's resolved read-only network flag with the real command
+    // sandbox. Controls before and after rule out a broken curl/server probe.
+    const shellRequest = (config: EngineTurnConfig) =>
+      engine.getSupervisor().request<{ exitCode: number; stdout: string }>("command/exec", {
+        command: [
+          "/bin/sh",
+          "-c",
+          `exec /usr/bin/curl --noproxy '*' --max-time 3 --fail http://127.0.0.1:${loopback.port}/`,
+        ],
+        cwd: workspace,
+        timeoutMs: 10_000,
+        sandboxPolicy: { type: "readOnly", networkAccess: config.networkAccessEnabled },
+      });
+    /** One turn on the bound thread; returns its model request once the turn has ended. */
+    const turnOn = async (
+      handle: string,
+      config: EngineTurnConfig,
+    ): Promise<Record<string, unknown>> => {
+      const mark = responses.frames.length;
+      const turn = await engine.startTurn({
+        handle,
+        input: [{ type: "text", text: PROMPT }],
+        config,
+      });
+      const frame = await withTimeout(responses.frameAfter(mark), 60_000, "the model request");
+      // Stop Codex retrying the closed socket before the thread is reloaded.
+      await engine.interruptTurn(handle, turn.turnId).catch(() => undefined);
+      await engine.waitForTurnTerminal(handle, turn.turnId, { timeoutMs: 30_000 });
+      return frame;
+    };
+    try {
+      await engine.start();
+      const thread = await engine.startThread({ config: build });
+      const first = await turnOn(thread.handle, build);
+      expect(offersTools(first)).toBe(true);
+      expect(offersWebSearch(first)).toBe(true);
+      expect(await shellRequest(build)).toMatchObject({ exitCode: 0, stdout: "reachable" });
+      expect(commandRequests).toBe(1);
+
+      // The runtime reloads the thread when a read-only turn changes the mode.
+      const reviewing = await engine.reloadThread(thread.handle, { config: readOnly });
+      const review = await turnOn(reviewing.handle, readOnly);
+      expect(offersTools(review)).toBe(true);
+      expect(offersWebSearch(review)).toBe(false);
+      expect((await shellRequest(readOnly)).exitCode).not.toBe(0);
+      expect(commandRequests).toBe(1);
+
+      // The rollout does not keep the thread override: the next build turn's
+      // reload, which names no mode, is offered search again.
+      const building = await engine.reloadThread(reviewing.handle, { config: build });
+      const after = await turnOn(building.handle, build);
+      expect(offersTools(after)).toBe(true);
+      expect(offersWebSearch(after)).toBe(true);
+      expect(await shellRequest(build)).toMatchObject({ exitCode: 0, stdout: "reachable" });
+      expect(commandRequests).toBe(2);
+    } finally {
+      await loopback.stop(true);
+      await engine.stop();
+      await responses.stop();
+    }
+  }, 240_000);
 });
 
 interface LiveTurn {

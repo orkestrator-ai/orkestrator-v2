@@ -57,8 +57,8 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 27 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 256 |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 26 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 257 |
 | Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 268 |
 | **Total** | | **552** |
 
@@ -170,7 +170,7 @@ it reaches. Some rules of thumb:
 - [ ] Run the worker-mail family scenario once per qualified platform with default messaging settings ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
 - [ ] Run the status-wake scenario live per platform: review ready, fix done and completed, build completed, worker waiting, seven reviews in one wake ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
 - [ ] Check mail tiles render from each platform's echoed carrier, single and batched, in a real coordinator transcript ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
-- [ ] Stop a Codex coordinator reaching the network through hosted `web_search`, or record why the `network` deny allows it ([coordinator-live-conformance.md](coordinator-live-conformance.md))
+- [x] Stop a Codex coordinator reaching the network through hosted `web_search`, or record why the `network` deny allows it ([coordinator-live-conformance.md](coordinator-live-conformance.md))
 
 ### Backend structure (high)
 
@@ -448,6 +448,7 @@ it reaches. Some rules of thumb:
 - [ ] Decide whether Wake peers stays off by default and align `agent-messaging.md` with the code ([coordinator-live-conformance.md](coordinator-live-conformance.md), decision)
 - [ ] Find out why a Grok coordinator's turn ends at its first denied tool in the live read-only run ([coordinator-live-conformance.md](coordinator-live-conformance.md), verify)
 - [ ] Let agent-test profiles authorize Pi's host login so the live coordinator suite can qualify Pi ([coordinator-live-conformance.md](coordinator-live-conformance.md))
+- [ ] Get Codex to attempt create, edit and shell in the live read-only run, or decide a known read-only sandbox counts as exercised ([coordinator-live-conformance.md](coordinator-live-conformance.md))
 - [ ] Auto-close an unassigned, empty-draft coordinator conversation when a new one is created ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md))
 
 ### Backend structure (medium)
@@ -888,7 +889,7 @@ it reaches. Some rules of thumb:
 | [multi-review-flow-graph.md](multi-review-flow-graph.md) |  |  |  |  | 0 |
 | **Coordinator and agent mail** | | | | | |
 | [coordinator-read-only-adapters.md](coordinator-read-only-adapters.md) |  |  | 5 | 4 | 9 |
-| [coordinator-live-conformance.md](coordinator-live-conformance.md) |  | 5 | 8 | 1 | 14 |
+| [coordinator-live-conformance.md](coordinator-live-conformance.md) |  | 4 | 9 | 1 | 14 |
 | [coordinator-consistency-gaps.md](coordinator-consistency-gaps.md) |  |  | 1 | 10 | 11 |
 | **Backend structure** | | | | | |
 | [storage-service-repositories.md](storage-service-repositories.md) |  |  | 4 | 2 | 6 |

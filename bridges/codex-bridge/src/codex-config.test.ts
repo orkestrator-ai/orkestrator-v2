@@ -16,6 +16,7 @@ import {
   codexHostedNetworkLockGaps,
   codexNetworkDeniedConfig,
   codexNetworkDeniedSearchMode,
+  codexReadOnlyTurnPolicy,
   resolveCodexMaxConcurrentThreads,
 } from "./codex-config.js";
 
@@ -351,6 +352,36 @@ describe("Codex app-server configuration", () => {
         networkAccess: "restricted",
       }),
     ).toEqual({});
+  });
+
+  test("a read-only turn denies the network and drops a search exception", () => {
+    const host = {
+      id: "interactive-host",
+      sandbox: "none",
+      approvals: "auto-approve",
+      projectResources: true,
+      networkAccess: "full",
+    } as const;
+    const turn = codexReadOnlyTurnPolicy(host);
+    expect(turn).toEqual({ ...host, capabilityPolicy: { deny: ["network"] } });
+    expect(codexNetworkDeniedConfig(turn)).toEqual({
+      web_search: "disabled",
+      "features.standalone_web_search": false,
+    });
+    // Existing denials are kept; an exception without the denial it carves
+    // out of never turns search back on.
+    expect(
+      codexReadOnlyTurnPolicy({
+        ...host,
+        capabilityPolicy: { deny: ["file.write"], allow: ["web.search"] },
+      }).capabilityPolicy,
+    ).toEqual({ deny: ["file.write", "network"] });
+    // A session restored without a policy still loses search.
+    expect(codexNetworkDeniedSearchMode(codexReadOnlyTurnPolicy(undefined))).toBe("disabled");
+    // A coordinator keeps the research mode its process configuration holds.
+    const research = codexCoordinatorPolicy({ [COORDINATOR_WEB_RESEARCH_ENV]: "search" });
+    expect(codexReadOnlyTurnPolicy(research)).toBe(research);
+    expect(codexNetworkDeniedSearchMode(codexReadOnlyTurnPolicy(research))).toBe("cached");
   });
 
   test("reads the hosted web search mode back from an effective configuration", () => {

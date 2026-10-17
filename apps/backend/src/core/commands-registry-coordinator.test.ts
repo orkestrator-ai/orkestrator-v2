@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createCommandRegistry } from "./commands-registry.js";
 import type { CommandContext } from "./commands-context.js";
+import { ProjectGitService } from "./project-git-service.js";
 import { CoordinatorService } from "./coordinator-service.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
 import { runCommand } from "./shell.js";
@@ -61,6 +62,32 @@ describe("coordinator command registry", () => {
   afterEach(async () => {
     await fs.rm(root, { recursive: true, force: true });
   });
+
+  test.each([undefined, "", "  ", " release/next "])(
+    "resolves the configured launch base branch %p with a main fallback",
+    async (defaultBranch) => {
+      const project = await storage.addProject(createProject("remote", checkout));
+      const branch = defaultBranch?.trim() || "main";
+      if (branch !== "main") await runCommand("git", ["branch", branch], { cwd: checkout });
+      if (defaultBranch !== undefined)
+        await storage.updateRepositoryConfig(project.id, {
+          ...(await storage.getRepositoryConfig(project.id)),
+          defaultBranch,
+        });
+      context.projectGit = new ProjectGitService(storage);
+      const head = (
+        await runCommand("git", ["rev-parse", "HEAD"], { cwd: checkout })
+      ).stdout.trim();
+      expect(
+        await commands.get("get_project_base_branch_tip")!({ projectId: project.id }, context),
+      ).toMatchObject({
+        branch,
+        commit: head,
+        ref: branch,
+        fetched: false,
+      });
+    },
+  );
 
   test("removes a project even when the coordinator store schema is unsupported", async () => {
     const project = await storage.addProject(createProject("remote", checkout));

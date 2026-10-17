@@ -33,3 +33,14 @@ unchanged owning file passed alone: `mise exec -- bun test --cwd apps/desktop
 --parallel=2 --only-failures` reported 30 passed in 4.94 s. Evidence:
 `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.v19VcP`.
 No assertion, timeout or skip changed.
+
+## Coordinator launch-base review recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name review-aggregate -- mise run test` (Bun 1.4.3, macOS arm64).
+- **Workers:** workspace/root/bridges/protocol reserved 4/1/2/1 slots. The component browser suite ran alongside the aggregate.
+- **Failure:** the same fixture digest test exceeded its 5000 ms budget at 5007.73 ms, with a racing `git rev-parse exited -1` between-tests error.
+- **Suite counts:** desktop reported 776 passed, one failed and one between-tests error across 777 tests in 60.32 seconds.
+- **Isolated rerun:** `mise run test:logged -- --name review-fixture-digest-owner -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev/coordinator-live.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 1.2 seconds after the component browser suite ended. The rerun preferred system Python and the testing guide's GNU utilities in PATH.
+- **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.HDY6ow/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Assessment:** an unchanged owning-file pass confirms a recurrence. Shared-host contention remains an unconfirmed hypothesis; no implementation, assertion, timeout or skip changed.
+- **Subsequent aggregate:** `mise run test:logged -- --name review-aggregate-system-tools -- mise run test` passed all four groups (exit 0, 339.7 seconds) with system Python and the documented GNU utilities preferred in PATH, after component browser validation ended. This pass does not establish a root cause or resolve the tracked flake.

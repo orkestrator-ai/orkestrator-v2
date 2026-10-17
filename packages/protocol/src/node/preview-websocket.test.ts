@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, jest, test } from "bun:test";
 import { createServer, type Server } from "node:http";
-import { connect, type AddressInfo, type Socket } from "node:net";
+import { connect, createServer as createTcpServer, type AddressInfo, type Socket } from "node:net";
 import { Duplex } from "node:stream";
 
 import {
@@ -134,6 +134,84 @@ function slowPeer() {
 async function settle(): Promise<void> {
   for (let tick = 0; tick < 5; tick += 1) await new Promise((resolve) => process.nextTick(resolve));
 }
+
+/** Real Bun TCP sockets with the receiving socket paused before any writes. */
+async function tcpSlowPeer(closeDrainTimeoutMs = 2_000) {
+  const server = createTcpServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const accepted = new Promise<Socket>((resolve) => server.once("connection", resolve));
+  const receiver = connect((server.address() as AddressInfo).port, "127.0.0.1");
+  receiver.on("error", () => undefined);
+  receiver.pause();
+  const sender = await accepted;
+  const ws = new PreviewWebSocket(sender, {
+    role: "server",
+    maxPayload: 64 * 1024,
+    closeTimeoutMs: 100,
+    closeDrainTimeoutMs,
+  });
+  const peer = new PreviewWebSocket(receiver, { role: "client", maxPayload: 64 * 1024 });
+  return {
+    ws,
+    peer,
+    async dispose() {
+      ws.terminate();
+      peer.terminate();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
+describe("preview websocket close over real TCP", () => {
+  test("a paused TCP peer receives every queued byte before EOF and normal close", async () => {
+    const pair = await tcpSlowPeer();
+    try {
+      const body = Buffer.alloc(16 * 1024 * 1024);
+      for (let index = 0; index < body.length; index += 1) body[index] = index % 251;
+      const received: Buffer[] = [];
+      const events: string[] = [];
+      pair.peer.on("message", (data, binary) => {
+        if (binary) received.push(data);
+        else events.push(data.toString());
+      });
+      const closed = new Promise<number>((resolve) => pair.peer.once("close", resolve));
+      for (let offset = 0; offset < body.length; offset += 64 * 1024)
+        pair.ws.send(body.subarray(offset, offset + 64 * 1024), true);
+      pair.ws.send("eof", false);
+      pair.ws.close(1000);
+      // Wait for kernel write callbacks too: the TCP send buffer must really
+      // be full, rather than merely observing synchronous writableLength.
+      await Bun.sleep(200);
+      expect(pair.ws.bufferedBytes).toBeGreaterThan(0);
+      expect(pair.ws.socket.destroyed).toBe(false);
+      pair.peer.start();
+      expect(await closed).toBe(1000);
+      expect(Buffer.concat(received)).toEqual(body);
+      expect(events).toEqual(["eof"]);
+    } finally {
+      await pair.dispose();
+    }
+  });
+
+  test("a TCP peer that never resumes is terminated at the drain deadline", async () => {
+    const pair = await tcpSlowPeer(600);
+    try {
+      const closed: number[] = [];
+      pair.ws.on("close", (code) => closed.push(code));
+      const chunk = Buffer.alloc(64 * 1024, 0x62);
+      for (let index = 0; index < 256; index += 1) pair.ws.send(chunk, true);
+      pair.ws.close(1000);
+      await Bun.sleep(200);
+      expect(pair.ws.bufferedBytes).toBeGreaterThan(0);
+      expect(pair.ws.socket.destroyed).toBe(false);
+      await new Promise<void>((resolve) => pair.ws.once("close", () => resolve()));
+      expect(pair.ws.socket.destroyed).toBe(true);
+      expect(closed).toEqual([1000]);
+    } finally {
+      await pair.dispose();
+    }
+  });
+});
 
 describe("preview websocket close with a slow reader", () => {
   test("queued data reaches a slow reader before the close grace starts", async () => {

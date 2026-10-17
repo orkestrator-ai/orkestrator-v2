@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { spawn } from "node:child_process";
 import { createServer, IncomingMessage, type Server } from "node:http";
-import type { AddressInfo, Socket } from "node:net";
+import { connect, createServer as createTcpServer, type AddressInfo, type Socket } from "node:net";
 import { Duplex, PassThrough } from "node:stream";
 
 import {
@@ -21,6 +22,8 @@ import {
 } from "../../../test-fixtures/preview-app/server.ts";
 import { createPreviewHarness, type PreviewHarness } from "./core/preview-test-support.js";
 import { PreviewTunnelServer } from "./preview-tunnel-server.js";
+import { PREVIEW_RELAY_SCRIPT } from "./preview-relay-script.js";
+import { PreviewRelaySupervisor } from "./preview-relay-supervisor.js";
 
 interface TunnelClient {
   ws: PreviewWebSocket;
@@ -290,8 +293,10 @@ describe("PreviewTunnelServer", () => {
     expect(tunnel.stats()).toMatchObject({ sockets: 0, aggregateQueuedBytes: 0 });
   });
 
-  async function controlledTunnel() {
-    const upstream = new PassThrough();
+  async function controlledTunnel(
+    upstream: Duplex = new PassThrough(),
+    options: { pingIntervalMs?: number; highWaterMark?: number } = {},
+  ) {
     const target = await harness.runtime.registry.acquireTarget(
       serviceId,
       (await attachment()).endpointGeneration,
@@ -306,11 +311,13 @@ describe("PreviewTunnelServer", () => {
       metrics: harness.runtime.metrics,
       logger: console,
       upstream: { relayConnect: async () => upstream },
+      pingIntervalMs: options.pingIntervalMs,
     });
     let blocked = false;
     let pending: (() => void) | undefined;
     let handshake = true;
     const downstream = new Duplex({
+      writableHighWaterMark: options.highWaterMark,
       read() {},
       write(chunk: Buffer, _encoding, callback) {
         if (handshake) {
@@ -385,6 +392,7 @@ describe("PreviewTunnelServer", () => {
       acquire.mockRestore();
     }
     return {
+      ws,
       upstream,
       downstream,
       data,
@@ -402,6 +410,129 @@ describe("PreviewTunnelServer", () => {
       },
     };
   }
+
+  test("an unanswered heartbeat cannot terminate a queued response during close drain", async () => {
+    const intervals = spyOn(globalThis, "setInterval");
+    const controlled = await controlledTunnel(undefined, { pingIntervalMs: 1000 });
+    const heartbeat = intervals.mock.calls.find(([, ms]) => ms === 1000)![0] as () => void;
+    intervals.mockRestore();
+    try {
+      controlled.pauseReader();
+      heartbeat(); // The ping is queued and cannot be answered by the peer yet.
+      const body = Buffer.alloc(1024, 0x73);
+      controlled.upstream.push(body);
+      controlled.upstream.end();
+      await waitForTunnelCleanup(() => controlled.upstream.destroyed);
+      expect(controlled.downstream.writableLength).toBeGreaterThan(body.length);
+      heartbeat(); // Next liveness interval, before the 30-second close drain bound.
+      expect(controlled.downstream.destroyed).toBe(false);
+      controlled.resumeReader();
+      expect(await controlled.closed).toBe(1000);
+      expect(Buffer.concat(controlled.data)).toEqual(body);
+      expect(controlled.controls.map((frame) => frame.type)).toEqual(["ready", "open-ok", "eof"]);
+      await waitForTunnelCleanup(() => tunnel.stats().sockets === 0);
+    } finally {
+      controlled.dispose();
+    }
+  });
+
+  test.each(["tcp", "relay"] as const)(
+    "%s upstream preserves unshifted bytes and EOF across a stopped tunnel reader",
+    async (kind) => {
+      // Force reads from both production upstream types to cross the queue
+      // ceiling, regardless of the platform's TCP read chunk size.
+      harness.runtime = harness.newRuntime({
+        limits: {
+          ...harness.runtime.limits,
+          tunnelFrameMaxBytes: 1024,
+          tunnelQueueMaxBytesPerDirection: 16 * 1024,
+        },
+      });
+      await harness.runtime.init();
+      const peers = new Set<Socket>();
+      let source!: Socket;
+      const sourceServer = createTcpServer({ allowHalfOpen: true }, (socket) => {
+        source = socket;
+        socket.resume();
+        peers.add(socket);
+        socket.on("error", () => undefined);
+        socket.on("close", () => peers.delete(socket));
+      });
+      await new Promise<void>((resolve) => sourceServer.listen(0, "127.0.0.1", resolve));
+      const sourcePort = (sourceServer.address() as AddressInfo).port;
+      const exits: Promise<void>[] = [];
+      const relay = new PreviewRelaySupervisor({
+        allowedPorts: () => [sourcePort],
+        window: 64 * 1024,
+        spawn: () => {
+          const child = spawn(process.execPath, ["-e", PREVIEW_RELAY_SCRIPT], {
+            stdio: ["pipe", "pipe", "ignore"],
+          });
+          exits.push(new Promise<void>((resolve) => child.once("exit", () => resolve())));
+          return child;
+        },
+      });
+      let controlled: Awaited<ReturnType<typeof controlledTunnel>> | undefined;
+      try {
+        const upstream =
+          kind === "relay"
+            ? await relay.connect(
+                { environmentId: "local", containerId: "local-relay", port: sourcePort },
+                new AbortController().signal,
+              )
+            : await new Promise<Socket>((resolve, reject) => {
+                const socket = connect(sourcePort, "127.0.0.1", () => resolve(socket));
+                socket.once("error", reject);
+              });
+        controlled = await controlledTunnel(upstream, { highWaterMark: 1024 });
+        const unshift = spyOn(upstream, "unshift");
+        const read = spyOn(upstream, "_read");
+        try {
+          const body = Buffer.alloc(512 * 1024);
+          for (let index = 0; index < body.length; index += 1) body[index] = index % 251;
+          controlled.pauseReader();
+          controlled.ws.send(encodePreviewTunnelFrame({ type: "eof" }));
+          source.write(body);
+          await waitForTunnelCleanup(
+            () => upstream.isPaused() && upstream.readableLength >= upstream.readableHighWaterMark,
+          );
+          expect(unshift).toHaveBeenCalled();
+          expect(upstream.destroyed).toBe(false);
+          expect(controlled.downstream.writableLength).toBeLessThan(
+            harness.runtime.limits.tunnelQueueMaxBytesPerDirection +
+              harness.runtime.limits.tunnelFrameMaxBytes +
+              14,
+          );
+          read.mockClear();
+          controlled.resumeReader();
+          await waitForTunnelCleanup(() => Buffer.concat(controlled!.data).length === body.length);
+          // Keep EOF out of the readable queue until the consumer asks for
+          // more. Otherwise a relay read containing the whole body and EOF
+          // legitimately needs no further _read (and no returned credit).
+          expect(read).toHaveBeenCalled();
+          source.end();
+          expect(await controlled.closed).toBe(1000);
+          expect(Buffer.concat(controlled.data)).toEqual(body);
+          expect(controlled.controls.map((frame) => frame.type)).toEqual([
+            "ready",
+            "open-ok",
+            "eof",
+          ]);
+          await waitForTunnelCleanup(() => tunnel.stats().sockets === 0);
+          expect(tunnel.stats().aggregateQueuedBytes).toBe(0);
+        } finally {
+          unshift.mockRestore();
+          read.mockRestore();
+        }
+      } finally {
+        controlled?.dispose();
+        relay.dispose();
+        for (const socket of Array.from(peers)) socket.destroy();
+        await new Promise<void>((resolve) => sourceServer.close(() => resolve()));
+        await Promise.all(exits);
+      }
+    },
+  );
 
   test("one large upstream read to a slow reader pauses at the queue bound instead of closing", async () => {
     const controlled = await controlledTunnel();

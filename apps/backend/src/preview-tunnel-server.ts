@@ -201,6 +201,12 @@ export class PreviewTunnelServer {
     );
     // Liveness on Orkestrator's own protocol only; application bytes are never touched.
     const ping = setInterval(() => {
+      // Closing sockets cannot send pings. Let the WebSocket's drain deadline
+      // and post-flush grace own termination, including peer-initiated closes.
+      if (!ws.isOpen) {
+        clearInterval(ping);
+        return;
+      }
       if (!alive) {
         ws.terminate();
         return;

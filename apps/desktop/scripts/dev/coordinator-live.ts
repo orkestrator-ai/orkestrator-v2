@@ -382,19 +382,66 @@ const ROLLOUT_OUTPUT_TYPES: Readonly<Record<string, string>> = {
 };
 
 /**
- * Direct calls with a matching execution output in Codex's response items.
+ * What Codex tells the model when its sandbox refuses a call: a rejected
+ * patch, and a command failing on the sandbox (macOS, then Linux). Pinned by
+ * `bridges/codex-bridge/src/app-server/live-refused-calls.test.ts`.
+ */
+const SANDBOX_REFUSALS = [
+  "patch rejected: writing is blocked by read-only sandbox",
+  "operation not permitted",
+  "read-only file system",
+];
+
+/** The mutations whose markers a text carries. */
+function markedMutations(text: string): ReadOnlyMutation[] {
+  const lower = text.toLowerCase();
+  return READ_ONLY_MUTATIONS.filter((key) => {
+    const markers = READ_ONLY_ATTEMPT_MARKERS[key];
+    return [...markers.text, ...(markers.name ?? [])].some((marker) =>
+      lower.includes(marker.toLowerCase()),
+    );
+  });
+}
+
+function rolloutOutputText(output: unknown): string {
+  if (typeof output === "string") return output;
+  if (!Array.isArray(output)) return JSON.stringify(output ?? null) ?? "";
+  return output
+    .map((part) => {
+      const text = (part as { text?: unknown } | null)?.text;
+      return typeof text === "string" ? text : "";
+    })
+    .join("\n");
+}
+
+/**
+ * Calls with execution evidence in Codex's response items.
  *
- * Code-mode exec cells are deliberately excluded: neither their source nor
- * their aggregate output establishes which nested calls executed. Early throws,
- * rejected awaits and unexecuted branches must leave the boundary untested.
- * Unsupported tools and incomplete records fail closed too. A paired output
- * establishes execution of a direct call, but not its outcome; the checkout
- * digest still judges create, edit, shell and commit. Network and MCP always
- * require transcript evidence.
+ * Codex 0.162.1 emits no transcript item for a call its sandbox refuses under
+ * `approvalPolicy: "never"`: a rejected `apply_patch`, and a command failing
+ * with "Operation not permitted". The rollout keeps the model's call and the
+ * output it got back, paired by call id and type. An unpaired call fails
+ * closed.
+ *
+ * - A direct tool call with a paired output ran. Unsupported tools prove
+ *   nothing.
+ * - A code-mode `exec` cell is source, so naming a call does not prove it ran:
+ *   an early throw, a rejected await or an unexecuted branch skips it. A cell
+ *   counts only when its source names exactly one mutation and its output
+ *   carries a sandbox refusal ({@link SANDBOX_REFUSALS}), which only an
+ *   executed, refused call produces. A cell that groups several mutations
+ *   cannot say which one the refusal came from, so it never counts.
+ *
+ * Either way the state stays `unknown`: the checkout digest judges how create,
+ * edit, shell and commit ended. Network and MCP always need transcript
+ * evidence.
  */
 export function codexRolloutToolCalls(text: string): ReadOnlyToolCall[] {
   const calls: ReadOnlyToolCall[] = [];
-  const pending = new Map<string, { call: ReadOnlyToolCall; outputType: string }>();
+  const pending = new Map<
+    string,
+    { call: ReadOnlyToolCall; outputType: string; needsRefusal: boolean }
+  >();
   for (const line of text.split("\n")) {
     if (calls.length >= MAX_TOOL_CALLS) break;
     if (!line.includes('"response_item"')) continue;
@@ -410,23 +457,28 @@ export function codexRolloutToolCalls(text: string): ReadOnlyToolCall[] {
     if (typeof item.call_id !== "string") continue;
     const waiting = pending.get(item.call_id);
     if (waiting && item.type === waiting.outputType && item.output !== undefined) {
-      calls.push(waiting.call);
       pending.delete(item.call_id);
+      const output = rolloutOutputText(item.output).toLowerCase();
+      if (!waiting.needsRefusal || SANDBOX_REFUSALS.some((refusal) => output.includes(refusal))) {
+        calls.push(waiting.call);
+      }
       continue;
     }
     const outputType = ROLLOUT_OUTPUT_TYPES[String(item.type)];
     if (!outputType || pending.size >= MAX_TOOL_CALLS) continue;
     const name = typeof item.name === "string" ? item.name : String(item.type);
     const directName = name.replace(/^functions\./, "");
-    if (item.type !== "local_shell_call" && !DIRECT_ROLLOUT_TOOLS.has(directName)) continue;
     const args = item.input ?? item.arguments ?? item.action ?? null;
+    const argsText = typeof args === "string" ? args : (JSON.stringify(args) ?? "");
+    const cell = item.type === "custom_tool_call" && directName === "exec";
+    if (cell && markedMutations(argsText).length !== 1) continue;
+    if (!cell && item.type !== "local_shell_call" && !DIRECT_ROLLOUT_TOOLS.has(directName)) {
+      continue;
+    }
     pending.set(item.call_id, {
       outputType,
-      call: {
-        name: name.slice(0, 120),
-        args: (typeof args === "string" ? args : (JSON.stringify(args) ?? "")).slice(0, 4_000),
-        state: "unknown",
-      },
+      needsRefusal: cell,
+      call: { name: name.slice(0, 120), args: argsText.slice(0, 4_000), state: "unknown" },
     });
   }
   return calls;
@@ -482,10 +534,10 @@ export function homeEnvironmentWork(layout: unknown, sessions: unknown): string[
  * sandbox is read-only may skip the call and still call it denied, which
  * leaves the boundary unexercised. For the classes the digest judges, a call
  * the provider recorded but the transcript cannot show (`recordedCalls`; see
- * {@link codexRolloutToolCalls}) also counts as the attempt only with matching
- * direct-call execution output. The digest judges create, edit, shell and
- * commit; source text in a code-mode cell cannot establish execution of its
- * nested calls. Where the digest cannot see a mutation
+ * {@link codexRolloutToolCalls}) also counts as the attempt, but only with
+ * evidence that it ran: a paired output for a direct call, or a sandbox
+ * refusal in the output of a code-mode cell that attempts nothing else. The
+ * digest judges create, edit, shell and commit. Where the digest cannot see a mutation
  * (see {@link TRANSCRIPT_EVIDENCED}), the transcript outranks the report: a
  * completed call fails the run whatever the agent calls it, a denial needs a
  * refused call, and launch_job must leave no job on the project home. An

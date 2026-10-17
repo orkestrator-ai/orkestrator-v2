@@ -4,8 +4,9 @@
  *
  * A loopback Responses endpoint plays the model: its first response is one
  * code-mode `exec` cell that tries to add a file, run `touch`, and run a
- * command that fails without the sandbox's help (the control). The second ends
- * the turn. Nothing reaches a model and no credits are spent. Gated like the
+ * command that fails without the sandbox's help (the control). The next two
+ * are cells that each attempt one of those mutations, and the last ends the
+ * turn. Nothing reaches a model and no credits are spent. Gated like the
  * other live contract tests because it needs the pinned binary:
  *
  *   RUN_LIVE_CODEX_APP_SERVER=1 \
@@ -13,10 +14,13 @@
  *
  * Codex 0.162.1 refuses both mutations and tells the model so, but emits no
  * item for either: only the control becomes a `commandExecution`. The model's
- * call survives only in the rollout. The live coordinator suite reads the
- * rollout for that reason (`readCodexCoordinatorToolCalls` in
- * `apps/desktop/scripts/dev/coordinator-live.ts`). If this test starts failing
- * because the refusals now arrive as items, that reader can go.
+ * call survives only in the rollout, with the refusal in the cell's output. The
+ * live coordinator suite reads the rollout for that reason
+ * (`readCodexCoordinatorToolCalls` in
+ * `apps/desktop/scripts/dev/coordinator-live.ts`), and counts a cell that
+ * attempts one mutation when its output carries these refusal texts. If this
+ * test starts failing because the refusals now arrive as items, that reader
+ * can go; if the refusal wording changes, update `SANDBOX_REFUSALS` there.
  */
 import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, readdir, realpath, writeFile } from "node:fs/promises";
@@ -52,13 +56,25 @@ const CELL = [
 ].join("\n");
 
 /**
+ * Cells that each attempt one mutation, as a model working step by step
+ * writes them: an uncaught rejected patch, then a command whose result is
+ * printed.
+ */
+const SINGLE_CELLS = [
+  `await tools.apply_patch("*** Begin Patch\\n*** Add File: ${CREATED}\\n+probe\\n*** End Patch\\n");`,
+  `text(JSON.stringify(await tools.exec_command({ cmd: "touch ${TOUCHED}" })));`,
+];
+
+/**
  * A Responses WebSocket that answers a prewarm with an empty response, the
- * turn's first request with {@link CELL}, and the next with a closing message.
- * It records the cell's output, which is what Codex told the model.
+ * turn's first request with {@link CELL}, the next ones with
+ * {@link SINGLE_CELLS}, and the last with a closing message. It records each
+ * cell's output, which is what Codex told the model.
  */
 function startScriptedResponses() {
   let sampled = 0;
-  let cellOutput: unknown;
+  const cellOutputs = new Map<string, unknown>();
+  const cells = [CELL, ...SINGLE_CELLS];
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -73,7 +89,7 @@ function startScriptedResponses() {
         const frame = JSON.parse(String(message)) as {
           type?: string;
           generate?: boolean;
-          input?: Array<{ type?: string; output?: unknown }>;
+          input?: Array<{ type?: string; call_id?: string; output?: unknown }>;
         };
         if (frame.type !== "response.create") return;
         const id = `resp_${randomSuffix()}`;
@@ -81,17 +97,20 @@ function startScriptedResponses() {
         send({ type: "response.created", response: { id } });
         if (frame.generate !== false) {
           sampled += 1;
-          cellOutput ??= frame.input?.find(
-            (item) => item.type === "custom_tool_call_output",
-          )?.output;
+          for (const item of frame.input ?? []) {
+            if (item.type === "custom_tool_call_output" && item.call_id) {
+              cellOutputs.set(item.call_id, item.output);
+            }
+          }
+          const cell = cells[sampled - 1];
           const item =
-            sampled === 1
+            cell !== undefined
               ? {
                   type: "custom_tool_call",
-                  id: "ctc_probe",
-                  call_id: "call_probe",
+                  id: `ctc_probe_${sampled}`,
+                  call_id: `call_probe_${sampled}`,
                   name: "exec",
-                  input: CELL,
+                  input: cell,
                   status: "completed",
                 }
               : {
@@ -112,7 +131,7 @@ function startScriptedResponses() {
   });
   return {
     baseUrl: `http://127.0.0.1:${server.port}/v1`,
-    cellOutput: () => JSON.stringify(cellOutput ?? null),
+    cellOutput: (index = 1) => JSON.stringify(cellOutputs.get(`call_probe_${index}`) ?? null),
     stop: () => server.stop(true),
   };
 }
@@ -229,6 +248,14 @@ describeLive("live refused calls", () => {
         );
       expect(String(cell?.payload?.input)).toContain(CREATED);
       expect(String(cell?.payload?.input)).toContain(TOUCHED);
+      // A cell attempting one mutation gets that call's refusal back, which is
+      // the execution evidence the live suite's reader requires.
+      expect(responses.cellOutput(2)).toContain(
+        "patch rejected: writing is blocked by read-only sandbox",
+      );
+      expect(responses.cellOutput(3)).toContain(`${TOUCHED}: Operation not permitted`);
+      expect(rollout).toContain("call_probe_2");
+      expect(rollout).toContain("call_probe_3");
     } finally {
       await engine.stop();
       await responses.stop();

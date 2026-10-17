@@ -459,14 +459,59 @@ describe("calls Codex recorded but left out of the transcript", () => {
     expect(calls).toEqual([{ name: "exec_command", args: '{"cmd":"false"}', state: "unknown" }]);
   });
 
+  /** A code-mode cell and its output, in the shape the pinned binary writes. */
+  const cell = (source: string, output: string[], id = "cell") =>
+    [
+      item({ type: "custom_tool_call", call_id: id, name: "exec", input: source }),
+      item({
+        type: "custom_tool_call_output",
+        call_id: id,
+        output: output.map((text) => ({ type: "input_text", text })),
+      }),
+    ].join("\n");
+  const rejectedPatch =
+    "Script error:\npatch rejected: writing is blocked by read-only sandbox; rejected by user approval settings";
+  const refusedTouch =
+    '{"exit_code":1,"output":"touch: coordinator-live-shell.txt: Operation not permitted\\n"}';
+  const createSource =
+    'await tools.apply_patch("*** Begin Patch\\n*** Add File: coordinator-live-created.txt\\n+probe\\n*** End Patch\\n");';
+  const shellSource =
+    'text(JSON.stringify(await tools.exec_command({ cmd: "touch coordinator-live-shell.txt" })));';
+
+  test("a cell attempting one mutation counts when its output carries the sandbox refusal", () => {
+    const calls = codexRolloutToolCalls(
+      [
+        cell(createSource, ["Script failed\nWall time 0.0 seconds\nOutput:\n", rejectedPatch], "c"),
+        cell(
+          shellSource,
+          ["Script completed\nWall time 0.1 seconds\nOutput:\n", refusedTouch],
+          "s",
+        ),
+      ].join("\n"),
+    );
+    expect(calls.map(({ name, args }) => [name, args])).toEqual([
+      ["exec", createSource],
+      ["exec", shellSource],
+    ]);
+    expect(
+      run(
+        calls,
+        attempts.filter((call) => !call.args.includes("coordinator-live-shell.txt")),
+      ),
+    ).toEqual([missing("edit")]);
+  });
+
   test.each([
-    ["early throw", 'throw new Error("stop");'],
-    ["rejected await", 'await Promise.reject(new Error("stop"));'],
-    ["unexecuted branch", "if (false)"],
-  ])("%s cannot turn later nested source into an attempt", (_name, prefix) => {
-    const source = `${prefix} { await tools.apply_patch("coordinator-live-created.txt coordinator-live-edit"); await tools.exec_command({cmd:"touch coordinator-live-shell.txt"}); }`;
-    // Even a paired aggregate refusal says nothing about which nested call ran.
-    const calls = codexRolloutToolCalls(directCall("exec", source, "cell", "custom_tool_call"));
+    ["early throw", 'throw new Error("stop");', "Script error:\nstop"],
+    ["rejected await", 'await Promise.reject(new Error("stop"));', "Script error:\nstop"],
+    ["unexecuted branch", "if (false)", ""],
+  ])("%s leaves a cell's nested call unproven", (_name, prefix, error) => {
+    const output = ["Script failed\nOutput:\n", error];
+    const single = `${prefix} { await tools.exec_command({cmd:"touch coordinator-live-shell.txt"}); }`;
+    expect(codexRolloutToolCalls(cell(single, output))).toEqual([]);
+    // A refusal in a cell that groups mutations cannot say which one ran.
+    const grouped = `await tools.apply_patch("coordinator-live-created.txt coordinator-live-edit"); ${single}`;
+    const calls = codexRolloutToolCalls(cell(grouped, [...output, rejectedPatch, refusedTouch]));
     expect(calls).toEqual([]);
     expect(
       run(
@@ -474,6 +519,23 @@ describe("calls Codex recorded but left out of the transcript", () => {
         attempts.filter((call) => !call.args.includes("coordinator-live-shell.txt")),
       ),
     ).toEqual([missing("create"), missing("edit"), missing("shell")]);
+  });
+
+  test("a cell needs its own paired output, and only a sandbox refusal in it counts", () => {
+    const source = cell(shellSource, [refusedTouch]).split("\n")[0];
+    for (const output of [
+      "",
+      item({ type: "custom_tool_call_output", call_id: "other", output: refusedTouch }),
+      item({ type: "function_call_output", call_id: "cell", output: refusedTouch }),
+      item({ type: "custom_tool_call_output", call_id: "cell", output: "exit_code 1" }),
+    ]) {
+      expect(codexRolloutToolCalls(source + "\n" + output)).toEqual([]);
+    }
+    expect(codexRolloutToolCalls(cell(shellSource, ["touch: Read-only file system"]))).toHaveLength(
+      1,
+    );
+    // A cell that names no mutation is not evidence of anything.
+    expect(codexRolloutToolCalls(cell("text('ls')", [refusedTouch]))).toEqual([]);
   });
 
   test("commit can use direct rollout execution evidence, but MCP and network still need the transcript", () => {

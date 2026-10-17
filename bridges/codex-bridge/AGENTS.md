@@ -105,8 +105,9 @@ newest row, which every window holds.
   `approvalPolicy: "never"`, app-server emits no item for a call its sandbox
   refuses: a rejected `apply_patch`, or a command failing with "Operation not
   permitted". The model still gets the refusal, and only the rollout keeps its
-  code-mode `exec` cell (verified against 0.162.1 by `live-refused-calls.test.ts`,
-  no credits). The live coordinator suite reads the rollout for this.
+  code-mode `exec` cell, with the refusal in its output (verified against
+  0.162.1 by `live-refused-calls.test.ts`, no credits). The live coordinator
+  suite reads the rollout for this.
 - Agent version bumps follow [`docs/development/upgrade-agents.md`](../../docs/development/upgrade-agents.md);
   the generated protocol under `app-server/generated/` is a lockfile.
 - Never resolve an approval to "approved" by default. Every timeout, disconnect,

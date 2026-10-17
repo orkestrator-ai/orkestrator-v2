@@ -201,6 +201,23 @@ the tab without a send.
   missing login answers 401 with `kind: "authentication-required"`, and the
   backend passes that message through unwrapped on every platform.
 
+### Codex in-tab sign-in: browser or device code
+
+Codex's browser sign-in finishes on a callback app-server serves on its own
+loopback (`127.0.0.1:1455`), so it works only when the browser runs on the
+same machine as the bridge. `begin_native_agent_sign_in` therefore asks for a
+device code (`deviceCode: true`, sent to the bridge as
+`POST /global/auth/login {"method":"device-code"}`, which starts
+`account/login/start {"type":"chatgptDeviceCode"}`) when:
+
+- the renderer is connected to a remote backend (`isRemoteGatewayConnection`),
+  from both the tab banner and the agent information panel; or
+- the environment is containerized, which the backend decides itself.
+
+Otherwise it keeps the browser flow. The tab banner keeps the code visible
+beside the sign-in link, and the panel's code toast stays until a read finds
+the account signed in. Bridges without a device flow ignore the body.
+
 ## Credentials in auth answers
 
 An auth answer never carries a credential. `GET /global/auth` and

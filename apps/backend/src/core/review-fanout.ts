@@ -65,6 +65,8 @@ import {
   type BuildPipelineProvider,
   type ProviderPrepareDispatchOptions,
 } from "./build-pipeline-provider.js";
+import { retainProvider } from "./provider-retirement.js";
+import { ProviderUnreachableError } from "./agent-provider-contract.js";
 import {
   structuredReportRepairPrompt,
   type ReviewWorktreeSnapshot,
@@ -679,6 +681,16 @@ export interface ReviewFanoutHost {
   /** Pane title for one reviewer's session. */
   sessionLabelFor(reviewer: ReviewerRecord, index: number): string;
   provider(selection: ReviewerModelSelection): Promise<BuildPipelineProvider>;
+  /**
+   * `provider`, returned by {@link provider} for this selection, could not
+   * reach its transport. A host that caches providers drops that instance (and
+   * only that one: a peer may already have replaced it), so the next
+   * {@link provider} call reconnects. Disposal waits for its concurrent users.
+   */
+  providerUnavailable?(
+    selection: ReviewerModelSelection,
+    provider: BuildPipelineProvider,
+  ): Promise<void>;
   /** Trusted policy resolved from the persisted environment, never provider defaults. */
   executionPolicy(): Promise<NativeAgentExecutionPolicy>;
   agentMcp?(
@@ -1112,7 +1124,41 @@ export class ReviewFanoutRunner {
     reviewerCount: number,
   ): Promise<"continue" | "stop"> {
     const host = this.host;
-    const provider = await host.provider(reviewer);
+    let provider: BuildPipelineProvider;
+    try {
+      provider = await host.provider(reviewer);
+    } catch (error) {
+      // Reconnection is observation of an existing turn, not a new dispatch.
+      // Startup backoff must share the same bound as an unreachable transport.
+      if (
+        reviewer.status === "running" &&
+        reviewer.providerSessionId &&
+        (reviewer.dispatchState === "sent" || reviewer.dispatchState === "dispatching") &&
+        (error instanceof ProviderUnreachableError ||
+          (typeof error === "object" &&
+            error !== null &&
+            "retryable" in error &&
+            error.retryable === true))
+      ) {
+        return this.recordUnavailable(reviewer, error);
+      }
+      throw error;
+    }
+    const release = retainProvider(provider);
+    try {
+      return await this.advanceReviewerWithProvider(reviewer, index, reviewerCount, provider);
+    } finally {
+      release();
+    }
+  }
+
+  private async advanceReviewerWithProvider(
+    reviewer: ReviewerRecord,
+    index: number,
+    reviewerCount: number,
+    provider: BuildPipelineProvider,
+  ): Promise<"continue" | "stop"> {
+    const host = this.host;
     await host.assertFence();
     if (reviewer.status === "pending") {
       const sessionKey = host.sessionKeyFor(reviewer, index);
@@ -1305,15 +1351,27 @@ export class ReviewFanoutRunner {
       await this.commit();
     }
     if (reviewer.status !== "running") return "continue";
-    await host.resolveUnattendedInteractions(provider, reviewer.providerSessionId);
     // Read as data so the terminal-failure branch below fires whether or not
     // the provider explained itself, and can report the explanation when it did.
     const statusStarted = Date.now();
-    const observation = await readProviderStatus(
-      provider,
-      reviewer.providerSessionId,
-      reviewer.requestId,
-    );
+    let observation: Awaited<ReturnType<typeof readProviderStatus>>;
+    try {
+      await host.resolveUnattendedInteractions(provider, reviewer.providerSessionId);
+      observation = await readProviderStatus(
+        provider,
+        reviewer.providerSessionId,
+        reviewer.requestId,
+      );
+    } catch (error) {
+      if (!(error instanceof ProviderUnreachableError)) throw error;
+      // A bridge that cannot be reached is an observation fault, not the
+      // reviewer's: keep its state and look again when due. The host drops its
+      // cached provider so the next pass reconnects, which restarts a local
+      // bridge that died; the idle-poll bound still fails a reviewer whose
+      // bridge never comes back.
+      await host.providerUnavailable?.(reviewer, provider);
+      return this.recordUnavailable(reviewer, error);
+    }
     this.record({
       operation: "reviewer.status",
       platform: efficiencyPlatform(reviewer.agent),
@@ -1820,6 +1878,13 @@ export class ReviewFanoutRunner {
     this.host.pollGate?.clear(`${this.host.workflowId}\0${reviewer.id}\0idle`);
     await this.commit();
     return true;
+  }
+
+  private recordUnavailable(reviewer: ReviewerRecord, error: unknown) {
+    return this.recordStall(
+      reviewer,
+      `The reviewer's ${reviewer.agent} provider stayed unreachable: ${reviewFanoutErrorMessage(error)}`,
+    );
   }
 
   /**

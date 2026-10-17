@@ -11,9 +11,11 @@ import {
 function sourceWindow(options: {
   title?: string;
   destroyed?: boolean;
+  focused?: boolean;
 }): MenuSourceWindow & { getTitle: ReturnType<typeof mock> } {
   return {
     isDestroyed: () => options.destroyed ?? false,
+    isFocused: () => options.focused ?? true,
     getTitle: mock(() => options.title ?? ""),
   };
 }
@@ -71,6 +73,22 @@ describe("resolveFocusedWindowContext", () => {
     ]);
 
     expect(resolveFocusedWindowContext(contexts, live.window, 22)).toBe(live);
+  });
+
+  test("a non-key DevTools candidate cannot override the explicit menu choice", () => {
+    const stale = { window: sourceWindow({ title: "DevTools owner", focused: false }) };
+    const selected = { window: sourceWindow({ title: "Selected", focused: false }) };
+    const contexts = new Map([
+      [11, stale],
+      [22, selected],
+    ]);
+
+    const resolved = resolveFocusedWindowContext(contexts, stale.window, 22);
+    expect(resolved).toBe(selected);
+    expect(projectMenuWindows(contexts, resolved?.window)).toEqual([
+      { id: 11, title: "DevTools owner", focused: false },
+      { id: 22, title: "Selected", focused: true },
+    ]);
   });
 
   test("uses the recorded id only while native focus is unavailable", () => {

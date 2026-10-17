@@ -11,6 +11,7 @@ import {
   createSession,
   deleteSession,
   eventEmitter,
+  expectControlOnlyPrompt,
   getAvailableModelCatalog,
   getAvailableModels,
   getClaudeRuntimeVersions,
@@ -58,6 +59,7 @@ test("passes the bridge marker to a native turn's Claude CLI environment", async
 describe("getAvailableModels", () => {
   test("returns the SDK's supported models, mapped to ModelInfo shape", async () => {
     const models = await getAvailableModels();
+    await expectControlOnlyPrompt(await nextQueryCall());
     expect(models.length).toBeGreaterThan(0);
     expect(models[0]).toMatchObject({
       id: "claude-opus-mock",

@@ -56,3 +56,18 @@ fails later, at native focus, on this shared host; see
 
 The 2026-09-22 observation passed on rerun, which an unanswered Keychain
 prompt would not do, so its cause stays unconfirmed and this case stays open.
+
+## Startup title recurrence (2026-10-17)
+
+During annotation review validation, the same independent-windows case failed
+its initial `toHaveTitle(profile.electronTitle)` after five seconds (received
+`Orkestrator AI`) while repository validation and a second Electron spec were
+running. Command: `mise run test:logged -- --name windows-electron -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts electron-main.spec.ts`.
+The owning file reported 2 passed, 1 failed and 1 platform skip (39.2 seconds).
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.z3sGAe/windows-electron.log.gz`.
+
+The final sequential `test:agent:electron` run passed all three applicable cases
+in this file (whole suite: 14 passed, 1 skipped in 80.4 seconds). The startup
+title assertion and timeout were unchanged. The separate Window-menu
+non-key-window fallback was fixed between runs; it cannot explain an earlier
+startup-title timeout. Concurrent startup/build contention remains a hypothesis.

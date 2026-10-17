@@ -57,10 +57,10 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 38 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 248 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 263 |
-| **Total** | | **550** |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 34 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 255 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 265 |
+| **Total** | | **555** |
 
 ## Very high
 
@@ -92,17 +92,17 @@ it reaches. Some rules of thumb:
 - [x] Re-baseline the opt-in preview suites and all preview unit files on current main after #966, #967 and #969 ([service-preview-rollout.md](service-preview-rollout.md), qualification)
 - [ ] Run the real Electron window service-preview qualification with the tunnel enabled in an isolated profile ([service-preview-rollout.md](service-preview-rollout.md), qualification)
 - [ ] Write a two-machine tailnet runbook and run decoy, latency, throttling, reconnect and publication checks ([service-preview-rollout.md](service-preview-rollout.md), qualification)
-- [ ] Re-run the annotation Electron and isolated browser suites on current main and record a sign-off ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
+- [x] Re-run the annotation Electron and isolated browser suites on current main and record a sign-off ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
 - [ ] Run the live annotation implement test once per provider and record skips explicitly ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
-- [ ] Qualify the annotation native window: Notes column bounds, focus, keyboard, narrow switch, zoom and DPR ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
+- [x] Qualify the annotation native window: Notes column bounds, focus, keyboard, narrow switch, zoom and DPR ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
 - [x] Decide whether annotations stay enabled by default or hold dispatch for providers without a live run ([web-annotation-qualification.md](web-annotation-qualification.md), decision)
 
 ### CLI and slash commands (high)
 
 - [ ] Re-run CLI credential-free, container and live Claude, Codex and OpenCode matrices at current main ([cli-qualification.md](cli-qualification.md), qualification)
 - [x] Verify whether a new Claude tab shows legacy `BUILTIN_COMMANDS` rows in the picker before its first query ([slash-command-catalogue.md](slash-command-catalogue.md), verify)
-- [ ] Run live slash-command probes for every provider at current pins in a disposable isolated profile ([slash-command-qualification.md](slash-command-qualification.md), qualification)
-- [ ] Run the inactive-environment slash-command browser scenario, including restarts at dispatch boundaries ([slash-command-qualification.md](slash-command-qualification.md), qualification)
+- [x] Run live slash-command probes for every provider at current pins in a disposable isolated profile ([slash-command-qualification.md](slash-command-qualification.md), qualification)
+- [x] Run the inactive-environment slash-command browser scenario, including restarts at dispatch boundaries ([slash-command-qualification.md](slash-command-qualification.md), qualification)
 
 ### Containers and environments (high)
 
@@ -137,6 +137,7 @@ it reaches. Some rules of thumb:
 - [x] Report `authentication-required` readiness on Claude, Pi, ACP and OpenCode; drop the Cursor-only 401 branch ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
 - [x] Confirm no auth response body carries a token or key except the login URL, and the URL is never logged ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)
 - [ ] Confirm close retains the conversation through the UI for Cursor, Pi, OpenCode and Grok ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
+- [ ] Make the shown and the run model match when a stored model is not in the catalogue; a new install's Codex `gpt-5.4` fails every turn on a ChatGPT login ([composer-model-parameters.md](composer-model-parameters.md))
 
 ### Transcripts, observation and bandwidth (high)
 
@@ -155,8 +156,9 @@ it reaches. Some rules of thumb:
 ### Multi Review (high)
 
 - [x] Make the slow-reviewer admission benchmark deterministic with deferred fakes or a controllable clock ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
-- [ ] Run the real-stack Multi Review inactive-environment cycle with restart, reload and bridge interruption ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), qualification)
-- [ ] Run the Multi Review browser and agent-browser suites for the #833 launcher and reviewer tab ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), qualification)
+- [x] Run the real-stack Multi Review inactive-environment cycle with restart, reload and bridge interruption ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), qualification)
+- [x] Run the Multi Review browser and agent-browser suites for the #833 launcher and reviewer tab ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), qualification)
+- [ ] Continue a Multi Review reviewer whose turn a backend restart cut short, instead of failing it ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
 - [ ] Compare full and compact consolidation on real providers over the corpus for recall and provenance ([multi-review-panel-value.md](multi-review-panel-value.md), qualification)
 
 ### Coordinator and agent mail (high)
@@ -204,11 +206,13 @@ it reaches. Some rules of thumb:
 - [ ] Decide the observation window, error and resource thresholds, and sign-off owner per preview cohort ([service-preview-rollout.md](service-preview-rollout.md), decision)
 - [ ] Decide whether the Chromium preview spec or the Docker preview suites join a regular gated run ([service-preview-rollout.md](service-preview-rollout.md), decision)
 - [ ] Seed local worktree preview services safely from `entryPort`, never from a port scan ([preview-service-discovery.md](preview-service-discovery.md))
-- [ ] Extend the annotation Electron spec with the real Notes column and capture alignment at several zooms and DPRs ([web-annotation-qualification.md](web-annotation-qualification.md))
+- [x] Extend the annotation Electron spec with the real Notes column and capture alignment at several zooms and DPRs ([web-annotation-qualification.md](web-annotation-qualification.md))
 - [ ] Add a Docker annotation spec titled `Docker fixture` asserting materialization, cleanup and file checks ([web-annotation-qualification.md](web-annotation-qualification.md))
 - [ ] Assert on the real stack that a sent request writes the annotation PNG into the local worktree ([web-annotation-qualification.md](web-annotation-qualification.md))
 - [ ] Add live Discuss and needs-input annotation cases beside the live implement case ([web-annotation-qualification.md](web-annotation-qualification.md))
-- [ ] Fix annotation-related flakes 0204 and 0225 ([web-annotation-qualification.md](web-annotation-qualification.md))
+- [x] Fix annotation-related flakes 0204 and 0225 (0204 by #1042, 0225 on 2026-10-17) ([web-annotation-qualification.md](web-annotation-qualification.md))
+- [ ] Keep a keychain access prompt from silently holding `dev:test` and desktop startup without a window ([web-annotation-qualification.md](web-annotation-qualification.md))
+- [ ] Qualify annotation preview OS focus, Window-menu focus and keyboard resolve where the app can be frontmost ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
 - [ ] Qualify annotation capture and materialization against a remote backend on another host ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
 - [ ] Test annotation approvals across environment switch, reload, SSE loss and backend restart ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
 - [ ] Review desktop captures from the gateway web client and iOS wrapper with no desktop connected ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
@@ -249,6 +253,11 @@ it reaches. Some rules of thumb:
 - [ ] Check that slash skill and template paths resolve inside the provider's container environment ([slash-command-qualification.md](slash-command-qualification.md), qualification)
 - [ ] Run the slash-command mixed-version matrix across backend, bridge and renderer versions ([slash-command-qualification.md](slash-command-qualification.md), qualification)
 - [ ] Measure slash catalogue discovery latency, refresh coalescing, cache bytes and probe counts ([slash-command-qualification.md](slash-command-qualification.md), qualification)
+- [ ] Mark Claude terminal-only commands unavailable before a tab's first turn ([slash-command-catalogue.md](slash-command-catalogue.md))
+- [ ] Load OpenCode command files added while its server runs, or tell the user a restart is needed ([slash-command-catalogue.md](slash-command-catalogue.md))
+- [ ] Run the live slash-command probes on Pi 1.2.0 with credentials, and qualify Codex disabled skills with a disposable `CODEX_HOME` ([slash-command-qualification.md](slash-command-qualification.md), qualification)
+- [ ] Verify whether Grok loads project skills and commands from a host worktree it has not trusted ([slash-command-qualification.md](slash-command-qualification.md), verify)
+- [ ] Verify that a Claude user is told a command parked by a bridge restart did not run after a same-id retry ([slash-command-qualification.md](slash-command-qualification.md), verify)
 
 ### Containers and environments (medium)
 
@@ -411,6 +420,7 @@ it reaches. Some rules of thumb:
 - [ ] Add seeded randomised interleaving tests across concurrent reviewers (commits, cancellation, fence loss) ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
 - [ ] Add a production sink for `recordEfficiency` or stop treating rollout observation as a gate ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
 - [ ] Run a mixed real-provider Multi Review panel at 8 to 32 reviewers, recording caps, latency and RSS ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), qualification)
+- [ ] Give Multi Review preparation and consolidation the one result-reminder turn reviewers get ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
 - [x] Count Multi Review fence checks per pass at 8 to 32 reviewers, before and after the per-row fix ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), verify)
 - [x] Decide whether Multi Review fence reads need the cross-process mutation lease at all ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), decision)
 - [ ] Add a content-free reviewer overlap metric from `reviewSourceIds` per run and reviewer position ([multi-review-panel-value.md](multi-review-panel-value.md))
@@ -501,6 +511,7 @@ it reaches. Some rules of thumb:
 - [ ] Add `BackendProcess.launch` tests for readiness timeout, invalid auth file and startup races ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [ ] Test `main.ts` window and connection bookkeeping, including the `useConnection` rollback ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [ ] Add a breakpoint-crossing browser spec and check both mobile fixes in a real narrow browser ([mobile-layout-gaps.md](mobile-layout-gaps.md), qualification)
+- [ ] Verify why the CoordinatorPaneTree mobile-switcher drop case fails alone on main (switcher tab stays unselected) ([mobile-layout-gaps.md](mobile-layout-gaps.md), verify)
 - [x] Keep the panes the mobile switcher hides laid out, so a pane switch keeps the transcript's scroll ([mobile-layout-gaps.md](mobile-layout-gaps.md))
 - [ ] Upgrade Electron 44 → 46 before 44 loses support on 2027-03-02; re-test annotation masking on a HiDPI display ([dependency-upgrades.md](dependency-upgrades.md))
 - [ ] Burn down the React Compiler lint warnings in `apps/web` and raise each rule back to `error` at zero ([dependency-upgrades.md](dependency-upgrades.md))
@@ -552,6 +563,7 @@ it reaches. Some rules of thumb:
 - [ ] Qualify each annotation extension that lands with synthetic pages and frame and shadow adversarial cases ([web-annotation-extensions.md](web-annotation-extensions.md), qualification)
 - [ ] Decide which annotation extension, if any, to build next ([web-annotation-extensions.md](web-annotation-extensions.md), decision)
 - [ ] Qualify pins and Show on page for offscreen, in-modal and late-font layout-shift targets ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
+- [ ] Make annotation create cost independent of collection size (about 4 ms per create at 1,900 notes) ([web-annotation-qualification.md](web-annotation-qualification.md))
 
 ### CLI and slash commands (low)
 
@@ -569,6 +581,8 @@ it reaches. Some rules of thumb:
 - [ ] Update stale SDK pin facts in the OpenCode, Claude and Cursor command owner comments ([slash-command-catalogue.md](slash-command-catalogue.md))
 - [ ] Update the pins and tables in `native-agent-commands.md` ("Provider support") and the owner comments after a qualification pass ([slash-command-qualification.md](slash-command-qualification.md), qualification)
 - [ ] Check whether any slash-command live runs happened informally after #827 ([slash-command-qualification.md](slash-command-qualification.md), verify)
+- [ ] Report a cold Codex skill list `stale` until its plugin skills have loaded ([slash-command-catalogue.md](slash-command-catalogue.md))
+- [ ] Give a dev profile's backend the workspace version so no version reminder covers the composer ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
 
 ### Containers and environments (low)
 
@@ -726,7 +740,8 @@ it reaches. Some rules of thumb:
 - [ ] Report referenced artifact bytes in Multi Review evidence verification counts ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
 - [ ] Add an opt-in large-evidence Multi Review benchmark with real hashing ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
 - [ ] Verify whether any supported reviewer platform still reaches the reviewer-transcript fallback ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), verify)
-- [ ] Verify whether the browser and agent suites were ever run for the #833 launcher and reviewer tab ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), verify)
+- [x] Verify whether the browser and agent suites were ever run for the #833 launcher and reviewer tab ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), verify)
+- [x] Evict the cached provider in Build Pipeline review stages when a reviewer's bridge is unreachable ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
 - [ ] Design a backend-owned, content-addressed review evidence store with read-only mounts ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), deferred)
 - [ ] Add provider batch status observation once a bridge exposes batch settlement status ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), deferred)
 - [ ] Add hierarchical map/reduce consolidation only if real workflows exceed the 640 KiB budget ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), deferred)
@@ -820,14 +835,14 @@ it reaches. Some rules of thumb:
 | [service-preview-rollout.md](service-preview-rollout.md) |  | 2 | 12 | 7 | 21 |
 | [embedded-service-previews.md](embedded-service-previews.md) |  |  |  | 13 | 13 |
 | [preview-service-discovery.md](preview-service-discovery.md) |  |  | 1 | 5 | 6 |
-| [web-annotation-qualification.md](web-annotation-qualification.md) |  | 3 | 14 | 3 | 20 |
+| [web-annotation-qualification.md](web-annotation-qualification.md) |  | 1 | 14 | 4 | 19 |
 | [web-annotation-known-limitations.md](web-annotation-known-limitations.md) |  |  | 7 | 3 | 10 |
 | [web-annotation-extensions.md](web-annotation-extensions.md) |  |  |  | 11 | 11 |
 | **CLI and slash commands** | | | | | |
 | [cli-command-surface.md](cli-command-surface.md) |  |  | 6 | 7 | 13 |
 | [cli-qualification.md](cli-qualification.md) |  | 1 | 6 | 1 | 8 |
-| [slash-command-catalogue.md](slash-command-catalogue.md) |  |  | 5 | 4 | 9 |
-| [slash-command-qualification.md](slash-command-qualification.md) |  | 2 | 3 | 2 | 7 |
+| [slash-command-catalogue.md](slash-command-catalogue.md) |  |  | 7 | 5 | 12 |
+| [slash-command-qualification.md](slash-command-qualification.md) |  |  | 6 | 2 | 8 |
 | **Containers and environments** | | | | | |
 | [container-platform-qualification.md](container-platform-qualification.md) |  | 3 | 11 | 1 | 15 |
 | [container-rebuild-state-preservation.md](container-rebuild-state-preservation.md) |  |  | 2 | 2 | 4 |
@@ -848,7 +863,7 @@ it reaches. Some rules of thumb:
 | [mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md) |  | 1 | 3 | 5 | 9 |
 | [session-titles-and-history.md](session-titles-and-history.md) |  |  | 4 | 4 | 8 |
 | [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md) |  |  | 8 | 6 | 14 |
-| [composer-model-parameters.md](composer-model-parameters.md) |  |  | 2 | 4 | 6 |
+| [composer-model-parameters.md](composer-model-parameters.md) |  | 1 | 2 | 4 | 7 |
 | [opencode-v2.md](opencode-v2.md) |  |  |  | 3 | 3 |
 | [provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md) |  |  | 2 | 15 | 17 |
 | [session-lifecycle-consistency.md](session-lifecycle-consistency.md) |  | 1 | 7 | 5 | 13 |
@@ -859,7 +874,7 @@ it reaches. Some rules of thumb:
 | [client-reconnect-and-freshness.md](client-reconnect-and-freshness.md) |  |  | 6 | 2 | 8 |
 | [recurring-work-qualification.md](recurring-work-qualification.md) |  | 4 | 9 | 19 | 32 |
 | **Multi Review** | | | | | |
-| [multi-review-scale-and-cost.md](multi-review-scale-and-cost.md) |  | 2 | 5 | 9 | 16 |
+| [multi-review-scale-and-cost.md](multi-review-scale-and-cost.md) |  | 1 | 6 | 8 | 15 |
 | [multi-review-panel-value.md](multi-review-panel-value.md) |  | 1 | 4 | 5 | 10 |
 | [multi-review-flow-graph.md](multi-review-flow-graph.md) |  |  |  |  | 0 |
 | **Coordinator and agent mail** | | | | | |
@@ -873,9 +888,9 @@ it reaches. Some rules of thumb:
 | [backend-core-domain-folders.md](backend-core-domain-folders.md) |  |  | 4 | 3 | 7 |
 | [backend-runtime-state-ownership.md](backend-runtime-state-ownership.md) |  |  | 4 | 3 | 7 |
 | **Cross-cutting** | | | | | |
-| [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md) |  | 1 | 10 | 3 | 14 |
+| [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md) |  | 1 | 10 | 4 | 15 |
 | [mixed-version-compatibility.md](mixed-version-compatibility.md) |  |  | 2 | 3 | 5 |
 | [test-suite-and-ci-health.md](test-suite-and-ci-health.md) | 1 |  | 4 | 12 | 17 |
-| [mobile-layout-gaps.md](mobile-layout-gaps.md) |  |  | 1 | 4 | 5 |
+| [mobile-layout-gaps.md](mobile-layout-gaps.md) |  |  | 2 | 4 | 6 |
 | [dependency-upgrades.md](dependency-upgrades.md) |  |  | 3 | 7 | 10 |
 | [remote-host-upgrades.md](remote-host-upgrades.md) |  |  | 3 | 2 | 5 |

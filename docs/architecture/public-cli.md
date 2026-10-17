@@ -159,6 +159,14 @@ not advertise at its version before sending it.
 | `run retry/discard` | `run.retry/discard` | `retry/discard_native_agent_dispatch` | provider |
 | `run cancel/output` | `run.cancel/output` | exec worker control | process / read |
 | `run receipts` | local | private local receipts | none |
+| `host status` | `host.status` | `HostMaintenanceService` detailed snapshot (impact, tools, image) | read |
+| `host update check [--wait]` | `host.update.check` | check request answered by the host's updater | metadata |
+| `host update apply --yes [--release V] [--when-idle [--max-wait D]] [--wait]` | `host.update.apply` | update job applied by the desktop app or the standalone self-updater; see [host-updates.md](host-updates.md) | process (restarts the host's app or service) |
+| `host update cancel` | `host.update.cancel` | cancels the job before its restart | metadata |
+| `host toolchain repair [--wait]` | `host.toolchain.repair` | pinned toolchain manager under its install lock | filesystem |
+| `host image update [--wait]` | `host.image.update` | `docker pull` of the matching release image, then retag | filesystem |
+| `host gh latest/pinned [--wait]` | `host.gh.update` | checksum-verified newest `gh`, or back to the pin (unqualified) | filesystem |
+| `service install/uninstall/status` | local | launchd or systemd user service running versioned releases through the launcher | filesystem, process |
 
 The shared discovery, tab resolution, catalogue and launch-validation helpers
 live in [`control-shared-actions.ts`](../../apps/backend/src/core/control-shared-actions.ts)

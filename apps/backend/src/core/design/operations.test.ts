@@ -13,6 +13,7 @@ import {
   createDesignHarness,
   deferred,
   trackUnhandledRejections,
+  withDesignLimit,
   type DesignHarness,
 } from "./test-support.js";
 
@@ -373,10 +374,16 @@ describe("design operations: prepare, execute, status and cancel", () => {
     expect(expired).toMatchObject({ state: "expired", failure: { code: "expired-operation" } });
     expect(await service().execute("env-1", canvasId, prepared.token)).toEqual(expired);
     expect((await service().getFrame(canvasId, "env-1", frameId)).x).toBe(0);
-    // Push the expired receipt out of the bounded receipt list.
-    for (let index = 1; index <= DESIGN_LIMITS.receiptsPerCanvas + 1; index++)
-      await service().mutate(canvasId, "env-1", frameId, index, { y: index }, "user");
+    // Push the expired receipt out of the bounded receipt list. A lowered bound
+    // prunes it in a few fsynced commits; the shipped 128 (129 commits)
+    // exceeded the 5 s deadline under aggregate load (flake 0267). Pruning at
+    // the shipped count is covered in memory by records.test.ts.
+    await withDesignLimit("receiptsPerCanvas", 4, async () => {
+      for (let index = 1; index <= DESIGN_LIMITS.receiptsPerCanvas + 1; index++)
+        await service().mutate(canvasId, "env-1", frameId, index, { y: index }, "user");
+    });
     const record = await readRecordFile(canvasId);
+    expect(record.receipts).toHaveLength(4);
     expect(record.receipts.some((receipt) => receipt.token === prepared.token)).toBe(false);
     expect(await service().execute("env-1", canvasId, prepared.token)).toMatchObject({
       state: "unknown",

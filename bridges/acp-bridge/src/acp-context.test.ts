@@ -1331,10 +1331,14 @@ describe("ACP bridge", () => {
   test("does not confirm a request while a cold session load is still preparing it", async () => {
     const directory = await temporaryDirectory();
     const lifecycleFile = resolve(directory, "preparing-dispatch-lifecycle.log");
+    // The turn stays open until the test releases it, so the probe after the
+    // acceptance cannot race the agent ending the turn.
+    const holdTurnFile = resolve(directory, "release-turn");
     const bridge = await spawnBridge({
       env: {
         FAKE_ACP_LIFECYCLE_FILE: lifecycleFile,
         FAKE_ACP_LOAD_DELAY_MS: "800",
+        FAKE_ACP_HOLD_TURN_FILE: holdTurnFile,
       },
     });
     const created = (await nativeFetch(`${bridge.base}/session/create`, {
@@ -1356,7 +1360,7 @@ describe("ACP bridge", () => {
     const prompt = nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
       method: "POST",
       headers: bridge.headers,
-      body: JSON.stringify({ prompt: "DIRECT:prepared", requestId: "preparing-1" }),
+      body: JSON.stringify({ prompt: "CURSORTASKHELD: prepared", requestId: "preparing-1" }),
     });
     await waitFor(
       () => fs.readFile(lifecycleFile, "utf8").catch(() => ""),
@@ -1370,7 +1374,7 @@ describe("ACP bridge", () => {
     const duplicate = await nativeFetch(`${bridge.base}/session/${created.id}/prompt`, {
       method: "POST",
       headers: bridge.headers,
-      body: JSON.stringify({ prompt: "DIRECT:prepared", requestId: "preparing-1" }),
+      body: JSON.stringify({ prompt: "CURSORTASKHELD: prepared", requestId: "preparing-1" }),
     });
     expect(duplicate.status).toBe(409);
 
@@ -1380,6 +1384,17 @@ describe("ACP bridge", () => {
         headers: bridge.headers,
       }).then((response) => response.json()),
     ).toEqual({ dispatch: "dispatched" });
+
+    await fs.writeFile(holdTurnFile, "release\n");
+    expect(
+      await waitFor(
+        () =>
+          nativeFetch(`${bridge.base}/session/${created.id}/dispatch?requestId=preparing-1`, {
+            headers: bridge.headers,
+          }).then((response) => response.json()) as Promise<Record<string, unknown>>,
+        (value) => "turn" in value,
+      ),
+    ).toEqual({ dispatch: "dispatched", turn: { state: "completed" } });
   });
 
   test("rejects unsupported vendor requests instead of acknowledging them", async () => {

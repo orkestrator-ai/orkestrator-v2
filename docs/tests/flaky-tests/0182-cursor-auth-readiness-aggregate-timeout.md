@@ -145,3 +145,18 @@ The isolated pass confirms an intermittent recurrence. A fixture setup or
 cleanup timeout cascading into later cases is consistent with earlier
 observations, but the underlying cause remains unconfirmed. No implementation,
 assertion, timeout or skip changed in the Cursor bridge.
+
+## Recurrence — 2026-10-17 (host maintenance review fixes)
+
+The `all-tests` aggregate reported ten-second hook timeouts for
+`authentication > reports an authenticated credential as ready` (10004.17 ms)
+and `authentication > an attached agent is ready without reading credentials`
+(10002.95 ms), with a connection-refused error between them. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Q6mb2y/bridges.log.gz`.
+The unchanged owner passed alone in 1.3 s:
+
+```sh
+mise run test:logged -- --name cursor-http-rerun-node -- bun test --cwd bridges/cursor-bridge ./src/http.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures
+```
+
+No Cursor implementation, timeout, assertion or skip changed.

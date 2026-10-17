@@ -14,7 +14,7 @@ import {
   type BridgeContractHandle,
 } from "../../../tests/conformance/bridge-contract/scenarios.js";
 import { newSessionState } from "./agent-session.js";
-import { loadPersistedState } from "./persistence.js";
+import { loadPersistedState, usePersistenceFsForTests } from "./persistence.js";
 import { clientSessionKeys, closingTombstones, sessions, type SessionState } from "./state.js";
 import { DEFAULT_STEER_JOURNAL_LIMITS } from "./steer-journal.js";
 import { holdPublication, startRouterHarness } from "./testing/router-harness.js";
@@ -32,6 +32,7 @@ runBridgeContractSuite({
   bridge: "cursor",
   async start(): Promise<BridgeContractHandle> {
     const harness = await startRouterHarness();
+    let restoreFlushes: (() => void) | undefined;
     return {
       async request(method, path, body) {
         const response = await harness.call(path, {
@@ -73,6 +74,16 @@ runBridgeContractSuite({
         await loadPersistedState();
       },
       async saturateBoundedState(sessionId) {
+        // Filling the journal publishes the state file about 510 times, each
+        // with a file and a directory fsync (1,028 flushes). They are cheap on
+        // macOS but took this scenario past Bun's 5 s timeout on loaded Linux
+        // runners (flake 0265, as 0216 and 0240). Only the flushes are stubbed,
+        // until `stop()`: writes, renames, the queue and the routes stay real,
+        // and persistence-durability.test.ts owns the flush ordering.
+        restoreFlushes = usePersistenceFsForTests({
+          fsyncFile: async () => {},
+          fsyncDirectory: async () => {},
+        });
         const state = sessions.get(sessionId)!;
         // A stand-in for an attached run that accepts every steer: the journal,
         // its admission and the route are the production code.
@@ -104,7 +115,13 @@ runBridgeContractSuite({
         const steer = (runtimeHealth as { summary?: { steer?: BoundedOccupancy } }).summary?.steer;
         return steer ? [steer] : [];
       },
-      stop: () => harness.close(),
+      async stop() {
+        try {
+          await harness.close();
+        } finally {
+          restoreFlushes?.();
+        }
+      },
     };
   },
 });

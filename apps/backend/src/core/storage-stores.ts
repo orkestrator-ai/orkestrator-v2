@@ -78,6 +78,7 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
 const ENGINE_STORE_LAYOUTS: Record<string, StoreLayout> = {
   "storage-deletion-fences": { kind: "record" },
   "storage-legacy-json-cleanups": { kind: "document" },
+  "host-maintenance": { kind: "document" },
   ...NATIVE_AGENT_DISPLAY_TAIL_STORE_LAYOUTS,
   ...BUILD_PIPELINE_TRANSCRIPT_STORE_LAYOUTS,
 };

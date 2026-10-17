@@ -82,3 +82,10 @@ timeout or skip changed.
 - This case timed out at 5156.76 ms, and `move_environment > a failed submodule re-link restores the original checkout` at 5157.03 ms.
 - Unchanged owning-file rerun: `bun test --preload ../../tests/setup-node.ts src/core/environment-move.test.ts` from `apps/backend` passed 37 of 37 in 33.31 seconds.
 - No assertion, timeout, skip or implementation in this owner changed.
+
+Recurrence on 2026-10-17, preview tunnel slow-reader validation:
+`mise run test:logged -- --name full-tests -- mise run test` on `9da80451`
+plus a preview-tunnel-only change, load average 30 to 40. The case timed out
+at 5061.30 ms (`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.vJOfiZ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`). The unchanged owning file then passed alone
+(`bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1`,
+37 passed). No implementation, assertion, timeout or skip changed.

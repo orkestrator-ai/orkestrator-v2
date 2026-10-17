@@ -42,6 +42,14 @@ describe("HTTP bridge provider", () => {
     expect(JSON.parse(String(request.init.body))).toEqual({ title: "Build task" });
   });
 
+  test("leaves the default model alone on bridges whose prompts carry the model", () => {
+    for (const connection of [claudeConnection, piConnection, cursorConnection, grokConnection]) {
+      expect(httpProvider(() => Response.json({}), connection).provider.resolveDefaultModel).toBe(
+        undefined,
+      );
+    }
+  });
+
   test("forwards tab-scoped MCP credentials in Claude, Codex, Pi, Cursor, and Grok request bodies", async () => {
     const agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "tab-token" };
     for (const connection of [

@@ -866,6 +866,9 @@ describe("BuildPipelineService", () => {
       if (url.endsWith("/session/create")) {
         return Response.json({ sessionId: "build-production-1" });
       }
+      if (url.endsWith("/global/models")) {
+        return Response.json({ source: "app-server", models: [{ id: "repo-codex" }] });
+      }
       return new Response(null, { status: 204 });
     }) as unknown as typeof fetch;
 
@@ -918,11 +921,13 @@ describe("BuildPipelineService", () => {
           base64Data: "AAAA",
         },
       });
+      // The configured default is checked against the live model list first.
       expect(requests.map(({ url }) => url)).toEqual([
+        "http://127.0.0.1:3210/global/models",
         "http://127.0.0.1:3210/session/create",
         "http://127.0.0.1:3210/session/build-production-1/prompt",
       ]);
-      const create = requests[0]!;
+      const create = requests[1]!;
       expect(new Headers(create.init.headers).get("X-Orkestrator-Codex-Token")).toBe(
         "test-auth-token",
       );
@@ -931,7 +936,7 @@ describe("BuildPipelineService", () => {
         modelReasoningEffort: "xhigh",
         mode: "build",
       });
-      expect(JSON.parse(String(requests[1]!.init.body))).toMatchObject({
+      expect(JSON.parse(String(requests[2]!.init.body))).toMatchObject({
         attachments: [
           {
             type: "image",

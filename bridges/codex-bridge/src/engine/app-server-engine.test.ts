@@ -188,6 +188,103 @@ function harness(
 
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
 
+describe("device login", () => {
+  const deviceLogin = {
+    type: "chatgptDeviceCode",
+    loginId: "login-one",
+    verificationUrl: "https://auth.example.test/device",
+    userCode: "TEST-CODE",
+  };
+
+  test("sends the device-code RPC and rehydrates the same bounded login without restarting it", async () => {
+    const h = harness({
+      "account/login/start": () => deviceLogin,
+      "account/read": () => ({ account: null, requiresOpenaiAuth: true }),
+    });
+    await h.engine.start();
+    try {
+      await h.engine.beginAccountLogin("device-code");
+      expect(h.child().requests.at(-1)).toEqual({
+        method: "account/login/start",
+        params: { type: "chatgptDeviceCode" },
+      });
+      const first = (await h.engine.readAccount()) as {
+        pendingSignIn: { url: string; code: string; expiresAt: number };
+      };
+      expect(first.pendingSignIn).toMatchObject({
+        url: deviceLogin.verificationUrl,
+        code: deviceLogin.userCode,
+      });
+      expect(first.pendingSignIn.expiresAt).toBeGreaterThan(Date.now());
+      expect(first.pendingSignIn.expiresAt).toBeLessThanOrEqual(Date.now() + 15 * 60_000);
+      expect(await h.engine.readAccount()).toEqual(first);
+      expect(h.child().requests.filter((r) => r.method === "account/login/start")).toHaveLength(1);
+    } finally {
+      await h.engine.stop();
+    }
+  });
+
+  test.each([true, false])(
+    "clears the owning login on completion (success=%s), ignoring a different login",
+    async (success) => {
+      const h = harness({
+        "account/login/start": () => deviceLogin,
+        "account/read": () => ({ account: null }),
+      });
+      await h.engine.start();
+      try {
+        await h.engine.beginAccountLogin("device-code");
+        h.child().notify("account/login/completed", { loginId: "old-login", success });
+        await settle();
+        expect(await h.engine.readAccount()).toHaveProperty("pendingSignIn");
+        h.child().notify("account/login/completed", { loginId: deviceLogin.loginId, success });
+        await settle();
+        expect(await h.engine.readAccount()).not.toHaveProperty("pendingSignIn");
+      } finally {
+        await h.engine.stop();
+      }
+    },
+  );
+
+  test.each(["expiry", "logout", "signed-in", "generation-exit", "start-failure"])(
+    "clears pending display on %s",
+    async (reason) => {
+      let account: unknown = null;
+      let failStart = false;
+      const h = harness({
+        "account/login/start": () => {
+          if (failStart) throw new Error("login unavailable");
+          return deviceLogin;
+        },
+        "account/read": () => ({ account }),
+        "account/logout": () => ({}),
+      });
+      await h.engine.start();
+      let now: ReturnType<typeof spyOn> | undefined;
+      try {
+        await h.engine.beginAccountLogin("device-code");
+        if (reason === "expiry") now = spyOn(Date, "now").mockReturnValue(Date.now() + 16 * 60_000);
+        if (reason === "logout") await h.engine.logoutAccount();
+        if (reason === "signed-in") account = { type: "chatgpt", email: "test@example.test" };
+        if (reason === "generation-exit") {
+          h.child().exit(1);
+          await settle();
+        }
+        if (reason === "start-failure") {
+          failStart = true;
+          await expect(h.engine.beginAccountLogin("device-code")).rejects.toThrow(
+            "login unavailable",
+          );
+        }
+        expect(await h.engine.readAccount()).not.toHaveProperty("pendingSignIn");
+      } finally {
+        now?.mockRestore();
+        await h.engine.stop();
+      }
+    },
+  );
+});
+
 describe("account usage", () => {
   test("reads and allowlists account token windows", async () => {
     const h = harness({
@@ -1059,7 +1156,7 @@ describe("model catalog", () => {
     expect(models[0]!.isDefault).toBe(true);
   });
 
-  test("stops paginating rather than looping on a repeated cursor", async () => {
+  test("rejects an incomplete catalogue rather than looping on a repeated cursor", async () => {
     let calls = 0;
     const h = harness({
       "model/list": () => {
@@ -1068,9 +1165,11 @@ describe("model catalog", () => {
       },
     });
     await h.engine.start();
-    await h.engine.listModels();
+    await expect(h.engine.listModels()).rejects.toThrow(
+      "Codex model catalogue exceeded its page limit",
+    );
 
-    expect(calls).toBeLessThanOrEqual(20);
+    expect(calls).toBe(20);
   });
 });
 

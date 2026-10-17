@@ -883,11 +883,16 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
   }
 
   async beginProjectionSignIn(
-    input: NativeAgentProjectionInput,
+    input: NativeAgentProjectionInput & { deviceCode?: boolean },
   ): Promise<{ url?: string; code?: string }> {
     const provider = await this.provider(input);
     if (!provider.beginSignIn) throw new Error(`${input.agent} does not support sign-in here`);
-    const outcome = await provider.beginSignIn();
+    // A browser sign-in redirects to the agent's loopback, which no browser
+    // reaches inside a container or, per the client, on another machine.
+    const environment = await this.storage.getEnvironment(input.environmentId);
+    const deviceCode =
+      input.deviceCode === true || environment?.environmentType === "containerized";
+    const outcome = await provider.beginSignIn(deviceCode ? { deviceCode: true } : undefined);
     this.invalidateProjection(
       nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
     );

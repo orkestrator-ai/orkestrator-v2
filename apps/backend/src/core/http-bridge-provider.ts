@@ -1164,8 +1164,8 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     return this.catalogAdapter.authStatus();
   }
 
-  beginSignIn() {
-    return this.catalogAdapter.beginSignIn();
+  beginSignIn(options?: { deviceCode?: boolean }) {
+    return this.catalogAdapter.beginSignIn(options);
   }
 
   signOut() {

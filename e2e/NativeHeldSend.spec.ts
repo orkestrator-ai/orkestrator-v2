@@ -1,5 +1,25 @@
 import { expect, test } from "@playwright/test";
 
+test("a device code survives browser-open failure, environment switching and renderer reload without another login", async ({
+  page,
+}) => {
+  await page.goto("/native-held-send");
+  await page.getByRole("button", { name: "Require sign in" }).click();
+  await page.getByRole("button", { name: "Sign in to Codex", exact: true }).click();
+  const code = page.getByText("SAME-CODE", { exact: true });
+  const link = page.getByRole("link", { name: "Open sign-in link" });
+  await expect(code).toBeVisible();
+  await expect(link).toHaveAttribute("href", "https://auth.example.test/device");
+  await page.getByRole("button", { name: "Switch environment" }).click();
+  await expect(code).toHaveCount(0);
+  await page.getByRole("button", { name: "Return to conversation" }).click();
+  await expect(code).toBeVisible();
+  await page.reload();
+  await expect(code).toBeVisible();
+  await expect(link).toHaveAttribute("href", "https://auth.example.test/device");
+  expect(await page.evaluate(() => sessionStorage.getItem("held-sign-in-count"))).toBe("1");
+});
+
 test("a held send survives switching environments, dispatches once on return and stays settled after reload", async ({
   page,
 }) => {

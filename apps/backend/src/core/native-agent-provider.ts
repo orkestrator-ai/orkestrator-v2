@@ -5,6 +5,7 @@ import type { HttpBridgeProviderDependencies } from "./http-bridge-transport.js"
 import type { AppConfig } from "./models.js";
 import { OpenCodeProvider, type OpenCodeProviderDependencies } from "./opencode-provider.js";
 import { openCodeEnvironmentDependencies } from "./opencode-provider-environment.js";
+import { resolveCodexBridgeDefaultModel } from "./session-held-model.js";
 import type { WorkflowResultReader } from "./workflow-result-service.js";
 
 export * from "./agent-provider-contract.js";
@@ -41,13 +42,19 @@ export function createNativeAgentProvider(
   connection: BridgeConnection,
   dependencies: ProviderDependencies = {},
 ): NativeAgentRuntimeProvider {
-  const provider =
+  const provider: NativeAgentRuntimeProvider =
     connection.agent === "opencode"
       ? new OpenCodeProvider(connection, {
           ...openCodeEnvironmentDependencies(dependencies.environment),
           ...dependencies,
         })
       : new HttpBridgeProvider(connection, dependencies.fetch ?? fetch, dependencies.stageImages);
+  // Codex runs the model its session was created with; the other bridges carry
+  // the model on each prompt and keep the configured one.
+  if (connection.agent === "codex") {
+    provider.resolveDefaultModel = (modelId) =>
+      resolveCodexBridgeDefaultModel(connection, dependencies.fetch ?? fetch, modelId);
+  }
   if (dependencies.workflowResults) {
     const providerStructured = provider.structured.bind(provider);
     provider.structured = async <T>(sessionId: string, requestId: string) => {

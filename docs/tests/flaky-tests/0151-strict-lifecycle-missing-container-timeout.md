@@ -78,3 +78,25 @@ No assertion, deadline or skip was changed.
 - The missing-container repair case timed out at 5599.26 ms, then a late fixture read reported a missing fake Docker log (the between-tests error).
 - Unchanged owning-file rerun: `bun test ./tests/commands-registry-environments-status.test.ts` from `apps/backend` passed 23 of 23.
 - No assertion, timeout, skip or implementation in this owner changed.
+
+## Codex catalogue review follow-up recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name full-tests -- mise run test`
+  (Bun 1.4.3, macOS arm64; workspace/root/bridge/protocol reservations
+  4/1/2/1 slots, with two backend workers and concurrent isolated browser and
+  other-worktree validation).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.jlxHbv/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+  This obsolete aggregate was interrupted after an integration test moved
+  during discovery; its workspace result is incomplete and has no final
+  backend test totals. A fresh aggregate validates the final tree.
+- **Failure:** `environment status and settings commands > strict lifecycle
+  commands still repair an environment whose container is already gone` in
+  `apps/backend/tests/commands-registry-environments-status.test.ts` exceeded
+  its 5000 ms deadline at 7491.75 ms. The following
+  `agent-test container mounts come from the isolated profile paths, not the host home`
+  failed at 114.52 ms with `ENOENT` reading the removed fake Docker log.
+- **Owning-file rerun:** `mise run test:logged -- --name lifecycle-status-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments-status.test.ts --parallel=1 --only-failures`
+  passed the unchanged owning file (exit 0) in 6.6 seconds.
+- **Assessment:** the isolated pass confirms intermittence. Host contention
+  and fixture teardown after timeout remain hypotheses; no lifecycle source,
+  assertion, timeout or skip changed.

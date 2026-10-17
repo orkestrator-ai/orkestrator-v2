@@ -747,7 +747,11 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
    */
   reloadMcpConfiguration?(): Promise<"reloaded" | "not-running" | "unsupported">;
   authStatus?(): Promise<NativeAgentAuthStatus>;
-  beginSignIn?(): Promise<{ url?: string; code?: string }>;
+  /**
+   * `deviceCode` asks for a flow without a loopback callback, for a browser
+   * that is not on the agent's machine. A platform without one ignores it.
+   */
+  beginSignIn?(options?: { deviceCode?: boolean }): Promise<{ url?: string; code?: string }>;
   signOut?(): Promise<void>;
   setSessionTitle?(sessionId: string, title: string): Promise<void>;
   /** Drop provider-side model/command caches so the next read re-discovers. */

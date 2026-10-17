@@ -183,7 +183,8 @@ interface BaselineRepositoryConfig {
  * symptom - a badge measured against a different ref than the panel it opens -
  * is invisible until someone compares the numbers.
  *
- * The commit recorded at creation wins because it is exact and immutable. The
+ * The environment's baseline commit ({@link environmentBaselineCommit}) wins
+ * because it is exact and immutable. The
  * configured PR base branch is next, since that is the branch the work is
  * destined for. `defaultBranch` is the fallback rather than a literal "main": a
  * repository on `master` or `trunk` would otherwise be measured against a ref
@@ -191,15 +192,59 @@ interface BaselineRepositoryConfig {
  * silent - the counts simply never appear.
  */
 export function resolveComparisonRef(
-  createdFromCommit: string | undefined | null,
+  baselineCommit: string | undefined | null,
   repositoryConfig: BaselineRepositoryConfig | undefined | null,
 ): string {
   return (
-    normaliseRef(createdFromCommit) ||
+    normaliseRef(baselineCommit) ||
     normaliseRef(repositoryConfig?.prBaseBranch) ||
     normaliseRef(repositoryConfig?.defaultBranch) ||
     FALLBACK_COMPARISON_REF
   );
+}
+
+/**
+ * A newer start point for an environment's changes, found after its branch took
+ * in later history from the branch it targets (a merge of, rebase onto or reset
+ * to a newer `origin/main`).
+ *
+ * `createdFromCommit` names the creation commit this was derived from. Every
+ * path that recreates a checkout replaces `createdFromCommit`, so a record whose
+ * source no longer matches describes a checkout that is gone and is ignored
+ * rather than having to be cleared at each of those paths.
+ */
+export interface EnvironmentDiffBaseline {
+  createdFromCommit: string;
+  commit: string;
+}
+
+interface BaselineEnvironment {
+  createdFromCommit?: string | null;
+  diffBaseline?: EnvironmentDiffBaseline | null;
+}
+
+/**
+ * The commit an environment's changes are measured from: where its branch now
+ * leaves the branch it targets, falling back to the commit it was created from.
+ *
+ * Measuring from the creation commit alone counts every commit the branch later
+ * took in from its target as the environment's own work. A worker launched from
+ * a checkout 14 commits behind `origin/main` that then merges `origin/main`
+ * would otherwise show those 14 commits in its Changes panel.
+ */
+export function environmentBaselineCommit(
+  environment: BaselineEnvironment | undefined | null,
+): string | undefined {
+  const createdFromCommit = normaliseRef(environment?.createdFromCommit);
+  if (!createdFromCommit) return undefined;
+  const baseline = environment?.diffBaseline;
+  if (
+    baseline &&
+    normaliseRef(baseline.createdFromCommit)?.toLowerCase() === createdFromCommit.toLowerCase()
+  ) {
+    return normaliseRef(baseline.commit) ?? createdFromCommit;
+  }
+  return createdFromCommit;
 }
 
 function normaliseRef(value: string | undefined | null): string | undefined {

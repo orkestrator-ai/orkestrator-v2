@@ -9,6 +9,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type {
+  NativeAgentControlUpdate,
   NativeAgentDiscoveryUpdate,
   NativeAgentMessagePage,
   NativeAgentProjectionUpdate,
@@ -157,6 +158,11 @@ const getNativeAgentProjectionUpdateMock = mock(async () => {
   return next();
 });
 const getNativeAgentProjectionMock = mock(async () => null);
+const updateNativeAgentControlsMock = mock(
+  async (_input: {
+    update: NativeAgentControlUpdate;
+  }): Promise<NativeAgentSessionProjection<TestMessage> | null> => null,
+);
 const stopNativeAgentSessionMock = mock(async () => {
   const next = stopResults.shift();
   return next ? next() : null;
@@ -172,6 +178,7 @@ mock.module("@/lib/backend", () => ({
   ensureNativeAgentSession: ensureNativeAgentSessionMock,
   adoptNativeAgentSession: async () => ({}),
   stopNativeAgentSession: stopNativeAgentSessionMock,
+  updateNativeAgentControls: updateNativeAgentControlsMock,
   resumeNativeAgentSession: async () => null,
   getNativeAgentProjection: getNativeAgentProjectionMock,
   getNativeAgentProjectionUpdate: getNativeAgentProjectionUpdateMock,
@@ -356,6 +363,7 @@ beforeEach(() => {
   getNativeAgentProjectionUpdateMock.mockClear();
   getNativeAgentProjectionMock.mockClear();
   stopNativeAgentSessionMock.mockClear();
+  updateNativeAgentControlsMock.mockReset();
   ensureNativeAgentSessionMock.mockClear();
   usePaneLayoutStore.setState({
     environments: new Map(),
@@ -393,6 +401,119 @@ describe("useNativeAgentSession progressive view", () => {
     expect(result.current.transcriptAvailability).toBe("current");
     expect(getNativeAgentDiscoveryUpdateMock).toHaveBeenCalled();
     releaseDiscovery();
+  });
+
+  // Discovery's models section is the bare catalogue. A Codex session can hold
+  // a model the login does not offer; the state view adds a row for it, and a
+  // later catalogue must not drop that row and make the picker show the first
+  // catalogue model instead of the one that runs.
+  test("keeps the selected model's row when discovery replaces the catalogue", async () => {
+    const offered = { platform: "codex" as const, id: "gpt-6.1-sol", label: "GPT-6.1-Sol" };
+    const held = {
+      platform: "codex" as const,
+      id: "gpt-5.4",
+      label: "gpt-5.4",
+      providerLabel: "Codex · session model",
+    };
+    let releaseDiscovery!: () => void;
+    const heldDiscovery = new Promise<NativeAgentDiscoveryUpdate>((resolve) => {
+      releaseDiscovery = () =>
+        resolve({
+          viewVersion: 1,
+          status: "snapshot",
+          token: "discovery-1",
+          value: {
+            identity,
+            sections: { models: { availability: "ready", value: [offered], revision: 1 } },
+          },
+        });
+    });
+    transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1")])];
+    stateUpdates = [
+      () =>
+        stateSnapshot("state-1", {
+          composer: {
+            models: [offered, held],
+            selectedModelId: "gpt-5.4",
+            fastModeEnabled: null,
+            fastModeAvailable: false,
+            modes: [],
+          },
+        }),
+    ];
+    discoveryUpdates = [() => heldDiscovery];
+
+    const { result } = renderSession();
+    await waitFor(() =>
+      expect(result.current.projection?.composer?.selectedModelId).toBe("gpt-5.4"),
+    );
+    releaseDiscovery();
+    await waitFor(() => expect(getNativeAgentDiscoveryUpdateMock).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(result.current.projection?.composer?.models).toEqual([offered, held]),
+    );
+    expect(result.current.projection?.composer?.selectedModelId).toBe("gpt-5.4");
+  });
+
+  test("drops the retained model row after selecting a listed model and refreshing discovery", async () => {
+    const offered = { platform: "codex" as const, id: "gpt-6.1-sol", label: "GPT-6.1-Sol" };
+    const held = {
+      platform: "codex" as const,
+      id: "hidden-model",
+      label: "hidden-model",
+      providerLabel: "Codex · session model",
+    };
+    const composer = {
+      models: [offered, held],
+      selectedModelId: held.id,
+      fastModeEnabled: null,
+      fastModeAvailable: false,
+      modes: [],
+    };
+    transcriptUpdates = [() => transcriptSnapshot("transcript-1", [message("m1")])];
+    stateUpdates = [() => stateSnapshot("state-1", { composer })];
+    discoveryUpdates = [
+      () => ({
+        viewVersion: 1,
+        status: "snapshot",
+        token: "discovery-1",
+        value: {
+          identity,
+          sections: { models: { availability: "ready", value: [offered], revision: 1 } },
+        },
+      }),
+    ];
+    const { result } = renderSession();
+    await waitFor(() =>
+      expect(result.current.projection?.composer?.models).toEqual([offered, held]),
+    );
+    updateNativeAgentControlsMock.mockImplementationOnce(async () =>
+      projection([message("m1")], {
+        composer: { ...composer, selectedModelId: offered.id },
+      }),
+    );
+    await act(async () => {
+      await result.current.updateControls({ modelId: offered.id });
+    });
+    expect(updateNativeAgentControlsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ update: { modelId: offered.id } }),
+    );
+    discoveryUpdates = [
+      () => ({
+        viewVersion: 1,
+        status: "snapshot",
+        token: "discovery-2",
+        value: {
+          identity,
+          sections: { models: { availability: "ready", value: [offered], revision: 2 } },
+        },
+      }),
+    ];
+    await act(async () => {
+      await result.current.refresh();
+    });
+    await waitFor(() => expect(result.current.projection?.composer?.models).toEqual([offered]));
+    expect(result.current.projection?.composer?.selectedModelId).toBe(offered.id);
   });
 
   test("keeps actions non-authoritative until session state arrives", async () => {

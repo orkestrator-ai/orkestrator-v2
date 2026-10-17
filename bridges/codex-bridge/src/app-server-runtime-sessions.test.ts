@@ -1185,6 +1185,10 @@ describe("models", () => {
 
     const result = await h.runtime.listModels();
     expect(result.source).toBe("app-server");
+    expect(result.supportedModelIds).toEqual(["gpt-5.6-sol", "hidden-one"]);
+    expect(
+      h.child().requests.find((request) => request.method === "model/list")?.params,
+    ).toMatchObject({ includeHidden: true });
     // Hidden models stay out of the picker.
     expect(result.models.map((model) => model.id)).toEqual(["gpt-5.6-sol"]);
     expect(result.models[0]!.reasoningEfforts).toEqual(["low", "medium", "xhigh"]);
@@ -1238,6 +1242,30 @@ describe("models", () => {
     const result = await h.runtime.listModels();
     expect(result.models[0]!.reasoningEfforts).toEqual([]);
     expect(result.models[0]!.defaultReasoningEffort).toBe("medium");
+  });
+
+  test("reads new availability after a child generation replacement", async () => {
+    let model = "account-a";
+    let reads = 0;
+    const h = await harness({
+      "model/list": () => {
+        reads += 1;
+        return { data: [{ id: model, displayName: model }], nextCursor: null };
+      },
+    });
+    expect((await h.runtime.listModels()).supportedModelIds).toEqual(["account-a"]);
+    model = "account-b";
+    await h.engine.getSupervisor().restartNow("test catalogue refresh");
+    expect((await h.runtime.listModels()).supportedModelIds).toEqual(["account-b"]);
+    expect(reads).toBe(2);
+  });
+
+  test("a bounded partial catalogue cannot establish model availability", async () => {
+    const h = await harness({
+      "model/list": () => ({ data: [{ id: "first" }], nextCursor: "more" }),
+    });
+    expect(await h.runtime.listModels()).toMatchObject({ source: "cache" });
+    expect((await h.runtime.listModels()).supportedModelIds).toBeUndefined();
   });
 
   test("falls back to the persisted cache when model/list fails", async () => {

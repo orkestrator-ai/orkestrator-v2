@@ -170,3 +170,45 @@ skip changed.
 - This test timed out at 6482.48 ms. In the same owner, `deleting an environment drops its counts from the snapshot` also timed out (5236.95 ms), recorded as [0300](0300-diff-stats-deletion-aggregate-timeout.md).
 - Unchanged owning-file rerun: `bun test ./tests/commands-integration.test.ts` from `apps/backend` passed 55 of 55.
 - No assertion, timeout, skip or implementation in this owner changed.
+
+## Codex catalogue review follow-up recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name full-tests -- mise run test`
+  (Bun 1.4.3, macOS arm64; workspace/root/bridge/protocol reservations
+  4/1/2/1 slots, with two backend workers and concurrent isolated browser and
+  other-worktree validation).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.jlxHbv/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+  This obsolete aggregate was interrupted after an integration test moved
+  during discovery; its workspace result is incomplete and has no final
+  backend test totals. A fresh aggregate validates the final tree.
+- **Failure:** `Electron backend command registry > persists safe cleanup failure
+  details and permits a backend deletion retry` in
+  `apps/backend/tests/commands-integration.test.ts` exceeded its 5000 ms
+  deadline at 5361.69 ms.
+- **Owning-file rerun:** `mise run test:logged -- --name cleanup-retry-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`
+  passed the unchanged owning file (exit 0) in 37.2 seconds.
+- **Assessment:** the isolated pass confirms intermittence. Host contention
+  remains a hypothesis; no lifecycle source, assertion, timeout or skip changed.
+
+
+## Codex catalogue review final validation — 2026-10-17
+
+`mise run test:logged -- --name final-full-tests -- mise run test` ran with
+4/1/2/1 workspace/root/bridge/protocol slots and two isolated backend workers
+on macOS arm64 (Bun 1.4.3), sharing the host with other worktrees.
+
+The cleanup-retry case exceeded its 5000 ms deadline at 7250.79 ms.
+
+The unchanged owning file passed `mise run test:logged -- --name
+commands-owner-final-rerun -- bun test --cwd apps/backend --preload
+../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1
+--only-failures` (exit 0, 40.3 seconds). Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.NfVWIS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+(compressed when the aggregate completes). The isolated pass confirms
+intermittence; host contention remains a hypothesis. No owning implementation,
+assertion, timeout or skip changed.
+
+Final aggregate totals: backend 8814 passed, 41 skipped, ten failed and three
+between-tests errors across 8865 tests in 472 files (541.38 seconds).
+Toolchain had 90 passed and one failed. Root, bridges, protocol and every
+other workspace package passed; aggregate exit 1 after 852.0 seconds.

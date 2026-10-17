@@ -1157,6 +1157,27 @@ export function multiReviewStepSession(
 }
 
 /**
+ * Whether `providerSessionId` on `agent` is one of the workflow's current
+ * sessions: a step's or a reviewer's. Such a session outlives a tab opened on
+ * it; closing the Multi Review closes it.
+ */
+export function multiReviewOwnsProviderSession(
+  workflow: MultiReviewWorkflow,
+  agent: AgentPlatform,
+  providerSessionId: string,
+): boolean {
+  const sessions = [
+    workflow.reviewSession,
+    workflow.preparationSession,
+    workflow.fixSession,
+    ...workflow.reviewers,
+  ];
+  return sessions.some(
+    (session) => session?.agent === agent && session.providerSessionId === providerSessionId,
+  );
+}
+
+/**
  * Whether a step may show its session's transcript as its own.
  *
  * - `none`: the step has no session yet.

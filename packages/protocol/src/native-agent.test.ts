@@ -1209,6 +1209,15 @@ describe("native agent execution policy guard", () => {
     }
   });
 
+  test("validates the optional outer container firewall", () => {
+    for (const containerNetworkAccess of ["full", "restricted"]) {
+      expect(isNativeAgentExecutionPolicy({ ...valid, containerNetworkAccess })).toBe(true);
+    }
+    for (const containerNetworkAccess of [null, true, "off", 1, {}]) {
+      expect(isNativeAgentExecutionPolicy({ ...valid, containerNetworkAccess })).toBe(false);
+    }
+  });
+
   test("rejects a capability that is not one this protocol names", () => {
     expect(
       isNativeAgentExecutionPolicy({ ...valid, capabilityPolicy: { deny: ["fs.write"] } }),
@@ -1265,7 +1274,7 @@ describe("native agent network denial", () => {
     ).toBe(true);
     expect(nativeAgentPolicyDeniesWebSearch(undefined)).toBe(false);
     expect(describeNativeAgentExecutionPolicy(research)).toBe(
-      "Provider sandbox, approvals denied, project rules off, no network except hosted web search, web fetch off",
+      "Provider sandbox, approvals denied, project resources off, no network except hosted web search, web fetch off",
     );
   });
 
@@ -1288,11 +1297,11 @@ describe("native agent network denial", () => {
 
   test("the information panel says the hosted web tools are off, not just restricted", () => {
     expect(describeNativeAgentExecutionPolicy(coordinator)).toBe(
-      "Provider sandbox, approvals denied, project rules off, no network, web search and web fetch off",
+      "Provider sandbox, approvals denied, project resources off, no network, web search and web fetch off",
     );
     const { capabilityPolicy: _omitted, ...restricted } = coordinator;
     expect(describeNativeAgentExecutionPolicy(restricted)).toBe(
-      "Provider sandbox, approvals denied, project rules off, restricted network",
+      "Provider sandbox, approvals denied, project resources off, restricted network",
     );
   });
 });

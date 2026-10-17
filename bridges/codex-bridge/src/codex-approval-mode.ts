@@ -35,8 +35,16 @@ export function codexApprovalConfig(
     return undefined;
   }
   const escalates = mode === "on-request" || mode === "auto-review";
+  // A container keeps the vendor sandbox off, so `on-request` would have no
+  // boundary to ask at and an `ask` policy would never ask. `untrusted` is
+  // the Codex mode that asks without one.
+  const asksWithoutSandbox =
+    mode === "on-request" &&
+    policy?.approvals === "ask" &&
+    policy.sandbox === "container" &&
+    sandbox === "danger-full-access";
   return {
-    approvalPolicy: mode === "auto-review" ? "on-request" : mode,
+    approvalPolicy: mode === "auto-review" ? "on-request" : asksWithoutSandbox ? "untrusted" : mode,
     approvalsReviewer: mode === "auto-review" ? "auto_review" : "user",
     ...(escalates && sandbox === "danger-full-access" && policy?.sandbox !== "container"
       ? { sandbox: "workspace-write" as const }

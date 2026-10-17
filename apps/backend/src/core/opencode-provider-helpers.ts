@@ -6,10 +6,12 @@ import type {
 } from "@opencode-ai/sdk/v2/types";
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2/client";
 import {
+  appendNativeAgentPolicyNote,
   DEFAULT_OPENCODE_MODEL_PROVIDERS,
   nativeAgentPolicyDeniesNetwork,
   nativeAgentPolicyDeniesWebSearch,
   normalizeOpenCodeModelProviders,
+  withoutProviderSandbox,
   type NativeAgentExecutionPolicy,
   type NativeAgentDefaultModelResolution,
   type NativeAgentResumeEntry,
@@ -396,22 +398,37 @@ export function openCodeWorkflowResultDenyPermissionRules() {
 export function effectiveOpenCodePolicy(
   policy: NativeAgentExecutionPolicy,
 ): NativeAgentExecutionPolicy {
-  return {
-    ...policy,
-    // OpenCode resolves its session directory from the checkout's own
-    // configuration and offers no way to opt out, so this axis cannot be
-    // honoured. Reported rather than silently dropped: it is why OpenCode is
-    // `provider-configured` and not `enforced`.
-    projectResources: true,
-    ...(policy.projectResources
-      ? {}
-      : {
-          note:
-            policy.id === "coordinator-read-only"
-              ? "OpenCode always loads the checkout's project configuration, including any MCP servers it declares."
-              : "OpenCode always reads project configuration for its session directory.",
-        }),
-  };
+  // OpenCode resolves its session directory from the checkout's own
+  // configuration and offers no way to opt out, so this axis cannot be
+  // honoured. Reported rather than silently dropped: it is why OpenCode is
+  // `provider-configured` and not `enforced`.
+  const withResources = policy.projectResources
+    ? policy
+    : appendNativeAgentPolicyNote(
+        { ...policy, projectResources: true },
+        policy.id === "coordinator-read-only"
+          ? "OpenCode always loads the checkout's project configuration, including any MCP servers it declares."
+          : "OpenCode always reads project configuration for its session directory.",
+      );
+  // Nor does it have a sandbox: only the permission rules stand between its
+  // commands and the network.
+  return withoutProviderSandbox(withResources, {
+    agent: "OpenCode",
+    toolsetBlocksNetwork: openCodeRulesBlockNetwork(openCodePermissionRules(policy)),
+  });
+}
+
+/**
+ * Whether a rule set refuses every command and page fetch. OpenCode takes the
+ * last rule that matches, which is why `openCodePermissionRules` puts denials
+ * last.
+ */
+export function openCodeRulesBlockNetwork(
+  rules: readonly { permission: string; pattern: string; action: string }[],
+): boolean {
+  const action = (permission: string) =>
+    rules.findLast((rule) => rule.permission === permission || rule.permission === "*")?.action;
+  return ["bash", "webfetch"].every((permission) => action(permission) === "deny");
 }
 
 export function openCodePermissionRules(policy: NativeAgentExecutionPolicy) {

@@ -24,10 +24,10 @@ const TEXT_RULES: Array<{ pattern: RegExp; replacement: string }> = [
     pattern: /([a-z][a-z0-9+.-]*:\/\/)[^/\s:@]+(?::[^/\s@]*)?@/gi,
     replacement: "$1[redacted]@",
   },
-  // ?token=… / &api_key=… in a URL or a log line that contains one.
+  // Query credentials and OAuth state/code in a URL or a log line containing one.
   {
     pattern:
-      /([?&](?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|apikey|auth|authorization|token|secret|password|passwd|signature|sig|key)=)[^&\s"'`]+/gi,
+      /([?&](?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|apikey|auth|authorization|token|secret|password|passwd|signature|sig|key|state|code)=)[^&\s"'`]+/gi,
     replacement: "$1[redacted]",
   },
   { pattern: /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, replacement: "Bearer [redacted]" },

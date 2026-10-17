@@ -222,10 +222,13 @@ describe("container runtime environment wiring", () => {
       ["Stop", "waiting"],
     ] as const) {
       const command = hooks[event]?.[0]?.hooks[0]?.command;
-      expect(command).toContain("/tmp/.claude-state");
+      expect(command).toContain(`/usr/local/bin/orkestrator-state-signal ${expected}`);
       withTempDir((dir) => {
         const stateFile = join(dir, "state");
-        const script = command!.replaceAll("/tmp/.claude-state", shellQuote(stateFile));
+        const script = command!.replaceAll(
+          "/usr/local/bin/orkestrator-state-signal",
+          `ORKESTRATOR_STATE_FILE=${shellQuote(stateFile)} sh ${shellQuote(join(repoRoot, "docker/orkestrator-state-signal.sh"))}`,
+        );
         const path = process.env.PATH ?? "/usr/bin:/bin";
 
         expect(

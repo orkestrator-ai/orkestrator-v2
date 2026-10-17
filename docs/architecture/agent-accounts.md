@@ -201,6 +201,37 @@ the tab without a send.
   missing login answers 401 with `kind: "authentication-required"`, and the
   backend passes that message through unwrapped on every platform.
 
+## Credentials in auth answers
+
+An auth answer never carries a credential. `GET /global/auth` and
+`get_native_agent_auth_status` hold only the fields of `NativeAgentAuthStatus`.
+`POST /global/auth/login` and `begin_native_agent_sign_in` hold only the URL to
+open and the device code (Cursor's bridge also repeats the URL as
+`loginUrl`). The URL and code go back to the client that asked and are never
+logged, because the URL carries the OAuth `state` and the code completes a
+device login.
+
+- **Allowlist, twice.** Each bridge builds its answer field by field from what
+  the provider reported, and the backend parses it the same way again
+  (`HttpBridgeCatalog.authStatus` / `beginSignIn`), so a bridge that starts
+  passing through a provider object cannot reach the renderer. OpenCode is
+  read the same way in `OpenCodeCapabilities.authStatus`.
+- **Logs.** Auth paths log fixed text or a redacted reason only. The Codex
+  bridge redacts its route-failure line (`app.onError`) and its account-read
+  warnings with `redactSecrets`. Hono's default handler would otherwise print
+  the whole `AppServerRpcError`, including app-server's `data`.
+  `open_in_browser` redacts the URL from a failed launch. Nothing logs command
+  arguments or results.
+- **Recordings.** `scripts/scrub-codex-recording.ts` removes `authUrl`,
+  `authorizationUrl`, `verificationUrl`, `userCode` and `loginId`. The opt-in
+  notification recorder writes those verbatim.
+- **Tests.** `tests/helpers/auth-secret-canaries.ts` plants credential-shaped
+  canaries in each fake (environment, credential store, SDK answer), checks the
+  answer's shape against the allowlist and captures console and stdio output.
+  Every bridge's auth routes, the backend parser and OpenCode use it, and
+  `tests/unit/auth-secret-guards.test.ts` fails if a bridge serving
+  `/global/auth` has no such test.
+
 ## Plan usage
 
 `get_plan_usage` reads the active account. `get_agent_account_usage` serves

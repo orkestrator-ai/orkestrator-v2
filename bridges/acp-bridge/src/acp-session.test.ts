@@ -79,7 +79,12 @@ describe("ACP bridge", () => {
       await nativeFetch(`${bridge.base}/session/${resumed.sessionId}/status`, {
         headers: bridge.headers,
       }).then((statusResponse) => statusResponse.json()),
-    ).toMatchObject({ policy, resumableSessionId: listed.sessions[0]!.id });
+    ).toMatchObject({
+      // Reported as it applies: the agent has no sandbox, network or
+      // project-configuration option, so only approvals and tools carry over.
+      policy: { ...policy, sandbox: "none", networkAccess: "full", projectResources: true },
+      resumableSessionId: listed.sessions[0]!.id,
+    });
   });
 
   test("pages the ACP session list and de-duplicates across pages", async () => {

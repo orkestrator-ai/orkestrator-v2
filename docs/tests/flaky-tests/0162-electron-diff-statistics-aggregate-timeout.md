@@ -239,3 +239,11 @@ skip changed.
 - **Assessment:** the isolated pass confirms an intermittent recurrence. Aggregate contention remains an unconfirmed hypothesis. No implementation, assertion, timeout or skip changed.
 
 - **Final aggregate rerun:** `mise run test:logged -- --name merge-tests-final -- mise run test` passed all four groups (exit 0, 277.5 seconds), including all five bridges (88.0 seconds). No tests, assertions, timeouts or skips changed.
+
+## Execution-policy conformance main merge recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test` (Bun 1.4.3, macOS arm64). Workspace/root/bridge/protocol reservations were 4/1/2/1 slots; browser validation ran alongside it.
+- **Failure:** `computes counts for a tracked local environment and announces them` and `serves the Files panel from the scan the badge already ran` exceeded their 5000 ms budgets (9690.43 and 9603.51 ms). Other hook failures and a subsequent missing Docker fixture log are recorded in 0265.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-commands-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 19.0 seconds.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.IG0vGk/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Assessment:** the isolated pass confirms intermittence; root cause remains unconfirmed. No assertion, timeout or skip changed.

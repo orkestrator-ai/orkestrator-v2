@@ -1,4 +1,5 @@
 import { multiReviewNativeFixOptions } from "./multi-review-native-fix.js";
+import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
 import type { NativeAgentRuntimeProvider } from "./native-agent-provider.js";
 import { dispatchMultiReviewAddressPrompt } from "./multi-review-address-dispatch.js";
@@ -6146,6 +6147,89 @@ test("MultiReviewService leaves a workflow that is not failed untouched on retry
     expect(provider.aborted).toEqual([]);
     expect((await snapshot(started.id))?.reviewers[0]?.providerSessionId).toBe("session-1");
   });
+});
+
+test("MultiReviewService progresses with its session viewer closed and no active renderer, then rehydrates and cleans up", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  await withService(
+    "env-hidden-review",
+    provider,
+    async ({ service, storage, start, snapshot, dataDir }) => {
+      await service.init();
+      const started = await start();
+      await waitUntil(async () =>
+        Boolean((await snapshot(started.id))?.reviewers[0]?.providerSessionId),
+      );
+      const reviewer = (await snapshot(started.id))!.reviewers[0]!;
+      const logicalSessionKey = "env-env-hidden-review:reviewer-viewer";
+      const key = nativeAgentSessionStorageKey(
+        started.environmentId,
+        reviewer.agent,
+        logicalSessionKey,
+      );
+      await storage.adoptNativeAgentSession({
+        key,
+        environmentId: started.environmentId,
+        agent: reviewer.agent,
+        logicalSessionKey,
+        providerSessionId: reviewer.providerSessionId!,
+        origin: "interactive-native",
+        interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+      });
+      const commands = createCommandRegistry();
+      const context = { storage, multiReviews: service } as unknown as CommandContext;
+      await commands.get("teardown_tab")!(
+        {
+          environmentId: started.environmentId,
+          tabId: "reviewer-viewer",
+          kind: "claude-native",
+        },
+        context,
+      );
+      expect(await storage.getNativeAgentSession(key)).toBeNull();
+      expect(provider.closed).toEqual([]);
+      expect(provider.aborted).toEqual([]);
+
+      // The renderer is absent throughout this progression; no tab subscription
+      // or active-environment callback drives the backend supervisor.
+      provider.statusValue = "idle";
+      await waitUntil(async () => (await snapshot(started.id))?.phase === "ready");
+      const authoritative = (await snapshot(started.id))!;
+      expect(authoritative.reviewers[0]?.status).toBe("completed");
+      expect(authoritative.consolidatedReport).toBeDefined();
+      // Returning to the environment reads persisted state, including a fresh
+      // storage instance to prove recovery does not depend on missed events.
+      const reloaded = new StorageService(dataDir);
+      await reloaded.init();
+      const returned = await commands.get("get_multi_review_workflow")!(
+        { workflowId: started.id },
+        { storage: reloaded } as CommandContext,
+      );
+      expect(returned).toMatchObject({
+        snapshot: {
+          phase: "ready",
+          reviewers: [{ status: "completed" }],
+          consolidatedReport: authoritative.consolidatedReport,
+        },
+      });
+      const transcript = await service.reviewerTranscript(started.id, reviewer.id);
+      expect(transcript.status).toBe("completed");
+      await service.cancel(started.id);
+      await commands.get("delete_multi_review_workflow")!({ workflowId: started.id }, context);
+      expect(provider.closed).toContain(reviewer.providerSessionId!);
+      expect(await storage.getMultiReviewWorkflow(started.id)).toBeNull();
+      expect(await storage.listNativeAgentSessions()).toEqual([]);
+    },
+    {
+      serviceOptions: {
+        autoAdvance: true,
+        pollIntervalMs: 10,
+        observationIntervalMs: 10,
+        reconcileIntervalMs: 30,
+      },
+    },
+  );
 });
 
 test("MultiReviewService closes every child session and pane tab before allowing a replacement", async () => {

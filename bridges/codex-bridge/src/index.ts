@@ -29,12 +29,14 @@ import { registerCodexTranscriptRoutes } from "./transcript-routes.js";
 import { isCodexApprovalMode } from "./codex-approval-mode.js";
 import {
   generateSessionTitleWithCodexExec,
+  normalizeExplicitSessionTitle,
   shutdownSessionTitleGeneration,
 } from "./session-titles.js";
 import { AppServerRuntime, SESSION_CLOSING_ERROR } from "./app-server-runtime.js";
 import { AppServerEngine, type AppServerEngineOptions } from "./engine/app-server-engine.js";
 import { codexAppServerConfigOverrides } from "./codex-config.js";
 import { APPROVAL_DECISIONS, isApprovalDecision } from "./app-server/approvals.js";
+import { redactSecrets } from "./app-server/redaction.js";
 import { parseInteractionAnswer, type InteractionAnswer } from "./app-server/interactions.js";
 import type { ParkedHoldResponse } from "./app-server-runtime-approvals.js";
 import type { AgentInteractionHold } from "@orkestrator/protocol/agent-interactions";
@@ -142,6 +144,22 @@ interface PromptAttachmentInput {
 }
 
 export const app = new Hono();
+
+/**
+ * Hono's default handler prints the whole error, and an `AppServerRpcError`
+ * carries app-server's `data` verbatim. Log only the redacted stack string,
+ * preserving diagnostic frames without inspecting attached error data.
+ */
+app.onError((error, c) => {
+  if ("getResponse" in error) {
+    const response = (error as { getResponse(): Response }).getResponse();
+    return c.newResponse(response.body, response);
+  }
+  console.error(
+    `[codex-bridge] ${c.req.method} ${c.req.path} failed: ${redactSecrets(error.stack ?? `${error.name}: ${error.message}`)}`,
+  );
+  return c.text("Internal Server Error", 500);
+});
 export const MAX_CODEX_TRANSCRIPT_RESPONSE_BYTES = 16 * 1024 * 1024;
 
 export function boundCodexTranscriptResponse(
@@ -1845,9 +1863,9 @@ app.post("/session/:id/rewind-messages", async (c) => {
 
 app.post("/session/:id/title", async (c) => {
   const body = await c.req.json().catch(() => ({}));
-  const title = typeof body.title === "string" ? body.title.trim().slice(0, 512) : "";
+  const title = typeof body.title === "string" ? normalizeExplicitSessionTitle(body.title) : "";
   if (!title) return c.json({ error: "title is required" }, 400);
-  return (await appServerRuntime.setSessionTitle(c.req.param("id"), title))
+  return (await appServerRuntime.setSessionTitle(c.req.param("id"), body.title))
     ? c.json({ title })
     : c.json({ error: "Session not found" }, 404);
 });

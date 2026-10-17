@@ -102,6 +102,12 @@ mostly inside containers. How accounts work is in
    Neither is called today.
 5. **Codex cancel.** Send `account/login/cancel` when an in-tab sign-in is
    abandoned. Nothing calls it today.
+6. **Scrub bridge output before the debug log.** `commands-servers.ts`
+   forwards local bridge stdout and stderr unchanged to `console.debug` and
+   `console.error`. With Debug logging on, `application-logging.ts` writes that
+   output to `<dataDir>/logs` with no redaction. No bridge prints auth data
+   today, and the canary tests hold each auth path to that. A credential-shape
+   scrub at that forward would also cover a log line nobody has written yet.
 
 ### Account switching gaps
 
@@ -135,8 +141,6 @@ Each was checked against the current code.
   item 3, in the settings card for every enabled platform.
 - A Codex sign-out then sign-in round trip on a fixture profile with
   `--credential-source codex`.
-- No token or key in any auth response body except the intended login `url`,
-  and the URL itself is never logged.
 - After item 1: an expired Claude login mid-turn shows the `auth` notice and
   the transcript sign-in card, not a spawn failure. A missing Claude login
   (`readiness`) already locks the composer behind the sign-in card.
@@ -163,6 +167,34 @@ Each was checked against the current code.
   credential as the account login, so each added Claude account has to sign in
   to those servers again. Copying them would break the rule above; this stays a
   known limitation unless Claude separates the two.
+
+- **No credential in an auth answer; the login URL is never logged.** Checked
+  at `9906db30` for every bridge, the backend boundary, OpenCode, the account
+  and Cursor login drivers, Control MCP, the public API and the renderer. The
+  rule and its guards are in
+  [agent-accounts.md](../architecture/agent-accounts.md#credentials-in-auth-answers).
+  - Answers are allowlisted field by field, at the bridge and again in the
+    backend, rather than redacted by pattern. A pattern cannot recognise a
+    credential it has no rule for, and an allowlist cannot pass one through.
+    Free-text fields (`label`, `plan`, `hint`) are taken from named provider
+    fields that are not credentials. No secret-shape filter runs on them.
+  - The URL and code go only to the client that asked. Logs never carry them,
+    not even redacted: the URL is short-lived but holds the OAuth `state`, and
+    the code completes a device login.
+  - Redaction runs where a log line is written: Codex `app.onError` and its
+    account-read warnings, and `open_in_browser`. Nothing redacts in the logger
+    (see outstanding item 6) or at `assertOkWithErrorDetail`. Bridge error
+    bodies on auth routes are fixed text, apart from Cursor's SDK login
+    failure, whose messages are fixed strings in `@cursor/sdk` 1.0.37.
+  - The guard is permanent tests, not a one-off check: canary credentials in
+    each fake, a strict shape check of each answer, and capture of console and
+    stdio (`tests/helpers/auth-secret-canaries.ts`). A static guard
+    (`tests/unit/auth-secret-guards.test.ts`) keeps every bridge that serves
+    `/global/auth` covered.
+  - Login progress (`get_agent_account_login`, `cursor_sdk_login_status`,
+    `get_github_cli_login`) is one global value that any gateway client can
+    read. That is accepted: the gateway credential already grants full
+    control of the backend.
 
 ## Open questions
 

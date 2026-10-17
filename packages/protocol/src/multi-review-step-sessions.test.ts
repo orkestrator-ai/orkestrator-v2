@@ -3,6 +3,7 @@ import {
   MULTI_REVIEW_WORKFLOW_VERSION,
   isMultiReviewStepTranscriptRequest,
   multiReviewSharedSessionStep,
+  multiReviewOwnsProviderSession,
   multiReviewStepSessionAccess,
   type MultiReviewSession,
   type MultiReviewWorkflow,
@@ -57,6 +58,21 @@ function access(target: MultiReviewWorkflow) {
 }
 
 describe("step sessions", () => {
+  for (const owner of ["preparationSession", "reviewSession", "fixSession", "reviewer"] as const) {
+    test(`provider ownership includes the current ${owner} and requires the same agent`, () => {
+      const current = session("current");
+      const target = workflow(
+        owner === "reviewer"
+          ? { reviewers: [{ id: "reviewer-1", ...current, status: "running" }] }
+          : { [owner]: current },
+      );
+      expect(multiReviewOwnsProviderSession(target, "codex", "current")).toBe(true);
+      expect(multiReviewOwnsProviderSession(target, "claude", "current")).toBe(false);
+      expect(multiReviewOwnsProviderSession(target, "codex", "superseded")).toBe(false);
+      expect(multiReviewOwnsProviderSession(workflow({}), "codex", "current")).toBe(false);
+    });
+  }
+
   test("separate sessions each belong to their own step", () => {
     expect(
       access(

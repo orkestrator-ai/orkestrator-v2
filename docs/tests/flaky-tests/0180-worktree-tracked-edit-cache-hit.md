@@ -106,3 +106,27 @@ mise run test:logged -- --name git-snapshots-rerun -- bun test --cwd apps/backen
 Aggregate evidence:
 `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Q6mb2y/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 No snapshot implementation, assertion, timeout or skip changed.
+
+## Auth-secrets main merge recurrence on 2026-10-17
+
+`mise run test:logged -- --name latest-merge-tests -- mise run test` while
+merging main through `2039ae62` into
+`todo-auth-response-secrets-fd4c38797733` reproduced the same cache-hit
+assertion at line 139 (`Expected: 1, Received: 0`, 135.99 ms). The workspace
+group reserved four worker slots, with two package tasks and two isolated Bun
+workers per package; root reserved one slot, bridges two, and protocol one.
+The backend reported 8,492 passed, 40 skipped and one failed across 455 files
+(279.57 seconds). The aggregate exited 1 after 314.3 seconds; the other
+workspace packages, root, bridges and protocol passed.
+
+The unchanged owning file passed alone (exit 0, four tests, 0.9 seconds):
+
+```bash
+mise run test:logged -- --name merge-worktree-recheck -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures
+```
+
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.CRhLaf/summary.json`
+and `workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+in the same directory; wrapper artifacts are in `orkestrator-test-run.XvaLJ6`.
+No watcher implementation, assertion, timeout or skip changed. The existing
+cache-invalidation hypothesis remains unconfirmed.

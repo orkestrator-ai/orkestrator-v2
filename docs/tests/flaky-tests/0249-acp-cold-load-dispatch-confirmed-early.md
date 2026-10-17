@@ -53,3 +53,11 @@ The subsequent `mise run test:logged -- --name final-tests -- mise run test` agg
 - **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.CYmzDD/bridges.log.gz`.
 - **Assessment:** consistent with the recorded completion/probe race; no
   production behavior, assertion, timeout or skip changed.
+
+## Execution-policy conformance main merge recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test` (Bun 1.4.3, macOS arm64). Workspace/root/bridge/protocol reservations were 4/1/2/1 slots; browser validation ran alongside it.
+- **Failure:** The final dispatch probe also returned `turn: { state: "completed" }`, failing exact equality at line 1382 (1497.71 ms).
+- **Owning-file rerun:** `mise run test:logged -- --name merge-acp-context-isolated -- bun test --cwd bridges/acp-bridge ./src/acp-context.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 17.1 seconds.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.IG0vGk/bridges.log.gz`.
+- **Assessment:** the isolated pass confirms intermittence; root cause remains unconfirmed. No assertion, timeout or skip changed.

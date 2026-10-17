@@ -40,3 +40,23 @@ The design canvas test appears sensitive to the suite's six-worker parallel load
 - **Owning-file rerun:** `mise run test:logged -- --name merge-design-browser-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1` passed the unchanged file in 23.7 s (exit 0).
 - **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.o1XC99/merge-browser.log.gz`.
 - **Disposition:** confirmed recurrence. Earlier overlapping focused browser invocations shared an output directory and are discarded as invalid evidence; the successful rerun ran sequentially. Host contention remains an unconfirmed hypothesis.
+
+## Ordering review (2026-10-16)
+
+Reviewed with the backend design flakes 0193, 0215 and 0218, which were test
+artefacts, not ordering bugs. The backend hint order this spec relies on is
+now pinned in `core/design/sync.test.ts`: per-canvas commit order, and status
+hints that never overtake their commit. This case was not rerun. Its symptoms
+(Playwright action timeouts, a disabled picker, an unmounted page) are client
+or profile timing, and nothing here implicates the design change feed. It
+stays open; see the follow-up in
+[design-canvas-qualification.md](../../todo/design-canvas-qualification.md).
+
+## Execution-policy conformance main merge recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name merge-browser -- mise run test:browser`; nine Playwright workers alongside the non-iOS suite.
+- **Failure:** Both mobile and desktop cases exceeded 30000 ms. The desktop case was waiting for the export button.
+- **Suite counts:** 323 passed, 69 skipped, four failed across 396 cases (247.6 seconds). The native branch-picker failure also failed alone and is not classified as a flake.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-design-browser-isolated -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1` passed the unchanged file (exit 0) in 15.9 seconds. Browser reruns ran sequentially.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.2CnKQx/merge-browser.log.gz`.
+- **Assessment:** intermittent under the aggregate browser run; root cause remains unconfirmed. No assertion, timeout or skip changed.

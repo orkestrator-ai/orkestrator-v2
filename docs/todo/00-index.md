@@ -57,10 +57,10 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 46 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 270 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 259 |
-| **Total** | | **576** |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 39 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 250 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 261 |
+| **Total** | | **551** |
 
 ## Very high
 
@@ -100,7 +100,7 @@ it reaches. Some rules of thumb:
 ### CLI and slash commands (high)
 
 - [ ] Re-run CLI credential-free, container and live Claude, Codex and OpenCode matrices at current main ([cli-qualification.md](cli-qualification.md), qualification)
-- [ ] Verify whether a new Claude tab shows legacy `BUILTIN_COMMANDS` rows in the picker before its first query ([slash-command-catalogue.md](slash-command-catalogue.md), verify)
+- [x] Verify whether a new Claude tab shows legacy `BUILTIN_COMMANDS` rows in the picker before its first query ([slash-command-catalogue.md](slash-command-catalogue.md), verify)
 - [ ] Run live slash-command probes for every provider at current pins in a disposable isolated profile ([slash-command-qualification.md](slash-command-qualification.md), qualification)
 - [ ] Run the inactive-environment slash-command browser scenario, including restarts at dispatch boundaries ([slash-command-qualification.md](slash-command-qualification.md), qualification)
 
@@ -109,16 +109,16 @@ it reaches. Some rules of thumb:
 - [ ] Re-run the full container live set, benchmarks and real-stack Docker specs on current `main` ([container-platform-qualification.md](container-platform-qualification.md), qualification)
 - [ ] Qualify the container live set and real-stack Docker run on Docker Desktop for Apple Silicon ([container-platform-qualification.md](container-platform-qualification.md), qualification)
 - [ ] Qualify stop with a pending approval (C11) on a real provider: the approval is denied, never approved ([container-platform-qualification.md](container-platform-qualification.md), qualification)
-- [ ] Re-trace `PROVIDER_STATE_LAYOUT` paths at current pins and add the step to the agent-upgrade guide ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md))
+- [x] Re-trace `PROVIDER_STATE_LAYOUT` paths at current pins and add the step to the agent-upgrade guide ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md))
 - [x] Allow firewall traffic as address, protocol and port tuples (TCP 443, GitHub SSH) under a new policy version ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
-- [ ] Replace the 1 s Claude state `docker exec` poll with a pushed change signal and a slow safety read ([container-state-observation.md](container-state-observation.md))
+- [x] Replace the 1 s Claude state `docker exec` poll with a pushed change signal and a slow safety read ([container-state-observation.md](container-state-observation.md))
 - [ ] Record a non-skipped run of the deletion-during-setup real-stack spec on current `main` ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), qualification)
 - [ ] Run a seeded real-stack pass of the pre-ledger startup sweeps in an isolated dev profile ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), qualification)
 
 ### Design canvas (high)
 
 - [ ] Run a live Claude and Codex design-tool cycle, including Ask agent, handoff and an environment switch ([design-canvas-qualification.md](design-canvas-qualification.md), qualification)
-- [ ] Verify whether the open design flakes, especially the extra event in 0215, reflect ordering bugs ([design-canvas-qualification.md](design-canvas-qualification.md), verify)
+- [x] Verify whether the open design flakes, especially the extra event in 0215, reflect ordering bugs ([design-canvas-qualification.md](design-canvas-qualification.md), verify)
 - [x] Reject a reused design `correlationId` with different input on settled receipts in `submit` and `findCreate` ([design-operation-recovery-edges.md](design-operation-recovery-edges.md))
 
 ### MCP (high)
@@ -131,11 +131,11 @@ it reaches. Some rules of thumb:
 ### Agent engines and provider SDKs (high)
 
 - [x] Park Claude `onElicitation` and `onUserDialog` requests as interactions instead of declining them ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
-- [ ] Check on each platform that the Agent Info policy summary matches the options the adapter received ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
+- [x] Check on each platform that the Agent Info policy summary matches the options the adapter received ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
 - [ ] Qualify a paused question and approval on each provider's real CLI past ten minutes, then answer ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
 - [ ] Keep the Claude CLI open across idle turns with an idle detach instead of draining at turn end ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md))
 - [x] Report `authentication-required` readiness on Claude, Pi, ACP and OpenCode; drop the Cursor-only 401 branch ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
-- [ ] Confirm no auth response body carries a token or key except the login URL, and the URL is never logged ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)
+- [x] Confirm no auth response body carries a token or key except the login URL, and the URL is never logged ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)
 - [ ] Confirm close retains the conversation through the UI for Cursor, Pi, OpenCode and Grok ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
 
 ### Transcripts, observation and bandwidth (high)
@@ -239,11 +239,11 @@ it reaches. Some rules of thumb:
 - [ ] Check CLI-started question and approval cards in the browser for providers other than Claude ([cli-qualification.md](cli-qualification.md), qualification)
 - [ ] Add a CLI scenario with a foreign-owner Docker decoy and assert no fallback or mutation ([cli-qualification.md](cli-qualification.md), qualification)
 - [ ] Verify the CLI credential-free scenario matrix still passes at `2459b05c` ([cli-qualification.md](cli-qualification.md), verify)
-- [ ] Retire the legacy slash catalogue routes and stop pre-session tabs showing guessed rows ([slash-command-catalogue.md](slash-command-catalogue.md))
+- [ ] Retire the legacy slash catalogue routes and stop the old-bridge 404 fallback showing guessed rows ([slash-command-catalogue.md](slash-command-catalogue.md))
 - [ ] Label UI-dependent Pi extension commands unavailable or return a bounded unsupported-interaction result ([slash-command-catalogue.md](slash-command-catalogue.md))
 - [ ] Check slash picker source groups, keyboard order and catalogue refresh on Claude, Pi and Grok in a browser ([slash-command-catalogue.md](slash-command-catalogue.md), qualification)
 - [ ] Collect legacy-route use counts and run a mixed-version check before deleting legacy catalogue routes ([slash-command-catalogue.md](slash-command-catalogue.md), qualification)
-- [ ] Verify whether a Grok tab reads the catalogue without a session ID and fails on `/plugins/commands` ([slash-command-catalogue.md](slash-command-catalogue.md), verify)
+- [x] Verify whether a Grok tab reads the catalogue without a session ID and fails on `/plugins/commands` ([slash-command-catalogue.md](slash-command-catalogue.md), verify)
 - [ ] Verify whether old-backend/new-bridge and old/new renderer catalogue projections are tested ([slash-command-catalogue.md](slash-command-catalogue.md), verify)
 - [ ] Check that slash skill and template paths resolve inside the provider's container environment ([slash-command-qualification.md](slash-command-qualification.md), qualification)
 - [ ] Run the slash-command mixed-version matrix across backend, bridge and renderer versions ([slash-command-qualification.md](slash-command-qualification.md), qualification)
@@ -261,7 +261,7 @@ it reaches. Some rules of thumb:
 - [ ] Check the agent-tools port is answered from a container on a host whose reachability path is open (C22) ([container-platform-qualification.md](container-platform-qualification.md), qualification)
 - [ ] Decide the published minimum Engine and Desktop versions and whether rootless is gated or refused ([container-platform-qualification.md](container-platform-qualification.md), decision)
 - [ ] Decide whether the container live suites get a scheduled CI job on Linux amd64 and arm64 runners ([container-platform-qualification.md](container-platform-qualification.md), decision)
-- [ ] Close or explicitly accept partial rebuild preservation for Codex, OpenCode and Grok state files ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md))
+- [x] Close or explicitly accept partial rebuild preservation for Codex, OpenCode and Grok state files ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md))
 - [ ] Retire the legacy-layer, host-mounts and policy-1 paths, with an export path for legacy containers ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md))
 - [ ] Decide whether `restoreRecoveryCopy` always assigns a new `runtimeGeneration` so stale handles are refused ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md), decision)
 - [ ] Generate one canonical default allowlist for the backend, renderer and firewall fallbacks ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
@@ -284,6 +284,7 @@ it reaches. Some rules of thumb:
 - [ ] Do a manual screen-reader and keyboard-only accessibility pass over the design canvas ([design-canvas-qualification.md](design-canvas-qualification.md), qualification)
 - [ ] Measure design client performance and leaks at 1, 16 and 64 frames, and library open up to 256 canvases ([design-canvas-qualification.md](design-canvas-qualification.md), qualification)
 - [ ] Run design mixed-version and migration checks on real old and new binaries ([design-canvas-qualification.md](design-canvas-qualification.md), qualification)
+- [ ] Reproduce design browser flakes 0174 and 0208 under a fixed worker count and synthetic load, then fix the wait or the product ([design-canvas-qualification.md](design-canvas-qualification.md))
 - [ ] Prove with a fault test whether a hung renderer `browser.close()` leaks Chromium, and fix it if so ([design-operation-recovery-edges.md](design-operation-recovery-edges.md))
 - [ ] Persist the native session id on design session links through `design_session_link` ([design-agent-conversation-links.md](design-agent-conversation-links.md))
 - [ ] Offer Resume conversation for closed design links whose native session can be resumed ([design-agent-conversation-links.md](design-agent-conversation-links.md))
@@ -332,6 +333,9 @@ it reaches. Some rules of thumb:
 - [ ] Retire the Cursor, Pi and ACP policy env overrides and make `cursorMcpServers` follow the session policy ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
 - [ ] Raise and answer an MCP elicitation in the browser, reload mid-question, and confirm it rehydrates ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
 - [ ] Run the Docker agent suite for the Cursor and Pi container execution-policy cells ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
+- [ ] Make Codex workers honour `projectResources: false` by pinning the checkout untrusted, then drop `codexReportedPolicy` ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
+- [ ] Confirm on a real Claude CLI that a sandboxed auto-approve session cannot leave the sandbox or reach an unlisted domain ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
+- [ ] Decide whether Pi, Grok and OpenCode refuse a provider-sandbox or restricted-network host policy instead of running unsandboxed ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), decision)
 - [ ] Verify every bridge has per-kind park, render, resolve and fail-closed timeout interaction tests ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), verify)
 - [ ] Verify whether a container Cursor session loads the repository's `.cursor/mcp.json` today ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), verify)
 - [ ] Decide whether Claude MCP OAuth sign-in uses parked `mcp-url` elicitations or a separate MCP flow ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), decision)
@@ -568,8 +572,9 @@ it reaches. Some rules of thumb:
 ### Containers and environments (low)
 
 - [ ] Verify whether the container live suites have run since #877 ([container-platform-qualification.md](container-platform-qualification.md), verify)
-- [ ] Verify Codex `session_index.jsonl` and Grok `active_sessions.json` / `worktrees.db` paths at current pins ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md), verify)
+- [x] Verify Codex `session_index.jsonl` and Grok `active_sessions.json` / `worktrees.db` paths at current pins ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md), verify)
 - [ ] Decide whether a resumable copy journal is worth its complexity for very large workspaces ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md), decision)
+- [ ] Stop seeding OpenCode `snapshot/`, `storage/` and `account.json` from the host; 1.19.0 never reads the copies in a container ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md))
 - [ ] Optionally switch between restricted and full network mode in place instead of requiring a rebuild ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
 - [ ] Decide between per-platform regression targets and one reference host with a tolerance ([container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md), decision)
 - [ ] Replace per-member source `sha256sum` with an in-process tar hasher after a safety review ([container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md), deferred)
@@ -582,6 +587,7 @@ it reaches. Some rules of thumb:
 - [ ] Verify the per-exec cost of the Claude state poll (B18) on Docker Desktop ([container-state-observation.md](container-state-observation.md), verify)
 - [ ] Decide whether the ~15 s delay for Git-invisible file changes is acceptable against the 6 s budget ([container-state-observation.md](container-state-observation.md), decision)
 - [ ] Decide whether ad hoc worktree roots should key their read cache by `realpath` ([container-state-observation.md](container-state-observation.md), decision)
+- [ ] Report Claude state signal health (armed, confirmed, demoted, unsupported) per container in recurring diagnostics ([container-state-observation.md](container-state-observation.md))
 - [ ] Fix the remaining test temp-directory leaks in Pi, Codex and Cursor bridge and worktree-watcher tests ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md))
 - [ ] Optionally surface ledger entries at the cleanup attempt cap in diagnostics or `disk:report` ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md))
 - [ ] Verify which writers still produce `<name>.json.<pid>.tmp` files since the #969 SQLite move ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), verify)
@@ -626,6 +632,8 @@ it reaches. Some rules of thumb:
 
 - [ ] Set Claude `askUserQuestion.previewFormat` once the question card's plain or html mode is decided ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
 - [ ] Delete the unused OpenCode `autoAnswerRequests` branch and move its tests onto the journaled path ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
+- [ ] Report a read-only turn's narrower policy in Agent Info on Claude, Cursor and Grok ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
+- [ ] Make Codex `on-request` ask, or describe it honestly, in a container under an auto-approve policy ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
 - [ ] Let a Grok pause outlive the 30-minute turn deadline and Grok's own question timeout ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
 - [ ] Show `hold` in `session interactions list` and add a CLI and public API hold action ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
 - [ ] Read the Claude model catalogue from `initializationResult()` on the live runtime, not a throwaway query ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md))
@@ -642,6 +650,7 @@ it reaches. Some rules of thumb:
 - [ ] Report or re-link account entries whose shared symlink a CLI atomic-rename replaced with a file ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
 - [ ] Verify with a live switch mid-turn that usage windows no longer fold into the new account's card ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), verify)
 - [ ] Stop older container images restoring the host login on restart by retiring the legacy host-mount path ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), blocked)
+- [ ] Scrub credential shapes from bridge stdout/stderr before the backend forwards it to the debug application log ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
 - [ ] Source Codex reasoning `summary` and `personality` from a setting, or remove the bridge plumbing ([composer-model-parameters.md](composer-model-parameters.md))
 - [ ] Decide whether Claude `acceptEdits` joins the `mode` axis, or stop forwarding `permissionMode` ([composer-model-parameters.md](composer-model-parameters.md))
 - [ ] Add a backend per-environment `maxBudgetUsd` setting mapped to a stopped notice, or drop the option ([composer-model-parameters.md](composer-model-parameters.md))
@@ -814,17 +823,17 @@ it reaches. Some rules of thumb:
 | **CLI and slash commands** | | | | | |
 | [cli-command-surface.md](cli-command-surface.md) |  |  | 6 | 7 | 13 |
 | [cli-qualification.md](cli-qualification.md) |  | 1 | 6 | 1 | 8 |
-| [slash-command-catalogue.md](slash-command-catalogue.md) |  | 1 | 6 | 4 | 11 |
+| [slash-command-catalogue.md](slash-command-catalogue.md) |  |  | 5 | 4 | 9 |
 | [slash-command-qualification.md](slash-command-qualification.md) |  | 2 | 3 | 2 | 7 |
 | **Containers and environments** | | | | | |
 | [container-platform-qualification.md](container-platform-qualification.md) |  | 3 | 11 | 1 | 15 |
-| [container-rebuild-state-preservation.md](container-rebuild-state-preservation.md) |  | 1 | 3 | 2 | 6 |
+| [container-rebuild-state-preservation.md](container-rebuild-state-preservation.md) |  |  | 2 | 2 | 4 |
 | [container-network-and-credential-isolation.md](container-network-and-credential-isolation.md) |  |  | 2 | 1 | 3 |
 | [container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md) |  |  | 3 | 6 | 9 |
-| [container-state-observation.md](container-state-observation.md) |  | 1 | 5 | 5 | 11 |
+| [container-state-observation.md](container-state-observation.md) |  |  | 5 | 6 | 11 |
 | [environment-and-disk-cleanup.md](environment-and-disk-cleanup.md) |  | 2 | 1 | 5 | 8 |
 | **Design canvas** | | | | | |
-| [design-canvas-qualification.md](design-canvas-qualification.md) |  | 2 | 5 | 6 | 13 |
+| [design-canvas-qualification.md](design-canvas-qualification.md) |  | 1 | 6 | 6 | 13 |
 | [design-operation-recovery-edges.md](design-operation-recovery-edges.md) |  |  | 1 | 2 | 3 |
 | [design-agent-conversation-links.md](design-agent-conversation-links.md) |  |  | 5 | 3 | 8 |
 | **MCP** | | | | | |
@@ -832,10 +841,10 @@ it reaches. Some rules of thumb:
 | [mcp-environment-delivery.md](mcp-environment-delivery.md) |  |  | 4 | 10 | 14 |
 | [control-mcp-voice-surface.md](control-mcp-voice-surface.md) |  |  | 9 |  | 9 |
 | **Agent engines and provider SDKs** | | | | | |
-| [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md) |  | 2 | 9 | 4 | 15 |
+| [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md) |  | 1 | 12 | 6 | 19 |
 | [mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md) |  | 1 | 3 | 5 | 9 |
 | [session-titles-and-history.md](session-titles-and-history.md) |  |  | 4 | 4 | 8 |
-| [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md) |  | 1 | 8 | 5 | 14 |
+| [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md) |  |  | 8 | 6 | 14 |
 | [composer-model-parameters.md](composer-model-parameters.md) |  |  | 2 | 4 | 6 |
 | [opencode-v2.md](opencode-v2.md) |  |  |  | 3 | 3 |
 | [provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md) |  |  | 2 | 15 | 17 |
@@ -849,7 +858,7 @@ it reaches. Some rules of thumb:
 | **Multi Review** | | | | | |
 | [multi-review-scale-and-cost.md](multi-review-scale-and-cost.md) |  | 2 | 5 | 9 | 16 |
 | [multi-review-panel-value.md](multi-review-panel-value.md) |  | 1 | 4 | 5 | 10 |
-| [multi-review-flow-graph.md](multi-review-flow-graph.md) |  |  |  | 4 | 4 |
+| [multi-review-flow-graph.md](multi-review-flow-graph.md) |  |  |  |  | 0 |
 | **Coordinator and agent mail** | | | | | |
 | [coordinator-read-only-adapters.md](coordinator-read-only-adapters.md) |  |  | 5 | 4 | 9 |
 | [coordinator-live-conformance.md](coordinator-live-conformance.md) |  | 5 | 8 | 1 | 14 |

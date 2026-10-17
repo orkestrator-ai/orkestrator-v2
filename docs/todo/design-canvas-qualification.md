@@ -1,6 +1,7 @@
 # Design canvas qualification
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `2459b05c` (2026-10-15); the flake review against
+`9906db30` (2026-10-16).
 
 The design canvas ([`design-canvas.md`](../architecture/design-canvas.md)) is
 complete in code: recoverable operations, safe export, history, incremental
@@ -81,6 +82,14 @@ files; see [live-provider-and-platform-qualification.md](live-provider-and-platf
   the explicit downgrade path (export before running an older backend). Cover
   a migrated record, an interrupted migration, a future record version and a
   corrupted record with an older backup.
+- **Browser design flakes under controlled parallel load.**
+  [0174](../tests/flaky-tests/0174-design-canvas-parallel-browser-timeout.md)
+  (`e2e/DesignCanvas.spec.ts` timeouts with six workers) and
+  [0208](../tests/flaky-tests/0208-design-canvas-private-import-picker-disabled-in-suite.md)
+  (import picker stays disabled late in `test:agent:browser`) were not rerun
+  in the 2026-10-16 review. Reproduce each with a fixed worker count and a
+  synthetic CPU load. Then decide between a client wait on an observable state
+  (the controller's 3 s cursor check is a real timer) and a product fix.
 
 ### Deferred until measured
 
@@ -159,6 +168,32 @@ did not justify a storage redesign. In order:
   or automatic conflict merging, a new database, asset package or write-ahead
   log solely for speed, and automatic implementation dispatch, approval,
   publishing or deployment.
+- Design flake review (2026-10-16): none of the backend design flakes was an
+  ordering bug, and no product code changed.
+  1. **Hint contract.** Hints stay at most once, best effort, and in commit
+     order per canvas within one backend, because they are published inside
+     the lane after their commit. The cursor and `design_sync` are
+     authoritative, and there is no per-hint sequence number and no dedupe.
+     The ordering is pinned by "live hints follow per-canvas commit order and
+     stale validation publishes nothing" in `core/design/sync.test.ts` and
+     stated under Synchronization in `design-canvas.md`. A sequence number
+     would add nothing: revision plus status version already orders hints,
+     and clients repair gaps by cursor.
+  2. **0215 was fixed in the test.** The 4th event was the first commit's
+     background-validation `status` hint, which is correct behaviour. The case
+     now holds that job with `renderer.block` before counting, then asserts
+     that the hint is the only later one. Awaiting validation inside
+     `execute` was rejected: it would put a render on every HTML edit's
+     acknowledgment path.
+  3. **0193, 0218 and the 0225 design cases bound the work, not the
+     deadline.** 258, 260 and 55 sequential fsynced commits took 0.4–0.9 s
+     alone and over 5 s under load. The tests lower the bound with
+     `withDesignLimit` (`core/design/test-support.ts`; `DESIGN_LIMITS` is read
+     at call time), and in-memory cases check the shipped 256-change and
+     50-entry bounds. Raising the per-test deadline was rejected because it
+     keeps the load sensitivity. A `DesignServiceOptions` limit seam was
+     rejected because it would touch `records.ts`, `apply.ts` and `service.ts`
+     only for tests.
 - Deliberate deviations, not bugs: drafts persist per client in
   `localStorage` (`design-drafts.ts`) rather than the backend compose-draft
   store; the layer tree uses its own fixed-row windowing instead of
@@ -178,13 +213,6 @@ did not justify a storage redesign. In order:
   and import cover copying today. If it is built, define and test the lock
   order for two-canvas operations before adding them.
 
-## Needs verification
-
-- Whether the open design flakes (listed under "Related") reflect ordering
-  bugs or only aggregate load. 0215 deserves a closer look: it asserts the
-  event count behind the duplicate-execute guarantee and saw 4 events instead
-  of 3.
-
 ## Related
 
 - [design-operation-recovery-edges.md](design-operation-recovery-edges.md) and
@@ -197,10 +225,13 @@ did not justify a storage redesign. In order:
   [`testing-guide.md`](../development/testing-guide.md).
 - Open design flakes:
   [0174](../tests/flaky-tests/0174-design-canvas-parallel-browser-timeout.md),
+  [0208](../tests/flaky-tests/0208-design-canvas-private-import-picker-disabled-in-suite.md)
+  and [0246](../tests/flaky-tests/0246-design-renderer-real-chromium-launch-deadline.md)
+  (real-Chromium launch on CI). Resolved on 2026-10-16 as test artefacts:
   [0193](../tests/flaky-tests/0193-design-sync-gap-aggregate-timeout.md),
-  [0208](../tests/flaky-tests/0208-design-canvas-private-import-picker-disabled-in-suite.md),
   [0215](../tests/flaky-tests/0215-design-operation-replay-event-count.md),
-  [0218](../tests/flaky-tests/0218-design-service-replay-aggregate-timeout.md),
+  [0218](../tests/flaky-tests/0218-design-service-replay-aggregate-timeout.md)
+  and the design half of
   [0225](../tests/flaky-tests/0225-design-and-bench-aggregate-timeouts.md).
 - Living-doc drift to fix in [`design-canvas.md`](../architecture/design-canvas.md):
   - The opening says the dialog has two modes and "no library or status

@@ -1,5 +1,5 @@
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import type { AgentToolConnection } from "./agent-tools.js";
+import type { AgentToolConnection, StateSignalCredential } from "./agent-tools.js";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
 import type { BackendRuntime } from "./backend-runtime.js";
 import type { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
@@ -55,6 +55,8 @@ export type CommandContext = {
     revokeTab?(environmentId: string, tabId: string): void;
     /** Port containers call back to; the network policy allows exactly it. */
     servicePort?(): number | null;
+    /** Doorbell credential for the Claude terminal state signal. */
+    issueStateSignal?(onSignal: () => void): StateSignalCredential | null;
   };
   /** Container → host agent tools reachability checks (startup, bridges, preflight). */
   containerHostReachability?: import("./container-host-reachability.js").ContainerHostReachabilityService;

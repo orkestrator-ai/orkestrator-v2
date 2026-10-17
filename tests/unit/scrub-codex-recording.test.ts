@@ -80,6 +80,28 @@ describe("scrub-codex-recording", () => {
     expect(output).toContain('"harmless":"keep-me"');
   });
 
+  test("redacts sign-in URLs, device codes and login ids", () => {
+    const line = JSON.stringify({
+      id: 7,
+      result: {
+        type: "chatgpt",
+        loginId: "3f1c7e2a-login",
+        authUrl: "https://auth.openai.com/oauth/authorize?state=abc&code_challenge=xyz",
+        verificationUrl: "https://auth.openai.com/codex/device",
+        userCode: "ABCD-1234",
+        authorizationUrl: "https://mcp.example.test/authorize?state=def",
+      },
+    });
+    const once = scrub(line);
+    // `authorizationUrl` already matches the generic secret-field rule.
+    expect(once.hits["sign-in-field"]).toBe(4);
+    for (const value of ["3f1c7e2a", "state=abc", "codex/device", "ABCD-1234", "state=def"]) {
+      expect(once.output).not.toContain(value);
+    }
+    expect(JSON.parse(once.output).result.type).toBe("chatgpt");
+    expect(scrub(once.output).hits["sign-in-field"]).toBeUndefined();
+  });
+
   test("redacts PEM private key blocks", () => {
     const { output } = scrub(
       "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----",

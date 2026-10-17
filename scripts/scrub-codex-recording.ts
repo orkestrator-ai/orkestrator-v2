@@ -114,6 +114,16 @@ export function buildRedactions(identity: ScrubIdentity = {}): Redaction[] {
         /("(?:[a-zA-Z_]*(?:secret|token|password|apiKey|api_key|credential|authorization)[a-zA-Z_]*)"\s*:\s*")[^"]{6,}(")/gi,
       replacement: `$1${REDACTED}$2`,
     },
+    // Sign-in answers (`account/login/start`, `mcpServer/oauth/login`,
+    // `account/login/completed`). The URL carries the OAuth `state` and PKCE
+    // challenge and the code completes a device login, so neither may reach a
+    // fixture. The lookahead keeps a re-check of a cleaned file clean.
+    {
+      name: "sign-in-field",
+      pattern:
+        /("(?:authUrl|authorizationUrl|verificationUrl|verificationUri|userCode|loginId)"\s*:\s*")(?!«redacted»")[^"]+(")/g,
+      replacement: `$1${REDACTED}$2`,
+    },
     // Identity. Home first, so the more specific path wins over the bare username.
     { name: "home-path", pattern: new RegExp(escapeRegExp(home), "g"), replacement: "/home/user" },
     // `user` is the placeholder this script writes, so redacting it would report

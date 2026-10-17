@@ -194,6 +194,8 @@ export function registerTmuxBackendCommands(
   registerCommand: RegisterCommand,
   options: {
     claudeStatePolls?: ClaudeStatePollManager;
+    /** Docker-backed doorbell installer; without one, polls stay at 1 s. */
+    claudeStateSignal?: poll.ClaudeStateSignalInstaller;
     prepareEnvironmentFirstPrompt?: (
       environmentId: string,
       prompt: string,
@@ -227,6 +229,7 @@ export function registerTmuxBackendCommands(
   // Tests inject a manager so the polling commands can be exercised without a
   // Docker daemon; production keeps the single process-wide instance.
   const claudeStatePolls = options.claudeStatePolls ?? defaultClaudeStatePolls;
+  if (options.claudeStateSignal) claudeStatePolls.setSignalInstaller(options.claudeStateSignal);
   register("reconcile_claude_state_polling", (_args, context) =>
     claudeStatePolls.reconcile(context),
   );

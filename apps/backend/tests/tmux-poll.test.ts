@@ -738,7 +738,13 @@ describe("ClaudeStatePollManager", () => {
     // timeout are unverified — and a typo there degrades to "always idle".
     expect(claudeStateReadCommand("container-abc")).toEqual({
       command: "docker",
-      args: ["exec", "container-abc", "cat", "/tmp/.claude-state"],
+      args: [
+        "exec",
+        "container-abc",
+        "sh",
+        "-c",
+        "if [ -f /tmp/.claude-state-snapshot ]; then head -c 256 /tmp/.claude-state-snapshot; else head -c 256 /tmp/.claude-state; fi",
+      ],
       options: { timeoutMs: CLAUDE_STATE_READ_TIMEOUT_MS },
     });
     expect(CLAUDE_STATE_READ_TIMEOUT_MS).toBe(5_000);

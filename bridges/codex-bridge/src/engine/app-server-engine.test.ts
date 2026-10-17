@@ -13,6 +13,11 @@ import {
 import type { AppServerSupervisorOptions } from "../app-server/process-supervisor.js";
 import { FakeReadable, FakeWritable } from "../app-server/testing/fake-app-server.js";
 import type { EngineEvent, EngineTurnConfig } from "./types.js";
+import {
+  AUTH_SECRET_CANARIES,
+  captureOutput,
+  expectNothingSecretLogged,
+} from "../../../../tests/helpers/auth-secret-canaries.js";
 
 const BUILD: EngineTurnConfig = { mode: "build", model: "gpt-5.6-sol", cwd: "/tmp/workspace" };
 const PLAN: EngineTurnConfig = { mode: "plan", cwd: "/tmp/workspace" };
@@ -3028,6 +3033,54 @@ describe("account sign-in", () => {
     first.resolve(SIGNED_IN);
     await flush(h);
     expect(requestCount(h, "config/mcpServer/reload")).toBe(1);
+  });
+
+  test("a failed sign-in check logs app-server's reason with credentials redacted", async () => {
+    const h = harness({
+      "account/read": () => {
+        throw new Error(
+          `refresh rejected: Bearer ${AUTH_SECRET_CANARIES.accessToken} ${AUTH_SECRET_CANARIES.openAiApiKey}`,
+        );
+      },
+    });
+    const { output } = await captureOutput(async () => {
+      await h.engine.start();
+      h.child().notify("account/login/completed", { loginId: "l1", success: true, error: null });
+      await flush(h);
+    });
+    expect(output).toContain("Account sign-in check failed");
+    expectNothingSecretLogged(output, "Codex sign-in check");
+  });
+
+  test("a failed connector recovery logs its reason with credentials redacted", async () => {
+    let account: unknown = SIGNED_OUT;
+    const h = harness({
+      "account/read": () => account,
+      "config/mcpServer/reload": () => {
+        throw new Error(
+          `reload rejected: Bearer ${AUTH_SECRET_CANARIES.accessToken} ${AUTH_SECRET_CANARIES.openAiApiKey}`,
+        );
+      },
+    });
+    await h.engine.start();
+    h.child().notify("mcpServer/startupStatus/updated", {
+      name: "codex_apps",
+      status: "failed",
+      error: EXPIRED_ACCOUNT_TOKEN,
+    });
+    await flush(h);
+    expect(h.engine.isAccountSignInRequired()).toBe(true);
+    account = SIGNED_IN;
+    const { result, output } = await captureOutput(async () => {
+      const response = await h.engine.readAccount();
+      await flush(h);
+      return response;
+    });
+    expect(result).toEqual(SIGNED_IN);
+    expect(requestCount(h, "config/mcpServer/reload")).toBe(1);
+    expect(output).toContain("Account connector recovery failed:");
+    expect(output).toContain("reload rejected:");
+    expectNothingSecretLogged(output, "Codex connector recovery");
   });
 
   test("an older routine read cannot overwrite a newer account change", async () => {

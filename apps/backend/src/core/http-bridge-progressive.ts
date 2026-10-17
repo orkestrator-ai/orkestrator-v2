@@ -243,6 +243,7 @@ export async function readHttpBridgeSessionState(input: {
       ? rawStatus
       : "error";
   let controls: NativeAgentControlUpdate | undefined;
+  let policy = isNativeAgentExecutionPolicy(payload.policy) ? payload.policy : undefined;
   if (configResponse) {
     assertOk(configResponse, "Codex session state config read");
     const config = asRecord(
@@ -250,6 +251,8 @@ export async function readHttpBridgeSessionState(input: {
         remaining: 128 * 1024,
       }),
     );
+    // Config is also authoritative on bridges predating policy in /status.
+    if (isNativeAgentExecutionPolicy(config?.policy)) policy = config.policy;
     controls = {
       ...(typeof config?.model === "string" ? { modelId: config.model } : {}),
       ...(typeof config?.modelReasoningEffort === "string"
@@ -283,7 +286,6 @@ export async function readHttpBridgeSessionState(input: {
     input.connection.accountId ?? "unknown",
   );
   const runtime = normalizeProviderRuntimeSummary(payload.runtime);
-  const policy = isNativeAgentExecutionPolicy(payload.policy) ? payload.policy : undefined;
   const reportedKinds = asRecord(asRecord(payload.capabilities)?.interactions)?.kinds;
   const backgroundTasks = normalizeClaudeBackgroundTasks(payload.backgroundTasks);
   const turnActivity =

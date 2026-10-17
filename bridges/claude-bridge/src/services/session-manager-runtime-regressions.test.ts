@@ -422,11 +422,11 @@ describe("join setup", () => {
     gate.resolve();
     delete queryControlOverrides.beforeExit;
     const transient = await nextQueryCall();
-    transient.push({ type: "system", subtype: "init" });
     await rewind;
     transient.finish();
     await second;
     expect(liveRewind).toHaveBeenCalledTimes(1);
-    expect(transient.options.maxTurns).toBe(0);
+    // A control-only query: no prompt string, so nothing joins the rollout.
+    expect(typeof transient.prompt).not.toBe("string");
   });
 });

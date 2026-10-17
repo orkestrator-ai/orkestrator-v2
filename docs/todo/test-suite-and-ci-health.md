@@ -217,6 +217,16 @@ reliably green on `main`, and nothing requires it to be.
    bottom-right of the page. Pass the package version in dev, or point
    Electron at `apps/desktop` so it reads `package.json`.
 
+9. **Electron specs leak their Vite server on a timeout.** The
+   `e2e/agent-testing/*-electron.spec.ts` helpers spawn a detached Vite dev server
+   and stop its process group in a `finally`. When the test times out while
+   `ElectronApplication.close()` hangs, Playwright tears the worker down and
+   the `finally` never runs, so the dev server keeps its port. Two leaked on
+   2026-10-17 (see the
+   [service-preview-rollout.md](service-preview-rollout.md) evidence log). Stop
+   the group from a fixture teardown or a worker-exit hook as well, and bound
+   the `close()` wait.
+
 ### Qualification
 
 - There is no controlled before-and-after comparison; the streamlining

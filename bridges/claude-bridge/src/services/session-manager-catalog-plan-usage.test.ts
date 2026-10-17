@@ -1,5 +1,9 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
-import { queryControlOverrides } from "./session-manager-test-harness.js";
+import {
+  expectControlOnlyPrompt,
+  nextQueryCall,
+  queryControlOverrides,
+} from "./session-manager-test-harness.js";
 import { readClaudePlanUsage } from "./session-manager.js";
 
 /**
@@ -25,6 +29,7 @@ describe("readClaudePlanUsage", () => {
       async () => ({ rate_limits_available: false, rate_limits: null }),
     );
     await expect(readClaudePlanUsage()).resolves.toEqual([]);
+    await expectControlOnlyPrompt(await nextQueryCall());
   });
 
   test("maps the structured windows to the canonical account windows", async () => {

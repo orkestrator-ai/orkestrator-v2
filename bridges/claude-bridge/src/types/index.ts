@@ -429,7 +429,7 @@ export interface ClaudeQueryControl {
  *
  * - `live`: `supportedCommands()` on the session's own turn query.
  * - `replacement`: a `system/commands_changed` push, a full replacement.
- * - `probe`: a zero-turn discovery CLI configured like the session's turns.
+ * - `probe`: a control-only discovery CLI configured like the session's turns.
  *   Provisional: it cannot see MCP-prompt commands or per-turn options.
  * - `init`: names from the turn's `init` frame only (no descriptions, hints
  *   or aliases). A cold fallback that any later read supersedes.

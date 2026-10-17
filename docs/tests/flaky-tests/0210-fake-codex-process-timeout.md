@@ -43,3 +43,13 @@ The other four bridge packages passed. Evidence:
 
 `mise run test:logged -- --name fake-codex-isolated -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures`
 passed the unchanged owner in 0.2 seconds. No assertion, timeout or skip changed.
+
+## Recurrence — 2026-10-17 (service preview re-baseline)
+
+Recurred on 2026-10-17 at 5000.00 ms in `mise run test` for the service
+preview re-baseline (GNU-tool PATH prefix, macOS arm64, Bun 1.4.3; no bridge
+code touched). Codex bridge: 2,144 passed, 31 skipped, 1 failed across 78
+files; the other four bridge packages passed. `bun test ./src/testing/fake-codex-app-server.test.ts`
+in `bridges/codex-bridge` passed the unchanged owning file alone (2 pass,
+0 fail, 82 ms). Evidence: `orkestrator-test-run.mVA1hD/bridges.log.gz` in the
+macOS temporary directory.

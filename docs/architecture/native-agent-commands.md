@@ -257,9 +257,11 @@ A new tab has a provider session ID before its first turn: the renderer's
 a persisted mapping always carries `providerSessionId`. Until that lands the
 projection is `null` and the picker shows nothing; afterwards
 `HttpBridgeCatalogAdapter` reads `GET /session/:id/commands`. The Claude bridge
-answers a session that has not run a turn from one zero-turn CLI probe
+answers a session that has not run a turn from one control-only CLI probe
 (`status: "stale"`) and the picker shows `loading` while the first read is in
-flight, so a current bridge never serves the legacy rows to a new tab.
+flight, so a current bridge never serves the legacy rows to a new tab. The
+probe sends no message (`controlOnlyQuery`): the Agent SDK drops
+`maxTurns: 0`, so a `prompt: ""` probe used to start a real turn.
 
 The legacy global route (`/global/slash-commands` for Codex and Cursor,
 `/plugins/commands` for Claude, Pi and Grok) is read only when the session

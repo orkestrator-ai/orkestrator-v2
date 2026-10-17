@@ -1123,16 +1123,63 @@ test("deletion during local setup clears worktree, bridge state, branch and ledg
     requestedId: profile,
     flavor: "agent-test",
   });
+  // The fixture has no setup script. Start this environment from a dangling
+  // commit that adds one, so the shared branch is untouched. The script keeps
+  // writing a turbo log into the worktree by absolute path, as a build does:
+  // if deletion left it running, it would re-create the worktree path.
+  const git = (args: string[], env: NodeJS.ProcessEnv = {}, input?: string) => {
+    const result = spawnSync("git", ["-C", fixture!.localPath!, ...args], {
+      encoding: "utf8",
+      env: { ...process.env, ...env },
+      input,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    return result.stdout.trim();
+  };
+  const baseBranch = "main";
+  const name = `delete-during-setup-${Date.now()}`;
+  // Not a substring of the worktree path, so it matches only the setup shell.
+  const marker = `${name}-loop`;
+  const index = path.join(runtime.profileRoot, `setup-index-${name}`);
+  const setupConfig = git(
+    ["hash-object", "-w", "--stdin"],
+    {},
+    `${JSON.stringify({
+      // `: <marker>` lets cleanup find a survivor by its command line.
+      setupLocal: `: ${marker}; while :; do mkdir -p "$PWD/.turbo" && date >> "$PWD/.turbo/turbo-setup.log"; sleep 0.2; done`,
+    })}\n`,
+  );
+  git(["read-tree", baseBranch], { GIT_INDEX_FILE: index });
+  git(["update-index", "--add", "--cacheinfo", `100644,${setupConfig},orkestrator-ai.json`], {
+    GIT_INDEX_FILE: index,
+  });
+  const tree = git(["write-tree"], { GIT_INDEX_FILE: index });
+  await fs.rm(index, { force: true });
+  const setupCommit = git(["commit-tree", tree, "-p", baseBranch, "-m", "Long-running setup"], {
+    GIT_AUTHOR_NAME: "Orkestrator QA",
+    GIT_AUTHOR_EMAIL: "qa@orkestrator.invalid",
+    GIT_COMMITTER_NAME: "Orkestrator QA",
+    GIT_COMMITTER_EMAIL: "qa@orkestrator.invalid",
+  });
   const environment = await invoke<Environment>("create_environment", {
     projectId: fixture!.id,
-    name: `delete-during-setup-${Date.now()}`,
+    name,
     networkAccessMode: "restricted",
     environmentType: "local",
+    delegationBaseBranch: baseBranch,
+    delegationBaseCommit: setupCommit,
   });
   try {
     await invoke("start_environment", { environmentId: environment.id });
     const active = await invoke<Environment>("get_environment", { environmentId: environment.id });
     expect(active.worktreePath).toBeTruthy();
+    const setupLog = path.join(active.worktreePath!, ".turbo", "turbo-setup.log");
+    await expect
+      .poll(async () => (await fs.stat(setupLog).catch(() => null))?.size ?? 0, {
+        timeout: 30_000,
+      })
+      .toBeGreaterThan(0);
+    expect(spawnSync("pgrep", ["-f", marker]).status, "setup is running").toBe(0);
     const branchRef = `refs/heads/${active.branch}`;
     const branchBefore = spawnSync(
       "git",
@@ -1149,6 +1196,9 @@ test("deletion during local setup clears worktree, bridge state, branch and ledg
       await invoke<Environment | null>("get_environment", { environmentId: environment.id }),
     ).toBeNull();
     await expect(fs.stat(active.worktreePath!)).rejects.toThrow();
+    // Several loop iterations: a surviving setup would have re-created it.
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    await expect(fs.stat(active.worktreePath!)).rejects.toThrow();
     for (const directory of environmentStateDirectories(runtime.dataDir, environment.id)) {
       await expect(fs.stat(directory)).rejects.toThrow();
     }
@@ -1159,8 +1209,11 @@ test("deletion during local setup clears worktree, bridge state, branch and ledg
     );
     expect(branch.status).not.toBe(0);
     expect(pendingCleanupEnvironmentIds(runtime.dataDir)).not.toContain(environment.id);
+    expect(spawnSync("pgrep", ["-f", marker]).status, "setup outlived deletion").toBe(1);
   } finally {
     await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
+    // Never leave a failed run's loop writing on the host.
+    spawnSync("pkill", ["-f", marker]);
   }
 });
 
@@ -1424,7 +1477,7 @@ test("coordinator Multi Review action reconciles a mounted renderer and survives
     await expect(page.getByRole("heading", { name: "Multi Review", exact: true })).toBeVisible({
       timeout: 30_000,
     });
-    await expect(page.getByText("Cancelled", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(/^Multi Review cancelled\b/).first()).toBeVisible();
     await page.reload();
     const expandAgain = page.getByRole("button", { name: `Expand project ${fixture!.name}` });
     await expect(expandAgain).toBeVisible({ timeout: 30_000 });
@@ -1433,7 +1486,7 @@ test("coordinator Multi Review action reconciles a mounted renderer and survives
     await expect(page.getByRole("heading", { name: "Multi Review", exact: true })).toBeVisible({
       timeout: 30_000,
     });
-    await expect(page.getByText("Cancelled", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(/^Multi Review cancelled\b/).first()).toBeVisible();
     const opened = await invoke<MultiReviewActionResult>("open_coordinator_multi_review", {
       scope,
       workflowId: launched.workflow.id,
@@ -1538,6 +1591,95 @@ test("Docker fixture rejects containers owned by another profile", async ({ page
     }
   } finally {
     spawnSync("docker", ["rm", "-f", foreignContainerId], { encoding: "utf8" });
+  }
+});
+
+test("Docker fixture deletion removes only the target container, volumes, network and ledger entry", async ({
+  page,
+}) => {
+  test.skip(
+    process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1",
+    "requires an agent-test profile seeded with a container fixture",
+  );
+  test.setTimeout(300_000);
+
+  const status = await profileStatus();
+  expect(status.status).toBe("ready");
+  const invoke = await authenticatedInvoke(page, status);
+  const fixture = (await invoke<Project[]>("get_projects")).find(
+    (project) => project.localPath === status.testProject,
+  );
+  expect(fixture).toBeTruthy();
+  const runtime = resolveRuntimeProfile({
+    repositoryRoot,
+    requestedId: profile,
+    flavor: "agent-test",
+  });
+  const owned = (kind: "container" | "volume" | "network", environmentId: string) => {
+    const filter = `label=environment-id=${environmentId}`;
+    const args =
+      kind === "container"
+        ? ["ps", "-aq", "--filter", filter]
+        : [kind, "ls", "-q", "--filter", filter];
+    const result = spawnSync("docker", args, { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    return result.stdout.split("\n").filter(Boolean).sort();
+  };
+  const containerFixture = (
+    await invoke<Environment[]>("get_environments", {
+      projectId: fixture!.id,
+    })
+  ).find((environment) => environment.name === "fixture-container");
+  expect(containerFixture?.containerId).toBeTruthy();
+  expect(containerFixture?.status).toBe("running");
+  const fixtureResources = {
+    containers: owned("container", containerFixture!.id),
+    volumes: owned("volume", containerFixture!.id),
+    networks: owned("network", containerFixture!.id),
+  };
+  for (const resources of Object.values(fixtureResources)) {
+    expect(resources).not.toHaveLength(0);
+  }
+  const environment = await invoke<Environment>("create_environment", {
+    projectId: fixture!.id,
+    name: `delete-container-${Date.now()}`,
+    networkAccessMode: "restricted",
+    environmentType: "containerized",
+  });
+  try {
+    await invoke("start_environment", { environmentId: environment.id });
+    const active = await invoke<Environment>("get_environment", { environmentId: environment.id });
+    expect(active.containerId).toBeTruthy();
+    expect(owned("container", environment.id)).not.toHaveLength(0);
+    expect(owned("volume", environment.id)).not.toHaveLength(0);
+    expect(owned("network", environment.id)).not.toHaveLength(0);
+
+    await invoke("delete_environment", { environmentId: environment.id });
+    expect(
+      await invoke<Environment | null>("get_environment", { environmentId: environment.id }),
+    ).toBeNull();
+    expect(owned("container", environment.id)).toEqual([]);
+    expect(owned("volume", environment.id)).toEqual([]);
+    expect(owned("network", environment.id)).toEqual([]);
+    expect(pendingCleanupEnvironmentIds(runtime.dataDir)).not.toContain(environment.id);
+
+    const retainedFixture = await invoke<Environment>("get_environment", {
+      environmentId: containerFixture!.id,
+    });
+    expect(retainedFixture.containerId).toBe(containerFixture!.containerId);
+    expect(retainedFixture.status).toBe("running");
+    expect(owned("container", containerFixture!.id)).toEqual(fixtureResources.containers);
+    expect(owned("volume", containerFixture!.id)).toEqual(fixtureResources.volumes);
+    expect(owned("network", containerFixture!.id)).toEqual(fixtureResources.networks);
+    const running = spawnSync(
+      "docker",
+      ["inspect", "--format", "{{.State.Running}}", containerFixture!.containerId!],
+      { encoding: "utf8" },
+    );
+    expect(running.status, running.stderr).toBe(0);
+    expect(running.stdout.trim()).toBe("true");
+  } finally {
+    await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
   }
 });
 

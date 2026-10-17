@@ -2,7 +2,7 @@ import { openClaudeRuntime, retireDrainingClaudeRuntime } from "./session-manage
 // Session Manager Service
 // Handles session state and interacts with Claude Agent SDK
 
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { controlOnlyQuery } from "./control-only-query.js";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type {
   ImageBlockParam,
@@ -795,58 +795,106 @@ export async function resolvePersistedMessageId(
 }
 
 /**
- * How long a transient rewind query may take to produce its first message.
+ * How long a transient rewind query may take to answer.
  *
- * Without a bound, a CLI that never speaks leaves the HTTP request hanging
+ * Without a bound, a CLI that never answers leaves the HTTP request hanging
  * forever with the session flagged busy.
  */
 export const REWIND_OPEN_TIMEOUT_MS = 30_000;
+export const REWIND_SHUTDOWN_TIMEOUT_MS = 5_000;
+
+async function closeTransientRewindQuery(
+  control: ReturnType<typeof controlOnlyQuery>,
+  onShutdown: () => void,
+): Promise<void> {
+  // close() only starts SDK cleanup. Query.return() (on the Query itself,
+  // not its inner message iterator) awaits that cleanup and the child exit.
+  // Keep observing it after our HTTP deadline so a late exit releases the
+  // fence; rejection or an unconfirmed shutdown must never release it.
+  const shutdown = Promise.resolve().then(async () => {
+    control.close();
+    await control.return();
+    onShutdown();
+  });
+  let shutdownTimeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      shutdown,
+      new Promise<never>((_, reject) => {
+        shutdownTimeout = setTimeout(
+          () => reject(new Error("shutdown pending")),
+          REWIND_SHUTDOWN_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } catch (error) {
+    debugLog("[session-manager] Failed to confirm rewind query shutdown:", error);
+    throw sessionOperationError(
+      "conflict",
+      "Claude file rewind shutdown is pending; retry after it stops",
+    );
+  } finally {
+    clearTimeout(shutdownTimeout);
+  }
+}
 
 export async function rewindViaTransientQuery(
   sdkSessionId: string,
   persistedMessageId: string,
   dryRun: boolean,
+  onShutdown: () => void = () => undefined,
 ): Promise<unknown> {
   const abortController = new AbortController();
-  const timeout = setTimeout(() => abortController.abort(), REWIND_OPEN_TIMEOUT_MS);
-  const iterator = query({
-    prompt: "",
-    options: {
-      cwd: currentWorkingDirectory(),
-      env: { ...process.env },
-      ...claudeExecutableOptions(),
-      resume: sdkSessionId,
-      enableFileCheckpointing: true,
-      // This query exists only to obtain a control handle. `maxTurns: 0` keeps
-      // it from running a turn that would append to the very rollout the
-      // checkpoints are indexed against.
-      maxTurns: 0,
-      abortController,
-    },
-  });
-  try {
-    for await (const _message of iterator) {
-      if (typeof iterator.rewindFiles !== "function") {
-        throw sessionOperationError(
-          "conflict",
-          "Installed Claude Agent SDK does not support file rewind",
-        );
-      }
-      return await iterator.rewindFiles(persistedMessageId, { dryRun });
-    }
-    throw sessionOperationError(
-      "conflict",
-      abortController.signal.aborted
-        ? "Timed out opening the Claude session for file rewind"
-        : "Claude session could not be opened for file rewind",
+  const timedOut = new Promise<never>((_, reject) => {
+    abortController.signal.addEventListener(
+      "abort",
+      () =>
+        reject(
+          sessionOperationError("conflict", "Timed out opening the Claude session for file rewind"),
+        ),
+      { once: true },
     );
+  });
+  timedOut.catch(() => undefined);
+  const timeout = setTimeout(() => abortController.abort(), REWIND_OPEN_TIMEOUT_MS);
+  // Control only. A prompt — even an empty one — would append a user message
+  // and a model reply to the very rollout the checkpoints are indexed
+  // against; `maxTurns: 0` does not stop it (see control-only-query.ts).
+  const control = (() => {
+    try {
+      return controlOnlyQuery({
+        cwd: currentWorkingDirectory(),
+        env: { ...process.env },
+        ...claudeExecutableOptions(),
+        resume: sdkSessionId,
+        enableFileCheckpointing: true,
+        abortController,
+      });
+    } catch (error) {
+      clearTimeout(timeout);
+      onShutdown();
+      throw error;
+    }
+  })();
+  try {
+    if (typeof control.rewindFiles !== "function") {
+      throw sessionOperationError(
+        "conflict",
+        "Installed Claude Agent SDK does not support file rewind",
+      );
+    }
+    const rewind = control.rewindFiles(persistedMessageId, { dryRun });
+    rewind.catch(() => undefined);
+    try {
+      return await Promise.race([rewind, timedOut]);
+    } catch (error) {
+      if (abortController.signal.aborted) throw error;
+      debugLog("[session-manager] Transient rewind query failed:", error);
+      throw sessionOperationError("conflict", "Claude session could not be opened for file rewind");
+    }
   } finally {
     clearTimeout(timeout);
-    try {
-      await iterator.return?.();
-    } catch (error) {
-      debugLog("[session-manager] Failed to close rewind query:", error);
-    }
+    await closeTransientRewindQuery(control, onShutdown);
   }
 }
 
@@ -873,6 +921,8 @@ export async function rewindSessionFiles(
   // `status` never leaves `idle` while it runs, so nothing else would stop a
   // prompt accepted a millisecond later from executing against files mid-restore.
   session.rewindInProgress = true;
+  let transientShutdownPending = false;
+  let requestFinished = false;
   try {
     const persistedMessageId = await resolvePersistedMessageId(
       session,
@@ -900,7 +950,19 @@ export async function rewindSessionFiles(
       result = await liveRewind.call(liveControl, persistedMessageId, { dryRun });
     } else {
       await retireDrainingClaudeRuntime(session);
-      result = await rewindViaTransientQuery(session.sdkSessionId, persistedMessageId, dryRun);
+      transientShutdownPending = true;
+      result = await rewindViaTransientQuery(
+        session.sdkSessionId,
+        persistedMessageId,
+        dryRun,
+        () => {
+          transientShutdownPending = false;
+          // Before the request settles, its finally owns release. Releasing
+          // here would let another rewind claim the fence before that finally
+          // runs and accidentally clears the new owner's fence.
+          if (requestFinished) session.rewindInProgress = false;
+        },
+      );
     }
     if (
       !result ||
@@ -915,7 +977,8 @@ export async function rewindSessionFiles(
     }
     return result;
   } finally {
-    session.rewindInProgress = false;
+    requestFinished = true;
+    if (!transientShutdownPending) session.rewindInProgress = false;
   }
 }
 

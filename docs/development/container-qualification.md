@@ -32,18 +32,19 @@ the platforms and providers still waiting for evidence are in
 ## Suites
 
 Wrap any command in `mise run test:logged -- --name <name> --` for a logged
-run.
+run. Run the backend suites with `--cwd apps/backend`: the root `bunfig.toml`
+ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 
 | Suite | Command | Scenarios |
 | --- | --- | --- |
 | Unit and integration | `mise run test` | Every scenario without a live suite below, against a fake `docker` |
-| Live lifecycle | `RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test apps/backend/tests/container-live-qualification.test.ts` | C09, C11, C12, C20 |
-| Live replacement | same variables, `apps/backend/tests/container-live-replacement.test.ts` | C14–C19 |
-| Live network | same variables, `apps/backend/tests/container-live-network.test.ts` | C22, C24, C26 |
-| Live firewall | same variables, `apps/backend/tests/container-live-firewall.test.ts` | C23 |
-| Benchmarks | `RUN_CONTAINER_BENCHMARKS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test apps/backend/tests/container-benchmarks.test.ts` | C28 |
+| Live lifecycle | `RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-live-qualification.test.ts` | C09, C11, C12, C20 |
+| Live replacement | same command, `./tests/container-live-replacement.test.ts` | C14–C19 |
+| Live network | same command, `./tests/container-live-network.test.ts` | C22, C24, C26 |
+| Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 |
+| Benchmarks | `RUN_CONTAINER_BENCHMARKS=1 ORKESTRATOR_QUALIFICATION_IMAGE=<image> bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-benchmarks.test.ts` | C28 |
 | Final image | `bash docker/tests/final-image-smoke.sh <image>` (CI runs it on the native amd64 and arm64 builds in `validate-bun-runtime.yml`) | C27 |
-| Real stack, Docker | `mise run dev:test --profile <p> --fixture --fixture-environments local,container`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> mise run test:agent:docker` | C29 (`container-rebuild-cycle.spec.ts`), container settings (`container-settings.spec.ts`) |
+| Real stack, Docker | `mise run dev:test --profile <p> --fixture --fixture-environments local,container`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> mise run test:agent:docker` | C29 (`container-rebuild-cycle.spec.ts`), container settings (`container-settings.spec.ts`), deletion through the ledger (`browser-gateway.spec.ts`) |
 | Real stack, live approval | The Docker profile above started with `--credential-source claude`, then `ORKESTRATOR_AGENT_TEST_PROFILE=<p> ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_APPROVAL=1 mise run test:agent:docker` | C11 approval half (`container-approval-stop.spec.ts`, a real Claude turn) |
 | Real stack, local | `mise run test:agent:browser:isolated` | C30 |
 | Provider resume | `scripts/qualify-session-resume.sh <profile> <agent> [environment-name]` | C13 |

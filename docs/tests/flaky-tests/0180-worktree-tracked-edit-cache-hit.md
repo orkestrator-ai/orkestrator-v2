@@ -130,3 +130,28 @@ and `workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
 in the same directory; wrapper artifacts are in `orkestrator-test-run.XvaLJ6`.
 No watcher implementation, assertion, timeout or skip changed. The existing
 cache-invalidation hypothesis remains unconfirmed.
+
+## Recurrence during the preview re-baseline merge (2026-10-17)
+
+- **Original command:** `mise run test:logged -- --name rb2-full-suite -- mise run test`
+  with the GNU-tool `PATH` prefix; macOS arm64, Bun 1.4.3, branch
+  `todo-preview-rebaseline-084636c7dd34` merged with `main` at `768ff53f` (no
+  worktree-snapshot code changed).
+- **Failure:** the same cache-hit assertion at line 139 (130.18 ms).
+- **Suite counts:** backend 8,715 passed, 41 skipped, 1 failed; every other
+  workspace package, root/support, bridges and the protocol lockfile passed.
+- **Isolated reruns:** `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1`
+  failed this case in 2 of 6 runs alone (3 pass, 1 fail each time) and passed
+  in the other 4, at a host load average of about 22 with other worktrees
+  running live tests. Earlier recurrences always passed alone; this is the
+  first evidence that host load alone, without the aggregate, can trigger it.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.YA5c3d/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+  No assertion, timeout or skip changed; the cause remains unconfirmed.
+
+## Multi Review recovery validation — 2026-10-17
+
+- Command: `mise run test:logged -- --name final-full-review-recovery -- mise run test` on `4443c027` plus the recovery fixes, macOS arm64 on the shared host. Workspace/root/bridge/protocol reserved 4/1/2/1 slots; backend used two isolated workers. Workspace admission waited 49.6 seconds.
+- The tracked-edit case failed at 153.74 ms: cache hits expected 1, received 0 (line 139). Backend: 8,636 passed, 41 skipped, one failed across 463 files (327.78 seconds). The outer run exited 1 after 409.7 seconds. Every other workspace package and the root/bridge/protocol groups passed; all recovery tests passed.
+- Unchanged owning-file rerun: `mise run test:logged -- --name snapshots-owner-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures` passed all four tests, exit 0, 0.5 seconds.
+- Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.IJ4t3D/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.NEipUr/final-full-review-recovery.log.gz`.
+- No watcher implementation, assertion, timeout or skip changed. Cache invalidation racing the read remains a hypothesis, not an established cause.

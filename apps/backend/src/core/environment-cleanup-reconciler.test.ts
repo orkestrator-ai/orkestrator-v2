@@ -292,8 +292,8 @@ describe("orphaned environment state sweep", () => {
     await storage.addEnvironment(environment("live"));
     const calls: Array<{ live: string[]; minAgeMs: number }> = [];
     context.design = {
-      sweepOrphanedCanvases: async (live: ReadonlySet<string>, minAgeMs: number) => {
-        calls.push({ live: [...live], minAgeMs });
+      sweepOrphanedCanvases: async (live: () => Promise<ReadonlySet<string>>, minAgeMs: number) => {
+        calls.push({ live: [...(await live())], minAgeMs });
         return 2;
       },
     } as unknown as CommandContext["design"];
@@ -305,7 +305,8 @@ describe("orphaned environment state sweep", () => {
     const { context, storage } = await reconcileContext();
     let swept = false;
     context.design = {
-      sweepOrphanedCanvases: async () => {
+      sweepOrphanedCanvases: async (live: () => Promise<ReadonlySet<string>>) => {
+        await live();
         swept = true;
         return 0;
       },
@@ -315,6 +316,21 @@ describe("orphaned environment state sweep", () => {
     };
     await expect(sweepOrphanedDesignCanvases(context)).rejects.toThrow("unreadable");
     expect(swept).toBe(false);
+  });
+
+  test("the design sweep has nothing to refuse before any canvas or environment exists", async () => {
+    const { context, storage, dataDir } = await reconcileContext();
+    const design = new DesignService(dataDir, () => {}, createTestRenderer());
+    context.design = design;
+    try {
+      // A fresh install: the environment store has never been written.
+      deleteStoredValue(dataDir, "environments.json");
+      await expect(storage.loadEnvironmentIdsForCleanup()).rejects.toThrow();
+      expect(await sweepOrphanedDesignCanvases(context)).toBe(0);
+    } finally {
+      await design.close();
+      storage.close();
+    }
   });
 
   for (const state of ["corrupt", "missing", "invalid", "invalid-owner", "empty"] as const) {

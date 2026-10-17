@@ -14,3 +14,23 @@
 The unchanged owning file passes alone. The failure is in recursive temporary-directory removal rather than receipt replay. Concurrent fixture teardown or host filesystem activity may explain the transient permission error; the evidence does not establish which. No cleanup assertion, timeout, or production public API behavior was changed.
 
 The subsequent settled-snapshot aggregate (`stable-final-tests`) did not reproduce this failure; its backend failures were the existing preview-tunnel flake and the unchanged HTTP provider module-size boundary.
+
+## Annotation sign-off main merge recurrence (2026-10-17)
+
+- **Command:** `mise run test:logged -- --name merge-tests -- mise run test`,
+  using four workspace slots, one root slot, two bridge slots and one protocol
+  slot (the standard aggregate allocation).
+- **Failure:** The same replay test reached fixture cleanup and failed at
+  `public-api/test-support.ts:143` with `EPERM` removing its temporary root
+  (9.67 ms). Backend: 8,732 passed, 41 skipped, one failed across 468 files
+  in 260.15 seconds. All other packages and groups passed; aggregate 294.8 s.
+- **Isolated rerun:** `mise run test:logged -- --name merge-public-api-projects -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/public-api/public-api-projects.test.ts --parallel=1 --only-failures`
+  passed unchanged (exit 0, 2.0 seconds).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.KySnXI/`
+  and `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.ibpcag/`.
+- **Assessment:** Recurrence of the registered cleanup flake; the isolated
+  pass still does not establish which concurrent filesystem activity caused it.
+
+The subsequent full confirmation run,
+`mise run test:logged -- --name merge-tests-confirm -- mise run test`,
+passed all four groups (exit 0, 282.3 seconds).

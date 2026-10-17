@@ -41,7 +41,10 @@ import {
   type ProviderExecutionMode,
   type ProviderPrepareDispatchOptions,
 } from "./build-pipeline-provider.js";
-import { REVIEW_PREPARATION_OUTPUT_CONTRACT } from "./build-pipeline-prompts.js";
+import {
+  MERGE_RESOLUTION_VALIDATION_INSTRUCTION,
+  REVIEW_PREPARATION_OUTPUT_CONTRACT,
+} from "./build-pipeline-prompts.js";
 
 /**
  * How many times the worktree probe is attempted before its result is treated
@@ -462,7 +465,7 @@ export function resumePromptFor(phase: ResumableBuildPhase): string | null {
     case "creating-pr":
       return "Resume creating the pull request from where you left off. Incorporate any messages sent while the pipeline was paused, push or prepare the branch as needed, and create the PR against the target branch if it is not already created. Do not ask questions; make sensible assumptions.";
     case "resolving-conflicts":
-      return "Resume resolving PR merge conflicts from where you left off. Incorporate any messages sent while the pipeline was paused, finish the conflict resolution, and validate the result as appropriate (skip tests, typechecking, and builds when every conflicted file is documentation). Do not ask questions; make sensible assumptions.";
+      return `Resume resolving PR merge conflicts from where you left off. Incorporate any messages sent while the pipeline was paused and finish the conflict resolution. ${MERGE_RESOLUTION_VALIDATION_INSTRUCTION} Do not ask questions; make sensible assumptions.`;
     case "creating-environment":
     case "starting-environment":
     case "waiting-for-setup":

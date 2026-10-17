@@ -356,12 +356,36 @@ describe("createResolveConflictsPrompt", () => {
     expect(result).toContain("Do NOT use --no-verify");
   });
 
-  test("skips test validation when only documentation conflicted", () => {
+  test("limits skipped validation to unconsumed prose and preserves required checks", () => {
     const result = createResolveConflictsPrompt("main");
     expect(result).toContain(
-      "If every conflicted file is documentation (for example Markdown files or files under `docs/`), do NOT run tests",
+      "Skip tests, typechecking, and builds only when every changed path is prose documentation with no test, build, or tooling consumers and repository instructions permit skipping those checks",
     );
-    expect(result).toContain("If any conflicted file is code, configuration, or tests, run the relevant tests");
+    expect(result).toContain("Always run repository-required checks");
+    expect(result).toContain("documentation, formatting, and link checks");
+    expect(result).toContain("confirm no conflict markers remain");
+  });
+
+  test("requires validation for auto-merged code even when only documentation conflicted", () => {
+    const result = createResolveConflictsPrompt("main");
+    expect(result).toContain(
+      "all paths changed by the merge relative to the original pre-merge HEAD",
+    );
+    expect(result).toContain("including auto-merged changes and conflict resolutions");
+    expect(result).toContain("if the full scope cannot be established, run relevant validation");
+    expect(result).toContain(
+      "If documentation conflicts accompany auto-merged code, configuration, or tests, run relevant tests, typechecking, and build validation for the merged result",
+    );
+    expect(result).not.toContain("If every conflicted file is documentation");
+  });
+
+  test("requires relevant checks for source under docs and Markdown consumed by tooling", () => {
+    const result = createResolveConflictsPrompt("main");
+    expect(result).toContain("File role takes precedence over location or extension");
+    expect(result).toContain("source files (including .ts and .mdx under docs/)");
+    expect(result).toContain(
+      "Markdown consumed by tests, builds, or tooling require relevant validation",
+    );
   });
 
   test("includes conflict marker instructions", () => {

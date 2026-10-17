@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { Environment } from "./models.js";
 import { createEnvironment } from "./storage.js";
+import { runCommand } from "./shell.js";
 import * as remoteGit from "./git-noninteractive-env.js";
 import * as containerExec from "./commands-container-exec.js";
 import { createPublicApiHarness, type PublicApiHarness } from "./public-api/test-support.js";
@@ -210,4 +211,71 @@ test("sync retains fetch state only for current running container generations", 
     expect(policy.freshness(containerId, "main")).toBeUndefined();
   for (const containerId of ["live", "replacement"])
     expect(policy.freshness(containerId, "main")).toEqual(retained.get(containerId));
+});
+
+test("a worker that takes in newer target history is retargeted to where its branch now leaves it", async () => {
+  const { h, tracking } = await harness();
+  const { projectPath } = await h.createRepository("baseline");
+  const run = (cwd: string, args: string[]) =>
+    runCommand("git", [
+      "-C",
+      cwd,
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=t@e.invalid",
+      ...args,
+    ]).then(({ stdout }) => stdout.trim());
+  const created = await run(projectPath, ["rev-parse", "HEAD"]);
+  const worktreePath = path.join(path.dirname(projectPath), "baseline-worker");
+  await run(projectPath, ["worktree", "add", "--no-track", "-b", "worker", worktreePath, created]);
+  const environment = {
+    ...createEnvironment("project", { environmentType: "local" }),
+    id: "worker",
+    worktreePath,
+    createdFromCommit: created,
+  };
+  await h.storage.addEnvironment(environment);
+  await tracking.sync(h.context);
+
+  // The target moves on, and the worker merges it.
+  await fs.writeFile(path.join(projectPath, "upstream.txt"), "upstream\n");
+  await run(projectPath, ["add", "upstream.txt"]);
+  await run(projectPath, ["commit", "-m", "upstream"]);
+  await run(projectPath, ["push", "origin", "main"]);
+  const tip = await run(projectPath, ["rev-parse", "HEAD"]);
+  await run(worktreePath, ["fetch", "origin"]);
+  await run(worktreePath, ["merge", "--ff-only", "origin/main"]);
+
+  const retargeted = deferred<void>();
+  const sync = tracking.sync.bind(tracking);
+  const spy = spyOn(tracking, "sync").mockImplementation(async (context) => {
+    await sync(context);
+    retargeted.resolve();
+  });
+  try {
+    // Measured from the creation commit, the merged upstream reads as the worker's own.
+    const before = await tracking.service.readFileList({
+      lookup: { worktreePath },
+      comparisonRef: created,
+      includeUncommitted: true,
+      refresh: true,
+    });
+    expect(before.changes).toEqual([expect.objectContaining({ path: "upstream.txt" })]);
+    await retargeted.promise;
+  } finally {
+    spy.mockRestore();
+  }
+
+  expect((await h.storage.getEnvironment("worker"))?.diffBaseline).toEqual({
+    createdFromCommit: created,
+    commit: tip,
+  });
+  const result = await tracking.service.readFileList({
+    lookup: { worktreePath },
+    comparisonRef: tip,
+    includeUncommitted: true,
+    refresh: true,
+  });
+  expect(result.changes).toEqual([]);
 });

@@ -7,6 +7,7 @@ import { useTerminalPortalStore } from "@/stores/terminalPortalStore";
 import type { MultiReviewTabData, PaneLeaf } from "@/types/paneLayout";
 import { createTabbarDroppableId, getNativeAgentData } from "@/types/paneLayout";
 import { cn } from "@/lib/utils";
+import { environmentBaselineCommit, resolveComparisonRef } from "@/lib/diff-baseline";
 import { multiReviewReviewerScrollKey } from "@/lib/multi-review-keys";
 import { clearPersistedVirtuosoState } from "@/hooks";
 import { DraggableTabBar } from "./DraggableTabBar";
@@ -134,15 +135,17 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
   const [tabRefreshRequestIds, setTabRefreshRequestIds] = useState(() => new Map<string, number>());
 
   // Read the diff baseline reactively from the environment/config stores.
-  const { projectId, createdFromCommit } = useEnvironmentStore(
+  const { projectId, baselineCommit } = useEnvironmentStore(
     useShallow((state) => {
       const env = state.getEnvironmentById(environmentId);
-      return { projectId: env?.projectId, createdFromCommit: env?.createdFromCommit };
+      return { projectId: env?.projectId, baselineCommit: environmentBaselineCommit(env) };
     }),
   );
   const repositories = useConfigStore((state) => state.config.repositories);
-  const comparisonRef =
-    createdFromCommit || (projectId ? repositories[projectId]?.prBaseBranch || "main" : "main");
+  const comparisonRef = resolveComparisonRef(
+    baselineCommit,
+    projectId ? repositories[projectId] : undefined,
+  );
 
   // Set up droppable for tabbar
   const { setNodeRef, isOver } = useDroppable({

@@ -262,6 +262,7 @@ export type StorageLayerTypes = [
 ];
 
 const MAX_PROJECT_REMOVAL_FENCES = 1_000;
+const FULL_COMMIT_SHA = /^[0-9a-f]{40}$/i;
 
 /** A project still owns environments; removal would orphan them. */
 export class ProjectHasEnvironmentsError extends Error {
@@ -706,6 +707,26 @@ export abstract class StorageProjects extends StorageBase {
           // entirely, so a cleared failure would arrive as an absent key and
           // leave the stale message on screen.
           environment.lifecycleError = value ?? null;
+        }
+      }
+      if ("diffBaseline" in updates) {
+        const value = updates.diffBaseline;
+        if (value === null || value === undefined) {
+          // Explicit null, like lifecycleError: renderers merge field-by-field.
+          environment.diffBaseline = null;
+        } else if (
+          isRecord(value) &&
+          typeof value.createdFromCommit === "string" &&
+          FULL_COMMIT_SHA.test(value.createdFromCommit) &&
+          typeof value.commit === "string" &&
+          FULL_COMMIT_SHA.test(value.commit)
+        ) {
+          environment.diffBaseline = {
+            createdFromCommit: value.createdFromCommit.toLowerCase(),
+            commit: value.commit.toLowerCase(),
+          };
+        } else {
+          throw new Error("Invalid environment diff baseline");
         }
       }
       if ("worktreeMove" in updates) {

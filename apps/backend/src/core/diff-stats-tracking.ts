@@ -1,4 +1,8 @@
-import { resolveComparisonRef } from "@orkestrator/protocol/diff-stats";
+import {
+  environmentBaselineCommit,
+  resolveComparisonRef,
+  type EnvironmentDiffBaseline,
+} from "@orkestrator/protocol/diff-stats";
 import { runRemoteGit } from "./git-noninteractive-env.js";
 import { GitFetchScheduler } from "./git-fetch-scheduler.js";
 import { runCommand } from "./shell.js";
@@ -17,6 +21,13 @@ import {
   type ContainerGitStatusDeps,
 } from "./commands-files.js";
 import { dockerExec } from "./commands-container-exec.js";
+import {
+  baselineTargetBranch,
+  findIntegratedBaseline,
+  isSameDiffBaseline,
+  localBaselineGit,
+} from "./diff-baseline.js";
+import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { quoteShell } from "./commands-agent-support.js";
 import type { BackendEmit, CommandContext } from "./commands-context.js";
 import type { Environment } from "./models.js";
@@ -59,6 +70,14 @@ export type DiffStatsTrackingOptions = {
   emit: BackendEmit;
 };
 
+/** What the baseline check needs to know about one local environment. */
+type BaselineCandidate = {
+  worktreePath: string;
+  createdFromCommit: string;
+  targetBranch: string;
+  current: EnvironmentDiffBaseline | null;
+};
+
 /**
  * Diff stats and Git freshness for one backend: the worktree fetch scheduler,
  * the container fetch policy, the diff-stats service built on both, and the
@@ -82,6 +101,11 @@ export class DiffStatsTracking {
   private stopped = false;
   private syncQueue: Promise<void> = Promise.resolve();
   private readonly removeFetchPolicyDiagnostics: () => void;
+  /** Local environments whose baseline can move, refreshed by every sync. */
+  private readonly baselineCandidates = new Map<string, BaselineCandidate>();
+  /** In-flight checks, and whether another scan asked for one meanwhile. */
+  private readonly baselineChecks = new Map<string, { rerun: boolean }>();
+  private baselineStorage: Pick<CommandContext, "storage"> | null = null;
 
   constructor(options: DiffStatsTrackingOptions) {
     this.gitFetchScheduler = createGitFetchScheduler();
@@ -119,6 +143,9 @@ export class DiffStatsTracking {
           ? this.containerGitFetchPolicy.freshness(target.containerId, target.comparisonRef)
           : undefined,
       scan: async (target) => {
+        // A scan follows every change the watcher sees, including HEAD moving
+        // when the branch takes in newer target history.
+        if (target.kind === "local") this.checkBaseline(target.environmentId);
         const detailed =
           target.kind === "local"
             ? await getLocalGitStatusDetailed(
@@ -218,13 +245,31 @@ export class DiffStatsTracking {
         // removed.
         if (generation !== this.syncGeneration) return;
 
+        this.baselineStorage = context;
+        this.baselineCandidates.clear();
         const live = new Set<string>();
         for (const environment of environments) {
           live.add(environment.id);
+          const repositoryConfig = config.repositories?.[environment.projectId];
           const comparisonRef = resolveComparisonRef(
-            environment.createdFromCommit,
-            config.repositories?.[environment.projectId],
+            environmentBaselineCommit(environment),
+            repositoryConfig,
           );
+          const targetBranch = baselineTargetBranch(environment, repositoryConfig);
+          if (
+            environment.environmentType === "local" &&
+            environment.worktreePath &&
+            environment.createdFromCommit &&
+            targetBranch &&
+            !isProjectHomeEnvironment(environment)
+          ) {
+            this.baselineCandidates.set(environment.id, {
+              worktreePath: environment.worktreePath,
+              createdFromCommit: environment.createdFromCommit,
+              targetBranch,
+              current: environment.diffBaseline ?? null,
+            });
+          }
           const target =
             environment.environmentType === "local"
               ? environment.worktreePath
@@ -270,6 +315,49 @@ export class DiffStatsTracking {
       });
     this.syncQueue = operation;
     await operation;
+  }
+
+  /**
+   * Moves a local environment's diff baseline to where its branch now leaves
+   * its target branch (`diff-baseline.ts`), then retargets its scans.
+   *
+   * Runs beside the scan rather than ahead of it so a scan never waits on it;
+   * the scan that found the move is superseded by the retargeted one. One check
+   * per environment at a time, so a burst of scans while an agent edits files
+   * costs at most one more check. That one still runs: a merge moves HEAD in
+   * several writes, and the scan for the last of them must not be dropped.
+   */
+  private checkBaseline(environmentId: string): void {
+    const inFlight = this.baselineChecks.get(environmentId);
+    if (inFlight) {
+      inFlight.rerun = true;
+      return;
+    }
+    const candidate = this.baselineCandidates.get(environmentId);
+    const storage = this.baselineStorage;
+    if (!candidate || !storage || this.stopped) return;
+    const check = { rerun: false };
+    this.baselineChecks.set(environmentId, check);
+    void (async () => {
+      const next = await findIntegratedBaseline(
+        localBaselineGit(candidate.worktreePath),
+        candidate.createdFromCommit,
+        candidate.targetBranch,
+      );
+      if (this.stopped || isSameDiffBaseline(next, candidate.current)) return;
+      await storage.storage.updateEnvironment(environmentId, { diffBaseline: next });
+      await this.sync(storage);
+    })()
+      .catch((error: unknown) => {
+        console.warn(
+          "[diff-stats] Could not update the environment diff baseline:",
+          error instanceof Error ? error.message : error,
+        );
+      })
+      .finally(() => {
+        this.baselineChecks.delete(environmentId);
+        if (check.rerun) this.checkBaseline(environmentId);
+      });
   }
 
   /** Releases every diff watcher and timer; called on backend shutdown. */

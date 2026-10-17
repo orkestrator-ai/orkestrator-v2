@@ -50,6 +50,7 @@ import {
   AmbiguousPromptDispatchError,
   ProviderSessionFailedError,
 } from "./build-pipeline-provider.js";
+import { ProviderUnreachableError } from "./agent-provider-contract.js";
 import { codexConnection, httpProvider } from "./agent-provider-test-support.js";
 import {
   REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
@@ -144,7 +145,7 @@ const consolidatedReport: StructuredReviewReport = {
 };
 
 class Provider implements BuildPipelineProvider {
-  readonly agent = "claude" as const;
+  readonly agent: BuildPipelineProvider["agent"] = "claude";
   readonly creates: Array<{ label: string; options?: ProviderCreateSessionOptions }> = [];
   readonly sends = new Map<string, { prompt: string; options: ProviderSendOptions }>();
   readonly aborted: string[] = [];
@@ -5830,6 +5831,156 @@ test("MultiReviewService fails a reviewer whose provider session errors or disap
       });
     });
   }
+});
+
+test("MultiReviewService retires a failed OpenCode provider after its peer dispatch and reader finish", async () => {
+  const dispatch = Promise.withResolvers<void>();
+  const reader = Promise.withResolvers<void>();
+  const failed = Promise.withResolvers<void>();
+  class SharedProvider extends Provider {
+    override readonly agent = "opencode" as const;
+    pendingDispatch = false;
+    pendingReader = false;
+    unsafeDisposal = false;
+    override async send(sessionId: string, prompt: string, options: ProviderSendOptions) {
+      await super.send(sessionId, prompt, options);
+      if (sessionId === "session-1") {
+        this.pendingDispatch = true;
+        await dispatch.promise;
+      }
+    }
+    override async status(sessionId: string): Promise<ProviderStatus> {
+      if (sessionId === "session-2") {
+        await failed.promise;
+        throw new ProviderUnreachableError("OpenCode is unreachable");
+      }
+      return "running";
+    }
+    override async messages(sessionId: string, options?: { limit?: number }) {
+      if (this.pendingDispatch) {
+        this.pendingReader = true;
+        await reader.promise;
+      }
+      return super.messages(sessionId, options);
+    }
+    override async dispose() {
+      // Model OpenCode's provider-wide abort controllers: immediate disposal
+      // would cancel both the dispatch and the UI read.
+      if (this.pendingDispatch || this.pendingReader) this.unsafeDisposal = true;
+      await super.dispose();
+    }
+  }
+  const provider = new SharedProvider();
+  const replacement = new Provider();
+  replacement.statusValue = "running";
+  let creations = 0;
+  await withService(
+    "env-shared-provider-retirement",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start([
+        { agent: "opencode", model: "provider/one" },
+        { agent: "opencode", model: "provider/two" },
+      ]);
+      const advancing = service.advanceNow(started.id);
+      let reading: Promise<unknown> | undefined;
+      try {
+        await waitUntil(() => provider.pendingDispatch);
+        const current = (await snapshot(started.id))!;
+        reading = service.reviewerTranscript(started.id, current.reviewers[0]!.id);
+        await waitUntil(() => provider.pendingReader);
+        failed.resolve();
+        await waitUntil(
+          async () => ((await snapshot(started.id))?.reviewers[1]?.idleResultPolls ?? 0) > 0,
+        );
+        expect(provider.disposeCalls).toBe(0);
+        provider.pendingDispatch = false;
+        dispatch.resolve();
+        await advancing;
+        expect(provider.disposeCalls).toBe(0);
+        expect((await snapshot(started.id))?.reviewers[0]).toMatchObject({
+          status: "running",
+          dispatchState: "sent",
+        });
+        expect(provider.aborted).toEqual([]);
+        expect(provider.sends.size).toBe(2);
+        provider.pendingReader = false;
+        reader.resolve();
+        await reading;
+        await waitUntil(() => provider.disposeCalls === 1);
+        await service.advanceNow(started.id);
+        expect(creations).toBe(2);
+        expect(provider.disposeCalls).toBe(1);
+        expect(provider.unsafeDisposal).toBe(false);
+      } finally {
+        provider.pendingDispatch = false;
+        provider.pendingReader = false;
+        failed.resolve();
+        dispatch.resolve();
+        reader.resolve();
+        await Promise.allSettled([advancing, ...(reading ? [reading] : [])]);
+      }
+    },
+    { createProvider: async () => (++creations === 1 ? provider : replacement) },
+  );
+});
+
+/*
+ * A local bridge that died cannot answer a status read. That is an
+ * observation fault, not the reviewer's: the reviewer keeps its session and
+ * request, and the cached provider is dropped so the next pass resolves the
+ * connection again, which restarts the bridge.
+ */
+test("MultiReviewService reconnects a reviewer whose bridge became unreachable", async () => {
+  class DeadBridgeProvider extends Provider {
+    down = false;
+    override async status(sessionId: string): Promise<ProviderStatus> {
+      if (this.down) throw new ProviderUnreachableError("claude bridge is not reachable");
+      return super.status(sessionId);
+    }
+  }
+  const provider = new DeadBridgeProvider();
+  let creations = 0;
+  await withService(
+    "env-reviewer-unreachable",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      provider.down = true;
+      await service.advanceNow(started.id);
+
+      const reconnecting = await snapshot(started.id);
+      expect(reconnecting?.phase).toBe("reviewing");
+      expect(reconnecting?.reviewers[0]).toMatchObject({
+        status: "running",
+        providerSessionId: "session-1",
+        dispatchState: "sent",
+      });
+      expect(reconnecting?.reviewers[0]?.idleResultPolls).toBeGreaterThanOrEqual(1);
+      expect(reconnecting?.reviewers[0]?.error).toBeUndefined();
+      expect(provider.aborted).toEqual([]);
+      // The unreachable instance was dropped, so the next pass reconnects.
+      const creationsBeforeReconnect = creations;
+      provider.down = false;
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      expect(creations).toBeGreaterThan(creationsBeforeReconnect);
+      const ready = await snapshot(started.id);
+      expect(ready?.reviewers[0]).toMatchObject({
+        status: "completed",
+        providerSessionId: "session-1",
+      });
+      expect(provider.aborted).toEqual([]);
+    },
+    {
+      createProvider: async () => {
+        creations += 1;
+        return provider;
+      },
+    },
+  );
 });
 
 /*

@@ -137,3 +137,36 @@ changed. Both profiles were stopped and reset after validation.
 - `mise run test:logged -- --name merge-agent-browser -- mise run test:agent:browser:isolated` on credential-free Codex profile `qa-browser-910af09e-8ee` reported 25 passed, 14 opt-in skips and one failure (536.5 s including lifecycle). The narrow host picker reached the socket dialog but `Select file` stayed disabled after entering the socket path (line 302, five-second visibility/enablement wait). Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.0YUiYo/merge-agent-browser.log.gz` and `output/agent-testing/qa-browser-910af09e-8ee/browser/`.
 - The full unchanged owning file on fresh credential-free Codex fixture profile `qa-unread-merge-owner` used `ORKESTRATOR_AGENT_TEST_PROFILE=qa-unread-merge-owner ORKESTRATOR_AGENT_TEST_RUN_ID=qa-unread-merge-owner mise run test:logged -- --name merge-gateway-browser-owner -- mise run test:agent:browser -- e2e/agent-testing/browser-gateway.spec.ts`. It reported 10 passed, five opt-in skips and one failure (110.1 s). The same narrow case failed earlier, with `Repository settings` hidden after `Open tools` (line 238, 15-second timeout). Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.PU8KT2/merge-gateway-browser-owner.log.gz` and `output/agent-testing/qa-unread-merge-owner/browser/`.
 - The changed project-home unread/background path passed in both runs. These results do not establish a new flake or resolve the existing picker issue; neither test nor picker code was changed in this merge. Both profiles were stopped and reset after validation.
+
+## Multi Review qualification — 2026-10-17
+
+- `mise run test:agent:browser:isolated` on `31d0fb06` (credential-free Codex profile `qa-browser-bca24bc9-5a5`, macOS arm64, about ten other live test environments on the host) reported 25 passed, 18 opt-in skips and one failure (6.8 min). The narrow case timed out with `Repository settings` resolved but "not stable" then "not visible" after `Open tools` (line 238, 15-second timeout).
+- On a fresh credential-free fixture profile (`dev:test --profile mrqhp-a5927117 --fixture --no-agent-credentials --agent-platforms codex`), `bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --grep "host picker creates" --repeat-each=2` passed all four runs (desktop and narrow twice, 36.7 s). The profile was stopped and reset afterwards.
+- Nothing about the picker, the assertion or its deadlines was changed.
+
+## Multi Review recovery follow-up — 2026-10-17
+
+On `4443c027` plus the provider recovery fixes, the isolated browser run with
+`ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW=1` reproduced the existing narrow
+picker failure: `Repository settings` became hidden after `Open tools`
+(line 238, 15-second click timeout). The fixture profile was
+`qa-browser-67110e54-b3a`, one Playwright worker on a loaded macOS arm64 host.
+Result: 25 passed, 18 opt-in skips, one failure, exit 1, 489.7 seconds.
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.9PgCqj/isolated-live-opt-in.log.gz`.
+All four live Multi Review cases remained skipped despite the inherited opt-in.
+The isolated runner stopped and reset its profile automatically.
+
+The full unchanged owning file was then run on a fresh credential-free Codex
+fixture profile:
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-review-gateway-owner mise run test:logged -- --name gateway-owner -- mise run test:agent:browser -- e2e/agent-testing/browser-gateway.spec.ts
+```
+
+It reproduced the same narrow picker timeout: 10 passed, five opt-in skips,
+one failed, 140.1 seconds, exit 1. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.erLCbH/gateway-owner.log.gz`
+and `output/agent-testing/qa-review-gateway-owner/browser/`. This does not
+establish a new passing owning-file rerun or resolve the existing issue.
+The picker, its assertions and deadlines were unchanged. The owning-file
+profile was stopped and reset.

@@ -1189,7 +1189,7 @@ describe("NativeAgentService", () => {
 
   test("resolves a parked dispatch whose id the restarted bridge has retired", async () => {
     let sendOutcome: "ambiguous" | "lost" = "ambiguous";
-    const lost = "Claude Code restarted before it confirmed this message, so it may not have run.";
+    const lost = "Claude Code could not confirm this message, so it may not have run.";
     const stub = createProviderStub("claude", {
       send: async () => {
         if (sendOutcome === "ambiguous") {

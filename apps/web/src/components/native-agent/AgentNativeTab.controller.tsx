@@ -1164,10 +1164,14 @@ export function SharedNativeAgentController({
   }, [data.environmentId, platform, sessionKey]);
 
   const releaseRetiredRequestId = useCallback(
-    (requestId: string) => {
+    (requestId: string, error: string) => {
       const current = useNativeComposeStore.getState().drafts.get(sessionKey);
       if (current?.requestId !== requestId) return;
-      updateDraft(sessionKey, { requestId: undefined, pendingTranscriptConfirmation: undefined });
+      updateDraft(sessionKey, {
+        requestId: undefined,
+        pendingTranscriptConfirmation: undefined,
+        submissionError: error,
+      });
     },
     [sessionKey, updateDraft],
   );
@@ -2486,7 +2490,7 @@ export function SharedNativeAgentController({
                     if (outcome.requestIdRetired) {
                       // The backend resolved the card. Keep the text, but under
                       // a new id, so sending it again can actually run it.
-                      releaseRetiredRequestId(actionableDispatch.requestId);
+                      releaseRetiredRequestId(actionableDispatch.requestId, outcome.error);
                       setOptimisticPrompt(null);
                     }
                     setSendError(outcome.error);

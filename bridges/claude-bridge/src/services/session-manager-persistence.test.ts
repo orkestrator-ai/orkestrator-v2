@@ -383,7 +383,7 @@ describe("reconcilePersistedSessions", () => {
       expect(adopted?.planMode).toBe(true);
       expect(adopted?.dispatchedRequestIds).toEqual(new Set(["initial-prompt:after-restart"]));
       // An earlier process claimed it, so the prompt route can refuse a retry.
-      expect(adopted?.inheritedDispatchedRequestIds).toEqual(
+      expect(adopted?.restoredDispatchedRequestIds).toEqual(
         new Set(["initial-prompt:after-restart"]),
       );
 
@@ -692,7 +692,7 @@ describe("ensurePersistedSession", () => {
       const state = await materializePersistedSession();
       expect(state.planMode).toBe(false);
       expect(state.dispatchedRequestIds).toEqual(new Set(["request-from-disk"]));
-      expect(state.inheritedDispatchedRequestIds).toEqual(new Set(["request-from-disk"]));
+      expect(state.restoredDispatchedRequestIds).toEqual(new Set(["request-from-disk"]));
     } finally {
       setClaudeHomeForTesting(sessionManagerTestHome);
       await rm(directory, { recursive: true, force: true });

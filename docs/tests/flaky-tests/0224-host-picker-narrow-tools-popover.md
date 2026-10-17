@@ -189,3 +189,9 @@ and `output/agent-testing/qa-review-gateway-owner/browser/`. This does not
 establish a new passing owning-file rerun or resolve the existing issue.
 The picker, its assertions and deadlines were unchanged. The owning-file
 profile was stopped and reset.
+
+## Retired-dispatch recovery validation — 2026-10-17
+
+The isolated credential-free Codex browser run on `8a2f9444` plus the retired-dispatch fixes reproduced the hidden `Repository settings` button at line 238 on profile `qa-browser-456a08a1-2d6`: 26 passed, 25 opt-in skips, two failed (the other failure is case 0279), 592.1 seconds including startup and cleanup. Command: `mise run test:logged -- --name isolated-browser -- mise run test:agent:browser:isolated --no-agent-credentials`. Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.SZD34s/isolated-browser.log.gz`.
+
+The unchanged full owning file passed on fresh credential-free Codex fixture profile `qa-retired-owner-b37f`: `ORKESTRATOR_AGENT_TEST_PROFILE=qa-retired-owner-b37f ORKESTRATOR_AGENT_TEST_RUN_ID=retired-gateway-owner mise run test:logged -- --name gateway-owner -- mise run test:agent:browser -- e2e/agent-testing/browser-gateway.spec.ts` (13 passed, six opt-in skips, 145.4 seconds including CLI build). Evidence: `output/agent-testing/retired-gateway-owner/browser/`. Both profiles were stopped and reset. No picker implementation, assertion, timeout or skip changed.

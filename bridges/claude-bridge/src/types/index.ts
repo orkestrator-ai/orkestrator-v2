@@ -632,10 +632,10 @@ export interface SessionState {
   dispatchedRequestIds?: Set<string>;
   /**
    * The ids `dispatchedRequestIds` held when this process restored the session
-   * from disk. An earlier process claimed them, and this one cannot tell
-   * whether their turns ran.
+   * from disk, after a restart or a same-process close. Without an in-memory
+   * outcome record, the bridge cannot tell whether their turns ran.
    */
-  inheritedDispatchedRequestIds?: ReadonlySet<string>;
+  restoredDispatchedRequestIds?: ReadonlySet<string>;
   /**
    * Local transcript rows that are not in the SDK rollout, such as an idle
    * `/steer` exchange. Eviction and restart rehydrate from disk and then merge

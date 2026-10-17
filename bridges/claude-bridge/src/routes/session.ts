@@ -801,19 +801,18 @@ session.post("/:id/prompt", async (c) => {
         );
       }
       const local = Boolean(idleSteerPromptReply(prompt, "Claude"));
-      // An earlier bridge process claimed this id and this one has no record
-      // of it. Its turn may have run or died with that process; nothing here
-      // can tell. Refuse it for good, as the other bridges do, rather than
+      // Restoring after a restart or tab close can recover a claim without
+      // its outcome. Nothing here can tell whether its turn ran.
+      // Refuse it for good, as the other bridges do, rather than
       // answer "already processed" for a command that may never have run.
       if (
         dispatchState === "new" &&
         !local &&
-        sessionData.inheritedDispatchedRequestIds?.has(requestId)
+        sessionData.restoredDispatchedRequestIds?.has(requestId)
       ) {
         return c.json(
           {
-            error:
-              "Claude prompt outcome is unknown after a bridge restart; resubmit with a new requestId",
+            error: "Claude prompt outcome is no longer available; resubmit with a new requestId",
             kind: DISPATCH_OUTCOME_LOST_KIND,
           },
           410,

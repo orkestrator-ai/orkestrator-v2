@@ -123,8 +123,8 @@ export async function getSessionActivity(sessionId: string): Promise<SessionActi
  * `dispatchedRequestIds` before the turn starts, so a restart can never run it
  * a second time. Whether that turn ran is lost with the process, though: a
  * restart can land before the CLI starts or partway through the turn. The
- * prompt route therefore refuses an id an earlier process claimed
- * (`inheritedDispatchedRequestIds`) with `DISPATCH_OUTCOME_LOST_KIND`, rather
+ * prompt route therefore refuses a restored claim without an outcome record
+ * (`restoredDispatchedRequestIds`) with `DISPATCH_OUTCOME_LOST_KIND`, rather
  * than reporting it processed, and the caller resends under a new id.
  */
 export type PromptDispatchState = "processing" | "already-processed";

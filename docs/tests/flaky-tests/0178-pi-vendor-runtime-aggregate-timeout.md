@@ -407,3 +407,9 @@ and `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.w0udE
 This observation does not independently establish a flake. Runtime staging
 remains an unresolved validation limitation; no source, assertion, timeout or
 skip changed.
+
+## Retired-dispatch recovery validation — 2026-10-17
+
+After correcting a bounded DOM diagnostic assertion from the first aggregate, the root/agent-support group was rerun with `mise run test:logged -- --name root-final -- bun test ./tests ./e2e/agent-testing/artifact-sanitizer.test.ts ./scripts/opencode-live-compatibility-probe.test.ts ./test-fixtures/agent-project/server.test.ts --parallel=4 --only-failures`. It reported 3037 passed, one skipped and one failed (73.6 seconds): this unchanged Pi staging case timed out at 30000.05 ms. Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.BVIgTu/root-final.log.gz`.
+
+`mise run test:logged -- --name pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the unchanged owning file alone in 17.0 seconds. The retired-dispatch changes do not touch Pi staging. No assertion, timeout or skip was changed.

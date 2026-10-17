@@ -216,7 +216,7 @@ export async function reconcilePersistedSessions(): Promise<void> {
       ...(storedPreferences?.dispatchedRequestIds?.length
         ? {
             dispatchedRequestIds: new Set(storedPreferences.dispatchedRequestIds),
-            inheritedDispatchedRequestIds: new Set(storedPreferences.dispatchedRequestIds),
+            restoredDispatchedRequestIds: new Set(storedPreferences.dispatchedRequestIds),
           }
         : {}),
       ...(storedPreferences?.steerJournal?.length
@@ -280,7 +280,7 @@ export async function materializePersistedSessionState(
     ...(preferences?.dispatchedRequestIds?.length
       ? {
           dispatchedRequestIds: new Set(preferences.dispatchedRequestIds),
-          inheritedDispatchedRequestIds: new Set(preferences.dispatchedRequestIds),
+          restoredDispatchedRequestIds: new Set(preferences.dispatchedRequestIds),
         }
       : {}),
     ...(preferences?.steerJournal?.length

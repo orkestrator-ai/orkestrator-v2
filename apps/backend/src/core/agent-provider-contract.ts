@@ -123,7 +123,7 @@ export interface AgentInteractionProviderCapability {
 
 export class PromptRejectedError extends Error {
   /**
-   * The bridge recorded this request id before it restarted and cannot say
+   * The bridge restored a claim for this request id without its outcome and cannot say
    * whether its turn ran. It refuses the id for good, so retrying it can never
    * succeed; a resend needs a new id.
    */

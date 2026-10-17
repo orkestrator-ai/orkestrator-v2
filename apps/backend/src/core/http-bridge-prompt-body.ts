@@ -86,8 +86,8 @@ export function bridgePromptBody(
 /**
  * Refuse a prompt whose request id the bridge has retired.
  *
- * An earlier bridge process recorded the id and restarted before its turn was
- * confirmed (HTTP 410, `kind: "dispatch-outcome-lost"`). Retrying can never
+ * The bridge restored a recorded id without its outcome
+ * (HTTP 410, `kind: "dispatch-outcome-lost"`). Retrying can never
  * help, so say what happened in the user's terms rather than the bridge's
  * request-id wording, and mark the id retired.
  */
@@ -98,7 +98,7 @@ export function assertPromptOutcomeKnown(
 ): void {
   if (status !== 410 || detail?.kind !== DISPATCH_OUTCOME_LOST_KIND) return;
   throw new PromptRejectedError(
-    `${AGENT_PLATFORM_LABELS[agent]} restarted before it confirmed this message, so it may not have run. Check the conversation and send it again if it did not.`,
+    `${AGENT_PLATFORM_LABELS[agent]} could not confirm this message, so it may not have run. Check the conversation and send it again if it did not.`,
     { requestIdRetired: true },
   );
 }

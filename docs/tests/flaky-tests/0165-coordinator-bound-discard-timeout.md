@@ -283,3 +283,9 @@ passed the unchanged owning file in 23.8 seconds (exit 0). Evidence:
 - Owning-file runs during the aggregate also timed out (47 passed, one failed, one between-tests teardown error each): `coordinator-owner-rerun` in 32.5 seconds and `coordinator-after-browser` in 24.9 seconds. Their artifacts are `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.iCnX63/coordinator-owner-rerun.log.gz` and `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.0jjdbZ/coordinator-after-browser.log.gz`.
 - After the aggregate and browser runs ended, the unchanged owning file passed: `mise run test:logged -- --name coordinator-post-aggregate -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`, 19.1 seconds, exit 0.
 - Shared-host contention and teardown after timeout remain hypotheses. No assertion, timeout, skip or implementation in this owner changed.
+
+## Retired-dispatch recovery validation — 2026-10-17
+
+The full `mise run test:logged -- --name full-tests -- mise run test` run timed out bound-discard at 5148.81 ms (five-second budget). The backend had 8784 passes and ten timeout failures; aggregate evidence is `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.YP2Uc2/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+`mise run test:logged -- --name coordinator-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` passed the unchanged owning file alone in 18.2 seconds. No coordinator implementation, assertion, timeout or skip changed.

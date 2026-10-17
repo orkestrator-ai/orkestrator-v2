@@ -1189,7 +1189,7 @@ describe("session routes", () => {
           ? {
               ...defaultGetSession(id)!,
               dispatchedRequestIds: new Set(["before-restart"]),
-              inheritedDispatchedRequestIds: new Set(["before-restart"]),
+              restoredDispatchedRequestIds: new Set(["before-restart"]),
             }
           : undefined,
       );
@@ -1201,8 +1201,7 @@ describe("session routes", () => {
 
       expect(res.status).toBe(410);
       expect(await jsonBody(res)).toEqual({
-        error:
-          "Claude prompt outcome is unknown after a bridge restart; resubmit with a new requestId",
+        error: "Claude prompt outcome is no longer available; resubmit with a new requestId",
         kind: "dispatch-outcome-lost",
       });
       expect(mockClaimPromptDispatch).not.toHaveBeenCalled();
@@ -1215,7 +1214,7 @@ describe("session routes", () => {
           ? {
               ...defaultGetSession(id)!,
               dispatchedRequestIds: new Set(["claimed-here", "idle-steer"]),
-              inheritedDispatchedRequestIds: new Set(["idle-steer"]),
+              restoredDispatchedRequestIds: new Set(["idle-steer"]),
             }
           : undefined,
       );

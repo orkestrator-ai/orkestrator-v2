@@ -142,8 +142,7 @@ describe("HTTP bridge command transport", () => {
       () =>
         Response.json(
           {
-            error:
-              "Claude prompt outcome is unknown after a bridge restart; resubmit with a new requestId",
+            error: "Claude prompt outcome is no longer available; resubmit with a new requestId",
             kind: "dispatch-outcome-lost",
           },
           { status: 410 },
@@ -154,7 +153,7 @@ describe("HTTP bridge command transport", () => {
     await expect(failure).rejects.toMatchObject({ requestIdRetired: true });
     // In the user's terms, not the bridge's request-id wording.
     await expect(failure).rejects.toThrow(
-      /^Claude Code restarted before it confirmed this message, so it may not have run\. Check the conversation and send it again if it did not\.$/,
+      /^Claude Code could not confirm this message, so it may not have run\. Check the conversation and send it again if it did not\.$/,
     );
 
     // Any other 410 is still a plain rejection.

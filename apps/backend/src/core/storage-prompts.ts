@@ -767,6 +767,7 @@ export abstract class StoragePrompts extends StorageNative {
     queueKey: string,
     requestId: string,
     message = "Queued prompt was rejected. Edit it or retry explicitly.",
+    options?: { requestIdRetired?: boolean },
   ): Promise<PersistedPromptQueue | null> {
     if (!isNonBlankString(queueKey) || !isNonBlankString(requestId) || !isNonBlankString(message)) {
       throw new Error("Prompt queue failure identity must not be blank");
@@ -781,13 +782,18 @@ export abstract class StoragePrompts extends StorageNative {
       if (!isRecord(inFlight.message) || !isNonBlankString(inFlight.message.id)) {
         return previous;
       }
+      // Only an explicit retirement permits a fresh dispatch identity. Keep the
+      // stable row id, and leave the error latched until the user retries.
+      const failedMessage = options?.requestIdRetired
+        ? { ...inFlight.message, requestId: randomUUID() }
+        : inFlight.message;
       const saved: PersistedPromptQueue = {
         ...withoutInFlight,
-        messages: [inFlight.message, ...previous.messages],
+        messages: [failedMessage, ...previous.messages],
         dispatchError: {
           requestId,
           messageId: inFlight.message.id,
-          messageFingerprint: this.promptQueueMessageFingerprint(inFlight.message),
+          messageFingerprint: this.promptQueueMessageFingerprint(failedMessage),
           message,
           failedAt: nowIso(),
         },

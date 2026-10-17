@@ -367,6 +367,8 @@ export type MultiReviewWorktreeSnapshot = ReviewWorktreeSnapshotRecord;
  * the native-agent layer deduplicates.
  */
 export interface MultiReviewAutoPrLaunch {
+  /** Fix attempt that authorized this launch; absent on legacy records. */
+  fixIdentity?: string;
   state: "pending" | "launched" | "skipped" | "failed";
   requestId: string;
   /** Failed delivery attempts, persisted so a restart cannot reset the budget. */
@@ -883,8 +885,9 @@ const AUTO_PR_LAUNCH_STATES = new Set<MultiReviewAutoPrLaunch["state"]>([
 function isAutoPrLaunch(value: unknown): value is MultiReviewAutoPrLaunch {
   return (
     record(value) &&
-    hasOnlyKeys(value, ["state", "requestId", "attempts", "tabId", "message"]) &&
+    hasOnlyKeys(value, ["state", "requestId", "attempts", "tabId", "message", "fixIdentity"]) &&
     AUTO_PR_LAUNCH_STATES.has(value.state as MultiReviewAutoPrLaunch["state"]) &&
+    optionalProgressDigest(value.fixIdentity) &&
     nonBlank(value.requestId, 256) &&
     (value.attempts === undefined ||
       (Number.isSafeInteger(value.attempts) && (value.attempts as number) >= 0)) &&

@@ -1,3 +1,4 @@
+import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
 import { multiReviewNativeFixOptions } from "./multi-review-native-fix.js";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
@@ -1067,6 +1068,7 @@ test("MultiReviewService launches a PR once an interactive Fix finishes on its o
       expect(settled.phase).toBe("interactive");
       expect(settled.autoPrLaunch).toEqual({
         state: "pending",
+        fixIdentity: multiReviewFixIdentity(settled.fixSession),
         requestId: `multi-review-pr:${started.id}`,
       });
       expect(reads).toEqual([
@@ -1080,6 +1082,7 @@ test("MultiReviewService launches a PR once an interactive Fix finishes on its o
       await service.advanceNow(started.id);
       expect((await snapshot(started.id))?.autoPrLaunch).toEqual({
         state: "launched",
+        fixIdentity: multiReviewFixIdentity(settled.fixSession),
         requestId: `multi-review-pr:${started.id}`,
         tabId: "agent-job-pr",
       });
@@ -4923,7 +4926,13 @@ test.each([true, false])(
           return ["completed", "failed"].includes((await snapshot(workflowId))?.phase ?? "");
         });
         expect((await snapshot(workflowId))?.autoPrLaunch).toEqual(
-          complete ? { state: "pending", requestId: `multi-review-pr:${workflowId}` } : undefined,
+          complete
+            ? {
+                state: "pending",
+                requestId: `multi-review-pr:${workflowId}`,
+                fixIdentity: multiReviewFixIdentity((await snapshot(workflowId))?.fixSession),
+              }
+            : undefined,
         );
         expect(pr.launches).toHaveLength(0);
         await service.advanceNow(workflowId);

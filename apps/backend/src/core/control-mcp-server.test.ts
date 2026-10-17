@@ -282,7 +282,9 @@ describe("Orkestrator control MCP server", () => {
           expect(content.delivery).toBe("async");
           if (mode === "off") {
             expect(content.wake).toContain("Only terminal");
+            expect(content.wake).not.toBe(COORDINATOR_WORKFLOW_STATUS_WAKE);
             expect(content.nextStep).toContain("tell the user to inspect");
+            expect(content.nextStep).toContain("do not wait for a ready or fix-turn wake");
           } else expect(content.wake).toBe(COORDINATOR_WORKFLOW_STATUS_WAKE);
         }
         for (const id of ["launched", "started"]) {

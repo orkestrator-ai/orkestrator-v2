@@ -1,3 +1,5 @@
+import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
+
 /** Bounded control response; never include provider configuration or controller fences. */
 export function workflowSummary(workflow: Record<string, unknown>): Record<string, unknown> {
   return {
@@ -51,14 +53,31 @@ function automationNext(workflow: Record<string, unknown>): string {
   const launch = isRecord(workflow.autoPrLaunch) ? workflow.autoPrLaunch : undefined;
   const fix = isRecord(workflow.fixSession) ? workflow.fixSession : undefined;
   const phase = workflow.phase;
-  const thenPr = autoPr ? "; a PR session starts once that Fix completes" : "";
-  if (launch?.state === "pending") return "The Fix completed; the PR session is starting.";
-  if (launch?.state === "launched")
-    return `The PR session started${typeof launch.tabId === "string" ? ` in tab ${launch.tabId}` : ""}; it pushes the branch and opens the pull request. Nothing else runs automatically.`;
-  // A later Fix may still queue the PR an earlier one skipped, so a running Fix comes first.
+  const customFix = isRecord(workflow.fixLaunch) && workflow.fixLaunch.kind === "custom";
+  const earlierPr =
+    launch?.state === "launched" &&
+    (launch.fixIdentity === undefined || launch.fixIdentity !== multiReviewFixIdentity(fix));
+  const manualPr = "; review its result and start or update the PR manually";
+  const thenPr = customFix
+    ? manualPr
+    : launch?.state === "launched"
+      ? "; the earlier PR does not confirm inclusion of this Fix's changes, so review and update it manually"
+      : autoPr
+        ? "; a PR session starts once that Fix completes"
+        : "";
+  // A new handoff or running Fix takes precedence over a retained PR launch.
   if (phase === "interactive" && workflow.addressPromptPending === true)
     return `The Fix handoff is being delivered${thenPr}.`;
   if (phase === "interactive" && fix?.status === "running") return `The Fix is running${thenPr}.`;
+  if (phase === "failed" || phase === "cancelled") return "Nothing else runs automatically.";
+  if (phase === "cancelling") return "Cancelling; nothing else runs automatically.";
+  if (phase === "interactive" && customFix)
+    return `The custom Fix ${fix?.status === "failed" ? "failed" : fix?.status === "idle" ? "turn ended" : "is starting"}${manualPr}.`;
+  if (launch?.state === "pending") return "The Fix completed; the PR session is starting.";
+  if (phase === "interactive" && earlierPr)
+    return "The Fix turn ended; the earlier PR does not confirm inclusion of this Fix's changes. Review the result and update the PR manually.";
+  if (launch?.state === "launched")
+    return `The PR session started${typeof launch.tabId === "string" ? ` in tab ${launch.tabId}` : ""}; it pushes the branch and opens the pull request. Nothing else runs automatically.`;
   if (launch?.state === "skipped" || launch?.state === "failed") {
     const reason =
       typeof launch.message === "string"
@@ -66,9 +85,7 @@ function automationNext(workflow: Record<string, unknown>): string {
         : ".";
     return `No PR session ${launch.state === "failed" ? "could start" : "was started"}${reason}`;
   }
-  if (phase === "completed" || phase === "failed" || phase === "cancelled")
-    return "Nothing else runs automatically.";
-  if (phase === "cancelling") return "Cancelling; nothing else runs automatically.";
+  if (phase === "completed") return "Nothing else runs automatically.";
   if (phase === "ready")
     return autoFix && !hasFindings(workflow.consolidatedReport)
       ? "Consolidation found nothing to fix, so no Fix or PR session starts."

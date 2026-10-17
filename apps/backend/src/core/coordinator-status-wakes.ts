@@ -19,6 +19,7 @@
  * Progress is not a status: individual reviewers finishing never wake anyone,
  * and build-pipeline stages only do under the opt-in `stages` mode.
  */
+import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
 import { createHash } from "node:crypto";
 import {
   AgentMailError,
@@ -169,14 +170,15 @@ function stalledSession(candidates: Array<[string, unknown]>): StalledSession | 
  * workflow is about to leave is not news: consolidation with findings goes
  * straight to the Fix (no `ready`), and a finished Fix with a queued PR is held
  * until the PR launch settles. The coordinator then hears `pr-started`, then
- * `pr-opened` once the environment reports the pull request (`prUrl`, read on
- * the next observation), or `pr-failed`. A skipped PR is reported on
+ * `pr-opened` once the environment reports an open pull request (URL and
+ * state, read on the next observation), or `pr-failed`. Closed, merged and
+ * unknown PR states are reported as such. A skipped PR is reported on
  * `fix-done` with its reason.
  */
 export function multiReviewStatus(
   snapshot: unknown,
   workflowId: string,
-  environment: { prUrl?: unknown } = {},
+  environment: { prUrl?: unknown; prState?: unknown } = {},
 ): CoordinatorStatus | null {
   if (!record(snapshot)) return null;
   const phase = text(snapshot.phase);
@@ -184,7 +186,17 @@ export function multiReviewStatus(
   const errorLine = text(snapshot.error) ? [`Error: ${boundedLine(snapshot.error as string)}`] : [];
   const fixSession = record(snapshot.fixSession) ? snapshot.fixSession : undefined;
   const autoPr = snapshot.autoPr === true;
-  const prLaunch = autoPr && record(snapshot.autoPrLaunch) ? snapshot.autoPrLaunch : undefined;
+  const recordedPrLaunch =
+    autoPr && record(snapshot.autoPrLaunch) ? snapshot.autoPrLaunch : undefined;
+  // Old launched records cannot prove which Fix they contain. Other legacy
+  // states keep their existing handoff behavior until a new Fix supersedes them.
+  const prLaunch =
+    recordedPrLaunch &&
+    (recordedPrLaunch.fixIdentity === undefined
+      ? recordedPrLaunch.state !== "launched"
+      : recordedPrLaunch.fixIdentity === multiReviewFixIdentity(fixSession))
+      ? recordedPrLaunch
+      : undefined;
   const prLaunchMessage = text(prLaunch?.message)
     ? boundedLine(prLaunch!.message as string)
     : undefined;
@@ -201,29 +213,42 @@ export function multiReviewStatus(
             ]
           : []),
       ];
-      return prUrl
-        ? {
-            key: `pr-opened:${fixKey}`,
-            state: "pr-opened",
-            tone: "success",
-            terminal: false,
-            headline: "fix finished and its pull request is open",
-            details: [`Pull request: ${boundedLine(prUrl)}`, "The coordinator does not merge it."],
-            tools,
-            mode: "settled",
-          }
-        : {
-            key: `pr-started:${fixKey}`,
-            state: "pr-started",
-            tone: "info",
-            terminal: false,
-            headline: "fix finished; PR session started",
-            details: [
-              `The PR session${tab ? ` (tab ${tab})` : ""} pushes the branch and opens the pull request. Another update follows once the environment reports it.`,
-            ],
-            tools,
-            mode: "settled",
-          };
+      if (prUrl) {
+        const state =
+          environment.prState === "open" ||
+          environment.prState === "closed" ||
+          environment.prState === "merged"
+            ? environment.prState
+            : "unknown";
+        const noticeState = state === "open" ? "pr-opened" : `pr-${state}`;
+        return {
+          key: `${noticeState}:${fixKey}`,
+          state: noticeState,
+          tone: state === "open" || state === "merged" ? "success" : "attention",
+          terminal: false,
+          headline:
+            state === "open"
+              ? "fix finished and its pull request is open"
+              : state === "unknown"
+                ? "fix finished; its pull request state is unknown"
+                : `fix finished; its pull request is ${state}`,
+          details: [`Pull request: ${boundedLine(prUrl)}`, "The coordinator does not merge it."],
+          tools,
+          mode: "settled",
+        };
+      }
+      return {
+        key: `pr-started:${fixKey}`,
+        state: "pr-started",
+        tone: "info",
+        terminal: false,
+        headline: "fix finished; PR session started",
+        details: [
+          `The PR session${tab ? ` (tab ${tab})` : ""} pushes the branch and opens the pull request. Another update follows once the environment reports it.`,
+        ],
+        tools,
+        mode: "settled",
+      };
     }
     if (prLaunch?.state === "failed")
       return {
@@ -359,6 +384,11 @@ export function multiReviewStatus(
         headline: "fix session finished its turn",
         details: [
           "The interactive fix turn ended. Read its tab to confirm every finding was addressed.",
+          ...(recordedPrLaunch?.state === "launched" && !prLaunch
+            ? [
+                "An earlier PR session started; its pull request does not confirm inclusion of this Fix's changes. Review the Fix and update the PR manually.",
+              ]
+            : []),
           ...(prLaunch?.state === "skipped"
             ? [`No PR session started${prLaunchMessage ? `: ${prLaunchMessage}` : "."}`]
             : []),
@@ -784,7 +814,9 @@ export class CoordinatorStatusWakes {
    * The environment of a review whose PR session started, so its pull request
    * can be reported once the PR monitor records it. Nothing else reads it.
    */
-  private async launchedPrEnvironment(snapshot: unknown): Promise<{ prUrl?: unknown }> {
+  private async launchedPrEnvironment(
+    snapshot: unknown,
+  ): Promise<{ prUrl?: unknown; prState?: unknown }> {
     if (
       !record(snapshot) ||
       snapshot.autoPr !== true ||

@@ -702,6 +702,40 @@ describe("multi review protocol", () => {
       }),
     ).toBe(false);
   });
+
+  test("accepts a step's bounded reminder and restart-continuation state", () => {
+    const step = {
+      version: MULTI_REVIEW_WORKFLOW_VERSION,
+      controller: "backend",
+      id: "workflow-step-follow-up",
+      environmentId: "env-1",
+      projectId: "project-1",
+      targetBranch: "main",
+      reviewers: [{ id: "reviewer-1", agent: "codex", model: "default", status: "pending" }],
+      fixModel: { agent: "codex", model: "default" },
+      phase: "preparing",
+      activeRequest: {
+        kind: "prepare",
+        requestId: "continuation-request",
+        state: "prepared",
+        createdAt: new Date(0).toISOString(),
+        continuationPrompt: "Continue the discovery work from where it stopped.",
+        resultReminderSent: true,
+        restartContinuationSent: true,
+      },
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+      backendRevision: 2,
+    };
+    expect(isMultiReviewWorkflow(step)).toBe(true);
+    for (const activeRequest of [
+      { ...step.activeRequest, continuationPrompt: "x".repeat(4_097) },
+      { ...step.activeRequest, resultReminderSent: "yes" },
+      { ...step.activeRequest, restartContinuationSent: 1 },
+    ]) {
+      expect(isMultiReviewWorkflow({ ...step, activeRequest })).toBe(false);
+    }
+  });
 });
 
 test("preparation and immutable package references survive strict workflow validation", () => {

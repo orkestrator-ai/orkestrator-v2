@@ -74,3 +74,18 @@ outer artifact `/tmp/orkestrator-test-run.e7nGed/merge-tests.log.gz`.
 passed the entire unchanged owning file (exit 0, 16.2 seconds). Shared host
 contention remains an unconfirmed hypothesis; no implementation, assertion,
 timeout or skip changed.
+
+## Multi Review restart-continuation main merge — 2026-10-17
+
+- Original command: `bun run test` from `apps/backend` on `53b43e81` (the Multi Review restart-continuation branch after merging `origin/main` at `607d12e2`), macOS arm64 under shared-host load (load average 18–28).
+- Aggregate: backend 8,857 passed, 41 skipped and six failed across 8,904 tests in 475 files (100.52 seconds). All six were five-second timeouts in unchanged owners; the others are recorded in 0165/0248, [0301](0301-looped-review-lease-takeover-timeout.md) and [0302](0302-validation-worker-progress-watchdog-timeout.md).
+- This case timed out at 5156.76 ms, and `move_environment > a failed submodule re-link restores the original checkout` at 5157.03 ms.
+- Unchanged owning-file rerun: `bun test --preload ../../tests/setup-node.ts src/core/environment-move.test.ts` from `apps/backend` passed 37 of 37 in 33.31 seconds.
+- No assertion, timeout, skip or implementation in this owner changed.
+
+Recurrence on 2026-10-17, preview tunnel slow-reader validation:
+`mise run test:logged -- --name full-tests -- mise run test` on `9da80451`
+plus a preview-tunnel-only change, load average 30 to 40. The case timed out
+at 5061.30 ms (`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.vJOfiZ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`). The unchanged owning file then passed alone
+(`bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1`,
+37 passed). No implementation, assertion, timeout or skip changed.

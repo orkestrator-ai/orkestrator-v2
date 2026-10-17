@@ -982,8 +982,8 @@ export class CodexRuntimeSessions {
     return this.ctx.options.engine.readAccount();
   }
 
-  beginAuthLogin(): Promise<unknown> {
-    return this.ctx.options.engine.beginAccountLogin();
+  beginAuthLogin(method?: "browser" | "device-code"): Promise<unknown> {
+    return this.ctx.options.engine.beginAccountLogin(method);
   }
 
   logoutAuth(): Promise<void> {
@@ -1240,6 +1240,12 @@ export class CodexRuntimeSessions {
     phase: SessionPhase;
     title?: string;
     error?: string;
+    /**
+     * Why the last turn failed, when it was not the model's doing. `restart`:
+     * an app-server restart stopped the turn partway; the thread is intact and
+     * a new prompt continues it.
+     */
+    interruption?: "restart";
     threadId?: string | null;
     turnId?: string;
     turnStartedAt?: string;
@@ -1268,6 +1274,9 @@ export class CodexRuntimeSessions {
       context?.phase ??
       (awaitingRecovery ? "recovering" : session.restartFailure ? "failed" : "idle");
     const latestDispatch = this.ctx.journal.latestForSession(sessionId);
+    const error =
+      context?.error ??
+      (phase === "failed" && session.restartFailure ? CODEX_RESTARTED_MID_TURN_MESSAGE : undefined);
 
     return {
       // Keeps the pre-migration contract; `phase` carries the new detail.
@@ -1275,11 +1284,13 @@ export class CodexRuntimeSessions {
       ...(session.config.policy ? { policy: codexReportedPolicy(session.config.policy) } : {}),
       phase,
       title: session.title,
-      error:
-        context?.error ??
-        (phase === "failed" && session.restartFailure
-          ? CODEX_RESTARTED_MID_TURN_MESSAGE
-          : undefined),
+      error,
+      // Structured so a workflow can continue the turn without matching text.
+      // The notice clears when the next turn is accepted, and the error check
+      // keeps a later, unrelated failure from inheriting it.
+      ...(phase === "failed" && session.restartFailure && error === CODEX_RESTARTED_MID_TURN_MESSAGE
+        ? { interruption: "restart" as const }
+        : {}),
       threadId: session.threadId,
       turnId: context?.activeTurn?.turnId,
       turnStartedAt: context?.turnStartedAt,

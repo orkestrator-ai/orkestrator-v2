@@ -945,6 +945,25 @@ describe("rollout public helpers (continued)", () => {
         "user",
       ),
     ).toBeNull();
+    // Codex 0.162 injects the global instructions under a heading with no path.
+    expect(
+      extractPersistedMessageText(
+        [
+          {
+            type: "input_text",
+            text: "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nUse the docs CLI.\n</INSTRUCTIONS>",
+          },
+        ],
+        "user",
+      ),
+    ).toBeNull();
+    // A user who writes about the heading is still shown.
+    expect(
+      extractPersistedMessageText(
+        [{ type: "input_text", text: "# AGENTS.md instructions\nPlease tidy them up." }],
+        "user",
+      ),
+    ).toBe("# AGENTS.md instructions\nPlease tidy them up.");
     expect(
       extractPersistedMessageText(
         [

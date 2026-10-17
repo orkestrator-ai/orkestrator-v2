@@ -1,13 +1,14 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, test } from "bun:test";
 import { createServer, type Server } from "node:http";
-import { connect, type AddressInfo, type Socket } from "node:net";
+import { connect, createServer as createTcpServer, type AddressInfo, type Socket } from "node:net";
+import { Duplex } from "node:stream";
 
 import {
   acceptPreviewWebSocket,
   connectPreviewWebSocket,
+  PreviewWebSocket,
   PreviewWebSocketHandshakeError,
   webSocketAccept,
-  type PreviewWebSocket,
 } from "./preview-websocket.js";
 
 const servers: Server[] = [];
@@ -98,6 +99,190 @@ async function rawClient(port: number): Promise<{ socket: Socket; received: () =
   received = received.subarray(end);
   return { socket, received: () => received };
 }
+
+/** A server endpoint whose peer reads only when released, one write at a time. */
+function slowPeer() {
+  const received: Buffer[] = [];
+  let held = true;
+  let pending: (() => void) | undefined;
+  const socket = new Duplex({
+    read() {},
+    write(chunk: Buffer, _encoding, callback) {
+      const flush = () => {
+        received.push(chunk);
+        callback();
+      };
+      if (held) pending = flush;
+      else flush();
+    },
+  });
+  const ws = new PreviewWebSocket(socket, { role: "server", maxPayload: 1024 });
+  return {
+    socket,
+    ws,
+    received: () => Buffer.concat(received),
+    release() {
+      held = false;
+      const flush = pending;
+      pending = undefined;
+      flush?.();
+    },
+  };
+}
+
+/** Let stream write callbacks, which run on the next tick, settle. */
+async function settle(): Promise<void> {
+  for (let tick = 0; tick < 5; tick += 1) await new Promise((resolve) => process.nextTick(resolve));
+}
+
+/** Real Bun TCP sockets with the receiving socket paused before any writes. */
+async function tcpSlowPeer(closeDrainTimeoutMs = 2_000) {
+  const server = createTcpServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const accepted = new Promise<Socket>((resolve) => server.once("connection", resolve));
+  const receiver = connect((server.address() as AddressInfo).port, "127.0.0.1");
+  receiver.on("error", () => undefined);
+  receiver.pause();
+  const sender = await accepted;
+  const ws = new PreviewWebSocket(sender, {
+    role: "server",
+    maxPayload: 64 * 1024,
+    closeTimeoutMs: 100,
+    closeDrainTimeoutMs,
+  });
+  const peer = new PreviewWebSocket(receiver, { role: "client", maxPayload: 64 * 1024 });
+  return {
+    ws,
+    peer,
+    async dispose() {
+      ws.terminate();
+      peer.terminate();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
+describe("preview websocket close over real TCP", () => {
+  test("a paused TCP peer receives every queued byte before EOF and normal close", async () => {
+    const pair = await tcpSlowPeer();
+    try {
+      const body = Buffer.alloc(16 * 1024 * 1024);
+      for (let index = 0; index < body.length; index += 1) body[index] = index % 251;
+      const received: Buffer[] = [];
+      const events: string[] = [];
+      pair.peer.on("message", (data, binary) => {
+        if (binary) received.push(data);
+        else events.push(data.toString());
+      });
+      const closed = new Promise<number>((resolve) => pair.peer.once("close", resolve));
+      for (let offset = 0; offset < body.length; offset += 64 * 1024)
+        pair.ws.send(body.subarray(offset, offset + 64 * 1024), true);
+      pair.ws.send("eof", false);
+      pair.ws.close(1000);
+      // Wait for kernel write callbacks too: the TCP send buffer must really
+      // be full, rather than merely observing synchronous writableLength.
+      await Bun.sleep(200);
+      expect(pair.ws.bufferedBytes).toBeGreaterThan(0);
+      expect(pair.ws.socket.destroyed).toBe(false);
+      pair.peer.start();
+      expect(await closed).toBe(1000);
+      expect(Buffer.concat(received)).toEqual(body);
+      expect(events).toEqual(["eof"]);
+    } finally {
+      await pair.dispose();
+    }
+  });
+
+  test("a TCP peer that never resumes is terminated at the drain deadline", async () => {
+    const pair = await tcpSlowPeer(600);
+    try {
+      const closed: number[] = [];
+      pair.ws.on("close", (code) => closed.push(code));
+      const chunk = Buffer.alloc(64 * 1024, 0x62);
+      for (let index = 0; index < 256; index += 1) pair.ws.send(chunk, true);
+      pair.ws.close(1000);
+      await Bun.sleep(200);
+      expect(pair.ws.bufferedBytes).toBeGreaterThan(0);
+      expect(pair.ws.socket.destroyed).toBe(false);
+      await new Promise<void>((resolve) => pair.ws.once("close", () => resolve()));
+      expect(pair.ws.socket.destroyed).toBe(true);
+      expect(closed).toEqual([1000]);
+    } finally {
+      await pair.dispose();
+    }
+  });
+});
+
+describe("preview websocket close with a slow reader", () => {
+  test("queued data reaches a slow reader before the close grace starts", async () => {
+    jest.useFakeTimers();
+    const peer = slowPeer();
+    try {
+      const payload = Buffer.alloc(64 * 1024, 0x61);
+      peer.ws.send(payload, true);
+      peer.ws.close(1000);
+      // Far beyond the 2-second handshake grace, but within the drain bound.
+      jest.advanceTimersByTime(10_000);
+      expect(peer.socket.destroyed).toBe(false);
+      peer.release();
+      await settle();
+      const bytes = peer.received();
+      expect(bytes.subarray(10, 10 + payload.length).equals(payload)).toBe(true);
+      expect(bytes.subarray(10 + payload.length)).toEqual(Buffer.from([0x88, 2, 0x03, 0xe8]));
+      // The grace now runs from the flushed close frame.
+      jest.advanceTimersByTime(1_999);
+      expect(peer.socket.destroyed).toBe(false);
+      jest.advanceTimersByTime(1);
+      expect(peer.socket.destroyed).toBe(true);
+    } finally {
+      jest.useRealTimers();
+      peer.ws.terminate();
+    }
+  });
+
+  test("a reader that stopped is cut off at the close drain bound", () => {
+    jest.useFakeTimers();
+    const peer = slowPeer();
+    const closed: number[] = [];
+    peer.ws.on("close", (code) => closed.push(code));
+    try {
+      peer.ws.send(Buffer.alloc(64 * 1024, 0x61), true);
+      peer.ws.close(1000);
+      jest.advanceTimersByTime(29_999);
+      expect(peer.socket.destroyed).toBe(false);
+      jest.advanceTimersByTime(1);
+      expect(peer.socket.destroyed).toBe(true);
+      expect(closed).toEqual([1000]);
+    } finally {
+      jest.useRealTimers();
+      peer.ws.terminate();
+    }
+  });
+
+  test("a close the peer starts also waits for queued data to reach it", async () => {
+    jest.useFakeTimers();
+    const peer = slowPeer();
+    try {
+      const payload = Buffer.alloc(64 * 1024, 0x61);
+      peer.ws.start();
+      peer.ws.send(payload, true);
+      peer.socket.push(frame(0x8, Buffer.from([0x03, 0xe8])));
+      await settle();
+      jest.advanceTimersByTime(10_000);
+      expect(peer.socket.destroyed).toBe(false);
+      peer.release();
+      await settle();
+      expect(peer.received().subarray(10 + payload.length)).toEqual(
+        Buffer.from([0x88, 2, 0x03, 0xe8]),
+      );
+      jest.advanceTimersByTime(2_000);
+      expect(peer.socket.destroyed).toBe(true);
+    } finally {
+      jest.useRealTimers();
+      peer.ws.terminate();
+    }
+  });
+});
 
 describe("preview websocket", () => {
   test("echoes text and binary between client and server", async () => {

@@ -42,6 +42,14 @@ describe("HTTP bridge provider", () => {
     expect(JSON.parse(String(request.init.body))).toEqual({ title: "Build task" });
   });
 
+  test("leaves the default model alone on bridges whose prompts carry the model", () => {
+    for (const connection of [claudeConnection, piConnection, cursorConnection, grokConnection]) {
+      expect(httpProvider(() => Response.json({}), connection).provider.resolveDefaultModel).toBe(
+        undefined,
+      );
+    }
+  });
+
   test("forwards tab-scoped MCP credentials in Claude, Codex, Pi, Cursor, and Grok request bodies", async () => {
     const agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "tab-token" };
     for (const connection of [
@@ -2040,6 +2048,41 @@ describe("HTTP bridge provider", () => {
     await expect(readProviderStatus(provider, "session-1")).resolves.toEqual({
       status: "error",
       error: "Selected model is at capacity. Please try a different model.",
+    });
+  });
+
+  test("readProviderStatus carries a restart interruption beside the failure", async () => {
+    const { provider } = httpProvider(
+      () =>
+        Response.json({
+          status: "error",
+          phase: "failed",
+          error: "Codex restarted before this turn finished.",
+          interruption: "restart",
+        }),
+      codexConnection,
+    );
+
+    await expect(readProviderStatus(provider, "session-1")).resolves.toEqual({
+      status: "error",
+      error: "Codex restarted before this turn finished.",
+      interruption: "restart",
+    });
+  });
+
+  test("ignores an interruption the backend does not know, or one without a failure", async () => {
+    const body = { current: {} as Record<string, unknown> };
+    const { provider } = httpProvider(() => Response.json(body.current), codexConnection);
+
+    body.current = { status: "error", error: "stopped", interruption: "network" };
+    expect((await readProviderStatus(provider, "session-1")).interruption).toBeUndefined();
+    body.current = { status: "idle", interruption: "restart" };
+    expect((await readProviderStatus(provider, "session-1")).interruption).toBeUndefined();
+    // A failure with no detail still reports the interruption as data.
+    body.current = { status: "error", interruption: "restart" };
+    expect(await provider.observeSession!("session-1")).toEqual({
+      status: "error",
+      interruption: "restart",
     });
   });
 

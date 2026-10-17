@@ -850,6 +850,9 @@ function isSyntheticPersistedUserText(text: string): boolean {
   const trimmed = text.trim();
   return (
     trimmed.startsWith("# AGENTS.md instructions for ") ||
+    // Codex 0.162 drops the path from the heading when it injects only the
+    // user's global instructions.
+    /^# AGENTS\.md instructions[ \t]*\n\s*<INSTRUCTIONS>/.test(trimmed) ||
     trimmed.startsWith(
       "<recommended_plugins>\nHere is a list of plugins that are available but not installed.",
     )

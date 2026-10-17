@@ -1,6 +1,6 @@
 # Slash-command catalogue
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `9da80451` (2026-10-17).
 
 The native composer's `/` menu lists only commands the provider reported and
 that have a tested executor, and a selected command never turns into ordinary
@@ -66,10 +66,10 @@ and need a decision. A new tab on a current bridge never sees those rows (see
 - The picker groups rows by `source` (`groupSlashCommandRuns` in
   `apps/web/src/lib/chat/slash-command-search.ts`, rendered by
   `SlashCommandMenu.tsx`). This is covered by component tests only.
-- Owner comments quote old pins: `apps/backend/src/core/opencode-commands.ts`
-  says OpenCode 1.18.31 (now 1.19.0), `session-manager-commands.ts` says Claude
-  Agent SDK 0.3.276 (now 0.3.296), and the comment in
-  `bridges/cursor-bridge/src/http.ts` says Cursor SDK 1.0.31 (now 1.0.37).
+- The comment in `bridges/cursor-bridge/src/http.ts` still says Cursor SDK
+  1.0.31 (now 1.0.37). The OpenCode (`opencode-commands.ts`) and Claude
+  (`session-manager-commands.ts`) owner comments were re-checked against
+  1.19.0 and 0.3.296 on 2026-10-17.
 
 ## Outstanding work
 
@@ -109,34 +109,26 @@ and need a decision. A new tab on a current bridge never sees those rows (see
 5. **Further Orkestrator shortcuts** beyond `/steer` and `/compact`: clear or
    new session, model and permission changes, review. Each needs its own
    qualified semantics.
-6. **Stale pin comments.** After re-qualification in
+6. **Stale pin comment.** After re-qualification in
    [slash-command-qualification.md](slash-command-qualification.md), update
-   the pin facts in the three owner comments above.
+   the Cursor pin fact in `bridges/cursor-bridge/src/http.ts`.
 7. **CLI selection.** `session commands` and `session command` are tracked in
    [cli-command-surface.md](cli-command-surface.md).
-8. **Claude terminal-only commands before the first turn.** Found live on
-   2026-10-17 (CLI 2.1.296). Until a tab's first turn, its rows come from the
-   control-only probe, which reports no `terminal_slash_commands`: that list
-   arrives only on a turn's `system/init` frame, and `SlashCommand` has no
-   terminal marker. So `/color`, `/focus` and `/reload-plugins` are listed
-   available in a new tab, and the live list marks them
-   `requires-interactive-ui` after the first turn. Selecting `/focus` in a new
-   tab completes as local output ("/focus isn't available here yet"), with no
-   model turn and no hang. Remember the last init's terminal list per CLI
-   version in the bridge (and persist it), or hold these rows until a live
-   list arrives. Never guess names.
+8. **Claude terminal-only commands before the first turn.** Done
+   2026-10-17; see "Constraints and rationale".
 9. **Codex plugin skills in a cold catalogue.** Found live on 2026-10-17
    (0.162.1). The first `skills/list` after the app-server child starts
    answers before plugin skills load: 6 skills, reported `ready`. A forced
    reload, or the next TTL read, gives 92. Report the first read `stale`
    until plugin loading settles, or re-read once after a short delay. Today it
    heals within one 30 s TTL.
-10. **OpenCode command files added while the server runs.** On 1.19.0 a
-    refresh answers `reread` (accurately), but `command.list` keeps serving
-    the inventory the server loaded at start. A new `.opencode/command` file
-    appears only after `opencode serve` restarts. Either dispose the
-    directory's instance (`instance.dispose`) when the session is idle and
-    answer `reloaded`, or tell the user that a restart is needed.
+10. **OpenCode command files added while the server runs.** Done
+    2026-10-17; see "Constraints and rationale".
+11. **Claude terminal marker (blocked upstream).** If the Agent SDK adds a
+    terminal marker to `SlashCommand`, read it from the probe's rows and
+    delete the remembered list in `claude-terminal-commands.ts`, which closes
+    the first-tab-on-a-new-CLI-version gap described in "Constraints and
+    rationale".
 
 ### Qualification
 
@@ -151,6 +143,62 @@ and need a decision. A new tab on a current bridge never sees those rows (see
 
 ## Constraints and rationale
 
+- **Claude terminal-only commands before the first turn (code item 8).**
+  Root cause: only a turn's `system/init` frame names the terminal-bound
+  commands (`terminal_slash_commands`). `SlashCommand` has no such marker at
+  SDK 0.3.296 (checked live on CLI 2.1.296: `/focus` arrives as
+  `{ name, description, argumentHint, builtin }`), and a tab with no turn is
+  served from the control-only probe, which never sees an init frame.
+  - Decision: the bridge remembers the newest list each CLI version reported
+    (`bridges/claude-bridge/src/services/claude-terminal-commands.ts`),
+    persists it in `~/.claude/orkestrator/terminal-slash-commands.json`
+    (newest four versions, atomic rename, last writer wins), and applies it to
+    probe rows until the session's own init arrives. The probe reads the
+    version from `initializationResult().claude_code_version`, which sends no
+    extra request. The session's own init always wins, even when it omits the
+    list.
+  - Rejected: holding every `builtin` row unavailable until the first turn
+    (also blocks `/context`, `/compact` and the rest); a fixed name list
+    (guessing, and it rots with each CLI release); spending a real model turn
+    at tab open (cost, and a session file the user never asked for).
+  - Accepted gap: a CLI version this bridge home has never run a turn on gets
+    no list, so its very first tab still lists these rows as available. The
+    CLI answers them as local output ("isn't available here yet") with no
+    model turn, as recorded in the qualification. If the Agent SDK adds a
+    terminal marker to `SlashCommand`, use it and delete the remembered list.
+- **OpenCode command files added while the server runs (code item 10).**
+  Root cause: OpenCode 1.19.0 reads command files once per directory
+  instance, and `command.list` serves that copy until the instance is
+  disposed. Reproduced on an isolated `opencode serve`: a file added after
+  start was missing from `GET /command` until `POST /instance/dispose`, and
+  listed right after it.
+  - `instance.dispose` aborts what the instance is running. Observed on the
+    same server: a busy session's Bash call ended "User aborted the command"
+    and its side effect never happened.
+  - Decision: an explicit refresh disposes the directory's instance only when
+    `session.status` shows no busy or retrying session and no dispatch or
+    session action from this provider is open. Dispatches wait while the reload
+    runs. Otherwise the refresh answers `deferred`, the catalogue reads
+    `stale`, and the reload is retried at the next `session.idle` or idle
+    `session.status` event, and when this provider's last open dispatch ends
+    (`session.command` answers only after its whole turn, so that turn's idle
+    edge arrives while the dispatch is still open). A reload bumps the provider's catalogue revision,
+    which session snapshots carry, so the backend cache re-reads at once
+    (`apps/backend/src/core/opencode-command-reload.ts`).
+  - Only an explicit refresh reloads. TTL reads never dispose: disposal also
+    restarts the instance's MCP servers and LSP clients and reconnects the
+    event stream.
+  - Rejected: a "restart OpenCode" message only (leaves the user to restart
+    the environment); watching command folders (a container's files are not
+    visible to the backend, and global config folders vary); restarting
+    `opencode serve` (stops every session at once).
+  - A refused disposal still re-reads the list and reports `failed` with a
+    message. A failed deferred reload is dropped rather than retried on every
+    idle edge.
+  - Limit: the gate is per provider instance. A turn started on the same
+    server by another client in the few milliseconds between the status read
+    and the disposal is not covered; Orkestrator holds one provider per
+    environment.
 - Never seed or guess rows. A successful empty list stays empty.
 - Bindings (skill paths, template bodies, command defaults) stay private to
   the executor; no public payload carries them.

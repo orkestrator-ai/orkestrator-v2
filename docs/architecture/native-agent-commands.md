@@ -174,7 +174,7 @@ pins is tracked in
 | Codex skills | `skills/list` for the effective cwd | `$name`, alias `/skill:name` | `structured-skill`: `{type:"skill", name, path}` plus a text item | `SkillsListResponse.errors` make the list partial or stale |
 | Codex templates | Bounded scan of `.codex/prompts` and `~/.codex/prompts` | Relative path | `bridge-template`: `$ARGUMENTS` expansion only | Scan errors reported as truncation |
 | Codex built-ins | Bridge | `/help`, `/models` | `bridge-local` | — |
-| OpenCode | One `command.list({directory})` | Exact server key, case-sensitive, no aliases | `provider-command` via `session.command` with a reserved `messageID` | List errors fail the read; an empty list stays empty |
+| OpenCode | One `command.list({directory})`; refresh reloads the directory instance when idle | Exact server key, case-sensitive, no aliases | `provider-command` via `session.command` with a reserved `messageID` | List errors fail the read; an empty list stays empty; `stale` while a requested reload waits for idle |
 | Pi | One builder over templates, skills and extensions (`sourceInfo` origin) | Template `/name`, skill `/skill:name`, extension invocation name | `provider-prompt` via `session.prompt({source:"rpc"})` | A persisted list is `stale` after restart |
 | Grok | ACP `available_commands_update` (push only) | Name as sent; `input.hint` as argument hint | `provider-prompt` via `session/prompt` | `ready` once this process received a list, even an empty one; restored rows are `stale` and not executable |
 | Cursor | None | — | — | `unsupported` |
@@ -187,7 +187,7 @@ These are listed with a reason and never executed:
 | Provider | Commands | Reason |
 | --- | --- | --- |
 | Claude | `/clear`, `/model`, `/permissions`, `/resume` | `session-changing`: the bridge does not adopt the new conversation ID, and each turn re-applies model and permission mode |
-| Claude | Init `terminal_slash_commands`, `/login`, `/logout` | `requires-interactive-ui` |
+| Claude | Init `terminal_slash_commands` (before a session's first turn, the list the same CLI version reported on an earlier turn), `/login`, `/logout` | `requires-interactive-ui` |
 | Claude | `/config`, `/doctor`, `/exit`, `/ide`, `/quit`, `/statusline`, `/terminal-setup`, `/theme`, `/vim` | `unqualified` |
 | Codex | Duplicate skill names | `ambiguous` |
 | Codex | Disabled skills | `disabled` |
@@ -216,7 +216,13 @@ catalogue read cannot let `/clear` reach the CLI.
   Session-changing (`/clear`, `/model`, `/permissions`, `/resume`),
   terminal-only and unqualified commands are listed unavailable, and the bridge
   also refuses them as typed text. Local command output is persisted as a
-  transcript row.
+  transcript row. Only a turn's init frame names the terminal-only commands
+  (`SlashCommand` has no marker), so the bridge remembers the newest list per
+  CLI version (`claude-terminal-commands.ts`, persisted under
+  `~/.claude/orkestrator/`) and applies it to probe rows until the session's
+  own init arrives. A CLI version the bridge has never run a turn on gets no
+  list: its terminal-only rows stay available, and the CLI answers them as
+  local output, until that first turn.
 - **Codex**: skills run as structured `skill` input (`$name`, alias
   `/skill:name`); templates are an Orkestrator compatibility feature with
   bounded discovery and `$ARGUMENTS` only. Inline `` !`…` `` shell spans are
@@ -228,9 +234,22 @@ catalogue read cannot let `/clear` reach the CLI.
   on the prompt timeout: acceptance is proven from the reserved `messageID`,
   and a missing answer is ambiguous, never a fallback prompt. OpenCode
   substitutes `$ARGUMENTS` before running a template's `` !`cmd` `` spans
-  (observed in the 1.18.31 server). That is OpenCode's own template semantics
-  on its own server, so a user's arguments to such a command can reach a shell
-  there; Orkestrator adds no shell surface of its own.
+  (observed in the 1.18.31 server, again in 1.19.0). That is OpenCode's own
+  template semantics on its own server, so a user's arguments to such a
+  command can reach a shell there; Orkestrator adds no shell surface of its
+  own. The server reads command files once per directory instance, so a
+  refresh disposes that instance (`instance.dispose`) to make it read them
+  again. Disposal aborts running work, so it happens only when no session in
+  the directory is busy or retrying and no dispatch from this provider is
+  open; dispatches wait while it runs. Otherwise the refresh answers
+  `deferred`, the catalogue reads `stale`, and the reload is retried at the
+  next idle edge on the event stream, after stream reconciliation, and when
+  the provider's last synchronous command dispatch ends. A plain
+  `promptAsync` acknowledgement is not an idle edge: it can precede the
+  server's busy status. Idle edges received during a status check cause
+  another whole-directory check. A disposal failure keeps the catalogue
+  `stale` and suppresses automatic retries until the next explicit refresh
+  (`opencode-command-reload.ts`).
 - **Pi**: extensions win over skills and templates, as in the SDK, and only
   the effective winner is listed. Literal intent uses
   `expandPromptTemplates: false`, which cannot stop extension `input` handlers.

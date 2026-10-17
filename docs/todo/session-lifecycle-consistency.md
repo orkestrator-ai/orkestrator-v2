@@ -113,7 +113,12 @@ conformance matrix records but does not resolve.
   them: a session another tab maps, or a Multi Review owns, is not closed.
   The browser spec's main case now checks that the new tab's session gets
   `POST /session/:id/close` (for OpenCode, an abort and no delete) once the
-  resume lands. It fails without the fix on all four platforms.
+  resume lands. It fails without the fix on all four platforms. Live on an
+  isolated profile with host Grok credentials,
+  `close-retention-live.spec.ts` (Grok) passed either way. A process sampler
+  under that profile's backend saw the new tab's empty-session `grok` process
+  stay alive beside the resumed one until the environment was deleted without
+  the fix, and exit when the resumed one started with it.
 - **OpenCode conversations are titled from their first prompt** (fixed
   2026-10-17). Every provider session is created as "Agent Session"
   (`native-agent-service-provider.ts`). The projection replaced that

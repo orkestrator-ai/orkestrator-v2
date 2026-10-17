@@ -158,5 +158,17 @@ size. The test is unchanged apart from its comment.
   fixed code passed 160 of 160.
 - The owning file passed alone (11 tests), and with every preview file.
 - A slow but still-reading client is still closed, not paused, by one large
-  read. That is tracked as code item 4 in
+  read. That was tracked as code item 4 in
   [service-preview-rollout.md](../../todo/service-preview-rollout.md).
+
+## Follow-up (2026-10-17): pause instead of close
+
+`pumpToClient` now pauses the upstream at the per-direction limit, before each
+frame, and returns the rest of the read to the upstream with `unshift`. The
+queue now stays within one frame of the limit, and a stopped reader keeps its
+tunnel until the liveness ping closes it. This test now asserts that tighter
+bound (`limit + frame + 14` header bytes) and that the tunnel is still open.
+Before the change it failed with 435,072 queued bytes against 294,926.
+`PreviewTunnelServer > one large upstream read to a slow reader pauses at the
+queue bound instead of closing` replaces the test that expected the
+`capacity-exceeded` close.

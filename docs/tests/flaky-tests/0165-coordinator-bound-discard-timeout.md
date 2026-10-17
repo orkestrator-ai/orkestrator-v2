@@ -308,3 +308,11 @@ No implementation, assertion, timeout or skip was changed.
 - **Owning-file rerun:** `mise run test:logged -- --name upstream-coordinator-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`, with the same PATH preference, passed unchanged (exit 0) in 30.0 seconds while the aggregate was still active.
 - **Evidence:** `/private/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.68dTo8/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer artifact `/private/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.1Mw2VS/upstream-merge-tests.log.gz`.
 - **Assessment:** the isolated pass confirms recurrence. Shared-host contention and teardown after timeout remain hypotheses; no product code, assertion, timeout or skip changed in the resolution.
+
+## Preview tunnel slow-reader validation — 2026-10-17
+
+- Original command: `mise run test:logged -- --name full-tests -- mise run test` on `9da80451` plus a change limited to the preview tunnel and `PreviewWebSocket`, macOS arm64, load average 30 to 40 from other worktrees' live tests.
+- Aggregate: backend 8,788 passed, 41 skipped, four failed; every other group passed. Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.vJOfiZ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- Failures: the bound-discard case and `fetch covers every configured remote and a dirty submodule needs enhanced confirmation` each hit the five-second timeout.
+- Owning-file rerun: `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1` gave 47 passed and 1 failed (the bound-discard case at 5155.68 ms). Two `-t "bound discard confirmations"` reruns also timed out (5152.24 and 5177.52 ms) at a load average of about 30.
+- Assessment: the case now fails alone while the host is loaded, which supports the contention hypothesis. The change under test does not touch the coordinator. No assertion, timeout or skip changed.

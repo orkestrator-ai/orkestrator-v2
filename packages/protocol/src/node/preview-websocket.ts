@@ -43,8 +43,10 @@ export function webSocketAccept(key: string): string {
 export interface PreviewWebSocketOptions {
   role: "server" | "client";
   maxPayload: number;
-  /** Close handshake grace before the socket is destroyed. */
+  /** Close handshake grace before the socket is destroyed, from the flushed close frame. */
   closeTimeoutMs?: number;
+  /** Bound on flushing queued bytes and the close frame to a peer that stopped reading. */
+  closeDrainTimeoutMs?: number;
 }
 
 export interface PreviewWebSocketEvents {
@@ -132,9 +134,7 @@ export class PreviewWebSocket extends EventEmitter<PreviewWebSocketEvents> {
     const payload = Buffer.alloc(2 + reasonBytes.length);
     payload.writeUInt16BE(code, 0);
     reasonBytes.copy(payload, 2);
-    this.writeFrame(WS_OPCODE.close, payload);
-    this.closeTimer = setTimeout(() => this.terminate(), this.options.closeTimeoutMs ?? 2_000);
-    this.closeTimer.unref?.();
+    this.sendClose(payload);
     // A server may end its side once the close frame is flushed.
     if (this.options.role === "server") this.socket.end();
   }
@@ -154,7 +154,27 @@ export class PreviewWebSocket extends EventEmitter<PreviewWebSocketEvents> {
     this.emit("close", this.closeCode, this.closeReason);
   }
 
-  private writeFrame(opcode: number, payload: Buffer): boolean {
+  /**
+   * Queue a close frame and bound the handshake. The grace starts only once
+   * the close frame, and so every byte queued before it, has been flushed: a
+   * slow reader still receives the tail, while a peer that stopped reading is
+   * cut off at the drain bound.
+   */
+  private sendClose(payload: Buffer): void {
+    this.armCloseTimer(this.options.closeDrainTimeoutMs ?? 30_000);
+    this.writeFrame(WS_OPCODE.close, payload, () =>
+      this.armCloseTimer(this.options.closeTimeoutMs ?? 2_000),
+    );
+  }
+
+  private armCloseTimer(ms: number): void {
+    if (this.closed) return;
+    if (this.closeTimer) clearTimeout(this.closeTimer);
+    this.closeTimer = setTimeout(() => this.terminate(), ms);
+    this.closeTimer.unref?.();
+  }
+
+  private writeFrame(opcode: number, payload: Buffer, flushed?: () => void): boolean {
     const length = payload.length;
     const mask = this.options.role === "client";
     const headerLength = 2 + (length < 126 ? 0 : length < 65_536 ? 2 : 8) + (mask ? 4 : 0);
@@ -182,7 +202,7 @@ export class PreviewWebSocket extends EventEmitter<PreviewWebSocketEvents> {
       payload.copy(frame, offset);
     }
     if (this.socket.destroyed) return false;
-    return this.socket.write(frame);
+    return this.socket.write(frame, flushed);
   }
 
   private fail(code: number, reason: string): void {
@@ -251,14 +271,9 @@ export class PreviewWebSocket extends EventEmitter<PreviewWebSocketEvents> {
           this.closeReason = reason;
           this.closing = true;
           const echo = payload.length >= 2 ? payload.subarray(0, 2) : Buffer.alloc(0);
-          this.writeFrame(WS_OPCODE.close, echo);
+          this.sendClose(echo);
           this.socket.end();
         }
-        this.closeTimer ??= setTimeout(
-          () => this.terminate(),
-          this.options.closeTimeoutMs ?? 2_000,
-        );
-        this.closeTimer.unref?.();
         return;
       }
       case WS_OPCODE.text:

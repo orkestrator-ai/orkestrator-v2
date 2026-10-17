@@ -72,23 +72,12 @@ partitions, and the evidence log where run results are now recorded.
    `EnvironmentRelay.onData`) and a protocol-version mismatch (the relay
    script exits). Stdin errors, a silent relay and a wrong nonce are already
    covered.
-4. Pause the tunnel upstream before one read can trip the capacity close.
-   `pumpToClient` (`apps/backend/src/preview-tunnel-server.ts`) pauses the
-   upstream only after a whole `data` chunk is framed, and Bun reads 512 KiB
-   at a time. When the client's kernel buffer is full, the first such read
-   closes the tunnel with `capacity-exceeded` instead of pausing it, so a
-   reader that is slow but still reading loses the tunnel. Since 2026-10-17
-   the queue itself stays within twice the per-direction limit (flake
-   [0184](../tests/flaky-tests/0184-preview-tunnel-stopped-reader-queue.md)).
-   Bound the upstream read size (for example with the socket's
-   `highWaterMark`) or pause per frame, and add a slow-reader test that
-   expects a pause rather than a close.
-5. Optional: Playwright `firefox` and `webkit` projects in
+4. Optional: Playwright `firefox` and `webkit` projects in
    `playwright.preview.config.ts`, as early signal only (not Safari or iOS
    evidence). Optional: new mise tasks for the opt-in suites (for example
    `test:preview:docker` and `test:preview:browser`), with `testing-guide.md`
    updated to use them.
-6. Partition retention. Electron has to own this, because the backend knows
+5. Partition retention. Electron has to own this, because the backend knows
    nothing about client partitions.
    - Clear a service's partition when its definition is removed or its
      environment deleted. Reconcile against the `tombstones` that
@@ -100,14 +89,14 @@ partitions, and the evidence log where run results are now recorded.
    - Once legacy URL tabs are retired, set a retention window for the shared
      window/connection partitions, then clean up only partitions this install
      created.
-7. Optional: when a legacy URL tab's port maps unambiguously to a current
+6. Optional: when a legacy URL tab's port maps unambiguously to a current
    service in the same environment and generation, offer "Open as service".
    Keep ambiguous tabs as they are, with "Choose service". Never infer
    ownership from the port alone or from which environment is active.
-8. After the support window (see Open questions), remove compatibility mode
+7. After the support window (see Open questions), remove compatibility mode
    from `ServiceBrowserTab` and retire the legacy route and its rewrite
    helpers, as a separate reviewed change.
-9. Reword the comments that cite deleted plan steps or the old evidence log:
+8. Reword the comments that cite deleted plan steps or the old evidence log:
    `PREVIEW_LIMITS` (`packages/protocol/src/preview-services.ts`),
    `preview-header-policy.ts`, and in `apps/backend/src/`
    `core/preview-access.ts`, `core/preview-target-resolver.ts`,
@@ -403,6 +392,31 @@ This replaces the 2026-09-23 file lists as the current baseline.
   SSH forwarding, remote pixel streaming and an Electron session proxy were
   rejected. There is no public relay or Tailscale Funnel, and only HTTP/1.1
   and WebSockets are carried.
+- Tunnel queue overload is backpressure; only admission fails with
+  `capacity-exceeded` (2026-10-17). `pumpToClient` checks the queue before
+  each frame. At `tunnelQueueMaxBytesPerDirection` it pauses the upstream and
+  hands the rest of the read back with `unshift`. That keeps the queue within
+  one frame of the limit whatever the runtime's read size (Bun reads 512 KiB,
+  Node 64 KiB, and the relay channel delivers whatever arrives). The rejected
+  options:
+  - Bounding the read size with `highWaterMark`. Bun ignores it for socket
+    reads, and it does not apply to relay channels.
+  - Keeping a remainder buffer in the tunnel. This adds a second queue, and
+    the upstream can emit `end` while the remainder is still held, which
+    would put EOF ahead of the data.
+  - Raising the hard ceiling. It stays proportional to the read size.
+  The old twice-the-limit capacity close has no reachable trigger, so it was
+  removed. A reader that stops entirely holds at most the queue, one read and
+  its admission slot until the 30-second liveness ping closes it.
+- A closing tunnel lets a slow reader drain (2026-10-17). `PreviewWebSocket`
+  starts its 2-second close-handshake grace from the close frame's write
+  callback, which runs once every earlier byte has been flushed. Before that
+  the grace started when the close frame was queued, so a reader more than
+  2 seconds behind lost the response tail and saw 1006 instead of EOF.
+  `closeDrainTimeoutMs` (default 30 s, the liveness interval) bounds a peer
+  that stops reading during the close. Progress polling on `writableLength`
+  was rejected because Node coalesces queued writes into one `writev`, so
+  progress shows only when the whole batch completes.
 - Mixed versions: old clients show service URIs unchanged and refuse them
   (`browser-address.test.ts`). Pre-#831 backends reject Auto mappings
   (`hostPort: 0`).
@@ -418,6 +432,12 @@ This replaces the 2026-09-23 file lists as the current baseline.
   off?
 - Should the Chromium preview spec or the Docker suites join a regular gated
   run?
+- Should tunnel liveness outlast a reader paused by backpressure? The desktop
+  stream stops reading the WebSocket while Chromium is not consuming (paused
+  media, for example). The backend's ping then waits behind queued data, gets
+  no pong, and the tunnel is terminated 30 to 60 seconds later. Options: keep
+  this as the stopped-reader bound; add a separate, longer stall deadline that
+  resets on drain; or ping on a channel that is not behind application data.
 
 ## Needs verification
 

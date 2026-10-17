@@ -212,29 +212,32 @@ export class PreviewTunnelServer {
     ws.on("pong", () => (alive = true));
     ws.on("close", cleanup);
 
+    const resumeOnDrain = (socket: Duplex) => {
+      socket.pause();
+      ws.once("drain", () => {
+        if (upstream === socket && state === "open") socket.resume();
+      });
+    };
     const pumpToClient = (chunk: Buffer) => {
       const socket = upstream;
       if (!socket) return;
       const frameMax = limits.tunnelFrameMaxBytes;
-      const queueMax = limits.tunnelQueueMaxBytesPerDirection * 2;
       let flushed = true;
       for (let offset = 0; offset < chunk.length; offset += frameMax) {
-        const frame = chunk.subarray(offset, offset + frameMax);
-        if (ws.bufferedBytes + frame.length > queueMax) {
-          // A reader that stopped consuming entirely: close with a typed failure
-          // rather than buffering application bytes without bound. One upstream
-          // read can far exceed a frame (Bun reads 512 KiB), so check each frame.
-          fail(PREVIEW_TUNNEL_CLOSE.capacity, "capacity-exceeded", "error");
+        if (ws.bufferedBytes >= limits.tunnelQueueMaxBytesPerDirection) {
+          // A slow reader: hand the rest of this read back to the upstream
+          // and wait for drain. One upstream read can far exceed the queue
+          // (Bun reads 512 KiB), so the queue stays within one frame of the
+          // bound and a reader that is slow, or stopped, is never closed for it.
+          resumeOnDrain(socket);
+          socket.unshift(chunk.subarray(offset));
           return;
         }
-        flushed = ws.send(frame, true) && flushed;
+        flushed = ws.send(chunk.subarray(offset, offset + frameMax), true) && flushed;
       }
       const overAggregate = this.aggregateQueuedBytes() >= limits.tunnelQueueMaxBytesAggregate;
       if (!flushed || ws.bufferedBytes >= limits.tunnelQueueMaxBytesPerDirection) {
-        socket.pause();
-        ws.once("drain", () => {
-          if (upstream === socket && state === "open") socket.resume();
-        });
+        resumeOnDrain(socket);
       } else if (overAggregate) {
         // This tunnel's own socket is flushed, so no drain will come: poll the
         // shared ceiling instead of waiting on an event that never fires.

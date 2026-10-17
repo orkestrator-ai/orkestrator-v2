@@ -108,15 +108,6 @@ mostly inside containers. How accounts work is in
    output to `<dataDir>/logs` with no redaction. No bridge prints auth data
    today, and the canary tests hold each auth path to that. A credential-shape
    scrub at that forward would also cover a log line nobody has written yet.
-7. **Revoke the Grok auth snapshot on opt-out.** `seedAgentTestProviderCredentials`
-   (`apps/desktop/scripts/dev/profile-io.ts`) copies host `~/.grok/auth.json`
-   into the profile's isolated HOME when Grok is authorized, but returns early
-   when it is not, so the copy from an earlier start survives. A profile reused
-   with `--credential-source claude` or `--no-agent-credentials` keeps Grok
-   signed in, which `credentials-and-models.md` says cannot happen. Remove the
-   snapshot when Grok is not authorized or the host file is missing, as the
-   Cursor key snapshot now does. Removing it also signs out a `grok login` made
-   inside the profile, which a re-authorized start overwrites anyway.
 
 ### Account switching gaps
 

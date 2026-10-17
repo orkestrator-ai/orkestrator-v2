@@ -846,6 +846,50 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test.each(["opencode", "cursor", "grok", "pi", "codex"] as const)(
+    "replaces the backend's Agent Session placeholder with the first prompt on %s",
+    async (agent) => {
+      const stub = createProviderStub(agent, {
+        interactiveSnapshot: async () => ({
+          status: "idle",
+          // The title `createSession` was given, echoed back by the provider.
+          title: "Agent Session",
+          messages: [
+            {
+              id: "user-1",
+              role: "user",
+              content: "Remember the lighthouse",
+              parts: [{ type: "text", content: "Remember the lighthouse" }],
+              createdAt: "2026-10-17T10:00:00.000Z",
+            },
+          ],
+        }),
+        setSessionTitle: async () => undefined,
+      });
+      await withService(
+        {
+          prefix: `orkestrator-native-${agent}-placeholder-title-`,
+          provider: async () => stub.provider,
+        },
+        async ({ service }) => {
+          const identity = {
+            environmentId: "env-1",
+            agent,
+            logicalSessionKey: `env-env-1:tab-${agent}-placeholder-title`,
+          };
+          await service.ensureSession(identity);
+          const projection = await service.getProjection(identity);
+          expect(projection?.title).toBe("Remember the lighthouse");
+          await waitForCondition(() => stub.setSessionTitle?.mock.calls.length === 1);
+          expect(stub.setSessionTitle).toHaveBeenCalledWith(
+            "provider-session",
+            "Remember the lighthouse",
+          );
+        },
+      );
+    },
+  );
+
   test("titles a session from the user's words, not framed system instructions", async () => {
     const prompt = `${wrapSystemInstructions("Use the orkestrator-design MCP server.")}\n\nMock up the sidebar`;
     const stub = createProviderStub("claude", {

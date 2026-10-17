@@ -4562,9 +4562,12 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         return normalized ? [normalized.slice(0, 80)] : [];
       })[0];
       const snapshotTitle = snapshot.title?.trim();
+      // "Agent Session" is the title this service creates every provider
+      // session with, and "Session 1a2b3c" is Claude's own; neither names the
+      // conversation. Left in place they stay its title in the resume list, so
+      // every OpenCode conversation read "Agent Session" there.
       const placeholderTitle =
-        input.agent === "claude" &&
-        (snapshotTitle === "Agent Session" || /^Session [a-f0-9]{6}$/i.test(snapshotTitle ?? ""));
+        snapshotTitle === "Agent Session" || /^Session [a-f0-9]{6}$/i.test(snapshotTitle ?? "");
       const projectionTitle =
         (!placeholderTitle && snapshotTitle) || fallbackTitle || snapshotTitle;
       if (

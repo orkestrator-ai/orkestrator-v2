@@ -14,8 +14,10 @@ const getAppVersion = mock(async () => {
   return backendVersion;
 });
 const handlers = new Map<string, (event: { payload: unknown }) => unknown>();
+let hostCanUpdate = false;
+const getHostMaintenance = mock(async () => ({ updater: { available: hostCanUpdate } }));
 
-mock.module("@/lib/backend", () => ({ ...realBackendSnapshot, getAppVersion }));
+mock.module("@/lib/backend", () => ({ ...realBackendSnapshot, getAppVersion, getHostMaintenance }));
 mock.module("@/lib/native/events", () => ({
   ...realNativeEventsSnapshot,
   listen: async (event: string, handler: (event: { payload: unknown }) => unknown) => {
@@ -57,6 +59,7 @@ async function reconnect() {
 
 beforeEach(() => {
   backendVersion = BUNDLED_APP_VERSION;
+  hostCanUpdate = false;
   getAppVersion.mockClear();
   handlers.clear();
   window.sessionStorage.clear();
@@ -86,6 +89,25 @@ describe("BackendVersionReminder", () => {
     expect(options.id).toBe(VERSION_REMINDER_TOAST_ID);
     expect(options.description).toContain(NEWER_BACKEND);
     expect(options.description).toContain(BUNDLED_APP_VERSION);
+  });
+
+  test("offers to update an older backend whose host can update itself", async () => {
+    backendVersion = "1.0.0";
+    hostCanUpdate = true;
+    window.orkestratorGateway = { enabled: true, baseUrl: "https://backend.example" };
+    const opened: unknown[] = [];
+    const listener = (event: Event) => opened.push((event as CustomEvent).detail);
+    window.addEventListener("orkestrator:open-global-settings", listener);
+    try {
+      render(<BackendVersionReminder />);
+      await waitFor(() => expect(mockToastWarning).toHaveBeenCalled());
+      const [, options] = lastWarning();
+      expect(options.action?.label).toBe("Update backend");
+      options.action?.onClick();
+      expect(opened).toEqual(["updates"]);
+    } finally {
+      window.removeEventListener("orkestrator:open-global-settings", listener);
+    }
   });
 
   test("ignores a backend that cannot name its version or cannot be reached", async () => {

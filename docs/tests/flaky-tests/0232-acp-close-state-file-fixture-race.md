@@ -1,7 +1,7 @@
 # ACP close state-file failure fixture races a writer
 
 - **ID:** 0232
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-15
 - **Test:** `POST /session/:id/close > a failed state-file write answers pending and keeps the session registered`
 - **File:** `bridges/acp-bridge/src/acp-session-close.test.ts:416`
@@ -28,3 +28,50 @@
   src/acp-session-close.test.ts --preload ../../tests/setup-node.ts
   --parallel=1 --only-failures` passed all 16 tests, wrapper duration 5.5 s.
 - No test or production code was changed.
+
+## Recurrence on GitHub Actions (2026-10-16)
+
+- **Run:** 38904039434, `Unit and integration tests` job of `lint.yml`
+  (`mise run test`, ubuntu-latest).
+- **Failure:** `EEXIST: file already exists, mkdir '/tmp/acp-bridge-test-KIqx8y/state/state.json'`
+  at `acp-session-close.test.ts:416:14`, 266.53 ms, in the same ACP run as 0249.
+
+## Root cause
+
+The writer is the turn's own completion. The prompt completion handler in
+`bridges/acp-bridge/src/acp-http.ts` sets `state.status = "idle"`, bumps the
+revision and calls `schedulePersist()`, which writes `state.json` (temporary
+file plus `rename`) on a 25 ms debounce (`src/acp-persist-writer.ts`). The
+test's `waitForStatus(id, "idle")` can observe idle before that write lands.
+When the write's `rename` fell between the fixture's `fs.rm(stateFile)` and
+`fs.mkdir(stateFile)`, it recreated the file and the `mkdir` failed with
+`EEXIST`. Production behaviour is correct; the fixture removed the file while
+a write it had triggered was still pending.
+
+The alone-run did not reproduce it (50 of 50 passed), but a temporary
+`Bun.sleep(40)` between the `rm` and the `mkdir` made the unchanged test fail
+10 of 10 with the recorded `EEXIST`, confirming the debounced write as the
+writer.
+
+## Fix (this branch)
+
+`bridges/acp-bridge/src/acp-session-close.test.ts`: after the session reports
+idle, the test waits until `state.json` holds this session at the live
+revision from `GET /session/:id/status`. Only the completion write carries
+the final revision, and nothing schedules another write once the turn has
+settled, so the bridge is quiescent before the fixture swaps the file for a
+directory. No production code, assertion, timeout or skip changed.
+
+## Verification
+
+From `bridges/acp-bridge`, on macOS arm64 with other worktrees' suites running
+(load average 27-52 on 18 cores):
+
+- `bun test src/acp-session-close.test.ts --preload ../../tests/setup-node.ts -t "failed state-file write" --rerun-each 100`:
+  100 pass, 0 fail.
+- With the temporary `Bun.sleep(40)` between `rm` and `mkdir`, 20 reruns: 20
+  pass after the fix (10 of 10 failed before it; the sleep was removed again).
+- `bun run test:bridge` (package suite, `--parallel=1`) three times in a row
+  at load averages 52, 48 and 36: each 579 pass, 3 skip, 0 fail across 37
+  files (76.6 s, 72.3 s, 67.9 s).
+- `bun run typecheck`: exit 0. `bunx oxfmt` and `bunx oxlint` on the file: clean.

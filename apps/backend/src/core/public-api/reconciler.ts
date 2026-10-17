@@ -237,6 +237,10 @@ export async function reconcileOperation(
       };
     },
   );
+  if (updated?.completedAt && record.action.startsWith("host.")) {
+    const id = record.result?.jobId ?? record.result?.taskId;
+    if (typeof id === "string") context.command.hostMaintenance?.releaseOutcome(id);
+  }
   return updated ?? record;
 }
 

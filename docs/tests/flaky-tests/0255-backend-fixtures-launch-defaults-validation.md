@@ -66,3 +66,12 @@ The browser observations and exact rerun commands are recorded in
 stopped and reset; `dev:status --json` reported `missing` with no live processes.
 Dedicated Docker, Electron and iOS scenario suites were omitted because their
 implementation paths were unchanged; credentialed browser cases remained opt-in.
+
+## Retention case resolved separately (2026-10-17)
+
+`project coordinator > retention never removes an open conversation` recurred
+in CI (run 38893136380, 5022.97 ms) and has been resolved as
+[0266](0266-coordinator-retention-open-conversation-timeout.md). It ran 128
+sequential durable writes against the 5 s deadline, and the test now fills the
+retention boundary in one mutation. The other cases in this
+file remain open.

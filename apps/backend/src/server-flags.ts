@@ -26,6 +26,7 @@ export const SERVER_VALUE_FLAGS: readonly string[] = Object.freeze([
   "--resource-root",
   "--runtime-flavor",
   "--runtime-profile-id",
+  "--standalone-updater",
   "--tailscale-bin",
   "--tailscale-serve-port",
   "--toolchain-bin-dir",
@@ -35,6 +36,7 @@ export const SERVER_VALUE_FLAGS: readonly string[] = Object.freeze([
 /** Presence-only flags. */
 export const SERVER_BOOLEAN_FLAGS: readonly string[] = Object.freeze([
   "--allow-non-tailscale-bind",
+  "--desktop-updater",
   "--desktop-web-client",
   "--strict-docker-owner",
   "--strict-gateway-port",

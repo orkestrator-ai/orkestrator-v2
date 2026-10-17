@@ -18,7 +18,11 @@ import {
   transcriptWithToolResult,
   waitFor,
 } from "./session-manager-test-harness.js";
-import { commandChangeJournal, overlayCommandChanges } from "./command-changes.js";
+import {
+  commandChangeJournal,
+  deleteCommandChangeJournal,
+  overlayCommandChanges,
+} from "./command-changes.js";
 import { coordinatorProcessPolicy } from "./read-only-policy.js";
 
 type Hook = (
@@ -240,7 +244,9 @@ describe("command change persistence", () => {
       expect(part?.commandChanges).toEqual(change);
     } finally {
       mockSdkGetSessionMessages.mockImplementation(async () => []);
-      await commandChangeJournal(PERSISTED_SDK_ID)!.remove();
+      // `remove()` alone would leave a removed journal cached for this id,
+      // and a removed journal ignores every later append; this evicts it too.
+      await deleteCommandChangeJournal(PERSISTED_SDK_ID);
     }
   });
 

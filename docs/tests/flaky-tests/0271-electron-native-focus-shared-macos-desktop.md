@@ -1,6 +1,6 @@
 # Electron native focus on a shared macOS desktop
 
-- **ID:** 0266
+- **ID:** 0271
 - **Status:** environmental
 - **Date observed:** 2026-10-17
 - **Test:** `real Electron main process shares one backend across independent windows`

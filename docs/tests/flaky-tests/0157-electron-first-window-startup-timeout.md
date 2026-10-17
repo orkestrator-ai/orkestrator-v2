@@ -52,7 +52,7 @@ Agent-test profiles on macOS now append `use-mock-keychain`
 After that, `firstWindow` succeeded in every launch: the whole Electron suite
 (10 passed, 1 skipped) and five further runs of this test. This test still
 fails later, at native focus, on this shared host; see
-[0266](0266-electron-native-focus-shared-macos-desktop.md).
+[0271](0271-electron-native-focus-shared-macos-desktop.md).
 
 The 2026-09-22 observation passed on rerun, which an unanswered Keychain
 prompt would not do, so its cause stays unconfirmed and this case stays open.

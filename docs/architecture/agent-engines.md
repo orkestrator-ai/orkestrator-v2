@@ -281,6 +281,9 @@ picker and the run on the same model:
 - **Existing sessions.** If a session holds a model the catalogue does not
   list, the picker shows that model, labelled "not offered to this login",
   instead of the first catalogue row. Picking any listed model replaces it.
+  The renderer keeps that row when a later discovery update replaces the
+  composer's models with the bare catalogue
+  (`withRetainedSelectedModelRow` in `useNativeAgentSession.ts`).
 
 `session-titles.ts` is the one deliberate exception to all of the above — it
 still spawns a hermetic `codex exec` with a custom model catalog, a read-only

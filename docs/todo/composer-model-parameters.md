@@ -135,6 +135,9 @@ forward that nothing in the backend supplies.
     projection add the held model as a row marked "not offered to this login"
     rather than show the first catalogue row. Nothing is persisted on a read.
     Picking any listed model replaces it through the normal control update.
+    Discovery's models section is the shared catalogue, so the renderer keeps
+    the selected model's row when discovery replaces the composer's models.
+    Without that, the live UI still showed the first catalogue row.
   - The shipped default `gpt-5.4` stays. It is valid for API-key logins, and
     an unset default would hand the choice to Codex's own config while the
     picker showed the first row, which is the same mismatch again.
@@ -142,6 +145,15 @@ forward that nothing in the backend supplies.
     `isDefault`. Using `isDefault` would need the bridge to forward that flag
     (`BridgeModel` drops it), and it could pick a model other than the one
     the picker shows for an unset selection.
+  - Live evidence, 2026-10-17. Profile `dev:test --fixture --credential-source
+    codex`, Codex 0.162.1, ChatGPT login, configured default `gpt-5.4`.
+    - A new tab's toast read "gpt-5.4 isn't available with your Codex login;
+      using GPT-6.1-Sol."
+    - The picker showed GPT-6.1-Sol, and a turn replied with the rollout's
+      `turn_context.model` equal to `gpt-6.1-sol`.
+    - A tab launched explicitly on `gpt-5.4` showed `gpt-5.4` in the picker.
+      Picking GPT-6.1-Sol ran the next turn on `gpt-6.1-sol` and removed the
+      not-offered row.
 
 ## Open questions
 

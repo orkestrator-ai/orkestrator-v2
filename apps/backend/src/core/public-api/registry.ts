@@ -3,6 +3,7 @@ import type { CommandRegistrar, RegistryDependencies } from "../commands-registr
 import { createCapabilitiesHandler, DISCOVERY_HANDLERS } from "./actions-discovery.js";
 import { ENVIRONMENT_HANDLERS } from "./actions-environments.js";
 import { EXEC_HANDLERS } from "./actions-exec.js";
+import { HOST_HANDLERS } from "./actions-host.js";
 import { LAUNCH_HANDLERS } from "./actions-launch.js";
 import { PROJECT_HANDLERS } from "./actions-projects.js";
 import { RUN_READ_HANDLERS, RUN_RECOVERY_HANDLERS } from "./actions-runs.js";
@@ -35,6 +36,7 @@ export function publicActionHandlers(): PublicActionHandler[] {
     ...RUN_READ_HANDLERS,
     ...RUN_RECOVERY_HANDLERS,
     ...EXEC_HANDLERS,
+    ...HOST_HANDLERS,
   ];
 }
 

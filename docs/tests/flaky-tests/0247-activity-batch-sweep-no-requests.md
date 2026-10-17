@@ -61,3 +61,22 @@ Recorded evidence only; no test changed.
 - **Disposition:** recurrence matches the existing empty-request failure and
   passes alone. The local-port/host-load hypothesis remains unconfirmed; no
   product code, assertions, deadlines or skips changed.
+
+## Recurrence during read-only Codex networking validation — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name wslock-full2 -- mise run test`
+  on `fix/codex-read-only-turn-hosted-search` at `cd00cf51`, which changes no
+  backend code. Other worktrees were validating on the same host.
+- **Failure:** `activity sweep over the batch route > 1 sessions cost 1 request(s) and touch nothing`
+  failed in the aggregate (16.88 ms), after reconciliation logged
+  `ProviderUnavailableError` and `ProviderUnreachableError` for `env-1`.
+- **Suite counts:** backend 8,618 passed, 41 skipped and one failed across
+  8,660 tests in 461 files. Bridges and protocol verification passed; root
+  also reported the existing flake-register metadata error for case 0265.
+- **Isolated rerun:** `mise run test:logged -- --name wslock-activity-batch -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/native-agent-service-activity-batch.test.ts --parallel=1`
+  passed the unchanged owning file (exit 0, 0.5 s).
+- **Evidence:** outer artifacts
+  `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.ToPPRg` and
+  `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.pYmQ2c`.
+- **Disposition:** recurrence of the same aggregate-only failure; passes alone.
+  No product code, assertions, deadlines or skips changed.

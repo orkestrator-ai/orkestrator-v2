@@ -10,6 +10,8 @@
  * only while the whole directory is idle, never during this provider's own
  * dispatch, and otherwise waits for the next idle edge.
  */
+import type { OpencodeClient } from "@opencode-ai/sdk/v2/client";
+import { asRecord, assertSdkResponse } from "./agent-provider-runtime.js";
 
 export type OpenCodeInstanceReloadResult = "reloaded" | "deferred";
 
@@ -32,6 +34,16 @@ export class OpenCodeInstanceReload {
   /** A reload was asked for and is waiting for the directory to go idle. */
   get pending(): boolean {
     return this.pendingReload;
+  }
+
+  /** Run `operation` as one dispatch (see {@link enterDispatch}). */
+  async withinDispatch<T>(operation: () => Promise<T>): Promise<T> {
+    const release = await this.enterDispatch();
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
   }
 
   /**
@@ -66,6 +78,19 @@ export class OpenCodeInstanceReload {
     }
   }
 
+  /**
+   * Every stream event, owned session or not: a deferred reload waits for the
+   * whole directory, so any session's idle edge re-checks it.
+   */
+  observeEvent(type: string, properties: Record<string, unknown>): void {
+    if (
+      type === "session.idle" ||
+      (type === "session.status" && asRecord(properties.status)?.type === "idle")
+    ) {
+      this.idleObserved();
+    }
+  }
+
   /** The event stream saw a session go idle: retry a deferred reload. */
   idleObserved(): void {
     if (!this.pendingReload || this.running) return;
@@ -94,4 +119,27 @@ export class OpenCodeInstanceReload {
     this.dependencies.reloaded();
     return "reloaded";
   }
+}
+
+/** A reload of `directory`'s instance on one OpenCode server. */
+export function openCodeInstanceReload(
+  client: OpencodeClient,
+  directory: string | undefined,
+  requestOptions: () => { signal: AbortSignal },
+  reloaded: () => void,
+): OpenCodeInstanceReload {
+  return new OpenCodeInstanceReload({
+    async idle() {
+      const response = await client.session.status({ directory }, requestOptions());
+      assertSdkResponse(response, "OpenCode status read");
+      const statuses = asRecord(response.data);
+      if (!statuses) throw new Error("OpenCode returned a malformed status read");
+      return Object.values(statuses).every((status) => asRecord(status)?.type === "idle");
+    },
+    async dispose() {
+      const response = await client.instance.dispose({ directory }, requestOptions());
+      assertSdkResponse(response, "OpenCode instance reload");
+    },
+    reloaded,
+  });
 }

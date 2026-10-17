@@ -695,14 +695,13 @@ function mcpRuntimeNoticeMessage(
 
 /**
  * Events only a model that accepted the account's credentials can produce:
- * streamed output, a tool call, token accounting, or a turn that completed.
+ * streamed output or a turn that completed. Tool events include local shell
+ * polls, and token accounting can arrive long after a turn stopped serving.
  */
 function isModelResponseEvent(event: EngineEvent): boolean {
   switch (event.kind) {
     case "item.text.delta":
     case "item.reasoning.delta":
-    case "model.tool.called":
-    case "thread.usage.updated":
       return true;
     case "turn.completed":
       return event.status === "completed" && !event.error;
@@ -716,6 +715,9 @@ const DEFAULT_INTERRUPT_TIMEOUT_MS = 15_000;
 const MAX_UNKNOWN_METHODS = 16;
 /** Longest retained method name. Protocol methods are far shorter than this. */
 const MAX_UNKNOWN_METHOD_LENGTH = 128;
+/** Bounded metadata only; overflow conservatively stops proving serving. */
+const MAX_ACCOUNT_PROOF_TURNS = 1024;
+const MAX_ACCOUNT_PROOF_ID_LENGTH = 256;
 
 export class AppServerEngine implements CodexEngine {
   readonly kind = "app-server" as const;
@@ -754,6 +756,10 @@ export class AppServerEngine implements CodexEngine {
    * answering. Only a refused turn (or an account change) retires the proof.
    */
   private accountServingGeneration?: EngineGeneration;
+  private notificationSequence = 0;
+  private accountProofInvalidatedSequence = 0;
+  /** One active turn per thread, with its transport arrival order. */
+  private readonly accountProofTurns = new Map<string, { turnId: string; sequence: number }>();
   /**
    * The generation whose effective configuration was read back with hosted
    * web search off. Checked again after every restart: a toolchain update can
@@ -803,8 +809,9 @@ export class AppServerEngine implements CodexEngine {
         // Enqueue only — reduction happens on the per-thread drain so this
         // returns immediately and the transport never back-pressures.
         const key = threadId ?? "connection";
+        const sequence = ++this.notificationSequence;
         this.supervisor.notificationQueue.run(key, () => {
-          this.processNotification(notification, generation);
+          this.processNotification(notification, generation, sequence);
         });
       },
       onServerRequest: (request, generation) => this.router.handle(request, generation),
@@ -1001,6 +1008,7 @@ export class AppServerEngine implements CodexEngine {
   private processNotification(
     notification: Parameters<typeof reduceNotification>[0],
     generation: EngineGeneration,
+    sequence: number,
   ): void {
     // Anything from a replaced process describes state that no longer exists.
     if (generation !== this.supervisor.getGeneration()) return;
@@ -1083,7 +1091,7 @@ export class AppServerEngine implements CodexEngine {
     ) {
       // A sign-out through another client is a new account state: answers the
       // model gave the previous one prove nothing about it.
-      this.accountServingGeneration = undefined;
+      this.invalidateAccountServing(sequence);
       this.checkAccountSignIn(true);
     }
 
@@ -1103,6 +1111,20 @@ export class AppServerEngine implements CodexEngine {
     if (result.unsupportedItemType) this.unsupportedItemCount += 1;
 
     for (const event of result.events) {
+      if (
+        event.kind === "turn.started" &&
+        event.threadId &&
+        event.threadId.length <= MAX_ACCOUNT_PROOF_ID_LENGTH &&
+        event.turnId.length <= MAX_ACCOUNT_PROOF_ID_LENGTH &&
+        this.accountProofTurns.get(event.threadId)?.turnId !== event.turnId
+      ) {
+        this.accountProofTurns.delete(event.threadId);
+        this.accountProofTurns.set(event.threadId, { turnId: event.turnId, sequence });
+        if (this.accountProofTurns.size > MAX_ACCOUNT_PROOF_TURNS) {
+          const oldest = this.accountProofTurns.keys().next().value;
+          if (oldest !== undefined) this.accountProofTurns.delete(oldest);
+        }
+      }
       if (event.kind === "turn.completed") {
         this.resolveTerminalWaiters(event.threadId, event.turnId, event.status);
       }
@@ -1110,10 +1132,24 @@ export class AppServerEngine implements CodexEngine {
         (event.kind === "turn.completed" || (event.kind === "error" && !event.willRetry)) &&
         event.error?.code === "unauthorized"
       ) {
-        this.accountServingGeneration = undefined;
+        this.invalidateAccountServing(sequence);
         this.checkAccountSignIn(false, true);
-      } else if (isModelResponseEvent(event)) {
-        this.recordAccountServing(generation);
+      } else if (isModelResponseEvent(event) && "turnId" in event && event.threadId) {
+        const started = this.accountProofTurns.get(event.threadId);
+        if (
+          started &&
+          started.turnId === event.turnId &&
+          started.sequence > this.accountProofInvalidatedSequence
+        ) {
+          this.recordAccountServing(generation);
+        }
+      }
+      if (
+        event.kind === "turn.completed" &&
+        event.threadId &&
+        this.accountProofTurns.get(event.threadId)?.turnId === event.turnId
+      ) {
+        this.accountProofTurns.delete(event.threadId);
       }
       this.emit(event);
     }
@@ -1122,6 +1158,13 @@ export class AppServerEngine implements CodexEngine {
   /** Whether app-server confirmed the account must be signed in again. */
   isAccountSignInRequired(): boolean {
     return this.accountSignInRequired;
+  }
+
+  private invalidateAccountServing(sequence: number): void {
+    this.accountServingGeneration = undefined;
+    // Connection and thread queues can drain out of order. A delayed start
+    // must keep its original arrival order rather than acquire fresh proof.
+    this.accountProofInvalidatedSequence = Math.max(this.accountProofInvalidatedSequence, sequence);
   }
 
   /**
@@ -1261,6 +1304,7 @@ export class AppServerEngine implements CodexEngine {
    * `engine.state` so they can mark sessions recovering rather than idle.
    */
   private handleGenerationChange(generation: EngineGeneration, previous: EngineGeneration): void {
+    this.accountProofTurns.clear();
     // Waiters belong to the dead process; nothing will ever answer them.
     this.rejectAllWaiters();
     // Same for approvals: the old child has forgotten the request, so the card on
@@ -1544,6 +1588,7 @@ export class AppServerEngine implements CodexEngine {
    */
   async reloadThread(handle: string, options: ResumeThreadOptions): Promise<EngineThread> {
     const threadId = this.bindings.get(handle)?.threadId ?? handle;
+    this.accountProofTurns.delete(threadId);
     this.bindings.delete(handle);
     // A failed unsubscribe cannot prove that the previous attempt's MCP
     // connection was unloaded. Tool names are shared across attempts, so a
@@ -2096,6 +2141,7 @@ export class AppServerEngine implements CodexEngine {
    */
   async unsubscribeThread(handle: string): Promise<void> {
     const binding = this.bindings.get(handle);
+    this.accountProofTurns.delete(binding?.threadId ?? handle);
     this.bindings.delete(handle);
     if (!binding) return;
     try {

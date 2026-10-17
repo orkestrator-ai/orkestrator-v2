@@ -408,6 +408,20 @@ This observation does not independently establish a flake. Runtime staging
 remains an unresolved validation limitation; no source, assertion, timeout or
 skip changed.
 
+## Recurrence — 2026-10-17 (resume replaced-session close)
+
+`mise run test` on a shared 18-slot host (other environments held every slot
+at start; workspace/root/bridges/protocol reserved 4/1/2/1) timed out the same
+staged-runtime test at 30002.07 ms. It was the only root/support failure;
+bridges and the protocol lockfile passed. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Di0lTl/root-and-agent-support-tests.log`.
+
+`bun test tests/unit/pi-bridge-vendor.test.ts` passed alone, unchanged (4
+passed, 19.5 seconds wall clock, with a live `dev:test` profile still running
+on the host). The change under test (closing the session a resume replaces,
+in the backend native agent service) does not touch Pi runtime staging. No
+source, assertion, timeout or skip changed.
+
 ## Coordinator launch-base review recurrence — 2026-10-17
 
 - **Original command:** `mise run test:logged -- --name review-aggregate -- mise run test` (Bun 1.4.3, macOS arm64).

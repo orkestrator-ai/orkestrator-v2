@@ -6,7 +6,7 @@
  * terminal UI's own controls (`/themes`, `/exit`, `/editor`, …) are not server
  * commands, so an empty discovery stays empty.
  *
- * Facts below come from the pinned 1.18.31 SDK types and the matching server
+ * Facts below come from the pinned 1.19.0 SDK types and the matching server
  * build:
  *
  * - `Command` is `{ name, description?, agent?, model?, source?, template,
@@ -22,6 +22,8 @@
  * - A client built with `directory` sends it as a header that the SDK rewrites
  *   into the `directory` query of every GET, so an "unscoped" list from this
  *   client is the same request as the scoped one; one read is enough.
+ * - Command files are read once per directory instance: a file added later is
+ *   listed only after `instance.dispose` (see `opencode-command-reload.ts`).
  */
 import type { OpencodeClient } from "@opencode-ai/sdk/v2/client";
 import {
@@ -47,6 +49,7 @@ import {
   type ProviderSendOptions,
 } from "./agent-provider-contract.js";
 import { asRecord } from "./agent-provider-runtime.js";
+import type { OpenCodeInstanceReload } from "./opencode-command-reload.js";
 
 /** How long a read serves both the picker and dispatch before a re-read. */
 export const OPENCODE_COMMAND_CATALOGUE_TTL_MS = 30_000;
@@ -235,12 +238,25 @@ export class OpenCodeCommandRegistry {
     promise: Promise<OpenCodeCommandInventory>;
   } | null = null;
   private generation = 0;
+  /** Bumped by each instance reload; session snapshots carry it to the backend cache. */
+  private reloads = 0;
 
   constructor(
     private readonly load: () => Promise<OpenCodeCommandInventory>,
     private readonly now: () => number,
     private readonly ttlMs = OPENCODE_COMMAND_CATALOGUE_TTL_MS,
+    private readonly instanceReload?: OpenCodeInstanceReload,
   ) {}
+
+  get revision(): number {
+    return this.reloads;
+  }
+
+  /** The server re-read its command files: what was cached predates them. */
+  reloaded(): void {
+    this.reloads += 1;
+    this.invalidate();
+  }
 
   read(): Promise<OpenCodeCommandInventory> {
     if (this.cached && this.cached.expiresAt > this.now()) {
@@ -277,27 +293,54 @@ export class OpenCodeCommandRegistry {
     const inventory = await this.read();
     return {
       enhanced: true,
-      status: "ready",
+      // A requested reload that is waiting for idle means the server may hold
+      // command files this list does not show yet.
+      status: this.instanceReload?.pending ? "stale" : "ready",
       commands: inventory.commands,
       truncated: inventory.truncated,
       freshness: "ttl",
+      ...(this.instanceReload ? { revision: this.reloads } : {}),
     };
   }
 
   /**
-   * OpenCode documents no command-reload operation or change event, so an
-   * explicit refresh is exactly a fresh read of what the server lists now.
+   * OpenCode has no command-reload operation or change event, and keeps
+   * serving the command files it read when the directory's instance started.
+   * An explicit refresh therefore reloads the instance when the directory is
+   * idle (`reloaded`), or asks for it at the next idle edge (`deferred`). The
+   * list is read again either way.
    */
   async refreshCommands(): Promise<ProviderCommandRefreshResult> {
+    let outcome: ProviderCommandRefreshResult["outcome"] = "reread";
+    let reloadFailed = false;
+    if (this.instanceReload) {
+      try {
+        outcome = await this.instanceReload.request();
+      } catch {
+        reloadFailed = true;
+      }
+    }
     try {
       await this.refresh();
-      return { outcome: "reread" };
     } catch {
       return {
         outcome: "failed",
         message: "OpenCode could not list its commands.",
       };
     }
+    if (reloadFailed) {
+      return {
+        outcome: "failed",
+        message:
+          "OpenCode could not reload its command files. The list was checked again; files added since OpenCode started may be missing.",
+      };
+    }
+    return outcome === "deferred"
+      ? {
+          outcome,
+          message: "OpenCode loads changed command files once none of its sessions is running.",
+        }
+      : { outcome };
   }
 }
 

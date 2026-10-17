@@ -4,18 +4,22 @@
  * The bridge owns one command inventory per session and serves it as the
  * enhanced catalogue (version 1, see docs/architecture/native-agent-commands.md).
  * Everything here is grounded in the installed Agent SDK declaration
- * (`@anthropic-ai/claude-agent-sdk` 0.3.276, `sdk.d.ts`):
+ * (`@anthropic-ai/claude-agent-sdk` 0.3.296, `sdk.d.ts`):
  *
- * - `SlashCommand` is `{ name, description, argumentHint, aliases? }`. It has
- *   no source or scope, so provenance is `unknown` unless it is verified: a
- *   name listed in the init frame's `skills`, a `<plugin>:` prefix naming a
- *   plugin the init frame says is loaded, or metadata the SDK actually sent.
+ * - `SlashCommand` is `{ name, description, argumentHint, aliases?, builtin? }`.
+ *   It has no source, scope or terminal marker, so provenance is `unknown`
+ *   unless it is verified: a name listed in the init frame's `skills`, a
+ *   `<plugin>:` prefix naming a plugin the init frame says is loaded, or
+ *   metadata the SDK actually sent.
  * - `Query.supportedCommands()` is the session's live inventory.
  * - `SDKCommandsChangedMessage` (`system/commands_changed`) is documented as a
  *   full replacement: "Clients should REPLACE their cached command list".
  * - `SDKSystemMessage` (`system/init`) carries names only (`slash_commands`,
  *   `skills`) plus `terminal_slash_commands`, the subset "bound to the local
  *   terminal". Init names are a cold fallback that any later read supersedes.
+ *   A probe gets no init frame, so until the session's first turn its rows use
+ *   the terminal list that CLI version reported on an earlier turn
+ *   (`claude-terminal-commands.ts`).
  * - `SDKConversationResetMessage` is emitted by `/clear`. This bridge does not
  *   adopt `new_conversation_id`, so it cannot follow what `/clear` does.
  *
@@ -46,6 +50,7 @@ import type {
   NativeAgentSlashCommandSource,
 } from "@orkestrator/protocol/native-agent";
 import { resolveClaudeDiscoveryConfig } from "./claude-query-config.js";
+import { rememberedTerminalSlashCommands } from "./claude-terminal-commands.js";
 import { isClosedTransportError, readableControl } from "./session-manager-catalog.js";
 import {
   claudeExecutableOptions,
@@ -119,8 +124,15 @@ const AUTHORITY_RANK: Record<ClaudeCommandInventoryState["authority"], number> =
 
 /** Per-session write counter, so a read that started earlier cannot win. */
 const inventoryWrites = new WeakMap<SessionState, number>();
+
+interface DiscoveryProbeResult {
+  commands: SlashCommand[];
+  /** `claude_code_version` from the probe's initialize answer, when sent. */
+  cliVersion?: string;
+}
+
 /** Single-flight discovery probes, keyed by session and configuration. */
-const probesInFlight = new Map<string, Promise<SlashCommand[]>>();
+const probesInFlight = new Map<string, Promise<DiscoveryProbeResult>>();
 
 export function resetClaudeCommandInventoryForTesting(): void {
   probesInFlight.clear();
@@ -187,7 +199,10 @@ export interface AnnotationContext {
   terminal: ReadonlySet<string>;
 }
 
-function annotationContext(session: SessionState): AnnotationContext {
+function annotationContext(
+  session: SessionState,
+  rememberedTerminal = session.commandInventoryState?.rememberedTerminalSlashCommands,
+): AnnotationContext {
   const init = session.initData;
   const skills = new Set<string>();
   for (const skill of [...(init?.skills ?? []), ...(session.commandSkillNames ?? [])]) {
@@ -199,7 +214,10 @@ function annotationContext(session: SessionState): AnnotationContext {
     // `plugin:`-prefixed MCP servers folded into the same list do not.
     if (plugin.path && plugin.name) plugins.add(plugin.name);
   }
-  const terminal = new Set((init?.terminalSlashCommands ?? []).map(displayCommandName));
+  // The session's own init frame is authoritative, including an absent list.
+  // Before it, a probe's rows use what the same CLI version reported earlier.
+  const terminalNames = init ? (init.terminalSlashCommands ?? []) : (rememberedTerminal ?? []);
+  const terminal = new Set(terminalNames.map(displayCommandName));
   return { skills, plugins, terminal };
 }
 
@@ -326,7 +344,12 @@ function applyInventory(
   session: SessionState,
   authority: ClaudeCommandInventoryState["authority"],
   commands: SlashCommand[] | undefined,
-  options: { startedAt?: number; probeFingerprint?: string; reannotation?: boolean } = {},
+  options: {
+    startedAt?: number;
+    probeFingerprint?: string;
+    rememberedTerminalSlashCommands?: string[];
+    reannotation?: boolean;
+  } = {},
 ): boolean {
   const previous = session.commandInventoryState;
   const writes = inventoryWrites.get(session) ?? 0;
@@ -339,7 +362,11 @@ function applyInventory(
     return false;
   }
   const sdkCommands = commands ?? initRows(session);
-  const { commands: rows, truncated } = claudeCommandRows(sdkCommands, annotationContext(session));
+  const remembered = options.rememberedTerminalSlashCommands;
+  const { commands: rows, truncated } = claudeCommandRows(
+    sdkCommands,
+    annotationContext(session, remembered),
+  );
   const changed =
     !previous ||
     previous.authority !== authority ||
@@ -353,6 +380,7 @@ function applyInventory(
     revision,
     truncated,
     ...(options.probeFingerprint ? { probeFingerprint: options.probeFingerprint } : {}),
+    ...(remembered ? { rememberedTerminalSlashCommands: remembered } : {}),
   };
   // Re-deriving annotations is not new content, so it must not make an
   // in-flight read look overtaken.
@@ -377,6 +405,9 @@ function reannotate(session: SessionState): void {
   applyInventory(session, state.authority, state.sdkCommands, {
     reannotation: true,
     ...(state.probeFingerprint ? { probeFingerprint: state.probeFingerprint } : {}),
+    ...(state.rememberedTerminalSlashCommands
+      ? { rememberedTerminalSlashCommands: state.rememberedTerminalSlashCommands }
+      : {}),
   });
 }
 
@@ -441,9 +472,14 @@ async function probeCommands(session: SessionState, force: boolean): Promise<voi
     probesInFlight.set(key, pending);
   }
   const startedAt = inventoryWrites.get(session) ?? 0;
-  const commands = await pending;
+  const { commands, cliVersion } = await pending;
+  const remembered = await rememberedTerminalSlashCommands(cliVersion);
   if (sessions.get(session.id) !== session) return;
-  applyInventory(session, "probe", commands, { startedAt, probeFingerprint: config.fingerprint });
+  applyInventory(session, "probe", commands, {
+    startedAt,
+    probeFingerprint: config.fingerprint,
+    ...(remembered ? { rememberedTerminalSlashCommands: remembered } : {}),
+  });
 }
 
 /**
@@ -453,7 +489,7 @@ async function probeCommands(session: SessionState, force: boolean): Promise<voi
  */
 async function runDiscoveryProbe(
   config: Awaited<ReturnType<typeof resolveClaudeDiscoveryConfig>>,
-): Promise<SlashCommand[]> {
+): Promise<DiscoveryProbeResult> {
   const env = await runtimeEnvironmentForAgentQuery();
   let probe: Query | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -466,6 +502,16 @@ async function runDiscoveryProbe(
       ...claudeExecutableOptions(),
     });
     const read = probe.supportedCommands();
+    // The version keys the remembered terminal list. The initialize answer is
+    // already held by the SDK, so this sends nothing; a CLI that does not
+    // report it just gets no list.
+    const version =
+      typeof probe.initializationResult === "function"
+        ? probe
+            .initializationResult()
+            .then((result) => result?.claude_code_version)
+            .catch(() => undefined)
+        : Promise.resolve(undefined);
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(
         () => reject(new Error("Claude command discovery timed out")),
@@ -475,7 +521,8 @@ async function runDiscoveryProbe(
     // The losing side of the race still settles; keep it from surfacing as
     // an unhandled rejection after the probe is closed.
     read.catch(() => undefined);
-    return sdkRows(await Promise.race([read, timeout]));
+    const [commands, cliVersion] = await Promise.race([Promise.all([read, version]), timeout]);
+    return { commands: sdkRows(commands), ...(cliVersion ? { cliVersion } : {}) };
   } finally {
     if (timer) clearTimeout(timer);
     await Promise.resolve(probe?.close()).catch(() => undefined);

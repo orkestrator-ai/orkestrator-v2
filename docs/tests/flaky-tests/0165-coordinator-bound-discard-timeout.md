@@ -354,3 +354,14 @@ No implementation, assertion, timeout or skip was changed.
 - Failures: the bound-discard case and `fetch covers every configured remote and a dirty submodule needs enhanced confirmation` each hit the five-second timeout.
 - Owning-file rerun: `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1` gave 47 passed and 1 failed (the bound-discard case at 5155.68 ms). Two `-t "bound discard confirmations"` reruns also timed out (5152.24 and 5177.52 ms) at a load average of about 30.
 - Assessment: the case now fails alone while the host is loaded, which supports the contention hypothesis. The change under test does not touch the coordinator. No assertion, timeout or skip changed.
+
+
+## Slash catalogue main merge recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, with the testing guide's GNU tools preferred in PATH (Bun 1.4.3, macOS arm64).
+- **Workers:** workspace/root/bridge/protocol reserved 4/1/2/1 slots; backend used two isolated Bun workers alongside other worktrees on the shared host.
+- **Failure:** `project coordinator > bound discard confirmations refuse stale, sequencer, nested, and failed switches` exceeded its 5000 ms deadline at 5137.19 ms.
+- **Suite counts:** backend reported 8933 passed, 41 skipped and four failed across 8978 tests in 476 files (639.61 seconds). All other workspace packages and root/bridge/protocol groups passed; aggregate exited 1 after 738.6 seconds.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.lAr6wP/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer `orkestrator-test-run.S55BjO/merge-tests.log.gz` in the same temporary root.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-coordinator-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 25.0 seconds).
+- **Assessment:** the isolated pass confirms intermittence. Shared-host contention remains a hypothesis. No owning implementation, assertion, timeout or skip changed.

@@ -150,3 +150,14 @@ Final aggregate totals: backend 8814 passed, 41 skipped, ten failed and three
 between-tests errors across 8865 tests in 472 files (541.38 seconds).
 Toolchain had 90 passed and one failed. Root, bridges, protocol and every
 other workspace package passed; aggregate exit 1 after 852.0 seconds.
+
+
+## Slash catalogue main merge recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, with the testing guide's GNU tools preferred in PATH (Bun 1.4.3, macOS arm64).
+- **Workers:** workspace/root/bridge/protocol reserved 4/1/2/1 slots; backend used two isolated Bun workers alongside other worktrees on the shared host.
+- **Failure:** `Electron backend command registry > deletes an environment only after all three local server kinds exit` exceeded its 5000 ms deadline at 6075.39 ms.
+- **Suite counts:** backend reported 8933 passed, 41 skipped and four failed across 8978 tests in 476 files (639.61 seconds). All other workspace packages and root/bridge/protocol groups passed; aggregate exited 1 after 738.6 seconds.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.lAr6wP/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer `orkestrator-test-run.S55BjO/merge-tests.log.gz` in the same temporary root.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-commands-integration-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 24.2 seconds).
+- **Assessment:** the isolated pass confirms intermittence. Shared-host contention remains a hypothesis. No owning implementation, assertion, timeout or skip changed.

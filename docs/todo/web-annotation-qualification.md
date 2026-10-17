@@ -1,6 +1,6 @@
 # Web annotation qualification
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `31d0fb06` (2026-10-17).
 
 Web-page annotations shipped in #845 (`964d71f4`, 2026-09-25). They have
 unit, contract and component tests, plus two real-stack specs on Linux. No
@@ -27,13 +27,22 @@ that names what was actually tested.
   every mode the reconciler keeps settling requests already sent. The feature
   is therefore on by default without a gate sign-off. That is deliberate; see
   the default decision under "Constraints and rationale".
-- `e2e/agent-testing/web-annotations-electron.spec.ts` (7 tests, run by
-  `mise run test:agent:electron`) drives the production preload API with fixed
-  bounds. It covers capture without an agent tab across a renderer reload and a
-  backend restart, masking, inert adversarial strings, pins, route identity,
-  text/region/page modes, and secret-free storage and logs. It never renders
-  the Notes column beside the native view, and it has no zoom or DPR
-  variation.
+- `e2e/agent-testing/web-annotations-electron.spec.ts` (10 tests, run by
+  `mise run test:agent:electron`). Seven drive the production preload API with
+  fixed bounds. They cover capture without an agent tab across a renderer
+  reload and a backend restart, masking, inert adversarial strings, pins, route
+  identity, text/region/page modes, and secret-free storage and logs. Since
+  2026-10-17, three more cover the native window:
+  - The real renderer draws the Notes column beside the native view. The view
+    must sit on its host at app zoom 0.8, 1 and 1.25 and never cover the
+    column, its resize handle or a focus ring (within the one DIP that integer
+    view bounds allow). A menu and a dialog hide the view. At 150% app zoom,
+    and in a 900 px window, the narrow Preview/Notes switch takes over.
+  - Create and send by keyboard alone.
+  - Capture pixels and the selection highlight stay on the target at preview
+    zoom 0.8, 1 and 1.5 in both fixed and Notes-offset views, without image
+    reduction. Natural DPR plus forced DPR 1 and 2 run on every host with
+    `--force-device-scale-factor`.
 - `e2e/agent-testing/web-annotations-gateway.spec.ts` (3 tests, run by
   `mise run test:agent:browser:isolated`). Its two batch tests use
   `holdQueue: true`, so nothing is dispatched or materialized. The live
@@ -67,9 +76,10 @@ that names what was actually tested.
 
 Test code the runs below depend on.
 
-1. Electron spec additions: open the real Notes column and assert the native
-   view's bounds against it. Add a capture-alignment case at preview zoom 0.8,
-   1 and 1.5, and at DPR 1 and 2.
+1. Done 2026-10-17 (see "Runs on 2026-10-17"): Electron spec additions that
+   open the real Notes column and assert the native view's bounds against it,
+   plus a capture-alignment case at preview zoom 0.8, 1 and 1.5, and at DPR 1
+   and 2.
 2. A Docker annotation case whose title contains `Docker fixture`, so
    `mise run test:agent:docker` selects it. Assert that
    `.orkestrator/annotations/<request>-<digest>.png` is written inside the
@@ -86,18 +96,21 @@ Test code the runs below depend on.
 5. Fixture-app routes for a CSS animation, a late-loading web font and an
    expired sign-in redirect. Use them to exercise `stable`/`unstable` from
    `web_annotation_result_capture` and the redirect handling of Show on page.
-6. Fix the flakes that touch these suites:
+6. Done 2026-10-17: both flakes that touched these suites are resolved.
    [0204](../tests/flaky-tests/0204-web-annotation-quota-hook-timeout.md)
-   (`web-annotation-quotas.test.ts` hook timeout) and
+   (`web-annotation-quotas.test.ts` hook timeout) was resolved on `main` by
+   #1042: the cause was a per-record fsync loop in the pre-SQLite storage,
+   removed by #969.
    [0225](../tests/flaky-tests/0225-design-and-bench-aggregate-timeouts.md)
-   (`web-annotation-payloads.bench.test.ts` creation-cost bound under
-   aggregate load).
+   (the `web-annotation-payloads.bench.test.ts` creation-cost bound) was
+   resolved on this branch: the case now bounds actual SQLite writes per
+   create, and median timings remain diagnostic.
 
 ### Qualification
 
-- Re-run `mise run test:agent:electron` and
-  `mise run test:agent:browser:isolated` on current main, and record them with
-  the sign-off template below. The last evidence predates #969 and #983.
+- Done 2026-10-17 on macOS (see "Runs on 2026-10-17"): re-run
+  `mise run test:agent:electron` and `mise run test:agent:browser:isolated` on
+  current main and record them with the sign-off template below.
 - Run the live implement test once for each provider in `AGENT_PLATFORMS`:
   claude, codex, cursor, grok, opencode and pi. Record skipped providers and
   missing credentials explicitly. A skipped provider is not a passing one.
@@ -109,10 +122,13 @@ Test code the runs below depend on.
   then answer from the request card and from chat. No approval may be applied
   twice, and an approval from a dead generation must be withdrawn, never
   applied implicitly.
-- Native window, after code item 1 or as a manual cua-driver pass:
+- Native window. Everything but the last bullet is done and permanent in the
+  Electron spec (2026-10-17, macOS), with the exceptions listed under "Not
+  qualified" there:
   - with the Notes column open, the preview bounds shrink;
   - menus, dialogs and focus rings are never covered;
-  - create, send and resolve work by keyboard alone;
+  - create, send and resolve work by keyboard alone (create and send only;
+    resolve needs a request in `awaiting-review`, which needs a live agent);
   - the narrow (under 720 px) Preview/Notes switch works;
   - screenshot and highlight alignment holds at the zoom and DPR values
     above;
@@ -139,6 +155,28 @@ Batch the provider, Docker, remote, macOS and iOS runs with other todo files
 through
 [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md).
 
+### Found on 2026-10-17
+
+- **Keychain prompt holds startup (medium).** The Electron specs no longer
+  touch the host keychain, but two other paths still can. A `dev:test` profile
+  whose name another worktree used first (a shared `--profile codex-qa`, for
+  example) waits on the same unanswered prompt. And the desktop app itself
+  awaits `isAsyncEncryptionAvailable()` before its first window
+  (`connection-manager.ts:731`), with no log line while it waits. Options:
+  pass `--use-mock-keychain` for `agent-test` launches from
+  `apps/desktop/scripts/dev/`; or start the check without awaiting it, create
+  the window, and resolve credential storage when a remote connection first
+  needs it; or log after a few seconds that a keychain prompt is pending.
+- **Native focus and keyboard resolve (medium, qualification).** Qualify the
+  preview's OS-level focus during selection, the `electron-main` Window-menu
+  focus check, and "Accept and resolve" by keyboard on a host where the app
+  can be frontmost and a live agent can bring a request to `awaiting-review`.
+- **Create cost grows with the collection (low).** A create costs about
+  4 ms at 1,900 notes against 0.3 ms empty, linear in the collection. Find what
+  each create reads or writes in proportion to the collection (not located
+  yet) before collections near the 2,000-note cap are common, and rename the
+  bench case, which claims the cost "stays flat".
+
 ### Sign-off template
 
 ```text
@@ -152,6 +190,210 @@ Capability matrix and known limitations:
 Migration and rollback verification:
 Reviewer / date:
 ```
+
+### Runs on 2026-10-17 (macOS)
+
+Sign-off for the two re-runs and the native-window check. It is not a
+milestone sign-off: the live providers, Docker, remote, approval and iOS runs
+above are still outstanding.
+
+```text
+Milestone / PR / commit: suites re-run and native window; main 31d0fb06, branch
+  todo-annotation-suites-signoff-93fef49795eb (spec, harness and bench changes below)
+Implemented scope and remaining deferrals: Electron spec gains the real Notes
+  column, keyboard create/send, and zoom x DPR capture alignment (code item 1);
+  flake 0225 resolved (0204 resolved on main by #1042); see "Not qualified"
+Platforms, providers, and client versions exercised: macOS 27.0 (arm64), Electron
+  44.7.0, Playwright 1.64.0; display scale factor 1 (DPR 2 forced); no provider
+  turns (the send is held by a compose draft)
+Logged commands and results: tables below
+Real workflow and inactive-environment evidence: capture without an agent tab
+  across renderer reload and app plus backend restart (Electron spec)
+Fault-injection boundaries exercised: none new (unit level, unchanged)
+Capability matrix and known limitations: unchanged; see "Not qualified"
+Migration and rollback verification: not run
+Reviewer / date: Claude (worker agent), 2026-10-17; awaiting human review
+```
+
+The tables below are the first run, before the Multi Review. "Review
+follow-up" at the end of this section records what the review changed and its
+final results.
+
+| Command | Result |
+| --- | --- |
+| `mise run test:agent:electron`, unchanged `main` | 2 passed, 3 failed, 1 skipped, 6 did not run (716 s). Every failure is Electron never opening a window (`firstWindow` timed out at 90 s, or the test at 120 s): the keychain hang below |
+| `mise run test:agent:electron`, with the fixes | 13 passed, 1 failed, 1 skipped (110 s). All 10 annotation tests pass, including the three new ones. The failure is `electron-main` "shares one backend across independent windows" (below). The skip is the Linux-only Wayland case |
+| `electron-main.spec.ts --grep 'independent windows'`, alone, twice | Failed both times at the Window-menu native-focus check (`isFocused()` false after 5 s), the same macOS failure as on 2026-10-15. In the full run it failed earlier, once, on an empty second-window title |
+| `mise run test:agent:browser:isolated` | Pass: 26 passed, 14 skipped (opt-in live, Docker and container cases), 0 failed (423 s). Both annotation gateway batch tests passed; the live implement test skipped as designed |
+| `web-annotation-payloads.bench.test.ts`, alone | 6 passed (0.8 s) |
+| All 22 `web-annotation*.test.ts` files, `--parallel=2`, four times | 265 passed each time |
+| `mise run lint`, `mise run typecheck`, `mise run format:check` | Pass (lint warnings only, all in files this change does not touch) |
+| `mise run test`, twice | Workspace, bridge and protocol groups passed both times. The root group failed once each time, on causes unrelated to this change: first on `flaky-tests-index.test.ts`, because the 0265 case file on `main` had no ID or Status line (fixed here); then on known flake 0178 (`pi-bridge-vendor.test.ts`, 30 s timeout), whose file passed alone (4 passed, 14 s) |
+
+What the new native-window tests measured (this host, display scale factor 1):
+
+| Check | Result |
+| --- | --- |
+| Notes closed, app zoom 1 | View 1059 x 798 DIP on a 1058.9 x 798 host |
+| Notes open, app zoom 1, 0.8, 1.25 | View on its host each time, no overlap with the column, its resize handle, or the focus ring of Add note (at 0.8 the rounded view edge reaches 0.19 DIP into the handle) |
+| App zoom 1.5, 1440-DIP window | Layout turns narrow (960 CSS px); Preview lands on its host |
+| Menu ("Connected server") and dialog ("New connection") open | View hidden; it comes back on its host after Escape |
+| Narrow switch (900 px window) | Notes hides the view; Preview shows it on its host (619 x 709); the wide layout returns at 1440 px |
+| Close annotations | Focus returns to the Notes button; the view regains its full width |
+| Keyboard create and send | Add note (Enter), Enter in the page selects the focused Save button, focus returns to the editor textarea, Save note (Enter), Discuss…, Space on the codex session, Discuss with…, Send: the request is `discuss:queued` |
+| Capture alignment, preview zoom 0.8 / 1 / 1.5 at DPR 1 | Highlight box equals the target times the image scale (0.8 / 1 / 1.5) to the pixel; the marker sits inside the 2 CSS px highlight border |
+| The same at DPR 2 (forced) | Images reduced to the 2,000 px bound (scale 1.25 / 1.5625 / 2.34); highlight within 1 px of the target times the scale |
+
+Findings:
+
+- **Keychain hang (fixed in the harness).** `safeStorage` keeps its key in the
+  login keychain item "<app name> Safe Storage", and the app name is the
+  profile's `electronTitle`. The Electron specs use fixed profile ids
+  (`annotation-smoke`, `electron-smoke`, `electron-resume`), so every worktree
+  shares one item per spec, and the item's access list names the Electron
+  binary that created it. Electron from any other worktree then waits on an
+  access prompt that nobody answers. Main awaits
+  `safeStorage.isAsyncEncryptionAvailable()` in `ConnectionManager.initialize`
+  (`apps/desktop/electron/connection-manager.ts:731`, called from
+  `main.ts:746`) before it creates the first window, so startup hangs with no
+  window and no error. A bare Electron probe reproduced it: the call never
+  returned (25 s timeout) under the name "Orkestrator AI — DEV
+  [annotation-smoke]", while it took 7 ms under "[electron-resume]" and 13 ms
+  under a fresh name. With `--use-mock-keychain` it took 4 ms and an
+  encrypt/decrypt round trip worked. Every Electron spec now launches with that
+  switch on macOS (`e2e/agent-testing/electron-launch-switches.ts`). This also
+  clears the 2026-10-15 `safeStorage.encryptStringAsync` failure: the
+  remote-nickname test passed.
+- **Native OS focus is not observable on a shared desktop.** Even after
+  `app.focus({ steal: true })` the window was never key
+  (`window-focused false`), because other applications kept the foreground.
+  The keyboard test therefore checks focus inside the app (the renderer
+  focuses the editor once main hands back), and checks the preview's OS-level
+  `isFocused()` only when the window is key. The `electron-main`
+  Window-menu failure has the same cause. Both are environment limits, not
+  product bugs: a user who clicks the Window menu has already brought the app
+  forward.
+- **Input events take DIPs.** `webContents.sendInputEvent` coordinates are view
+  DIPs, not CSS px, so at preview zoom 0.8 a click at the CSS centre landed on
+  another element. The spec now scales click points by the preview zoom. This
+  was a test bug only; capture was correct.
+- **The capture keeps the selection highlight on purpose** (`prepare()` in
+  `browser-preview-annotation-script.ts`). The alignment check uses the
+  highlight's border box as the target and expects the marker inside the
+  2 CSS px border.
+- **Creating a note costs time proportional to the collection** (median 0.34 ms
+  empty, 1.34 ms at 500 notes, 2.84 ms at 1,000, 4.11 ms at 1,900). That is
+  linear, not quadratic. The bench's 2 s floor hides it, and the case name
+  ("creation cost stays flat") overstates it. Recorded as a low follow-up.
+
+Decisions (made without the user, to be validated):
+
+1. Fix the startup hang in the test harness (`--use-mock-keychain`), not in
+   the app. A per-run or per-worktree profile id would add a keychain item per
+   run or per worktree. Bounding the app's check with a timeout would change
+   production behaviour: a user who answers the prompt late would get
+   session-only tokens. Follow-up below.
+2. Extend `web-annotations-electron.spec.ts` in place, sharing its stack,
+   rather than adding a new spec file. That costs one Electron launch (plus
+   one for each forced DPR) instead of a second stack, and keeps it inside
+   `test:agent:electron`.
+3. For DPR, run the display's own scale factor and then forced DPR 1 and
+   forced DPR 2 (`--force-device-scale-factor`), relaunching without the
+   switch at the end. The first version forced only the missing value; the
+   review made both forced runs unconditional, so every host runs the same
+   branches, at the cost of one more launch.
+4. Check the app zoom at 0.8, 1 and 1.25 for wide bounds, and treat 1.5 as the
+   narrow case, because a 1440-DIP window is under 720 CSS px of container
+   there. Preview zoom 0.8, 1 and 1.5 are all checked for capture alignment.
+5. Tolerate less than one DIP of overlap between the view and its neighbours.
+   Main rounds bounds to whole DIPs (`validateBounds`), so a fractional
+   neighbour edge cannot be met exactly. Snapping inward (`ceil` the left
+   edge, `floor` the right) would guarantee no overlap but leave up to one DIP
+   uncovered; it was not worth a production change.
+6. "Keyboard alone" means controls are reached with real Tab and Shift+Tab
+   presses and activated with Enter or Space, never clicked. The first version
+   used Playwright's `focus()` in place of Tab; the review replaced it.
+   Resolve is not covered: it needs a request in `awaiting-review`.
+7. Flake 0225: bound the SQLite rows and bytes each create writes, rather than
+   raise the time bound. The first version compared median create times, but
+   its 33 ms floor could hide a whole-history rewrite, so the review replaced
+   it. Flake 0204 was resolved on `main` (#1042) while this branch was open.
+8. Window menu: when `getFocusedWindow()` returns a window that is not
+   natively focused (a DevTools-focused owner on a shared macOS desktop), the
+   explicit Window-menu selection wins (`window-menu.ts`, with a unit test).
+   The `electron-main` test still requires the selected label, and checks OS
+   focus only when the app owns a key window. This was added in the review.
+
+Not qualified on this run:
+
+- OS-level native focus of the preview and of the Window-menu target (the
+  window was never key on this shared desktop).
+- Resolve by keyboard in the native window (needs a live agent turn).
+- A real DPR 2 display (DPR 2 was forced; the display here is scale factor 1).
+- Linux, Windows, the live providers, Docker, remote backend, approvals across
+  disruption, web and iOS review, and the comparison fixtures (unchanged from
+  the list above).
+
+#### Review follow-up (2026-10-17)
+
+The Electron keyboard case now reaches renderer controls with Tab and checks
+Shift+Tab backtracking. Native page keys reach the selected element without
+assigning DOM focus to it. Its Discuss receipt is cancelled and checked absent
+from the prompt queue before the compose-draft hold is removed; a failed or
+ambiguous cleanup retains the hold until profile disposal. A profile-local
+Codex executable probe refuses and records accidental `app-server`/`exec`
+launches through cleanup and subsequent profile relaunches.
+
+Capture qualification now uses an 800-DIP fixed preview and the actual Notes
+layout (with nonzero view offsets), checking all three preview zooms in both.
+The smaller view keeps DPR 2 images under the reduction bound, so native image
+scale is asserted unconditionally. Natural capture plus forced DPR 1 and forced
+DPR 2 run on every host, removing the old host-dependent forced-DPR branch.
+A physical Retina display still requires separate hardware qualification.
+
+The creation benchmark now gates on SQLite row writes and bytes per create,
+including document-envelope updates; the former 33.33 ms timing floor could
+hide a rewrite. See the correction in flake 0225.
+
+The Window-menu focus resolver also ignores a `getFocusedWindow()` candidate
+whose host is not key: Electron can return a DevTools-focused owner while
+another app owns native focus. The recorded explicit menu selection is then
+authoritative. A unit regression verifies the selected label in that state;
+the Electron test continues to require that label and gates only the OS-focus
+predicate on actual native focus availability. Initial Home reload flake
+[0272](../tests/flaky-tests/0272-annotation-home-reload-native-view.md) is
+recorded separately; its owning spec passed unchanged on rerun.
+
+Follow-up validation on `annotation-native-window-signoff`:
+
+- `mise run test:logged -- --name agent-electron-final -- mise run test:agent:electron`
+  with `ORKESTRATOR_AGENT_TEST_RUN_ID=review-final`: **14 passed, 1 skipped**
+  (the Linux-only Wayland case), 80.4 seconds. All ten annotation cases passed,
+  including the selected-element identity after keyboard capture. The Codex
+  probe recorded no launch during cleanup, later tests or relaunches.
+- All 12 forced-DPR/layout/zoom combinations kept unreduced images; reported
+  scales matched DPR × preview zoom (DPR 2: 1.6, 2, 3, within pixel rounding).
+- Window-menu unit tests, all six payload benchmarks, format, lint and full
+  typecheck passed. The negative rewrite control failed as expected.
+- Artifacts: `output/agent-testing/review-final/electron/results.json`; all
+  temporary profiles and supervised processes were stopped and removed by
+  the suite. Native foreground focus and physical Retina hardware remain
+  outside this shared-desktop run. Browser, Docker, CLI and iOS scenario suites
+  were omitted because those product paths were unchanged.
+
+- Full non-iOS validation: `mise run test:logged -- --name review-full-suite -- mise run test`
+  **passed**, 728.4 seconds including a 234-second workspace capacity wait.
+  Workspace, root/agent-support, bridge and protocol groups all passed.
+
+After merging `origin/main` (#1042, #1045) into the branch:
+
+- `mise run test:agent:electron`: 14 passed, 1 skipped (Linux-only Wayland
+  case), 0 failed (83 s).
+- `window-menu.test.ts` 12 passed; the payload bench and quota files 21 passed;
+  `mise run lint`, `mise run typecheck` and `mise run format:check` passed.
+- `mise run test`: root, bridge and protocol groups passed. The workspace group
+  failed once, on known flake 0187 (`commands-integration.test.ts`, 5 s
+  timeout), and that file passed alone (55 passed, 19 s).
 
 ### Runs on 2026-10-15 (macOS)
 
@@ -286,7 +528,9 @@ Partial evidence only; no milestone was signed off. Linux (Wayland, display
 
 ## Needs verification
 
-- Whether the 2026-09-25 runs still pass after #969 and #983.
+- Whether the 2026-09-25 runs still pass after #969 and #983. The Electron
+  and isolated browser suites do (2026-10-17, macOS); the bench and full
+  suite were re-run too. Linux was not re-run.
 - Whether the gateway spec's synthetic capture still matches what the Electron
   capture path produces.
 

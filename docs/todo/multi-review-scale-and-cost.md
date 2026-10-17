@@ -301,6 +301,64 @@ text names the platform provider, including OpenCode.
   the wrapper log is
   `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.NEipUr/final-full-review-recovery.log.gz`.
 
+## Restart continuation and step reminders (2026-10-17)
+
+Built on `9da80451` (#1056 already merged), on macOS arm64 with other live
+test environments on the host.
+
+Fixed:
+
+- **A restart failed a Codex reviewer mid-review.** The bridge's restart
+  notice reached the backend only as text, and `ReviewFanoutRunner` failed any
+  reviewer whose status read was `error`. The bridge now reports
+  `interruption: "restart"`, and the runner and step runner continue the turn
+  once (see Current state, "Follow-up turns").
+- **Preparation and consolidation had no result reminder.** The step runner
+  threw the `missingWorkflowResultMessage` failure as soon as the idle bound
+  ran out. It now sends the reviewers' one reminder first.
+- **Rehydrated Codex transcripts showed Codex's injected instructions as a
+  user turn.** Codex 0.162 writes the global instructions block under
+  `# AGENTS.md instructions` with no path. The rollout filter
+  (`isSyntheticPersistedUserText`, `bridges/codex-bridge/src/history/rollout.ts`)
+  only knew `# AGENTS.md instructions for <path>`. The live restart case found
+  this. The first live run after the fix had the Codex reviewer complete
+  through its continuation, but its rehydrated transcript showed three user
+  turns where two were allowed. No reviewer transcript was checked after a
+  restart before, because the Codex reviewer always failed.
+
+Tests:
+
+- `review-fanout-restart-continuation.test.ts` covers continuing in the same
+  session, the second restart failing closed, a report submitted before the
+  restart, retiring the tool slot, and an ordinary failure still failing.
+  Three of the five fail without the runner change.
+- `multi-review-service.test.ts` covers the preparation reminder and its bound,
+  a consolidation continued after a restart, a second restart failing the
+  step, and one reminder before a pasted-report failure. All four fail without
+  the service change.
+- The bridge status, provider parsing, prompt and protocol tests cover the new
+  fields. `rollout.test.ts` covers the new instructions heading, and that a
+  user's own text starting with it is still shown.
+
+Live, on profile `mrq-restart-dcac9155`
+(`dev:test --fixture --credential-source claude --credential-source codex
+--agent-platforms claude,codex`, Claude 2.1.296, Codex 0.162.1, Haiku 4.5 and
+GPT-6-Luna at low effort), the restart case was "converges after a backend
+restart while reviewers run". It now requires the Codex reviewer to complete.
+After the rollout fix it passed (157.5 s): Claude "completed after the result
+reminder", Codex "completed after the restart continuation". The whole file
+then passed 4 of 4 in 654.7 s. The restart case had the same outcomes. After
+the killed bridge, Claude failed closed after its reminder (Code item 3) and
+Codex completed. The profile was stopped and reset. The spec's prompt-count
+failure message now labels each user turn (prompt, restart, reminder, commit
+nudge, or a `<tag>`) without printing its text.
+
+Not qualified live: the step reminder. A model forgetting its result tool is
+rare (1 of 15 preparations on 2026-10-17) and cannot be forced on a real
+provider, so only the deterministic tests cover it. No live restart landed
+while preparation or consolidation was mid-turn, so the step continuation is
+covered by tests only.
+
 ## Constraints and rationale
 
 - **The ten invariants.** Every change must keep all of these.
@@ -414,6 +472,9 @@ text names the platform provider, including OpenCode.
     would have needed an extra kind check and given no benefit. The step
     reminder names the step's own work ("Your discovery work is already
     done").
+  - *The rollout-filter fix ships here.* It is a one-line Codex bridge change
+    found by this work's live check. Leaving it out would leave the
+    strengthened restart case failing on every run.
   - *Claude and Build Pipeline steps are follow-ups* (Code items 3 and 4).
     Claude needs bridge work to report an interruption. Build Pipeline's own
     steps have a separate runner, and #1056 had just changed those files.

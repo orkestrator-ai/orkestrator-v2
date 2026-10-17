@@ -390,7 +390,9 @@ snapshot first: phase, reviewer state, reports and consolidation. It also
 checks that each reviewer kept its provider session and start time, that a
 new request id appears only for a result reminder, restart continuation or
 schema repair, and that
-no transcript holds more prompts than those turns allow. It then checks the
+no transcript holds more prompts than those turns allow. When it holds more,
+the failure labels each user turn by the follow-up it opens with, never by its
+text. It then checks the
 tab, on return and again after a reload: the graph's node states, the
 inspector's transcript tail, the controls and the reviewer's read-only tab.
 The reviewer transcript read must not be the compatibility fallback, and a

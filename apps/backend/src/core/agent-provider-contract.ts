@@ -75,7 +75,17 @@ export interface ProviderSessionObservation {
   backgroundWorkLive?: boolean;
   /** Released Claude dispatches whose query is still awaiting its root continuation. */
   retainedContinuationRequestIds?: string[];
+  /**
+   * Set beside `status: "error"` when the provider itself stopped the turn
+   * partway, not the model: `restart` means a provider restart cut it short
+   * and the same session can continue it. Only the Codex bridge reports one
+   * today; an unknown value is dropped, so that turn fails as before.
+   */
+  interruption?: ProviderTurnInterruption;
 }
+
+/** A provider-caused stop of a turn the same session can continue. */
+export type ProviderTurnInterruption = "restart";
 
 export interface ProviderPromptImage {
   filename: string;
@@ -169,12 +179,18 @@ export class ProviderDispatchPreparationError extends ProviderUnavailableError {
 export class ProviderSessionFailedError extends Error {
   readonly agent: ProviderAgent;
   readonly detail: string;
+  readonly interruption?: ProviderTurnInterruption;
 
-  constructor(agent: ProviderAgent, detail: string) {
+  constructor(
+    agent: ProviderAgent,
+    detail: string,
+    options: { interruption?: ProviderTurnInterruption } = {},
+  ) {
     super(`The ${agent} session failed: ${detail}`);
     this.name = "ProviderSessionFailedError";
     this.agent = agent;
     this.detail = detail;
+    if (options.interruption) this.interruption = options.interruption;
   }
 }
 
@@ -205,7 +221,11 @@ export async function readProviderStatus(
     return observation;
   } catch (error) {
     if (error instanceof ProviderSessionFailedError) {
-      return { status: "error", error: error.detail };
+      return {
+        status: "error",
+        error: error.detail,
+        ...(error.interruption ? { interruption: error.interruption } : {}),
+      };
     }
     throw error;
   }

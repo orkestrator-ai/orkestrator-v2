@@ -5,6 +5,7 @@ import {
   lastAssistantText,
   missingWorkflowResultMessage,
   workflowResultReminderPrompt,
+  workflowRestartContinuationPrompt,
 } from "./workflow-result-missing.js";
 
 const BASE = {
@@ -78,6 +79,43 @@ describe("workflowResultReminderPrompt", () => {
       const prompt = workflowResultReminderPrompt({ ...REMINDER, submission, finalText: "{}" });
       expect(prompt.length).toBeLessThan(4_096);
     }
+  });
+
+  test("names the step's own finished work", () => {
+    expect(
+      workflowResultReminderPrompt({
+        resultLabel: "review package preparation",
+        toolName: "submit_validation_plan",
+        submission: "preparing",
+        workLabel: "discovery work",
+      }),
+    ).toContain("Your discovery work is already done: do not repeat it");
+  });
+});
+
+describe("workflowRestartContinuationPrompt", () => {
+  test("asks for the unfinished work to continue, not to be resubmitted", () => {
+    const prompt = workflowRestartContinuationPrompt({
+      workLabel: "review",
+      resultLabel: "structured report",
+      toolName: "submit_review_report",
+    });
+    expect(prompt).toContain("your last turn stopped partway");
+    expect(prompt).toContain("Continue the review from where it stopped. Do not start over");
+    expect(prompt).toContain("by calling `submit_review_report`");
+    expect(prompt).toContain("The earlier resultKey is closed.");
+    // The reminder's claim is false for a cut-short turn.
+    expect(prompt).not.toContain("already done");
+  });
+
+  test("omits the result tool for a structured-output turn, and fits the bound", () => {
+    const prompt = workflowRestartContinuationPrompt({
+      workLabel: "consolidation",
+      resultLabel: "consolidated report",
+    });
+    expect(prompt).not.toContain("resultKey");
+    expect(prompt).toContain("return your consolidated report");
+    expect(prompt.length).toBeLessThan(4_096);
   });
 });
 

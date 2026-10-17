@@ -664,6 +664,7 @@ describe("session lifecycle", () => {
       status: "error",
       phase: "failed",
       error: CODEX_RESTARTED_MID_TURN_MESSAGE,
+      interruption: "restart",
     });
     expect(h.events).toContainEqual({
       type: "session.error",
@@ -3262,6 +3263,8 @@ describe("crash recovery", () => {
       status: "error",
       phase: "failed",
       error: CODEX_RESTARTED_MID_TURN_MESSAGE,
+      // Structured, so a workflow continues the turn without matching text.
+      interruption: "restart",
     });
     expect(h.events).toContainEqual({
       type: "session.error",
@@ -3278,6 +3281,7 @@ describe("crash recovery", () => {
     expect(h.runtime.getStatus(sessionId, false)).toMatchObject({
       status: "error",
       error: CODEX_RESTARTED_MID_TURN_MESSAGE,
+      interruption: "restart",
     });
     await h.runtime.getMessages(sessionId);
     expect(h.runtime.getStatus(sessionId)).toMatchObject({
@@ -3297,6 +3301,7 @@ describe("crash recovery", () => {
     });
     expect(next.ok).toBe(true);
     expect(h.runtime.getRegistry().getSession(sessionId)?.restartFailure).toBeUndefined();
+    expect(h.runtime.getStatus(sessionId)?.interruption).toBeUndefined();
     expect(
       (await new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" }).load()).find(
         (entry) => entry.bridgeSessionId === sessionId,
@@ -3337,7 +3342,11 @@ describe("crash recovery", () => {
         retryable: true,
       },
     });
-    expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "error", phase: "failed" });
+    expect(h.runtime.getStatus(sessionId)).toMatchObject({
+      status: "error",
+      phase: "failed",
+      interruption: "restart",
+    });
   });
 
   test("a turn the user was cancelling stays interrupted across a restart", async () => {
@@ -3364,6 +3373,7 @@ describe("crash recovery", () => {
 
     // The user asked for the stop, so the restart must not be blamed for it.
     expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "idle", phase: "idle" });
+    expect(h.runtime.getStatus(sessionId)?.interruption).toBeUndefined();
     expect(
       h.events.some(
         (event) =>

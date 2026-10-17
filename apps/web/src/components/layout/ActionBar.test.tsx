@@ -6438,12 +6438,84 @@ describe("ActionBar pull request actions", () => {
     };
     render(<ActionBar />);
 
-    const checking = screen.getByRole("button", {
-      name: "Checking mergeability…",
-    }) as HTMLButtonElement;
-    expect(checking.disabled).toBe(true);
+    const checking = screen.getByRole("button", { name: "Checking mergeability…" });
+    expect(checking.getAttribute("aria-disabled")).toBe("true");
     expect(screen.queryByRole("button", { name: "Merge PR" }) === null).toBe(true);
     expect(screen.queryByRole("button", { name: "Resolve" }) === null).toBe(true);
+
+    fireEvent.click(checking);
+    expect(launchNativeAgentJobMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Configure conflict resolution" }) === null).toBe(
+      true,
+    );
+  });
+
+  test("opens the Resolve modal from a right-click while mergeability is pending", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: null,
+    };
+    render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Checking mergeability…" }));
+    expect(screen.getByRole("dialog", { name: "Configure conflict resolution" })).toBeTruthy();
+    expect(screen.queryByRole("alert") === null).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
+    await waitFor(() =>
+      expect(launchNativeAgentJobMock).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Resolve" }),
+      ),
+    );
+  });
+
+  test("opens the Resolve modal after a long press while mergeability is pending", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: null,
+    };
+    render(<ActionBar presentation="grid" />);
+
+    const checking = screen.getByRole("button", { name: "Checking mergeability…" });
+    fireEvent.pointerDown(checking, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 24,
+      clientY: 24,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    fireEvent.pointerUp(checking, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 24,
+      clientY: 24,
+    });
+
+    expect(
+      await screen.findByRole("dialog", { name: "Configure conflict resolution" }),
+    ).toBeTruthy();
+    fireEvent.click(checking);
+    expect(launchNativeAgentJobMock).not.toHaveBeenCalled();
+  }, 20_000);
+
+  test("blocks a Resolve opened during the mergeability check once the PR proves clean", () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: null,
+    };
+    const view = render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Checking mergeability…" }));
+    currentEnvironment = { ...currentEnvironment, hasMergeConflicts: false };
+    view.rerender(<ActionBar />);
+
+    expect(screen.getByRole("alert").textContent).toContain("no longer has merge conflicts");
+    expect(
+      (screen.getByRole("button", { name: "Resolve conflicts" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 
   test("presents a closed pull request and cleanup explanation without merged-branch wording", () => {

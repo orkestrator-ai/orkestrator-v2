@@ -256,3 +256,10 @@ skip changed.
 - **Failures:** eight diff-statistics cases exceeded the 5000 ms budget: `computes counts for a tracked local environment and announces them` (5403.25 ms), `serves the Files panel from the scan the badge already ran` (5410.16 ms), `refreshes a tracked environment on explicit request` (5459.96 ms), `clears published counts when a repository config retarget cannot be scanned` (5386.69 ms), `does not resurrect deleted tracking from a stale reconciliation` (6281.31 ms), `does not mark the counts approximate for an ordinary worktree` (6443.82 ms), `enables git's scan caches on a newly created worktree` (6569.41 ms), and `deleting an environment drops its counts from the snapshot` (6076.77 ms).
 - **Owning-file rerun:** `mise run test:logged -- --name commands-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 19.9 seconds.
 - **Assessment:** the unchanged owning-file pass confirms an intermittent recurrence. Shared-host contention remains a hypothesis. No owning implementation, assertion, timeout or skip changed.
+
+## Preview tunnel slow-reader validation — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name full-tests -- mise run test` on `9da80451` plus a preview-tunnel-only change, macOS arm64, load average 30 to 40.
+- **Failure:** `computes counts for a tracked local environment and announces them` (5749.61 ms). Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.vJOfiZ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Owning-file rerun:** `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1` passed unchanged (55 passed).
+- **Assessment:** an intermittent recurrence. No implementation, assertion, timeout or skip changed.

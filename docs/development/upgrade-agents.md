@@ -216,9 +216,18 @@ every backend-only host, then restart the service.
 - **A running backend does not notice.** The default is chosen at startup, and
   bridges already launched keep the executable they resolved, so restart after
   installing.
-- **Nothing runs it for you.** A backend-only host never updates its toolchain on
-  its own; a release that changes a pin needs the command run again. Wire it into
-  the host's deploy or service-start step (`ExecStartPre=` under systemd works).
+- **A service runs it for you.** A backend installed with `orkestrator service
+  install` runs it before every start of a release, and its self-update runs the
+  new release's installer before it restarts. Any other backend-only host does
+  not update its toolchain on its own. A release that changes a pin needs the
+  command run again: wire it into the host's deploy or service-start step
+  (`ExecStartPre=` under systemd works). Remote clients can also repair the
+  pinned set with `host.toolchain.repair`
+  ([host-updates.md](../architecture/host-updates.md)).
+- **The managed `claude` does not update itself.** Host processes running it get
+  `CLAUDE_PINNED_RUNTIME_ENV` (`DISABLE_AUTOUPDATER=1`, with
+  `FORCE_AUTOUPDATE_PLUGINS=1` so the user's plugins still update). A `claude` on
+  PATH is left alone.
 
 ### Container environments
 

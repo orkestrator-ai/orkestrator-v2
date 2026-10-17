@@ -2,7 +2,6 @@
 
 - **ID:** 0265
 - **Status:** open
-- **Date observed:** 2026-10-17
 
 ## Observation — 2026-10-17
 

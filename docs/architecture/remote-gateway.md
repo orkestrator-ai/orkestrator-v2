@@ -39,6 +39,12 @@ backend. Once serving, every backend publishes a mode-0600
 path of its auth file (never the token). See
 [public-cli.md](public-cli.md).
 
+To keep a standalone backend running and let remote clients update it, install
+it as a user service with `orkestrator service install -- <serve args>`. That
+uses launchd on macOS and systemd on Linux. The service runs versioned releases
+through a launcher, which goes back to the previous release when a new one
+fails to start. See [host-updates.md](host-updates.md#standalone-service).
+
 ## Connecting `orkestrator.dev`
 
 Both devices must be on the same Tailscale network. The hosted client requires

@@ -199,6 +199,8 @@ describe("public action input contract", () => {
       "environment.exec": "voice",
       "session.interaction.resolve": "voice:approval",
       "run.discard": "always",
+      "host.update.apply": "always",
+      "host.gh.update": "always",
     });
     // Reads never need confirmation.
     for (const [action, contract] of entries) {

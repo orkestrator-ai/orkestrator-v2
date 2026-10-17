@@ -19,6 +19,10 @@ import {
   gzip,
 } from "node:zlib";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
+import type {
+  HostMaintenanceSnapshot,
+  HostUpdaterReport,
+} from "@orkestrator/protocol/host-maintenance";
 import {
   GatewayTokenValidationError,
   getGatewayTokenValidationError,
@@ -46,6 +50,7 @@ export type GatewayRouteKey =
   | "status"
   | "gateway-settings"
   | "web-client-access"
+  | "host-updater"
   | "invoke"
   | "events"
   | "metrics"
@@ -115,6 +120,16 @@ export interface OrkestratorGatewayOptions {
     getStatus(): WebClientStatus;
     setEnabled(enabled: boolean): Promise<WebClientStatus>;
     resetServe(): Promise<WebClientStatus>;
+  };
+  /**
+   * The host updater's side channel: the desktop app reads update jobs and
+   * reports their progress here. Served only on the loopback control
+   * listener, so no remote client can impersonate the executor.
+   */
+  hostUpdaterControl?: {
+    /** Includes the restart impact the executor's `when-idle` waits on. */
+    snapshot(): Promise<HostMaintenanceSnapshot>;
+    report(report: HostUpdaterReport): HostMaintenanceSnapshot;
   };
 }
 
@@ -247,7 +262,7 @@ export const GATEWAY_METRIC_TOTAL_LABEL_BYTES = 8 * 1024;
  * timing breakdown both incomplete and different on every run.
  * `apps/backend/tests/gateway-support-extra.test.ts` pins these against the real registry.
  */
-export const GATEWAY_COMMAND_METRIC_MAP_LIMIT = 640;
+export const GATEWAY_COMMAND_METRIC_MAP_LIMIT = 656;
 export const GATEWAY_COMMAND_METRIC_TOTAL_LABEL_BYTES = 32 * 1024;
 export const GATEWAY_METRIC_SAMPLE_LIMIT = 32;
 export const MAX_CLIENT_METRICS_BODY_BYTES = 64 * 1024;
@@ -743,6 +758,7 @@ export function classifyGatewayRoute(pathname: string): GatewayRouteKey {
   if (pathname === `${API_PREFIX}/status`) return "status";
   if (pathname === `${API_PREFIX}/gateway-settings`) return "gateway-settings";
   if (pathname === `${API_PREFIX}/web-client-access`) return "web-client-access";
+  if (pathname === `${API_PREFIX}/host-updater`) return "host-updater";
   if (pathname === `${API_PREFIX}/invoke`) return "invoke";
   if (pathname === `${API_PREFIX}/events`) return "events";
   if (pathname === `${API_PREFIX}/metrics`) return "metrics";

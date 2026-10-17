@@ -1866,3 +1866,82 @@ test("local environment move survives inactive navigation and reload", async ({ 
     await fs.rm(accountHome, { recursive: true, force: true });
   }
 });
+
+for (const width of [1280, 390]) {
+  test(`host maintenance rehydrates task completion while Settings is closed (${width}px)`, async ({
+    page,
+  }) => {
+    page.setDefaultTimeout(15_000);
+    const status = await profileStatus();
+    expect(status.status).toBe("ready");
+    const invoke = await authenticatedInvoke(page, status);
+    const projects = await invoke<Project[]>("get_projects");
+    const fixture = projects.find((project) => project.localPath === status.testProject)!;
+    expect(fixture).toBeTruthy();
+    await page.setViewportSize({ width, height: 900 });
+    const openUpdates = async () => {
+      const globalSettings = page.getByRole("button", { name: "Global settings", exact: true });
+      if (width < 768 && !(await globalSettings.isVisible())) {
+        const openDrawer = page.getByRole("button", { name: "Open projects and environments" });
+        const closeDrawer = page
+          .getByRole("button", { name: "Close projects and environments" })
+          .first();
+        await expect(openDrawer.or(closeDrawer).first()).toBeVisible();
+        const drawer = page.getByRole("dialog", { name: "Projects and environments", exact: true });
+        if (await drawer.isVisible()) {
+          await drawer.getByRole("button", { name: fixture.name, exact: true }).click();
+          if (await drawer.isVisible())
+            await drawer
+              .getByRole("button", { name: "Close projects and environments" })
+              .first()
+              .click();
+          await expect(drawer).toBeHidden();
+        }
+        // Selecting the project rehydrates its context and closes the tools
+        // popover. Open it after that reconciliation has finished.
+        await expect(async () => {
+          if (!(await globalSettings.isVisible())) {
+            await page.getByRole("button", { name: "Open tools", exact: true }).click();
+          }
+          await globalSettings.click({ timeout: 1_000 });
+          await expect(page.getByRole("dialog", { name: "Settings", exact: true })).toBeVisible();
+        }).toPass({ timeout: 15_000 });
+      } else {
+        await globalSettings.click();
+      }
+      const settings = page.getByRole("dialog", { name: "Settings", exact: true });
+      const section = settings.getByRole("combobox", { name: "Settings section", exact: true });
+      if (await section.isVisible()) {
+        await section.click();
+        await page.getByRole("option", { name: "Updates", exact: true }).click();
+      } else {
+        await settings.getByRole("button", { name: "Updates", exact: true }).click();
+      }
+      await expect(
+        settings.getByRole("heading", { name: "Agent tools", exact: true }),
+      ).toBeVisible();
+      return settings;
+    };
+    let settings = await openUpdates();
+    await settings.getByRole("button", { name: "Close settings" }).click();
+    const task = await invoke<{ id: string }>("set_host_gh_channel", { channel: "pinned" });
+    await expect
+      .poll(async () => {
+        const snapshot = await invoke<{ tasks: Record<string, { id: string; state: string }> }>(
+          "get_host_maintenance",
+          { detail: true },
+        );
+        return snapshot.tasks["gh-update"]?.id === task.id
+          ? snapshot.tasks["gh-update"].state
+          : "missing";
+      })
+      .toBe("succeeded");
+    settings = await openUpdates();
+    await expect(settings.getByRole("status").filter({ hasText: /^Done/ })).toBeVisible();
+    await settings.getByRole("button", { name: "Close settings" }).click();
+    await page.reload();
+    settings = await openUpdates();
+    await expect(settings.getByRole("status").filter({ hasText: /^Done/ })).toBeVisible();
+    await expect(settings.getByRole("button", { name: "Repair agent tools" })).toBeEnabled();
+  });
+}

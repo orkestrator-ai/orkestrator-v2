@@ -80,6 +80,33 @@ mise run test:logged -- --name merge-worktree-isolated -- bun test --cwd apps/ba
 No watcher implementation, assertion, timeout or skip was changed. The existing
 cache-invalidation hypothesis remains unconfirmed.
 
+## Recurrence on 2026-10-17
+
+`mise run test:logged -- --name full-suite -- mise run test` on the remote host
+maintenance branch (based on `eeeca4b3`) failed the same cache-hit assertion
+(`Expected: 1, Received: 0`, 213 ms) in the workspace group, next to two
+deterministic failures that change caused and fixed: the command-label budget
+and the CLI pack list. It failed once more when run in one `bun test` process
+with `tests/gateway-support-extra.test.ts` (139 ms), then passed alone three
+times in a row (4 pass, 0 fail each) with
+`bun test --preload ../../tests/setup-node.ts src/core/worktree-snapshots-git.test.ts`
+from `apps/backend`. The change touches no worktree-snapshot, watcher or diff
+code. Status remains open.
+
+## Recurrence — 2026-10-17 (host maintenance review fixes)
+
+The `all-tests` aggregate again expected one `file-list-read` cache hit but
+observed zero in `a tracked edit that never touches the index is detected`.
+The unchanged owning file passed alone in 0.4 s with:
+
+```sh
+mise run test:logged -- --name git-snapshots-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures
+```
+
+Aggregate evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Q6mb2y/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+No snapshot implementation, assertion, timeout or skip changed.
+
 ## Auth-secrets main merge recurrence on 2026-10-17
 
 `mise run test:logged -- --name latest-merge-tests -- mise run test` while

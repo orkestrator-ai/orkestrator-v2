@@ -107,7 +107,18 @@ export async function preparePinnedToolchains(options: {
    * manifest points at.
    */
   interactive?: boolean;
+  /**
+   * Retries before the first dialog. Set after a remote-requested update,
+   * when the relaunched app may have nobody in front of it: a transient
+   * network failure should not leave the remote client waiting on a modal.
+   */
+  unattendedRetries?: { attempts: number; delayMs: number };
+  /** Test seam for the retry delay. */
+  sleep?: (ms: number) => Promise<void>;
 }): Promise<string | null> {
+  let automaticRetries = options.unattendedRetries?.attempts ?? 0;
+  const sleep =
+    options.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const artifacts = options.artifacts ?? pinnedToolchainArtifacts();
   const requiredArtifacts = artifacts.filter((artifact) => !isSupportToolName(artifact.name));
   while (true) {
@@ -137,6 +148,11 @@ export async function preparePinnedToolchains(options: {
       return result.binDir;
     } catch (error) {
       options.logError(error);
+      if (automaticRetries > 0) {
+        automaticRetries -= 1;
+        await sleep(options.unattendedRetries!.delayMs);
+        continue;
+      }
       if (options.interactive === false) {
         options.quit();
         return null;

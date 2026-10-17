@@ -3,6 +3,7 @@ export * from "./backend/terminals";
 export * from "./backend/config-integrations";
 export * from "./backend/docker-skills";
 export * from "./backend/system";
+export * from "./backend/host-maintenance";
 export * from "./backend/files-sessions";
 export * from "./backend/workflows";
 export * from "./backend/kanban";

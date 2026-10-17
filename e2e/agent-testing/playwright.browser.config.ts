@@ -20,6 +20,7 @@ export default defineConfig({
     "terminal-input-resume.spec.ts",
     "terminal-mobile-panes.spec.ts",
     "opencode-live.spec.ts",
+    "close-retention-live.spec.ts",
   ],
   fullyParallel: false,
   workers: 1,

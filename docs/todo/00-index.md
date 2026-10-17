@@ -57,8 +57,8 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 39 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 247 |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 38 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 248 |
 | Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 259 |
 | **Total** | | **546** |
 
@@ -136,7 +136,7 @@ it reaches. Some rules of thumb:
 - [ ] Keep the Claude CLI open across idle turns with an idle detach instead of draining at turn end ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md))
 - [x] Report `authentication-required` readiness on Claude, Pi, ACP and OpenCode; drop the Cursor-only 401 branch ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
 - [x] Confirm no auth response body carries a token or key except the login URL, and the URL is never logged ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)
-- [ ] Confirm close retains the conversation through the UI for Cursor, Pi, OpenCode and Grok ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
+- [x] Confirm close retains the conversation through the UI for Cursor, Pi, OpenCode and Grok ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
 
 ### Transcripts, observation and bandwidth (high)
 
@@ -358,12 +358,15 @@ it reaches. Some rules of thumb:
 - [ ] Re-arm pending Claude permissions on (re)initialize via `pending_permission_requests` and `reinitialize()` ([provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md), deferred)
 - [ ] Surface Claude MCP permission provenance (`McpServerProvenance`) in the shared interaction card ([provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md), deferred)
 - [ ] Remove the legacy `DELETE` close fallback and `bridge-upgrade-required` path after the support window ([session-lifecycle-consistency.md](session-lifecycle-consistency.md))
-- [ ] Close a Cursor tab during cold startup and during a run, switch away, return and reload ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
+- [x] Close a Cursor tab during cold startup and during a run, switch away, return and reload ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
 - [ ] Interrupt a Pi prompt before acceptance, switch away, return and reload; status settles, next prompt runs ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
-- [ ] Restore an assigned Grok tab image draft in the browser once the Grok CLI connects ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
+- [x] Restore an assigned Grok tab image draft in the browser once the Grok CLI connects ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
 - [ ] Check large-transcript recovery in the browser after Cursor persistence shedding ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
-- [ ] Leave an approval pending in an inactive environment, close and reload; no card returns actionable ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
+- [ ] Withdraw a dead-generation approval card after close and reload in an inactive environment ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
 - [ ] Verify an attachment-only Cursor or Grok draft survives a backend restart without losing its image ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), verify)
+- [ ] Check what a live Cursor resume row shows when every agent is created as `Orkestrator` ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), verify)
+- [ ] Close the empty session a resume into a new tab replaces; Grok keeps a process per resume ([session-lifecycle-consistency.md](session-lifecycle-consistency.md))
+- [ ] Run live close retention for Cursor and Pi with both signed in to an isolated profile ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
 
 ### Transcripts, observation and bandwidth (medium)
 
@@ -647,11 +650,12 @@ it reaches. Some rules of thumb:
 - [ ] Evaluate the unused OpenCode 1.x `find.*` file search on the surface the provider already drives ([provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md), deferred)
 - [ ] Map Cursor `askQuestion` to a `question` interaction once the SDK adds a typed answer path ([provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md), blocked)
 - [ ] Add Grok MCP elicitation UI once Grok exposes a supported reverse-request contract ([provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md), blocked)
-- [ ] Add an opt-in real-stack spec that closes a tab, finds the conversation and resumes it per provider ([session-lifecycle-consistency.md](session-lifecycle-consistency.md))
+- [x] Add an opt-in real-stack spec that closes a tab, finds the conversation and resumes it per provider ([session-lifecycle-consistency.md](session-lifecycle-consistency.md))
 - [ ] Saturate Cursor steer in the browser: 429 refusal, runtime notice, turn continues, draft survives reload ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
 - [ ] Show the `bridge-upgrade-required` restart toast for an old Claude bridge using a stale-bundle fixture ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
 - [ ] Decide whether to align idle cancel and abort responses across Claude, Codex and ACP ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), decision)
 - [ ] Decide whether Claude, Codex, Pi and ACP publish bounded-state occupancy in runtime health ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), decision)
+- [ ] Label untitled resume rows by detail or a readable id, not the first 8 characters of a Grok token or Pi path ([session-lifecycle-consistency.md](session-lifecycle-consistency.md))
 
 ### Transcripts, observation and bandwidth (low)
 
@@ -818,7 +822,7 @@ it reaches. Some rules of thumb:
 | [composer-model-parameters.md](composer-model-parameters.md) |  |  | 2 | 4 | 6 |
 | [opencode-v2.md](opencode-v2.md) |  |  |  | 3 | 3 |
 | [provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md) |  |  | 2 | 15 | 17 |
-| [session-lifecycle-consistency.md](session-lifecycle-consistency.md) |  | 1 | 7 | 5 | 13 |
+| [session-lifecycle-consistency.md](session-lifecycle-consistency.md) |  |  | 8 | 5 | 13 |
 | **Transcripts, observation and bandwidth** | | | | | |
 | [transcript-history-efficiency.md](transcript-history-efficiency.md) |  | 4 | 11 | 5 | 20 |
 | [remote-client-bandwidth.md](remote-client-bandwidth.md) |  |  | 4 | 9 | 13 |

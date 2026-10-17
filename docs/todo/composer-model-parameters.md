@@ -94,6 +94,10 @@ forward that nothing in the backend supplies.
    other providers for the same fallback. The live slash-command spec works
    around it by launching Codex on `ORKESTRATOR_AGENT_TEST_MODEL`.
 
+   The Codex sub-agent qualification independently reproduced this with both
+   the composer and an explicit `ensure_native_agent_session` model. Evidence:
+   [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md#codex-sub-agent-cards-evidence).
+
 ### Qualification
 
 - Change an extra Cursor axis, send a turn, reload, and confirm the value comes

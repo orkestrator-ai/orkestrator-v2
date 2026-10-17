@@ -43,6 +43,13 @@ evidence. This file only points at it.
   upgrades (#964).
 - Current agent pins: Claude Agent SDK 0.3.296 / CLI 2.1.296, Codex 0.162.1,
   OpenCode 1.19.0, Cursor SDK 1.0.37, Grok 1.0.52 (ACP SDK 1.8.0), Pi 1.2.0.
+- Codex sub-agent cards have a permanent credential-free spec over the real
+  bridge and backend: `apps/backend/tests/codex-subagent-cards.test.ts`
+  (runs in `mise run test`) and `e2e/CodexSubagentCards.spec.ts` (renderer,
+  `mise run test:browser`). Both drive
+  `bridges/codex-bridge/src/testing/fake-codex-subagents.mjs` through
+  `apps/backend/tests/codex-subagent-stack.ts`. The live run is recorded
+  under "Codex sub-agent cards evidence" below.
 - Agent-test isolation: `checkHostTool` (`apps/backend/src/core/host-tools.ts`)
   reports only managed binaries in an agent-test profile, but spawning does
   not match it. `resolveClaudeBinary`, `resolveCodexBinary`,
@@ -88,18 +95,6 @@ evidence. This file only points at it.
 
 ### Qualification: checks with no other home
 
-- **Codex sub-agent cards.**
-  - Start a fixture profile: `mise run dev:test --profile <p> --fixture --credential-source codex --agent-platforms codex`.
-  - Run synthetic work that launches distinct children plus one spawn rejected
-    at capacity. Observe the configured limit rather than assuming one.
-  - Verify:
-    - one card per successful child;
-    - the failed attempt is visible and not counted as active;
-    - child transcripts load;
-    - status, transcript and controls are correct after finishing in an
-      inactive environment, after a reload, and after restarting the isolated
-      stack (cold identity recovery from child session headers);
-    - no finished child is left on a permanent spinner.
 - **Electron terminal input resume.** Re-run `mise run test:agent:electron` for
   `e2e/agent-testing/terminal-input-resume-electron.spec.ts`. The review
   follow-up of #986 did not re-run the Electron suite. Confirm that Resume
@@ -141,7 +136,7 @@ Provider runs (credentials needed). Every provider also has items in [native-age
 | Provider | Items in |
 | --- | --- |
 | Claude | [mcp-management.md](mcp-management.md), [mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md), [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), [transcript-history-efficiency.md](transcript-history-efficiency.md), [session-lifecycle-consistency.md](session-lifecycle-consistency.md), [design-canvas-qualification.md](design-canvas-qualification.md), [design-agent-conversation-links.md](design-agent-conversation-links.md) |
-| Codex | [mcp-management.md](mcp-management.md), [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), [session-titles-and-history.md](session-titles-and-history.md), [container-platform-qualification.md](container-platform-qualification.md), [design-canvas-qualification.md](design-canvas-qualification.md), [design-agent-conversation-links.md](design-agent-conversation-links.md), the sub-agent cards check above |
+| Codex | [mcp-management.md](mcp-management.md), [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), [session-titles-and-history.md](session-titles-and-history.md), [container-platform-qualification.md](container-platform-qualification.md), [design-canvas-qualification.md](design-canvas-qualification.md), [design-agent-conversation-links.md](design-agent-conversation-links.md) |
 | OpenCode | [mcp-management.md](mcp-management.md), [container-platform-qualification.md](container-platform-qualification.md), [session-lifecycle-consistency.md](session-lifecycle-consistency.md), the live spec and inactive-path checks above |
 | Cursor | [cli-qualification.md](cli-qualification.md), [mcp-management.md](mcp-management.md), [mcp-environment-delivery.md](mcp-environment-delivery.md), [mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md), [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), [session-lifecycle-consistency.md](session-lifecycle-consistency.md), [session-titles-and-history.md](session-titles-and-history.md), [composer-model-parameters.md](composer-model-parameters.md), [transcript-history-efficiency.md](transcript-history-efficiency.md), [container-platform-qualification.md](container-platform-qualification.md) |
 | Grok | [cli-qualification.md](cli-qualification.md), [mcp-management.md](mcp-management.md), [session-lifecycle-consistency.md](session-lifecycle-consistency.md), [transcript-history-efficiency.md](transcript-history-efficiency.md), [container-platform-qualification.md](container-platform-qualification.md), [provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md), the tool-output check above |
@@ -165,6 +160,63 @@ Provider runs (credentials needed). Every provider also has items in [native-age
 - Stop and reset every profile afterwards (`mise run dev:stop --profile <p>`,
   `mise run dev:reset --profile <p>`). Remove only resources the run created.
 
+- Codex sub-agent cards (2026-10-17) are qualified in two layers, not
+  through a fake Codex inside a `dev:test` profile. Decisions:
+  1. The permanent spec drives a fake app-server through the real
+     codex-bridge process, the real `HttpBridgeProvider` and the real
+     `NativeAgentService` projection (`codex-subagent-stack.ts`), with the
+     renderer half in the component browser suite. A `dev:test` profile has no
+     seam for a fake Codex binary (the backend overwrites `CODEX_PATH` and
+     Electron strips unknown env in agent-test), and putting the data path in
+     `mise run test` gates every pull request in CI, which the browser and
+     agent suites do not.
+  2. The fake reproduces the multi-agent v2 incident shape (#602): path-only
+     `spawn_agent` outputs, one spawn rejected with `collab spawn failed: agent
+     thread limit reached`, child ids only in live `subAgentActivity` items, no
+     `sub_agent_activity` records in the parent rollout. The live run confirmed
+     codex 0.162.1 writes exactly this. A test steps it through a Unix control
+     socket (`finish`), so no step waits on a clock; waits re-read the
+     projection on each bridge SSE frame, under a 30 s safety deadline.
+  3. "Reload" is a new backend service over the surviving bridge; "restart" is
+     a new bridge, app-server and service over the same storage and Codex
+     home, so identity can only come from child `session_meta` headers.
+     Mutation checks: disabling `resolvePersistedChildThreadIds` fails only the
+     cold assertions (three anonymous pending cards).
+  4. A restart while children are still running is not covered: a dead
+     app-server ends the turn, so it is a different scenario from card
+     identity.
+
+### Codex sub-agent cards evidence
+
+Live run, 2026-10-17, macOS 27.0 arm64, commit `31d0fb06`, managed codex
+0.162.1, Bun 1.4.2, profile `qa-codex-subagents-d415` (`mise run dev:test
+--fixture --credential-source codex --agent-platforms codex`), Codex thread
+limit set to 2 in profile settings, model `gpt-6.1-sol` (low). One synthetic
+prompt asked for three sub-agents (`alpha_check`, `beta_check`,
+`gamma_check`) that each run one `echo`.
+
+- Running: two cards (`Gibbs (alpha_check)`, `Kant (beta_check)`), "2 active".
+- `gamma_check` rejected at the configured limit: one Failed card, "Agent could
+  not start: agent limit reached.", never counted as active.
+- Finished while the environment was inactive (two backend polls): three
+  cards, two Finished, one Failed; no spinner, no duplicate.
+- Fresh page load: the same three cards and ids; the nested transcript opens
+  (`Exec echo alpha_check`, success, `done`).
+- After `dev:stop` and `dev:test` on the same profile (new app-server process):
+  the same three cards, ids, statuses and nested transcript.
+- Model: the profile's saved Codex default
+  (`agentSettings.platforms.codex.model`) was `gpt-5.4`, which this ChatGPT
+  account's live catalogue no longer lists. The composer showed GPT-6.1-Sol,
+  yet the first four attempts (composer, and `ensure_native_agent_session` /
+  `dispatch_native_agent_prompt` with `model: "gpt-6.1-sol"`) all ran
+  `gpt-5.4` per the rollout's `turn_context` and failed with 400 "The
+  'gpt-5.4' model is not supported when using Codex with a ChatGPT account".
+  Setting the saved default to `gpt-6.1-sol` let the run proceed. Tracked in
+  [composer-model-parameters.md](composer-model-parameters.md).
+- Cleanup: `dev:stop` and `dev:reset` on the profile. The profile's Codex home
+  is the host `~/.codex`, so the run's six rollouts under
+  `~/.codex/sessions/2026/10/17/` (synthetic prompts only) were left in place.
+
 ## Open questions
 
 - Should a provider that is qualified for a feature be re-qualified after
@@ -177,6 +229,23 @@ Provider runs (credentials needed). Every provider also has items in [native-age
   suites on a Docker-capable runner or a macOS runner for Electron?
 
 ## Needs verification
+
+- A Codex multi-agent v2 turn renders as one assistant row live but two rows
+  after a cold reload. Live spawns arrive only as `subAgentActivity` items, so
+  nothing in the live row is a tool call to open the next row on, while the
+  rollout's `spawn_agent` calls do split it (`history/rollout.ts`). The cards
+  are the same either way; only their row and the final message's row differ
+  (`apps/backend/tests/codex-subagent-cards.test.ts` scenario). Check against a
+  recorded 0.162.1 stream whether live `wait_agent` or collab items should
+  open the next row, and either align the live boundary or record why the two
+  differ.
+
+  The credential-free stack spec now asserts both layouts explicitly: one
+  live row with the introduction, four cards and final answer; two cold rows
+  with the introduction and four cards in the first, final answer in the
+  second. It also checks that reopening only the backend preserves the live
+  row. This guards the current boundary behavior; aligning the layouts still
+  needs the recorded-stream evidence above.
 
 - When the host has no `CLAUDE_CONFIG_DIR`,
   `apps/desktop/electron/backend-process.ts` defaults

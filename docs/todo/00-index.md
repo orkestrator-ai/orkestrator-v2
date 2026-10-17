@@ -57,9 +57,9 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 29 |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 28 |
 | Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 255 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 267 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 268 |
 | **Total** | | **552** |
 
 ## Very high
@@ -181,7 +181,7 @@ it reaches. Some rules of thumb:
 ### Cross-cutting (high)
 
 - [x] Make the desktop app wait (bounded) for the backend to exit before `quitAndInstall` and on every quit ([remote-host-upgrades.md](remote-host-upgrades.md))
-- [ ] Qualify Codex sub-agent cards on a fixture profile: one card per child, recovery after reload and restart ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
+- [x] Qualify Codex sub-agent cards on a fixture profile: one card per child, recovery after reload and restart ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
 - [x] Decide and implement a renderer-backend skew guard for raw OpenCode envelopes from older backends ([mixed-version-compatibility.md](mixed-version-compatibility.md))
 - [x] Fix flake 0166 (OpenCode probe deadline), which recurred on 2026-10-15 ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [x] Keep split panes mounted across the mobile breakpoint through stable per-pane hosts ([mobile-layout-gaps.md](mobile-layout-gaps.md))
@@ -803,6 +803,7 @@ it reaches. Some rules of thumb:
 - [ ] Confirm runtime drift counters and advisory notices show and rehydrate in Agent Info on two platforms ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
 - [ ] Confirm the usage panel shows turns and account windows across a reload on two providers ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
 - [ ] Verify agent-test Claude profiles do not treat `~/.claude` as a first run when `CLAUDE_CONFIG_DIR` is unset ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), verify)
+- [ ] Verify whether a live Codex multi-agent v2 turn should split rows where a cold reload does ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), verify)
 - [ ] Document `export_build_pipeline_for_downgrade` in storage.md as a downgrade aid, or remove it ([mixed-version-compatibility.md](mixed-version-compatibility.md))
 - [ ] Add content-free usage counters for each legacy compatibility path once the support window is agreed ([mixed-version-compatibility.md](mixed-version-compatibility.md))
 - [ ] Verify no external tool invokes the claim commands or downgrade export through `/__orkestrator/invoke` ([mixed-version-compatibility.md](mixed-version-compatibility.md), verify)
@@ -892,7 +893,7 @@ it reaches. Some rules of thumb:
 | [backend-core-domain-folders.md](backend-core-domain-folders.md) |  |  | 4 | 3 | 7 |
 | [backend-runtime-state-ownership.md](backend-runtime-state-ownership.md) |  |  | 4 | 3 | 7 |
 | **Cross-cutting** | | | | | |
-| [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md) |  | 1 | 10 | 4 | 15 |
+| [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md) |  |  | 10 | 5 | 15 |
 | [mixed-version-compatibility.md](mixed-version-compatibility.md) |  |  | 2 | 3 | 5 |
 | [test-suite-and-ci-health.md](test-suite-and-ci-health.md) | 1 |  | 4 | 13 | 18 |
 | [mobile-layout-gaps.md](mobile-layout-gaps.md) |  |  | 2 | 4 | 6 |

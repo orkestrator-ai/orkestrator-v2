@@ -217,6 +217,15 @@ Aggregate backend counts for this observation: 8,341 passed, 40 skipped,
 
 Aggregate backend counts for this recurrence: 8,456 passed, 40 skipped, two failed and one error across 8,498 tests (481.96 s); aggregate exited 1 after 645.7 s.
 
+## Codex sub-agent review validation recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name repository-tests -- mise run test` (Bun 1.4.3, macOS arm64).
+- **Workers:** workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated workers. Other worktree validations shared the host, and the component browser suite ran alongside the aggregate.
+- **Aggregate evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.8J9UKQ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`. The aggregate exited 1 after 582.8 seconds. Backend reported 8,618 passed, 41 skipped, ten failed and one between-tests error across 8,669 tests; desktop also had a timeout (0258), and root failed on the pre-existing missing metadata in case 0265. Bridges and protocol verification passed.
+- **Failure:** the bound-discard case exceeded its 5000 ms budget at 5174.63 ms. Its late nested-repository assertion then rejected with "The configured local checkout is not a Git repository" after fixture cleanup.
+- **Owning-file rerun:** `mise run test:logged -- --name coordinator-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 19.1 seconds.
+- **Assessment:** the unchanged owning-file pass confirms an intermittent recurrence. Shared-host contention remains a hypothesis. No owning implementation, assertion, timeout or skip changed.
+
 ## Container platform qualification recurrence — 2026-10-17
 
 `mise run test` on branch `todo-container-live-qualification-8efe5278910a-r1`

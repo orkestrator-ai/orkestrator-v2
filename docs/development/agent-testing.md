@@ -381,6 +381,45 @@ leaves the profile running under a detached launcher, so stop it with
 longer reports `testProject` afterwards; the spec falls back to the profile's
 seeded copy.
 
+### Live close retention
+
+`e2e/agent-testing/close-retention-live.spec.ts` checks, with real providers
+and through the real app, that closing a native agent tab keeps the
+conversation. It has its own opt-in and uses the profile's host credentials:
+
+```bash
+mise run dev:test --profile qa-close-live --fixture --agent-platforms cursor,grok,opencode,pi
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-close-live ORKESTRATOR_AGENT_TEST_LIVE_CLOSE_RETENTION=1 \
+  mise run test:logged -- --name close-retention-live -- mise run test:agent:browser -- \
+  e2e/agent-testing/close-retention-live.spec.ts
+mise run dev:stop --profile qa-close-live
+mise run dev:reset --profile qa-close-live
+```
+
+For each platform in `ORKESTRATOR_AGENT_TEST_CLOSE_RETENTION_PLATFORMS`
+(default `cursor,pi,opencode,grok`), a launched tab is asked to remember a
+codeword. The case closes the tab with its close button and reloads to check
+the tab stays closed. It then opens a new tab from the toolbar, finds the
+conversation in the resume list, resumes it and asks for the codeword. Only a
+model that still holds the first turn can answer, so the reply proves the same
+native conversation continued. The backend transcript must hold the first
+prompt exactly once. `ORKESTRATOR_AGENT_TEST_CLOSE_RETENTION_MODELS` takes
+`<platform>=<model>` pairs, for example an OpenCode model from a connected
+provider. A platform that is not enabled or not signed in is skipped with that
+reason. Each case deletes its environment.
+
+The same flow runs without credentials, for all four platforms, in the
+component browser suite: `e2e/CloseRetention.spec.ts` drives the real pane
+tree and native agent tab against `e2e/fixtures/close-retention-host.ts`. That
+host runs the real backend command registry and native agent service, and the
+real Cursor, Pi and ACP bridges and OpenCode provider, over fake vendor
+engines (`bridges/cursor-bridge/src/testing/fake-engine-server.ts`,
+`bridges/pi-bridge/src/testing/fake-engine-server.ts`,
+`bridges/acp-bridge/src/testing/fake-agent-close.ts` and
+`e2e/fixtures/close-retention-opencode.ts`). Its assertions read each engine's
+own store, so a duplicated or lost prompt fails there.
+
 ### Live coordinator suite
 
 The live coordinator suite checks that a real provider keeps the coordinator's

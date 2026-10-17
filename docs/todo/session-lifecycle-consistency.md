@@ -1,14 +1,15 @@
 # Session lifecycle consistency
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `31d0fb06` (2026-10-17).
 
 The native bridges share one lifecycle contract. Acknowledgements are durable.
 State is published before any side effect. A permanent close fences late work.
 Cancellation works before a prompt is accepted. Recovery state is bounded. And
 closing a tab keeps the conversation. #853 landed the code and the
-deterministic tests for all of it. What is left is real-stack evidence that
-was never collected, plus a few divergences that the conformance matrix records
-but does not resolve.
+deterministic tests for all of it. Close retention through the UI is now a
+permanent browser spec for Cursor, Pi, OpenCode and Grok. What is left is
+real-stack evidence that was never collected, plus a few divergences that the
+conformance matrix records but does not resolve.
 
 ## Current state
 
@@ -57,57 +58,119 @@ but does not resolve.
   guarded by `tests/unit/bridge-contract-conformance.test.ts`. Interaction
   scenarios are in `bridges/cursor-bridge/src/conformance-interactions.test.ts`.
   Every unsupported cell carries its reason.
+- **Close retention through the UI** (`e2e/CloseRetention.spec.ts`, in
+  `mise run test:browser`). The spec drives the real pane tree and native agent
+  tab. Its host (`e2e/fixtures/close-retention-host.ts`) runs the real backend
+  command registry, native agent service, Cursor, Pi and ACP bridges and
+  OpenCode provider, with fakes only at each vendor engine:
+  - Cursor: `bridges/cursor-bridge/src/testing/fake-engine-server.ts`
+  - Pi: `bridges/pi-bridge/src/testing/fake-engine-server.ts`, using pi-ai's
+    faux model, so the JSONL session files are real
+  - Grok: `bridges/acp-bridge/src/testing/fake-agent-close.ts`
+  - OpenCode: `e2e/fixtures/close-retention-opencode.ts`
+
+  For each platform the spec completes a turn and closes the tab with its
+  close button. It checks the bridge received `POST /session/:id/close` and
+  never a `DELETE` (for OpenCode, that `session.delete` was never called), and
+  that a reload does not bring the tab back. It then opens a new tab, picks the
+  platform in the resume dialog, picks the conversation, and checks the
+  transcript is restored once. The next prompt must run in the same vendor
+  conversation: the engine's own store holds exactly `[first, second]`. A
+  final reload keeps both turns and dispatches nothing.
+
+  The same harness covers three further cases:
+  - Closing mid-turn for Cursor, OpenCode and Grok: the owned run is
+    cancelled, the tab stays closed across an inactive environment and a
+    reload, and the conversation resumes and continues.
+  - Closing a Cursor tab during cold start, while `Agent.create` is held: the
+    dispatch already in flight reaches the bridge after the close and is
+    fenced there. The late agent is disposed without a send, and no teardown
+    intent is left pending.
+  - An assigned Grok tab restoring an image draft, with text and
+    attachment-only, across an inactive environment and two reloads.
 - **Live evidence so far** (2026-09-26 unless noted): retention through the UI
   for Claude and Codex; a bridge restart that kept the plan-mode selection;
   draft restoration for an assigned Cursor tab and for the pre-session picker
   (Cursor and Grok). `e2e/agent-testing/native-draft-attachments.spec.ts`
   reports a skip with its reason when a bridge cannot connect.
+  On 2026-10-17, `e2e/agent-testing/close-retention-live.spec.ts` passed for
+  Grok and OpenCode through the real app on an isolated profile with host
+  credentials. Each case: closed the tab, the tab stayed closed after a reload,
+  the conversation was resumed from a new tab, and the resumed session repeated
+  a codeword it had only been told before the close. Cursor and Pi were
+  skipped as signed out in that profile (Qualification item 1).
+- **OpenCode conversations are titled from their first prompt** (fixed
+  2026-10-17). Every provider session is created as "Agent Session"
+  (`native-agent-service-provider.ts`). The projection replaced that
+  placeholder with the first prompt only for Claude
+  (`native-agent-service-projection.ts`), so every OpenCode conversation read
+  "Agent Session" in the resume list. Live, before the fix, the only OpenCode
+  row was "Agent Session". Now any platform's placeholder is replaced. A
+  provider's own title (Codex's brief title, Grok's generated title) is still
+  kept.
 
 ## Outstanding work
 
 ### Code
 
-1. **Optional repeatable retention spec.** Add an opt-in real-stack spec under
-   `e2e/agent-testing/`: complete a turn, close the tab, find the conversation
-   in the resume list, resume it. One case per configured provider. No such
-   spec exists, so qualification item 3 has to be repeated by hand.
-2. **Retire the legacy close fallback after the support window.** Remove the
+1. **Retire the legacy close fallback after the support window.** Remove the
    `DELETE` fallback and `LEGACY_DELETE_RETAINS_HISTORY` from
    `closeBridgeSessionRetaining`, and the `bridge-upgrade-required` path, once
    no supported bridge predates `POST /session/:id/close` (see
    [mixed-version-compatibility.md](mixed-version-compatibility.md)). Until
    then, a 404 or 405 keeps meaning "old bridge", never "already closed".
+2. **Close the session a resume replaces.** A new agent tab creates a bridge
+   session when it is locked to a platform for resume. `resumeProjectionSession`
+   (`apps/backend/src/core/native-agent-service-dispatch.ts`) then adopts the
+   resumed id and never closes the empty session it replaced. The spec's
+   bridge log shows `POST /session/create` followed by `POST /session/resume`,
+   with no close for the created id. A signed-in ACP bridge spawns the agent at
+   create (`createSession`, `bridges/acp-bridge/src/acp-session.ts`), and
+   nothing reaps an idle session. So each resume into a new Grok tab leaves a
+   Grok process running for the life of the bridge, and the session counts
+   against `ACP_MAX_SESSIONS`. Grok and OpenCode can also keep an empty vendor
+   conversation in their history. Close the replaced session through the same
+   checks tab teardown applies (shared sessions, Multi Review ownership), or
+   create the session lazily so a tab locked only to resume never has one.
+3. **Label untitled resume rows by something a person recognises.**
+   `NativeResumeSessionDialog` falls back to `Session <first 8 characters of the
+   id>`. Live Grok rows whose title Grok had not generated yet read
+   `Session acp-sess`, because the id is the `acp-session:` resume token. A Pi
+   row without a name would show the start of a file path. Fall back to the
+   row's detail, or a short form of the provider's own id.
 
 ### Qualification
 
-No code is needed unless a check fails. Items 1 to 4 need provider
-credentials; batch them with
+No code is needed unless a check fails. Live items need provider credentials;
+batch them with
 [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md).
 
-1. **Cursor close during cold startup and during a run.** Close, switch
-   environment, return, reload. Expect no late work, no resurrected tab and a
-   truthful closing state.
+1. **Live close retention for Cursor and Pi.** Run
+   `e2e/agent-testing/close-retention-live.spec.ts`
+   ([agent-testing.md](../development/agent-testing.md#live-close-retention))
+   with a profile where both are signed in. On 2026-10-17 both were signed
+   out in an isolated profile on the qualification host: Pi because nothing
+   imports `~/.pi/agent/auth.json` into the profile's private HOME, and Cursor
+   for a reason the launcher does not log.
 2. **Pi startup interrupt.** Interrupt before the prompt is accepted, switch
    away, return and reload. The turn must stop, status must settle, no approval
    may be left unanswered, and the next prompt must run. The SDK side is
    already source-verified (Pi "Preflight" in
-   [`upgrade-agents.md`](../development/upgrade-agents.md)).
-3. **Retention after close through the UI** for Cursor, Pi, OpenCode and Grok:
-   complete a turn, close the tab, find the conversation in the resume list and
-   resume it. Grok's vendor-side retention is verified; the UI path is not.
-4. **Assigned Grok tab image-draft restoration in the browser.** The spec cases
-   exist and skip while the Grok CLI cannot connect.
-5. **Browser: large-transcript recovery after Cursor persistence shedding.**
+   [`upgrade-agents.md`](../development/upgrade-agents.md)). The browser
+   harness cannot hold Pi's startup: the faux model answers at once and the
+   bridge exposes no startup gate outside its in-process test hooks.
+3. **Browser: large-transcript recovery after Cursor persistence shedding.**
    Expect an honest truncated view, the same provider identity and working
    controls.
-6. **Browser: steer saturation.** Expect the runtime-panel notice, the 429
+4. **Browser: steer saturation.** Expect the runtime-panel notice, the 429
    refusal, the current turn continuing, and the draft kept across an inactive
    return and a reload.
-7. **Browser: pending approval or question while the environment is inactive,
-   then close and reload.** A still-live provider request is denied per its
-   contract, a dead-generation card is withdrawn, and no card comes back
-   actionable.
-8. **Browser: the `bridge-upgrade-required` restart toast for an old Claude
+5. **Browser: a dead-generation card while the environment is inactive.** A
+   card whose provider generation died (bridge restart) must be withdrawn after
+   close and reload. The still-live case (Grok question and plan approval
+   cancelled by the close, nothing actionable after reload or resume) is in
+   `e2e/CloseRetention.spec.ts`. No other platform's fake parks a request yet.
+6. **Browser: the `bridge-upgrade-required` restart toast for an old Claude
    bridge.** This needs a stale-bundle fixture. The first pass observed only
    the pending intent, not the toast.
 
@@ -148,6 +211,50 @@ credentials; batch them with
   reading only it treats every recovered run as fenced. A legacy
   `overflow: true` without `overflowBefore` is read as bounded by the load
   time.
+- **Close retention is proved in the component browser suite, with real
+  layers down to each vendor engine.** `e2e/CloseRetention.spec.ts` drives the
+  real renderer against the real backend command registry and bridges. Each
+  engine is faked at its own boundary: the Cursor SDK `Agent` statics, pi-ai's
+  faux model, the ACP fake agent process and the OpenCode SDK client. Bridges
+  are not faked. The alternatives were weaker or riskier:
+  - A renderer fixture with a fake `invoke` would not exercise `teardown_tab`,
+    the bridge close route, list or resume.
+  - A backend-only test would skip the close button, the resume dialogs and
+    the tab and pane state.
+  - A `dev:test` profile with fake engines would need a test seam in the
+    shipped backend.
+
+  The cost is a fixture host that knows each engine's quirks. A new
+  platform needs its own fake engine before it gets a case.
+- **Fake engine entry points live in the bridge that owns them**
+  (`bridges/*/src/testing/fake-engine-server.ts`). They use the bridge's own
+  `*ForTests` seams, so the bridge's `tsconfig.test.json` typechecks them and
+  nothing in `src` outside `testing/` imports them. Each starts the server
+  itself (Cursor imports `server.ts`; Pi sets `PI_BRIDGE_LIBRARY_ONLY`), so the
+  shipped entry point is unchanged.
+- **"Same conversation" is judged from the engine's store, not the
+  transcript.** The spec reads the prompts each vendor conversation actually
+  ran: the Cursor agent's turns, the Pi model's context on each call, the Grok
+  store and the OpenCode session messages. A resume that silently started a
+  new conversation, re-sent the first prompt, or dropped history fails there
+  even if the rendered transcript looks right.
+- **One viewport.** The cases skip the mobile project: the close, resume and
+  continue path does not depend on layout, and each case spends real bridge
+  work.
+- **Live proof is a separate, opt-in spec**
+  (`e2e/agent-testing/close-retention-live.spec.ts`). It is not in
+  `mise run test` or the review scheduler, because turns cost tokens. A
+  codeword the second turn must repeat proves the model kept its context.
+  Signed-out platforms are skipped with that reason, never passed.
+- **The OpenCode title placeholder is fixed here.** It is one condition in
+  the projection, it decides whether the closed conversation can be found in
+  the resume list (this item's subject), and live evidence showed it.
+  `native-agent-service-projection.test.ts` covers it per platform, and the
+  OpenCode browser case fails without it, because the OpenCode fake now keeps
+  a session's created title as OpenCode does.
+- **The resume leak is recorded, not fixed here.** Closing the session a
+  resume replaces changes resume semantics on every platform and needs the
+  teardown's shared-session and Multi Review checks (Code item 2).
 - Which records survive a bridge or backend restart, and who owns each, is in
   [agent-engines.md → What survives a restart](../architecture/agent-engines.md#what-survives-a-restart).
 - Every caller of close and its intended retention is in
@@ -170,6 +277,12 @@ credentials; batch them with
   unsupported for the rest).
 
 ## Needs verification
+
+- What a real Cursor resume row shows. The bridge creates every SDK agent as
+  `name: "Orkestrator"` and has no rename, so each row is probably titled
+  "Orkestrator", with the SDK's `summary` as its detail. The browser spec's fake
+  assumes the summary describes the conversation. Check on the live run in
+  Qualification item 1.
 
 - Whether an attachment-only Cursor or Grok draft survives a backend restart
   without composer hydration erasing the image.

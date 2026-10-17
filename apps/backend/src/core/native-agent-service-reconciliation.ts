@@ -259,9 +259,19 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       }
     }
     if (this.stopped) return;
+    // Preserve the aggregate's restart fallback until every session has a
+    // known prior observation. Afterwards exact session edges own attention,
+    // including completions announced before a detached shell finally exits.
+    const environmentsWithUnknownSessions = new Set<string>();
     const sessionsByEnvironment = new Map<string, PersistedNativeAgentSession[]>();
     for (const session of sessions) {
       if (!environmentsById.has(session.environmentId)) continue;
+      if (
+        this.observedSessionActivity.get(session.key)?.providerSessionId !==
+        session.providerSessionId
+      ) {
+        environmentsWithUnknownSessions.add(session.environmentId);
+      }
       const grouped = sessionsByEnvironment.get(session.environmentId) ?? [];
       grouped.push(session);
       sessionsByEnvironment.set(session.environmentId, grouped);
@@ -334,7 +344,11 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         const applyObservation = async (
           session: PersistedNativeAgentSession,
           activity: AgentActivityState,
-          details: { readyForInput?: boolean; pendingInteraction?: boolean } = {},
+          details: {
+            readyForInput?: boolean;
+            completionPending?: boolean;
+            pendingInteraction?: boolean;
+          } = {},
         ): Promise<void> => {
           if (!this.observations.accepts(ticket, session.key)) {
             settledIdle = false;
@@ -352,6 +366,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
               sessionOwner,
               details.readyForInput,
               () => this.observations.accepts(ticket, session.key),
+              details.completionPending,
             )
           )
             completionCandidates.add(session.environmentId);
@@ -451,6 +466,9 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
                 ...(observation?.readyForInput !== undefined
                   ? { readyForInput: observation.readyForInput }
                   : {}),
+                ...(observation?.completionPending !== undefined
+                  ? { completionPending: observation.completionPending }
+                  : {}),
                 pendingInteraction:
                   activity === "waiting" || (observation?.asyncQuestionItemIds?.length ?? 0) > 0,
               });
@@ -531,6 +549,12 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
           desiredState,
           new Date().toISOString(),
           "native-agent",
+          undefined,
+          false,
+          {
+            completionAttention:
+              !hasRegisteredSessions || environmentsWithUnknownSessions.has(environment.id),
+          },
         )
         .catch((error) => {
           console.warn(
@@ -680,36 +704,28 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     owner: "environment" | "coordinator" = "environment",
     readyForInput?: boolean,
     stillApplicable?: () => boolean,
+    completionPending?: boolean,
   ): Promise<boolean> {
     const observed = this.observedSessionActivity.get(session.key);
     const currentObservation =
       observed?.providerSessionId === session.providerSessionId ? observed : undefined;
     const previous = currentObservation?.state;
-    /*
-     * Readiness is an edge layered on the state machine, not a replacement for
-     * it. A bridge that keeps `state` at `working` for background tasks still
-     * releases the composer when the parent turn ends, and that release is the
-     * moment worth announcing — but only when a turn was actually live to
-     * release. Requiring `previous === "working"` is what keeps an observation
-     * that merely *regains* the flag from counting: the absent-bridge sweep and
-     * a non-resident session both record `idle` with no readiness, so without
-     * that guard the next poll after the bridge returns and the session is
-     * materialized would mark the environment unread with no turn behind it.
-     */
-    const readinessEdge =
-      readyForInput === true &&
+    // Readiness alone is ambiguous on older bridges. An explicit settled root
+    // turn can ring while detached shells keep the environment working; an
+    // owed continuation keeps its completion edge until the final result.
+    const releasedCompletion =
+      state === "working" && readyForInput === true && completionPending === false;
+    const previousReleasedCompletion =
       previous === "working" &&
-      currentObservation?.readyForInput !== true;
-    /*
-     * The historical edge stays live for every other shape, including an
-     * explicit `readyForInput: false`. Gating it on readiness being absent
-     * would make an accurate provider weaker than a silent one: a bridge that
-     * reports "not ready" alongside an idle turn would lose its attention edge
-     * entirely, while one that omits the field keeps it.
-     */
+      currentObservation?.readyForInput === true &&
+      currentObservation.completionPending === false;
     const durableAttentionEdge =
-      readinessEdge ||
-      ((state === "idle" || state === "waiting") &&
+      (state === "waiting" &&
+        previous !== "waiting" &&
+        (currentObservation !== undefined || observed === undefined)) ||
+      (completionPending !== true &&
+        (state === "idle" || releasedCompletion) &&
+        !previousReleasedCompletion &&
         (previous === "working" ||
           (state === "idle" && observed === undefined && countUnknownIdleAsCompletion)));
     // PR reconciliation retains its narrower historical completion contract:
@@ -731,11 +747,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       await this.storage.recordEnvironmentSessionCompletion(
         session.environmentId,
         new Date(this.now()).toISOString(),
-        state === "waiting"
-          ? "agent_waiting"
-          : state === "working"
-            ? "agent_ready"
-            : "agent_finished",
+        state === "waiting" ? "agent_waiting" : "agent_finished",
       );
     }
     if (stillApplicable && !stillApplicable()) return false;
@@ -743,6 +755,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       providerSessionId: session.providerSessionId,
       state,
       ...(readyForInput !== undefined ? { readyForInput } : {}),
+      ...(completionPending !== undefined ? { completionPending } : {}),
     });
     if (previous !== state) {
       const observation = this.observations.nextStamp();

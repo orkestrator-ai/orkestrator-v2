@@ -81,6 +81,15 @@ Recorded evidence only; no test changed.
 - **Disposition:** recurrence of the same aggregate-only failure; passes alone.
   No product code, assertions, deadlines or skips changed.
 
+## Activity-sweep observation during agent readiness main merge — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test` (Bun 1.4.3, macOS arm64; workspace/root/bridge/protocol reserved 4/1/2/1 slots on the shared host).
+- **Failure:** `activity sweep over the batch route > missing unmaps only that session; unavailable leaves every mapping uncertain` retained `provider-1` at line 177 instead of removing it (20.58 ms). Reconciliation logged `ProviderUnreachableError`; this assertion did not inspect the request count, so the empty-request symptom of earlier observations is not independently established here.
+- **Suite counts:** backend 8925 passed, 41 skipped and one failed across 8967 tests in 475 files (401.89 seconds). All other workspace packages, bridges and protocol verification passed. Root/support also reported the Pi runtime staging timeout tracked in 0178. The aggregate exited 1 after 1216.5 seconds, including host-capacity waits.
+- **Isolated rerun:** `mise run test:logged -- --name merge-activity-file -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/native-agent-service-activity-batch.test.ts --parallel=1 --only-failures` passed the unchanged owning file (exit 0, 0.4 seconds).
+- **Evidence:** `orkestrator-test-run.f52EuE/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer artifact `orkestrator-test-run.uYmDZx/merge-tests.log.gz` under the host temporary directory.
+- **Assessment:** the isolated pass establishes intermittence. The relationship to earlier local-port failures and host contention remains unconfirmed. No source, assertion, deadline or skip changed.
+
 ## Refused-cell validation recurrence — 2026-10-17
 
 - **Original command:** `mise run test:logged -- --name full-suite -- mise run test`. No backend implementation or owning test changed.

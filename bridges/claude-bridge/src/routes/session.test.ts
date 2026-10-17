@@ -205,6 +205,7 @@ mock.module("../services/session-manager.js", () => ({
   stopBackgroundTask: mockStopBackgroundTask,
   getPendingQuestions: mockGetPendingQuestions,
   getSessionActivity: mockGetSessionActivity,
+  sessionCompletionPending: realSessionManagerSnapshot.sessionCompletionPending,
   getSessionInitData: mockGetSessionInitData,
   answerQuestion: mockAnswerQuestion,
   dismissQuestion: mockDismissQuestion,
@@ -2134,7 +2135,11 @@ describe("session routes", () => {
       );
       const res = await app.request("/session/s-1/activity");
 
-      expect(await jsonBody(res)).toEqual({ activity: "working", readyForInput: true });
+      expect(await jsonBody(res)).toEqual({
+        activity: "working",
+        readyForInput: true,
+        completionPending: false,
+      });
     });
 
     test("withholds readiness while the session still holds a turn", async () => {

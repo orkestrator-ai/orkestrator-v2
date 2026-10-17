@@ -93,6 +93,9 @@ export class HttpBridgeActivityBatchReader {
         state: entry.activity,
         ...(asyncQuestionItemIds.length ? { asyncQuestionItemIds } : {}),
         ...(entry.readyForInput !== undefined ? { readyForInput: entry.readyForInput } : {}),
+        ...(entry.completionPending !== undefined
+          ? { completionPending: entry.completionPending }
+          : {}),
       });
     }
     return entries;

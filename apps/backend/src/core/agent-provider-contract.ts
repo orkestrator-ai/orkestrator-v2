@@ -47,6 +47,8 @@ export interface ProviderActivityObservation {
   asyncQuestionItemIds?: string[];
   /** The composer can accept input even if background work keeps `state` working. */
   readyForInput?: boolean;
+  /** A released root turn still owes a response, independently of composer readiness. */
+  completionPending?: boolean;
 }
 
 /**

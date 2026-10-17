@@ -522,6 +522,14 @@ does not establish a flake. The new real SDK auth-only runtime test passes.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.r499sA/root-and-agent-support-tests.log.gz` (compressed when the aggregate completes).
 - **Assessment:** the isolated pass confirms intermittence. Shared-host filesystem contention remains an unconfirmed hypothesis. No source, assertion, timeout or skip changed.
 
+## Observation — 2026-10-17 (agent readiness main merge)
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test` (Bun 1.4.3, macOS arm64; workspace/root/bridge/protocol reserved 4/1/2/1 slots on a shared host).
+- **Failure:** `Pi bridge runtime vendoring > loads Pi's supported SDK from the staged runtime closure` in `tests/unit/pi-bridge-vendor.test.ts` timed out at 30000.70 ms. Root/support reported 3037 passed, one skipped and one failed across 3039 tests in 140 files (308.88 seconds).
+- **Owning-file rerun:** `mise run test:logged -- --name merge-pi-vendor-rerun -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` also timed out at 30000.43 ms (three passed, one failed; 31.4 seconds logged).
+- **Evidence:** `orkestrator-test-run.f52EuE/root-and-agent-support-tests.log.gz` and `orkestrator-test-run.WSjG7z/merge-pi-vendor-rerun.log.gz` under the host temporary directory (aggregate output compressed on completion).
+- **Assessment:** this observation does not independently establish a flake. Runtime staging remains an unresolved validation limitation; shared-host contention remains an unconfirmed hypothesis. No source, assertion, timeout or skip changed.
+
 ## Pi and Cursor agent-test logins main merge validation — 2026-10-17
 
 Aggregate command, worker configuration, counts and evidence are recorded in [0211](0211-cleanup-retry-aggregate-timeout.md#pi-and-cursor-agent-test-logins-main-merge-validation--2026-10-17).

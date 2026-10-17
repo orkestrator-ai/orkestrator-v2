@@ -51,6 +51,52 @@ describe("remembered Claude terminal commands", () => {
     ]);
   });
 
+  test("lookups see versions and updates recorded after the initial load", async () => {
+    await expect(rememberedTerminalSlashCommands("2.1.296")).resolves.toBeUndefined();
+    recordTerminalSlashCommands("2.1.296", ["focus"]);
+    await expect(rememberedTerminalSlashCommands("2.1.296")).resolves.toEqual(["focus"]);
+    await terminalSlashCommandWritesForTesting();
+    restartBridge();
+    await expect(rememberedTerminalSlashCommands("2.1.296")).resolves.toEqual(["focus"]);
+    recordTerminalSlashCommands("2.1.296", ["color"]);
+    await expect(rememberedTerminalSlashCommands("2.1.296")).resolves.toEqual(["color"]);
+  });
+
+  test("an identical init retries persistence after a filesystem failure", async () => {
+    const file = join(claudeOrkestratorDir(), "terminal-slash-commands.json");
+    // A directory at the target makes rename fail, even when running as root.
+    await mkdir(file, { recursive: true });
+    recordTerminalSlashCommands("2.1.296", ["focus"]);
+    await terminalSlashCommandWritesForTesting();
+    await expect(rememberedTerminalSlashCommands("2.1.296")).resolves.toEqual(["focus"]);
+    await rm(file, { recursive: true });
+    recordTerminalSlashCommands("2.1.296", ["focus"]);
+    await terminalSlashCommandWritesForTesting();
+    restartBridge();
+    await expect(rememberedTerminalSlashCommands("2.1.296")).resolves.toEqual(["focus"]);
+  });
+
+  test("loading an oversized persisted inventory keeps only the newest four versions", async () => {
+    await mkdir(claudeOrkestratorDir(), { recursive: true });
+    await writeFile(
+      join(claudeOrkestratorDir(), "terminal-slash-commands.json"),
+      JSON.stringify({
+        versions: ["6", "5", "4", "3", "2", "1"].map((version) => ({
+          version,
+          commands: [version],
+        })),
+      }),
+    );
+    await expect(rememberedTerminalSlashCommands("6")).resolves.toEqual(["6"]);
+    await expect(rememberedTerminalSlashCommands("3")).resolves.toEqual(["3"]);
+    await expect(rememberedTerminalSlashCommands("2")).resolves.toBeUndefined();
+    recordTerminalSlashCommands("7", ["7"]);
+    await terminalSlashCommandWritesForTesting();
+    restartBridge();
+    await expect(rememberedTerminalSlashCommands("3")).resolves.toBeUndefined();
+    await expect(rememberedTerminalSlashCommands("7")).resolves.toEqual(["7"]);
+  });
+
   test("absent or malformed init fields record nothing", async () => {
     recordTerminalSlashCommands(undefined, ["focus"]);
     recordTerminalSlashCommands("2.1.296", undefined);

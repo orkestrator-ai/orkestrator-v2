@@ -243,8 +243,13 @@ catalogue read cannot let `/clear` reach the CLI.
   the directory is busy or retrying and no dispatch from this provider is
   open; dispatches wait while it runs. Otherwise the refresh answers
   `deferred`, the catalogue reads `stale`, and the reload is retried at the
-  next idle edge on the event stream and when the provider's last open
-  dispatch ends (`opencode-command-reload.ts`).
+  next idle edge on the event stream, after stream reconciliation, and when
+  the provider's last synchronous command dispatch ends. A plain
+  `promptAsync` acknowledgement is not an idle edge: it can precede the
+  server's busy status. Idle edges received during a status check cause
+  another whole-directory check. A disposal failure keeps the catalogue
+  `stale` and suppresses automatic retries until the next explicit refresh
+  (`opencode-command-reload.ts`).
 - **Pi**: extensions win over skills and templates, as in the SDK, and only
   the effective winner is listed. Literal intent uses
   `expandPromptTemplates: false`, which cannot stop extension `input` handlers.

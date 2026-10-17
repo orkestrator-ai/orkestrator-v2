@@ -28,39 +28,58 @@ export class OpenCodeInstanceReload {
   private dispatches = 0;
   private running: Promise<"reloaded" | "busy"> | null = null;
   private pendingReload = false;
+  private failed = false;
+  private checkAgain = false;
 
   constructor(private readonly dependencies: OpenCodeInstanceReloadDependencies) {}
 
-  /** A reload was asked for and is waiting for the directory to go idle. */
+  /** A requested reload has not succeeded, including a failed attempt. */
   get pending(): boolean {
     return this.pendingReload;
   }
 
   /** Run `operation` as one dispatch (see {@link enterDispatch}). */
-  async withinDispatch<T>(operation: () => Promise<T>): Promise<T> {
+  async withinDispatch<T>(
+    operation: () => Promise<T>,
+    recheckOnRelease: () => boolean = () => true,
+  ): Promise<T> {
     const release = await this.enterDispatch();
     try {
       return await operation();
     } finally {
-      release();
+      release(recheckOnRelease());
     }
+  }
+
+  /** A prompt acknowledgement is not an idle edge; commands wait for their turn. */
+  async withinPromptDispatch<T>(
+    operation: (commandDispatched: () => void) => Promise<T>,
+  ): Promise<T> {
+    let command = false;
+    return this.withinDispatch(
+      () =>
+        operation(() => {
+          command = true;
+        }),
+      () => command,
+    );
   }
 
   /**
    * Hold reloads off for one dispatch. Waits out a reload already running, so
    * a dispatch never lands on an instance that is being disposed.
    */
-  async enterDispatch(): Promise<() => void> {
+  async enterDispatch(): Promise<(recheck?: boolean) => void> {
     while (this.running) await this.running.catch(() => undefined);
     this.dispatches += 1;
     let released = false;
-    return () => {
+    return (recheck = true) => {
       if (released) return;
       released = true;
       this.dispatches -= 1;
       // `session.command` answers only after its whole turn, so that turn's
       // idle edge arrives while its dispatch is still open. Re-check here.
-      if (this.dispatches === 0) this.idleObserved();
+      if (recheck && this.dispatches === 0) this.idleObserved();
     };
   }
 
@@ -70,12 +89,8 @@ export class OpenCodeInstanceReload {
    */
   async request(): Promise<OpenCodeInstanceReloadResult> {
     this.pendingReload = true;
-    try {
-      return (await this.attempt()) === "reloaded" ? "reloaded" : "deferred";
-    } catch (error) {
-      this.pendingReload = false;
-      throw error;
-    }
+    this.failed = false;
+    return (await this.attempt()) === "reloaded" ? "reloaded" : "deferred";
   }
 
   /**
@@ -93,21 +108,32 @@ export class OpenCodeInstanceReload {
 
   /** The event stream saw a session go idle: retry a deferred reload. */
   idleObserved(): void {
-    if (!this.pendingReload || this.running) return;
-    void this.attempt().catch(() => {
-      // A failed deferred reload is not retried on every idle edge; the next
-      // explicit refresh tries again and reports the failure.
-      this.pendingReload = false;
-    });
+    if (!this.pendingReload || this.failed) return;
+    if (this.running) {
+      this.checkAgain = true;
+      return;
+    }
+    // attempt records failure before releasing the gate. Keep the catalogue
+    // stale, but leave retries to the next explicit refresh.
+    void this.attempt().catch(() => undefined);
   }
 
   private attempt(): Promise<"reloaded" | "busy"> {
     if (this.running) return this.running;
     if (this.dispatches > 0) return Promise.resolve("busy");
     // Set before the first await, so a dispatch that starts now waits.
-    const running = this.reload().finally(() => {
-      if (this.running === running) this.running = null;
-    });
+    const running = this.reload()
+      .catch((error) => {
+        this.failed = true;
+        throw error;
+      })
+      .finally(() => {
+        if (this.running === running) this.running = null;
+        if (this.checkAgain) {
+          this.checkAgain = false;
+          this.idleObserved();
+        }
+      });
     this.running = running;
     return running;
   }

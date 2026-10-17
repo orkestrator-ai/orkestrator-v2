@@ -32,7 +32,9 @@ interface StoredEntry {
   commands: string[];
 }
 
-let loaded: Promise<StoredEntry[]> | null = null;
+let loaded: Promise<void> | null = null;
+// In-memory observations may be newer than the last successful write.
+let dirty = false;
 let entries: StoredEntry[] = [];
 let writes: Promise<void> = Promise.resolve();
 
@@ -70,7 +72,7 @@ function parseEntries(raw: string): StoredEntry[] {
 }
 
 /** Read the file once per process. A missing or unreadable file is empty. */
-function load(): Promise<StoredEntry[]> {
+function load(): Promise<void> {
   loaded ??= readFile(filePath(), "utf8")
     .then(parseEntries, () => [])
     .catch(() => [])
@@ -81,7 +83,6 @@ function load(): Promise<StoredEntry[]> {
         0,
         MAX_VERSIONS,
       );
-      return entries;
     });
   return loaded;
 }
@@ -94,8 +95,8 @@ export async function rememberedTerminalSlashCommands(
   version: string | undefined,
 ): Promise<string[] | undefined> {
   if (!validVersion(version)) return undefined;
-  const stored = await load();
-  return stored.find((entry) => entry.version === version)?.commands.slice();
+  await load();
+  return entries.find((entry) => entry.version === version)?.commands.slice();
 }
 
 /**
@@ -107,7 +108,8 @@ export function recordTerminalSlashCommands(version: unknown, commands: unknown)
   const names = validNames(commands);
   if (!validVersion(version) || !names) return;
   const previous = entries.find((entry) => entry.version === version);
-  if (previous && JSON.stringify(previous.commands) === JSON.stringify(names)) return;
+  if (previous && JSON.stringify(previous.commands) === JSON.stringify(names) && !dirty) return;
+  dirty = true;
   entries = [
     { version, commands: names },
     ...entries.filter((entry) => entry.version !== version),
@@ -119,10 +121,12 @@ export function recordTerminalSlashCommands(version: unknown, commands: unknown)
       await mkdir(directory, { recursive: true });
       const target = filePath();
       const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
-      await writeFile(temporary, `${JSON.stringify({ versions: entries })}\n`, {
+      const snapshot = entries;
+      await writeFile(temporary, `${JSON.stringify({ versions: snapshot })}\n`, {
         mode: 0o600,
       });
       await rename(temporary, target);
+      if (entries === snapshot) dirty = false;
     })
     .catch(() => {
       // The in-memory list still serves this process; the next init retries.
@@ -136,6 +140,7 @@ export function terminalSlashCommandWritesForTesting(): Promise<void> {
 
 export function resetTerminalSlashCommandsForTesting(): void {
   loaded = null;
+  dirty = false;
   entries = [];
   writes = Promise.resolve();
 }

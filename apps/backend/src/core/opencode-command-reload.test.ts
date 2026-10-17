@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { OpenCodeInstanceReload } from "./opencode-command-reload.js";
+import { OpenCodeCommandRegistry, normalizeOpenCodeCommandList } from "./opencode-commands.js";
+import { openCodeFake } from "./agent-provider-test-support.js";
+import { OpenCodeInstanceReload, openCodeInstanceReload } from "./opencode-command-reload.js";
 
 function settable<T>() {
   let resolve!: (value: T) => void;
@@ -101,6 +103,66 @@ describe("OpenCode instance reload", () => {
     expect(h.reload.pending).toBe(false);
   });
 
+  test("an idle edge during an in-flight busy read triggers one more directory check", async () => {
+    const first = settable<boolean>();
+    const done = settable<void>();
+    let reads = 0;
+    let disposals = 0;
+    const reload = new OpenCodeInstanceReload({
+      idle: async () => (++reads === 1 ? first.promise : true),
+      dispose: async () => {
+        disposals += 1;
+      },
+      reloaded: () => done.resolve(),
+    });
+    const request = reload.request();
+    reload.idleObserved();
+    reload.idleObserved();
+    first.resolve(false);
+    await expect(request).resolves.toBe("deferred");
+    await done.promise;
+    expect(reads).toBe(2);
+    expect(disposals).toBe(1);
+    expect(reload.pending).toBe(false);
+  });
+
+  test("a retrying session prevents instance disposal", async () => {
+    const fake = openCodeFake();
+    fake.setStatusResponse({ data: { session: { type: "retry", attempt: 1, next: 10 } } });
+    const reload = openCodeInstanceReload(
+      fake.client,
+      "/workspace",
+      () => ({ signal: new AbortController().signal }),
+      () => {},
+    );
+    await expect(reload.request()).resolves.toBe("deferred");
+    expect(reload.pending).toBe(true);
+    expect(fake.instanceDisposeCalls).toHaveLength(0);
+  });
+
+  test("catalogue reads and TTL expiration never dispose an instance", async () => {
+    const h = harness();
+    let now = 0;
+    let reads = 0;
+    const registry = new OpenCodeCommandRegistry(
+      async () => {
+        reads += 1;
+        return normalizeOpenCodeCommandList([]);
+      },
+      () => now,
+      10,
+      h.reload,
+    );
+    await registry.catalogue();
+    await registry.read();
+    now = 11;
+    await registry.catalogue();
+    expect(reads).toBe(2);
+    expect(h.calls).toEqual([]);
+    await expect(registry.refreshCommands()).resolves.toEqual({ outcome: "reloaded" });
+    expect(h.calls).toEqual(["idle", "dispose", "reloaded"]);
+  });
+
   test("a dispatch that starts during a reload waits until the instance is rebuilt", async () => {
     const h = harness();
     const disposed = settable<void>();
@@ -121,12 +183,12 @@ describe("OpenCode instance reload", () => {
     expect(h.calls).toEqual(["idle", "dispose", "reloaded", "dispatch"]);
   });
 
-  test("a failed disposal propagates, drops the request and reopens dispatch", async () => {
+  test("a failed disposal propagates, keeps the catalogue stale and reopens dispatch", async () => {
     const h = harness();
     h.setDisposeError(new Error("refused"));
     await expect(h.reload.request()).rejects.toThrow("refused");
     expect(h.calls).toEqual(["idle", "dispose"]);
-    expect(h.reload.pending).toBe(false);
+    expect(h.reload.pending).toBe(true);
     const release = await h.reload.enterDispatch();
     release();
   });
@@ -143,9 +205,19 @@ describe("OpenCode instance reload", () => {
     // enterDispatch waits for the failed reload to settle.
     (await h.reload.enterDispatch())();
     await Promise.resolve();
-    expect(h.reload.pending).toBe(false);
+    expect(h.reload.pending).toBe(true);
+    const registry = new OpenCodeCommandRegistry(
+      async () => normalizeOpenCodeCommandList([]),
+      Date.now,
+      undefined,
+      h.reload,
+    );
+    await expect(registry.catalogue()).resolves.toMatchObject({ status: "stale", revision: 0 });
     h.reload.idleObserved();
     await Promise.resolve();
     expect(h.calls.filter((call) => call === "dispose")).toHaveLength(1);
+    h.setDisposeError(null);
+    await expect(registry.refreshCommands()).resolves.toEqual({ outcome: "reloaded" });
+    await expect(registry.catalogue()).resolves.toMatchObject({ status: "ready" });
   });
 });

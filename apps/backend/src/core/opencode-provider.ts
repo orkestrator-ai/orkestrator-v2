@@ -116,9 +116,8 @@ import {
   openCodeMessageIdScope,
   openCodeModelSelection,
   openCodePermissionRules,
-  openCodeWorkflowResultTurnTools,
   preflightOpenCodeModel,
-  OPENCODE_READ_ONLY_TURN_TOOLS,
+  openCodePromptToolOptions,
   openCodePromptParts,
   openCodeReasoningVariant,
   openCodeRequestOptions,
@@ -660,6 +659,8 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       readMessages: (sessionId, limit) => this.readMessagesSnapshot(sessionId, limit),
       reconciled: (sessionId) => this.actionRetry.reconciled(sessionId),
     });
+    // Recover idle edges lost across a stream gap; reload rechecks the directory.
+    if (!this.disposed) this.commandReload.idleObserved();
   }
 
   private async reconcilePendingRequestsNow(): Promise<void> {
@@ -717,11 +718,17 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   async send(sessionId: string, prompt: string, options: ProviderSendOptions): Promise<void> {
-    // A command reload aborts the instance's running work: never mid-dispatch.
-    await this.commandReload.withinDispatch(() => this.sendGated(sessionId, prompt, options));
+    await this.commandReload.withinPromptDispatch((commandDispatch) =>
+      this.sendGated(sessionId, prompt, options, commandDispatch),
+    );
   }
 
-  private async sendGated(sessionId: string, prompt: string, options: ProviderSendOptions) {
+  private async sendGated(
+    sessionId: string,
+    prompt: string,
+    options: ProviderSendOptions,
+    commandDispatch: () => void,
+  ) {
     await this.workflowResults.prepare(sessionId, {
       agentMcp: options.agentMcp,
       workflowResultTool: options.workflowResultTool,
@@ -778,6 +785,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       let response;
       try {
         if (command) {
+          commandDispatch();
           const outcome = await dispatchOpenCodeCommand({
             client: this.client,
             command,
@@ -810,14 +818,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
               model,
               agent: openCodeAgentFor(this.sessionPolicies.get(sessionId), options, "build"),
               variant,
-              ...(options.readOnly && !reviewEnabled
-                ? {
-                    tools: {
-                      ...OPENCODE_READ_ONLY_TURN_TOOLS,
-                      ...openCodeWorkflowResultTurnTools(workflowTool),
-                    },
-                  }
-                : {}),
+              ...openCodePromptToolOptions(options, reviewEnabled),
             },
             this.requestOptions(),
           );

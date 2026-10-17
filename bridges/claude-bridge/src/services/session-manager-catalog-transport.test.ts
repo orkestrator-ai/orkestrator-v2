@@ -465,11 +465,9 @@ describe("Claude terminal-only commands before a session's first turn", () => {
   }
 
   async function probedRows(probeVersion: string | undefined) {
-    if (probeVersion) {
-      queryControlOverrides.initializationResult = mock(async () => ({
-        claude_code_version: probeVersion,
-      }));
-    }
+    queryControlOverrides.initializationResult = mock(async () =>
+      probeVersion ? { claude_code_version: probeVersion } : {},
+    );
     const session = idleSession("new tab");
     const catalogue = await readClaudeCommandCatalogue(session.id);
     expect(session.commandInventoryState?.authority).toBe("probe");

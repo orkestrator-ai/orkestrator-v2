@@ -24,6 +24,7 @@ import type {
   CoordinatorWebResearch,
 } from "@orkestrator/protocol/coordinator-web-research";
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
+import type { EnvironmentDiffBaseline } from "@orkestrator/protocol/diff-stats";
 import type {
   AgentInteractionOrigin,
   AgentInteractionPolicy,
@@ -131,6 +132,8 @@ export interface Environment {
   agentActivityUpdatedAt?: string;
   /** Git commit that this environment was originally created from. */
   createdFromCommit?: string;
+  /** Where the branch now leaves its target branch; see `environmentBaselineCommit`. */
+  diffBaseline?: EnvironmentDiffBaseline | null;
   delegationBaseBranch?: string;
   delegationBaseCommit?: string;
   /** Network access mode (defaults to "restricted" for security) */

@@ -139,7 +139,7 @@ function judge(platform: AgentPlatform, host: CoordinatorHostCapabilities): Tier
       return {
         tier: "advisory",
         reason:
-          "Grok's web search and web fetch are switched off, and it is asked to request permission before acting with every request denied. A tool that does not ask is not stopped.",
+          "Grok's write, edit, shell, subagent, web search and web fetch tools are removed. Remaining permission requests are denied; other tools that do not ask remain advisory.",
         mcpClient: true,
       };
   }

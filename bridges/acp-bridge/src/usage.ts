@@ -206,3 +206,37 @@ export function acpContextUsage(
     updatedAt: details.updatedAt,
   };
 }
+
+/** Sum consumption across attempts, retaining the latest context snapshot. */
+export function accumulateAttemptUsage(
+  previous: AcpTurnUsage = {},
+  attempt: AcpTurnUsage,
+): AcpTurnUsage {
+  const combined = { ...previous, ...attempt };
+  for (const key of Object.keys(attempt) as Array<keyof AcpTurnUsage>) {
+    if (key !== "contextUsedTokens" && key !== "contextWindow") {
+      combined[key] = (previous[key] ?? 0) + attempt[key]!;
+    }
+  }
+  const previousTokens = acpUsageTokenCount(previous);
+  const attemptTokens = acpUsageTokenCount(attempt);
+  if (previousTokens !== undefined || attemptTokens !== undefined) {
+    combined.totalTokens = (previousTokens ?? 0) + (attemptTokens ?? 0);
+  }
+  return combined;
+}
+
+export function acpUsageTokenCount(usage: AcpTurnUsage): number | undefined {
+  return (
+    usage.totalTokens ??
+    (usage.inputTokens === undefined &&
+    usage.outputTokens === undefined &&
+    usage.cacheReadTokens === undefined &&
+    usage.cacheWriteTokens === undefined
+      ? undefined
+      : (usage.inputTokens ?? 0) +
+        (usage.outputTokens ?? 0) +
+        (usage.cacheReadTokens ?? 0) +
+        (usage.cacheWriteTokens ?? 0))
+  );
+}

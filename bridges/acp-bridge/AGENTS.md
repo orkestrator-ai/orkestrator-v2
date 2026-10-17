@@ -75,3 +75,15 @@ created yet", never as a session to load.
   gets at most `POLICY_DENIAL_MAX_CONTINUATIONS`. After that it is recorded as
   a failure. A cancellation naming another category (a hook, `MidTurnAbort`)
   is never continued.
+
+- **Remove Grok mutation tools before prompting.** Every Grok child under a
+  `deny` policy loads a private `--agent-profile` excluding `write`,
+  `search_replace`, `run_terminal_cmd` and `Agent`, and uses `--no-leader`.
+  Grok can run `touch` without requesting permission, so a bridge refusal
+  alone cannot enforce read-only operation. Read-only transitions replace the
+  child; close removes its temporary profile.
+- **Usage belongs to attempts before turns.** Merge duplicate vendor and
+  prompt-result carriers within an attempt, then sum consumption across
+  continuations. Context occupancy and window retain the latest snapshot.
+  Reset partial structured output and cancel parked interactions before a
+  continuation; an ended attempt cannot own a later attempt's interaction.

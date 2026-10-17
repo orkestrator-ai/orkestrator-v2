@@ -111,30 +111,27 @@ and what its first runs found. Everything else here is qualification.
    web annotation runs did. Pi is an `enforced` platform that cannot currently
    be qualified live.
 
-5. **Grok runs some shell commands without asking.** In a 2026-10-17 probe
-   against the pinned Grok 1.0.52 (no `--always-approve`, coordinator argv),
-   `touch shell.txt` ran and created the file without a
-   `session/request_permission`. `echo x > out.txt`, `rm`, `git init` and
-   `git commit` all asked and were refused. The coordinator's `advisory` note
-   already says a tool that does not ask is not stopped. Now that a refusal no
-   longer ends the turn, the live read-only case reaches its shell step, and a
-   command like this would change the checkout. Two switches verified on
-   `grok agent stdio` 1.0.52 could close it:
-   - an `--agent-profile` whose frontmatter has `disallowedTools` (`write`,
-     `search_replace`, `run_terminal_cmd`) removes those tools, and the model
-     reported the step refused with `end_turn`;
-   - `--sandbox read-only` (not yet tried on stdio).
-
-   Top-level `--deny`, `--permission-mode dontAsk`, a `permissionMode` in the
-   profile, `_meta.permissionMode` on `session/new` and a `GROK_CONFIG`
-   `permission` overlay were all ignored on stdio. A `[permission] deny` in
-   `config.toml` works, but only through the user's own Grok home. Whichever
-   switch is chosen also feeds the deferred "real read-only gate" item in
-   [coordinator-read-only-adapters.md](coordinator-read-only-adapters.md).
-6. **A continued ACP turn reports only its last attempt's usage.** Each
-   `session/prompt` result carries that attempt's usage, and `recordTurnUsage`
-   overwrites rather than adds. The retriable-provider continuation had the
-   same gap before the policy-denial continuation was added.
+5. **Grok shell gate applied.** Grok 1.0.52 ran `touch shell.txt` without
+   asking permission in the 2026-10-17 probe. Deny-policy children now load
+   a private `--agent-profile` removing `write`, `search_replace`,
+   `run_terminal_cmd` and built-in subagents, with `--no-leader`. The bridge
+   still denies MCP permission requests and continues refused attempts.
+   Keep the advisory tier until the live read-only qualification passes;
+   unasked tools outside this removed set are not an enforced boundary.
+   Live rerun on 2026-10-17 after rebuilding the ACP bundle (Grok 1.0.52,
+   profile `qa-coordinator-grok-4cd8b564`): checkout digests matched with no
+   changes, and the transcript contained no write, edit or shell calls. The
+   turn finished, including a refused MCP `use_tool`. Full qualification still
+   failed: Grok labelled the unavailable mutation/network tools `denied`
+   without attempting them, and its ticket-discovery title did not match.
+   The suite was not weakened and the disposable profile was stopped/reset.
+   Evidence: `output/agent-testing/qa-coordinator-grok-4cd8b564/coordinator/grok.json`
+   (local, ignored artifact).
+6. **Continued ACP usage accounting fixed.** Vendor and result carriers merge
+   within each attempt; consumption sums across attempts while context
+   occupancy keeps its latest snapshot. Policy and provider continuations
+   share that accounting and clear partial structured output. Regression
+   coverage includes the HTTP journal and structured-output result.
 
 ### Verify
 
@@ -330,12 +327,13 @@ is the truth, and this file is the backlog.
   - Refuse with `reject_once` (`policyDenialOutcome`). `cancelled` is ACP's
     "the turn was cancelled" outcome. `reject_always` would persist a "never
     allow" grant in the user's Grok approvals for that project.
-  - Keep the turn going in the bridge, not in Grok's configuration. After a
+  - Keep refused MCP calls going in the bridge. Built-in mutation tools are
+    removed by the read-only profile before the child starts. After a
     `cancelled` attempt during which the bridge refused a request, the prompt
     loop sends the same session `POLICY_DENIAL_CONTINUATION`. That covers every
-    tool that asks, MCP calls included. A Grok-side switch (an agent profile,
-    a sandbox) covers only built-in tools, and its other effects on the pinned
-    build are unverified. Cost: one extra model request per refusal.
+    tool that asks, MCP calls included. The profile removes the built-in
+    mutation tools; remaining unasked tools keep the tier advisory.
+    Cost: one extra model request per refusal.
   - Continue on the bridge's own refusal record. Grok's
     `cancellationCategory` is only a veto: any category other than
     `PermissionRejected` or `PermissionCancelled` ends the turn. A user

@@ -283,3 +283,28 @@ passed the unchanged owning file in 23.8 seconds (exit 0). Evidence:
 - Owning-file runs during the aggregate also timed out (47 passed, one failed, one between-tests teardown error each): `coordinator-owner-rerun` in 32.5 seconds and `coordinator-after-browser` in 24.9 seconds. Their artifacts are `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.iCnX63/coordinator-owner-rerun.log.gz` and `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.0jjdbZ/coordinator-after-browser.log.gz`.
 - After the aggregate and browser runs ended, the unchanged owning file passed: `mise run test:logged -- --name coordinator-post-aggregate -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`, 19.1 seconds, exit 0.
 - Shared-host contention and teardown after timeout remain hypotheses. No assertion, timeout, skip or implementation in this owner changed.
+
+
+## ACP policy continuation validation — 2026-10-17
+
+- Original command: `mise run test:logged -- --name full-tests -- mise run test`
+  on `7f43ef60` plus ACP policy fixes, macOS arm64. Workspace/root/bridge/
+  protocol reservations were 4/1/2/1 slots; backend used two isolated workers
+  on a host shared with other worktrees and an isolated live Grok profile.
+- Aggregate failure: `project coordinator > fetch force, fast-forward sync,
+  remote switching, and divergence stay safe` at 5103.88 ms (5000 ms limit),
+  with a late `git commit -m local` SIGTERM. Backend: 8789 passed, 41 skipped,
+  two failed in 586.69 seconds. Whole command: exit 1, 625.8 seconds.
+- Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.lvavmO/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- `mise run test:logged -- --name coordinator-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`
+  failed: 46 passed, two failed, two late SQLite errors, 30.9 seconds. The
+  bound-discard case timed out at 5126.94 ms and the dirty-submodule case at
+  5320.94 ms. Artifact: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.1FRn0R/coordinator-owner.log.gz`.
+- After the aggregate completed, the same owning-file command under label
+  `coordinator-post-suite` still failed: 47 passed, one failed, one late
+  `SQLITE_IOERR_VNODE`, 30.3 seconds. Bound discard exceeded its deadline at
+  5171.09 ms. Artifact: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.eNEjwF/coordinator-post-suite.log.gz`.
+- This run does **not** establish an isolated owning-file pass, so the
+  aggregate failure remains unresolved evidence rather than a newly confirmed
+  flake. Host I/O contention remains a hypothesis. No owner code, assertion,
+  deadline or skip changed.

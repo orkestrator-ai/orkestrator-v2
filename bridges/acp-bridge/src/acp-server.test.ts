@@ -63,6 +63,8 @@ describe("ACP bridge", () => {
       "--disable-web-search",
       "agent",
       "--no-leader",
+      "--agent-profile",
+      expect.stringMatching(/read-only\.md$/),
       "stdio",
     ]);
   });
@@ -76,7 +78,14 @@ describe("ACP bridge", () => {
         ACP_PROVIDER: "grok",
         ORKESTRATOR_BRIDGE_EXECUTION_POLICY: "coordinator-read-only",
       }),
-    ).toEqual(["--disable-web-search", "agent", "--no-leader", "stdio"]);
+    ).toEqual([
+      "--disable-web-search",
+      "agent",
+      "--no-leader",
+      "--agent-profile",
+      expect.stringMatching(/read-only\.md$/),
+      "stdio",
+    ]);
   });
 
   test("any policy that denies the network starts Grok without web search", async () => {

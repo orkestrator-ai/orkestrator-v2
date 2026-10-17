@@ -12,6 +12,7 @@ import {
   type JsonObject,
   type SessionState,
 } from "./acp-context.js";
+import { recordTurnUsage } from "./acp-session.js";
 import { STRUCTURED_PROMPT_INSTRUCTION_PREFIX } from "./structured-prompt-marker.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import { schedulePersist } from "./acp-persist-writer.js";
@@ -158,6 +159,7 @@ export function retryStillOwned(
 ): boolean {
   return (
     !shuttingDown &&
+    !state.closing &&
     sessions.get(state.id) === state &&
     state.child === child &&
     state.status === "running" &&
@@ -181,6 +183,8 @@ export async function requestPromptWithRetriableProviderRetries(
   promptSequence: number,
   schema: JsonObject | undefined,
 ): Promise<unknown> {
+  state.currentAttemptUsage = {};
+  state.completedAttemptUsage = undefined;
   let prompt = initialPrompt;
   let retries = 0;
   let policyContinuations = 0;
@@ -203,6 +207,7 @@ export async function requestPromptWithRetriableProviderRetries(
       if (state.promptDeadlineAt === promptDeadlineAt) state.promptDeadlineAt = undefined;
     }
 
+    recordTurnUsage(state, result);
     const flattened = requestError ? null : flattenedRetriableProviderTail(state);
     if (!requestError && !flattened) {
       if (
@@ -213,12 +218,11 @@ export async function requestPromptWithRetriableProviderRetries(
         return result;
       }
       if (policyContinuations >= POLICY_DENIAL_MAX_CONTINUATIONS) {
+        cancelEndedAttemptInteractions(state);
         state.policyDenialExhaustedPromptSequence = promptSequence;
         return result;
       }
-      // The refused call has already failed; settle anything else the ended
-      // attempt left open. Earlier output stays: nothing in it was wrong.
-      reconcileStaleToolParts(state);
+      resetEndedAttempt(state);
       policyContinuations += 1;
       prompt = continuationPrompt(state, POLICY_DENIAL_CONTINUATION, schema);
       continue;
@@ -241,11 +245,7 @@ export async function requestPromptWithRetriableProviderRetries(
     // and the typed-RPC path. The continuation re-emits the whole value, so a
     // retained prefix would concatenate into unparseable JSON and fail a turn
     // that actually recovered.
-    if (state.currentTurnOutput !== null) state.currentTurnOutput = "";
-    // A provider can stop between a tool's start and terminal update. Settle
-    // that attempt before the continuation starts; completed tools remain
-    // successful and the continuation is explicitly told not to repeat them.
-    reconcileStaleToolParts(state);
+    resetEndedAttempt(state);
     retries += 1;
     await retryDelay(RETRIABLE_PROVIDER_RETRY_BASE_MS * 2 ** (retries - 1));
 
@@ -256,6 +256,22 @@ export async function requestPromptWithRetriableProviderRetries(
       throw retryOwnershipLostError(state);
     }
     prompt = continuationPrompt(state, RETRIABLE_PROVIDER_CONTINUATION, schema);
+  }
+}
+
+function resetEndedAttempt(state: SessionState): void {
+  state.completedAttemptUsage = state.currentTurnUsage;
+  state.currentAttemptUsage = {};
+  if (state.currentTurnOutput !== null) state.currentTurnOutput = "";
+  reconcileStaleToolParts(state);
+  cancelEndedAttemptInteractions(state);
+}
+
+function cancelEndedAttemptInteractions(state: SessionState): void {
+  // Requests from an ended attempt must not outlive it or resolve a
+  // request in the continuation. `respond` also settles each deadline.
+  for (const interaction of Array.from(state.interactions.values())) {
+    interaction.respond({ outcome: "cancelled" });
   }
 }
 

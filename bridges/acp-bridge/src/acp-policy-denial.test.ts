@@ -12,7 +12,14 @@ import {
   requestPromptWithRetriableProviderRetries,
   turnTerminalError,
 } from "./acp-prompt.js";
-import { attachChild, clearApprovals, policyDenialOutcome } from "./acp-session.js";
+import {
+  attachChild,
+  clearApprovals,
+  policyDenialOutcome,
+  recordTurnUsage,
+  finalizeTurnUsage,
+  parkGrokInteraction,
+} from "./acp-session.js";
 
 /*
  * Grok 1.0.52 ends its turn on any non-allow answer to a permission request
@@ -68,7 +75,13 @@ interface Attempt {
  * come from `script`, one per attempt. An attempt can first raise a
  * permission request through the bridge's own handler.
  */
-function readOnlyTurn(script: Array<{ ask?: boolean; result: unknown }>) {
+function readOnlyTurn(
+  script: Array<{
+    ask?: boolean;
+    result: unknown;
+    during?: (state: SessionState, child: AcpProcess) => void | Promise<void>;
+  }>,
+) {
   const responses: unknown[] = [];
   const attempts: Attempt[] = [];
   const state = {
@@ -82,6 +95,10 @@ function readOnlyTurn(script: Array<{ ask?: boolean; result: unknown }>) {
     interactions: new Map(),
     activeSubagentDescriptors: new Map(),
     revision: 0,
+    sessionConfig: { composer: {} },
+    turnStartedAt: Date.now(),
+    currentTurnUsage: {},
+    currentTurnOutput: null,
   } as unknown as SessionState;
   const child = {
     respond: (_id: number, result: unknown) => responses.push(result),
@@ -100,6 +117,7 @@ function readOnlyTurn(script: Array<{ ask?: boolean; result: unknown }>) {
           options: GROK_WRITE_OPTIONS,
         });
       }
+      await step.during?.(state, child);
       return step.result;
     },
   } as unknown as AcpProcess;
@@ -248,4 +266,177 @@ describe("a cancelled turn that is not continued", () => {
       turn.cleanup();
     }
   });
+});
+
+describe("continued attempt accounting and lifecycle", () => {
+  test("merges duplicate carriers per attempt, sums consumption and retains the latest context", async () => {
+    const first = {
+      totalTokens: 15,
+      inputTokens: 10,
+      outputTokens: 5,
+      costUsd: 0.1,
+      cacheReadTokens: 2,
+      cacheWriteTokens: 1,
+      reasoningTokens: 3,
+      apiDurationMs: 10,
+    };
+    const second = {
+      totalTokens: 27,
+      inputTokens: 20,
+      outputTokens: 7,
+      costUsd: 0.2,
+      cacheReadTokens: 4,
+      cacheWriteTokens: 2,
+      reasoningTokens: 6,
+      apiDurationMs: 20,
+    };
+    const turn = readOnlyTurn([
+      {
+        ask: true,
+        result: {
+          ...ENDED_ON_REJECTION,
+          usage: first,
+          _meta: { ...ENDED_ON_REJECTION._meta, usage: first },
+        },
+        during: (state, child) => {
+          for (const sessionUpdate of ["response_completed", "turn_completed"]) {
+            child.onVendor("x.ai/session/update", {
+              sessionId: state.acpSessionId,
+              update: { sessionUpdate, usage: first },
+            });
+          }
+          recordTurnUsage(state, { sessionUpdate: "usage_update", used: 100, size: 1000 });
+        },
+      },
+      {
+        result: { stopReason: "end_turn", usage: second },
+        during: (state) => {
+          recordTurnUsage(state, { usage: second });
+          recordTurnUsage(state, { sessionUpdate: "usage_update", used: 80, size: 2000 });
+        },
+      },
+    ]);
+    try {
+      turn.state.usage = { turn: {}, sessionTokens: 50, updatedAt: new Date().toISOString() };
+      await turn.run();
+      finalizeTurnUsage(turn.state);
+      expect(turn.state.currentTurnUsage).toEqual({
+        totalTokens: 42,
+        inputTokens: 30,
+        outputTokens: 12,
+        costUsd: 0.1 + 0.2,
+        cacheReadTokens: 6,
+        cacheWriteTokens: 3,
+        reasoningTokens: 9,
+        apiDurationMs: 30,
+        contextUsedTokens: 80,
+        contextWindow: 2000,
+      });
+      expect(turn.state.usage).toMatchObject({
+        sessionTokens: 92,
+        lastTurnTokens: 42,
+        turns: [{ totalTokens: 42, costUsd: 0.1 + 0.2 }],
+      });
+    } finally {
+      turn.cleanup();
+    }
+  });
+
+  test("clears partial structured output at the attempt boundary", async () => {
+    const turn = readOnlyTurn([
+      {
+        ask: true,
+        result: ENDED_ON_REJECTION,
+        during: (state) => {
+          state.currentTurnOutput = '{"stale":';
+        },
+      },
+      {
+        result: { stopReason: "end_turn" },
+        during: (state) => {
+          expect(state.currentTurnOutput).toBe("");
+          state.currentTurnOutput += '{"ok":true}';
+        },
+      },
+    ]);
+    try {
+      await turn.run({ type: "object" });
+      expect(JSON.parse(turn.state.currentTurnOutput!)).toEqual({ ok: true });
+    } finally {
+      turn.cleanup();
+    }
+  });
+
+  test.each(["cancel", "close", "remove", "replace", "error", "sequence"])(
+    "does not continue when %s occurs while the refused attempt is pending",
+    async (change) => {
+      let release!: () => void;
+      let entered!: () => void;
+      const pending = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const turn = readOnlyTurn([
+        {
+          ask: true,
+          result: ENDED_ON_REJECTION,
+          during: async () => {
+            entered();
+            await pending;
+          },
+        },
+      ]);
+      try {
+        const run = turn.run();
+        await started;
+        if (change === "cancel") turn.state.retryCancelledPromptSequence = 4;
+        if (change === "close") turn.state.closing = true;
+        if (change === "remove") sessions.delete(turn.state.id);
+        if (change === "replace") turn.state.child = {} as AcpProcess;
+        if (change === "error") turn.state.status = "error";
+        if (change === "sequence") turn.state.promptSequence += 1;
+        release();
+        await run;
+        expect(turn.attempts).toHaveLength(1);
+      } finally {
+        release();
+        turn.cleanup();
+      }
+    },
+  );
+
+  test.each(["x.ai/ask_user_question", "x.ai/exit_plan_mode"])(
+    "cancels a parked %s from the ended attempt before continuing",
+    async (method) => {
+      const turn = readOnlyTurn([
+        {
+          ask: true,
+          result: ENDED_ON_REJECTION,
+          during: (state, child) => {
+            parkGrokInteraction(state, child, 99, method, {
+              sessionId: state.acpSessionId,
+              toolCallId: "parked",
+              planContent: "Plan",
+              questions: [{ question: "Which option?" }],
+            });
+            expect(state.interactions.size).toBe(1);
+          },
+        },
+        {
+          result: { stopReason: "end_turn" },
+          during: (state) => {
+            expect(state.interactions.size).toBe(0);
+          },
+        },
+      ]);
+      try {
+        await turn.run();
+        expect(turn.responses).toEqual([REJECTED, { outcome: "cancelled" }]);
+      } finally {
+        turn.cleanup();
+      }
+    },
+  );
 });

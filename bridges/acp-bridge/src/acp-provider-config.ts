@@ -115,8 +115,12 @@ export function providerArgv(
     approvals?: "ask" | "auto-approve" | "deny";
     /** The session's policy denies `network`. */
     denyNetwork?: boolean;
+    readOnlyProfilePath?: string;
   },
 ): string[] {
+  if (options.readOnlyProfilePath && !config.argv.includes("agent")) {
+    throw new Error("Grok read-only profile requires a local agent launcher");
+  }
   const network =
     options.denyNetwork && Object.hasOwn(NETWORK_DENIED_ARGUMENTS, config.id)
       ? NETWORK_DENIED_ARGUMENTS[config.id]!
@@ -133,8 +137,12 @@ export function providerArgv(
     if (argument === "{{effort}}") {
       return options.effort ? ["--reasoning-effort", options.effort] : [];
     }
-    if (network && argument === network.subcommand) {
-      return [argument, ...network.afterSubcommand];
+    if (argument === "agent") {
+      return [
+        argument,
+        ...(network?.afterSubcommand ?? (options.readOnlyProfilePath ? ["--no-leader"] : [])),
+        ...(options.readOnlyProfilePath ? ["--agent-profile", options.readOnlyProfilePath] : []),
+      ];
     }
     return [argument];
   });

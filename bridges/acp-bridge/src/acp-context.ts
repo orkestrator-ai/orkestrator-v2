@@ -37,6 +37,7 @@ import {
   providerArgv,
   undeclaredPromptCapabilities,
 } from "./acp-provider-config.js";
+import { createReadOnlyProfile } from "./acp-readonly-profile.js";
 import { effectiveExecutionPolicy } from "./acp-policy.js";
 import {
   GrokMcpConfigWatcher,
@@ -442,6 +443,9 @@ export interface SessionState {
   usage?: PersistedUsage;
   /** Usage carriers collected for the in-flight turn. Never persisted. */
   currentTurnUsage?: AcpTurnUsage;
+  /** Deduplicated carriers for this ACP attempt and consumption before it. */
+  currentAttemptUsage?: AcpTurnUsage;
+  completedAttemptUsage?: AcpTurnUsage;
   /** Support correlation retained until the current turn is finalized. */
   currentTurnRequestId?: string;
   /** Whether the active turn already received a vendor terminal usage carrier. */
@@ -967,6 +971,7 @@ export class AcpProcess {
     }
   >();
   #closed = false;
+  #readOnlyProfile?: ReturnType<typeof createReadOnlyProfile>;
   #terminationOutcome?: "resolved" | "rejected";
   #stdoutBuffer = Buffer.alloc(0);
   onUpdate: (params: JsonObject) => void = unattachedUpdate;
@@ -1002,21 +1007,30 @@ export class AcpProcess {
     // (catalog probe, session list, replay) still runs under the process
     // authority, so a coordinator bridge never starts Grok with its web tools.
     const policy = spawnOptions.policy ?? effectiveExecutionPolicy(undefined);
-    const args = providerArgv(providerConfig, {
-      ...spawnOptions,
-      approvals: policy?.approvals,
-      denyNetwork: nativeAgentPolicyDeniesNetwork(policy),
-    });
-    // Read before the child starts, so an edit racing the spawn is reported
-    // as a change rather than missed.
-    this.mcpConfigAtSpawn = grokMcpConfigFingerprint(currentGrokMcpConfigFiles()).catch(
-      () => undefined,
-    );
-    this.child = spawn(executable, args, {
-      cwd: workingDirectory,
-      env: { ...process.env, ...providerConfig.env },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    if (providerConfig.id === "grok" && policy?.approvals === "deny") {
+      this.#readOnlyProfile = createReadOnlyProfile();
+    }
+    try {
+      const args = providerArgv(providerConfig, {
+        ...spawnOptions,
+        approvals: policy?.approvals,
+        readOnlyProfilePath: this.#readOnlyProfile?.path,
+        denyNetwork: nativeAgentPolicyDeniesNetwork(policy),
+      });
+      // Read before the child starts, so an edit racing the spawn is reported
+      // as a change rather than missed.
+      this.mcpConfigAtSpawn = grokMcpConfigFingerprint(currentGrokMcpConfigFiles()).catch(
+        () => undefined,
+      );
+      this.child = spawn(executable, args, {
+        cwd: workingDirectory,
+        env: { ...process.env, ...providerConfig.env },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch (error) {
+      this.#readOnlyProfile?.dispose();
+      throw error;
+    }
     this.#diagnostics = createBridgeDiagnostics("acp", { id: `process-${this.child.pid}` }, () => ({
       pendingRequests: this.#pending.size,
     }));
@@ -1338,6 +1352,8 @@ export class AcpProcess {
   #close(error: Error, streamOutcome: "resolved" | "rejected" = "rejected"): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.#readOnlyProfile?.dispose();
+    this.#readOnlyProfile = undefined;
     this.#diagnostics?.streamSettled(streamOutcome);
     this.#diagnostics?.close();
     for (const pending of this.#pending.values()) {

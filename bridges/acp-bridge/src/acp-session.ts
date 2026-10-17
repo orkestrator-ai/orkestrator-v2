@@ -22,7 +22,12 @@ import {
   type AcpNormalizedSessionConfig,
 } from "./session-config.js";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
-import { parseAcpTurnUsage, type AcpTurnUsage } from "./usage.js";
+import {
+  acpUsageTokenCount,
+  accumulateAttemptUsage,
+  parseAcpTurnUsage,
+  type AcpTurnUsage,
+} from "./usage.js";
 import { acpSignInMissing, assertAcpSignedIn } from "./acp-credentials.js";
 import {
   AcpProcess,
@@ -1952,8 +1957,11 @@ export function recordTurnUsage(state: SessionState, payload: unknown): void {
   }
   const turnInFlight = state.turnStartedAt !== undefined;
   const previous = state.usage;
+  if (turnInFlight) {
+    state.currentAttemptUsage = { ...state.currentAttemptUsage, ...turn };
+  }
   const accumulatedTurn = turnInFlight
-    ? { ...state.currentTurnUsage, ...turn }
+    ? accumulateAttemptUsage(state.completedAttemptUsage, state.currentAttemptUsage!)
     : { ...previous?.turn, ...turn };
   if (turnInFlight) state.currentTurnUsage = accumulatedTurn;
   const durationMs =
@@ -1989,18 +1997,7 @@ export function recordTurnUsage(state: SessionState, payload: unknown): void {
 
 /** Exact per-turn consumption when ACP or the vendor reports token counters. */
 export function acpTurnTokenCount(usage: AcpTurnUsage): number | undefined {
-  return (
-    usage.totalTokens ??
-    (usage.inputTokens === undefined &&
-    usage.outputTokens === undefined &&
-    usage.cacheReadTokens === undefined &&
-    usage.cacheWriteTokens === undefined
-      ? undefined
-      : (usage.inputTokens ?? 0) +
-        (usage.outputTokens ?? 0) +
-        (usage.cacheReadTokens ?? 0) +
-        (usage.cacheWriteTokens ?? 0))
-  );
+  return acpUsageTokenCount(usage);
 }
 
 /** Commit the usage collected for one completed turn replayed by session/load. */

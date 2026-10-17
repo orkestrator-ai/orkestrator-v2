@@ -1,7 +1,7 @@
 # ACP dispatch probe already reports the turn completed during a cold load
 
 - **ID:** 0249
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-16
 - **Test:** `ACP bridge > does not confirm a request while a cold session load is still preparing it`
 - **Owning file:** `bridges/acp-bridge/src/acp-context.test.ts:1331` (assertion at `:1382`)
@@ -54,10 +54,64 @@ The subsequent `mise run test:logged -- --name final-tests -- mise run test` agg
 - **Assessment:** consistent with the recorded completion/probe race; no
   production behavior, assertion, timeout or skip changed.
 
-## Execution-policy conformance main merge recurrence — 2026-10-17
+## Execution-policy conformance main merge recurrence — 2026-10-17 (before this branch's fix)
 
 - **Original command:** `mise run test:logged -- --name merge-tests -- mise run test` (Bun 1.4.3, macOS arm64). Workspace/root/bridge/protocol reservations were 4/1/2/1 slots; browser validation ran alongside it.
 - **Failure:** The final dispatch probe also returned `turn: { state: "completed" }`, failing exact equality at line 1382 (1497.71 ms).
 - **Owning-file rerun:** `mise run test:logged -- --name merge-acp-context-isolated -- bun test --cwd bridges/acp-bridge ./src/acp-context.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 17.1 seconds.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.IG0vGk/bridges.log.gz`.
 - **Assessment:** the isolated pass confirms intermittence; root cause remains unconfirmed. No assertion, timeout or skip changed.
+
+## Recurrences on GitHub Actions (2026-10-16)
+
+- **Runs:** 38901701138 and 38904039434, `Unit and integration tests` job of
+  `lint.yml` (`mise run test`, ubuntu-latest).
+- **Failure:** the same `turn: { state: "completed" }` at
+  `acp-context.test.ts:1382`, in 1064.93 ms and 1110.55 ms. Run 38904039434
+  also failed 0232 in the same ACP package run.
+
+## Root cause
+
+A test race, not a production defect. The prompt used `DIRECT:prepared`, which
+the fake agent (`src/testing/fake-agent-prompt-start.ts`) answers with one
+message chunk and `stopReason: "end_turn"` immediately. The prompt route
+answers `202` once the prompt is handed to the agent, and the completion
+handler in `src/acp-http.ts` moves the journal entry to `completed`
+independently. `GET /session/:id/dispatch` deliberately reports the turn
+outcome once the entry is `completed` or `failed`, so whenever the agent's
+reply was processed before the test's follow-up probe, the answer correctly
+gained `turn: { state: "completed" }` and the exact-equality assertion failed.
+
+Reproduced before the fix: `bun test src/acp-context.test.ts --preload
+../../tests/setup-node.ts -t "cold session load is still preparing"
+--rerun-each 30` from `bridges/acp-bridge` failed 1 of 30 on a loaded macOS
+host (load average about 27 on 18 cores). Widening the window with a temporary
+`Bun.sleep(300)` after the `202` made the unchanged test fail 5 of 5.
+
+## Fix (this branch)
+
+`bridges/acp-bridge/src/acp-context.test.ts`: the bridge is spawned with
+`FAKE_ACP_HOLD_TURN_FILE`, and the prompt is `CURSORTASKHELD: prepared`, which
+the fake agent keeps open until the test creates the hold file (the same
+primitive `acp-prompt.test.ts` uses for `held-1`). The post-acceptance probe
+therefore always sees an accepted, unfinished turn and still asserts exactly
+`{ dispatch: "dispatched" }`. The test then releases the turn and waits for the
+probe to report the outcome, asserting exactly
+`{ dispatch: "dispatched", turn: { state: "completed" } }`, which covers the
+completed branch the race used to hit by accident. No production code,
+timeout, skip or assertion strictness changed.
+
+## Verification
+
+From `bridges/acp-bridge`, on macOS arm64 with other worktrees' suites running
+(load average 27-52 on 18 cores):
+
+- `bun test src/acp-context.test.ts --preload ../../tests/setup-node.ts -t "cold session load is still preparing" --rerun-each 50`:
+  50 pass, 0 fail (was 1 fail in 30 before the fix).
+- The same filter with a temporary `Bun.sleep(300)` after the `202`, five
+  reruns: 5 of 5 failed before the fix, 5 of 5 passed after it (the sleep was
+  removed again).
+- `bun run test:bridge` (package suite, `--parallel=1`) three times in a row
+  at load averages 52, 48 and 36: each 579 pass, 3 skip, 0 fail across 37
+  files (76.6 s, 72.3 s, 67.9 s).
+- `bun run typecheck`: exit 0. `bunx oxfmt` and `bunx oxlint` on the file: clean.

@@ -43,6 +43,10 @@ import {
   browserPreviewRefererPrefix,
 } from "./gateway-internals.js";
 import type { ListenerKind, GatewayRequestMetrics } from "./gateway-internals.js";
+import { parseHostUpdaterReport } from "@orkestrator/protocol/host-maintenance";
+
+/** A host updater report is a handful of bounded fields. */
+const HOST_UPDATER_REPORT_MAX_BYTES = 16 * 1024;
 
 /**
  * The route handlers `handle` dispatches to. `GatewayHandlers` calls back into
@@ -382,6 +386,15 @@ export class GatewayAuth {
       return;
     }
 
+    if (url.pathname === `${API_PREFIX}/host-updater`) {
+      if (listenerKind !== "control" || !this.ctx.hostUpdaterControl) {
+        jsonResponse(response, 404, { error: "Not found" });
+        return;
+      }
+      await this.handleHostUpdater(request, response, requestMetrics);
+      return;
+    }
+
     if (url.pathname === `${API_PREFIX}/status`) {
       if (request.method !== "GET") {
         response.writeHead(405, { allow: "GET" });
@@ -531,6 +544,49 @@ export class GatewayAuth {
       return;
     }
     jsonResponse(response, 200, await this.ctx.webClientControl.setEnabled(body.enabled));
+  }
+
+  async handleHostUpdater(
+    request: IncomingMessage,
+    response: ServerResponse,
+    requestMetrics: GatewayRequestMetrics,
+  ): Promise<void> {
+    const control = this.ctx.hostUpdaterControl;
+    if (!control) {
+      jsonResponse(response, 404, { error: "Not found" });
+      return;
+    }
+    if (request.method === "GET") {
+      jsonResponse(response, 200, await control.snapshot());
+      return;
+    }
+    if (request.method !== "POST") {
+      response.writeHead(405, { allow: "GET, POST" });
+      response.end();
+      return;
+    }
+    let body: Record<string, unknown>;
+    try {
+      const parsed = await readJsonBody(request, HOST_UPDATER_REPORT_MAX_BYTES);
+      body = parsed.body;
+      requestMetrics.setRequestBytes(parsed.bytes);
+    } catch (error) {
+      if (error instanceof RequestBodyTooLargeError) {
+        jsonResponse(response, 413, { error: error.message });
+        return;
+      }
+      if (error instanceof InvalidRequestBodyError) {
+        jsonResponse(response, 400, { error: error.message });
+        return;
+      }
+      throw error;
+    }
+    const report = parseHostUpdaterReport(body);
+    if (!report) {
+      jsonResponse(response, 400, { error: "Malformed host updater report" });
+      return;
+    }
+    jsonResponse(response, 200, control.report(report));
   }
 
   async handleLogin(request: IncomingMessage, response: ServerResponse): Promise<void> {

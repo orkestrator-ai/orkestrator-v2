@@ -411,6 +411,20 @@ describe("POST /session/:id/close", () => {
     const id = await bridge.create();
     expect((await bridge.prompt(id, "Keep this one")).status).toBe(202);
     await bridge.waitForStatus(id, "idle");
+    // The turn's completion reports idle at once but persists on a debounce.
+    // Wait until the file holds the live revision: that write landing between
+    // the remove and the mkdir below recreates the file and fails the mkdir.
+    await waitFor(
+      async () => {
+        const live = (await bridge.request(`/session/${id}/status`)).body.revision;
+        const persisted = await fs
+          .readFile(bridge.stateFile, "utf8")
+          .then((text) => JSON.parse(text) as { sessions: Array<{ id: string; revision: number }> })
+          .catch(() => ({ sessions: [] }));
+        return { live, persisted: persisted.sessions.find((entry) => entry.id === id)?.revision };
+      },
+      ({ live, persisted }) => persisted === live,
+    );
     // A directory where the state file belongs makes the atomic rename fail.
     await fs.rm(bridge.stateFile, { force: true });
     await fs.mkdir(bridge.stateFile);

@@ -1,3 +1,4 @@
+import { CLAUDE_PINNED_RUNTIME_ENV } from "@orkestrator/protocol/terminal-agent-launch";
 import * as shared from "./tmux-shared.js";
 import { claudeCliReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
 import * as hooks from "./tmux-hooks.js";
@@ -360,7 +361,14 @@ export class TmuxSession {
         const accountDirectory =
           this.backend.kind === "local" ? await localClaudeConfigDirectory(context) : undefined;
         const accountPrefix = localClaudeAccountPrefix(accountDirectory);
-        const wrapped = `${runtimePrefix}${accountPrefix}${claudeCmd}; echo '[claude exited]'; exec bash`;
+        // The managed binary stays on its pin; see CLAUDE_PINNED_RUNTIME_ENV.
+        const pinnedPrefix =
+          this.backend.kind === "local" && claudeCommand.includes("/")
+            ? `export ${Object.entries(CLAUDE_PINNED_RUNTIME_ENV)
+                .map(([name, value]) => `${name}=${value}`)
+                .join(" ")}; `
+            : "";
+        const wrapped = `${runtimePrefix}${pinnedPrefix}${accountPrefix}${claudeCmd}; echo '[claude exited]'; exec bash`;
         const out = await this.backend.exec([
           this.tmuxCommand,
           "new-session",

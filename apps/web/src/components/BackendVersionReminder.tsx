@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import * as backend from "@/lib/backend";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT, listen } from "@/lib/native/events";
 import { appVersionSkew, BUNDLED_APP_VERSION, normalizeBackendVersion } from "@/lib/app-version";
+import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { describeVersionReminder, versionClientKind } from "@/lib/version-reminder";
 
 export const VERSION_REMINDER_TOAST_ID = "orkestrator-version-reminder";
@@ -58,11 +59,21 @@ export function BackendVersionReminder() {
       }
       // A backend that cannot name its version cannot be compared.
       if (disposed || !reported) return;
+      const skew = appVersionSkew(BUNDLED_APP_VERSION, reported);
+      const hostCanUpdate =
+        skew === "backend-older"
+          ? await backend
+              .getHostMaintenance()
+              .then((host) => host.updater.available)
+              .catch(() => false)
+          : false;
+      if (disposed) return;
       const reminder = describeVersionReminder({
-        skew: appVersionSkew(BUNDLED_APP_VERSION, reported),
+        skew,
         clientVersion: BUNDLED_APP_VERSION,
         backendVersion: reported,
         clientKind: versionClientKind(),
+        hostCanUpdate,
       });
       if (!reminder) {
         // Clearing it here is not the user dismissing it, so record nothing.
@@ -92,7 +103,14 @@ export function BackendVersionReminder() {
         },
         ...(reminder.action === "reload"
           ? { action: { label: "Reload", onClick: () => window.location.reload() } }
-          : {}),
+          : reminder.action === "update"
+            ? {
+                action: {
+                  label: "Update backend",
+                  onClick: () => requestGlobalSettings("updates"),
+                },
+              }
+            : {}),
       });
     };
 

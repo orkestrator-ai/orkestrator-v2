@@ -50,6 +50,7 @@ import { registerServerCommands } from "./commands-registry-servers.js";
 import { registerSessionCommands } from "./commands-registry-sessions.js";
 import { registerSystemCommands } from "./commands-registry-system.js";
 import { registerHostFileCommands } from "./commands-host-files.js";
+import { registerHostMaintenanceCommands } from "./commands-registry-host.js";
 import { registerTeardownCommands } from "./commands-registry-teardown.js";
 import { registerPublicApiCommands } from "./public-api/registry.js";
 import { registerTerminalCommands } from "./commands-registry-terminal.js";
@@ -283,6 +284,7 @@ export function createCommandRegistry(
   registerEnvironmentCommands(register, dependencies);
   registerSystemCommands(register);
   registerHostFileCommands(register);
+  registerHostMaintenanceCommands(register);
   registerDockerCommands(register, dependencies);
   registerServerCommands(register, dependencies);
   registerToolingCommands(register, dependencies);

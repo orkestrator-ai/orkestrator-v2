@@ -786,6 +786,40 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test.each([
+    { environment: "local", requested: false, deviceCode: false },
+    { environment: "local", requested: true, deviceCode: true },
+    { environment: "containerized", requested: false, deviceCode: true },
+  ] as const)(
+    "a $environment sign-in asked for a device code: $requested uses one: $deviceCode",
+    async ({ environment, requested, deviceCode }) => {
+      const stub = createProviderStub("codex");
+      const beginSignIn = mock(async (_options?: { deviceCode?: boolean }) => ({
+        url: "https://auth.example.test/device",
+      }));
+      Object.assign(stub.provider, { beginSignIn });
+      await withService(
+        {
+          prefix: "orkestrator-sign-in-route-",
+          environment: {
+            environmentType: environment,
+            ...(environment === "containerized" ? { containerId: "container-1" } : {}),
+          },
+          provider: async () => stub.provider,
+        },
+        async ({ service }) => {
+          await service.beginProjectionSignIn({
+            environmentId: "env-1",
+            agent: "codex",
+            logicalSessionKey: "env-env-1:tab-sign-in",
+            ...(requested ? { deviceCode: true } : {}),
+          });
+          expect(beginSignIn).toHaveBeenCalledWith(deviceCode ? { deviceCode: true } : undefined);
+        },
+      );
+    },
+  );
+
   test("account reads preserve auth failures rather than reporting unsupported", async () => {
     const stub = createProviderStub("cursor", {
       authStatus: async () => {

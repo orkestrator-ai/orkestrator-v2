@@ -14,7 +14,6 @@
  * Cursor credential path and the bridge token.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -106,6 +105,53 @@ describe("the bridge entrypoint", () => {
 });
 
 /**
+ * Budget for a test that starts fresh `bun` processes.
+ *
+ * A cold `bun -e` that imports this package (and, for one case, `@cursor/sdk`)
+ * takes tens of milliseconds on an idle host but several seconds on a CI
+ * runner that is also building the web bundle and running three other test
+ * groups. Bun's 5 s per-test default is not a property of the code under test,
+ * and when it expires Bun kills the still-running child, which surfaced as an
+ * opaque `exited null` with empty stderr. The child deadline sits inside this
+ * budget so a genuinely hung child fails with its own signal and stderr.
+ */
+const PROCESS_TEST_TIMEOUT_MS = 30_000;
+const CHILD_DEADLINE_MS = 20_000;
+
+/**
+ * Run `bun -e body` and return its trimmed stdout.
+ *
+ * Asynchronous so Bun's test timeout and the child deadline can both fire, and
+ * so a test that needs several fresh processes can start them together.
+ */
+async function runBun(options: {
+  body: string;
+  cwd?: string;
+  env: Record<string, string | undefined>;
+}): Promise<string> {
+  const child = Bun.spawn([process.execPath, "-e", options.body], {
+    cwd: options.cwd,
+    env: options.env,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: CHILD_DEADLINE_MS,
+    killSignal: "SIGKILL",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  if (exitCode !== 0) {
+    throw new Error(
+      `bun -e exited ${exitCode} (signal ${child.signalCode ?? "none"}, deadline ${CHILD_DEADLINE_MS}ms): ${stderr}`,
+    );
+  }
+  return stdout.trim();
+}
+
+/**
  * Spawned rather than asserted in process, because the property under test is
  * what `bun` itself does on the way in — which a same-process test has already
  * missed by the time it runs.
@@ -117,8 +163,9 @@ function runBridgeScript(options: {
   workspace: string;
   body: string;
   env?: NodeJS.ProcessEnv;
-}): string {
-  const result = spawnSync(process.execPath, ["-e", options.body], {
+}): Promise<string> {
+  return runBun({
+    body: options.body,
     cwd: options.from,
     env: {
       ...process.env,
@@ -129,13 +176,7 @@ function runBridgeScript(options: {
       HOSTNAME: "127.0.0.1",
       ...options.env,
     },
-    encoding: "utf8",
-    timeout: 60_000,
   });
-  if (result.status !== 0) {
-    throw new Error(`bridge script exited ${result.status}: ${result.stderr}`);
-  }
-  return result.stdout.trim();
 }
 
 describe("the bridge process", () => {
@@ -162,36 +203,42 @@ describe("the bridge process", () => {
     return directories;
   }
 
-  test("enters the workspace at module load without bootstrapping from it", () => {
-    const { packageRoot, workspace } = fixture();
-    const preloadMarker = join(workspace, "preload-ran");
-    // A repository-controlled bunfig, which `bun` would honour on the way in if
-    // the launcher started this process in the worktree.
-    writeFileSync(join(workspace, "bunfig.toml"), 'preload = ["./repo-preload.js"]\n');
-    writeFileSync(
-      join(workspace, "repo-preload.js"),
-      `require("node:fs").writeFileSync(${JSON.stringify(preloadMarker)}, "ran");\n`,
-    );
+  test(
+    "enters the workspace at module load without bootstrapping from it",
+    async () => {
+      const { packageRoot, workspace } = fixture();
+      const preloadMarker = join(workspace, "preload-ran");
+      // A repository-controlled bunfig, which `bun` would honour on the way in if
+      // the launcher started this process in the worktree.
+      writeFileSync(join(workspace, "bunfig.toml"), 'preload = ["./repo-preload.js"]\n');
+      writeFileSync(
+        join(workspace, "repo-preload.js"),
+        `require("node:fs").writeFileSync(${JSON.stringify(preloadMarker)}, "ran");\n`,
+      );
 
-    const cwd = runBridgeScript({
-      from: packageRoot,
-      workspace,
-      body: `await import(${JSON.stringify(configModule)});
+      const cwd = await runBridgeScript({
+        from: packageRoot,
+        workspace,
+        body: `await import(${JSON.stringify(configModule)});
         process.stdout.write(process.cwd());`,
-    });
+      });
 
-    expect(cwd).toBe(realpathSync(workspace));
-    expect(existsSync(preloadMarker)).toBe(false);
-  });
+      expect(cwd).toBe(realpathSync(workspace));
+      expect(existsSync(preloadMarker)).toBe(false);
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
 
-  test("configures the SDK with the production store rooted below bridge state", () => {
-    const { packageRoot, workspace } = fixture();
-    const stateRoot = join(packageRoot, "state");
-    const output = runBridgeScript({
-      from: packageRoot,
-      workspace,
-      env: { CURSOR_BRIDGE_STATE_DIR: stateRoot },
-      body: `const sdk = await import(${JSON.stringify(cursorSdkModule)});
+  test(
+    "configures the SDK with the production store rooted below bridge state",
+    async () => {
+      const { packageRoot, workspace } = fixture();
+      const stateRoot = join(packageRoot, "state");
+      const output = await runBridgeScript({
+        from: packageRoot,
+        workspace,
+        env: { CURSOR_BRIDGE_STATE_DIR: stateRoot },
+        body: `const sdk = await import(${JSON.stringify(cursorSdkModule)});
         const configured = [];
         const original = sdk.Cursor.configure;
         sdk.Cursor.configure = (options) => {
@@ -204,31 +251,37 @@ describe("the bridge process", () => {
           configuredProductionStore: configured[0] === runtime.cursorLocalAgentStore,
           storeRoot: runtime.cursorLocalAgentStoreRoot,
         }));`,
-    });
+      });
 
-    expect(JSON.parse(output)).toEqual({
-      configuredOnce: true,
-      configuredProductionStore: true,
-      storeRoot: join(stateRoot, "cursor-sdk"),
-    });
-  });
+      expect(JSON.parse(output)).toEqual({
+        configuredOnce: true,
+        configuredProductionStore: true,
+        storeRoot: join(stateRoot, "cursor-sdk"),
+      });
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
 
-  test("re-enters the workspace when start() runs after a later cwd change", () => {
-    const { packageRoot, workspace, elsewhere } = fixture();
+  test(
+    "re-enters the workspace when start() runs after a later cwd change",
+    async () => {
+      const { packageRoot, workspace, elsewhere } = fixture();
 
-    const cwd = runBridgeScript({
-      from: packageRoot,
-      workspace,
-      body: `await import(${JSON.stringify(configModule)});
+      const cwd = await runBridgeScript({
+        from: packageRoot,
+        workspace,
+        body: `await import(${JSON.stringify(configModule)});
         process.chdir(${JSON.stringify(elsewhere)});
         const server = await import(${JSON.stringify(serverModule)});
         await server.start();
         process.stdout.write(process.cwd());
         process.exit(0);`,
-    });
+      });
 
-    expect(cwd).toBe(realpathSync(workspace));
-  });
+      expect(cwd).toBe(realpathSync(workspace));
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
 });
 
 /**
@@ -244,31 +297,40 @@ describe("the bridge process", () => {
  * this default is a documentation change too.
  */
 describe("the host execution posture", () => {
-  function readSandboxDefault(env: NodeJS.ProcessEnv): string {
-    const result = spawnSync(
-      process.execPath,
-      [
-        "-e",
-        `const c = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "config.ts")).href)});
+  function readSandboxDefault(env: NodeJS.ProcessEnv): Promise<string> {
+    return runBun({
+      body: `const c = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "config.ts")).href)});
          process.stdout.write(String(c.sandboxEnabled));`,
-      ],
-      { env: { ...process.env, ...env }, encoding: "utf8" },
-    );
-    expect(result.status).toBe(0);
-    return result.stdout.trim();
+      env: { ...process.env, ...env },
+    });
   }
 
-  test("is ungated unless a launcher explicitly opts in", () => {
-    expect(readSandboxDefault({ CURSOR_BRIDGE_SANDBOX: "" })).toBe("false");
-  });
+  test(
+    "is ungated unless a launcher explicitly opts in",
+    async () => {
+      expect(await readSandboxDefault({ CURSOR_BRIDGE_SANDBOX: "" })).toBe("false");
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
 
-  test("only the exact opt-in value turns the SDK sandbox on", () => {
-    expect(readSandboxDefault({ CURSOR_BRIDGE_SANDBOX: "1" })).toBe("true");
-    // Anything else fails closed towards the documented default rather than
-    // half-enabling a sandbox on a typo.
-    expect(readSandboxDefault({ CURSOR_BRIDGE_SANDBOX: "true" })).toBe("false");
-    expect(readSandboxDefault({ CURSOR_BRIDGE_SANDBOX: "0" })).toBe("false");
-  });
+  test(
+    "only the exact opt-in value turns the SDK sandbox on",
+    async () => {
+      // `sandboxEnabled` is frozen at import, so every value needs its own
+      // process. They are independent, so start them together.
+      const [optIn, word, zero] = await Promise.all([
+        readSandboxDefault({ CURSOR_BRIDGE_SANDBOX: "1" }),
+        readSandboxDefault({ CURSOR_BRIDGE_SANDBOX: "true" }),
+        readSandboxDefault({ CURSOR_BRIDGE_SANDBOX: "0" }),
+      ]);
+      expect(optIn).toBe("true");
+      // Anything else fails closed towards the documented default rather than
+      // half-enabling a sandbox on a typo.
+      expect(word).toBe("false");
+      expect(zero).toBe("false");
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
 
   test("project settings are an exact opt-in read at the call site", () => {
     const previous = process.env.CURSOR_BRIDGE_PROJECT_SETTINGS;

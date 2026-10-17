@@ -698,10 +698,14 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
       throw new Error(`${input.agent} does not support session resume`);
     }
     this.invalidateProjection(key);
-    const resumedId = await provider.resumeSession(
+    // Wait for any last-owner close before reopening the conversation. Adoption
+    // takes the same fence and rechecks liveness before publishing its mapping.
+    const resumedId = await withProviderSessionTeardownLock(
+      this.storage,
+      input.environmentId,
+      input.agent,
       input.providerSessionId,
-      input.controls,
-      trustedInput.policy,
+      () => provider.resumeSession!(input.providerSessionId, input.controls, trustedInput.policy),
     );
     await this.adoptSession({
       ...trustedInput,

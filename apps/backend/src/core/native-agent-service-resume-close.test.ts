@@ -12,9 +12,16 @@ import {
   MULTI_REVIEW_WORKFLOW_VERSION,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
-import type { NativeAgentRuntimeProvider } from "./native-agent-service-shared.js";
+import {
+  NativeAgentProviderSessionMissingError,
+  type NativeAgentRuntimeProvider,
+} from "./native-agent-service-shared.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
-import { createProviderStub, withService } from "./native-agent-service-projection-test-support.js";
+import {
+  createProviderStub,
+  internals,
+  withService,
+} from "./native-agent-service-projection-test-support.js";
 import { withProviderSessionTeardownLock } from "./provider-session-ownership.js";
 
 type Agent = (typeof BUILD_PIPELINE_AGENTS)[number];
@@ -29,6 +36,14 @@ function resumableStub(
   const closeSession = mock(async (_sessionId: string) => undefined);
   Object.assign(stub.provider as NativeAgentRuntimeProvider, { resumeSession, closeSession });
   return { provider: stub.provider, resumeSession, closeSession };
+}
+
+function gate() {
+  let open!: () => void;
+  const opened = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { open, opened };
 }
 
 const tab = (agent: Agent, tabId = "tab-new") => ({
@@ -130,6 +145,152 @@ describe("resume closes the session it replaced", () => {
         });
         await service.resumeProjectionSession({ ...identity, providerSessionId: "vendor-old" });
         expect(closeSession).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  for (const acquisition of ["adopt", "resume"] as const) {
+    test(`${acquisition} waits for replacement cleanup's no-owner snapshot`, async () => {
+      const snapshotRead = gate();
+      const releaseSnapshot = gate();
+      const acquisitionReady = gate();
+      let live = true;
+      const order: string[] = [];
+      const { provider, resumeSession, closeSession } = resumableStub("grok", "provider-resumed", {
+        status: async (id) => (id === "provider-session" && !live ? "missing" : "idle"),
+        send: async (id) => {
+          if (id === "provider-session" && !live) throw new Error("Session is closed");
+          order.push(`send:${id}`);
+        },
+      });
+      resumeSession.mockImplementation(async (id) => {
+        order.push(`resume:${id}`);
+        if (id === "provider-session") live = true;
+        return id === "provider-session" ? id : "provider-resumed";
+      });
+      closeSession.mockImplementation(async (id) => {
+        order.push(`close:${id}`);
+        if (id === "provider-session") live = false;
+      });
+      await withService(
+        {
+          prefix: `orkestrator-resume-close-acquire-${acquisition}-`,
+          provider: async () => provider,
+        },
+        async ({ service, storage }) => {
+          const identity = tab("grok");
+          const other = tab("grok", "tab-other");
+          await service.ensureSession(identity);
+          const listWorkflows = storage.listMultiReviewWorkflows.bind(storage);
+          spyOn(storage, "listMultiReviewWorkflows").mockImplementation(async (environmentId) => {
+            const workflows = await listWorkflows(environmentId);
+            // The ownership helper has already captured an empty tab snapshot.
+            snapshotRead.open();
+            await releaseSnapshot.opened;
+            return workflows;
+          });
+          const replacing = service.resumeProjectionSession({
+            ...identity,
+            providerSessionId: "vendor-old",
+          });
+          await snapshotRead.opened;
+          const resolveProvider = internals(service).provider.bind(service);
+          spyOn(internals(service), "provider").mockImplementation(async (input) => {
+            const resolved = await resolveProvider(input);
+            if (input.logicalSessionKey === other.logicalSessionKey) acquisitionReady.open();
+            return resolved;
+          });
+          const status = spyOn(provider, "status");
+          const input = { ...other, providerSessionId: "provider-session" };
+          // Handle rejection immediately; a failed acquisition must not kill the backend.
+          const acquiring = (
+            acquisition === "adopt"
+              ? service.adoptSession(input)
+              : service.resumeProjectionSession(input)
+          ).then(
+            (value) => ({ value, error: undefined }),
+            (error: unknown) => ({ value: undefined, error }),
+          );
+          try {
+            await acquisitionReady.opened;
+            // Drain continuations after provider resolution. No elapsed-time race:
+            // the snapshot gate remains closed until these assertions finish.
+            await new Promise<void>((resolve) => setImmediate(resolve));
+            expect(status).not.toHaveBeenCalledWith("provider-session");
+            expect(resumeSession.mock.calls.map(([id]) => id)).toEqual(["vendor-old"]);
+            const key = nativeAgentSessionStorageKey("env-1", "grok", other.logicalSessionKey);
+            expect(await storage.getNativeAgentSession(key)).toBeNull();
+          } finally {
+            releaseSnapshot.open();
+            await replacing;
+          }
+          const result = await acquiring;
+          if (acquisition === "adopt") {
+            expect(result.error).toBeInstanceOf(NativeAgentProviderSessionMissingError);
+            // A direct adoption cannot resurrect a closed process. Resume it
+            // after the close, then publish the new live owner.
+            await service.resumeProjectionSession(input);
+          } else {
+            expect(result.error).toBeUndefined();
+            expect(result.value).toMatchObject({ sessionId: "provider-session" });
+          }
+          expect(order.slice(0, 3)).toEqual([
+            "resume:vendor-old",
+            "close:provider-session",
+            "resume:provider-session",
+          ]);
+          const key = nativeAgentSessionStorageKey("env-1", "grok", other.logicalSessionKey);
+          expect((await storage.getNativeAgentSession(key))?.providerSessionId).toBe(
+            "provider-session",
+          );
+          expect(await provider.status("provider-session")).toBe("idle");
+          await service.dispatchPrompt({ ...other, prompt: "Continue", requestId: "after-close" });
+          expect(order).toContain("send:provider-session");
+          expect(closeSession.mock.calls).toEqual([["provider-session"]]);
+        },
+      );
+    });
+  }
+
+  test("an adoption already publishing its mapping fences replacement cleanup", async () => {
+    const publishing = gate();
+    const releasePublication = gate();
+    const refreshed = gate();
+    const { provider, closeSession } = resumableStub("grok", "provider-resumed", {
+      interactiveSnapshot: async (id) => {
+        if (id === "provider-resumed") refreshed.open();
+        return { status: "idle", messages: [] };
+      },
+    });
+    await withService(
+      { prefix: "orkestrator-resume-close-acquire-first-", provider: async () => provider },
+      async ({ service, storage }) => {
+        const identity = tab("grok");
+        const other = tab("grok", "tab-other");
+        await service.ensureSession(identity);
+        const adopt = storage.adoptNativeAgentSession.bind(storage);
+        spyOn(storage, "adoptNativeAgentSession").mockImplementation(async (input) => {
+          if (input.logicalSessionKey === other.logicalSessionKey) {
+            publishing.open();
+            await releasePublication.opened;
+          }
+          return adopt(input);
+        });
+        const acquiring = service.adoptSession({ ...other, providerSessionId: "provider-session" });
+        await publishing.opened;
+        const replacing = service.resumeProjectionSession({
+          ...identity,
+          providerSessionId: "vendor-old",
+        });
+        try {
+          await refreshed.opened;
+          expect(closeSession).not.toHaveBeenCalled();
+        } finally {
+          releasePublication.open();
+          await Promise.all([acquiring, replacing]);
+        }
+        expect(closeSession).not.toHaveBeenCalled();
+        expect((await service.getProjection(other))?.sessionId).toBe("provider-session");
       },
     );
   });

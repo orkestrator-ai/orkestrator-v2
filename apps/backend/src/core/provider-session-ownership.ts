@@ -19,8 +19,12 @@ type OwnershipStorage = Pick<
 const teardownTails = new WeakMap<object, Map<string, Promise<void>>>();
 
 /**
- * Closes of one provider session run one at a time, keyed by (environment,
- * agent, provider session) within one storage. Without this, two owners
+ * Acquisitions and closes of one provider session run one at a time, keyed by
+ * (environment, agent, provider session) within one storage. Adoption holds the
+ * fence from its liveness check through mapping publication, and resume waits
+ * for any in-flight close before reopening the conversation. A queued adoption
+ * must reject a session that closed while it waited; it cannot publish a stale
+ * mapping. Without this fence, two owners
  * letting go together (two tabs closed at once, or a tab close racing a
  * resume in another tab) could each see the other's mapping, both skip the
  * provider close, and leave the session running with no owner.

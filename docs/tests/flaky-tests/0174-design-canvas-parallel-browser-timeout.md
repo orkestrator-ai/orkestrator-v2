@@ -51,3 +51,12 @@ hints that never overtake their commit. This case was not rerun. Its symptoms
 or profile timing, and nothing here implicates the design change feed. It
 stays open; see the follow-up in
 [design-canvas-qualification.md](../../todo/design-canvas-qualification.md).
+
+## Execution-policy conformance main merge recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name merge-browser -- mise run test:browser`; nine Playwright workers alongside the non-iOS suite.
+- **Failure:** Both mobile and desktop cases exceeded 30000 ms. The desktop case was waiting for the export button.
+- **Suite counts:** 323 passed, 69 skipped, four failed across 396 cases (247.6 seconds). The native branch-picker failure also failed alone and is not classified as a flake.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-design-browser-isolated -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1` passed the unchanged file (exit 0) in 15.9 seconds. Browser reruns ran sequentially.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.2CnKQx/merge-browser.log.gz`.
+- **Assessment:** intermittent under the aggregate browser run; root cause remains unconfirmed. No assertion, timeout or skip changed.

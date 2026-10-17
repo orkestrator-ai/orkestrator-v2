@@ -406,6 +406,35 @@ export async function reconcileAgentMcp(
   }
 }
 
+/** Build and reload the actual SDK resources used on every session attach. */
+export async function createPiSessionServices(
+  state: SessionState,
+  options: Omit<
+    Parameters<typeof createAgentSessionServices>[0],
+    "resourceLoaderOptions" | "resourceLoaderReloadOptions"
+  >,
+): ReturnType<typeof createAgentSessionServices> {
+  const loaderPolicy = piResourceLoaderPolicy(state);
+  const services = await createAgentSessionServices({
+    ...options,
+    resourceLoaderOptions: {
+      // Project resources can execute arbitrary code or replace built-in tools.
+      // Read-only sessions exclude them even inside trusted containers.
+      ...loaderPolicy.discovery,
+      extensionFactories: [
+        { name: "orkestrator", factory: approvalExtension(state) },
+        { name: "orkestrator-mcp", factory: piMcpExtension(state) },
+        // After the gate, so a refused call is never measured.
+        { name: "orkestrator-command-changes", factory: commandChangeExtension(state) },
+      ],
+    },
+  });
+  await services.resourceLoader.reload({
+    resolveProjectTrust: async () => loaderPolicy.projectTrusted,
+  });
+  return services;
+}
+
 async function createPiAgentSession(state: SessionState): Promise<AgentSession> {
   // Checked before anything expensive: an environment with no authenticated
   // provider must say so, rather than failing inside the first turn the user
@@ -428,27 +457,11 @@ async function createPiAgentSession(state: SessionState): Promise<AgentSession> 
     sessionStartEvent?: Parameters<typeof createAgentSessionFromServices>[0]["sessionStartEvent"];
   }) => {
     const settingsManager = SettingsManager.create(cwd, runtimeAgentDir);
-    const services = await createAgentSessionServices({
+    const services = await createPiSessionServices(state, {
       cwd,
       agentDir: runtimeAgentDir,
       settingsManager,
       modelRuntime: runtime,
-      resourceLoaderOptions: {
-        // `.pi/` may contain arbitrary TypeScript extensions. The container
-        // launcher opts in; host worktrees stay fail-closed. Read-only review
-        // sessions also exclude project instructions and registrations because
-        // an extension can replace an otherwise allow-listed built-in tool.
-        ...projectResourceDiscoveryOptions(state.policy?.projectResources, state.readOnly === true),
-        extensionFactories: [
-          { name: "orkestrator", factory: approvalExtension(state) },
-          { name: "orkestrator-mcp", factory: piMcpExtension(state) },
-          // After the approval gate, so a refused call is never measured.
-          { name: "orkestrator-command-changes", factory: commandChangeExtension(state) },
-        ],
-      },
-    });
-    await services.resourceLoader.reload({
-      resolveProjectTrust: async () => state.policy?.projectResources === true,
     });
     const model = await resolveModelForSession(state.composer.selectedModelId);
     state.composer = await hydrateComposerForSession(
@@ -754,6 +767,20 @@ export function projectResourceDiscoveryOptions(
     // project resources are disabled. Package-only reviews are different: a
     // repository AGENTS.md is untrusted input outside the verified package.
     noContextFiles: readOnly,
+  };
+}
+
+/** What a session's resource loader discovers, and whether it trusts the project. */
+export function piResourceLoaderPolicy(state: Pick<SessionState, "policy" | "readOnly">): {
+  discovery: ReturnType<typeof projectResourceDiscoveryOptions>;
+  projectTrusted: boolean;
+} {
+  return {
+    discovery: projectResourceDiscoveryOptions(
+      state.policy?.projectResources,
+      state.readOnly === true,
+    ),
+    projectTrusted: state.policy?.projectResources === true,
   };
 }
 

@@ -1,6 +1,8 @@
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { describe, expect, test } from "bun:test";
 import {
+  CONTAINER_NETWORK_FOLLOWS_ENVIRONMENT_NOTE,
+  NO_CONTAINER_ON_HOST_NOTE,
   resolveEnvironmentExecutionPolicy,
   resolveNativeAgentExecutionPolicy,
   SANDBOXED_FOR_NETWORK_RESTRICTION_NOTE,
@@ -206,6 +208,67 @@ describe("resolveNativeAgentExecutionPolicy", () => {
 
   test("the unsandboxed default carries no note", () => {
     expect(resolveNativeAgentExecutionPolicy(host, "looped-review").note).toBeUndefined();
+  });
+
+  test("a host cannot claim a container it does not have", () => {
+    expect(
+      resolveNativeAgentExecutionPolicy(host, "interactive-native", { sandbox: "container" }),
+    ).toMatchObject({ sandbox: "none", note: NO_CONTAINER_ON_HOST_NOTE });
+  });
+
+  test("a container stays the boundary when an override asks for no sandbox", () => {
+    expect(
+      resolveNativeAgentExecutionPolicy(container, "interactive-native", { sandbox: "none" }),
+    ).toMatchObject({ sandbox: "container", networkAccess: "restricted" });
+  });
+
+  test("a container reports the network its firewall gives, not the override's", () => {
+    // The firewall follows the environment (`commands-containers.ts`), so an
+    // override cannot widen the network beyond the firewall.
+    expect(
+      resolveNativeAgentExecutionPolicy(container, "interactive-native", { networkAccess: "full" }),
+    ).toEqual({
+      id: "interactive-container",
+      sandbox: "container",
+      approvals: "auto-approve",
+      projectResources: true,
+      networkAccess: "restricted",
+      note: CONTAINER_NETWORK_FOLLOWS_ENVIRONMENT_NOTE,
+    });
+  });
+
+  test.each([undefined, "none", "container"] as const)(
+    "a full-network container retains restricted overrides with sandbox %s",
+    (sandbox) => {
+      expect(
+        resolveNativeAgentExecutionPolicy(
+          { environmentType: "containerized", networkAccessMode: "full" },
+          "interactive-native",
+          { ...(sandbox ? { sandbox } : {}), networkAccess: "restricted" },
+        ),
+      ).toMatchObject({
+        sandbox: "provider",
+        networkAccess: "restricted",
+        containerNetworkAccess: "full",
+        note: SANDBOXED_FOR_NETWORK_RESTRICTION_NOTE,
+      });
+    },
+  );
+
+  test("a provider sandbox inside a container can narrow its network but not widen it", () => {
+    expect(
+      resolveNativeAgentExecutionPolicy(
+        { environmentType: "containerized", networkAccessMode: "full" },
+        "interactive-native",
+        { sandbox: "provider", networkAccess: "restricted" },
+      ),
+    ).toMatchObject({ sandbox: "provider", networkAccess: "restricted" });
+    expect(
+      resolveNativeAgentExecutionPolicy(container, "interactive-native", {
+        sandbox: "provider",
+        networkAccess: "full",
+      }),
+    ).toMatchObject({ sandbox: "provider", networkAccess: "restricted" });
   });
 });
 

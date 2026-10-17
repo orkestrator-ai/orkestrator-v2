@@ -379,3 +379,11 @@ merge-pi-owner-after-browser -- bun test ./tests/unit/pi-bridge-vendor.test.ts
 0), with the same PATH preference. This later pass establishes intermittence;
 shared-host filesystem contention remains an unconfirmed hypothesis. No
 assertion, timeout or skip changed.
+
+## Execution-policy conformance main merge recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test` (Bun 1.4.3, macOS arm64). Workspace/root/bridge/protocol reservations were 4/1/2/1 slots; browser validation ran alongside it.
+- **Failure:** The staged Pi runtime load exceeded 30000 ms (30006.46 ms).
+- **Owning-file rerun:** `mise run test:logged -- --name merge-pi-vendor-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 16.6 seconds.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.IG0vGk/root-and-agent-support-tests.log.gz`.
+- **Assessment:** the isolated pass confirms intermittence; root cause remains unconfirmed. No assertion, timeout or skip changed.

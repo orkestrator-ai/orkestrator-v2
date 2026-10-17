@@ -13,6 +13,7 @@ import {
   claudeTurnPolicy,
   claudeWorkspaceCwd,
 } from "./claude-query-config.js";
+import { claudeExecutionSandbox } from "./claude-execution-sandbox.js";
 import { debugLog } from "./logger.js";
 import {
   AGENT_MCP_SERVER_NAME,
@@ -25,7 +26,6 @@ import {
   claudeDeniedTools,
   claudeDisallowedTools,
   claudeReadOnlyAllowedTools,
-  claudeReadOnlySandbox,
   createCoordinatorReadOnlyHook,
   isCoordinatorReadOnlyPolicy,
 } from "./read-only-policy.js";
@@ -346,18 +346,9 @@ export function claudeQueryOptions(
     forwardSubagentText: true,
     allowedTools,
     ...(disallowedTools?.length ? { disallowedTools } : {}),
-    ...(coordinatorReadOnly && policy
-      ? { sandbox: claudeReadOnlySandbox(policy) }
-      : policy?.sandbox === "provider"
-        ? {
-            sandbox: {
-              enabled: true,
-              autoAllowBashIfSandboxed:
-                policy.approvals === "auto-approve" && !claudeAsksForApproval(policy, options),
-              network: { allowLocalBinding: policy.networkAccess === "full" },
-            },
-          }
-        : {}),
+    ...(policy?.sandbox === "provider" || coordinatorReadOnly
+      ? { sandbox: claudeExecutionSandbox(policy, claudeAsksForApproval(policy, options)) }
+      : {}),
     abortController,
     // A deterministic UUID makes the bridge id recoverable from the SDK's
     // persisted session store after a bridge restart.

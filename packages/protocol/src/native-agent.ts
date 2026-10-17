@@ -9,12 +9,17 @@ import {
   isNativeAgentMessagePatchList,
   type NativeAgentMessagePatch,
 } from "./native-agent-transcript-patch.js";
+import {
+  describeNativeAgentPolicyEffects,
+  nativeAgentPolicyEffects,
+} from "./native-agent-policy-effects.js";
 import type {
   NativeAgentRuntimeSteerJournal,
   NativeAgentSteerRejectedOutcome,
 } from "./native-agent-steer-rejection.js";
 
 export * from "./native-agent-steer-rejection.js";
+export * from "./native-agent-policy-effects.js";
 
 /** Provider-neutral identity for one native-agent tab. */
 export interface NativeAgentTabData {
@@ -1223,6 +1228,8 @@ export interface NativeAgentExecutionPolicy {
    */
   capabilityPolicy?: { deny: NativeAgentCapability[]; allow?: NativeAgentCapability[] };
   networkAccess: "restricted" | "full";
+  /** Outer firewall retained when an optional provider sandbox runs in a container. */
+  containerNetworkAccess?: "restricted" | "full";
   /** Provider caveat when one policy axis cannot be enforced exactly. */
   note?: string;
 }
@@ -1261,6 +1268,9 @@ export function isNativeAgentExecutionPolicy(value: unknown): value is NativeAge
       policy.approvals === "deny") &&
     typeof policy.projectResources === "boolean" &&
     (policy.networkAccess === "restricted" || policy.networkAccess === "full") &&
+    (policy.containerNetworkAccess === undefined ||
+      policy.containerNetworkAccess === "restricted" ||
+      policy.containerNetworkAccess === "full") &&
     (policy.note === undefined || typeof policy.note === "string") &&
     (toolPolicy === undefined ||
       ((toolPolicy.allow === undefined ||
@@ -1311,26 +1321,12 @@ export function nativeAgentPolicyDeniesWebSearch(
   return capabilities.deny.includes("network") && !capabilities.allow?.includes("web.search");
 }
 
-/** Stable, provider-neutral copy for the agent information panel. */
+/**
+ * Stable, provider-neutral copy for the agent information panel, rendered from
+ * the policy's effects so the conformance suite can hold every adapter to it.
+ */
 export function describeNativeAgentExecutionPolicy(policy: NativeAgentExecutionPolicy): string {
-  const sandbox =
-    policy.sandbox === "container"
-      ? "Container sandbox"
-      : policy.sandbox === "provider"
-        ? "Provider sandbox"
-        : "No sandbox";
-  const approvals =
-    policy.approvals === "ask"
-      ? "approvals on request"
-      : policy.approvals === "deny"
-        ? "approvals denied"
-        : "approvals off";
-  const network = !nativeAgentPolicyDeniesNetwork(policy)
-    ? `${policy.networkAccess} network`
-    : nativeAgentPolicyDeniesWebSearch(policy)
-      ? "no network, web search and web fetch off"
-      : "no network except hosted web search, web fetch off";
-  return `${sandbox}, ${approvals}, project rules ${policy.projectResources ? "on" : "off"}, ${network}`;
+  return describeNativeAgentPolicyEffects(nativeAgentPolicyEffects(policy));
 }
 
 export interface NativeAgentRateLimitWindow {

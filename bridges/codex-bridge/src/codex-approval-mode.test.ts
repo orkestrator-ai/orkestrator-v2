@@ -57,6 +57,27 @@ describe("codexApprovalConfig", () => {
     ).toBeUndefined();
   });
 
+  test("an ask policy in a container asks for commands rather than for leaving a sandbox", () => {
+    const containerAsk: NativeAgentExecutionPolicy = {
+      ...hostPolicy,
+      id: "interactive-container",
+      sandbox: "container",
+      approvals: "ask",
+    };
+    expect(codexApprovalConfig(containerAsk, "danger-full-access", "on-request")).toEqual({
+      approvalPolicy: "untrusted",
+      approvalsReviewer: "user",
+    });
+    // An auto-approve container keeps the mode it was given.
+    expect(
+      codexApprovalConfig(
+        { ...containerAsk, approvals: "auto-approve" },
+        "danger-full-access",
+        "on-request",
+      )?.approvalPolicy,
+    ).toBe("on-request");
+  });
+
   test("recognises only the composer's modes", () => {
     expect(isCodexApprovalMode("auto-review")).toBe(true);
     expect(isCodexApprovalMode({ granular: {} })).toBe(false);

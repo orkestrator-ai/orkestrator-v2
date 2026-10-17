@@ -407,3 +407,24 @@ and `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.w0udE
 This observation does not independently establish a flake. Runtime staging
 remains an unresolved validation limitation; no source, assertion, timeout or
 skip changed.
+
+
+## Codex catalogue review follow-up recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name full-tests -- mise run test`
+  (Bun 1.4.3, macOS arm64; workspace/root/bridge/protocol reservations
+  4/1/2/1 slots, alongside an isolated browser run and other worktrees).
+- **Failure:** `Pi bridge runtime vendoring > loads Pi's supported SDK from
+  the staged runtime closure` in `tests/unit/pi-bridge-vendor.test.ts`
+  exceeded its 30-second deadline at 30000.11 ms. Root/support reported
+  3037 passed, one skipped, two failed and one error across 3040 tests in
+  303.68 seconds. The additional failure/error was discovery of an integration
+  test moved during the run; a fresh aggregate passed root/support with
+  3038 passed, one skipped and zero failures across 3039 tests in 195.41 seconds.
+- **Owning-file rerun:** `mise run test:logged -- --name pi-vendor-rerun -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+  passed the unchanged four-test file (exit 0) in 31.8 seconds overall.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.jlxHbv/root-and-agent-support-tests.log.gz`
+  (compressed when the aggregate completes).
+- **Assessment:** the isolated pass confirms intermittence. Host filesystem
+  contention remains a hypothesis; no Pi source, assertion, timeout or skip
+  changed.

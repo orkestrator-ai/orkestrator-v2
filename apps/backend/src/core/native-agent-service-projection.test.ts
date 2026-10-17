@@ -2381,7 +2381,7 @@ describe("NativeAgentService", () => {
 
   // Codex turns run the session config's model; the prompt carries none. The
   // catalogue's first row is not what runs, so the picker must not show it.
-  test("shows the model a Codex session runs when the catalogue does not list it", async () => {
+  test("neutrally identifies a held Codex model missing from a catalogue of unknown provenance", async () => {
     const invoke: Invoke = async <T>(command: string): Promise<T> => {
       if (command !== "get_native_agent_model_catalog") {
         throw new Error(`Unexpected backend command: ${command}`);
@@ -2425,7 +2425,7 @@ describe("NativeAgentService", () => {
         ]);
         expect(projection?.composer?.models[1]).toMatchObject({
           label: "gpt-5.4",
-          providerLabel: "Codex · not offered to this login",
+          providerLabel: "Codex · session model",
         });
 
         // Picking a listed model replaces it.

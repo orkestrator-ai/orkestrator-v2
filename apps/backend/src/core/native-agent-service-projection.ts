@@ -95,7 +95,7 @@ import {
   lastAssistantModelRef,
 } from "./native-agent-composer-selection.js";
 import { nativeAgentPlatformPolicy } from "./native-agent-platform-policy.js";
-import { notOfferedSessionModel } from "./session-held-model.js";
+import { heldSessionModel } from "./session-held-model.js";
 import { providerCacheKey } from "./native-agent-provider-registry.js";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import { sessionIncompleteTurnNotice } from "./models.js";
@@ -3918,7 +3918,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       models.length > 0 &&
       !models.some((model) => model.id === selectedModelId)
     ) {
-      models = [...models, notOfferedSessionModel(input.agent, selectedModelId)];
+      models = [...models, heldSessionModel(input.agent, selectedModelId)];
     }
     const resolvedSelection = withResolvedNativeComposerModel(models, selectedModelId, input.agent);
     models = resolvedSelection.models;

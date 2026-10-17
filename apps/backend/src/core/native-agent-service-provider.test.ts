@@ -600,6 +600,7 @@ describe("NativeAgentService", () => {
           if (url.endsWith("/global/models")) {
             return Response.json({
               source: "app-server",
+              supportedModelIds: ["gpt-6.1-sol", "gpt-6.1-sol-mini"],
               models: [{ id: "gpt-6.1-sol", name: "GPT-6.1-Sol" }],
             });
           }

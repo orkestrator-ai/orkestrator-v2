@@ -47,6 +47,7 @@ describe("HTTP bridge provider (codex)", () => {
       () =>
         Response.json({
           source: "app-server",
+          supportedModelIds: ["gpt-6.1-sol", "gpt-6.1-sol-mini"],
           models: [{ id: "gpt-6.1-sol", name: "GPT-6.1-Sol" }],
         }),
       codexConnection,

@@ -24,21 +24,24 @@ export interface CodexCatalogueModel {
 /**
  * The Codex bridge's catalogue, or undefined when it could not be read.
  *
- * Only `source: "app-server"` is the login's live `model/list`. The bridge's
+ * Only `source: "app-server"` with `supportedModelIds` establishes complete
+ * live availability. Older bridges return only picker rows. The bridge's
  * persisted cache and hardcoded fallback can omit models the login serves, so
  * they never justify replacing a configured model.
  */
 export interface CodexCatalogue {
   models: CodexCatalogueModel[];
   source?: string;
+  /** Complete live availability, including models hidden from the picker. */
+  supportedModelIds?: string[];
 }
 
 /**
  * The model a new Codex session should run for an inherited default.
  *
  * A configured model is replaced only on the positive signal that the live
- * catalogue does not list it, and the replacement is that catalogue's first
- * row: the one the picker already falls back to, so the shown and the run
+ * availability catalogue does not list it. The replacement is the picker's
+ * first row: the one the picker already falls back to, so the shown and the run
  * model agree. An unset default stays unset and Codex applies its own. The
  * answer is for this session only; callers never write it to settings.
  */
@@ -49,8 +52,10 @@ export function resolveCodexDefaultModel(
   const requestedModelId = configuredModelId?.trim();
   // `"default"` is the launchers' placeholder for unset, not a Codex model.
   if (!requestedModelId || requestedModelId === "default") return {};
-  if (catalogue?.source !== "app-server") return { modelId: requestedModelId };
-  if (catalogue.models.some((model) => model.id === requestedModelId)) {
+  if (catalogue?.source !== "app-server" || !catalogue.supportedModelIds) {
+    return { modelId: requestedModelId };
+  }
+  if (catalogue.supportedModelIds.includes(requestedModelId)) {
     return { modelId: requestedModelId };
   }
   const replacement = catalogue.models[0];
@@ -86,7 +91,11 @@ export async function resolveCodexBridgeDefaultModel(
 /** Bounded parse of the bridge's `/global/models` body. */
 export function parseCodexCatalogue(value: unknown): CodexCatalogue | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const { models, source } = value as { models?: unknown; source?: unknown };
+  const { models, source, supportedModelIds } = value as {
+    models?: unknown;
+    source?: unknown;
+    supportedModelIds?: unknown;
+  };
   if (!Array.isArray(models)) return undefined;
   return {
     models: models.slice(0, 512).flatMap((candidate): CodexCatalogueModel[] => {
@@ -96,23 +105,28 @@ export function parseCodexCatalogue(value: unknown): CodexCatalogue | undefined 
       return [{ id, ...(typeof name === "string" ? { name } : {}) }];
     }),
     ...(typeof source === "string" ? { source } : {}),
+    ...(Array.isArray(supportedModelIds) &&
+    supportedModelIds.length <= 1_000 &&
+    supportedModelIds.every((id) => typeof id === "string" && id.length > 0)
+      ? { supportedModelIds: supportedModelIds as string[] }
+      : {}),
   };
 }
 
 /**
- * A picker row for a session-held model the catalogue does not list.
+ * A picker row for a session-held model the current picker does not list.
  *
  * It is what the session's next turn runs, so the picker shows it rather than
- * a catalogue row that would not run. The provider line says why it is not in
- * the list; picking any listed model replaces it.
+ * a catalogue row that would not run. Its absence from the picker alone says
+ * nothing about account availability.
  */
-export function notOfferedSessionModel(platform: AgentPlatform, modelId: string): AgentModel {
+export function heldSessionModel(platform: AgentPlatform, modelId: string): AgentModel {
   const label = AGENT_PLATFORM_LABELS[platform];
   return {
     platform,
     id: modelId,
     label: modelId,
-    providerLabel: `${label} · not offered to this login`,
-    description: `This session runs ${modelId}, which your ${label} login does not list. Choose another model.`,
+    providerLabel: `${label} · session model`,
+    description: `This session runs ${modelId}. It is not in the current model picker.`,
   };
 }

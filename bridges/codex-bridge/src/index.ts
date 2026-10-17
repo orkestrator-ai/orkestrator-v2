@@ -1182,8 +1182,7 @@ app.post("/global/auth/logout", async (c) => {
 });
 
 app.get("/global/models", async (c) => {
-  const { models, source } = await appServerRuntime.listModels();
-  return c.json({ models, source });
+  return c.json(await appServerRuntime.listModels());
 });
 
 /** Account plan limits for the global settings pane; no session required. */

@@ -283,3 +283,26 @@ passed the unchanged owning file in 23.8 seconds (exit 0). Evidence:
 - Owning-file runs during the aggregate also timed out (47 passed, one failed, one between-tests teardown error each): `coordinator-owner-rerun` in 32.5 seconds and `coordinator-after-browser` in 24.9 seconds. Their artifacts are `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.iCnX63/coordinator-owner-rerun.log.gz` and `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.0jjdbZ/coordinator-after-browser.log.gz`.
 - After the aggregate and browser runs ended, the unchanged owning file passed: `mise run test:logged -- --name coordinator-post-aggregate -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`, 19.1 seconds, exit 0.
 - Shared-host contention and teardown after timeout remain hypotheses. No assertion, timeout, skip or implementation in this owner changed.
+
+
+## Codex catalogue review final validation — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name final-full-tests -- mise run test`
+  (Bun 1.4.3, macOS arm64; workspace/root/bridge/protocol reservations
+  4/1/2/1 slots, two isolated backend workers; other worktrees shared the host).
+- **Aggregate:** backend 8814 passed, 41 skipped, ten failed and three
+  between-tests errors across 8865 tests in 472 files (541.38 seconds).
+  Toolchain had one failure; every other package and root/bridge/protocol
+  group passed. Aggregate exited 1 after 852.0 seconds.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.NfVWIS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Failure:** bound-discard exceeded its 5000 ms deadline at 5120.72 ms.
+- **First owning-file rerun:** `mise run test:logged -- --name coordinator-owner-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`
+  also timed out (5133.27 ms; 47 passed, one failed and one between-tests
+  error, 29.5 seconds overall). Late fixture work reported `disk I/O error`
+  instead of the expected nested-repository refusal. Evidence:
+  `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.xchrod/coordinator-owner-rerun.log.gz`.
+- **Post-aggregate rerun:** the unchanged file passed `mise run test:logged -- --name coordinator-post-aggregate -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`
+  (exit 0, 17.7 seconds).
+- **Assessment:** the later isolated pass confirms intermittence. Shared-host
+  contention and teardown after timeout remain hypotheses; no coordinator
+  implementation, assertion, timeout or skip changed.

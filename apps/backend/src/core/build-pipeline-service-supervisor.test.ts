@@ -533,6 +533,7 @@ describe("BuildPipelineService", () => {
     const answerFromChatGptLogin = async (modelId: string | undefined) =>
       resolveCodexDefaultModel(modelId, {
         source: "app-server",
+        supportedModelIds: ["gpt-6.1-sol", "gpt-6.1-sol-mini"],
         models: [{ id: "gpt-6.1-sol", name: "GPT-6.1-Sol" }],
       });
     const configureCodexModel = async (storage: StorageService, model: string) => {
@@ -559,6 +560,20 @@ describe("BuildPipelineService", () => {
           modelId: "gpt-6.1-sol",
           message: "gpt-5.4 isn't available with your Codex login; using GPT-6.1-Sol.",
         });
+        expect((await storage.loadConfig()).global.agentSettings).toEqual(
+          config.global.agentSettings,
+        );
+      });
+    });
+
+    test("retains an offered configured default on an unpinned Codex step", async () => {
+      await withService(async (service, storage, provider) => {
+        provider.resolveDefaultModel = answerFromChatGptLogin;
+        const config = await configureCodexModel(storage, "gpt-6.1-sol");
+        const { session } = await startBuilding(service, storage, { agentType: "codex" });
+        expect(session.model).toBe("gpt-6.1-sol");
+        expect(provider.created[0]?.options?.model).toBe("gpt-6.1-sol");
+        expect(session.modelSubstitution).toBeUndefined();
         expect((await storage.loadConfig()).global.agentSettings).toEqual(
           config.global.agentSettings,
         );

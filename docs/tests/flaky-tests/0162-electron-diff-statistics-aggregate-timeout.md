@@ -256,3 +256,28 @@ skip changed.
 - **Failures:** eight diff-statistics cases exceeded the 5000 ms budget: `computes counts for a tracked local environment and announces them` (5403.25 ms), `serves the Files panel from the scan the badge already ran` (5410.16 ms), `refreshes a tracked environment on explicit request` (5459.96 ms), `clears published counts when a repository config retarget cannot be scanned` (5386.69 ms), `does not resurrect deleted tracking from a stale reconciliation` (6281.31 ms), `does not mark the counts approximate for an ordinary worktree` (6443.82 ms), `enables git's scan caches on a newly created worktree` (6569.41 ms), and `deleting an environment drops its counts from the snapshot` (6076.77 ms).
 - **Owning-file rerun:** `mise run test:logged -- --name commands-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 19.9 seconds.
 - **Assessment:** the unchanged owning-file pass confirms an intermittent recurrence. Shared-host contention remains a hypothesis. No owning implementation, assertion, timeout or skip changed.
+
+
+## Codex catalogue review final validation — 2026-10-17
+
+`mise run test:logged -- --name final-full-tests -- mise run test` ran with
+4/1/2/1 workspace/root/bridge/protocol slots and two isolated backend workers
+on macOS arm64 (Bun 1.4.3), sharing the host with other worktrees.
+
+The diff-statistics cases `enables git's scan caches on a newly created
+worktree` and `deleting an environment drops its counts from the snapshot`
+exceeded their 5000 ms deadlines at 5846.21 and 5440.61 ms respectively.
+
+The unchanged owning file passed `mise run test:logged -- --name
+commands-owner-final-rerun -- bun test --cwd apps/backend --preload
+../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1
+--only-failures` (exit 0, 40.3 seconds). Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.NfVWIS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+(compressed when the aggregate completes). The isolated pass confirms
+intermittence; host contention remains a hypothesis. No owning implementation,
+assertion, timeout or skip changed.
+
+Final aggregate totals: backend 8814 passed, 41 skipped, ten failed and three
+between-tests errors across 8865 tests in 472 files (541.38 seconds).
+Toolchain had 90 passed and one failed. Root, bridges, protocol and every
+other workspace package passed; aggregate exit 1 after 852.0 seconds.

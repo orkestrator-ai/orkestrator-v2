@@ -1059,7 +1059,7 @@ describe("model catalog", () => {
     expect(models[0]!.isDefault).toBe(true);
   });
 
-  test("stops paginating rather than looping on a repeated cursor", async () => {
+  test("rejects an incomplete catalogue rather than looping on a repeated cursor", async () => {
     let calls = 0;
     const h = harness({
       "model/list": () => {
@@ -1068,9 +1068,11 @@ describe("model catalog", () => {
       },
     });
     await h.engine.start();
-    await h.engine.listModels();
+    await expect(h.engine.listModels()).rejects.toThrow(
+      "Codex model catalogue exceeded its page limit",
+    );
 
-    expect(calls).toBeLessThanOrEqual(20);
+    expect(calls).toBe(20);
   });
 });
 

@@ -1418,10 +1418,7 @@ export abstract class StorageProjects extends StorageBase {
   async recordEnvironmentSessionCompletion(
     environmentId: string,
     occurredAt: string,
-    reason: Extract<
-      EnvironmentUnreadReason,
-      "agent_finished" | "agent_ready" | "agent_waiting"
-    > = "agent_finished",
+    reason: Extract<EnvironmentUnreadReason, "agent_finished" | "agent_waiting"> = "agent_finished",
   ): Promise<Environment> {
     if (!isAgentActivityTimestamp(occurredAt)) {
       throw new Error("occurredAt must be a valid ISO timestamp");

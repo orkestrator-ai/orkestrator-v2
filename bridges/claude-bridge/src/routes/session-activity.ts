@@ -31,8 +31,9 @@ export async function readSessionActivityObservation(
   return {
     activity,
     // Readiness and activity deliberately diverge while background work is
-    // alive: the composer may accept a new prompt (and the bell may announce
-    // that fact) while the environment icon must remain blue and pulsing.
+    // alive: the composer may accept a new prompt while the environment icon
+    // must remain blue and pulsing. The backend does not ring the bell for
+    // readiness; it waits for the session to read idle or waiting.
     ...(resident?.status === "idle" ? { readyForInput: true as const } : {}),
   };
 }

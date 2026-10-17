@@ -1282,7 +1282,10 @@ describe("NativeAgentService", () => {
     );
   });
 
-  test("announces ready input while background work keeps the environment working", async () => {
+  test("does not ring the bell when a parent turn releases to background work", async () => {
+    // A Claude turn that ends while its own background tasks run has parked
+    // itself to wait for them; the CLI resumes it when they settle. The bell
+    // waits for the session to go idle, here without an observed resume.
     let observation: ProviderActivityObservation = {
       state: "working",
       readyForInput: false,
@@ -1312,18 +1315,28 @@ describe("NativeAgentService", () => {
 
         expect(await storage.getEnvironment("env-1")).toMatchObject({
           agentActivityState: "working",
-          hasUnreadWork: true,
-          unreadReason: "agent_ready",
         });
+        expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).not.toBe(true);
         expect(await service.hasObservedLiveWork("env-1", "claude")).toBe(true);
+
+        observation = { state: "idle", readyForInput: true };
+        await service.reconcileAgentActivity();
+
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          agentActivityState: "idle",
+          hasUnreadWork: true,
+          unreadReason: "agent_finished",
+        });
       },
     );
   });
 
-  test("announces a released composer once, on the edge the bridge actually reports", async () => {
-    // The production sequence for a Claude session with live background tasks:
-    // readiness is *absent* while the turn runs, then appears when the parent
-    // turn releases the composer. `false` never crosses the wire.
+  test("rings once the turn resumed after background work ends", async () => {
+    // The production sequence for a Claude session that parks on its own
+    // background tasks: readiness is *absent* while the turn runs, appears when
+    // the parent turn releases the composer, disappears when a task
+    // notification resumes the root loop, and the resumed turn then ends idle.
+    // `false` never crosses the wire.
     let observation: ProviderActivityObservation = { state: "working" };
     const { provider } = createProviderStub("claude", {
       observeActivity: async () => observation,
@@ -1345,16 +1358,25 @@ describe("NativeAgentService", () => {
         await service.reconcileAgentActivity();
         expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).not.toBe(true);
 
+        // The bridge repeats `readyForInput: true` on every poll for as long as
+        // the tasks run. None of those polls is news.
         observation = { state: "working", readyForInput: true };
         await service.reconcileAgentActivity();
+        await service.reconcileAgentActivity();
+        expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).not.toBe(true);
+
+        observation = { state: "working" };
+        await service.reconcileAgentActivity();
+        expect((await storage.getEnvironment("env-1"))?.hasUnreadWork).not.toBe(true);
+
+        observation = { state: "idle", readyForInput: true };
+        await service.reconcileAgentActivity();
         expect(await storage.getEnvironment("env-1")).toMatchObject({
-          agentActivityState: "working",
+          agentActivityState: "idle",
           hasUnreadWork: true,
-          unreadReason: "agent_ready",
+          unreadReason: "agent_finished",
         });
 
-        // The bridge repeats `readyForInput: true` on every poll for as long as
-        // the tasks run. Only the release is news.
         await storage.setEnvironmentUnread("env-1", false);
         await service.reconcileAgentActivity();
         await service.reconcileAgentActivity();

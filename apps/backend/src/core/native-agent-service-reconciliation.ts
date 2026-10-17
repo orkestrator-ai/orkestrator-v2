@@ -686,32 +686,23 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       observed?.providerSessionId === session.providerSessionId ? observed : undefined;
     const previous = currentObservation?.state;
     /*
-     * Readiness is an edge layered on the state machine, not a replacement for
-     * it. A bridge that keeps `state` at `working` for background tasks still
-     * releases the composer when the parent turn ends, and that release is the
-     * moment worth announcing — but only when a turn was actually live to
-     * release. Requiring `previous === "working"` is what keeps an observation
-     * that merely *regains* the flag from counting: the absent-bridge sweep and
-     * a non-resident session both record `idle` with no readiness, so without
-     * that guard the next poll after the bridge returns and the session is
-     * materialized would mark the environment unread with no turn behind it.
-     */
-    const readinessEdge =
-      readyForInput === true &&
-      previous === "working" &&
-      currentObservation?.readyForInput !== true;
-    /*
-     * The historical edge stays live for every other shape, including an
-     * explicit `readyForInput: false`. Gating it on readiness being absent
-     * would make an accurate provider weaker than a silent one: a bridge that
-     * reports "not ready" alongside an idle turn would lose its attention edge
-     * entirely, while one that omits the field keeps it.
+     * Readiness never rings the bell on its own. A Claude parent turn that
+     * releases the composer while its background tasks run has almost always
+     * parked itself to wait for them ("I'll be notified when it finishes"),
+     * and the CLI resumes it when they settle. Announcing the release told the
+     * user an agent wanted input while it was still mid-task. The edge worth
+     * announcing comes when that resumed turn ends and the session reads
+     * `idle`, or when it parks on the user as `waiting`. `readyForInput` still
+     * frees the composer and the mail gate (`sessionTurnActivitySnapshot`).
+     *
+     * The edge is the same for every readiness shape, including an explicit
+     * `readyForInput: false`, so an accurate provider is never weaker than one
+     * that omits the field.
      */
     const durableAttentionEdge =
-      readinessEdge ||
-      ((state === "idle" || state === "waiting") &&
-        (previous === "working" ||
-          (state === "idle" && observed === undefined && countUnknownIdleAsCompletion)));
+      (state === "idle" || state === "waiting") &&
+      (previous === "working" ||
+        (state === "idle" && observed === undefined && countUnknownIdleAsCompletion));
     // PR reconciliation retains its narrower historical completion contract:
     // a parked waiting turn needs the user's attention, but it has not ended.
     //
@@ -731,11 +722,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       await this.storage.recordEnvironmentSessionCompletion(
         session.environmentId,
         new Date(this.now()).toISOString(),
-        state === "waiting"
-          ? "agent_waiting"
-          : state === "working"
-            ? "agent_ready"
-            : "agent_finished",
+        state === "waiting" ? "agent_waiting" : "agent_finished",
       );
     }
     if (stillApplicable && !stillApplicable()) return false;

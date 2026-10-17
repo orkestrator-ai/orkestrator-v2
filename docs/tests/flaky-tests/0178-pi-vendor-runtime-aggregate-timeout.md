@@ -567,3 +567,13 @@ the owning test unchanged.
 - **Assessment:** this observation does not independently establish a flake because the owning file also failed alone. The merge conflict resolution changes documentation only and does not change Pi runtime staging. Host filesystem contention remains a hypothesis; runtime-staging validation remains an unresolved limitation. No source, assertion, timeout or skip changed.
 
 Final aggregate: exit 1 after 1252.7 seconds logged. Backend passed 8964 tests with 41 skipped and no failures; all other workspace packages except desktop passed. Bridges and the Codex protocol check passed. The only failed cases were this runtime-staging timeout and the desktop fixture-digest timeout (0178/0258).
+
+## Coordinator pane drop-test main merge recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test` on Bun 1.4.3, macOS arm64. Workspace/root/bridge/protocol reserved 4/1/2/1 slots, with two backend workers, concurrent component browser validation and other worktrees sharing the host.
+- **Failure:** `Pi bridge runtime vendoring > loads Pi's supported SDK from the staged runtime closure` in `tests/unit/pi-bridge-vendor.test.ts` exceeded its 30000 ms deadline at 30001.54 ms. Root/support reported 3037 passed, one skipped and one failed across 3039 tests in 140 files (274.13 seconds).
+- **Owning-file rerun:** `mise run test:logged -- --name merge-pi-vendor-alone -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 12.4 seconds).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.xZ3kaR/root-and-agent-support-tests.log.gz`.
+- **Assessment:** the isolated pass confirms intermittence. Shared-host contention remains an unconfirmed hypothesis; no owning implementation, assertion, timeout or skip changed.
+
+Final aggregate exited 1 after 477.8 seconds. Backend reported 8978 passed, 41 skipped and one failed across 9020 tests in 478 files (423.04 seconds). Root/support reported the Pi timeout above; all other workspace packages, bridges and the Codex protocol check passed. Both failing owning files passed unchanged alone. Formatting, lint, typechecking and the full component browser suite also passed. Additional real-stack, Electron, Docker and iOS scenario suites were omitted because the branch changes a component-browser test and documentation, and conflict resolution changes documentation only.

@@ -226,15 +226,21 @@ reliably green on `main`, and nothing requires it to be.
    [service-preview-rollout.md](service-preview-rollout.md) evidence log). Stop
    the group from a fixture teardown or a worker-exit hook as well, and bound
    the `close()` wait.
-10. **A backend environment test fails on `main`.**
+10. **A backend environment test fails on `main` on some runs.**
     `Electron backend environment lifecycle commands > removes a newly created
     worktree and its branch when persisting them fails`
-    (`apps/backend/tests/commands-registry-environments.test.ts:1451`) expects
-    `start_environment` to reject with "storage unavailable", but the promise
-    resolves. It fails alone on a clean `origin/main` at `9da80451`
-    (2026-10-17), so it is a deterministic failure rather than a flake, and
-    every `mise run test` reports it. Find the change that made the start
-    path stop surfacing the persistence failure, then fix the code or the
+    (`apps/backend/tests/commands-registry-environments.test.ts:1409`; first
+    reported as line 1451) expects `start_environment` to reject with "storage
+    unavailable", but the promise resolves. On 2026-10-17 it failed alone on a
+    clean `origin/main` at `9da80451`, and in the Grok-trust build's full
+    `mise run test`. Later the same day it passed, run alone from
+    `apps/backend` with `bun test tests/commands-registry-environments.test.ts
+    -t "removes a newly created worktree and its branch"`, on clean detached
+    checkouts of `9da80451` (one run) and `origin/main` at `607d12e2` (three
+    runs), and on that branch merged with `607d12e2`, both alone and in the
+    full suite. So it depends on something outside the tree (host tools on
+    `PATH`, or Git or filesystem state), not on a commit. Find what makes the
+    start path stop surfacing the persistence failure, then fix the code or the
     test.
 
 ### Qualification

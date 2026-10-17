@@ -180,7 +180,7 @@ it reaches. Some rules of thumb:
 
 ### Cross-cutting (high)
 
-- [ ] Fix `removes a newly created worktree and its branch when persisting them fails`, which fails alone on `main` ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
+- [ ] Fix `removes a newly created worktree and its branch when persisting them fails`, which has failed alone on a clean `main` on some runs ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [x] Make the desktop app wait (bounded) for the backend to exit before `quitAndInstall` and on every quit ([remote-host-upgrades.md](remote-host-upgrades.md))
 - [x] Qualify Codex sub-agent cards on a fixture profile: one card per child, recovery after reload and restart ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
 - [x] Decide and implement a renderer-backend skew guard for raw OpenCode envelopes from older backends ([mixed-version-compatibility.md](mixed-version-compatibility.md))

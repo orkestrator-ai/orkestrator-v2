@@ -146,13 +146,10 @@ scale evidence that was never collected.
    submit_validation_plan to submit its review package preparation"; Restart
    step recovered it. Reuse the step's `schemaRepairPrompt` dispatch path with
    `workflowResultReminderPrompt`, once per step.
-5. **Evict the cached provider in Build Pipeline review stages** when a
-   reviewer's bridge is unreachable, as Multi Review does. Their reviewers get
-   the bounded retry today but keep reading the dead port until it expires.
-6. **Add seeded, CI-sized randomised interleaving tests** across concurrent
+5. **Add seeded, CI-sized randomised interleaving tests** across concurrent
    reviewers. They should interleave commit resolution, provider completion,
    cancellation, fence loss and restart. They were planned but never written.
-7. **Close the measurement gaps.**
+6. **Close the measurement gaps.**
    - Verification counts only the package's declared size. Referenced artifact
      bytes are not reported.
    - There is no opt-in large-evidence case (hundreds of MiB, real hashing).
@@ -240,6 +237,62 @@ Decisions taken during the run:
 - The spec restarts preparation once if it fails before any reviewer starts,
   and records it, because that flake (Code item 4) is outside what the cycle
   tests.
+
+### Review recovery follow-up (2026-10-17)
+
+Validated on `4443c027` plus the recovery fixes in this commit, on macOS
+arm64. Multi Review and Build Pipeline now evict only the failed cached
+instance. Instance-scoped call counts and reviewer/read leases defer disposal
+until concurrent dispatches and transcript reads finish. Observation retries
+accept transport faults; malformed interaction responses fail promptly.
+Retryable provider recreation errors share the existing bounded observation
+budget without changing the dispatched session or request identity. Failure
+text names the platform provider, including OpenCode.
+
+- Deterministic tests cover a pending OpenCode dispatch plus a concurrent UI
+  reader during peer eviction, exactly-once disposal, pipeline reconnection,
+  transient and permanent recreation failures, and completion during an outage
+  with a report or with the one result reminder.
+- Live bridge kill: `ORKESTRATOR_AGENT_TEST_PROFILE=qa-review-recovery-1017
+  ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW=1 mise run test:logged -- --name
+  multi-review-live-bridge -- mise run test:agent:browser --
+  e2e/agent-testing/multi-review-live.spec.ts --grep 'isolates an interrupted
+  reviewer bridge'` passed (1 test, 92.5 seconds). The Claude reviewer failed
+  closed after its result reminder; the Codex peer completed and the review
+  consolidated. The case verified preserved sessions and dispatch identity,
+  inactive-environment settlement, and UI rehydration after reload. This is
+  recovery/failure-isolation evidence, not completion of an interrupted turn.
+- Profile `qa-review-recovery-1017` used Claude 2.1.296 and Codex 0.162.1,
+  with the spec's Haiku 4.5 and GPT-6-Luna defaults. It was stopped and reset.
+  Content-free outcomes are in
+  `output/agent-testing/qa-review-recovery-1017/browser/results.json`.
+- The isolated browser runner forces
+  `ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW=0`; its regression test starts with
+  an inherited value of `1` and verifies the Playwright child's value is `0`.
+  The actual isolated suite with that variable exported as `1` also skipped
+  all four live Multi Review cases: 25 passed, 18 skipped, one existing narrow
+  host-picker failure (489.7 seconds, exit 1; flake entry 0224). Its profile
+  `qa-browser-67110e54-b3a` was stopped and reset automatically. Evidence:
+  `output/agent-testing/qa-browser-67110e54-b3a/browser/results.json` and
+  `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.9PgCqj/isolated-live-opt-in.log.gz`.
+- `mise run check`, the focused backend recovery owners, the desktop isolated
+  runner owner, and the recurring-work comparison all passed. The latter
+  compared all 14 baseline scenarios without changing a work counter.
+  Docker, Electron-specific and iOS scenario suites were omitted because
+  these fixes do not change those paths.
+- Final full suite: `mise run test:logged -- --name final-full-review-recovery
+  -- mise run test` exited 1 after 409.7 seconds. All recovery tests, all other
+  workspace packages and root/bridge/protocol groups passed. Backend reported
+  8,636 passed, 41 skipped and one failure: the unchanged tracked-edit
+  cache-hit flake [0180](../tests/flaky-tests/0180-worktree-tracked-edit-cache-hit.md).
+  Its complete owning file passed immediately on rerun (four tests,
+  0.5 seconds). The earlier aggregate's three known timeout owners also passed
+  separately; the wrapper-identity assertion found there was corrected and
+  passed. The final static check passed after the test correction.
+  Aggregate evidence is in
+  `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.IJ4t3D/`;
+  the wrapper log is
+  `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.NEipUr/final-full-review-recovery.log.gz`.
 
 ## Constraints and rationale
 

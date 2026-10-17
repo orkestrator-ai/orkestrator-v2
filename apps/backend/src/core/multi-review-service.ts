@@ -8,6 +8,7 @@ import {
   REVIEW_VALIDATION_PLAN_SCHEMA,
 } from "./review-validation-prompts.js";
 import { validationPreparation } from "./review-validation-service.js";
+import { managedProvider, retainProvider, retireProvider } from "./provider-retirement.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   MULTI_REVIEW_REPLACED_FIX_SESSION_NOTICE,
@@ -761,9 +762,14 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           fence: reviewer.sessionKey,
         });
         const started = Date.now();
-        transcript = await readReviewerTranscript(provider, readSessionId, knownSourceToken, {
-          key: reviewerHistoryKey(workflow.id, reviewer.id),
-        });
+        const release = retainProvider(provider);
+        try {
+          transcript = await readReviewerTranscript(provider, readSessionId, knownSourceToken, {
+            key: reviewerHistoryKey(workflow.id, reviewer.id),
+          });
+        } finally {
+          release();
+        }
         recordEfficiency(this.options.efficiency, {
           owner: "multi-review",
           operation:
@@ -846,7 +852,13 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           const key = this.providerKey(workflow, session);
           this.providerReaders.set(key, (this.providerReaders.get(key) ?? 0) + 1);
           try {
-            return await read(await this.providerInstance(workflow, session));
+            const provider = await this.providerInstance(workflow, session);
+            const release = retainProvider(provider);
+            try {
+              return await read(provider);
+            } finally {
+              release();
+            }
           } finally {
             await this.releaseProviderReaderByKey(key);
           }
@@ -943,15 +955,20 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         fence: reviewer.sessionKey,
       });
       const started = Date.now();
-      page = await readReviewerHistoryPage(
-        provider,
-        {
-          sessionKey: reviewerHistoryKey(workflow.id, reviewer.id),
-          providerSessionId: readSessionId,
-        },
-        before,
-        options,
-      );
+      const release = retainProvider(provider);
+      try {
+        page = await readReviewerHistoryPage(
+          provider,
+          {
+            sessionKey: reviewerHistoryKey(workflow.id, reviewer.id),
+            providerSessionId: readSessionId,
+          },
+          before,
+          options,
+        );
+      } finally {
+        release();
+      }
       recordEfficiency(this.options.efficiency, {
         owner: "multi-review",
         operation:
@@ -4425,11 +4442,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     const key = this.providerKey(workflow, selection);
     if (this.providers.get(key) !== provider) return;
     this.providers.delete(key);
-    try {
-      await provider.dispose?.();
-    } catch {
-      // Its bridge is already unreachable; nothing more to release.
-    }
+    retireProvider(provider);
   }
 
   private async disposeProviderIfUnused(key: string): Promise<void> {
@@ -4701,8 +4714,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
               autoAnswerRequests: false,
             });
           })();
-      this.providers.set(key, provider);
-      return provider;
+      const managed = managedProvider(provider);
+      this.providers.set(key, managed);
+      return managed;
     })();
     this.providerCreations.set(key, creation);
     try {

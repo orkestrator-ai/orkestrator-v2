@@ -702,7 +702,7 @@ it reaches. Some rules of thumb:
 - [ ] Add an opt-in large-evidence Multi Review benchmark with real hashing ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
 - [ ] Verify whether any supported reviewer platform still reaches the reviewer-transcript fallback ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), verify)
 - [x] Verify whether the browser and agent suites were ever run for the #833 launcher and reviewer tab ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), verify)
-- [ ] Evict the cached provider in Build Pipeline review stages when a reviewer's bridge is unreachable ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
+- [x] Evict the cached provider in Build Pipeline review stages when a reviewer's bridge is unreachable ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
 - [ ] Design a backend-owned, content-addressed review evidence store with read-only mounts ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), deferred)
 - [ ] Add provider batch status observation once a bridge exposes batch settlement status ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), deferred)
 - [ ] Add hierarchical map/reduce consolidation only if real workflows exceed the 640 KiB budget ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), deferred)

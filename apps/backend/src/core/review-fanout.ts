@@ -61,11 +61,12 @@ import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-ag
 import {
   AmbiguousPromptDispatchError,
   ProviderDispatchPreparationError,
-  ProviderUnavailableError,
   readProviderStatus,
   type BuildPipelineProvider,
   type ProviderPrepareDispatchOptions,
 } from "./build-pipeline-provider.js";
+import { retainProvider } from "./provider-retirement.js";
+import { ProviderUnreachableError } from "./agent-provider-contract.js";
 import {
   structuredReportRepairPrompt,
   type ReviewWorktreeSnapshot,
@@ -682,9 +683,9 @@ export interface ReviewFanoutHost {
   provider(selection: ReviewerModelSelection): Promise<BuildPipelineProvider>;
   /**
    * `provider`, returned by {@link provider} for this selection, could not
-   * reach its bridge. A host that caches providers drops that instance (and
+   * reach its transport. A host that caches providers drops that instance (and
    * only that one: a peer may already have replaced it), so the next
-   * {@link provider} call reconnects.
+   * {@link provider} call reconnects. Disposal waits for its concurrent users.
    */
   providerUnavailable?(
     selection: ReviewerModelSelection,
@@ -1123,7 +1124,41 @@ export class ReviewFanoutRunner {
     reviewerCount: number,
   ): Promise<"continue" | "stop"> {
     const host = this.host;
-    const provider = await host.provider(reviewer);
+    let provider: BuildPipelineProvider;
+    try {
+      provider = await host.provider(reviewer);
+    } catch (error) {
+      // Reconnection is observation of an existing turn, not a new dispatch.
+      // Startup backoff must share the same bound as an unreachable transport.
+      if (
+        reviewer.status === "running" &&
+        reviewer.providerSessionId &&
+        (reviewer.dispatchState === "sent" || reviewer.dispatchState === "dispatching") &&
+        (error instanceof ProviderUnreachableError ||
+          (typeof error === "object" &&
+            error !== null &&
+            "retryable" in error &&
+            error.retryable === true))
+      ) {
+        return this.recordUnavailable(reviewer, error);
+      }
+      throw error;
+    }
+    const release = retainProvider(provider);
+    try {
+      return await this.advanceReviewerWithProvider(reviewer, index, reviewerCount, provider);
+    } finally {
+      release();
+    }
+  }
+
+  private async advanceReviewerWithProvider(
+    reviewer: ReviewerRecord,
+    index: number,
+    reviewerCount: number,
+    provider: BuildPipelineProvider,
+  ): Promise<"continue" | "stop"> {
+    const host = this.host;
     await host.assertFence();
     if (reviewer.status === "pending") {
       const sessionKey = host.sessionKeyFor(reviewer, index);
@@ -1328,17 +1363,14 @@ export class ReviewFanoutRunner {
         reviewer.requestId,
       );
     } catch (error) {
-      if (!(error instanceof ProviderUnavailableError)) throw error;
+      if (!(error instanceof ProviderUnreachableError)) throw error;
       // A bridge that cannot be reached is an observation fault, not the
       // reviewer's: keep its state and look again when due. The host drops its
       // cached provider so the next pass reconnects, which restarts a local
       // bridge that died; the idle-poll bound still fails a reviewer whose
       // bridge never comes back.
       await host.providerUnavailable?.(reviewer, provider);
-      return this.recordStall(
-        reviewer,
-        `The reviewer's ${reviewer.agent} bridge stayed unreachable: ${reviewFanoutErrorMessage(error)}`,
-      );
+      return this.recordUnavailable(reviewer, error);
     }
     this.record({
       operation: "reviewer.status",
@@ -1846,6 +1878,13 @@ export class ReviewFanoutRunner {
     this.host.pollGate?.clear(`${this.host.workflowId}\0${reviewer.id}\0idle`);
     await this.commit();
     return true;
+  }
+
+  private recordUnavailable(reviewer: ReviewerRecord, error: unknown) {
+    return this.recordStall(
+      reviewer,
+      `The reviewer's ${reviewer.agent} provider stayed unreachable: ${reviewFanoutErrorMessage(error)}`,
+    );
   }
 
   /**

@@ -8,10 +8,11 @@ import { ProviderUnavailableError, type BuildPipelineProvider } from "./build-pi
 import { MultiReviewProgressTracker } from "./multi-review-progress.js";
 import { ManualTime } from "./recurring-test-support.js";
 import { ReviewFanoutRunner, type ReviewFanoutHost } from "./review-fanout.js";
+import { reportFor } from "./build-pipeline-review-fanout-test-support.js";
 import { ElapsedPollGate } from "./workflow-poll-gate.js";
 
 /** A running reviewer whose bridge can be taken down and brought back. */
-function harness(options: { interactionsUnreachable?: boolean } = {}) {
+function harness(options: { interactionsUnreachable?: boolean; interactionFailure?: Error } = {}) {
   const reviewer: ReviewerRecord = {
     id: "reviewer-1",
     agent: "claude",
@@ -23,7 +24,13 @@ function harness(options: { interactionsUnreachable?: boolean } = {}) {
     dispatchState: "sent",
     resultTransport: "structured-output-v1",
   };
-  const bridge = { down: true as boolean, failure: undefined as Error | undefined };
+  const bridge = {
+    down: true as boolean,
+    failure: undefined as Error | undefined,
+    resolutionFailure: undefined as Error | undefined,
+    status: "running" as "running" | "idle",
+    result: false,
+  };
   const created: BuildPipelineProvider[] = [];
   const unavailable: BuildPipelineProvider[] = [];
   const abandoned: string[] = [];
@@ -33,13 +40,20 @@ function harness(options: { interactionsUnreachable?: boolean } = {}) {
       async status() {
         if (bridge.failure) throw bridge.failure;
         if (bridge.down) throw new ProviderUnreachableError("claude bridge is not reachable");
-        return "running";
+        return bridge.status;
       },
       async messages() {
         return [];
       },
       async structured() {
-        return null;
+        return bridge.result
+          ? {
+              ok: true,
+              provider: reviewer.agent,
+              requestId: reviewer.requestId,
+              value: reportFor("Recovered"),
+            }
+          : null;
       },
       async abort() {},
       async send(_sessionId: string, prompt: string) {
@@ -58,7 +72,10 @@ function harness(options: { interactionsUnreachable?: boolean } = {}) {
     label: "test review",
     sessionKeyFor: () => "review-session-key",
     sessionLabelFor: () => "Reviewer",
-    provider: async () => current,
+    provider: async () => {
+      if (bridge.resolutionFailure) throw bridge.resolutionFailure;
+      return current;
+    },
     async providerUnavailable(_selection, provider) {
       unavailable.push(provider);
       if (provider === current) current = makeProvider();
@@ -69,8 +86,9 @@ function harness(options: { interactionsUnreachable?: boolean } = {}) {
     async save() {},
     async assertFence() {},
     async resolveUnattendedInteractions() {
+      if (options.interactionFailure) throw options.interactionFailure;
       if (options.interactionsUnreachable && bridge.down) {
-        throw new ProviderUnavailableError("claude bridge is unavailable");
+        throw new ProviderUnreachableError("claude bridge is unavailable");
       }
     },
     async abandonSession(_selection, providerSessionId) {
@@ -129,7 +147,7 @@ describe("reviewer whose bridge cannot be reached", () => {
     }
     expect(reviewer.status).toBe("failed");
     expect(reviewer.error).toBe(
-      "The reviewer's claude bridge stayed unreachable: claude bridge is not reachable",
+      "The reviewer's claude provider stayed unreachable: claude bridge is not reachable",
     );
     expect(abandoned).toEqual(["review-session"]);
     expect(sent).toEqual([]);
@@ -151,4 +169,115 @@ describe("reviewer whose bridge cannot be reached", () => {
     expect(reviewer.error).toBe("status read broke");
     expect(unavailable).toEqual([]);
   });
+});
+
+test("malformed interaction payloads fail promptly without reconnecting", async () => {
+  const { reviewer, runner, unavailable, abandoned } = harness({
+    interactionFailure: new ProviderUnavailableError("Malformed approval payload"),
+  });
+  await runner.advanceReviewers([reviewer]);
+  expect(reviewer.status).toBe("failed");
+  expect(reviewer.error).toBe("Malformed approval payload");
+  expect(unavailable).toEqual([]);
+  expect(abandoned).toEqual(["review-session"]);
+});
+
+test("reconnection startup backoff preserves the live turn until recovery", async () => {
+  const { reviewer, runner, bridge, time, abandoned, sent } = harness();
+  await runner.advanceReviewers([reviewer]);
+  bridge.resolutionFailure = Object.assign(new Error("Bridge startup is pending"), {
+    retryable: true,
+  });
+  time.jump(1_000);
+  await runner.advanceReviewers([reviewer]);
+  expect(reviewer).toMatchObject({ status: "running", dispatchState: "sent", idleResultPolls: 2 });
+  expect(abandoned).toEqual([]);
+  bridge.resolutionFailure = undefined;
+  bridge.down = false;
+  time.jump(1_000);
+  await runner.advanceReviewers([reviewer]);
+  expect(reviewer.idleResultPolls).toBeUndefined();
+  expect(reviewer.providerSessionId).toBe("review-session");
+  expect(reviewer.requestId).toBe("review-request");
+  expect(sent).toEqual([]);
+});
+
+test.each(["sent", "dispatching"] as const)(
+  "reconnection startup failures exhaust the bound for %s without resending",
+  async (dispatchState) => {
+    const { reviewer, runner, bridge, time, abandoned, sent } = harness();
+    reviewer.dispatchState = dispatchState;
+    bridge.resolutionFailure = Object.assign(new Error("Bridge startup is pending"), {
+      retryable: true,
+    });
+    for (let poll = 0; poll < REVIEW_FANOUT_MAX_IDLE_RESULT_POLLS; poll += 1) {
+      await runner.advanceReviewers([reviewer]);
+      time.jump(1_000);
+    }
+    expect(reviewer.status).toBe("failed");
+    expect(reviewer.error).toContain("claude provider stayed unreachable");
+    expect(abandoned).toEqual(["review-session"]);
+    expect(sent).toEqual([]);
+  },
+);
+
+test("permanent reconnect configuration failures are terminal", async () => {
+  const { reviewer, runner, bridge, unavailable } = harness();
+  bridge.resolutionFailure = new Error("Bridge authentication is unavailable");
+  await runner.advanceReviewers([reviewer]);
+  expect(reviewer.status).toBe("failed");
+  expect(reviewer.error).toBe("Bridge authentication is unavailable");
+  expect(unavailable).toEqual([]);
+});
+
+test("OpenCode outage failures use provider-neutral wording", async () => {
+  const { reviewer, runner, bridge, time } = harness();
+  reviewer.agent = "opencode";
+  bridge.failure = new ProviderUnreachableError("Connection refused");
+  for (let poll = 0; poll < REVIEW_FANOUT_MAX_IDLE_RESULT_POLLS; poll += 1) {
+    await runner.advanceReviewers([reviewer]);
+    time.jump(1_000);
+  }
+  expect(reviewer.error).toBe(
+    "The reviewer's opencode provider stayed unreachable: Connection refused",
+  );
+});
+
+test("accepts a report from a turn that finished during an outage", async () => {
+  const { reviewer, runner, bridge, time, abandoned, sent } = harness();
+  await runner.advanceReviewers([reviewer]);
+  expect(reviewer.idleResultPolls).toBe(1);
+  bridge.down = false;
+  bridge.status = "idle";
+  bridge.result = true;
+  time.jump(1_000);
+  await runner.advanceReviewers([reviewer]);
+  expect(reviewer.status).toBe("completed");
+  expect(reviewer.report?.reviewSummary).toBe("Recovered");
+  expect(reviewer.idleResultPolls).toBeUndefined();
+  expect(abandoned).toEqual([]);
+  expect(sent).toEqual([]);
+});
+
+test("a turn finished without a report during an outage gets one bounded reminder", async () => {
+  const { reviewer, runner, bridge, time, abandoned, sent } = harness();
+  reviewer.resultTransport = "tool-v1";
+  await runner.advanceReviewers([reviewer]);
+  bridge.down = false;
+  bridge.status = "idle";
+  for (let poll = 1; poll < REVIEW_FANOUT_MAX_IDLE_RESULT_POLLS; poll += 1) {
+    time.jump(1_000);
+    await runner.advanceReviewers([reviewer]);
+  }
+  expect(reviewer).toMatchObject({
+    status: "running",
+    resultReminderSent: true,
+    dispatchState: "prepared",
+  });
+  expect(reviewer.requestId).not.toBe("review-request");
+  expect(reviewer.providerSessionId).toBe("review-session");
+  expect(reviewer.continuationPrompt).toBeDefined();
+  expect(reviewer.idleResultPolls).toBeUndefined();
+  expect(abandoned).toEqual([]);
+  expect(sent).toEqual([]);
 });

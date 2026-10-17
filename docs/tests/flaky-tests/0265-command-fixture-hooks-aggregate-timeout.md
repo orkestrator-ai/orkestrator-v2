@@ -1,5 +1,8 @@
 # Command fixture hook timeouts during merge validation
 
+- **ID:** 0265
+- **Status:** open
+
 ## Observation — 2026-10-17
 
 - **Original command:** `mise run test:logged -- --name merge-tests -- mise run test` (Bun 1.4.3, macOS arm64). Workspace/root/bridge/protocol reservations were 4/1/2/1 slots; browser validation ran alongside it.

@@ -609,7 +609,9 @@ export function MultiReviewLaunchDialog({
                   disabled={busy}
                   onCheckedChange={(checked) => setAutoPr(checked === true)}
                 />
-                <Label htmlFor="multi-review-launch-auto-pr">Auto-PR after fix</Label>
+                <Label htmlFor="multi-review-launch-auto-pr">
+                  Auto-PR after fix or clean review
+                </Label>
               </div>
               <p
                 aria-live="polite"

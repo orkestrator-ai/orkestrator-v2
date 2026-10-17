@@ -472,3 +472,20 @@ test("marks findings a running reviewer reported as provisional", async ({ page 
     .filter({ hasText: "Paused prepare step never clears validation stop flag" });
   await expect(confirmed.getByTestId("multi-review-finding-standing")).toHaveCount(0);
 });
+
+for (const phase of ["ready", "interactive", "reviewing", "consolidating"]) {
+  test(`a retained clean-review PR notice reflects the current ${phase} snapshot after reload`, async ({
+    page,
+  }) => {
+    await page.goto("/multi-review-flow?phase=ready&cleanReviewPr&cleanReport");
+    await expect(page.getByTestId("multi-review-auto-pr-notice")).toContainText(
+      "The review found nothing to fix",
+    );
+    await page.goto(`/multi-review-flow?phase=${phase}&cleanReviewPr`);
+    await expect(page.getByRole("tablist", { name: "Multi Review pipeline" })).toBeVisible();
+    await expect(page.getByTestId("multi-review-auto-pr-notice")).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByRole("tablist", { name: "Multi Review pipeline" })).toBeVisible();
+    await expect(page.getByTestId("multi-review-auto-pr-notice")).toHaveCount(0);
+  });
+}

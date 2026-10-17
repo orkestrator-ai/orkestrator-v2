@@ -61,7 +61,7 @@ export const DEFAULT_MULTI_REVIEW_REVIEWER_COUNT = 2;
 export interface MultiReviewAgentSettings {
   /** Automatically launch Fix after a manual Multi Review consolidates. */
   autoFix?: boolean;
-  /** Automatically launch the PR tab after a Multi Review Fix turn completes. */
+  /** Automatically launch the PR tab after a Multi Review Fix turn completes, or after a clean report. */
   autoPr?: boolean;
   /** Number of reviewer sessions Multi Review, feature builds, and ticket builds start. */
   reviewerCount?: number;

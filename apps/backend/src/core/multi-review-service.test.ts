@@ -1,3 +1,5 @@
+import { multiReviewStatus } from "./coordinator-status-wakes.js";
+import { multiReviewAutomation } from "./control-workflow-summary.js";
 import { multiReviewFixIdentity } from "./multi-review-fix-identity.js";
 import { multiReviewNativeFixOptions } from "./multi-review-native-fix.js";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
@@ -2717,6 +2719,339 @@ test("MultiReviewService does not auto-fix a clean consolidated report", async (
         },
       },
     },
+  );
+});
+
+test.each([true, false])(
+  "MultiReviewService opens the PR straight after a clean consolidated report (auto-fix %s)",
+  async (autoFix) => {
+    const provider = new Provider();
+    provider.consolidationReport = cleanReport;
+    const events: string[] = [];
+    const flow = orderedAutoFlow(events);
+    await withService(
+      `env-clean-auto-pr-${autoFix}`,
+      provider,
+      async ({ service, start, snapshot }) => {
+        const started = await start();
+        expect(started).toMatchObject({ autoPr: true });
+        // The PR intent is saved with the clean report, before any PR launch.
+        const queued = await advanceUntil(
+          service,
+          snapshot,
+          started.id,
+          (workflow) => workflow.autoPrLaunch !== undefined,
+        );
+        expect(queued.phase).toBe("ready");
+        expect(queued.autoPrLaunch).toEqual({
+          basis: "clean-review",
+          state: "pending",
+          requestId: `multi-review-pr:${started.id}`,
+        });
+        expect(events).toEqual([]);
+
+        const launched = await advanceUntil(
+          service,
+          snapshot,
+          started.id,
+          (workflow) => workflow.autoPrLaunch?.state === "launched",
+        );
+        expect(launched.phase).toBe("ready");
+        expect(launched.autoPrLaunch).toEqual({
+          basis: "clean-review",
+          state: "launched",
+          requestId: `multi-review-pr:${started.id}`,
+          tabId: "agent-job-pr",
+        });
+        expect(launched.addressPromptPending).toBeUndefined();
+        expect(flow.pr.launches[0]).toMatchObject({ title: "PR", activateTab: false });
+        // No Fix ran, and the delivered PR is never repeated.
+        await service.advanceNow(started.id);
+        expect(events).toEqual(["pr"]);
+      },
+      {
+        autoFix,
+        autoPr: true,
+        packageFlow: true,
+        invoke: flow.invoke,
+        serviceOptions: { dispatchAddressPrompt: flow.dispatchAddressPrompt },
+      },
+    );
+  },
+);
+
+test.each(["reviewer", "consolidation"] as const)(
+  "a launched clean-review PR survives %s restart without hiding new findings after reload",
+  async (kind) => {
+    const provider = new Provider();
+    // Consolidation can initially resolve findings, then find them on the next attempt.
+    provider.reviewerReport = consolidatedReport;
+    provider.consolidationReport = cleanReport;
+    const pr = autoPrInvoker();
+    await withService(
+      `env-clean-pr-restart-${kind}`,
+      provider,
+      async ({ service, storage, start, snapshot }) => {
+        const started = await start();
+        const launched = await advanceUntil(
+          service,
+          snapshot,
+          started.id,
+          (workflow) => workflow.autoPrLaunch?.state === "launched",
+        );
+        provider.consolidationReport = consolidatedReport;
+        if (kind === "reviewer") {
+          await service.restartReviewer(started.id, launched.reviewers[0]!.id);
+        } else {
+          await service.restartStep(started.id, "consolidate");
+        }
+        await service.shutdown();
+        const replacement = new MultiReviewService(storage, pr.invoke, {
+          autoAdvance: false,
+          provider: async () => provider,
+        });
+        try {
+          const ready = await advanceUntil(
+            replacement,
+            snapshot,
+            started.id,
+            (workflow) => workflow.phase === "ready",
+          );
+          expect(ready.consolidatedReport?.issues).toHaveLength(1);
+          expect(ready.autoPrLaunch).toEqual(launched.autoPrLaunch);
+          // Both the live result and the stored result after reload reflect this report.
+          for (const current of [ready, (await snapshot(started.id))!]) {
+            const status = multiReviewStatus(current, started.id)!;
+            expect(status).toMatchObject({ state: "ready", headline: "is ready to address" });
+            expect(status.tools.join(" ")).toContain("address_multi_review");
+            expect(multiReviewAutomation({ ...current }).next).toContain(
+              "Waiting for address_multi_review",
+            );
+          }
+          await replacement.advanceNow(started.id);
+          expect(pr.launches).toHaveLength(1);
+        } finally {
+          await replacement.shutdown();
+        }
+      },
+      { autoPr: true, packageFlow: true, invoke: pr.invoke },
+    );
+  },
+);
+
+test("restores a pending clean-review PR and retries its delivery without a renderer", async () => {
+  const provider = new Provider();
+  const pr = autoPrInvoker({ failures: 1 });
+  await withService(
+    "env-clean-pr-background-restart",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      const queued = await advanceUntil(
+        service,
+        snapshot,
+        started.id,
+        (workflow) => workflow.autoPrLaunch?.state === "pending",
+      );
+      await service.shutdown();
+      const replacement = new MultiReviewService(storage, pr.invoke, {
+        autoAdvance: false,
+        provider: async () => provider,
+        addressDispatchRetryMs: 0,
+      });
+      try {
+        await replacement.advanceNow(started.id);
+        expect((await snapshot(started.id))?.autoPrLaunch).toMatchObject({
+          ...queued.autoPrLaunch,
+          basis: "clean-review",
+          state: "pending",
+          attempts: 1,
+        });
+      } finally {
+        await replacement.shutdown();
+      }
+      const background = new MultiReviewService(storage, pr.invoke, {
+        autoAdvance: true,
+        pollIntervalMs: 5,
+        provider: async () => provider,
+        addressDispatchRetryMs: 0,
+      });
+      try {
+        // Only the backend supervisor is running; no UI or caller advances delivery.
+        await background.init();
+        await waitUntil(
+          async () => (await snapshot(started.id))?.autoPrLaunch?.state === "launched",
+        );
+        expect((await snapshot(started.id))?.autoPrLaunch).toMatchObject({
+          basis: "clean-review",
+          state: "launched",
+          requestId: queued.autoPrLaunch!.requestId,
+          tabId: "agent-job-pr",
+        });
+        expect(pr.launches).toHaveLength(2);
+        expect(new Set(pr.launches.map((launch) => launch.requestId))).toEqual(
+          new Set([queued.autoPrLaunch!.requestId]),
+        );
+        expect(pr.launches.every((launch) => launch.activateTab === false)).toBe(true);
+      } finally {
+        await background.shutdown();
+      }
+    },
+    { autoPr: true, packageFlow: true, invoke: pr.invoke },
+  );
+});
+
+test("retry restores a clean report's PR intent after a failed Fix superseded it", async () => {
+  const provider = new Provider();
+  const pr = autoPrInvoker();
+  await withService(
+    "env-clean-pr-retry-fix",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      const queued = await advanceUntil(
+        service,
+        snapshot,
+        started.id,
+        (workflow) => workflow.autoPrLaunch?.state === "pending",
+      );
+      const addressed = await service.address(started.id);
+      expect(addressed.autoPrLaunch).toBeUndefined();
+      await advanceUntil(service, snapshot, started.id, (workflow) => workflow.phase === "failed");
+      const restored = await service.retry(started.id);
+      expect(restored.phase).toBe("ready");
+      expect(restored.autoPrLaunch).toEqual(queued.autoPrLaunch);
+      const launched = await advanceUntil(
+        service,
+        snapshot,
+        started.id,
+        (workflow) => workflow.autoPrLaunch?.state === "launched",
+      );
+      expect(launched.autoPrLaunch?.basis).toBe("clean-review");
+      expect(pr.launches).toHaveLength(1);
+    },
+    {
+      autoPr: true,
+      packageFlow: true,
+      invoke: pr.invoke,
+      serviceOptions: {
+        maxAddressDispatchAttempts: 1,
+        dispatchAddressPrompt: async () => {
+          throw new Error("Fix delivery failed");
+        },
+      },
+    },
+  );
+});
+
+test("MultiReviewService leaves a clean report at ready when auto-PR is off", async () => {
+  const provider = new Provider();
+  provider.consolidationReport = cleanReport;
+  const pr = autoPrInvoker();
+  await withService(
+    "env-clean-no-auto-pr",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      const ready = await advanceUntil(
+        service,
+        snapshot,
+        started.id,
+        (workflow) => workflow.phase === "ready",
+      );
+      await service.advanceNow(started.id);
+      expect(ready.autoPrLaunch).toBeUndefined();
+      expect(pr.launches).toHaveLength(0);
+    },
+    { autoFix: true, packageFlow: true, invoke: pr.invoke },
+  );
+});
+
+test("MultiReviewService drops a clean report's pending PR when a Fix starts first", async () => {
+  const provider = new Provider();
+  provider.consolidationReport = cleanReport;
+  const pr = autoPrInvoker();
+  await withService(
+    "env-clean-auto-pr-fix-first",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await advanceUntil(
+        service,
+        snapshot,
+        started.id,
+        (workflow) => workflow.autoPrLaunch?.state === "pending",
+      );
+      const addressed = await service.address(started.id);
+      expect(addressed.phase).toBe("interactive");
+      expect(addressed.autoPrLaunch).toBeUndefined();
+      await service.advanceNow(started.id);
+      expect(pr.launches).toHaveLength(0);
+    },
+    {
+      autoFix: true,
+      autoPr: true,
+      packageFlow: true,
+      invoke: pr.invoke,
+      serviceOptions: { dispatchAddressPrompt: autoPrFixDispatch },
+    },
+  );
+});
+
+test("MultiReviewService skips a clean report's PR once the review has moved on", async () => {
+  const provider = new Provider();
+  provider.consolidationReport = cleanReport;
+  const pr = autoPrInvoker();
+  await withService(
+    "env-clean-auto-pr-stale",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await advanceUntil(
+        service,
+        snapshot,
+        started.id,
+        (workflow) => workflow.autoPrLaunch?.state === "pending",
+      );
+      await mutateStoredWorkflow(storage, started.id, (workflow) => {
+        workflow.consolidatedReport = consolidatedReport;
+      });
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.autoPrLaunch).toMatchObject({
+        basis: "clean-review",
+        state: "skipped",
+        message: expect.stringContaining("moved on from its clean report"),
+      });
+      expect(pr.launches).toHaveLength(0);
+    },
+    { autoFix: true, autoPr: true, packageFlow: true, invoke: pr.invoke },
+  );
+});
+
+test("MultiReviewService skips a clean report's PR when the environment already has one", async () => {
+  const provider = new Provider();
+  provider.consolidationReport = cleanReport;
+  const pr = autoPrInvoker();
+  await withService(
+    "env-clean-auto-pr-existing",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      await storage.updateEnvironment("env-clean-auto-pr-existing", {
+        prUrl: "https://github.com/acme/app/pull/7",
+        prState: "open",
+      });
+      const started = await start();
+      const skipped = await advanceUntil(
+        service,
+        snapshot,
+        started.id,
+        (workflow) => workflow.autoPrLaunch?.state === "skipped",
+      );
+      expect(skipped.phase).toBe("ready");
+      expect(skipped.autoPrLaunch?.message).toContain("already exists");
+      expect(pr.launches).toHaveLength(0);
+    },
+    { autoFix: true, autoPr: true, packageFlow: true, invoke: pr.invoke },
   );
 });
 

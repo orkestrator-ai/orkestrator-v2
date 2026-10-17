@@ -4749,7 +4749,7 @@ describe("ActionBar workflow tabs", () => {
     currentMultiReviewSettings = { autoPr: true };
     render(<ActionBar />);
     fireEvent.contextMenu(screen.getByRole("button", { name: "Multi Review" }));
-    const checkbox = screen.getByRole("checkbox", { name: "Auto-PR after fix" });
+    const checkbox = screen.getByRole("checkbox", { name: "Auto-PR after fix or clean review" });
     expect(checkbox.getAttribute("aria-checked")).toBe("true");
     fireEvent.click(checkbox);
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));

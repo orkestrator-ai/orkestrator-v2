@@ -736,7 +736,7 @@ describe("MultiReviewLaunchDialog auto-PR", () => {
       onOpenChange: () => undefined,
     };
     const { rerender } = render(<MultiReviewLaunchDialog {...props} open />);
-    const checkbox = screen.getByRole("checkbox", { name: "Auto-PR after fix" });
+    const checkbox = screen.getByRole("checkbox", { name: "Auto-PR after fix or clean review" });
     expect(checkbox.getAttribute("aria-checked")).toBe("false");
     fireEvent.click(checkbox);
     expect(screen.getByTestId("multi-review-work-summary").textContent).toContain(
@@ -747,7 +747,9 @@ describe("MultiReviewLaunchDialog auto-PR", () => {
     rerender(<MultiReviewLaunchDialog {...props} open={false} />);
     rerender(<MultiReviewLaunchDialog {...props} open />);
     expect(
-      screen.getByRole("checkbox", { name: "Auto-PR after fix" }).getAttribute("aria-checked"),
+      screen
+        .getByRole("checkbox", { name: "Auto-PR after fix or clean review" })
+        .getAttribute("aria-checked"),
     ).toBe("false");
   });
 });

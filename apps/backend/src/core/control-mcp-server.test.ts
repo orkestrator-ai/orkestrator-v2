@@ -632,7 +632,7 @@ describe("Orkestrator control MCP server", () => {
       automation: {
         autoFix: true,
         autoPr: true,
-        next: "The Fix starts automatically if consolidation reports findings, then a PR session once the Fix completes.",
+        next: "The Fix starts automatically if consolidation reports findings, then a PR session once the Fix completes; a clean report starts the PR session directly.",
       },
     });
     const autoFixOff = await rpc(credential.url, credential.token, "tools/call", {
@@ -686,7 +686,7 @@ describe("Orkestrator control MCP server", () => {
         automation: {
           autoFix: false,
           autoPr: true,
-          next: "Stops at ready; address_multi_review starts the Fix; a PR session starts once that Fix completes.",
+          next: "Stops at ready if consolidation reports findings; address_multi_review starts the Fix; a PR session starts once that Fix completes. A clean report starts the PR session directly.",
         },
       },
       selection: {

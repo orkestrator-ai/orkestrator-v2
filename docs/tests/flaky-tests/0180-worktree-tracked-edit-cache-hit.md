@@ -155,3 +155,19 @@ cache-invalidation hypothesis remains unconfirmed.
 - Unchanged owning-file rerun: `mise run test:logged -- --name snapshots-owner-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures` passed all four tests, exit 0, 0.5 seconds.
 - Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.IJ4t3D/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.NEipUr/final-full-review-recovery.log.gz`.
 - No watcher implementation, assertion, timeout or skip changed. Cache invalidation racing the read remains a hypothesis, not an established cause.
+
+## Preview tunnel close-drain validation recurrence (2026-10-17)
+
+- **Command:** `mise run test:logged -- --name full-suite -- mise run test`;
+  workspace/root/bridge/protocol reserved 4/1/2/1 worker slots, with two isolated
+  Bun workers per workspace package. Workspace admission waited 251.3 seconds.
+- **Failure:** the unchanged tracked-edit cache-hit assertion at line 139
+  expected 1 and received 0 (142.04 ms). Backend: 8,793 passed, 41 skipped,
+  2 failed across 471 files (401.33 seconds). The other failure was a new
+  relay-test scheduling assumption, corrected in the same change. Other
+  workspace packages, root/support, bridges and protocol passed.
+- **Isolated rerun:** `mise run test:logged -- --name git-cache-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures`
+  passed all four unchanged tests, exit 0 (0.8 seconds logged).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.ZmlX01/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- The existing cache-invalidation hypothesis remains unconfirmed. No watcher
+  implementation, assertion, timeout or skip changed.

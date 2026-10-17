@@ -155,3 +155,20 @@ passed the unchanged owning file in 24.7 seconds (exit 0). Evidence:
   outer artifact `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.wJM0al/review-tests.log.gz`.
 - **Assessment:** isolated pass confirms an intermittent recurrence. Host
   contention remains a hypothesis. No product code, assertion, timeout or skip changed.
+
+## Recurrence — 2026-10-17 (device-login review fixes)
+
+`mise run test:logged -- --name login-full-tests -- mise run test` timed out
+`does not delete remote branches during closed environment cleanup` at 5065.31 ms
+and `retains the environment and process ownership when deletion cannot reap a server`
+at 5953.57 ms. The workspace group reserved four slots and waited
+408.7 seconds for host capacity. The unchanged owning file passed alone
+(exit 0, 27.3 seconds):
+
+```bash
+mise run test:logged -- --name login-environment-commands-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures
+```
+
+Evidence: `orkestrator-test-run.rIDYEp/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log`
+(compressed when the aggregate finishes) in the host temporary directory.
+No implementation, assertion, timeout or skip was changed.

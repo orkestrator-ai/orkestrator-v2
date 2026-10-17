@@ -777,6 +777,8 @@ export async function beginNativeAgentSignIn(input: {
   environmentId: string;
   agent: NativeAgentClientPlatform;
   logicalSessionKey: string;
+  /** Ask for a device code: the browser cannot reach the agent's loopback. */
+  deviceCode?: boolean;
 }): Promise<{ url?: string; code?: string }> {
   return invoke("begin_native_agent_sign_in", input);
 }

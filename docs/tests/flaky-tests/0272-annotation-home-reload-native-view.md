@@ -21,3 +21,21 @@
 - **Hypothesis:** asynchronous renderer initialization may overwrite the explicit
   Home selection immediately after `waitForApi`; not confirmed. No timeout or
   assertion was relaxed, and no test was skipped.
+
+## Recurrence during preview tunnel close-drain validation (2026-10-17)
+
+- **Original command:** `mise run test:logged -- --name agent-electron -- mise run test:agent:electron`.
+  One Playwright worker; the full non-iOS suite was also active, with groups
+  waiting for shared host capacity.
+- **Failure:** the same Home preview test timed out at the 30-second
+  `visiblePreview` poll after renderer reload (line 718), expected `true`,
+  received `false`. The run took 105.4 seconds: 4 passed, 1 failed, 1 skipped,
+  9 did not run.
+- **Isolated rerun:** `mise run test:logged -- --name electron-annotations-isolated -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts e2e/agent-testing/web-annotations-electron.spec.ts --workers=1`.
+  All 10 unchanged tests passed; the logged command took 66.2 seconds. The
+  non-iOS suite remained active.
+- **Evidence:** original failure log
+  `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.vrId94/agent-electron.log.gz`;
+  isolated counts in `output/agent-testing/electron-smoke/electron/results.json`.
+- **Hypothesis:** consistent with the existing renderer-initialization race;
+  this run does not establish a cause. No assertion or timeout was changed.

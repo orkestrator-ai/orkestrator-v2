@@ -408,6 +408,38 @@ This observation does not independently establish a flake. Runtime staging
 remains an unresolved validation limitation; no source, assertion, timeout or
 skip changed.
 
+## Observation — 2026-10-17 (device-login review fixes)
+
+`mise run test:logged -- --name login-full-tests -- mise run test` timed out
+the staged runtime load at 30000.29 ms with one isolated root worker on a
+shared 18-slot host. The owning-file command
+`mise run test:logged -- --name login-pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+also timed out at 30000.10 ms (three passed, one failed, 31.0 seconds).
+This observation does not independently establish a flake; it remains an
+unresolved validation limitation. The device-login changes do not alter Pi
+staging. Evidence: `orkestrator-test-run.rIDYEp/root-and-agent-support-tests.log`
+(compressed when the aggregate finishes) and
+`orkestrator-test-run.ODHqwz/login-pi-vendor-owner.log.gz` in the host temporary
+directory. No timeout, assertion or skip was changed.
+
+## Preview tunnel close-drain validation observation (2026-10-17)
+
+- **Command:** `mise run test:logged -- --name final-full-suite -- mise run test`.
+  Workspace/root/bridge/protocol reserved 4/1/2/1 slots; root used one isolated
+  Bun worker and waited 362.2 seconds for admission.
+- **Failure:** the supported-SDK runtime-closure load timed out after
+  30,002.94 ms. Root/support: 3,037 passed, 1 skipped, 1 failed across
+  140 files (243.06 seconds). The aggregate finished in 701.1 seconds, with
+  two unrelated backend failures; bridge and protocol groups passed. All
+  preview tunnel tests passed.
+- **Owning-file rerun:** `mise run test:logged -- --name pi-vendor-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+  also timed out at 30,001.34 ms: 3 passed, 1 failed, 32.1 seconds logged.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.bXnknL/root-and-agent-support-tests.log.gz`;
+  isolated artifact directory `orkestrator-test-run.FEOacp` under the same root.
+- This observation does not independently establish a flake. Runtime staging
+  remains an unresolved validation limitation; no Pi source, assertion,
+  timeout or skip changed.
+
 ## Recurrence — 2026-10-17 (resume replaced-session close)
 
 `mise run test` on a shared 18-slot host (other environments held every slot
@@ -452,3 +484,11 @@ source, assertion, timeout or skip changed.
 - **Assessment:** the isolated pass confirms intermittence. Host filesystem
   contention remains a hypothesis; no Pi source, assertion, timeout or skip
   changed.
+
+## Codex stored-model main merge recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test` (Bun 1.4.3, macOS arm64; workspace/root/bridge/protocol reserved 4/1/2/1 slots).
+- **Failure:** the staged-runtime load test exceeded its 30000 ms deadline at 30017.19 ms.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-pi-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 13.9 seconds).
+- **Evidence:** `orkestrator-test-run.bQMvqV/root-and-agent-support-tests.log.gz` under the host temporary directory; outer run `orkestrator-test-run.4bGaMi/merge-tests.log.gz`.
+- **Assessment:** the isolated pass confirms an intermittent recurrence. No implementation, assertion, timeout or skip changed.

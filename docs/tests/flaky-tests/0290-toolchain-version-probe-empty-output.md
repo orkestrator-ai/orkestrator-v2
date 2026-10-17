@@ -1,5 +1,9 @@
 # Toolchain version probe sometimes observes empty output
 
+- **ID:** 0290
+- **Status:** open
+- **Date observed:** 2026-10-17
+
 ## Codex catalogue review validation — 2026-10-17
 
 - **Test:** `pinned desktop toolchain cache > probes installed executables and

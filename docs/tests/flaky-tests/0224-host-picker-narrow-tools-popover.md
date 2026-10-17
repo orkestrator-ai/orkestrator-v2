@@ -189,3 +189,18 @@ and `output/agent-testing/qa-review-gateway-owner/browser/`. This does not
 establish a new passing owning-file rerun or resolve the existing issue.
 The picker, its assertions and deadlines were unchanged. The owning-file
 profile was stopped and reset.
+
+## Device-login review validation (2026-10-17)
+
+`mise run test:logged -- --name login-isolated-browser -- mise run test:agent:browser:isolated`
+reproduced the same hidden Repository settings button at line 238 after
+Open tools (15-second click timeout). The run finished with 27 passed,
+25 skipped and one failed in 8.7 minutes. Account switching and signed-out
+Codex recovery through inactive environments and reload passed. The
+credential-free profile `qa-browser-bdfd649e-0a6` was stopped and reset by the
+runner. No assertion, timeout or skip was changed; this run does not establish
+an additional flaky classification or resolve the existing issue.
+
+Evidence: `orkestrator-test-run.SROwT8/login-isolated-browser.log.gz` in the
+host temporary directory and
+`output/agent-testing/qa-browser-bdfd649e-0a6/browser/`.

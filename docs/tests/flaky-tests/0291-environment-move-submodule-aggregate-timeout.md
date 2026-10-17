@@ -1,5 +1,9 @@
 # Environment move submodule rollback aggregate timeout
 
+- **ID:** 0291
+- **Status:** open
+- **Date observed:** 2026-10-17
+
 ## Codex catalogue review validation — 2026-10-17
 
 - **Test:** `move_environment > a failed submodule re-link restores the original

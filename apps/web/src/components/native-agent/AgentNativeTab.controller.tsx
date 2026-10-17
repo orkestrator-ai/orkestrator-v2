@@ -4,6 +4,8 @@ import { ChevronDown, Loader2, LogIn, X } from "lucide-react";
 import { claudeNativeParameterValues } from "@orkestrator/protocol/agent-settings";
 import {
   nativeAgentSteerRejectionMessage,
+  normalizePendingSignIn,
+  NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS,
   nativeAsyncQuestionRequestId,
   withResolvedNativeComposerModel,
   resolveReasoningId,
@@ -90,6 +92,7 @@ import {
 } from "@/lib/chat/client-only-messages";
 import { pinNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
+import { isRemoteGatewayConnection } from "@/lib/gateway-url";
 import {
   buildMessageForkPlan,
   forkAttachmentNotice,
@@ -843,11 +846,19 @@ export function SharedNativeAgentController({
   const authenticationReadiness =
     projection?.readiness?.state === "authentication-required" ? projection.readiness : null;
   const authenticationRequired = authenticationReadiness !== null;
-  // A bridge that names its sign-in route answers it with the readiness. One
-  // that predates the route is asked through the account read, which is not
-  // free, so it is not part of the projection and runs only while required.
+  // Read legacy sign-in routes on demand. Codex also exposes its live device
+  // login here, so recover that snapshot even when readiness already names
+  // the route. Account reads stay outside the routine projection path.
   const readinessSignIn = authenticationReadiness?.signIn;
-  const signInReadNeeded = authenticationRequired && !readinessSignIn;
+  const signInReadNeeded = authenticationRequired && (!readinessSignIn || platform === "codex");
+  const [signInPending, setSignInPending] = useState(false);
+  const [signInDetails, setSignInDetails] = useState<{
+    url?: string;
+    code?: string;
+    expiresAt?: number;
+  } | null>(null);
+  const signInUrl = signInDetails?.url;
+  const signInCode = signInDetails?.code;
   // When the lock was first seen. Claude's card only resumes a sign-in that
   // finished after the failure it answers, and a lock carries no timestamp.
   const [authRequiredSince, setAuthRequiredSince] = useState<string | null>(null);
@@ -867,7 +878,6 @@ export function SharedNativeAgentController({
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let failures = 0;
-    setSignInStatus({ key: authReadKey, kind: null, state: "loading" });
     const read = async () => {
       try {
         const status = await getNativeAgentAuthStatus({
@@ -877,6 +887,15 @@ export function SharedNativeAgentController({
         });
         if (cancelled) return;
         if (!status?.signIn?.kind) throw new Error("Sign-in options are unavailable");
+        const pending =
+          status.state === "signed-in" ? undefined : normalizePendingSignIn(status.pendingSignIn);
+        setSignInDetails(
+          (previous) =>
+            pending ??
+            (status.pendingSignIn === null || status.state === "signed-in" ? null : previous),
+        );
+        if (pending)
+          timer = setTimeout(() => void read(), Math.min(2_000, pending.expiresAt - Date.now()));
         // A signed-in account's hint is about signing out.
         const hint = status.state === "signed-in" ? undefined : status.signIn.hint;
         setSignInStatus({
@@ -911,8 +930,14 @@ export function SharedNativeAgentController({
   // reads cannot establish that inline sign-in is unsupported.
   const inlineSignInAvailable =
     currentSignInStatus?.kind === "browser-url" || currentSignInStatus?.kind === "device-code";
-  const [signInPending, setSignInPending] = useState(false);
-  const [signInUrl, setSignInUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!signInDetails?.expiresAt) return;
+    const timer = setTimeout(
+      () => setSignInDetails(null),
+      Math.max(0, signInDetails.expiresAt - Date.now()),
+    );
+    return () => clearTimeout(timer);
+  }, [signInDetails]);
   // A sign-in that runs in the platform's own CLI opens where this agent runs:
   // the environment's terminal is local for a local tab, inside the container
   // otherwise.
@@ -939,11 +964,14 @@ export function SharedNativeAgentController({
   );
   const startSignIn = useCallback(() => {
     setSignInPending(true);
-    setSignInUrl(null);
+    setSignInDetails(null);
     void beginNativeAgentSignIn({
       environmentId: data.environmentId,
       agent: platform,
       logicalSessionKey: sessionKey,
+      // A browser on another machine cannot reach a loopback callback on the
+      // backend's, so a remote connection signs in with a device code.
+      ...(isRemoteGatewayConnection() ? { deviceCode: true } : {}),
     })
       .then((result) => {
         if (result.url) {
@@ -951,9 +979,15 @@ export function SharedNativeAgentController({
           if (url.protocol !== "https:" && url.protocol !== "http:") {
             throw new Error("The sign-in URL is invalid");
           }
-          setSignInUrl(url.href);
           openSignInUrl(url.href);
         }
+        setSignInDetails({
+          ...(result.url ? { url: result.url } : {}),
+          ...(result.code
+            ? { code: result.code, expiresAt: Date.now() + NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS }
+            : {}),
+        });
+        if (result.code) setAuthReadAttempt((attempt) => attempt + 1);
         if (result.code) toast.info(`Enter code ${result.code} to finish signing in to ${label}`);
         else if (result.url) toast.info(`Finish signing in to ${label} in your browser`);
       })
@@ -963,7 +997,7 @@ export function SharedNativeAgentController({
         );
       })
       .finally(() => setSignInPending(false));
-  }, [data.environmentId, label, openSignInUrl, platform, sessionKey]);
+  }, [data.environmentId, label, openSignInUrl, platform, sessionKey, setAuthReadAttempt]);
   const resolvedComposer = useMemo(
     () =>
       withResolvedNativeComposerModel(composer?.models ?? [], composer?.selectedModelId, platform),
@@ -2410,6 +2444,11 @@ export function SharedNativeAgentController({
               >
                 Open sign-in link
               </a>
+            ) : null}
+            {signInCode ? (
+              <span>
+                Code <span className="select-all font-mono font-semibold">{signInCode}</span>
+              </span>
             ) : null}
           </div>
         ) : terminalSignInCommand && createTerminalTab ? (

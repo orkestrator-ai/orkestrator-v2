@@ -87,6 +87,16 @@ jobs:
           mise run download:codex
           echo "$GITHUB_WORKSPACE/binaries" >> "$GITHUB_PATH"
 
+      # The Claude execution-policy qualification runs the pinned CLI's real
+      # Linux sandbox, which needs bubblewrap and socat. Ubuntu 24.04's AppArmor
+      # policy also denies the unprivileged user namespaces bubblewrap creates.
+      - name: Install Claude sandbox dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap socat
+          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --unshare-all --ro-bind / / true
+
       - name: Run default non-iOS suite
         env:
           # A known place for the failing groups' full logs, uploaded below.

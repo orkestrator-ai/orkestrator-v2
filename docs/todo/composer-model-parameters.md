@@ -73,6 +73,18 @@ forward that nothing in the backend supplies.
 4. **`maxBudgetUsd`.** Add a backend-owned per-environment budget setting, with
    `error_max_budget_usd` mapping to a `stopped` notice, or drop the option from
    the bridge.
+5. **Codex launches a saved model the picker does not show.** Seen on
+   2026-10-17 in an agent-test profile (codex 0.162.1, ChatGPT account): the
+   saved default `agentSettings.platforms.codex.model` was `gpt-5.4`, which the
+   account's live catalogue no longer lists. The composer showed the catalogue
+   default (GPT-6.1-Sol), but new sessions, from the composer and from
+   `ensure_native_agent_session` with an explicit `model`, ran `gpt-5.4`, and
+   every turn failed with 400 "model is not supported when using Codex with a
+   ChatGPT account". Work out which layer binds the saved model (a tab that
+   mounts creates the session before any explicit `ensure` runs), then either
+   launch what the picker shows or show the saved model as unavailable. Done
+   when the picker and the launched model always agree. Evidence:
+   [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md#codex-sub-agent-cards-evidence).
 
 ### Qualification
 

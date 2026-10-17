@@ -238,6 +238,21 @@ export function registerCoordinatorCommands(
     if (!context.projectGit) throw new Error("Project Git service is unavailable");
     return context.projectGit.fetch(asNonBlankString(projectId, "projectId"), force === true);
   });
+  register("get_project_base_branch_tip", async ({ projectId }, context) => {
+    if (!context.projectGit) throw new Error("Project Git service is unavailable");
+    const project = asNonBlankString(projectId, "projectId");
+    // The same default a normal environment launch branches from.
+    const { defaultBranch } = await context.storage.getRepositoryConfig(project);
+    return context.projectGit.baseBranchTip(project, defaultBranch?.trim() || "main");
+  });
+  register("verify_project_launch_base", ({ projectId, branch, commit }, context) => {
+    if (!context.projectGit) throw new Error("Project Git service is unavailable");
+    return context.projectGit.branchContainsCommit(
+      asNonBlankString(projectId, "projectId"),
+      asNonBlankString(branch, "branch"),
+      asNonBlankString(commit, "commit"),
+    );
+  });
   register("sync_project_git", ({ projectId }, context) => {
     if (!context.projectGit) throw new Error("Project Git service is unavailable");
     return context.projectGit.sync(asNonBlankString(projectId, "projectId"));

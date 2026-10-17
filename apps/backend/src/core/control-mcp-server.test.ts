@@ -146,6 +146,12 @@ describe("Orkestrator control MCP server", () => {
         case "get_repository_config":
           result = {};
           break;
+        case "get_project_base_branch_tip":
+          result = { branch: "main", commit: "a".repeat(40), ref: "origin/main", fetched: true };
+          break;
+        case "verify_project_launch_base":
+          result = { contained: true };
+          break;
         case "get_opencode_model_catalog_cache":
           result = null;
           break;
@@ -2247,7 +2253,7 @@ describe("Orkestrator control MCP server", () => {
     expect(launchWithoutWake.body.result?.structuredContent).not.toHaveProperty("delivery");
   });
 
-  test("reports an unavailable coordinator launch base without calling git status", async () => {
+  test("reports an unavailable checkout base without calling git status", async () => {
     const issue = (workspace: Record<string, unknown>) => {
       overrides.set("get_project_coordinator", () => ({ workspace }));
       return server.issueCoordinatorCredential({
@@ -2274,6 +2280,7 @@ describe("Orkestrator control MCP server", () => {
       return result.body.result?.structuredContent;
     };
 
+    // A detached or unborn checkout leaves the base-branch default launchable.
     expect(
       await callLaunchOptions({
         id: "coordinator-1",
@@ -2290,12 +2297,13 @@ describe("Orkestrator control MCP server", () => {
       }),
     ).toMatchObject({
       enabledAgents: ["codex"],
-      coordinatorBase: {
+      coordinatorBase: { baseBranch: "main", baseCommit: "a".repeat(40), available: true },
+      checkoutBase: {
         baseBranch: null,
         baseCommit: "a".repeat(40),
         available: false,
         unavailableReason: "detached HEAD",
-        requiredFor: "launch_environment",
+        source: "checkout",
       },
     });
 
@@ -2315,12 +2323,11 @@ describe("Orkestrator control MCP server", () => {
       }),
     ).toMatchObject({
       enabledAgents: ["codex"],
-      coordinatorBase: {
+      checkoutBase: {
         baseBranch: "main",
         baseCommit: null,
         available: false,
         unavailableReason: "unborn repository",
-        requiredFor: "launch_environment",
       },
     });
 
@@ -2357,17 +2364,17 @@ describe("Orkestrator control MCP server", () => {
     expect(failed.body.result?.isError).not.toBe(true);
     expect(failed.body.result?.structuredContent).toMatchObject({
       enabledAgents: ["codex"],
-      coordinatorBase: {
+      checkoutBase: {
         baseBranch: null,
         baseCommit: null,
         available: false,
         unavailableReason: "Repository status is unavailable: Project Git is unavailable",
-        requiredFor: "launch_environment",
       },
     });
   });
 
-  test("rejects coordinator launches whose base does not match the current checkout", async () => {
+  test("defaults coordinator launches to the base branch's latest commit", async () => {
+    // The checkout sits on a feature branch, behind the base branch.
     overrides.set("get_project_coordinator", () => ({
       workspace: {
         id: "coordinator-1",
@@ -2376,19 +2383,104 @@ describe("Orkestrator control MCP server", () => {
           { id: "conversation-1", tabId: "coordinator-tab", mailboxIncarnationId: "incarnation-1" },
         ],
         repositoryStatus: {
-          branch: "main",
-          headCommit: "a".repeat(40),
+          branch: "feature",
+          headCommit: "c".repeat(40),
+          detached: false,
+          unborn: false,
+        },
+      },
+    }));
+    overrides.set("get_project_base_branch_tip", () => ({
+      branch: "develop",
+      commit: "b".repeat(40),
+      ref: "origin/develop",
+      fetched: false,
+      fetchError: "Could not resolve host",
+    }));
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["discovery", "environments"],
+    });
+    const options = await rpc(credential.url, credential.token, "tools/call", {
+      name: "get_launch_options",
+      arguments: { projectId: "project-1" },
+    });
+    expect(options.body.result?.structuredContent).toMatchObject({
+      coordinatorBase: {
+        baseBranch: "develop",
+        baseCommit: "b".repeat(40),
+        available: true,
+        source: "base-branch",
+        ref: "origin/develop",
+        // A failed fetch still answers, but says the remote may have moved on.
+        remoteState: "stale",
+        fetchError: "Could not resolve host",
+        requiredFor: "launch_environment",
+      },
+      checkoutBase: {
+        baseBranch: "feature",
+        baseCommit: "c".repeat(40),
+        available: true,
+        source: "checkout",
+      },
+    });
+
+    overrides.set("get_project_base_branch_tip", () => ({
+      branch: "develop",
+      commit: null,
+      ref: null,
+      fetched: false,
+      unavailableReason: "Base branch develop was not found locally or on origin",
+    }));
+    const missing = await rpc(credential.url, credential.token, "tools/call", {
+      name: "get_launch_options",
+      arguments: { projectId: "project-1" },
+    });
+    expect(missing.body.result?.structuredContent).toMatchObject({
+      coordinatorBase: {
+        baseBranch: "develop",
+        baseCommit: null,
+        available: false,
+        unavailableReason: "Base branch develop was not found locally or on origin",
+      },
+    });
+  });
+
+  test("rejects coordinator launches whose commit is not on the named branch", async () => {
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          { id: "conversation-1", tabId: "coordinator-tab", mailboxIncarnationId: "incarnation-1" },
+        ],
+        repositoryStatus: {
+          branch: "feature",
+          headCommit: "c".repeat(40),
           detached: false,
           unborn: false,
         },
       },
     }));
     overrides.set("get_project_git_status", () => ({
-      branch: "main",
-      headCommit: "a".repeat(40),
-      trackedChanges: 0,
+      branch: "feature",
+      headCommit: "c".repeat(40),
+      trackedChanges: 2,
       untrackedChanges: 0,
     }));
+    // main holds a…, feature holds c…; nothing holds b….
+    overrides.set("verify_project_launch_base", ({ branch, commit }) => {
+      const tip = { main: "a".repeat(40), feature: "c".repeat(40) }[branch as string];
+      if (!tip)
+        return { contained: false, reason: `${branch} does not exist in the project checkout` };
+      return String(commit).toLowerCase() === tip
+        ? { contained: true }
+        : { contained: false, reason: `the commit is not on ${branch}` };
+    });
     let launched = 0;
     overrides.set("launch_coordinator_environment", () => {
       launched += 1;
@@ -2418,24 +2510,42 @@ describe("Orkestrator control MCP server", () => {
         },
       });
 
-    const staleCommit = await launch("main", "b".repeat(40));
-    expect(staleCommit.body.result?.isError).toBe(true);
-    expect(JSON.stringify(staleCommit.body)).toContain("Refresh get_launch_options");
+    const strayCommit = await launch("main", "b".repeat(40));
+    expect(strayCommit.body.result?.isError).toBe(true);
+    expect(JSON.stringify(strayCommit.body)).toContain("the commit is not on main");
+    expect(JSON.stringify(strayCommit.body)).toContain("Refresh get_launch_options");
 
-    const staleBranch = await launch("another", "a".repeat(40));
-    expect(staleBranch.body.result?.isError).toBe(true);
-    expect(JSON.stringify(staleBranch.body)).toContain("Refresh get_launch_options");
+    const missingBranch = await launch("another", "a".repeat(40));
+    expect(missingBranch.body.result?.isError).toBe(true);
+    expect(JSON.stringify(missingBranch.body)).toContain("Refresh get_launch_options");
     expect(launched).toBe(0);
-    expect(
-      invocations.filter(({ command }) => command === "launch_coordinator_environment"),
-    ).toHaveLength(0);
 
-    const matched = await launch("main", "A".repeat(40));
-    expect(matched.body.result?.isError).not.toBe(true);
-    expect(matched.body.result?.structuredContent).toMatchObject({
+    // The base branch's tip launches although the checkout is elsewhere, and
+    // the checkout's dirty state is not reported for a base it is not on.
+    const fromBase = await launch("main", "A".repeat(40));
+    expect(fromBase.body.result?.isError).not.toBe(true);
+    expect(fromBase.body.result?.structuredContent).toMatchObject({
       environmentId: "env-worker",
+      delegationBaseBranch: "main",
+      delegationBaseCommit: "A".repeat(40),
     });
-    expect(launched).toBe(1);
+    expect(fromBase.body.result?.structuredContent).not.toHaveProperty(
+      "liveCheckoutHasUncommittedChanges",
+    );
+    expect(
+      invocations.find(({ command }) => command === "launch_coordinator_environment")?.args,
+    ).toMatchObject({
+      input: { delegationBaseBranch: "main", delegationBaseCommit: "A".repeat(40) },
+    });
+
+    // Building on the checkout stays possible when asked for, and says that
+    // its uncommitted changes are not part of the worker's base.
+    const fromCheckout = await launch("feature", "c".repeat(40));
+    expect(fromCheckout.body.result?.structuredContent).toMatchObject({
+      environmentId: "env-worker",
+      liveCheckoutHasUncommittedChanges: true,
+    });
+    expect(launched).toBe(2);
   });
 
   test("uses the worker's live catalog when the project home is the first snapshot", async () => {

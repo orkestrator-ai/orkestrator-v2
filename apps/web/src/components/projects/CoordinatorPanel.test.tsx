@@ -426,6 +426,105 @@ describe("CoordinatorPanel", () => {
     expect(screen.getByText(/Codex is unavailable for Coordinator/)).toBeTruthy();
   });
 
+  test("asks before starting the coordinator on a checkout behind its upstream", async () => {
+    const unassignedConversation = {
+      ...snapshot.workspace.conversations[0]!,
+      agent: undefined,
+    };
+    ensuredSnapshot = {
+      ...snapshot,
+      workspace: { ...snapshot.workspace, conversations: [unassignedConversation] },
+    };
+    ensuredGit = {
+      ...gitStatus,
+      upstream: "origin/main",
+      remote: "origin",
+      ahead: 0,
+      behind: 3,
+      remoteState: "fresh",
+      fetchedAt: new Date(0).toISOString(),
+    };
+    const order: string[] = [];
+    syncGit.mockImplementation(async () => {
+      order.push("sync");
+      return { ...ensuredGit, behind: 0 };
+    });
+    assignAgent.mockImplementation(async () => {
+      order.push("assign");
+      return ensuredSnapshot;
+    });
+
+    render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByTestId("native-agent");
+
+    // Cancel leaves the conversation unstarted and the checkout untouched.
+    fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
+    expect(await screen.findByText("Checkout is behind origin/main")).toBeTruthy();
+    expect(screen.getByText(/main is 3 commits behind origin\/main/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByText("Checkout is behind origin/main")).toBeNull());
+    expect(order).toEqual([]);
+
+    // Starting without updating skips the fast-forward.
+    fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Start without updating" }));
+    await waitFor(() => expect(order).toEqual(["assign"]));
+
+    // Fast-forwarding happens before the first prompt is sent.
+    order.length = 0;
+    fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Fast-forward and start" }));
+    await waitFor(() => expect(order).toEqual(["sync", "assign"]));
+    syncGit.mockImplementation(async () => ensuredGit);
+  });
+
+  test("a diverged checkout is warned about but never fast-forwarded", async () => {
+    ensuredSnapshot = {
+      ...snapshot,
+      workspace: {
+        ...snapshot.workspace,
+        conversations: [{ ...snapshot.workspace.conversations[0]!, agent: undefined }],
+      },
+    };
+    ensuredGit = {
+      ...gitStatus,
+      upstream: "origin/main",
+      remote: "origin",
+      ahead: 2,
+      behind: 1,
+      remoteState: "fresh",
+      fetchedAt: new Date(0).toISOString(),
+    };
+    assignAgent.mockImplementation(async () => ensuredSnapshot);
+
+    render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByTestId("native-agent");
+    fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
+    expect(await screen.findByText(/the branches have diverged/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Fast-forward and start" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Start without updating" }));
+    await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
+    expect(syncGit).not.toHaveBeenCalled();
+  });
+
+  test("an up-to-date checkout starts the coordinator without asking", async () => {
+    ensuredSnapshot = {
+      ...snapshot,
+      workspace: {
+        ...snapshot.workspace,
+        conversations: [{ ...snapshot.workspace.conversations[0]!, agent: undefined }],
+      },
+    };
+    ensuredGit = { ...gitStatus, upstream: "origin/main", remote: "origin", ahead: 0, behind: 0 };
+    assignAgent.mockImplementation(async () => ensuredSnapshot);
+
+    render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByTestId("native-agent");
+    fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
+    await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/Checkout is behind/)).toBeNull();
+  });
+
   test("reports an assignment failure without binding the conversation", async () => {
     ensuredSnapshot = {
       ...snapshot,

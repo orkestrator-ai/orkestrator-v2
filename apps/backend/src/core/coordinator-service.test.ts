@@ -951,6 +951,87 @@ describe("project coordinator", () => {
     await expect(git.sync(project.id)).rejects.toThrow("diverged");
   });
 
+  test("launch bases come from the fetched base branch, not the checkout", async () => {
+    const remote = path.join(root, "remote.git");
+    await runCommand("git", ["init", "--bare", "-b", "main", remote], { cwd: root });
+    await runCommand("git", ["remote", "add", "origin", remote], { cwd: checkout });
+    await runCommand("git", ["push", "-u", "origin", "main"], { cwd: checkout });
+    const project = await storage.addProject(createProject(remote, checkout));
+    const git = new ProjectGitService(storage);
+    const checkoutHead = async () =>
+      (await runCommand("git", ["rev-parse", "HEAD"], { cwd: checkout })).stdout.trim();
+
+    // The checkout moves to a feature branch while main advances remotely.
+    await runCommand("git", ["switch", "-c", "feature"], { cwd: checkout });
+    await fs.writeFile(path.join(checkout, "feature.txt"), "feature\n");
+    await runCommand("git", ["add", "feature.txt"], { cwd: checkout });
+    await runCommand("git", ["commit", "-m", "feature"], { cwd: checkout });
+    const featureHead = await checkoutHead();
+    const publisher = path.join(root, "publisher");
+    await runCommand("git", ["clone", remote, publisher], { cwd: root });
+    await runCommand("git", ["config", "user.email", "publisher@example.invalid"], {
+      cwd: publisher,
+    });
+    await runCommand("git", ["config", "user.name", "Publisher"], { cwd: publisher });
+    await fs.writeFile(path.join(publisher, "remote.txt"), "remote\n");
+    await runCommand("git", ["add", "remote.txt"], { cwd: publisher });
+    await runCommand("git", ["commit", "-m", "remote"], { cwd: publisher });
+    await runCommand("git", ["push"], { cwd: publisher });
+    const remoteHead = (
+      await runCommand("git", ["rev-parse", "HEAD"], { cwd: publisher })
+    ).stdout.trim();
+
+    expect(await git.baseBranchTip(project.id, "main")).toEqual({
+      branch: "main",
+      commit: remoteHead,
+      ref: "origin/main",
+      fetched: true,
+    });
+    // Only refs moved: the checkout is still on its own branch and commit.
+    expect(await checkoutHead()).toBe(featureHead);
+
+    // Both the base branch's tip and the checkout's HEAD are valid bases.
+    expect(await git.branchContainsCommit(project.id, "main", remoteHead)).toEqual({
+      contained: true,
+    });
+    expect(await git.branchContainsCommit(project.id, "feature", featureHead)).toEqual({
+      contained: true,
+    });
+    expect(await git.branchContainsCommit(project.id, "main", featureHead)).toEqual({
+      contained: false,
+      reason: "the commit is not on main",
+    });
+    expect(await git.branchContainsCommit(project.id, "missing", remoteHead)).toEqual({
+      contained: false,
+      reason: "missing does not exist in the project checkout",
+    });
+    expect(await git.branchContainsCommit(project.id, "main", "f".repeat(40))).toEqual({
+      contained: false,
+      reason: "the commit does not exist in the project checkout",
+    });
+
+    // An unreachable remote still answers from the last fetched ref.
+    await runCommand("git", ["remote", "set-url", "origin", path.join(root, "gone.git")], {
+      cwd: checkout,
+    });
+    const offline = await git.baseBranchTip(project.id, "main");
+    expect(offline).toMatchObject({ commit: remoteHead, ref: "origin/main", fetched: false });
+    expect(offline.fetchError).toBeTruthy();
+
+    // A local-only branch falls back to the local ref.
+    await runCommand("git", ["remote", "remove", "origin"], { cwd: checkout });
+    expect(await git.baseBranchTip(project.id, "feature")).toEqual({
+      branch: "feature",
+      commit: featureHead,
+      ref: "feature",
+      fetched: false,
+    });
+    expect(await git.baseBranchTip(project.id, "nowhere")).toMatchObject({
+      commit: null,
+      unavailableReason: "Base branch nowhere was not found locally or on origin",
+    });
+  });
+
   test("rejects non-repositories and configured checkouts that are not the repository root", async () => {
     const nested = path.join(checkout, "nested");
     await fs.mkdir(nested);

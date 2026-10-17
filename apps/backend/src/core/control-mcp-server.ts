@@ -36,7 +36,11 @@ import {
   validateSelection,
 } from "./control-shared-actions.js";
 import {
+  AUTO_FIX_FIELD_DESCRIPTION,
+  AUTO_PR_FIELD_DESCRIPTION,
+  MULTI_REVIEW_AUTOMATION_DESCRIPTION,
   registerControlReviewActions,
+  reviewSelection,
   workflowStatusWakeResult,
 } from "./control-mcp-review-actions.js";
 import { normalizedWorkflow, workflowSummary } from "./control-workflow-summary.js";
@@ -1556,7 +1560,9 @@ async function createControlMcp(
       {
         title: "Start a multi-review",
         description:
-          "Low-level build-gated recovery primitive: starts backend work only and does NOT create/select a root tab or reproduce the UI button. Prefer launch_multi_review for a complete environment-level Multi Review action. Omit reviewers, reviewModel and fixModel to use the user's saved Multi Review defaults (saved auto-fix and auto-PR always apply); set them only when the user asks for specific models.",
+          "Low-level build-gated recovery primitive: starts backend work only and does NOT create/select a root tab or reproduce the UI button. Prefer launch_multi_review for a complete environment-level Multi Review action. Omit reviewers, reviewModel and fixModel to use the user's saved Multi Review defaults; set them only when the user asks for specific models. " +
+          MULTI_REVIEW_AUTOMATION_DESCRIPTION +
+          " The result's selection reports the rows and auto-actions that will run and which were requested.",
         inputSchema: z.object({
           requestId: z.string().trim().min(1).max(256),
           buildPipelineId: z.string().trim().min(1).max(200),
@@ -1581,6 +1587,8 @@ async function createControlMcp(
             .describe(
               "Optional. Omit to use the user's saved fix model. Set only when the user asks for one.",
             ),
+          autoFix: z.boolean().optional().describe(AUTO_FIX_FIELD_DESCRIPTION),
+          autoPr: z.boolean().optional().describe(AUTO_PR_FIELD_DESCRIPTION),
         }),
         annotations: {
           readOnlyHint: false,
@@ -1601,6 +1609,7 @@ async function createControlMcp(
         if (!record) throw new Error("Multi-review returned no result");
         return toolResult({
           workflow: workflowSummary(record),
+          selection: reviewSelection(record, input),
           ...(await workflowStatusWakeResult(invoke)),
         });
       },

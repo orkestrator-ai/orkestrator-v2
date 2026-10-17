@@ -1013,7 +1013,10 @@ describe("BuildPipelineService", () => {
       };
 
       provider.registered.length = 0;
-      expect(await resolveProvider.provider(restored, "claude")).toBe(provider);
+      // Resolution returns the cached lifetime wrapper, while registration
+      // still reaches the injected transport instance.
+      const cached = resolveProvider.providers.get(`${restored.environmentId}:claude`)!;
+      expect(await resolveProvider.provider(restored, "claude")).toBe(cached);
       expect(provider.registered).toEqual([
         expect.objectContaining({
           sessionId: "build-1",
@@ -1031,7 +1034,9 @@ describe("BuildPipelineService", () => {
       const injected = new FakeProvider();
       resolveProvider.providers.clear();
       resolveProvider.options.provider = async () => injected;
-      expect(await resolveProvider.provider(restored, "claude")).toBe(injected);
+      const replacement = await resolveProvider.provider(restored, "claude");
+      expect(replacement).toBe(resolveProvider.providers.get(`${restored.environmentId}:claude`)!);
+      expect(replacement).not.toBe(cached);
       expect(injected.registered).toEqual([
         expect.objectContaining({
           sessionId: "build-1",

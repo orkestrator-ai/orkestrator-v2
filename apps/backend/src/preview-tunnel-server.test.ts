@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { createServer, IncomingMessage, type Server } from "node:http";
+import type { AddressInfo, Socket } from "node:net";
+import { Duplex, PassThrough } from "node:stream";
 
 import {
   encodePreviewTunnelFrame,
@@ -11,7 +12,7 @@ import {
 import {
   connectPreviewWebSocket,
   PreviewWebSocketHandshakeError,
-  type PreviewWebSocket,
+  PreviewWebSocket,
 } from "@orkestrator/protocol/node/preview-websocket";
 
 import {
@@ -271,7 +272,8 @@ describe("PreviewTunnelServer", () => {
     await ready(client);
     client.ws.send(encodePreviewTunnelFrame({ type: "open" }));
     await client.nextControl("open-ok");
-    // Stop reading at the TCP level: the server must pause the upstream.
+    // Stop reading at the TCP level: the server must pause the upstream, or
+    // close the tunnel before one large upstream read queues past the bound.
     client.ws.pause();
     client.ws.send(Buffer.from("GET /endless HTTP/1.1\r\nhost: localhost\r\n\r\n"));
     await Bun.sleep(300);
@@ -284,6 +286,167 @@ describe("PreviewTunnelServer", () => {
     await client.closed;
     await waitForTunnelCleanup(() => tunnel.stats().sockets === 0);
     expect(tunnel.stats()).toMatchObject({ sockets: 0, aggregateQueuedBytes: 0 });
+  });
+
+  async function controlledTunnel() {
+    const upstream = new PassThrough();
+    const target = await harness.runtime.registry.acquireTarget(
+      serviceId,
+      (await attachment()).endpointGeneration,
+    );
+    const acquire = spyOn(harness.runtime.registry, "acquireTarget").mockResolvedValue({
+      ...target,
+      relay: { environmentId: "local", containerId: "controlled", port: fixture.port },
+    });
+    tunnel.close();
+    tunnel = new PreviewTunnelServer({
+      runtime: harness.runtime,
+      metrics: harness.runtime.metrics,
+      logger: console,
+      upstream: { relayConnect: async () => upstream },
+    });
+    let blocked = false;
+    let pending: (() => void) | undefined;
+    let handshake = true;
+    const downstream = new Duplex({
+      read() {},
+      write(chunk: Buffer, _encoding, callback) {
+        if (handshake) {
+          handshake = false;
+          callback();
+          return;
+        }
+        const flush = () => {
+          peer.push(chunk);
+          callback();
+        };
+        if (blocked) pending = flush;
+        else flush();
+      },
+    });
+    const peer = new Duplex({
+      read() {},
+      write(chunk: Buffer, _encoding, callback) {
+        downstream.push(chunk);
+        callback();
+      },
+    });
+    const ws = new PreviewWebSocket(peer, { role: "client", maxPayload: 1024 * 1024 });
+    const data: Buffer[] = [];
+    const controls: Array<Record<string, unknown>> = [];
+    ws.on("message", (payload, binary) => {
+      if (binary) data.push(payload);
+      else controls.push(JSON.parse(payload.toString()));
+    });
+    ws.start();
+    const request = new IncomingMessage(downstream as Socket);
+    request.method = "GET";
+    request.url = PREVIEW_TUNNEL_PATH;
+    request.headers = {
+      upgrade: "websocket",
+      "sec-websocket-key": "AAAAAAAAAAAAAAAAAAAAAA==",
+      "sec-websocket-version": "13",
+      "sec-websocket-protocol": PREVIEW_TUNNEL_SUBPROTOCOL,
+    };
+    try {
+      expect(tunnel.handleUpgrade(request, downstream, Buffer.alloc(0))).toBe(true);
+      const descriptor = await attachment();
+      ws.send(
+        encodePreviewTunnelFrame({
+          type: "hello",
+          version: 1,
+          attachmentId: descriptor.attachmentId,
+          credential: descriptor.tunnel!.credential,
+        }),
+      );
+      await waitForTunnelCleanup(() => controls.some((frame) => frame.type === "ready"));
+      ws.send(encodePreviewTunnelFrame({ type: "open" }));
+      await waitForTunnelCleanup(() => controls.some((frame) => frame.type === "open-ok"));
+    } catch (error) {
+      dispose();
+      throw error;
+    }
+    function dispose() {
+      ws.terminate();
+      downstream.destroy();
+      upstream.destroy();
+      acquire.mockRestore();
+    }
+    return {
+      upstream,
+      downstream,
+      data,
+      controls,
+      dispose,
+      pauseReader() {
+        blocked = true;
+      },
+      resumeReader() {
+        blocked = false;
+        const flush = pending;
+        pending = undefined;
+        flush?.();
+      },
+    };
+  }
+
+  test("one large upstream read cannot exceed the stopped reader's strict queue ceiling", async () => {
+    const controlled = await controlledTunnel();
+    try {
+      const limit = harness.runtime.limits.tunnelQueueMaxBytesPerDirection;
+      controlled.pauseReader();
+      // One data event must cross the hard ceiling, regardless of TCP read sizes.
+      controlled.upstream.push(Buffer.alloc(limit * 4, 0x61));
+      await waitForTunnelCleanup(() => controlled.downstream.writableLength > 0);
+      expect(controlled.downstream.writableLength).toBeGreaterThan(limit);
+      expect(controlled.downstream.writableLength).toBeLessThanOrEqual(limit * 2);
+      expect(controlled.upstream.destroyed).toBe(true);
+      expect(tunnel.stats().aggregateQueuedBytes).toBe(controlled.downstream.writableLength);
+      controlled.resumeReader();
+      await waitForTunnelCleanup(() => controlled.controls.some((frame) => frame.type === "error"));
+      expect(controlled.controls.find((frame) => frame.type === "error")).toMatchObject({
+        error: { category: "capacity-exceeded" },
+      });
+      expect(controlled.data.length).toBeGreaterThan(1);
+      expect(
+        controlled.data.every(
+          (frame) => frame.length <= harness.runtime.limits.tunnelFrameMaxBytes,
+        ),
+      ).toBe(true);
+    } finally {
+      controlled.dispose();
+    }
+    await waitForTunnelCleanup(() => tunnel.stats().sockets === 0);
+    expect(tunnel.stats().aggregateQueuedBytes).toBe(0);
+  });
+
+  test("a slow reader pauses the upstream and resumes without losing bytes after drain", async () => {
+    const controlled = await controlledTunnel();
+    const resume = spyOn(controlled.upstream, "resume");
+    try {
+      const first = Buffer.alloc(harness.runtime.limits.tunnelQueueMaxBytesPerDirection, 0x61);
+      const second = Buffer.from("after-drain");
+      controlled.pauseReader();
+      controlled.upstream.push(first);
+      await waitForTunnelCleanup(() => controlled.upstream.isPaused());
+      expect(controlled.upstream.destroyed).toBe(false);
+      expect(controlled.downstream.writableLength).toBeGreaterThanOrEqual(first.length);
+      controlled.upstream.push(second);
+      expect(controlled.data).toHaveLength(0);
+      resume.mockClear();
+      controlled.resumeReader();
+      await waitForTunnelCleanup(
+        () => Buffer.concat(controlled.data).length === first.length + second.length,
+      );
+      expect(resume).toHaveBeenCalled();
+      expect(Buffer.concat(controlled.data)).toEqual(Buffer.concat([first, second]));
+      expect(controlled.upstream.destroyed).toBe(false);
+      expect(controlled.controls.some((frame) => frame.type === "error")).toBe(false);
+      expect(tunnel.stats().aggregateQueuedBytes).toBe(0);
+    } finally {
+      resume.mockRestore();
+      controlled.dispose();
+    }
   });
 
   test("admission bounds tunnels per service and releases on close", async () => {

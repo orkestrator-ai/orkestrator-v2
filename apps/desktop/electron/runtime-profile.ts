@@ -277,6 +277,23 @@ export function runtimeProfileFromEnvironment(
   return loadRuntimeProfileSync(filePath);
 }
 
+/**
+ * Chromium switches to append before `app.whenReady()` for this flavor.
+ *
+ * `safeStorage` keeps its key in the macOS login keychain under the profile's
+ * fixed title. When an earlier Electron build created that item, the current
+ * binary is not on its access list, so macOS raises an access prompt that no
+ * one answers in an unattended run, and startup waits on it with no window and
+ * no log. A mock keychain keeps encryption working without reading or writing
+ * the user's keychain. Other flavors keep the real one.
+ */
+export function chromiumSwitchesForRuntime(
+  flavor: RuntimeFlavor,
+  platform: NodeJS.Platform,
+): string[] {
+  return flavor === "agent-test" && platform === "darwin" ? ["use-mock-keychain"] : [];
+}
+
 export function statusManifestPath(profile: RuntimeProfile): string {
   return path.join(profile.runtimeDir, "status.json");
 }

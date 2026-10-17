@@ -18,7 +18,7 @@ writers on one `.jsonl`. When touching the prompt path:
   still owns background work; the next prompt is written into it
   (`submitClaudeTurn`). A new process starts only when there is none, or after
   a draining one has exited (`retireDrainingClaudeRuntime`). Probes that never
-  run the model (`maxTurns: 0` rewind, catalogue reads) are not turns.
+  run the model (the rewind query, catalogue reads) are not turns.
 - **The runtime ends itself; turns never close its input.** Its idle window
   (`session-manager-runtime-idle.ts`, `CLAUDE_BRIDGE_RUNTIME_IDLE_MS`, default
   10 minutes; 0 closes input at turn end) closes input after that much silence
@@ -29,6 +29,11 @@ writers on one `.jsonl`. When touching the prompt path:
   `CLAUDE_BRIDGE_MAX_IDLE_RUNTIMES` (default 3) idle CLIs stay warm per bridge;
   the one idle longest goes first. A hard abort with nothing running leaves a
   warm CLI alone.
+- **A metadata read goes through `controlOnlyQuery`.** The Agent SDK drops
+  `maxTurns: 0`, so a `prompt: ""` query sends an empty user message and starts
+  a real turn (model calls, tools, an empty session file under
+  `~/.claude/projects`) unless it is closed first. `controlOnlyQuery` sends no
+  message at all.
 - **The newest turn owns the root conversation.** Root frames, results, hooks
   and continuations go to `runtime.latestTurn`; only a subagent's frames go to
   the turn whose row holds its call (`routeClaudeFrame`). A superseded turn

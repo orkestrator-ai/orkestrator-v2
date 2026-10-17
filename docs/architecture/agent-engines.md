@@ -554,6 +554,19 @@ why it keys on the capability denial rather than on `networkAccess:
 has no exception: an opened URL can carry data out. See
 [`coordinator.md`](coordinator.md#network-and-web-research).
 
+A `readOnly` turn (a Multi Review reviewer, a consolidation report) denies
+`network` on every adapter, whatever the session's own policy allows, so it
+loses hosted search and fetch as well as writes. Claude, Cursor and Grok swap
+in a fixed read-only policy that denies it; OpenCode masks `webfetch` and
+`websearch` for the turn; Pi's read-only gate admits no web tool. Codex keeps
+the session's policy and adds the denial (`codexReadOnlyTurnPolicy`), which
+turns `web_search` to `"disabled"` on the thread. app-server applies thread
+configuration only when a thread starts or resumes, so the runtime reloads an
+attached thread whenever a turn's hosted search setting differs from the last
+one applied (`promptThreadConfig`), and the next build turn reloads it back. A
+coordinator, which already denies `network`, keeps its research mode on a
+read-only turn, as Claude's does under process authority.
+
 ### Approval modes
 
 Within that policy, Claude and Codex sessions also carry a per-session

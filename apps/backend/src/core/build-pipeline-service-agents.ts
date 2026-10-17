@@ -34,6 +34,7 @@ import type {
 import { stagePromptImages } from "./prompt-attachments.js";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { BuildPipelineContext } from "./build-pipeline-context.js";
+import { managedProvider, retireProvider } from "./provider-retirement.js";
 import { clearReviewerAdmission } from "./review-fanout-admission.js";
 
 /** Tiers and catalogue access shared by every selection in one operation. */
@@ -69,8 +70,9 @@ export class BuildPipelineAgents {
       let creation = this.ctx.providerCreations.get(providerKey);
       if (!creation) {
         creation = this.createProvider(pipeline, agent).then((created) => {
-          this.ctx.providers.set(providerKey, created);
-          return created;
+          const managed = managedProvider(created);
+          this.ctx.providers.set(providerKey, managed);
+          return managed;
         });
         const pending = creation;
         this.ctx.providerCreations.set(providerKey, pending);
@@ -99,6 +101,18 @@ export class BuildPipelineAgents {
       });
     }
     return provider;
+  }
+
+  /** Evict only the failed generation; concurrent consumers finish before disposal. */
+  async evictUnreachableProvider(
+    pipeline: BuildPipeline,
+    agent: BuildPipelineAgent,
+    provider: BuildPipelineProvider,
+  ): Promise<void> {
+    const key = `${pipeline.environmentId}:${agent}`;
+    if (this.ctx.providers.get(key) !== provider) return;
+    this.ctx.providers.delete(key);
+    retireProvider(provider);
   }
 
   /** Builds an uncached provider for one environment harness. */

@@ -54,7 +54,8 @@ async function refuseTurnForMissingLogin(): Promise<void> {
   call.finish();
   await expect(turn).rejects.toThrow();
   const probe = await nextQueryCall();
-  expect(probe.options).toMatchObject({ maxTurns: 0 });
+  // Control only: no prompt string, so no user message and no turn.
+  expect(typeof probe.prompt).not.toBe("string");
   await waitFor(() => probe.isClosed());
 }
 

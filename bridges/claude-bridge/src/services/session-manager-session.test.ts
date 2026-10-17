@@ -7,6 +7,7 @@ import {
   createSession,
   dismissQuestion,
   evictIdleHydratedTranscripts,
+  expectControlOnlyPrompt,
   getPendingPlanApprovals,
   getPendingQuestions,
   getSession,
@@ -44,8 +45,8 @@ describe("catalog discovery caching", () => {
       queryControlOverrides.accountInfo = mock(async () => ({}));
       await readClaudeAuthStatus();
       const probe = await nextQueryCall();
+      expect(typeof probe.prompt).not.toBe("string");
       expect(probe.options).toMatchObject({
-        maxTurns: 0,
         env: { ORKESTRATOR_NATIVE_AGENT_BRIDGE: "claude" },
       });
       expect(probe.isClosed()).toBe(true);
@@ -90,12 +91,16 @@ describe("idle MCP catalogue", () => {
     call.push({ type: "result", subtype: "success" });
     call.finish();
     await promptPromise;
+    // Turn completion releases the foreground before the runtime observes EOF.
+    // Wait for the CLI to exit so the action exercises the metadata fallback.
+    await waitFor(() => session.claudeRuntime === undefined);
     expect(session.queryControl).toBeUndefined();
 
     expect(await readSessionMcpServers(session.id)).toEqual([
       expect.objectContaining({ id: "docs", status: "connected", toolCount: 1 }),
     ]);
     await performSessionMcpAction(session.id, "docs", "reconnect");
+    await expectControlOnlyPrompt(await nextQueryCall());
     expect(reconnect).toHaveBeenCalledWith("docs");
   });
 });

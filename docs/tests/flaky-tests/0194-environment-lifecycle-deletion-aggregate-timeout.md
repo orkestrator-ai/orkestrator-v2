@@ -115,3 +115,43 @@ The cause remains unconfirmed. No assertion, timeout or skip was changed.
 - **Failure:** `retains the environment and process ownership when deletion cannot reap a server` exceeded the five-second deadline at 5133.55 ms. No environment lifecycle code changed.
 - **Owning-file rerun:** `mise run test:logged -- --name backend-deletion-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures` passed unchanged in 58.4 seconds (exit 0).
 - **Evidence:** `/tmp/orkestrator-test-run.1PZf4j/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` after finalization. No assertion, deadline or skip changed; the load hypothesis remains unconfirmed.
+
+## Pane reset review recurrence — 2026-10-17
+
+`mise run test:logged -- --name full-suite -- mise run test` used workspace,
+root, bridge and protocol reservations of 4/1/2/1 slots while browser checks
+and other worktrees used the host. `continues merged environment cleanup when the remote head branch is already deleted` (5102.67 ms) and `does not delete remote branches during closed environment cleanup` (5248.06 ms) exceeded their five-second deadlines.
+
+`mise run test:logged -- --name environment-lifecycle-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures`
+passed the unchanged owning file in 24.7 seconds (exit 0). Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.XKPva3/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+(compressed when the aggregate completes). No assertion, timeout or skip changed.
+
+## Cleanup review follow-up recurrence (2026-10-17)
+
+- **Original command:** the testing guide's macOS GNU-tool PATH with
+  `mise run test:logged -- --name review-tests -- mise run test` on
+  `todo/env-cleanup-realstack-qualification` (`160610af` plus review fixes).
+- **Workers:** workspace/root/bridges/protocol reserved 4/1/2/1 slots;
+  backend used two isolated Bun workers. Other worktrees shared the host;
+  workspace admission waited 361.3 seconds.
+- **Failures:** seven cases exceeded the 5000 ms budget:
+  `deletes the remote head branch during merged local environment cleanup`
+  (5145.33 ms), `continues merged environment cleanup when the remote head branch is already deleted`
+  (5287.29 ms), `does not delete remote branches during closed environment cleanup`
+  (5152.93 ms), `removes the environment even when remote branch deletion fails for a non-404 reason`
+  (5125.16 ms), `does not delete remote branches when a merged environment has no PR url`
+  (5482.02 ms), `does not delete remote branches when a merged container environment is not running`
+  (5279.35 ms), and `retains the environment and process ownership when deletion cannot reap a server`
+  (7434.46 ms, also tracked in 0226).
+- **Counts:** backend 8612 passed, 41 skipped, eight failed and one late
+  SQLite error across 8661 tests in 461 files (442.50 seconds). The other
+  timeout and late error belong to 0165. All other workspace packages, root,
+  bridges and protocol passed; aggregate exited 1 after 840.1 seconds.
+- **Isolated rerun:** the same GNU-tool PATH with
+  `mise run test:logged -- --name review-lifecycle-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures`
+  passed the unchanged owning file (exit 0) in 18.9 seconds after the aggregate.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.qwtTNi/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
+  outer artifact `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.wJM0al/review-tests.log.gz`.
+- **Assessment:** isolated pass confirms an intermittent recurrence. Host
+  contention remains a hypothesis. No product code, assertion, timeout or skip changed.

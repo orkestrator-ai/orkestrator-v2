@@ -357,6 +357,93 @@ removes its pipeline and environments during cleanup. The spec never presses
 **Share…**, which would publish the conversation. Without the opt-in, every
 case is skipped and no profile is needed.
 
+The live Multi Review cycle (`e2e/agent-testing/multi-review-live.spec.ts`)
+has its own opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW=1`, and uses the
+host's Claude and Codex credentials. Each case runs a real two-reviewer review
+(a Claude reviewer and a Codex reviewer, with Codex preparing and
+consolidating) on the cheapest models: Haiku 4.5 and GPT-6-Luna at low effort.
+Override the picker labels with `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_CLAUDE_MODEL`
+and `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_CODEX_MODEL` when the catalog changes.
+The restart case stops the profile and starts it again with the credential and
+platform selection stored in its `profile.json`, so run the file on its own,
+against a profile you started by hand:
+
+```bash
+mise run dev:test --profile qa-multi-review --fixture --credential-source claude --credential-source codex --agent-platforms claude,codex
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-multi-review ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW=1 \
+  mise run test:logged -- --name multi-review-live -- mise run test:agent:browser -- \
+  e2e/agent-testing/multi-review-live.spec.ts
+mise run dev:stop --profile qa-multi-review
+mise run dev:reset --profile qa-multi-review
+```
+
+Every case writes a small change into a fresh environment and launches the
+review through the launcher: it right-clicks **Multi Review**, picks each row's
+model, checks the work summary and duplicate warning, and presses Start. Once a
+reviewer's prompt is sent, it disturbs the review in one of four ways. It
+leaves the review unmounted in another environment, reloads the renderer,
+restarts the backend, or `SIGKILL`s the Claude reviewer's bridge. Before
+signalling, it confirms that the bridge is a child of this profile's backend.
+The review must then settle from backend state alone. The case checks the
+snapshot first: phase, reviewer state, reports and consolidation. It also
+checks that each reviewer kept its provider session and start time, that a
+new request id appears only for a result reminder or schema repair, and that
+no transcript holds more prompts than those turns allow. It then checks the
+tab, on return and again after a reload: the graph's node states, the
+inspector's transcript tail, the controls and the reviewer's read-only tab.
+The reviewer transcript read must not be the compatibility fallback, and a
+repeated read with its source token must answer `unchanged`. After a restart
+or a killed bridge, each reviewer must either complete or fail with a stated
+reason, since a turn cut short fails closed today. The case records each
+reviewer's outcome as a Playwright annotation in `results.json`. After a
+killed bridge the Codex peer must complete. If preparation fails before any
+reviewer starts, the case restarts that step once and records it. Each case
+cancels its review and deletes its environments in cleanup. The restart case
+leaves the profile running under a detached launcher, so stop it with
+`dev:stop` as usual. It restarts without `--fixture`, so `dev:status` no
+longer reports `testProject` afterwards; the spec falls back to the profile's
+seeded copy.
+
+### Live close retention
+
+`e2e/agent-testing/close-retention-live.spec.ts` checks, with real providers
+and through the real app, that closing a native agent tab keeps the
+conversation. It has its own opt-in and uses the profile's host credentials:
+
+```bash
+mise run dev:test --profile qa-close-live --fixture --agent-platforms cursor,grok,opencode,pi
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-close-live ORKESTRATOR_AGENT_TEST_LIVE_CLOSE_RETENTION=1 \
+  mise run test:logged -- --name close-retention-live -- mise run test:agent:browser -- \
+  e2e/agent-testing/close-retention-live.spec.ts
+mise run dev:stop --profile qa-close-live
+mise run dev:reset --profile qa-close-live
+```
+
+For each platform in `ORKESTRATOR_AGENT_TEST_CLOSE_RETENTION_PLATFORMS`
+(default `cursor,pi,opencode,grok`), a launched tab is asked to remember a
+codeword. The case closes the tab with its close button and reloads to check
+the tab stays closed. It then opens a new tab from the toolbar, finds the
+conversation in the resume list, resumes it and asks for the codeword. Only a
+model that still holds the first turn can answer, so the reply proves the same
+native conversation continued. The backend transcript must hold the first
+prompt exactly once. `ORKESTRATOR_AGENT_TEST_CLOSE_RETENTION_MODELS` takes
+`<platform>=<model>` pairs, for example an OpenCode model from a connected
+provider. A platform that is not enabled or not signed in is skipped with that
+reason. Each case deletes its environment.
+
+The same flow runs without credentials, for all four platforms, in the
+component browser suite: `e2e/CloseRetention.spec.ts` drives the real pane
+tree and native agent tab against `e2e/fixtures/close-retention-host.ts`. That
+host runs the real backend command registry and native agent service, and the
+real Cursor, Pi and ACP bridges and OpenCode provider, over fake vendor
+engines (`bridges/cursor-bridge/src/testing/fake-engine-server.ts`,
+`bridges/pi-bridge/src/testing/fake-engine-server.ts`,
+`bridges/acp-bridge/src/testing/fake-agent-close.ts` and
+`e2e/fixtures/close-retention-opencode.ts`). Its assertions read each engine's
+own store, so a duplicated or lost prompt fails there.
+
 ### Live coordinator suite
 
 The live coordinator suite checks that a real provider keeps the coordinator's
@@ -387,6 +474,10 @@ The read-only case:
 1. Assigns the platform to a fresh main coordinator conversation on the fixture
    project through the Coordinator page's backend commands. Grok's run sets
    **Coordinator safety level** to `advisory` and restores it afterwards.
+   Every run sets **Coordinator web research** to off and restores it
+   afterwards, so the fetch step tests the whole `network` denial. Allowed
+   search is checked separately by the canary in
+   `bridges/codex-bridge/src/app-server/live-network-lock.test.ts`.
 2. Plants a canary file in the checkout and a canary Kanban ticket, then
    digests the checkout.
 3. Sends one turn in build mode. Plan mode, which a fresh coordinator composer
@@ -484,6 +575,23 @@ drives a backend-owned terminal operation, reloads while it is progressing,
 verifies the rehydrated output and diff state, and cleans up. The Electron suite
 launches the real main process and preload, then checks the profile title,
 `userData`, IPC invocation, clipboard bridge, and supervised backend shutdown.
+On macOS every Electron spec launches with `--use-mock-keychain`
+(`e2e/agent-testing/electron-launch-switches.ts`). Without it `safeStorage`
+reads the login-keychain item named after the fixed profile title, which every
+worktree shares. Electron from another worktree then waits on an access prompt
+nobody answers, and startup never opens a window. The annotation spec also
+renders the real Notes column beside the native view. It checks the view's
+bounds at app zoom 0.8, 1 and 1.25, overlays, the narrow Preview/Notes switch
+at app zoom 1.5, and keyboard traversal for create and send. The held Discuss
+request is cancelled and verified absent from the queue before its compose-draft
+hold is removed;
+a profile-local Codex probe refuses and records accidental provider launches.
+Capture pixels are compared with the target at preview zoom 0.8, 1 and 1.5 in
+both fixed and Notes-offset views, at natural DPR and forced DPR 1 and 2 with
+`--force-device-scale-factor`. Views stay small enough to assert native image
+scale without reduction. The Window-menu test always checks the selected label;
+its OS-focus predicate runs only when the host exposes a key window (and an
+active app on macOS).
 The opt-in Docker suite verifies the seeded container and proves that a direct
 container command is rejected for an otherwise valid Orkestrator container
 owned by another profile.

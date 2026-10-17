@@ -143,6 +143,8 @@ export class BuildPipelineSupervisor {
     if (!this.reviewFanoutRunner) {
       this.reviewFanoutRunner = new BuildPipelineReviewFanout({
         provider: (pipeline, agent) => this.agents.provider(pipeline, agent),
+        providerUnavailable: (pipeline, agent, provider) =>
+          this.agents.evictUnreachableProvider(pipeline, agent, provider),
         executionPolicy: (pipeline) => this.ctx.executionPolicy(pipeline),
         save: async (pipeline) => {
           await this.ctx.save(pipeline, pipeline.backendRevision);

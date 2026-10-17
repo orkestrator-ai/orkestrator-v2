@@ -252,18 +252,24 @@ test.describe("live coordinator", () => {
         if (Array.isArray(enabled) && !enabled.includes(platform)) {
           skip(`${platform} is not enabled in this profile (start it with --agent-platforms)`);
         }
-        const previousTier = config.global.coordinatorProviderTiers;
-        if (previousTier !== entry.tierSetting) {
+        // The network step tests the coordinator's whole `network` denial, so
+        // the research exception (hosted search, on by default) is switched
+        // off. What search may reach with it on is checked by the gated canary
+        // in `bridges/codex-bridge/src/app-server/live-network-lock.test.ts`.
+        const caseSettings = {
+          coordinatorProviderTiers: entry.tierSetting,
+          coordinatorWebResearch: "off",
+        };
+        const previousSettings = Object.fromEntries(
+          Object.keys(caseSettings).map((key) => [key, config.global[key]]),
+        );
+        await invoke("update_global_config", { global: { ...config.global, ...caseSettings } });
+        cleanup.push(async () => {
+          const current = await invoke<{ global: Record<string, unknown> }>("get_config");
           await invoke("update_global_config", {
-            global: { ...config.global, coordinatorProviderTiers: entry.tierSetting },
+            global: { ...current.global, ...previousSettings },
           });
-          cleanup.push(async () => {
-            const current = await invoke<{ global: Record<string, unknown> }>("get_config");
-            await invoke("update_global_config", {
-              global: { ...current.global, coordinatorProviderTiers: previousTier },
-            });
-          });
-        }
+        });
 
         // A fresh, unassigned main conversation: a platform is bound by the
         // first prompt and never changes, so an earlier case's main is closed.

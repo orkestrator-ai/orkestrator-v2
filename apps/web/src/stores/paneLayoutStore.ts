@@ -432,7 +432,7 @@ function cleanupTabResources(envId: string, containerId: string | null, tab: Tab
 }
 
 /**
- * Reclaims renderer-owned state after an authoritative layout removes a tab.
+ * Reclaims renderer-owned state on runtime reset or authoritative tab removal.
  *
  * Native provider sessions are only evicted locally because the initiating
  * client owns their deletion. Terminal PTYs are different: only the renderer
@@ -593,14 +593,16 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     if (!envId) return;
 
     const envState = state.environments.get(envId);
-    if (!envState) return;
 
     const terminalPortalStore = useTerminalPortalStore.getState();
-    const containerId = envState.containerId;
+    const containerId = envState?.containerId ?? null;
 
-    const envTabs = getAllLeaves(envState.root).flatMap((leaf) => leaf.tabs);
+    const envTabs = envState ? getAllLeaves(envState.root).flatMap((leaf) => leaf.tabs) : [];
     envTabs.forEach((tab) => {
-      cleanupTabResources(envId, containerId, tab);
+      // Reset discards runtime views, not the durable tabs. A native teardown
+      // intent would outlive an unavailable bridge and close the session after
+      // the next start restores and re-adopts it.
+      cleanupLocalTabResources(envId, containerId, tab);
     });
 
     // Clear all terminal instances from portal store for this environment
@@ -614,7 +616,12 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
       containerId: null,
       backendRevision: 0,
     });
-    set({ environments: newEnvs });
+    // The persisted layout outlives the runtime (agent tabs and their sessions
+    // survive a stop), so the next start must restore it from the backend
+    // rather than seed a default terminal over an empty local copy.
+    const hydration = new Map(state.hydration);
+    hydration.delete(envId);
+    set({ environments: newEnvs, hydration });
   },
 
   beginHydration: (environmentId) => {

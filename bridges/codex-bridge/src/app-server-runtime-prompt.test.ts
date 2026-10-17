@@ -1259,7 +1259,7 @@ describe("at-most-once dispatch", () => {
     ).toMatchObject({ ok: true });
 
     const turn = h.child().requests.find((request) => request.method === "turn/start")!;
-    expect(turn.params.sandboxPolicy).toEqual({ type: "readOnly", networkAccess: true });
+    expect(turn.params.sandboxPolicy).toEqual({ type: "readOnly", networkAccess: false });
     expect(turn.params.input).toEqual([
       { type: "text", text: "Consolidate the reports", text_elements: [] },
     ]);
@@ -1298,7 +1298,7 @@ describe("at-most-once dispatch", () => {
         ?.default_tools_approval_mode,
     ).toBe("approve");
     expect(turn.params.config).toBeUndefined();
-    expect(turn.params.sandboxPolicy).toEqual({ type: "readOnly", networkAccess: true });
+    expect(turn.params.sandboxPolicy).toEqual({ type: "readOnly", networkAccess: false });
   });
 
   test("re-resumes an attached thread with workflow result approval before dispatch", async () => {
@@ -3886,6 +3886,67 @@ describe("composed approval settings", () => {
       await h.drain();
     }
   });
+  test.each([true, false])(
+    "read-only turns deny command networking and restore search (policy=%s)",
+    async (withPolicy) => {
+      const h = await harness();
+      const { sessionId } = h.runtime.createSession({
+        mode: "build",
+        ...(withPolicy
+          ? {
+              policy: {
+                id: "interactive-host",
+                sandbox: "provider",
+                approvals: "auto-approve",
+                projectResources: true,
+                networkAccess: "full",
+              },
+            }
+          : {}),
+      });
+      // No agentMcp: hosted search alone must be enough to reload the thread.
+      for (const [index, readOnly] of [false, true, false, false].entries()) {
+        const before = h.child().requests.length;
+        expect(
+          await h.runtime.prompt(sessionId, {
+            prompt: "Inspect",
+            requestId: `search-readonly-${index}`,
+            attachments: [],
+            readOnly,
+          }),
+        ).toMatchObject({ ok: true });
+        const sent = h
+          .child()
+          .requests.slice(before)
+          .map((r) => r.method);
+        const thread = h
+          .child()
+          .requests.findLast((r) => r.method === "thread/start" || r.method === "thread/resume")!;
+        const config = thread.params.config as Record<string, unknown> | undefined;
+        expect(config?.web_search).toBe(index === 1 ? "disabled" : undefined);
+        const turn = h.child().requests.findLast((r) => r.method === "turn/start")!;
+        expect(turn.params.sandboxPolicy).toMatchObject(
+          !readOnly && !withPolicy ? { type: "dangerFullAccess" } : { networkAccess: !readOnly },
+        );
+        expect(h.runtime.getRegistry().getSession(sessionId)?.config.networkAccessEnabled).toBe(
+          true,
+        );
+        // Turns 1 and 2 change the search mode, so each reloads the thread;
+        // turn 3 repeats turn 2's configuration and does not.
+        expect(sent.filter((method) => method === "thread/unsubscribe")).toHaveLength(
+          index === 1 || index === 2 ? 1 : 0,
+        );
+        expect(sent.filter((method) => method === "thread/resume")).toHaveLength(
+          index === 1 || index === 2 ? 1 : 0,
+        );
+        h.child().notify("turn/completed", {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "completed" },
+        });
+        await h.drain();
+      }
+    },
+  );
   test("read-only dispatch overrides selected reviewer without leaking into the following turn", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });
@@ -3914,5 +3975,283 @@ describe("composed approval settings", () => {
       });
       await h.drain();
     }
+  });
+});
+
+// These paths deliberately omit agentMcp: search alone must govern reloads.
+describe("search configuration recovery", () => {
+  async function complete(h: Harness): Promise<void> {
+    h.child().notify("turn/completed", {
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed" },
+    });
+    await h.drain();
+  }
+
+  test("a first read-only prompt starts with hosted search disabled", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    expect(
+      await h.runtime.prompt(sessionId, {
+        prompt: "Inspect",
+        requestId: "first-readonly",
+        attachments: [],
+        readOnly: true,
+      }),
+    ).toMatchObject({ ok: true });
+    const start = h.child().requests.find((r) => r.method === "thread/start")!;
+    expect(start.params.config).toMatchObject({ web_search: "disabled" });
+    expect(h.child().requests.some((r) => r.method === "thread/unsubscribe")).toBe(false);
+    expect(h.child().requests.find((r) => r.method === "turn/start")!.params.sandboxPolicy).toEqual(
+      { type: "readOnly", networkAccess: false },
+    );
+  });
+
+  test("a coordinator research policy keeps cached search without a read-only reload", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({
+      mode: "build",
+      policy: {
+        id: "coordinator-read-only",
+        sandbox: "provider",
+        approvals: "deny",
+        projectResources: false,
+        networkAccess: "restricted",
+        capabilityPolicy: { deny: ["network"], allow: ["web.search"] },
+      },
+    });
+    for (const [index, readOnly] of [false, true, false].entries()) {
+      expect(
+        await h.runtime.prompt(sessionId, {
+          prompt: "Research",
+          requestId: `cached-${index}`,
+          attachments: [],
+          readOnly,
+        }),
+      ).toMatchObject({ ok: true });
+      const start = h.child().requests.find((r) => r.method === "thread/start")!;
+      expect(start.params.config).toMatchObject({ web_search: "cached" });
+      expect(h.child().requests.some((r) => r.method === "thread/unsubscribe")).toBe(false);
+      await complete(h);
+    }
+  });
+
+  test("retry after failed unsubscribe reloads before certifying the build baseline", async () => {
+    let loaded = false;
+    let search: unknown;
+    let failUnsubscribe = false;
+    const applied: unknown[] = [];
+    const load = (params: Record<string, unknown>) => {
+      // Model the real server: a loaded resume ignores config overrides.
+      if (!loaded) search = (params.config as Record<string, unknown> | undefined)?.web_search;
+      loaded = true;
+      return { thread: threadPayload("thread-1") };
+    };
+    const h = await harness({
+      "thread/start": load,
+      "thread/resume": load,
+      "thread/unsubscribe": () => {
+        if (failUnsubscribe) {
+          failUnsubscribe = false;
+          throw new Error("unsubscribe failed");
+        }
+        loaded = false;
+        return {};
+      },
+      "turn/start": () => {
+        applied.push(search);
+        return { turn: { id: "turn-1" } };
+      },
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    expect(
+      await h.runtime.prompt(sessionId, {
+        prompt: "Inspect",
+        requestId: "review",
+        attachments: [],
+        readOnly: true,
+      }),
+    ).toMatchObject({ ok: true });
+    await complete(h);
+    failUnsubscribe = true;
+    const input = { prompt: "Build", requestId: "restore", attachments: [] };
+    expect(await h.runtime.prompt(sessionId, input)).toMatchObject({ ok: false, status: 503 });
+    expect(applied).toEqual(["disabled"]);
+    expect(h.runtime.getRegistry().getThread("thread-1")?.promptThreadConfig).toBeUndefined();
+    expect(h.runtime.getJournal().classify("restore").record).toBeUndefined();
+    // A read also re-attaches, but cannot certify that resume applied anything.
+    await h.runtime.getMessages(sessionId);
+    expect(h.runtime.getRegistry().getThread("thread-1")?.promptThreadConfig).toBeUndefined();
+    expect(search).toBe("disabled");
+    expect(await h.runtime.prompt(sessionId, input)).toMatchObject({ ok: true });
+    expect(applied).toEqual(["disabled", undefined]);
+    expect(h.child().requests.filter((r) => r.method === "thread/unsubscribe")).toHaveLength(2);
+    expect(h.runtime.getRegistry().getThread("thread-1")?.promptThreadConfig).toBeDefined();
+  });
+
+  test.each([false, true])("re-attach reapplies search for readOnly=%s", async (readOnly) => {
+    let now = 1000;
+    const h = await harness({}, { now: () => now, threadIdleMs: 10 });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    expect(
+      await h.runtime.prompt(sessionId, {
+        prompt: "Inspect",
+        requestId: "before-detach",
+        attachments: [],
+        readOnly: true,
+      }),
+    ).toMatchObject({ ok: true });
+    await complete(h);
+    now += 100;
+    await h.runtime.sweepIdle();
+    expect(h.runtime.getRegistry().getThread("thread-1")).toBeUndefined();
+    const before = h.child().requests.length;
+    expect(
+      await h.runtime.prompt(sessionId, {
+        prompt: "Next",
+        requestId: "after-detach",
+        attachments: [],
+        readOnly,
+      }),
+    ).toMatchObject({ ok: true });
+    const requests = h.child().requests.slice(before);
+    const resume = requests.findLast((r) => r.method === "thread/resume")!;
+    expect((resume.params.config as Record<string, unknown> | undefined)?.web_search).toBe(
+      readOnly ? "disabled" : undefined,
+    );
+    expect(requests[requests.lastIndexOf(resume) - 1]?.method).toBe("thread/unsubscribe");
+  });
+
+  test.each([false, true])(
+    "generation recovery reapplies search for readOnly=%s",
+    async (readOnly) => {
+      const h = await harness({ "skills/list": () => ({ data: [] }) });
+      const { sessionId } = h.runtime.createSession({ mode: "build" });
+      expect(
+        await h.runtime.prompt(sessionId, {
+          prompt: "Inspect",
+          requestId: "before-generation",
+          attachments: [],
+          readOnly: true,
+        }),
+      ).toMatchObject({ ok: true });
+      await complete(h);
+      const generation = h.engine.info().generation;
+      h.child().exit(1);
+      await h.engine.listSkills({ cwd: "/tmp/ws" });
+      await h.drain();
+      expect(h.engine.info().generation).not.toBe(generation);
+      expect(
+        await h.runtime.prompt(sessionId, {
+          prompt: "Next",
+          requestId: "after-generation",
+          attachments: [],
+          readOnly,
+        }),
+      ).toMatchObject({ ok: true });
+      const requests = h.child().requests;
+      const resume = requests.findLast((r) => r.method === "thread/resume")!;
+      expect((resume.params.config as Record<string, unknown> | undefined)?.web_search).toBe(
+        readOnly ? "disabled" : undefined,
+      );
+      expect(requests.filter((r) => r.method === "thread/unsubscribe")).toHaveLength(
+        readOnly ? 1 : 0,
+      );
+    },
+  );
+
+  test("an overloaded read-only retry reapplies search after generation rebind", async () => {
+    let overload = false;
+    const h = await harness(
+      {
+        "turn/start": () => {
+          if (overload) {
+            overload = false;
+            const error = new Error("ingress queue full");
+            (error as { rpcCode?: number }).rpcCode = -32001;
+            throw error;
+          }
+          return { turn: { id: "turn-1" } };
+        },
+      },
+      { initialPromptRetryDelayMs: 0 },
+    );
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    await h.runtime.prompt(sessionId, {
+      prompt: "Build",
+      requestId: "materialize",
+      attachments: [],
+    });
+    await complete(h);
+    const retryable = deferredSignal();
+    const resumeRetry = deferredSignal();
+    const journal = h.runtime.getJournal();
+    const markRetryable = journal.markRetryable.bind(journal);
+    journal.markRetryable = async (id) => {
+      retryable.resolve();
+      await resumeRetry.promise;
+      await markRetryable(id);
+    };
+    overload = true;
+    const pending = h.runtime.prompt(sessionId, {
+      prompt: "Inspect",
+      requestId: "initial-prompt:search-rebind",
+      attachments: [],
+      readOnly: true,
+    });
+    await retryable.promise;
+    try {
+      await h.engine.getSupervisor().restartNow("search retry rebind");
+    } finally {
+      resumeRetry.resolve();
+    }
+    expect(await pending).toMatchObject({ ok: true });
+    expect(h.children).toHaveLength(2);
+    const requests = h.child().requests;
+    const resume = requests.findLast((r) => r.method === "thread/resume")!;
+    expect(resume.params.config).toMatchObject({ web_search: "disabled" });
+    expect(requests[requests.lastIndexOf(resume) - 1]?.method).toBe("thread/unsubscribe");
+    expect(requests.findLast((r) => r.method === "turn/start")!.params.sandboxPolicy).toEqual({
+      type: "readOnly",
+      networkAccess: false,
+    });
+  });
+
+  test("policy updates compare against the applied search setting", async () => {
+    const h = await harness();
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    expect(
+      await h.runtime.prompt(sessionId, {
+        prompt: "Build",
+        requestId: "before-policy",
+        attachments: [],
+      }),
+    ).toMatchObject({ ok: true });
+    await complete(h);
+    expect(
+      await h.runtime.updateConfig(sessionId, {
+        mode: "build",
+        policy: {
+          id: "pipeline",
+          sandbox: "provider",
+          approvals: "auto-approve",
+          projectResources: false,
+          networkAccess: "restricted",
+          capabilityPolicy: { deny: ["network"] },
+        },
+      }),
+    ).toBe("updated");
+    expect(
+      await h.runtime.prompt(sessionId, {
+        prompt: "Inspect",
+        requestId: "after-policy",
+        attachments: [],
+        readOnly: true,
+      }),
+    ).toMatchObject({ ok: true });
+    const requests = h.child().requests;
+    const resume = requests.findLast((r) => r.method === "thread/resume")!;
+    expect(resume.params.config).toMatchObject({ web_search: "disabled" });
+    expect(requests[requests.lastIndexOf(resume) - 1]?.method).toBe("thread/unsubscribe");
   });
 });

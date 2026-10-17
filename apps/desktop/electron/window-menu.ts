@@ -2,6 +2,7 @@ import type { ApplicationMenuWindow } from "./application-menu.js";
 
 export type MenuSourceWindow = {
   isDestroyed(): boolean;
+  isFocused(): boolean;
   getTitle(): string;
 };
 
@@ -20,7 +21,10 @@ export function resolveFocusedWindowContext<Context extends MenuSourceContext>(
   focusedWindow: MenuSourceWindow | null | undefined,
   lastFocusedWindowId: number | null,
 ): Context | null {
-  if (focusedWindow) {
+  // getFocusedWindow can return the window whose DevTools has focus even
+  // when the host window is not key (notably on a shared macOS desktop).
+  // Do not let that stale candidate override an explicit Window-menu choice.
+  if (focusedWindow?.isFocused()) {
     for (const context of contexts.values()) {
       if (context.window === focusedWindow) return context;
     }

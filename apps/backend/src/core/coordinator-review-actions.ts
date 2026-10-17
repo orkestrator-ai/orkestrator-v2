@@ -14,6 +14,7 @@ import { asNonBlankString, stripLoopedReviewSnapshotSecrets } from "./commands-h
 import { actionHash, requireCoordinatorConversation } from "./coordinator-action-scope.js";
 import { openMultiReviewTab } from "./workflow-tab-actions.js";
 import {
+  multiReviewAutomation,
   multiReviewDefaultRows,
   readLaunchModelCatalog,
   savedLaunchSettings,
@@ -124,8 +125,7 @@ export function registerCoordinatorReviewActions(
         reviewers: input.reviewers ?? defaults!.reviewers,
         reviewModel: input.reviewModel ?? defaults!.reviewModel,
         fixModel: input.fixModel ?? defaults!.fixModel,
-        autoFix: input.autoFix ?? config.global.agentSettings?.multiReview?.autoFix ?? false,
-        autoPr: input.autoPr ?? config.global.agentSettings?.multiReview?.autoPr ?? false,
+        ...multiReviewAutomation(input, config.global.agentSettings?.multiReview),
       };
       const reservedId = `action-${createHash("sha256").update(`${caller.coordinatorId}\0${input.requestId}`).digest("hex").slice(0, 32)}`;
       const payloadHash = actionHash({ action: "launch-multi-review", input });

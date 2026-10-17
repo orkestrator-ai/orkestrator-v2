@@ -70,6 +70,38 @@ function createSaved(environmentId: string, input: LayoutInput) {
 describe("pane layout persistence", () => {
   beforeEach(resetStore);
 
+  test("stop reset cancels pending writes and never persists its empty runtime layout", async () => {
+    const store = usePaneLayoutStore.getState();
+    store.initialize("container-1", "env-1");
+    store.addTab("default", { id: "native", type: "agent-native" }, "env-1");
+    store.finishHydration("env-1");
+    const restored = usePaneLayoutStore.getState().environments.get("env-1")!;
+    const save = mock(async (environmentId: string, input: LayoutInput) =>
+      createSaved(environmentId, input),
+    );
+    const stop = startPaneLayoutPersistence({ save, debounceMs: 5, selectionDebounceMs: 5 });
+    try {
+      // Both the structural debounce and the reset notification must be
+      // suppressed once hydration is cleared, even while the pane record stays.
+      store.addTab("default", { id: "pending-edit", type: "file" }, "env-1");
+      store.reset("env-1");
+      expect(usePaneLayoutStore.getState().getAllTabs("env-1")).toEqual([]);
+      expect(usePaneLayoutStore.getState().hydration.has("env-1")).toBe(false);
+      await waitForTimers();
+      expect(save).not.toHaveBeenCalled();
+
+      store.beginHydration("env-1");
+      store.finishHydration("env-1", restored);
+      await waitForTimers();
+      expect(save).not.toHaveBeenCalled();
+      expect(usePaneLayoutStore.getState().getAllTabs("env-1")).toEqual([
+        { id: "native", type: "agent-native" },
+      ]);
+    } finally {
+      stop();
+    }
+  });
+
   test("round-trips file navigation state through persistence and restoration", () => {
     const input = createPersistedPaneLayoutInput({
       containerId: "container-1",

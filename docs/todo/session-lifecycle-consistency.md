@@ -99,6 +99,26 @@ conformance matrix records but does not resolve.
   the conversation was resumed from a new tab, and the resumed session repeated
   a codeword it had only been told before the close. Cursor and Pi were
   skipped as signed out in that profile (Qualification item 1).
+- **A resume closes the session it replaced** (fixed 2026-10-17). A new
+  agent tab creates a provider session as it mounts, before its resume picker
+  opens. `resumeProjectionSession`
+  (`apps/backend/src/core/native-agent-service-dispatch.ts`) adopted the
+  resumed id and left the created session running. On Grok that was a `grok`
+  process holding an `ACP_MAX_SESSIONS` slot for the life of the bridge, with
+  no reaper. On every other platform it was a bridge map entry (Codex drops
+  one after 7 days untouched). It now closes the replaced session with
+  `provider.closeSession`, the same non-destructive close tab teardown uses.
+  Tab teardown's ownership rules and its per-session lock moved into
+  `apps/backend/src/core/provider-session-ownership.ts`, and both paths use
+  them: a session another tab maps, or a Multi Review owns, is not closed.
+  The browser spec's main case now checks that the new tab's session gets
+  `POST /session/:id/close` (for OpenCode, an abort and no delete) once the
+  resume lands. It fails without the fix on all four platforms. Live on an
+  isolated profile with host Grok credentials,
+  `close-retention-live.spec.ts` (Grok) passed either way. A process sampler
+  under that profile's backend saw the new tab's empty-session `grok` process
+  stay alive beside the resumed one until the environment was deleted without
+  the fix, and exit when the resumed one started with it.
 - **OpenCode conversations are titled from their first prompt** (fixed
   2026-10-17). Every provider session is created as "Agent Session"
   (`native-agent-service-provider.ts`). The projection replaced that
@@ -119,20 +139,22 @@ conformance matrix records but does not resolve.
    no supported bridge predates `POST /session/:id/close` (see
    [mixed-version-compatibility.md](mixed-version-compatibility.md)). Until
    then, a 404 or 405 keeps meaning "old bridge", never "already closed".
-2. **Close the session a resume replaces.** A new agent tab creates a bridge
-   session when it is locked to a platform for resume. `resumeProjectionSession`
-   (`apps/backend/src/core/native-agent-service-dispatch.ts`) then adopts the
-   resumed id and never closes the empty session it replaced. The spec's
-   bridge log shows `POST /session/create` followed by `POST /session/resume`,
-   with no close for the created id. A signed-in ACP bridge spawns the agent at
-   create (`createSession`, `bridges/acp-bridge/src/acp-session.ts`), and
-   nothing reaps an idle session. So each resume into a new Grok tab leaves a
-   Grok process running for the life of the bridge, and the session counts
-   against `ACP_MAX_SESSIONS`. Grok and OpenCode can also keep an empty vendor
-   conversation in their history. Close the replaced session through the same
-   checks tab teardown applies (shared sessions, Multi Review ownership), or
-   create the session lazily so a tab locked only to resume never has one.
-3. **Label untitled resume rows by something a person recognises.**
+2. **Create no session for a tab opened only to resume** (follow-up to the
+   resume close, low). A tab locked to a platform for resume still creates a
+   provider session as it mounts, and the resume then closes it. The close
+   keeps vendor history, so OpenCode and Grok each still store one empty
+   conversation per resume, and a signed-in Grok bridge spawns an agent
+   process for a few seconds. Creating the session only on the first prompt,
+   or when the picker is dismissed, would avoid both. It needs the composer to
+   render without a projection.
+3. **Retry a replaced-session close that failed** (follow-up, low). The
+   resume close is best effort: a 503 pending or a timeout leaves the session
+   registered on the bridge, with no mapping for any sweep to find. Only a
+   close blocked by owned work answers pending, and a replaced tab session is
+   almost always empty. If the leak shows up again, record a durable intent
+   keyed by environment, agent and provider session, and replay it in
+   `reconcile_tab_teardowns`.
+4. **Label untitled resume rows by something a person recognises.**
    `NativeResumeSessionDialog` falls back to `Session <first 8 characters of the
    id>`. Live Grok rows whose title Grok had not generated yet read
    `Session acp-sess`, because the id is the `acp-session:` resume token. A Pi
@@ -252,9 +274,43 @@ batch them with
   `native-agent-service-projection.test.ts` covers it per platform, and the
   OpenCode browser case fails without it, because the OpenCode fake now keeps
   a session's created title as OpenCode does.
-- **The resume leak is recorded, not fixed here.** Closing the session a
-  resume replaces changes resume semantics on every platform and needs the
-  teardown's shared-session and Multi Review checks (Code item 2).
+- **The resume close is in the backend, after the resume is adopted.** A
+  renderer-only fix (create no session for a tab opened to resume) would miss
+  a user who opens a plain new tab and then clicks Resume Session, and every
+  non-UI caller of `resume_native_agent_session`. The backend knows which
+  session the tab showed (`existing.providerSessionId`, which is also the
+  adoption's `expectedProviderSessionId`), so the close takes no id from the
+  renderer. The close runs only after the adoption succeeds, so a failed
+  resume leaves the tab's own session usable. Lazy creation stays as Code
+  item 2, because it also avoids the empty vendor conversation.
+- **The resume close follows tab teardown's last-owner rules and lock.**
+  `providerSessionHeldElsewhere` and `withProviderSessionTeardownLock`
+  (`provider-session-ownership.ts`) are shared code, not a copy. The lock is
+  keyed by (environment, agent, provider session) within one storage, so a
+  tab close racing a resume in another tab cannot both skip the close: the
+  resume checks under the lock, after its adoption, and the teardown checks
+  and retires its mapping under the same lock. A session another tab shares,
+  or one a Multi Review owns, is left alone, as tab close leaves it.
+- **It closes any replaced session, not only empty ones.** The tab no longer
+  shows the replaced session, which is what a tab close means, and the close
+  keeps the conversation, so it can be resumed again. In the UI the Resume
+  Session button only shows on an empty transcript, so the replaced session
+  is almost always empty. Checking for emptiness first would need a provider
+  read on every resume and would keep the leak for a replaced session that
+  had one turn.
+- **The close is best effort and runs beside the projection refresh.** A
+  failure is logged (the agent name and error class only, never the message)
+  and the resume still succeeds; a bridge that cannot be reached has usually
+  lost the session with its process. The resume answers once both the refresh
+  and the close settle, so the close never outlives the request unobserved.
+  On a responsive bridge an idle close is one local request, and the bridge
+  request timeout bounds the slow case. A durable retry is Code item 3.
+- **`provider.closeSession`, not the teardown's raw bridge request.** The
+  resume has already resolved the provider and reached the bridge, so there
+  is no bridge to avoid starting. `HttpBridgeProvider.closeSession` calls
+  `closeBridgeSessionRetaining` like teardown, so the legacy-DELETE and
+  Claude upgrade rules are the same. OpenCode's `closeSession` runs its own
+  retaining close.
 - Which records survive a bridge or backend restart, and who owns each, is in
   [agent-engines.md → What survives a restart](../architecture/agent-engines.md#what-survives-a-restart).
 - Every caller of close and its intended retention is in

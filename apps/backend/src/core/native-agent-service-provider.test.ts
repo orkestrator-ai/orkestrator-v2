@@ -581,6 +581,101 @@ describe("NativeAgentService", () => {
     ).finally(() => provider.dispose?.());
   });
 
+  // A new install's Codex default is `gpt-5.4`, which a ChatGPT login's
+  // `model/list` does not offer. Codex runs the session's configured model, so
+  // creating the session with it failed every turn while the picker showed the
+  // catalogue's first model.
+  test("starts a new Codex tab on an offered model when the configured default is not offered", async () => {
+    const created: unknown[] = [];
+    const provider = createNativeAgentProvider(
+      {
+        agent: "codex",
+        baseUrl: "http://codex.test",
+        authToken: "codex-token",
+        requestTimeoutMs: 1_000,
+      },
+      {
+        fetch: (async (input: string | URL | Request, init: RequestInit = {}) => {
+          const url = String(input);
+          if (url.endsWith("/global/models")) {
+            return Response.json({
+              source: "app-server",
+              models: [{ id: "gpt-6.1-sol", name: "GPT-6.1-Sol" }],
+            });
+          }
+          if (url.endsWith("/session/create")) {
+            created.push(JSON.parse(String(init.body)));
+            return Response.json({ sessionId: "codex-thread-1" });
+          }
+          throw new Error(`Unexpected Codex bridge request: ${url}`);
+        }) as typeof fetch,
+      },
+    );
+    await withService(
+      { prefix: "orkestrator-native-codex-offered-default-", provider: async () => provider },
+      async ({ storage, service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-codex",
+          origin: "interactive-native" as const,
+          interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+        };
+        const config = await storage.loadConfig();
+
+        const ensure = createCommandRegistry().get("ensure_native_agent_session")!;
+        const session = (await ensure({ ...identity, model: "gpt-5.4", modelSource: "default" }, {
+          storage,
+          nativeAgents: service,
+        } as unknown as CommandContext)) as Awaited<
+          ReturnType<NativeAgentService["ensureSession"]>
+        >;
+
+        expect(created).toEqual([expect.objectContaining({ model: "gpt-6.1-sol" })]);
+        expect(session.controls?.modelId).toBe("gpt-6.1-sol");
+        expect(session.modelSubstitution).toEqual({
+          requestedModelId: "gpt-5.4",
+          modelId: "gpt-6.1-sol",
+          message: "gpt-5.4 isn't available with your Codex login; using GPT-6.1-Sol.",
+        });
+        // For this session only: the configured default keeps the user's choice.
+        expect(await storage.loadConfig()).toEqual(config);
+      },
+    );
+  });
+
+  test("keeps an explicit Codex model the catalogue does not offer", async () => {
+    const created: unknown[] = [];
+    const requests: string[] = [];
+    const provider = createNativeAgentProvider(
+      { agent: "codex", baseUrl: "http://codex.test", authToken: "codex-token" },
+      {
+        fetch: (async (input: string | URL | Request, init: RequestInit = {}) => {
+          requests.push(String(input));
+          created.push(JSON.parse(String(init.body)));
+          return Response.json({ sessionId: "codex-thread-1" });
+        }) as typeof fetch,
+      },
+    );
+    await withService(
+      { prefix: "orkestrator-native-codex-explicit-", provider: async () => provider },
+      async ({ service }) => {
+        const session = await service.ensureSession({
+          environmentId: "env-1",
+          agent: "codex",
+          logicalSessionKey: "env-env-1:tab-codex-explicit",
+          model: "gpt-5.4",
+          modelSource: "explicit",
+        });
+
+        expect(requests).toEqual(["http://codex.test/session/create"]);
+        expect(created).toEqual([expect.objectContaining({ model: "gpt-5.4" })]);
+        expect(session.controls?.modelId).toBe("gpt-5.4");
+        expect(session.modelSubstitution).toBeUndefined();
+      },
+    );
+  });
+
   test("keeps an explicit disconnected initial model without reporting a substitution", async () => {
     const fake = openCodeFake();
     Object.assign(fake.client as object, {

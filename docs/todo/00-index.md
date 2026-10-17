@@ -57,10 +57,10 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 25 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 257 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 268 |
-| **Total** | | **551** |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 24 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 258 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 269 |
+| **Total** | | **552** |
 
 ## Very high
 
@@ -138,7 +138,7 @@ it reaches. Some rules of thumb:
 - [x] Report `authentication-required` readiness on Claude, Pi, ACP and OpenCode; drop the Cursor-only 401 branch ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
 - [x] Confirm no auth response body carries a token or key except the login URL, and the URL is never logged ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)
 - [x] Confirm close retains the conversation through the UI for Cursor, Pi, OpenCode and Grok ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
-- [ ] Make the shown and the run model match when a stored model is not in the catalogue; a new install's Codex `gpt-5.4` fails every turn on a ChatGPT login ([composer-model-parameters.md](composer-model-parameters.md))
+- [x] Make the shown and the run model match when a stored model is not in the catalogue; a new install's Codex `gpt-5.4` fails every turn on a ChatGPT login ([composer-model-parameters.md](composer-model-parameters.md))
 
 ### Transcripts, observation and bandwidth (high)
 
@@ -369,6 +369,7 @@ it reaches. Some rules of thumb:
 - [ ] Run a Codex sign-out then sign-in round trip on a fixture profile with Codex credentials ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)
 - [ ] Confirm an expired Claude login mid-turn shows the `auth` notice and actionable readiness, not a spawn failure ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)
 - [ ] Migrate reasoning and speed axes onto generic `parameters`, or record the decision to keep both models ([composer-model-parameters.md](composer-model-parameters.md))
+- [ ] Apply or reject a per-turn `model` on a Codex dispatch; the Codex prompt body drops it, so an explicit dispatch model on an existing session is ignored ([composer-model-parameters.md](composer-model-parameters.md))
 - [ ] Change an extra Cursor model axis, send a turn, reload, and confirm the value returns from the backend ([composer-model-parameters.md](composer-model-parameters.md), qualification)
 - [ ] Re-arm pending Claude permissions on (re)initialize via `pending_permission_requests` and `reinitialize()` ([provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md), deferred)
 - [ ] Surface Claude MCP permission provenance (`McpServerProvenance`) in the shared interaction card ([provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md), deferred)
@@ -679,6 +680,7 @@ it reaches. Some rules of thumb:
 - [ ] Source Codex reasoning `summary` and `personality` from a setting, or remove the bridge plumbing ([composer-model-parameters.md](composer-model-parameters.md))
 - [ ] Decide whether Claude `acceptEdits` joins the `mode` axis, or stop forwarding `permissionMode` ([composer-model-parameters.md](composer-model-parameters.md))
 - [ ] Add a backend per-environment `maxBudgetUsd` setting mapped to a stopped notice, or drop the option ([composer-model-parameters.md](composer-model-parameters.md))
+- [ ] Refuse a Codex send on a session model the live `model/list` does not offer, keeping the draft, instead of Codex's HTTP 400 ([composer-model-parameters.md](composer-model-parameters.md))
 - [ ] After the axis migration, round trip reasoning and speed controls on every platform through a reload ([composer-model-parameters.md](composer-model-parameters.md), qualification)
 - [ ] Make `checkHttpHealth` reject HTML so an OpenCode 2.x server is never reported healthy ([opencode-v2.md](opencode-v2.md))
 - [ ] Recheck upstream OpenCode 2.x since 2.0.18: new release, storage policy, steer precondition, MCP endpoints ([opencode-v2.md](opencode-v2.md), verify)
@@ -875,7 +877,7 @@ it reaches. Some rules of thumb:
 | [mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md) |  |  | 3 | 5 | 8 |
 | [session-titles-and-history.md](session-titles-and-history.md) |  |  | 4 | 4 | 8 |
 | [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md) |  |  | 8 | 6 | 14 |
-| [composer-model-parameters.md](composer-model-parameters.md) |  | 1 | 2 | 4 | 7 |
+| [composer-model-parameters.md](composer-model-parameters.md) |  |  | 3 | 5 | 8 |
 | [opencode-v2.md](opencode-v2.md) |  |  |  | 3 | 3 |
 | [provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md) |  |  | 2 | 15 | 17 |
 | [session-lifecycle-consistency.md](session-lifecycle-consistency.md) |  |  | 8 | 5 | 13 |

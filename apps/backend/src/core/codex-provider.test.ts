@@ -42,6 +42,60 @@ describe("HTTP bridge provider (codex)", () => {
     expect(JSON.parse(String(requests[0]!.init.body)).mode).toBe(mode);
   });
 
+  test("replaces an inherited default the live model list does not offer", async () => {
+    const { provider, requests } = httpProvider(
+      () =>
+        Response.json({
+          source: "app-server",
+          models: [{ id: "gpt-6.1-sol", name: "GPT-6.1-Sol" }],
+        }),
+      codexConnection,
+    );
+
+    await expect(provider.resolveDefaultModel?.("gpt-5.4")).resolves.toEqual({
+      modelId: "gpt-6.1-sol",
+      substitution: {
+        requestedModelId: "gpt-5.4",
+        modelId: "gpt-6.1-sol",
+        message: "gpt-5.4 isn't available with your Codex login; using GPT-6.1-Sol.",
+      },
+    });
+    expect(requests.map((request) => request.url)).toEqual(["http://codex.test/global/models"]);
+    expect(new Headers(requests[0]!.init.headers).get("X-Orkestrator-Codex-Token")).toBe(
+      "codex-token",
+    );
+  });
+
+  test("keeps the inherited default when the model list is not live", async () => {
+    const { provider } = httpProvider(
+      () => Response.json({ source: "fallback", models: [{ id: "gpt-6.1-sol" }] }),
+      codexConnection,
+    );
+
+    await expect(provider.resolveDefaultModel?.("gpt-5.4")).resolves.toEqual({
+      modelId: "gpt-5.4",
+    });
+  });
+
+  test("keeps the inherited default when the model list cannot be read", async () => {
+    const { provider } = httpProvider(
+      () => new Response("unavailable", { status: 503 }),
+      codexConnection,
+    );
+
+    await expect(provider.resolveDefaultModel?.("gpt-5.4")).resolves.toEqual({
+      modelId: "gpt-5.4",
+    });
+  });
+
+  test("leaves an unset default to Codex without reading the model list", async () => {
+    const { provider, requests } = httpProvider(() => Response.json({}), codexConnection);
+
+    await expect(provider.resolveDefaultModel?.(undefined)).resolves.toEqual({});
+    await expect(provider.resolveDefaultModel?.("default")).resolves.toEqual({});
+    expect(requests).toHaveLength(0);
+  });
+
   test("reads status from the codex-specific endpoint", async () => {
     const { provider, requests } = httpProvider(
       () => Response.json({ status: "running" }),

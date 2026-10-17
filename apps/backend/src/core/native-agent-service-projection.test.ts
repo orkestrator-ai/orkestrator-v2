@@ -2379,6 +2379,98 @@ describe("NativeAgentService", () => {
     );
   });
 
+  // Codex turns run the session config's model; the prompt carries none. The
+  // catalogue's first row is not what runs, so the picker must not show it.
+  test("shows the model a Codex session runs when the catalogue does not list it", async () => {
+    const invoke: Invoke = async <T>(command: string): Promise<T> => {
+      if (command !== "get_native_agent_model_catalog") {
+        throw new Error(`Unexpected backend command: ${command}`);
+      }
+      return [
+        {
+          platform: "codex",
+          id: "gpt-6.1-sol",
+          label: "GPT-6.1-Sol",
+          reasoning: [{ id: "high", label: "High" }],
+        },
+      ] as T;
+    };
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        controls: { modelId: "gpt-5.4", reasoningId: "high" },
+      }),
+      updateInteractiveControls: async () => undefined,
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-codex-not-offered-",
+        provider: async () => stub.provider,
+        invoke,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-codex-not-offered",
+        };
+        await service.ensureSession({ ...identity, model: "gpt-5.4", modelSource: "explicit" });
+
+        const projection = await service.getProjection(identity);
+        expect(projection?.composer?.selectedModelId).toBe("gpt-5.4");
+        expect(projection?.composer?.models.map((model) => model.id)).toEqual([
+          "gpt-6.1-sol",
+          "gpt-5.4",
+        ]);
+        expect(projection?.composer?.models[1]).toMatchObject({
+          label: "gpt-5.4",
+          providerLabel: "Codex · not offered to this login",
+        });
+
+        // Picking a listed model replaces it.
+        await service.updateProjectionControls({ ...identity, update: { modelId: "gpt-6.1-sol" } });
+        expect(stub.updateInteractiveControls).toHaveBeenCalledWith(
+          expect.any(String),
+          expect.objectContaining({ modelId: "gpt-6.1-sol" }),
+        );
+      },
+    );
+  });
+
+  test("keeps a Codex session's listed model without adding rows", async () => {
+    const invoke: Invoke = async <T>(): Promise<T> =>
+      [
+        { platform: "codex", id: "gpt-6.1-sol", label: "GPT-6.1-Sol" },
+        { platform: "codex", id: "gpt-6.1-sol-mini", label: "GPT-6.1-Sol Mini" },
+      ] as T;
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({
+        status: "idle",
+        messages: [],
+        controls: { modelId: "gpt-6.1-sol-mini" },
+      }),
+    });
+    await withService(
+      { prefix: "orkestrator-native-codex-offered-", provider: async () => stub.provider, invoke },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-codex-offered",
+        };
+        await service.ensureSession(identity);
+
+        const projection = await service.getProjection(identity);
+        expect(projection?.composer?.selectedModelId).toBe("gpt-6.1-sol-mini");
+        expect(projection?.composer?.models.map((model) => model.id)).toEqual([
+          "gpt-6.1-sol",
+          "gpt-6.1-sol-mini",
+        ]);
+      },
+    );
+  });
+
   test("projects an initial OpenCode execution profile before the first prompt", async () => {
     const stub = createProviderStub("opencode", {
       interactiveSnapshot: async () => ({

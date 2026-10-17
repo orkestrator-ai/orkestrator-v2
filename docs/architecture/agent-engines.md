@@ -268,6 +268,20 @@ session unsubscribes, whereas deleting would destroy the user's rollout. Tab
 close (`POST /session/:id/close`) additionally confirms that a last-reference
 turn has actually stopped before releasing the thread.
 
+A Codex turn runs the model in its session's config; the prompt carries no
+model. Two rules in `apps/backend/src/core/session-held-model.ts` keep the
+picker and the run on the same model:
+
+- **New sessions.** A session created on an inherited default that the login's
+  live `model/list` does not offer starts on that list's first model, the same
+  row the picker would show. The user gets a toast, Build stages record a
+  `modelSubstitution`, and the setting is not changed. A pinned or explicit
+  model is kept. The bridge's cache or fallback catalogue is never grounds for a
+  swap.
+- **Existing sessions.** If a session holds a model the catalogue does not
+  list, the picker shows that model, labelled "not offered to this login",
+  instead of the first catalogue row. Picking any listed model replaces it.
+
 `session-titles.ts` is the one deliberate exception to all of the above — it
 still spawns a hermetic `codex exec` with a custom model catalog, a read-only
 sandbox, and user config ignored, so title generation cannot inherit the user's

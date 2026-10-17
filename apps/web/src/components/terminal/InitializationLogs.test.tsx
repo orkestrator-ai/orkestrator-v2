@@ -137,18 +137,26 @@ describe("InitializationLogs", () => {
   test("identical tails write no state: no re-render, no re-scroll", async () => {
     getContainerLogsMock.mockResolvedValue("same line");
     render(<InitializationLogs containerId="container-1" />);
-    await waitFor(() => expect(screen.getByText("same line")).toBeTruthy());
+    /*
+     * Land the first read inside act() so its commit and the auto-scroll
+     * effect both flush before the baseline is taken. Resolved outside act()
+     * (via waitFor), the passive scroll effect runs on React's setImmediate
+     * task, racing waitFor's setTimeout(0) drain; a stall of a millisecond or
+     * more lets waitFor return first and the initial scroll then lands inside
+     * the identical-tail polls below (flake 0176).
+     */
+    await advance(0);
     const shown = screen.getByText("same line");
-    const scrolls = scrollIntoView.mock.calls.length;
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
     await advance(5_000);
     expect(getContainerLogsMock).toHaveBeenCalledTimes(6);
     expect(screen.getByText("same line")).toBe(shown);
-    expect(scrollIntoView.mock.calls.length).toBe(scrolls);
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
 
     getContainerLogsMock.mockResolvedValue("same line\nnew line");
     await advance(1_000);
-    await waitFor(() => expect(screen.getByText("new line")).toBeTruthy());
-    expect(scrollIntoView.mock.calls.length).toBe(scrolls + 1);
+    expect(screen.getByText("new line")).toBeTruthy();
+    expect(scrollIntoView).toHaveBeenCalledTimes(2);
   });
 
   test("two views of the same container share one read", async () => {

@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
-import { chromium, errors, type Browser } from "playwright-core";
+import { chromium, type Browser } from "playwright-core";
 import { DesignError } from "./errors.js";
 import { DesignRenderQueue } from "./render-queue.js";
 import {
@@ -666,64 +666,49 @@ describe("DesignRenderer health", () => {
 });
 
 const realChromium = resolveDesignChromiumPath();
-// The functional case proves script blocking and capture independently of
-// cold-start speed. The first real-browser case exercises the production budget.
-const REAL_CHROMIUM_LAUNCH_MS = 45_000;
+/** Bound for the one untimed cold start that loads Chromium from disk (0246). */
+const COLD_START_MS = 120_000;
 
 describe("DesignRenderer with real Chromium", () => {
+  // A host's first Chromium start reads roughly 350 MB of browser from disk.
+  // On a CI runner with a cold page cache and a contended disk that read alone
+  // outlasts the production launch budget, while every later start takes
+  // milliseconds (0246). Pay it once here, outside the renderer, so both cases
+  // hold the renderer's own launch path to the production budgets.
+  beforeAll(async () => {
+    if (!realChromium) return;
+    const started = performance.now();
+    const browser = await chromium.launch({
+      headless: true,
+      executablePath: realChromium,
+      timeout: COLD_START_MS,
+    });
+    try {
+      const page = await browser.newPage();
+      await page.setContent("<p>warm</p>");
+      await page.screenshot({ type: "png" });
+    } finally {
+      await browser.close();
+    }
+    const elapsed = Math.round(performance.now() - started);
+    if (elapsed > DEFAULT_DESIGN_RENDER_BUDGETS.launchMs / 3)
+      console.warn(`[real Chromium] cold start took ${elapsed} ms before the cases (0246)`);
+  }, COLD_START_MS + 15_000);
+
   test.skipIf(!realChromium)(
-    "uses the production launch budget and reports cold-start timeouts",
+    "starts a loaded browser within the production launch budget",
     async () => {
-      let launchOutcome: Promise<unknown> | undefined;
       let launchTimeout: number | undefined;
       const instance = new DesignRenderer({
         launchBrowser: (options) => {
           launchTimeout = options?.timeout;
-          const browser = chromium.launch(options);
-          launchOutcome = browser.then(
-            () => undefined,
-            (error: unknown) => error,
-          );
-          return browser;
+          return chromium.launch(options);
         },
       });
       renderers.push(instance);
-      const started = performance.now();
-      const outcome = await instance.run<string>(job()).then(
-        (value) => ({ ok: true as const, value }),
-        (error: unknown) => ({ ok: false as const, error }),
-      );
+      expect(await instance.run<string>(job())).toContain("Hello");
       expect(launchTimeout).toBe(DEFAULT_DESIGN_RENDER_BUDGETS.launchMs);
-      if (outcome.ok) {
-        expect(outcome.value).toContain("Hello");
-        expect(instance.status()).toMatchObject({ state: "ready", ready: true });
-        return;
-      }
-
-      // A slow cold start is a supported production failure, not a render
-      // success. Only a launch deadline is acceptable here; installation,
-      // context creation and runtime failures must still fail the test.
-      const launchError = await Promise.race([
-        launchOutcome,
-        Bun.sleep(1_000).then(() => undefined),
-      ]);
-      if (launchError !== undefined && !(launchError instanceof errors.TimeoutError))
-        throw launchError;
-      expect(outcome.error).toBeInstanceOf(DesignError);
-      expect((outcome.error as DesignError).code).toBe("renderer-unavailable");
-      if ((outcome.error as Error).message !== "Design renderer did not start in time")
-        expect(launchError).toBeInstanceOf(errors.TimeoutError);
-      // Timers use millisecond resolution; tolerate only rounding at the boundary.
-      expect(performance.now() - started).toBeGreaterThanOrEqual(
-        DEFAULT_DESIGN_RENDER_BUDGETS.launchMs - 1,
-      );
-      expect(instance.status()).toMatchObject({
-        state: "launch-failed",
-        ready: false,
-        queued: 0,
-        running: 0,
-      });
-      console.warn(`[real Chromium] production launch timed out after ${launchTimeout} ms (0246)`);
+      expect(instance.status()).toMatchObject({ state: "ready", ready: true });
     },
     DEFAULT_DESIGN_RENDER_BUDGETS.overallMs + 5_000,
   );
@@ -733,10 +718,6 @@ describe("DesignRenderer with real Chromium", () => {
     async () => {
       let launch: Promise<string> | undefined;
       const instance = new DesignRenderer({
-        budgets: {
-          launchMs: REAL_CHROMIUM_LAUNCH_MS,
-          overallMs: REAL_CHROMIUM_LAUNCH_MS + DEFAULT_DESIGN_RENDER_BUDGETS.overallMs,
-        },
         launchBrowser: (options) => {
           const started = performance.now();
           const elapsed = () => `${Math.round(performance.now() - started)} ms`;
@@ -761,7 +742,7 @@ describe("DesignRenderer with real Chromium", () => {
         throw error;
       }
     },
-    REAL_CHROMIUM_LAUNCH_MS + 45_000,
+    2 * DEFAULT_DESIGN_RENDER_BUDGETS.overallMs,
   );
 });
 

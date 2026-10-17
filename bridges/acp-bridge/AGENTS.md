@@ -84,6 +84,8 @@ created yet", never as a session to load.
   child; close removes its temporary profile.
 - **Usage belongs to attempts before turns.** Merge duplicate vendor and
   prompt-result carriers within an attempt, then sum consumption across
-  continuations. Context occupancy and window retain the latest snapshot.
+  continuations. Context occupancy, window and cost (ACP's cumulative session
+  cost) retain the latest snapshot. A late carrier after a continued turn
+  merges into its last attempt, not the summed turn.
   Reset partial structured output and cancel parked interactions before a
   continuation; an ended attempt cannot own a later attempt's interaction.

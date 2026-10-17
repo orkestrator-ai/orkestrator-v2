@@ -56,7 +56,7 @@ describe("policy continuation through HTTP completion", () => {
             usedTokens: 80,
             lastTurnTokens: 42,
             sessionTokens: 42,
-            costUsd: 0.1 + 0.2,
+            costUsd: 0.3,
           },
         });
       }

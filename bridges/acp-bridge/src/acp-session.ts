@@ -1957,10 +1957,15 @@ export function recordTurnUsage(state: SessionState, payload: unknown): void {
   }
   const turnInFlight = state.turnStartedAt !== undefined;
   const previous = state.usage;
-  if (turnInFlight) {
+  // A late carrier after a continued turn belongs to its last attempt, so it
+  // merges there; merging it into the summed turn would drop earlier attempts.
+  const attemptOpen =
+    turnInFlight ||
+    (state.completedAttemptUsage !== undefined && state.currentAttemptUsage !== undefined);
+  if (attemptOpen) {
     state.currentAttemptUsage = { ...state.currentAttemptUsage, ...turn };
   }
-  const accumulatedTurn = turnInFlight
+  const accumulatedTurn = attemptOpen
     ? accumulateAttemptUsage(state.completedAttemptUsage, state.currentAttemptUsage!)
     : { ...previous?.turn, ...turn };
   if (turnInFlight) state.currentTurnUsage = accumulatedTurn;

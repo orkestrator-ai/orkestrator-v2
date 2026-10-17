@@ -786,8 +786,8 @@ export async function route(
         rememberPendingLateTurnUsage(state, promptSequence);
         state.turnStartedAt = undefined;
         state.currentTurnUsage = undefined;
-        state.currentAttemptUsage = undefined;
-        state.completedAttemptUsage = undefined;
+        // The attempt split stays until the next turn so a late carrier after a
+        // continuation lands on the last attempt (`recordTurnUsage`).
         state.currentTurnRequestId = undefined;
         state.currentTurnSawVendorUsage = undefined;
         if (schema && requestId) {

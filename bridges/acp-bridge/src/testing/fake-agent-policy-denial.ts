@@ -29,7 +29,7 @@ export function handlePolicyDenial(message: JsonObject): boolean {
   const denied = attempts === 1 || process.env.FAKE_ACP_POLICY_EXHAUST === "1";
   const usage = denied
     ? { totalTokens: 15, inputTokens: 10, outputTokens: 5, costUsd: 0.1 }
-    : { totalTokens: 27, inputTokens: 20, outputTokens: 7, costUsd: 0.2 };
+    : { totalTokens: 27, inputTokens: 20, outputTokens: 7, costUsd: 0.3 };
   for (const sessionUpdate of ["response_completed", "turn_completed"]) {
     write({
       jsonrpc: "2.0",

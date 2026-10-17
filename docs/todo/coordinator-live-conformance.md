@@ -129,7 +129,8 @@ and what its first runs found. Everything else here is qualification.
    (local, ignored artifact).
 6. **Continued ACP usage accounting fixed.** Vendor and result carriers merge
    within each attempt; consumption sums across attempts while context
-   occupancy keeps its latest snapshot. Policy and provider continuations
+   occupancy and ACP's cumulative session cost keep their latest snapshot,
+   and a late carrier merges into the last attempt. Policy and provider continuations
    share that accounting and clear partial structured output. Regression
    coverage includes the HTTP journal and structured-output result.
 

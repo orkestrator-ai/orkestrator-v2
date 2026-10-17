@@ -284,7 +284,8 @@ describe("continued attempt accounting and lifecycle", () => {
       totalTokens: 27,
       inputTokens: 20,
       outputTokens: 7,
-      costUsd: 0.2,
+      // ACP reports cost as the session's cumulative total, not per attempt.
+      costUsd: 0.3,
       cacheReadTokens: 4,
       cacheWriteTokens: 2,
       reasoningTokens: 6,
@@ -324,7 +325,7 @@ describe("continued attempt accounting and lifecycle", () => {
         totalTokens: 42,
         inputTokens: 30,
         outputTokens: 12,
-        costUsd: 0.1 + 0.2,
+        costUsd: 0.3,
         cacheReadTokens: 6,
         cacheWriteTokens: 3,
         reasoningTokens: 9,
@@ -335,7 +336,18 @@ describe("continued attempt accounting and lifecycle", () => {
       expect(turn.state.usage).toMatchObject({
         sessionTokens: 92,
         lastTurnTokens: 42,
-        turns: [{ totalTokens: 42, costUsd: 0.1 + 0.2 }],
+        turns: [{ totalTokens: 42, costUsd: 0.3 }],
+      });
+
+      // The HTTP handler ends the turn; a late carrier repeats the last
+      // attempt's numbers and must not replace the summed turn.
+      turn.state.turnStartedAt = undefined;
+      turn.state.currentTurnUsage = undefined;
+      recordTurnUsage(turn.state, { usage: { ...second, reasoningTokens: 8 } });
+      expect(turn.state.usage).toMatchObject({
+        turn: { totalTokens: 42, inputTokens: 30, reasoningTokens: 11, costUsd: 0.3 },
+        sessionTokens: 92,
+        lastTurnTokens: 42,
       });
     } finally {
       turn.cleanup();

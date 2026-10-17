@@ -271,7 +271,8 @@ describe("PreviewTunnelServer", () => {
     await ready(client);
     client.ws.send(encodePreviewTunnelFrame({ type: "open" }));
     await client.nextControl("open-ok");
-    // Stop reading at the TCP level: the server must pause the upstream.
+    // Stop reading at the TCP level: the server must pause the upstream, or
+    // close the tunnel before one large upstream read queues past the bound.
     client.ws.pause();
     client.ws.send(Buffer.from("GET /endless HTTP/1.1\r\nhost: localhost\r\n\r\n"));
     await Bun.sleep(300);

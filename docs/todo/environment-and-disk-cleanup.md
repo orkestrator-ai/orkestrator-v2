@@ -1,14 +1,14 @@
 # Environment and disk cleanup
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `31d0fb06` (2026-10-17).
 
 Deleting an environment, the startup reconciler and the pre-ledger sweeps
 remove only state Orkestrator can prove it owns, and dev tooling and tests
 must not grow disk without bound. The code shipped in #856 (deletion ledger,
 branch policy, reconciler) and #879 (dev profile pruning, test isolation,
-pre-ledger sweeps, `disk:report`). What remains is real-stack evidence, a few
-test temporary directories that still leak, and a way to see cleanup that has
-stopped retrying.
+pre-ledger sweeps, `disk:report`). The real-stack evidence was recorded on
+2026-10-17 (below). What remains is a few test temporary directories that still
+leak, and a way to see cleanup that has stopped retrying.
 
 ## Current state
 
@@ -33,7 +33,9 @@ stopped retrying.
   UI, diagnostics or `disk:report` shows it.
 - Sweeps for state whose owner is provable without a ledger:
   - `sweepOrphanedEnvironmentState`: bridge state directories.
-  - `sweepOrphanedDesignCanvases`: design canvases.
+  - `sweepOrphanedDesignCanvases`: design canvases. It loads the owner set
+    only when some canvas has an owner, so a fresh data directory whose
+    environment store was never written no longer logs a refused sweep.
   - `WebAnnotationStorage.init({ environmentExists })`: web annotation
     stores.
   - `sweepPreLedgerDiskState` runs `sweepStrayWorkspaceDirectories`,
@@ -53,12 +55,14 @@ stopped retrying.
 - `scripts/disk-report.ts` (`mise run disk:report`, `--json`,
   `--fix legacy-turbo`) is read-only and uses the same predicates as the
   pruners.
-- Evidence so far: unit suites, the real-stack spec "deletion during local
-  setup clears worktree, bridge state, branch and ledger" in
-  `e2e/agent-testing/browser-gateway.spec.ts` (run by
-  `mise run test:agent:browser:isolated`), and live C19
+- Evidence: unit suites; the real-stack specs "deletion during local setup
+  clears worktree, bridge state, branch and ledger" (run by
+  `mise run test:agent:browser:isolated`) and "Docker fixture deletion removes
+  the container, volumes, network and ledger entry" (run by
+  `mise run test:agent:docker`), both in
+  `e2e/agent-testing/browser-gateway.spec.ts`; live C19
   (`apps/backend/tests/container-live-replacement.test.ts`) on Linux Engine
-  only.
+  and Docker Desktop; and the seeded sweep pass below.
 
 ## Outstanding work
 
@@ -87,22 +91,52 @@ stopped retrying.
 
 ### Qualification
 
-- A recorded run of the deletion spec on current `main` that actually ran,
-  not skipped.
-- A real-stack pass of the pre-ledger sweeps in an isolated `dev:test`
-  profile. Seed the following, restart the backend, then check what was
-  removed against what was reported:
-  - a stray workspace directory holding only `.turbo/turbo-*.log` (removed)
-    and one holding any other file (kept, logged);
-  - merged and unmerged orphan branches in the environment naming scheme
-    (merged deleted, unmerged kept and counted);
-  - an abandoned `<store>.json.<pid>.tmp` in the data directory with a dead
-    PID, older than an hour (removed).
+None outstanding. The results are below.
 
-  Backdate the seeded mtimes: anything modified in the last hour is skipped.
-- Container deletion through the ledger on Docker Desktop, covering the
-  `container`, `volumes` and `network` steps. See
-  [container-platform-qualification.md](container-platform-qualification.md).
+## Qualification results (2026-10-17)
+
+Run on `todo-env-cleanup-realstack` at `main` `31d0fb06` plus this change,
+on macOS 27.0 arm64 (Apple Silicon) with Docker Desktop 4.93.0 (Engine 29.8.1)
+and Bun 1.4.3. Each run used the isolated profile `qa-envclean-05b87b2c`, which
+was stopped and reset afterwards.
+
+| Scenario | Result |
+| --- | --- |
+| Deletion during local setup, as shipped | Pass, not skipped. But the backend logged `no setup commands found`: the fixture has no `orkestrator-ai.json`, so no setup was running when deletion ran. |
+| Deletion during local setup, with a running setup (spec extended, see below) | Pass (5.5–6.0 s, four runs). `pgrep` found the setup shell before deletion; its PTY exited 137 on deletion, the worktree path stayed absent 1.5 s later, and no setup process survived. |
+| Negative control: `terminateTerminalSessionsForEnvironment` stubbed out | Fail, as intended. The surviving setup re-created the worktree path. A relative-path loop had passed this control because it cannot re-create a removed cwd; the spec now writes by absolute path, as turbo does. |
+| One-shot `mise run test:agent:browser:isolated` (profile `qa-browser-8311cc1a-7e5`) | The deletion spec passed, not skipped. Suite: 25 passed, 15 opt-in skips (the Docker spec among them), 1 failed. The failure was the known narrow host-picker flake [0224](../tests/flaky-tests/0224-host-picker-narrow-tools-popover.md), which failed once and passed twice when run alone. |
+| Seeded pre-ledger sweeps, restart without `--fixture` | Pass. Logged and observed: stray workspaces removed 1 (only a nested `.turbo/turbo-build.log`) and kept 1 (also holds `notes.txt`, logged once), a fresh stray kept silently; orphan branches deleted 2 (one merged into `main`, one with no new commits), kept 1 (unmerged commit), the non-scheme branch untouched; temp files removed 1 (`qa-store.json.4999999.tmp`, dead PID, 2 h old), kept PID 1, fresh and non-PID names; orphan bridge state directories removed 1, a fresh one kept. |
+| Seeded pre-ledger sweeps, an earlier restart with `--fixture` | Not valid: `deleted 0, kept 2`. `dev:test --fixture` deletes and re-creates the fixture repository (`apps/desktop/scripts/dev/fixture.ts`) after Electron is ready, concurrently with the backend's background startup sweep, which counted the vanishing branches as kept. |
+| Isolation | The backend held only the profile's `orkestrator.sqlite`. The main workspaces root, the main data directory's temp files and the other profiles were unchanged. |
+| Live C19 on Docker Desktop (`dev-b4d6266ccb00`, built after #1041) | Pass: 1 pass, 0 fail. The other tests in the file were filtered out with `-t C19`. |
+| Real-stack containerized deletion on Docker Desktop (new spec) | Pass. Container, volumes and network existed before `delete_environment`; none remained after, and the ledger had no entry. The fixture container's resources were untouched. |
+| Startup on a fresh profile | Before this change: `Orphaned design canvas sweep failed: Error`, because the environment store did not exist yet. After it: no warning. |
+
+To repeat the sweep pass:
+
+1. Start a profile with `--fixture` once, then stop it.
+2. Seed the candidates and backdate them by at least an hour. Use
+   `find <dir> -depth -exec touch -h -t <time> {} +`, because creating a file
+   resets its directory's mtime.
+3. The first start already recorded a branch sweep for the fixture project,
+   and the next pass waits 24 hours. Rewrite its time in the
+   `environment-cleanup-sweeps` store with
+   `bun e2e/agent-testing/backend-store.ts <dataDir> environment-cleanup-sweeps.json write`.
+4. Restart **without** `--fixture`.
+
+Decisions taken in this run:
+
+- The deletion spec now starts its environment from a dangling commit that
+  adds a looping `setupLocal`, passed as `delegationBaseCommit`. The shared
+  fixture branch is untouched, and `finally` kills any survivor by a unique
+  marker.
+- Container deletion is qualified by a new real-stack spec gated on
+  `ORKESTRATOR_AGENT_TEST_DOCKER`, alongside live C19. That spec exercises the
+  real `delete_environment` path, where C19 uses an in-memory context.
+- The sweep pass was run by hand rather than as a spec. It needs a backend
+  restart and backdated mtimes, which the browser suite cannot do inside one
+  profile.
 
 ## Constraints and rationale
 

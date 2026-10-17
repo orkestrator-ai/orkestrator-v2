@@ -57,10 +57,10 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 39 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 247 |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 37 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 246 |
 | Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 259 |
-| **Total** | | **546** |
+| **Total** | | **543** |
 
 ## Very high
 
@@ -112,8 +112,8 @@ it reaches. Some rules of thumb:
 - [x] Re-trace `PROVIDER_STATE_LAYOUT` paths at current pins and add the step to the agent-upgrade guide ([container-rebuild-state-preservation.md](container-rebuild-state-preservation.md))
 - [x] Allow firewall traffic as address, protocol and port tuples (TCP 443, GitHub SSH) under a new policy version ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
 - [x] Replace the 1 s Claude state `docker exec` poll with a pushed change signal and a slow safety read ([container-state-observation.md](container-state-observation.md))
-- [ ] Record a non-skipped run of the deletion-during-setup real-stack spec on current `main` ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), qualification)
-- [ ] Run a seeded real-stack pass of the pre-ledger startup sweeps in an isolated dev profile ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), qualification)
+- [x] Record a non-skipped run of the deletion-during-setup real-stack spec on current `main` ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), qualification)
+- [x] Run a seeded real-stack pass of the pre-ledger startup sweeps in an isolated dev profile ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), qualification)
 
 ### Design canvas (high)
 
@@ -273,7 +273,7 @@ it reaches. Some rules of thumb:
 - [ ] Record idle execs and activity, turn and Files-panel latency before and after each observation change ([container-state-observation.md](container-state-observation.md), qualification)
 - [ ] Regenerate the deterministic recurring-work baseline; stored step artifacts no longer reproduce ([container-state-observation.md](container-state-observation.md), qualification)
 - [ ] Decide whether Claude state polling can be limited to containers running Claude in a terminal ([container-state-observation.md](container-state-observation.md), decision)
-- [ ] Qualify container deletion through the ledger (container, volumes, network steps) on Docker Desktop ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), qualification)
+- [x] Qualify container deletion through the ledger (container, volumes, network steps) on Docker Desktop ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), qualification)
 - [ ] Qualify backend upgrade over old containers and rollback-floor refusal with real releases ([container-platform-qualification.md](container-platform-qualification.md), qualification)
 
 ### Design canvas (medium)
@@ -801,7 +801,7 @@ it reaches. Some rules of thumb:
 | [container-network-and-credential-isolation.md](container-network-and-credential-isolation.md) |  |  | 2 | 1 | 3 |
 | [container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md) |  |  | 3 | 6 | 9 |
 | [container-state-observation.md](container-state-observation.md) |  |  | 5 | 6 | 11 |
-| [environment-and-disk-cleanup.md](environment-and-disk-cleanup.md) |  | 2 | 1 | 5 | 8 |
+| [environment-and-disk-cleanup.md](environment-and-disk-cleanup.md) |  |  |  | 5 | 5 |
 | **Design canvas** | | | | | |
 | [design-canvas-qualification.md](design-canvas-qualification.md) |  | 1 | 6 | 6 | 13 |
 | [design-operation-recovery-edges.md](design-operation-recovery-edges.md) |  |  | 1 | 2 | 3 |

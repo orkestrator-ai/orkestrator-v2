@@ -24,6 +24,7 @@ with full history. Status lives in this index so a model can skip those files.
 
 | ID | Status | Test | File | Symptom | Case |
 | --- | --- | --- | --- | --- | --- |
+| 0273 | open | Claude live inactive slash-command completion | e2e/agent-testing/slash-command-inactive.spec.ts | SDK result diagnostic followed by a 180-second completion timeout; unchanged Claude-only owning file passed in 87.3 seconds. | [0273-claude-live-slash-provider-result.md](0273-claude-live-slash-provider-result.md) |
 | 0265 | open | Command fixture setup/deletion hooks and subsequent project-remote case | apps/backend/tests/commands-integration.test.ts | Aggregate hook timeouts (35003.48/5603.72 ms) and a missing fake Docker log; unchanged owning file passed alone in 19.0 seconds. | [0265-command-fixture-hooks-aggregate-timeout.md](0265-command-fixture-hooks-aggregate-timeout.md) |
 | 0263 | open | `image identity > resolves a tag to its immutable id and registry digest` | apps/backend/tests/docker-image.test.ts:152 | Five-second aggregate timeout (5003.82 ms); unchanged owning file passed alone in 2.8 seconds. | [0263-docker-image-identity-aggregate-timeout.md](0263-docker-image-identity-aggregate-timeout.md) |
 | 0262 | open | ACP package aggregate no-progress stall | bridges/acp-bridge | No output after the Bun startup banner; the 300-second watchdog terminated ACP while the other four bridge packages passed. Unchanged package passed alone in 61.9 seconds. | [0262-acp-package-aggregate-no-progress.md](0262-acp-package-aggregate-no-progress.md) |

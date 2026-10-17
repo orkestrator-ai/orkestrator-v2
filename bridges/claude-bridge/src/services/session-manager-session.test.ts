@@ -7,6 +7,7 @@ import {
   createSession,
   dismissQuestion,
   evictIdleHydratedTranscripts,
+  expectControlOnlyPrompt,
   getPendingPlanApprovals,
   getPendingQuestions,
   getSession,
@@ -44,8 +45,8 @@ describe("catalog discovery caching", () => {
       queryControlOverrides.accountInfo = mock(async () => ({}));
       await readClaudeAuthStatus();
       const probe = await nextQueryCall();
+      expect(typeof probe.prompt).not.toBe("string");
       expect(probe.options).toMatchObject({
-        maxTurns: 0,
         env: { ORKESTRATOR_NATIVE_AGENT_BRIDGE: "claude" },
       });
       expect(probe.isClosed()).toBe(true);
@@ -96,6 +97,7 @@ describe("idle MCP catalogue", () => {
       expect.objectContaining({ id: "docs", status: "connected", toolCount: 1 }),
     ]);
     await performSessionMcpAction(session.id, "docs", "reconnect");
+    await expectControlOnlyPrompt(await nextQueryCall());
     expect(reconnect).toHaveBeenCalledWith("docs");
   });
 });

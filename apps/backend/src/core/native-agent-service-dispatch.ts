@@ -700,23 +700,36 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     this.invalidateProjection(key);
     // Wait for any last-owner close before reopening the conversation. Adoption
     // takes the same fence and rechecks liveness before publishing its mapping.
-    const resumedId = await withProviderSessionTeardownLock(
-      this.storage,
-      input.environmentId,
-      input.agent,
-      input.providerSessionId,
-      () => provider.resumeSession!(input.providerSessionId, input.controls, trustedInput.policy),
-    );
-    await this.adoptSession({
-      ...trustedInput,
-      providerSessionId: resumedId,
-      expectedProviderSessionId: existing?.providerSessionId,
-      controls: input.controls,
-      model: input.controls?.modelId,
-      reasoningEffort: input.controls?.reasoningId,
-      sessionMode: input.controls?.mode,
-      fastMode: input.controls?.fastMode,
-    });
+    const resumeAndAdopt = async () => {
+      const id = await withProviderSessionTeardownLock(
+        this.storage,
+        input.environmentId,
+        input.agent,
+        input.providerSessionId,
+        () => provider.resumeSession!(input.providerSessionId, input.controls, trustedInput.policy),
+      );
+      await this.adoptSession({
+        ...trustedInput,
+        providerSessionId: id,
+        expectedProviderSessionId: existing?.providerSessionId,
+        controls: input.controls,
+        model: input.controls?.modelId,
+        reasoningEffort: input.controls?.reasoningId,
+        sessionMode: input.controls?.mode,
+        fastMode: input.controls?.fastMode,
+      });
+      return id;
+    };
+    let resumedId: string;
+    try {
+      resumedId = await resumeAndAdopt();
+    } catch (error) {
+      // A last-owner close can take the fence between the reopen and the
+      // adoption, which then finds the session missing. That close has
+      // finished by then, so one more reopen recovers the conversation.
+      if (!(error instanceof shared.NativeAgentProviderSessionMissingError)) throw error;
+      resumedId = await resumeAndAdopt();
+    }
     const replacedId = existing?.providerSessionId;
     const closingReplaced =
       replacedId && replacedId !== resumedId

@@ -295,6 +295,71 @@ describe("resume closes the session it replaced", () => {
     );
   });
 
+  test("a resume whose reopened session closes before adoption reopens it again", async () => {
+    const adopting = gate();
+    const releaseAdoption = gate();
+    let live = true;
+    let reopened = false;
+    const order: string[] = [];
+    const { provider, resumeSession, closeSession } = resumableStub("grok", "provider-resumed", {
+      status: async (id) => (id === "provider-session" && !live ? "missing" : "idle"),
+    });
+    resumeSession.mockImplementation(async (id) => {
+      order.push(`resume:${id}`);
+      if (id !== "provider-session") return "provider-resumed";
+      live = true;
+      reopened = true;
+      return id;
+    });
+    closeSession.mockImplementation(async (id) => {
+      order.push(`close:${id}`);
+      if (id === "provider-session") live = false;
+    });
+    await withService(
+      { prefix: "orkestrator-resume-close-reopen-", provider: async () => provider },
+      async ({ service, storage }) => {
+        const identity = tab("grok");
+        const other = tab("grok", "tab-other");
+        await service.ensureSession(identity);
+        const resolveProvider = internals(service).provider.bind(service);
+        let paused = false;
+        spyOn(internals(service), "provider").mockImplementation(async (input) => {
+          const resolved = await resolveProvider(input);
+          // The other tab's adoption, after its reopen released the fence.
+          if (input.logicalSessionKey === other.logicalSessionKey && reopened && !paused) {
+            paused = true;
+            adopting.open();
+            await releaseAdoption.opened;
+          }
+          return resolved;
+        });
+        const acquiring = service.resumeProjectionSession({
+          ...other,
+          providerSessionId: "provider-session",
+        });
+        try {
+          await adopting.opened;
+          // The first tab resumes away and, seeing no other owner, closes it.
+          await service.resumeProjectionSession({ ...identity, providerSessionId: "vendor-old" });
+        } finally {
+          releaseAdoption.open();
+        }
+        await expect(acquiring).resolves.toMatchObject({ sessionId: "provider-session" });
+        expect(order).toEqual([
+          "resume:provider-session",
+          "resume:vendor-old",
+          "close:provider-session",
+          "resume:provider-session",
+        ]);
+        const key = nativeAgentSessionStorageKey("env-1", "grok", other.logicalSessionKey);
+        expect((await storage.getNativeAgentSession(key))?.providerSessionId).toBe(
+          "provider-session",
+        );
+        expect(await provider.status("provider-session")).toBe("idle");
+      },
+    );
+  });
+
   test("a session a Multi Review owns is left to the workflow", async () => {
     const { provider, closeSession } = resumableStub("codex");
     await withService(

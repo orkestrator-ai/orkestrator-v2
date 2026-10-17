@@ -99,13 +99,16 @@ describe("preview commands", () => {
       bootstrapAction: () => "https://bootstrap.preview.test/bootstrap",
       originFor: () => "https://s-0123.preview.test",
     };
-    await invoke("update_preview_settings", { settings: { transport: true } });
+    // Install the container before the first command initializes the runtime:
+    // its background reconcile may inspect Docker at once, and a "missing"
+    // inspection is cached.
     harness.docker.containers.set("container-a", {
       id: "container-a",
       environmentId: "a",
       owner: harness.owner,
       ports: { "3000/tcp": [{ HostIp: "127.0.0.1", HostPort: "49152" }] },
     });
+    await invoke("update_preview_settings", { settings: { transport: true } });
     await harness.runtime.registry.settle();
     const serviceId = harness.runtime.registry.snapshot({ environmentId: "a" }).services[0]!
       .definition.serviceId;

@@ -223,8 +223,9 @@ incomplete owner set would make live state look orphaned.
   roots whose name is a state key but not the key of any live or deleting
   environment, coordinator workspace or coordinator conversation.
 - **Design canvases** (`sweepOrphanedDesignCanvases`): canvases whose
-  environment is gone. A missing, corrupt or incomplete environment store
-  aborts it.
+  environment is gone. When any canvas has an owner, a missing, corrupt or
+  incomplete environment store aborts it. With no owned canvas it does not
+  read the store, so a fresh data directory has nothing to refuse.
 - **Web annotations**: `WebAnnotationStorage.init({ environmentExists })`
   deletes, rather than loads, stores whose environment is gone. A lookup that
   fails counts as existing.

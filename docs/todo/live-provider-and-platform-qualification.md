@@ -83,6 +83,15 @@ evidence. This file only points at it.
    - Make the undo case assert that the reverted turn disappears; today it
      only checks the toast and an idle turn.
    - Update the matching paragraph in `agent-testing.md` (see "Related").
+3. **A dev profile's backend reports the Electron version.** In a `dev:test`
+   profile the backend starts as "Orkestrator 44.7.0": `ORKESTRATOR_VERSION`
+   comes from an unpackaged Electron's `app.getVersion()`
+   (`apps/backend/src/core/constants.ts:147`). The renderer is 2.21.1, so
+   every event-stream reconnect raises "Reload to use the matching version"
+   (`BackendVersionReminder.tsx`). The toast sits over the composer's Send
+   button and intercepts browser-spec clicks; `slash-command-inactive.spec.ts`
+   dismisses it with a locator handler. Pass the workspace package version in
+   development, or skip the reminder for agent-test profiles.
 
 ### Qualification: checks with no other home
 

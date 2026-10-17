@@ -56,3 +56,32 @@ No assertion, deadline or skip was changed.
 - **Evidence:** `/tmp/orkestrator-test-run.zOMprl/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer artifact `/tmp/orkestrator-test-run.TYkzGQ/merge-tests.log.gz`.
 - **Isolated rerun:** `mise run test:logged -- --name merge-lifecycle-isolated -- bun test --cwd apps/backend ./tests/commands-registry-environments.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed the unchanged owning file (exit 0) in 40.4 seconds. Each owning file ran in its own process; other focused reruns were active on the host.
 - **Disposition:** intermittent failure confirmed by the owning-file pass; the cause remains unconfirmed. No product code, assertion, timeout or skip was changed.
+
+## Pane reset review recurrence — 2026-10-17
+
+`mise run test:logged -- --name full-suite -- mise run test` used workspace,
+root, bridge and protocol reservations of 4/1/2/1 slots while browser checks
+and other worktrees used the host. The deletion-reap case exceeded its five-second deadline at 6799.93 ms.
+
+`mise run test:logged -- --name environment-lifecycle-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures`
+passed the unchanged owning file in 24.7 seconds (exit 0). Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.XKPva3/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+(compressed when the aggregate completes). No assertion, timeout or skip changed.
+
+## Cleanup review follow-up recurrence (2026-10-17)
+
+The same case timed out at 7434.46 ms in
+`mise run test:logged -- --name review-tests -- mise run test`. The unchanged
+owning file passed after the aggregate with one worker in 18.9 seconds.
+Exact commands, worker configuration, suite counts and evidence are recorded
+in [0194](0194-environment-lifecycle-deletion-aggregate-timeout.md#cleanup-review-follow-up-recurrence-2026-10-17).
+No assertion, timeout or skip changed; host contention remains a hypothesis.
+
+## Multi Review recovery validation — 2026-10-17
+
+- Original command: `mise run test:logged -- --name full-review-recovery -- mise run test` on `4443c027` plus the recovery changes, macOS arm64 under shared-host load. Workspace/root/bridge/protocol reserved 4/1/2/1 slots; backend used two isolated workers.
+- Aggregate: backend 8,632 passed, 41 skipped, four failed and two between-tests errors across 463 files (525.39 seconds); outer run exited 1 after 549.9 seconds. Three failures were known five-second timeouts, and one provider-identity assertion was updated for the new lifetime wrapper and passed in its owning file. All other workspace packages and the root/bridge/protocol groups passed.
+- Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.AdrtP5/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.YbWcld/full-review-recovery.log.gz`.
+- The deletion-reap case timed out at 6812.46 ms.
+- Unchanged owning-file rerun: `mise run test:logged -- --name lifecycle-owner-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures` passed in 20.3 seconds, exit 0.
+- Shared-host contention and teardown after timeout remain hypotheses. No assertion, timeout, skip or implementation in this owner changed.

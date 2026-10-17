@@ -268,6 +268,7 @@ const getPaneLayoutMock = mock(
 );
 
 const deletePaneLayoutMock = mock(async (_environmentId: string, _expectedRevision?: number) => {});
+const teardownTabMock = mock<typeof realBackend.teardownTab>(async () => ({ completed: true }));
 const listMultiReviewWorkflowsMock = mock<typeof realBackend.listMultiReviewWorkflows>(
   async () => [],
 );
@@ -395,6 +396,7 @@ mock.module("@/lib/backend", () => ({
   getPaneLayout: getPaneLayoutMock,
   getBuildPipelineConditional: mock(async () => null),
   deletePaneLayout: deletePaneLayoutMock,
+  teardownTab: teardownTabMock,
   listLoopedReviewWorkflows: listLoopedReviewWorkflowsMock,
   listMultiReviewWorkflows: listMultiReviewWorkflowsMock,
   getMultiReviewWorkflow: getMultiReviewWorkflowMock,
@@ -603,6 +605,8 @@ describe("TerminalContainer", () => {
     useMultiReviewStore.setState({ workflows: new Map() });
     deletePaneLayoutMock.mockReset();
     deletePaneLayoutMock.mockResolvedValue(undefined);
+    teardownTabMock.mockReset();
+    teardownTabMock.mockResolvedValue({ completed: true });
     localStorage.clear();
     listLoopedReviewWorkflowsMock.mockReset();
     listLoopedReviewWorkflowsMock.mockResolvedValue([]);
@@ -1197,6 +1201,191 @@ describe("TerminalContainer", () => {
       expect(afterStop?.root).toMatchObject({ kind: "leaf", id: "default", tabs: [] });
       expect(afterStop?.activePaneId).toBe("default");
     });
+  });
+
+  test("restores the persisted layout, not a default terminal, when a stopped container starts again", async () => {
+    getPaneLayoutMock.mockResolvedValue({
+      version: PANE_LAYOUT_VERSION,
+      environmentId: "env-hidden",
+      containerId: "container-hidden",
+      activePaneId: "restored-pane",
+      root: {
+        kind: "leaf",
+        id: "restored-pane",
+        tabs: [{ id: "agent-tab", type: "plain", displayTitle: "Agent" }],
+        activeTabId: "agent-tab",
+      },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 1,
+    });
+    const renderTerminal = (isContainerRunning: boolean) => (
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning={isContainerRunning}
+          isActive={false}
+        />
+      </TerminalProvider>
+    );
+    const view = render(renderTerminal(true));
+    await waitFor(() => {
+      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([
+        { id: "agent-tab" },
+      ]);
+    });
+
+    // Viewed while stopped, then started from that view.
+    view.rerender(renderTerminal(false));
+    await waitFor(() => {
+      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([]);
+    });
+    view.rerender(renderTerminal(true));
+
+    await waitFor(() => {
+      expect(getPaneLayoutMock).toHaveBeenCalledTimes(2);
+      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([
+        { id: "agent-tab" },
+      ]);
+    });
+    expect(usePaneLayoutStore.getState().environments.get("env-hidden")?.activePaneId).toBe(
+      "restored-pane",
+    );
+  });
+
+  test.each(["container-hidden", "container-replacement"])(
+    "restores a native tab after stop with runtime %s without scheduling session teardown",
+    async (nextContainerId) => {
+      const persisted: PersistedPaneLayout = {
+        version: PANE_LAYOUT_VERSION,
+        environmentId: "env-hidden",
+        containerId: "container-hidden",
+        activePaneId: "native-pane",
+        root: {
+          kind: "leaf",
+          id: "native-pane",
+          tabs: [
+            {
+              id: "native-tab",
+              type: "agent-native",
+              nativeAgentData: {
+                platform: "claude",
+                environmentId: "env-hidden",
+                sessionId: "retained-session",
+              },
+            },
+          ],
+          activeTabId: "native-tab",
+        },
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        revision: 1,
+      };
+      getPaneLayoutMock.mockResolvedValue(persisted);
+      const renderTerminal = (running: boolean, containerId = "container-hidden") => (
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-hidden"
+            containerId={containerId}
+            isContainerRunning={running}
+            isActive={false}
+          />
+        </TerminalProvider>
+      );
+      const view = render(renderTerminal(true));
+      await waitFor(() =>
+        expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([
+          { id: "native-tab" },
+        ]),
+      );
+
+      // A close here would persist an intent before discovering the dead bridge.
+      teardownTabMock.mockRejectedValue(new Error("bridge unavailable"));
+      view.rerender(renderTerminal(false));
+      await waitFor(() =>
+        expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([]),
+      );
+      expect(teardownTabMock).not.toHaveBeenCalled();
+
+      useEnvironmentStore
+        .getState()
+        .updateEnvironment("env-hidden", { containerId: nextContainerId });
+      getPaneLayoutMock.mockResolvedValue({
+        ...persisted,
+        containerId: nextContainerId,
+        revision: 2,
+      });
+      view.rerender(renderTerminal(true, nextContainerId));
+      await waitFor(() => {
+        expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("done");
+        expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([
+          {
+            id: "native-tab",
+            nativeAgentData: { sessionId: "retained-session", containerId: nextContainerId },
+          },
+        ]);
+      });
+      expect(teardownTabMock).not.toHaveBeenCalled();
+      expect(deletePaneLayoutMock).not.toHaveBeenCalled();
+    },
+  );
+
+  test("a hydration response from before stop cannot settle the next start's pending restore", async () => {
+    let resolveOld!: (layout: PersistedPaneLayout | null) => void;
+    let resolveNew!: (layout: PersistedPaneLayout | null) => void;
+    getPaneLayoutMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOld = resolve;
+        }),
+    );
+    getPaneLayoutMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveNew = resolve;
+        }),
+    );
+    const renderTerminal = (running: boolean) => (
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning={running}
+          isActive={false}
+        />
+      </TerminalProvider>
+    );
+    const view = render(renderTerminal(true));
+    await waitFor(() => expect(getPaneLayoutMock).toHaveBeenCalledTimes(1));
+    view.rerender(renderTerminal(false));
+    expect(usePaneLayoutStore.getState().hydration.has("env-hidden")).toBe(false);
+    view.rerender(renderTerminal(true));
+    await waitFor(() => expect(getPaneLayoutMock).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      resolveOld(null);
+    });
+    expect(usePaneLayoutStore.getState().hydration.get("env-hidden")).toBe("pending");
+    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([]);
+    await act(async () => {
+      resolveNew({
+        version: PANE_LAYOUT_VERSION,
+        environmentId: "env-hidden",
+        containerId: "container-hidden",
+        activePaneId: "restored",
+        revision: 2,
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        root: {
+          kind: "leaf",
+          id: "restored",
+          activeTabId: "survivor",
+          tabs: [{ id: "survivor", type: "plain" }],
+        },
+      });
+    });
+    await waitFor(() =>
+      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([
+        { id: "survivor" },
+      ]),
+    );
   });
 
   test("CAS-migrates sensitive restored browser history after hydration alone", async () => {

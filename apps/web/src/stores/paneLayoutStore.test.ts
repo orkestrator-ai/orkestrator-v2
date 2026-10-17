@@ -460,7 +460,7 @@ describe("paneLayoutStore tab cleanup", () => {
     });
   });
 
-  test("reset cleans up all tab resources for the environment", () => {
+  test("reset disposes runtime resources without closing durable native or tmux tabs", () => {
     const destroy = mock(async () => {});
     window.orkestrator = { browserPreview: { destroy } } as never;
     usePaneLayoutStore.setState({
@@ -494,7 +494,7 @@ describe("paneLayoutStore tab cleanup", () => {
     useTerminalSessionStore.getState().setSession(terminalKey, { sessionId: "pty-reset" });
     usePaneLayoutStore.getState().reset("env-reset");
 
-    expect(teardownTab).toHaveBeenCalledTimes(3);
+    expect(teardownTab).toHaveBeenCalledTimes(1);
     expect(teardownTab).toHaveBeenCalledWith(
       expect.objectContaining({
         environmentId: "env-reset",
@@ -502,16 +502,6 @@ describe("paneLayoutStore tab cleanup", () => {
         sessionId: "pty-reset",
       }),
     );
-    expect(teardownTab).toHaveBeenCalledWith({
-      environmentId: "env-reset",
-      tabId: "tmux-tab",
-      kind: "claude-tmux",
-    });
-    expect(teardownTab).toHaveBeenCalledWith({
-      environmentId: "env-reset",
-      tabId: "codex-tab",
-      kind: "codex-native",
-    });
     expect(destroy).toHaveBeenCalledWith("browser-tab");
     expect(usePaneLayoutStore.getState().getAllTabs("env-reset")).toEqual([]);
   });

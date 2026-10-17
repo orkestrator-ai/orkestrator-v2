@@ -21,3 +21,15 @@
 - **Owning-file rerun:** `mise run test:logged -- --name fixture-digest-isolated -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev/coordinator-live.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 4.9 seconds.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.8J9UKQ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Assessment:** the unchanged owning-file pass confirms an intermittent recurrence. Shared-host contention remains a hypothesis. No owning implementation, assertion, timeout or skip changed.
+
+## Container platform qualification recurrence — 2026-10-17
+
+`mise run test` on branch `todo-container-live-qualification-8efe5278910a-r1`
+(based on `31d0fb06`, no desktop source changes) timed out again at 5022.08 ms,
+again with `git rev-parse exited -1` as an error between tests. Host load
+average was about 20–33 on 18 cores, with nine other environments testing. The
+unchanged owning file passed alone: `mise exec -- bun test --cwd apps/desktop
+--preload ../../tests/setup-node.ts ./scripts/dev/coordinator-live.test.ts
+--parallel=2 --only-failures` reported 30 passed in 4.94 s. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.v19VcP`.
+No assertion, timeout or skip changed.

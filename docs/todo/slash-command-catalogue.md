@@ -114,6 +114,29 @@ and need a decision. A new tab on a current bridge never sees those rows (see
    the pin facts in the three owner comments above.
 7. **CLI selection.** `session commands` and `session command` are tracked in
    [cli-command-surface.md](cli-command-surface.md).
+8. **Claude terminal-only commands before the first turn.** Found live on
+   2026-10-17 (CLI 2.1.296). Until a tab's first turn, its rows come from the
+   control-only probe, which reports no `terminal_slash_commands`: that list
+   arrives only on a turn's `system/init` frame, and `SlashCommand` has no
+   terminal marker. So `/color`, `/focus` and `/reload-plugins` are listed
+   available in a new tab, and the live list marks them
+   `requires-interactive-ui` after the first turn. Selecting `/focus` in a new
+   tab completes as local output ("/focus isn't available here yet"), with no
+   model turn and no hang. Remember the last init's terminal list per CLI
+   version in the bridge (and persist it), or hold these rows until a live
+   list arrives. Never guess names.
+9. **Codex plugin skills in a cold catalogue.** Found live on 2026-10-17
+   (0.162.1). The first `skills/list` after the app-server child starts
+   answers before plugin skills load: 6 skills, reported `ready`. A forced
+   reload, or the next TTL read, gives 92. Report the first read `stale`
+   until plugin loading settles, or re-read once after a short delay. Today it
+   heals within one 30 s TTL.
+10. **OpenCode command files added while the server runs.** On 1.19.0 a
+    refresh answers `reread` (accurately), but `command.list` keeps serving
+    the inventory the server loaded at start. A new `.opencode/command` file
+    appears only after `opencode serve` restarts. Either dispose the
+    directory's instance (`instance.dispose`) when the session is idle and
+    answer `reloaded`, or tell the user that a restart is needed.
 
 ### Qualification
 
@@ -155,8 +178,8 @@ and need a decision. A new tab on a current bridge never sees those rows (see
     projection at all (`native-agent-service-dispatch.ts:1121`), so the picker
     is empty, and every projection catalogue read passes the session ID
     (`native-agent-service-projection.ts:2824`, `:3287`, `:4344`).
-  - On the session route, a Claude session with no turn yet gets one zero-turn
-    CLI probe, reported `stale` ("may be out of date"); while that read is in
+  - On the session route, a Claude session with no turn yet gets one
+    control-only CLI probe, reported `stale` ("may be out of date"); while that read is in
     flight the picker shows `loading` (`native-agent-command-catalogue.ts:228`).
     Bridge test: "a cold read runs one probe configured like the session's
     turns" (`session-manager-catalog-transport.test.ts`).

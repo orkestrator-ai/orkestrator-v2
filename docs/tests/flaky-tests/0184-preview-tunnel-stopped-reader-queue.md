@@ -1,7 +1,7 @@
 # Stopped-reader tunnel queue exceeds its assertion under aggregate load
 
 - **ID:** 0184
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-08
 - **Test:** `PreviewTunnelServer > a stopped reader cannot grow the queue without bound`
 - **File:** `apps/backend/src/preview-tunnel-server.test.ts:270`
@@ -131,3 +131,32 @@ not establish a root cause. No assertion, timeout or skip was changed.
 - **Isolated rerun:** `mise run test:logged -- --name preview-tunnel-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/preview-tunnel-server.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 0.7 seconds.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.20GMqp/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `summary.json`; outer wrapper: `orkestrator-test-run.oXpWyb/full-tests.log.gz` in the same temporary directory.
 - **Hypothesis:** this repeats the existing aggregate-load queue-sampling failure. The isolated pass establishes intermittent behavior without identifying the root cause. No assertion, timeout or skip was changed.
+
+## Resolution (2026-10-17)
+
+The bound was really exceeded, by the server rather than the sample.
+`pumpToClient` framed a whole upstream `data` chunk and only then compared
+`writableLength` with twice `tunnelQueueMaxBytesPerDirection`. Bun reads the
+fixture's endless body 512 KiB at a time. A temporary trace of the unchanged
+code on an isolated run showed the first chunk go straight to the kernel
+(`chunk=524288 buffered=0 flushed=true`), so the upstream was never paused,
+and the second push `writableLength` to 524,352 bytes and trip the capacity
+close. Even passing runs closed the tunnel with only 32,704 bytes of headroom
+against the test's bound. Under load part of the first chunk is still queued
+when the second arrives, and the sample lands above the bound (557,298 to
+819,474 bytes here).
+
+`pumpToClient` now checks the queue before each frame and fails with
+`capacity-exceeded` before a frame would take it past twice the per-direction
+limit. The queue is now bounded by the limit rather than by the runtime's read
+size. The test is unchanged apart from its comment.
+
+- Stress, eight concurrent processes, each
+  `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/preview-tunnel-server.test.ts -t "stopped reader" --rerun-each 20`,
+  on a host with a load average of about 20: the old code failed 12 of 160
+  (received 557,298, 581,350, 639,546, 648,951, 721,158 and 786,702), the
+  fixed code passed 160 of 160.
+- The owning file passed alone (11 tests), and with every preview file.
+- A slow but still-reading client is still closed, not paused, by one large
+  read. That is tracked as code item 4 in
+  [service-preview-rollout.md](../../todo/service-preview-rollout.md).

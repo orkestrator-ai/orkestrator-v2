@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { controlOnlyQuery } from "./control-only-query.js";
 import type { McpServerStatus, Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type {
   NativeAgentAccountUsageWindow,
@@ -209,14 +209,10 @@ export async function answerIdleSteerPrompt(
 }
 
 function createProbe(): Query {
-  return query({
-    prompt: "",
-    options: {
-      maxTurns: 0,
-      cwd: process.env.CWD || process.cwd(),
-      env: { ...process.env },
-      ...claudeExecutableOptions(),
-    },
+  return controlOnlyQuery({
+    cwd: process.env.CWD || process.cwd(),
+    env: { ...process.env },
+    ...claudeExecutableOptions(),
   });
 }
 

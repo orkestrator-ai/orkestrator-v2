@@ -278,31 +278,31 @@ describe("forwardPreviewRequest and forwardPreviewUpgrade", () => {
     await fixture.close();
   });
 
-  function get(path: string, headers: Record<string, string> = {}, method = "GET", body?: Buffer) {
+  function get(
+    path: string,
+    headers: Record<string, string> = {},
+    method = "GET",
+    body?: Buffer,
+    onFirstChunk?: (chunk: Buffer) => void,
+  ) {
     return new Promise<{
       status: number;
       headers: Record<string, string | string[] | undefined>;
       body: Buffer;
-      firstChunkAt: number;
-      endAt: number;
     }>((resolve, reject) => {
-      const started = Date.now();
       const request = httpRequest(
         { host: "127.0.0.1", port: ingressPort, path, method, headers, agent: false },
         (response) => {
           const chunks: Buffer[] = [];
-          let firstChunkAt = -1;
           response.on("data", (chunk: Buffer) => {
-            if (firstChunkAt < 0) firstChunkAt = Date.now() - started;
             chunks.push(chunk);
+            if (chunks.length === 1) onFirstChunk?.(chunk);
           });
           response.on("end", () =>
             resolve({
               status: response.statusCode ?? 0,
               headers: response.headers,
               body: Buffer.concat(chunks),
-              firstChunkAt,
-              endAt: Date.now() - started,
             }),
           );
           response.on("error", reject);
@@ -325,14 +325,16 @@ describe("forwardPreviewRequest and forwardPreviewUpgrade", () => {
   });
 
   test("streams the first HTML chunk before the upstream completes", async () => {
-    const pending = get("/chunked");
-    await Bun.sleep(150);
-    fixture.releaseStalled();
-    const result = await pending;
-    expect(String(result.body)).toContain("first");
+    // The upstream finishes only once the client holds the first chunk, so a
+    // forwarder that buffered the body until the end would never deliver it.
+    let firstChunk = "";
+    const result = await get("/chunked", {}, "GET", undefined, (chunk) => {
+      firstChunk = String(chunk);
+      fixture.releaseStalled();
+    });
+    expect(firstChunk).toContain("first");
+    expect(firstChunk).not.toContain("second");
     expect(String(result.body)).toContain("second");
-    expect(result.firstChunkAt).toBeLessThan(140);
-    expect(result.endAt).toBeGreaterThanOrEqual(140);
   });
 
   test("binary downloads and uploads are byte-exact", async () => {

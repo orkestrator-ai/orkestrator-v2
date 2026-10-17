@@ -1358,7 +1358,13 @@ function MultiReviewOverviewTab({
       </div>,
     );
   }
-  if (workflow.autoPrLaunch) {
+  if (
+    workflow.autoPrLaunch &&
+    (workflow.autoPrLaunch.basis !== "clean-review" ||
+      (workflow.phase === "ready" &&
+        workflow.consolidatedReport?.issues.length === 0 &&
+        workflow.consolidatedReport.testCoverageGaps.length === 0))
+  ) {
     notices.push(<AutoPrLaunchNotice key="auto-pr" launch={workflow.autoPrLaunch} />);
   }
 

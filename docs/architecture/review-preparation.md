@@ -134,13 +134,19 @@ run the same `MultiReviewService` code:
 | Step | Durable record | Recovery after restart |
 | --- | --- | --- |
 | Consolidation with findings and `autoFix` | report saved with `phase: interactive`, `addressPromptPending` (`queueDefaultFix`); no `ready` | The supervisor delivers the pending handoff under its reserved request id; failed attempts persist and fail the review after three |
+| Consolidation with nothing to fix and `autoPr` | report saved with `phase: ready` and `autoPrLaunch: { basis: clean-review, state: pending }` in one save (`queueCleanReviewAutoPr`); no Fix | The supervisor launches the PR as below while the review is still `ready` on that clean report |
 | Fix runs in its ordinary interactive tab | `fixSession` observed `running` | Observation resumes from the provider session |
 | Fix turn finished on its own, `autoPr` | `fixSession.status: idle` and `autoPrLaunch: pending` in one save (`queueAutoPr`) | The supervisor retries the launch under `multi-review-pr:<id>`, which the native-agent layer deduplicates |
 | PR session | `autoPrLaunch: launched` with its tab, or `failed` after three attempts | A launched PR is never repeated |
 
-Only proof that a Fix completed queues the PR: a complete structured result, or
-an interactive handoff turn that finished on its own as its conversation's
-last turn. A Fix that fails, is stopped, is superseded or cannot be confirmed
+Only proof that a Fix completed, or a clean report, queues the PR: a complete
+structured result, an interactive handoff turn that finished on its own as its
+conversation's last turn, or a consolidated report with no issues and no
+coverage gaps. A clean report needs no Fix, so with `autoPr` on it goes
+straight to the PR whatever `autoFix` says, for button, coordinator and every
+other launch alike. Its intent is marked `basis: clean-review` and is
+delivered only while the review is still `ready` on that report; starting a
+Fix first drops it, and a review that moved on records `skipped`. A Fix that fails, is stopped, is superseded or cannot be confirmed
 records `skipped` with its reason, or nothing when the session failed. The
 review stops there. A custom Fix never starts a PR, and a new Fix drops an
 undelivered PR intent so the PR cannot race it. Every PR intent records the

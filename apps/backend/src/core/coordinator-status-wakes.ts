@@ -169,7 +169,8 @@ function stalledSession(candidates: Array<[string, unknown]>): StalledSession | 
  * Auto-fix and auto-PR advance the review on their own, so a state the
  * workflow is about to leave is not news: consolidation with findings goes
  * straight to the Fix (no `ready`), and a finished Fix with a queued PR is held
- * until the PR launch settles. The coordinator then hears `pr-started`, then
+ * until the PR launch settles. A clean report with auto-PR on is held the same
+ * way, then reported through the same PR states. The coordinator then hears `pr-started`, then
  * `pr-opened` once the environment reports an open pull request (URL and
  * state, read on the next observation), or `pr-failed`. Closed, merged and
  * unknown PR states are reported as such. A skipped PR is reported on
@@ -188,21 +189,29 @@ export function multiReviewStatus(
   const autoPr = snapshot.autoPr === true;
   const recordedPrLaunch =
     autoPr && record(snapshot.autoPrLaunch) ? snapshot.autoPrLaunch : undefined;
-  // Old launched records cannot prove which Fix they contain. Other legacy
-  // states keep their existing handoff behavior until a new Fix supersedes them.
+  // A clean report's PR speaks for the review only while it rests on that
+  // report. Old launched records cannot prove which Fix they contain. Other
+  // legacy states keep their existing handoff behavior until a new Fix
+  // supersedes them.
+  const cleanReviewPr = recordedPrLaunch?.basis === "clean-review";
   const prLaunch =
     recordedPrLaunch &&
-    (recordedPrLaunch.fixIdentity === undefined
-      ? recordedPrLaunch.state !== "launched"
-      : recordedPrLaunch.fixIdentity === multiReviewFixIdentity(fixSession))
+    (cleanReviewPr
+      ? phase === "ready" &&
+        record(snapshot.consolidatedReport) &&
+        findingCounts(snapshot.consolidatedReport).total === 0
+      : recordedPrLaunch.fixIdentity === undefined
+        ? recordedPrLaunch.state !== "launched"
+        : recordedPrLaunch.fixIdentity === multiReviewFixIdentity(fixSession))
       ? recordedPrLaunch
       : undefined;
   const prLaunchMessage = text(prLaunch?.message)
     ? boundedLine(prLaunch!.message as string)
     : undefined;
   const prUrl = text(environment.prUrl);
-  /** The PR step's own status once it settled, keyed to the Fix that queued it. */
+  /** The PR step's own status once it settled, keyed to the Fix or clean report that queued it. */
   const prStatus = (fixKey: string): CoordinatorStatus | null => {
+    const finished = cleanReviewPr ? "found nothing to fix" : "fix finished";
     if (prLaunch?.state === "launched") {
       const tab = text(prLaunch.tabId);
       const tools = [
@@ -228,10 +237,10 @@ export function multiReviewStatus(
           terminal: false,
           headline:
             state === "open"
-              ? "fix finished and its pull request is open"
+              ? `${finished} and its pull request is open`
               : state === "unknown"
-                ? "fix finished; its pull request state is unknown"
-                : `fix finished; its pull request is ${state}`,
+                ? `${finished}; its pull request state is unknown`
+                : `${finished}; its pull request is ${state}`,
           details: [`Pull request: ${boundedLine(prUrl)}`, "The coordinator does not merge it."],
           tools,
           mode: "settled",
@@ -242,7 +251,7 @@ export function multiReviewStatus(
         state: "pr-started",
         tone: "info",
         terminal: false,
-        headline: "fix finished; PR session started",
+        headline: `${finished}; PR session started`,
         details: [
           `The PR session${tab ? ` (tab ${tab})` : ""} pushes the branch and opens the pull request. Another update follows once the environment reports it.`,
         ],
@@ -256,9 +265,11 @@ export function multiReviewStatus(
         state: "pr-failed",
         tone: "failure",
         terminal: false,
-        headline: "fix finished but its PR session could not start",
+        headline: `${finished} but its PR session could not start`,
         details: prLaunchMessage ? [`Error: ${prLaunchMessage}`] : [],
-        tools: [read, `open_multi_review_fix { "workflowId": "${workflowId}" }`],
+        tools: cleanReviewPr
+          ? [read]
+          : [read, `open_multi_review_fix { "workflowId": "${workflowId}" }`],
         mode: "settled",
       };
     return null;
@@ -348,22 +359,33 @@ export function multiReviewStatus(
   }
   if (phase === "ready") {
     const findings = findingCounts(snapshot.consolidatedReport);
+    const readyKey = hash(`${reviewAttempt}:${text(reviewSession?.completedAt) ?? ""}`);
+    if (cleanReviewPr && prLaunch) {
+      // Auto-PR moves a clean report straight on; report the PR, not the pause.
+      if (prLaunch.state === "pending") return null;
+      const pr = prStatus(readyKey);
+      if (pr) return pr;
+    }
     return {
       // A restarted consolidation reaches `ready` again with a new report.
-      key: `ready:${hash(`${reviewAttempt}:${text(reviewSession?.completedAt) ?? ""}`)}`,
+      key: `ready:${readyKey}`,
       state: "ready",
       tone: findings.total > 0 ? "attention" : "success",
       terminal: false,
       headline: findings.total > 0 ? "is ready to address" : "found nothing to fix",
       details: [
         `Consolidated report: ${findings.line}.`,
-        ...(snapshot.autoFix === true && findings.total === 0
-          ? ["Auto-fix is on, but there was nothing to fix, so no Fix or PR session started."]
-          : autoPr
-            ? [
-                "Auto-PR is on: once a Fix started with address_multi_review completes, a PR session starts automatically.",
-              ]
-            : []),
+        ...(cleanReviewPr && prLaunch
+          ? [`No PR session started${prLaunchMessage ? `: ${prLaunchMessage}` : "."}`]
+          : recordedPrLaunch?.state === "launched"
+            ? ["An earlier PR session started; review and update it manually after this Fix."]
+            : snapshot.autoFix === true && findings.total === 0
+              ? ["Auto-fix is on, but there was nothing to fix, so no Fix or PR session started."]
+              : autoPr
+                ? [
+                    "Auto-PR is on: once a Fix started with address_multi_review completes, a PR session starts automatically.",
+                  ]
+                : []),
       ],
       tools: [read, `address_multi_review { "workflowId": "${workflowId}" }`],
       mode: "settled",

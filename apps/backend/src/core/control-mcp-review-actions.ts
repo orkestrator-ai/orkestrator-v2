@@ -83,11 +83,11 @@ export const AUTO_FIX_FIELD_DESCRIPTION =
   "Optional. Start the Fix session automatically when consolidation reports findings, as the button's Auto-fix does. Omit to use the user's saved Auto-fix setting; omitted with autoPr: true means on. Set only when the user asks.";
 
 export const AUTO_PR_FIELD_DESCRIPTION =
-  "Optional. Start the PR session (push the branch and open the pull request) automatically once the Fix finishes, as the button's Auto-PR does. It never runs before the Fix; it never merges. Omit to use the user's saved Auto-PR setting. Set only when the user asks.";
+  "Optional. Start the PR session (push the branch and open the pull request) automatically once the Fix finishes, or straight after a consolidation that found nothing to fix, as the button's Auto-PR does. It never runs while a Fix is pending or running; it never merges. Omit to use the user's saved Auto-PR setting. Set only when the user asks.";
 
 /** Shared by both launch tools so they describe auto-fix and auto-PR identically. */
 export const MULTI_REVIEW_AUTOMATION_DESCRIPTION =
-  "Omit autoFix and autoPr to use the user's saved Auto-fix and Auto-PR settings, as the button does; set them only when the user asks. With both on the review runs end to end: consolidation, then Fix, then a PR session once the Fix completes. A failed, stopped or stalled Fix starts no PR. autoPr: true alone also turns on autoFix unless autoFix is false, in which case the PR follows a Fix started with address_multi_review.";
+  "Omit autoFix and autoPr to use the user's saved Auto-fix and Auto-PR settings, as the button does; set them only when the user asks. With both on the review runs end to end: consolidation, then Fix, then a PR session once the Fix completes. With autoPr on, a consolidation with nothing to fix starts the PR session directly. A failed, stopped or stalled Fix starts no PR. autoPr: true alone also turns on autoFix unless autoFix is false, in which case the PR follows a Fix started with address_multi_review.";
 
 async function response(
   value: MultiReviewActionResult,

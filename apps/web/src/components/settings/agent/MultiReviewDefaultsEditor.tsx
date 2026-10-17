@@ -382,8 +382,8 @@ export function MultiReviewDefaultsEditor({
           <Label htmlFor="multi-review-auto-pr">Auto-PR</Label>
         </div>
         <p id="multi-review-auto-pr-description" className="text-xs text-muted-foreground">
-          Automatically launch the PR tab after a structured Fix completes, using the pull request
-          default. Review an interactive Fix and use the PR button to create its pull request.
+          Automatically launch the PR tab, using the pull request default, after the Fix completes
+          or when the review finds nothing to fix.
         </p>
       </div>
 

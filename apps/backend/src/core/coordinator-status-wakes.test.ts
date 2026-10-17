@@ -1088,6 +1088,67 @@ describe("status classification and bounds", () => {
     ).toBeNull();
   });
 
+  test("a clean report with auto-PR is held, then reported through its PR states", () => {
+    const status = (
+      autoPrLaunch: Record<string, unknown>,
+      environment: Record<string, unknown> = {},
+      phase = "ready",
+    ) =>
+      multiReviewStatus(
+        {
+          phase,
+          autoFix: true,
+          autoPr: true,
+          consolidatedReport: { issues: [], testCoverageGaps: [] },
+          autoPrLaunch: { basis: "clean-review", requestId: "pr", ...autoPrLaunch },
+        },
+        "review-1",
+        environment,
+      );
+    expect(status({ state: "pending" })).toBeNull();
+    const started = status({ state: "launched", tabId: "pr-tab" })!;
+    expect(started).toMatchObject({
+      state: "pr-started",
+      headline: "found nothing to fix; PR session started",
+    });
+    const opened = status(
+      { state: "launched", tabId: "pr-tab" },
+      { prUrl: "https://github.com/org/repo/pull/7", prState: "open" },
+    )!;
+    expect(opened).toMatchObject({
+      state: "pr-opened",
+      headline: "found nothing to fix and its pull request is open",
+    });
+    expect(opened.key).not.toBe(started.key);
+    const failed = status({ state: "failed", message: "tab limit" })!;
+    expect(failed).toMatchObject({
+      state: "pr-failed",
+      headline: "found nothing to fix but its PR session could not start",
+    });
+    expect(failed.tools.join(" ")).not.toContain("open_multi_review_fix");
+    const skipped = status({ state: "skipped", message: "A pull request already exists" })!;
+    expect(skipped).toMatchObject({ state: "ready", headline: "found nothing to fix" });
+    expect(skipped.details).toContain("No PR session started: A pull request already exists");
+  });
+
+  test.each(["issues", "testCoverageGaps"])(
+    "a retained clean-review PR cannot hide current %s",
+    (kind) => {
+      const status = multiReviewStatus(
+        {
+          phase: "ready",
+          autoPr: true,
+          consolidatedReport: { issues: [], testCoverageGaps: [], [kind]: [{}] },
+          autoPrLaunch: { basis: "clean-review", state: "launched", requestId: "pr" },
+        },
+        "review-1",
+        { prUrl: "https://github.com/org/repo/pull/7", prState: "open" },
+      )!;
+      expect(status).toMatchObject({ state: "ready", headline: "is ready to address" });
+      expect(status.tools).toContain('address_multi_review { "workflowId": "review-1" }');
+    },
+  );
+
   test("auto-actions explain a ready review and hold a completion whose PR is queued", () => {
     const ready = (snapshot: Record<string, unknown>) =>
       multiReviewStatus(

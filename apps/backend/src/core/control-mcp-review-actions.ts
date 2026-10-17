@@ -43,31 +43,58 @@ function selectionRow(row: SelectionRow | undefined) {
   };
 }
 
-/** The rows the saved review runs, and which ones the caller chose. */
-function reviewSelection(
-  value: MultiReviewActionResult,
-  input: { reviewers?: unknown; reviewModel?: unknown; fixModel?: unknown },
-) {
+type ReviewLaunchInput = {
+  reviewers?: unknown;
+  reviewModel?: unknown;
+  fixModel?: unknown;
+  autoFix?: unknown;
+  autoPr?: unknown;
+};
+
+/** The rows and auto-actions the saved review runs, and which ones the caller chose. */
+export function reviewSelection(snapshot: object, input: ReviewLaunchInput) {
+  const workflow = snapshot as {
+    reviewers?: SelectionRow[];
+    reviewModel?: SelectionRow;
+    fixModel?: SelectionRow;
+    autoFix?: unknown;
+    autoPr?: unknown;
+  };
   const source = (field: unknown) => (field === undefined ? "default" : "requested");
-  const workflow = value.workflow;
   return {
     reviewers: (workflow.reviewers ?? []).map((row) => selectionRow(row)),
     reviewModel: selectionRow(workflow.reviewModel),
     fixModel: selectionRow(workflow.fixModel),
+    autoFix: workflow.autoFix === true,
+    autoPr: workflow.autoPr === true,
     source: {
       reviewers: source(input.reviewers),
       reviewModel: source(input.reviewModel),
       fixModel: source(input.fixModel),
+      // A requested auto-PR turns an omitted auto-fix on with it.
+      autoFix:
+        input.autoFix === undefined && input.autoPr === true ? "implied" : source(input.autoFix),
+      autoPr: source(input.autoPr),
     },
   };
 }
+
+export const AUTO_FIX_FIELD_DESCRIPTION =
+  "Optional. Start the Fix session automatically when consolidation reports findings, as the button's Auto-fix does. Omit to use the user's saved Auto-fix setting; omitted with autoPr: true means on. Set only when the user asks.";
+
+export const AUTO_PR_FIELD_DESCRIPTION =
+  "Optional. Start the PR session (push the branch and open the pull request) automatically once the Fix finishes, as the button's Auto-PR does. It never runs before the Fix; it never merges. Omit to use the user's saved Auto-PR setting. Set only when the user asks.";
+
+/** Shared by both launch tools so they describe auto-fix and auto-PR identically. */
+export const MULTI_REVIEW_AUTOMATION_DESCRIPTION =
+  "Omit autoFix and autoPr to use the user's saved Auto-fix and Auto-PR settings, as the button does; set them only when the user asks. With both on the review runs end to end: consolidation, then Fix, then a PR session once the Fix completes. A failed, stopped or stalled Fix starts no PR. autoPr: true alone also turns on autoFix unless autoFix is false, in which case the PR follows a Fix started with address_multi_review.";
 
 async function response(
   value: MultiReviewActionResult,
   invoke: ControlMcpInvoker,
   options: {
     startsWork?: boolean;
-    launchInput?: { reviewers?: unknown; reviewModel?: unknown; fixModel?: unknown };
+    launchInput?: ReviewLaunchInput;
   } = {},
 ) {
   const summary = {
@@ -78,7 +105,7 @@ async function response(
       ? await workflowStatusWakeResult(invoke)
       : {}),
     ...(options.launchInput && value.workflow
-      ? { selection: reviewSelection(value, options.launchInput) }
+      ? { selection: reviewSelection(value.workflow, options.launchInput) }
       : {}),
   };
   return {
@@ -99,7 +126,9 @@ export function registerControlReviewActions(
       title: "Launch and open environment Multi Review (preferred)",
       description:
         "Preferred complete Multi Review button action: accept the launch dialog's reviewer rows, preparation/consolidation model, and fix model, use saved branch/instruction defaults when omitted, reuse an active review, start at most once, and durably create/focus its root tab in the selected pane even while the environment UI is inactive. No build pipeline prerequisite. Reuse requestId with the same payload on retry; inspect outcome/ui/recovery before claiming success. " +
-        "Omit reviewers, reviewModel and fixModel to use the user's saved Multi Review defaults, exactly as the Multi Review button does; set them only when the user asks for specific models (get_launch_options lists them). The result's selection reports the rows that will run and which were requested.",
+        "Omit reviewers, reviewModel and fixModel to use the user's saved Multi Review defaults, exactly as the Multi Review button does; set them only when the user asks for specific models (get_launch_options lists them). " +
+        MULTI_REVIEW_AUTOMATION_DESCRIPTION +
+        " The result's selection reports the rows and auto-actions that will run and which were requested; a reused active review keeps its own.",
       inputSchema: z
         .object({
           requestId: z.string().trim().min(1).max(256),
@@ -122,6 +151,8 @@ export function registerControlReviewActions(
             .describe(
               "Optional. Omit to use the user's saved fix model. Set only when the user asks for one.",
             ),
+          autoFix: z.boolean().optional().describe(AUTO_FIX_FIELD_DESCRIPTION),
+          autoPr: z.boolean().optional().describe(AUTO_PR_FIELD_DESCRIPTION),
           targetBranch: z.string().trim().min(1).max(500).optional(),
           reviewInstruction: z.string().max(100_000).optional(),
         })

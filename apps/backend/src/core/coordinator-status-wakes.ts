@@ -164,13 +164,80 @@ function stalledSession(candidates: Array<[string, unknown]>): StalledSession | 
  * Reviewers finishing one by one is progress and never wakes anyone; under
  * `stages` the coordinator hears once when all of them are done and
  * consolidation starts.
+ *
+ * Auto-fix and auto-PR advance the review on their own, so a state the
+ * workflow is about to leave is not news: consolidation with findings goes
+ * straight to the Fix (no `ready`), and a finished Fix with a queued PR is held
+ * until the PR launch settles. The coordinator then hears `pr-started`, then
+ * `pr-opened` once the environment reports the pull request (`prUrl`, read on
+ * the next observation), or `pr-failed`. A skipped PR is reported on
+ * `fix-done` with its reason.
  */
-export function multiReviewStatus(snapshot: unknown, workflowId: string): CoordinatorStatus | null {
+export function multiReviewStatus(
+  snapshot: unknown,
+  workflowId: string,
+  environment: { prUrl?: unknown } = {},
+): CoordinatorStatus | null {
   if (!record(snapshot)) return null;
   const phase = text(snapshot.phase);
   const read = `get_multi_review { "workflowId": "${workflowId}" }`;
   const errorLine = text(snapshot.error) ? [`Error: ${boundedLine(snapshot.error as string)}`] : [];
   const fixSession = record(snapshot.fixSession) ? snapshot.fixSession : undefined;
+  const autoPr = snapshot.autoPr === true;
+  const prLaunch = autoPr && record(snapshot.autoPrLaunch) ? snapshot.autoPrLaunch : undefined;
+  const prLaunchMessage = text(prLaunch?.message)
+    ? boundedLine(prLaunch!.message as string)
+    : undefined;
+  const prUrl = text(environment.prUrl);
+  /** The PR step's own status once it settled, keyed to the Fix that queued it. */
+  const prStatus = (fixKey: string): CoordinatorStatus | null => {
+    if (prLaunch?.state === "launched") {
+      const tab = text(prLaunch.tabId);
+      const tools = [
+        read,
+        ...(tab && text(snapshot.environmentId)
+          ? [
+              `get_tab_state { "environmentId": "${snapshot.environmentId as string}", "tabId": "${tab}" }`,
+            ]
+          : []),
+      ];
+      return prUrl
+        ? {
+            key: `pr-opened:${fixKey}`,
+            state: "pr-opened",
+            tone: "success",
+            terminal: false,
+            headline: "fix finished and its pull request is open",
+            details: [`Pull request: ${boundedLine(prUrl)}`, "The coordinator does not merge it."],
+            tools,
+            mode: "settled",
+          }
+        : {
+            key: `pr-started:${fixKey}`,
+            state: "pr-started",
+            tone: "info",
+            terminal: false,
+            headline: "fix finished; PR session started",
+            details: [
+              `The PR session${tab ? ` (tab ${tab})` : ""} pushes the branch and opens the pull request. Another update follows once the environment reports it.`,
+            ],
+            tools,
+            mode: "settled",
+          };
+    }
+    if (prLaunch?.state === "failed")
+      return {
+        key: `pr-failed:${fixKey}`,
+        state: "pr-failed",
+        tone: "failure",
+        terminal: false,
+        headline: "fix finished but its PR session could not start",
+        details: prLaunchMessage ? [`Error: ${prLaunchMessage}`] : [],
+        tools: [read, `open_multi_review_fix { "workflowId": "${workflowId}" }`],
+        mode: "settled",
+      };
+    return null;
+  };
   const reviewSession = record(snapshot.reviewSession)
     ? snapshot.reviewSession
     : snapshot.reviewModel || snapshot.consolidationModel
@@ -178,6 +245,8 @@ export function multiReviewStatus(snapshot: unknown, workflowId: string): Coordi
       : fixSession;
   const reviewAttempt = `${text(reviewSession?.sessionKey) ?? ""}:${text(reviewSession?.startedAt) ?? ""}`;
   if (phase === "completed") {
+    // A structured Fix completes the review and queues its PR in the same save.
+    if (prLaunch?.state === "pending") return null;
     const fix = record(snapshot.fixResult) ? snapshot.fixResult : undefined;
     return {
       key: "completed",
@@ -188,6 +257,13 @@ export function multiReviewStatus(snapshot: unknown, workflowId: string): Coordi
       details: [
         ...(fix && text(fix.summary) ? [`Fix: ${boundedLine(fix.summary as string)}`] : []),
         ...(fix ? [`Files changed: ${count(fix.filesChanged)}`] : []),
+        ...(prLaunch?.state === "launched"
+          ? [
+              `PR session started${text(prLaunch.tabId) ? ` in tab ${prLaunch.tabId as string}` : ""}.`,
+            ]
+          : prLaunch
+            ? [`No PR session started${prLaunchMessage ? `: ${prLaunchMessage}` : "."}`]
+            : []),
       ],
       tools: [read],
       mode: "off",
@@ -254,7 +330,16 @@ export function multiReviewStatus(snapshot: unknown, workflowId: string): Coordi
       tone: findings.total > 0 ? "attention" : "success",
       terminal: false,
       headline: findings.total > 0 ? "is ready to address" : "found nothing to fix",
-      details: [`Consolidated report: ${findings.line}.`],
+      details: [
+        `Consolidated report: ${findings.line}.`,
+        ...(snapshot.autoFix === true && findings.total === 0
+          ? ["Auto-fix is on, but there was nothing to fix, so no Fix or PR session started."]
+          : autoPr
+            ? [
+                "Auto-PR is on: once a Fix started with address_multi_review completes, a PR session starts automatically.",
+              ]
+            : []),
+      ],
       tools: [read, `address_multi_review { "workflowId": "${workflowId}" }`],
       mode: "settled",
     };
@@ -262,6 +347,10 @@ export function multiReviewStatus(snapshot: unknown, workflowId: string): Coordi
   if (phase === "interactive" && snapshot.addressPromptPending !== true && fixSession) {
     const fixKey = hash(`${text(fixSession.sessionKey) ?? ""}:${text(fixSession.startedAt) ?? ""}`);
     if (fixSession.status === "idle") {
+      // The PR is next; report how it went rather than a Fix the coordinator need not act on.
+      if (prLaunch?.state === "pending") return null;
+      const pr = prStatus(fixKey);
+      if (pr) return pr;
       return {
         key: `fix-done:${fixKey}`,
         state: "fix-done",
@@ -270,6 +359,9 @@ export function multiReviewStatus(snapshot: unknown, workflowId: string): Coordi
         headline: "fix session finished its turn",
         details: [
           "The interactive fix turn ended. Read its tab to confirm every finding was addressed.",
+          ...(prLaunch?.state === "skipped"
+            ? [`No PR session started${prLaunchMessage ? `: ${prLaunchMessage}` : "."}`]
+            : []),
         ],
         tools: [read, `open_multi_review_fix { "workflowId": "${workflowId}" }`],
         mode: "settled",
@@ -282,9 +374,10 @@ export function multiReviewStatus(snapshot: unknown, workflowId: string): Coordi
         tone: "failure",
         terminal: false,
         headline: "fix session failed",
-        details: text(fixSession.error)
-          ? [`Error: ${boundedLine(fixSession.error as string)}`]
-          : [],
+        details: [
+          ...(text(fixSession.error) ? [`Error: ${boundedLine(fixSession.error as string)}`] : []),
+          ...(autoPr ? ["No PR session will start."] : []),
+        ],
         tools: [read, `open_multi_review_fix { "workflowId": "${workflowId}" }`],
         mode: "settled",
       };
@@ -687,6 +780,22 @@ export class CoordinatorStatusWakes {
     });
   }
 
+  /**
+   * The environment of a review whose PR session started, so its pull request
+   * can be reported once the PR monitor records it. Nothing else reads it.
+   */
+  private async launchedPrEnvironment(snapshot: unknown): Promise<{ prUrl?: unknown }> {
+    if (
+      !record(snapshot) ||
+      snapshot.autoPr !== true ||
+      !record(snapshot.autoPrLaunch) ||
+      snapshot.autoPrLaunch.state !== "launched" ||
+      !text(snapshot.environmentId)
+    )
+      return {};
+    return (await this.storage.getEnvironment(snapshot.environmentId as string)) ?? {};
+  }
+
   private async observeAssociation(
     workspaces: CoordinatorWorkspace[],
     association: CoordinatorWorkflowAssociation,
@@ -700,7 +809,11 @@ export class CoordinatorStatusWakes {
     const status =
       association.kind === "build-pipeline"
         ? buildPipelineStatus(persisted.snapshot, association.resourceId)
-        : multiReviewStatus(persisted.snapshot, association.resourceId);
+        : multiReviewStatus(
+            persisted.snapshot,
+            association.resourceId,
+            await this.launchedPrEnvironment(persisted.snapshot),
+          );
     if (!status || MODE_ORDER[mode] < MODE_ORDER[status.mode]) return;
     const revision = typeof persisted.revision === "number" ? persisted.revision : 0;
     if (association.statusNotice?.key === status.key) {

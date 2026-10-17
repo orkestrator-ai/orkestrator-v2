@@ -437,10 +437,9 @@ class MultiReviewCycle {
           workflow = await this.read();
           if (workflow.phase === "failed") {
             // A small preparation model occasionally ends its turn without
-            // calling its result tool, and steps get no reminder turn yet
-            // (docs/todo/multi-review-scale-and-cost.md). That happens before
-            // anything this spec disturbs, so restart the step once, as a user
-            // would, and record it rather than fail the cycle.
+            // calling its result tool, even after its reminder turn. That
+            // happens before anything this spec disturbs, so restart the step
+            // once, as a user would, and record it rather than fail the cycle.
             if (
               !preparationRestarted &&
               workflow.reviewers.every((reviewer) => !reviewer.requestId)

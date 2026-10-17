@@ -207,6 +207,15 @@ reliably green on `main`, and nothing requires it to be.
    (OpenCode probe deadline) and 0171 (Multi Review slow-reviewer benchmark)
    were resolved on 2026-10-15 with a controlled deadline and an ordering
    check. Resolve 0246 (real-Chromium launch) as item 1 describes.
+8. **Electron specs leak their Vite server on a timeout.** The
+   `e2e/agent-testing/*-electron.spec.ts` helpers spawn `bun run dev` detached
+   and stop its process group in a `finally`. When the test times out while
+   `ElectronApplication.close()` hangs, Playwright tears the worker down and
+   the `finally` never runs, so the dev server keeps its port. Two leaked on
+   2026-10-17 (see the
+   [service-preview-rollout.md](service-preview-rollout.md) evidence log). Stop
+   the group from a fixture teardown or a worker-exit hook as well, and bound
+   the `close()` wait.
 
 ### Qualification
 

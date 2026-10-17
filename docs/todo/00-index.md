@@ -57,10 +57,10 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 39 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 247 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 259 |
-| **Total** | | **546** |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 38 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 245 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 261 |
+| **Total** | | **545** |
 
 ## Very high
 
@@ -89,7 +89,7 @@ it reaches. Some rules of thumb:
 
 ### Service previews and web annotations (high)
 
-- [ ] Re-baseline the opt-in preview suites and all preview unit files on current main after #966, #967 and #969 ([service-preview-rollout.md](service-preview-rollout.md), qualification)
+- [x] Re-baseline the opt-in preview suites and all preview unit files on current main after #966, #967 and #969 ([service-preview-rollout.md](service-preview-rollout.md), qualification)
 - [ ] Run the real Electron window service-preview qualification with the tunnel enabled in an isolated profile ([service-preview-rollout.md](service-preview-rollout.md), qualification)
 - [ ] Write a two-machine tailnet runbook and run decoy, latency, throttling, reconnect and publication checks ([service-preview-rollout.md](service-preview-rollout.md), qualification)
 - [ ] Re-run the annotation Electron and isolated browser suites on current main and record a sign-off ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
@@ -189,7 +189,8 @@ it reaches. Some rules of thumb:
 
 - [ ] Add a real-Electron service-preview spec under `e2e/agent-testing/` and add it to the Electron `testMatch` ([service-preview-rollout.md](service-preview-rollout.md))
 - [ ] Add a hostile service-worker route to the preview-app fixture that intercepts `/__orkestrator_preview/session` ([service-preview-rollout.md](service-preview-rollout.md))
-- [ ] Diagnose or fix preview flakes 0184, 0195 and 0221 ([service-preview-rollout.md](service-preview-rollout.md))
+- [x] Diagnose or fix preview flakes 0184, 0195 and 0221 ([service-preview-rollout.md](service-preview-rollout.md))
+- [ ] Pause the preview tunnel upstream before one 512 KiB read can close a slow but live reader ([service-preview-rollout.md](service-preview-rollout.md))
 - [ ] Clear preview service and connection partitions when services, environments or connections are removed ([service-preview-rollout.md](service-preview-rollout.md))
 - [ ] Remove `ServiceBrowserTab` compatibility mode and retire the legacy loopback route after the support window ([service-preview-rollout.md](service-preview-rollout.md))
 - [ ] Qualify publication with real private DNS and wildcard certificates per deployment type, with or without Serve ([service-preview-rollout.md](service-preview-rollout.md), qualification)
@@ -197,8 +198,8 @@ it reaches. Some rules of thumb:
 - [ ] Qualify previews on Docker Desktop for macOS and Windows, including Auto ports and the exec relay ([service-preview-rollout.md](service-preview-rollout.md), qualification)
 - [ ] Run the hostile service-worker bootstrap and re-bootstrap check against the documented outcome ([service-preview-rollout.md](service-preview-rollout.md), qualification)
 - [ ] Set preview performance thresholds from the two-machine baseline and add HMR and reconnect metrics ([service-preview-rollout.md](service-preview-rollout.md), qualification)
-- [ ] Verify the opt-in preview suites still pass on main after #966, #967 and #969 ([service-preview-rollout.md](service-preview-rollout.md), verify)
-- [ ] Verify the Electron agent-test task starts cleanly on the run host ([service-preview-rollout.md](service-preview-rollout.md), verify)
+- [x] Verify the opt-in preview suites still pass on main after #966, #967 and #969 ([service-preview-rollout.md](service-preview-rollout.md), verify)
+- [x] Verify the Electron agent-test task starts cleanly on the run host ([service-preview-rollout.md](service-preview-rollout.md), verify)
 - [ ] Decide the observation window, error and resource thresholds, and sign-off owner per preview cohort ([service-preview-rollout.md](service-preview-rollout.md), decision)
 - [ ] Decide whether the Chromium preview spec or the Docker preview suites join a regular gated run ([service-preview-rollout.md](service-preview-rollout.md), decision)
 - [ ] Seed local worktree preview services safely from `entryPort`, never from a port scan ([preview-service-discovery.md](preview-service-discovery.md))
@@ -564,6 +565,7 @@ it reaches. Some rules of thumb:
 - [ ] Report Claude state signal health (armed, confirmed, demoted, unsupported) per container in recurring diagnostics ([container-state-observation.md](container-state-observation.md))
 - [ ] Fix the remaining test temp-directory leaks in Pi, Codex and Cursor bridge and worktree-watcher tests ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md))
 - [ ] Optionally surface ledger entries at the cleanup attempt cap in diagnostics or `disk:report` ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md))
+- [ ] Remove a dev profile's `safeStorage` Keychain item when `dev:reset` removes the profile ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md))
 - [ ] Verify which writers still produce `<name>.json.<pid>.tmp` files since the #969 SQLite move ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), verify)
 - [ ] Decide whether a permanently failing ledger entry blocks re-creating an environment in its namespace ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), decision)
 - [ ] Decide whether ledger entries at the attempt cap are ever retried, after an upgrade or on user action ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), decision)
@@ -759,6 +761,7 @@ it reaches. Some rules of thumb:
 - [ ] Convert the remaining literal waits in `PersistentTerminal` and `AgentNativeTab` tests where faithful ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [ ] Profile and trim backend slow test owners (validation worker, public-api exec, commands, tmux) ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [ ] Resolve the gateway-auth part of flake 0006 once the registry criteria are met ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
+- [ ] Stop an Electron spec's Vite dev server even when the test times out and its `finally` never runs ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [ ] Record fresh test-suite baselines and a controlled before-and-after comparison if speed work resumes ([test-suite-and-ci-health.md](test-suite-and-ci-health.md), qualification)
 - [ ] Confirm the desktop test gaps with coverage before writing tests ([test-suite-and-ci-health.md](test-suite-and-ci-health.md), verify)
 - [ ] Find the root cause of the `AddProjectDialog.test.tsx` cost ([test-suite-and-ci-health.md](test-suite-and-ci-health.md), verify)
@@ -784,7 +787,7 @@ it reaches. Some rules of thumb:
 | File | Very high | High | Medium | Low | Total |
 | --- | --- | --- | --- | --- | --- |
 | **Service previews and web annotations** | | | | | |
-| [service-preview-rollout.md](service-preview-rollout.md) |  | 3 | 14 | 7 | 24 |
+| [service-preview-rollout.md](service-preview-rollout.md) |  | 2 | 12 | 7 | 21 |
 | [embedded-service-previews.md](embedded-service-previews.md) |  |  |  | 13 | 13 |
 | [preview-service-discovery.md](preview-service-discovery.md) |  |  | 1 | 5 | 6 |
 | [web-annotation-qualification.md](web-annotation-qualification.md) |  | 3 | 14 | 3 | 20 |
@@ -801,7 +804,7 @@ it reaches. Some rules of thumb:
 | [container-network-and-credential-isolation.md](container-network-and-credential-isolation.md) |  |  | 2 | 1 | 3 |
 | [container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md) |  |  | 3 | 6 | 9 |
 | [container-state-observation.md](container-state-observation.md) |  |  | 5 | 6 | 11 |
-| [environment-and-disk-cleanup.md](environment-and-disk-cleanup.md) |  | 2 | 1 | 5 | 8 |
+| [environment-and-disk-cleanup.md](environment-and-disk-cleanup.md) |  | 2 | 1 | 6 | 9 |
 | **Design canvas** | | | | | |
 | [design-canvas-qualification.md](design-canvas-qualification.md) |  | 1 | 6 | 6 | 13 |
 | [design-operation-recovery-edges.md](design-operation-recovery-edges.md) |  |  | 1 | 2 | 3 |
@@ -842,6 +845,6 @@ it reaches. Some rules of thumb:
 | **Cross-cutting** | | | | | |
 | [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md) |  | 1 | 10 | 3 | 14 |
 | [mixed-version-compatibility.md](mixed-version-compatibility.md) |  |  | 2 | 3 | 5 |
-| [test-suite-and-ci-health.md](test-suite-and-ci-health.md) | 1 |  | 4 | 11 | 16 |
+| [test-suite-and-ci-health.md](test-suite-and-ci-health.md) | 1 |  | 4 | 12 | 17 |
 | [mobile-layout-gaps.md](mobile-layout-gaps.md) |  |  | 1 | 4 | 5 |
 | [dependency-upgrades.md](dependency-upgrades.md) |  |  | 3 | 7 | 10 |

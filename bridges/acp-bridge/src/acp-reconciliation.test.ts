@@ -962,6 +962,7 @@ describe("ACP bridge", () => {
     expect(await redelivery.json()).toMatchObject({
       error:
         "cursor prompt outcome is unknown after a bridge restart; resubmit with a new requestId",
+      kind: "dispatch-outcome-lost",
     });
 
     // The at-most-once work was never re-executed and a fresh requestId still

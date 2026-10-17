@@ -156,6 +156,14 @@ cache-invalidation hypothesis remains unconfirmed.
 - Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.IJ4t3D/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.NEipUr/final-full-review-recovery.log.gz`.
 - No watcher implementation, assertion, timeout or skip changed. Cache invalidation racing the read remains a hypothesis, not an established cause.
 
+## Grok-trust PR-stage merge recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name pr-stage-full -- mise run test`, on `verify-grok-trust-claude-parked-retry` merged with `origin/main` at `607d12e2`, host load average about 27.
+- **Failure:** the cache-hit assertion expected 1 and received 0 (`worktree-snapshots-git.test.ts:139`). The workspace group had three failures in total (8821 backend tests passed); root, bridges and the protocol lockfile groups passed.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.rEfkv1/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Isolated rerun:** `bun test --preload ../../tests/setup-node.ts src/core/worktree-snapshots-git.test.ts` from `apps/backend` passed unchanged: 4 pass, 0 fail in under a second.
+- **Assessment:** an unchanged owning-file pass confirms a recurrence. The branch does not touch this code. No source, assertion, timeout or skip changed.
+
 ## Pi and Cursor agent-test logins PR stage — 2026-10-17
 
 - Original command: `bun run test:workspace` in `apps/backend` (two workers) after merging `origin/main` into `fix-pi-login-in-agent-test-profiles-379ebff75838`, macOS arm64 on the heavily loaded shared host.

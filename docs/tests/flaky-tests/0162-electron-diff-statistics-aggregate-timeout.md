@@ -257,6 +257,13 @@ skip changed.
 - **Owning-file rerun:** `mise run test:logged -- --name commands-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 19.9 seconds.
 - **Assessment:** the unchanged owning-file pass confirms an intermittent recurrence. Shared-host contention remains a hypothesis. No owning implementation, assertion, timeout or skip changed.
 
+## Retired-dispatch recovery validation — 2026-10-17
+
+`mise run test:logged -- --name full-tests -- mise run test` on `8a2f9444` plus the retired-dispatch fixes reported ten backend five-second timeouts (8784 passed): four diff-statistics cases in this file, cleanup-retry and local-server deletion (cases 0211 and 0220), coordinator bound-discard (0165), and three environment lifecycle deletion cases (0194/0226). The workspace group used four slots, with two isolated backend workers, alongside root and bridge groups on the shared host. The full run took 701.9 seconds. Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.YP2Uc2/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+The diff cases were `serves the Files panel from the scan the badge already ran` (5535.54 ms), `clears published counts when a repository config retarget cannot be scanned` (6113.77 ms), `does not mark the counts approximate for an ordinary worktree` (5927.42 ms), and `enables git's scan caches on a newly created worktree` (6767.64 ms). The cleanup retry took 8299.77 ms and the local-server deletion took 7160.38 ms.
+
+`mise run test:logged -- --name integration-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed the entire unchanged owning file alone in 20.8 seconds, including all six failed cases. No diff, cleanup, fixture, timeout, assertion or skip was changed.
 
 ## Codex catalogue review final validation — 2026-10-17
 

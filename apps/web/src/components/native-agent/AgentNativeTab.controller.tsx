@@ -1197,6 +1197,19 @@ export function SharedNativeAgentController({
     void discard(platform);
   }, [data.environmentId, platform, sessionKey]);
 
+  const releaseRetiredRequestId = useCallback(
+    (requestId: string, error: string) => {
+      const current = useNativeComposeStore.getState().drafts.get(sessionKey);
+      if (current?.requestId !== requestId) return;
+      updateDraft(sessionKey, {
+        requestId: undefined,
+        pendingTranscriptConfirmation: undefined,
+        submissionError: error,
+      });
+    },
+    [sessionKey, updateDraft],
+  );
+
   const clearConfirmedDraft = useCallback(
     (requestId: string | undefined): boolean => {
       if (!requestId) return false;
@@ -1618,6 +1631,8 @@ export function SharedNativeAgentController({
         );
       }
       let keepTranscriptConfirmation = false;
+      // The provider will never run this id: a resend has to mint a new one.
+      let requestIdRetired = false;
       try {
         if (canQueue) {
           await enqueue(prompt, options);
@@ -1649,6 +1664,7 @@ export function SharedNativeAgentController({
           return true;
         }
         if (outcome.outcome === "rejected") setOptimisticPrompt(null);
+        requestIdRetired = outcome.outcome === "rejected" && outcome.requestIdRetired === true;
         keepTranscriptConfirmation = outcome.outcome === "unknown";
         /*
          * A backend-reported unknown is a parked dispatch: the
@@ -1681,7 +1697,11 @@ export function SharedNativeAgentController({
         text,
         mentions: draft.mentions,
         attachments: submittedAttachments,
-        ...(dispatchRequestId ? { requestId: dispatchRequestId } : {}),
+        ...(requestIdRetired
+          ? { requestId: undefined }
+          : dispatchRequestId
+            ? { requestId: dispatchRequestId }
+            : {}),
         ...(keepTranscriptConfirmation && transcriptConfirmation
           ? { pendingTranscriptConfirmation: transcriptConfirmation }
           : { pendingTranscriptConfirmation: undefined }),
@@ -2506,6 +2526,12 @@ export function SharedNativeAgentController({
                     setSendError(null);
                     setOptimisticPrompt(null);
                   } else if (outcome.outcome === "rejected") {
+                    if (outcome.requestIdRetired) {
+                      // The backend resolved the card. Keep the text, but under
+                      // a new id, so sending it again can actually run it.
+                      releaseRetiredRequestId(actionableDispatch.requestId, outcome.error);
+                      setOptimisticPrompt(null);
+                    }
                     setSendError(outcome.error);
                   } else {
                     setSendError(outcome.error ?? "The dispatch is still being reconciled.");

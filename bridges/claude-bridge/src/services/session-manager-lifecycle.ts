@@ -135,15 +135,14 @@ export function sessionCompletionPending(session: SessionState): boolean {
  * structured turns still set that field because it also addresses the *result*,
  * but dedup for every prompt now flows through this registry.
  *
- * Durability: in memory, matching the session state it guards, so it is lost on
- * a bridge restart. For Claude that is the correct tradeoff rather than a gap.
- * The SDK spawns a per-turn child owned by this process, so a restart kills any
- * in-flight turn outright: a prompt retried across a restart provably did not
- * finish and *should* run again. (The Codex bridge persists its journal to disk
- * because `codex app-server` turns outlive the bridge connection, leaving
- * genuine ambiguity after a restart — see `sessions/dispatch-journal.ts`.) The
- * hazard covered here, a lost HTTP response from a still-live bridge, never
- * spans a restart.
+ * Durability: these records are in memory and lost on a bridge restart. The
+ * claim itself is durable: `claimPromptDispatch` writes the id to the session's
+ * `dispatchedRequestIds` before the turn starts, so a restart can never run it
+ * a second time. Whether that turn ran is lost with the process, though: a
+ * restart can land before the CLI starts or partway through the turn. The
+ * prompt route therefore refuses a restored claim without an outcome record
+ * (`restoredDispatchedRequestIds`) with `DISPATCH_OUTCOME_LOST_KIND`, rather
+ * than reporting it processed, and the caller resends under a new id.
  */
 export type PromptDispatchState = "processing" | "already-processed";
 

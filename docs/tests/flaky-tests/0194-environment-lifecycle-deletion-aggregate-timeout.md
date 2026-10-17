@@ -156,6 +156,12 @@ passed the unchanged owning file in 24.7 seconds (exit 0). Evidence:
 - **Assessment:** isolated pass confirms an intermittent recurrence. Host
   contention remains a hypothesis. No product code, assertion, timeout or skip changed.
 
+## Retired-dispatch recovery validation — 2026-10-17
+
+The full `mise run test:logged -- --name full-tests -- mise run test` run reported five-second timeouts for `deletes the remote head branch during merged local environment cleanup` (5464.74 ms), `does not delete remote branches during closed environment cleanup` (5749.17 ms), and `retains the environment and process ownership when deletion cannot reap a server` (5390.55 ms, also case 0226). Backend results: 8784 passed, ten failed. Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.YP2Uc2/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+
+`mise run test:logged -- --name environments-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures` passed the unchanged owning file alone in 20.4 seconds. No lifecycle implementation, assertion, timeout or skip changed.
+
 ## Recurrence — 2026-10-17 (device-login review fixes)
 
 `mise run test:logged -- --name login-full-tests -- mise run test` timed out

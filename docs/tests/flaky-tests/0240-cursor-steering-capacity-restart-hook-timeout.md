@@ -1,7 +1,7 @@
 # Cursor steering-at-capacity restart case hits a hook timeout
 
 - **ID:** 0240
-- **Status:** open (recurred 2026-10-17)
+- **Status:** open
 - **Date observed:** 2026-10-15
 - **Test:** `steering at capacity across a restart > a lost refusal and a
   recovered run never produce a duplicate or a fabricated absent`

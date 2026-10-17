@@ -110,7 +110,10 @@ describe("a send that rejects after it was called", () => {
     await loadPersistedState();
     const successor = sessions.get(state.id)!;
     const successorAgent = attachFake(successor);
-    expect((await prompt(successor, "unknown-1")).status).toBe(410);
+    const redelivery = await prompt(successor, "unknown-1");
+    expect(redelivery.status).toBe(410);
+    // The backend reads the kind, not the wording, to retire the id.
+    expect(((await redelivery.json()) as { kind?: string }).kind).toBe("dispatch-outcome-lost");
     expect(successorAgent.sends).toHaveLength(0);
   });
 

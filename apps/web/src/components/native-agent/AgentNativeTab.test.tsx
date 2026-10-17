@@ -217,8 +217,8 @@ const dispatchNativeAgentIntentMock = mock(
     requestId: input.requestId,
   }),
 );
-const retryNativeAgentDispatchMock = mock(async () => ({
-  outcome: "accepted" as const,
+const retryNativeAgentDispatchMock = mock(async (): Promise<NativeAgentDispatchOutcome> => ({
+  outcome: "accepted",
   requestId: "recoverable-1",
 }));
 const discardNativeAgentDispatchMock = mock(async () => ({ discarded: true }));
@@ -4090,6 +4090,103 @@ describe("AgentNativeTab", () => {
     ).toBeTruthy();
     expect(screen.getByText(/could not confirm delivery of your last message/i)).toBeTruthy();
     expect(screen.queryByText(/Confirming delivery with Codex/i) === null).toBe(true);
+  });
+
+  test("keeps a delayed retired retry warning through unmount and resends under a new id", async () => {
+    const tabId = "tab-retired-retry";
+    const sessionKey = createSessionKey("env-1", tabId);
+    const lost =
+      "Claude Code could not confirm this message, so it may not have run. Check the conversation and send it again if it did not.";
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      text: "Deploy the preview",
+      requestId: "lost-1",
+      pendingTranscriptConfirmation: { requestId: "lost-1", sessionId: "s-1", priorMessageIds: [] },
+    });
+    let parked = true;
+    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+      ...(await defaultProjection(projectionInput)),
+      ...(parked
+        ? {
+            recoverableDispatch: {
+              requestId: "lost-1",
+              createdAt: "2026-09-09T19:12:51.000Z",
+              status: "action-required" as const,
+            },
+          }
+        : {}),
+    }));
+    let releaseRetry!: () => void;
+    const retryGate = new Promise<void>((resolve) => {
+      releaseRetry = resolve;
+    });
+    retryNativeAgentDispatchMock.mockImplementationOnce(async () => {
+      await retryGate;
+      parked = false;
+      return { outcome: "rejected" as const, error: lost, requestIdRetired: true as const };
+    });
+
+    const mounted = render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    fireEvent.click(await screen.findByRole("button", { name: "Retry send" }));
+    await waitFor(() => expect(retryNativeAgentDispatchMock).toHaveBeenCalledTimes(1));
+    mounted.unmount();
+    releaseRetry();
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.submissionError).toBe(lost),
+    );
+    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+
+    // Told plainly, never shown as delivered, and the text is kept to resend.
+    expect(await screen.findByText(lost)).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Retry send" }) === null).toBe(true),
+    );
+    const draft = useNativeComposeStore.getState().drafts.get(sessionKey);
+    expect(draft?.text).toBe("Deploy the preview");
+    expect(draft?.requestId).toBeUndefined();
+    expect(draft?.pendingTranscriptConfirmation).toBeUndefined();
+
+    // The bridge refuses the old id for good, so a resend needs a new one.
+    fireEvent.keyDown(await screen.findByRole("textbox"), { key: "Enter" });
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    const resent = dispatchNativeAgentIntentMock.mock.calls[0]![0] as { requestId?: string };
+    expect(resent.requestId).toBeString();
+    expect(resent.requestId).not.toBe("lost-1");
+  });
+
+  test("releases a retired direct submit id and preserves its draft warning on remount", async () => {
+    const tabId = "tab-retired-direct";
+    const sessionKey = createSessionKey("env-1", tabId);
+    const warning = "Claude could not confirm this message, so it may not have run.";
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      text: "Deploy the preview",
+      requestId: "retired-direct",
+    });
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async () => ({
+      outcome: "rejected",
+      error: warning,
+      requestIdRetired: true,
+    }));
+    const mounted = render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    fireEvent.keyDown(await screen.findByRole("textbox"), { key: "Enter" });
+    await screen.findByText(warning);
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.requestId).toBeUndefined(),
+    );
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe(
+      "Deploy the preview",
+    );
+    expect(
+      useNativeComposeStore.getState().drafts.get(sessionKey)?.pendingTranscriptConfirmation,
+    ).toBeUndefined();
+    mounted.unmount();
+    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    expect(await screen.findByText(warning)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry send" }) === null).toBe(true);
+    fireEvent.keyDown(await screen.findByRole("textbox"), { key: "Enter" });
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(2));
+    const resent = dispatchNativeAgentIntentMock.mock.calls[1]![0];
+    expect(resent.requestId).toBeString();
+    expect(resent.requestId).not.toBe("retired-direct");
   });
 
   test("keeps the recovery card mounted and disabled while a retry is running", async () => {

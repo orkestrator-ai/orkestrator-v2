@@ -32,6 +32,13 @@ host load from the concurrent groups pushes it over. The test source was
 neither changed nor skipped. The branch under test
 (`chore-2026-10-14-cleanup-follow-ups`) does not touch terminal history.
 
+## Grok-trust PR-stage merge recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name pr-stage-full -- mise run test`, on `verify-grok-trust-claude-parked-retry` merged with `origin/main` at `607d12e2`, host load average about 27.
+- **Failure:** `normalizes lines, CRLF, Unicode, and ANSI across transport chunks and pages` timed out at 5002.96 ms. The workspace group had three failures in total (8821 backend tests passed); root, bridges and the protocol lockfile groups passed.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.rEfkv1/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Isolated rerun:** `bun test --preload ../../tests/setup-node.ts src/core/terminal-history.test.ts` from `apps/backend` passed unchanged: 25 pass, 0 fail in about 8 seconds.
+- **Assessment:** an unchanged owning-file pass confirms a recurrence. The branch does not touch this code. No source, assertion, timeout or skip changed.
 
 ## ACP policy continuation validation recurrence — 2026-10-17
 

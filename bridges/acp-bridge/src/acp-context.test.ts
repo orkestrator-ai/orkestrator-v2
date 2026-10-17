@@ -13,6 +13,53 @@ import {
 } from "./acp-test-harness.js";
 
 describe("ACP bridge", () => {
+  for (const scenario of ["trusted", "untrusted", "read-only", "coordinator", "probe"] as const) {
+    test(`passes effective ${scenario} project trust through the actual Grok spawn`, async () => {
+      const directory = await temporaryDirectory();
+      const spawnFile = resolve(directory, "spawn.jsonl");
+      const bridge = await spawnBridge({
+        env: {
+          ACP_PROVIDER: "grok",
+          GROK_FOLDER_TRUST: "1",
+          FAKE_ACP_SPAWN_FILE: spawnFile,
+          ORKESTRATOR_BRIDGE_EXECUTION_POLICY:
+            scenario === "coordinator" ? "coordinator-read-only" : undefined,
+        },
+      });
+      const response =
+        scenario === "probe"
+          ? await nativeFetch(`${bridge.base}/session/list`, { headers: bridge.headers })
+          : await nativeFetch(`${bridge.base}/session/create`, {
+              method: "POST",
+              headers: bridge.headers,
+              body: JSON.stringify({
+                policy: {
+                  id: "interactive-host",
+                  sandbox: "none",
+                  approvals: "auto-approve",
+                  projectResources: scenario !== "untrusted",
+                  networkAccess: "full",
+                },
+                readOnly: scenario === "read-only",
+              }),
+            });
+      expect(response.status).toBe(scenario === "probe" ? 200 : 201);
+      const launches = (await fs.readFile(spawnFile, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { args: string[]; folderTrust: string });
+      expect(launches.length).toBeGreaterThan(0);
+      for (const launch of launches) {
+        expect(launch.folderTrust).toBe(scenario === "trusted" ? "0" : "1");
+        expect(launch.args.includes("--no-leader")).toBe(
+          scenario === "trusted" || scenario === "read-only" || scenario === "coordinator",
+        );
+        expect(launch.args).toContain("agent");
+        expect(launch.args).toContain("stdio");
+      }
+    });
+  }
+
   for (const acpProvider of ["cursor", "grok"] as const) {
     test(`lists and resumes provider-owned ${acpProvider} sessions`, async () => {
       const directory = await temporaryDirectory();

@@ -642,12 +642,28 @@ export function isFallbackExecutionProfileId(id: string): boolean {
 export type NativeAgentConnectionState = "connecting" | "connected" | "error";
 
 /**
+ * The `kind` a bridge puts on its refusal of a prompt request id that an
+ * earlier bridge process recorded and never confirmed. The bridge cannot tell
+ * whether that turn ran, and will never run the id again.
+ */
+export const DISPATCH_OUTCOME_LOST_KIND = "dispatch-outcome-lost";
+
+/**
  * A dispatch may have reached the provider even when its HTTP response was
  * lost. Callers must reconcile `unknown`; they must never retry it blindly.
  */
 export type NativeAgentDispatchOutcome =
   | { outcome: "accepted"; requestId: string }
-  | { outcome: "rejected"; error: string }
+  | {
+      outcome: "rejected";
+      error: string;
+      /**
+       * The provider recorded this request id before a bridge restart and
+       * cannot say whether it ran, so it will refuse the id from now on. Any
+       * parked record for it is cleared; the draft needs a new id to run it.
+       */
+      requestIdRetired?: true;
+    }
   | {
       outcome: "unknown";
       requestId: string;

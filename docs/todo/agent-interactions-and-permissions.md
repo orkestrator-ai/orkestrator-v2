@@ -236,6 +236,15 @@ per-bridge environment overrides that predate the execution policy.
     moved `expiresAt` but not `hold`, and there is no hold action. Add `hold` to
     the listing and a `session.interaction.hold` action that calls
     `hold_native_agent_interaction`.
+12. **Grok project resources off.** When the policy turns project resources on,
+    the ACP bridge launches Grok with `GROK_FOLDER_TRUST=0`
+    (`acp-provider-config.ts`). When it is off, which is the host default, Grok
+    still loads the AGENTS.md, skills, commands, hooks and MCP servers of a
+    checkout whose main repository the user trusted in Grok, and
+    `acpReportedPolicy` reports the axis as on. No switch forces Grok's gate
+    closed: an empty `GROK_HOME` would also drop the login. Find one on the
+    pinned build (or ask xAI), then honour `false` and drop the note, as item 6
+    plans for Codex.
 
 ### Qualification
 

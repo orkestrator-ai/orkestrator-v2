@@ -76,7 +76,10 @@ import {
   isBridgeTranscriptSubRead,
 } from "@orkestrator/protocol/node/bridge-transcript-routes";
 import { cursorTranscriptSource } from "./transcript-source.js";
-import { isNativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import {
+  DISPATCH_OUTCOME_LOST_KIND,
+  isNativeAgentExecutionPolicy,
+} from "@orkestrator/protocol/native-agent";
 import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
 import {
   NATIVE_AGENT_COMMAND_CATALOGUE_VERSION,
@@ -985,10 +988,11 @@ async function handlePrompt(
       // outcome. Never re-dispatch at-most-once work: refuse plainly so the
       // caller resubmits under a fresh id rather than reading a 202 as a turn
       // this process will never run.
-      throw new HttpError(
-        410,
-        "Cursor prompt outcome is unknown after a bridge restart; resubmit with a new requestId",
-      );
+      return json(response, 410, {
+        error:
+          "Cursor prompt outcome is unknown after a bridge restart; resubmit with a new requestId",
+        kind: DISPATCH_OUTCOME_LOST_KIND,
+      });
     }
     if (journaled.state === "prepared")
       throw new HttpError(409, "Prompt dispatch is still preparing");

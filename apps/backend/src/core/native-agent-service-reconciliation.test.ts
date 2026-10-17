@@ -4850,6 +4850,47 @@ describe("NativeAgentService shared observations", () => {
     );
   });
 
+  test("queue retry uses a fresh dispatch id only after an explicit retired refusal", async () => {
+    let rejected = false;
+    const { provider, send } = createProviderStub("claude", {
+      send: async () => {
+        if (!rejected) {
+          rejected = true;
+          throw new PromptRejectedError("Outcome lost; check before resending", {
+            requestIdRetired: true,
+          });
+        }
+      },
+    });
+    await withService(
+      { prefix: "native-queue-retired-", provider: async () => provider },
+      async ({ storage, service }) => {
+        await adopt(storage, "tab-1", "provider-1", "claude");
+        const queueKey = "claude\0tab-1";
+        await storage.savePromptQueue(queueKey, "env-1", [
+          { id: "stable-row", requestId: "retired-request", text: "Deploy once" },
+        ]);
+        await internals(service).drainPromptQueueOnce(queueKey);
+        expect(send).toHaveBeenCalledTimes(1);
+        const failed = await storage.getPromptQueue(queueKey);
+        expect(failed?.dispatchError?.message).toContain("Outcome lost");
+        expect(failed?.inFlight).toBeUndefined();
+        expect(failed?.messages[0]).toMatchObject({ id: "stable-row", text: "Deploy once" });
+        const freshId = (failed?.messages[0] as { requestId?: string } | undefined)?.requestId;
+        expect(freshId).toBeString();
+        expect(freshId).not.toBe("retired-request");
+        await internals(service).drainPromptQueueOnce(queueKey);
+        expect(send).toHaveBeenCalledTimes(1);
+        await storage.retryPromptQueueDispatch(queueKey);
+        await internals(service).drainPromptQueueOnce(queueKey);
+        expect(send).toHaveBeenCalledTimes(2);
+        expect(send.mock.calls[1]?.[2]?.requestId).toBe(freshId);
+        expect((await storage.getPromptQueue(queueKey))?.messages).toEqual([]);
+        expect((await storage.getPromptQueue(queueKey))?.inFlight).toBeUndefined();
+      },
+    );
+  });
+
   test("one completed session drains its queue while a sibling stays busy", async () => {
     const sessionActivity = new Map<string, ProviderActivityState>([
       ["provider-1", "working"],

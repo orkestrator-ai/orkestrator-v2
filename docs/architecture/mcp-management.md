@@ -65,7 +65,7 @@ described below. Higher precedence wins for a same-name entry.
 | Cursor | Project | `<worktree>/.cursor/mcp.json` | JSON `mcpServers` | 20 | yes | **excluded** on host |
 | Grok | Managed | `/etc/grok/managed_config.toml`, `$GROK_HOME/managed_config.toml` | TOML `[mcp_servers.*]` | 6–7 | never | — |
 | Grok | Backend user | `$GROK_HOME/config.toml` (default `~/.grok`) | TOML `[mcp_servers.*]` | 10 | yes | — |
-| Grok | Project | `<worktree>/.grok/config.toml` | TOML | 20 | yes | from `$GROK_HOME/trusted_folders.toml` (a trusted parent covers the worktree; `GROK_FOLDER_TRUST=0` or `[folder_trust] enabled = false` turns the gate off); `unknown` when undecided |
+| Grok | Project | `<worktree>/.grok/config.toml` | TOML | 20 | yes | from `$GROK_HOME/trusted_folders.toml` (a trusted parent covers the worktree; `GROK_FOLDER_TRUST=0` or `[folder_trust] enabled = false` turns the gate off); `unknown` when undecided. A session whose policy turns project resources on runs Grok with the gate off, which this column does not yet reflect |
 | Grok | Compatibility | Claude `~/.claude.json` (user and private local) > Cursor `~/.cursor/mcp.json` and project `.cursor/mcp.json` > project `.mcp.json` | JSON | 1–5 | never | Claude/Cursor imports honour `GROK_*_MCPS_ENABLED`, then `requirements.toml`, user `config.toml`, `managed_config.toml` `[compat.*] mcps`; the project config is never read for it |
 | Pi | Backend user | `$PI_CODING_AGENT_DIR` or `~/.pi/agent`, `mcp.json` | JSON `mcpServers`, or a bare map (bridge only; labelled) | 10 | yes | — |
 | Pi | Project | `<worktree>/.pi/mcp.json` | same | 20 | yes | **excluded** on host |

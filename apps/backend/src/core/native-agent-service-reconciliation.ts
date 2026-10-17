@@ -1219,7 +1219,9 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       this.clearQueueBackoff(queueKey);
     } catch (error) {
       if (error instanceof PromptRejectedError) {
-        await this.storage.failPromptQueueDispatch(queueKey, reservation.requestId, error.message);
+        await this.storage.failPromptQueueDispatch(queueKey, reservation.requestId, error.message, {
+          requestIdRetired: error.requestIdRetired,
+        });
         this.clearQueueBackoff(queueKey);
         return;
       }

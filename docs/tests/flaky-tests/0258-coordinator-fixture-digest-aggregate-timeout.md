@@ -73,6 +73,14 @@ No assertion, timeout or skip changed.
 - **Evidence:** `orkestrator-test-run.bQMvqV/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory; outer run `orkestrator-test-run.4bGaMi/merge-tests.log.gz`.
 - **Assessment:** the isolated pass confirms an intermittent recurrence. No implementation, assertion, timeout or skip changed.
 
+## Grok-trust follow-up main merge recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name merge-full-tests -- mise run test` (Bun 1.4.3, macOS arm64; workspace/root/bridge/protocol reservations 4/1/2/1 slots on the shared host; workspace admission waited 763.8 seconds).
+- **Failure:** the fixture digest case exceeded its 5000 ms deadline at 5010.47 ms, with a racing `git worktree add` between-tests error. Desktop reported 778 passed, one failed and one error across 779 tests in 59 files (19.55 seconds).
+- **Owning-file rerun:** `mise run test:logged -- --name merge-coordinator-fixture-owner -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev/coordinator-live.test.ts --parallel=1 --only-failures`, with system Python preferred in PATH, passed unchanged (exit 0, 4.3 seconds logged).
+- **Evidence:** `orkestrator-test-run.GfKwdw/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory (compressed when the aggregate completes).
+- **Assessment:** the unchanged owning-file pass confirms an intermittent recurrence. Shared-host contention remains unconfirmed. No implementation, assertion, timeout or skip changed; conflict resolutions combined documentation histories.
+
 ## Codex phantom-denials PR-stage recurrence — 2026-10-17
 
 - **Original command:** `bun test scripts/dev/coordinator-live.test.ts` from `apps/desktop`, alone rather than in the aggregate, on `fix-codex-phantom-denials-8bdb8d15d820` while other worktrees validated (load average about 26–31 on 18 cores).

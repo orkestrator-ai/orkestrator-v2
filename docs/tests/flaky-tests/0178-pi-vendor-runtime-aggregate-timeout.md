@@ -465,6 +465,12 @@ source, assertion, timeout or skip changed.
 - **Assessment:** an unchanged owning-file pass confirms a recurrence. Shared-host contention remains an unconfirmed hypothesis; no implementation, assertion, timeout or skip changed.
 - **Subsequent aggregate:** `mise run test:logged -- --name review-aggregate-system-tools -- mise run test` passed all four groups (exit 0, 339.7 seconds) with system Python and the documented GNU utilities preferred in PATH, after component browser validation ended. This pass does not establish a root cause or resolve the tracked flake.
 
+## Retired-dispatch recovery validation — 2026-10-17
+
+After correcting a bounded DOM diagnostic assertion from the first aggregate, the root/agent-support group was rerun with `mise run test:logged -- --name root-final -- bun test ./tests ./e2e/agent-testing/artifact-sanitizer.test.ts ./scripts/opencode-live-compatibility-probe.test.ts ./test-fixtures/agent-project/server.test.ts --parallel=4 --only-failures`. It reported 3037 passed, one skipped and one failed (73.6 seconds): this unchanged Pi staging case timed out at 30000.05 ms. Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.BVIgTu/root-final.log.gz`.
+
+`mise run test:logged -- --name pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the unchanged owning file alone in 17.0 seconds. The retired-dispatch changes do not touch Pi staging. No assertion, timeout or skip was changed.
+
 ## Agent-test credential review observation — 2026-10-17
 
 The unchanged SDK staging test exceeded 30000 ms in `mise run test` and again
@@ -521,6 +527,14 @@ does not establish a flake. The new real SDK auth-only runtime test passes.
 - **Isolated rerun:** `mise run test:logged -- --name pi-vendor-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the unchanged owning file (exit 0, 20.9 seconds).
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.r499sA/root-and-agent-support-tests.log.gz` (compressed when the aggregate completes).
 - **Assessment:** the isolated pass confirms intermittence. Shared-host filesystem contention remains an unconfirmed hypothesis. No source, assertion, timeout or skip changed.
+
+## Grok-trust follow-up main merge observation — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name merge-full-tests -- mise run test` (Bun 1.4.3, macOS arm64; workspace/root/bridge/protocol reservations 4/1/2/1 slots on the shared host).
+- **Failure:** the staged-runtime load test exceeded its 30000 ms deadline at 30000.20 ms. Root/support reported 3037 passed, one skipped and one failed across 3039 tests in 140 files (288.23 seconds); admission had waited 133.3 seconds.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` also timed out (30000.15 ms; three passed, one failed; 32.0 seconds logged).
+- **Evidence:** `orkestrator-test-run.GfKwdw/root-and-agent-support-tests.log.gz` and `orkestrator-test-run.tFWCa3/merge-pi-vendor-owner.log.gz` under the host temporary directory (the aggregate log is compressed when the run completes).
+- **Assessment:** this observation does not independently establish intermittence because the unchanged owning file also failed alone. The test and its implementation are unchanged from `origin/main`; runtime staging remains an unresolved validation limitation. No implementation, assertion, timeout or skip changed.
 
 ## Observation — 2026-10-17 (agent readiness main merge)
 

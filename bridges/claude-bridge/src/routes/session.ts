@@ -8,7 +8,10 @@ import {
   holdPendingRequest,
   type ClaudeHoldFamily,
 } from "../services/session-manager-interaction-holds.js";
-import { NATIVE_AGENT_STEER_REJECTION_HTTP_STATUS } from "@orkestrator/protocol/native-agent";
+import {
+  DISPATCH_OUTCOME_LOST_KIND,
+  NATIVE_AGENT_STEER_REJECTION_HTTP_STATUS,
+} from "@orkestrator/protocol/native-agent";
 import { idleSteerPromptReply } from "@orkestrator/protocol/agent-slash-commands";
 import {
   commandUnavailableResponse,
@@ -797,8 +800,25 @@ session.post("/:id/prompt", async (c) => {
           202,
         );
       }
+      const local = Boolean(idleSteerPromptReply(prompt, "Claude"));
+      // Restoring after a restart or tab close can recover a claim without
+      // its outcome. Nothing here can tell whether its turn ran.
+      // Refuse it for good, as the other bridges do, rather than
+      // answer "already processed" for a command that may never have run.
+      if (
+        dispatchState === "new" &&
+        !local &&
+        sessionData.restoredDispatchedRequestIds?.has(requestId)
+      ) {
+        return c.json(
+          {
+            error: "Claude prompt outcome is no longer available; resubmit with a new requestId",
+            kind: DISPATCH_OUTCOME_LOST_KIND,
+          },
+          410,
+        );
+      }
       if (dispatchState === "already-processed" || alreadyDurable) {
-        const local = Boolean(idleSteerPromptReply(prompt, "Claude"));
         return c.json({
           status: "already-processed",
           requestId,

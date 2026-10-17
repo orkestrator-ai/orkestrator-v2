@@ -1,4 +1,10 @@
-import type { BridgeConnection, ProviderSendOptions } from "./agent-provider-contract.js";
+import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
+import { DISPATCH_OUTCOME_LOST_KIND } from "@orkestrator/protocol/native-agent";
+import {
+  PromptRejectedError,
+  type BridgeConnection,
+  type ProviderSendOptions,
+} from "./agent-provider-contract.js";
 import type { HttpBridgeAgent } from "./http-bridge-catalog.js";
 
 /**
@@ -75,4 +81,24 @@ export function bridgePromptBody(
             }
           : { fastMode: options.fastMode ?? connection.fastMode }),
   };
+}
+
+/**
+ * Refuse a prompt whose request id the bridge has retired.
+ *
+ * The bridge restored a recorded id without its outcome
+ * (HTTP 410, `kind: "dispatch-outcome-lost"`). Retrying can never
+ * help, so say what happened in the user's terms rather than the bridge's
+ * request-id wording, and mark the id retired.
+ */
+export function assertPromptOutcomeKnown(
+  agent: HttpBridgeAgent,
+  status: number,
+  detail: Record<string, unknown> | null | undefined,
+): void {
+  if (status !== 410 || detail?.kind !== DISPATCH_OUTCOME_LOST_KIND) return;
+  throw new PromptRejectedError(
+    `${AGENT_PLATFORM_LABELS[agent]} could not confirm this message, so it may not have run. Check the conversation and send it again if it did not.`,
+    { requestIdRetired: true },
+  );
 }

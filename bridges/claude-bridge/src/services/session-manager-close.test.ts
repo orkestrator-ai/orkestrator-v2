@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { Hono } from "hono";
 
 import {
   PERSISTED_SDK_ID,
@@ -57,6 +58,28 @@ describe("closeSessionRetainingHistory", () => {
     expect(listed).not.toBe(state);
     expect(listed?.status).toBe("idle");
     expect(listed?.sdkSessionId).toBe(PERSISTED_SDK_ID);
+  });
+
+  test("refuses a same-process claim after close and rematerialize without asserting a restart", async () => {
+    const state = await materializePersistedSession();
+    await claimPromptDispatch(state.id, "closed-claim", () => ({ started: Promise.resolve() }));
+    await closeSessionRetainingHistory(state.id);
+    const restored = await materializePersistedSession();
+    expect(restored.dispatchedRequestIds?.has("closed-claim")).toBe(true);
+    expect(restored.restoredDispatchedRequestIds?.has("closed-claim")).toBe(true);
+    const { default: sessionRoutes } = await import("../routes/session.js");
+    const app = new Hono();
+    app.route("/session", sessionRoutes);
+    const response = await app.request(`/session/${state.id}/prompt`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ requestId: "closed-claim", prompt: "Deploy once" }),
+    });
+    expect(response.status).toBe(410);
+    expect(await response.json()).toEqual({
+      kind: "dispatch-outcome-lost",
+      error: "Claude prompt outcome is no longer available; resubmit with a new requestId",
+    });
   });
 
   test("answers an unknown or already-closed id as missing, so a lost response retries safely", async () => {

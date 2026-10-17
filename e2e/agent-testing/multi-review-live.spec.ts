@@ -198,6 +198,7 @@ function describeWorkflow(workflow: MultiReviewWorkflow): string {
       status: reviewer.status,
       dispatchState: reviewer.dispatchState,
       resultReminderSent: reviewer.resultReminderSent,
+      restartContinuationSent: reviewer.restartContinuationSent,
       error: reviewer.error,
     })),
   });
@@ -215,7 +216,12 @@ function userTurns(messages: unknown[]): number {
 
 /** The prompts a reviewer may legitimately have been sent: the review plus each designed follow-up. */
 function allowedTurns(reviewer: Reviewer): number {
-  return 1 + (reviewer.resultReminderSent ? 1 : 0) + (reviewer.schemaRepairAttempts ?? 0);
+  return (
+    1 +
+    (reviewer.resultReminderSent ? 1 : 0) +
+    (reviewer.restartContinuationSent ? 1 : 0) +
+    (reviewer.schemaRepairAttempts ?? 0)
+  );
 }
 
 class MultiReviewCycle {
@@ -468,7 +474,7 @@ class MultiReviewCycle {
       if (reviewer.status === "failed") failed.push(index);
       test.info().annotations.push({
         type: `reviewer-${index + 1}-${reviewer.agent}-after-${disruption}`,
-        description: `${reviewer.status}${reviewer.resultReminderSent ? " after the result reminder" : ""}${reviewer.error ? `: ${reviewer.error}` : ""}`,
+        description: `${reviewer.status}${reviewer.restartContinuationSent ? " after the restart continuation" : ""}${reviewer.resultReminderSent ? " after the result reminder" : ""}${reviewer.error ? `: ${reviewer.error}` : ""}`,
       });
     }
     return failed;
@@ -525,7 +531,9 @@ class MultiReviewCycle {
       if (earlier.requestId && reviewer.requestId !== earlier.requestId) {
         // A new request id is legitimate only for a designed follow-up turn.
         expect(
-          reviewer.resultReminderSent === true || (reviewer.schemaRepairAttempts ?? 0) > 0,
+          reviewer.resultReminderSent === true ||
+            reviewer.restartContinuationSent === true ||
+            (reviewer.schemaRepairAttempts ?? 0) > 0,
           `reviewer ${index + 1} was re-dispatched under a new request id`,
         ).toBe(true);
       }
@@ -759,12 +767,18 @@ test.describe("live Multi Review inactive-environment cycle", () => {
       await cycle.reconnect(restarted);
       const resumed = await cycle.read();
       expect(resumed.phase).not.toBe("cancelled");
-      // A reviewer whose turn the restart cut short fails closed today rather
-      // than continuing in its session (docs/todo/multi-review-scale-and-cost.md),
-      // so either outcome is accepted per reviewer and recorded. Everything
-      // else is held: no cancellation, no second prompt, no fresh session, a
-      // stated reason, and a tab that agrees with the snapshot.
-      const failed = cycle.recordOutcomes(await cycle.waitForSettled(), "restart");
+      // The Codex bridge reports a turn the restart cut short, and the runner
+      // continues it once in the same session, so the Codex reviewer must
+      // finish. Claude reports no interruption yet
+      // (docs/todo/multi-review-scale-and-cost.md), so it may complete or fail
+      // closed, and is recorded. Everything else is held: no cancellation, no
+      // prompt beyond the designed follow-ups, no fresh session, a stated
+      // reason, and a tab that agrees with the snapshot.
+      const settledAfterRestart = await cycle.waitForSettled();
+      const failed = cycle.recordOutcomes(settledAfterRestart, "restart");
+      expect(settledAfterRestart.reviewers[1]!.status, describeWorkflow(settledAfterRestart)).toBe(
+        "completed",
+      );
       const settled = await cycle.verifySnapshot(before, { failedReviewers: failed });
       await cycle.gotoApp();
       await cycle.openEnvironment(0);

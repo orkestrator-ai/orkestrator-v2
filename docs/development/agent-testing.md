@@ -388,16 +388,19 @@ signalling, it confirms that the bridge is a child of this profile's backend.
 The review must then settle from backend state alone. The case checks the
 snapshot first: phase, reviewer state, reports and consolidation. It also
 checks that each reviewer kept its provider session and start time, that a
-new request id appears only for a result reminder or schema repair, and that
+new request id appears only for a result reminder, restart continuation or
+schema repair, and that
 no transcript holds more prompts than those turns allow. It then checks the
 tab, on return and again after a reload: the graph's node states, the
 inspector's transcript tail, the controls and the reviewer's read-only tab.
 The reviewer transcript read must not be the compatibility fallback, and a
 repeated read with its source token must answer `unchanged`. After a restart
-or a killed bridge, each reviewer must either complete or fail with a stated
-reason, since a turn cut short fails closed today. The case records each
-reviewer's outcome as a Playwright annotation in `results.json`. After a
-killed bridge the Codex peer must complete. If preparation fails before any
+the Codex reviewer must complete, because the runner continues a Codex turn the
+restart cut short. The Claude reviewer, after a restart or a killed bridge, may
+either complete or fail with a stated reason, since Claude reports no
+interruption yet. The case records each reviewer's outcome as a Playwright
+annotation in `results.json`. After a killed bridge the Codex peer must
+complete. If preparation fails before any
 reviewer starts, the case restarts that step once and records it. Each case
 cancels its review and deletes its environments in cleanup. The restart case
 leaves the profile running under a detached launcher, so stop it with

@@ -160,6 +160,8 @@ class Provider implements BuildPipelineProvider {
    * stays failed until the next turn runs.
    */
   readonly sessionFailures = new Map<string, string>();
+  /** Sessions whose `sessionFailures` entry is a provider restart's interruption. */
+  readonly restartInterrupted = new Set<string>();
   readonly attached: string[] = [];
   readonly consolidationSessions = new Set<string>();
   readonly consolidationSessionsWithFindings = new Set<string>();
@@ -259,7 +261,13 @@ class Provider implements BuildPipelineProvider {
       throw error;
     }
     const failure = this.sessionFailures.get(sessionId);
-    if (failure) throw new ProviderSessionFailedError(this.agent, failure);
+    if (failure) {
+      throw new ProviderSessionFailedError(
+        this.agent,
+        failure,
+        this.restartInterrupted.has(sessionId) ? { interruption: "restart" } : {},
+      );
+    }
     return this.statusOverrides.get(sessionId) ?? this.statusValue;
   }
   async observeSession(sessionId: string) {
@@ -4201,6 +4209,181 @@ test.each(["grok", "cursor", "pi", "codex"] as const)(
   },
 );
 
+test("a preparation model that finishes without submitting gets one reminder turn", async () => {
+  const provider = new Provider(false);
+  const environmentId = "env-preparation-reminder";
+  await withService(
+    environmentId,
+    provider,
+    async ({ service, snapshot, workflowResults }) => {
+      const codex = { agent: "codex" as const, model: "default" };
+      const started = await service.start({
+        environmentId,
+        projectId: "project-1",
+        targetBranch: "main",
+        reviewers: [codex],
+        reviewModel: codex,
+        fixModel: codex,
+      });
+      const first = await advanceUntil(
+        service,
+        snapshot,
+        started.id,
+        (workflow) =>
+          workflow.activeRequest?.kind === "prepare" && workflow.activeRequest.state === "sent",
+      );
+      const firstRequestId = first.activeRequest!.requestId;
+      const sessionId = first.reviewSession!.providerSessionId;
+      expect(first.activeRequest?.resultTransport).toBe("tool-v1");
+
+      // The turn ends idle and nothing reaches submit_validation_plan.
+      const reminded = await advanceUntil(
+        service,
+        snapshot,
+        started.id,
+        (workflow) =>
+          workflow.phase === "failed" ||
+          (workflow.activeRequest?.resultReminderSent === true &&
+            workflow.activeRequest.state === "sent"),
+      );
+      expect(reminded.phase).toBe("preparing");
+      const reminderRequestId = reminded.activeRequest!.requestId;
+      expect(reminderRequestId).not.toBe(firstRequestId);
+      expect(reminded.reviewSession?.providerSessionId).toBe(sessionId);
+      expect(reminded.activeRequest?.continuationPrompt).toBeUndefined();
+      expect(
+        await workflowResults!.status({ environmentId, projectId: "project-1" }, firstRequestId),
+      ).toMatchObject({ lifecycle: "superseded" });
+      const reminder = provider.sends.get(reminderRequestId)!;
+      expect(reminder.prompt).toContain(
+        "Orkestrator has not received your review package preparation.",
+      );
+      expect(reminder.prompt).toContain("Your discovery work is already done");
+      expect(reminder.prompt).toContain(reminderRequestId);
+      expect(reminder.options.workflowResultTool).toBe("submit_validation_plan");
+
+      // The reminder is spent once: a second miss fails the step as before.
+      const failed = await advanceUntil(
+        service,
+        snapshot,
+        started.id,
+        (workflow) => workflow.phase === "failed",
+      );
+      expect(failed.error).toBe(
+        "The preparation model finished without calling submit_validation_plan to submit its review package preparation",
+      );
+      expect(provider.sends.size).toBe(2);
+    },
+    { toolMode: true, packageFlow: true },
+  );
+});
+
+test("MultiReviewService continues a consolidation a provider restart cut short", async () => {
+  const provider = new Provider(false);
+  const environmentId = "env-consolidation-restart";
+  const scope = { environmentId, projectId: "project-1" };
+  const restarted =
+    "Codex restarted before this turn finished, so its work stopped partway. Send a message to continue.";
+  await withService(
+    environmentId,
+    provider,
+    async ({ service, start, snapshot, workflowResults }) => {
+      const codex = { agent: "codex" as const, model: "default" };
+      const started = await start([codex], codex);
+      const reviewing = await advanceUntil(service, snapshot, started.id, (workflow) =>
+        Boolean(workflow.reviewers[0]?.requestId),
+      );
+      await workflowResults!.submit(scope, reviewing.reviewers[0]!.requestId!, cleanReport);
+      const consolidating = await advanceUntil(
+        service,
+        snapshot,
+        started.id,
+        (workflow) =>
+          workflow.activeRequest?.kind === "consolidate" && workflow.activeRequest.state === "sent",
+      );
+      const firstRequestId = consolidating.activeRequest!.requestId;
+      const sessionId = (consolidating.reviewSession ?? consolidating.fixSession)!
+        .providerSessionId;
+
+      provider.sessionFailures.set(sessionId, restarted);
+      provider.restartInterrupted.add(sessionId);
+      await service.advanceNow(started.id);
+      const queued = (await snapshot(started.id))!;
+      expect(queued.phase).toBe("consolidating");
+      expect(queued.activeRequest).toMatchObject({
+        kind: "consolidate",
+        state: "prepared",
+        restartContinuationSent: true,
+      });
+      expect(queued.activeRequest?.requestId).not.toBe(firstRequestId);
+      expect(queued.activeRequest?.continuationPrompt).toContain("Continue the consolidation");
+
+      // The bridge clears its notice once the next turn is accepted.
+      provider.sessionFailures.delete(sessionId);
+      provider.restartInterrupted.delete(sessionId);
+      await service.advanceNow(started.id);
+      const continuationRequestId = queued.activeRequest!.requestId;
+      const continuation = provider.sends.get(continuationRequestId)!;
+      expect(continuation.prompt).toContain("stopped partway");
+      expect(continuation.prompt).toContain("submit_consolidated_review");
+      expect(continuation.prompt).not.toContain("<multi-review-reports-json>");
+      expect((await snapshot(started.id))?.activeRequest?.state).toBe("sent");
+
+      await workflowResults!.submit(scope, continuationRequestId, cleanReport);
+      await service.advanceNow(started.id);
+      expect((await snapshot(started.id))?.phase).toBe("ready");
+    },
+    { toolMode: true },
+  );
+});
+
+test("a second restart during a step's continuation fails the step", async () => {
+  const provider = new Provider(false);
+  const environmentId = "env-consolidation-second-restart";
+  const restarted = "Codex restarted before this turn finished.";
+  await withService(
+    environmentId,
+    provider,
+    async ({ service, start, snapshot, workflowResults }) => {
+      const codex = { agent: "codex" as const, model: "default" };
+      const started = await start([codex], codex);
+      const reviewing = await advanceUntil(service, snapshot, started.id, (workflow) =>
+        Boolean(workflow.reviewers[0]?.requestId),
+      );
+      await workflowResults!.submit(
+        { environmentId, projectId: "project-1" },
+        reviewing.reviewers[0]!.requestId!,
+        cleanReport,
+      );
+      const consolidating = await advanceUntil(
+        service,
+        snapshot,
+        started.id,
+        (workflow) =>
+          workflow.activeRequest?.kind === "consolidate" && workflow.activeRequest.state === "sent",
+      );
+      const sessionId = (consolidating.reviewSession ?? consolidating.fixSession)!
+        .providerSessionId;
+      provider.sessionFailures.set(sessionId, restarted);
+      provider.restartInterrupted.add(sessionId);
+
+      // The first interruption is continued; the bridge still reports the
+      // continuation cut short, so the next one fails closed.
+      const failed = await advanceUntil(
+        service,
+        snapshot,
+        started.id,
+        (workflow) => workflow.phase === "failed",
+      );
+      expect(failed.error).toBe(`The consolidation session failed: ${restarted}`);
+      expect(
+        [...provider.sends.values()].filter((send) => send.prompt.includes("stopped partway")),
+      ).toHaveLength(1);
+    },
+    { toolMode: true },
+  );
+});
+
 test("a consolidation that pastes its report instead of submitting it says so", async () => {
   const provider = new Provider(false);
   const originalMessages = provider.messages.bind(provider);
@@ -4245,6 +4428,12 @@ test("a consolidation that pastes its report instead of submitting it says so", 
       expect((await snapshot(started.id))?.error).toBe(
         "The consolidation model replied with its consolidated report as text instead of calling submit_consolidated_review",
       );
+      // It was reminded once, by name, before the step failed.
+      const reminders = [...provider.sends.values()].filter((send) =>
+        send.prompt.includes("You wrote the consolidated report as reply text."),
+      );
+      expect(reminders).toHaveLength(1);
+      expect((await snapshot(started.id))?.activeRequest?.resultReminderSent).toBe(true);
     },
     { toolMode: true },
   );

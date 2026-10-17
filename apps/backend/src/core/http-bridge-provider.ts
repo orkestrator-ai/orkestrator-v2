@@ -492,10 +492,13 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
           remaining: 16 * 1024 * 1024,
         }),
       ) ?? {};
+    // Only Codex reports this today; any other value is ignored, so the turn
+    // fails as it always has.
+    const interruption = body.interruption === "restart" ? ("restart" as const) : undefined;
     if (body.status === "error" && typeof body.error === "string") {
       const detail = body.error.trim().slice(0, 4_000);
       if (detail) {
-        throw new ProviderSessionFailedError(this.agent, detail);
+        throw new ProviderSessionFailedError(this.agent, detail, { interruption });
       }
     }
     const status =
@@ -505,6 +508,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     const contextUsage = this.contextUsage(body.contextUsage);
     return {
       status,
+      ...(status === "error" && interruption ? { interruption } : {}),
       // sessionTokens has explicit cumulative semantics. Do not expose an
       // occupancy-only bridge snapshot as review consumption.
       ...(contextUsage?.sessionTokens !== undefined ? { contextUsage } : {}),

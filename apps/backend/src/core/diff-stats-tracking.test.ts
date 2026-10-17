@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Environment } from "./models.js";
 import { createEnvironment } from "./storage.js";
 import { runCommand } from "./shell.js";
+import * as baselineGit from "./diff-baseline.js";
 import * as remoteGit from "./git-noninteractive-env.js";
 import * as containerExec from "./commands-container-exec.js";
 import { createPublicApiHarness, type PublicApiHarness } from "./public-api/test-support.js";
@@ -278,4 +279,298 @@ test("a worker that takes in newer target history is retargeted to where its bra
     refresh: true,
   });
   expect(result.changes).toEqual([]);
+});
+
+// Suppress automatic watcher scans so each race has a deterministic admission
+// point; drive the baseline owner and wait for its coalesced work to settle.
+function baselineOwner(tracking: Awaited<ReturnType<typeof harness>>["tracking"]) {
+  return tracking as unknown as {
+    checkBaseline(id: string): void;
+    baselineChecks: Map<string, unknown>;
+  };
+}
+
+async function idleBaseline(tracking: Awaited<ReturnType<typeof harness>>["tracking"]) {
+  const owner = baselineOwner(tracking);
+  const deadline = Date.now() + 5000;
+  while (owner.baselineChecks.size && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  expect(owner.baselineChecks.size).toBe(0);
+}
+
+async function baselineFixture(options: Partial<Environment> = {}) {
+  const { h, tracking } = await harness();
+  const { projectPath } = await h.createRepository("baseline-races");
+  const git = (cwd: string, ...args: string[]) =>
+    runCommand("git", [
+      "-C",
+      cwd,
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=t@e.invalid",
+      ...args,
+    ]).then(({ stdout }) => stdout.trim());
+  const created = await git(projectPath, "rev-parse", "HEAD");
+  const worktreePath = path.join(path.dirname(projectPath), "worker");
+  await git(projectPath, "worktree", "add", "--no-track", "-b", "worker", worktreePath, created);
+  await fs.writeFile(path.join(projectPath, "upstream.txt"), "imported\n");
+  await git(projectPath, "add", ".");
+  await git(projectPath, "commit", "-m", "upstream");
+  await git(projectPath, "push", "origin", "main");
+  const tip = await git(projectPath, "rev-parse", "HEAD");
+  await git(worktreePath, "merge", "--ff-only", "origin/main");
+  await fs.writeFile(path.join(worktreePath, "own.txt"), "worker\n");
+  await git(worktreePath, "add", ".");
+  await git(worktreePath, "commit", "-m", "own work");
+  const baseline = { createdFromCommit: created, commit: tip };
+  const environment = {
+    ...createEnvironment("project", { environmentType: "local" }),
+    id: "worker",
+    worktreePath,
+    createdFromCommit: created,
+    diffBaseline: baseline,
+    prState: "open" as const,
+    ...options,
+  };
+  await h.storage.addEnvironment(environment);
+  const track = spyOn(tracking.service, "track").mockImplementation(() => undefined);
+  try {
+    await tracking.sync(h.context);
+  } finally {
+    track.mockRestore();
+  }
+  return { h, tracking, git, projectPath, worktreePath, created, tip, baseline };
+}
+
+for (const failure of ["merge-base", "ancestry", "missing-ref"] as const) {
+  test(`an advanced baseline survives an inconclusive ${failure} probe`, async () => {
+    const f = await baselineFixture();
+    if (failure === "merge-base") {
+      // The local main can lag the remote. It must not become authoritative
+      // merely because probing the remote fails.
+      await f.git(f.worktreePath, "update-ref", "refs/heads/main", f.created);
+    }
+    if (failure === "missing-ref") {
+      await f.git(f.worktreePath, "update-ref", "-d", "refs/remotes/origin/main");
+      await f.git(f.worktreePath, "update-ref", "-d", "refs/heads/main");
+    }
+    const realGit = baselineGit.localBaselineGit(f.worktreePath);
+    const probe = spyOn(baselineGit, "localBaselineGit").mockReturnValue(async (args) => {
+      if (failure === "merge-base" && args[2] === "refs/remotes/origin/main") return null;
+      if (failure === "ancestry" && args[0] === "merge-base" && args[1] !== "HEAD") return null;
+      return realGit(args);
+    });
+    const update = spyOn(f.h.storage, "updateEnvironment");
+    try {
+      baselineOwner(f.tracking).checkBaseline("worker");
+      await idleBaseline(f.tracking);
+      expect(update).not.toHaveBeenCalled();
+      expect((await f.h.storage.getEnvironment("worker"))?.diffBaseline).toEqual(f.baseline);
+    } finally {
+      probe.mockRestore();
+      update.mockRestore();
+    }
+  });
+}
+
+test("a successful reset to creation clears the advanced baseline and retargets scans", async () => {
+  const f = await baselineFixture();
+  await f.git(f.worktreePath, "reset", "--hard", f.created);
+  baselineOwner(f.tracking).checkBaseline("worker");
+  await idleBaseline(f.tracking);
+  expect((await f.h.storage.getEnvironment("worker"))?.diffBaseline).toBeNull();
+  const snapshot = await f.tracking.service.readFileList({
+    lookup: { worktreePath: f.worktreePath },
+    comparisonRef: f.created,
+    includeUncommitted: true,
+    refresh: true,
+  });
+  expect(snapshot.changes).toEqual([]);
+});
+
+for (const timing of ["cached", "in-flight", "queued-write"] as const) {
+  test(`a ${timing} candidate cannot consume the worker commits after its PR merges`, async () => {
+    const f = await baselineFixture();
+    await f.git(f.projectPath, "merge", "--ff-only", "worker");
+    await f.git(f.projectPath, "push", "origin", "main");
+    const started = deferred<void>();
+    const release = deferred<void>();
+    const realGit = baselineGit.localBaselineGit(f.worktreePath);
+    const probe = spyOn(baselineGit, "localBaselineGit").mockReturnValue(async (args) => {
+      const result = await realGit(args);
+      if (timing === "in-flight") {
+        started.resolve();
+        await release.promise;
+      }
+      return result;
+    });
+    const originalUpdate = f.h.storage.updateEnvironment.bind(f.h.storage);
+    const update = spyOn(f.h.storage, "updateEnvironment").mockImplementation(
+      async (id, updates, guard) => {
+        if (timing === "queued-write" && "diffBaseline" in updates) {
+          started.resolve();
+          await release.promise;
+        }
+        return originalUpdate(id, updates, guard);
+      },
+    );
+    try {
+      if (timing === "cached") await originalUpdate("worker", { prState: "merged" });
+      baselineOwner(f.tracking).checkBaseline("worker");
+      if (timing !== "cached") {
+        await started.promise;
+        await originalUpdate("worker", { prState: "merged" });
+      }
+      release.resolve();
+      await idleBaseline(f.tracking);
+      expect((await f.h.storage.getEnvironment("worker"))?.diffBaseline).toEqual(f.baseline);
+      const files = await f.tracking.service.readFileList({
+        lookup: { worktreePath: f.worktreePath },
+        comparisonRef: f.tip,
+        includeUncommitted: true,
+        refresh: true,
+      });
+      expect(files.changes).toEqual([expect.objectContaining({ path: "own.txt" })]);
+    } finally {
+      release.resolve();
+      probe.mockRestore();
+      update.mockRestore();
+    }
+  });
+}
+
+for (const change of [
+  { prBaseBranch: "release" },
+  { worktreePath: "/another-checkout" },
+  { createdFromCommit: "c".repeat(40) },
+] as const) {
+  test(`an in-flight baseline is fenced after ${Object.keys(change)[0]} changes`, async () => {
+    const f = await baselineFixture();
+    await f.git(f.worktreePath, "reset", "--hard", f.created);
+    const started = deferred<void>();
+    const release = deferred<void>();
+    const realGit = baselineGit.localBaselineGit(f.worktreePath);
+    const probe = spyOn(baselineGit, "localBaselineGit").mockReturnValue(async (args) => {
+      const result = await realGit(args);
+      started.resolve();
+      await release.promise;
+      return result;
+    });
+    const track = spyOn(f.tracking.service, "track").mockImplementation(() => undefined);
+    try {
+      baselineOwner(f.tracking).checkBaseline("worker");
+      await started.promise;
+      await f.h.storage.updateEnvironment("worker", change);
+      release.resolve();
+      await idleBaseline(f.tracking);
+      expect((await f.h.storage.getEnvironment("worker"))?.diffBaseline).toEqual(f.baseline);
+    } finally {
+      release.resolve();
+      probe.mockRestore();
+      track.mockRestore();
+    }
+  });
+}
+
+test("scan bursts coalesce into a rerun that observes the final reset", async () => {
+  const f = await baselineFixture();
+  const started = deferred<void>();
+  const release = deferred<void>();
+  const realGit = baselineGit.localBaselineGit(f.worktreePath);
+  let calls = 0;
+  const probe = spyOn(baselineGit, "localBaselineGit").mockImplementation(() => {
+    calls += 1;
+    if (calls === 1)
+      return async (args) => {
+        const result = await realGit(args);
+        if (args[0] === "merge-base" && args[1] !== "HEAD") {
+          started.resolve();
+          await release.promise;
+        }
+        return result;
+      };
+    return realGit;
+  });
+  const track = spyOn(f.tracking.service, "track").mockImplementation(() => undefined);
+  try {
+    const owner = baselineOwner(f.tracking);
+    owner.checkBaseline("worker");
+    await started.promise;
+    owner.checkBaseline("worker");
+    owner.checkBaseline("worker");
+    await f.git(f.worktreePath, "reset", "--hard", f.created);
+    release.resolve();
+    await idleBaseline(f.tracking);
+    expect((await f.h.storage.getEnvironment("worker"))?.diffBaseline).toBeNull();
+    expect(calls).toBe(2);
+  } finally {
+    release.resolve();
+    probe.mockRestore();
+    track.mockRestore();
+  }
+});
+
+for (const options of [{ prState: "merged" as const }, { projectHome: true }]) {
+  test(`sync skips baseline checks for ${Object.keys(options)[0]}`, async () => {
+    const f = await baselineFixture(options);
+    const probe = spyOn(baselineGit, "localBaselineGit");
+    try {
+      baselineOwner(f.tracking).checkBaseline("worker");
+      await idleBaseline(f.tracking);
+      expect(probe).not.toHaveBeenCalled();
+    } finally {
+      probe.mockRestore();
+    }
+  });
+}
+
+test("a storage failure releases the check and a later scan can retry", async () => {
+  const f = await baselineFixture();
+  await f.git(f.worktreePath, "reset", "--hard", f.created);
+  const update = spyOn(f.h.storage, "updateEnvironment").mockRejectedValue(
+    new Error("write failed"),
+  );
+  const warning = spyOn(console, "warn").mockImplementation(() => undefined);
+  try {
+    baselineOwner(f.tracking).checkBaseline("worker");
+    await idleBaseline(f.tracking);
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining("diff baseline"), "write failed");
+    expect((await f.h.storage.getEnvironment("worker"))?.diffBaseline).toEqual(f.baseline);
+  } finally {
+    update.mockRestore();
+    warning.mockRestore();
+  }
+  baselineOwner(f.tracking).checkBaseline("worker");
+  await idleBaseline(f.tracking);
+  expect((await f.h.storage.getEnvironment("worker"))?.diffBaseline).toBeNull();
+});
+
+test("a repository target change fences a baseline write waiting for storage admission", async () => {
+  const f = await baselineFixture();
+  await f.git(f.worktreePath, "reset", "--hard", f.created);
+  const started = deferred<void>();
+  const release = deferred<void>();
+  const original = f.h.storage.updateEnvironment.bind(f.h.storage);
+  const update = spyOn(f.h.storage, "updateEnvironment").mockImplementation(
+    async (id, updates, guard) => {
+      started.resolve();
+      await release.promise;
+      return original(id, updates, guard);
+    },
+  );
+  const track = spyOn(f.tracking.service, "track").mockImplementation(() => undefined);
+  try {
+    baselineOwner(f.tracking).checkBaseline("worker");
+    await started.promise;
+    await f.h.storage.patchRepositoryConfig("project", { prBaseBranch: "release" });
+    release.resolve();
+    await idleBaseline(f.tracking);
+    expect((await f.h.storage.getEnvironment("worker"))?.diffBaseline).toEqual(f.baseline);
+  } finally {
+    release.resolve();
+    update.mockRestore();
+    track.mockRestore();
+  }
 });

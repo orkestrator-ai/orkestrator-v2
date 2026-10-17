@@ -608,11 +608,19 @@ export abstract class StorageProjects extends StorageBase {
     });
   }
 
-  async updateEnvironment(environmentId: string, updates: JsonRecord): Promise<Environment> {
+  async updateEnvironment(
+    environmentId: string,
+    updates: JsonRecord,
+    shouldUpdate?: (environment: Readonly<Environment>) => boolean | Promise<boolean>,
+  ): Promise<Environment> {
     return this.enqueueEnvironmentMutation(async () => {
       const environments = await this.loadEnvironments();
       const environment = environments.find((candidate) => candidate.id === environmentId);
       if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      // Fence observations against mutations (for example a PR becoming merged)
+      // under the same cross-process lock as the write. A caller-side read alone
+      // leaves a gap while this mutation waits for admission.
+      if (shouldUpdate && !(await shouldUpdate(environment))) return environment;
       const beforeJson = JSON.stringify(environment);
 
       if ("containerResourceLimits" in updates) {

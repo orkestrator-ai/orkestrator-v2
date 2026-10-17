@@ -344,8 +344,24 @@ export class DiffStatsTracking {
         candidate.createdFromCommit,
         candidate.targetBranch,
       );
-      if (this.stopped || isSameDiffBaseline(next, candidate.current)) return;
-      await storage.storage.updateEnvironment(environmentId, { diffBaseline: next });
+      if (this.stopped || next === undefined || isSameDiffBaseline(next, candidate.current)) return;
+      await storage.storage.updateEnvironment(
+        environmentId,
+        { diffBaseline: next },
+        async (environment) => {
+          const config = await storage.storage.loadConfig();
+          return (
+            !this.stopped &&
+            environment.environmentType === "local" &&
+            !isProjectHomeEnvironment(environment) &&
+            environment.worktreePath === candidate.worktreePath &&
+            environment.createdFromCommit === candidate.createdFromCommit &&
+            baselineTargetBranch(environment, config.repositories?.[environment.projectId]) ===
+              candidate.targetBranch &&
+            isSameDiffBaseline(environment.diffBaseline, candidate.current)
+          );
+        },
+      );
       await this.sync(storage);
     })()
       .catch((error: unknown) => {

@@ -94,9 +94,9 @@ test("the creation commit stays the baseline when the target does not contain it
 
 test("a missing target branch or a non-commit creation ref leaves the baseline alone", async () => {
   const { created, run } = await workerFixture();
-  expect(await findIntegratedBaseline(run, created, "does-not-exist")).toBeNull();
-  expect(await findIntegratedBaseline(run, created, "bad..ref")).toBeNull();
-  expect(await findIntegratedBaseline(run, "origin/main", "main")).toBeNull();
+  expect(await findIntegratedBaseline(run, created, "does-not-exist")).toBeUndefined();
+  expect(await findIntegratedBaseline(run, created, "bad..ref")).toBeUndefined();
+  expect(await findIntegratedBaseline(run, "origin/main", "main")).toBeUndefined();
 });
 
 test("a baseline recorded for an earlier checkout is ignored", () => {
@@ -135,4 +135,17 @@ test("the target branch prefers the PR base, then the delegated branch, then rep
   ).toBe("develop");
   expect(baselineTargetBranch({}, { defaultBranch: "trunk" })).toBe("trunk");
   expect(baselineTargetBranch({ prBaseBranch: null }, null)).toBe("main");
+});
+
+test("a rebase excludes imported history and retains the rebased worker commits", async () => {
+  const { worktree, created, advanceOrigin, run } = await workerFixture();
+  const original = await commit(worktree, "own-work.txt");
+  const tip = await advanceOrigin();
+  await git(worktree, ["rebase", "origin/main"]);
+  expect(await git(worktree, ["rev-parse", "HEAD"])).not.toBe(original);
+  expect(await findIntegratedBaseline(run, created, "main")).toEqual({
+    createdFromCommit: created,
+    commit: tip,
+  });
+  expect(await git(worktree, ["diff", "--name-only", tip])).toBe("own-work.txt");
 });

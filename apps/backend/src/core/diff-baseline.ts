@@ -55,31 +55,41 @@ export function baselineTargetBranch(
  * commit), keeps measuring from where it was created. Reads local refs only;
  * a branch that took in `origin/main` already fetched it.
  *
- * Returns null when the creation commit is still the right baseline.
+ * Returns null when the creation commit is still the right baseline, and
+ * undefined when Git cannot establish a baseline. An unavailable observation
+ * must never clear a previously saved baseline.
  */
 export async function findIntegratedBaseline(
   git: BaselineGit,
   createdFromCommit: string,
   targetBranch: string,
-): Promise<EnvironmentDiffBaseline | null> {
-  if (!isImmutableCommitRef(createdFromCommit)) return null;
+): Promise<EnvironmentDiffBaseline | null | undefined> {
+  if (!isImmutableCommitRef(createdFromCommit)) return undefined;
   const created = createdFromCommit.trim().toLowerCase();
   let branch: string;
   try {
     branch = validateGitRefName(targetBranch, "target branch");
   } catch {
-    return null;
+    return undefined;
   }
 
-  for (const ref of [`refs/remotes/origin/${branch}`, `refs/heads/${branch}`]) {
-    const mergeBase = (await git(["merge-base", "HEAD", ref]))?.toLowerCase();
-    if (!mergeBase || !isImmutableCommitRef(mergeBase)) continue;
-    if (mergeBase === created) return null;
-    const containsCreation =
-      (await git(["merge-base", "--is-ancestor", created, mergeBase])) !== null;
-    return containsCreation ? { createdFromCommit: created, commit: mergeBase } : null;
-  }
-  return null;
+  const refs = [`refs/remotes/origin/${branch}`, `refs/heads/${branch}`];
+  // Only fall back to a local branch when the remote ref is positively absent.
+  // Falling back after a failed merge-base can mistake a stale local branch for
+  // evidence that an advanced baseline should be cleared.
+  const inventory = await git(["for-each-ref", "--format=%(refname)", ...refs]);
+  if (inventory === null) return undefined;
+  const available = new Set(inventory.split("\n"));
+  const ref = refs.find((candidate) => available.has(candidate));
+  if (!ref) return undefined;
+  const mergeBase = (await git(["merge-base", "HEAD", ref]))?.toLowerCase();
+  if (!mergeBase || !isImmutableCommitRef(mergeBase)) return undefined;
+  if (mergeBase === created) return null;
+  // --is-ancestor exits nonzero for both "no" and a failed read. A successful
+  // merge-base gives us positive evidence either way instead.
+  const ancestor = (await git(["merge-base", created, mergeBase]))?.toLowerCase();
+  if (!ancestor || !isImmutableCommitRef(ancestor)) return undefined;
+  return ancestor === created ? { createdFromCommit: created, commit: mergeBase } : null;
 }
 
 export function isSameDiffBaseline(

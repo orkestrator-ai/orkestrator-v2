@@ -1,7 +1,7 @@
 // Session Manager Service
 // Handles session state and interacts with Claude Agent SDK
 
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { controlOnlyQuery } from "./control-only-query.js";
 import type {
   ModelInfo,
   QuestionRequest,
@@ -221,26 +221,21 @@ export function getSessionInitData(sessionId: string): SessionInitData | undefin
 
 /**
  * Get available models from the Claude Agent SDK
- * The supportedModels() method is available on the Query object returned by query()
+ * through a control-only query (see control-only-query.ts).
  */
 export async function getAvailableModelCatalog(): Promise<{
   models: ModelInfo[];
   source: "sdk" | "fallback";
 }> {
-  let q: ReturnType<typeof query> | undefined;
+  let q: ReturnType<typeof controlOnlyQuery> | undefined;
   try {
     const cwd = process.env.CWD || process.cwd();
     debugLog("[session-manager] Fetching supported models", { cwd });
-    // Create a query object to access supportedModels()
-    // We use maxTurns: 0 to prevent any actual processing
-    q = query({
-      prompt: "",
-      options: {
-        maxTurns: 0,
-        cwd,
-        env: { ...process.env },
-        ...claudeExecutableOptions(),
-      },
+    // A control-only query: supportedModels() without running a turn.
+    q = controlOnlyQuery({
+      cwd,
+      env: { ...process.env },
+      ...claudeExecutableOptions(),
     });
 
     // Get supported models from the query object

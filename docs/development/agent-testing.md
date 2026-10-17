@@ -333,6 +333,54 @@ removes its pipeline and environments during cleanup. The spec never presses
 **Share…**, which would publish the conversation. Without the opt-in, every
 case is skipped and no profile is needed.
 
+The live Multi Review cycle (`e2e/agent-testing/multi-review-live.spec.ts`)
+has its own opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW=1`, and uses the
+host's Claude and Codex credentials. Each case runs a real two-reviewer review
+(a Claude reviewer and a Codex reviewer, with Codex preparing and
+consolidating) on the cheapest models: Haiku 4.5 and GPT-6-Luna at low effort.
+Override the picker labels with `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_CLAUDE_MODEL`
+and `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_CODEX_MODEL` when the catalog changes.
+The restart case stops the profile and starts it again with the credential and
+platform selection stored in its `profile.json`, so run the file on its own,
+against a profile you started by hand:
+
+```bash
+mise run dev:test --profile qa-multi-review --fixture --credential-source claude --credential-source codex --agent-platforms claude,codex
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-multi-review ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW=1 \
+  mise run test:logged -- --name multi-review-live -- mise run test:agent:browser -- \
+  e2e/agent-testing/multi-review-live.spec.ts
+mise run dev:stop --profile qa-multi-review
+mise run dev:reset --profile qa-multi-review
+```
+
+Every case writes a small change into a fresh environment and launches the
+review through the launcher: it right-clicks **Multi Review**, picks each row's
+model, checks the work summary and duplicate warning, and presses Start. Once a
+reviewer's prompt is sent, it disturbs the review in one of four ways. It
+leaves the review unmounted in another environment, reloads the renderer,
+restarts the backend, or `SIGKILL`s the Claude reviewer's bridge. Before
+signalling, it confirms that the bridge is a child of this profile's backend.
+The review must then settle from backend state alone. The case checks the
+snapshot first: phase, reviewer state, reports and consolidation. It also
+checks that each reviewer kept its provider session and start time, that a
+new request id appears only for a result reminder or schema repair, and that
+no transcript holds more prompts than those turns allow. It then checks the
+tab, on return and again after a reload: the graph's node states, the
+inspector's transcript tail, the controls and the reviewer's read-only tab.
+The reviewer transcript read must not be the compatibility fallback, and a
+repeated read with its source token must answer `unchanged`. After a restart
+or a killed bridge, each reviewer must either complete or fail with a stated
+reason, since a turn cut short fails closed today. The case records each
+reviewer's outcome as a Playwright annotation in `results.json`. After a
+killed bridge the Codex peer must complete. If preparation fails before any
+reviewer starts, the case restarts that step once and records it. Each case
+cancels its review and deletes its environments in cleanup. The restart case
+leaves the profile running under a detached launcher, so stop it with
+`dev:stop` as usual. It restarts without `--fixture`, so `dev:status` no
+longer reports `testProject` afterwards; the spec falls back to the profile's
+seeded copy.
+
 ### Live coordinator suite
 
 The live coordinator suite checks that a real provider keeps the coordinator's

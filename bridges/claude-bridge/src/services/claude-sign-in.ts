@@ -9,7 +9,7 @@
  * expired login keeps failing as a turn error, which the tab already turns
  * into a sign-in card.
  */
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { controlOnlyQuery } from "./control-only-query.js";
 import type { AccountInfo, Query } from "@anthropic-ai/claude-agent-sdk";
 import type {
   NativeAgentAuthStatus,
@@ -78,14 +78,10 @@ export function normalizeClaudeAccount(account: AccountInfo): NativeAgentAuthSta
 async function probeAccount(): Promise<NativeAgentAuthStatus> {
   let probe: Query | undefined;
   try {
-    probe = query({
-      prompt: "",
-      options: {
-        maxTurns: 0,
-        cwd: process.env.CWD || process.cwd(),
-        env: { ...process.env },
-        ...claudeExecutableOptions(),
-      },
+    probe = controlOnlyQuery({
+      cwd: process.env.CWD || process.cwd(),
+      env: { ...process.env },
+      ...claudeExecutableOptions(),
     });
     return normalizeClaudeAccount(await probe.accountInfo());
   } finally {

@@ -56,6 +56,15 @@ import type { QueryCall, SdkSessionInfo, SdkSessionMessage } from "./session-man
 // Re-exported so a suite has a single import source for the whole fixture.
 export * from "./session-manager-test-mocks.js";
 
+/** A metadata probe must leave the SDK's user-input stream pending. */
+export async function expectControlOnlyPrompt(call: QueryCall): Promise<void> {
+  expect(typeof call.prompt).not.toBe("string");
+  const first = (call.prompt as AsyncIterable<unknown>)[Symbol.asyncIterator]().next();
+  expect(await Promise.race([first.then(() => "message"), Bun.sleep(20).then(() => "none")])).toBe(
+    "none",
+  );
+}
+
 import * as sessionManager from "./session-manager.js";
 
 import { eventEmitter } from "./event-emitter.js";

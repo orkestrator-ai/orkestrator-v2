@@ -571,7 +571,9 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
                   if (outcome.outcome === "rejected") {
                     expect(outcome, `${typed}: retry refused without saying why`).toMatchObject({
                       requestIdRetired: true,
-                      error: expect.stringMatching(/restarted before it confirmed this message/),
+                      error: expect.stringMatching(
+                        /could not confirm this message, so it may not have run/,
+                      ),
                     });
                   }
                   testInfo.annotations.push({

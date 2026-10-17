@@ -329,16 +329,20 @@ that never ran. ACP, Cursor and Pi already refused such an id with 410
 
 Fix:
 
-- The Claude bridge refuses an id inherited from an earlier process
-  (`inheritedDispatchedRequestIds`, set on restore) with 410 and
-  `kind: "dispatch-outcome-lost"`. ACP, Cursor and Pi add the same kind.
+- The Claude bridge refuses a claimed id it restored from disk without an
+  outcome (`restoredDispatchedRequestIds`, set on restore after a restart or a
+  same-process tab close) with 410 and `kind: "dispatch-outcome-lost"`. ACP,
+  Cursor and Pi add the same kind.
 - The backend raises `PromptRejectedError` with `requestIdRetired`
   (`assertPromptOutcomeKnown`), clears the parked record even on
   a retry, and answers `rejected` with `requestIdRetired: true` and "Claude Code
-  restarted before it confirmed this message, so it may not have run. Check the
+  could not confirm this message, so it may not have run. Check the
   conversation and send it again if it did not."
 - The tab shows that message, keeps the text and drops the id, so Send runs it
-  under a new id.
+  under a new id. The warning is stored on the draft, so it survives the tab
+  unmounting while the retry is in flight.
+- A queued prompt refused this way gets a fresh dispatch id (its row id stays),
+  so the queue's Retry can deliver it.
 
 Live, in disposable profile `qa-slash-retired-a77b` (Claude only):
 `slash-command-inactive.spec.ts` passed (1 passed, 100 s). The restart right
@@ -388,7 +392,7 @@ passed.
    `GET /:id/dispatch` still answers `unknown` for an id an earlier process
    claimed, so the card waits out the grace window and asks for a Retry that
    can only report the lost outcome. Answer that case from
-   `inheritedDispatchedRequestIds` so the backend can resolve the card and
+   `restoredDispatchedRequestIds` so the backend can resolve the card and
    show the message on its own.
 
 ## Constraints and rationale

@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { useFilesPanelStore, useConfigStore, usePaneLayoutStore } from "@/stores";
 import { useUIStore, useEnvironmentStore, useProjectStore } from "@/stores";
 import * as backend from "@/lib/backend";
-import { resolveComparisonRef } from "@/lib/diff-baseline";
+import { environmentBaselineCommit, resolveComparisonRef } from "@/lib/diff-baseline";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import { useWorktreeSnapshotRevisions } from "@/hooks/useWorktreeSnapshotRevisions";
 import { useWorktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
@@ -297,7 +297,8 @@ export function useFilesPanel() {
     return (await ensureProjectHomeInStore(projectId!)).id;
   }, [isProjectScope, selectedEnvironmentId, projectId, worktreePath]);
 
-  // Prefer the commit captured when the environment was created. Older
+  // Prefer the environment's baseline commit: where its branch leaves the branch
+  // it targets, else the commit captured when it was created. Older
   // environments fall back to the repository PR base branch, then its default
   // branch. Shared with the sidebar badge so both report the same numbers.
   // Selected narrowly: `config.repositories[id]` is a stored object with a
@@ -306,9 +307,7 @@ export function useFilesPanel() {
     (state) => (projectId ? state.config.repositories[projectId] : null) ?? null,
   );
   const comparisonRef = resolveComparisonRef(
-    isProjectScope
-      ? projectHomeEnvironment?.createdFromCommit
-      : selectedEnvironment?.createdFromCommit,
+    environmentBaselineCommit(isProjectScope ? projectHomeEnvironment : selectedEnvironment),
     repoConfig,
   );
   const environmentSnapshotKey = [

@@ -36,3 +36,29 @@
 - **Disposition:** the same removal error affected another deletion case in the
   owning file. The shared-path collision hypothesis remains unconfirmed. No
   test, timeout or skip was changed.
+
+
+## Codex catalogue review final validation — 2026-10-17
+
+`mise run test:logged -- --name final-full-tests -- mise run test` ran with
+4/1/2/1 workspace/root/bridge/protocol slots and two isolated backend workers
+on macOS arm64 (Bun 1.4.3), sharing the host with other worktrees.
+
+The same `clears retained setup state when the environment is deleted` case
+exceeded its 30000 ms deadline at 30698.75 ms. This occurrence was a timeout,
+rather than the earlier EPERM symptom; the shared-path collision explanation
+remains unproven.
+
+The unchanged owning file passed `mise run test:logged -- --name
+commands-owner-final-rerun -- bun test --cwd apps/backend --preload
+../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1
+--only-failures` (exit 0, 40.3 seconds). Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.NfVWIS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+(compressed when the aggregate completes). The isolated pass confirms
+intermittence; host contention remains a hypothesis. No owning implementation,
+assertion, timeout or skip changed.
+
+Final aggregate totals: backend 8814 passed, 41 skipped, ten failed and three
+between-tests errors across 8865 tests in 472 files (541.38 seconds).
+Toolchain had 90 passed and one failed. Root, bridges, protocol and every
+other workspace package passed; aggregate exit 1 after 852.0 seconds.

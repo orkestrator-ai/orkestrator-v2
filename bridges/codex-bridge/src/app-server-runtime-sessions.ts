@@ -982,8 +982,8 @@ export class CodexRuntimeSessions {
     return this.ctx.options.engine.readAccount();
   }
 
-  beginAuthLogin(): Promise<unknown> {
-    return this.ctx.options.engine.beginAccountLogin();
+  beginAuthLogin(method?: "browser" | "device-code"): Promise<unknown> {
+    return this.ctx.options.engine.beginAccountLogin(method);
   }
 
   logoutAuth(): Promise<void> {

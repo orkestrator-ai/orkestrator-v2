@@ -86,6 +86,26 @@ No assertion, timeout or skip changed; host contention remains a hypothesis.
 - Unchanged owning-file rerun: `mise run test:logged -- --name lifecycle-owner-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures` passed in 20.3 seconds, exit 0.
 - Shared-host contention and teardown after timeout remain hypotheses. No assertion, timeout, skip or implementation in this owner changed.
 
+
+## Codex catalogue review final validation — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name final-full-tests -- mise run test`
+  (Bun 1.4.3, macOS arm64; workspace/root/bridge/protocol reservations
+  4/1/2/1 slots, two isolated backend workers; other worktrees shared the host).
+- **Aggregate:** backend 8814 passed, 41 skipped, ten failed and three
+  between-tests errors across 8865 tests in 472 files (541.38 seconds).
+  Toolchain had one failure; every other package and root/bridge/protocol
+  group passed. Aggregate exited 1 after 852.0 seconds.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.NfVWIS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Failures:** deletion-reap exceeded its 5000 ms deadline at 7186.38 ms.
+  Companion `does not delete remote branches when a merged environment has no PR url`
+  exceeded the same deadline at 5042.19 ms.
+- **Post-aggregate owning-file rerun:** `mise run test:logged -- --name lifecycle-owner-post-aggregate -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures`
+  passed unchanged (exit 0, 19.4 seconds).
+- **Assessment:** the isolated pass confirms intermittence. Shared-host
+  contention remains a hypothesis; no lifecycle implementation, assertion,
+  timeout or skip changed.
+
 ## Codex phantom-denials branch validation (2026-10-17)
 
 Recurred in `mise run test` on `fix-codex-phantom-denials-8bdb8d15d820` (base

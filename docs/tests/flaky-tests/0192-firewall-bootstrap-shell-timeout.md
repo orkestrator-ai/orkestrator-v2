@@ -87,3 +87,11 @@ fixture now puts Homebrew's GNU tools first on its own PATH
 (`tests/unit/gnu-shell-tools.ts`), and the date-dependent case skips with the
 install command when they are absent. This open entry still tracks only the
 aggregate-load timeouts.
+
+## Execution-policy conformance main merge recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test` (Bun 1.4.3, macOS arm64). Workspace/root/bridge/protocol reservations were 4/1/2/1 slots; browser validation ran alongside it.
+- **Failure:** `GitHub ranges come from a fresh backend seed, else live, else this container's cache` exceeded 5000 ms (5011.54 ms).
+- **Owning-file rerun:** `mise run test:logged -- --name merge-firewall-isolated -- bun test ./tests/unit/firewall-policy.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 9.7 seconds.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.IG0vGk/root-and-agent-support-tests.log.gz`.
+- **Assessment:** the isolated pass confirms intermittence; root cause remains unconfirmed. No assertion, timeout or skip changed.

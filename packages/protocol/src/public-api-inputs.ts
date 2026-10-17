@@ -50,7 +50,9 @@ export interface PublicActionInputSchema extends PublicJsonSchema {
 /**
  * Groups of actions a Control MCP credential can be granted. `tickets` and
  * `mail` have no public actions yet; they are listed so credentials can name
- * them before those actions exist.
+ * them before those actions exist. `host` (updating Orkestrator itself) is for
+ * the operator's own clients only and must never be granted to an MCP
+ * credential an agent could hold.
  */
 export const PUBLIC_CAPABILITIES = Object.freeze([
   "discovery",
@@ -64,6 +66,7 @@ export const PUBLIC_CAPABILITIES = Object.freeze([
   "settings",
   "tickets",
   "mail",
+  "host",
 ] as const);
 
 export type PublicCapability = (typeof PUBLIC_CAPABILITIES)[number];
@@ -934,6 +937,91 @@ export const PUBLIC_ACTION_INPUTS: Readonly<Record<PublicActionName, PublicActio
         ["operationId"],
       ),
       examples: [{ operationId: "op-1", tailBytes: 4096 }],
+    },
+    "host.status": {
+      capability: "host",
+      confirmation: "never",
+      input: schema({}),
+      examples: [{}],
+    },
+    "host.update.check": {
+      capability: "host",
+      confirmation: "never",
+      input: schema({}),
+      examples: [{}],
+    },
+    "host.update.apply": {
+      capability: "host",
+      confirmation: "always",
+      input: schema(
+        {
+          version: {
+            type: "string",
+            minLength: 5,
+            maxLength: 64,
+            description:
+              "Install only this release (for example 2.22.0). Omit to install the newest release the host finds.",
+          },
+          confirm: {
+            type: "boolean",
+            enum: [true],
+            description:
+              "Must be true: installing restarts the host's Orkestrator app and ends work running there.",
+          },
+          drain: {
+            type: "string",
+            enum: ["now", "when-idle"],
+            description:
+              "now (default): restart after the countdown. when-idle: wait until no agent turn or pipeline is running, up to maxWaitSeconds.",
+          },
+          maxWaitSeconds: {
+            type: "integer",
+            minimum: 60,
+            maximum: 86400,
+            description: "With drain when-idle: restart anyway after this long. Default 3600.",
+          },
+        },
+        ["confirm"],
+      ),
+      examples: [
+        { confirm: true },
+        { confirm: true, version: "2.22.0" },
+        { confirm: true, drain: "when-idle", maxWaitSeconds: 1800 },
+      ],
+    },
+    "host.update.cancel": {
+      capability: "host",
+      confirmation: "never",
+      input: schema({}),
+      examples: [{}],
+    },
+    "host.toolchain.repair": {
+      capability: "host",
+      confirmation: "never",
+      input: schema({}),
+      examples: [{}],
+    },
+    "host.image.update": {
+      capability: "host",
+      confirmation: "never",
+      input: schema({}),
+      examples: [{}],
+    },
+    "host.gh.update": {
+      capability: "host",
+      confirmation: "always",
+      input: schema(
+        {
+          channel: {
+            type: "string",
+            enum: ["pinned", "latest"],
+            description:
+              "latest installs the newest gh release (not qualified with this Orkestrator); pinned goes back to the pin.",
+          },
+        },
+        ["channel"],
+      ),
+      examples: [{ channel: "latest" }, { channel: "pinned" }],
     },
   });
 

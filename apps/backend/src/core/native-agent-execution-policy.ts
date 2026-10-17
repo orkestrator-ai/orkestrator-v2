@@ -3,9 +3,11 @@ import {
   type CoordinatorWebResearch,
 } from "@orkestrator/protocol/coordinator-web-research";
 import type { AgentInteractionOrigin } from "@orkestrator/protocol/agent-interactions";
-import type {
-  NativeAgentExecutionPolicy,
-  NativeAgentExecutionPolicyOverride,
+import {
+  appendNativeAgentPolicyNote,
+  SANDBOXED_FOR_NETWORK_RESTRICTION_NOTE,
+  type NativeAgentExecutionPolicy,
+  type NativeAgentExecutionPolicyOverride,
 } from "@orkestrator/protocol/native-agent";
 import type { Environment } from "./models.js";
 
@@ -13,9 +15,15 @@ import type { Environment } from "./models.js";
 export const UNAPPLIED_NETWORK_RESTRICTION_NOTE =
   "This environment requests restricted network access, which this session does not apply. Set both a sandbox and restricted network access under Settings -> Execution policy to enforce it.";
 
-/** Shown when an override asked for a restriction and got the sandbox that applies it. */
-export const SANDBOXED_FOR_NETWORK_RESTRICTION_NOTE =
-  "Restricted network access is enforced by the provider sandbox, so this session runs sandboxed.";
+export { SANDBOXED_FOR_NETWORK_RESTRICTION_NOTE };
+
+/** Shown when a host environment's override asked for a container it does not have. */
+export const NO_CONTAINER_ON_HOST_NOTE =
+  "This environment is not a container, so the container sandbox it requests cannot apply and the session runs without one.";
+
+/** Shown when a container's override asked for network access its firewall does not give. */
+export const CONTAINER_NETWORK_FOLLOWS_ENVIRONMENT_NOTE =
+  "A container's network access follows the environment's network setting, which this session's override cannot change.";
 
 /**
  * Resolve the immutable policy attached to a provider session.
@@ -79,21 +87,70 @@ export function resolveNativeAgentExecutionPolicy(
   const restrictionRequested = environment.networkAccessMode === "restricted";
   if (!override) return reconcileNetworkAccess(policy, restrictionRequested);
   return reconcileNetworkAccess(
-    {
-      ...policy,
-      ...override,
-      id: policy.id,
-      ...(override.toolPolicy
-        ? {
-            toolPolicy: {
-              ...(override.toolPolicy.allow ? { allow: [...override.toolPolicy.allow] } : {}),
-              ...(override.toolPolicy.deny ? { deny: [...override.toolPolicy.deny] } : {}),
-            },
-          }
-        : {}),
-    },
+    reconcileContainerBoundary(
+      {
+        ...policy,
+        ...override,
+        id: policy.id,
+        ...(override.toolPolicy
+          ? {
+              toolPolicy: {
+                ...(override.toolPolicy.allow ? { allow: [...override.toolPolicy.allow] } : {}),
+                ...(override.toolPolicy.deny ? { deny: [...override.toolPolicy.deny] } : {}),
+              },
+            }
+          : {}),
+      },
+      environment,
+    ),
     restrictionRequested,
   );
+}
+
+/**
+ * Keep an override's container claims true to the environment.
+ *
+ * The container is the environment's boundary, not something a session policy
+ * can switch: a host has none to offer, and a container is still there when
+ * the override says `none` (no adapter sandboxes either way). Its firewall
+ * follows the environment's network setting. A session reports at least that
+ * restriction; a narrower override enables an inner provider sandbox. Keep the
+ * outer firewall separately so an adapter without that sandbox can retain it.
+ */
+function reconcileContainerBoundary(
+  policy: NativeAgentExecutionPolicy,
+  environment: Pick<Environment, "environmentType" | "networkAccessMode">,
+): NativeAgentExecutionPolicy {
+  const container = environment.environmentType === "containerized";
+  if (!container) {
+    return policy.sandbox === "container"
+      ? appendNativeAgentPolicyNote({ ...policy, sandbox: "none" }, NO_CONTAINER_ON_HOST_NOTE)
+      : policy;
+  }
+  // A provider sandbox inside the container can narrow the network further;
+  // nothing inside it can widen what the firewall allows.
+  const needsProviderRestriction =
+    environment.networkAccessMode === "full" && policy.networkAccess === "restricted";
+  const sandbox =
+    policy.sandbox === "provider" || needsProviderRestriction ? "provider" : "container";
+  const networkAccess =
+    environment.networkAccessMode === "restricted"
+      ? "restricted"
+      : sandbox === "provider"
+        ? policy.networkAccess
+        : "full";
+  const reconciled: NativeAgentExecutionPolicy = {
+    ...policy,
+    sandbox,
+    networkAccess,
+    ...(sandbox === "provider" ? { containerNetworkAccess: environment.networkAccessMode } : {}),
+  };
+  if (needsProviderRestriction && policy.sandbox !== "provider") {
+    return appendNativeAgentPolicyNote(reconciled, SANDBOXED_FOR_NETWORK_RESTRICTION_NOTE);
+  }
+  return policy.networkAccess === networkAccess
+    ? reconciled
+    : appendNativeAgentPolicyNote(reconciled, CONTAINER_NETWORK_FOLLOWS_ENVIRONMENT_NOTE);
 }
 
 /** Resolve a workflow policy from the complete persisted environment record. */
@@ -131,10 +188,13 @@ function reconcileNetworkAccess(
   restrictionRequested: boolean,
 ): NativeAgentExecutionPolicy {
   if (policy.sandbox === "none" && policy.networkAccess === "restricted") {
-    return { ...policy, sandbox: "provider", note: SANDBOXED_FOR_NETWORK_RESTRICTION_NOTE };
+    return appendNativeAgentPolicyNote(
+      { ...policy, sandbox: "provider" },
+      SANDBOXED_FOR_NETWORK_RESTRICTION_NOTE,
+    );
   }
   if (restrictionRequested && policy.networkAccess !== "restricted") {
-    return { ...policy, note: UNAPPLIED_NETWORK_RESTRICTION_NOTE };
+    return appendNativeAgentPolicyNote(policy, UNAPPLIED_NETWORK_RESTRICTION_NOTE);
   }
   return policy;
 }

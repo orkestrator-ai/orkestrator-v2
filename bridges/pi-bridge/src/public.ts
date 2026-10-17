@@ -6,10 +6,12 @@
  * here is a field the renderer stops seeing. Nothing Pi-specific escapes past
  * this boundary.
  */
-import type {
-  NativeAgentContextUsage,
-  NativeAgentReadiness,
-  NativeAgentRuntimeSummary,
+import {
+  withoutProviderSandbox,
+  type NativeAgentContextUsage,
+  type NativeAgentExecutionPolicy,
+  type NativeAgentReadiness,
+  type NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
 import { transcriptTailStart } from "@orkestrator/protocol/node/transcript-window";
 import { approvalsEnabled, PROVIDER } from "./config.js";
@@ -22,6 +24,24 @@ import {
   type JsonObject,
   type SessionState,
 } from "./state.js";
+
+/**
+ * The policy this session runs under, as Agent Info should describe it.
+ *
+ * Pi has no sandbox and no network control of its own, so a `provider`
+ * sandbox and a restriction it would hold are reported as what actually
+ * applies. Only the approval gate can keep commands off the network: a
+ * read-only session or a `deny` policy refuses every command it would run.
+ */
+export function piReportedPolicy(
+  policy: NativeAgentExecutionPolicy,
+  readOnly: boolean | undefined,
+): NativeAgentExecutionPolicy {
+  return withoutProviderSandbox(policy, {
+    agent: "Pi",
+    toolsetBlocksNetwork: readOnly === true || policy.approvals === "deny",
+  });
+}
 
 export function publicSession(state: SessionState): JsonObject {
   const contextUsage = publicContextUsage(state);
@@ -41,7 +61,7 @@ export function publicSession(state: SessionState): JsonObject {
     ...publicCommandRevision(state),
     sessionId: state.id,
     composer: state.composer,
-    ...(state.policy ? { policy: state.policy } : {}),
+    ...(state.policy ? { policy: piReportedPolicy(state.policy, state.readOnly) } : {}),
     ...(contextUsage ? { contextUsage } : {}),
     runtime: publicRuntime(state),
   };
@@ -86,7 +106,7 @@ export function publicStatus(state: SessionState, readiness?: NativeAgentReadine
     // title Pi reports in `session_info_changed` stranded in bridge state.
     ...(state.title ? { title: state.title } : {}),
     composer: state.composer,
-    ...(state.policy ? { policy: state.policy } : {}),
+    ...(state.policy ? { policy: piReportedPolicy(state.policy, state.readOnly) } : {}),
     ...(contextUsage ? { contextUsage } : {}),
     runtime: publicRuntime(state),
     capabilities: { interactions: { kinds: publicInteractionKinds(state) } },

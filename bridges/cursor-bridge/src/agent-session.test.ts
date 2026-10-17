@@ -470,6 +470,18 @@ describe("ensureAgent", () => {
     });
     expect(ask.approvals).toBe("auto-approve");
     expect(ask.note).toContain("cannot surface interactive approvals");
+    expect(ask.note).toContain("auto-review is used");
+    // Auto-review runs only inside the provider sandbox; without it the note
+    // must not claim a reviewer that `attach` never turns on.
+    const unsandboxedAsk = resolveCursorExecutionPolicy({
+      id: "interactive-host",
+      sandbox: "none",
+      approvals: "ask",
+      projectResources: false,
+      networkAccess: "full",
+    });
+    expect(unsandboxedAsk.note).toContain("runs without asking");
+    expect(unsandboxedAsk.note).not.toContain("auto-review");
 
     const denied = newSessionState(undefined, {
       id: "interactive-host",

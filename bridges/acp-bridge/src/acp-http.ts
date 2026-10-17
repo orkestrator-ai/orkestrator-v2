@@ -14,7 +14,7 @@ import {
   refreshCommandCatalogue,
   resolveSelectedCommand,
 } from "./acp-commands.js";
-import { effectiveExecutionPolicy } from "./acp-policy.js";
+import { acpReportedPolicy, effectiveExecutionPolicy } from "./acp-policy.js";
 import {
   parsePromptAttachments,
   PromptAttachmentError,
@@ -317,7 +317,7 @@ export async function route(
       ...(state.acpSessionId
         ? { resumableSessionId: externalSessionToken(state.acpSessionId) }
         : {}),
-      ...(state.policy ? { policy: state.policy } : {}),
+      ...(state.policy ? { policy: acpReportedPolicy(state.policy, providerConfig.name) } : {}),
       ...(contextUsage ? { contextUsage } : {}),
       ...publicCommandRevision(state),
       runtime: publicRuntime(state),

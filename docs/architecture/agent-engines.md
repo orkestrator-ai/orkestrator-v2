@@ -506,12 +506,36 @@ across detach and restart, and expose it in their authoritative snapshot. The
 agent info panel renders that effective value rather than making trust decisions
 in the renderer.
 
-Interactive host sessions default to provider sandboxing, explicit approvals,
-project resources off, and full network access. Container sessions use the
-container as their sandbox, automatically approve inside that boundary, enable
-project resources, and follow the environment network setting. Pipeline runs
-are unattended. The coordinator always uses the immutable
-`coordinator-read-only` policy regardless of an environment override.
+Interactive host sessions default to no sandbox, auto-approval, project
+resources off, and full network access: every vendor sandbox holds `.git`
+read-only, which stalls ordinary Git work in a worktree (#613). Container
+sessions use the container as their sandbox, automatically approve inside that
+boundary, enable project resources, and follow the environment network
+setting. An override cannot widen the container firewall; an override that
+narrows a full-network container enables a provider sandbox inside it. The
+resolved policy retains `containerNetworkAccess` alongside that optional inner
+sandbox, so adapters without a provider sandbox still report the outer boundary.
+Pipeline runs are unattended. The coordinator always
+uses the immutable `coordinator-read-only` policy regardless of an environment
+override.
+
+Agent Info renders the policy's effects (`nativeAgentPolicyEffects` in
+`packages/protocol/src/native-agent-policy-effects.ts`): what confines the
+agent, what becomes of an action nothing pre-approved, whether repository
+configuration loads, and whether its commands reach the network. It renders
+them from the policy the bridge reports, and each bridge reports what it
+applies. Pi, Grok and OpenCode have no sandbox, so a `provider` sandbox and the
+network restriction it would hold are reported as unsandboxed with a note;
+Codex and Grok report project resources as on, because their own project trust
+decides; Cursor reports `ask` as the auto-approval it runs.
+
+The execution-policy conformance suite (`tests/conformance/execution-policy/`)
+keeps the two honest. Each platform's runner sends ten policy shapes through
+the adapter's real option builders, captures what the SDK or CLI receives,
+decodes it into the same effects, and compares them with the summary. A
+deliberate difference must be stricter than the summary and listed with its
+reason in `narrowings.ts`. Change an adapter's options and its runner's
+decoder together.
 
 | Adapter | Policy mapping | `network` in `capabilityPolicy.deny` (search unless `allow` names `web.search`) |
 | --- | --- | --- |

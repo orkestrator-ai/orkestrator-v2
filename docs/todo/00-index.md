@@ -57,10 +57,10 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 40 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 244 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 257 |
-| **Total** | | **542** |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 39 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 250 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 261 |
+| **Total** | | **551** |
 
 ## Very high
 
@@ -131,7 +131,7 @@ it reaches. Some rules of thumb:
 ### Agent engines and provider SDKs (high)
 
 - [x] Park Claude `onElicitation` and `onUserDialog` requests as interactions instead of declining them ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
-- [ ] Check on each platform that the Agent Info policy summary matches the options the adapter received ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
+- [x] Check on each platform that the Agent Info policy summary matches the options the adapter received ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
 - [ ] Qualify a paused question and approval on each provider's real CLI past ten minutes, then answer ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
 - [ ] Keep the Claude CLI open across idle turns with an idle detach instead of draining at turn end ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md))
 - [x] Report `authentication-required` readiness on Claude, Pi, ACP and OpenCode; drop the Cursor-only 401 branch ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
@@ -177,6 +177,7 @@ it reaches. Some rules of thumb:
 
 ### Cross-cutting (high)
 
+- [x] Make the desktop app wait (bounded) for the backend to exit before `quitAndInstall` and on every quit ([remote-host-upgrades.md](remote-host-upgrades.md))
 - [ ] Qualify Codex sub-agent cards on a fixture profile: one card per child, recovery after reload and restart ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
 - [x] Decide and implement a renderer-backend skew guard for raw OpenCode envelopes from older backends ([mixed-version-compatibility.md](mixed-version-compatibility.md))
 - [x] Fix flake 0166 (OpenCode probe deadline), which recurred on 2026-10-15 ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
@@ -332,6 +333,9 @@ it reaches. Some rules of thumb:
 - [ ] Retire the Cursor, Pi and ACP policy env overrides and make `cursorMcpServers` follow the session policy ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
 - [ ] Raise and answer an MCP elicitation in the browser, reload mid-question, and confirm it rehydrates ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
 - [ ] Run the Docker agent suite for the Cursor and Pi container execution-policy cells ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
+- [ ] Make Codex workers honour `projectResources: false` by pinning the checkout untrusted, then drop `codexReportedPolicy` ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
+- [ ] Confirm on a real Claude CLI that a sandboxed auto-approve session cannot leave the sandbox or reach an unlisted domain ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
+- [ ] Decide whether Pi, Grok and OpenCode refuse a provider-sandbox or restricted-network host policy instead of running unsandboxed ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), decision)
 - [ ] Verify every bridge has per-kind park, render, resolve and fail-closed timeout interaction tests ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), verify)
 - [ ] Verify whether a container Cursor session loads the repository's `.cursor/mcp.json` today ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), verify)
 - [ ] Decide whether Claude MCP OAuth sign-in uses parked `mcp-url` elicitations or a separate MCP flow ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), decision)
@@ -454,6 +458,31 @@ it reaches. Some rules of thumb:
 
 ### Cross-cutting (medium)
 
+- [x] Decide the remote dependency-update policy: pinned only, a signed overlay, or per-tool latest ([remote-host-upgrades.md](remote-host-upgrades.md), decision)
+- [x] Decide whether a person at the Mac can postpone a remote-initiated restart ([remote-host-upgrades.md](remote-host-upgrades.md), decision)
+- [x] Decide who may trigger host maintenance, and keep it off every MCP surface ([remote-host-upgrades.md](remote-host-upgrades.md), decision)
+- [x] Decide the host-upgrade support matrix across desktop, AppImage, supervised and unsupervised backends ([remote-host-upgrades.md](remote-host-upgrades.md), decision)
+- [x] Extend `host.status` with per-tool versions and sources, image status and restart impact ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Cancel a host update before its restart stage ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Pass `listenerKind` to `handleInvoke` and add control-listener-only commands ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Add a durable host-maintenance job with revisioned events and a reconciler that settles on version evidence ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Add a drain policy (`whenIdle` with a maximum wait, or `now`) over `shutdown()` ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Show a host-updating banner outside Settings, reload backend-served clients, and add an install action to the version reminder ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Add `--host-updater=desktop` and a main-process executor that rehydrates from `host.status` on reconnect ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Add a non-interactive `checkAndStage()` that reports progress and counts as staged only after `downloadPromise` ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Make a remote-initiated relaunch unattended: no blocking modals, and the gateway and Tailscale Serve return ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [ ] Qualify a remote-initiated update between two signed releases on macOS and AppImage with agents running ([remote-host-upgrades.md](remote-host-upgrades.md), qualification)
+- [x] Add `orkestrator service install | uninstall | status` with launchd and systemd user units ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Add versioned standalone release directories, a launcher shim and rollback after failed boots ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Pin Bun for standalone service installs ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Publish the npm package from `release-desktop.ts publish` with the desktop version ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Add the supervised standalone executor: npm integrity check, smoke check, toolchain pre-install, flip and restart ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [ ] Qualify standalone upgrade and rollback on macOS launchd and Linux systemd ([remote-host-upgrades.md](remote-host-upgrades.md), qualification)
+- [ ] Qualify `host.image.update` against the GHCR release image and `host.gh.update` latest on macOS and Linux ([remote-host-upgrades.md](remote-host-upgrades.md), qualification)
+- [x] Add `host.toolchain.repair` through the shared toolchain manager under its install lock ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Publish each release's toolchain pin list and show it in `host.status` ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Add `host.image.update`: pull the matching GHCR image, retag it, and list environments to recreate ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Verify whether the managed host `claude` updates itself without `DISABLE_AUTOUPDATER` ([remote-host-upgrades.md](remote-host-upgrades.md), verify)
 - [ ] Decide and align agent-test binary resolution: document the `PATH` fallback or refuse it ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
 - [ ] Refresh the live OpenCode spec for the no-default-model and fork-keeps-model fixes ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
 - [ ] Re-run the Electron terminal input resume spec and confirm Resume keeps the same PTY process ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
@@ -603,6 +632,8 @@ it reaches. Some rules of thumb:
 
 - [ ] Set Claude `askUserQuestion.previewFormat` once the question card's plain or html mode is decided ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
 - [ ] Delete the unused OpenCode `autoAnswerRequests` branch and move its tests onto the journaled path ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
+- [ ] Report a read-only turn's narrower policy in Agent Info on Claude, Cursor and Grok ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
+- [ ] Make Codex `on-request` ask, or describe it honestly, in a container under an auto-approve policy ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
 - [ ] Let a Grok pause outlive the 30-minute turn deadline and Grok's own question timeout ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
 - [ ] Show `hold` in `session interactions list` and add a CLI and public API hold action ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
 - [ ] Read the Claude model catalogue from `initializationResult()` on the live runtime, not a throwaway query ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md))
@@ -745,6 +776,10 @@ it reaches. Some rules of thumb:
 
 ### Cross-cutting (low)
 
+- [x] Add a 60 s countdown with Postpone on the Mac for remote-initiated restarts ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [x] Offer an opt-in, unqualified out-of-band `gh` update ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [ ] Rebuild environments on an outdated image from Settings → Updates instead of one by one ([remote-host-upgrades.md](remote-host-upgrades.md))
+- [ ] Separate container terminals from host terminals in the restart impact ([remote-host-upgrades.md](remote-host-upgrades.md))
 - [ ] Confirm runtime drift counters and advisory notices show and rehydrate in Agent Info on two platforms ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
 - [ ] Confirm the usage panel shows turns and account windows across a reload on two providers ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
 - [ ] Verify agent-test Claude profiles do not treat `~/.claude` as a first run when `CLAUDE_CONFIG_DIR` is unset ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), verify)
@@ -806,7 +841,7 @@ it reaches. Some rules of thumb:
 | [mcp-environment-delivery.md](mcp-environment-delivery.md) |  |  | 4 | 10 | 14 |
 | [control-mcp-voice-surface.md](control-mcp-voice-surface.md) |  |  | 9 |  | 9 |
 | **Agent engines and provider SDKs** | | | | | |
-| [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md) |  | 2 | 9 | 4 | 15 |
+| [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md) |  | 1 | 12 | 6 | 19 |
 | [mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md) |  | 1 | 3 | 5 | 9 |
 | [session-titles-and-history.md](session-titles-and-history.md) |  |  | 4 | 4 | 8 |
 | [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md) |  |  | 8 | 6 | 14 |
@@ -840,3 +875,4 @@ it reaches. Some rules of thumb:
 | [test-suite-and-ci-health.md](test-suite-and-ci-health.md) | 1 |  | 4 | 11 | 16 |
 | [mobile-layout-gaps.md](mobile-layout-gaps.md) |  |  | 1 | 4 | 5 |
 | [dependency-upgrades.md](dependency-upgrades.md) |  |  | 3 | 7 | 10 |
+| [remote-host-upgrades.md](remote-host-upgrades.md) |  | 1 | 25 | 4 | 30 |

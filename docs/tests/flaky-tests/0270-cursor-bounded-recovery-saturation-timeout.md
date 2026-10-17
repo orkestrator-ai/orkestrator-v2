@@ -1,6 +1,7 @@
 # Cursor bounded-recovery contract scenario times out at saturation (bridges/cursor-bridge/src/conformance-bridge-contract.test.ts)
 
-- **ID:** 0265
+- **ID:** 0270
+- **Former branch ID:** 0265; renumbered when merging main to avoid its command-fixture case ID.
 - **Status:** resolved
 - **Date observed:** 2026-10-16
 - **Test:** `bridge HTTP contract: cursor > bounded-recovery-summary: runtime-health reports bounded recovery state within its limits at saturation`

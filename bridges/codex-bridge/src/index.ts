@@ -11,6 +11,7 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { compress } from "hono/compress";
 import { isJsonSchema } from "@orkestrator/protocol/structured-output";
+import { normalizePendingSignIn } from "@orkestrator/protocol/native-agent";
 import { WorkspaceChangeProbe } from "@orkestrator/protocol/node/workspace-change-probe";
 import {
   WORKFLOW_RESULT_KINDS,
@@ -1146,13 +1147,16 @@ app.get("/global/auth", async (c) => {
   const raw = (await appServerRuntime.readAuthStatus()) as {
     account?: { type?: string; email?: string | null; planType?: string } | null;
     requiresOpenaiAuth?: boolean;
+    pendingSignIn?: unknown;
   };
   const account = raw.account;
   if (!account) {
+    const pendingSignIn = normalizePendingSignIn(raw.pendingSignIn);
     return c.json({
       state: raw.requiresOpenaiAuth ? "needs-auth" : "signed-out",
       signIn: { kind: "browser-url" },
       signOut: false,
+      pendingSignIn: pendingSignIn ?? null,
     });
   }
   const label = account.type === "chatgpt" ? account.email || "ChatGPT" : account.type || "Codex";
@@ -1165,7 +1169,10 @@ app.get("/global/auth", async (c) => {
 });
 
 app.post("/global/auth/login", async (c) => {
-  const raw = (await appServerRuntime.beginAuthLogin()) as {
+  // `{ method: "device-code" }` asks for the flow without a loopback callback.
+  const body = (await c.req.json().catch(() => ({}))) as { method?: unknown };
+  const method = body?.method === "device-code" ? "device-code" : "browser";
+  const raw = (await appServerRuntime.beginAuthLogin(method)) as {
     authUrl?: string;
     verificationUrl?: string;
     userCode?: string;
@@ -1182,8 +1189,7 @@ app.post("/global/auth/logout", async (c) => {
 });
 
 app.get("/global/models", async (c) => {
-  const { models, source } = await appServerRuntime.listModels();
-  return c.json({ models, source });
+  return c.json(await appServerRuntime.listModels());
 });
 
 /** Account plan limits for the global settings pane; no session required. */

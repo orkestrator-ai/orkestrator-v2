@@ -162,3 +162,19 @@ cache-invalidation hypothesis remains unconfirmed.
 - The tracked-edit case failed at 304.02 ms: cache hits expected 1, received 0 (line 139). Backend: 8,830 passed, 41 skipped, two failed across 475 files (457.71 seconds); the other failure was 0165.
 - Unchanged owning-file rerun: `bun test --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts` in `apps/backend` passed all four tests (0.83 seconds).
 - The branch does not touch worktree snapshots. No watcher implementation, assertion, timeout or skip changed.
+
+## Preview tunnel close-drain validation recurrence (2026-10-17)
+
+- **Command:** `mise run test:logged -- --name full-suite -- mise run test`;
+  workspace/root/bridge/protocol reserved 4/1/2/1 worker slots, with two isolated
+  Bun workers per workspace package. Workspace admission waited 251.3 seconds.
+- **Failure:** the unchanged tracked-edit cache-hit assertion at line 139
+  expected 1 and received 0 (142.04 ms). Backend: 8,793 passed, 41 skipped,
+  2 failed across 471 files (401.33 seconds). The other failure was a new
+  relay-test scheduling assumption, corrected in the same change. Other
+  workspace packages, root/support, bridges and protocol passed.
+- **Isolated rerun:** `mise run test:logged -- --name git-cache-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures`
+  passed all four unchanged tests, exit 0 (0.8 seconds logged).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.ZmlX01/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- The existing cache-invalidation hypothesis remains unconfirmed. No watcher
+  implementation, assertion, timeout or skip changed.

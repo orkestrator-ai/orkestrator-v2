@@ -278,16 +278,19 @@ mock.module("@/components/terminal/FileViewerTab", () => ({
     tabId,
     environmentId,
     filePath,
+    baseBranch,
   }: {
     tabId: string;
     environmentId?: string;
     filePath: string;
+    baseBranch?: string;
   }) => (
     <div
       data-testid="file-viewer-tab"
       data-tab-id={tabId}
       data-environment-id={environmentId}
       data-file-path={filePath}
+      data-base-branch={baseBranch}
     />
   ),
 }));
@@ -519,6 +522,62 @@ describe("PaneLeafContainer", () => {
     multiReviewTabFailure = null;
     multiReviewMountCount = 0;
     paneRenderCount = 0;
+  });
+
+  test("diff tabs follow matching persisted baselines, ignore stale pairs and fall back to the default branch", async () => {
+    const created = "a".repeat(40);
+    const advanced = "b".repeat(40);
+    const pane: PaneLeaf = {
+      kind: "leaf",
+      id: "diff-pane",
+      activeTabId: "diff-tab",
+      tabs: [
+        {
+          id: "diff-tab",
+          type: "file",
+          fileData: {
+            filePath: "own.txt",
+            isDiff: true,
+            baseBranch: "old-tab-branch",
+          },
+        },
+      ],
+    };
+    const update = (fields: Record<string, unknown>) =>
+      act(() => {
+        useEnvironmentStore.setState((state) => ({
+          environments: state.environments.map((env) => ({ ...env, ...fields })),
+        }));
+      });
+    update({
+      createdFromCommit: created,
+      diffBaseline: { createdFromCommit: created, commit: advanced },
+    });
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        repositories: {
+          "project-1": { defaultBranch: "trunk" } as (typeof state.config.repositories)[string],
+        },
+      },
+    }));
+    render(
+      <PaneLeafContainer
+        pane={pane}
+        containerId="container-hidden"
+        environmentId="env-hidden"
+        isActive
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("file-viewer-tab").getAttribute("data-base-branch")).toBe(advanced),
+    );
+    update({ diffBaseline: { createdFromCommit: "c".repeat(40), commit: advanced } });
+    expect(screen.getByTestId("file-viewer-tab").getAttribute("data-base-branch")).toBe(created);
+    update({ diffBaseline: null });
+    expect(screen.getByTestId("file-viewer-tab").getAttribute("data-base-branch")).toBe(created);
+    update({ createdFromCommit: undefined });
+    expect(screen.getByTestId("file-viewer-tab").getAttribute("data-base-branch")).toBe("trunk");
   });
 
   test("clicking the pane scopes the active pane update to its environment", () => {

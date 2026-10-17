@@ -122,3 +122,35 @@ The aggregate and browser workload delayed the real Git/worktree operations beyo
 - **Assessment:** the timeout and isolated pass match the existing aggregate
   symptom. Load sensitivity remains a hypothesis. No assertions, deadlines,
   skips or implementation in this owner changed.
+
+
+## Codex catalogue review final validation — 2026-10-17
+
+`mise run test:logged -- --name final-full-tests -- mise run test` ran with
+4/1/2/1 workspace/root/bridge/protocol slots and two isolated backend workers
+on macOS arm64 (Bun 1.4.3), sharing the host with other worktrees.
+
+The workspace-artifact Git excludes case exceeded its 5000 ms deadline at
+5016.18 ms.
+
+The unchanged owning file passed `mise run test:logged -- --name
+commands-owner-final-rerun -- bun test --cwd apps/backend --preload
+../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1
+--only-failures` (exit 0, 40.3 seconds). Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.NfVWIS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
+(compressed when the aggregate completes). The isolated pass confirms
+intermittence; host contention remains a hypothesis. No owning implementation,
+assertion, timeout or skip changed.
+
+Final aggregate totals: backend 8814 passed, 41 skipped, ten failed and three
+between-tests errors across 8865 tests in 472 files (541.38 seconds).
+Toolchain had 90 passed and one failed. Root, bridges, protocol and every
+other workspace package passed; aggregate exit 1 after 852.0 seconds.
+
+## Pi and Cursor agent-test logins main merge validation — 2026-10-17
+
+Aggregate command, worker configuration, counts and evidence are recorded in [0211](0211-cleanup-retry-aggregate-timeout.md#pi-and-cursor-agent-test-logins-main-merge-validation--2026-10-17).
+
+The first cleanup-owner rerun, `mise run test:logged -- --name merge-cleanup-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`, timed out `injects workspace artifact git excludes into local worktrees before status reads` at 5032.53 ms, followed by a late fixture-cleanup rejection (54 passed, one failed, one error; 40.61 seconds). Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.TCtpzn/merge-cleanup-owner.log.gz`.
+
+The unchanged owning file then passed `mise run test:logged -- --name merge-cleanup-post-workspace -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` after workspace validation ended (exit 0, 28.4 seconds). This confirms intermittence; host contention remains a hypothesis. No implementation, assertion, timeout or skip changed.

@@ -13,7 +13,6 @@ import type { ApprovalRequest } from "./app-server/approvals.js";
 import type { InteractionRequest } from "./app-server/interactions.js";
 import { CodexCommandCatalogue } from "./commands/codex-command-catalogue.js";
 import type { EngineRateLimitWindow, EngineUsageSnapshot } from "./engine/types.js";
-import type { BridgeModel } from "./models-cache.js";
 import { ThreadRegistry } from "./sessions/thread-registry.js";
 import { DispatchJournal } from "./sessions/dispatch-journal.js";
 import { BridgeSessionStore } from "./sessions/persistence.js";
@@ -66,7 +65,6 @@ export class CodexRuntimeContext {
   readonly store: BridgeSessionStore;
   readonly threadState = new Map<string, ThreadRuntimeState>();
   readonly now: () => number;
-  modelCache: BridgeModel[] | null = null;
   started = false;
   /** Shared by concurrent callers; cleared after failure so startup can retry. */
   startPromise: Promise<void> | null = null;

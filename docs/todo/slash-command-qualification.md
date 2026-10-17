@@ -80,7 +80,7 @@ Per provider:
     `requires-interactive-ui` from the init frame's
     `terminal_slash_commands`, which a probe never gets.
     Selecting `/focus` in a new tab answers "/focus isn't available here yet"
-    as local output (code item 8 in the catalogue file).
+    as local output (code item 8 in the catalogue file, fixed 2026-10-17).
   - **Inventory change:** an idle TTL read serves the cached list. An explicit
     refresh answers `deferred`, and the new command appears at the first TTL
     read after the next turn.
@@ -122,9 +122,10 @@ Per provider:
     That matches the documented order in `dispatchOpenCodeCommand`.
   - Typed `/exit` and `/themes` are refused as terminal commands, with
     nothing sent.
-  - A refresh answers `reread`. A command file added while the server runs
-    appears only after `opencode serve` restarts (code item 10 in the
-    catalogue file).
+  - A refresh answered `reread`, and a command file added while the server
+    ran appeared only after `opencode serve` restarted (code item 10 in the
+    catalogue file). Fixed 2026-10-17: a refresh now reloads the directory's
+    instance when it is idle, and defers to the next idle edge otherwise.
 - **Grok.**
   - The list arrives by push before the first turn.
   - A user skill ran through `session/prompt`, and its slash text reached the
@@ -273,8 +274,9 @@ The disposable profile was stopped and reset; no live launcher remains.
 ### Found outside slash commands
 
 - Fresh installs: the default Codex model `gpt-5.4` is not offered to a
-  ChatGPT login, the picker shows another model, and every turn fails
-  ([composer-model-parameters.md](composer-model-parameters.md), item 5).
+  ChatGPT login, the picker shows another model, and every turn fails. Fixed
+  on `fix/codex-stored-model-mismatch`; see "Constraints and rationale" in
+  [composer-model-parameters.md](composer-model-parameters.md).
 - A dev profile's backend reports the Electron version, which raises a
   version reminder over the composer's Send button
   ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md),

@@ -239,6 +239,8 @@ export type OpenCodeFake = {
   commandDispatchCalls: Array<Record<string, unknown>>;
   commandListCalls: Array<Record<string, unknown> | undefined>;
   setCommandListResponse(response: { data?: unknown[] }): void;
+  instanceDisposeCalls: Array<Record<string, unknown> | undefined>;
+  setInstanceDisposeHandler(handler: (() => Promise<Record<string, unknown>>) | null): void;
   setPromptError(error: unknown): void;
   setPromptGate(gate: Promise<void> | null): void;
   client: OpencodeClient;
@@ -312,6 +314,8 @@ export function openCodeFake(): OpenCodeFake {
   const promptCalls: Array<Record<string, unknown>> = [];
   const commandDispatchCalls: Array<Record<string, unknown>> = [];
   const commandListCalls: Array<Record<string, unknown> | undefined> = [];
+  const instanceDisposeCalls: Array<Record<string, unknown> | undefined> = [];
+  let instanceDisposeHandler: (() => Promise<Record<string, unknown>>) | null = null;
   let commandListResponse: { data?: unknown[] } = { data: [] };
   let promptError: unknown = null;
   let promptGate: Promise<void> | null = null;
@@ -565,6 +569,12 @@ export function openCodeFake(): OpenCodeFake {
         return commandListResponse;
       },
     },
+    instance: {
+      async dispose(parameters?: Record<string, unknown>) {
+        instanceDisposeCalls.push(parameters);
+        return instanceDisposeHandler ? instanceDisposeHandler() : { data: true };
+      },
+    },
   } as unknown as OpencodeClient;
 
   return {
@@ -575,6 +585,10 @@ export function openCodeFake(): OpenCodeFake {
     commandListCalls,
     setCommandListResponse(response: { data?: unknown[] }) {
       commandListResponse = response;
+    },
+    instanceDisposeCalls,
+    setInstanceDisposeHandler(handler) {
+      instanceDisposeHandler = handler;
     },
     createCalls,
     updateCalls,

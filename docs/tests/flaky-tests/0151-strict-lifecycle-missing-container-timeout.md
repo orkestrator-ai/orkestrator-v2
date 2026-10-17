@@ -69,3 +69,34 @@ No assertion, deadline or skip was changed.
 - The missing-container repair case timed out at 6140.30 ms, then a late fixture read reported a missing fake Docker log.
 - Unchanged owning-file rerun: `mise run test:logged -- --name status-owner-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments-status.test.ts --parallel=1 --only-failures` passed in 6.4 seconds, exit 0.
 - Shared-host contention and teardown after timeout remain hypotheses. No assertion, timeout, skip or implementation in this owner changed.
+
+## Multi Review restart-continuation validation — 2026-10-17
+
+- Original command: `mise run test:logged -- --name full-restart-continuation -- mise run test` on `9da80451` plus the Multi Review restart-continuation change, macOS arm64, alongside another environment's full suite on the same host.
+- Aggregate: backend 8,800 passed, 41 skipped, four failed and one between-tests error across 472 files (505.46 seconds). One failure was the change's own provider line-limit breach, fixed before commit; the other three were five-second timeouts in unchanged owners. All other workspace packages and the root, bridge and protocol groups passed.
+- Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.vczqfd/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- The missing-container repair case timed out at 5599.26 ms, then a late fixture read reported a missing fake Docker log (the between-tests error).
+- Unchanged owning-file rerun: `bun test ./tests/commands-registry-environments-status.test.ts` from `apps/backend` passed 23 of 23.
+- No assertion, timeout, skip or implementation in this owner changed.
+
+## Codex catalogue review follow-up recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name full-tests -- mise run test`
+  (Bun 1.4.3, macOS arm64; workspace/root/bridge/protocol reservations
+  4/1/2/1 slots, with two backend workers and concurrent isolated browser and
+  other-worktree validation).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.jlxHbv/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+  This obsolete aggregate was interrupted after an integration test moved
+  during discovery; its workspace result is incomplete and has no final
+  backend test totals. A fresh aggregate validates the final tree.
+- **Failure:** `environment status and settings commands > strict lifecycle
+  commands still repair an environment whose container is already gone` in
+  `apps/backend/tests/commands-registry-environments-status.test.ts` exceeded
+  its 5000 ms deadline at 7491.75 ms. The following
+  `agent-test container mounts come from the isolated profile paths, not the host home`
+  failed at 114.52 ms with `ENOENT` reading the removed fake Docker log.
+- **Owning-file rerun:** `mise run test:logged -- --name lifecycle-status-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments-status.test.ts --parallel=1 --only-failures`
+  passed the unchanged owning file (exit 0) in 6.6 seconds.
+- **Assessment:** the isolated pass confirms intermittence. Host contention
+  and fixture teardown after timeout remain hypotheses; no lifecycle source,
+  assertion, timeout or skip changed.

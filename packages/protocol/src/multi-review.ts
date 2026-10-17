@@ -483,6 +483,12 @@ export interface MultiReviewWorkflow {
     /** Durable correction turn for a rejected consolidated report. */
     schemaRepairAttempts?: number;
     schemaRepairPrompt?: string;
+    /** Same-session follow-up turn: the result reminder or a restart continuation. */
+    continuationPrompt?: string;
+    /** The step's one reminder to call its result tool was spent. */
+    resultReminderSent?: boolean;
+    /** The step's one continuation after a provider restart was spent. */
+    restartContinuationSent?: boolean;
     idleResultPolls?: number;
     /** Bounded terminal polls while the provider finalizes cumulative usage. */
     usageFinalizationPolls?: number;
@@ -823,6 +829,9 @@ function isActiveRequest(
       "createdAt",
       "schemaRepairAttempts",
       "schemaRepairPrompt",
+      "continuationPrompt",
+      "resultReminderSent",
+      "restartContinuationSent",
       "idleResultPolls",
       "usageFinalizationPolls",
     ]) &&
@@ -838,6 +847,10 @@ function isActiveRequest(
     Number.isFinite(Date.parse(value.createdAt)) &&
     optionalRepairAttempts(value.schemaRepairAttempts) &&
     optionalString(value.schemaRepairPrompt, 100_000) &&
+    optionalString(value.continuationPrompt, 4_096) &&
+    (value.resultReminderSent === undefined || typeof value.resultReminderSent === "boolean") &&
+    (value.restartContinuationSent === undefined ||
+      typeof value.restartContinuationSent === "boolean") &&
     optionalPollCount(value.idleResultPolls) &&
     (value.usageFinalizationPolls === undefined ||
       (Number.isSafeInteger(value.usageFinalizationPolls) &&

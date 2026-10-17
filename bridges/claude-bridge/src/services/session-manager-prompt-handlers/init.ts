@@ -2,6 +2,7 @@ import type { SDKMessage, SDKSystemMessage } from "@anthropic-ai/claude-agent-sd
 import type { McpServerRuntimeStatus } from "../../types/index.js";
 import { sessionHealth } from "../../types/index.js";
 import { eventEmitter } from "../event-emitter.js";
+import { recordTerminalSlashCommands } from "../claude-terminal-commands.js";
 import { pluginStatusesFromInit } from "../init-plugins.js";
 import { debugLog } from "../logger.js";
 import { recordInitCommandInventory } from "../session-manager-commands.js";
@@ -105,6 +106,9 @@ export async function handleInitMessage(turn: TurnState, message: SDKMessage): P
     slashCommandCount: initMsg.slash_commands?.length ?? 0,
   });
 
+  // Probe rows of later sessions on this CLI version use this list until
+  // their own first init.
+  recordTerminalSlashCommands(initMsg.claude_code_version, initMsg.terminal_slash_commands);
   // Init names seed an empty inventory only; they never replace a
   // live read or a `commands_changed` push.
   recordInitCommandInventory(session);

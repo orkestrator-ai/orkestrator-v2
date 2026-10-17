@@ -8,6 +8,7 @@ import * as backend from "@/lib/backend";
 import * as nativeEvents from "@/lib/native/events";
 import { resetReadCoordinatorForTests } from "@/lib/read-coordinator";
 import { useEnvironmentStore, useFilesPanelStore, useUIStore } from "@/stores";
+import { useConfigStore } from "@/stores/configStore";
 import { useWorktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
 import type { Environment } from "@/types";
 import { isAnnouncedNewer, useFilesPanel } from "./useFilesPanel";
@@ -67,7 +68,8 @@ beforeEach(() => {
   eventRevision = 1;
   legacy = false;
   useWorktreeSnapshotStore.setState({ entries: new Map(), generation: null, syncStatus: "idle" });
-  useUIStore.setState({ selectedEnvironmentId: "env-1" });
+  useUIStore.setState({ selectedEnvironmentId: "env-1", selectedProjectId: null });
+  useConfigStore.setState((state) => ({ config: { ...state.config, repositories: {} } }));
   useEnvironmentStore.setState({
     environments: [
       {
@@ -227,5 +229,87 @@ describe("isAnnouncedNewer", () => {
     expect(isAnnouncedNewer({ targetGeneration: 1, revision: 1 }, "gen-2", applied)).toBe(true);
     expect(isAnnouncedNewer({ targetGeneration: 1, revision: 9 }, "gen-1", undefined)).toBe(false);
     expect(isAnnouncedNewer({ targetGeneration: 1, revision: 9 }, null, applied)).toBe(false);
+  });
+});
+
+describe("useFilesPanel persisted diff baselines", () => {
+  const created = "a".repeat(40);
+  const advanced = "b".repeat(40);
+  function update(fields: Partial<Environment>) {
+    act(() =>
+      useEnvironmentStore.setState((state) => ({
+        environments: state.environments.map((env) =>
+          env.id === "env-1" ? { ...env, ...fields } : env,
+        ),
+      })),
+    );
+  }
+  const paths = () => useFilesPanelStore.getState().changes.map((change) => change.path);
+
+  beforeEach(() => {
+    legacy = true;
+    update({ createdFromCommit: created });
+    listSpy.mockImplementation(async (_path: string, ref: string) => ({
+      unchanged: false,
+      digest: ref,
+      value: (ref === advanced ? ["own.txt"] : ["own.txt", "upstream.txt"]).map((path) => ({
+        path,
+        filename: path,
+        directory: "",
+        additions: 1,
+        deletions: 0,
+        status: "M",
+      })),
+    }));
+  });
+
+  test("baseline advances and explicit clears retarget status reads and revert actions", async () => {
+    const revert = spyOn(backend, "revertLocalFile").mockResolvedValue("");
+    spies.push(revert);
+    const { result } = renderHook(() => useFilesPanel());
+    await flush();
+    expect(paths()).toEqual(["own.txt", "upstream.txt"]);
+    update({ diffBaseline: { createdFromCommit: created, commit: advanced } });
+    await flush();
+    expect(listSpy.mock.calls.at(-1)?.[1]).toBe(advanced);
+    expect(useFilesPanelStore.getState().targetBranch).toBe(advanced);
+    expect(paths()).toEqual(["own.txt"]);
+    await act(async () => result.current.revertFile("own.txt"));
+    expect(revert).toHaveBeenLastCalledWith("env-1", "own.txt", advanced);
+
+    update({ diffBaseline: null });
+    await flush();
+    expect(listSpy.mock.calls.at(-1)?.[1]).toBe(created);
+    expect(useFilesPanelStore.getState().targetBranch).toBe(created);
+    expect(paths()).toEqual(["own.txt", "upstream.txt"]);
+    await act(async () => result.current.revertFile("own.txt"));
+    expect(revert).toHaveBeenLastCalledWith("env-1", "own.txt", created);
+  });
+
+  test("returning from an inactive environment and remounting recover the persisted selection", async () => {
+    const first = renderHook(() => useFilesPanel());
+    await flush();
+    act(() => useUIStore.setState({ selectedEnvironmentId: null }));
+    first.unmount();
+    update({ diffBaseline: { createdFromCommit: created, commit: advanced } });
+    act(() => useUIStore.setState({ selectedEnvironmentId: "env-1" }));
+    const returned = renderHook(() => useFilesPanel());
+    await flush();
+    expect(paths()).toEqual(["own.txt"]);
+    expect(useFilesPanelStore.getState().targetBranch).toBe(advanced);
+    returned.unmount();
+    resetReadCoordinatorForTests();
+    renderHook(() => useFilesPanel());
+    await flush();
+    expect(listSpy.mock.calls.at(-1)?.[1]).toBe(advanced);
+    expect(paths()).toEqual(["own.txt"]);
+  });
+
+  test("a baseline for another checkout is ignored", async () => {
+    update({ diffBaseline: { createdFromCommit: "c".repeat(40), commit: advanced } });
+    renderHook(() => useFilesPanel());
+    await flush();
+    expect(listSpy.mock.calls.at(-1)?.[1]).toBe(created);
+    expect(useFilesPanelStore.getState().targetBranch).toBe(created);
   });
 });

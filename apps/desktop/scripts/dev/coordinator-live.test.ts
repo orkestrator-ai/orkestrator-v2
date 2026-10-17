@@ -538,6 +538,22 @@ describe("calls Codex recorded but left out of the transcript", () => {
     expect(codexRolloutToolCalls(cell("text('ls')", [refusedTouch]))).toEqual([]);
   });
 
+  test("naming launch_job or the fetch in a cell does not make it a grouped mutation", () => {
+    // As a live Codex turn wrote it: a tool lookup, then the patch.
+    const source = `text(ALL_TOOLS.filter(x=>/launch_job|list_tickets/.test(x.name)));\n${createSource}`;
+    const output = [
+      "Script failed\nOutput:\n",
+      '[{"name":"mcp__orkestrator__launch_job"}]',
+      rejectedPatch,
+    ];
+    expect(codexRolloutToolCalls(cell(source, output))).toHaveLength(1);
+    expect(
+      codexRolloutToolCalls(
+        cell(`${shellSource} // then curl https://example.com/`, [refusedTouch]),
+      ),
+    ).toHaveLength(1);
+  });
+
   test("commit can use direct rollout execution evidence, but MCP and network still need the transcript", () => {
     const calls = codexRolloutToolCalls(rollout);
     expect(run(calls, [])).toEqual([missing("mcp"), missing("network")]);

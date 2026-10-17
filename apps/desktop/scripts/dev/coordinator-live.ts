@@ -392,15 +392,18 @@ const SANDBOX_REFUSALS = [
   "read-only file system",
 ];
 
-/** The mutations whose markers a text carries. */
-function markedMutations(text: string): ReadOnlyMutation[] {
-  const lower = text.toLowerCase();
-  return READ_ONLY_MUTATIONS.filter((key) => {
-    const markers = READ_ONLY_ATTEMPT_MARKERS[key];
-    return [...markers.text, ...(markers.name ?? [])].some((marker) =>
-      lower.includes(marker.toLowerCase()),
-    );
-  });
+/**
+ * The digest-judged mutations a cell's source names. Network and MCP are left
+ * out: a rollout never answers for them, their refusals carry no sandbox text,
+ * and a cell may name `launch_job` just to look the tool up.
+ */
+function digestMutationsNamed(source: string): ReadOnlyMutation[] {
+  const lower = source.toLowerCase();
+  return READ_ONLY_MUTATIONS.filter(
+    (key) =>
+      !TRANSCRIPT_EVIDENCED.has(key) &&
+      READ_ONLY_ATTEMPT_MARKERS[key].text.some((marker) => lower.includes(marker.toLowerCase())),
+  );
 }
 
 function rolloutOutputText(output: unknown): string {
@@ -427,7 +430,8 @@ function rolloutOutputText(output: unknown): string {
  *   nothing.
  * - A code-mode `exec` cell is source, so naming a call does not prove it ran:
  *   an early throw, a rejected await or an unexecuted branch skips it. A cell
- *   counts only when its source names exactly one mutation and its output
+ *   counts only when its source names exactly one digest-judged mutation
+ *   (create, edit, shell or commit) and its output
  *   carries a sandbox refusal ({@link SANDBOX_REFUSALS}), which only an
  *   executed, refused call produces. A cell that groups several mutations
  *   cannot say which one the refusal came from, so it never counts.
@@ -471,7 +475,7 @@ export function codexRolloutToolCalls(text: string): ReadOnlyToolCall[] {
     const args = item.input ?? item.arguments ?? item.action ?? null;
     const argsText = typeof args === "string" ? args : (JSON.stringify(args) ?? "");
     const cell = item.type === "custom_tool_call" && directName === "exec";
-    if (cell && markedMutations(argsText).length !== 1) continue;
+    if (cell && digestMutationsNamed(argsText).length !== 1) continue;
     if (!cell && item.type !== "local_shell_call" && !DIRECT_ROLLOUT_TOOLS.has(directName)) {
       continue;
     }

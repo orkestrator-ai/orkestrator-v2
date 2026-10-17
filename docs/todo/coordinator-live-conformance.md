@@ -107,8 +107,11 @@ and what its first runs found. Everything else here is qualification.
    cells for eight steps and five transcript calls. Review then found that a
    cell's source cannot prove a nested call ran (an early throw or untaken
    branch skips it), so a cell now counts only when it attempts exactly one
-   mutation and its output carries the sandbox refusal. That rule is not yet
-   re-run live. The upstream behaviour, refusal text included, is
+   checkout mutation and its output carries the sandbox refusal. The first
+   live run of that rule failed create: Codex's cell looked up `launch_job`
+   in its tool list before patching, and the MCP marker made it look like
+   two mutations. Only create, edit, shell and commit now count. The upstream
+   behaviour, refusal text included, is
    pinned by `bridges/codex-bridge/src/app-server/live-refused-calls.test.ts`.
    The user-facing half (the live transcript hides those refusals) is item 11
    in [coordinator-read-only-adapters.md](coordinator-read-only-adapters.md).
@@ -274,7 +277,8 @@ is the truth, and this file is the backlog.
   from the conversation's private Codex home, never the host's. A direct tool
   call needs its output. A code-mode cell's source does not prove a nested
   call ran: an early throw, rejected await or untaken branch skips it. So a
-  cell counts only when it attempts exactly one mutation and its output
+  cell counts only when it attempts exactly one checkout mutation (create,
+  edit, shell or commit) and its output
   carries Codex's sandbox refusal, which only an executed, refused call
   produces. A cell grouping several mutations cannot say which one was
   refused, so it never counts. The digest judges how the call ended; the

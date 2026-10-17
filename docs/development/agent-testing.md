@@ -503,7 +503,9 @@ The read-only case:
    it by call id and type. A direct tool call needs its output. A code-mode
    `exec` cell is source, and an early throw, rejected await or unexecuted
    branch skips a call it names. So a cell counts only when it attempts
-   exactly one mutation and its output carries Codex's sandbox refusal
+   exactly one checkout mutation (create, edit, shell or commit; naming
+   `launch_job` to look the tool up does not count) and its output carries
+   Codex's sandbox refusal
    (`patch rejected: writing is blocked by read-only sandbox`, `Operation not
    permitted` or `Read-only file system`). A cell grouping several mutations
    cannot say which one was refused, so it never counts; nor do unsupported

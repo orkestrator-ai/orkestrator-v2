@@ -313,4 +313,58 @@ describe("toolchain startup orchestration", () => {
     expect(logError).toHaveBeenCalledWith(error);
     expect(quit).toHaveBeenCalledTimes(1);
   });
+
+  test("after a remote update it retries on its own before asking anyone", async () => {
+    const ensure = mock()
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockResolvedValue({
+        rootDir: "/data/toolchains",
+        binDir: "/data/toolchains/bin",
+        executables: {},
+      });
+    const showMessageBox = mock(async (_options: { detail: string }) => ({ response: 1 }));
+    const sleep = mock(async (_ms: number) => undefined);
+
+    await expect(
+      preparePinnedToolchains({
+        dataDir: "/data",
+        ensure,
+        fetchImpl: mock(async () => new Response()),
+        onProgress: mock(() => undefined),
+        showMessageBox,
+        quit: mock(() => undefined),
+        logError: mock(() => undefined),
+        unattendedRetries: { attempts: 3, delayMs: 30_000 },
+        sleep,
+      }),
+    ).resolves.toBe("/data/toolchains/bin");
+    expect(showMessageBox).not.toHaveBeenCalled();
+    expect(sleep.mock.calls.map(([ms]) => ms)).toEqual([30_000, 30_000]);
+  });
+
+  test("falls back to the prompt once the automatic retries are spent", async () => {
+    const ensure = mock(async () => {
+      throw new Error("network down");
+    });
+    const showMessageBox = mock(async (_options: { detail: string }) => ({ response: 1 }));
+    const quit = mock(() => undefined);
+
+    await expect(
+      preparePinnedToolchains({
+        dataDir: "/data",
+        ensure,
+        fetchImpl: mock(async () => new Response()),
+        onProgress: mock(() => undefined),
+        showMessageBox,
+        quit,
+        logError: mock(() => undefined),
+        unattendedRetries: { attempts: 2, delayMs: 1 },
+        sleep: async () => undefined,
+      }),
+    ).resolves.toBeNull();
+    expect(ensure).toHaveBeenCalledTimes(3);
+    expect(showMessageBox).toHaveBeenCalledTimes(1);
+    expect(quit).toHaveBeenCalledTimes(1);
+  });
 });

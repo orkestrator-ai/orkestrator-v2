@@ -1,6 +1,6 @@
 # Environment settings drawer does not open in the parallel browser suite
 
-- **ID:** 0266
+- **ID:** 0278
 - **Status:** open
 - **Date observed:** 2026-10-17
 - **File:** `e2e/EnvironmentSettingsDrawer.spec.ts`.

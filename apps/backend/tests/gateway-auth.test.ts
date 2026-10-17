@@ -369,6 +369,68 @@ describe("remote gateway", () => {
     expect(unauthenticated.status).toBe(401);
   });
 
+  test("serves the host updater channel only on the authenticated control listener", async () => {
+    const snapshot = {
+      revision: 1,
+      version: "2.21.1",
+      updater: {
+        kind: "desktop" as const,
+        available: true,
+        reason: null,
+        latestVersion: null,
+        updateAvailable: null,
+        checkedAt: null,
+        checkError: null,
+      },
+      checkRequest: null,
+      job: null,
+      tasks: {},
+      nextRelease: null,
+      ghChannel: "pinned" as const,
+    };
+    const report = mock((_report: unknown) => snapshot);
+    const { info } = await startGateway({
+      controlBindAddress: "127.0.0.1",
+      controlPort: 0,
+      hostUpdaterControl: { snapshot: async () => snapshot, report },
+    });
+    const path = "__orkestrator/host-updater";
+    const headers = { authorization: `Bearer ${info.token}` };
+
+    const read = await requestUrl(`${info.url}${path}`, { headers });
+    expect(read.status).toBe(200);
+    expect(read.json()).toMatchObject({ version: "2.21.1" });
+
+    const reported = await requestUrl(`${info.url}${path}`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ type: "ready" }),
+    });
+    expect(reported.status).toBe(200);
+    expect(report).toHaveBeenCalledWith({ type: "ready" });
+
+    const malformed = await requestUrl(`${info.url}${path}`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ type: "job", jobId: "j", state: "succeeded" }),
+    });
+    expect(malformed.status).toBe(400);
+    expect(report).toHaveBeenCalledTimes(1);
+
+    // A remote client holding the same token cannot impersonate the executor.
+    const browserRead = await requestUrl(`${info.browserUrl}${path}`, { headers });
+    expect(browserRead.status).toBe(404);
+    const browserReport = await requestUrl(`${info.browserUrl}${path}`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ type: "ready" }),
+    });
+    expect(browserReport.status).toBe(404);
+    expect(report).toHaveBeenCalledTimes(1);
+    const unauthenticated = await requestUrl(`${info.url}${path}`);
+    expect(unauthenticated.status).toBe(401);
+  });
+
   test("validates web access methods and request bodies", async () => {
     const setEnabled = mock(async (enabled: boolean) => ({
       enabled,

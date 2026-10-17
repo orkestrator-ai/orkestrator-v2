@@ -8,6 +8,8 @@ import {
 } from "./argv.js";
 import { connectionCommands } from "./commands/connection.js";
 import { environmentCommands } from "./commands/environment.js";
+import { hostCommands } from "./commands/host.js";
+import { serviceCommands } from "./commands/service.js";
 import { projectCommands } from "./commands/project.js";
 import { runCommands } from "./commands/run.js";
 import { sessionCommands } from "./commands/session.js";
@@ -31,6 +33,8 @@ export const CLIENT_COMMANDS: readonly CommandSpec[] = [
   ...sessionCommands,
   ...runCommands,
   ...toolchainCommands,
+  ...hostCommands,
+  ...serviceCommands,
 ];
 
 export const COMMAND_TREE: CommandTree = { commands: CLIENT_COMMANDS };

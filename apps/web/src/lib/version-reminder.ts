@@ -27,8 +27,11 @@ export function versionClientKind(target: ClientWindow = window): VersionClientK
 export interface VersionReminder {
   title: string;
   description: string;
-  /** `reload` when reloading the page loads a matching renderer. */
-  action: "reload" | null;
+  /**
+   * `reload` when reloading the page loads a matching renderer; `update` when
+   * the backend's host can be updated from here (Settings → Updates).
+   */
+  action: "reload" | "update" | null;
 }
 
 /** The reminder for a mismatch, or null when the versions match. */
@@ -37,11 +40,14 @@ export function describeVersionReminder({
   clientVersion,
   backendVersion,
   clientKind,
+  hostCanUpdate = false,
 }: {
   skew: AppVersionSkew;
   clientVersion: string;
   backendVersion: string;
   clientKind: VersionClientKind;
+  /** The backend's host reports an updater that can install an update now. */
+  hostCanUpdate?: boolean;
 }): VersionReminder | null {
   if (skew === "same") return null;
   if (clientKind === "backend-served") {
@@ -54,8 +60,10 @@ export function describeVersionReminder({
   if (skew === "backend-older") {
     return {
       title: "The Orkestrator backend is out of date",
-      description: `The backend you're connected to runs Orkestrator ${backendVersion}, older than this app (${clientVersion}). Update Orkestrator on the computer running the backend; until then some views may not display correctly.`,
-      action: null,
+      description: hostCanUpdate
+        ? `The backend you're connected to runs Orkestrator ${backendVersion}, older than this app (${clientVersion}). Update it from here; until then some views may not display correctly.`
+        : `The backend you're connected to runs Orkestrator ${backendVersion}, older than this app (${clientVersion}). Update Orkestrator on the computer running the backend; until then some views may not display correctly.`,
+      action: hostCanUpdate ? "update" : null,
     };
   }
   if (skew === "client-older") {

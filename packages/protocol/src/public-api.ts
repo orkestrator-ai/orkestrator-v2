@@ -403,6 +403,65 @@ export const PUBLIC_ACTIONS = {
     milestone: "D",
     summary: "Read a bounded stdout/stderr window of an exec operation.",
   },
+  "host.status": {
+    version: 1,
+    mutation: false,
+    effects: [],
+    observation: "immediate",
+    milestone: "D",
+    summary: "Read the host's Orkestrator version, its updater, the last check and the update job.",
+  },
+  "host.update.check": {
+    version: 1,
+    mutation: true,
+    effects: ["metadata"],
+    observation: "receipt",
+    milestone: "D",
+    summary: "Ask the host to check for an Orkestrator update; the result arrives in host.status.",
+  },
+  "host.update.apply": {
+    version: 1,
+    mutation: true,
+    effects: ["process"],
+    observation: "receipt",
+    milestone: "D",
+    summary:
+      "Download and install an Orkestrator update on the host, restarting it after a 60 s countdown (optionally once it is idle).",
+  },
+  "host.update.cancel": {
+    version: 1,
+    mutation: true,
+    effects: ["metadata"],
+    observation: "receipt",
+    milestone: "D",
+    summary: "Cancel the host's update before it restarts.",
+  },
+  "host.toolchain.repair": {
+    version: 1,
+    mutation: true,
+    effects: ["filesystem"],
+    observation: "receipt",
+    milestone: "D",
+    summary:
+      "Reinstall whatever of the host's pinned agent toolchain is missing or fails its digest.",
+  },
+  "host.image.update": {
+    version: 1,
+    mutation: true,
+    effects: ["filesystem"],
+    observation: "receipt",
+    milestone: "D",
+    summary:
+      "Pull the release container image matching the backend and use it for new environments; lists environments to rebuild.",
+  },
+  "host.gh.update": {
+    version: 1,
+    mutation: true,
+    effects: ["filesystem"],
+    observation: "receipt",
+    milestone: "D",
+    summary: "Switch the host's gh between its pin and the newest upstream release (unqualified).",
+  },
 } as const satisfies Record<string, PublicActionDescriptor>;
 
 export type PublicActionName = keyof typeof PUBLIC_ACTIONS;

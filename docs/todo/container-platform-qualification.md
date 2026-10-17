@@ -242,7 +242,7 @@ prevent its late response from settling the next start's restore.
 - Format, lint, full typecheck, the flaky-register test and the backend
   retaining-close tests passed. The broad repository/browser runs also hit
   unrelated failures, recorded in the flaky-test register (0165, 0174, 0178,
-  0194, 0210, 0226 and 0266). Pi runtime staging also timed out on both owning-file
+  0194, 0210, 0226 and 0278). Pi runtime staging also timed out on both owning-file
   reruns, so this validation does not establish a fully green repository suite.
   The full suite finished in 565.3 s: web passed 7892 tests (10 skipped),
   backend reported four failures and one late error, root one failure, and

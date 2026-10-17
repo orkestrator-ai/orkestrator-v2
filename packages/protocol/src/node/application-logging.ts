@@ -463,18 +463,36 @@ export function registerApplicationLoggingShutdown(
   timeoutMs = LOG_SHUTDOWN_FLUSH_MS,
 ): void {
   if (!logging) return;
-  let shuttingDown = false;
+  registerWillQuitHold(app, () => logging.stop(), timeoutMs);
+}
+
+/**
+ * Holds `will-quit` open until `settle` finishes or `timeoutMs` passes, then
+ * re-issues the quit on a later macrotask (see above for why it must be later).
+ *
+ * Several holds may be registered. One that releases first re-issues the quit
+ * while another is still settling, so a hold keeps preventing every `will-quit`
+ * until it has released itself; only then does it fall through.
+ */
+export function registerWillQuitHold(
+  app: ApplicationLoggingQuitHost,
+  settle: () => Promise<unknown>,
+  timeoutMs: number,
+): void {
+  let state: "idle" | "holding" | "released" = "idle";
   app.on("will-quit", (event) => {
-    if (shuttingDown) return;
-    shuttingDown = true;
+    if (state === "released") return;
     event.preventDefault();
+    if (state === "holding") return;
+    state = "holding";
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<void>((resolve) => {
       timer = setTimeout(resolve, timeoutMs);
       timer.unref?.();
     });
-    void Promise.race([logging.stop().catch(() => {}), deadline]).finally(() => {
+    void Promise.race([settle().catch(() => {}), deadline]).finally(() => {
       if (timer) clearTimeout(timer);
+      state = "released";
       setTimeout(() => app.quit(), 0);
     });
   });

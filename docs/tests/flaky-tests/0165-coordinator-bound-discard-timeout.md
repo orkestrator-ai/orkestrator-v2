@@ -298,3 +298,13 @@ mise run test:logged -- --name login-coordinator-service-owner -- bun test --cwd
 Evidence: `orkestrator-test-run.rIDYEp/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log`
 (compressed when the aggregate finishes) in the host temporary directory.
 No implementation, assertion, timeout or skip was changed.
+
+## Device-login follow-up main merge recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name upstream-merge-tests -- mise run test`, with system Python and the testing guide's GNU utilities preferred in PATH (Bun 1.4.3, macOS arm64).
+- **Workers:** workspace/root/bridges/protocol reserved 4/1/2/1 slots on the shared 18-slot host. Workspace admission waited 197.0 seconds; backend used two isolated Bun workers.
+- **Failure:** `project coordinator > bound discard confirmations refuse stale, sequencer, nested, and failed switches` timed out at 5142.50 ms against its 5000 ms limit. A late `SQLITE_IOERR_VNODE` arose in `storeRevision` through project Git persistence after the timeout.
+- **Suite counts:** backend reported 8,858 passed, 41 skipped, one failed and one error across 8,900 tests in 473 files (435.54 seconds). Desktop had the known 0258 timeout; root had missing metadata in case 0280, corrected and verified separately. Bridges and protocol passed; aggregate exited 1 after 681.0 seconds.
+- **Owning-file rerun:** `mise run test:logged -- --name upstream-coordinator-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`, with the same PATH preference, passed unchanged (exit 0) in 30.0 seconds while the aggregate was still active.
+- **Evidence:** `/private/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.68dTo8/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer artifact `/private/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.1Mw2VS/upstream-merge-tests.log.gz`.
+- **Assessment:** the isolated pass confirms recurrence. Shared-host contention and teardown after timeout remain hypotheses; no product code, assertion, timeout or skip changed in the resolution.

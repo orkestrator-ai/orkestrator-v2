@@ -44,3 +44,13 @@ No assertion, timeout or skip changed.
 - **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.HDY6ow/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Assessment:** an unchanged owning-file pass confirms a recurrence. Shared-host contention remains an unconfirmed hypothesis; no implementation, assertion, timeout or skip changed.
 - **Subsequent aggregate:** `mise run test:logged -- --name review-aggregate-system-tools -- mise run test` passed all four groups (exit 0, 339.7 seconds) with system Python and the documented GNU utilities preferred in PATH, after component browser validation ended. This pass does not establish a root cause or resolve the tracked flake.
+
+## Device-login follow-up main merge recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name upstream-merge-tests -- mise run test`, with system Python and the testing guide's GNU utilities preferred in PATH (Bun 1.4.3, macOS arm64).
+- **Workers:** workspace/root/bridges/protocol reserved 4/1/2/1 slots on the shared 18-slot host. Workspace admission waited 197.0 seconds; package suites used two isolated Bun workers.
+- **Failure:** the fixture digest case timed out at 5018.38 ms against its 5000 ms limit, with a racing `git for-each-ref exited -1` between-tests error.
+- **Suite counts:** desktop reported 776 passed, one failed and one error across 777 tests in 58 files (30.36 seconds). Backend had the known 0165 timeout; root had missing metadata in case 0280, corrected and verified separately. Bridges and protocol passed; aggregate exited 1 after 681.0 seconds.
+- **Owning-file rerun:** `mise run test:logged -- --name upstream-coordinator-fixture-owner -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev/coordinator-live.test.ts --parallel=1 --only-failures`, with the same PATH preference, passed unchanged (exit 0) in 4.6 seconds while the aggregate was still active.
+- **Evidence:** `/private/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.68dTo8/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer artifact `/private/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.1Mw2VS/upstream-merge-tests.log.gz`.
+- **Assessment:** the isolated pass confirms recurrence. Shared-host contention remains unconfirmed; no product code, assertion, timeout or skip changed in the resolution.

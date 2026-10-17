@@ -1,6 +1,7 @@
 # OpenCode agent-tool background configuration timing
 
-Status: open.
+- **ID:** 0280
+- **Status:** open
 
 ## Observation — 2026-10-17 (device-login main merge)
 

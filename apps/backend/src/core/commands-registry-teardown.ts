@@ -26,9 +26,9 @@ import {
   isTabTeardownKind,
 } from "@orkestrator/protocol/tab-teardown";
 import {
-  isMultiReviewWorkflow,
-  multiReviewOwnsProviderSession,
-} from "@orkestrator/protocol/multi-review";
+  providerSessionHeldElsewhere,
+  withProviderSessionTeardownLock,
+} from "./provider-session-ownership.js";
 
 export function registerTeardownCommands(
   register: CommandRegistrar,
@@ -115,39 +115,6 @@ export function registerTeardownCommands(
       ]);
     } finally {
       clearTimeout(timeout);
-    }
-  };
-
-  /**
-   * Teardowns of one provider session run one at a time, keyed by
-   * (environment, agent, provider session). Without this, two tabs sharing a
-   * session and closed together (or a user close racing the reconcile sweep)
-   * could each see the other's mapping, both skip the provider close, and
-   * leave the session running with no owner.
-   */
-  const providerSessionTeardownTails = new Map<string, Promise<void>>();
-  const withProviderSessionTeardownLock = async <T>(
-    environmentId: string,
-    agent: string,
-    providerSessionId: string,
-    operation: () => Promise<T>,
-  ): Promise<T> => {
-    const key = `${environmentId}\0${agent}\0${providerSessionId}`;
-    const previous = providerSessionTeardownTails.get(key) ?? Promise.resolve();
-    let release!: () => void;
-    const tail = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const chained = previous.then(() => tail);
-    providerSessionTeardownTails.set(key, chained);
-    await previous;
-    try {
-      return await operation();
-    } finally {
-      release();
-      if (providerSessionTeardownTails.get(key) === chained) {
-        providerSessionTeardownTails.delete(key);
-      }
     }
   };
 
@@ -295,54 +262,47 @@ export function registerTeardownCommands(
     // risking closing another tab's conversation.
     const providerSessionId = persistedSession?.providerSessionId;
     if (!providerSessionId) return;
-    await withProviderSessionTeardownLock(environment.id, agent, providerSessionId, async () => {
-      // Re-read under the lock: a concurrent teardown of this tab may already
-      // have retired the mapping, or rebound it to another provider session.
-      const current = await context.storage.getNativeAgentSession(storageKey);
-      if (current?.providerSessionId !== providerSessionId) return;
-      // Two logical tabs can map to one provider session (both resumed the same
-      // conversation). Closing one tab must not stop or release the other's, so
-      // a shared session only loses this tab's mapping. Teardowns of one
-      // provider session are serialized, so of two tabs closed together the
-      // second one sees no other owner and performs the real close.
-      const sharedWithAnotherTab = (await context.storage.listNativeAgentSessions()).some(
-        (session) =>
-          session.environmentId === environment.id &&
-          session.agent === agent &&
-          session.logicalSessionKey !== logicalSessionKey &&
-          session.providerSessionId === providerSessionId,
-      );
-      // A Multi Review step or reviewer session opened in a tab ("Open session")
-      // belongs to its workflow, which the supervisor drives and which closes it
-      // when the Multi Review itself is closed. Closing the tab only hides it.
-      const ownedByWorkflow =
-        !sharedWithAnotherTab &&
-        (await context.storage.listMultiReviewWorkflows(environment.id)).some(
-          ({ snapshot }) =>
-            isMultiReviewWorkflow(snapshot) &&
-            multiReviewOwnsProviderSession(snapshot, agent, providerSessionId),
-        );
-      if (!sharedWithAnotherTab && !ownedByWorkflow) {
-        if (agent === "opencode") {
-          await closeOpenCodeTabSession(environment.id, providerSessionId, context);
-        } else {
-          const bridge = await peekTabTeardownBridge(environment, agent, context);
-          if (!bridge) {
-            throw new Error("Tab teardown bridge is unavailable or unhealthy");
+    await withProviderSessionTeardownLock(
+      context.storage,
+      environment.id,
+      agent,
+      providerSessionId,
+      async () => {
+        // Re-read under the lock: a concurrent teardown of this tab may already
+        // have retired the mapping, or rebound it to another provider session.
+        const current = await context.storage.getNativeAgentSession(storageKey);
+        if (current?.providerSessionId !== providerSessionId) return;
+        // A session another tab shares, or a Multi Review owns, only loses this
+        // tab's mapping. Of two tabs closed together, the second one under the
+        // lock sees no other owner and performs the real close.
+        const heldElsewhere = await providerSessionHeldElsewhere(context.storage, {
+          environmentId: environment.id,
+          agent,
+          providerSessionId,
+          exceptLogicalSessionKey: logicalSessionKey,
+        });
+        if (!heldElsewhere) {
+          if (agent === "opencode") {
+            await closeOpenCodeTabSession(environment.id, providerSessionId, context);
+          } else {
+            const bridge = await peekTabTeardownBridge(environment, agent, context);
+            if (!bridge) {
+              throw new Error("Tab teardown bridge is unavailable or unhealthy");
+            }
+            await closeBridgeSessionRetaining(agent, providerSessionId, (method, path) =>
+              requestProviderTabSession(new URL(`http://127.0.0.1:${bridge.port}${path}`), method, {
+                Authorization: `Bearer ${bridge.authToken}`,
+              }),
+            );
           }
-          await closeBridgeSessionRetaining(agent, providerSessionId, (method, path) =>
-            requestProviderTabSession(new URL(`http://127.0.0.1:${bridge.port}${path}`), method, {
-              Authorization: `Bearer ${bridge.authToken}`,
-            }),
-          );
+          context.nativeAgents?.releaseProviderSession?.(environment.id, agent, providerSessionId);
         }
-        context.nativeAgents?.releaseProviderSession?.(environment.id, agent, providerSessionId);
-      }
-      // The provider-side close is confirmed (or another owner keeps it), so the
-      // durable logical-tab mapping is retired as part of the same idempotent
-      // intent. The vendor conversation itself is never deleted here.
-      await context.storage.invalidateNativeAgentSession(storageKey, providerSessionId);
-    });
+        // The provider-side close is confirmed (or another owner keeps it), so the
+        // durable logical-tab mapping is retired as part of the same idempotent
+        // intent. The vendor conversation itself is never deleted here.
+        await context.storage.invalidateNativeAgentSession(storageKey, providerSessionId);
+      },
+    );
   };
 
   const finishTabTeardown = async (
@@ -459,7 +419,12 @@ export function registerTeardownCommands(
       console.warn(
         "[backend] Skipping orphaned tab reconciliation because pane layouts are unreadable",
       );
-      return { terminals: 0, nativeSessions: 0, tmuxSessions: 0, skipped: true };
+      return {
+        terminals: 0,
+        nativeSessions: 0,
+        tmuxSessions: 0,
+        skipped: true,
+      };
     }
     const referencedTerminalTabs = new Map<string, Set<string>>();
     const referencedNativeTabs = new Map<string, Set<string>>();

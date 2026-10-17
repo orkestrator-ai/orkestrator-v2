@@ -1,6 +1,6 @@
 # Public exec restart fixture cleanup EPERM
 
-- **ID:** 0280
+- **ID:** 0341
 - **Status:** open
 - **Date observed:** 2026-10-17
 - **Test:** `environment.exec > the worker survives a backend restart and its result is reconciled, not re-run`

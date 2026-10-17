@@ -364,6 +364,8 @@ stops entirely is closed by the 30-second liveness ping, not by the queue.
 When a tunnel closes, a slow reader still receives the queued bytes. The
 2-second close-handshake grace starts once the close frame has been flushed,
 and a peer that stops reading is cut off 30 seconds after the close.
+Liveness pings stop once the tunnel starts closing, so an unanswered ping
+cannot cut off the drain.
 
 ## Framework configuration
 

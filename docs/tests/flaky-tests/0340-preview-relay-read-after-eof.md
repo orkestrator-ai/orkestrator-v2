@@ -1,6 +1,6 @@
 # Relay read assertion after queued EOF
 
-- **ID:** 0279
+- **ID:** 0340
 - **Status:** resolved
 - **Date observed:** 2026-10-17
 - **Test:** `PreviewTunnelServer > relay upstream preserves unshifted bytes and EOF across a stopped tunnel reader`
@@ -32,6 +32,6 @@
 
 The subsequent full run (`mise run test:logged -- --name final-full-suite -- mise run test`)
 passed all preview tunnel tests with two isolated backend workers. Its backend
-failures were unrelated cases 0227 and 0280; root/support failed case 0178.
+failures were unrelated cases 0227 and 0341; root/support failed case 0178.
 Evidence: `orkestrator-test-run.bXnknL/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
 under the same temporary root.

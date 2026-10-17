@@ -414,7 +414,9 @@ This replaces the 2026-09-23 file lists as the current baseline.
   the grace started when the close frame was queued, so a reader more than
   2 seconds behind lost the response tail and saw 1006 instead of EOF.
   `closeDrainTimeoutMs` (default 30 s, the liveness interval) bounds a peer
-  that stops reading during the close. Progress polling on `writableLength`
+  that stops reading during the close, and the liveness interval stops once
+  the tunnel is closing so an unanswered ping cannot cut the drain short.
+  Progress polling on `writableLength`
   was rejected because Node coalesces queued writes into one `writev`, so
   progress shows only when the whole batch completes.
 - Mixed versions: old clients show service URIs unchanged and refuse them

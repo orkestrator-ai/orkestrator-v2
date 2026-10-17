@@ -143,7 +143,10 @@ an interactive handoff turn that finished on its own as its conversation's
 last turn. A Fix that fails, is stopped, is superseded or cannot be confirmed
 records `skipped` with its reason, or nothing when the session failed. The
 review stops there. A custom Fix never starts a PR, and a new Fix drops an
-undelivered PR intent so the PR cannot race it. `autoPr` without `autoFix`
+undelivered PR intent so the PR cannot race it. Every PR intent records the
+Fix attempt that authorized it (`autoPrLaunch.fixIdentity`). Status notices and
+`get_multi_review` therefore never present an earlier PR as the outcome of a
+later Fix; that Fix's changes need a manual PR update. `autoPr` without `autoFix`
 means a PR after a Fix the user (or `address_multi_review`) starts. The PR
 session pushes the branch and opens the pull request; nothing merges.
 

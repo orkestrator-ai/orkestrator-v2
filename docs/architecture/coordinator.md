@@ -482,7 +482,7 @@ stable key; a key is sent once, recorded on the association
 | --- | --- | --- |
 | Multi Review | consolidation `ready` (finding counts by severity, coverage gaps, verdict) | `settled` |
 | Multi Review | interactive fix turn finished (`fix-done`, with the reason when auto-PR started no PR) or failed (`fix-failed`) | `settled` |
-| Multi Review | auto-PR: PR session started (`pr-started`), its pull request open (`pr-opened`, with the URL), or the launch failed (`pr-failed`) | `settled` |
+| Multi Review | auto-PR: PR session started (`pr-started`), its pull request open (`pr-opened`, with the URL) or already `pr-closed`, `pr-merged` or `pr-unknown`, or the launch failed (`pr-failed`) | `settled` |
 | Multi Review | a reviewer, consolidation or fix session `stalled` | `settled` |
 | Multi Review | `completed` (fix summary, files changed), `failed` (error), `cancelled` | always |
 | Multi Review | all reviewers finished and consolidation started (`reviews-finished`) | `stages` |
@@ -503,8 +503,15 @@ to leave is not reported. Consolidation with findings goes straight to the Fix
 handoff and never reaches `ready`. A finished Fix that queued its PR is held
 until the PR launch settles, and the coordinator hears `pr-started` instead of
 a `fix-done` it would be expected to act on. `pr-opened` follows once the
-environment records `prUrl`; the PR monitor sets it, and the next workflow save
-or the 60-second sweep reports it. A failed or stopped Fix reports `fix-failed`
+environment records `prUrl` with `prState: open`; the PR monitor sets them, and
+the next workflow save or the 60-second sweep reports it. A retained URL whose
+state is closed, merged or unknown is reported as that state, never as open.
+Each PR launch records the identity of the Fix attempt that authorized it
+(`autoPrLaunch.fixIdentity`, a hash of the Fix session key and start time). A
+later Fix, for example after a reviewer restart, is reported as `fix-done`,
+noting that the earlier PR does not confirm it includes the new changes. A
+launched record without an identity, from before this change, is treated the
+same way. A failed or stopped Fix reports `fix-failed`
 or `fix-done` with "No PR session started"; the review stops there. A
 consolidation with nothing to fix reports `ready` with a line saying no Fix or PR
 started. A legacy structured Fix holds `completed` until its PR launch settles,

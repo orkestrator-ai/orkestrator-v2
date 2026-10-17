@@ -126,6 +126,9 @@ If there are merge conflicts:
    - Edit the file to resolve the conflict, removing all conflict markers
    - Ensure the resolved code is correct and functional
 3. After resolving all conflicts, run \`git add -A\` to stage the resolved files
+4. Validate the resolution based on which files had conflicts:
+   - If every conflicted file is documentation (for example Markdown files or files under \`docs/\`), do NOT run tests, typechecking, or builds; just confirm no conflict markers remain
+   - If any conflicted file is code, configuration, or tests, run the relevant tests, typechecking, and build validation for the project
 
 ## Step 4: Complete the Merge
 

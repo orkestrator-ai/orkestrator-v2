@@ -356,6 +356,14 @@ describe("createResolveConflictsPrompt", () => {
     expect(result).toContain("Do NOT use --no-verify");
   });
 
+  test("skips test validation when only documentation conflicted", () => {
+    const result = createResolveConflictsPrompt("main");
+    expect(result).toContain(
+      "If every conflicted file is documentation (for example Markdown files or files under `docs/`), do NOT run tests",
+    );
+    expect(result).toContain("If any conflicted file is code, configuration, or tests, run the relevant tests");
+  });
+
   test("includes conflict marker instructions", () => {
     const result = createResolveConflictsPrompt("main");
     expect(result).toContain("<<<<<<<");

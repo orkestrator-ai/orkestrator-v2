@@ -676,5 +676,8 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("origin/develop");
     expect(prompt).toContain("resolve every merge conflict");
     expect(prompt).toContain("run relevant validation");
+    expect(prompt).toContain(
+      "skip tests, typechecking, and builds when every conflicted file is documentation",
+    );
   });
 });

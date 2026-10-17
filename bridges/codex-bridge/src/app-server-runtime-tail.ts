@@ -281,17 +281,22 @@ export class CodexRuntimeTail {
   async listModels(): Promise<{
     models: BridgeModel[];
     source: "app-server" | "cache" | "fallback";
+    supportedModelIds?: string[];
   }> {
-    if (this.ctx.modelCache) return { models: this.ctx.modelCache, source: "app-server" };
+    // Read on every request: account changes and child replacement must never
+    // leave a previous login's catalogue labelled as live availability.
     try {
       const engineModels = await this.ctx.options.engine.listModels();
       const models = engineModels
         .filter((model) => !model.hidden)
         .map((model) => toBridgeModel(model));
       if (models.length > 0) {
-        this.ctx.modelCache = models;
         await this.ctx.options.persistModels?.(models).catch(() => undefined);
-        return { models, source: "app-server" };
+        return {
+          models,
+          source: "app-server",
+          supportedModelIds: engineModels.map((model) => model.id),
+        };
       }
     } catch (error) {
       console.warn(

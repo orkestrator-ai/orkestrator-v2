@@ -1473,6 +1473,11 @@ export interface NativeAgentSignInRoute {
 
 export interface NativeAgentAuthStatus {
   state: NativeAgentAuthState;
+  /**
+   * Live login owned by this environment/provider's bridge; never log or persist to disk.
+   * Null confirms no pending login; absent means the bridge predates this snapshot.
+   */
+  pendingSignIn?: NativeAgentPendingSignIn | null;
   account?: { label: string; plan?: string; expiresAt?: string };
   providers?: Array<{
     id: string;
@@ -1482,6 +1487,42 @@ export interface NativeAgentAuthStatus {
   }>;
   signIn?: NativeAgentSignInRoute;
   signOut?: boolean;
+}
+
+export interface NativeAgentPendingSignIn {
+  url: string;
+  code: string;
+  expiresAt: number;
+}
+
+export const NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS = 15 * 60_000;
+
+/** Keep only the bounded, expiring display fields of a live device login. */
+export function normalizePendingSignIn(
+  value: unknown,
+  now = Date.now(),
+): NativeAgentPendingSignIn | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const { url, code, expiresAt } = value as Record<string, unknown>;
+  if (
+    typeof url !== "string" ||
+    url.length > 4096 ||
+    typeof code !== "string" ||
+    !code.trim() ||
+    code.length > 512 ||
+    typeof expiresAt !== "number" ||
+    !Number.isFinite(expiresAt) ||
+    expiresAt <= now ||
+    expiresAt > now + NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS
+  )
+    return undefined;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return undefined;
+  } catch {
+    return undefined;
+  }
+  return { url, code, expiresAt };
 }
 
 export type NativeAgentNotice = {

@@ -59,7 +59,11 @@ function expectOptionalString(value: unknown, where: string): void {
 export function expectAuthStatusShape(body: unknown): void {
   expect(body !== null && typeof body === "object" && !Array.isArray(body)).toBe(true);
   const status = body as Record<string, unknown>;
-  keysWithin(status, ["state", "account", "providers", "signIn", "signOut"], "auth status");
+  keysWithin(
+    status,
+    ["state", "account", "providers", "signIn", "signOut", "pendingSignIn"],
+    "auth status",
+  );
   expect(AUTH_STATES.has(String(status.state))).toBe(true);
   if (status.account !== undefined) {
     const account = status.account as Record<string, unknown>;
@@ -85,6 +89,13 @@ export function expectAuthStatusShape(body: unknown): void {
     keysWithin(signIn, ["kind", "hint"], "auth status signIn");
     expect(SIGN_IN_KINDS.has(String(signIn.kind))).toBe(true);
     expectOptionalString(signIn.hint, "signIn.hint");
+  }
+  if (status.pendingSignIn !== undefined && status.pendingSignIn !== null) {
+    const pending = status.pendingSignIn as Record<string, unknown>;
+    keysWithin(pending, ["url", "code", "expiresAt"], "pending sign-in");
+    expect(typeof pending.url).toBe("string");
+    expect(typeof pending.code).toBe("string");
+    expect(typeof pending.expiresAt).toBe("number");
   }
   if (status.signOut !== undefined) expect(typeof status.signOut).toBe("boolean");
 }

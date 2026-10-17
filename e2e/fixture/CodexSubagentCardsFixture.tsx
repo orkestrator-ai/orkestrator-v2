@@ -56,12 +56,13 @@ export function CodexSubagentCardsFixture() {
       </div>
       <div data-testid="transcript">
         {messages.map((message, index) => (
-          <NativeMessage
-            key={message.id}
-            message={message}
-            previousMessage={messages[index - 1] ?? null}
-            platform="codex"
-          />
+          <div key={message.id} data-testid="transcript-row" data-message-id={message.id}>
+            <NativeMessage
+              message={message}
+              previousMessage={messages[index - 1] ?? null}
+              platform="codex"
+            />
+          </div>
         ))}
       </div>
     </main>

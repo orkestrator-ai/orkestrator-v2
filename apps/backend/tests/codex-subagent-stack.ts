@@ -28,6 +28,7 @@ import { waitForLocalServerHealth } from "../src/core/commands-server-health.js"
 import { HttpBridgeProvider } from "../src/core/http-bridge-provider.js";
 import { NativeAgentService } from "../src/core/native-agent-service.js";
 import { StorageService } from "../src/core/storage.js";
+import { waitForProjection } from "./wait-for-projection.js";
 
 const repositoryRoot = path.resolve(import.meta.dir, "../../..");
 const bridgeRoot = path.join(repositoryRoot, "bridges", "codex-bridge");
@@ -41,9 +42,6 @@ export const SUBAGENT_STACK_IDENTITY = {
 
 /** What the scenario asks for; the fake ignores the wording. */
 export const SUBAGENT_STACK_PROMPT = "Run the three checks in parallel sub-agents.";
-
-/** Upper bound for one wait. A safety net, never the synchronisation. */
-const WAIT_DEADLINE_MS = 30_000;
 
 async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -263,35 +261,15 @@ export async function startSubagentStack(): Promise<SubagentStack> {
       }
     },
     projection,
-    async waitForProjection(accept, description) {
-      const controller = new AbortController();
-      const deadline = AbortSignal.timeout(WAIT_DEADLINE_MS);
-      let last: NativeAgentSessionProjection | undefined;
-      const abort = () => controller.abort(deadline.reason);
-      deadline.addEventListener("abort", abort, { once: true });
-      try {
-        // Subscribe before the first read so a change between the two is not missed.
-        const events = bridgeEvents(controller.signal);
-        const first = events.next();
-        last = await projection();
-        if (accept(last)) return last;
-        await first;
-        for await (const _ of events) {
-          last = await projection();
-          if (accept(last)) return last;
-        }
-        throw new Error("bridge event stream ended");
-      } catch (error) {
-        throw new Error(
-          `Timed out waiting for ${description}: ${String(error)}\nlast projection: ${JSON.stringify(
-            last?.messages ?? null,
-          ).slice(0, 4_000)}\nbridge stderr:\n${bridge?.stderr.join("\n") ?? ""}`,
-        );
-      } finally {
-        deadline.removeEventListener("abort", abort);
-        controller.abort();
-      }
-    },
+    waitForProjection: (accept, description) =>
+      waitForProjection({
+        projection,
+        subscribe: bridgeEvents,
+        accept,
+        description,
+        diagnostics: (last) =>
+          `last projection: ${JSON.stringify(last?.messages ?? null).slice(0, 4_000)}\nbridge stderr:\n${bridge?.stderr.join("\n") ?? ""}`,
+      }),
     async reopenBackend() {
       await stopService();
       await startService(bridge!.port);

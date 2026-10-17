@@ -94,6 +94,26 @@ const allCards = (children: Card[]) =>
     String(left.name).localeCompare(String(right.name)),
   );
 
+/** Assert model-response boundaries as well as the card set across recovery. */
+function assistantRows(projection: NativeAgentSessionProjection) {
+  return (
+    projection.messages as Array<{
+      role: string;
+      parts?: Array<{ type: string; content?: string }>;
+    }>
+  )
+    .filter((message) => message.role === "assistant")
+    .map((message) => ({
+      text: (message.parts ?? [])
+        .filter((part) => part.type === "text")
+        .map((part) => part.content),
+      cards: (message.parts ?? []).filter((part) => part.type === "subagent").length,
+    }));
+}
+
+const INTRO = "Starting the checks.";
+const SUMMARY = "All three checks passed; one more could not start.";
+
 let stack: SubagentStack | undefined;
 
 afterEach(async () => {
@@ -119,10 +139,13 @@ describe("Codex sub-agent cards through the bridge and backend projection", () =
       expect(new Set(ids).size).toBe(3);
       expect(cards(running)).toEqual(allCards(runningChildren(ids)));
       expect(running.turn.phase).toBe("running");
+      expect(assistantRows(running)).toEqual([{ text: [INTRO], cards: 4 }]);
 
       // A backend that never saw the spawns, over the live bridge (a reload).
       await stack.reopenBackend();
-      expect(cards(await stack.projection())).toEqual(allCards(runningChildren(ids)));
+      const reopened = await stack.projection();
+      expect(cards(reopened)).toEqual(allCards(runningChildren(ids)));
+      expect(assistantRows(reopened)).toEqual(assistantRows(running));
 
       // The children finish while nobody reads: the backend is replaced before
       // the first read after the fact, as for a tab in an inactive environment.
@@ -135,6 +158,9 @@ describe("Codex sub-agent cards through the bridge and backend projection", () =
         "every child to finish and the turn to end",
       );
       expect(cards(finished)).toEqual(allCards(finishedChildren(ids)));
+      // v2 activity-only live items carry no tool call boundary. The final
+      // message shares the live row; a fresh backend must preserve that row.
+      expect(assistantRows(finished)).toEqual([{ text: [INTRO, SUMMARY], cards: 4 }]);
 
       // Cold: new bridge, new app-server, new backend. Identity now comes from
       // the child rollouts' session_meta headers alone.
@@ -143,6 +169,13 @@ describe("Codex sub-agent cards through the bridge and backend projection", () =
       const cold = await stack.projection();
       expect(cold.turn.phase).toBe("idle");
       expect(cards(cold)).toEqual(allCards(finishedChildren(ids)));
+      // The rollout contains spawn_agent calls, so recovery can identify the
+      // next model response. Cards stay with their spawning response and the
+      // final answer opens the second row, without duplicating either text.
+      expect(assistantRows(cold)).toEqual([
+        { text: [INTRO], cards: 4 },
+        { text: [SUMMARY], cards: 0 },
+      ]);
     },
     STACK_TEST_TIMEOUT_MS,
   );

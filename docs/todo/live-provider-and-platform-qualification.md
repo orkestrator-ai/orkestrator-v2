@@ -222,6 +222,13 @@ prompt asked for three sub-agents (`alpha_check`, `beta_check`,
   open the next row, and either align the live boundary or record why the two
   differ.
 
+  The credential-free stack spec now asserts both layouts explicitly: one
+  live row with the introduction, four cards and final answer; two cold rows
+  with the introduction and four cards in the first, final answer in the
+  second. It also checks that reopening only the backend preserves the live
+  row. This guards the current boundary behavior; aligning the layouts still
+  needs the recorded-stream evidence above.
+
 - When the host has no `CLAUDE_CONFIG_DIR`,
   `apps/desktop/electron/backend-process.ts` defaults
   `ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR` to `<home>/.claude`. Claude

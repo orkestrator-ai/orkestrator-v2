@@ -95,6 +95,52 @@ async function expectCards(page: Page, childStatus: "Active" | "Finished") {
   }
 }
 
+/** Check the rendered placement, independently of status text and card counts. */
+async function expectPinnedChildren(page: Page, phase: "running" | "finished" | "cold") {
+  const rows = page.getByTestId("transcript-row");
+  const children = CHILDREN.map((child) => card(page, `${child.name} (${child.role})`));
+  const childRow = rows.filter({ has: children[0]! });
+  await expect(childRow).toHaveCount(1);
+  const placement = phase === "cold" ? childRow : rows.last();
+  for (const child of CHILDREN) {
+    await expect(
+      placement.getByRole("button", { name: new RegExp(`^Agent ${child.name} `) }),
+    ).toHaveCount(1);
+  }
+  if (phase === "running")
+    await expect(childRow).toHaveAttribute("data-message-id", "active-agents");
+  else await expect(page.locator('[data-message-id="active-agents"]')).toHaveCount(0);
+
+  // The cards must be visually below the parent's text, not merely present in
+  // a group somewhere in the DOM. Nested transcripts are outside this check.
+  const intro = page.getByText("Starting the checks.", { exact: true });
+  const introBox = await intro.boundingBox();
+  const firstBox = await children[0]!.boundingBox();
+  expect(introBox).not.toBeNull();
+  expect(firstBox).not.toBeNull();
+  expect(firstBox!.y).toBeGreaterThanOrEqual(introBox!.y + introBox!.height);
+
+  if (phase !== "running") {
+    const summary = page.getByText("All three checks passed; one more could not start.", {
+      exact: true,
+    });
+    const summaryBox = await summary.boundingBox();
+    expect(summaryBox).not.toBeNull();
+    if (phase === "finished") {
+      // Settled cards stay below the live response on refresh and page reload.
+      expect(firstBox!.y).toBeGreaterThanOrEqual(summaryBox!.y + summaryBox!.height);
+    } else {
+      // Cold recovery has a separate final-response row (asserted by the
+      // backend spec). Its cards remain with the preceding spawn response.
+      const lastBox = await children.at(-1)!.boundingBox();
+      expect(lastBox).not.toBeNull();
+      expect(summaryBox!.y).toBeGreaterThanOrEqual(lastBox!.y + lastBox!.height);
+    }
+  }
+
+  return childRow.getByRole("button", { name: /^Agent (Ada|Grace|Linus) / }).allTextContents();
+}
+
 /** Opens a child's card and checks its nested transcript; a running child has no answer yet. */
 async function expectNestedTranscript(
   page: Page,
@@ -141,10 +187,12 @@ test("Codex sub-agent cards stay one per child through reload and a cold restart
     }).toPass({ timeout: 30_000 });
     await expect(page.getByTestId("turn-phase")).toHaveText("running");
     await expectCards(page, "Active");
+    const runningOrder = await expectPinnedChildren(page, "running");
     await expectNestedTranscript(page, CHILDREN[0], false);
 
     await page.reload();
     await expectCards(page, "Active");
+    expect(await expectPinnedChildren(page, "running")).toEqual(runningOrder);
 
     // The children finish while the page holds an old read and the backend
     // that served it is replaced, as for a tab in an inactive environment.
@@ -155,10 +203,12 @@ test("Codex sub-agent cards stay one per child through reload and a cold restart
       await expect(page.getByTestId("turn-phase")).toHaveText("idle", { timeout: 1_000 });
     }).toPass({ timeout: 30_000 });
     await expectCards(page, "Finished");
+    const finishedOrder = await expectPinnedChildren(page, "finished");
     await expectNestedTranscript(page, CHILDREN[0]);
 
     await page.reload();
     await expectCards(page, "Finished");
+    expect(await expectPinnedChildren(page, "finished")).toEqual(finishedOrder);
     await expectNestedTranscript(page, CHILDREN[1]);
 
     // Cold: a new bridge, app-server and backend recover identity from disk.
@@ -166,6 +216,7 @@ test("Codex sub-agent cards stay one per child through reload and a cold restart
     await page.reload();
     await expect(page.getByTestId("turn-phase")).toHaveText("idle");
     await expectCards(page, "Finished");
+    expect(await expectPinnedChildren(page, "cold")).toEqual(finishedOrder);
     for (const child of CHILDREN) await expectNestedTranscript(page, child);
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),

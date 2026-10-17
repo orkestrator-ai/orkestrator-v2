@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
+import { stat } from "node:fs/promises";
+import path from "node:path";
 import type { CommandContext } from "./commands-context.js";
 import { getClaudeOAuthAccessToken, getHostClaudeCredentials } from "./commands-files.js";
-import { AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV } from "./commands-runtime-state.js";
+import {
+  AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV,
+  AGENT_TEST_HOST_PI_AGENT_DIR_ENV,
+} from "./commands-runtime-state.js";
 import { cursorApiKeyFingerprint, resolveCursorApiKey } from "./commands-validation.js";
 
 export type CursorHostCredentialMaterial = {
@@ -41,4 +46,34 @@ export async function applyClaudeHostCredentialEnvironment(
   const credentials = await getHostClaudeCredentials(process.platform, hostHome, hostConfigDir);
   const accessToken = getClaudeOAuthAccessToken(credentials);
   if (accessToken) env.ANTHROPIC_AUTH_TOKEN = accessToken;
+}
+
+/**
+ * Apply Pi's credential policy to a local Pi bridge or catalogue probe.
+ *
+ * A local run leaves `PI_AGENT_DIR` unset, so Pi uses its own default
+ * `~/.pi/agent`. That is the user's own login in production and the isolated
+ * profile's directory in agent-test. An agent-test profile that authorizes Pi
+ * also gets the host's `auth.json`, and only that file: the profile keeps its
+ * own settings, models, MCP config and extensions. The bridge uses the host
+ * file directly rather than a copy. A copy would rotate an OAuth refresh token
+ * the host's `pi` still holds.
+ *
+ * Pi creates a credential file that is missing, so a host that never signed in
+ * to Pi is not pointed at one. A file that appears later is used from the next
+ * bridge start.
+ */
+export async function applyPiHostCredentialEnvironment(
+  context: CommandContext,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  delete env.PI_AGENT_DIR;
+  delete env.PI_BRIDGE_AUTH_FILE;
+  if (context.runtimeFlavor !== "agent-test" || !context.credentialSources?.has("pi")) return;
+
+  const hostAgentDir = process.env[AGENT_TEST_HOST_PI_AGENT_DIR_ENV]?.trim();
+  if (!hostAgentDir) return;
+  const authFile = path.join(hostAgentDir, "auth.json");
+  const info = await stat(authFile).catch(() => null);
+  if (info?.isFile()) env.PI_BRIDGE_AUTH_FILE = authFile;
 }

@@ -56,3 +56,36 @@ created yet", never as a session to load.
   timeout (`promptDeadlineAt`) and, for a question, Grok's own
   `GROK_ASK_USER_QUESTION_TIMEOUT_SECS`. Expiry still cancels; a hold never
   answers the request.
+
+## Policy refusals
+
+- **Refuse with `reject_once`, never `cancelled` or `reject_always`.** Under a
+  `deny` policy `onPermission` answers with `policyDenialOutcome`. ACP's
+  `cancelled` outcome means the prompt turn itself was cancelled. Grok's
+  `reject_always` stores a "never allow" grant in the user's own per-project
+  approvals. `cancelled` is used only when a request offers no `reject_once`.
+- **A turn ended on that refusal is continued.** Grok 1.0.52 ends its turn on
+  any answer except allow (`stopReason: "cancelled"`,
+  `_meta.cancellationCategory` `PermissionRejected`), so a read-only
+  coordinator or reviewer used to stop at its first refused write without
+  reporting. `requestPromptWithRetriableProviderRetries` re-prompts the same
+  session with `POLICY_DENIAL_CONTINUATION` when three things hold: the
+  attempt ended `cancelled`, `state.policyDeniedRequests` rose during it, and
+  the turn is still the bridge's (not cancelled or closed by the user). A turn
+  gets at most `POLICY_DENIAL_MAX_CONTINUATIONS`. After that it is recorded as
+  a failure. A cancellation naming another category (a hook, `MidTurnAbort`)
+  is never continued.
+
+- **Remove Grok mutation tools before prompting.** Every Grok child under a
+  `deny` policy loads a private `--agent-profile` excluding `write`,
+  `search_replace`, `run_terminal_cmd` and `Agent`, and uses `--no-leader`.
+  Grok can run `touch` without requesting permission, so a bridge refusal
+  alone cannot enforce read-only operation. Read-only transitions replace the
+  child; close removes its temporary profile.
+- **Usage belongs to attempts before turns.** Merge duplicate vendor and
+  prompt-result carriers within an attempt, then sum consumption across
+  continuations. Context occupancy, window and cost (ACP's cumulative session
+  cost) retain the latest snapshot. A late carrier after a continued turn
+  merges into its last attempt, not the summed turn.
+  Reset partial structured output and cancel parked interactions before a
+  continuation; an ended attempt cannot own a later attempt's interaction.

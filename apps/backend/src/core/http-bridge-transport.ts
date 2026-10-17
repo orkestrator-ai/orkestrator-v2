@@ -11,6 +11,8 @@ import {
   type ProviderActivityObservation,
   type ProviderAgent,
   type ProviderSendOptions,
+  ProviderSessionFailedError,
+  type ProviderTurnInterruption,
   ProviderUnavailableError,
   ProviderUnreachableError,
 } from "./agent-provider-contract.js";
@@ -240,6 +242,22 @@ export function sessionSnapshotBudget(agent: ProviderAgent): { remaining: number
     remaining:
       agent === "claude" ? 16 * 1024 * 1024 : AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes,
   };
+}
+
+/**
+ * Reads a failed turn from a bridge session snapshot body. A failure the bridge
+ * explained is thrown as a {@link ProviderSessionFailedError}; otherwise the
+ * turn's interruption, if the body reports a failed one, is returned.
+ */
+export function throwExplainedTurnFailure(
+  agent: ProviderAgent,
+  body: Record<string, unknown>,
+): ProviderTurnInterruption | undefined {
+  const interruption = body.interruption === "restart" ? ("restart" as const) : undefined;
+  if (body.status !== "error") return undefined;
+  const detail = typeof body.error === "string" ? body.error.trim().slice(0, 4_000) : "";
+  if (detail) throw new ProviderSessionFailedError(agent, detail, { interruption });
+  return interruption;
 }
 
 export async function boundedJson(

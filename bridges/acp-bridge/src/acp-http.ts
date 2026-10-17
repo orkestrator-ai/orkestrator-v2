@@ -28,7 +28,6 @@ import {
   finalizeTurnUsage,
   listResumableSessions,
   parseComposerPatch,
-  recordTurnUsage,
   rememberPendingLateTurnUsage,
   resumeSession,
   setSessionReadOnly,
@@ -700,6 +699,8 @@ export async function route(
     const promptSequence = state.promptSequence;
     state.turnStartedAt = Date.now();
     state.currentTurnUsage = {};
+    state.currentAttemptUsage = {};
+    state.completedAttemptUsage = undefined;
     state.currentTurnRequestId = requestId || undefined;
     state.currentTurnSawVendorUsage = false;
     state.currentTurnOutput = schema ? "" : null;
@@ -714,6 +715,8 @@ export async function route(
       state.dispatching = false;
       state.turnStartedAt = undefined;
       state.currentTurnUsage = undefined;
+      state.currentAttemptUsage = undefined;
+      state.completedAttemptUsage = undefined;
       state.currentTurnRequestId = undefined;
       state.currentTurnSawVendorUsage = undefined;
       state.currentTurnOutput = null;
@@ -777,14 +780,14 @@ export async function route(
             message: `${provider} stopped the turn with ${stopReason}`,
           });
         }
-        // PromptResponse.usage is the ACP carrier; Grok still nests the same
-        // numbers under `_meta`. Parse the whole result so either spelling lands
-        // before `turnStartedAt` is cleared and the elapsed time is lost.
-        recordTurnUsage(state, result);
+        // The dispatcher merged every attempt's response with its live usage
+        // carriers. Commit that logical turn once, before clearing its clock.
         finalizeTurnUsage(state);
         rememberPendingLateTurnUsage(state, promptSequence);
         state.turnStartedAt = undefined;
         state.currentTurnUsage = undefined;
+        // The attempt split stays until the next turn so a late carrier after a
+        // continuation lands on the last attempt (`recordTurnUsage`).
         state.currentTurnRequestId = undefined;
         state.currentTurnSawVendorUsage = undefined;
         if (schema && requestId) {
@@ -857,6 +860,8 @@ export async function route(
         finalizeTurnUsage(state);
         state.turnStartedAt = undefined;
         state.currentTurnUsage = undefined;
+        state.currentAttemptUsage = undefined;
+        state.completedAttemptUsage = undefined;
         state.currentTurnRequestId = undefined;
         state.currentTurnSawVendorUsage = undefined;
         // A turn that failed gets no final pass, so a live timer armed moments

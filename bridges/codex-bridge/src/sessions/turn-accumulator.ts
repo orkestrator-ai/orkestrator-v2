@@ -132,6 +132,11 @@ function isClientToolCall(item: EngineItem): boolean {
   return MODEL_STEP_TOOL_ITEM_TYPES.has(item.type);
 }
 
+/** A code-mode `exec` cell the bridge read back from the rollout (`RefusedCellTail`). */
+function isCodeModeCell(item: EngineItem): boolean {
+  return item.type === "dynamic_tool_call" && item.tool === "exec";
+}
+
 /** A single runaway command must not be able to exhaust bridge memory. */
 export const DEFAULT_MAX_COMMAND_OUTPUT_CHARS = 256 * 1024;
 
@@ -215,6 +220,21 @@ export class TurnAccumulator {
   /** Tool calls such as write_stdin/request_user_input need no rendered item. */
   noteModelToolCall(): void {
     this.modelToolCalled = true;
+  }
+
+  /**
+   * Whether a client tool item of this turn started in `[fromMs, toMs]`, by
+   * app-server's clock. A code-mode cell recovered from the rollout is not
+   * one: it is the call those items would have come from.
+   */
+  clientToolItemStartedBetween(fromMs: number, toMs: number): boolean {
+    for (const accumulator of this.items.values()) {
+      const item = accumulator.item;
+      if (!item || !isClientToolCall(item) || isCodeModeCell(item)) continue;
+      const at = accumulator.startedAt ?? accumulator.completedAt;
+      if (at !== undefined && at >= fromMs && at <= toMs) return true;
+    }
+    return false;
   }
 
   /**

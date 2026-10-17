@@ -1,5 +1,17 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+/**
+ * How long dnd-kit's pointer sensor keeps swallowing clicks after a drop
+ * (`setTimeout(documentListeners.removeAll, 50)` in @dnd-kit/core 6.3.1).
+ */
+const DND_KIT_CLICK_SUPPRESSION_MS = 50;
+
+// Time still flows, so the page renders as usual, but each drag can fire
+// dnd-kit's cleanup timer at once instead of waiting for it.
+test.beforeEach(async ({ page }) => {
+  await page.clock.install();
+});
+
 /** A real pointer drag: dnd-kit only activates after the pointer has moved 8px. */
 async function dragTo(page: Page, source: Locator, x: number, y: number) {
   const from = (await source.boundingBox())!;
@@ -8,6 +20,9 @@ async function dragTo(page: Page, source: Locator, x: number, y: number) {
   await page.mouse.move(from.x + from.width / 2 + 20, from.y + from.height / 2 + 20, { steps: 5 });
   await page.mouse.move(x, y, { steps: 15 });
   await page.mouse.up();
+  // An activated drag stops every click's propagation at the document until
+  // this timer runs, so a click right after a drop never reaches React.
+  await page.clock.runFor(DND_KIT_CLICK_SUPPRESSION_MS);
 }
 
 test.describe("coordinator tab groups", () => {

@@ -89,3 +89,13 @@ Recorded evidence only; no test changed.
 - **Isolated rerun:** `mise run test:logged -- --name merge-activity-file -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/native-agent-service-activity-batch.test.ts --parallel=1 --only-failures` passed the unchanged owning file (exit 0, 0.4 seconds).
 - **Evidence:** `orkestrator-test-run.f52EuE/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer artifact `orkestrator-test-run.uYmDZx/merge-tests.log.gz` under the host temporary directory.
 - **Assessment:** the isolated pass establishes intermittence. The relationship to earlier local-port failures and host contention remains unconfirmed. No source, assertion, deadline or skip changed.
+
+## Refused-cell validation recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test`. No backend implementation or owning test changed.
+- **Workers:** workspace/root/bridges/protocol reserved 4/1/2/1 slots on the shared 18-slot host; backend used two isolated workers. The workspace group waited 686.3 seconds for capacity.
+- **Failures:** the 10-session case received `[]` instead of `[10]` (22.53 ms); the 100-session case received `[]` instead of `[64, 36]` (58.55 ms), both at line 153 after activity reconciliation logged an error.
+- **Suite counts:** backend 8818 passed, 41 skipped and three failed across 8862 tests in 473 files (366.20 seconds). The remaining backend failure is 0211; bridges separately hit 0214. Root/support and protocol passed. The aggregate exited 1 after 1101.3 seconds.
+- **Owning-file rerun:** `mise run test:logged -- --name activity-batch-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/native-agent-service-activity-batch.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 0.3 seconds.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.nN9Z1G/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- This matches the existing aggregate-only empty-request symptom. The host-load/port hypothesis remains unconfirmed; no implementation, assertion, timeout or skip changed.

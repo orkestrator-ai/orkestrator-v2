@@ -62,6 +62,29 @@ export function agentDirectory(): string | undefined {
 }
 
 /**
+ * Where the runtime keeps credentials and its model config.
+ *
+ * `PI_BRIDGE_AUTH_FILE` names a credential file outside the agent directory.
+ * An agent-test profile uses it to share only the host's `auth.json` while its
+ * settings, models and MCP config stay in the profile. Sharing the file rather
+ * than a copy keeps an OAuth refresh made here the one the host's `pi` reads
+ * next, instead of a rotated-away refresh token.
+ */
+export function runtimeStorePaths(): { authPath?: string; modelsPath?: string } {
+  const directory = agentDirectory();
+  const authFile = process.env.PI_BRIDGE_AUTH_FILE?.trim();
+  const authPath = authFile
+    ? resolve(authFile)
+    : directory
+      ? resolve(directory, "auth.json")
+      : undefined;
+  return {
+    ...(authPath ? { authPath } : {}),
+    ...(directory ? { modelsPath: resolve(directory, "models.json") } : {}),
+  };
+}
+
+/**
  * Where Pi writes its own session transcripts.
  *
  * Pi owns this file format and resumes a conversation from it, so it is the

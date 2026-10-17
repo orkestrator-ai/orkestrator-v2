@@ -6,6 +6,8 @@ import { createServer as createNetServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { MAX_GATEWAY_EVENT_FRAME_BYTES } from "@orkestrator/protocol/gateway-event-stream";
+import { applyPiHostCredentialEnvironment } from "../../backend/src/core/host-agent-credentials";
+import type { CommandContext } from "../../backend/src/core/commands-context";
 import { defaultConfig } from "../../backend/src/core/storage";
 import {
   configureSshAgentSocketEnvironment,
@@ -561,6 +563,87 @@ describe("Electron backend process supervisor", () => {
     expect(isolated.CLAUDE_SECURESTORAGE_CONFIG_DIR).toBeUndefined();
     expect(isolated.CLAUDE_CONFIG_DIR).toBe("/profiles/qa/credentials/claude");
     expect(isolated.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR).toBeUndefined();
+  });
+
+  test("names only the host Pi agent directory, and only when Pi is authorized", () => {
+    const parent = {
+      HOME: "/Users/tester",
+      PI_CODING_AGENT_DIR: "/Users/tester/dotfiles/pi",
+      ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR: "/tmp/injected-host-pi",
+    };
+    const runtime = { flavor: "agent-test" as const, isolatedCredentialRoot: "/profiles/qa/creds" };
+
+    const authorized = createBackendProcessEnvironment(parent, "2.8.2", {
+      ...runtime,
+      credentialSources: ["pi"],
+    });
+    // The host's own override wins, as it does for `pi` itself; the variable
+    // never reaches the profile, so Pi there keeps the isolated HOME's directory.
+    expect(authorized.ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR).toBe("/Users/tester/dotfiles/pi");
+    expect(authorized.PI_CODING_AGENT_DIR).toBeUndefined();
+    expect(authorized.PI_AGENT_DIR).toBeUndefined();
+    expect(authorized.HOME).toBe("/profiles/qa/creds/home");
+
+    const defaulted = createBackendProcessEnvironment({ HOME: "/Users/tester" }, "2.8.2", {
+      ...runtime,
+      credentialSources: ["pi"],
+    });
+    expect(defaulted.ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR).toBe("/Users/tester/.pi/agent");
+
+    const denied = createBackendProcessEnvironment(parent, "2.8.2", {
+      ...runtime,
+      credentialSources: ["claude"],
+    });
+    expect(denied.ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR).toBeUndefined();
+
+    const production = createBackendProcessEnvironment(parent, "2.8.2");
+    expect(production.ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR).toBeUndefined();
+  });
+
+  test("normalizes host Pi overrides before HOME changes and hands off only auth", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "orkestrator-pi-handoff-"));
+    directories.push(root);
+    const hostHome = path.join(root, "host");
+    const authPath = path.join(hostHome, ".pi-custom", "auth.json");
+    await mkdir(path.dirname(authPath), { recursive: true });
+    await writeFile(authPath, "{}");
+    const isolated = createBackendProcessEnvironment(
+      { HOME: hostHome, PI_CODING_AGENT_DIR: "~/.pi-custom" },
+      undefined,
+      {
+        flavor: "agent-test",
+        credentialSources: ["pi"],
+        isolatedCredentialRoot: path.join(root, "credentials"),
+      },
+    );
+    expect(isolated.HOME).not.toBe(hostHome);
+    expect(isolated.ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR).toBe(path.dirname(authPath));
+    const name = "ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR";
+    const previous = process.env[name];
+    process.env[name] = isolated[name];
+    try {
+      const env: NodeJS.ProcessEnv = { HOME: isolated.HOME };
+      await applyPiHostCredentialEnvironment(
+        {
+          runtimeFlavor: "agent-test",
+          credentialSources: new Set(["pi"]),
+        } as unknown as CommandContext,
+        env,
+      );
+      expect(env.PI_BRIDGE_AUTH_FILE).toBe(authPath);
+      expect(env.PI_AGENT_DIR).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env[name];
+      else process.env[name] = previous;
+    }
+    for (const override of ["~", "relative/pi", "/absolute/pi"]) {
+      const env = createBackendProcessEnvironment(
+        { HOME: hostHome, PI_CODING_AGENT_DIR: override },
+        undefined,
+        { flavor: "agent-test", credentialSources: ["pi"] },
+      );
+      expect(env[name]).toBe(override === "~" ? hostHome : path.resolve(override));
+    }
   });
 
   test("agent-test environments keep the Docker daemon endpoint while isolating its credentials", () => {

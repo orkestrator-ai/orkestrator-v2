@@ -2072,12 +2072,14 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
   const resolveLaunchInFlight = resolveLaunchEnvironmentId !== null;
 
+  // An unknown mergeability (null) still allows configuring a resolve: GitHub
+  // can take a while to compute it, and the user may already know it conflicts.
   const canConfigureResolve = Boolean(
     tabCount < MAX_TABS &&
     isRunning &&
     hasPR &&
     !isPRFinished &&
-    hasMergeConflicts &&
+    hasMergeConflicts !== false &&
     selectedEnvironmentId &&
     selectedProjectId &&
     !resolveLaunchInFlight,
@@ -2177,7 +2179,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     : selectedEnvironmentId !== resolveDialogTarget.environmentId ||
         selectedProjectId !== resolveDialogTarget.projectId
       ? "The selected environment changed. Close this dialog and reopen it from the intended environment."
-      : !hasPR || isPRFinished || !hasMergeConflicts
+      : !hasPR || isPRFinished || hasMergeConflicts === false
         ? "This pull request no longer has merge conflicts to resolve."
         : !isRunning
           ? "The environment is no longer running."

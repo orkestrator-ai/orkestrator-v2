@@ -1,6 +1,6 @@
 # GitHub picker non-git destination alert missing in the root suite
 
-- **ID:** 0342
+- **ID:** 0352
 - **Status:** open
 - **Date observed:** 2026-10-17
 - **File:** `tests/unit/components/GitHubCloneIntegration.test.tsx`.

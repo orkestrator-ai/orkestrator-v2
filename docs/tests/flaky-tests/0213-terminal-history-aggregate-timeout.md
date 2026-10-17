@@ -31,3 +31,24 @@ the default 5-second deadline even alone (the whole file takes 6.75 seconds), so
 host load from the concurrent groups pushes it over. The test source was
 neither changed nor skipped. The branch under test
 (`chore-2026-10-14-cleanup-follow-ups`) does not touch terminal history.
+
+
+## ACP policy continuation validation recurrence — 2026-10-17
+
+- Original command: `mise run test:logged -- --name full-tests -- mise run test`
+  on `7f43ef60` plus the ACP policy continuation fixes, macOS arm64.
+- Workers: workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend
+  used two isolated workers. Other worktrees shared the host; this run also
+  exercised an isolated Grok live profile.
+- This recurrence names `terminal history > pages fixed history backwards and
+  rejects a cursor for another history`: 5002.41 ms against a 5000 ms limit.
+  Late work asserted `row-1250` against an undefined row after fixture cleanup.
+- Aggregate: backend 8789 passed, 41 skipped, two failed across 471 files
+  (586.69 seconds). The full command exited 1 after 625.8 seconds; the other
+  backend failure is 0165 and the Cursor hook timeout is 0240.
+- Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.lvavmO/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- Isolated owning-file rerun:
+  `mise run test:logged -- --name terminal-history-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/terminal-history.test.ts --parallel=1 --only-failures`
+  passed unchanged, exit 0, 12.9 seconds.
+- Shared-host I/O contention remains a hypothesis. No owning code, assertion,
+  timeout or skip changed.

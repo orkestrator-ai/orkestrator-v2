@@ -445,6 +445,12 @@ export interface ClaudeCommandInventoryState {
   refreshFailed?: boolean;
   /** Discovery configuration a probe answer was computed for. */
   probeFingerprint?: string;
+  /**
+   * Terminal-bound names the probed CLI version reported on an earlier turn
+   * (`claude-terminal-commands.ts`). Used only until this session's own init
+   * frame arrives.
+   */
+  rememberedTerminalSlashCommands?: string[];
 }
 
 /** A provider-reported activity within a running turn. */

@@ -22,7 +22,12 @@ import {
   type AcpNormalizedSessionConfig,
 } from "./session-config.js";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
-import { parseAcpTurnUsage, type AcpTurnUsage } from "./usage.js";
+import {
+  acpUsageTokenCount,
+  accumulateAttemptUsage,
+  parseAcpTurnUsage,
+  type AcpTurnUsage,
+} from "./usage.js";
 import { acpSignInMissing, assertAcpSignedIn } from "./acp-credentials.js";
 import {
   AcpProcess,
@@ -776,6 +781,27 @@ export function workflowResultPermissionOption(
   return allowOptionId(params);
 }
 
+/**
+ * The answer to a permission request this session's policy refuses.
+ *
+ * A refusal, not a cancellation: ACP's `cancelled` outcome says the prompt
+ * turn itself was cancelled. Only `reject_once` is chosen. Grok's
+ * `reject_always` stores a "never allow" grant in the user's per-project
+ * approvals, outliving this session's policy. A request offering no
+ * `reject_once` falls back to `cancelled`, which no agent treats as approval.
+ *
+ * Grok 1.0.52 ends its turn on either answer (`cancellationCategory`
+ * `PermissionRejected` or `PermissionCancelled`); the prompt loop continues
+ * such a turn (`acp-prompt.ts`).
+ */
+export function policyDenialOutcome(params: JsonObject): JsonObject {
+  const options = Array.isArray(params.options) ? params.options.filter(isObject) : [];
+  const reject = options.find((option) => option.kind === "reject_once");
+  return typeof reject?.optionId === "string"
+    ? { outcome: { outcome: "selected", optionId: reject.optionId } }
+    : { outcome: { outcome: "cancelled" } };
+}
+
 function allowOptionId(params: JsonObject): string | undefined {
   const options = Array.isArray(params.options) ? params.options.filter(isObject) : [];
   const allow =
@@ -952,7 +978,8 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
       return;
     }
     if (policy?.approvals === "deny") {
-      child.respond(requestId, { outcome: { outcome: "cancelled" } });
+      state.policyDeniedRequests = (state.policyDeniedRequests ?? 0) + 1;
+      child.respond(requestId, policyDenialOutcome(params));
       return;
     }
     const autoAllow = autoApprovedPermissionOption(
@@ -1930,8 +1957,16 @@ export function recordTurnUsage(state: SessionState, payload: unknown): void {
   }
   const turnInFlight = state.turnStartedAt !== undefined;
   const previous = state.usage;
-  const accumulatedTurn = turnInFlight
-    ? { ...state.currentTurnUsage, ...turn }
+  // A late carrier after a continued turn belongs to its last attempt, so it
+  // merges there; merging it into the summed turn would drop earlier attempts.
+  const attemptOpen =
+    turnInFlight ||
+    (state.completedAttemptUsage !== undefined && state.currentAttemptUsage !== undefined);
+  if (attemptOpen) {
+    state.currentAttemptUsage = { ...state.currentAttemptUsage, ...turn };
+  }
+  const accumulatedTurn = attemptOpen
+    ? accumulateAttemptUsage(state.completedAttemptUsage, state.currentAttemptUsage!)
     : { ...previous?.turn, ...turn };
   if (turnInFlight) state.currentTurnUsage = accumulatedTurn;
   const durationMs =
@@ -1967,18 +2002,7 @@ export function recordTurnUsage(state: SessionState, payload: unknown): void {
 
 /** Exact per-turn consumption when ACP or the vendor reports token counters. */
 export function acpTurnTokenCount(usage: AcpTurnUsage): number | undefined {
-  return (
-    usage.totalTokens ??
-    (usage.inputTokens === undefined &&
-    usage.outputTokens === undefined &&
-    usage.cacheReadTokens === undefined &&
-    usage.cacheWriteTokens === undefined
-      ? undefined
-      : (usage.inputTokens ?? 0) +
-        (usage.outputTokens ?? 0) +
-        (usage.cacheReadTokens ?? 0) +
-        (usage.cacheWriteTokens ?? 0))
-  );
+  return acpUsageTokenCount(usage);
 }
 
 /** Commit the usage collected for one completed turn replayed by session/load. */

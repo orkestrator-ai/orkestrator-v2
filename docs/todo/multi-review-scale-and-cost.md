@@ -3,14 +3,18 @@
 Checked against `main` at `2459b05c` (2026-10-15). The browser suites and the
 real-stack inactive-environment cycle were run against `31d0fb06` on
 2026-10-17; see [Qualification results](#qualification-results-2026-10-17).
+The restart continuation and step reminders were added on `9da80451`
+(2026-10-17); see
+[Restart continuation and step reminders](#restart-continuation-and-step-reminders-2026-10-17).
 
 Multi Review's control plane covers reviewer admission, observation,
 persistence, evidence verification and consolidation input. Its cost must stay
 bounded, and independent of retained review history, as a panel grows towards
 the 32-reviewer maximum. The mechanisms shipped in #833, and #852 made the keyed
 supervisor the default driver. What remains is rollback gates that outlived
-their one-release window, two recovery gaps the real-stack cycle found, and
-scale evidence that was never collected.
+their one-release window, a Claude restart gap and the Build Pipeline steps'
+share of the two recovery gaps the real-stack cycle found, and scale evidence
+that was never collected.
 
 ## Current state
 
@@ -67,6 +71,21 @@ scale evidence that was never collected.
   a reviewer whose bridge never answers. Multi Review evicts its provider
   (`MultiReviewService.evictUnreachableProvider`); Build Pipeline review stages
   get the bounded retry but do not evict yet.
+- **Follow-up turns.** A reviewer, and each Multi Review step (preparation,
+  consolidation, Fix), gets two bounded same-session follow-ups under a fresh
+  request id. The first is the result reminder (`workflowResultReminderPrompt`):
+  a tool-mode turn that went idle with no accepted result gets it once, after
+  `MAX_IDLE_RESULT_POLLS`. The reviewer's is in
+  `ReviewFanoutRunner.prepareReviewerResultReminder`, the step's in
+  `MultiReviewService.prepareStepFollowUp`. The second is the restart
+  continuation (`workflowRestartContinuationPrompt`). A turn the provider
+  reports as `interruption: "restart"` is continued once instead of failed,
+  unless a result was already accepted. Today only the Codex bridge reports
+  that, from its `restartFailure` notice on `/session/:id/status`. The spent
+  flags `resultReminderSent` and `restartContinuationSent` are persisted on the
+  reviewer and on `activeRequest`, and the second miss or second restart fails
+  closed. Build Pipeline review stages get the reviewer half through the shared
+  runner.
 - **Live cycle.** `e2e/agent-testing/multi-review-live.spec.ts`
   (`ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW=1`) runs the inactive-environment
   cycle on the real stack: unmount, renderer reload, backend restart and a
@@ -112,40 +131,24 @@ scale evidence that was never collected.
    lower down, in `readHttpBridgeTranscriptSnapshot`
    (`http-bridge-progressive.ts`), and never sets `fallback: true` (see
    [mixed-version-compatibility.md](mixed-version-compatibility.md)).
-3. **Continue a reviewer whose turn a backend restart cut short.** A restart
-   while reviewers run fails every Codex reviewer mid-turn: the Codex bridge
-   restores the session and reports the turn as `failed` with
-   `CODEX_RESTARTED_MID_TURN_MESSAGE` ("Codex restarted before this turn
-   finished … Send a message to continue",
-   `bridges/codex-bridge/src/sessions/thread-registry.ts`). The runner treats
-   any `error` status as terminal (`review-fanout.ts`, the `status === "error"`
-   branch), so the reviewer's work is thrown away and the review consolidates
-   without it. When every reviewer is mid-turn the whole review fails (seen in
-   the first restart run on 2026-10-17). A Claude reviewer can survive by
-   luck: its resumed session goes idle without a report, and the one result
-   reminder continues it. That reminder says the analysis is done, though,
-   which is false for a cut-short turn. After a killed bridge, the Claude
-   reviewer's in-flight Read came back declined on the resumed session. The
-   model then refused the reminder because it had never seen the diff, and
-   failed (2 of 2 runs). Proposed fix: the bridge reports a structured
-   interruption (for example `interruption: "restart"` beside
-   `phase: "failed"`) rather than only text, `readProviderStatus` carries it,
-   and the runner queues one continuation turn in the same session under a
-   new request id. It works like the result reminder but asks the reviewer to
-   continue its review, and is bounded once and persisted so a second restart
-   cannot loop. The same gap applies to the preparation, consolidation and Fix
-   steps and to Build Pipeline review stages. Fail-closed is still the
-   contract (invariant 5) once the continuation is spent.
-4. **Give preparation and consolidation the reviewers' one result-reminder
-   turn.** A reviewer that goes idle without calling its result tool gets one
-   reminder (`prepareReviewerResultReminder`). The preparation and
-   consolidation steps fail the whole workflow at once
-   (`MultiReviewService`, the `missingWorkflowResultMessage` throw after
-   `MAX_IDLE_RESULT_POLLS`). On 2026-10-17 one of 15 preparations on
-   GPT-6-Luna (low) ended with "The preparation model finished without calling
-   submit_validation_plan to submit its review package preparation"; Restart
-   step recovered it. Reuse the step's `schemaRepairPrompt` dispatch path with
-   `workflowResultReminderPrompt`, once per step.
+3. **Continue a Claude reviewer whose turn a restart cut short.** The Codex
+   half shipped (see
+   [Restart continuation and step reminders](#restart-continuation-and-step-reminders-2026-10-17)).
+   The Claude bridge reports no interruption: a resumed Claude session just
+   goes idle without a report, so the runner sends the result reminder, which
+   says the analysis is done. After a killed bridge the model refused that
+   reminder because it had never seen the diff (2 of 2 runs on 2026-10-17).
+   The fix is for the Claude bridge to record that a turn was in flight when
+   it died and report `interruption: "restart"` beside a failed status. The
+   runner and steps need no change, because they already continue on that
+   field.
+4. **Give Build Pipeline's own steps the restart continuation and result
+   reminder.** Its review stages share the runner and already have both. Its
+   consolidation (`build-pipeline-review-fanout.ts`, the `status === "error"`
+   branch) and other stage turns (`build-pipeline-service-supervisor.ts`) still
+   fail on a cut-short turn or a missing result. Reuse
+   `workflowRestartContinuationPrompt` and `workflowResultReminderPrompt`, with
+   the same once-only, persisted spent flags.
 5. **Add seeded, CI-sized randomised interleaving tests** across concurrent
    reviewers. They should interleave commit resolution, provider completion,
    cancellation, fence loss and restart. They were planned but never written.
@@ -203,12 +206,12 @@ Codex GPT-6-Luna (low) prepared and consolidated.
 | Suite or scenario | Command | Result |
 | --- | --- | --- |
 | Multi Review component specs | `ORKESTRATOR_E2E_PORT=14731 bunx playwright test --config e2e/playwright.config.ts e2e/MultiReviewLaunchDialog.spec.ts e2e/MultiReviewOverview.spec.ts e2e/MultiReviewFlow.spec.ts e2e/ReviewLaunchDialog.spec.ts` | Pass |
-| Full component browser suite | `mise run test:browser` (on port 14732) | 326 passed, 69 skipped, 1 failed. All 73 Multi Review cases passed. The failure was `CoordinatorPaneTree` "drops in the mobile switcher…", which fails 2 of 3 times on its own on unchanged `main` ([mobile-layout-gaps.md](mobile-layout-gaps.md#needs-verification)). |
+| Full component browser suite | `mise run test:browser` (on port 14732) | 326 passed, 69 skipped, 1 failed. All 73 Multi Review cases passed. The failure was `CoordinatorPaneTree` "drops in the mobile switcher…", which failed 2 of 3 times on its own on unchanged `main`; the test clicked inside dnd-kit's 50 ms post-drop click suppression, fixed in the spec ([mobile-layout-gaps.md](mobile-layout-gaps.md#constraints-and-rationale)). |
 | Agent-browser suite | `mise run test:agent:browser:isolated` | 25 passed, 18 skipped (opt-in live cases), 1 failed: known flake [0224](../tests/flaky-tests/0224-host-picker-narrow-tools-popover.md), which passed 4 of 4 alone. The suite has no credential-free Multi Review case; the launcher and reviewer tab are covered by the live cycle below. |
 | Coordinator Multi Review action (opt-in) | `ORKESTRATOR_AGENT_TEST_REVIEW=1 … --grep "coordinator Multi Review action"` | Failed on a stale assertion: the exact text "Cancelled" is gone since the flow graph. It now matches the status line "Multi Review cancelled", and passes. |
 | Live cycle: unmount | `multi-review-live.spec.ts` "settles while unmounted…" | Pass (2 full runs; an earlier run passed every snapshot check and failed on a spec selector). Settled to `ready` while unmounted. No cancellation, one prompt per reviewer, same sessions, `unchanged` conditional reads, no fallback. The graph, inspector, Fix control and the reviewer's read-only tab are right on return and after reloads. |
-| Live cycle: renderer reload | "survives a renderer reload while reviewers run" | Pass (2 runs; one earlier attempt failed in preparation before the reload, see Code item 4). |
-| Live cycle: backend restart | "converges after a backend restart while reviewers run" | Pass under the fail-closed contract (2 runs). The Claude reviewer completed after its result reminder. The Codex reviewer failed with the restart message, and the review consolidated from Claude's report. Two earlier runs failed the stricter spec that required both reviewers to complete. One had the same split; in the other, both reviewers were cut short and the whole review failed. See Code item 3. |
+| Live cycle: renderer reload | "survives a renderer reload while reviewers run" | Pass (2 runs; one earlier attempt failed in preparation before the reload; the step reminder now covers it, see [Restart continuation and step reminders](#restart-continuation-and-step-reminders-2026-10-17)). |
+| Live cycle: backend restart | "converges after a backend restart while reviewers run" | Pass under the fail-closed contract (2 runs). The Claude reviewer completed after its result reminder. The Codex reviewer failed with the restart message, and the review consolidated from Claude's report. Two earlier runs failed the stricter spec that required both reviewers to complete. One had the same split; in the other, both reviewers were cut short and the whole review failed. Fixed for Codex since; see [Restart continuation and step reminders](#restart-continuation-and-step-reminders-2026-10-17). |
 | Live cycle: killed reviewer bridge | "isolates an interrupted reviewer bridge to that reviewer" | Before the fix the Claude reviewer failed at once with "claude bridge is not reachable" (the outcome of one of the two pre-fix runs was not recorded). After the fix (3 runs) the bridge was restarted and the reviewer continued in its session, then failed closed after the reminder (Code item 3). The Codex peer completed every time. |
 
 After the Multi Review Fix (`a1e36236`) and the `origin/main` merge
@@ -239,7 +242,7 @@ Decisions taken during the run:
   with a stated reason, and recorded as annotations, because fail-closed is the
   documented contract. Everything else is held strictly.
 - The spec restarts preparation once if it fails before any reviewer starts,
-  and records it, because that flake (Code item 4) is outside what the cycle
+  and records it, because that flake (now covered by the step reminder) is outside what the cycle
   tests.
 
 ### Review recovery follow-up (2026-10-17)
@@ -297,6 +300,64 @@ text names the platform provider, including OpenCode.
   `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.IJ4t3D/`;
   the wrapper log is
   `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.NEipUr/final-full-review-recovery.log.gz`.
+
+## Restart continuation and step reminders (2026-10-17)
+
+Built on `9da80451` (#1056 already merged), on macOS arm64 with other live
+test environments on the host.
+
+Fixed:
+
+- **A restart failed a Codex reviewer mid-review.** The bridge's restart
+  notice reached the backend only as text, and `ReviewFanoutRunner` failed any
+  reviewer whose status read was `error`. The bridge now reports
+  `interruption: "restart"`, and the runner and step runner continue the turn
+  once (see Current state, "Follow-up turns").
+- **Preparation and consolidation had no result reminder.** The step runner
+  threw the `missingWorkflowResultMessage` failure as soon as the idle bound
+  ran out. It now sends the reviewers' one reminder first.
+- **Rehydrated Codex transcripts showed Codex's injected instructions as a
+  user turn.** Codex 0.162 writes the global instructions block under
+  `# AGENTS.md instructions` with no path. The rollout filter
+  (`isSyntheticPersistedUserText`, `bridges/codex-bridge/src/history/rollout.ts`)
+  only knew `# AGENTS.md instructions for <path>`. The live restart case found
+  this. The first live run after the fix had the Codex reviewer complete
+  through its continuation, but its rehydrated transcript showed three user
+  turns where two were allowed. No reviewer transcript was checked after a
+  restart before, because the Codex reviewer always failed.
+
+Tests:
+
+- `review-fanout-restart-continuation.test.ts` covers continuing in the same
+  session, the second restart failing closed, a report submitted before the
+  restart, retiring the tool slot, and an ordinary failure still failing.
+  Three of the five fail without the runner change.
+- `multi-review-service.test.ts` covers the preparation reminder and its bound,
+  a consolidation continued after a restart, a second restart failing the
+  step, and one reminder before a pasted-report failure. All four fail without
+  the service change.
+- The bridge status, provider parsing, prompt and protocol tests cover the new
+  fields. `rollout.test.ts` covers the new instructions heading, and that a
+  user's own text starting with it is still shown.
+
+Live, on profile `mrq-restart-dcac9155`
+(`dev:test --fixture --credential-source claude --credential-source codex
+--agent-platforms claude,codex`, Claude 2.1.296, Codex 0.162.1, Haiku 4.5 and
+GPT-6-Luna at low effort), the restart case was "converges after a backend
+restart while reviewers run". It now requires the Codex reviewer to complete.
+After the rollout fix it passed (157.5 s): Claude "completed after the result
+reminder", Codex "completed after the restart continuation". The whole file
+then passed 4 of 4 in 654.7 s. The restart case had the same outcomes. After
+the killed bridge, Claude failed closed after its reminder (Code item 3) and
+Codex completed. The profile was stopped and reset. The spec's prompt-count
+failure message now labels each user turn (prompt, restart, reminder, commit
+nudge, or a `<tag>`) without printing its text.
+
+Not qualified live: the step reminder. A model forgetting its result tool is
+rare (1 of 15 preparations on 2026-10-17) and cannot be forced on a real
+provider, so only the deterministic tests cover it. No live restart landed
+while preparation or consolidation was mid-turn, so the step continuation is
+covered by tests only.
 
 ## Constraints and rationale
 
@@ -373,11 +434,50 @@ text names the platform provider, including OpenCode.
   | Retryable provider create or prepare error | Reviewer | Stay pending or retrying; peers continue |
   | Ambiguous prompt send | Reviewer | Park the same request ID; peers continue |
   | Transient status or transcript read error, including an unreachable bridge | Reviewer observation | Keep prior state; reconnect and retry when due; fail after the idle-poll bound |
-| Turn cut short by a backend restart | Reviewer | Fails the reviewer today (Codex); see Code item 3 |
+  | Turn cut short by a provider restart (`interruption: "restart"`) | Reviewer or step | Accept a result already submitted; otherwise continue once in the same session; fail on a second restart. A Claude turn reports no interruption yet (Code item 3) |
   | Structured result still invalid after repair | Reviewer | Fail that reviewer; keep the other reports |
   | Controller fence lost | Whole runner | Reject commits, stop new I/O; the new owner reconciles |
   | User cancellation | Whole owner | Drop queued work; decline or abort live sessions safely |
 
+- **Restart continuation and step reminders (2026-10-17).**
+  - *Detection is a structured bridge field, not text.* The Codex bridge
+    already keeps a durable `restartFailure` notice for a turn its app-server
+    restart stopped. `/session/:id/status` now reports it as
+    `interruption: "restart"`, but only while the session's error is still that
+    restart's message, so a later unrelated failure cannot inherit it. Matching
+    `CODEX_RESTARTED_MID_TURN_MESSAGE` in the backend would break on any
+    wording change. Having the backend infer "I restarted, so every sent turn
+    was interrupted" would also continue turns that failed for real reasons. A
+    bridge that predates the field fails the turn as before; there is no text
+    fallback.
+  - *A continuation, not a fresh attempt.* The session keeps the partial work,
+    so one turn in the same session under a new request id
+    (`workflowRestartContinuationPrompt`) resumes it. Restarting the reviewer
+    in a fresh session would redo all of it. This does not weaken invariant 3:
+    the bridge has journaled the interrupted request as terminal, so nothing
+    about it is ambiguous, and the continuation is a new request rather than a
+    re-send of the old one.
+  - *Once, persisted.* `restartContinuationSent` survives restarts, so a
+    provider that keeps dying (a crash-looping app-server) fails closed on the
+    second interruption, as invariant 5 requires. A user who restarts twice
+    during one turn loses that reviewer, the same as before this change.
+  - *A submitted result wins.* A result accepted before the restart is used,
+    and the continuation is skipped. An interrupted structured-output turn
+    records an `ok: false` provider failure, which counts as no result.
+  - *Separate budgets.* The continuation and the result reminder are spent
+    independently. A continued reviewer can still forget to submit, and the
+    reminder's "your work is done" is false right after a restart.
+  - *Steps.* Preparation, consolidation and Fix share one step runner, so all
+    three get the reminder and the continuation. Restricting it to two of them
+    would have needed an extra kind check and given no benefit. The step
+    reminder names the step's own work ("Your discovery work is already
+    done").
+  - *The rollout-filter fix ships here.* It is a one-line Codex bridge change
+    found by this work's live check. Leaving it out would leave the
+    strengthened restart case failing on every run.
+  - *Claude and Build Pipeline steps are follow-ups* (Code items 3 and 4).
+    Claude needs bridge work to report an interruption. Build Pipeline's own
+    steps have a separate runner, and #1056 had just changed those files.
 - Budget values and why they were chosen (640 KiB consolidation, 1 MiB per
   report, caps of 4/8/4/16, the 3 s running cadence), with the benchmark
   reproduce command, are in

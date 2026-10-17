@@ -1,3 +1,4 @@
+import { stat } from "node:fs/promises";
 import {
   DEFAULT_INITIAL_PROMPT_RETRY_DELAY_MS,
   DEFAULT_ENVIRONMENT_DRAIN_TIMEOUT_MS,
@@ -549,14 +550,23 @@ export class CodexRuntimePrompt {
         threadId: context.threadId,
       });
 
-      const startTurn = () =>
-        this.ctx.options.engine.startTurn({
+      let refusedCellOffset: number | undefined;
+      const startTurn = async () => {
+        const path = this.ctx.options.engine.rolloutPath(context!.threadId);
+        refusedCellOffset = path
+          ? await stat(path).then(
+              (stats) => stats.size,
+              (error: NodeJS.ErrnoException) => (error.code === "ENOENT" ? 0 : undefined),
+            )
+          : undefined;
+        return this.ctx.options.engine.startTurn({
           handle: context!.engineHandle,
           input: engineInput,
           config: turnConfig,
           requestId,
           outputSchema: input.outputSchema,
         });
+      };
       let turn;
       try {
         turn = await startTurn();
@@ -795,6 +805,7 @@ export class CodexRuntimePrompt {
       // reader goes through `stateFor`, and writing the streaming identity to a
       // dead object would leave the turn running but never streaming.
       const liveState = this.lifecycle.stateFor(context.threadId);
+      liveState.refusedCellOffset = refusedCellOffset;
       this.lifecycle.beginAssistantTurnRender(liveState, assistantMessage);
 
       // The turn is registered now, so anything that arrived while `turn/start`

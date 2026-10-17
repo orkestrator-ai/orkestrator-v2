@@ -1,9 +1,21 @@
 import { afterAll, describe, expect, jest, test } from "bun:test";
 import { semver } from "bun";
-import { chmod, cp, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  cp,
+  mkdtemp,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+  symlink,
+} from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ownedTempDirPrefix, sweepStaleTempDirs } from "../../../tests/temp-sweep";
+import { createEnvironment } from "../src/core/storage";
+import { agentTestHostCursorCredentialPath } from "../src/core/agent-test-cursor-credential";
 import { waitForStandaloneBackendReady } from "./standalone-ready";
 
 const root = path.resolve(import.meta.dir, "../../..");
@@ -55,7 +67,7 @@ async function startBackend(
   extraArgs: string[] = [],
   extraEnv: Record<string, string> = {},
   prepare?: (paths: { dataDir: string; rendererRoot: string }) => Promise<void>,
-  launch?: { bunArgs?: string[]; entry?: string; cwd?: string },
+  launch?: { bunArgs?: string[]; entry?: string; cwd?: string; appRoot?: string },
 ): Promise<{
   url: string;
   token: string;
@@ -84,9 +96,9 @@ async function startBackend(
       "--data-dir",
       dataDir,
       "--app-root",
-      root,
+      launch?.appRoot ?? root,
       "--resource-root",
-      root,
+      launch?.appRoot ?? root,
       "--renderer-root",
       rendererRoot,
       ...extraArgs,
@@ -245,6 +257,104 @@ describe("standalone backend service", () => {
     const webResponse = await Bun.fetch(url, { headers: authorization });
     expect(webResponse.status).toBe(200);
     expect(webResponse.headers.get("content-type")).toContain("text/html");
+  });
+
+  test("agent-test startup loads the Cursor snapshot and launches Pi with only host auth", async () => {
+    const args = ["--runtime-flavor", "agent-test", "--credential-source", "cursor,pi"];
+    const isolatedHome = await createTemporaryDirectory("orkestrator-standalone-worktree-");
+    const hostPi = path.join(isolatedHome, "host-pi");
+    await mkdir(hostPi);
+    await writeFile(path.join(hostPi, "auth.json"), "{}");
+    const started = await startBackend(
+      args,
+      {
+        HOME: isolatedHome,
+        CURSOR_API_KEY: "",
+        PI_CODING_AGENT_DIR: "",
+        ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR: hostPi,
+      },
+      async ({ dataDir }) => {
+        const snapshot = agentTestHostCursorCredentialPath(dataDir);
+        await mkdir(path.dirname(snapshot), { recursive: true });
+        await writeFile(
+          snapshot,
+          JSON.stringify({ apiKey: "startup-fixture-key", apiKeyExpiresAtMs: Date.now() + 60_000 }),
+        );
+        const worktree = path.join(dataDir, "worktree");
+        await mkdir(worktree);
+        const environment = createEnvironment("project-1");
+        await writeFile(
+          path.join(dataDir, "environments.json"),
+          JSON.stringify([
+            {
+              ...environment,
+              id: "credential-handoff",
+              environmentType: "local",
+              worktreePath: worktree,
+              status: "running",
+            },
+          ]),
+        );
+        const appRoot = path.join(isolatedHome, "app");
+        const bin = path.join(appRoot, "bin");
+        await mkdir(bin, { recursive: true });
+        await symlink(process.execPath, path.join(bin, "bun"));
+        for (const bridge of ["cursor-bridge", "pi-bridge"]) {
+          const dist = path.join(appRoot, "bridges", bridge, "dist");
+          await mkdir(dist, { recursive: true });
+          // Exercise actual launch environments without exposing credentials in
+          // test output or contacting any provider.
+          await writeFile(
+            path.join(dist, "index.js"),
+            `
+          Bun.serve({ port: Number(process.env.PORT), hostname: "127.0.0.1", fetch() {
+            return Response.json({
+              snapshotSelected: process.env.CURSOR_API_KEY === "startup-fixture-key",
+              authFile: process.env.PI_BRIDGE_AUTH_FILE ?? null,
+              agentDir: process.env.PI_AGENT_DIR ?? null,
+              codingAgentDir: process.env.PI_CODING_AGENT_DIR || null,
+              home: process.env.HOME,
+            });
+          }});
+        `,
+          );
+        }
+      },
+      {
+        entry: path.join(root, "apps/backend/src/main.ts"),
+        appRoot: path.join(isolatedHome, "app"),
+      },
+    );
+    try {
+      await expect(
+        invokeBackend(started.url, started.token, "cursor_sdk_login_status", {}),
+      ).resolves.toMatchObject({
+        auth: { authenticated: true, source: "host-snapshot" },
+      });
+      const cursor = (await invokeBackend(
+        started.url,
+        started.token,
+        "start_local_cursor_server_cmd",
+        { environmentId: "credential-handoff" },
+      )) as { port: number };
+      const cursorEnv = await (
+        await Bun.fetch(`http://127.0.0.1:${cursor.port}/global/health`)
+      ).json();
+      expect(cursorEnv.snapshotSelected).toBe(true);
+      const pi = (await invokeBackend(started.url, started.token, "start_local_pi_server_cmd", {
+        environmentId: "credential-handoff",
+      })) as { port: number };
+      const piEnv = await (await Bun.fetch(`http://127.0.0.1:${pi.port}/global/health`)).json();
+      expect(piEnv).toMatchObject({
+        authFile: path.join(hostPi, "auth.json"),
+        agentDir: null,
+        codingAgentDir: null,
+        home: isolatedHome,
+      });
+    } finally {
+      started.child.kill("SIGTERM");
+      await started.child.exited;
+    }
   });
 
   test("passes CLI compression through to gateway metrics for each listener", async () => {

@@ -117,3 +117,31 @@ describe("ACP provider configuration", () => {
     expect(undeclaredPromptCapabilities("toString")).toEqual({});
   });
 });
+
+test("Grok read-only profiles disable the shared leader independently of network flags", () => {
+  const config = loadAcpProviderConfig({ ACP_PROVIDER: "grok" });
+  expect(
+    providerArgv(config, { approvals: "deny", readOnlyProfilePath: "/private/profile.md" }),
+  ).toEqual(["agent", "--no-leader", "--agent-profile", "/private/profile.md", "stdio"]);
+  expect(
+    providerArgv(config, {
+      approvals: "deny",
+      denyNetwork: true,
+      readOnlyProfilePath: "/private/profile.md",
+    }),
+  ).toEqual([
+    "--disable-web-search",
+    "agent",
+    "--no-leader",
+    "--agent-profile",
+    "/private/profile.md",
+    "stdio",
+  ]);
+});
+
+test("refuses a read-only profile when the Grok launcher cannot load it", () => {
+  const config = loadAcpProviderConfig({ ACP_PROVIDER: "grok" });
+  expect(() =>
+    providerArgv({ ...config, argv: ["stdio"] }, { readOnlyProfilePath: "/private/profile.md" }),
+  ).toThrow("read-only profile requires a local agent launcher");
+});

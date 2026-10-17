@@ -284,6 +284,13 @@ passed the unchanged owning file in 23.8 seconds (exit 0). Evidence:
 - After the aggregate and browser runs ended, the unchanged owning file passed: `mise run test:logged -- --name coordinator-post-aggregate -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`, 19.1 seconds, exit 0.
 - Shared-host contention and teardown after timeout remain hypotheses. No assertion, timeout, skip or implementation in this owner changed.
 
+## Pi and Cursor agent-test logins PR stage — 2026-10-17
+
+- Original command: `bun run test:workspace` in `apps/backend` (two workers) after merging `origin/main` into `fix-pi-login-in-agent-test-profiles-379ebff75838`, macOS arm64 on the heavily loaded shared host.
+- The bound-discard case timed out at 5107.48 ms. Backend: 8,830 passed, 41 skipped, two failed across 475 files (457.71 seconds); the other failure was 0180.
+- Unchanged owning-file rerun: `bun test --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts` in `apps/backend` passed all 52 tests (24.67 seconds).
+- The branch does not touch the coordinator service. No assertion, timeout, skip or implementation changed.
+
 ## Multi Review restart-continuation main merge — 2026-10-17
 
 - Original command: `bun run test` from `apps/backend` on `53b43e81` (the Multi Review restart-continuation branch after merging `origin/main` at `607d12e2`), macOS arm64 under shared-host load (load average 18–28).
@@ -291,6 +298,30 @@ passed the unchanged owning file in 23.8 seconds (exit 0). Evidence:
 - The bound-discard case timed out at 5285.56 ms and `project coordinator > fetch force, fast-forward sync, remote switching, and divergence stay safe` at 5717.12 ms.
 - Unchanged owning-file rerun: `bun test --preload ../../tests/setup-node.ts src/core/coordinator-service.test.ts` from `apps/backend` passed 52 of 52 in 22.50 seconds.
 - No assertion, timeout, skip or implementation in this owner changed.
+
+## ACP policy continuation validation — 2026-10-17
+
+- Original command: `mise run test:logged -- --name full-tests -- mise run test`
+  on `7f43ef60` plus ACP policy fixes, macOS arm64. Workspace/root/bridge/
+  protocol reservations were 4/1/2/1 slots; backend used two isolated workers
+  on a host shared with other worktrees and an isolated live Grok profile.
+- Aggregate failure: `project coordinator > fetch force, fast-forward sync,
+  remote switching, and divergence stay safe` at 5103.88 ms (5000 ms limit),
+  with a late `git commit -m local` SIGTERM. Backend: 8789 passed, 41 skipped,
+  two failed in 586.69 seconds. Whole command: exit 1, 625.8 seconds.
+- Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.lvavmO/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- `mise run test:logged -- --name coordinator-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`
+  failed: 46 passed, two failed, two late SQLite errors, 30.9 seconds. The
+  bound-discard case timed out at 5126.94 ms and the dirty-submodule case at
+  5320.94 ms. Artifact: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.1FRn0R/coordinator-owner.log.gz`.
+- After the aggregate completed, the same owning-file command under label
+  `coordinator-post-suite` still failed: 47 passed, one failed, one late
+  `SQLITE_IOERR_VNODE`, 30.3 seconds. Bound discard exceeded its deadline at
+  5171.09 ms. Artifact: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.eNEjwF/coordinator-post-suite.log.gz`.
+- This run does **not** establish an isolated owning-file pass, so the
+  aggregate failure remains unresolved evidence rather than a newly confirmed
+  flake. Host I/O contention remains a hypothesis. No owner code, assertion,
+  deadline or skip changed.
 
 ## Codex catalogue review final validation — 2026-10-17
 
@@ -355,6 +386,13 @@ No implementation, assertion, timeout or skip was changed.
 - Owning-file rerun: `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1` gave 47 passed and 1 failed (the bound-discard case at 5155.68 ms). Two `-t "bound discard confirmations"` reruns also timed out (5152.24 and 5177.52 ms) at a load average of about 30.
 - Assessment: the case now fails alone while the host is loaded, which supports the contention hypothesis. The change under test does not touch the coordinator. No assertion, timeout or skip changed.
 
+## Pi and Cursor agent-test logins main merge validation — 2026-10-17
+
+Aggregate command, worker configuration, counts and evidence are recorded in [0211](0211-cleanup-retry-aggregate-timeout.md#pi-and-cursor-agent-test-logins-main-merge-validation--2026-10-17).
+
+- Failure: `bound discard confirmations refuse stale, sequencer, nested, and failed switches` exceeded its 5000 ms deadline at 5214.68 ms.
+- Owning-file rerun: `mise run test:logged -- --name merge-coordinator-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` also timed out this case at 5208.53 ms, followed by an ENOENT reading the removed nested fixture; 51 passed, one failed and one error (43.04 seconds). Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.UQSgsr/merge-coordinator-owner.log.gz`.
+- This observation remains unresolved: the isolated failure does not establish a flake. No implementation, assertion, timeout or skip changed.
 
 ## Slash catalogue main merge recurrence — 2026-10-17
 

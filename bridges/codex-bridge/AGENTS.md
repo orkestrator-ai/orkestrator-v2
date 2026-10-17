@@ -25,6 +25,7 @@ ignored, so title generation cannot inherit the user's tools or instructions.
 | `src/app-server/server-request-router.ts` | Answers every server request, exactly once       |
 | `src/app-server/notification-recorder.ts` | Opt-in capture of the inbound stream for fixtures |
 | `src/sessions/dispatch-journal.ts`      | At-most-once prompt dispatch                       |
+| `src/sessions/refused-cell-tail.ts`     | Refused code-mode cells, read from the rollout     |
 | `src/messages/normalization.ts`         | Item → normalized part rendering                   |
 | `src/messages/diff-budget.ts`           | Caps the diff state, the largest memory consumer   |
 | `src/codex-item-types.ts`               | Local thread-item types (was the Codex SDK)        |
@@ -101,6 +102,23 @@ newest row, which every window holds.
   `RUN_LIVE_CODEX_APP_SERVER=1` (no credits), and once with
   `RUN_LIVE_CODEX_WEB_SEARCH_CANARY=1`, which spends a few turns proving
   `cached` still refuses a page `live` opens.
+- Never read a missing tool row as "the model did not try". Under a sandbox
+  (`read-only` or `workspace-write`), app-server emits no item for a call the
+  sandbox refuses: a rejected `apply_patch`, or a failing command whose output
+  looks like a denial ("Operation not permitted", "Permission denied",
+  "Read-only file system"…). The model still gets the refusal; only the
+  rollout keeps the code-mode `exec` cell and its output. `RefusedCellTail`
+  reads the active turn's rollout records (path from `thread.path`) from the
+  file size captured before `turn/start`, so a fast turn's cells are not
+  skipped. It polls every 200 ms, and the turn's events are applied in order
+  behind a read before each new model response and before `turn.completed`,
+  so a cell lands in the row of the response that ran it. It shows a cell as
+  a failed `exec` row when no item of the turn started while it ran, or its
+  output reports a refusal. `fs.watch` cannot replace the poll: on macOS it
+  reports nothing for Codex's appends through its open descriptor. Raw
+  response events cannot either: `experimentalRawEvents` exists only on
+  `thread/start`, so a thread resumed in a new app-server never gets them.
+  Verified against 0.162.1 by `live-refused-calls.test.ts` (no credits).
 - Agent version bumps follow [`docs/development/upgrade-agents.md`](../../docs/development/upgrade-agents.md);
   the generated protocol under `app-server/generated/` is a lockfile.
 - Never resolve an approval to "approved" by default. Every timeout, disconnect,

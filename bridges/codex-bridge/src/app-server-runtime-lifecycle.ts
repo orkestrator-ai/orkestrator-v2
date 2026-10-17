@@ -35,6 +35,7 @@ import {
   type ThreadContext,
 } from "./sessions/thread-registry.js";
 import { TurnAccumulator } from "./sessions/turn-accumulator.js";
+import { RefusedCellTail, reportsRefusal, type RefusedCell } from "./sessions/refused-cell-tail.js";
 import { compareDispatchRecordsNewestFirst, DispatchJournal } from "./sessions/dispatch-journal.js";
 
 import {
@@ -163,6 +164,7 @@ export class CodexRuntimeLifecycle {
 
   async stop(): Promise<void> {
     this.ctx.stopping = true;
+    for (const state of this.ctx.threadState.values()) state.refusedCellTail?.tail.close();
     this.ctx.resolveDispatchAdmissionStop();
     if (this.ctx.sweepTimer) clearInterval(this.ctx.sweepTimer);
     this.ctx.sweepTimer = null;
@@ -213,6 +215,10 @@ export class CodexRuntimeLifecycle {
         ...[...this.ctx.threadState.values()]
           .filter((state) => state.orderedEventDraining)
           .map((state) => state.orderedEventTail),
+        ...[...this.ctx.threadState.values()].flatMap((state) => {
+          const reading = state.refusedCellTail?.tail.busy();
+          return reading ? [reading] : [];
+        }),
       ];
       if (pending.length === 0) return;
       await Promise.allSettled(pending);
@@ -459,6 +465,8 @@ export class CodexRuntimeLifecycle {
     state.historicalAssistantSegments.clear();
     state.releasedAssistantRows.clear();
     state.pendingEvents.clear();
+    state.refusedCellTail?.tail.close();
+    state.refusedCellTail = undefined;
     this.ctx.threadState.delete(threadId);
   }
 
@@ -726,6 +734,7 @@ export class CodexRuntimeLifecycle {
       // idle, which would let the build pipeline advance on a lost turn.
       if (event.state === "restarting" || event.state === "failed") {
         for (const context of this.ctx.registry.markAllRecovering()) {
+          this.ctx.threadState.get(context.threadId)?.refusedCellTail?.tail.close();
           this.emitStatus(context);
         }
       }
@@ -891,8 +900,13 @@ export class CodexRuntimeLifecycle {
     for (const event of queue) this.applyEvent(context, event);
   }
 
-  applyEvent(context: ThreadContext, event: EngineEvent): void {
+  applyEvent(context: ThreadContext, event: EngineEvent, ordered = false): void {
     const threadId = context.threadId;
+    const entry = this.ctx.threadState.get(threadId)?.refusedCellTail;
+    if (!ordered && entry && "turnId" in event && event.turnId === entry.turnId) {
+      this.queueRefusedCellEvent(context, entry, event);
+      return;
+    }
 
     switch (event.kind) {
       case "thread.name.updated":
@@ -946,7 +960,10 @@ export class CodexRuntimeLifecycle {
       }
       case "turn.started": {
         const turn = context.activeTurn;
-        if (turn && turn.turnId === event.turnId) turn.markRunning(event.turnId);
+        if (turn && turn.turnId === event.turnId) {
+          turn.markRunning(event.turnId);
+          this.startRefusedCellTail(context, turn);
+        }
         return;
       }
       case "model.tool.called": {
@@ -1060,17 +1077,221 @@ export class CodexRuntimeLifecycle {
         if (!turn || !turn.accepts(event)) return;
         this.discardOutlivingCommandWindows(turn);
         turn.complete(event.status, event.error);
-        void this.runFinalization(context, turn).catch((error) => {
-          console.error(
-            `[codex-bridge] Failed to finalize turn ${turn.turnId}:`,
-            error instanceof Error ? error.message : error,
-          );
-        });
+        const finalize = () =>
+          this.runFinalization(context, turn).catch((error) => {
+            console.error(
+              `[codex-bridge] Failed to finalize turn ${turn.turnId}:`,
+              error instanceof Error ? error.message : error,
+            );
+          });
+        // The last cells are read before the turn's rows are rendered for good.
+        const tail = this.takeRefusedCellTail(threadId, turn);
+        if (!tail) {
+          void finalize();
+          return;
+        }
+        const work = tail.finish().then(finalize, finalize);
+        this.ctx.pendingFinalizations.add(work);
+        void work.then(() => this.ctx.pendingFinalizations.delete(work));
         return;
       }
       default:
         return;
     }
+  }
+
+  /**
+   * Follows the turn's rollout records for code-mode cells app-server reports
+   * no item for, and shows them as rows (`RefusedCellTail`). Needs the rollout
+   * path app-server reported for the thread; without one nothing changes.
+   */
+  startRefusedCellTail(context: ThreadContext, turn: TurnAccumulator): void {
+    const state = this.stateFor(context.threadId);
+    if (state.refusedCellTail?.turnId === turn.turnId) return;
+    state.refusedCellTail?.tail.close();
+    state.refusedCellTail = undefined;
+    // The boundary belongs to the prompt that captured it; a turn started some
+    // other way (an inline review) falls back to the bounded turn-ID scan.
+    const offset = state.refusedCellOffset;
+    state.refusedCellOffset = undefined;
+    const path = this.ctx.options.engine.rolloutPath(context.threadId);
+    if (!path) return;
+    const watch = this.ctx.options.watchRolloutFile;
+    const tail = new RefusedCellTail({
+      path,
+      turnId: turn.turnId,
+      offset,
+      ...(watch ? { watch } : {}),
+      itemStartedBetween: (fromMs, toMs) => turn.clientToolItemStartedBetween(fromMs, toMs),
+      onCell: (cell) => {
+        if (
+          this.ctx.stopping ||
+          this.ctx.threadState.get(context.threadId) !== state ||
+          context.activeTurn !== turn ||
+          context.phase === "recovering" ||
+          context.phase === "cancelling" ||
+          context.engineGeneration !== turn.engineGeneration
+        )
+          return;
+        // Bound cells waiting behind notification delivery as well as the disk parser.
+        if (entry.cells.length < 256) entry.cells.push(cell);
+        else {
+          tail.close();
+          for (const sessionId of context.bridgeSessionIds)
+            this.ctx.options.emit({
+              type: "session.reconcile-required",
+              sessionId,
+              data: { reason: "rollout-cell-queue-overflow" },
+            });
+        }
+      },
+    });
+    const entry: NonNullable<ThreadRuntimeState["refusedCellTail"]> = {
+      turnId: turn.turnId,
+      tail,
+      cells: [],
+      events: [],
+      bytes: 0,
+      draining: false,
+    };
+    state.refusedCellTail = entry;
+    void tail.poll().catch(() => undefined);
+  }
+
+  /** Disk barriers serialize only this thread; stdout continues consuming notifications. */
+  queueRefusedCellEvent(
+    context: ThreadContext,
+    entry: NonNullable<ThreadRuntimeState["refusedCellTail"]>,
+    event: EngineEvent,
+  ): void {
+    const bytes = estimateOrderedEventBytes(event);
+    if (
+      entry.events.length >= MAX_PENDING_EVENTS_PER_TURN ||
+      entry.bytes + bytes > MAX_ORDERED_EVENT_BYTES_PER_THREAD
+    ) {
+      // Preserve every authoritative event under backpressure. Stop disk recovery,
+      // apply the bounded backlog synchronously, and explicitly invalidate readers.
+      entry.tail.close();
+      this.ctx.threadState.get(context.threadId)!.refusedCellTail = undefined;
+      for (const queued of entry.events.splice(0)) this.applyEvent(context, queued, true);
+      this.applyEvent(context, event, true);
+      for (const sessionId of context.bridgeSessionIds)
+        this.ctx.options.emit({
+          type: "session.reconcile-required",
+          sessionId,
+          data: { reason: "rollout-event-queue-overflow" },
+        });
+      return;
+    }
+    entry.events.push(event);
+    entry.bytes += bytes;
+    if (entry.draining) return;
+    entry.draining = true;
+    const state = this.ctx.threadState.get(context.threadId)!;
+    const turn = context.activeTurn!;
+    const work = (async () => {
+      try {
+        while (entry.events.length > 0) {
+          const next = entry.events[0]!;
+          const newResponse =
+            ((next.kind === "item.started" || next.kind === "item.completed") &&
+              (next.item.type === "reasoning" || next.item.type === "agent_message") &&
+              !turn.items.has(next.item.id)) ||
+            ((next.kind === "item.text.delta" || next.kind === "item.reasoning.delta") &&
+              !turn.items.has(next.itemId));
+          if (next.kind === "turn.completed") await entry.tail.finish();
+          else if (newResponse) await entry.tail.poll().catch(() => undefined);
+          if (
+            this.ctx.stopping ||
+            this.ctx.threadState.get(context.threadId) !== state ||
+            state.refusedCellTail !== entry ||
+            context.activeTurn !== turn ||
+            context.phase === "recovering" ||
+            context.engineGeneration !== turn.engineGeneration
+          )
+            return;
+          if (newResponse || next.kind === "turn.completed") {
+            const before =
+              next.kind === "item.started"
+                ? (next.startedAtMs ?? this.ctx.now())
+                : next.kind === "item.completed"
+                  ? (next.completedAtMs ?? this.ctx.now())
+                  : this.ctx.now();
+            const ready = entry.cells.filter(
+              (cell) => next.kind === "turn.completed" || (cell.completedAtMs ?? 0) <= before,
+            );
+            entry.cells = entry.cells.filter((cell) => !ready.includes(cell));
+            for (const cell of ready) this.applyRefusedCell(context, turn, cell);
+          }
+          entry.events.shift();
+          entry.bytes -= estimateOrderedEventBytes(next);
+          this.applyEvent(context, next, true);
+        }
+      } finally {
+        entry.draining = false;
+      }
+    })();
+    this.ctx.pendingFinalizations.add(work);
+    void work.catch(() => undefined).finally(() => this.ctx.pendingFinalizations.delete(work));
+  }
+
+  /** Detaches the turn's tail so its last read can run before finalization. */
+  takeRefusedCellTail(threadId: string, turn: TurnAccumulator): RefusedCellTail | undefined {
+    const state = this.ctx.threadState.get(threadId);
+    const entry = state?.refusedCellTail;
+    if (!state || !entry) return undefined;
+    state.refusedCellTail = undefined;
+    if (entry.turnId === turn.turnId) return entry.tail;
+    entry.tail.close();
+    return undefined;
+  }
+
+  /**
+   * Shows a recovered cell as the item app-server never sent: a completed
+   * dynamic tool call, rendered like the `exec` row a reload builds from the
+   * same rollout record. Failed when the model was told of a refusal.
+   */
+  applyRefusedCell(context: ThreadContext, turn: TurnAccumulator, cell: RefusedCell): void {
+    if (
+      this.ctx.stopping ||
+      context.activeTurn !== turn ||
+      !this.ctx.threadState.has(context.threadId) ||
+      context.phase === "recovering" ||
+      context.phase === "cancelling" ||
+      context.engineGeneration !== turn.engineGeneration
+    )
+      return;
+    if (
+      !reportsRefusal(cell.output) &&
+      cell.startedAtMs !== undefined &&
+      cell.completedAtMs !== undefined &&
+      turn.clientToolItemStartedBetween(cell.startedAtMs, cell.completedAtMs)
+    )
+      return;
+    const duration =
+      cell.startedAtMs !== undefined && cell.completedAtMs !== undefined
+        ? Math.max(0, Math.round(cell.completedAtMs - cell.startedAtMs))
+        : undefined;
+    this.applyEvent(
+      context,
+      {
+        kind: "item.completed",
+        threadId: context.threadId,
+        turnId: turn.turnId,
+        item: {
+          id: cell.callId,
+          type: "dynamic_tool_call",
+          tool: "exec",
+          arguments: cell.source,
+          content_items: cell.output ? [{ type: "inputText", text: cell.output }] : [],
+          status: cell.failed ? "failed" : "completed",
+          ...(duration === undefined ? {} : { duration_ms: duration }),
+        },
+        ...(cell.completedAtMs === undefined ? {} : { completedAtMs: cell.completedAtMs }),
+        engineGeneration: turn.engineGeneration,
+      },
+      true,
+    );
   }
 
   /** Gives the next model response a row of its own (see `openModelResponseRow`). */
@@ -1721,6 +1942,8 @@ export class CodexRuntimeLifecycle {
   }
 
   runFinalization(context: ThreadContext, turn: TurnAccumulator): Promise<void> {
+    // A turn settled by recovery rather than `turn/completed` stops its tail here.
+    this.takeRefusedCellTail(context.threadId, turn)?.close();
     const work = this.ctx.callbacks.finalizeTurn(context, turn);
     this.ctx.pendingFinalizations.add(work);
     work.then(

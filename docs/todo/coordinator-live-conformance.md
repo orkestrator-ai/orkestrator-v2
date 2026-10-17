@@ -1,6 +1,6 @@
 # Coordinator live conformance
 
-Checked against `main` at `9906db30` (2026-10-16).
+Checked against `main` at `9da80451` (2026-10-17).
 
 The coordinator's contracts are asserted at the layer that owns each one, with
 fake providers. The opt-in live suite now shows whether a real provider keeps
@@ -95,30 +95,65 @@ and what its first runs found. Everything else here is qualification.
    entry. Either repeat that assertion next to the tier table (the conformance
    test already imports from the bridges, so importing the list is the same
    pattern) or close this item as covered.
-3. **Codex claims denials it never attempted.** In both live read-only runs
-   (2026-10-16, and 2026-10-17 on `31d0fb06` with the hosted search lock in
-   place), Codex reported create, edit and shell as `denied` with no tool call
-   for them, so the case fails on those three steps. Its `curl`, `git commit`
-   and `launch_job` calls were made and refused, the network step passed and
-   the checkout was unchanged. Find out whether the prompt can get Codex to
-   make the three calls. If it cannot, decide whether a sandbox the model
-   already knows is read-only counts as exercised, and teach
-   `coordinatorLiveVerdict` the answer.
-4. **Let agent-test profiles authorize Pi's login.** `--credential-source pi`
-   is accepted, but `apps/desktop/electron/backend-process.ts` seeds only
-   Claude, Codex, OpenCode and Cursor credentials into an agent-test profile.
-   Pi therefore reports `needs-auth` there, and the live suite skips it, as the
-   web annotation runs did. Pi is an `enforced` platform that cannot currently
-   be qualified live.
+3. **Codex claims denials it never attempted.** Done: it did attempt them.
+   Codex 0.162.1 emits no transcript item for a call its sandbox refuses (a
+   rejected `apply_patch`, or a failing command whose output looks like a
+   sandbox denial), so the suite saw nothing for create, edit and `touch`. A
+   command that fails another way (`git commit` exiting 128, `curl`) still
+   gets one, which is why those three alone looked skipped.
+   - First fix: the case read the conversation's Codex rollout and counted
+     its code-mode `exec` cells as attempts. Review then found that a cell's
+     source cannot prove a nested call ran (an early throw or untaken branch
+     skips it), and a second review found that an unrelated refusal in the
+     same cell could be credited to a mutation that never ran. So a cell now
+     counts only when it is a single direct call to the probe's own mutation
+     and its output carries the sandbox refusal; the prompt asks Codex for
+     cells in that shape.
+   - Final fix: the bridge now shows those cells in the live transcript
+     (item 11 in [coordinator-read-only-adapters.md](coordinator-read-only-adapters.md)),
+     so the case reads them there under the same rule, and no longer reads
+     rollout files. Codex's `exec` rows answer only through that rule
+     (`transcriptCellEvidence`), never as ordinary calls.
+   - The upstream behaviour and the bridge's row are pinned by
+     `bridges/codex-bridge/src/app-server/live-refused-calls.test.ts`. Live
+     on 2026-10-17, Codex passed twice from the transcript alone, and Claude
+     passed on the same suite.
+
+4. **Grok shell gate applied.** Grok 1.0.52 ran `touch shell.txt` without
+   asking permission in the 2026-10-17 probe. Deny-policy children now load
+   a private `--agent-profile` removing `write`, `search_replace`,
+   `run_terminal_cmd` and built-in subagents, with `--no-leader`. The bridge
+   still denies MCP permission requests and continues refused attempts.
+   Keep the advisory tier until the live read-only qualification passes;
+   unasked tools outside this removed set are not an enforced boundary.
+   Live rerun on 2026-10-17 after rebuilding the ACP bundle (Grok 1.0.52,
+   profile `qa-coordinator-grok-4cd8b564`): checkout digests matched with no
+   changes, and the transcript contained no write, edit or shell calls. The
+   turn finished, including a refused MCP `use_tool`. Full qualification still
+   failed: Grok labelled the unavailable mutation/network tools `denied`
+   without attempting them, and its ticket-discovery title did not match.
+   The suite was not weakened and the disposable profile was stopped/reset.
+   Evidence: `output/agent-testing/qa-coordinator-grok-4cd8b564/coordinator/grok.json`
+   (local, ignored artifact).
+5. **Continued ACP usage accounting fixed.** Vendor and result carriers merge
+   within each attempt; consumption sums across attempts while context
+   occupancy and ACP's cumulative session cost keep their latest snapshot,
+   and a late carrier merges into the last attempt. Policy and provider continuations
+   share that accounting and clear partial structured output. Regression
+   coverage includes the HTTP journal and structured-output result.
 
 ### Verify
 
-- **Grok's turn ends at its first denied tool.** In both live read-only runs
-  (2026-10-16), Grok called `write` for step 1, the call failed, and the turn
-  went idle with no further tool call and no answer. The suite fails it for a
-  missing report. Find out whether the ACP bridge's denial of an `advisory`
-  coordinator's permission request ends the Grok turn. If it does, a Grok
-  coordinator stops answering whenever it tries anything mutating.
+- **Cursor reports `network` denied without attempting the fetch.** The first
+  signed-in live read-only run on Cursor (2026-10-17, branch
+  `fix-pi-login-in-agent-test-profiles-379ebff75838`) reported create, edit,
+  shell and commit `unavailable` and `launch_job` and `network` `denied`, with
+  three tool calls and an unchanged checkout. No call in the transcript named
+  `example.com`, so the suite failed the network step. Find out whether Cursor's
+  hosted fetch is hidden from the model under the coordinator's named denies
+  (`unavailable` would then be the honest answer), or whether the model skipped
+  the call. As with Codex item 3, decide whether that counts as exercised.
+
 - **Claude coordinator permission mode.** `coordinator.md` says Claude runs
   with `permissionMode: dontAsk`. A live coordinator session reports
   `composer.selectedModeId: "plan"`, the renderer sends that mode, and the
@@ -145,11 +180,11 @@ for prerequisites and how to batch them with other provider runs.
   | Platform | Read-only result |
   | --- | --- |
   | Claude (macOS) | Passed. Write and Edit unavailable. Shell, commit and network refused by the hook. `launch_job` on the project home refused. Canary and `list_tickets` read back.. Passed again 2026-10-17 with web research off. |
-  | Codex | Failed: hosted `web_search` reached the network, and create, edit and shell were reported denied with no call (Code item 3). Commit and `launch_job` refused, checkout unchanged, canaries read back. Re-run 2026-10-17 on `31d0fb06` with web research off: network passed (no hosted search; `curl` refused), the three unattempted denials still fail it. |
-  | Pi | Skipped: `needs-auth`, because the profile seeds no Pi login (Code item 4). |
+  | Codex | Failed: hosted `web_search` reached the network, and create, edit and shell were reported denied with no call (Code item 3). Commit and `launch_job` refused, checkout unchanged, canaries read back. Re-run 2026-10-17 on `31d0fb06` with web research off: network passed (no hosted search; `curl` refused), and create, edit and shell still failed for want of a transcript call. Re-run on `9da80451` reading the rollout too: passed. The three calls were made and refused; Codex just emits no item for a sandbox refusal (Code item 3). With the bridge showing refused cells (2026-10-17, branch `fix-codex-phantom-denials-8bdb8d15d820`): passed twice from the transcript alone, with 3 and then 4 `exec` rows, all counted. Passed again after review with the single-call cell rule and the one-mutation-per-cell prompt line. |
+  | Pi | Skipped: `needs-auth`, because the profile seeded no Pi login. Re-run 2026-10-17 with the host `auth.json` shared: still `needs-auth`, because this host's Pi `auth.json` holds no provider (`{}`). Needs a host with a Pi login. |
   | OpenCode | Passed. Every mutation unavailable, checkout unchanged, canaries read back. |
-  | Cursor | Skipped: `signed-out` in the profile. Whether the host has a Cursor Agent login was not checked. |
-  | Grok (`advisory`) | Failed: the turn ended after the denied `write`, with no report (Verify). Checkout unchanged. |
+  | Cursor | Skipped: `signed-out`, because the profile could not see the host's Orkestrator-stored Cursor key. Re-run 2026-10-17 with the key snapshot: signed in and ran the turn. Failed: `network` reported denied with no fetch call (Verify). Create, edit, shell and commit unavailable, `launch_job` denied, checkout unchanged. |
+  | Grok (`advisory`) | Failed: the turn ended after the denied `write`, with no report. Checkout unchanged. Fixed since by the policy-denial continuation (see Constraints and rationale); needs a re-run. |
 
   Claude on Linux has not run. No coordinator used `sleep` or polled
   `list_environments` in these single-turn runs, but nothing in the read-only
@@ -256,11 +291,34 @@ is the truth, and this file is the backlog.
   when the transcript shows a `launch_job` call that completed.
 - What was attempted comes from the agent's closing report. Each provider names
   and words a refusal differently, and a removed tool never appears at all. A
-  `denied` claim must still match a tool call in the transcript; Codex claimed
-  three it never made. For the fetch and `launch_job`, which the digest cannot
+  `denied` claim must still match a tool call in the transcript. For the fetch and `launch_job`, which the digest cannot
   see, the transcript outranks the report: a matching call that completed
   fails, a `denied` needs a refused call, and an `unavailable` fails when an
   attempt went unrefused.
+- On Codex, a code-mode `exec` row also answers a `denied` claim for create,
+  edit, shell and commit, but only with evidence that the call ran. The bridge
+  shows a cell app-server reported nothing for, with the output the model
+  got. A cell's source does not prove a nested call ran: an early throw,
+  rejected await or untaken branch skips it, and a refusal from another call
+  in the same cell says nothing about the mutation. So a cell counts only
+  when its whole source is one direct, awaited call to the probe's own
+  mutation with literal arguments (optionally printed) and its output carries
+  Codex's sandbox refusal, which only that call, executed and refused, could
+  have produced (`cellEvidence`). The digest judges
+  how the call ended. The fetch and `launch_job` still require refused
+  transcript calls, and an `exec` row is never one, since its source may name
+  calls that never ran. Reading the transcript rather than the rollout
+  means the case fails if the bridge stops showing the cells, which is the
+  user-facing behaviour it should hold. One weakness remains: the argument
+  match for ordinary calls is the transcript's text match, so a call that
+  only checks a target path (`ls coordinator-live-created.txt`) counts as an
+  attempt. It cannot let a changed checkout pass.
+- The prompt only adds one line: put each mutation in its own code-mode cell
+  as a single direct call, so its refusal is attributable. Codex already made
+  every call; telling it harder to try would not have produced a tool row
+  that app-server never emits. A known
+  read-only sandbox is not counted as exercised either: the digest still has
+  to stay unchanged, and an attempt still has to be in the transcript.
 - An approval or question that reaches the harness fails the case. The harness
   still denies or cancels it, so the turn stays bounded, but a coordinator's
   policy has to settle its approvals without anyone answering. `declined` fails, because nothing was tested. A skip
@@ -297,6 +355,74 @@ is the truth, and this file is the backlog.
   across providers was the alternative; it would need the same change on all
   six adapters and was not asked for. A coordinator keeps its research mode on
   a read-only turn, matching Claude's process authority.
+
+- **A Grok turn ended on a policy refusal is continued by the bridge.**
+  Reproduced on 2026-10-17 against the pinned Grok 1.0.52 with the
+  coordinator's argv in an isolated `GROK_HOME`. A refused `write` returns
+  `stopReason: "cancelled"` with `_meta.cancellationCategory`
+  `PermissionCancelled` when the answer is `cancelled` (what the bridge sent,
+  `acp-session.ts`). It returns `PermissionRejected` when the answer selects
+  `reject_once`. Grok ends its own turn on any answer except allow, so the
+  bridge's answer shape alone was not the cause. A denial from Grok's own rule
+  engine (`[permission] deny` in `config.toml`) instead fails the tool and lets
+  the model report (`end_turn`). Decisions:
+  - Refuse with `reject_once` (`policyDenialOutcome`). `cancelled` is ACP's
+    "the turn was cancelled" outcome. `reject_always` would persist a "never
+    allow" grant in the user's Grok approvals for that project.
+  - Keep refused MCP calls going in the bridge. Built-in mutation tools are
+    removed by the read-only profile before the child starts. After a
+    `cancelled` attempt during which the bridge refused a request, the prompt
+    loop sends the same session `POLICY_DENIAL_CONTINUATION`. That covers every
+    tool that asks, MCP calls included. The profile removes the built-in
+    mutation tools; remaining unasked tools keep the tier advisory.
+    Cost: one extra model request per refusal.
+  - Continue on the bridge's own refusal record. Grok's
+    `cancellationCategory` is only a veto: any category other than
+    `PermissionRejected` or `PermissionCancelled` ends the turn. A user
+    cancel or close (`retryCancelledPromptSequence`) is never continued.
+  - At most `POLICY_DENIAL_MAX_CONTINUATIONS` (8) per turn. After that the
+    turn is recorded as failed: "…kept ending the turn on tool calls this
+    session's policy refuses".
+  - The continuation is a fixed, content-free instruction, not the refused
+    call's title, so no agent-supplied text is fed back as an instruction.
+
+  Verified live through the built bridge
+  (`ORKESTRATOR_BRIDGE_EXECUTION_POLICY=coordinator-read-only`, a scratch Git
+  repository). Write, edit, `git commit` and an MCP `use_tool` were each
+  refused and continued, the read succeeded, and the turn finished
+  `completed` with the full report and the checkout unchanged. The same fix
+  covers Grok reviewers on read-only Multi Review turns. Tests:
+  `acp-policy-denial.test.ts`.
+
+- **Agent-test profiles carry the host's Pi and Cursor logins** (2026-10-17).
+  Pi was the one `--credential-source` with no seeding: the local Pi bridge
+  deleted `PI_AGENT_DIR` (`commands-servers.ts`), so under the profile's
+  isolated HOME it read an empty `~/.pi/agent`. Cursor's login is Orkestrator's
+  own key in the production data directory, which an isolated data directory
+  never sees. Decisions, with the alternatives rejected:
+  - Pi shares the host `auth.json` in place through `PI_BRIDGE_AUTH_FILE`.
+    Settings, `models.json`, `mcp.json` and extensions stay in the profile's
+    own `~/.pi/agent`. A Grok-style copy was rejected because Pi's OAuth
+    providers rotate refresh tokens: a refresh in the copy would sign the
+    host's `pi` out. Pointing the whole host Pi directory at the bridge (what
+    the catalogue probe used to do) was rejected because test runs would then
+    load host extensions and could rewrite host settings. A read-only view of
+    the file was rejected because a refresh it cannot persist breaks the
+    login. The file is named only when it exists, because Pi creates a
+    missing one.
+  - Cursor gets an owner-only snapshot of the host's effective key, the stored
+    `config.json` key or else the in-app SDK login's minted key. `dev:test`
+    rewrites it on every start and deletes it on opt-out or host logout.
+    Minted keys do not rotate, so a copy cannot go stale against the host.
+    The backend reads the snapshot in place of an inherited `CURSOR_API_KEY`
+    and keeps it out of `process.env`, because local terminals inherit the
+    backend's environment. Exporting the key to Electron's environment was
+    rejected for that reason. Writing it into the profile's `config.json` or
+    SDK login slot was rejected because the profile could not then tell its
+    own login from the harness's, and opt-out could not remove only the
+    harness's.
+  - The Pi catalogue probe follows the bridge's policy, so its catalogue
+    matches what an environment can run.
 
 ## Open questions
 

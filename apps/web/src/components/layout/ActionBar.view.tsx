@@ -5,6 +5,7 @@ import {
   lazy,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   type FocusEvent as ReactFocusEvent,
   type MouseEvent as ReactMouseEvent,
@@ -128,6 +129,8 @@ function ToolbarContextMenuTrigger({
   const tooltipState = useHoverTooltip();
   const tooltipsEnabled = useContext(ToolbarTooltipsEnabledContext);
   const child = children as ReactElement<TriggerProps>;
+  // cloneElement forwards the ref to React; it never reads its current value.
+  // oxlint-disable-next-line react/refs
   const trigger = cloneElement(child, {
     "data-toolbar-custom-context-menu": "true",
     ref: tooltipAnchorRef,
@@ -428,23 +431,25 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     tabCount,
     workspaceReady,
   });
-  multiReviewShortcutStateRef.current = {
-    canCreateTab,
-    fixReviewIssuesLaunchDefaults,
-    handleMultiReview,
-    isRunning,
-    multiReviewLaunchPending,
-    multiReviewReviewerDefaults,
-    multiReviewAutoFix,
-    multiReviewAutoPr,
-    reviewLaunchDefaults,
-    reviewPreparationLaunchDefaults,
-    reviewModelCatalog,
-    selectedEnvironmentId,
-    setupRunning,
-    tabCount,
-    workspaceReady,
-  };
+  useLayoutEffect(() => {
+    multiReviewShortcutStateRef.current = {
+      canCreateTab,
+      fixReviewIssuesLaunchDefaults,
+      handleMultiReview,
+      isRunning,
+      multiReviewLaunchPending,
+      multiReviewReviewerDefaults,
+      multiReviewAutoFix,
+      multiReviewAutoPr,
+      reviewLaunchDefaults,
+      reviewPreparationLaunchDefaults,
+      reviewModelCatalog,
+      selectedEnvironmentId,
+      setupRunning,
+      tabCount,
+      workspaceReady,
+    };
+  });
 
   useEffect(() => {
     const handleMultiReviewShortcut = (event: KeyboardEvent) => {
@@ -1238,7 +1243,13 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                           "gap-2",
                           !isGrid && "bg-green-600 text-white hover:bg-green-700",
                         )}
-                        onClick={() => !isMerging && setMergeDialogOpen(true)}
+                        onClick={(event) => {
+                          if (resolveLongPress.shouldSuppressClick()) {
+                            event.preventDefault();
+                            return;
+                          }
+                          if (!isMerging) setMergeDialogOpen(true);
+                        }}
                         disabled={!isRunning || isMerging}
                       >
                         {isMerging ? (
@@ -1257,12 +1268,41 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   )}
 
                   {!isPRFinished && hasMergeConflicts === null && (
-                    <ToolbarTooltipTrigger tooltip="GitHub is still checking whether this PR can be merged">
+                    <ToolbarTooltipTrigger
+                      tooltip={
+                        <>
+                          <p>GitHub is still checking whether this PR can be merged</p>
+                          {isRunning && canLaunchBackendJob && (
+                            <p className="text-xs text-muted-foreground">
+                              ⌘⇧U or right-click/long-press to resolve conflicts anyway
+                            </p>
+                          )}
+                        </>
+                      }
+                    >
+                      {/* Soft-disabled rather than `disabled`: a disabled button
+                          receives no contextmenu or pointer events, and the
+                          Resolve configuration must stay reachable while
+                          mergeability is still being computed. */}
                       <Button
+                        ref={resolveButtonRef}
                         variant={isGrid ? "ghost" : "outline"}
                         size="sm"
-                        className="gap-2"
-                        disabled
+                        className="gap-2 touch-manipulation cursor-not-allowed opacity-50"
+                        onClick={(event) => {
+                          // Consume a long press's trailing click so it cannot
+                          // launch from the Resolve button that may replace this.
+                          resolveLongPress.shouldSuppressClick();
+                          event.preventDefault();
+                        }}
+                        onContextMenu={(event) => {
+                          event.preventDefault();
+                          resolveLongPress.cancel();
+                          openResolveDialog();
+                        }}
+                        {...resolveLongPress.handlers}
+                        data-toolbar-custom-context-menu="true"
+                        aria-disabled
                       >
                         <Loader2 className="h-4 w-4 animate-spin" />
                         <span className={cn(isGrid && "truncate text-xs")}>

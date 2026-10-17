@@ -465,6 +465,25 @@ source, assertion, timeout or skip changed.
 - **Assessment:** an unchanged owning-file pass confirms a recurrence. Shared-host contention remains an unconfirmed hypothesis; no implementation, assertion, timeout or skip changed.
 - **Subsequent aggregate:** `mise run test:logged -- --name review-aggregate-system-tools -- mise run test` passed all four groups (exit 0, 339.7 seconds) with system Python and the documented GNU utilities preferred in PATH, after component browser validation ended. This pass does not establish a root cause or resolve the tracked flake.
 
+## Agent-test credential review observation — 2026-10-17
+
+The unchanged SDK staging test exceeded 30000 ms in `mise run test` and again
+in its owning-file rerun:
+`mise run test:logged -- --name pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`.
+The isolated result was three passed and one timeout (31.0 seconds overall).
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.5SclER`.
+This recurrence remains an unresolved staging limitation; the isolated failure
+does not establish a flake. The new real SDK auth-only runtime test passes.
+
+## Pending Resolve review recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name resolve-full-suite -- mise run test`; the root group used one Bun worker alongside browser validation and other host work.
+- **Failure:** The staged-runtime SDK load timed out at 30000.03 ms.
+- **Root counts:** 3036 passed, one skipped, two failed across 3039 cases in 327.65 seconds. The other failure was a diagnostic-bounds assertion in the new ActionBar regression; that assertion was corrected and its owning guard passed separately.
+- **Owning-file rerun:** `mise run test:logged -- --name resolve-pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the unchanged file (exit 0, 31.0 seconds including all four cases).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.NMzwfo/root-and-agent-support-tests.log.gz`.
+- **Assessment:** Recurrence of the existing timeout with an unchanged owning-file pass; shared-host contention remains unconfirmed. No timeout, assertion or skip in the Pi tests changed.
+
 ## Codex catalogue review follow-up recurrence — 2026-10-17
 
 - **Original command:** `mise run test:logged -- --name full-tests -- mise run test`
@@ -502,6 +521,21 @@ source, assertion, timeout or skip changed.
 - **Isolated rerun:** `mise run test:logged -- --name pi-vendor-isolated -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the unchanged owning file (exit 0, 20.9 seconds).
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.r499sA/root-and-agent-support-tests.log.gz` (compressed when the aggregate completes).
 - **Assessment:** the isolated pass confirms intermittence. Shared-host filesystem contention remains an unconfirmed hypothesis. No source, assertion, timeout or skip changed.
+
+## Pi and Cursor agent-test logins main merge validation — 2026-10-17
+
+Aggregate command, worker configuration, counts and evidence are recorded in [0211](0211-cleanup-retry-aggregate-timeout.md#pi-and-cursor-agent-test-logins-main-merge-validation--2026-10-17).
+
+- Failure: `loads Pi's supported SDK from the staged runtime closure` exceeded its 30000 ms deadline at 30000.09 ms.
+- Owning-file rerun: `mise run test:logged -- --name merge-pi-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` also timed out at 30001.95 ms; three passed and one failed (32.47 seconds). Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.HkX36D/merge-pi-owner.log.gz`.
+- This repeats the branch's unresolved staging limitation; the isolated failure does not establish a flake. No implementation, assertion, timeout or skip changed.
+
+## Codex phantom-denials branch validation (2026-10-17)
+
+Recurred in `mise run test` on `fix-codex-phantom-denials-8bdb8d15d820` (base
+`9da80451`), whose diff touches no Pi source, at 30,002.02 ms, alongside 0226 and 0310.
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.6fSEkJ`.
+The unchanged owning file passed alone (`bun test --preload ./tests/setup-node.ts tests/unit/pi-bridge-vendor.test.ts` from the root): 4 passed in 23.4 s.
 
 ## Slash catalogue accuracy review recurrence — 2026-10-17
 

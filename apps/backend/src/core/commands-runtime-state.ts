@@ -235,6 +235,8 @@ export const CONTAINER_CURSOR_CREDENTIAL_DIR = path.posix.dirname(CONTAINER_CURS
 export const HOST_CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 export const AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV =
   "ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR";
+/** The host's Pi agent directory, set by the desktop only when Pi is authorized. */
+export const AGENT_TEST_HOST_PI_AGENT_DIR_ENV = "ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR";
 export const CLAUDE_GITHUB_CREDENTIAL_FILE_ENV = "ORKESTRATOR_GITHUB_CREDENTIAL_FILE";
 export const CLAUDE_GITHUB_ENV_FINGERPRINT_FILE =
   "/tmp/orkestrator-ai/claude-github-env-fingerprint";

@@ -99,10 +99,14 @@ describe("credential resolution", () => {
     });
   });
 
-  test("prefers an inherited environment key, matching the bridge's own order", async () => {
+  test("prefers a configured key over inherited environment and stored login keys", async () => {
     process.env.CURSOR_API_KEY = "from-env";
     await storeCredentials({ version: 1, apiKey: "from-login" });
     expect(await cursorSdkAuthStatus(contextWith(), "from-config")).toEqual({
+      authenticated: true,
+      source: "api-key-config",
+    });
+    expect(await cursorSdkAuthStatus(contextWith(), undefined)).toEqual({
       authenticated: true,
       source: "api-key-env",
     });

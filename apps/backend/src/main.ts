@@ -19,6 +19,7 @@ import { leaseActivatedToolchainSet } from "@orkestrator/toolchain/manager";
 import path from "node:path";
 import { readLauncherState, standaloneLayout } from "@orkestrator/protocol/node/standalone-service";
 import { createStandaloneUpdater } from "./host-standalone-updater.js";
+import { loadAgentTestHostCursorApiKey } from "./core/agent-test-cursor-credential.js";
 import {
   installStandaloneBackendLogging,
   stopStandaloneBackendLogging,
@@ -44,6 +45,11 @@ if (
   throw new Error(`${mode} requires --host 127.0.0.1`);
 }
 await mkdir(options.dataDir, { recursive: true });
+loadAgentTestHostCursorApiKey({
+  dataDir: options.dataDir,
+  runtimeFlavor: options.runtimeFlavor,
+  credentialSources: new Set(options.credentialSources),
+});
 await leaseActivatedToolchainSet(options.dataDir, options.toolchainBinDir);
 // Installed before startup logs anything worth keeping. A no-op under Electron,
 // which already records this process's output.

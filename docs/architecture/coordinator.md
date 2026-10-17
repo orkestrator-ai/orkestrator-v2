@@ -199,6 +199,17 @@ always loads the checkout's project configuration, including any MCP servers it
 declares. Cursor applies the sandbox and a tool ban but exposes no approval
 callback, and is refused outright if its sandbox cannot be enabled.
 
+Grok deny-policy children load a private agent profile that removes `write`,
+`search_replace`, `run_terminal_cmd` and built-in subagents, with `--no-leader`
+so a shared process cannot bypass it. This also covers read-only review turns.
+Remaining ACP permission requests, including MCP calls, are refused by choosing
+`reject_once`. Other tools that never ask remain advisory. Grok
+1.0.52 ends its turn on any answer except allow, so the bridge then sends the
+same session a fixed continuation saying the call was refused and must not be
+retried (`POLICY_DENIAL_CONTINUATION`, `acp-prompt.ts`). The continuation
+counts as part of the same turn, and a turn gets at most eight. Without it, a
+Grok coordinator stopped at its first refused tool and never answered.
+
 The coordinator policy names operations, not one provider's tool strings:
 `capabilityPolicy.deny` is `file.write`, `file.patch`, `shell.mutate`, and
 `network`. Each bridge translates that list. `capabilityPolicy.allow` carves

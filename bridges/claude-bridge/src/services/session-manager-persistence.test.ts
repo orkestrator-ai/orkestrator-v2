@@ -2307,4 +2307,87 @@ describe("rewindSessionFiles", () => {
     expect(getSession(state.id)?.rewindInProgress).toBe(false);
     state.queryControl = undefined;
   });
+
+  for (const shutdown of ["delayed", "timeout", "rejected"] as const) {
+    test(`keeps admission fenced after a rewind timeout with ${shutdown} SDK cleanup`, async () => {
+      const state = await rewindableSession();
+      let resolveShutdown!: () => void;
+      let rejectShutdown!: (error: Error) => void;
+      const cleanup = new Promise<void>((resolve, reject) => {
+        resolveShutdown = resolve;
+        rejectShutdown = reject;
+      });
+      // Match the SDK: close starts cleanup but returns void; Query.return
+      // awaits the same cleanup, including the child shutdown grace period.
+      const close = mock(() => undefined);
+      const returnQuery = mock(async () => {
+        await cleanup;
+        return { done: true, value: undefined };
+      });
+      queryControlOverrides.close = close;
+      queryControlOverrides.return = returnQuery;
+      queryControlOverrides.rewindFiles = mock(() => new Promise(() => undefined));
+      await import("@anthropic-ai/claude-agent-sdk");
+      jest.useFakeTimers();
+      try {
+        const rewind = rewindSessionFiles(state.id, U1);
+        // Attach a rejection handler before advancing either deadline.
+        const outcome = rewind.catch((error: unknown) => error);
+        for (let i = 0; i < 1_000 && mockQuery.mock.calls.length === 0; i += 1) {
+          jest.advanceTimersByTime(0);
+          await Promise.resolve();
+        }
+        expect(mockQuery).toHaveBeenCalledTimes(1);
+        jest.advanceTimersByTime(30_000);
+        for (let i = 0; i < 100 && returnQuery.mock.calls.length === 0; i += 1) {
+          await Promise.resolve();
+        }
+        expect(close).toHaveBeenCalledTimes(1);
+        expect(returnQuery).toHaveBeenCalledTimes(1);
+        const expectFenced = async () => {
+          expect(state.rewindInProgress).toBe(true);
+          await expect(sendPrompt(state.id, "meanwhile")).rejects.toMatchObject({
+            code: "conflict",
+            message: "Session is restoring files from a checkpoint",
+          });
+          await expect(rewindSessionFiles(state.id, U1)).rejects.toMatchObject({
+            code: "conflict",
+            message: "A file rewind is already in progress for this session",
+          });
+          expect(mockQuery).toHaveBeenCalledTimes(1);
+        };
+        await expectFenced();
+        if (shutdown === "timeout") {
+          jest.advanceTimersByTime(5_000);
+        } else if (shutdown === "rejected") {
+          rejectShutdown(new Error("child exit could not be confirmed"));
+        }
+        if (shutdown !== "delayed") {
+          expect(await outcome).toMatchObject({
+            code: "conflict",
+            message: "Claude file rewind shutdown is pending; retry after it stops",
+          });
+          await expectFenced();
+        }
+        if (shutdown !== "rejected") {
+          resolveShutdown();
+          for (let i = 0; i < 100 && state.rewindInProgress; i += 1) await Promise.resolve();
+          expect(state.rewindInProgress).toBe(false);
+          if (shutdown === "delayed") {
+            expect(await outcome).toMatchObject({
+              code: "conflict",
+              message: "Timed out opening the Claude session for file rewind",
+            });
+          }
+          // The same session can rewind again once shutdown is confirmed.
+          state.queryControl = { rewindFiles: async () => ({ canRewind: true }) };
+          await expect(rewindSessionFiles(state.id, U1)).resolves.toEqual({ canRewind: true });
+          state.queryControl = undefined;
+        }
+      } finally {
+        resolveShutdown();
+        jest.useRealTimers();
+      }
+    });
+  }
 });

@@ -7,6 +7,7 @@ import {
   createSession,
   dismissQuestion,
   evictIdleHydratedTranscripts,
+  expectControlOnlyPrompt,
   getPendingPlanApprovals,
   getPendingQuestions,
   getSession,
@@ -96,6 +97,7 @@ describe("idle MCP catalogue", () => {
       expect.objectContaining({ id: "docs", status: "connected", toolCount: 1 }),
     ]);
     await performSessionMcpAction(session.id, "docs", "reconnect");
+    await expectControlOnlyPrompt(await nextQueryCall());
     expect(reconnect).toHaveBeenCalledWith("docs");
   });
 });

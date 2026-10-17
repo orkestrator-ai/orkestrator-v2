@@ -801,11 +801,48 @@ export async function resolvePersistedMessageId(
  * forever with the session flagged busy.
  */
 export const REWIND_OPEN_TIMEOUT_MS = 30_000;
+export const REWIND_SHUTDOWN_TIMEOUT_MS = 5_000;
+
+async function closeTransientRewindQuery(
+  control: ReturnType<typeof controlOnlyQuery>,
+  onShutdown: () => void,
+): Promise<void> {
+  // close() only starts SDK cleanup. Query.return() (on the Query itself,
+  // not its inner message iterator) awaits that cleanup and the child exit.
+  // Keep observing it after our HTTP deadline so a late exit releases the
+  // fence; rejection or an unconfirmed shutdown must never release it.
+  const shutdown = Promise.resolve().then(async () => {
+    control.close();
+    await control.return();
+    onShutdown();
+  });
+  let shutdownTimeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      shutdown,
+      new Promise<never>((_, reject) => {
+        shutdownTimeout = setTimeout(
+          () => reject(new Error("shutdown pending")),
+          REWIND_SHUTDOWN_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } catch (error) {
+    debugLog("[session-manager] Failed to confirm rewind query shutdown:", error);
+    throw sessionOperationError(
+      "conflict",
+      "Claude file rewind shutdown is pending; retry after it stops",
+    );
+  } finally {
+    clearTimeout(shutdownTimeout);
+  }
+}
 
 export async function rewindViaTransientQuery(
   sdkSessionId: string,
   persistedMessageId: string,
   dryRun: boolean,
+  onShutdown: () => void = () => undefined,
 ): Promise<unknown> {
   const abortController = new AbortController();
   const timedOut = new Promise<never>((_, reject) => {
@@ -823,14 +860,22 @@ export async function rewindViaTransientQuery(
   // Control only. A prompt — even an empty one — would append a user message
   // and a model reply to the very rollout the checkpoints are indexed
   // against; `maxTurns: 0` does not stop it (see control-only-query.ts).
-  const control = controlOnlyQuery({
-    cwd: currentWorkingDirectory(),
-    env: { ...process.env },
-    ...claudeExecutableOptions(),
-    resume: sdkSessionId,
-    enableFileCheckpointing: true,
-    abortController,
-  });
+  const control = (() => {
+    try {
+      return controlOnlyQuery({
+        cwd: currentWorkingDirectory(),
+        env: { ...process.env },
+        ...claudeExecutableOptions(),
+        resume: sdkSessionId,
+        enableFileCheckpointing: true,
+        abortController,
+      });
+    } catch (error) {
+      clearTimeout(timeout);
+      onShutdown();
+      throw error;
+    }
+  })();
   try {
     if (typeof control.rewindFiles !== "function") {
       throw sessionOperationError(
@@ -849,11 +894,7 @@ export async function rewindViaTransientQuery(
     }
   } finally {
     clearTimeout(timeout);
-    try {
-      await Promise.resolve(control.close());
-    } catch (error) {
-      debugLog("[session-manager] Failed to close rewind query:", error);
-    }
+    await closeTransientRewindQuery(control, onShutdown);
   }
 }
 
@@ -880,6 +921,8 @@ export async function rewindSessionFiles(
   // `status` never leaves `idle` while it runs, so nothing else would stop a
   // prompt accepted a millisecond later from executing against files mid-restore.
   session.rewindInProgress = true;
+  let transientShutdownPending = false;
+  let requestFinished = false;
   try {
     const persistedMessageId = await resolvePersistedMessageId(
       session,
@@ -907,7 +950,19 @@ export async function rewindSessionFiles(
       result = await liveRewind.call(liveControl, persistedMessageId, { dryRun });
     } else {
       await retireDrainingClaudeRuntime(session);
-      result = await rewindViaTransientQuery(session.sdkSessionId, persistedMessageId, dryRun);
+      transientShutdownPending = true;
+      result = await rewindViaTransientQuery(
+        session.sdkSessionId,
+        persistedMessageId,
+        dryRun,
+        () => {
+          transientShutdownPending = false;
+          // Before the request settles, its finally owns release. Releasing
+          // here would let another rewind claim the fence before that finally
+          // runs and accidentally clears the new owner's fence.
+          if (requestFinished) session.rewindInProgress = false;
+        },
+      );
     }
     if (
       !result ||
@@ -922,7 +977,8 @@ export async function rewindSessionFiles(
     }
     return result;
   } finally {
-    session.rewindInProgress = false;
+    requestFinished = true;
+    if (!transientShutdownPending) session.rewindInProgress = false;
   }
 }
 

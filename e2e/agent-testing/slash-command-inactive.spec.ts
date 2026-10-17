@@ -41,7 +41,7 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 
@@ -255,13 +255,29 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
         const runToken = nonce("SLASHRUN");
         const addedToken = nonce("SLASHADDED");
         const longToken = nonce("SLASHLONG");
+        const executionFile = `.slashq-executions-${longToken}`;
+        // Append before any other work, once per command execution. A final
+        // reply cannot prove at-most-once when a restart interrupts a turn.
+        const recordExecution =
+          "For every invocation of this command, including a retry with the same arguments, " +
+          "as your first action use the shell tool exactly once to run " +
+          `\`printf '%s\\n' '$ARGUMENTS' >> ${executionFile}\`. ` +
+          "Always append a new line even if this file already has the same line. " +
+          "Do not repeat that append or modify this file again within this invocation. Then ";
+        const executions = (argument: string) =>
+          existsSync(path.join(worktree!, executionFile))
+            ? readFileSync(path.join(worktree!, executionFile), "utf8")
+                .split("\n")
+                .filter((line) => line === argument).length
+            : 0;
         writeCommand("slashq-run", commandBody("Inactive qualification", replyExactly(runToken)));
         writeCommand(
           "slashq-long",
           commandBody(
             "Long qualification reply",
-            "Write every whole number from 1 to 400 in words, separated by commas, then on a " +
-              `final line write exactly ${longToken}-$ARGUMENTS. Do not use any tools.`,
+            recordExecution +
+              "write every whole number from 1 to 400 in words, separated by commas, then on a " +
+              `final line write exactly ${longToken}-$ARGUMENTS. Do not use any more tools.`,
           ),
         );
         writeCommand("slashq-gone", commandBody("Removed while inactive", replyExactly("GONE")));
@@ -366,7 +382,10 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
           // to need reconciliation, and a catalogue refresh.
           writeCommand(
             "slashq-added",
-            commandBody("Added while inactive", replyExactly(addedToken)),
+            commandBody(
+              "Added while inactive",
+              recordExecution + `reply with exactly ${addedToken}-$ARGUMENTS and nothing else.`,
+            ),
           );
           removeCommand("slashq-gone");
           await context.setOffline(true);
@@ -515,6 +534,21 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
             timeoutMs: 60_000,
           });
         };
+        const sendRestartDraft = async (typed: string) => {
+          const submitted = page.waitForRequest((request) => {
+            if (request.method() !== "POST" || !request.url().endsWith("/__orkestrator/invoke"))
+              return false;
+            const body = request.postDataJSON() as {
+              command?: string;
+              args?: Record<string, unknown>;
+            };
+            return body.command === "dispatch_native_agent_intent" && body.args?.prompt === typed;
+          });
+          await sendDraft();
+          const body = (await submitted).postDataJSON() as { args: Record<string, unknown> };
+          expect(typeof body.args.requestId).toBe("string");
+          return body.args;
+        };
         const settleAfterRestart = async (typed: string) => {
           let retried = false;
           await expect
@@ -564,47 +598,67 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["codex"] as Provide
           // Long enough for a duplicate re-dispatch to surface if one existed.
           await page.waitForTimeout(15_000);
           const messages = (await projection())?.messages;
-          const runs = count(messages, "assistant", token);
-          expect(runs, `${typed} ran ${runs} times`).toBeLessThanOrEqual(1);
+          const replies = count(messages, "assistant", token);
+          expect(replies, `${typed} produced duplicate final replies`).toBeLessThanOrEqual(1);
           expect(
             count(messages, "user", typed),
             `${typed} was submitted more than once`,
           ).toBeLessThanOrEqual(1);
           testInfo.annotations.push({
             type: "restart-outcome",
-            description: `${typed}: ${runs === 1 ? "ran once" : "did not run"}${retried ? " (after retry)" : ""}`,
+            description: `${typed}: ${replies === 1 ? "one final reply" : "no final reply"}${retried ? " (after retry)" : ""}`,
           });
-          return runs;
+          return replies;
         };
 
         await test.step("a bridge restart right after Send never runs the command twice", async () => {
           await selectCommand("/slashq-added", "gamma");
-          await sendDraft();
+          const submission = await sendRestartDraft("/slashq-added gamma");
           await restartBridge();
           await openEnvironment(other.name);
           const retried = await settleAfterRestart("/slashq-added gamma");
+          // Replay the actual browser submission even when reconciliation
+          // did not park it. This always exercises same-id retry admission.
+          await invoke("dispatch_native_agent_intent", submission);
+          await settleAfterRestart("/slashq-added gamma");
           await openEnvironment(target.name);
           await expect(input).toBeVisible({ timeout: 90_000 });
           await expect(composeBar.getByTitle("Stop current query")).toBeHidden({ timeout: 30_000 });
           await expectAtMostOnce(`${addedToken}-gamma`, "/slashq-added gamma", retried);
+          expect(
+            executions("gamma"),
+            "restart after Send duplicated execution",
+          ).toBeLessThanOrEqual(1);
         });
 
         await test.step("a bridge restart while the accepted command runs never runs it twice", async () => {
           await selectCommand("/slashq-long", "delta");
-          await sendDraft();
+          const submission = await sendRestartDraft("/slashq-long delta");
           await expect
             .poll(async () => (await projection())?.turn.phase, {
               timeout: 90_000,
               message: "the long command never started running",
             })
             .toBe("running");
+          await expect
+            .poll(() => executions("delta"), {
+              timeout: 90_000,
+              message: "the long command never durably recorded its start",
+            })
+            .toBe(1);
+          expect((await projection())?.turn.phase, "restart must interrupt a running command").toBe(
+            "running",
+          );
           await openEnvironment(other.name);
           await restartBridge();
           const retried = await settleAfterRestart("/slashq-long delta");
+          await invoke("dispatch_native_agent_intent", submission);
+          await settleAfterRestart("/slashq-long delta");
           await openEnvironment(target.name);
           await expect(input).toBeVisible({ timeout: 90_000 });
           await expect(composeBar.getByTitle("Stop current query")).toBeHidden({ timeout: 30_000 });
           await expectAtMostOnce(`${longToken}-delta`, "/slashq-long delta", retried);
+          expect(executions("delta"), "restart or same-id retry duplicated execution").toBe(1);
           // The session still runs commands afterwards.
           await selectCommand("/slashq-run", "omega");
           await sendDraft();

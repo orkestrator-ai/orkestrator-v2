@@ -178,8 +178,8 @@ The spec checks the following:
 - The result and the new inventory after a hard reload, then again at
   390×844.
 - A bridge restart right after Send, and another while the accepted command
-  runs. Each restart was observed to end at most once, counted from a
-  transcript proven reloaded:
+  runs. The original run counted final replies and user rows from a transcript
+  proven reloaded; those counts alone cannot detect an interrupted execution:
   - Codex: neither command ran (the turn failed, nothing parked).
   - Claude: the first dispatch parked, was retried under the same request id
     and still did not run. The second did not run. The session then ran
@@ -194,6 +194,62 @@ on OpenCode, Grok or Pi (the spec supports Codex and Claude). Whether a refresh
 keeps an idle session attached was checked by hand only: Claude (no CLI left
 under the bridge, list stays `missing` until a refresh) and Grok (list stays
 `stale`, so no `session/load`).
+
+### Review follow-up (2026-10-17)
+
+The restart scenario now appends a durable execution marker as the command's
+first action. The running-turn restart waits for exactly one marker and checks
+that the turn is still running before stopping the bridge. Both restart cases
+replay the captured browser submission with its original request ID, whether
+or not reconciliation parked it. The first case permits zero or one execution;
+the running-turn case requires exactly one, including after retry. Final reply
+counts remain separate: an interrupted turn can execute without a final reply.
+
+The opt-in scenario ran again in the disposable fixture profile
+`qa-slash-review-1017`, with Codex and Claude credentials and only those two
+platforms enabled: **2 passed, 0 skipped** (265 s). Both providers retained
+exactly one execution marker through the running-turn restart and same-ID
+retry. Codex also exercised stale-draft refusal; Claude's stale-draft step
+retains its documented limitation above. The JSON report is
+`output/agent-testing/qa-slash-review-1017/browser/results.json`.
+
+The transient Claude rewind now awaits the SDK Query's `return()` cleanup
+after `close()`. A bounded shutdown wait returns a retryable conflict while
+retaining the rewind fence; confirmed late cleanup releases it. Focused
+regressions cover delayed, timed-out and rejected cleanup, prompt and rewind
+admission during shutdown, and admission after confirmed shutdown. Model
+catalogue, idle MCP action and plan-usage tests also assert that their probe
+input never yields a user message.
+
+A repeat exposed a cold-discovery bug before Claude's first send, reproduced
+with Claude alone. The full projection held the project commands, but the
+progressive discovery response retained an earlier session-action-only value
+beside the newer catalogue state. Discovery now takes command rows and state
+from the same authoritative catalogue snapshot. A backend regression holds a
+cold provider read beyond its initial budget and keeps the clock fixed, proving
+that the completed rows reach the browser without waiting for cache expiry.
+
+With that fix, Codex passed the combined live run. Claude's initial turn then
+failed with an SDK result diagnostic; the unchanged Claude-only owning file
+passed on rerun (one passed, zero skipped, 87.3 s), including the inactive and
+restart checks. This intermittent provider failure is recorded as
+[0266](../tests/flaky-tests/0266-claude-live-slash-provider-result.md), with the
+failed combined command and evidence. Both providers therefore passed against
+the final code; the JSON report above now contains the final Claude-only run.
+
+Validation: the four focused Claude suites, the backend progressive,
+projection and command suites, `format:check`, `lint` and `typecheck` passed.
+The final `mise run test` passed the workspace, all five bridges and
+Codex protocol groups. Its only failure was the existing
+`tests/unit/flaky-tests-index.test.ts`: record
+`docs/tests/flaky-tests/0265-command-fixture-hooks-aggregate-timeout.md` lacks
+the required ID/status metadata in HEAD. The unchanged owning test also
+failed alone, so this is a deterministic baseline failure, not a new flake.
+Aggregate evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.9lkJ9D/summary.json`.
+Validation covers local browser flows; Docker, Electron and iOS scenario suites
+were outside this change.
+The disposable profile was stopped and reset; no live launcher remains.
 
 ### Fixes from the run
 

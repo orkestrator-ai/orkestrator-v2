@@ -19,6 +19,7 @@
  */
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { hasNotarizationCredentials } from "../electron-builder.release.config.js";
 import { PINNED_TOOL_VERSIONS } from "../packages/toolchain/src/manifest.js";
 import { assertMacUpdateFeed, prepareMacUpdateFeeds } from "./mac-update-feed.js";
 
@@ -36,6 +37,12 @@ const REQUIRED_ASSET_SUFFIXES = [
 ] as const;
 export const TOOLCHAIN_PINS_ASSET = "toolchain-pins.json";
 const LINUX_UPDATE_FEEDS = ["latest-linux.yml", "latest-linux-arm64.yml"] as const;
+/**
+ * The `xcrun notarytool store-credentials` profile the release Mac keeps. Used
+ * only when no notarization credentials are set, so an exported
+ * APPLE_KEYCHAIN_PROFILE, API key or Apple ID still takes precedence.
+ */
+export const DEFAULT_NOTARY_KEYCHAIN_PROFILE = "orkestrator-notary";
 
 function fail(message: string): never {
   throw new Error(message);
@@ -182,7 +189,10 @@ function build(publish: boolean, runtime: ReleaseRuntime): void {
 
   const tag = releaseTag();
   if (publish) assertTaggedCheckout(tag, runtime.capture);
-  const env = publish ? { ...runtime.env, GH_TOKEN: githubToken(runtime) } : runtime.env;
+  let env = publish ? { ...runtime.env, GH_TOKEN: githubToken(runtime) } : runtime.env;
+  if (platform === "darwin" && !hasNotarizationCredentials(env)) {
+    env = { ...env, APPLE_KEYCHAIN_PROFILE: DEFAULT_NOTARY_KEYCHAIN_PROFILE };
+  }
 
   run(["bun", "install", "--frozen-lockfile"]);
   run(["mise", "run", "download:bun"]);

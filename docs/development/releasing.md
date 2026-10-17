@@ -57,7 +57,7 @@ when a GitHub token is available.
 
 | Machine | Needs |
 | --- | --- |
-| Mac | Apple Silicon; a Developer ID Application certificate in the login keychain; notarization credentials in the environment (`APPLE_API_KEY`/`APPLE_API_KEY_ID`/`APPLE_API_ISSUER`, `APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID`, or `APPLE_KEYCHAIN_PROFILE`). |
+| Mac | Apple Silicon; a Developer ID Application certificate in the login keychain; notarization credentials. By default `release:desktop` uses the `orkestrator-notary` keychain profile (`xcrun notarytool store-credentials orkestrator-notary --apple-id <id> --team-id <team>`); setting `APPLE_API_KEY`/`APPLE_API_KEY_ID`/`APPLE_API_ISSUER`, `APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID`, or `APPLE_KEYCHAIN_PROFILE` overrides it. |
 | Linux | `mise`, `git`, and `bsdtar` (`sudo pacman -S libarchive`). |
 | Both | `gh auth login` (or `GH_TOKEN`) with write access to the repository. |
 

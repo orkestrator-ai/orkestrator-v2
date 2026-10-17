@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  DEFAULT_NOTARY_KEYCHAIN_PROFILE,
   assertTaggedCheckout,
   runDesktopRelease,
   type ReleaseRuntime,
@@ -207,6 +208,33 @@ describe("desktop release commands", () => {
     runDesktopRelease(["build", "--no-publish"], runtime);
     expect(capture).not.toHaveBeenCalled();
     expect(run.mock.calls[3]?.[0].slice(-2)).toEqual(["--publish", "never"]);
+  });
+
+  test("macOS packaging defaults to the release keychain profile for notarization", () => {
+    const { runtime, run } = harness();
+    runDesktopRelease(["build", "--no-publish"], runtime);
+    expect(run.mock.calls[3]?.[1]).toMatchObject({
+      APPLE_KEYCHAIN_PROFILE: DEFAULT_NOTARY_KEYCHAIN_PROFILE,
+    });
+  });
+
+  test.each([
+    [{ APPLE_KEYCHAIN_PROFILE: "other-profile" }],
+    [{ APPLE_API_KEY: "key.p8", APPLE_API_KEY_ID: "id", APPLE_API_ISSUER: "issuer" }],
+  ])("explicit notarization credentials are left untouched: %o", (credentials) => {
+    const { runtime, run } = harness({ env: { GH_TOKEN: "test-only", ...credentials } });
+    runDesktopRelease(["build", "--no-publish"], runtime);
+    const env = run.mock.calls[3]?.[1];
+    expect(env).toMatchObject(credentials);
+    if (!("APPLE_KEYCHAIN_PROFILE" in credentials)) {
+      expect(env?.APPLE_KEYCHAIN_PROFILE).toBeUndefined();
+    }
+  });
+
+  test("Linux packaging gets no Apple keychain profile", () => {
+    const { runtime, run } = harness({ platform: "linux", arch: "x64" });
+    runDesktopRelease(["build", "--no-publish"], runtime);
+    expect(run.mock.calls[3]?.[1]?.APPLE_KEYCHAIN_PROFILE).toBeUndefined();
   });
 
   test.each([

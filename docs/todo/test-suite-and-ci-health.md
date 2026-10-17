@@ -207,6 +207,15 @@ reliably green on `main`, and nothing requires it to be.
    (OpenCode probe deadline) and 0171 (Multi Review slow-reviewer benchmark)
    were resolved on 2026-10-15 with a controlled deadline and an ordering
    check. Resolve 0246 (real-Chromium launch) as item 1 describes.
+8. **Dev profiles report Electron's version as the backend's.** Found on
+   2026-10-17 during the container qualification. The dev launcher starts
+   Electron on `apps/desktop/dist/electron/main.js`
+   (`apps/desktop/scripts/dev/lifecycle.ts:629`), so `app.getVersion()` returns
+   Electron's 44.7.0 and `createBackendProcessEnvironment` exports it as
+   `ORKESTRATOR_VERSION`. Every `mise run dev` and `dev:test` browser therefore
+   shows "Orkestrator has been updated … the server now runs 44.7.0" over the
+   bottom-right of the page. Pass the package version in dev, or point
+   Electron at `apps/desktop` so it reads `package.json`.
 
 ### Qualification
 

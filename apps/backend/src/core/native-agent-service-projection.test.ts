@@ -846,7 +846,7 @@ describe("NativeAgentService", () => {
     );
   });
 
-  test.each(["opencode", "cursor", "grok", "pi", "codex"] as const)(
+  test.each(["claude", "opencode", "cursor", "grok", "pi", "codex"] as const)(
     "replaces the backend's Agent Session placeholder with the first prompt on %s",
     async (agent) => {
       const stub = createProviderStub(agent, {
@@ -887,6 +887,49 @@ describe("NativeAgentService", () => {
           );
         },
       );
+    },
+  );
+
+  test.each(["opencode", "cursor", "grok", "pi", "codex", "claude"] as const)(
+    "preserves saved titles on %s without updating the provider",
+    async (agent) => {
+      const titles =
+        agent === "claude" ? ["Saved conversation"] : ["Session abc123", "Saved conversation"];
+      for (const title of titles) {
+        const stub = createProviderStub(agent, {
+          interactiveSnapshot: async () => ({
+            status: "idle",
+            title,
+            messages: [
+              {
+                id: "user-1",
+                role: "user",
+                content: "An unrelated first prompt",
+                parts: [{ type: "text", content: "An unrelated first prompt" }],
+                createdAt: "2026-10-17T10:00:00.000Z",
+              },
+            ],
+          }),
+          setSessionTitle: async () => undefined,
+        });
+        await withService(
+          {
+            prefix: `orkestrator-native-${agent}-saved-title-`,
+            provider: async () => stub.provider,
+          },
+          async ({ service }) => {
+            const identity = {
+              environmentId: "env-1",
+              agent,
+              logicalSessionKey: `env-env-1:tab-${agent}-saved-title`,
+            };
+            await service.ensureSession(identity);
+            const projection = await service.getProjection(identity);
+            expect(projection?.title).toBe(title);
+            expect(stub.setSessionTitle).not.toHaveBeenCalled();
+          },
+        );
+      }
     },
   );
 

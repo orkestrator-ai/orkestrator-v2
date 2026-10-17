@@ -126,6 +126,7 @@ async function startBridge(platform: BridgePlatform): Promise<Bridge> {
       GROK_HOME: grokHome,
       FAKE_CLOSE_STORE: files.grokStore,
       FAKE_CLOSE_LOG: files.grokLog,
+      FAKE_CLOSE_SESSION_CAPABILITY: "1",
     };
   }
   const packageDirectory = path.join(repositoryRoot, entry.split("/src/")[0]!);

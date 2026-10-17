@@ -29,6 +29,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import { hasNewCompletedReply, type RetentionMessage } from "./close-retention-replies";
 
 type Status = {
   status: string;
@@ -38,7 +39,7 @@ type Status = {
 };
 type Project = { id: string; name: string; localPath: string | null };
 type Environment = { id: string; name: string };
-type Message = { role: string; content?: unknown };
+type Message = RetentionMessage;
 type Projection = {
   sessionId?: string;
   turn: { phase: string; error?: string };
@@ -222,7 +223,11 @@ test.describe("live close retention", () => {
             logicalSessionKey: `env-${environment.id}:${tabId}`,
           });
         /** Backend truth: the turn settled and an assistant reply matched. */
-        const waitForReply = async (tabId: string, matches: (reply: string) => boolean) => {
+        const waitForReply = async (
+          tabId: string,
+          previousMessageIds: ReadonlySet<string>,
+          matches: (reply: string) => boolean,
+        ) => {
           await expect
             .poll(
               async () => {
@@ -233,12 +238,7 @@ test.describe("live close retention", () => {
                   }
                   throw new Error(`${label} turn failed: ${current.turn.error ?? "no error"}`);
                 }
-                return (
-                  current?.turn.phase === "idle" &&
-                  current.messages
-                    .filter((message) => message.role === "assistant")
-                    .some((message) => matches(textOf(message)))
-                );
+                return hasNewCompletedReply(current, previousMessageIds, matches);
               },
               { timeout: TURN_TIMEOUT_MS, message: `${label} never answered` },
             )
@@ -253,7 +253,7 @@ test.describe("live close retention", () => {
         // Sending waits for the session to be ready: Enter before then is
         // ignored, so wait for the enabled send button as a user would.
         const sendButton = composeBar.getByRole("button", { name: "Send", exact: true });
-        const send = async (prompt: string) => {
+        const send = async (tabId: string, prompt: string) => {
           await expect(composer).toBeVisible({ timeout: 90_000 });
           await composer.fill(prompt);
           // A composer whose provider has no login offers sign-in instead of send.
@@ -265,16 +265,22 @@ test.describe("live close retention", () => {
             testInfo.skip(true, `${label} is not signed in in profile "${profile}"`);
           }
           await expect(sendButton).toBeEnabled({ timeout: 90_000 });
+          const before = await projection(tabId);
+          expect(before, "capture the transcript before sending").toBeTruthy();
+          const previousMessageIds = new Set(before!.messages.map((message) => message.id));
           // Enter rather than a click: a development "page is out of date"
           // toast can sit over the send button in a long-lived profile.
           await composer.press("Enter");
           await expect(composer).toHaveText("", { timeout: 30_000 });
+          return previousMessageIds;
         };
 
         const codeword = `ORK${Math.floor(100_000 + Math.random() * 900_000)}`;
         const first = `Remember this codeword for later: ${codeword}. Reply with only the word OK. Do not use any tools.`;
-        await send(first);
-        await waitForReply(firstTab, (reply) => /\bok\b/i.test(reply));
+        const beforeFirst = await send(firstTab, first);
+        await waitForReply(firstTab, beforeFirst, (reply) => /\bok\b/i.test(reply));
+        const firstSessionId = (await projection(firstTab))?.sessionId;
+        expect(firstSessionId, "the original provider session has an identity").toBeTruthy();
 
         await page.getByRole("button", { name: new RegExp(`^Close ${label}\\b`) }).click();
         await expect(composer).toHaveCount(0);
@@ -313,12 +319,14 @@ test.describe("live close retention", () => {
         });
         const resumedTab = agentTabs(pane.root).find((tab) => tab.platform === platform);
         expect(resumedTab, "the resumed tab is in the saved layout").toBeTruthy();
+        expect((await projection(resumedTab!.id))?.sessionId).toBe(firstSessionId);
 
         const second =
           "What codeword did I ask you to remember? Reply with only the codeword. Do not use any tools.";
-        await send(second);
-        await waitForReply(resumedTab!.id, (reply) => reply.includes(codeword));
+        const beforeSecond = await send(resumedTab!.id, second);
+        await waitForReply(resumedTab!.id, beforeSecond, (reply) => reply.includes(codeword));
         const resumed = await projection(resumedTab!.id);
+        expect(resumed?.sessionId).toBe(firstSessionId);
         const userPrompts = resumed!.messages
           .filter((message) => message.role === "user")
           .map(textOf);

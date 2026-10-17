@@ -4567,7 +4567,8 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       // conversation. Left in place they stay its title in the resume list, so
       // every OpenCode conversation read "Agent Session" there.
       const placeholderTitle =
-        snapshotTitle === "Agent Session" || /^Session [a-f0-9]{6}$/i.test(snapshotTitle ?? "");
+        snapshotTitle === "Agent Session" ||
+        (input.agent === "claude" && /^Session [a-f0-9]{6}$/i.test(snapshotTitle ?? ""));
       const projectionTitle =
         (!placeholderTitle && snapshotTitle) || fallbackTitle || snapshotTitle;
       if (

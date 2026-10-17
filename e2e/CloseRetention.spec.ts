@@ -24,14 +24,22 @@ import path from "node:path";
 let host: ChildProcess;
 let origin: string;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ browserName }, testInfo) => {
+  test.skip(
+    browserName !== "chromium" || testInfo.project.name !== "desktop-chromium",
+    "The flow is layout-independent; one viewport covers it",
+  );
+  test.setTimeout(90_000);
   host = spawn("bun", [path.join(import.meta.dirname, "fixtures/close-retention-host.ts")], {
     stdio: ["ignore", "pipe", "pipe"],
   });
   origin = await new Promise<string>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Close-retention host timed out")), 60_000);
     // Bounded diagnostic output; the host reads no credential.
     let error = "";
+    const timeout = setTimeout(
+      () => reject(new Error(`Close-retention host timed out: ${error}`)),
+      60_000,
+    );
     host.stderr!.on("data", (chunk) => {
       error = (error + String(chunk)).slice(-4_000);
     });
@@ -56,11 +64,7 @@ test.afterAll(async () => {
   });
 });
 
-test.beforeEach(async ({ page, request }, testInfo) => {
-  test.skip(
-    testInfo.project.name !== "desktop-chromium",
-    "The flow is layout-independent; one viewport covers it",
-  );
+test.beforeEach(async ({ page, request }) => {
   test.setTimeout(120_000);
   await page.route("**/__close-retention/**", async (route) => {
     const incoming = route.request();
@@ -242,6 +246,16 @@ for (const platform of ["cursor", "pi", "opencode", "grok"] as const) {
       await expect
         .poll(() => bridgeRequests(request, platform, requestsBefore))
         .toContain(`POST /session/${sessionId}/close`);
+      if (platform === "grok") {
+        // ACP's bridge id differs from the vendor's native conversation id.
+        const nativeSession = (await vendor(request)).grok.sessions.find((session) =>
+          session.prompts.includes(first),
+        );
+        expect(nativeSession, "the vendor retained the native session").toBeTruthy();
+        await expect
+          .poll(async () => (await vendor(request)).grok.events)
+          .toContain(`session-close:${nativeSession!.id}`);
+      }
     }
     // The closed tab stays closed across a reload.
     await page.reload();

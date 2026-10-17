@@ -4,6 +4,7 @@ import {
 } from "@orkestrator/protocol/agent-command-catalogue";
 import {
   NATIVE_AGENT_COMMAND_REFRESH_OUTCOMES,
+  normalizePendingSignIn,
   type NativeAgentAuthStatus,
   type NativeAgentMcpServer,
   type NativeAgentMcpServerAction,
@@ -229,6 +230,8 @@ export class HttpBridgeCatalogAdapter {
       ? (body!.state as NativeAgentAuthStatus["state"])
       : "unknown";
     const account = asRecord(body?.account);
+    const pendingSignIn =
+      state === "signed-in" ? undefined : normalizePendingSignIn(body?.pendingSignIn);
     const accountLabel = nonEmptyString(account?.label);
     const signIn = asRecord(body?.signIn);
     const signInKind = ["browser-url", "device-code", "terminal", "none"].includes(
@@ -260,6 +263,9 @@ export class HttpBridgeCatalogAdapter {
       : undefined;
     return {
       state,
+      ...(state !== "signed-in" && body && "pendingSignIn" in body
+        ? { pendingSignIn: pendingSignIn ?? null }
+        : {}),
       ...(accountLabel
         ? {
             account: {

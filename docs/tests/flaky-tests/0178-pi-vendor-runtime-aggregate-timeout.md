@@ -407,3 +407,17 @@ and `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.w0udE
 This observation does not independently establish a flake. Runtime staging
 remains an unresolved validation limitation; no source, assertion, timeout or
 skip changed.
+
+## Observation — 2026-10-17 (device-login review fixes)
+
+`mise run test:logged -- --name login-full-tests -- mise run test` timed out
+the staged runtime load at 30000.29 ms with one isolated root worker on a
+shared 18-slot host. The owning-file command
+`mise run test:logged -- --name login-pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+also timed out at 30000.10 ms (three passed, one failed, 31.0 seconds).
+This observation does not independently establish a flake; it remains an
+unresolved validation limitation. The device-login changes do not alter Pi
+staging. Evidence: `orkestrator-test-run.rIDYEp/root-and-agent-support-tests.log`
+(compressed when the aggregate finishes) and
+`orkestrator-test-run.ODHqwz/login-pi-vendor-owner.log.gz` in the host temporary
+directory. No timeout, assertion or skip was changed.

@@ -1486,15 +1486,22 @@ describe("AgentNativeTab", () => {
       ...(await defaultProjection(input as never)),
       readiness: { state: "authentication-required" as const, message: "Sign in to Codex" },
     }));
+    let pendingSignIn: NativeAgentAuthStatus["pendingSignIn"];
     getNativeAgentAuthStatusMock.mockImplementation(async () => ({
       state: "needs-auth" as const,
       signIn: { kind: "device-code" as const },
-    }));
-    beginNativeAgentSignInMock.mockImplementationOnce(async () => ({
-      url: "https://auth.example.test/device",
-      code: "ABCD-1234",
+      ...(pendingSignIn ? { pendingSignIn } : {}),
     }));
     beginNativeAgentSignInMock.mockImplementationOnce(async () => {
+      pendingSignIn = {
+        url: "https://auth.example.test/device",
+        code: "ABCD-1234",
+        expiresAt: Date.now() + 60_000,
+      };
+      return { url: pendingSignIn.url, code: pendingSignIn.code };
+    });
+    beginNativeAgentSignInMock.mockImplementationOnce(async () => {
+      pendingSignIn = undefined;
       throw new Error("login unavailable");
     });
     render(<AgentNativeTab tabId="tab-codex-device" data={identity("codex")} isActive />);
@@ -1510,7 +1517,9 @@ describe("AgentNativeTab", () => {
     );
     // The code stays in the banner for as long as the sign-in takes.
     expect(screen.getByText("ABCD-1234")).toBeTruthy();
-    fireEvent.click(button);
+    const retryButton = await screen.findByRole("button", { name: "Sign in to Codex" });
+    await waitFor(() => expect((retryButton as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(retryButton);
     await waitFor(() =>
       expect(mockToastError).toHaveBeenCalledWith(
         "Could not start Codex sign-in: login unavailable",
@@ -1518,6 +1527,76 @@ describe("AgentNativeTab", () => {
     );
     expect(screen.queryByRole("link", { name: "Open sign-in link" }) === null).toBe(true);
     expect(screen.queryByText("ABCD-1234") === null).toBe(true);
+  });
+
+  test("rehydrates a pending device login after switching environments and a renderer reload without starting another login", async () => {
+    let pendingSignIn: NativeAgentAuthStatus["pendingSignIn"];
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      readiness: {
+        state: "authentication-required" as const,
+        message: "Sign in to Codex",
+        signIn: { kind: "browser-url" as const },
+      },
+    }));
+    getNativeAgentAuthStatusMock.mockImplementation(async (input) => ({
+      state: "needs-auth",
+      signIn: { kind: "browser-url" },
+      ...(input.environmentId === identity("codex").environmentId && pendingSignIn
+        ? { pendingSignIn }
+        : {}),
+    }));
+    beginNativeAgentSignInMock.mockImplementation(async () => {
+      pendingSignIn = {
+        url: "https://auth.example.test/device",
+        code: "SAME-CODE",
+        expiresAt: Date.now() + 60_000,
+      };
+      return { url: pendingSignIn.url, code: pendingSignIn.code };
+    });
+    const mount = () =>
+      render(<AgentNativeTab tabId="pending-device-login" data={identity("codex")} isActive />);
+    let view = mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Sign in to Codex" }));
+    await screen.findByText("SAME-CODE");
+    view.unmount();
+    useEnvironmentStore.setState({
+      environments: [
+        ...useEnvironmentStore.getState().environments,
+        {
+          id: "other-environment",
+          projectId: "project-1",
+          name: "Other environment",
+          order: 1,
+          setupPhase: "ready",
+        } as never,
+      ],
+    });
+    const away = render(
+      <AgentNativeTab
+        tabId="other-environment"
+        data={{ ...identity("codex"), environmentId: "other-environment" }}
+        isActive
+      />,
+    );
+    await screen.findByRole("button", { name: "Sign in to Codex" });
+    expect(screen.queryByText("SAME-CODE") === null).toBe(true);
+    away.unmount();
+    view = mount();
+    await screen.findByText("SAME-CODE");
+    expect(screen.getByRole("link", { name: "Open sign-in link" }).getAttribute("href")).toBe(
+      pendingSignIn!.url,
+    );
+    view.unmount();
+    // Reload loses every renderer projection, leaving only the backend fixture's live login.
+    useNativeAgentProjectionStore.getState().reset();
+    mount();
+    await screen.findByText("SAME-CODE");
+    expect(screen.getByRole("link", { name: "Open sign-in link" }).getAttribute("href")).toBe(
+      pendingSignIn!.url,
+    );
+    expect(beginNativeAgentSignInMock).toHaveBeenCalledTimes(1);
+    expect(openInBrowserMock).toHaveBeenCalledTimes(1);
   });
 
   test("asks for a device code when the backend is on another machine", async () => {
@@ -1709,7 +1788,8 @@ describe("AgentNativeTab", () => {
 
     expect(await screen.findByRole("button", { name: "Sign in to Codex" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Checking sign-in options…" }) === null).toBe(true);
-    expect(getNativeAgentAuthStatusMock).not.toHaveBeenCalled();
+    // The route is available immediately; the account read also recovers a pending code.
+    expect(getNativeAgentAuthStatusMock).toHaveBeenCalledTimes(1);
   });
 
   test("does not take an earlier Claude sign-in as the answer to a current lock", async () => {

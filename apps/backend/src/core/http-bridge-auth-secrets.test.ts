@@ -92,6 +92,51 @@ describe.each(CONNECTIONS)("%s bridge auth boundary", (_agent, connection) => {
     expectNothingSecretLogged(output, "sign-in");
   });
 
+  test("rehydrates only the bounded pending-login display fields and logs neither code nor URL", async () => {
+    const pendingSignIn = {
+      url: CANARY_LOGIN_URL,
+      code: CANARY_USER_CODE,
+      expiresAt: Date.now() + 60_000,
+    };
+    const { provider } = httpProvider(
+      () =>
+        Response.json({
+          state: "needs-auth",
+          pendingSignIn: { ...pendingSignIn, ...TOKENS, loginId: AUTH_SECRET_CANARIES.oauthCode },
+        }),
+      connection,
+    );
+    const { result: status, output } = await captureOutput(() => provider.authStatus!());
+    expect(status.pendingSignIn).toEqual(pendingSignIn);
+    expectAuthStatusShape(status);
+    expectOnlyLoginSecrets(status, "pending sign-in");
+    expectNothingSecretLogged(output, "pending sign-in");
+  });
+
+  test.each(["expired", "unbounded", "invalid-url", "oversized-code", "signed-in"])(
+    "drops a %s pending login",
+    async (reason) => {
+      const pendingSignIn = {
+        url: CANARY_LOGIN_URL,
+        code: CANARY_USER_CODE,
+        expiresAt: Date.now() + 60_000,
+      };
+      if (reason === "expired") pendingSignIn.expiresAt = Date.now() - 1;
+      if (reason === "unbounded") pendingSignIn.expiresAt = Date.now() + 60 * 60_000;
+      if (reason === "invalid-url") pendingSignIn.url = "javascript:alert(1)";
+      if (reason === "oversized-code") pendingSignIn.code = "a".repeat(513);
+      const { provider } = httpProvider(
+        () =>
+          Response.json({
+            state: reason === "signed-in" ? "signed-in" : "needs-auth",
+            pendingSignIn,
+          }),
+        connection,
+      );
+      expect((await provider.authStatus!()).pendingSignIn ?? null).toBeNull();
+    },
+  );
+
   test("asks the bridge for a device code only when the caller does", async () => {
     const bodies: Array<string | null> = [];
     const { provider } = httpProvider(async (_input, init) => {

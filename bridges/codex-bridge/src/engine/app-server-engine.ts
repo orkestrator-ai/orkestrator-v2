@@ -22,6 +22,11 @@
  *     against persisted turns rather than retrying blind.
  */
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
+import {
+  NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS,
+  normalizePendingSignIn,
+  type NativeAgentPendingSignIn,
+} from "@orkestrator/protocol/native-agent";
 import { open } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -748,6 +753,11 @@ export class AppServerEngine implements CodexEngine {
    * with a stale token that the normal refresh would have replaced.
    */
   private accountSignInRequired = false;
+  // One live login per app-server account, independent of any renderer or tab.
+  private pendingSignIn: { loginId: string; display: NativeAgentPendingSignIn } | null = null;
+  private pendingSignInTimer: ReturnType<typeof setTimeout> | undefined;
+  private completedLoginId: string | null = null;
+  private loginSequence = 0;
   /**
    * The generation whose model has answered since its last refused turn or
    * account change. Once a forced refresh is rejected, app-server reports no
@@ -825,6 +835,8 @@ export class AppServerEngine implements CodexEngine {
       onGenerationReady: (generation, previous) =>
         this.handleGenerationChange(generation, previous),
       onGenerationExit: (generation) => {
+        this.clearPendingSignIn();
+        this.loginSequence++;
         this.hostedNetworkLockVerifiedGeneration = null;
         this.rejectAllWaiters();
         this.router.abandonGeneration(generation);
@@ -953,6 +965,7 @@ export class AppServerEngine implements CodexEngine {
   }
 
   async stop(): Promise<void> {
+    this.clearPendingSignIn();
     await this.supervisor.stop();
     this.bindings.clear();
     this.rejectAllWaiters();
@@ -1079,6 +1092,14 @@ export class AppServerEngine implements CodexEngine {
         this.runtimeNotices.push(runtimeNotice);
         if (this.runtimeNotices.length > 100) this.runtimeNotices.shift();
         if (isCodexAccountAuthFailure(runtimeNotice)) this.checkAccountSignIn(false);
+      }
+    }
+
+    if (notification.method === "account/login/completed") {
+      const loginId = objectRecord(notification.params).loginId;
+      if (typeof loginId === "string" && loginId.length <= 512) {
+        this.completedLoginId = loginId;
+        if (this.pendingSignIn?.loginId === loginId) this.clearPendingSignIn();
       }
     }
 
@@ -1896,6 +1917,12 @@ export class AppServerEngine implements CodexEngine {
     });
   }
 
+  private clearPendingSignIn(): void {
+    clearTimeout(this.pendingSignInTimer);
+    this.pendingSignInTimer = undefined;
+    this.pendingSignIn = null;
+  }
+
   async readAccount(): Promise<unknown> {
     // Order by request, but only a successful response supersedes an older
     // one. A failed routine read leaves a pending failure check free to land.
@@ -1903,6 +1930,7 @@ export class AppServerEngine implements CodexEngine {
     const generation = this.supervisor.getGeneration();
     // On-demand UI auth-status reads must not force a token refresh here (see
     // `checkAccountSignIn`). App-server refreshes a stale token on its own.
+    const loginSequence = this.loginSequence;
     const response = await this.supervisor.request("account/read", { refreshToken: false });
     // Auth-status reads answer from account/read itself. A connector reload is
     // independent work and must not turn a valid account answer into an error.
@@ -1912,7 +1940,11 @@ export class AppServerEngine implements CodexEngine {
         redactSecrets(error instanceof Error ? error.message : String(error)),
       );
     });
-    return response;
+    if (loginSequence === this.loginSequence && objectRecord(response).account)
+      this.clearPendingSignIn();
+    const pendingSignIn = normalizePendingSignIn(this.pendingSignIn?.display);
+    if (!pendingSignIn) this.clearPendingSignIn();
+    return { ...objectRecord(response), ...(pendingSignIn ? { pendingSignIn } : {}) };
   }
 
   async readAccountUsage(): Promise<EngineAccountUsageWindow[]> {
@@ -1937,17 +1969,47 @@ export class AppServerEngine implements CodexEngine {
    * backend, a container) cannot finish it; device code has no callback.
    */
   async beginAccountLogin(method: "browser" | "device-code" = "browser"): Promise<unknown> {
-    if (method === "device-code") {
-      return this.supervisor.request("account/login/start", { type: "chatgptDeviceCode" });
-    }
-    return this.supervisor.request("account/login/start", {
-      type: "chatgpt",
-      codexStreamlinedLogin: true,
-      useHostedLoginSuccessPage: true,
+    const sequence = ++this.loginSequence;
+    this.clearPendingSignIn();
+    const response = await this.supervisor.request(
+      "account/login/start",
+      method === "device-code"
+        ? {
+            type: "chatgptDeviceCode",
+          }
+        : {
+            type: "chatgpt",
+            codexStreamlinedLogin: true,
+            useHostedLoginSuccessPage: true,
+          },
+    );
+    const raw = objectRecord(response);
+    const display = normalizePendingSignIn({
+      url: raw.verificationUrl,
+      code: raw.userCode,
+      expiresAt: Date.now() + NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS,
     });
+    if (
+      sequence === this.loginSequence &&
+      typeof raw.loginId === "string" &&
+      raw.loginId.length > 0 &&
+      raw.loginId.length <= 512 &&
+      raw.loginId !== this.completedLoginId &&
+      display
+    ) {
+      this.pendingSignIn = { loginId: raw.loginId, display };
+      this.pendingSignInTimer = setTimeout(
+        () => this.clearPendingSignIn(),
+        Math.max(0, display.expiresAt - Date.now()),
+      );
+      this.pendingSignInTimer.unref?.();
+    }
+    return response;
   }
 
   async logoutAccount(): Promise<void> {
+    this.clearPendingSignIn();
+    this.loginSequence++;
     await this.supervisor.request("account/logout", undefined);
   }
 

@@ -59,6 +59,8 @@ import type { NativeMessage } from "@/lib/chat/native-message-types";
 import {
   describeNativeAgentExecutionPolicy,
   nativeAgentSteerRejectionMessage,
+  normalizePendingSignIn,
+  NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS,
   type NativeAgentAuthStatus,
   type NativeAgentControlUpdate,
 } from "@orkestrator/protocol/native-agent";
@@ -95,8 +97,10 @@ interface ControlUpdateState {
 /** Host-meter freshness requested while the agent-information popover is open. */
 export const AGENT_INFO_SYSTEM_USAGE_INTERVAL_MS = 3_000;
 
-/** One device-code toast at a time; a confirmed sign-in dismisses it. */
-const DEVICE_CODE_TOAST_ID = "agent-info-device-code";
+/** Account auth is shared by tabs of one environment/provider, not by all accounts. */
+function deviceCodeToastId(environmentId: string, agent: string): string {
+  return `agent-info-device-code:${JSON.stringify([environmentId, agent])}`;
+}
 
 interface ActiveNativeSession {
   provider: AgentPlatform;
@@ -440,6 +444,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
     let cancelled = false;
     let sequence = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let observedPendingSignIn: string | null = null;
     let signInReadsRemaining = 0;
     let signInDeadline = 0;
     const invalidate = () => {
@@ -464,14 +469,40 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
         setAccountReadFailed(false);
         if (status.state === "signed-in") {
           signInReadsRemaining = 0;
-          toast.dismiss(DEVICE_CODE_TOAST_ID);
+          toast.dismiss(deviceCodeToastId(accountEnvironmentId, accountAgent));
+        } else {
+          const pending = normalizePendingSignIn(status.pendingSignIn);
+          if (pending) {
+            const identity = JSON.stringify([pending.code, pending.url, pending.expiresAt]);
+            if (observedPendingSignIn !== identity)
+              toast.info(`Device code: ${pending.code}`, {
+                id: deviceCodeToastId(accountEnvironmentId, accountAgent),
+                duration: pending.expiresAt - Date.now(),
+                closeButton: true,
+                action: {
+                  label: "Open sign-in link",
+                  onClick: () => {
+                    void openInBrowser(pending.url).catch(() =>
+                      toast.error("Could not open the sign-in link"),
+                    );
+                  },
+                },
+              });
+            observedPendingSignIn = identity;
+            signInReadsRemaining = Math.ceil((pending.expiresAt - Date.now()) / 2_000);
+            signInDeadline = pending.expiresAt;
+          } else if (observedPendingSignIn || status.pendingSignIn === null) {
+            observedPendingSignIn = null;
+            toast.dismiss(deviceCodeToastId(accountEnvironmentId, accountAgent));
+          }
         }
       } catch {
         if (cancelled || request !== sequence) return;
         setAccountReadFailed(true);
       }
       // Login completion happens outside this panel. Bound the follow-up reads
-      // to two minutes, and stop them on close, identity change or sign-out.
+      // to two minutes for browser login or the device-code deadline, and stop
+      // them on close, identity change or sign-out.
       if (signInReadsRemaining > 0 && Date.now() < signInDeadline) {
         signInReadsRemaining--;
         timer = setTimeout(() => void refresh(), 2_000);
@@ -1449,15 +1480,34 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                                 // No loopback callback reaches a remote backend.
                                 ...(isRemoteGatewayConnection() ? { deviceCode: true } : {}),
                               });
-                              reader?.watchSignIn();
-                              // The desktop shell denies window.open.
-                              if (result.url) await openInBrowser(result.url);
                               // The code is needed for as long as the sign-in takes.
                               if (result.code) {
                                 toast.info(`Device code: ${result.code}`, {
-                                  id: DEVICE_CODE_TOAST_ID,
-                                  duration: Infinity,
+                                  id: deviceCodeToastId(
+                                    activeSession.environmentId,
+                                    activeSession.provider,
+                                  ),
+                                  duration: NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS,
                                   closeButton: true,
+                                  ...(result.url
+                                    ? {
+                                        action: {
+                                          label: "Open sign-in link",
+                                          onClick: () => {
+                                            void openInBrowser(result.url!).catch(() =>
+                                              toast.error("Could not open the sign-in link"),
+                                            );
+                                          },
+                                        },
+                                      }
+                                    : {}),
+                                });
+                              }
+                              reader?.watchSignIn();
+                              // Opening a browser is independent of starting the login.
+                              if (result.url) {
+                                void openInBrowser(result.url).catch(() => {
+                                  toast.error("Could not open the sign-in link");
                                 });
                               }
                             })

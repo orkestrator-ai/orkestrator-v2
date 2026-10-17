@@ -44,3 +44,12 @@ No assertion, timeout or skip changed.
 - **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.HDY6ow/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Assessment:** an unchanged owning-file pass confirms a recurrence. Shared-host contention remains an unconfirmed hypothesis; no implementation, assertion, timeout or skip changed.
 - **Subsequent aggregate:** `mise run test:logged -- --name review-aggregate-system-tools -- mise run test` passed all four groups (exit 0, 339.7 seconds) with system Python and the documented GNU utilities preferred in PATH, after component browser validation ended. This pass does not establish a root cause or resolve the tracked flake.
+
+## Codex phantom-denials PR-stage recurrence — 2026-10-17
+
+- **Original command:** `bun test scripts/dev/coordinator-live.test.ts` from `apps/desktop`, alone rather than in the aggregate, on `fix-codex-phantom-denials-8bdb8d15d820` while other worktrees validated (load average about 26–31 on 18 cores).
+- **Failure:** the same case exceeded its 5000 ms budget at 5033.25 ms, with a racing `git status exited -1` between-tests error.
+- **Suite counts:** 45 passed, one failed and one between-tests error across 46 tests in 6.12 seconds.
+- **Rerun:** the same command passed all 46 unchanged; so did the case alone (`-t "fixture tree digest"`, 3 passed) and the file with the runner tests under `--preload ../../tests/setup-node.ts` (52 passed).
+- **Evidence:** terminal output only; no log file was kept.
+- **Assessment:** the first case outside the aggregate. The branch changes the rollout reader in the same file but not the digest. Shared-host contention remains an unconfirmed hypothesis; no implementation, assertion, timeout or skip changed.

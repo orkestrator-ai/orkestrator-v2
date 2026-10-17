@@ -7,6 +7,11 @@ import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { DESKTOP_SUPERVISED_ENV } from "@orkestrator/protocol/node/application-logging";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
 import {
+  isHostMaintenanceSnapshot,
+  type HostMaintenanceSnapshot,
+  type HostUpdaterReport,
+} from "@orkestrator/protocol/host-maintenance";
+import {
   GATEWAY_EVENT_CURSOR_PARAM,
   GatewayEventStreamState,
   NATIVE_EVENT_STREAM_CONNECTED_EVENT,
@@ -392,6 +397,42 @@ export class BackendHttpClient {
     return this.webClientAccess("DELETE");
   }
 
+  /** Update jobs for this computer; served only on the loopback control listener. */
+  async hostUpdaterSnapshot(): Promise<HostMaintenanceSnapshot> {
+    return this.hostUpdater("GET");
+  }
+
+  async reportHostUpdater(report: HostUpdaterReport): Promise<HostMaintenanceSnapshot> {
+    return this.hostUpdater("POST", report);
+  }
+
+  private async hostUpdater(
+    method: "GET" | "POST",
+    body?: HostUpdaterReport,
+  ): Promise<HostMaintenanceSnapshot> {
+    const response = await fetch(new URL("/__orkestrator/host-updater", this.baseUrl), {
+      method,
+      headers: {
+        authorization: `Bearer ${this.token}`,
+        ...(body ? { "content-type": "application/json" } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+    const payload = (await response.json().catch(() => ({}))) as unknown;
+    if (!response.ok) {
+      const error = (payload as { error?: unknown }).error;
+      throw new Error(
+        typeof error === "string"
+          ? error
+          : `Host updater request failed with HTTP ${response.status}`,
+      );
+    }
+    if (!isHostMaintenanceSnapshot(payload)) {
+      throw new Error("Host updater response was malformed");
+    }
+    return payload;
+  }
+
   listen(onEvent: (event: string, payload: unknown) => void): void {
     this.abortEvents?.abort();
     const controller = new AbortController();
@@ -537,6 +578,8 @@ export class BackendProcess {
     fallbackGatewayHost?: string;
     allowNonTailscaleBind?: boolean;
     desktopWebClient?: boolean;
+    /** This app can install updates; the backend accepts remote update requests. */
+    desktopUpdater?: boolean;
     tailscaleExecutable?: string;
     runtimeFlavor?: "production" | "development" | "agent-test";
     runtimeProfileId?: string;
@@ -569,6 +612,8 @@ export class BackendProcess {
     fallbackGatewayHost?: string;
     allowNonTailscaleBind?: boolean;
     desktopWebClient?: boolean;
+    /** This app can install updates; the backend accepts remote update requests. */
+    desktopUpdater?: boolean;
     tailscaleExecutable?: string;
     runtimeFlavor?: "production" | "development" | "agent-test";
     runtimeProfileId?: string;
@@ -604,6 +649,7 @@ export class BackendProcess {
         : path.join(options.resourceRoot, "web"),
     ];
     if (options.toolchainBinDir) args.push("--toolchain-bin-dir", options.toolchainBinDir);
+    if (options.desktopUpdater) args.push("--desktop-updater");
     if (options.desktopWebClient) {
       args.push(
         "--desktop-web-client",
@@ -760,11 +806,23 @@ export class BackendProcess {
     return this.child?.pid;
   }
 
-  stop(): void {
+  /** Sends SIGTERM; resolves once the backend has finished its drain and exited. */
+  stop(): Promise<void> {
+    const child = this.child;
     this.client?.stopListening();
-    this.child?.kill("SIGTERM");
     this.client = null;
     this.child = null;
     this.info = null;
+    if (!child?.pid || child.exitCode !== null || child.signalCode !== null) {
+      return Promise.resolve();
+    }
+    const exited = new Promise<void>((resolve) => {
+      child.once("exit", () => resolve());
+      child.once("error", () => resolve());
+    });
+    child.kill("SIGTERM");
+    const force = setTimeout(() => child.kill("SIGKILL"), 20_000);
+    force.unref();
+    return exited.finally(() => clearTimeout(force));
   }
 }

@@ -18,6 +18,7 @@ const assets = [
   "app.AppImage",
   "app.pacman",
   "latest-linux.yml",
+  "toolchain-pins.json",
 ];
 
 function harness(overrides: Partial<ReleaseRuntime> = {}) {
@@ -41,6 +42,8 @@ function harness(overrides: Partial<ReleaseRuntime> = {}) {
     releaseTag: () => tag,
     artifacts: () => ["app.dmg", "mac-arm64-unpacked"],
     prepareMacUpdateFeeds: () => ["release/latest-mac.yml"],
+    writeToolchainPins: () => "release/toolchain-pins.json",
+    npmHasVersion: () => false,
     ...overrides,
   };
   return { runtime, run, capture };
@@ -181,6 +184,16 @@ describe("desktop release commands", () => {
               ],
             ]
           : []),
+        [
+          "gh",
+          "release",
+          "upload",
+          tag,
+          "--repo",
+          "orkestrator-ai/orkestrator-v2",
+          "--clobber",
+          "release/toolchain-pins.json",
+        ],
       ]);
       expect(run.mock.calls[2]?.[1]).toMatchObject({
         GH_TOKEN: "test-only",
@@ -260,19 +273,37 @@ describe("desktop release commands", () => {
   });
 
   test("accepts the architecture-specific arm64 Linux updater feed", () => {
-    const { runtime, run } = harness({
-      capture: (command) =>
-        command[2] === "download"
-          ? "minimumSystemVersion: '22.0.0'\n"
-          : JSON.stringify({
-              isDraft: true,
-              assets: assets.map((name) => ({
-                name: name === "latest-linux.yml" ? "latest-linux-arm64.yml" : name,
-              })),
-            }),
-    });
+    const { runtime, run, capture } = harness();
+    const original = capture.getMockImplementation()!;
+    capture.mockImplementation((command) => command[0] === "gh" && command[2] === "view"
+      ? JSON.stringify({ isDraft: true, assets: assets.map((name) => ({ name: name === "latest-linux.yml" ? "latest-linux-arm64.yml" : name })) })
+      : original(command));
     runDesktopRelease(["publish"], runtime);
-    expect(run).toHaveBeenCalledTimes(1);
+    // publish:cli, then the release edit.
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  test("publishes the npm package before making the release public, once", () => {
+    const { runtime, run } = harness();
+    runDesktopRelease(["publish"], runtime);
+    expect(run.mock.calls.map(([command]) => command[0] === "mise" ? command.join(" ") : command[2])).toEqual([
+      "mise run publish:cli",
+      "edit",
+    ]);
+
+    const already = harness({ npmHasVersion: () => true });
+    runDesktopRelease(["publish"], already.runtime);
+    expect(already.run.mock.calls.map(([command]) => command[2])).toEqual(["edit"]);
+
+    const skipped = harness();
+    runDesktopRelease(["publish", "--skip-npm"], skipped.runtime);
+    expect(skipped.run.mock.calls.map(([command]) => command[2])).toEqual(["edit"]);
+  });
+
+  test("a prerelease is never published to npm", () => {
+    const { runtime, run } = harness({ releaseTag: () => "v2.20.0-beta.1" });
+    runDesktopRelease(["publish"], runtime);
+    expect(run.mock.calls.map(([command]) => command[2])).toEqual(["edit"]);
   });
 
   test("refuses an already-public release", () => {
@@ -291,4 +322,16 @@ describe("desktop release commands", () => {
       expect(run).not.toHaveBeenCalled();
     },
   );
+});
+
+test.each(["dirty", "wrong-head"])("npm publication refuses %s checkout before building", (mode) => {
+  const { runtime, run, capture } = harness();
+  const original = capture.getMockImplementation()!;
+  capture.mockImplementation((command) => {
+    if (mode === "dirty" && command[1] === "status") return " M source.ts";
+    if (mode === "wrong-head" && command[2] === `${tag}^{commit}`) return other;
+    return original(command);
+  });
+  expect(() => runDesktopRelease(["publish"], runtime)).toThrow(mode === "dirty" ? "uncommitted changes" : "does not point at HEAD");
+  expect(run).not.toHaveBeenCalled();
 });

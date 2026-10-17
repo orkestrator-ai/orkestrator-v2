@@ -529,10 +529,13 @@ describe("design lifecycle: tombstones, restore, purge, duplicate and fencing", 
     expect(await exists(service().store.historyDir(canvasId))).toBe(true);
   });
 
+  // Bun's async recursive readdir lists subdirectories concurrently, so its
+  // entry order varies between calls (a child can precede its parent). Sort
+  // to compare the set of paths, not the traversal order.
   const canvasFiles = async (canvasId: string) =>
-    (await readdir(join(harness.dir, "design-canvases"), { recursive: true })).filter((file) =>
-      file.includes(canvasId),
-    );
+    (await readdir(join(harness.dir, "design-canvases"), { recursive: true }))
+      .filter((file) => file.includes(canvasId))
+      .toSorted();
 
   for (const problem of ["unparsable", "unreadable"] as const) {
     test(`the orphan sweep keeps a canvas with an ${problem} owner`, async () => {

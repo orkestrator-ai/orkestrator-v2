@@ -385,6 +385,16 @@ Follow-up validation on `annotation-native-window-signoff`:
   **passed**, 728.4 seconds including a 234-second workspace capacity wait.
   Workspace, root/agent-support, bridge and protocol groups all passed.
 
+After merging `origin/main` (#1042, #1045) into the branch:
+
+- `mise run test:agent:electron`: 14 passed, 1 skipped (Linux-only Wayland
+  case), 0 failed (83 s).
+- `window-menu.test.ts` 12 passed; the payload bench and quota files 21 passed;
+  `mise run lint`, `mise run typecheck` and `mise run format:check` passed.
+- `mise run test`: root, bridge and protocol groups passed. The workspace group
+  failed once, on known flake 0187 (`commands-integration.test.ts`, 5 s
+  timeout), and that file passed alone (55 passed, 19 s).
+
 ### Runs on 2026-10-15 (macOS)
 
 Partial evidence only; no milestone was signed off. macOS on Apple Silicon,

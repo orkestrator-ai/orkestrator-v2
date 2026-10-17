@@ -85,7 +85,9 @@ export type AutoUpdateController = {
    */
   stageForRemote(onProgress?: (percent: number) => void): Promise<StagedUpdate>;
   /** Quits and installs `version` if it is the staged update; false otherwise. */
-  installStaged(version: string): boolean;
+  installStaged(version: string): Promise<boolean>;
+  /** Release the staged version after a remote job ends. */
+  releaseRemoteStage(): void;
   stop(): void;
 };
 
@@ -101,6 +103,8 @@ export type AutoUpdateOptions = {
   log?: Pick<Console, "info" | "warn">;
   /** Called after every check, background ones included. */
   onCheckResult?(report: UpdateCheckReport): void;
+  /** Drain the backend and release the AppImage single-instance lock before spawning its replacement. */
+  prepareForInstall?(): Promise<void>;
 };
 
 /**
@@ -122,6 +126,7 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
   let intervalTimer: NodeJS.Timeout | null = null;
   // While a remote request stages an update, its countdown replaces the prompt.
   let remoteStaging = 0;
+  let remoteReserved = false;
   let progressListener: ((percent: number) => void) | null = null;
 
   updater.autoDownload = true;
@@ -143,6 +148,7 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
         "running agent sessions are not interrupted until then.",
     });
     if (result.response === 0 && downloadedVersion === version && revision === readinessRevision) {
+      await options.prepareForInstall?.();
       updater.quitAndInstall();
     }
   }
@@ -218,6 +224,7 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
   function check(): Promise<UpdateCheckResult | null> {
     // Hold the operation through download/staging so a menu click and a timer
     // cannot start competing downloads or misreport an in-flight update.
+    if (remoteReserved && !checkInFlight) return Promise.resolve(null);
     checkInFlight ??= performCheck().finally(() => {
       checkInFlight = null;
     });
@@ -247,6 +254,7 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
         if (downloadedVersion) {
           // The remote countdown is this version's prompt; do not ask again.
           promptedVersion = downloadedVersion;
+          remoteReserved = true;
           return { status: "staged", version: downloadedVersion };
         }
         if (result?.isUpdateAvailable) {
@@ -258,11 +266,15 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
         if (progressListener === onProgress) progressListener = null;
       }
     },
-    installStaged(version: string): boolean {
+    releaseRemoteStage(): void {
+      remoteReserved = false;
+    },
+    async installStaged(version: string): Promise<boolean> {
       if (downloadedVersion !== version || checkInFlight) return false;
       // Nobody may be at this computer: relaunch after installing. Linux
       // AppImage otherwise exits without starting the new version; macOS
       // always relaunches and ignores both arguments.
+      await options.prepareForInstall?.();
       updater.quitAndInstall(true, true);
       return true;
     },
@@ -273,7 +285,7 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
       intervalTimer = null;
     },
     async checkNow(): Promise<void> {
-      if (manualCheck) return;
+      if (manualCheck || remoteReserved) return;
       manualCheck = true;
       try {
         if (downloadedVersion && !checkInFlight) {

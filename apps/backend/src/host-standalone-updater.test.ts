@@ -76,6 +76,7 @@ async function setup(options: { engines?: string; latest?: string } = {}) {
     emit: () => undefined,
   });
   service.init();
+  service.markReady();
   const shutdown = mock(() => undefined);
   const { run, calls } = runner(options.engines);
   const updater = createStandaloneUpdater({
@@ -157,4 +158,52 @@ describe("createStandaloneUpdater", () => {
     expect(service.job(job.id)?.error).toContain("newest release");
     expect(shutdown).not.toHaveBeenCalled();
   });
+});
+
+test.each(["failed-read", "unknown-terminal"])(
+  "when-idle waits through %s until authoritative idle",
+  async (mode) => {
+    const { service, shutdown } = await setup();
+    let idle = false;
+    let reads = 0;
+    service.setReaders({
+      impact: async () => {
+        reads += 1;
+        if (!idle && mode === "failed-read") throw new Error("unavailable");
+        return {
+          workingAgents: 0,
+          waitingAgents: 0,
+          unknownAgents: idle ? 0 : 1,
+          activePipelines: 0,
+          terminals: 0,
+          hostServers: 0,
+          measuredAt: new Date().toISOString(),
+        };
+      },
+    });
+    const job = service.requestUpdate({ requestedVersion: null, drain: "when-idle" });
+    await until(() => reads >= 3);
+    expect(service.job(job.id)?.state).toBe("waiting-for-idle");
+    expect(shutdown).not.toHaveBeenCalled();
+    idle = true;
+    await until(() => shutdown.mock.calls.length > 0);
+  },
+);
+
+test("startup settlement precedes executor startup so interrupted requests are never resumed", async () => {
+  const prior = new HostMaintenanceService({
+    dataDir,
+    updater: "standalone",
+    version: "2.21.1",
+    emit: () => undefined,
+  });
+  prior.init();
+  prior.markReady();
+  const job = prior.requestUpdate({ requestedVersion: "2.22.0" });
+  prior.close();
+  const { service, calls, shutdown } = await setup();
+  await Bun.sleep(40);
+  expect(service.job(job.id)?.state).toBe("failed");
+  expect(calls).toEqual([]);
+  expect(shutdown).not.toHaveBeenCalled();
 });

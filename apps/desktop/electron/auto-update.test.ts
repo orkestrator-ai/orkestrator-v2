@@ -43,7 +43,10 @@ describe("isAutoUpdateSupported", () => {
   });
 });
 
-function createHarness(checkResult: UpdateCheckResult | Error | null = {}) {
+function createHarness(
+  checkResult: UpdateCheckResult | Error | null = {},
+  prepareForInstall?: () => Promise<void>,
+) {
   const listeners = new Map<string, (arg: never) => void>();
   const updater: UpdaterLike = {
     autoDownload: false,
@@ -72,6 +75,7 @@ function createHarness(checkResult: UpdateCheckResult | Error | null = {}) {
     showMessageBox,
     log,
     onCheckResult,
+    prepareForInstall,
   });
   const emit = (event: string, arg: unknown) => listeners.get(event)?.(arg as never);
   return { updater, showMessageBox, controller, emit, log, onCheckResult };
@@ -389,9 +393,9 @@ describe("remote update staging", () => {
     const harness = createHarness();
     downloading(harness, "2.20.0");
     await harness.controller.stageForRemote();
-    expect(harness.controller.installStaged("2.21.0")).toBe(false);
+    expect(await harness.controller.installStaged("2.21.0")).toBe(false);
     expect(harness.updater.quitAndInstall).not.toHaveBeenCalled();
-    expect(harness.controller.installStaged("2.20.0")).toBe(true);
+    expect(await harness.controller.installStaged("2.20.0")).toBe(true);
     expect(harness.updater.quitAndInstall).toHaveBeenCalledWith(true, true);
   });
 
@@ -405,4 +409,67 @@ describe("remote update staging", () => {
     });
     expect(harness.showMessageBox).not.toHaveBeenCalled();
   });
+});
+
+test("a remote staged version is reserved across countdown and idle-wait checks", async () => {
+  jest.useFakeTimers();
+  const harness = createHarness();
+  try {
+    harness.updater.checkForUpdates = mock(async () => {
+      harness.emit("update-downloaded", { version: "2.22.0" });
+      return { isUpdateAvailable: true, updateInfo: { version: "2.22.0" } };
+    });
+    await harness.controller.stageForRemote();
+    harness.controller.start();
+    jest.advanceTimersByTime(7 * 60 * 60 * 1000);
+    await harness.controller.checkSilently();
+    await harness.controller.checkNow();
+    expect(harness.updater.checkForUpdates).toHaveBeenCalledTimes(1);
+    expect(await harness.controller.installStaged("2.22.0")).toBe(true);
+    harness.controller.releaseRemoteStage();
+    await harness.controller.checkSilently();
+    expect(harness.updater.checkForUpdates).toHaveBeenCalledTimes(2);
+  } finally {
+    harness.controller.stop();
+  }
+});
+
+test("remote staging joins a concurrent check before reserving the staged version", async () => {
+  const harness = createHarness();
+  let finish!: (result: UpdateCheckResult) => void;
+  harness.updater.checkForUpdates = mock(
+    () =>
+      new Promise<UpdateCheckResult>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const check = harness.controller.checkSilently();
+  const staged = harness.controller.stageForRemote();
+  harness.emit("update-downloaded", { version: "2.23.0" });
+  finish({ isUpdateAvailable: true, updateInfo: { version: "2.23.0" } });
+  await check;
+  expect(await staged).toEqual({ status: "staged", version: "2.23.0" });
+  expect(await harness.controller.installStaged("2.23.0")).toBe(true);
+  expect(harness.updater.checkForUpdates).toHaveBeenCalledTimes(1);
+});
+
+test("the updater cannot spawn the replacement until install preparation finishes", async () => {
+  let finish!: () => void;
+  const harness = createHarness(
+    {},
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  harness.updater.checkForUpdates = mock(async () => {
+    harness.emit("update-downloaded", { version: "2.22.0" });
+    return { isUpdateAvailable: true };
+  });
+  await harness.controller.stageForRemote();
+  const install = harness.controller.installStaged("2.22.0");
+  expect(harness.updater.quitAndInstall).not.toHaveBeenCalled();
+  finish();
+  expect(await install).toBe(true);
+  expect(harness.updater.quitAndInstall).toHaveBeenCalledWith(true, true);
 });

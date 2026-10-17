@@ -268,6 +268,7 @@ function publish(runtime: ReleaseRuntime, options: { npm: boolean }): void {
     if (runtime.npmHasVersion(version)) {
       console.log(`\norkestrator@${version} is already on npm.`);
     } else {
+      assertTaggedCheckout(tag, runtime.capture);
       run(["mise", "run", "publish:cli"]);
     }
   }

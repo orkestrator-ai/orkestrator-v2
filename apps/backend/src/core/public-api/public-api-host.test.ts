@@ -21,6 +21,7 @@ function hostService(dataDir: string, version: string, ready = true): HostMainte
   });
   services.push(service);
   service.init();
+  service.markReady();
   if (ready) service.report({ type: "ready" });
   return service;
 }
@@ -37,6 +38,14 @@ async function runGet(harness: PublicApiHarness, operationId: string): Promise<P
   const response = await harness.call("run.get", { operationId });
   expect(response.ok).toBe(true);
   return response.receipt!;
+}
+
+async function taskFinished(service: HostMaintenanceService, id: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (service.task(id)?.state === "running") {
+    if (Date.now() > deadline) throw new Error("task did not finish");
+    await Bun.sleep(5);
+  }
 }
 
 describe("host.* public actions", () => {
@@ -236,5 +245,105 @@ describe("host.* public actions", () => {
     if (!response.ok) throw new Error("status failed");
     expect(response.result.impact?.waitingAgents).toBe(1);
     expect(response.result.tasks).toEqual({});
+  });
+});
+
+test("consecutive public tasks retain each outcome until its receipt settles", async () => {
+  const { harness, service } = await setup();
+  const first = await harness.call<{ taskId: string }>(
+    "host.gh.update",
+    { channel: "pinned" },
+    { requestId: "first" },
+  );
+  if (!first.ok) throw new Error("first refused");
+  await taskFinished(service, first.result.taskId);
+  const second = await harness.call<{ taskId: string }>(
+    "host.gh.update",
+    { channel: "pinned" },
+    { requestId: "second" },
+  );
+  if (!second.ok) throw new Error("second refused");
+  await taskFinished(service, second.result.taskId);
+  expect(service.task(first.result.taskId)?.state).toBe("succeeded");
+  expect(await runGet(harness, first.receipt!.operationId)).toMatchObject({ state: "succeeded" });
+  expect(await runGet(harness, second.receipt!.operationId)).toMatchObject({ state: "succeeded" });
+  expect(await runGet(harness, first.receipt!.operationId)).toMatchObject({ state: "succeeded" });
+});
+
+test("consecutive update jobs retain their outcomes across restart and receipt reconciliation", async () => {
+  const { harness, service } = await setup();
+  const first = await harness.call<{ jobId: string }>(
+    "host.update.apply",
+    { confirm: true, version: "2.22.0" },
+    { requestId: "update-first" },
+  );
+  if (!first.ok) throw new Error("first refused");
+  service.report({
+    type: "job",
+    jobId: first.result.jobId,
+    state: "awaiting-restart",
+    targetVersion: "2.22.0",
+  });
+  service.report({ type: "job", jobId: first.result.jobId, state: "restarting" });
+  service.close();
+  const newService = hostService(harness.dataDir, "2.22.0");
+  harness.context.hostMaintenance = newService;
+  const second = await harness.call<{ jobId: string }>(
+    "host.update.apply",
+    { confirm: true, version: "2.23.0" },
+    { requestId: "update-second" },
+  );
+  if (!second.ok) throw new Error("second refused");
+  newService.report({
+    type: "job",
+    jobId: second.result.jobId,
+    state: "failed",
+    error: "download failed",
+  });
+  expect(await runGet(harness, first.receipt!.operationId)).toMatchObject({ state: "succeeded" });
+  expect(await runGet(harness, second.receipt!.operationId)).toMatchObject({ state: "failed" });
+});
+
+test("a backend that fails before readiness cannot report update success to its public receipt", async () => {
+  const { harness, service } = await setup();
+  const accepted = await harness.call<{ jobId: string }>(
+    "host.update.apply",
+    { confirm: true, version: "2.22.0" },
+    { requestId: "unready" },
+  );
+  if (!accepted.ok) throw new Error("refused");
+  const jobId = accepted.result.jobId;
+  service.report({ type: "job", jobId, state: "awaiting-restart", targetVersion: "2.22.0" });
+  service.report({ type: "job", jobId, state: "restarting" });
+  service.close();
+  const unready = new HostMaintenanceService({
+    dataDir: harness.dataDir,
+    updater: "standalone",
+    version: "2.22.0",
+    emit: () => undefined,
+  });
+  services.push(unready);
+  unready.init();
+  harness.context.hostMaintenance = unready;
+  expect(await runGet(harness, accepted.receipt!.operationId)).toMatchObject({ state: "running" });
+  unready.close();
+  const restored = new HostMaintenanceService({
+    dataDir: harness.dataDir,
+    updater: "standalone",
+    version: "2.21.1",
+    emit: () => undefined,
+    rollbackEvidence: () => ({
+      failedVersion: "2.22.0",
+      restoredVersion: "2.21.1",
+      at: new Date(Date.now() + 1000).toISOString(),
+    }),
+  });
+  services.push(restored);
+  restored.init();
+  restored.markReady();
+  harness.context.hostMaintenance = restored;
+  expect(await runGet(harness, accepted.receipt!.operationId)).toMatchObject({
+    state: "failed",
+    error: { message: "2.22.0 did not start, so the host went back to 2.21.1" },
   });
 });

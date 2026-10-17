@@ -93,3 +93,18 @@ test("a running task shows its step", () => {
     (screen.getByRole("button", { name: "Repair agent tools" }) as HTMLButtonElement).disabled,
   ).toBe(true);
 });
+
+test("an unknown installed version is displayed as unavailable rather than as the pin", () => {
+  render(
+    <HostDependencySettings
+      snapshot={{
+        ...detailed,
+        tools: [
+          { name: "gh", source: "managed", pinnedVersion: "2.102.0", installedVersion: null },
+        ],
+      }}
+      accept={() => undefined}
+    />,
+  );
+  expect(screen.getByText("version unavailable")).toBeTruthy();
+});

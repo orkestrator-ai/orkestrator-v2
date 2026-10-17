@@ -273,17 +273,11 @@ describe("desktop release commands", () => {
   });
 
   test("accepts the architecture-specific arm64 Linux updater feed", () => {
-    const { runtime, run } = harness({
-      capture: (command) =>
-        command[2] === "download"
-          ? "minimumSystemVersion: '22.0.0'\n"
-          : JSON.stringify({
-              isDraft: true,
-              assets: assets.map((name) => ({
-                name: name === "latest-linux.yml" ? "latest-linux-arm64.yml" : name,
-              })),
-            }),
-    });
+    const { runtime, run, capture } = harness();
+    const original = capture.getMockImplementation()!;
+    capture.mockImplementation((command) => command[0] === "gh" && command[2] === "view"
+      ? JSON.stringify({ isDraft: true, assets: assets.map((name) => ({ name: name === "latest-linux.yml" ? "latest-linux-arm64.yml" : name })) })
+      : original(command));
     runDesktopRelease(["publish"], runtime);
     // publish:cli, then the release edit.
     expect(run).toHaveBeenCalledTimes(2);
@@ -328,4 +322,16 @@ describe("desktop release commands", () => {
       expect(run).not.toHaveBeenCalled();
     },
   );
+});
+
+test.each(["dirty", "wrong-head"])("npm publication refuses %s checkout before building", (mode) => {
+  const { runtime, run, capture } = harness();
+  const original = capture.getMockImplementation()!;
+  capture.mockImplementation((command) => {
+    if (mode === "dirty" && command[1] === "status") return " M source.ts";
+    if (mode === "wrong-head" && command[2] === `${tag}^{commit}`) return other;
+    return original(command);
+  });
+  expect(() => runDesktopRelease(["publish"], runtime)).toThrow(mode === "dirty" ? "uncommitted changes" : "does not point at HEAD");
+  expect(run).not.toHaveBeenCalled();
 });

@@ -214,17 +214,6 @@ const stop = createBackendShutdownHandler({
 process.on("SIGINT", () => void stop("SIGINT"));
 process.on("SIGTERM", () => void stop("SIGTERM"));
 
-if (standaloneLayoutForService) {
-  createStandaloneUpdater({
-    service: backend.hostMaintenance,
-    layout: standaloneLayoutForService,
-    dataDir: options.dataDir,
-    currentVersion: APP_VERSION,
-    // The launcher sees `restart-requested` and starts the new release.
-    shutdown: () => void stop("SIGTERM"),
-  }).start();
-}
-
 // The Electron supervisor cannot deliver SIGTERM if it crashes or is
 // force-killed, and this process would otherwise keep every local bridge (and
 // each bridge's app-server tree) alive as orphans. When the parent that spawned
@@ -290,3 +279,20 @@ process.stdout.write(
     controlMcpFile: backend.getControlMcpInfo()?.descriptorFile,
   })}\n`,
 );
+// The standalone launcher observes the descriptor, not stdout. A publication
+// failure must leave the update pending so its eventual rollback can fail it.
+if (!standaloneLayoutForService || removeInstanceDescriptor) {
+  backend.hostMaintenance.markReady();
+  // Settle the previous process's job before the executor can observe it.
+  // In particular, a stale requested job must never be dispatched again.
+  if (standaloneLayoutForService) {
+    createStandaloneUpdater({
+      service: backend.hostMaintenance,
+      layout: standaloneLayoutForService,
+      dataDir: options.dataDir,
+      currentVersion: APP_VERSION,
+      // The launcher sees `restart-requested` and starts the new release.
+      shutdown: () => void stop("SIGTERM"),
+    }).start();
+  }
+}

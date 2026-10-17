@@ -20,7 +20,8 @@ export type HostUpdaterChannel = {
 export type HostUpdateEngine = Pick<
   AutoUpdateController,
   "checkSilently" | "stageForRemote" | "installStaged"
->;
+> &
+  Partial<Pick<AutoUpdateController, "releaseRemoteStage">>;
 
 export type RestartDecision = "restart" | "postpone" | "cancelled";
 
@@ -80,6 +81,7 @@ export function createHostUpdateExecutor(options: {
   now?: () => number;
   restartDelayMs?: number;
   idlePollMs?: number;
+  reportRetryMs?: number;
   log?: Pick<Console, "info" | "warn">;
 }): HostUpdateExecutor {
   const { channel, engine } = options;
@@ -91,7 +93,13 @@ export function createHostUpdateExecutor(options: {
   let handledCheckId: string | null = null;
   let pendingCheckId: string | null = null;
   let lastCheck: UpdateCheckReport | null = null;
-  const handledJobs = new Set<string>();
+  let handledJobId: string | null = null;
+  let revision = -1;
+  let ready = false;
+  let recoveryTimer: ReturnType<typeof setTimeout> | null = null;
+  let refreshing: Promise<void> | null = null;
+  let recoveryDelay = options.reportRetryMs ?? 1_000;
+  const pendingFailures = new Map<string, string>();
   const running = new Map<string, AbortController>();
 
   function send(report: HostUpdaterReport): Promise<HostMaintenanceSnapshot | null> {
@@ -99,6 +107,28 @@ export function createHostUpdateExecutor(options: {
       log.warn("[Updater] Could not report to the backend:", message(error));
       return null;
     });
+  }
+
+  async function sendCritical(
+    report: HostUpdaterReport,
+    signal: AbortSignal,
+  ): Promise<HostMaintenanceSnapshot | null> {
+    for (let attempt = 0; attempt < 3 && !signal.aborted; attempt += 1) {
+      const result = await send(report);
+      if (result) return result;
+      if (attempt < 2) await sleep((options.reportRetryMs ?? 1_000) * 2 ** attempt, signal);
+    }
+    return null;
+  }
+
+  function scheduleRecovery(): void {
+    if (recoveryTimer) return;
+    recoveryTimer = setTimeout(() => {
+      recoveryTimer = null;
+      void refresh();
+    }, recoveryDelay);
+    recoveryTimer.unref?.();
+    recoveryDelay = Math.min(30_000, recoveryDelay * 2);
   }
 
   function reportCheck(report: UpdateCheckReport): void {
@@ -144,7 +174,15 @@ export function createHostUpdateExecutor(options: {
   }
 
   async function runJob(job: HostUpdateJob, signal: AbortSignal): Promise<void> {
-    const fail = (error: string) => send({ type: "job", jobId: job.id, state: "failed", error });
+    const fail = async (error: string) => {
+      pendingFailures.set(job.id, error);
+      const result = await sendCritical(
+        { type: "job", jobId: job.id, state: "failed", error },
+        signal,
+      );
+      if (result) pendingFailures.delete(job.id);
+      else scheduleRecovery();
+    };
     try {
       await send({ type: "job", jobId: job.id, state: "downloading", progressPercent: 0 });
       let lastProgressAt = 0;
@@ -200,27 +238,34 @@ export function createHostUpdateExecutor(options: {
       }
       // Record the restart before quitting, so the next backend knows the
       // install was attempted.
-      const acknowledged = await send({ type: "job", jobId: job.id, state: "restarting" });
+      const acknowledged = await sendCritical(
+        { type: "job", jobId: job.id, state: "restarting" },
+        signal,
+      );
       if (acknowledged?.job?.id !== job.id || acknowledged.job.state !== "restarting") {
         log.warn("[Updater] The backend did not record the restart; not installing");
+        if (!signal.aborted)
+          await fail("The backend could not acknowledge the restart; retry the update");
         return;
       }
       await options
         .beforeInstall?.({ jobId: job.id, version: staged.version })
         .catch((error: unknown) => log.warn("[Updater] Preparing the relaunch failed:", error));
       log.info(`[Updater] Installing ${staged.version} for a remote request`);
-      if (!engine.installStaged(staged.version)) {
+      if (!(await engine.installStaged(staged.version))) {
         await fail("The staged update is no longer available");
       }
     } catch (error) {
       if (!signal.aborted) await fail(message(error));
     } finally {
       running.delete(job.id);
+      engine.releaseRemoteStage?.();
     }
   }
 
   function reconcile(snapshot: HostMaintenanceSnapshot): void {
-    if (!started) return;
+    if (!started || !ready || snapshot.revision < revision) return;
+    revision = snapshot.revision;
     const request = snapshot.checkRequest;
     if (request && request.id !== handledCheckId) {
       handledCheckId = request.id;
@@ -234,29 +279,46 @@ export function createHostUpdateExecutor(options: {
       running.get(job.id)?.abort();
       return;
     }
-    if (job.state === "requested" && !handledJobs.has(job.id)) {
-      handledJobs.add(job.id);
+    if (job.state === "requested" && handledJobId !== job.id) {
+      handledJobId = job.id;
       const controller = new AbortController();
       running.set(job.id, controller);
       void runJob(job, controller.signal);
     }
   }
 
-  async function refresh(): Promise<void> {
-    try {
-      reconcile(await channel.snapshot());
-    } catch (error) {
-      log.warn("[Updater] Could not read update requests:", message(error));
-    }
+  function refresh(): Promise<void> {
+    refreshing ??= (async () => {
+      try {
+        const announcement = await send({ type: "ready" });
+        if (!announcement) {
+          ready = false;
+          scheduleRecovery();
+          return;
+        }
+        ready = true;
+        for (const [jobId, error] of pendingFailures) {
+          if (await send({ type: "job", jobId, state: "failed", error }))
+            pendingFailures.delete(jobId);
+        }
+        if (pendingFailures.size) scheduleRecovery();
+        else recoveryDelay = options.reportRetryMs ?? 1_000;
+        reconcile(await channel.snapshot());
+      } catch (error) {
+        log.warn("[Updater] Could not read update requests:", message(error));
+        scheduleRecovery();
+      }
+    })().finally(() => {
+      refreshing = null;
+    });
+    return refreshing;
   }
 
   return {
     async start(): Promise<void> {
       if (started) return;
       started = true;
-      const snapshot = await send({ type: "ready" });
-      if (snapshot) reconcile(snapshot);
-      else await refresh();
+      await refresh();
     },
     handleEvent(event: string, payload: unknown): void {
       if (!started) return;

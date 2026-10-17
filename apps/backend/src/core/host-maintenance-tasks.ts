@@ -89,7 +89,14 @@ function describeProgress(progress: ToolchainProgress): string {
  * directory); a standalone one moves it, as `orkestrator toolchain install`
  * does.
  */
-export function startToolchainRepair(context: CommandContext) {
+export function startToolchainRepair(
+  context: CommandContext,
+  dependencies = {
+    plan: planToolchainInstall,
+    ensure: ensurePinnedToolchains,
+    install: installPinnedToolchains,
+  },
+) {
   const service = serviceOf(context);
   const dataDir = context.storage.getDataDir();
   return background(service, "toolchain-repair", "Checking the pinned toolchain", async (stage) => {
@@ -97,8 +104,8 @@ export function startToolchainRepair(context: CommandContext) {
     let binDir: string;
     let versions: Record<string, string>;
     if (service.updaterKind === "desktop") {
-      const plan = await planToolchainInstall({ dataDir });
-      const installed = await ensurePinnedToolchains({
+      const plan = await dependencies.plan({ dataDir });
+      const installed = await dependencies.ensure({
         dataDir,
         artifacts: plan.artifacts,
         onProgress,
@@ -108,7 +115,7 @@ export function startToolchainRepair(context: CommandContext) {
         plan.artifacts.map((artifact) => [artifact.name, artifact.version]),
       );
     } else {
-      const installed = await installPinnedToolchains({ dataDir, onProgress });
+      const installed = await dependencies.install({ dataDir, onProgress });
       binDir = installed.binDir;
       versions = installed.versions as Record<string, string>;
     }
@@ -130,14 +137,22 @@ export function startToolchainRepair(context: CommandContext) {
  * this backend needs, and makes it the image new environments use. Running
  * environments keep their image until they are rebuilt; the result lists them.
  */
-export function startImageUpdate(context: CommandContext) {
+export function startImageUpdate(
+  context: CommandContext,
+  dependencies = {
+    run: runCommand,
+    status: getImageStatus,
+    read: readImageStatus,
+    reset: resetImageManifestCache,
+  },
+) {
   const service = serviceOf(context);
   const reference = releaseImageReference();
   const target = configuredImageRef(context);
   return background(service, "image-update", `Pulling ${reference}`, async (stage) => {
-    await runCommand("docker", ["pull", reference], { timeoutMs: 45 * 60 * 1000 });
+    await dependencies.run("docker", ["pull", reference], { timeoutMs: 45 * 60 * 1000 });
     stage("Checking the image");
-    const status = await getImageStatus({ ...context, dockerImage: reference });
+    const status = await dependencies.status({ ...context, dockerImage: reference });
     if (status.state !== "compatible") {
       throw new Error(
         `${reference} is not usable by this backend (${status.state})${
@@ -148,9 +163,9 @@ export function startImageUpdate(context: CommandContext) {
       );
     }
     stage(`Tagging it as ${target}`);
-    await runCommand("docker", ["tag", reference, target], { timeoutMs: 60_000 });
-    resetImageManifestCache();
-    const image = await readImageStatus(context);
+    await dependencies.run("docker", ["tag", reference, target], { timeoutMs: 60_000 });
+    dependencies.reset();
+    const image = await dependencies.read(context);
     return {
       imageId: status.imageId,
       reference,

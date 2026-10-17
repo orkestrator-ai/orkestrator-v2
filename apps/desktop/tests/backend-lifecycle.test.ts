@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import {
   createBackendWebClientControls,
+  prepareAppImageInstall,
   registerBackendShutdown,
 } from "../electron/backend-lifecycle";
 
@@ -120,4 +121,32 @@ describe("desktop backend lifecycle", () => {
     await Bun.sleep(60);
     expect(state.quits).toBe(1);
   });
+});
+
+test("AppImage replacement can claim the lock only after the old backend exits", async () => {
+  const order: string[] = [];
+  let drain!: () => void;
+  const backend = {
+    stop: () =>
+      new Promise<void>((resolve) => {
+        drain = resolve;
+      }),
+  };
+  let locked = true;
+  const preparation = prepareAppImageInstall(
+    {
+      releaseSingleInstanceLock: () => {
+        locked = false;
+        order.push("unlock");
+      },
+    },
+    backend,
+  );
+  expect(locked).toBe(true);
+  order.push("backend-exit");
+  drain();
+  await preparation;
+  // AppImageUpdater's force-run spawn happens only after this preparation resolves.
+  order.push(locked ? "single-instance-rejected" : "replacement-started");
+  expect(order).toEqual(["backend-exit", "unlock", "replacement-started"]);
 });

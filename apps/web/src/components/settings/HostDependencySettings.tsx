@@ -52,7 +52,7 @@ function TaskStatus({ task }: { task: HostTask | undefined }) {
 }
 
 function sourceLabel(tool: HostToolStatus): string {
-  if (tool.source === "managed") return tool.installedVersion ?? tool.pinnedVersion;
+  if (tool.source === "managed") return tool.installedVersion ?? "version unavailable";
   if (tool.source === "path") return "on PATH (not managed)";
   return "missing";
 }

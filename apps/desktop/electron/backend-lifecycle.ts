@@ -51,3 +51,12 @@ export function registerBackendShutdown(
   });
   registerWillQuitHold(app, () => stopped ?? Promise.resolve(), timeoutMs);
 }
+
+/** AppImageUpdater spawns before app.quit: drain and unlock before allowing that spawn. */
+export async function prepareAppImageInstall(
+  app: Pick<Electron.App, "releaseSingleInstanceLock">,
+  backend: Pick<BackendProcess, "stop">,
+): Promise<void> {
+  await backend.stop();
+  app.releaseSingleInstanceLock();
+}

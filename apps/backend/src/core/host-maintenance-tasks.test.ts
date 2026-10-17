@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -11,6 +11,8 @@ import {
   fetchReleasePins,
   installedLatestGh,
   startGhUpdate,
+  startImageUpdate,
+  startToolchainRepair,
 } from "./host-maintenance-tasks.js";
 import { runCommand } from "./shell.js";
 
@@ -143,4 +145,128 @@ describe("fetchReleasePins", () => {
     expect(await fetchReleasePins("2.22.0", malformed)).toBeNull();
     expect(await fetchReleasePins("latest", missing)).toBeNull();
   });
+});
+
+test.each(["compatible", "incompatible", "pull-failure", "tag-failure"])(
+  "image update records %s without recreating containers",
+  async (mode) => {
+    const calls: string[][] = [];
+    const reset = mock(() => undefined);
+    const dependencies: Parameters<typeof startImageUpdate>[1] = {
+      run: async (_file, args = []) => {
+        calls.push(args);
+        if (mode === "pull-failure" && args[0] === "pull") throw new Error("pull failed");
+        if (mode === "tag-failure" && args[0] === "tag") throw new Error("tag failed");
+        return { stdout: "", stderr: "" };
+      },
+      status: async () => ({
+        state: mode === "incompatible" ? "incompatible" : "compatible",
+        imageRef: "release",
+        imageId: "sha256:new",
+        registryDigest: null,
+        architecture: null,
+        manifest: null,
+        missingCapabilities: mode === "incompatible" ? ["workspace-prepare"] : [],
+        remediation: null,
+      }),
+      read: async () => ({
+        name: "target",
+        present: true,
+        compatible: true,
+        reason: null,
+        releaseReference: "release",
+        outdatedEnvironments: [
+          { id: "old-container", name: "Existing work", projectId: "project" },
+        ],
+      }),
+      reset,
+    };
+    const task = startImageUpdate({ ...context(), dockerImage: "fixture:target" }, dependencies);
+    await until(() => service.task(task.id)?.state !== "running");
+    if (mode === "compatible") {
+      expect(service.task(task.id)).toMatchObject({
+        state: "succeeded",
+        result: {
+          imageId: "sha256:new",
+          tag: "fixture:target",
+          outdatedEnvironments: [{ id: "old-container" }],
+        },
+      });
+      expect(calls.map((args) => args[0])).toEqual(["pull", "tag"]);
+      expect(reset).toHaveBeenCalledTimes(1);
+    } else {
+      expect(service.task(task.id)?.state).toBe("failed");
+      expect(reset).not.toHaveBeenCalled();
+      if (mode === "incompatible") {
+        expect(service.task(task.id)?.error).toContain("workspace-prepare");
+        expect(calls.map((args) => args[0])).toEqual(["pull"]);
+      }
+    }
+  },
+);
+
+test.each([false, true])(
+  "desktop toolchain repair preserves activation and reports restartRequired=%s",
+  async (changed) => {
+    service.close();
+    service = new HostMaintenanceService({
+      dataDir,
+      updater: "desktop",
+      version: "2.21.1",
+      emit: () => undefined,
+    });
+    service.init();
+    const { pinnedToolchainArtifacts } = await import("@orkestrator/toolchain/manifest");
+    const artifacts = pinnedToolchainArtifacts(process.platform, process.arch);
+    const inUse = path.join(dataDir, "toolchains", "bin", "in-use");
+    const selected = changed ? path.join(dataDir, "toolchains", "bin", "new-set") : inUse;
+    const install = mock(async () => {
+      throw new Error("must not change desktop activation");
+    });
+    const task = startToolchainRepair(
+      { ...context(), toolchainBinDir: inUse },
+      {
+        plan: async () => ({
+          artifacts,
+          tools: artifacts.map((artifact) => artifact.name),
+          source: "explicit",
+        }),
+        ensure: async () => ({
+          rootDir: dataDir,
+          binDir: selected,
+          executables: {} as Awaited<
+            ReturnType<typeof import("@orkestrator/toolchain/manager").ensurePinnedToolchains>
+          >["executables"],
+        }),
+        install,
+      },
+    );
+    await until(() => service.task(task.id)?.state !== "running");
+    expect(service.task(task.id)).toMatchObject({
+      state: "succeeded",
+      result: {
+        restartRequired: changed,
+        versions: Object.fromEntries(
+          artifacts.map((artifact) => [artifact.name, artifact.version]),
+        ),
+      },
+    });
+    expect(install).not.toHaveBeenCalled();
+  },
+);
+
+test("a toolchain repair failure becomes a durable failed task", async () => {
+  const task = startToolchainRepair(context(), {
+    plan: async () => {
+      throw new Error("unexpected desktop branch");
+    },
+    ensure: async () => {
+      throw new Error("unexpected desktop branch");
+    },
+    install: async () => {
+      throw new Error("digest mismatch");
+    },
+  });
+  await until(() => service.task(task.id)?.state !== "running");
+  expect(service.task(task.id)).toMatchObject({ state: "failed", error: "digest mismatch" });
 });

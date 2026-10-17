@@ -56,6 +56,8 @@ export function describeRestartImpact(impact: HostRestartImpact): string {
   if (impact.workingAgents) parts.push(`${plural(impact.workingAgents, "agent")} working`);
   if (impact.waitingAgents)
     parts.push(`${plural(impact.waitingAgents, "agent")} waiting for an answer`);
+  if (impact.unknownAgents)
+    parts.push(`${plural(impact.unknownAgents, "agent")} with unknown activity`);
   if (impact.activePipelines) parts.push(plural(impact.activePipelines, "build pipeline"));
   if (impact.terminals) parts.push(plural(impact.terminals, "open terminal"));
   return parts.length > 0 ? parts.join(" · ") : "Nothing is running on the host right now.";

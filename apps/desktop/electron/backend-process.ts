@@ -821,6 +821,8 @@ export class BackendProcess {
       child.once("error", () => resolve());
     });
     child.kill("SIGTERM");
-    return exited;
+    const force = setTimeout(() => child.kill("SIGKILL"), 20_000);
+    force.unref();
+    return exited.finally(() => clearTimeout(force));
   }
 }

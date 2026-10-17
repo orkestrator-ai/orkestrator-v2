@@ -3,6 +3,7 @@ import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PINNED_TOOL_VERSIONS } from "@orkestrator/toolchain/manifest";
+import { isHostIdle } from "@orkestrator/protocol/host-maintenance";
 import type { CommandContext } from "./commands-context.js";
 import { setManagedGitHubCli } from "./github-cli-binary.js";
 import { readRestartImpact, readToolStatus } from "./host-maintenance-readers.js";
@@ -32,9 +33,10 @@ test("restart impact counts working and waiting agents and unfinished pipelines"
     },
     storage: {
       listAllBuildPipelines: async () => [
-        { snapshot: { phase: "implementing" } },
+        { snapshot: { phase: "building" } },
         { snapshot: { phase: "complete" } },
         { snapshot: { phase: "failed" } },
+        { snapshot: { phase: "paused" } },
       ],
     },
   } as unknown as CommandContext;
@@ -92,4 +94,54 @@ test("a grok on PATH is missing: the backend never runs it from PATH", async () 
   } finally {
     process.env.PATH = originalPath;
   }
+});
+
+for (const reader of ["agents", "pipelines"] as const) {
+  test(`restart impact is unavailable when ${reader} cannot be read`, async () => {
+    const context = {
+      agentRegistry: {
+        snapshot: async () => {
+          if (reader === "agents") throw new Error("unavailable");
+          return { entries: [{ state: "working" }] };
+        },
+      },
+      storage: {
+        listAllBuildPipelines: async () => {
+          if (reader === "pipelines") throw new Error("unavailable");
+          return [{ snapshot: { phase: "building" } }];
+        },
+      },
+    } as unknown as CommandContext;
+    await expect(readRestartImpact(context)).rejects.toThrow("unavailable");
+  });
+}
+
+test("unknown terminal activity in an inactive environment stays busy; paused pipelines are idle", async () => {
+  let entries = [{ kind: "terminal", state: "unknown", environmentId: "inactive" }];
+  const context = {
+    agentRegistry: { snapshot: async () => ({ entries }) },
+    storage: { listAllBuildPipelines: async () => [{ snapshot: { phase: "paused" } }] },
+  } as unknown as CommandContext;
+  const impact = await readRestartImpact(context);
+  expect(impact).toMatchObject({ unknownAgents: 1, activePipelines: 0 });
+  expect(isHostIdle(impact)).toBe(false);
+  entries = [{ kind: "terminal", state: "stopped", environmentId: "inactive" }];
+  expect(isHostIdle(await readRestartImpact(context))).toBe(true);
+});
+
+test("gh-latest reports its actual installed version, and unknown layouts never report the pin", async () => {
+  const executable = path.join(root, "toolchains", "gh-latest", "2.200.0", "gh");
+  await mkdir(path.dirname(executable), { recursive: true });
+  await writeFile(executable, "#!/bin/sh\n");
+  setManagedGitHubCli(executable);
+  const context = { resourceRoot: root, appRoot: root } as unknown as CommandContext;
+  expect(
+    (await readToolStatus(context, "latest")).find((tool) => tool.name === "gh")?.installedVersion,
+  ).toBe("2.200.0");
+  const unknown = path.join(root, "gh");
+  await writeFile(unknown, "#!/bin/sh\n");
+  setManagedGitHubCli(unknown);
+  expect(
+    (await readToolStatus(context, "latest")).find((tool) => tool.name === "gh")?.installedVersion,
+  ).toBeNull();
 });

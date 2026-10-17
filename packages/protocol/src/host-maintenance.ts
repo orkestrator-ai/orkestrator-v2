@@ -114,7 +114,9 @@ export interface HostRestartImpact {
   workingAgents: number;
   /** Agent tabs waiting for an answer from someone. */
   waitingAgents: number;
-  /** Build pipelines that have not finished. */
+  /** Running agent tabs whose activity cannot be observed, including terminal agents. */
+  unknownAgents?: number;
+  /** Build pipelines currently running (paused pipelines are idle). */
   activePipelines: number;
   /** Terminals the backend owns; their shells end with it. */
   terminals: number;
@@ -125,7 +127,9 @@ export interface HostRestartImpact {
 
 /** Nothing a restart would cut short: no agent turn and no pipeline in progress. */
 export function isHostIdle(impact: HostRestartImpact): boolean {
-  return impact.workingAgents === 0 && impact.activePipelines === 0;
+  return (
+    impact.workingAgents === 0 && (impact.unknownAgents ?? 0) === 0 && impact.activePipelines === 0
+  );
 }
 
 /** Work on the host's dependencies that the backend runs itself. */

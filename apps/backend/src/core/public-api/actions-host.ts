@@ -152,6 +152,7 @@ const hostUpdateApply: MutationActionHandler<ApplyInput> = {
       async execute() {
         let created: HostUpdateJob;
         try {
+          service.assertOutcomeCapacity();
           created = service.requestUpdate({
             requestedVersion: input.version,
             drain: input.drain,
@@ -160,6 +161,7 @@ const hostUpdateApply: MutationActionHandler<ApplyInput> = {
         } catch (error) {
           throw publicError(error);
         }
+        service.retainOutcome(created.id);
         return {
           state: "running",
           stage: created.state,
@@ -211,7 +213,10 @@ function taskHandler<I>(
       return {
         async execute() {
           try {
+            const service = maintenance(context);
+            service.assertOutcomeCapacity();
             const task = start(context.command, input);
+            service.retainOutcome(task.id);
             return { state: "running", stage: "running", result: { taskId: task.id } };
           } catch (error) {
             throw publicError(error);
@@ -222,8 +227,16 @@ function taskHandler<I>(
   };
 }
 
-const hostToolchainRepair = taskHandler("host.toolchain.repair", () => ({}), startToolchainRepair);
-const hostImageUpdate = taskHandler("host.image.update", () => ({}), startImageUpdate);
+const hostToolchainRepair = taskHandler(
+  "host.toolchain.repair",
+  () => ({}),
+  (context) => startToolchainRepair(context),
+);
+const hostImageUpdate = taskHandler(
+  "host.image.update",
+  () => ({}),
+  (context) => startImageUpdate(context),
+);
 const hostGhUpdate = taskHandler(
   "host.gh.update",
   (input) => {

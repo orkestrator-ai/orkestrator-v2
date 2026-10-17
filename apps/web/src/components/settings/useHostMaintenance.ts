@@ -3,6 +3,7 @@ import {
   HOST_MAINTENANCE_EVENT,
   type HostMaintenanceSnapshot,
 } from "@orkestrator/protocol/host-maintenance";
+import { subscribeToConnections } from "@/lib/connections";
 import * as backend from "@/lib/backend";
 import { listenAuthoritative } from "@/lib/native/authoritative-events";
 
@@ -32,30 +33,63 @@ export function useHostMaintenance(options: { detail?: boolean } = {}) {
   const [snapshot, setSnapshot] = useState<HostMaintenanceSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const revision = useRef(-1);
-
-  const accept = useCallback((next: HostMaintenanceSnapshot) => {
-    if (next.revision < revision.current) return;
-    revision.current = next.revision;
-    setSnapshot((previous) => ({
-      ...next,
-      ...((next.impact ?? previous?.impact) ? { impact: next.impact ?? previous?.impact } : {}),
-      ...((next.tools ?? previous?.tools) ? { tools: next.tools ?? previous?.tools } : {}),
-      ...(next.image !== undefined
-        ? { image: next.image }
-        : previous?.image !== undefined
-          ? { image: previous.image }
-          : {}),
-    }));
-    setError(null);
+  const [scope, setScope] = useState<{ id: string } | null>(null);
+  const connection = useRef<{ id: string } | null>(null);
+  useEffect(() => {
+    let disposed = false;
+    let observed = false;
+    const change = (id: string) => {
+      if (disposed || connection.current?.id === id) return;
+      const next = { id };
+      connection.current = next;
+      revision.current = -1;
+      setSnapshot(null);
+      setError(null);
+      setScope(next);
+    };
+    const unlisten = subscribeToConnections((list) => {
+      observed = true;
+      change(list.activeConnectionId);
+    });
+    void window.orkestrator?.connections
+      ?.list()
+      .then((list) => {
+        if (!observed) change(list.activeConnectionId);
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      unlisten();
+    };
   }, []);
+
+  const accept = useCallback(
+    (next: HostMaintenanceSnapshot) => {
+      if (connection.current !== scope) return;
+      if (next.revision < revision.current) return;
+      revision.current = next.revision;
+      setSnapshot((previous) => ({
+        ...next,
+        ...((next.impact ?? previous?.impact) ? { impact: next.impact ?? previous?.impact } : {}),
+        ...((next.tools ?? previous?.tools) ? { tools: next.tools ?? previous?.tools } : {}),
+        ...(next.image !== undefined
+          ? { image: next.image }
+          : previous?.image !== undefined
+            ? { image: previous.image }
+            : {}),
+      }));
+      setError(null);
+    },
+    [scope],
+  );
 
   const reload = useCallback(async () => {
     try {
       accept(await backend.getHostMaintenance(detail));
     } catch (failure) {
-      setError(errorText(failure));
+      if (connection.current === scope) setError(errorText(failure));
     }
-  }, [accept, detail]);
+  }, [accept, scope, detail]);
 
   useEffect(() => {
     const controller = new AbortController();

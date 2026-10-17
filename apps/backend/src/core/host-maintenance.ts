@@ -28,6 +28,7 @@ import { openBackendDatabase } from "./storage-stores.js";
 
 /** The backend database store holding the update job, tasks and the last check. */
 export const HOST_MAINTENANCE_STORE = "host-maintenance";
+const MAX_RETAINED_OUTCOMES = 1024;
 
 export type HostMaintenanceErrorCode = "unsupported" | "busy" | "invalid-input" | "not-found";
 
@@ -59,6 +60,8 @@ interface HostMaintenanceDocument {
   tasks: Partial<Record<HostTaskKind, HostTask>>;
   nextRelease: HostReleasePins | null;
   ghChannel: "pinned" | "latest";
+  /** Public outcomes pinned until their receipts durably settle; admission is bounded. */
+  retained: Record<string, HostTask | HostUpdateJob>;
 }
 
 /** Which reported states may follow which; anything else is ignored. */
@@ -152,8 +155,12 @@ function normalizeDocument(value: unknown): HostMaintenanceDocument {
     tasks: {},
     nextRelease: null,
     ghChannel: "pinned",
+    retained: {},
   };
   if (!isRecord(value) || value.version !== 1) return empty;
+  if (isRecord(value.retained) && Object.keys(value.retained).length > MAX_RETAINED_OUTCOMES) {
+    throw new Error("Maintenance outcome store exceeds capacity; refusing to discard evidence");
+  }
   const checkRequest =
     isRecord(value.checkRequest) &&
     typeof value.checkRequest.id === "string" &&
@@ -204,6 +211,17 @@ function normalizeDocument(value: unknown): HostMaintenanceDocument {
     tasks,
     nextRelease,
     ghChannel: value.ghChannel === "latest" ? "latest" : "pinned",
+    retained: isRecord(value.retained)
+      ? Object.fromEntries(
+          Object.entries(value.retained).flatMap(([id, entry]) => {
+            const record =
+              isRecord(entry) && HOST_TASK_KINDS.includes(entry.kind as HostTaskKind)
+                ? normalizeTask(entry.kind as HostTaskKind, entry)
+                : normalizeJob(entry);
+            return record && record.id === id ? [[id, record]] : [];
+          }),
+        )
+      : {},
   };
 }
 
@@ -220,7 +238,7 @@ function bounded(text: string): string {
  * The record is durable because an update outlives the process that applies
  * it: installing restarts the app (or the standalone backend) and this
  * backend with it, and the new backend settles the job from evidence (the
- * version it now runs, or the launcher's rollback record) in {@link init}.
+ * version it now runs, or the launcher's rollback record) in {@link markReady}.
  * Nothing here installs anything. The desktop app's main process, or the
  * standalone self-updater, reads the snapshot, does the work and reports
  * back through {@link report}.
@@ -228,6 +246,9 @@ function bounded(text: string): string {
 export class HostMaintenanceService {
   private storage: StorageDatabase | null = null;
   private executorReady: boolean;
+  private initialized = false;
+  private readinessSettled = false;
+  private startupJobId: string | null = null;
   private readonly now: () => number;
   private readonly newId: () => string;
   private readers: HostMaintenanceReaders;
@@ -292,6 +313,9 @@ export class HostMaintenanceService {
         this.database.readStoreValueInTransaction(HOST_MAINTENANCE_STORE)?.value,
       );
       if (!mutate(document)) return null;
+      for (const record of [document.job, ...Object.values(document.tasks)]) {
+        if (record && document.retained[record.id]) document.retained[record.id] = record;
+      }
       document.revision += 1;
       this.database.writeStoreInTransaction(HOST_MAINTENANCE_STORE, document);
       return document;
@@ -315,14 +339,13 @@ export class HostMaintenanceService {
 
   /**
    * Settles work the previous process left in progress. Installing restarts
-   * this backend, so an update is only ever finished here, from the version
-   * that is now running; it is never resumed. Dependency tasks the restart cut
+   * this backend; update settlement waits for markReady. Dependency tasks the restart cut
    * short fail and can be started again.
    */
   init(): void {
-    const version = this.options.version;
-    const rollback = this.options.rollbackEvidence?.() ?? null;
+    if (this.initialized) return;
     this.update((document) => {
+      this.startupJobId = document.job?.id ?? null;
       let changed = false;
       const at = this.iso();
       for (const kind of HOST_TASK_KINDS) {
@@ -337,8 +360,20 @@ export class HostMaintenanceService {
         };
         changed = true;
       }
+      return changed;
+    });
+    this.initialized = true;
+  }
+
+  /** Called only after gateway startup, descriptor publication and the ready handshake. */
+  markReady(): void {
+    if (this.readinessSettled) return;
+    const version = this.options.version;
+    const rollback = this.options.rollbackEvidence?.() ?? null;
+    this.update((document) => {
+      const at = this.iso();
       const job = document.job;
-      if (!job || !isActiveHostUpdateJob(job)) return changed;
+      if (!job || job.id !== this.startupJobId || !isActiveHostUpdateJob(job)) return false;
       const expected = job.targetVersion ?? job.requestedVersion;
       const settle = (patch: Partial<HostUpdateJob>) => {
         document.job = {
@@ -354,7 +389,12 @@ export class HostMaintenanceService {
         settle({ state: "succeeded", targetVersion: version, error: null });
       } else if (version !== job.fromVersion) {
         settle({ state: "failed", error: `The host restarted on ${version}, not ${expected}` });
-      } else if (rollback && rollback.restoredVersion === version) {
+      } else if (
+        rollback &&
+        rollback.restoredVersion === version &&
+        rollback.failedVersion === expected &&
+        Date.parse(rollback.at) >= Date.parse(job.requestedAt)
+      ) {
         settle({
           state: "failed",
           error: `${rollback.failedVersion} did not start, so the host went back to ${version}`,
@@ -370,6 +410,7 @@ export class HostMaintenanceService {
       }
       return true;
     });
+    this.readinessSettled = true;
   }
 
   snapshot(): HostMaintenanceSnapshot {
@@ -440,16 +481,54 @@ export class HostMaintenanceService {
     };
   }
 
-  /** The job with this ID, when it is still the recorded one. */
+  /** The current job or a prior job retained for an unsettled public receipt. */
   job(id: string): HostUpdateJob | null {
-    const job = this.load().job;
-    return job?.id === id ? job : null;
+    const document = this.load();
+    const job = document.job?.id === id ? document.job : document.retained[id];
+    return job && "fromVersion" in job ? job : null;
   }
 
-  /** The task with this ID, when it is still the latest of its kind. */
+  /** The latest task or a prior task retained for an unsettled public receipt. */
   task(id: string): HostTask | null {
-    const tasks = this.load().tasks;
-    return Object.values(tasks).find((task) => task?.id === id) ?? null;
+    const document = this.load();
+    const task =
+      Object.values(document.tasks).find((task) => task?.id === id) ?? document.retained[id];
+    return task && "kind" in task ? task : null;
+  }
+
+  assertOutcomeCapacity(): void {
+    if (Object.keys(this.load().retained).length >= MAX_RETAINED_OUTCOMES) {
+      throw new HostMaintenanceError(
+        "busy",
+        "Maintenance receipts must settle before starting more work",
+      );
+    }
+  }
+
+  retainOutcome(id: string): void {
+    this.update((document) => {
+      const record =
+        document.job?.id === id
+          ? document.job
+          : Object.values(document.tasks).find((task) => task?.id === id);
+      if (!record) throw new HostMaintenanceError("not-found", "Maintenance record is gone");
+      if (
+        !document.retained[id] &&
+        Object.keys(document.retained).length >= MAX_RETAINED_OUTCOMES
+      ) {
+        throw new HostMaintenanceError("busy", "Maintenance receipt capacity reached");
+      }
+      document.retained[id] = record;
+      return true;
+    });
+  }
+
+  releaseOutcome(id: string): void {
+    this.update((document) => {
+      if (!document.retained[id]) return false;
+      delete document.retained[id];
+      return true;
+    });
   }
 
   private assertAvailable(): void {

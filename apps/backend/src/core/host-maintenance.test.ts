@@ -48,6 +48,7 @@ function create(
   });
   services.push(service);
   service.init();
+  service.markReady();
   if ((options.ready ?? true) && service.updaterKind === "desktop") {
     service.report({ type: "ready" });
   }
@@ -361,4 +362,57 @@ describe("HostMaintenanceService", () => {
     expect(detailed.tools).toBeUndefined();
     expect(service.snapshot().impact).toBeUndefined();
   });
+});
+
+test("an unready new backend cannot settle success, and rollback settles the matching job failed", () => {
+  const before = create({ updater: "standalone" }).service;
+  const job = before.requestUpdate({ requestedVersion: "2.22.0" });
+  before.report({ type: "job", jobId: job.id, state: "awaiting-restart", targetVersion: "2.22.0" });
+  before.report({ type: "job", jobId: job.id, state: "restarting" });
+  before.close();
+  const unready = new HostMaintenanceService({
+    dataDir,
+    updater: "standalone",
+    version: "2.22.0",
+    emit: () => undefined,
+  });
+  services.push(unready);
+  unready.init();
+  expect(unready.job(job.id)?.state).toBe("restarting");
+  unready.close();
+  const restored = create({
+    updater: "standalone",
+    rollback: { failedVersion: "2.22.0", restoredVersion: "2.21.1", at: "2026-10-16T12:05:00Z" },
+  }).service;
+  expect(restored.job(job.id)).toMatchObject({
+    state: "failed",
+    error: "2.22.0 did not start, so the host went back to 2.21.1",
+  });
+});
+
+test.each([
+  { failedVersion: "2.22.0", restoredVersion: "2.21.1", at: "2026-10-15T12:00:00Z" },
+  { failedVersion: "2.20.0", restoredVersion: "2.21.1", at: "2026-10-16T12:05:00Z" },
+])("stale or unrelated rollback evidence cannot label a later update", (rollback) => {
+  const before = create({ updater: "standalone" }).service;
+  before.requestUpdate({ requestedVersion: "2.22.0" });
+  before.close();
+  expect(create({ updater: "standalone", rollback }).service.snapshot().job?.error).toBe(
+    "The app restarted before the update was installed",
+  );
+});
+
+test("readiness settlement cannot finish a new job admitted during startup or on repeated notifications", () => {
+  const service = new HostMaintenanceService({
+    dataDir,
+    updater: "standalone",
+    version: "2.21.1",
+    emit: () => undefined,
+  });
+  services.push(service);
+  service.init();
+  const job = service.requestUpdate({ requestedVersion: "2.22.0" });
+  service.markReady();
+  service.markReady();
+  expect(service.job(job.id)?.state).toBe("requested");
 });

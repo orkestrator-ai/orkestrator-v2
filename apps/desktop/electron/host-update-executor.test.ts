@@ -79,7 +79,7 @@ function createHarness(
       if (options.staged instanceof Error) throw options.staged;
       return options.staged ?? { status: "staged" as const, version: "2.22.0" };
     }),
-    installStaged: mock((_version: string) => options.install ?? true),
+    installStaged: mock(async (_version: string) => options.install ?? true),
   };
   const confirmRestart = mock(
     options.confirmRestart ?? (async () => options.decision ?? ("restart" as const)),
@@ -92,6 +92,7 @@ function createHarness(
     beforeInstall,
     ...(options.realClock ? {} : { now: () => Date.parse("2026-10-16T12:00:00.000Z") }),
     idlePollMs: 5,
+    reportRetryMs: 1,
     log: { info: () => undefined, warn: () => undefined },
   });
   const settle = async () => {
@@ -375,4 +376,105 @@ describe("confirmRestartWithCountdown", () => {
     cancel.abort();
     expect(await decision).toBe("cancelled");
   });
+});
+
+test("reannounces ready after the first POST fails, including reconnect", async () => {
+  const harness = createHarness();
+  const report = harness.channel.report.getMockImplementation()!;
+  let readyAttempts = 0;
+  harness.channel.report.mockImplementation(async (input) => {
+    if (input.type === "ready" && ++readyAttempts === 1) throw new Error("offline");
+    return report(input);
+  });
+  await harness.executor.start();
+  harness.executor.handleEvent(NATIVE_EVENT_STREAM_CONNECTED_EVENT, undefined);
+  await harness.settle();
+  expect(readyAttempts).toBeGreaterThanOrEqual(2);
+  const requested = snapshot({ job: job() });
+  harness.set(requested);
+  harness.executor.handleEvent(HOST_MAINTENANCE_EVENT, requested);
+  await harness.settle();
+  expect(harness.engine.stageForRemote).toHaveBeenCalledTimes(1);
+});
+
+test.each([false, true])(
+  "lost restarting report is recovered (persisted before response lost: %s)",
+  async (persisted) => {
+    const harness = createHarness({ initial: snapshot({ job: job() }) });
+    const report = harness.channel.report.getMockImplementation()!;
+    let attempts = 0;
+    harness.channel.report.mockImplementation(async (input) => {
+      if (input.type === "job" && input.state === "restarting" && attempts++ === 0) {
+        if (persisted) await report(input);
+        throw new Error("response lost");
+      }
+      return report(input);
+    });
+    await harness.executor.start();
+    const deadline = Date.now() + 1000;
+    while (!harness.engine.installStaged.mock.calls.length && Date.now() < deadline)
+      await Bun.sleep(5);
+    expect(harness.engine.installStaged).toHaveBeenCalledTimes(1);
+    expect(attempts).toBe(2);
+  },
+);
+
+test("exhausted restarting report retries fail the job and allow later jobs", async () => {
+  const harness = createHarness({ initial: snapshot({ job: job() }) });
+  const report = harness.channel.report.getMockImplementation()!;
+  harness.channel.report.mockImplementation(async (input) => {
+    if (input.type === "job" && input.state === "restarting") throw new Error("offline");
+    return report(input);
+  });
+  await harness.executor.start();
+  const deadline = Date.now() + 1000;
+  while (jobStates(harness.reports).at(-1) !== "failed" && Date.now() < deadline)
+    await Bun.sleep(5);
+  expect(jobStates(harness.reports).at(-1)).toBe("failed");
+  expect(harness.engine.installStaged).not.toHaveBeenCalled();
+  const next = snapshot({ job: job({ id: "next" }) });
+  harness.set(next);
+  harness.executor.handleEvent(HOST_MAINTENANCE_EVENT, next);
+  await harness.settle();
+  expect(harness.engine.stageForRemote).toHaveBeenCalledTimes(2);
+  await Bun.sleep(20);
+});
+
+test("unavailable or unknown impact waits for a trustworthy idle reading", async () => {
+  const harness = createHarness({
+    initial: snapshot({
+      job: job({ drain: "when-idle", idleDeadline: "2026-10-16T13:00:00.000Z" }),
+    }),
+  });
+  let reads = 0;
+  harness.channel.snapshot.mockImplementation(async () => {
+    reads += 1;
+    if (reads <= 3) throw new Error("authoritative readers unavailable");
+    return snapshot({
+      job: job(),
+      impact: {
+        workingAgents: 0,
+        waitingAgents: 0,
+        unknownAgents: reads < 6 ? 1 : 0,
+        activePipelines: 0,
+        terminals: 0,
+        hostServers: 0,
+        measuredAt: "2026-10-16T12:00:00Z",
+      },
+    });
+  });
+  await harness.executor.start();
+  // Initial snapshot failed; reconnect retries readiness and the snapshot.
+  harness.set(
+    snapshot({ job: job({ drain: "when-idle", idleDeadline: "2026-10-16T13:00:00.000Z" }) }),
+  );
+  harness.executor.handleEvent(
+    HOST_MAINTENANCE_EVENT,
+    snapshot({ job: job({ drain: "when-idle", idleDeadline: "2026-10-16T13:00:00.000Z" }) }),
+  );
+  await Bun.sleep(8);
+  expect(harness.confirmRestart).not.toHaveBeenCalled();
+  const deadline = Date.now() + 1000;
+  while (!harness.confirmRestart.mock.calls.length && Date.now() < deadline) await Bun.sleep(5);
+  expect(harness.confirmRestart).toHaveBeenCalledTimes(1);
 });

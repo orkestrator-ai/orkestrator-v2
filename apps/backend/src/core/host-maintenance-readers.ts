@@ -1,3 +1,4 @@
+import { isActiveBuildPhase, type BuildPhase } from "@orkestrator/protocol/build-pipeline";
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { PINNED_TOOL_VERSIONS, type ToolchainName } from "@orkestrator/toolchain/manifest";
@@ -25,19 +26,23 @@ export function releaseImageReference(version: string = APP_VERSION): string {
 export async function readRestartImpact(context: CommandContext): Promise<HostRestartImpact> {
   let workingAgents = 0;
   let waitingAgents = 0;
-  const registry = await context.agentRegistry?.snapshot().catch(() => null);
-  for (const entry of registry?.entries ?? []) {
+  if (!context.agentRegistry) throw new Error("Agent activity is unavailable");
+  const registry = await context.agentRegistry.snapshot();
+  let unknownAgents = 0;
+  for (const entry of registry.entries) {
     if (entry.state === "working") workingAgents += 1;
     else if (entry.state === "waiting") waitingAgents += 1;
+    else if (entry.state === "unknown") unknownAgents += 1;
   }
-  const pipelines = await context.storage.listAllBuildPipelines().catch(() => []);
+  const pipelines = await context.storage.listAllBuildPipelines();
   const activePipelines = pipelines.filter((pipeline) => {
     const phase = (pipeline.snapshot as { phase?: unknown }).phase;
-    return phase !== "complete" && phase !== "failed";
+    return isActiveBuildPhase(phase as BuildPhase);
   }).length;
   return {
     workingAgents,
     waitingAgents,
+    unknownAgents,
     activePipelines,
     terminals: terminalProcesses.size,
     hostServers: localServerProcesses.size,
@@ -54,7 +59,12 @@ function managedVersion(executable: string, name: string): string | null {
     return null;
   }
   const parts = resolved.split(path.sep);
-  const index = parts.lastIndexOf(name);
+  const root = parts.lastIndexOf("toolchains");
+  const directory = parts[root + 1];
+  const index =
+    root >= 0 && (directory === name || (name === "gh" && directory === "gh-latest"))
+      ? root + 1
+      : -1;
   const version = index >= 0 ? parts[index + 1] : undefined;
   return version && /^\d+\.\d+\.\d+/.test(version) ? version : null;
 }
@@ -88,7 +98,7 @@ export async function readToolStatus(
           name,
           pinnedVersion,
           source: "managed",
-          installedVersion: managedVersion(executable, name) ?? pinnedVersion,
+          installedVersion: managedVersion(executable, name),
         }
       : {
           name,

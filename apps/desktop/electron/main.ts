@@ -20,7 +20,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { LOCAL_CONNECTION_ID } from "@orkestrator/protocol/connections";
 import { BackendProcess, type BackendHttpClient } from "./backend-process.js";
-import { registerBackendShutdown } from "./backend-lifecycle.js";
+import { prepareAppImageInstall, registerBackendShutdown } from "./backend-lifecycle.js";
 import {
   LINUX_DESKTOP_ENTRY_FILENAME,
   PRODUCT_NAME,
@@ -86,7 +86,7 @@ import {
   type HostUpdateExecutor,
 } from "./host-update-executor.js";
 import {
-  claimRemoteRelaunchAttempt,
+  recoverRemoteBackendFailure,
   readRemoteRelaunchMarker,
   writeRemoteRelaunchMarker,
 } from "./remote-relaunch.js";
@@ -390,6 +390,9 @@ async function startAutoUpdate(): Promise<void> {
       showMessageBox: (window, options) =>
         window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options),
       onCheckResult: (report) => hostUpdates?.reportCheck(report),
+      ...(process.platform === "linux"
+        ? { prepareForInstall: () => prepareAppImageInstall(app, backendProcess) }
+        : {}),
     });
     autoUpdate.start();
     createMenu();
@@ -789,13 +792,10 @@ async function startApplication(): Promise<void> {
       publishConnectionLists();
       // Shortly after a remote-requested update, relaunch instead of a modal
       // nobody may answer, so the remote client gets its backend back.
-      const marker = readRemoteRelaunchMarker(dataDir);
-      if (marker && claimRemoteRelaunchAttempt(dataDir, marker)) {
+      if (recoverRemoteBackendFailure(dataDir, app)) {
         console.error(
-          `[Desktop] Local backend exited after an update; relaunching: ${error.message}`,
+          `[Desktop] Local backend exited after an update; applying unattended recovery: ${error.message}`,
         );
-        app.relaunch();
-        app.quit();
         return;
       }
       dialog.showErrorBox(
@@ -873,6 +873,9 @@ if (isPrimaryInstance) {
     .catch((error: unknown) => {
       handleStartupFailure({
         isQuitting: quitReopen.isQuitting,
+        recover: () =>
+          runtimeFlavor !== "agent-test" &&
+          recoverRemoteBackendFailure(app.getPath("userData"), app),
         error,
         report: (failure) => {
           console.error("[Desktop] Startup failed:", failure);

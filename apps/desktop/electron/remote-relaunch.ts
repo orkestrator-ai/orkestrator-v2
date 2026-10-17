@@ -89,3 +89,16 @@ export function claimRemoteRelaunchAttempt(dataDir: string, marker: RemoteRelaun
 export function clearRemoteRelaunchMarker(dataDir: string): void {
   rmSync(markerPath(dataDir), { force: true });
 }
+
+/** Shared by pre-readiness startup rejection and unexpected exits after readiness. */
+export function recoverRemoteBackendFailure(
+  dataDir: string,
+  app: { relaunch(): void; quit(): void },
+): boolean {
+  const marker = readRemoteRelaunchMarker(dataDir);
+  if (!marker) return false;
+  if (claimRemoteRelaunchAttempt(dataDir, marker)) app.relaunch();
+  // An unattended startup must never block on a modal, even when its budget is spent.
+  app.quit();
+  return true;
+}

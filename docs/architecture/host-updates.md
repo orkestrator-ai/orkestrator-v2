@@ -88,7 +88,9 @@ Real-release qualification is still open in
    - A required version is not the newest release.
 3. **Waiting for idle (`when-idle`).** The job reports `waiting-for-idle` and
    polls the restart impact. It goes on when no agent turn or pipeline is
-   running (`isHostIdle`), or when `idleDeadline` passes.
+   running (`isHostIdle`), or when `idleDeadline` passes. Unreadable activity or
+   pipeline snapshots keep waiting. Unknown agent activity (including terminal
+   agents in inactive environments) keeps the host busy; paused pipelines do not.
 4. **The countdown.** The job reports `awaiting-restart` with a `restartAt`
    60 seconds ahead.
    - **Desktop:** a dialog offers Restart Now or Postpone. An unanswered dialog
@@ -105,21 +107,29 @@ Real-release qualification is still open in
    the backend has recorded it.
    - **Desktop:**
      1. It writes `remote-update-relaunch.json` in the data directory.
-     2. It calls `quitAndInstall(true, true)`, which relaunches on AppImage
-        too.
-     3. `registerBackendShutdown` holds `will-quit` until the backend has
+     2. On Linux it first drains the backend (with forced termination after
+        20 s), then releases the single-instance lock. AppImage's updater can
+        spawn its replacement before the old process exits.
+     3. It calls `quitAndInstall(true, true)`, which relaunches on AppImage too.
+     4. `registerBackendShutdown` holds `will-quit` until the backend has
         drained and exited, for at most `BACKEND_EXIT_WAIT_MS` (20 s).
    - **Standalone:**
      1. It copies the release's launcher into place.
      2. It moves `previous` to the old release and `current` to the new one.
      3. It writes `restart-requested`.
      4. It shuts the backend down.
-7. **Settling.** The next backend settles the job at startup from evidence, and
-   never resumes it:
+7. **Settling.** After publishing readiness, the next backend settles the job from evidence, and
+   never resumes it. Standalone settlement requires its instance descriptor,
+   which is what the launcher observes:
+
    - The expected new version is running: `succeeded`.
    - Another version is running: `failed`.
-   - The launcher rolled the release back: `failed`, with that reason.
+   - The launcher rolled this job's target release back after its request: `failed`, with that reason.
    - The same version is running: `failed`.
+
+   Public job and task outcomes are retained by ID until their operation receipts
+   durably settle. The latest displayed record can be replaced without losing an
+   earlier receipt's evidence; capacity refuses admission rather than evicting it.
 
    An update installed by an ordinary quit during the countdown also ends
    `succeeded`.
@@ -181,7 +191,8 @@ The launcher works like this:
    version.
 4. A newly activated release that has not become ready gets two boots. After
    that, the launcher points `current` back at `previous` and records the
-   rollback in `launcher-state.json`.
+   rollback in `launcher-state.json`. A child still alive at its boot deadline is
+   sent SIGTERM, then SIGKILL after a bounded grace period, before another boot.
 5. When the backend exits after `restart-requested`, the launcher starts the
    new `current` at once.
 6. SIGTERM and SIGINT are passed to the backend, and the launcher exits with

@@ -10,7 +10,7 @@ import type {
 } from "@orkestrator/protocol/host-maintenance";
 
 import * as backend from "@/lib/backend";
-import { UpdatesSettings } from "./UpdatesSettings";
+import { UpdatesSettings, describeRestartImpact } from "./UpdatesSettings";
 
 function snapshot(overrides: Partial<HostMaintenanceSnapshot> = {}): HostMaintenanceSnapshot {
   return hostMaintenanceSnapshotFixture({
@@ -158,4 +158,18 @@ test("an update in progress can be cancelled", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Cancel update" }));
   await waitFor(() => expect(cancel).toHaveBeenCalledWith("job-1"));
   expect(await screen.findByText("The update was cancelled.")).toBeTruthy();
+});
+
+test("restart confirmation identifies running agents with unknown activity", () => {
+  expect(
+    describeRestartImpact({
+      workingAgents: 0,
+      waitingAgents: 0,
+      unknownAgents: 1,
+      activePipelines: 0,
+      terminals: 0,
+      hostServers: 0,
+      measuredAt: "2026-10-16T12:00:00Z",
+    }),
+  ).toContain("1 agent with unknown activity");
 });

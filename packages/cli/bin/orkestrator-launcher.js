@@ -35,6 +35,7 @@ const MAX_BOOT_ATTEMPTS = 2;
 const READY_TIMEOUT_MS = Number(process.env.ORKESTRATOR_LAUNCHER_READY_TIMEOUT_MS ?? 120_000);
 const RETRY_DELAY_MS = Number(process.env.ORKESTRATOR_LAUNCHER_RETRY_DELAY_MS ?? 2_000);
 const CRASH_DELAY_MS = Number(process.env.ORKESTRATOR_LAUNCHER_CRASH_DELAY_MS ?? 5_000);
+const STOP_TIMEOUT_MS = Number(process.env.ORKESTRATOR_LAUNCHER_STOP_TIMEOUT_MS ?? 10_000);
 const TOOLCHAIN_TIMEOUT_MS = 20 * 60 * 1000;
 
 const dataDir = path.resolve(process.argv[2] ?? "");
@@ -189,6 +190,19 @@ while (!stopping) {
     next.bootAttempts[version] = 0;
     writeState(next);
     log(`${version} is ready`);
+  }
+  if (!ready && !exited) {
+    log(`${version} missed its readiness deadline; stopping it`);
+    child.kill("SIGTERM");
+    let timer;
+    await Promise.race([
+      exit,
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, STOP_TIMEOUT_MS);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (!exited) child.kill("SIGKILL");
   }
   const { code, signal } = await exit;
   child = null;

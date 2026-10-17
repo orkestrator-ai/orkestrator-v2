@@ -92,3 +92,17 @@ times in a row (4 pass, 0 fail each) with
 `bun test --preload ../../tests/setup-node.ts src/core/worktree-snapshots-git.test.ts`
 from `apps/backend`. The change touches no worktree-snapshot, watcher or diff
 code. Status remains open.
+
+## Recurrence — 2026-10-17 (host maintenance review fixes)
+
+The `all-tests` aggregate again expected one `file-list-read` cache hit but
+observed zero in `a tracked edit that never touches the index is detected`.
+The unchanged owning file passed alone in 0.4 s with:
+
+```sh
+mise run test:logged -- --name git-snapshots-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures
+```
+
+Aggregate evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Q6mb2y/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+No snapshot implementation, assertion, timeout or skip changed.

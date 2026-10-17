@@ -24,6 +24,14 @@ const version = path.basename(release);
 const mode = readFileSync(path.join(packageRoot, "mode"), "utf8").trim();
 if (args[0] === "toolchain") process.exit(0);
 if (mode === "crash") process.exit(1);
+if (mode === "unready") {
+  const dataDir = args[args.indexOf("--data-dir") + 1];
+  const { appendFileSync } = await import("node:fs");
+  appendFileSync(path.join(dataDir, "failed-pids"), process.pid + "\\n");
+  process.on("SIGTERM", () => {});
+  setInterval(() => {}, 1000);
+  await new Promise(() => {});
+}
 const dataDir = args[args.indexOf("--data-dir") + 1];
 writeFileSync(path.join(dataDir, "backend-instance.json"), JSON.stringify({ pid: process.pid, appVersion: version }));
 process.on("SIGTERM", () => process.exit(0));
@@ -97,7 +105,8 @@ async function setup(options: {
       ...process.env,
       ORKESTRATOR_LAUNCHER_RETRY_DELAY_MS: "20",
       ORKESTRATOR_LAUNCHER_CRASH_DELAY_MS: "20",
-      ORKESTRATOR_LAUNCHER_READY_TIMEOUT_MS: "5000",
+      ORKESTRATOR_LAUNCHER_READY_TIMEOUT_MS: "1000",
+      ORKESTRATOR_LAUNCHER_STOP_TIMEOUT_MS: "50",
     },
   });
 }
@@ -161,3 +170,17 @@ describe("orkestrator-launcher", () => {
     expect(await exited).toBe(0);
   }, 30_000);
 });
+
+test("kills live unready children after a bounded grace period and restores the previous release", async () => {
+  dataDir = await mkdtemp(path.join(tmpdir(), "ork-launcher-unready-"));
+  await release("1.0.0", "good");
+  await release("2.0.0", "unready");
+  await setup({ current: "2.0.0", previous: "1.0.0", lastReady: "1.0.0" });
+  await until(() => readJson(path.join(dataDir, "backend-instance.json"))?.appVersion === "1.0.0");
+  const pids = readFileSync(path.join(dataDir, "failed-pids"), "utf8")
+    .trim()
+    .split("\n")
+    .map(Number);
+  expect(pids).toHaveLength(2);
+  for (const pid of pids) expect(() => process.kill(pid, 0)).toThrow();
+}, 20_000);

@@ -100,6 +100,7 @@ import {
 import { openCodeContextUsage } from "./opencode-usage.js";
 import { OpenCodeStreamState } from "./opencode-stream-state.js";
 import { OpenCodeCommandChanges } from "./opencode-command-changes.js";
+import { OpenCodeInstanceReload } from "./opencode-command-reload.js";
 import {
   DEFAULT_OPENCODE_EXISTENCE_CACHE_TTL_MS,
   effectiveOpenCodePolicy,
@@ -180,6 +181,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     readOpenCodeComposerCatalog(this.client, this.requestOptions(), allowed, options),
   );
   private readonly commands: OpenCodeCommandRegistry;
+  private readonly commandReload: OpenCodeInstanceReload;
   private readonly blockedSessions = new Set<string>();
   private readonly failedQuestionSessions = new Set<string>();
   private readonly sessionPolicies = new Map<string, NativeAgentExecutionPolicy>();
@@ -265,9 +267,22 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     this.now = dependencies.now ?? Date.now;
     this.monitorBackoff = createOpenCodeMonitorBackoff(dependencies, this.now);
     this.waitForMonitorRetry = dependencies.waitForMonitorRetry ?? waitForOpenCodeRetry;
+    this.commandReload = new OpenCodeInstanceReload({
+      idle: () => this.directoryIdle(),
+      dispose: () => this.disposeDirectoryInstance(),
+      reloaded: () => {
+        // The disposal event reaches the stream later. Drop what lived in the
+        // old instance now, so the next dispatch re-registers it.
+        this.workflowResults.invalidate();
+        this.invalidateInteractiveMetadata();
+        this.commands.reloaded();
+      },
+    });
     this.commands = new OpenCodeCommandRegistry(
       () => this.capabilitiesAdapter.readCommands(),
       () => this.now(),
+      undefined,
+      this.commandReload,
     );
     this.lifecycle = new OpenCodeSessionLifecycle(
       this.client,
@@ -487,6 +502,14 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       return;
     }
     const properties = event.properties ?? {};
+    // Any session, owned or not: a deferred command reload waits for the
+    // whole directory, and re-checks it on every idle edge.
+    if (
+      event.type === "session.idle" ||
+      (event.type === "session.status" && asRecord(properties.status)?.type === "idle")
+    ) {
+      this.commandReload.idleObserved();
+    }
     const rawSessionId =
       typeof properties.sessionID === "string" ? properties.sessionID : undefined;
     const globalEvent =
@@ -701,6 +724,21 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
   }
 
   async send(sessionId: string, prompt: string, options: ProviderSendOptions): Promise<void> {
+    // A command reload disposes the directory's instance, which aborts its
+    // running work, so the two never overlap.
+    const release = await this.commandReload.enterDispatch();
+    try {
+      await this.sendWithinDispatch(sessionId, prompt, options);
+    } finally {
+      release();
+    }
+  }
+
+  private async sendWithinDispatch(
+    sessionId: string,
+    prompt: string,
+    options: ProviderSendOptions,
+  ): Promise<void> {
     await this.workflowResults.prepare(sessionId, {
       agentMcp: options.agentMcp,
       workflowResultTool: options.workflowResultTool,
@@ -997,6 +1035,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
         runtime: this.streamState.runtime(sessionId),
         notices,
       }),
+      commandCatalogueRevision: this.commands.revision,
       ...(sessionModel.modelId ? { sessionModelId: sessionModel.modelId } : {}),
       ...(sessionModel.reasoningId ? { sessionReasoningId: sessionModel.reasoningId } : {}),
       ...(await this.catalog.signInReadiness(() => this.allowedModelProviders())),
@@ -1264,6 +1303,26 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     return this.commands.refreshCommands();
   }
 
+  /** No session in the directory is busy or retrying. */
+  private async directoryIdle(): Promise<boolean> {
+    const response = await this.client.session.status(
+      { directory: this.connection.directory },
+      this.requestOptions(),
+    );
+    assertSdkResponse(response, "OpenCode status read");
+    const statuses = asRecord(response.data);
+    if (!statuses) throw new Error("OpenCode returned a malformed status read");
+    return Object.values(statuses).every((status) => asRecord(status)?.type === "idle");
+  }
+
+  private async disposeDirectoryInstance(): Promise<void> {
+    const response = await this.client.instance.dispose(
+      { directory: this.connection.directory },
+      this.requestOptions(),
+    );
+    assertSdkResponse(response, "OpenCode instance reload");
+  }
+
   async slashCommands() {
     return (await this.commands.catalogue()).commands;
   }
@@ -1349,6 +1408,7 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     sessionId: string,
     action: NativeAgentSessionAction,
   ): Promise<NativeAgentSessionActionOutcome> {
+    const release = await this.commandReload.enterDispatch();
     try {
       if (action.kind === "compact") {
         const model = action.modelId?.trim();
@@ -1407,6 +1467,8 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
       }
     } catch (error) {
       throw new ProviderUnavailableError(`OpenCode ${action.kind} failed`, { cause: error });
+    } finally {
+      release();
     }
     throw new PromptRejectedError(`OpenCode does not support ${action.kind}`);
   }

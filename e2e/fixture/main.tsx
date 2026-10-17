@@ -110,6 +110,9 @@ const MailTilesFixture = lazy(async () => ({
   default: (await import("./MailTilesFixture")).MailTilesFixture,
 }));
 
+const CloseRetentionFixture = lazy(async () => ({
+  default: (await import("./CloseRetentionFixture")).CloseRetentionFixture,
+}));
 const PaneBreakpointFixture = lazy(async () => ({
   default: (await import("./PaneBreakpointFixture")).PaneBreakpointFixture,
 }));
@@ -1681,6 +1684,13 @@ function fixtureForPath() {
     );
   }
 
+  if (window.location.pathname === "/close-retention") {
+    return (
+      <Suspense fallback={null}>
+        <CloseRetentionFixture />
+      </Suspense>
+    );
+  }
   if (window.location.pathname === "/pane-breakpoint") {
     return (
       <Suspense fallback={null}>

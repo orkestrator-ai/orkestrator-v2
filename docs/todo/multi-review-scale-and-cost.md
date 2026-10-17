@@ -211,6 +211,10 @@ Codex GPT-6-Luna (low) prepared and consolidated.
 | Live cycle: backend restart | "converges after a backend restart while reviewers run" | Pass under the fail-closed contract (2 runs). The Claude reviewer completed after its result reminder. The Codex reviewer failed with the restart message, and the review consolidated from Claude's report. Two earlier runs failed the stricter spec that required both reviewers to complete. One had the same split; in the other, both reviewers were cut short and the whole review failed. See Code item 3. |
 | Live cycle: killed reviewer bridge | "isolates an interrupted reviewer bridge to that reviewer" | Before the fix the Claude reviewer failed at once with "claude bridge is not reachable" (the outcome of one of the two pre-fix runs was not recorded). After the fix (3 runs) the bridge was restarted and the reviewer continued in its session, then failed closed after the reminder (Code item 3). The Codex peer completed every time. |
 
+After the Multi Review Fix (`a1e36236`) and the `origin/main` merge
+(`182a8ee0`), the whole live file ran again on a fresh profile: 4 of 4 passed
+in 7.0 minutes, with the same per-reviewer outcomes as above.
+
 Fixed in this change:
 
 - **An unreachable bridge failed its reviewer at once.** That contradicted the

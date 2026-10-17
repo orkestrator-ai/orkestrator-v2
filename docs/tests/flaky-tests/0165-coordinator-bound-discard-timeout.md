@@ -291,6 +291,14 @@ passed the unchanged owning file in 23.8 seconds (exit 0). Evidence:
 - Unchanged owning-file rerun: `bun test --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts` in `apps/backend` passed all 52 tests (24.67 seconds).
 - The branch does not touch the coordinator service. No assertion, timeout, skip or implementation changed.
 
+## Multi Review restart-continuation main merge — 2026-10-17
+
+- Original command: `bun run test` from `apps/backend` on `53b43e81` (the Multi Review restart-continuation branch after merging `origin/main` at `607d12e2`), macOS arm64 under shared-host load (load average 18–28).
+- Aggregate: backend 8,857 passed, 41 skipped and six failed across 8,904 tests in 475 files (100.52 seconds). All six were five-second timeouts in unchanged owners; the others are recorded in 0165/0248, [0301](0301-looped-review-lease-takeover-timeout.md) and [0302](0302-validation-worker-progress-watchdog-timeout.md).
+- The bound-discard case timed out at 5285.56 ms and `project coordinator > fetch force, fast-forward sync, remote switching, and divergence stay safe` at 5717.12 ms.
+- Unchanged owning-file rerun: `bun test --preload ../../tests/setup-node.ts src/core/coordinator-service.test.ts` from `apps/backend` passed 52 of 52 in 22.50 seconds.
+- No assertion, timeout, skip or implementation in this owner changed.
+
 ## Codex catalogue review final validation — 2026-10-17
 
 - **Original command:** `mise run test:logged -- --name final-full-tests -- mise run test`
@@ -361,3 +369,13 @@ Aggregate command, worker configuration, counts and evidence are recorded in [02
 - Failure: `bound discard confirmations refuse stale, sequencer, nested, and failed switches` exceeded its 5000 ms deadline at 5214.68 ms.
 - Owning-file rerun: `mise run test:logged -- --name merge-coordinator-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` also timed out this case at 5208.53 ms, followed by an ENOENT reading the removed nested fixture; 51 passed, one failed and one error (43.04 seconds). Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.UQSgsr/merge-coordinator-owner.log.gz`.
 - This observation remains unresolved: the isolated failure does not establish a flake. No implementation, assertion, timeout or skip changed.
+
+## Slash catalogue main merge recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, with the testing guide's GNU tools preferred in PATH (Bun 1.4.3, macOS arm64).
+- **Workers:** workspace/root/bridge/protocol reserved 4/1/2/1 slots; backend used two isolated Bun workers alongside other worktrees on the shared host.
+- **Failure:** `project coordinator > bound discard confirmations refuse stale, sequencer, nested, and failed switches` exceeded its 5000 ms deadline at 5137.19 ms.
+- **Suite counts:** backend reported 8933 passed, 41 skipped and four failed across 8978 tests in 476 files (639.61 seconds). All other workspace packages and root/bridge/protocol groups passed; aggregate exited 1 after 738.6 seconds.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.lAr6wP/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; outer `orkestrator-test-run.S55BjO/merge-tests.log.gz` in the same temporary root.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-coordinator-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 25.0 seconds).
+- **Assessment:** the isolated pass confirms intermittence. Shared-host contention remains a hypothesis. No owning implementation, assertion, timeout or skip changed.

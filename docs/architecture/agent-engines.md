@@ -885,6 +885,26 @@ seeing the rejection:
 The shared instruction and reminder text (`WORKFLOW_RESULT_MALFORMED_CALL_GUIDANCE`)
 names both directions of the brace fault and forbids shortening the report.
 
+**Follow-up turns.** A Multi Review reviewer, and the preparation,
+consolidation and Fix steps, each get two bounded follow-up turns in the same
+session, under a fresh request id and result slot
+(`workflow-result-missing.ts`):
+
+- **Result reminder.** A tool-mode turn that went idle with no accepted result
+  gets one `workflowResultReminderPrompt` after the idle-poll bound, then fails
+  (`resultReminderSent`). It says the work is done and only the submission is
+  missing.
+- **Restart continuation.** A turn the provider itself cut short is not failed.
+  The Codex bridge reports that on `/session/:id/status` as
+  `interruption: "restart"` beside `phase: "failed"`, and
+  `readProviderStatus` carries it. A result accepted before the restart still
+  counts. Otherwise the turn gets one `workflowRestartContinuationPrompt`
+  (`restartContinuationSent`), which asks the model to continue rather than
+  resubmit, and a second interruption fails it. No other bridge reports
+  interruptions yet, so their cut-short turns fail as before.
+
+Both flags are persisted, so a backend restart cannot reset either budget.
+
 ### Provisional findings (`report_finding`)
 
 A Multi Review reviewer's report arrives whole, when its result is accepted.

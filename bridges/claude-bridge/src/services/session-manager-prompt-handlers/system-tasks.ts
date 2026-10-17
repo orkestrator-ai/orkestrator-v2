@@ -6,7 +6,6 @@ import {
   RUN_SCOPED_TASK_METADATA_RESET,
   boundBackgroundTaskHistory,
   carriedTaskMetadata,
-  closeQueryControlIfUnused,
   inheritBackgroundTaskHookRun,
   isHookRunningBackgroundTask,
   parkSettlingBackgroundTask,
@@ -101,8 +100,7 @@ export function handleTaskEdge(turn: TurnState, message: SDKMessage): void | "st
     taskMessage.tool_use_id !== stored.toolUseId;
   if (resumedRun) {
     // The finished run's parked snapshot must not describe this one.
-    const parked = takeSettlingBackgroundTask(session, taskMessage.task_id);
-    if (parked) closeQueryControlIfUnused(session, parked.owner);
+    takeSettlingBackgroundTask(session, taskMessage.task_id);
   }
   const previous = resumedRun
     ? {
@@ -165,9 +163,8 @@ export function handleTaskEdge(turn: TurnState, message: SDKMessage): void | "st
     // A finishing task sends its terminal patch before the
     // `task_notification` edge, while the CLI is still queueing the
     // notification it will answer. For a released turn this is the
-    // same boundary as that edge: closing here kills the CLI between
-    // writing the notification and running the model on it, so the
-    // reply the model promised never comes.
+    // same boundary as that edge, so the turn waits for the reply the
+    // model promised rather than ending here.
     if (
       owner === turn.queryIteratorControl &&
       turn.turnReleasedToBackgroundTasks &&
@@ -177,9 +174,7 @@ export function handleTaskEdge(turn: TurnState, message: SDKMessage): void | "st
       turn.receivedResult = false;
       waitForContinuationAfterNotification(turn);
     }
-    closeQueryControlIfUnused(session, owner);
   }
-  closeQueryControlIfUnused(session, correlated.owner);
   emitBackgroundTasks(turn);
 }
 
@@ -248,15 +243,10 @@ export function handleTaskNotification(turn: TurnState, message: SDKMessage): vo
   const owner = session.backgroundTaskControls?.get(task.id) ?? parked?.owner ?? correlated.owner;
   session.backgroundTaskControls?.delete(task.id);
   // The notification is injected into the same root loop and may be
-  // followed by another assistant/result boundary. `Query.close()` is
-  // destructive (it terminates the CLI and suppresses later frames),
-  // so a released query must stay alive until that boundary arrives.
-  // A later result closes held input, while abort/delete still closes
-  // the control explicitly.
+  // followed by another assistant/result boundary, which a released turn
+  // waits for before it ends.
   if (owner === turn.queryIteratorControl && turn.turnReleasedToBackgroundTasks) {
     waitForContinuationAfterNotification(turn);
-  } else {
-    closeQueryControlIfUnused(session, owner);
   }
   emitBackgroundTasks(turn);
 }
@@ -277,7 +267,6 @@ export function handleBackgroundTasksChanged(turn: TurnState, message: SDKMessag
     ).filter(([, task]) => !LIVE_BACKGROUND_TASK_STATUSES.has(task.status)),
   ) as Record<string, BackgroundTaskSnapshot>;
   const previousControls = session.backgroundTaskControls;
-  const previousOwners = new Set(previousControls?.values() ?? []);
   const replacementControls = new Map<string, NonNullable<SessionState["queryControl"]>>();
   // The SDK documents this level signal as per-process. Every turn runs
   // on the session's one CLI, so it normally speaks for every live
@@ -348,8 +337,8 @@ export function handleBackgroundTasksChanged(turn: TurnState, message: SDKMessag
   // The edge that does may still be on its way (the SDK leaves the
   // order unspecified; an edge that already landed made the task
   // terminal, so it is not in this list), so the query still owes a
-  // continuation and must not be torn down
-  // here — that close is what silently dropped the "I'll report back
+  // continuation, and the released turn must wait for it rather than
+  // end here — ending is what silently dropped the "I'll report back
   // when it finishes" reply the model had already promised.
   const droppedByThisQuery = previouslyLiveOwnedByThisQuery.filter(
     (task) => replacement[task.id] === undefined,
@@ -359,18 +348,9 @@ export function handleBackgroundTasksChanged(turn: TurnState, message: SDKMessag
       parkSettlingBackgroundTask(session, task, turn.queryIteratorControl!);
     }
     // Mirrors the `task_notification` branch: the earlier result is
-    // only the boundary before this transition, not permission to
-    // close streaming input. Closing it here lands stdin EOF between
-    // the model's final tool result and its final assistant message,
-    // which the rollout records as `[Request interrupted by user]`.
+    // only the boundary before this transition, not the end of the turn.
     turn.receivedResult = false;
     waitForContinuationAfterNotification(turn);
-  }
-  // Retention above is what keeps this query out of the close below:
-  // `closeQueryControlIfUnused` treats a retained control as still in
-  // use. Every other owner is closed exactly as before.
-  for (const owner of previousOwners) {
-    closeQueryControlIfUnused(session, owner);
   }
   emitBackgroundTasks(turn);
 }

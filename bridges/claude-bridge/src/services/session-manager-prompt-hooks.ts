@@ -91,7 +91,10 @@ export async function recordBackgroundTaskHook(
     sessions.get(sessionId) !== session ||
     session.deleting ||
     turn.abortController.signal.aborted ||
-    turn.queryEnded ||
+    // The latest turn's prompt may have settled while its CLI runs on; only
+    // the process ending makes its hooks stale.
+    !turn.runtime ||
+    turn.runtime.state === "ended" ||
     !turn.queryIteratorControl ||
     (hookInput.hook_event_name !== "TaskCreated" &&
       hookInput.hook_event_name !== "TaskCompleted" &&
@@ -134,15 +137,14 @@ export async function recordBackgroundTaskHook(
     // A subagent's `agent_id` *is* the id its `task_notification` reports,
     // and this hook is delivered on the control channel — so for a
     // backgrounded subagent it normally arrives before the notification
-    // the SDK injects back into the root loop. Settling first hands the
-    // last reference to this query to `closeQueryControlIfUnused`, whose
-    // `Query.close()` is destructive, and then closes held stdin: the CLI
-    // dies in the gap, having written the notification to its rollout with
-    // nothing left to answer it. Retain exactly as the `task_notification`
-    // and `background_tasks_changed` branches do — the edge that follows
-    // still writes the authoritative terminal status over this one. A stop
-    // landing while the result is still settling follows that result too,
-    // so it owes the same continuation.
+    // the SDK injects back into the root loop. Settling first would end the
+    // released turn, and a later result with nothing owed would then publish
+    // an idle edge before the CLI answers the notification. Wait for the
+    // continuation exactly as the `task_notification` and
+    // `background_tasks_changed` branches do — the edge that follows still
+    // writes the authoritative terminal status over this one. A stop landing
+    // while the result is still settling follows that result too, so it owes
+    // the same continuation.
     const settlesReleasedTurn =
       (turn.turnReleasedToBackgroundTasks || turn.settlingResult) &&
       session.backgroundTaskControls?.get(taskId) === turn.queryIteratorControl &&

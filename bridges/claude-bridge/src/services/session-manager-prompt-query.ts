@@ -7,6 +7,7 @@ import { claudeWorkflowResultTools } from "./claude-workflow-result-tools.js";
 import { backgroundCommandInstruction } from "./background-commands.js";
 import {
   claudeAsksForApproval,
+  effectiveClaudeChrome,
   claudePermissionMode,
   claudePolicyPermissionMode,
   claudeSettingSources,
@@ -333,10 +334,7 @@ export function claudeQueryOptions(
     // Explicit flags override ambient CLAUDE_CODE_ENABLE_CFC. Chrome is
     // opt-in, and a coordinator's read-only boundary always excludes
     // driving the user's signed-in browser.
-    extraArgs:
-      options?.parameterValues?.chrome === true && !coordinatorReadOnly
-        ? { chrome: null }
-        : { "no-chrome": null },
+    extraArgs: effectiveClaudeChrome(policy, options) ? { chrome: null } : { "no-chrome": null },
     ...(typeof options?.maxBudgetUsd === "number" && options.maxBudgetUsd > 0
       ? { maxBudgetUsd: options.maxBudgetUsd }
       : {}),

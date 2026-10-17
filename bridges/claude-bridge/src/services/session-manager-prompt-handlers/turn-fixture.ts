@@ -38,7 +38,6 @@ export function turnFixture(options: { registered?: boolean } = {}): {
       createdAt: new Date().toISOString(),
     },
     dispatchRequestId: undefined,
-    retainedContinuationTimeoutMs: undefined,
     beforeStartup: captureTurnStartup(session),
     abortController: new AbortController(),
     turnGeneration: 1,

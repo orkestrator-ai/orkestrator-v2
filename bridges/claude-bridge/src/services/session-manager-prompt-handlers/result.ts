@@ -15,7 +15,6 @@ import {
   resultSupersededBySteer,
 } from "../session-manager-messages.js";
 import {
-  closeTurnInput,
   finishTurnInputIfSettled,
   ownsActiveTurn,
   recordInterruptedStructuredOutputIfCurrent,
@@ -157,8 +156,8 @@ export async function handleResultMessage(turn: TurnState, message: SDKMessage):
       settleResultWithoutOwnership(turn);
       return;
     }
+    // Stopping the latest turn already stopped its process.
     recordInterruptedStructuredOutputIfCurrent(turn);
-    closeTurnInput(turn);
     return;
   }
   // Both round trips can take seconds. Lifecycle hooks and task stops
@@ -193,7 +192,6 @@ export async function handleResultMessage(turn: TurnState, message: SDKMessage):
     // usage snapshot. A newer structured turn replaces the request id
     // before taking ownership; never let this old turn overwrite it.
     recordInterruptedStructuredOutputIfCurrent(turn);
-    closeTurnInput(turn);
     return;
   }
   turn.bootstrapClaudeUsage = false;

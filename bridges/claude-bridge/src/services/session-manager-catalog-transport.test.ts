@@ -84,7 +84,7 @@ describe("catalog reads against a closed transport", () => {
     await readSessionCommands(session.id);
     const callsBeforeDrain = supportedCommands.mock.calls.length;
 
-    // What `closeTurnInput()` records once the CLI's stdin is closed.
+    // What `drainClaudeRuntime()` records once the CLI's stdin is closed.
     session.queryControlDraining = session.queryControl;
 
     await expect(readSessionCommands(session.id)).resolves.toEqual(session.commandInventory ?? []);
@@ -201,6 +201,9 @@ async function runTurn(sessionId: string, messages: unknown[]): Promise<void> {
   for (const message of messages) call.push(message);
   call.finish();
   await turn;
+  // The prompt settles at its result; these cases read the session once its
+  // process has exited too.
+  await waitFor(() => getSession(sessionId)?.claudeRuntime === undefined);
 }
 
 function init(fields: Record<string, unknown> = {}) {

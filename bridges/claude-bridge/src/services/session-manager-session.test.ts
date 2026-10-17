@@ -91,6 +91,9 @@ describe("idle MCP catalogue", () => {
     call.push({ type: "result", subtype: "success" });
     call.finish();
     await promptPromise;
+    // Turn completion releases the foreground before the runtime observes EOF.
+    // Wait for the CLI to exit so the action exercises the metadata fallback.
+    await waitFor(() => session.claudeRuntime === undefined);
     expect(session.queryControl).toBeUndefined();
 
     expect(await readSessionMcpServers(session.id)).toEqual([

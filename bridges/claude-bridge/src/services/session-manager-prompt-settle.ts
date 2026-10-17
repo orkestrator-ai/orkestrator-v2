@@ -16,6 +16,7 @@ import {
   ownsActiveTurn,
   recordInterruptedStructuredOutputIfCurrent,
 } from "./session-manager-prompt-turn-lifecycle.js";
+import { reconcileIdleClaudeRuntime } from "./session-manager-runtime-idle.js";
 import type { TurnState } from "./session-manager-prompt-turn.js";
 import { markTranscriptChanged, resetTranscriptEpoch } from "./transcript-revision.js";
 
@@ -325,7 +326,6 @@ export function finalizeTurn(turn: TurnState): void {
     session.inProgressUsage = undefined;
     session.inProgressUsageGeneration = undefined;
   }
-  turn.closeSdkInput();
   if (session.finishTurnInputIfSettled === turn.finishTurnInputForThisTurn) {
     session.finishTurnInputIfSettled = undefined;
   }
@@ -342,12 +342,8 @@ export function finalizeTurn(turn: TurnState): void {
       forgetPromptDispatch(sessionId, dispatchRequestId);
     }
   }
-  // The stream is over, so there is no continuation left to wait for and the
-  // watchdog has nothing to guard.
-  if (turn.retainedContinuationTimer) {
-    clearTimeout(turn.retainedContinuationTimer);
-    turn.retainedContinuationTimer = null;
-  }
+  // This prompt is answered: nothing waits on a continuation for it any more.
+  turn.awaitingContinuation = false;
   if (dispatchRequestId) {
     session.retainedContinuationRequestIds?.delete(dispatchRequestId);
     if (session.retainedContinuationRequestIds?.size === 0) {
@@ -355,8 +351,8 @@ export function finalizeTurn(turn: TurnState): void {
     }
   }
   // What the process owned is settled by the runtime when it ends
-  // (`endClaudeRuntime`), not here: a turn that is superseded or released to
-  // background work finishes while the process it ran on keeps going.
+  // (`endClaudeRuntime`), not here: a turn that is superseded, released to
+  // background work or simply over finishes while its process keeps going.
   // The pre-turn transcript read failed, so `persistedMessagesLoaded` claims
   // a hydration that never happened. Clearing it once the turn is over lets
   // the next transcript request retry; leaving it set hid the on-disk history
@@ -365,5 +361,9 @@ export function finalizeTurn(turn: TurnState): void {
     session.persistedMessagesLoaded = false;
     resetTranscriptEpoch(session);
   }
+  // Both successful settlement and failed join rollback can restore idle
+  // ownership after another session filled the warm cap. Enforce only once
+  // the foreground is actually free, including when turns settle together.
+  reconcileIdleClaudeRuntime(session);
   stream.clearFlushTimer();
 }

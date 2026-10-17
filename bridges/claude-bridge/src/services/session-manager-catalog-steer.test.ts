@@ -282,19 +282,13 @@ describe("Claude steer journal and transcript", () => {
       });
     };
     const finish = async (uuids: string[], index = 1, fields: Record<string, unknown> = {}) => {
-      let inputClosed = false;
-      const completion = input.next().then((next) => {
-        inputClosed = next.done === true;
-      });
       result(uuids, index, fields);
-      // Do not finish the mock output until the result closes held stdin:
+      // Do not finish the mock output until the result settles the prompt:
       // finishing it first would mask a skipped terminal result.
-      await waitFor(() => inputClosed);
-      await completion;
-      call.finish();
       await prompt;
       expect(session.status).toBe("idle");
       expect(session.queryControl).toBeUndefined();
+      call.finish();
       return getSessionMessages(session.id);
     };
     return { session, prompt, call, input, promptUuid, steer, result, finish };
@@ -730,10 +724,11 @@ describe("Claude steer journal and transcript", () => {
         user_message_uuid: steerId,
         user_message_uuids: [steerId],
       });
-      await waitFor(() => inputClosed);
-      await inputCompletion;
-      call.finish();
+      // The terminal result settles the prompt; the CLI stays warm.
       await prompt;
+      expect(inputClosed).toBe(false);
+      call.finish();
+      await inputCompletion;
 
       expect(sessions.get(session.id)?.status).toBe("idle");
       const transcript = getSessionMessages(session.id);
@@ -856,10 +851,11 @@ describe("Claude steer journal and transcript", () => {
       user_message_uuid: steerId,
       user_message_uuids: [steerId],
     });
-    await waitFor(() => inputClosed);
-    await inputCompletion;
-    call.finish();
+    // The terminal result settles the prompt; the CLI stays warm.
     await prompt;
+    expect(inputClosed).toBe(false);
+    call.finish();
+    await inputCompletion;
 
     const settled = sessions.get(session.id);
     expect(settled?.status).toBe("idle");

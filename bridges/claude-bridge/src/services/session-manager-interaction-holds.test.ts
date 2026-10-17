@@ -12,10 +12,7 @@ import {
   sendPrompt,
   track,
 } from "./session-manager-test-harness.js";
-import { pendingQuestions } from "./session-manager-core.js";
 import { holdPendingRequest } from "./session-manager-interaction-holds.js";
-import { armContinuationWatchdog } from "./session-manager-prompt-turn-lifecycle.js";
-import { turnFixture } from "./session-manager-prompt-handlers/turn-fixture.js";
 
 const WINDOW = AGENT_INTERACTION_DEFAULT_TIMEOUT_MS;
 const CEILING = AGENT_INTERACTION_HOLD_CEILING_MS;
@@ -211,35 +208,6 @@ describe("pausing a parked request's deadline", () => {
       );
     } finally {
       await finish();
-    }
-  });
-});
-
-describe("the retained-continuation watchdog", () => {
-  test("stands down while a card waits on the user, then releases once it settles", () => {
-    const { session, turn, dispose } = turnFixture({ registered: true });
-    session.latestTurnGeneration = turn.turnGeneration;
-    jest.useFakeTimers();
-    try {
-      pendingQuestions.set("watchdog-question", {
-        id: "watchdog-question",
-        sessionId: session.id,
-        questions: [],
-        requestedAt: Date.now(),
-        expiresAt: Date.now() + CEILING,
-      });
-      armContinuationWatchdog(turn);
-      jest.advanceTimersByTime(WINDOW);
-      // A paused card is not silence: the bound re-arms instead of closing.
-      expect(turn.retainedContinuationTimer).not.toBeNull();
-
-      pendingQuestions.delete("watchdog-question");
-      jest.advanceTimersByTime(WINDOW);
-      expect(turn.retainedContinuationTimer).toBeNull();
-    } finally {
-      jest.useRealTimers();
-      pendingQuestions.delete("watchdog-question");
-      dispose();
     }
   });
 });

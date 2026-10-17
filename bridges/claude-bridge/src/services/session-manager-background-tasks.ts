@@ -407,7 +407,6 @@ export function recordBackgroundTaskLaunch(
   if (LIVE_BACKGROUND_TASK_STATUSES.has(status)) {
     (session.backgroundTaskControls ??= new Map()).set(launch.id, control);
   }
-  if (parked) closeQueryControlIfUnused(session, parked.owner);
   emitBackgroundTaskSnapshot(session);
 }
 
@@ -519,7 +518,7 @@ export const NO_CONTROL_CHANNEL: StopBackgroundTaskResult = {
 };
 
 /**
- * Move one task to a terminal state and release the handle that owned it.
+ * Move one task to a terminal state and forget which handle owned it.
  *
  * Used wherever the bridge learns a task can no longer be running *without*
  * being told by a `task_notification` — a stop it issued itself, or a provider
@@ -543,12 +542,11 @@ export function settleBackgroundTask(
       ...(error !== undefined ? { error: previous.error ?? error } : {}),
     },
   });
-  const owner = session.backgroundTaskControls?.get(taskId);
   session.backgroundTaskControls?.delete(taskId);
   if (session.backgroundTaskControls?.size === 0) {
     session.backgroundTaskControls = undefined;
   }
-  closeQueryControlIfUnused(session, owner);
+  // The process that owned it stays up; its idle window decides when it goes.
   session.finishTurnInputIfSettled?.();
   return true;
 }
@@ -702,53 +700,32 @@ export function takeQueryControls(
   for (const control of session.backgroundTaskCandidates?.values() ?? []) {
     controls.add(control);
   }
-  // A control retained across a background-task notification is a live writer
-  // like any other. Deletion and abort are the two points at which the user has
-  // said that work should stop, so the pending continuation does not exempt it.
-  for (const control of session.retainedQueryControls ?? []) {
-    controls.add(control);
-  }
   session.queryControl = undefined;
   session.backgroundTaskControls = undefined;
   session.backgroundTaskCandidates = undefined;
-  session.retainedQueryControls = undefined;
   session.settlingBackgroundTasks = undefined;
   return controls;
 }
 
 /**
- * Keep `control` addressable while its released turn waits for the continuation
- * a background-task notification triggers.
- *
- * The control is deliberately not closed there, so without this it would belong
- * to none of the session's collections: `releaseQueryControls` could not reach
- * it and the CLI would outlive the session that owns it.
+ * Whether `runtime`'s process owns work that must outlive the response
+ * boundary: a live task it started, or a Bash call that may yet become one.
  */
-export function retainQueryControl(
+export function claudeRuntimeOwnsLiveWork(
   session: SessionState,
-  control: NonNullable<SessionState["queryControl"]>,
-): void {
-  (session.retainedQueryControls ??= new Set()).add(control);
-}
-
-export function forgetRetainedQueryControl(
-  session: SessionState,
-  control: NonNullable<SessionState["queryControl"]> | undefined,
-): void {
-  if (!control || !session.retainedQueryControls) return;
-  session.retainedQueryControls.delete(control);
-  if (session.retainedQueryControls.size === 0) {
-    session.retainedQueryControls = undefined;
+  runtime: { control: NonNullable<SessionState["queryControl"]> },
+): boolean {
+  const { control } = runtime;
+  for (const task of Object.values(session.backgroundTasks ?? {}) as BackgroundTaskSnapshot[]) {
+    if (
+      LIVE_BACKGROUND_TASK_STATUSES.has(task.status) &&
+      session.backgroundTaskControls?.get(task.id) === control
+    ) {
+      return true;
+    }
   }
-}
-
-export function closeQueryControlIfUnused(
-  session: SessionState,
-  control: NonNullable<SessionState["queryControl"]> | undefined,
-): void {
-  if (!control || session.queryControl === control) return;
-  if (Array.from(session.backgroundTaskControls?.values() ?? []).includes(control)) return;
-  if (Array.from(session.backgroundTaskCandidates?.values() ?? []).includes(control)) return;
-  if (session.retainedQueryControls?.has(control)) return;
-  void closeQueryControl(control);
+  for (const owner of session.backgroundTaskCandidates?.values() ?? []) {
+    if (owner === control) return true;
+  }
+  return false;
 }

@@ -6,7 +6,6 @@ import {
 } from "../../types/index.js";
 import { observeClaudeMessage } from "../diagnostics.js";
 import { debugLog, isDebugLoggingEnabled } from "../logger.js";
-import { armContinuationWatchdog } from "../session-manager-prompt-turn-lifecycle.js";
 import type { TurnState } from "../session-manager-prompt-turn.js";
 import { handleAssistantMessage } from "./assistant.js";
 import type { PromptMessageHandler } from "./context.js";
@@ -72,11 +71,6 @@ export async function handleTurnMessage(turn: TurnState, message: SDKMessage): P
   // A superseded turn still draws frames for its own tools, after its
   // diagnostics have closed.
   if (diagnostics && !turn.queryEnded) observeClaudeMessage(diagnostics, message);
-  // Any frame is evidence the provider is still answering the notification,
-  // so the watchdog is pushed out rather than allowed to expire mid-stream.
-  // Retention itself is dropped by the reclaim, the result, or the watchdog
-  // firing — never by liveness alone.
-  if (turn.retainedContinuationTimer) armContinuationWatchdog(turn);
   // Fires once per streamed delta — i.e. per token. Both the object
   // literal and the write are guarded, not just the write.
   if (isDebugLoggingEnabled) {

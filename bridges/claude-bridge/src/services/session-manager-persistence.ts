@@ -536,14 +536,6 @@ export function evictIdleHydratedTranscripts(now: number = Date.now()): string[]
       skip("background-task-candidates");
       continue;
     }
-    // A released turn waiting for the continuation a background task triggers
-    // is idle by `status`, owns no abort controller and — once the level signal
-    // has cleared its tasks — no live task either. Evicting its transcript here
-    // would drop the messages the continuation is about to be appended to.
-    if (session.retainedQueryControls && session.retainedQueryControls.size > 0) {
-      skip("retained-query-controls");
-      continue;
-    }
     if (session.settlingBackgroundTasks && session.settlingBackgroundTasks.size > 0) {
       skip("settling-background-tasks");
       continue;

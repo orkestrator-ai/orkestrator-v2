@@ -33,13 +33,17 @@ import type { ClaudeRuntimeMcp } from "./session-manager-prompt-mcp-sync.js";
 import type { ToolTracker } from "./session-manager-messages.js";
 import {
   claudeAsksForApproval,
+  effectiveClaudeChrome,
   claudePolicyPermissionMode,
   claudeSettingSources,
   claudeTurnPolicy,
   claudeWorkspaceCwd,
 } from "./claude-query-config.js";
 import { isCoordinatorReadOnlyPolicy } from "./read-only-policy.js";
+import { claudeRuntimeOwnsLiveWork } from "./session-manager-background-tasks.js";
 import { sessionOperationError } from "./session-manager-core.js";
+import { sessionHasPendingInteractions } from "./session-manager-lifecycle.js";
+import type { ClaudeRuntimeIdleTimer } from "./session-manager-runtime-idle.js";
 import { requestsUltracode } from "./ultracode.js";
 
 /**
@@ -93,6 +97,8 @@ export interface ClaudeLiveSettings {
 export interface ClaudeLaunchProfile {
   context1m: boolean;
   promptSuggestions: boolean;
+  chrome: boolean;
+  maxBudgetUsd: number | null;
   thinking: string;
   bypassCapable: boolean;
   plugins?: string;
@@ -124,6 +130,11 @@ export function claudeLaunchProfile(
   return {
     context1m: effectiveClaudeContext1m(options),
     promptSuggestions: options?.promptSuggestions === true,
+    chrome: effectiveClaudeChrome(policy, options),
+    maxBudgetUsd:
+      typeof options?.maxBudgetUsd === "number" && options.maxBudgetUsd > 0
+        ? options.maxBudgetUsd
+        : null,
     thinking:
       typeof options?.parameterValues?.thinking === "string"
         ? options.parameterValues.thinking
@@ -202,14 +213,15 @@ export function claudeLaunchedProfile(
  * Launch-only settings cannot change on a live CLI, and starting a second one
  * on the same conversation is the defect this module exists to prevent, so a
  * prompt that changes them waits until the background work the running process
- * owns has finished, or the user stops it.
+ * owns has finished, or the user stops it. A warm CLI that owes nothing is
+ * retired for the new launch instead (`runTurnOnRuntime`).
  */
 export function assertClaudeRuntimeStaticAccepts(
   session: SessionState,
   options: PromptOptions | undefined,
 ): void {
   const runtime = openClaudeRuntime(session);
-  if (!runtime) return;
+  if (!runtime || !claudeRuntimeOwesWork(runtime)) return;
   const conflict = claudeLaunchConflict(runtime.launch, claudeLaunchProfile(session, options));
   if (conflict)
     throw sessionOperationError(
@@ -224,7 +236,7 @@ export async function assertClaudeRuntimeAccepts(
   resources?: Pick<ClaudeLaunchProfile, "plugins" | "credentials">,
 ): Promise<void> {
   const runtime = openClaudeRuntime(session);
-  if (!runtime) return;
+  if (!runtime || !claudeRuntimeOwesWork(runtime)) return;
   const request = claudeLaunchProfile(session, options);
   const refuse = (conflict: string | undefined) => {
     if (conflict)
@@ -268,6 +280,10 @@ export interface ClaudeRuntime {
   latestTurn: ClaudeRuntimeTurn;
   /** `draining` once input is closed: the CLI can no longer start a turn. */
   state: "open" | "draining" | "ended";
+  /** The idle window while it runs; see `session-manager-runtime-idle.ts`. */
+  idleTimer: ClaudeRuntimeIdleTimer | undefined;
+  /** When the last frame arrived; orders idle CLIs past the warm cap. */
+  lastFrameAt: number;
   supportedAgents: Array<{ name: string; description?: string; model?: string }>;
   ended: Promise<void>;
 }
@@ -316,6 +332,8 @@ export function createClaudeRuntime(input: {
     mcp: input.mcp,
     latestTurn: input.firstTurn,
     state: "open",
+    idleTimer: undefined,
+    lastFrameAt: Date.now(),
     supportedAgents: [],
     ended,
   };
@@ -330,6 +348,20 @@ export function openClaudeRuntime(session: SessionState): ClaudeRuntime | undefi
 }
 
 /**
+ * Whether the process still owes something beyond a foreground turn: a live
+ * task it started, the continuation a task notification triggers, or a card
+ * waiting on the user. Such a process cannot be replaced or stopped without
+ * losing that work; one that owes nothing is merely warm.
+ */
+export function claudeRuntimeOwesWork(runtime: ClaudeRuntime): boolean {
+  return (
+    claudeRuntimeOwnsLiveWork(runtime.session, runtime) ||
+    runtime.latestTurn.isAwaitingContinuation() ||
+    sessionHasPendingInteractions(runtime.session.id)
+  );
+}
+
+/**
  * Why `request` cannot run on `runtime`, or undefined when it can.
  *
  * Thinking resets and bypass mode are limited by launch capabilities; other
@@ -339,6 +371,8 @@ export function claudeLaunchConflict(
   runtime: ClaudeLaunchProfile,
   request: ClaudeLaunchProfile,
 ): string | undefined {
+  if (runtime.chrome !== request.chrome) return "Chrome setting";
+  if (runtime.maxBudgetUsd !== request.maxBudgetUsd) return "cost budget";
   if (runtime.context1m !== request.context1m) return "1M context setting";
   if (runtime.promptSuggestions !== request.promptSuggestions) return "prompt suggestions";
   if (request.thinking === "adaptive" && runtime.thinking !== "adaptive")
@@ -404,6 +438,9 @@ export function submitClaudeTurn(
 ): boolean {
   // A teardown fence or aborted signal excludes a process that is ending.
   if (runtime.state !== "open" || runtime.abortController.signal.aborted) return false;
+  // A turn holds the process again; it re-arms the idle window when it ends.
+  runtime.idleTimer?.cancel();
+  runtime.idleTimer = undefined;
   // Written before ownership moves, so input that turns out to be closed (the
   // SDK stops reading when its process dies) leaves this runtime untouched for
   // caller to refuse safely. Nothing can answer before this function returns.
@@ -420,9 +457,18 @@ export function submitClaudeTurn(
   return true;
 }
 
-/** Close the runtime's input: the CLI finishes what it has and exits. */
+/**
+ * Close the runtime's input: the CLI finishes what it has and exits.
+ *
+ * Marks the control draining first: until the process has exited, a control
+ * request races that exit and fails with "Query closed before response
+ * received", so catalogue reads skip it (`readableControl`).
+ */
 export function drainClaudeRuntime(runtime: ClaudeRuntime): void {
+  runtime.idleTimer?.cancel();
+  runtime.idleTimer = undefined;
   if (runtime.state === "open") runtime.state = "draining";
+  runtime.session.queryControlDraining = runtime.control;
   runtime.input.close();
 }
 

@@ -21,11 +21,11 @@ import {
 import {
   captureTurnStartup,
   createTurnState,
-  type PromptTestHooks,
   type TurnStartupSnapshot,
   type TurnState,
 } from "./session-manager-prompt-turn.js";
 import { assertClaudeRuntimeStaticAccepts, openClaudeRuntime } from "./session-manager-runtime.js";
+import { reconcileIdleClaudeRuntime } from "./session-manager-runtime-idle.js";
 import { markTranscriptChanged, resetTranscriptEpoch } from "./transcript-revision.js";
 
 export { MAX_STREAM_CONTENT_BLOCK_INDEX } from "./session-manager-prompt-stream.js";
@@ -215,6 +215,7 @@ export async function applyPromptPlanMode(
       session.structuredOutputRequestId = beforeStartup.structuredOutputRequestId;
       session.inProgressUsage = beforeStartup.inProgressUsage;
       session.inProgressUsageGeneration = beforeStartup.inProgressUsageGeneration;
+      reconcileIdleClaudeRuntime(session);
     }
     if (dispatchRequestId) {
       forgetPromptDispatch(sessionId, dispatchRequestId);
@@ -341,7 +342,6 @@ export function createClaudeTurn(
     options: PromptOptions | undefined;
     userMessage: NormalizedMessage;
     transcriptHydrationFailed: boolean;
-    testHooks: PromptTestHooks | undefined;
   },
 ): TurnState {
   const { session, sessionId } = admission;
@@ -362,7 +362,6 @@ export function createClaudeTurn(
     structuredRequestId: admission.structuredRequestId,
     userMessage: input.userMessage,
     dispatchRequestId: admission.dispatchRequestId,
-    retainedContinuationTimeoutMs: input.testHooks?.retainedContinuationTimeoutMs,
     beforeStartup: admission.beforeStartup,
     abortController: admission.abortController,
     turnGeneration: admission.turnGeneration,

@@ -33,10 +33,12 @@ export function createClaudeRuntimeTurn(turn: TurnState): ClaudeRuntimeTurn {
       turn.resolveTurnEnded();
     },
     runtimeEnded: (failure) => {
+      // An owed continuation dies with the process.
+      stopWaitingForContinuation(turn);
       if (failure) turn.rejectTurnEnded(failure.error);
       else turn.resolveTurnEnded();
     },
-    isAwaitingContinuation: () => turn.retainedContinuationTimer !== null,
+    isAwaitingContinuation: () => turn.awaitingContinuation,
     inheritContinuation: () => {
       turn.inheritedContinuation = true;
     },

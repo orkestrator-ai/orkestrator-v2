@@ -697,12 +697,12 @@ export interface SessionState {
    */
   claudeRuntime?: import("../services/session-manager-runtime.js").ClaudeRuntime;
   /**
-   * The turn query whose stdin has been closed and which is now shutting down.
+   * The session CLI's control once its input is closed and it is shutting down
+   * (`drainClaudeRuntime`).
    *
-   * `queryControl` stays set from turn start until the turn's `finally`, but
-   * the CLI's stdin closes earlier, at the result boundary. Any control request
-   * issued in that window races the process exit and is rejected by the SDK
-   * with "Query closed before response received". Marking the control lets
+   * Any control request issued until the process exits races that exit and is
+   * rejected by the SDK with "Query closed before response received". Marking
+   * the control lets
    * read-only catalogue calls skip a request that cannot be answered and serve
    * a cached answer instead; writes still attempt it, because a caller asking
    * to change state deserves the real error.
@@ -712,8 +712,8 @@ export interface SessionState {
    * Re-evaluate whether the current streaming prompt may close its input.
    *
    * A Claude result is not terminal while background agents are live. The
-   * callback is installed only for the active turn and closes stdin once that
-   * turn has a result and no live background task remains.
+   * callback is installed only for the active turn and ends that turn once it
+   * has a result and no live background task remains; the CLI stays warm.
    */
   finishTurnInputIfSettled?: () => void;
   /**
@@ -744,16 +744,6 @@ export interface SessionState {
     string,
     { command?: string; outputTail?: string; error?: string; completed?: boolean }
   >;
-  /**
-   * Controls kept alive across a background-task notification.
-   *
-   * A terminal `task_notification` is injected back into the same root agent
-   * loop, so the query that released its turn may still produce another
-   * assistant/result boundary. `Query.close()` is destructive, so that control
-   * must not be closed there — but it must stay *reachable*, or session
-   * teardown can no longer stop a live CLI writing to the rollout.
-   */
-  retainedQueryControls?: Set<ClaudeQueryControl>;
   /** Dispatches whose released query is awaiting a background-task continuation. */
   retainedContinuationRequestIds?: Set<string>;
   /**

@@ -24,6 +24,7 @@ import {
   type ClaudeRuntimeTurn,
 } from "./session-manager-runtime.js";
 import { closeSessionRetainingHistory } from "./session-manager-close.js";
+import { setClaudeRuntimeIdleTimingForTesting } from "./session-manager-runtime-idle.js";
 
 // One Claude conversation runs in one CLI. These pin what a turn that starts
 // while the session's CLI is still running background work does: it joins that
@@ -175,9 +176,8 @@ describe("one CLI per session", () => {
     const followUpUuid = (followUp.value as SDKUserMessage).uuid!;
     await firstPrompt;
     let inputClosed = false;
-    const inputCompletion = input.next().then((result) => {
+    void input.next().then((result) => {
       inputClosed = result.done === true;
-      return result;
     });
 
     call.push({
@@ -203,8 +203,7 @@ describe("one CLI per session", () => {
       });
     }
     await waitFor(() => session.backgroundTasks?.["agent-bg"]?.status === "completed");
-    const control = session.claudeRuntime!.control;
-    expect(session.retainedQueryControls?.has(control)).toBe(true);
+    expect(session.claudeRuntime?.latestTurn.isAwaitingContinuation()).toBe(true);
 
     // A straggling frame from the first turn's agent reaches the first turn.
     call.push({
@@ -218,7 +217,7 @@ describe("one CLI per session", () => {
     // Anything that asks whether the process is still in use must hear yes.
     call.push({ type: "system", subtype: "background_tasks_changed", tasks: [] });
     await Bun.sleep(20);
-    expect(session.retainedQueryControls?.has(control)).toBe(true);
+    expect(session.claudeRuntime?.latestTurn.isAwaitingContinuation()).toBe(true);
     expect(call.isClosed()).toBe(false);
     expect(inputClosed).toBe(false);
 
@@ -233,10 +232,12 @@ describe("one CLI per session", () => {
     });
     await waitFor(() => session.status === "running");
     pushSuccessfulContinuationResult(call);
-    expect(await inputCompletion).toEqual({ done: true, value: undefined });
-    call.finish();
+    // The answered continuation ends the turn; the CLI stays warm for the next.
     await secondPrompt;
     expect(session.status).toBe("idle");
+    expect(inputClosed).toBe(false);
+    expect(session.claudeRuntime?.state).toBe("open");
+    call.finish();
   });
 
   test("live settings are restated on the running CLI", async () => {
@@ -369,7 +370,10 @@ describe("one CLI per session", () => {
     expect(getSession(session.id)).toBeUndefined();
   });
 
-  test("a turn that ends with nothing left running drains the CLI before the next one", async () => {
+  test("with no idle window, a turn that ends with nothing left running drains the CLI", async () => {
+    // The default keeps the CLI warm (`session-manager-runtime-idle.test.ts`);
+    // a window of zero restores closing input at the end of the turn.
+    setClaudeRuntimeIdleTimingForTesting({ idleMs: 0 });
     const { events, stop } = captureEvents();
     try {
       const session = createSession("drain");
@@ -385,7 +389,7 @@ describe("one CLI per session", () => {
       expect(session.claudeRuntime?.state).toBe("draining");
       first.finish();
       await firstPrompt;
-      expect(session.claudeRuntime).toBeUndefined();
+      await waitFor(() => session.claudeRuntime === undefined);
       expect(events.filter((event) => event.type === "session.idle")).toHaveLength(1);
 
       const secondPrompt = sendPrompt(session.id, "another");
@@ -433,6 +437,8 @@ describe("runtime routing", () => {
   test("compares only what a running CLI cannot change", () => {
     const launched: ClaudeLaunchProfile = {
       context1m: false,
+      chrome: false,
+      maxBudgetUsd: null,
       promptSuggestions: false,
       thinking: "adaptive",
       bypassCapable: true,

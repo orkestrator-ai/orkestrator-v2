@@ -41,7 +41,7 @@ export function resetClaudeCatalogCachesForTesting(): void {
 }
 
 /**
- * The turn query, unless it is shutting down.
+ * The foreground or warm query, unless it is shutting down.
  *
  * A control whose stdin is closed still answers `supportedCommands` and friends
  * on paper, but the CLI is on its way out and the SDK rejects the pending
@@ -49,8 +49,14 @@ export function resetClaudeCatalogCachesForTesting(): void {
  * cached answer than by a request that cannot land.
  */
 export function readableControl(session: SessionState | undefined): SessionState["queryControl"] {
-  if (!session?.queryControl) return undefined;
-  return session.queryControl === session.queryControlDraining ? undefined : session.queryControl;
+  if (!session) return undefined;
+  const runtime = session.claudeRuntime;
+  const control =
+    session.queryControl ??
+    (runtime?.state === "open" && !runtime.abortController.signal.aborted
+      ? runtime.control
+      : undefined);
+  return control === session.queryControlDraining ? undefined : control;
 }
 
 /**
@@ -299,7 +305,7 @@ export async function performSessionMcpAction(
   const session = sessions.get(sessionId);
   if (!session) throw new Error("Session not found");
   let probe: Query | undefined;
-  const control = session.queryControl ?? (probe = createProbe());
+  const control = readableControl(session) ?? (probe = createProbe());
   try {
     if (action === "reconnect") await control.reconnectMcpServer?.(serverId);
     else if (action === "enable") await control.toggleMcpServer?.(serverId, true);
@@ -481,7 +487,7 @@ export async function configureClaudeSession(
     parameterValues?: Record<string, string | boolean>;
   },
 ): Promise<void> {
-  const control = session.queryControl;
+  const control = session.queryControl ?? readableControl(session);
   if (!control) return;
   try {
     if (input.model !== undefined) await control.setModel?.(input.model);

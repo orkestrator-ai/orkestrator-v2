@@ -57,10 +57,10 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 26 |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 25 |
 | Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 257 |
 | Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 268 |
-| **Total** | | **552** |
+| **Total** | | **551** |
 
 ## Very high
 
@@ -134,7 +134,7 @@ it reaches. Some rules of thumb:
 - [x] Park Claude `onElicitation` and `onUserDialog` requests as interactions instead of declining them ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md))
 - [x] Check on each platform that the Agent Info policy summary matches the options the adapter received ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
 - [ ] Qualify a paused question and approval on each provider's real CLI past ten minutes, then answer ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), qualification)
-- [ ] Keep the Claude CLI open across idle turns with an idle detach instead of draining at turn end ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md))
+- [x] Keep the Claude CLI open across idle turns with an idle detach instead of draining at turn end ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md))
 - [x] Report `authentication-required` readiness on Claude, Pi, ACP and OpenCode; drop the Cursor-only 401 branch ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md))
 - [x] Confirm no auth response body carries a token or key except the login URL, and the URL is never logged ([agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md), qualification)
 - [x] Confirm close retains the conversation through the UI for Cursor, Pi, OpenCode and Grok ([session-lifecycle-consistency.md](session-lifecycle-consistency.md), qualification)
@@ -351,9 +351,11 @@ it reaches. Some rules of thumb:
 - [ ] Verify every bridge has per-kind park, render, resolve and fail-closed timeout interaction tests ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), verify)
 - [ ] Verify whether a container Cursor session loads the repository's `.cursor/mcp.json` today ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), verify)
 - [ ] Decide whether Claude MCP OAuth sign-in uses parked `mcp-url` elicitations or a separate MCP flow ([agent-interactions-and-permissions.md](agent-interactions-and-permissions.md), decision)
-- [ ] Retire Claude per-turn bookkeeping (continuation watchdog, `backgroundTaskControls`) with the warm runtime ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md))
+- [x] Retire Claude per-turn bookkeeping (continuation watchdog, `backgroundTaskControls`) with the warm runtime ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md))
 - [ ] Steer long Claude and Cursor turns, switch environment, return and reload; confirm the snapshot restores it ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md), qualification)
-- [ ] Measure Claude turn-start and follow-up first-token latency before and after the warm runtime changes ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md), qualification)
+- [x] Measure Claude turn-start and follow-up first-token latency before and after the warm runtime changes ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md), qualification)
+- [ ] Collapse Claude `backgroundTaskControls`, candidates and settling tasks into runtime-owned task state ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md))
+- [ ] Qualify one warm Claude CLI through the app across follow-up, plan and permission changes, a paused approval and an MCP edit ([mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md), qualification)
 - [ ] Move session title generation into a backend title service and delete the Codex and Claude bridge generators ([session-titles-and-history.md](session-titles-and-history.md))
 - [ ] Adopt Codex `thread/reverted` by trimming the served transcript and remove it from the ignore list ([session-titles-and-history.md](session-titles-and-history.md))
 - [ ] Rehydrate Claude subagent detail on resume with `getSubagentMessages()` ([session-titles-and-history.md](session-titles-and-history.md))
@@ -870,7 +872,7 @@ it reaches. Some rules of thumb:
 | [control-mcp-voice-surface.md](control-mcp-voice-surface.md) |  |  | 9 |  | 9 |
 | **Agent engines and provider SDKs** | | | | | |
 | [agent-interactions-and-permissions.md](agent-interactions-and-permissions.md) |  | 1 | 12 | 6 | 19 |
-| [mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md) |  | 1 | 3 | 5 | 9 |
+| [mid-turn-steer-and-interrupt.md](mid-turn-steer-and-interrupt.md) |  |  | 3 | 5 | 8 |
 | [session-titles-and-history.md](session-titles-and-history.md) |  |  | 4 | 4 | 8 |
 | [agent-accounts-and-sign-in.md](agent-accounts-and-sign-in.md) |  |  | 8 | 6 | 14 |
 | [composer-model-parameters.md](composer-model-parameters.md) |  | 1 | 2 | 4 | 7 |

@@ -85,7 +85,7 @@ import {
   projectMenuWindows,
   resolveFocusedWindowContext,
 } from "./window-menu.js";
-import { runtimeProfileFromEnvironment } from "./runtime-profile.js";
+import { chromiumSwitchesForRuntime, runtimeProfileFromEnvironment } from "./runtime-profile.js";
 import {
   installProductionApplicationLogging,
   registerApplicationLoggingShutdown,
@@ -120,6 +120,9 @@ const runtimeFlavor = runtimeProfile?.flavor ?? (isDev ? "development" : "produc
 const productName = runtimeProfile?.electronTitle ?? PRODUCT_NAME;
 
 app.setName(productName);
+for (const name of chromiumSwitchesForRuntime(runtimeFlavor, process.platform)) {
+  app.commandLine.appendSwitch(name);
+}
 if (process.platform === "linux") app.setDesktopName(LINUX_DESKTOP_ENTRY_FILENAME);
 app.setPath(
   "userData",

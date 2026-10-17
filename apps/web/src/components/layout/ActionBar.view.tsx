@@ -5,6 +5,7 @@ import {
   lazy,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   type FocusEvent as ReactFocusEvent,
   type MouseEvent as ReactMouseEvent,
@@ -128,6 +129,8 @@ function ToolbarContextMenuTrigger({
   const tooltipState = useHoverTooltip();
   const tooltipsEnabled = useContext(ToolbarTooltipsEnabledContext);
   const child = children as ReactElement<TriggerProps>;
+  // cloneElement forwards the ref to React; it never reads its current value.
+  // oxlint-disable-next-line react/refs
   const trigger = cloneElement(child, {
     "data-toolbar-custom-context-menu": "true",
     ref: tooltipAnchorRef,
@@ -428,23 +431,25 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     tabCount,
     workspaceReady,
   });
-  multiReviewShortcutStateRef.current = {
-    canCreateTab,
-    fixReviewIssuesLaunchDefaults,
-    handleMultiReview,
-    isRunning,
-    multiReviewLaunchPending,
-    multiReviewReviewerDefaults,
-    multiReviewAutoFix,
-    multiReviewAutoPr,
-    reviewLaunchDefaults,
-    reviewPreparationLaunchDefaults,
-    reviewModelCatalog,
-    selectedEnvironmentId,
-    setupRunning,
-    tabCount,
-    workspaceReady,
-  };
+  useLayoutEffect(() => {
+    multiReviewShortcutStateRef.current = {
+      canCreateTab,
+      fixReviewIssuesLaunchDefaults,
+      handleMultiReview,
+      isRunning,
+      multiReviewLaunchPending,
+      multiReviewReviewerDefaults,
+      multiReviewAutoFix,
+      multiReviewAutoPr,
+      reviewLaunchDefaults,
+      reviewPreparationLaunchDefaults,
+      reviewModelCatalog,
+      selectedEnvironmentId,
+      setupRunning,
+      tabCount,
+      workspaceReady,
+    };
+  });
 
   useEffect(() => {
     const handleMultiReviewShortcut = (event: KeyboardEvent) => {
@@ -1238,7 +1243,13 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                           "gap-2",
                           !isGrid && "bg-green-600 text-white hover:bg-green-700",
                         )}
-                        onClick={() => !isMerging && setMergeDialogOpen(true)}
+                        onClick={(event) => {
+                          if (resolveLongPress.shouldSuppressClick()) {
+                            event.preventDefault();
+                            return;
+                          }
+                          if (!isMerging) setMergeDialogOpen(true);
+                        }}
                         disabled={!isRunning || isMerging}
                       >
                         {isMerging ? (

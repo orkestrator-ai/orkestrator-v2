@@ -6456,6 +6456,15 @@ describe("ActionBar pull request actions", () => {
       prState: "open",
       hasMergeConflicts: null,
     };
+    launchNativeAgentJobMock.mockResolvedValueOnce({
+      jobId: "resolve-job",
+      environmentId: "env-1",
+      tabId: "agent-job-resolve",
+      agent: "codex",
+      logicalSessionKey: "env-env-1:agent-job-resolve",
+      status: "accepted",
+      completionActionArmed: true,
+    });
     render(<ActionBar />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Checking mergeability…" }));
@@ -6465,9 +6474,15 @@ describe("ActionBar pull request actions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
     await waitFor(() =>
       expect(launchNativeAgentJobMock).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Resolve" }),
+        expect.objectContaining({
+          title: "Resolve",
+          completionAction: "refresh-pr-after-agent-completion",
+        }),
       ),
     );
+    await waitFor(() => expect(requestPaneTabActivationMock).toHaveBeenCalled());
+    expect(toastWarningMock).not.toHaveBeenCalled();
+    expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
   test("opens the Resolve modal after a long press while mergeability is pending", async () => {
@@ -6499,6 +6514,44 @@ describe("ActionBar pull request actions", () => {
     fireEvent.click(checking);
     expect(launchNativeAgentJobMock).not.toHaveBeenCalled();
   }, 20_000);
+
+  test("suppresses a pending long press's trailing click after Merge PR replaces the control", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prState: "open",
+      hasMergeConflicts: null,
+    };
+    const view = render(<ActionBar presentation="grid" />);
+
+    const checking = screen.getByRole("button", { name: "Checking mergeability…" });
+    fireEvent.pointerDown(checking, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 24,
+      clientY: 24,
+    });
+    await screen.findByRole("dialog", { name: "Configure conflict resolution" });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    currentEnvironment = { ...currentEnvironment, hasMergeConflicts: false };
+    view.rerender(<ActionBar presentation="grid" />);
+    const merge = screen.getByRole("button", { name: "Merge PR" });
+    fireEvent.pointerUp(merge, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 24,
+      clientY: 24,
+    });
+    fireEvent.click(merge);
+
+    expect(screen.queryByTestId("alert-dialog-content") === null).toBe(true);
+    expect(mergeEnvironmentPrMock).not.toHaveBeenCalled();
+    expect(launchNativeAgentJobMock).not.toHaveBeenCalled();
+
+    // Only the synthesized click is consumed; a later deliberate click works.
+    fireEvent.click(merge);
+    expect(screen.getByTestId("alert-dialog-content")).toBeTruthy();
+  });
 
   test("blocks a Resolve opened during the mergeability check once the PR proves clean", () => {
     currentEnvironment = {
@@ -7474,19 +7527,22 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     expect(launchNativeAgentJobMock).not.toHaveBeenCalled();
   });
 
-  test("opens conflict-resolution configuration with Cmd+Shift+U when the PR conflicts", () => {
-    currentEnvironment = {
-      ...currentEnvironment,
-      prState: "open",
-      hasMergeConflicts: true,
-    };
-    render(<ActionBar />);
+  test.each([true, null])(
+    "opens conflict-resolution configuration with Cmd+Shift+U when merge conflicts are %s",
+    (hasMergeConflicts) => {
+      currentEnvironment = {
+        ...currentEnvironment,
+        prState: "open",
+        hasMergeConflicts,
+      };
+      render(<ActionBar />);
 
-    fireEvent.keyDown(window, { key: "u", code: "KeyU", metaKey: true, shiftKey: true });
+      fireEvent.keyDown(window, { key: "u", code: "KeyU", metaKey: true, shiftKey: true });
 
-    expect(screen.getByRole("heading", { name: "Configure conflict resolution" })).toBeTruthy();
-    expect(launchNativeAgentJobMock).not.toHaveBeenCalled();
-  });
+      expect(screen.getByRole("heading", { name: "Configure conflict resolution" })).toBeTruthy();
+      expect(launchNativeAgentJobMock).not.toHaveBeenCalled();
+    },
+  );
 
   test("keeps Cmd+Shift+P exclusively owned by Open File", async () => {
     currentEnvironment = { ...currentEnvironment, prUrl: null, prState: null };

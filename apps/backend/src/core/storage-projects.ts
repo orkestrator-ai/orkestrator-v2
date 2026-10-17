@@ -1023,10 +1023,10 @@ export abstract class StorageProjects extends StorageBase {
   }
 
   /**
-   * Atomically arms conflict-resolution reconciliation against the latest PR
-   * fields. Serializing the predicate with the write prevents an older Resolve
-   * click from re-arming an intent after a concurrent monitor check already
-   * proved the PR mergeable.
+   * Atomically arms conflict-resolution reconciliation, including when the PR's
+   * mergeability is pending. Serializing the predicate with the write prevents
+   * an older Resolve click from re-arming an intent after a concurrent monitor
+   * check already proved the PR mergeable.
    */
   async armPrRecheckAfterAgentCompletion(
     environmentId: string,
@@ -1038,7 +1038,7 @@ export abstract class StorageProjects extends StorageBase {
       if (
         !environment.prUrl ||
         environment.prState !== "open" ||
-        environment.hasMergeConflicts !== true
+        environment.hasMergeConflicts === false
       )
         return { environment, armedAt: null };
 

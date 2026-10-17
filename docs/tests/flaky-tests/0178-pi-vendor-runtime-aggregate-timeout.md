@@ -450,3 +450,12 @@ source, assertion, timeout or skip changed.
 - **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.HDY6ow/root-and-agent-support-tests.log.gz`.
 - **Assessment:** an unchanged owning-file pass confirms a recurrence. Shared-host contention remains an unconfirmed hypothesis; no implementation, assertion, timeout or skip changed.
 - **Subsequent aggregate:** `mise run test:logged -- --name review-aggregate-system-tools -- mise run test` passed all four groups (exit 0, 339.7 seconds) with system Python and the documented GNU utilities preferred in PATH, after component browser validation ended. This pass does not establish a root cause or resolve the tracked flake.
+
+## Pending Resolve review recurrence — 2026-10-17
+
+- **Original command:** `mise run test:logged -- --name resolve-full-suite -- mise run test`; the root group used one Bun worker alongside browser validation and other host work.
+- **Failure:** The staged-runtime SDK load timed out at 30000.03 ms.
+- **Root counts:** 3036 passed, one skipped, two failed across 3039 cases in 327.65 seconds. The other failure was a diagnostic-bounds assertion in the new ActionBar regression; that assertion was corrected and its owning guard passed separately.
+- **Owning-file rerun:** `mise run test:logged -- --name resolve-pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the unchanged file (exit 0, 31.0 seconds including all four cases).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.NMzwfo/root-and-agent-support-tests.log.gz`.
+- **Assessment:** Recurrence of the existing timeout with an unchanged owning-file pass; shared-host contention remains unconfirmed. No timeout, assertion or skip in the Pi tests changed.

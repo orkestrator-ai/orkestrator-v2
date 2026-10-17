@@ -2726,7 +2726,7 @@ describe("PR completion refresh intent", () => {
           },
           {
             prUrl: "https://github.com/acme/repo/pull/1",
-            prState: "open",
+            prState: "merged",
             hasMergeConflicts: null,
           },
         ] as const
@@ -2738,39 +2738,43 @@ describe("PR completion refresh intent", () => {
     });
   });
 
-  test("survives restart and token-safe rollback preserves a newer arm", async () => {
-    await withTemporaryStorage(async (storage, dataDir) => {
-      const environment = {
-        ...createEnvironment("project-1"),
-        id: "env-pr-arm",
-        prUrl: "https://github.com/acme/repo/pull/1",
-        prState: "open" as const,
-        hasMergeConflicts: true,
-      };
-      await storage.addEnvironment(environment);
-      const first = (await storage.armPrRecheckAfterAgentCompletion(environment.id)).armedAt!;
+  test.each([true, null])(
+    "survives restart and token-safe rollback with merge conflicts %s",
+    async (hasMergeConflicts) => {
+      await withTemporaryStorage(async (storage, dataDir) => {
+        const environment = {
+          ...createEnvironment("project-1"),
+          id: "env-pr-arm",
+          prUrl: "https://github.com/acme/repo/pull/1",
+          prState: "open" as const,
+          hasMergeConflicts,
+        };
+        await storage.addEnvironment(environment);
+        const first = (await storage.armPrRecheckAfterAgentCompletion(environment.id)).armedAt!;
+        expect(first).toEqual(expect.any(String));
 
-      const restarted = new StorageService(dataDir);
-      await restarted.init();
-      expect(
-        (await restarted.getEnvironment(environment.id))?.prRecheckAfterAgentCompletionArmedAt,
-      ).toBe(first);
+        const restarted = new StorageService(dataDir);
+        await restarted.init();
+        expect(
+          (await restarted.getEnvironment(environment.id))?.prRecheckAfterAgentCompletionArmedAt,
+        ).toBe(first);
 
-      const second = (await restarted.armPrRecheckAfterAgentCompletion(environment.id)).armedAt!;
-      expect(second).not.toBe(first);
-      expect(
-        (await restarted.disarmPrRecheckAfterAgentCompletion(environment.id, first))
-          .prRecheckAfterAgentCompletionArmedAt,
-      ).toBe(second);
-      expect(
-        (await restarted.disarmPrRecheckAfterAgentCompletion(environment.id, second))
-          .prRecheckAfterAgentCompletionArmedAt,
-      ).toBeUndefined();
-      await expect(
-        restarted.disarmPrRecheckAfterAgentCompletion("missing", second),
-      ).rejects.toThrow("Environment not found: missing");
-    });
-  });
+        const second = (await restarted.armPrRecheckAfterAgentCompletion(environment.id)).armedAt!;
+        expect(second).not.toBe(first);
+        expect(
+          (await restarted.disarmPrRecheckAfterAgentCompletion(environment.id, first))
+            .prRecheckAfterAgentCompletionArmedAt,
+        ).toBe(second);
+        expect(
+          (await restarted.disarmPrRecheckAfterAgentCompletion(environment.id, second))
+            .prRecheckAfterAgentCompletionArmedAt,
+        ).toBeUndefined();
+        await expect(
+          restarted.disarmPrRecheckAfterAgentCompletion("missing", second),
+        ).rejects.toThrow("Environment not found: missing");
+      });
+    },
+  );
 
   test("returns no token when a later arm is refused without exposing the existing token", async () => {
     await withTemporaryStorage(async (storage) => {
@@ -2783,7 +2787,7 @@ describe("PR completion refresh intent", () => {
       };
       await storage.addEnvironment(environment);
       const first = await storage.armPrRecheckAfterAgentCompletion(environment.id);
-      await storage.updateEnvironment(environment.id, { hasMergeConflicts: null });
+      await storage.updateEnvironment(environment.id, { hasMergeConflicts: false });
 
       const refused = await storage.armPrRecheckAfterAgentCompletion(environment.id);
 

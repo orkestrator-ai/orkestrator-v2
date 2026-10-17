@@ -318,78 +318,83 @@ describe("launch_control_job command", () => {
     }
   });
 
-  test("launches renderer jobs entirely in the backend and arms PR refresh before dispatch", async () => {
-    const dataDir = await mkdtemp(path.join(tmpdir(), "ork-renderer-job-command-"));
-    const storage = new StorageService(dataDir);
-    await storage.init();
-    await storage.addEnvironment({
-      id: "env-1",
-      projectId: "project-1",
-      name: "Conflicting PR",
-      branch: "feature/conflicts",
-      containerId: null,
-      status: "running",
-      setupPhase: "ready",
-      prUrl: "https://github.com/org/repo/pull/1",
-      prState: "open",
-      hasMergeConflicts: true,
-      createdAt: new Date(0).toISOString(),
-      networkAccessMode: "restricted",
-      order: 0,
-      environmentType: "local",
-      worktreePath: dataDir,
-    });
-    const context = {
-      storage,
-      emit: () => undefined,
-      appRoot: "",
-      resourceRoot: "",
-      environmentLifecycleTasks: {},
-      runtime: new BackendRuntime({ emit: () => undefined }),
-      nativeAgents: {
-        ensureSession: async () => ({ providerSessionId: "provider-session-1" }),
-        dispatchIntent: async () => {
-          const environment = await storage.getEnvironment("env-1");
-          expect(environment?.prRecheckAfterAgentCompletionArmedAt).toEqual(expect.any(String));
-          const layout = await storage.getPaneLayout("env-1");
-          expect(JSON.stringify(layout?.root)).toContain("provider-session-1");
-          return { outcome: "accepted" as const };
+  test.each([true, null])(
+    "launches renderer jobs and arms PR refresh before dispatch with merge conflicts %s",
+    async (hasMergeConflicts) => {
+      const dataDir = await mkdtemp(path.join(tmpdir(), "ork-renderer-job-command-"));
+      const storage = new StorageService(dataDir);
+      await storage.init();
+      await storage.addEnvironment({
+        id: "env-1",
+        projectId: "project-1",
+        name: "Conflicting PR",
+        branch: "feature/conflicts",
+        containerId: null,
+        status: "running",
+        setupPhase: "ready",
+        prUrl: "https://github.com/org/repo/pull/1",
+        prState: "open",
+        hasMergeConflicts,
+        createdAt: new Date(0).toISOString(),
+        networkAccessMode: "restricted",
+        order: 0,
+        environmentType: "local",
+        worktreePath: dataDir,
+      });
+      const context = {
+        storage,
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+        environmentLifecycleTasks: {},
+        runtime: new BackendRuntime({ emit: () => undefined }),
+        nativeAgents: {
+          ensureSession: async () => ({ providerSessionId: "provider-session-1" }),
+          dispatchIntent: async () => {
+            const environment = await storage.getEnvironment("env-1");
+            expect(environment?.prRecheckAfterAgentCompletionArmedAt).toEqual(expect.any(String));
+            const layout = await storage.getPaneLayout("env-1");
+            expect(JSON.stringify(layout?.root)).toContain("provider-session-1");
+            return { outcome: "accepted" as const };
+          },
         },
-      },
-    } as unknown as CommandContext;
-    const command = createCommandRegistry().get("launch_native_agent_job");
-    if (!command) throw new Error("launch_native_agent_job was not registered");
+      } as unknown as CommandContext;
+      const command = createCommandRegistry().get("launch_native_agent_job");
+      if (!command) throw new Error("launch_native_agent_job was not registered");
 
-    try {
-      const result = (await command(
-        {
-          requestId: "resolve-request-1",
+      try {
+        const result = (await command(
+          {
+            requestId: "resolve-request-1",
+            environmentId: "env-1",
+            agent: "codex",
+            modelId: "configured-resolved-model-id",
+            reasoningId: "high",
+            title: "Resolve",
+            prompt: "Resolve the merge conflicts.",
+            completionAction: "refresh-pr-after-agent-completion",
+            activateTab: true,
+          },
+          context,
+        )) as Record<string, unknown>;
+
+        expect(result).toMatchObject({
           environmentId: "env-1",
           agent: "codex",
-          modelId: "configured-resolved-model-id",
-          reasoningId: "high",
-          title: "Resolve",
-          prompt: "Resolve the merge conflicts.",
-          completionAction: "refresh-pr-after-agent-completion",
-          activateTab: true,
-        },
-        context,
-      )) as Record<string, unknown>;
-
-      expect(result).toMatchObject({
-        environmentId: "env-1",
-        agent: "codex",
-        status: "accepted",
-      });
-      const layout = await storage.getPaneLayout("env-1");
-      expect(layout?.root).toMatchObject({
-        kind: "leaf",
-        activeTabId: result.tabId,
-      });
-    } finally {
-      await rm(dataDir, { recursive: true, force: true });
-    }
-  });
+          status: "accepted",
+          completionActionArmed: true,
+        });
+        expect(result).not.toHaveProperty("warning");
+        const layout = await storage.getPaneLayout("env-1");
+        expect(layout?.root).toMatchObject({
+          kind: "leaf",
+          activeTabId: result.tabId,
+        });
+      } finally {
+        await rm(dataDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("rolls back the Resolve completion arm when backend dispatch is rejected", async () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), "ork-rejected-renderer-job-"));

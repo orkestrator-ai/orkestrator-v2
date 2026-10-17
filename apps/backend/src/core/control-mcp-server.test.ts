@@ -2450,6 +2450,112 @@ describe("Orkestrator control MCP server", () => {
     });
   });
 
+  test("base discovery failure stays unavailable without silently using the checkout", async () => {
+    overrides.set("get_project_base_branch_tip", () => {
+      throw new Error("git read failed");
+    });
+    overrides.set("get_project_coordinator", () => ({
+      workspace: {
+        id: "coordinator-1",
+        lifecycleState: "ready",
+        conversations: [
+          { id: "conversation-1", tabId: "coordinator-tab", mailboxIncarnationId: "incarnation-1" },
+        ],
+        repositoryStatus: { branch: "feature", headCommit: "c".repeat(40) },
+      },
+    }));
+    const credential = server.issueCoordinatorCredential({
+      role: "coordinator",
+      projectId: "project-1",
+      coordinatorId: "coordinator-1",
+      conversationId: "conversation-1",
+      mailboxIncarnationId: "incarnation-1",
+      capabilities: ["discovery"],
+    });
+    const tools = await rpc(credential.url, credential.token, "tools/list");
+    expect(
+      tools.body.result?.tools?.find((tool) => tool.name === "get_launch_options")?.annotations,
+    ).toMatchObject({ readOnlyHint: false, openWorldHint: true });
+    const options = await rpc(credential.url, credential.token, "tools/call", {
+      name: "get_launch_options",
+      arguments: { projectId: "project-1" },
+    });
+    expect(options.body.result?.isError).not.toBe(true);
+    expect(options.body.result?.structuredContent).toMatchObject({
+      coordinatorBase: {
+        baseBranch: null,
+        baseCommit: null,
+        available: false,
+        unavailableReason: "Base branch is unavailable: git read failed",
+      },
+      checkoutBase: { baseBranch: "feature", baseCommit: "c".repeat(40), available: true },
+    });
+  });
+
+  test.each(["launch_environment", "start_build_pipeline"])(
+    "%s refuses an unverifiable base before starting work",
+    async (tool) => {
+      overrides.set("get_project_coordinator", () => ({
+        workspace: {
+          id: "coordinator-1",
+          lifecycleState: "ready",
+          conversations: [
+            {
+              id: "conversation-1",
+              tabId: "coordinator-tab",
+              mailboxIncarnationId: "incarnation-1",
+            },
+          ],
+        },
+      }));
+      const credential = server.issueCoordinatorCredential({
+        role: "coordinator",
+        projectId: "project-1",
+        coordinatorId: "coordinator-1",
+        conversationId: "conversation-1",
+        mailboxIncarnationId: "incarnation-1",
+        capabilities: ["environments", "build-pipelines"],
+      });
+      const launch = () =>
+        rpc(credential.url, credential.token, "tools/call", {
+          name: tool,
+          arguments: {
+            requestId: "invalid-base",
+            projectId: "project-1",
+            agent: "codex",
+            prompt: "Fix it",
+            taskId: "task-1",
+            taskTitle: "Task",
+            taskSnapshot: { title: "Task", description: "", acceptanceCriteria: "" },
+            baseBranch: "main",
+            baseCommit: "b".repeat(40),
+          },
+        });
+      overrides.set("verify_project_launch_base", () => ({
+        contained: false,
+        reason: "the commit is not on main",
+      }));
+      const stray = await launch();
+      expect(stray.body.result?.isError).toBe(true);
+      expect(JSON.stringify(stray.body)).toContain("the commit is not on main");
+      expect(JSON.stringify(stray.body)).toContain("Refresh get_launch_options");
+      overrides.set("verify_project_launch_base", () => {
+        throw new Error("git unavailable");
+      });
+      const failed = await launch();
+      expect(failed.body.result?.isError).toBe(true);
+      expect(JSON.stringify(failed.body)).toContain(
+        "Coordinator launch base could not be verified: git unavailable",
+      );
+      expect(JSON.stringify(failed.body)).toContain("Refresh get_launch_options");
+      expect(
+        invocations.some(({ command }) =>
+          ["launch_coordinator_environment", "start_coordinator_build_pipeline"].includes(command),
+        ),
+      ).toBe(false);
+    },
+  );
+
   test("rejects coordinator launches whose commit is not on the named branch", async () => {
     overrides.set("get_project_coordinator", () => ({
       workspace: {

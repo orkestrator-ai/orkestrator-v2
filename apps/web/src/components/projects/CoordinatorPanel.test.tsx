@@ -8,6 +8,8 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import * as realBackend from "@/lib/backend";
 import * as realNativeAgent from "@/components/native-agent";
+import { useConfigStore } from "@/stores/configStore";
+import { useNativeComposeStore } from "@/stores/nativeComposeStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import { useNativeNoticeDismissalStore } from "@/stores/nativeNoticeDismissalStore";
@@ -25,6 +27,8 @@ import { createSessionKey } from "@/lib/utils";
 
 const backendSnapshot = { ...realBackend };
 const nativeAgentSnapshot = { ...realNativeAgent };
+let useRealAgentTab = false;
+const initialConfig = useConfigStore.getState().config;
 const pause = mock(async (): Promise<CoordinatorSnapshot> => {
   throw new Error("pause failed");
 });
@@ -127,6 +131,7 @@ const prepareSwitch = mock(async (_projectId: string, ref: string) => ({
   ref,
 }));
 const syncGit = mock(async () => ensuredGit);
+const fetchGit = mock(async () => ensuredGit);
 const getCoordinator = mock(async () => ensuredSnapshot);
 /** Conditional view reads: a stand-in owner that stamps by body identity. */
 let viewRevision = 0;
@@ -155,11 +160,15 @@ const assignAgent = mock(async () => ensuredSnapshot);
 
 mock.module("@/lib/backend", () => ({
   ...backendSnapshot,
+  getLocalFileTree: mock(async () => []),
+  getNativeAgentModelCatalog: mock(async () => [
+    { platform: "claude", id: "claude-sonnet-5", label: "Claude Sonnet" },
+  ]),
   ensureProjectCoordinator: ensure,
   getProjectCoordinator: getCoordinator,
   getProjectCoordinatorView: getCoordinatorView,
   getProjectGitStatus: getGit,
-  fetchProjectGit: mock(async () => ensuredGit),
+  fetchProjectGit: fetchGit,
   switchProjectGitBranch: switchBranch,
   prepareProjectGitBranchSwitch: prepareSwitch,
   syncProjectGit: syncGit,
@@ -209,7 +218,12 @@ const renderAgentNativeTab = mock((props: Record<string, unknown>) => (
 
 mock.module("@/components/native-agent", () => ({
   ...nativeAgentSnapshot,
-  AgentNativeTab: renderAgentNativeTab,
+  AgentNativeTab: (props: Parameters<typeof realNativeAgent.AgentNativeTab>[0]) =>
+    useRealAgentTab ? (
+      <nativeAgentSnapshot.AgentNativeTab {...props} />
+    ) : (
+      renderAgentNativeTab(props as unknown as Record<string, unknown>)
+    ),
 }));
 
 import { CoordinatorPanel } from "./CoordinatorPanel";
@@ -220,6 +234,11 @@ import { useUIStore } from "@/stores";
 
 describe("CoordinatorPanel", () => {
   beforeEach(() => {
+    useRealAgentTab = false;
+    useConfigStore.setState({ config: initialConfig });
+    useNativeComposeStore
+      .getState()
+      .clearDraft(createSessionKey("coordinator:coordinator-1:conversation-1", "coordinator-tab"));
     pause.mockClear();
     select.mockClear();
     resume.mockClear();
@@ -230,7 +249,10 @@ describe("CoordinatorPanel", () => {
     switchBranch.mockClear();
     prepareSwitch.mockClear();
     nextPreparedSwitch = preparedSwitch;
-    syncGit.mockClear();
+    syncGit.mockReset();
+    syncGit.mockImplementation(async () => ensuredGit);
+    fetchGit.mockReset();
+    fetchGit.mockImplementation(async () => ensuredGit);
     getCoordinator.mockClear();
     getCoordinatorView.mockClear();
     viewBody = null;
@@ -462,7 +484,9 @@ describe("CoordinatorPanel", () => {
     expect(await screen.findByText("Checkout is behind origin/main")).toBeTruthy();
     expect(screen.getByText(/main is 3 commits behind origin\/main/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    await waitFor(() => expect(screen.queryByText("Checkout is behind origin/main")).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByText("Checkout is behind origin/main") === null).toBe(true),
+    );
     expect(order).toEqual([]);
 
     // Starting without updating skips the fast-forward.
@@ -501,7 +525,7 @@ describe("CoordinatorPanel", () => {
     await screen.findByTestId("native-agent");
     fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
     expect(await screen.findByText(/the branches have diverged/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Fast-forward and start" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Fast-forward and start" }) === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Start without updating" }));
     await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
     expect(syncGit).not.toHaveBeenCalled();
@@ -522,7 +546,90 @@ describe("CoordinatorPanel", () => {
     await screen.findByTestId("native-agent");
     fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
     await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
-    expect(screen.queryByText(/Checkout is behind/)).toBeNull();
+    expect(screen.queryByText(/Checkout is behind/) === null).toBe(true);
+  });
+
+  test("a failed pre-start fetch still assigns without a behind-checkout dialog", async () => {
+    ensuredSnapshot = {
+      ...snapshot,
+      workspace: {
+        ...snapshot.workspace,
+        conversations: [{ ...snapshot.workspace.conversations[0]!, agent: undefined }],
+      },
+    };
+    ensuredGit = { ...gitStatus, upstream: "origin/main", behind: 3 };
+    fetchGit.mockRejectedValue(new Error("offline"));
+    render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByTestId("native-agent");
+    fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
+    await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/Checkout is behind/) === null).toBe(true);
+    expect(syncGit).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    { trackedChanges: 1, reason: "it has uncommitted changes." },
+    { untrackedChanges: 1, reason: "it has uncommitted changes." },
+    {
+      mergeInProgress: true,
+      repositoryOperationBlockedReason: "Finish the current merge first.",
+      reason: "Finish the current merge first.",
+    },
+  ])("warns but cannot fast-forward a blocked checkout: %p", async ({ reason, ...status }) => {
+    ensuredSnapshot = {
+      ...snapshot,
+      workspace: {
+        ...snapshot.workspace,
+        conversations: [{ ...snapshot.workspace.conversations[0]!, agent: undefined }],
+      },
+    };
+    ensuredGit = { ...gitStatus, upstream: "origin/main", ahead: 0, behind: 2, ...status };
+    render(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByTestId("native-agent");
+    fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
+    expect((await screen.findByText(/It cannot be fast-forwarded/)).textContent).toContain(reason);
+    expect(screen.queryByRole("button", { name: "Fast-forward and start" }) === null).toBe(true);
+    expect(assignAgent).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Start without updating" }));
+    await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
+    expect(syncGit).not.toHaveBeenCalled();
+  });
+
+  test("a rejected fast-forward keeps the real composer's draft and allows retry", async () => {
+    useRealAgentTab = true;
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude"],
+      agentSettings: { defaultAgent: "claude" },
+    });
+    ensuredSnapshot = {
+      ...snapshot,
+      workspace: {
+        ...snapshot.workspace,
+        conversations: [{ ...snapshot.workspace.conversations[0]!, agent: undefined }],
+      },
+    };
+    ensuredGit = { ...gitStatus, upstream: "origin/main", remote: "origin", ahead: 0, behind: 2 };
+    syncGit.mockRejectedValueOnce(new Error("Fast-forward refused"));
+    const { container } = render(<CoordinatorPanel projectId="project-1" />);
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Inspect my draft after syncing" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("button", { name: "Fast-forward and start" }));
+    expect(await screen.findByText("Fast-forward refused")).toBeTruthy();
+    expect(syncGit).toHaveBeenCalledTimes(1);
+    expect(assignAgent).not.toHaveBeenCalled();
+    expect(input.textContent).toBe("Inspect my draft after syncing");
+    expect(container.querySelector(".animate-spin") === null).toBe(true);
+    // Reopening the dialog proves both the composer and sync controls recovered.
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByText(/Checkout is behind/) === null).toBe(true));
+    expect(input.textContent).toBe("Inspect my draft after syncing");
+    const key = createSessionKey("coordinator:coordinator-1:conversation-1", "coordinator-tab");
+    expect(useNativeComposeStore.getState().drafts.get(key)?.text).toBe(
+      "Inspect my draft after syncing",
+    );
+    expect(assignAgent).not.toHaveBeenCalled();
   });
 
   test("reports an assignment failure without binding the conversation", async () => {

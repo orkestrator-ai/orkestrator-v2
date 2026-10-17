@@ -126,6 +126,8 @@ export class ProjectGitService {
     string,
     { force: boolean; promise: Promise<ProjectGitStatus> }
   >();
+  private readonly baseFetches = new Map<string, Promise<{ fetchError?: string }>>();
+  private readonly baseFetchAttempts = new Map<string, { at: number; fetchError?: string }>();
   private readonly confirmations = new Map<
     string,
     {
@@ -641,7 +643,7 @@ export class ProjectGitService {
   }
 
   /**
-   * Fetches the base branch and reads its newest commit.
+   * Fetches the base branch with a per-project/branch cooldown and reads its tip.
    *
    * Workers start from the project's base branch rather than from wherever the
    * coordinator's checkout happens to be, matching a normal environment launch,
@@ -652,20 +654,59 @@ export class ProjectGitService {
   async baseBranchTip(projectId: string, branch: string): Promise<ProjectBaseBranchTip> {
     const root = await this.root(projectId);
     await runCommand("git", ["check-ref-format", "--branch", branch], { cwd: root });
-    return this.serialize(root, async () => {
-      const remotes = (await runCommand("git", ["remote"], { cwd: root, timeoutMs: 10_000 })).stdout
-        .split("\n")
-        .map((remote) => remote.trim());
-      let fetched = false;
-      let fetchError: string | undefined;
-      if (remotes.includes("origin")) {
-        try {
-          await runRemoteGit("fetch", ["origin", branch], { cwd: root, timeoutMs: 60_000 });
-          fetched = true;
-        } catch (error) {
-          fetchError = gitError("fetch", error).message;
+    const key = JSON.stringify([projectId, root, branch]);
+    let fetched = false;
+    let fetchError: string | undefined;
+    const existing = this.baseFetches.get(key);
+    const previous = this.baseFetchAttempts.get(key);
+    if (existing) {
+      ({ fetchError } = await existing);
+    } else if (previous && Date.now() - previous.at < FETCH_COOLDOWN_MS) {
+      fetchError = previous.fetchError;
+    } else {
+      // Network I/O must not hold the checkout lock. Git updates the destination
+      // ref atomically; serialize only our reads with checkout mutations.
+      const operation = (async () => {
+        const remotes = (
+          await runCommand("git", ["remote"], { cwd: root, timeoutMs: 10_000 })
+        ).stdout
+          .split("\n")
+          .map((remote) => remote.trim());
+        let error: string | undefined;
+        if (remotes.includes("origin")) {
+          try {
+            await runRemoteGit(
+              "fetch",
+              ["origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`],
+              {
+                cwd: root,
+                timeoutMs: 60_000,
+              },
+            );
+            fetched = true;
+          } catch (cause) {
+            error = gitError("fetch", cause).message;
+          }
         }
-      }
+        // Bound completed-attempt metadata; in-flight requests stay deduplicated
+        // until settlement. Failed attempts also cool down unreachable remotes.
+        this.baseFetchAttempts.delete(key);
+        this.baseFetchAttempts.set(key, {
+          at: Date.now(),
+          ...(error ? { fetchError: error } : {}),
+        });
+        if (this.baseFetchAttempts.size > 128) {
+          const oldest = this.baseFetchAttempts.keys().next().value;
+          if (oldest !== undefined) this.baseFetchAttempts.delete(oldest);
+        }
+        return error ? { fetchError: error } : {};
+      })().finally(() => {
+        this.baseFetches.delete(key);
+      });
+      this.baseFetches.set(key, operation);
+      ({ fetchError } = await operation);
+    }
+    return this.serialize(root, async () => {
       const remoteCommit = await readCommit(root, `refs/remotes/origin/${branch}`);
       if (remoteCommit) {
         return {

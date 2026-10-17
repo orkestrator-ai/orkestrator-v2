@@ -524,7 +524,7 @@ async function createControlMcp(
         "Use launch_environment for a new workspace and launch_job for an independent " +
         "agent tab in an existing ready environment. " +
         (coordinatorScope
-          ? "Every launch_environment call requires baseBranch and baseCommit; copy coordinatorBase from get_launch_options, the latest commit of the repository's base branch, unless the user asks to build on the current checkout (checkoutBase).Prefer launch_multi_review for the complete environment Multi Review button action; start_multi_review is a backend-only recovery primitive. Use open_multi_review or open_multi_review_fix to focus saved work. "
+          ? "Every launch_environment call requires baseBranch and baseCommit; copy coordinatorBase from get_launch_options, the latest commit of the repository's base branch, unless the user asks to build on the current checkout (checkoutBase). Prefer launch_multi_review for the complete environment Multi Review button action; start_multi_review is a backend-only recovery primitive. Use open_multi_review or open_multi_review_fix to focus saved work. "
           : "") +
         "Reuse requestId when retrying mutations. " +
         (coordinatorScope ? COORDINATOR_LAUNCH_DEFAULTS_RULE : LAUNCH_DEFAULTS_GUIDANCE) +
@@ -609,7 +609,9 @@ async function createControlMcp(
         projectId: z.string().trim().min(1).max(200),
         environmentId: z.string().trim().min(1).max(200).optional(),
       }),
-      annotations: readAnnotations(),
+      annotations: coordinatorScope
+        ? { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true }
+        : readAnnotations(),
     },
     async ({ projectId, environmentId }) => {
       const options = await launchOptionsWithDefaults(projectId, environmentId);
@@ -1535,6 +1537,10 @@ async function createControlMcp(
         },
       },
       async ({ requestId, baseBranch, baseCommit, ...input }) => {
+        await assertCoordinatorLaunchBaseOnBranch(invoke, coordinatorScope.projectId, {
+          baseBranch,
+          baseCommit,
+        });
         if (input.existingEnvironmentId) {
           await invoke("get_environment", { environmentId: input.existingEnvironmentId });
         }

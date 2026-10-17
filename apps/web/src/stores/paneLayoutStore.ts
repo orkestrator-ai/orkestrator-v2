@@ -614,7 +614,12 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
       containerId: null,
       backendRevision: 0,
     });
-    set({ environments: newEnvs });
+    // The persisted layout outlives the runtime (agent tabs and their sessions
+    // survive a stop), so the next start must restore it from the backend
+    // rather than seed a default terminal over an empty local copy.
+    const hydration = new Map(state.hydration);
+    hydration.delete(envId);
+    set({ environments: newEnvs, hydration });
   },
 
   beginHydration: (environmentId) => {

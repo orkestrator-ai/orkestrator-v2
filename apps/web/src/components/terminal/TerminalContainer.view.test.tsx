@@ -1199,6 +1199,56 @@ describe("TerminalContainer", () => {
     });
   });
 
+  test("restores the persisted layout, not a default terminal, when a stopped container starts again", async () => {
+    getPaneLayoutMock.mockResolvedValue({
+      version: PANE_LAYOUT_VERSION,
+      environmentId: "env-hidden",
+      containerId: "container-hidden",
+      activePaneId: "restored-pane",
+      root: {
+        kind: "leaf",
+        id: "restored-pane",
+        tabs: [{ id: "agent-tab", type: "plain", displayTitle: "Agent" }],
+        activeTabId: "agent-tab",
+      },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      revision: 1,
+    });
+    const renderTerminal = (isContainerRunning: boolean) => (
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning={isContainerRunning}
+          isActive={false}
+        />
+      </TerminalProvider>
+    );
+    const view = render(renderTerminal(true));
+    await waitFor(() => {
+      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([
+        { id: "agent-tab" },
+      ]);
+    });
+
+    // Viewed while stopped, then started from that view.
+    view.rerender(renderTerminal(false));
+    await waitFor(() => {
+      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([]);
+    });
+    view.rerender(renderTerminal(true));
+
+    await waitFor(() => {
+      expect(getPaneLayoutMock).toHaveBeenCalledTimes(2);
+      expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toMatchObject([
+        { id: "agent-tab" },
+      ]);
+    });
+    expect(usePaneLayoutStore.getState().environments.get("env-hidden")?.activePaneId).toBe(
+      "restored-pane",
+    );
+  });
+
   test("CAS-migrates sensitive restored browser history after hydration alone", async () => {
     const currentUrl = "https://example.com/current?token=current#live";
     getPaneLayoutMock.mockResolvedValue({

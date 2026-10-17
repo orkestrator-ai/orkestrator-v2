@@ -1102,8 +1102,9 @@ export function TerminalContainer({
     previousEnvironmentIdRef.current = environmentId;
   }, [containerId, environmentId, reset]);
 
-  // Reset pane layout when the container stops.
-  // This clears all terminals and tabs since their backend sessions are destroyed
+  // Reset pane layout when the container stops: its terminal sessions are gone.
+  // Agent tabs and their sessions survive in the persisted layout, which the
+  // next start re-hydrates (`reset` clears this environment's hydration).
   useEffect(() => {
     if (!isContainerRunning && containerId) {
       rendererDebugLog(

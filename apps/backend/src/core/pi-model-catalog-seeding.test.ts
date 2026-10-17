@@ -368,9 +368,12 @@ describe("discoverHostPiModelCatalog", () => {
     expect(spawns).toHaveLength(0);
   });
 
-  test("points an authorized agent-test probe at the host Pi directory", async () => {
-    const hostHome = path.join(appRoot, "host-home");
-    process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = hostHome;
+  test("gives an authorized agent-test probe only the host Pi login", async () => {
+    const hostAgentDir = path.join(appRoot, "host-home", ".pi", "agent");
+    await fs.mkdir(hostAgentDir, { recursive: true });
+    await fs.writeFile(path.join(hostAgentDir, "auth.json"), "{}");
+    process.env.ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR = hostAgentDir;
+    process.env.PI_AGENT_DIR = "/leaked/agent";
     try {
       stubBridgeSpawn(async (spawned) =>
         listenAsBridge(Number(spawned.env.PORT), spawned.env.PI_BRIDGE_TOKEN ?? "", []),
@@ -380,22 +383,36 @@ describe("discoverHostPiModelCatalog", () => {
         context({ runtimeFlavor: "agent-test", credentialSources: new Set(["pi"]) }),
       );
 
-      expect(spawns[0]?.env.PI_AGENT_DIR).toBe(path.join(hostHome, ".pi", "agent"));
+      // The profile's own Pi directory (its isolated HOME) holds the model
+      // config; only the credential file is the host's.
+      expect(spawns[0]?.env.PI_AGENT_DIR).toBeUndefined();
+      expect(spawns[0]?.env.PI_BRIDGE_AUTH_FILE).toBe(path.join(hostAgentDir, "auth.json"));
     } finally {
-      delete process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
+      delete process.env.ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR;
+      delete process.env.PI_AGENT_DIR;
     }
   });
 
-  test("declines an agent-test probe with no host home to read", async () => {
-    delete process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
-    stubBridgeSpawn(() => undefined);
+  test("names no host credential file when the host has no Pi login", async () => {
+    const hostAgentDir = path.join(appRoot, "host-home", ".pi", "agent");
+    process.env.ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR = hostAgentDir;
+    try {
+      stubBridgeSpawn(async (spawned) =>
+        listenAsBridge(Number(spawned.env.PORT), spawned.env.PI_BRIDGE_TOKEN ?? "", []),
+      );
 
-    const models = await discoverHostPiModelCatalog(
-      context({ runtimeFlavor: "agent-test", credentialSources: new Set(["pi"]) }),
-    );
+      await discoverHostPiModelCatalog(
+        context({ runtimeFlavor: "agent-test", credentialSources: new Set(["pi"]) }),
+      );
 
-    expect(models).toEqual([]);
-    expect(spawns).toHaveLength(0);
+      // Pi would create a missing auth file, so the host's directory must not
+      // be named at all. The profile's own Pi login, if any, still applies.
+      expect(spawns[0]?.env.PI_BRIDGE_AUTH_FILE).toBeUndefined();
+      expect(spawns[0]?.env.PI_AGENT_DIR).toBeUndefined();
+      expect(await fs.stat(hostAgentDir).catch(() => null)).toBeNull();
+    } finally {
+      delete process.env.ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR;
+    }
   });
 });
 

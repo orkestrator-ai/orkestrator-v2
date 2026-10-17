@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   access,
   appendFile,
@@ -29,10 +29,12 @@ import {
   readAndValidateSentinel,
   removeProfileState,
   reserveLoopbackPorts,
+  agentTestCursorSnapshotPath,
   seedAgentTestProviderCredentials,
   seedInstalledAgentToolchains,
   seedInstalledModelCatalogCaches,
 } from "./profile-io.js";
+import { agentTestHostCursorCredentialPath } from "../../../backend/src/core/agent-test-cursor-credential.js";
 import {
   createBoundedLogWriter,
   orphanedRuntimeProcesses,
@@ -348,6 +350,94 @@ describe("development profile lifecycle primitives", () => {
       "grok/auth.json",
     ]);
     expect(await readFile(destination, "utf8")).toBe("host-auth-v2");
+    await seedAgentTestProviderCredentials(profile, { roots });
+    await expect(access(destination)).rejects.toThrow();
+    await seedAgentTestProviderCredentials(enabled, { roots });
+    await rm(source);
+    await seedAgentTestProviderCredentials(enabled, { roots });
+    await expect(access(destination)).rejects.toThrow();
+  });
+
+  test("snapshots only the host's effective Cursor key and revokes it on opt-out", async () => {
+    const { roots, profile } = await modelCacheFixture();
+    const snapshot = agentTestCursorSnapshotPath(profile);
+    const config = path.join(roots.productionDataDir, "config.json");
+    const login = path.join(roots.productionDataDir, "cursor-sdk", "auth.json");
+    await mkdir(path.dirname(login), { recursive: true });
+    const hostConfig = {
+      global: { cursorApiKey: "host-config-key", githubToken: "unrelated-secret" },
+    };
+    await writeFile(config, JSON.stringify(hostConfig));
+    const expiry = Date.now() + 60_000;
+    await writeFile(
+      login,
+      JSON.stringify({ version: 1, apiKey: "host-minted-key", apiKeyExpiresAtMs: expiry }),
+    );
+    const enabled = { ...profile, credentialSources: ["cursor" as const] };
+
+    // The stored key wins, as it does in a production backend, and nothing
+    // else from the host's settings is copied.
+    await expect(seedAgentTestProviderCredentials(enabled, { roots })).resolves.toEqual([
+      "cursor/host-api-key.json",
+    ]);
+    expect(JSON.parse(await readFile(snapshot, "utf8"))).toEqual({ apiKey: "host-config-key" });
+    expect((await stat(snapshot)).mode & 0o777).toBe(0o600);
+    expect((await stat(path.dirname(snapshot))).mode & 0o777).toBe(0o700);
+
+    // Without a stored key, the in-app sign-in's minted key is used.
+    await writeFile(config, JSON.stringify({ global: {} }));
+    await seedAgentTestProviderCredentials(enabled, { roots });
+    expect(JSON.parse(await readFile(snapshot, "utf8"))).toEqual({
+      apiKey: "host-minted-key",
+      apiKeyExpiresAtMs: expiry,
+    });
+
+    // An expired minted key is a signed-out host, so the old snapshot goes.
+    await writeFile(
+      login,
+      JSON.stringify({ apiKey: "host-minted-key", apiKeyExpiresAtMs: Date.now() - 1 }),
+    );
+    await expect(seedAgentTestProviderCredentials(enabled, { roots })).resolves.toEqual([]);
+    await expect(readFile(snapshot)).rejects.toThrow();
+
+    // A profile that stops authorizing Cursor loses the snapshot.
+    await writeFile(config, JSON.stringify(hostConfig));
+    await seedAgentTestProviderCredentials(enabled, { roots });
+    await expect(
+      seedAgentTestProviderCredentials({ ...profile, credentialSources: ["grok"] }, { roots }),
+    ).resolves.toEqual([]);
+    await expect(readFile(snapshot)).rejects.toThrow();
+
+    // The host's own files are only ever read.
+    expect(JSON.parse(await readFile(config, "utf8"))).toEqual(hostConfig);
+    // The backend reads the snapshot where this writes it.
+    expect(snapshot).toBe(agentTestHostCursorCredentialPath(profile.dataDir));
+  });
+
+  test("a failed Cursor refresh removes the previous account snapshot", async () => {
+    const { roots, profile } = await modelCacheFixture();
+    const enabled = { ...profile, credentialSources: ["cursor" as const] };
+    const config = path.join(roots.productionDataDir, "config.json");
+    await mkdir(roots.productionDataDir, { recursive: true });
+    await writeFile(config, JSON.stringify({ global: { cursorApiKey: "account-A" } }));
+    await seedAgentTestProviderCredentials(enabled, { roots });
+    const snapshot = agentTestCursorSnapshotPath(profile);
+    expect(JSON.parse(await readFile(snapshot, "utf8"))).toEqual({ apiKey: "account-A" });
+    await writeFile(config, JSON.stringify({ global: { cursorApiKey: "account-B" } }));
+    const now = Date.now();
+    const clock = spyOn(Date, "now").mockReturnValue(now);
+    // Occupy the temporary file with a directory to force the atomic write to fail.
+    const temporary = `${snapshot}.${process.pid}.${now}.tmp`;
+    await mkdir(temporary);
+    try {
+      await expect(seedAgentTestProviderCredentials(enabled, { roots })).resolves.toEqual([]);
+      await expect(access(snapshot)).rejects.toThrow();
+      // Cleanup failure must stop startup instead of continuing with old material.
+      await mkdir(snapshot);
+      await expect(seedAgentTestProviderCredentials(enabled, { roots })).rejects.toThrow();
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   /**

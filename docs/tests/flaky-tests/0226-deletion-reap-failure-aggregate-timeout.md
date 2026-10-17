@@ -106,6 +106,14 @@ No assertion, timeout or skip changed; host contention remains a hypothesis.
   contention remains a hypothesis; no lifecycle implementation, assertion,
   timeout or skip changed.
 
+## Pi and Cursor agent-test logins main merge validation — 2026-10-17
+
+Aggregate command, worker configuration, counts and evidence are recorded in [0211](0211-cleanup-retry-aggregate-timeout.md#pi-and-cursor-agent-test-logins-main-merge-validation--2026-10-17).
+
+- Failure: `retains the environment and process ownership when deletion cannot reap a server` exceeded its 5000 ms deadline at 5510.68 ms.
+- Unchanged owning-file rerun: `mise run test:logged -- --name merge-deletion-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures` passed, exit 0 (35.6 seconds).
+- The owning-file pass confirms intermittence. Shared-host contention remains a hypothesis; no implementation, assertion, timeout or skip changed.
+
 ## Codex phantom-denials branch validation (2026-10-17)
 
 Recurred in `mise run test` on `fix-codex-phantom-denials-8bdb8d15d820` (base

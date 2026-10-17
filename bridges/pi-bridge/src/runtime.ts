@@ -11,7 +11,7 @@
  * bridge that cannot reach a provider must still start and serve its
  * transcript.
  */
-import { agentDirectory, CATALOG_TIMEOUT_MS } from "./config.js";
+import { CATALOG_TIMEOUT_MS, runtimeStorePaths } from "./config.js";
 import { ModelRuntime } from "./pi-sdk.js";
 
 let runtime: ModelRuntime | null = null;
@@ -37,11 +37,8 @@ async function create(): Promise<ModelRuntime> {
 }
 
 async function createSdkRuntime(): Promise<ModelRuntime> {
-  const directory = agentDirectory();
   return ModelRuntime.create({
-    ...(directory
-      ? { authPath: `${directory}/auth.json`, modelsPath: `${directory}/models.json` }
-      : {}),
+    ...runtimeStorePaths(),
     // Dynamic providers publish their catalogues over HTTP. Allowed, because a
     // model list that is a week stale is a picker showing models the account no
     // longer has — but bounded, because it happens on the first request a tab

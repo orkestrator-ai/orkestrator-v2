@@ -31,3 +31,23 @@ take native focus. The frontmost application was not identified (an
 AppleScript query timed out), so this is unconfirmed. The assertion predates
 the run (#788) and is unrelated to service previews. Re-run on a dedicated
 desktop session before treating it as a regression.
+
+## Agent-test credential review recurrence, 2026-10-17
+
+`mise run test:logged -- --name agent-electron -- mise run test:agent:electron`
+finished with 11 passed, 1 skipped, and 3 failures, all at the unchanged
+five-second profile-title check: the independent-window and remote-nickname
+cases in `electron-main.spec.ts`, and the case in
+`terminal-input-resume-electron.spec.ts`. Each received `Orkestrator AI` instead
+of its profile title before reaching the behavior under test.
+
+An owning-spec rerun also failed those same three checks (1 passed, 1 skipped):
+
+```sh
+ORKESTRATOR_AGENT_TEST_RUN_ID=pi-credential-electron-rerun mise run test:logged -- --name agent-electron-owners -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts electron-main.spec.ts terminal-input-resume-electron.spec.ts
+```
+
+This remains an environmental failure, not a confirmed flake. Evidence is in
+`output/agent-testing/electron-smoke/electron/` and
+`output/agent-testing/pi-credential-electron-rerun/electron/` in this worktree.
+The credential-specific desktop and backend startup tests pass separately.

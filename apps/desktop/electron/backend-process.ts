@@ -214,6 +214,7 @@ export function createBackendProcessEnvironment(
   delete env.ORKESTRATOR_CREDENTIAL_SOURCE;
   delete env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
   delete env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR;
+  delete env.ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR;
   if (runtime?.flavor === "agent-test") {
     const allowed = new Set(runtime.credentialSources ?? []);
     const inherited = { ...parentEnv };
@@ -278,6 +279,20 @@ export function createBackendProcessEnvironment(
       env.XDG_CONFIG_HOME = path.join(runtime.isolatedCredentialRoot, "xdg-config");
       env.XDG_DATA_HOME = path.join(runtime.isolatedCredentialRoot, "xdg-data");
       env.XDG_STATE_HOME = path.join(runtime.isolatedCredentialRoot, "xdg-state");
+    }
+    if (allowed.has("pi")) {
+      // Only the path: the backend hands the Pi bridge this directory's
+      // `auth.json` and nothing else from it.
+      const piAgentDir =
+        inherited.PI_CODING_AGENT_DIR?.trim() ||
+        (inheritedHome ? path.join(inheritedHome, ".pi", "agent") : undefined);
+      if (piAgentDir) {
+        const expanded =
+          inheritedHome && (piAgentDir === "~" || piAgentDir.startsWith("~/"))
+            ? path.join(inheritedHome, piAgentDir.slice(2))
+            : piAgentDir;
+        env.ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR = path.resolve(expanded);
+      }
     }
     if (allowed.has("cursor") && inherited.CURSOR_API_KEY) {
       env.CURSOR_API_KEY = inherited.CURSOR_API_KEY;

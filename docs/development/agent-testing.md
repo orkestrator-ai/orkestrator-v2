@@ -160,8 +160,8 @@ sends the tab to the login page, so a stale-but-rendered UI is not a state an
 agent has to diagnose: if the browser under test is suddenly showing the login
 page, the session lapsed and the fix is a fresh `dev:login` link.
 
-Agent-test profiles authorize the host's Claude, Codex, Cursor, Grok, and
-OpenCode credentials by default so manual QA can run real agents:
+Agent-test profiles authorize the host's Claude, Codex, Cursor, Grok, OpenCode
+and Pi credentials by default so manual QA can run real agents:
 
 See [`credentials-and-models.md`](credentials-and-models.md) for the full
 per-platform credential, container-import, and model-cache matrix.

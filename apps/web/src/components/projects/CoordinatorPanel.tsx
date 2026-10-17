@@ -46,7 +46,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -81,6 +81,18 @@ function gitSummary(status: ProjectGitStatus | null): string {
   return "Up to date";
 }
 
+/** Why a behind checkout cannot be fast-forwarded, or null when it can. */
+function behindFastForwardBlocker(status: ProjectGitStatus | undefined): string | null {
+  if (!status) return null;
+  if ((status.ahead ?? 0) > 0) {
+    return `it also has ${status.ahead} local ${status.ahead === 1 ? "commit" : "commits"}, so the branches have diverged.`;
+  }
+  if (status.trackedChanges > 0 || status.untrackedChanges > 0) {
+    return "it has uncommitted changes.";
+  }
+  return status.repositoryOperationBlockedReason;
+}
+
 export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
   const project = useProjectStore((state) => state.projects.find((item) => item.id === projectId));
   const {
@@ -98,6 +110,12 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     null,
   );
   const [pendingSwitch, setPendingSwitch] = useState<ProjectGitSwitchConfirmation | null>(null);
+  // Asked before the main coordinator's first prompt when its checkout is
+  // behind its upstream: it would otherwise plan against older code.
+  const [behindStart, setBehindStart] = useState<{
+    status: ProjectGitStatus;
+    resolve: (choice: "fast-forward" | "start" | "cancel") => void;
+  } | null>(null);
   const [actionError, setError] = useState<string | null>(null);
   const error = actionError ?? loadError;
   const [pendingLaunch, setPendingLaunch] = useState<{
@@ -325,6 +343,45 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
       setSnapshot(next);
     },
     [projectId, setSnapshot],
+  );
+  /*
+   * The main coordinator reads this checkout, so starting it on a branch that
+   * is behind its upstream plans against stale code. Ask first, after a
+   * cooldown-bound fetch, and fast-forward when the user chooses to. Resolving
+   * without assigning keeps the composer's draft, so Cancel loses nothing; a
+   * failed fast-forward rejects, which the composer reports with the draft kept.
+   */
+  const startConversation = useCallback(
+    async (
+      conversation: { id: string; role?: string },
+      platform: AgentPlatform,
+      launch: Parameters<typeof assignAgent>[2],
+      prompt: string,
+    ) => {
+      if (conversation.role !== "side") {
+        // An unreachable remote is no reason to refuse the start.
+        const status = await backend.fetchProjectGit(projectId).catch(() => null);
+        if (status) setGit(status);
+        if (status?.upstream && (status.behind ?? 0) > 0) {
+          const choice = await new Promise<"fast-forward" | "start" | "cancel">((resolve) =>
+            setBehindStart({ status, resolve }),
+          );
+          setBehindStart(null);
+          if (choice === "cancel") return;
+          if (choice === "fast-forward") {
+            setOperation("sync");
+            try {
+              setGit(await backend.syncProjectGit(projectId));
+              await refreshView();
+            } finally {
+              setOperation(null);
+            }
+          }
+        }
+      }
+      await assignAgent(conversation.id, platform, launch, prompt);
+    },
+    [assignAgent, projectId, refreshView, setGit],
   );
   // The conversation in the focused group; the backend's selection until the
   // layout has caught up with it.
@@ -610,7 +667,8 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
         onAssignPlatform={
           conversation.agent
             ? undefined
-            : (platform, prompt, options) => assignAgent(conversation.id, platform, options, prompt)
+            : (platform, prompt, options) =>
+                startConversation(conversation, platform, options, prompt)
         }
         {...(launch
           ? {
@@ -965,6 +1023,41 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
             >
               Discard and switch
             </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog
+        open={behindStart !== null}
+        onOpenChange={(open) => {
+          if (!open) behindStart?.resolve("cancel");
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Checkout is behind {behindStart?.status.upstream}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {behindStart?.status.branch ?? "This checkout"} is {behindStart?.status.behind}{" "}
+              {behindStart?.status.behind === 1 ? "commit" : "commits"} behind{" "}
+              {behindStart?.status.upstream}, so the coordinator would read older code. Worker
+              environments start from the latest base branch either way.
+              {behindFastForwardBlocker(behindStart?.status)
+                ? ` It cannot be fast-forwarded: ${behindFastForwardBlocker(behindStart?.status)}`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className={buttonVariants({ variant: "outline" })}
+              onClick={() => behindStart?.resolve("start")}
+            >
+              Start without updating
+            </AlertDialogAction>
+            {behindStart && !behindFastForwardBlocker(behindStart.status) ? (
+              <AlertDialogAction onClick={() => behindStart.resolve("fast-forward")}>
+                Fast-forward and start
+              </AlertDialogAction>
+            ) : null}
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

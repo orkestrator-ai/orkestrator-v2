@@ -58,9 +58,9 @@ it reaches. Some rules of thumb:
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
 | High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 25 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 257 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 256 |
 | Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 268 |
-| **Total** | | **551** |
+| **Total** | | **550** |
 
 ## Very high
 
@@ -519,7 +519,7 @@ it reaches. Some rules of thumb:
 - [ ] Add `BackendProcess.launch` tests for readiness timeout, invalid auth file and startup races ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [ ] Test `main.ts` window and connection bookkeeping, including the `useConnection` rollback ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [ ] Add a breakpoint-crossing browser spec and check both mobile fixes in a real narrow browser ([mobile-layout-gaps.md](mobile-layout-gaps.md), qualification)
-- [ ] Verify why the CoordinatorPaneTree mobile-switcher drop case fails alone on main (switcher tab stays unselected) ([mobile-layout-gaps.md](mobile-layout-gaps.md), verify)
+- [x] Verify why the CoordinatorPaneTree mobile-switcher drop case fails alone on main (switcher tab stays unselected) ([mobile-layout-gaps.md](mobile-layout-gaps.md), verify)
 - [x] Keep the panes the mobile switcher hides laid out, so a pane switch keeps the transcript's scroll ([mobile-layout-gaps.md](mobile-layout-gaps.md))
 - [ ] Upgrade Electron 44 → 46 before 44 loses support on 2027-03-02; re-test annotation masking on a HiDPI display ([dependency-upgrades.md](dependency-upgrades.md))
 - [ ] Burn down the React Compiler lint warnings in `apps/web` and raise each rule back to `error` at zero ([dependency-upgrades.md](dependency-upgrades.md))

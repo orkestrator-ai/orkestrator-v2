@@ -361,7 +361,7 @@ another app owns native focus. The recorded explicit menu selection is then
 authoritative. A unit regression verifies the selected label in that state;
 the Electron test continues to require that label and gates only the OS-focus
 predicate on actual native focus availability. Initial Home reload flake
-[0271](../tests/flaky-tests/0271-annotation-home-reload-native-view.md) is
+[0272](../tests/flaky-tests/0272-annotation-home-reload-native-view.md) is
 recorded separately; its owning spec passed unchanged on rerun.
 
 Follow-up validation on `annotation-native-window-signoff`:

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -73,6 +74,17 @@ class Provider {
     for (const count of this.statusReads.values()) total += count;
     return total;
   }
+
+  /** An independent provider in the same state, for a copied fixture. */
+  copy(): Provider {
+    const copied = new Provider(this.name);
+    for (const [id, phase] of this.phases) copied.phases.set(id, phase);
+    copied.sent.push(...this.sent.map((entry) => ({ ...entry })));
+    for (const [id, count] of this.statusReads) copied.statusReads.set(id, count);
+    copied.busy = this.busy;
+    copied.counter = this.counter;
+    return copied;
+  }
 }
 
 const cleanups: (() => Promise<void>)[] = [];
@@ -127,6 +139,13 @@ interface Fixture {
 /**
  * Persisted fixture shared by both drivers: `completed` pipelines that
  * finished long ago and `active` ones mid-build, one environment each.
+ *
+ * Each pipeline seeded through `start` and two `advanceNow` passes costs about
+ * 20 durable (`synchronous = FULL`) commits. Only the active pipelines and
+ * the first completed one take that path. Every later completed record is
+ * the first one's persisted snapshot re-keyed and written by one save.
+ * Seeding all 30-40 retained records the long way spent most of the 5 s
+ * deadline on fsyncs when commits were slow (0205).
  */
 async function fixture(options: { completed: number; active: number }): Promise<Fixture> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-build-keyed-"));
@@ -140,10 +159,32 @@ async function fixture(options: { completed: number; active: number }): Promise<
   });
   const active: string[] = [];
   const completed: string[] = [];
+  let retained: { id: string; snapshot: string } | null = null;
   const total = options.completed + options.active;
   for (let index = 0; index < total; index += 1) {
     const environmentId = `env-${index}`;
     await environment(storage, environmentId);
+    if (retained && index < options.completed) {
+      const id = randomUUID();
+      // The template is pipeline 0: re-key its id, environment and task.
+      const snapshot = JSON.parse(
+        retained.snapshot
+          .replaceAll(retained.id, id)
+          .replaceAll(/\benv-0\b/g, environmentId)
+          .replaceAll(/\btask-0\b/g, `task-${index}`),
+      ) as BuildPipeline;
+      // A first save commits revision 1, so the record is already adopted.
+      await storage.saveBuildPipeline(
+        id,
+        "project-1",
+        environmentId,
+        BUILD_PIPELINE_VERSION,
+        { ...snapshot, controller: "backend", backendRevision: 1 },
+        0,
+      );
+      completed.push(id);
+      continue;
+    }
     const started = await seeder.start({
       taskId: `task-${index}`,
       projectId: "project-1",
@@ -172,6 +213,7 @@ async function fixture(options: { completed: number; active: number }): Promise<
         { ...snapshot, backendRevision: record.revision + 1 },
         record.revision,
       );
+      retained = { id: started.id, snapshot: JSON.stringify(snapshot) };
       completed.push(started.id);
     } else {
       active.push(started.id);
@@ -180,6 +222,21 @@ async function fixture(options: { completed: number; active: number }): Promise<
   await seeder.shutdown();
   cleanups.push(() => fs.rm(dataDir, { recursive: true, force: true }));
   return { dataDir, storage, providers, active, completed };
+}
+
+/** A byte-identical copy of a seeded fixture, so a second driver starts from the same state. */
+async function copyFixture(source: Fixture): Promise<Fixture> {
+  // Closing checkpoints the WAL into the database file; the source reopens on next use.
+  source.storage.close();
+  const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-build-keyed-"));
+  cleanups.push(() => fs.rm(dataDir, { recursive: true, force: true }));
+  await fs.cp(source.dataDir, dataDir, { recursive: true });
+  const storage = new StorageService(dataDir);
+  await storage.init();
+  const providers = new Map(
+    [...source.providers].map(([environmentId, provider]) => [environmentId, provider.copy()]),
+  );
+  return { ...source, dataDir, storage, providers };
 }
 
 function providerFor(providers: Map<string, Provider>, environmentId: string): Provider {
@@ -246,8 +303,10 @@ describe("build pipeline obligations", () => {
 describe("BuildPipelineService keyed scheduling", () => {
   test("old and new drivers make the same transitions from one persisted fixture", async () => {
     const outcomes: Record<string, unknown> = {};
+    const seeded = await fixture({ completed: 30, active: 2 });
+    const copied = await copyFixture(seeded);
     for (const mode of ["legacy", "keyed"] as const) {
-      const context = await fixture({ completed: 30, active: 2 });
+      const context = mode === "legacy" ? seeded : copied;
       const time = new ManualTime(0);
       const supervisor = service(context, mode, time);
       await supervisor.init();

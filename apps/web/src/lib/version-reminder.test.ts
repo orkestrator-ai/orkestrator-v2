@@ -64,6 +64,18 @@ describe("describeVersionReminder", () => {
     }
   });
 
+  test("offers to update a backend whose host can update itself", () => {
+    const reminder = describeVersionReminder({
+      clientVersion: "2.20.0",
+      backendVersion: "2.19.17",
+      skew: "backend-older",
+      clientKind: "desktop",
+      hostCanUpdate: true,
+    });
+    expect(reminder?.action).toBe("update");
+    expect(reminder?.description).toContain("Update it from here");
+  });
+
   test("offers a reload to an out-of-date hosted web app", () => {
     const reminder = describeVersionReminder({
       ...versions,

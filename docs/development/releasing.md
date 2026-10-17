@@ -40,6 +40,14 @@ Darwin 22 minimum; publication downloads those feeds and verifies the floor
 before making the draft public.
 Tags with a `-suffix` publish as prereleases, which the updater ignores.
 
+Every build also uploads `toolchain-pins.json`, with the agent CLI and `gh`
+pins of the release. A running Orkestrator reads it after a check to show what
+an update would change. Before it makes a release public, `release:publish`
+runs `mise run publish:cli`. That publishes the `orkestrator` npm package at
+the same version, so standalone services and desktop apps update to the same
+release. The step is skipped when the version is already on npm, and for
+prereleases. Pass `mise run release:publish -- --skip-npm` to leave npm alone.
+
 To rehearse a build without uploading or needing the tag, run
 `mise run release:desktop -- --no-publish`. Artifacts land in `release/`.
 The local signed `package:release` task also sets `--publish never`, including
@@ -84,6 +92,11 @@ AppImage. `app-update.yml` is only embedded by the release configs, so local
 It checks 30 seconds after launch and every 6 hours, downloads in the
 background, then asks the user to restart. "Later" installs on the next quit.
 **Orkestrator AI → Check for Updates…** runs a check on demand.
+
+Remote clients can also check and install through **Settings → Updates**,
+`orkestrator host update`, or the `host.*` public actions. The app then shows a
+60-second countdown instead of the Restart / Later prompt. See
+[host-updates.md](../architecture/host-updates.md).
 
 ## Minimum macOS version
 

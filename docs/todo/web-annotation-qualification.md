@@ -96,14 +96,15 @@ Test code the runs below depend on.
 5. Fixture-app routes for a CSS animation, a late-loading web font and an
    expired sign-in redirect. Use them to exercise `stable`/`unstable` from
    `web_annotation_result_capture` and the redirect handling of Show on page.
-6. Fix flake
+6. Done 2026-10-17: both flakes that touched these suites are resolved.
    [0204](../tests/flaky-tests/0204-web-annotation-quota-hook-timeout.md)
-   (`web-annotation-quotas.test.ts` hook timeout). It was investigated on
-   2026-10-17 and not reproduced, so it stays open. Its sibling
+   (`web-annotation-quotas.test.ts` hook timeout) was resolved on `main` by
+   #1042: the cause was a per-record fsync loop in the pre-SQLite storage,
+   removed by #969.
    [0225](../tests/flaky-tests/0225-design-and-bench-aggregate-timeouts.md)
    (the `web-annotation-payloads.bench.test.ts` creation-cost bound) was
-   resolved the same day: the case now bounds actual SQLite writes per create;
-   median timings remain diagnostic.
+   resolved on this branch: the case now bounds actual SQLite writes per
+   create, and median timings remain diagnostic.
 
 ### Qualification
 
@@ -201,7 +202,7 @@ Milestone / PR / commit: suites re-run and native window; main 31d0fb06, branch
   todo-annotation-suites-signoff-93fef49795eb (spec, harness and bench changes below)
 Implemented scope and remaining deferrals: Electron spec gains the real Notes
   column, keyboard create/send, and zoom x DPR capture alignment (code item 1);
-  flake 0225 resolved, 0204 still open; see "Not qualified"
+  flake 0225 resolved (0204 resolved on main by #1042); see "Not qualified"
 Platforms, providers, and client versions exercised: macOS 27.0 (arm64), Electron
   44.7.0, Playwright 1.64.0; display scale factor 1 (DPR 2 forced); no provider
   turns (the send is held by a compose draft)
@@ -213,6 +214,10 @@ Capability matrix and known limitations: unchanged; see "Not qualified"
 Migration and rollback verification: not run
 Reviewer / date: Claude (worker agent), 2026-10-17; awaiting human review
 ```
+
+The tables below are the first run, before the Multi Review. "Review
+follow-up" at the end of this section records what the review changed and its
+final results.
 
 | Command | Result |
 | --- | --- |
@@ -292,9 +297,11 @@ Decisions (made without the user, to be validated):
    rather than adding a new spec file. That costs one Electron launch (plus
    one for each forced DPR) instead of a second stack, and keeps it inside
    `test:agent:electron`.
-3. For DPR, use the display's own scale factor and force only the missing one
-   with `--force-device-scale-factor`, then relaunch without it. Both values
-   run on every host for at most two extra launches.
+3. For DPR, run the display's own scale factor and then forced DPR 1 and
+   forced DPR 2 (`--force-device-scale-factor`), relaunching without the
+   switch at the end. The first version forced only the missing value; the
+   review made both forced runs unconditional, so every host runs the same
+   branches, at the cost of one more launch.
 4. Check the app zoom at 0.8, 1 and 1.25 for wide bounds, and treat 1.5 as the
    narrow case, because a 1440-DIP window is under 720 CSS px of container
    there. Preview zoom 0.8, 1 and 1.5 are all checked for capture alignment.
@@ -303,12 +310,19 @@ Decisions (made without the user, to be validated):
    neighbour edge cannot be met exactly. Snapping inward (`ceil` the left
    edge, `floor` the right) would guarantee no overlap but leave up to one DIP
    uncovered; it was not worth a production change.
-6. "Keyboard alone" means each control is focused and then activated by Enter
-   or Space, never clicked. The Playwright `focus()` stands in for Tab. Resolve
-   is not covered: it needs a request in `awaiting-review`.
-7. Flake 0225: compare median per-create cost rather than raise the bound.
-   Flake 0204: record the investigation and keep it open rather than change a
-   test that cannot be reproduced.
+6. "Keyboard alone" means controls are reached with real Tab and Shift+Tab
+   presses and activated with Enter or Space, never clicked. The first version
+   used Playwright's `focus()` in place of Tab; the review replaced it.
+   Resolve is not covered: it needs a request in `awaiting-review`.
+7. Flake 0225: bound the SQLite rows and bytes each create writes, rather than
+   raise the time bound. The first version compared median create times, but
+   its 33 ms floor could hide a whole-history rewrite, so the review replaced
+   it. Flake 0204 was resolved on `main` (#1042) while this branch was open.
+8. Window menu: when `getFocusedWindow()` returns a window that is not
+   natively focused (a DevTools-focused owner on a shared macOS desktop), the
+   explicit Window-menu selection wins (`window-menu.ts`, with a unit test).
+   The `electron-main` test still requires the selected label, and checks OS
+   focus only when the app owns a key window. This was added in the review.
 
 Not qualified on this run:
 
@@ -319,7 +333,57 @@ Not qualified on this run:
 - Linux, Windows, the live providers, Docker, remote backend, approvals across
   disruption, web and iOS review, and the comparison fixtures (unchanged from
   the list above).
-- Flake 0204 (not reproduced).
+
+#### Review follow-up (2026-10-17)
+
+The Electron keyboard case now reaches renderer controls with Tab and checks
+Shift+Tab backtracking. Native page keys reach the selected element without
+assigning DOM focus to it. Its Discuss receipt is cancelled and checked absent
+from the prompt queue before the compose-draft hold is removed; a failed or
+ambiguous cleanup retains the hold until profile disposal. A profile-local
+Codex executable probe refuses and records accidental `app-server`/`exec`
+launches through cleanup and subsequent profile relaunches.
+
+Capture qualification now uses an 800-DIP fixed preview and the actual Notes
+layout (with nonzero view offsets), checking all three preview zooms in both.
+The smaller view keeps DPR 2 images under the reduction bound, so native image
+scale is asserted unconditionally. Natural capture plus forced DPR 1 and forced
+DPR 2 run on every host, removing the old host-dependent forced-DPR branch.
+A physical Retina display still requires separate hardware qualification.
+
+The creation benchmark now gates on SQLite row writes and bytes per create,
+including document-envelope updates; the former 33.33 ms timing floor could
+hide a rewrite. See the correction in flake 0225.
+
+The Window-menu focus resolver also ignores a `getFocusedWindow()` candidate
+whose host is not key: Electron can return a DevTools-focused owner while
+another app owns native focus. The recorded explicit menu selection is then
+authoritative. A unit regression verifies the selected label in that state;
+the Electron test continues to require that label and gates only the OS-focus
+predicate on actual native focus availability. Initial Home reload flake
+[0271](../tests/flaky-tests/0271-annotation-home-reload-native-view.md) is
+recorded separately; its owning spec passed unchanged on rerun.
+
+Follow-up validation on `annotation-native-window-signoff`:
+
+- `mise run test:logged -- --name agent-electron-final -- mise run test:agent:electron`
+  with `ORKESTRATOR_AGENT_TEST_RUN_ID=review-final`: **14 passed, 1 skipped**
+  (the Linux-only Wayland case), 80.4 seconds. All ten annotation cases passed,
+  including the selected-element identity after keyboard capture. The Codex
+  probe recorded no launch during cleanup, later tests or relaunches.
+- All 12 forced-DPR/layout/zoom combinations kept unreduced images; reported
+  scales matched DPR × preview zoom (DPR 2: 1.6, 2, 3, within pixel rounding).
+- Window-menu unit tests, all six payload benchmarks, format, lint and full
+  typecheck passed. The negative rewrite control failed as expected.
+- Artifacts: `output/agent-testing/review-final/electron/results.json`; all
+  temporary profiles and supervised processes were stopped and removed by
+  the suite. Native foreground focus and physical Retina hardware remain
+  outside this shared-desktop run. Browser, Docker, CLI and iOS scenario suites
+  were omitted because those product paths were unchanged.
+
+- Full non-iOS validation: `mise run test:logged -- --name review-full-suite -- mise run test`
+  **passed**, 728.4 seconds including a 234-second workspace capacity wait.
+  Workspace, root/agent-support, bridge and protocol groups all passed.
 
 ### Runs on 2026-10-15 (macOS)
 
@@ -504,55 +568,3 @@ Partial evidence only; no milestone was signed off. Linux (Wayland, display
   (web and iOS review proof)
 - `docs/improvements/web-page-annotations/plan/14-validation-observability-and-release.md`
   (gates, commands, sign-off template, evidence record)
-
-## Review follow-up (2026-10-17)
-
-The Electron keyboard case now reaches renderer controls with Tab and checks
-Shift+Tab backtracking. Native page keys reach the selected element without
-assigning DOM focus to it. Its Discuss receipt is cancelled and checked absent
-from the prompt queue before the compose-draft hold is removed; a failed or
-ambiguous cleanup retains the hold until profile disposal. A profile-local
-Codex executable probe refuses and records accidental `app-server`/`exec`
-launches through cleanup and subsequent profile relaunches.
-
-Capture qualification now uses an 800-DIP fixed preview and the actual Notes
-layout (with nonzero view offsets), checking all three preview zooms in both.
-The smaller view keeps DPR 2 images under the reduction bound, so native image
-scale is asserted unconditionally. Natural capture plus forced DPR 1 and forced
-DPR 2 run on every host, removing the old host-dependent forced-DPR branch.
-A physical Retina display still requires separate hardware qualification.
-
-The creation benchmark now gates on SQLite row writes and bytes per create,
-including document-envelope updates; the former 33.33 ms timing floor could
-hide a rewrite. See the correction in flake 0225. The score-table total is 546,
-matching its category counts and all five by-file column totals.
-
-The Window-menu focus resolver also ignores a `getFocusedWindow()` candidate
-whose host is not key: Electron can return a DevTools-focused owner while
-another app owns native focus. The recorded explicit menu selection is then
-authoritative. A unit regression verifies the selected label in that state;
-the Electron test continues to require that label and gates only the OS-focus
-predicate on actual native focus availability. Initial Home reload flake
-[0266](../tests/flaky-tests/0266-annotation-home-reload-native-view.md) is
-recorded separately; its owning spec passed unchanged on rerun.
-
-Follow-up validation on `annotation-native-window-signoff`:
-
-- `mise run test:logged -- --name agent-electron-final -- mise run test:agent:electron`
-  with `ORKESTRATOR_AGENT_TEST_RUN_ID=review-final`: **14 passed, 1 skipped**
-  (the Linux-only Wayland case), 80.4 seconds. All ten annotation cases passed,
-  including the selected-element identity after keyboard capture. The Codex
-  probe recorded no launch during cleanup, later tests or relaunches.
-- All 12 forced-DPR/layout/zoom combinations kept unreduced images; reported
-  scales matched DPR × preview zoom (DPR 2: 1.6, 2, 3, within pixel rounding).
-- Window-menu unit tests, all six payload benchmarks, format, lint and full
-  typecheck passed. The negative rewrite control failed as expected.
-- Artifacts: `output/agent-testing/review-final/electron/results.json`; all
-  temporary profiles and supervised processes were stopped and removed by
-  the suite. Native foreground focus and physical Retina hardware remain
-  outside this shared-desktop run. Browser, Docker, CLI and iOS scenario suites
-  were omitted because those product paths were unchanged.
-
-- Full non-iOS validation: `mise run test:logged -- --name review-full-suite -- mise run test`
-  **passed**, 728.4 seconds including a 234-second workspace capacity wait.
-  Workspace, root/agent-support, bridge and protocol groups all passed.

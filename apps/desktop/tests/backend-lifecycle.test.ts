@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import {
   createBackendWebClientControls,
+  prepareAppImageInstall,
   registerBackendShutdown,
 } from "../electron/backend-lifecycle";
 
@@ -65,19 +66,87 @@ describe("desktop backend lifecycle", () => {
     await expect(controls.getWebClientStatus()).resolves.toMatchObject({ enabled: false });
   });
 
-  test("stops the backend when Electron begins quitting", () => {
-    let beforeQuit: (() => void) | undefined;
+  function fakeQuittingApp() {
+    const listeners = new Map<string, Array<(event: { preventDefault(): void }) => void>>();
+    const state = { prevented: 0, quits: 0 };
     const app = {
-      on: mock((event: string, listener: () => void) => {
-        if (event === "before-quit") beforeQuit = listener;
+      on: mock((event: string, listener: (event: { preventDefault(): void }) => void) => {
+        listeners.set(event, [...(listeners.get(event) ?? []), listener]);
         return app as never;
       }),
+      quit: mock(() => {
+        state.quits += 1;
+      }),
     };
-    const backendProcess = { stop: mock(() => undefined) };
+    const emit = (event: string) => {
+      for (const listener of listeners.get(event) ?? []) {
+        listener({ preventDefault: () => (state.prevented += 1) });
+      }
+    };
+    return { app, state, emit };
+  }
 
-    registerBackendShutdown(app as never, backendProcess as never);
-    beforeQuit?.();
+  test("stops the backend once and holds the quit until it has exited", async () => {
+    const { app, state, emit } = fakeQuittingApp();
+    const exited = Promise.withResolvers<void>();
+    const backendProcess = { stop: mock(() => exited.promise) };
 
+    registerBackendShutdown(app as never, backendProcess as never, 5_000);
+    emit("before-quit");
+    emit("before-quit");
+    emit("will-quit");
     expect(backendProcess.stop).toHaveBeenCalledTimes(1);
+    expect(state.prevented).toBe(1);
+
+    // Another hold (the log flush) re-issuing the quit must not let it through.
+    emit("will-quit");
+    expect(state.prevented).toBe(2);
+    await Bun.sleep(5);
+    expect(state.quits).toBe(0);
+
+    exited.resolve();
+    await Bun.sleep(5);
+    expect(state.quits).toBe(1);
+    emit("will-quit");
+    expect(state.prevented).toBe(2);
   });
+
+  test("quits anyway when the backend outlives its exit deadline", async () => {
+    const { app, state, emit } = fakeQuittingApp();
+    const backendProcess = { stop: mock(() => new Promise<void>(() => {})) };
+
+    registerBackendShutdown(app as never, backendProcess as never, 10);
+    emit("before-quit");
+    emit("will-quit");
+    await Bun.sleep(60);
+    expect(state.quits).toBe(1);
+  });
+});
+
+test("AppImage replacement can claim the lock only after the old backend exits", async () => {
+  const order: string[] = [];
+  let drain!: () => void;
+  const backend = {
+    stop: () =>
+      new Promise<void>((resolve) => {
+        drain = resolve;
+      }),
+  };
+  let locked = true;
+  const preparation = prepareAppImageInstall(
+    {
+      releaseSingleInstanceLock: () => {
+        locked = false;
+        order.push("unlock");
+      },
+    },
+    backend,
+  );
+  expect(locked).toBe(true);
+  order.push("backend-exit");
+  drain();
+  await preparation;
+  // AppImageUpdater's force-run spawn happens only after this preparation resolves.
+  order.push(locked ? "single-instance-rejected" : "replacement-started");
+  expect(order).toEqual(["backend-exit", "unlock", "replacement-started"]);
 });

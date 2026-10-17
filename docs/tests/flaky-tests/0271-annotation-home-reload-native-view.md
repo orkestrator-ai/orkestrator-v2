@@ -1,6 +1,6 @@
 # Annotation Home preview hidden after reload
 
-- **ID:** 0266
+- **ID:** 0271
 - **Status:** open
 - **Date observed:** 2026-10-17
 - **Test:** `Home native preview hides beneath board panels and returns without losing its tab`

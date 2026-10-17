@@ -1,7 +1,7 @@
 # Web annotation quota hook timeout under aggregate load
 
 - **ID:** 0204
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-13
 - **Test:** `environment quotas through the service > the request count quota refuses a send with usage totals and reserves nothing`.
 - **Owning file:** `apps/backend/src/core/web-annotation-quotas.test.ts`.
@@ -35,30 +35,50 @@ or skips were changed.
 - **Evidence:** `/tmp/orkestrator-test-run.Pv387k/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Hypothesis:** fixture lifecycle work exceeded its deadline under aggregate load or shared backend activity. The owning test and backend were unchanged; the cause is unconfirmed. No test was skipped or timeout raised.
 
-## Investigation on 2026-10-17 (not reproduced; still open)
+## Resolution (2026-10-17)
 
-- **Host:** macOS, `main` at `31d0fb06`, host load average about 13 on 18 cores
-  (nine other worktrees running live suites).
-- **Phase timings, alone:** the case's restart (closing the first service and
-  initializing a second over 5,000 seeded request rows) took 33 to 39 ms, and
-  the `afterEach` cleanup took 3.7 to 4.4 ms (three runs, with timing probes
-  that were then removed).
-- **Under load:** eight concurrent copies of `web-annotation-quotas.test.ts`
-  with `web-annotation-payloads.bench.test.ts`, twice, all passed (2.2 to
-  2.7 s each). All 22 `web-annotation*.test.ts` files with `--parallel=2`, four
-  times: 265 passed each time (4.2 to 5.2 s).
-- **Lead, unconfirmed:** both recorded failures stopped within 6 ms of 10 s
-  (10,000.19 and 10,005.53 ms), not at a load-dependent time. 10 s is also the
-  SQLite `busy_timeout` that `StorageDatabase` sets (`storage-database.ts`), and
-  `bun:sqlite`'s busy handler blocks the event loop while it waits. So a hook
-  that hits a held write lock would stall for exactly that long, and Bun could
-  report the hook timeout only after it returned. No second writer to the
-  harness's private database has been found: the harness closes the first
-  service before opening the second, and every transaction is synchronous.
-  `WebAnnotationStorage.close()` keeps its store map, and `database()` reopens
-  a connection lazily after close. A late write from a closed service would
-  therefore open a second connection, but none was observed.
-- **Next step:** when it recurs, find which statement blocked, for example by
-  lowering the `busy_timeout` in a local `StorageDatabase` build so that the
-  `SQLITE_BUSY` error names the statement. No test, deadline or skip was
-  changed.
+- **Status:** resolved
+- **CI history:** `gh run list --workflow lint.yml --created ">=2026-10-01"`
+  returned 327 runs (212 failed). Scanning every failed log found this test in
+  13 runs, 4 on `main` (37042129544, 37118083684, 38403589006, 38473492724).
+  Eleven report `this test timed out after 5000ms` with the test body at
+  5,797–9,847 ms; two (37042078129, 37135282071) report
+  `a beforeEach/afterEach hook timed out for this test` at 10,000.08 and
+  10,000.21 ms. The last hit was run 38538035041, created
+  2026-10-14T08:50Z. None of the 178 runs created after c95479da1 merged
+  (2026-10-14T19:03Z, 88 failed for other reasons) contains it.
+- **Root cause:** a real per-record fsync loop in the pre-SQLite storage. The
+  test faked 5,000 requests by writing a version 1 `manifest.json` that carried
+  request text inline. After the restart, the first commit (`createAnnotation`
+  for "second") found no persisted text for any request and wrote 5,000
+  `request-text` records, each with its own `mkdir`, temp-file write, `fsync`,
+  `rename` and `unlink` (`writeDurable`; `syncDirectories: false` skipped only
+  directory syncs). The `afterEach` then removed 5,006 record directories
+  recursively. Measured on the pre-SQLite tree (`git archive c95479da1^`), the
+  restart took 15 ms, that single create 1,874 ms, the refused send 21 ms,
+  and `harness.cleanup()` 480 ms; the case took 2.64 s of the file's 2.83 s.
+  On a slower, loaded CI disk the create alone exceeded the 5 s test
+  deadline, and when it overran far enough the pending cleanup exhausted the
+  10 s hook deadline.
+- **Fix:** c95479da1 (#969, `feat(storage): migrate backend persistence to
+  SQLite`) moved web annotation storage to SQLite. Records and index rows now
+  commit in one transaction with no per-record file, and the test seeds the
+  5,000 requests through `store.mutate` instead of a version 1 manifest. No
+  test or production change was needed on this branch, and no deadline,
+  assertion or limit was changed. The remaining cost is the designed
+  O(manifest) clone and row plan per commit (about 25 ms per commit at 5,000
+  requests).
+- **Verification (Apple silicon, 18 cores, Bun 1.4.3, current tree):**
+  - Alone: the case took 0.154 s; the file passed 15/15 in 385 ms.
+    Per phase: fixture mutate 77–97 ms, restart 20–22 ms, create 26–31 ms,
+    refused send 20–25 ms, cleanup 2–3 ms.
+  - `bun test --preload ../../tests/setup-node.ts ./src/core/web-annotation-quotas.test.ts --rerun-each 20`:
+    300/300 passed in 6.71 s; the case took 0.159–0.197 s (median 0.177 s).
+  - Same command under CPU stress (36 `yes` busy loops on 18 cores):
+    300/300 passed in 31.2 s; the case took 0.74–1.49 s (median 1.18 s).
+    The pre-SQLite tree under the same stress (`--rerun-each 5`) took
+    2.27–2.77 s for the case, without CI's slower disk.
+  - Backend aggregate, `bun test --preload ../../tests/setup-node.ts src tests --parallel=2`,
+    alongside other agents' suites: 8,481 passed, 40 skipped, 12 failed in
+    369 s. None of the failures was in a web annotation file. This case took
+    0.203 s and its file 0.431 s.

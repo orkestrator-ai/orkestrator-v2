@@ -16,7 +16,10 @@ import {
 } from "@orkestrator/protocol/claude-background-commands";
 import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
 import { removeOpenCodeCommandChangeJournals } from "./opencode-command-changes.js";
-import { OPENCODE_PINNED_RUNTIME_ENV } from "@orkestrator/protocol/terminal-agent-launch";
+import {
+  CLAUDE_PINNED_RUNTIME_ENV,
+  OPENCODE_PINNED_RUNTIME_ENV,
+} from "@orkestrator/protocol/terminal-agent-launch";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -1169,6 +1172,8 @@ export async function startLocalServerUnlocked(
     command = resolveBunBinary(context);
     cwd = getBridgePath(context, "claude-bridge");
     env.CLAUDE_CLI_PATH = resolveClaudeBinary(context);
+    // The managed binary stays on its pin; see CLAUDE_PINNED_RUNTIME_ENV.
+    if (env.CLAUDE_CLI_PATH !== "claude") Object.assign(env, CLAUDE_PINNED_RUNTIME_ENV);
     // Read by the Claude CLI the bridge spawns; unset keeps its 2-hour ceiling.
     const bashMaxTimeout = claudeBashMaxTimeoutEnvValue(
       bridgeConfig.global.claudeBackgroundCommandLimitHours,

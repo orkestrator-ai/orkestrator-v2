@@ -599,3 +599,14 @@ Final aggregate: exit 1 after 1252.7 seconds logged. Backend passed 8964 tests w
 - **Assessment:** the isolated pass confirms intermittence. Shared-host contention remains an unconfirmed hypothesis; no owning implementation, assertion, timeout or skip changed.
 
 Final aggregate exited 1 after 477.8 seconds. Backend reported 8978 passed, 41 skipped and one failed across 9020 tests in 478 files (423.04 seconds). Root/support reported the Pi timeout above; all other workspace packages, bridges and the Codex protocol check passed. Both failing owning files passed unchanged alone. Formatting, lint, typechecking and the full component browser suite also passed. Additional real-stack, Electron, Docker and iOS scenario suites were omitted because the branch changes a component-browser test and documentation, and conflict resolution changes documentation only.
+
+## Recurrence during real-Electron service-preview qualification (2026-10-18)
+
+- **Command:** `mise run test:logged -- --name full-tests -- mise run test` on
+  a macOS arm64 host shared with other live-test worktrees (load average
+  around 30), on branch `qualify-preview-electron-tunnel-c6ca4deaffee`.
+- **Failure:** the same 30-second timeout (root group: 3052 passed, 2 failed;
+  the other failure was a case-file status format error in this change, since
+  fixed).
+- **Isolated rerun:** `mise run test:logged -- --name pi-vendor-alone -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1`
+  passed in 6.9 s. The test and the Pi bridge were unchanged on the branch.

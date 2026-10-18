@@ -58,9 +58,9 @@ it reaches. Some rules of thumb:
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
 | High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 25 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 252 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 275 |
-| **Total** | | **553** |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 253 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 276 |
+| **Total** | | **555** |
 
 ## Very high
 
@@ -90,7 +90,8 @@ it reaches. Some rules of thumb:
 ### Service previews and web annotations (high)
 
 - [x] Re-baseline the opt-in preview suites and all preview unit files on current main after #966, #967 and #969 ([service-preview-rollout.md](service-preview-rollout.md), qualification)
-- [ ] Run the real Electron window service-preview qualification with the tunnel enabled in an isolated profile ([service-preview-rollout.md](service-preview-rollout.md), qualification)
+- [x] Run the real Electron window service-preview qualification with the tunnel enabled in an isolated profile ([service-preview-rollout.md](service-preview-rollout.md), qualification)
+- [ ] Cover the remaining real-Electron service-preview cases: windows on different backends, a connection switch, clipboard, overlays, HMR reattach, keyboard and narrow viewport ([service-preview-rollout.md](service-preview-rollout.md), qualification)
 - [ ] Write a two-machine tailnet runbook and run decoy, latency, throttling, reconnect and publication checks ([service-preview-rollout.md](service-preview-rollout.md), qualification)
 - [x] Re-run the annotation Electron and isolated browser suites on current main and record a sign-off ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
 - [ ] Run the live annotation implement test once per provider and record skips explicitly ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
@@ -194,7 +195,7 @@ it reaches. Some rules of thumb:
 
 ### Service previews and web annotations (medium)
 
-- [ ] Add a real-Electron service-preview spec under `e2e/agent-testing/` and add it to the Electron `testMatch` ([service-preview-rollout.md](service-preview-rollout.md))
+- [x] Add a real-Electron service-preview spec under `e2e/agent-testing/` and add it to the Electron `testMatch` ([service-preview-rollout.md](service-preview-rollout.md))
 - [ ] Add a hostile service-worker route to the preview-app fixture that intercepts `/__orkestrator_preview/session` ([service-preview-rollout.md](service-preview-rollout.md))
 - [x] Diagnose or fix preview flakes 0184, 0195 and 0221 ([service-preview-rollout.md](service-preview-rollout.md))
 - [x] Pause the preview tunnel upstream before one 512 KiB read can close a slow but live reader ([service-preview-rollout.md](service-preview-rollout.md))
@@ -209,6 +210,8 @@ it reaches. Some rules of thumb:
 - [x] Verify the Electron agent-test task starts cleanly on the run host ([service-preview-rollout.md](service-preview-rollout.md), verify)
 - [ ] Decide the observation window, error and resource thresholds, and sign-off owner per preview cohort ([service-preview-rollout.md](service-preview-rollout.md), decision)
 - [ ] Decide whether the Chromium preview spec or the Docker preview suites join a regular gated run ([service-preview-rollout.md](service-preview-rollout.md), decision)
+- [ ] Verify whether a legacy URL tab's re-attach with a stale URL undoes a link, redirect or Back, as service tabs did before 2026-10-18 ([service-preview-rollout.md](service-preview-rollout.md), verify)
+- [ ] Verify why the pane-layout store re-applies an older saved browser URL of a tab after a newer local save ([service-preview-rollout.md](service-preview-rollout.md), verify)
 - [ ] Seed local worktree preview services safely from `entryPort`, never from a port scan ([preview-service-discovery.md](preview-service-discovery.md))
 - [x] Extend the annotation Electron spec with the real Notes column and capture alignment at several zooms and DPRs ([web-annotation-qualification.md](web-annotation-qualification.md))
 - [ ] Add a Docker annotation spec titled `Docker fixture` asserting materialization, cleanup and file checks ([web-annotation-qualification.md](web-annotation-qualification.md))
@@ -547,6 +550,7 @@ it reaches. Some rules of thumb:
 - [ ] Measure disk used by `orkestrator-preview-svc-*` partitions on a long-lived profile ([service-preview-rollout.md](service-preview-rollout.md), verify)
 - [ ] Decide whether annotations on legacy URL tabs may keep depending on the legacy route ([service-preview-rollout.md](service-preview-rollout.md), decision)
 - [ ] Decide whether preview tunnel liveness should outlast a reader paused by backpressure, whose ping waits behind queued data ([service-preview-rollout.md](service-preview-rollout.md), decision)
+- [ ] Name service tabs after their service in the tab strip instead of "Browser N" ([service-preview-rollout.md](service-preview-rollout.md))
 - [ ] Build the web iframe preview surface: minimal sandbox, honoured framing, top-level fallback, safe postMessage ([embedded-service-previews.md](embedded-service-previews.md))
 - [ ] Investigate partitioned (CHIPS) cookies for the `__Host-orkestrator-preview` transport cookie only ([embedded-service-previews.md](embedded-service-previews.md))
 - [ ] Build an optional iOS in-app preview in a dedicated `WKWebView` with its own data store ([embedded-service-previews.md](embedded-service-previews.md))
@@ -862,7 +866,7 @@ it reaches. Some rules of thumb:
 | File | Very high | High | Medium | Low | Total |
 | --- | --- | --- | --- | --- | --- |
 | **Service previews and web annotations** | | | | | |
-| [service-preview-rollout.md](service-preview-rollout.md) |  | 2 | 11 | 8 | 21 |
+| [service-preview-rollout.md](service-preview-rollout.md) |  | 2 | 12 | 9 | 23 |
 | [embedded-service-previews.md](embedded-service-previews.md) |  |  |  | 13 | 13 |
 | [preview-service-discovery.md](preview-service-discovery.md) |  |  | 1 | 5 | 6 |
 | [web-annotation-qualification.md](web-annotation-qualification.md) |  | 1 | 14 | 4 | 19 |

@@ -1,7 +1,7 @@
 # Annotation Home preview hidden after reload
 
 - **ID:** 0272
-- **Status:** resolved (2026-10-18; reopen on recurrence)
+- **Status:** resolved
 - **Date observed:** 2026-10-17
 - **Test:** `Home native preview hides beneath board panels and returns without losing its tab`
   in `e2e/agent-testing/web-annotations-electron.spec.ts`.

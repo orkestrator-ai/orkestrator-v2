@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AccountQuotaList } from "@/components/layout/AgentInfoButton.panels";
 import { AgentAccountLoginPanel } from "@/components/settings/AgentAccountLoginPanel";
+import { StalePlanUsageNote } from "@/components/settings/PlanUsageSection";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import {
   cancelAgentAccountLogin,
@@ -104,7 +105,10 @@ function AccountUsage({
     return <p className="text-xs text-muted-foreground">{snapshot.message}</p>;
   }
   return snapshot.windows.length > 0 ? (
-    <AccountQuotaList account={snapshot.windows} />
+    <div>
+      <AccountQuotaList account={snapshot.windows} />
+      {snapshot.stale ? <StalePlanUsageNote snapshot={snapshot} /> : null}
+    </div>
   ) : (
     <p className="text-xs text-muted-foreground">No metered plan limits reported.</p>
   );

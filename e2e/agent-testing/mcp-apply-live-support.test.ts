@@ -4,6 +4,7 @@ import {
   parseProbeLog,
   probePrompt,
   probeResult,
+  probeServersInToolRows,
   PROBE_SERVER_NAME,
   PROBE_UNAVAILABLE,
   scopePrefix,
@@ -63,6 +64,34 @@ describe("mcp apply live support", () => {
         expect: { reach: true, tag: "v1" },
       }),
     ).toMatchObject({ passed: false, reason: 'server "mqu0_alpha" answered instead of "mqu0_beta"' });
+  });
+
+  test("a call through the renamed server's tool is a substitution, not the removed one", () => {
+    const events = parseProbeLog(log);
+    const input = {
+      events,
+      server: "mqu0_alpha",
+      nonce: "N1",
+      reply: probeResult("mqu0_alpha", "v1", "N1"),
+    };
+    expect(
+      judgeProbe({ ...input, expect: { reach: false }, toolRows: ["tool-invocation:mqu0_beta_probe:?"] }),
+    ).toMatchObject({ reached: true, substitutedBy: "mqu0_beta", passed: true });
+    expect(
+      judgeProbe({ ...input, expect: { reach: false }, toolRows: ["tool:mcp__mqu0_alpha__probe:done"] }),
+    ).toMatchObject({ reached: true, passed: false });
+    // With no tool rows (a code-mode cell) the log alone decides.
+    expect(judgeProbe({ ...input, expect: { reach: false } })).toMatchObject({ passed: false });
+    expect(
+      judgeProbe({
+        ...input,
+        expect: { reach: true, tag: "v1" },
+        toolRows: ["tool-invocation:mqu0_beta_probe:?"],
+      }),
+    ).toMatchObject({ passed: false, reason: 'the model called "mqu0_beta" instead' });
+    expect(probeServersInToolRows(["x:mcp__mqp1_beta__probe:done", "y:Bash:done"])).toEqual([
+      "mqp1_beta",
+    ]);
   });
 
   test("probe names are recognised for cleanup and nothing else is", () => {

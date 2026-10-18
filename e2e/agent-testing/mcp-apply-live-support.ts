@@ -76,8 +76,23 @@ export interface ProbeVerdict {
   /** The reply carried the exact result line for this nonce. */
   replyHasResult: boolean;
   replyUnavailable: boolean;
+  /**
+   * The turn's tool rows named only a different probe server: the model
+   * called that one instead (a renamed entry's process keeps its old label,
+   * so only the tool name tells the two apart).
+   */
+  substitutedBy?: string;
   passed: boolean;
   reason?: string;
+}
+
+/** Probe server names that tool rows mention (`mcp__x__probe`, `x_probe`, …). */
+export function probeServersInToolRows(rows: readonly string[]): string[] {
+  const names = new Set<string>();
+  for (const row of rows) {
+    for (const match of row.matchAll(/mq[ulpxs]\d*_[a-z]+/g)) names.add(match[0]);
+  }
+  return [...names];
 }
 
 /**
@@ -91,6 +106,8 @@ export function judgeProbe(input: {
   nonce: string;
   reply: string;
   expect: ProbeExpectation;
+  /** Tool rows of the turn, as `type:name:state`; names only. */
+  toolRows?: readonly string[];
 }): ProbeVerdict {
   const call = input.events.find((event) => event.event === "call" && event.nonce === input.nonce);
   const reached = call !== undefined;
@@ -98,20 +115,28 @@ export function judgeProbe(input: {
   const replyUnavailable = input.reply.includes(PROBE_UNAVAILABLE);
   const replyHasResult =
     call !== undefined && input.reply.includes(probeResult(call.label, call.tag, input.nonce));
+  const named = probeServersInToolRows(input.toolRows ?? []);
+  const substitutedBy =
+    named.length > 0 && !named.includes(input.server) ? named[0] : undefined;
   if (!input.expect.reach) {
+    // A call the model made through another server's tool does not show the
+    // removed name was still offered; the tool rows say which tool ran.
+    const removedAnswered = reached && !substitutedBy;
     return {
       reached,
       ...(answeredBy ? { answeredBy } : {}),
       replyHasResult,
       replyUnavailable,
-      passed: !reached,
-      ...(reached
+      ...(substitutedBy ? { substitutedBy } : {}),
+      passed: !removedAnswered,
+      ...(removedAnswered
         ? { reason: `the removed server "${call!.label}" (${call!.tag}) still answered the call` }
         : {}),
     };
   }
   let reason: string | undefined;
   if (!call) reason = "no server logged a call with this nonce";
+  else if (substitutedBy) reason = `the model called "${substitutedBy}" instead`;
   else if (call.label !== (input.expect.label ?? input.server))
     reason = `server "${call.label}" answered instead of "${input.expect.label ?? input.server}"`;
   else if (call.tag !== input.expect.tag)
@@ -122,6 +147,7 @@ export function judgeProbe(input: {
     ...(answeredBy ? { answeredBy } : {}),
     replyHasResult,
     replyUnavailable,
+    ...(substitutedBy ? { substitutedBy } : {}),
     passed: reason === undefined,
     ...(reason ? { reason } : {}),
   };

@@ -570,12 +570,14 @@ test.describe("live MCP apply", () => {
           const outcome = (await runTurn(tab, probePrompt(server, value))).result!;
           // Give a slow server a moment to flush its log line.
           await new Promise((resolve) => setTimeout(resolve, 500));
+          const rows = toolRows(outcome.fresh);
           const verdict = judgeProbe({
             events: events(),
             server,
             nonce: value,
             reply: outcome.reply,
             expect: expectation,
+            toolRows: rows,
           });
           const record = {
             tab: tab.endsWith("-a") ? "A" : "B",
@@ -592,7 +594,7 @@ test.describe("live MCP apply", () => {
             // Which tools the turn tried, by name and state only (no
             // arguments or output), so a call that never reached a server
             // shows whether it was refused, failed or never attempted.
-            ...(verdict.passed ? {} : { toolRows: toolRows(outcome.fresh) }),
+            ...(rows.length > 0 ? { toolRows: rows } : {}),
           };
           return record;
         };

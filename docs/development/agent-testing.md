@@ -410,6 +410,59 @@ leaves the profile running under a detached launcher, so stop it with
 longer reports `testProject` afterwards; the spec falls back to the profile's
 seeded copy.
 
+### Live transcript paging
+
+`e2e/agent-testing/transcript-paging-live.spec.ts` drives transcripts past the
+100-message live window with real providers and checks history paging end to
+end. It has its own opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_TRANSCRIPT_PAGING=1`,
+and uses the host's Claude and Codex credentials:
+
+```bash
+mise run dev:test --profile qa-paging --fixture --credential-source claude --credential-source codex --agent-platforms claude,codex
+# In a second terminal, one case at a time or both:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-paging ORKESTRATOR_AGENT_TEST_LIVE_TRANSCRIPT_PAGING=1 \
+  mise run test:logged -- --name transcript-paging-live -- mise run test:agent:browser -- \
+  e2e/agent-testing/transcript-paging-live.spec.ts
+mise run dev:stop --profile qa-paging
+mise run dev:reset --profile qa-paging
+```
+
+Each case lays a trail of files in a fresh environment; every file names the
+next under a random name, so the agent has to read them one at a time. The
+stop each tool call read places every row, so the spec checks pages and the
+live tail for gaps, duplicates and order without reading model prose.
+
+- **Native conversation** (Claude Haiku, 150 stops by default; set
+  `ORKESTRATOR_AGENT_TEST_PAGING_NATIVE_PLATFORM=codex` for GPT-6-Luna). Claude
+  reads with its Read tool, and its tool-only rows coalesce into tall
+  per-minute blocks, the harder case for holding a place. Codex notes each
+  stop in a sentence so that every step gets a row. The backend
+  window must be truncated with a cursor, and following the cursor in
+  40-message pages must reach the first prompt with every stop in order. In
+  the browser, **Load earlier messages** must bring the prompt back, keep the
+  reader's row on screen (moving the list off the top when rows land above
+  it), and expand a tool row from the loaded page. Then the same after a reload.
+- **Multi Review** (a Claude Haiku and a Codex GPT-6-Luna reviewer, 130 stops).
+  The trail protocol is in an `AGENTS.md` that is part of the change. Codex
+  loads it as instructions; a Claude reviewer runs read-only without project
+  instructions and in practice reviews without walking it, so the long
+  reviewer is the Codex one. Codex opens a row only where reasoning or a
+  message follows a tool call, so the protocol asks for one sentence per stop.
+  While reviewers run, no stall may be reported, and a reviewer running past
+  2.5 progress-probe intervals must show its progress clock advance. Probes run
+  once a minute, so a short reviewer shows only its baseline. Afterwards, each
+  reviewer longer than the window must have a bounded summary, an `unchanged`
+  repeat read, pages back to its prompt, and a reviewer tab whose **Load
+  earlier messages** keeps the reader's place. When Claude is unavailable,
+  `ORKESTRATOR_AGENT_TEST_PAGING_FIRST_REVIEWER=codex` makes the first
+  reviewer a medium-effort Codex one.
+
+Scroll upward with the mouse wheel when you drive these views by hand or from
+a spec. A programmatic `scrollTo` is not user intent to the transcript list: it
+stays pinned to the tail and snaps back. Measurements land as annotations in
+`results.json`. Override models and trail lengths with the variables named in
+the spec's header.
+
 ### Live close retention
 
 `e2e/agent-testing/close-retention-live.spec.ts` checks, with real providers

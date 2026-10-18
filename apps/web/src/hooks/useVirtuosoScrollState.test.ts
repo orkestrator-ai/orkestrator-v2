@@ -161,4 +161,22 @@ describe("useVirtuosoScrollState scrollToIndex", () => {
     await waitFor(() => expect(handle.scrollToIndex.mock.calls.length).toBeGreaterThan(1));
     expect(handle.scrollTo).not.toHaveBeenCalled();
   });
+
+  test("a jump that lands on the tail does not re-engage stick until its corrections finish", async () => {
+    const { result } = renderHook(() => useVirtuosoScrollState({ isActive: true }));
+    const handle = fakeHandle();
+    result.current.virtuosoRef.current = handle as never;
+    expect(result.current.scrollToIndex(3)).toBe(true);
+
+    // Rows were just prepended and sizes are cached by index, so the first
+    // jump can clamp at the end of the list. That is not the reader arriving.
+    result.current.scrollProps.atBottomStateChange(true);
+    expect(result.current.scrollProps.followOutput(true)).toBe(false);
+
+    // Once the corrections have run, reaching the tail means the reader is there.
+    await waitFor(() => expect(handle.scrollToIndex).toHaveBeenCalledTimes(4));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    result.current.scrollProps.atBottomStateChange(true);
+    expect(result.current.scrollProps.followOutput(true)).toBe("auto");
+  });
 });

@@ -221,6 +221,14 @@ export function useVirtuosoScrollState(
   const mountedRef = useRef(true);
   const scrollInFlightRef = useRef(false);
   const scrollOperationRef = useRef(0);
+  /**
+   * The operation of an explicit jump to a row whose corrections are still
+   * running. Row sizes are cached by index, so after rows are prepended the
+   * first jump can land on stale sizes and clamp at the end of the list; that
+   * transient bottom must not re-engage stick intent, or growth pinning holds
+   * the reader at the tail and the corrections can never land.
+   */
+  const indexJumpOperationRef = useRef<number | null>(null);
   const hasBeenActiveRef = useRef(false);
   const envChangedWhileInactiveRef = useRef(false);
   const pendingActivationScrollRef = useRef(false);
@@ -282,7 +290,10 @@ export function useVirtuosoScrollState(
       // item's measured height. Do not let that transient callback undo an
       // explicit user release while the browser geometry is still away from
       // the tail.
-      if (distanceFromBottom <= AT_BOTTOM_THRESHOLD) {
+      const jumpingToRow =
+        indexJumpOperationRef.current !== null &&
+        indexJumpOperationRef.current === scrollOperationRef.current;
+      if (distanceFromBottom <= AT_BOTTOM_THRESHOLD && !jumpingToRow) {
         wantsStickRef.current = true;
       }
     }
@@ -819,6 +830,7 @@ export function useVirtuosoScrollState(
       cancelActivationScrollFrame();
       const operation = ++scrollOperationRef.current;
       scrollInFlightRef.current = false;
+      indexJumpOperationRef.current = operation;
       handle.scrollToIndex({ index, align: "center", behavior: "auto" });
       let corrections = 0;
       const correct = () => {
@@ -828,6 +840,8 @@ export function useVirtuosoScrollState(
         corrections += 1;
         if (corrections < SCROLL_TO_INDEX_CORRECTIONS) {
           setTimeout(correct, SCROLL_TO_INDEX_CORRECTION_INTERVAL_MS);
+        } else if (indexJumpOperationRef.current === operation) {
+          indexJumpOperationRef.current = null;
         }
       };
       setTimeout(correct, SCROLL_TO_INDEX_CORRECTION_INTERVAL_MS);

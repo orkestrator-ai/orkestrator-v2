@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
+import { useHeldTranscriptPlace, useRestoreHeldPlace } from "@/hooks/useHeldTranscriptPlace";
 import {
   AlertCircle,
   CheckCircle2,
@@ -382,10 +383,8 @@ export function MultiReviewReviewerTab({
   const snapshotRef = useRef<MultiReviewReviewerTranscript | null>(null);
   const historyRef = useRef<ReviewerHistoryState>(EMPTY_REVIEWER_HISTORY);
   const historyGeneration = useRef(0);
-  /** First shown message before a prepend, to hold the reader's place. */
-  const scrollAnchor = useRef<string | null>(null);
-  /** First rendered row, recorded after each render for the anchor above. */
-  const firstRenderedId = useRef<string | null>(null);
+  /** The reader's place, held while a page lands above it. */
+  const heldPlace = useHeldTranscriptPlace();
   const pageInFlight = useRef(false);
   /*
    * Rows from a lightweight reviewer transcript carry a `detailRef` in place
@@ -414,16 +413,19 @@ export function MultiReviewReviewerTab({
     setSnapshot(next);
   }, []);
 
-  const commitHistory = useCallback((next: ReviewerHistoryState, reset: boolean) => {
-    if (reset) {
-      // Fences a page still in flight: it belongs to the history just dropped.
-      historyGeneration.current += 1;
-      pageInFlight.current = false;
-      scrollAnchor.current = null;
-    }
-    historyRef.current = next;
-    setHistory(next);
-  }, []);
+  const commitHistory = useCallback(
+    (next: ReviewerHistoryState, reset: boolean) => {
+      if (reset) {
+        // Fences a page still in flight: it belongs to the history just dropped.
+        historyGeneration.current += 1;
+        pageInFlight.current = false;
+        heldPlace.release();
+      }
+      historyRef.current = next;
+      setHistory(next);
+    },
+    [heldPlace],
+  );
 
   /** Fold one transcript answer into the tail and the loaded history together. */
   const applyTranscript = useCallback(
@@ -529,7 +531,7 @@ export function MultiReviewReviewerTab({
           before = page.nextCursor;
           continue;
         }
-        if (added) scrollAnchor.current = firstRenderedId.current;
+        if (added) heldPlace.hold();
         commitHistory(next, false);
         return;
       }
@@ -540,7 +542,15 @@ export function MultiReviewReviewerTab({
       if (historyGeneration.current === generation) pageInFlight.current = false;
       setLoadingEarlier(false);
     }
-  }, [commitHistory, data.reviewerId, data.workflowId, fenceRequests, loadHistoryPage, refresh]);
+  }, [
+    commitHistory,
+    data.reviewerId,
+    data.workflowId,
+    fenceRequests,
+    heldPlace,
+    loadHistoryPage,
+    refresh,
+  ]);
 
   /**
    * A manual refresh is a request for a snapshot newer than the click. If an
@@ -744,16 +754,7 @@ export function MultiReviewReviewerTab({
 
   // Hold the reader on the message they were reading when a page lands above
   // it; the list otherwise keeps its offset and the new rows push it away.
-  useLayoutEffect(() => {
-    const anchor = scrollAnchor.current;
-    if (!anchor) return;
-    scrollAnchor.current = null;
-    const index = messages.findIndex((message) => message.id === anchor);
-    if (index > 0) scrollToIndex(index);
-  }, [messages, scrollToIndex]);
-  useLayoutEffect(() => {
-    firstRenderedId.current = messages[0]?.id ?? null;
-  }, [messages]);
+  useRestoreHeldPlace(heldPlace, messages, scrollToIndex);
 
   const running = snapshot?.status === "running";
   const stalled = Boolean(snapshot?.stalledSince && running);

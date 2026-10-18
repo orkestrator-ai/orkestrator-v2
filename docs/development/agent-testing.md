@@ -244,7 +244,10 @@ file. This makes model pickers representative even in a deliberately
 credential-free run. Existing profile caches are preserved across restarts, and
 the seeding does not copy projects, sessions, prompts, settings, or additional
 credentials. Grok's explicitly authorized local login is the sole exception: a
-bounded owner-only `auth.json` snapshot is refreshed into the isolated home.
+bounded owner-only `auth.json` snapshot is refreshed into the isolated home,
+holding access tokens only. Its refresh tokens are blanked, so an expired host
+login leaves Grok signed out in the profile (see
+[credentials-and-models.md](credentials-and-models.md#agent-test-credential-policy)).
 
 To create and start fixture environments during seeding:
 

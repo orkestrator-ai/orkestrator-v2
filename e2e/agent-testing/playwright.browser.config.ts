@@ -28,7 +28,11 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   timeout: 120_000,
-  reporter: [["line"], ["json", { outputFile: path.join(outputRoot, "results.json") }]],
+  reporter: [
+    ["line"],
+    ["json", { outputFile: path.join(outputRoot, "results.json") }],
+    [path.join(import.meta.dirname, "artifact-sanitizing-reporter.ts"), { suite: "browser" }],
+  ],
   outputDir: path.join(outputRoot, "artifacts"),
   globalTeardown: path.join(import.meta.dirname, "global-teardown.ts"),
   use: {

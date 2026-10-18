@@ -608,3 +608,11 @@ Final aggregate exited 1 after 477.8 seconds. Backend reported 8978 passed, 41 s
 - **Owning-file rerun:** `mise run test:logged -- --name pi-vendor-rerun -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` also timed out (30000.17 ms; three passed, one failed; 32.2 seconds logged).
 - **Evidence:** aggregate `orkestrator-test-run.4qOAEA/root-and-agent-support-tests.log.gz` and isolated `orkestrator-test-run.5qKEzQ/pi-vendor-rerun.log.gz` under the host temporary directory.
 - **Assessment:** this occurrence does not independently establish a flake because the unchanged owning file also failed alone. Runtime staging remains an unresolved validation limitation. No Pi source, assertion, timeout, or skip changed.
+
+Final aggregate exited 1 after 690.9 seconds. Root/support reported 3052 passed,
+one skipped and three failed across 3056 tests in 140 files. The other two
+failures were configuration and bounded-diagnostics assertions introduced while
+adding the public smoke suite; both were corrected and passed together with the
+Playwright spec-loading checks in the focused `review-contracts` rerun (17.0 s).
+The public-client package passed all 41 tests, and its production browser smoke
+passed all eight cases. Bridge and protocol-lockfile groups passed.

@@ -437,3 +437,12 @@ Aggregate command, worker configuration, counts and evidence are recorded in [02
 - **Owning-file rerun:** `mise run test:logged -- --name coordinator-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` also timed out (5110.30 ms), followed by a late checkout-not-a-Git-repository rejection after fixture cleanup (51 passed, one failed, one between-tests error; 33.3 seconds logged).
 - **Evidence:** aggregate `orkestrator-test-run.4qOAEA/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and isolated `orkestrator-test-run.ACgVno/coordinator-rerun.log.gz` under the host temporary directory.
 - **Assessment:** this occurrence remains unresolved because the unchanged owning file also failed alone. No backend source, assertion, timeout, or skip changed.
+
+Final aggregate exited 1 after 690.9 seconds. Backend reported 9017 passed,
+41 skipped, this one failed case and its late between-tests error across
+9059 tests in 480 files (451.20 seconds). Every other workspace package passed;
+root/support also reported the Pi staging timeout and two subsequently corrected
+contract assertions. Bridge and protocol-lockfile groups passed. Electron,
+Docker and iOS scenario suites were omitted because the change covers the
+public client's pre-connection flow and Settings copy. Playwright stopped all
+owned test servers; no isolated application profile was created.

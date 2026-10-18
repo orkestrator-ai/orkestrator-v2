@@ -304,6 +304,28 @@ export function startPreviewFixture(options: PreviewFixtureOptions = {}): Promis
         "x-service-marker": marker,
       });
     }
+    if (path === "/sw.js") {
+      // A benign worker: it answers `/sw/marker` itself and passes every other
+      // request to the network, so its fetches cross the same transport.
+      return send(
+        response,
+        200,
+        "text/javascript",
+        `self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
+self.addEventListener("fetch", (event) => {
+  const path = new URL(event.request.url).pathname;
+  if (path === "/sw/marker") {
+    event.respondWith(new Response(JSON.stringify({ worker: ${JSON.stringify(marker)} }), {
+      headers: { "content-type": "application/json" },
+    }));
+  } else {
+    event.respondWith(fetch(event.request));
+  }
+});`,
+        { "x-service-marker": marker, "cache-control": "no-store" },
+      );
+    }
     if (path === "/csp") {
       return send(response, 200, "text/html", html(marker, "csp"), {
         "content-security-policy": "default-src 'self'",

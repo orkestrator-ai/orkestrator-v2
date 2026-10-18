@@ -192,7 +192,9 @@ Published desktop releases and the in-app updater are described in [`docs/develo
 
 Open [`orkestrator.dev`](https://www.orkestrator.dev) and select **Log in**, or connect directly at [`orkestrator.dev/connect`](https://www.orkestrator.dev/connect).
 
-To install Bun if needed and start the published backend without cloning the repository:
+The hosted client is static. The browser connects directly to your backend over Tailscale; commands, terminal traffic and agent sessions are not relayed through the website. Both devices must be on the same tailnet, and the backend needs a tailnet-only HTTPS address (a plain `http://100.x.y.z:34121` URL is blocked as mixed content).
+
+From the desktop app, enable **Settings → Web client → Allow web access**, then enter the HTTPS address and gateway token shown there. Without the desktop app or a clone, install Bun if needed and run the published backend:
 
 ```bash
 curl -fsSL https://orkestrator.dev/install.sh | \
@@ -200,9 +202,7 @@ curl -fsSL https://orkestrator.dev/install.sh | \
   --allowed-origins https://orkestrator.dev,https://www.orkestrator.dev
 ```
 
-The hosted client connects your browser directly to your backend. See the [CLI guide](packages/cli/README.md) for service options and Tailscale Serve setup.
-
-Remote browser access (Tailscale, `mise run start:web`, `mise run start:web-public`) is documented in [`docs/architecture/remote-gateway.md`](docs/architecture/remote-gateway.md). The gateway binds Tailscale addresses by default and requires a token.
+See the [CLI guide](packages/cli/README.md) for service options and Tailscale Serve setup. Remote browser access (`mise run start:web`, `mise run start:web-public`, tokens, Tailscale Serve) is documented in [`docs/architecture/remote-gateway.md`](docs/architecture/remote-gateway.md). The gateway binds Tailscale addresses by default and requires a token.
 
 ## Further reading
 

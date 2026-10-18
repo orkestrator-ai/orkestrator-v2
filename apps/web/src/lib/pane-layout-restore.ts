@@ -156,6 +156,8 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
   if (type === "browser") {
     if (!isRecord(value.browserData)) return null;
     const url = optionalString(value.browserData.url) ?? "";
+    const requestId = nonEmptyString(value.browserData.navigationRequestId);
+    const navigationRequestId = requestId && requestId.length <= 128 ? requestId : undefined;
     const rawHistory =
       Array.isArray(value.browserData.history) &&
       value.browserData.history.every((entry) => typeof entry === "string")
@@ -176,6 +178,7 @@ function sanitizeTab(value: unknown, context: PaneLayoutRestoreContext): TabInfo
       type,
       browserData: {
         url,
+        ...(navigationRequestId ? { navigationRequestId } : {}),
         ...(history ? { history } : {}),
         ...(historyIndex !== undefined ? { historyIndex } : {}),
         ...(annotationPanel ? { annotationPanel } : {}),

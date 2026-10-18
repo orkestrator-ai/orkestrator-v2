@@ -261,3 +261,21 @@ The unchanged owning file passed alone (4 pass, 1.4 s).
 - **Assessment:** confirmed intermittent recurrence; the existing
   invalidation hypothesis remains unconfirmed. No watcher implementation,
   assertion, timeout or skip changed.
+
+## Live transcript paging qualification recurrence — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name full-test -- mise run test` on `qualify-transcript-paging-live-mr-c2fa28c0ecdd` (web transcript views and an opt-in e2e spec only), shared macOS arm64 host.
+- **Failure:** the unchanged case failed at line 139 in 185.23 ms: cache hits expected 1, received 0. Backend reported 9,016 passed, 41 skipped and two failed across 480 files (414.4 seconds); the other was the new coordinator timeout [0480](0480-coordinator-fetch-remotes-submodule-timeout.md).
+- **Isolated rerun:** `mise run test:logged -- --name git-cache-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures` passed, exit 0 (0.8 seconds logged).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.9ChzHs/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- No watcher implementation, assertion, timeout or skip changed.
+
+## Recurrence after merging main into the real-Electron preview branch (2026-10-18)
+
+- **Command:** `mise run test:logged -- --name full-tests-merged -- mise run test`
+  on branch `qualify-preview-electron-tunnel-c6ca4deaffee` after merging
+  `origin/main` at `68dc1c8d`, on a macOS arm64 host shared with other
+  live-test worktrees.
+- **Failure:** the same test failed in the backend workspace group (135.8 ms).
+- **Isolated rerun:** `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1`
+  passed 4/4. The owning file was unchanged on the branch.

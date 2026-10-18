@@ -107,3 +107,14 @@ suites running in other environments. Failed at 5072.95 ms. Workspace and root
 artifacts:
 `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.UQLOD6/`.
 The unchanged owning file passed alone (48 pass, 2.3 s, after failing twice more at 5.0 s while load was 69).
+
+## Recurrence during real-Electron service-preview qualification (2026-10-18)
+
+- **Command:** `mise run test:logged -- --name full-tests -- mise run test` on
+  a macOS arm64 host shared with other live-test worktrees (load average
+  around 30), on branch `qualify-preview-electron-tunnel-c6ca4deaffee`.
+- **Failure:** the same test timed out at 5 s; the follow-on
+  `git rev-parse exited 128: Unable to read current working directory` came
+  from the timed-out test's removed fixture directory.
+- **Isolated rerun:** `mise run test:logged -- --name coordinator-live-alone -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/dev/coordinator-live.test.ts --parallel=1`
+  passed in 2.1 s. The owning file was unchanged on the branch.

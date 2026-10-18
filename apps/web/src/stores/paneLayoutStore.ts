@@ -266,6 +266,7 @@ interface PaneLayoutState {
     environmentId?: string,
     history?: string[],
     historyIndex?: number,
+    navigationRequestId?: string,
   ) => void;
   /** Persist only web annotation panel view preferences for a browser tab. */
   updateTabBrowserAnnotationPanel: (
@@ -1354,7 +1355,7 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     set({ environments });
   },
 
-  updateTabBrowserUrl: (tabId, url, environmentId, history, historyIndex) => {
+  updateTabBrowserUrl: (tabId, url, environmentId, history, historyIndex, navigationRequestId) => {
     const state = get();
     const envId = environmentId ?? state.activeEnvironmentId;
     if (!envId) return;
@@ -1364,7 +1365,12 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
     const paneWithTab = findPaneWithTab(envState.root, tabId);
     const existingTab = paneWithTab?.tabs.find((tab) => tab.id === tabId);
     if (!paneWithTab || existingTab?.type !== "browser" || !existingTab.browserData) return;
-    if (existingTab.browserData.url === url && history === undefined && historyIndex === undefined)
+    if (
+      existingTab.browserData.url === url &&
+      history === undefined &&
+      historyIndex === undefined &&
+      navigationRequestId === undefined
+    )
       return;
 
     // A cursor without a new array still has to be clamped: it addresses the
@@ -1387,6 +1393,9 @@ export const usePaneLayoutStore = create<PaneLayoutState>()((set, get) => ({
               browserData: {
                 ...tab.browserData,
                 url,
+                ...(url !== tab.browserData.url || navigationRequestId !== undefined
+                  ? { navigationRequestId: navigationRequestId ?? createUuid() }
+                  : {}),
                 ...(boundedHistory !== undefined ? { history: boundedHistory } : {}),
                 ...(boundedHistoryIndex !== undefined ? { historyIndex: boundedHistoryIndex } : {}),
               },

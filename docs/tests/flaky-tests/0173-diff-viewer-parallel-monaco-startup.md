@@ -78,3 +78,10 @@ Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run
 - **Owning-file rerun:** `mise run test:logged -- --name resolve-browser-owner-rerun -- bunx playwright test --config e2e/playwright.config.ts e2e/DiffViewerMobile.spec.ts e2e/PaneBreakpoint.spec.ts --workers=1` passed both unchanged files (exit 0, 42.1 seconds).
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.NgqDST/resolve-browser.log.gz`.
 - **Assessment:** Matches the existing startup symptom. Host contention and overlapping Vite updates remain possible contributors; no diff-viewer code or test changed.
+
+## Agent-mail review validation recurrence — 2026-10-19
+
+- `mise run test:logged -- --name browser -- mise run test:browser` ran five browser workers alongside repository and isolated-browser validation. The mobile header and new-file cases did not find `.monaco-diff-editor` within five seconds. The suite finished with 346 passed, 80 skipped and six failed in 7.5 minutes.
+- The unchanged owning file passed alone: `mise run test:logged -- --name browser-diff-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DiffViewerMobile.spec.ts --workers=1 --output output/playwright/mail-review-diff` (exit 0, 18.6 seconds).
+- Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.xmUT5O/browser.log.gz`.
+- No timeout, assertion or skip changed. Host load was high; causality remains unconfirmed.

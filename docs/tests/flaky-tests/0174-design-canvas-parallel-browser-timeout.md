@@ -82,3 +82,10 @@ case at 30000 ms (335 passed, 80 skipped, five failures across 420 cases).
 `mise run test:logged -- --name browser-design-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1`
 then passed the owning file in 27.2 seconds. Browser reruns ran sequentially.
 Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.iMEuX0/browser.log.gz`.
+
+## Agent-mail review validation recurrence — 2026-10-19
+
+- `mise run test:logged -- --name browser -- mise run test:browser` timed out both unchanged viewport cases in the five-worker run alongside repository and isolated-browser validation (346 passed, 80 skipped, six failed in 7.5 minutes).
+- The unchanged owning file passed alone: `mise run test:logged -- --name browser-design-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1 --output output/playwright/mail-review-design` (exit 0, 19.2 seconds). Browser owner reruns ran sequentially.
+- Evidence: `/var/folders/w0/qhqx9hyx0kz0625nb35b7vv40000gq/T/orkestrator-test-run.xmUT5O/browser.log.gz`.
+- No timeout, assertion or skip changed. Host contention is a possible contributor, not an established cause.

@@ -428,3 +428,12 @@ Aggregate command, worker configuration, counts and evidence are recorded in [02
 - **Failure:** `project coordinator > bound discard confirmations refuse stale, sequencer, nested, and failed switches` exceeded its 5000 ms deadline at 5129.20 ms, with a late `SQLITE_IOERR_VNODE` during asynchronous persistence after fixture cleanup.
 - **Owning-file rerun:** `mise run test:logged -- --name merge-coordinator-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 11.6 seconds).
 - **Assessment:** the unchanged isolated pass confirms intermittence; shared-host contention remains a hypothesis. No owning implementation, assertion, timeout or skip changed.
+
+
+## Public landing-page review observation — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name root-tests -- mise run test` on macOS arm64 with Bun 1.4.3, alongside browser validation and other worktrees on the shared host.
+- **Failure:** `bound discard confirmations refuse stale, sequencer, nested, and failed switches` exceeded its 5000 ms deadline (5147.65 ms).
+- **Owning-file rerun:** `mise run test:logged -- --name coordinator-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` also timed out (5110.30 ms), followed by a late checkout-not-a-Git-repository rejection after fixture cleanup (51 passed, one failed, one between-tests error; 33.3 seconds logged).
+- **Evidence:** aggregate `orkestrator-test-run.4qOAEA/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and isolated `orkestrator-test-run.ACgVno/coordinator-rerun.log.gz` under the host temporary directory.
+- **Assessment:** this occurrence remains unresolved because the unchanged owning file also failed alone. No backend source, assertion, timeout, or skip changed.

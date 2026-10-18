@@ -599,3 +599,12 @@ Final aggregate: exit 1 after 1252.7 seconds logged. Backend passed 8964 tests w
 - **Assessment:** the isolated pass confirms intermittence. Shared-host contention remains an unconfirmed hypothesis; no owning implementation, assertion, timeout or skip changed.
 
 Final aggregate exited 1 after 477.8 seconds. Backend reported 8978 passed, 41 skipped and one failed across 9020 tests in 478 files (423.04 seconds). Root/support reported the Pi timeout above; all other workspace packages, bridges and the Codex protocol check passed. Both failing owning files passed unchanged alone. Formatting, lint, typechecking and the full component browser suite also passed. Additional real-stack, Electron, Docker and iOS scenario suites were omitted because the branch changes a component-browser test and documentation, and conflict resolution changes documentation only.
+
+
+## Public landing-page review validation — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name root-tests -- mise run test` on macOS arm64 with Bun 1.4.3, alongside browser validation and other worktrees on the shared host.
+- **Failure:** `loads Pi's supported SDK from the staged runtime closure` exceeded its 30000 ms deadline (30000.10 ms).
+- **Owning-file rerun:** `mise run test:logged -- --name pi-vendor-rerun -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` also timed out (30000.17 ms; three passed, one failed; 32.2 seconds logged).
+- **Evidence:** aggregate `orkestrator-test-run.4qOAEA/root-and-agent-support-tests.log.gz` and isolated `orkestrator-test-run.5qKEzQ/pi-vendor-rerun.log.gz` under the host temporary directory.
+- **Assessment:** this occurrence does not independently establish a flake because the unchanged owning file also failed alone. Runtime staging remains an unresolved validation limitation. No Pi source, assertion, timeout, or skip changed.

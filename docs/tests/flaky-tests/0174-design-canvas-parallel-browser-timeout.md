@@ -82,3 +82,28 @@ case at 30000 ms (335 passed, 80 skipped, five failures across 420 cases).
 `mise run test:logged -- --name browser-design-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1`
 then passed the owning file in 27.2 seconds. Browser reruns ran sequentially.
 Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.iMEuX0/browser.log.gz`.
+
+
+## Public landing-page review recurrence — 2026-10-18
+
+The desktop `canvas edits, script isolation, missed events, conflict and reload`
+case timed out after 30000 ms in `mise run test:logged -- --name browser -- mise run test:browser`
+(nine workers, alongside the full unit suite and other worktrees on macOS arm64).
+The component run finished with 339 passed, 80 skipped and 11 failed; nine
+failures were trace-file ENOENT errors caused by an overlapping rerun sharing
+its output directory, separate from the Monaco and canvas timeouts.
+Evidence: `orkestrator-test-run.OwH8yL/browser.log.gz` under the host temporary directory.
+
+`ORKESTRATOR_E2E_PORT=1443 mise run test:logged -- --name canvas-browser-rerun -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts --workers=1 --output=output/playwright/canvas-rerun`
+passed both unchanged viewport cases (27.2 seconds logged). This confirms
+intermittence for the canvas timeout. Shared-host contention remains a hypothesis;
+no canvas source, assertion, timeout, or skip changed.
+
+The two files affected by the artifact collision also passed unchanged with
+one worker and separate output directories: `e2e/AgentUsage.spec.ts` in 27.5 s
+(`--output=output/playwright/usage-rerun`) and
+`e2e/BackgroundTaskOutcome.spec.ts` in 43.5 s
+(`--output=output/playwright/background-rerun`). Both used
+`mise run test:logged -- --name <label> -- bunx playwright test --config e2e/playwright.config.ts <owning-file> --workers=1 --output=<directory>`.
+These ENOENT failures were caused by the overlapping validation commands,
+not evidence of intermittent product behavior.

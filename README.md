@@ -183,7 +183,7 @@ Both the machine running Orkestrator and the device with the browser must be sig
 1. Make sure Tailscale is connected on both devices.
 2. In the Electron app, open **Settings > Web client**, enable **Allow web access**, and save. The app keeps its existing backend running, allows the hosted Orkestrator origins, and publishes it through Tailscale Serve.
 3. Copy the HTTPS backend address and gateway token shown in that settings panel.
-4. Open [`https://www.orkestrator.dev`](https://www.orkestrator.dev) from a browser on the same tailnet.
+4. Open [`https://www.orkestrator.dev/connect`](https://www.orkestrator.dev/connect) from a browser on the same tailnet.
 5. Enter the HTTPS address as the **Backend address** and the token as the **Gateway token**, then select **Connect directly**. Use the origin only—do not add a path, query string, or token to the URL.
 
 For a standalone backend without Electron, run:

@@ -30,7 +30,7 @@ type Icon = ComponentType<SVGProps<SVGSVGElement>>;
 
 const GITHUB_URL = "https://github.com/orkestrator-ai/orkestrator-v2";
 const INSTALL_COMMAND =
-  "curl -fsSL https://orkestrator.dev/install.sh | bash -s -- --tailscale-serve --allowed-origins https://orkestrator.dev";
+  "curl -fsSL https://orkestrator.dev/install.sh | bash -s -- --tailscale-serve --allowed-origins https://orkestrator.dev,https://www.orkestrator.dev";
 
 const AGENTS = ["Claude Code", "Codex", "OpenCode", "Cursor Agent", "Grok Build", "Pi"];
 
@@ -327,7 +327,11 @@ function InstallCommand() {
         <span aria-hidden="true">$ </span>
         {INSTALL_COMMAND}
       </code>
-      <button type="button" onClick={copy} aria-label="Copy install command">
+      <button
+        type="button"
+        onClick={copy}
+        aria-label={copied ? "Install command copied" : "Copy install command"}
+      >
         {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
       </button>
     </div>

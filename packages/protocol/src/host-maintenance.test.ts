@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { isHostVersion, parseHostUpdaterReport } from "./host-maintenance.js";
+import {
+  hostUpdateChannelOfVersion,
+  hostUpdateChannelsReceived,
+  isHostVersion,
+  parseHostUpdaterReport,
+} from "./host-maintenance.js";
 
 describe("parseHostUpdaterReport", () => {
   test("accepts each report the executor sends", () => {
@@ -60,4 +65,35 @@ test("isHostVersion accepts release names only", () => {
   expect(isHostVersion("2.22.0-rc.1")).toBe(true);
   expect(isHostVersion("v2.22.0")).toBe(false);
   expect(isHostVersion("latest")).toBe(false);
+});
+
+test("a release's channel comes from its version suffix", () => {
+  expect(hostUpdateChannelOfVersion("2.23.0")).toBe("stable");
+  expect(hostUpdateChannelOfVersion("v2.23.0")).toBe("stable");
+  expect(hostUpdateChannelOfVersion("2.23.0-beta")).toBe("beta");
+  expect(hostUpdateChannelOfVersion("2.23.0-beta.2")).toBe("beta");
+  expect(hostUpdateChannelOfVersion("v2.24.0-alpha")).toBe("unstable");
+  expect(hostUpdateChannelOfVersion("2.24.0-alpha.3")).toBe("unstable");
+  for (const version of ["2.23.0-rc.1", "2.23.0-unstable", "2.23.0-beta-2", "2.23", "beta"]) {
+    expect(hostUpdateChannelOfVersion(version)).toBeNull();
+  }
+});
+
+test("a channel receives its own releases and every more stable channel's", () => {
+  expect(hostUpdateChannelsReceived("stable")).toEqual(["stable"]);
+  expect(hostUpdateChannelsReceived("beta")).toEqual(["stable", "beta"]);
+  expect(hostUpdateChannelsReceived("unstable")).toEqual(["stable", "beta", "unstable"]);
+});
+
+test("check reports preserve a valid channel and reject an unknown one", () => {
+  const report = {
+    type: "check",
+    latestVersion: "2.23.0",
+    updateAvailable: true,
+    checkedAt: "2026-10-16T12:00:00.000Z",
+    error: null,
+    channel: "beta",
+  } as const;
+  expect(parseHostUpdaterReport(report)).toEqual(report);
+  expect(parseHostUpdaterReport({ ...report, channel: "canary" })).toBeNull();
 });

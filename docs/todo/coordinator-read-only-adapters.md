@@ -98,6 +98,9 @@ advertises.
    `codex-config.ts`. Only do this if a live run in
    [coordinator-live-conformance.md](coordinator-live-conformance.md) shows
    Codex reaching for it; the poll guard covers mailbox polling either way.
+   Live evidence on 2026-10-18: no Codex coordinator ran `sleep` in the
+   async and worker-mail family scenarios (nor did Claude, OpenCode or
+   Cursor), so the deny is still not justified.
 3. **OpenCode at `enforced`.** Only if unification requires it: the adapter
    would have to ignore or disable project MCP servers that can execute
    commands. Until then OpenCode stays `provider-configured`, and the note

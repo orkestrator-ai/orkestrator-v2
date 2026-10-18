@@ -259,6 +259,14 @@ ORKESTRATOR_PREVIEW_BENCH=1 mise run test:logged -- --name preview-bench -- \
   bun test --cwd apps/backend ./src/preview-bench.test.ts --parallel=1
 ```
 
+The real Electron window with the desktop tunnel on needs no variable: it is
+`e2e/agent-testing/service-preview-electron.spec.ts`, part of
+`mise run test:agent:electron`. It launches Electron on a disposable
+agent-test profile with `ORKESTRATOR_PREVIEW_TRANSPORT=1` (agent-test backends
+keep that variable and `ORKESTRATOR_PREVIEW_RELAY`) and two preview-app
+fixtures. Run it alone with
+`bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts service-preview-electron.spec.ts`.
+
 Record results in the evidence log of
 [service-preview-rollout.md](../todo/service-preview-rollout.md#evidence-log).
 

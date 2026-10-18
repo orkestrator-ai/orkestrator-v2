@@ -26,3 +26,26 @@
 Claude package counts: 1563 passed, five skipped and one failed across 1569 tests in 74 files (70.94 seconds). The other four bridge packages passed.
 
 Aggregate result: `merge2-tests` exited 1 after 1132.1 seconds logged. Backend reported 9081 passed, 41 skipped and 11 failed across 9133 tests in 485 files (1118.57 seconds). Every other workspace package passed; root/support passed 3084 tests with one skip, and protocol regeneration passed. Evidence: `orkestrator-test-run.0J1rem/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
+
+## Coordinator qualification main refresh — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name refresh-full -- mise run test`, with the testing guide's GNU-tool PATH prefix, merging `origin/main` into pre-merge HEAD `1bca78a2`. Workspace/root/bridges/protocol reserved 4/1/2/1 slots alongside credential-free CLI scenarios and isolated design-browser validation.
+- **Related owner:** `status frames > a failed plan-mode persistence write keeps the current toggle`, `bridges/claude-bridge/src/services/session-manager-system-events.test.ts:270`.
+- **Failure:** `.claude` was already a directory when the fixture tried to replace it with a file (`EISDIR`, 2.09 ms), before the assertion on the plan-mode toggle.
+- **Owning-file rerun:** `mise run test:logged -- --name refresh-claude-system-owner -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/services/session-manager-system-events.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 0.2 seconds.
+- **Evidence:** `orkestrator-test-run.Bda6du/bridges.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** the unchanged isolated pass confirms intermittence in the same fixture-directory pattern. Asynchronous session setup remains a hypothesis; no source, assertion, timeout or skip changed.
+
+The aggregate finished in 419.7 seconds with only the bridge group failing. Claude reported 1575 passed, five skipped and one failed across 1581 tests in 74 files (39.22 seconds); all other bridges, every workspace package, root/support and protocol regeneration passed.
+
+The subsequent warm run, `mise run test:logged -- --name refresh-full-warm -- mise run test`, passed all four groups unchanged (exit 0, 322.1 seconds logged). The isolated design-browser task and credential-free CLI scenario matrix also passed; no test skip, assertion or timeout changed.
+
+## Keep-open picker main merge — 2026-10-19
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, with the testing guide's GNU-tool PATH prefix, merging `origin/main` at `d28f0d63` into `24d4ac1c`. Workspace/root/bridges/protocol reserved 4/1/2/1 slots alongside browser validation.
+- **Failure:** `plan approval flow > keeps plan mode enabled when an approved exit cannot be persisted` failed before its assertion because writing `.claude` raised `EISDIR` (`session-manager-interactions.test.ts:863`, 2.29 ms). Claude reported 1575 passed, five skipped and one failed across 1581 tests in 74 files (57.86 seconds); the other four bridge packages passed.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-claude-interactions-owner -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/services/session-manager-interactions.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 0.1 seconds logged.
+- **Evidence:** `orkestrator-test-run.4pe57b/bridges.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** confirmed intermittent recurrence of the existing fixture-directory symptom. No bridge implementation, assertion, timeout or skip changed.
+
+The subsequent installed-dependency aggregate, `mise run test:logged -- --name merge-tests-installed -- mise run test`, passed all four groups unchanged (exit 0, 266.7 seconds logged).

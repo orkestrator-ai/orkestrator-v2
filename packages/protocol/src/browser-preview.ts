@@ -30,6 +30,12 @@ export interface BrowserPreviewAttachInput {
   url?: string;
   /** Service previews: resolved and authorized in the main process. */
   service?: BrowserPreviewServiceTarget;
+  /**
+   * Service previews: the view navigation (`BrowserPreviewState.service.navigation`)
+   * that `service.path` was chosen against. A path chosen against an older
+   * navigation is stale and never navigates the view. Absent from older renderers.
+   */
+  navigationBasis?: number;
   bounds: BrowserPreviewBounds;
   visible: boolean;
 }
@@ -51,8 +57,12 @@ export interface BrowserPreviewState {
   canGoBack: boolean;
   canGoForward: boolean;
   error: string | null;
-  /** Present for service previews: the durable identity and app-relative path. */
-  service?: { serviceId: string; path: string; displayUrl: string };
+  /**
+   * Present for service previews: the durable identity and app-relative path.
+   * `navigation` counts the view's main-frame navigations (links, redirects,
+   * history, in-page routes); echo it as `navigationBasis`.
+   */
+  service?: { serviceId: string; path: string; displayUrl: string; navigation?: number };
   transport?: BrowserPreviewTransportState;
 }
 

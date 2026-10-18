@@ -10,7 +10,7 @@ dist/
 dist-electron/
 .turbo/
 out/
-release/
+/release/
 # Root-anchored: an unanchored `build/` also swallows source directories named
 # `build`, such as apps/web/src/components/build.
 /build/

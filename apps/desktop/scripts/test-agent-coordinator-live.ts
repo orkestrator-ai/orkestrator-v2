@@ -5,7 +5,7 @@ import { COORDINATOR_LIVE_ROOT_ENV, runCoordinatorLive } from "./dev/coordinator
 import { SUPERVISED_FLAG, ownerAbortSignal, runUnderSupervisor } from "./dev/owner-supervisor.js";
 
 /**
- * `mise run test:agent:coordinator [--credential-source <platform>]…`
+ * `mise run test:agent:coordinator [--credential-source <platform>]… [--scenario <scenario>]…`
  *
  * One disposable `dev:test --fixture` profile per platform, authorized for
  * that platform's host credential alone, runs the live coordinator spec and is
@@ -24,7 +24,7 @@ const args = process.argv.slice(2);
 const supervised = args[0] === SUPERVISED_FLAG;
 if (supervised) args.shift();
 // Validated before anything starts, so a typo fails without a profile.
-const { platforms } = parseCoordinatorLiveArguments(args);
+const { platforms, scenarios } = parseCoordinatorLiveArguments(args);
 
 if (supervised) {
   const owner = ownerAbortSignal();
@@ -32,6 +32,7 @@ if (supervised) {
     const override = process.env[COORDINATOR_LIVE_ROOT_ENV];
     const { exitCode, summaryFile } = await runCoordinatorLive({
       platforms,
+      scenarios,
       signal: owner.signal,
       log: (line) => console.log(line),
       ...(override ? { root: path.resolve(override) } : {}),

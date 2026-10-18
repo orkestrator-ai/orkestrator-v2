@@ -3832,6 +3832,54 @@ describe("NativeAgentService", () => {
       );
     });
 
+    test.each([
+      // A coordinator launch names no model: the settings' default is inherited,
+      // so a login that cannot serve it gets the runtime's replacement.
+      ["an inherited default is replaced", undefined, "gpt-5.5", ["gpt-5.4"]],
+      // A launcher that named a model keeps it, and dispatch reports it.
+      ["a launch's own model stays pinned", "gpt-5.4", "gpt-5.4", []],
+    ] as const)(
+      "the initial prompt's Codex model: %s",
+      async (_label, initialAgentModel, expectedModel, resolved) => {
+        const { provider, send } = createProviderStub("codex");
+        const resolveDefaultModel = mock(async (modelId: string | undefined) =>
+          modelId === "gpt-5.4" ? { modelId: "gpt-5.5" } : { modelId },
+        );
+        provider.resolveDefaultModel = resolveDefaultModel;
+        await withService(
+          {
+            prefix: "orkestrator-native-launch-codex-default-",
+            environment: {
+              pendingAgentLaunch: true,
+              initialPrompt: "Report to the coordinator",
+              agentSettings: {
+                defaultAgent: "codex",
+                platforms: { codex: { mode: "native", model: "gpt-5.4" } },
+              },
+              ...(initialAgentModel ? { initialAgentModel } : {}),
+            },
+            provider: async () => provider,
+          },
+          async ({ storage, service }) => {
+            await service.reconcileInitialLaunch("env-1");
+
+            expect(resolveDefaultModel.mock.calls.map(([modelId]) => modelId)).toEqual([
+              ...resolved,
+            ]);
+            expect(send).toHaveBeenCalledWith(
+              "provider-session",
+              "Report to the coordinator",
+              expect.objectContaining({ model: expectedModel }),
+            );
+            const stored = await storage.getNativeAgentSession(
+              nativeAgentSessionStorageKey("env-1", "codex", "env-env-1:startup-agent"),
+            );
+            expect(stored?.controls?.modelId).toBe(expectedModel);
+          },
+        );
+      },
+    );
+
     test("prefers the environment's one-shot speed over the platform tier's", async () => {
       const { provider, createSession } = createProviderStub("codex");
       await withService(

@@ -80,6 +80,44 @@ function asSplit(node: PaneNode): Extract<PaneNode, { kind: "split" }> {
 }
 
 describe("mergePersistedPaneLayouts", () => {
+  test("keeps a browser navigation's URL and write identity atomic while merging panel edits", () => {
+    const browser = (url: string, navigationRequestId?: string, open = false) =>
+      input({
+        kind: "leaf",
+        id: "pane",
+        activeTabId: "browser",
+        tabs: [
+          {
+            id: "browser",
+            type: "browser",
+            browserData: {
+              url,
+              ...(navigationRequestId ? { navigationRequestId } : {}),
+              annotationPanel: { open },
+            },
+          },
+        ],
+      });
+    const base = browser("/a", "base");
+    // A newer request for the same path is still a local navigation intent.
+    const local = browser("/a", "local");
+    const remote = browser("/b", "remote", true);
+    const merged = mergePersistedPaneLayouts(base, local, remote);
+    expect(tabs(merged.root)[0]!.browserData).toEqual({
+      url: "/a",
+      navigationRequestId: "local",
+      annotationPanel: { open: true },
+    });
+    const panelOnly = browser("/a", "base", true);
+    expect(
+      tabs(mergePersistedPaneLayouts(base, panelOnly, browser("/b", "remote")).root)[0]!
+        .browserData,
+    ).toEqual({ url: "/b", navigationRequestId: "remote", annotationPanel: { open: true } });
+    expect(
+      tabs(mergePersistedPaneLayouts(base, browser("/legacy"), remote).root)[0]!.browserData,
+    ).toEqual({ url: "/legacy", annotationPanel: { open: true } });
+  });
+
   test("unions distinct concurrent additions", () => {
     const base = input(leaf("default", ["base"]));
     const local = input(leaf("default", ["base", "local"]));

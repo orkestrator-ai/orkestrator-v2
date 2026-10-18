@@ -54,6 +54,10 @@ in `bridges/codex-bridge` passed the unchanged owning file alone (2 pass,
 0 fail, 82 ms). Evidence: `orkestrator-test-run.mVA1hD/bridges.log.gz` in the
 macOS temporary directory.
 
+## Electron preview main merge — 2026-10-18
+
+`mise run test:logged -- --name merge-tests -- mise run test` repeated the version/invocation timeout at 5074.82 ms. The unchanged owning file passed with `mise run test:logged -- --name merge-codexfake-owner -- bun test ./bridges/codex-bridge/src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` (exit 0, 1.1 seconds). Aggregate evidence: `orkestrator-test-run.ItrRrn/bridges.log.gz` below the host temporary directory. No implementation, assertion, timeout or skip changed.
+
 ## Main merge validation — 2026-10-18
 
 - **Command:** `mise run test:logged -- --name merge-full-suite -- mise run test`, aggregate reservations 4/1/2/1; one worker for the owning package/group.
@@ -72,3 +76,11 @@ macOS temporary directory.
 - **Assessment:** the equivalent isolated pass confirms intermittence. Shared-host contention remains a hypothesis; no implementation, assertion, timeout or skip changed.
 
 Aggregate result: exit 1 after 664.7 seconds logged. Codex bridge reported 2230 passed, 34 skipped and this one failure across 2265 tests; all other bridge packages passed.
+
+## Async question prefix review recurrence — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name complete-suite -- mise run test`, with workspace/root/bridges/protocol reservations of 4/1/2/1 worker slots; browser validation also ran on the shared host.
+- **Failure:** the version/invocation case exceeded its 5000 ms deadline (5017.17 ms). The other four bridge packages passed.
+- **Owning-file rerun:** `mise run test:logged -- --name codex-fake-process-node-recheck -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` passed unchanged (0.2 seconds logged).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.LC3ZRI/bridges.log.gz` (compressed when the aggregate completes).
+- **Assessment:** confirmed recurrence; no implementation, assertion, timeout or skip changed.

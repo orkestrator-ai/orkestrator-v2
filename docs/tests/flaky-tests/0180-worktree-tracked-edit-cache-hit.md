@@ -234,3 +234,56 @@ backend package, and again in one of three runs of the owning file alone
 - **Isolated rerun:** `mise run test:logged -- --name baseline-worktree-git -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 0.6 s.
 - **Evidence:** `orkestrator-test-run.BopZMS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Disposition:** Confirmed recurrence; no watcher implementation, assertion, timeout or skip changed.
+
+## Upgrade-channel merge validation — 2026-10-18
+
+- **Command:** `mise run test:logged -- --name merge-final-tests -- mise run test`, with the testing guide's macOS GNU-tool PATH and aggregate workspace/root/bridges/protocol reservations of 4/1/2/1 workers; backend used two isolated workers.
+- **Failure:** The same assertion at line 139 expected 1 and received 0 (175.25 ms). Backend reported 9059 passed, 41 skipped and one failure across 481 files; all other workspace packages, root tests, bridges and protocol regeneration passed. The full command exited 1 after 566.1 seconds including capacity waits.
+- **Isolated rerun:** `mise run test:logged -- --name merge-worktree-cache-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures`, with the same GNU-tool PATH, also failed unchanged: three passed, one failed in 1.1 seconds (116.10 ms for the failing test).
+- **Evidence:** `orkestrator-test-run.xfw48l/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `orkestrator-test-run.PMDdwy/merge-worktree-cache-rerun.log.gz` under the host temporary directory.
+- **Disposition:** This observation does not independently establish a flake because the owning file failed alone. The test and its worktree implementation were not changed by the merge; no assertion, timeout or skip changed. Full-suite validation remains non-green.
+
+## Recurrence on 2026-10-18
+
+`mise run test:logged -- --name full-test -- mise run test` on branch `qualify-coordinator-live-six-platforms-fb2b4a53344d`, on a host at load average 36–69 with several live
+suites running in other environments. Failed at 231.49 ms, an assertion rather than a timeout. Workspace and root
+artifacts:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.UQLOD6/`.
+The unchanged owning file passed alone (4 pass, 1.4 s).
+
+
+## Live coordinator review-fix validation — 2026-10-18
+
+- **Aggregate:** `mise run test:logged -- --name coordinator-full-suite -- mise run test`
+  on `qualify-coordinator-live-six-platforms-fb2b4a53344d`, macOS arm64, Bun 1.4.3.
+  Backend used two isolated workers alongside the other aggregate groups and
+  another worktree's validation. The workspace group exited 1 after 363.7 s;
+  backend reported 9045 passed, 41 skipped, two failed and one between-tests
+  error. Every other workspace package, root/support, bridges and protocol
+  lockfile validation passed.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.MUMuwG/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Failure:** the tracked-edit cache-hit assertion at line 139 expected 1
+  and received 0 (105.32 ms). The preceding modified-file assertion passed.
+- **Owning-file rerun:** `mise run test:logged -- --name worktree-cache-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures`
+  passed unchanged, exit 0, in 0.4 s.
+- **Assessment:** confirmed intermittent recurrence; the existing
+  invalidation hypothesis remains unconfirmed. No watcher implementation,
+  assertion, timeout or skip changed.
+
+## Live transcript paging qualification recurrence — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name full-test -- mise run test` on `qualify-transcript-paging-live-mr-c2fa28c0ecdd` (web transcript views and an opt-in e2e spec only), shared macOS arm64 host.
+- **Failure:** the unchanged case failed at line 139 in 185.23 ms: cache hits expected 1, received 0. Backend reported 9,016 passed, 41 skipped and two failed across 480 files (414.4 seconds); the other was the new coordinator timeout [0480](0480-coordinator-fetch-remotes-submodule-timeout.md).
+- **Isolated rerun:** `mise run test:logged -- --name git-cache-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures` passed, exit 0 (0.8 seconds logged).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.9ChzHs/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- No watcher implementation, assertion, timeout or skip changed.
+
+## Recurrence after merging main into the real-Electron preview branch (2026-10-18)
+
+- **Command:** `mise run test:logged -- --name full-tests-merged -- mise run test`
+  on branch `qualify-preview-electron-tunnel-c6ca4deaffee` after merging
+  `origin/main` at `68dc1c8d`, on a macOS arm64 host shared with other
+  live-test worktrees.
+- **Failure:** the same test failed in the backend workspace group (135.8 ms).
+- **Isolated rerun:** `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1`
+  passed 4/4. The owning file was unchanged on the branch.

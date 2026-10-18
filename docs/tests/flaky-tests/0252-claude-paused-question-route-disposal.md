@@ -23,3 +23,19 @@
 - **Owning-file rerun:** `mise run test:logged -- --name claude-interactions-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/ClaudeInteractions.spec.ts --workers=1 --output=output/playwright/claude-interactions-owner` passed unchanged (19.5 seconds logged).
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.fPWiLQ/picker-browser.log.gz`.
 - **Assessment:** confirmed intermittent recurrence; no Claude implementation, assertion, timeout or skip changed. The public-site smoke suite, which the component failure prevented from starting, passed separately.
+
+## Transcript-paging final validation — 2026-10-18
+
+The desktop variant repeated the same request-context disposal during
+`mise run test:logged -- --name committed-browser-suite -- mise run test:browser`
+on commit `3dd86696`. All transcript-paging cases passed; component suite counts
+were 359 passed, 80 skipped and one failed (124.8 seconds logged).
+
+The unchanged owner passed both viewport projects alone in 11.7 seconds:
+
+```bash
+mise run test:logged -- --name claude-interactions-alone -- bunx playwright test --config e2e/playwright.config.ts e2e/ClaudeInteractions.spec.ts --workers=1
+```
+
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.19DYL2/committed-browser-suite.log.gz`.
+No interaction test, timeout, assertion or product behavior changed.

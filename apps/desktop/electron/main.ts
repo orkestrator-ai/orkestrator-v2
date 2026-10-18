@@ -385,6 +385,11 @@ async function startAutoUpdate(): Promise<void> {
   if (!autoUpdateSupported()) return;
   try {
     const { default: electronUpdater } = await import("electron-updater");
+    const { VersionOrderedGitHubProvider } = await import("./github-update-provider.js");
+    electronUpdater.autoUpdater.setFeedURL({
+      provider: "custom",
+      updateProvider: VersionOrderedGitHubProvider,
+    });
     autoUpdate = createAutoUpdateController({
       updater: electronUpdater.autoUpdater,
       productName,

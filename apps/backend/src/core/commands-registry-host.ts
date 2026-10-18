@@ -1,3 +1,4 @@
+import { isHostUpdateChannel } from "@orkestrator/protocol/host-maintenance";
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import { assertOnlyKeys } from "./commands-validation.js";
@@ -64,6 +65,13 @@ export function registerHostMaintenanceCommands(register: CommandRegistrar): voi
   register("start_host_image_update", (args, context) => {
     assertOnlyKeys(args, [], "arguments");
     return startImageUpdate(context);
+  });
+  register("set_host_update_channel", (args, context) => {
+    assertOnlyKeys(args, ["channel"], "arguments");
+    if (!isHostUpdateChannel(args.channel)) {
+      throw new Error("channel must be stable, beta or unstable");
+    }
+    return service(context).setUpdateChannel(args.channel);
   });
   register("set_host_gh_channel", (args, context) => {
     assertOnlyKeys(args, ["channel"], "arguments");

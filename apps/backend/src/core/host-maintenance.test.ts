@@ -342,6 +342,53 @@ describe("HostMaintenanceService", () => {
     expect(seen).toHaveLength(1);
   });
 
+  test("a host that never chose a channel keeps the one its first release came from", () => {
+    const beta = create({ version: "2.23.0-beta" }).service;
+    expect(beta.updateChannel()).toBe("beta");
+    beta.close();
+    // The beta install has since updated to a stable release.
+    expect(create({ version: "2.23.0" }).service.updateChannel()).toBe("beta");
+  });
+
+  test("an existing stable install defaults to Stable", () => {
+    expect(create().service.snapshot().updateChannel).toBe("stable");
+  });
+
+  test("switching the update channel drops the last check and asks for a new one", () => {
+    const { service, events } = create();
+    service.report({
+      type: "check",
+      latestVersion: "2.22.0",
+      updateAvailable: true,
+      checkedAt: "2026-10-16T12:30:00.000Z",
+      error: null,
+    });
+    service.setNextRelease({ version: "2.22.0", tools: { claude: "2.1.310" } });
+    const snapshot = service.setUpdateChannel("beta");
+    expect(snapshot.updateChannel).toBe("beta");
+    expect(snapshot.updater.latestVersion).toBeNull();
+    expect(snapshot.nextRelease).toBeNull();
+    expect(snapshot.checkRequest).not.toBeNull();
+    const revision = events.length;
+    service.setUpdateChannel("beta");
+    expect(events).toHaveLength(revision);
+  });
+
+  test("a host without an updater records the channel without requesting a check", () => {
+    const { service } = create({ updater: "none", ready: false });
+    expect(service.setUpdateChannel("unstable")).toMatchObject({
+      updateChannel: "unstable",
+      checkRequest: null,
+    });
+  });
+
+  test("refuses to change the update channel during an update", () => {
+    const { service } = create();
+    service.requestUpdate({ requestedVersion: null });
+    expect(() => service.setUpdateChannel("beta")).toThrow("update in progress");
+    expect(service.updateChannel()).toBe("stable");
+  });
+
   test("a detailed snapshot adds live readings and survives a failing reader", async () => {
     const { service } = create();
     service.setReaders({
@@ -415,4 +462,68 @@ test("readiness settlement cannot finish a new job admitted during startup or on
   service.markReady();
   service.markReady();
   expect(service.job(job.id)?.state).toBe("requested");
+});
+
+test("late release pins are fenced across channel switches and subsequent checks", async () => {
+  const completions: Array<() => void> = [];
+  const service = new HostMaintenanceService({
+    dataDir,
+    updater: "standalone",
+    version: "2.21.0",
+    emit: () => undefined,
+    onCheck: (version, isCurrent) => {
+      completions.push(() => {
+        if (version && isCurrent()) service.setNextRelease({ version, tools: { claude: version } });
+      });
+    },
+  });
+  service.init();
+  service.markReady();
+  try {
+    service.setUpdateChannel("unstable");
+    service.report({
+      type: "check",
+      latestVersion: "2.24.0-alpha",
+      updateAvailable: true,
+      checkedAt: new Date().toISOString(),
+      error: null,
+    });
+    await Promise.resolve();
+    service.setUpdateChannel("stable");
+    service.report({
+      type: "check",
+      latestVersion: "2.23.0",
+      updateAvailable: true,
+      checkedAt: new Date().toISOString(),
+      error: null,
+    });
+    await Promise.resolve();
+    completions[1]!();
+    completions[0]!();
+    expect(service.snapshot().nextRelease?.version).toBe("2.23.0");
+    service.setUpdateChannel("unstable");
+    completions[0]!();
+    expect(service.snapshot().nextRelease).toBeNull();
+  } finally {
+    service.close();
+  }
+});
+
+test("late executor reports cannot replace a channel result after its request settled", () => {
+  const { service } = create();
+  const old = service.requestCheck().checkRequest!.id;
+  const current = service.setUpdateChannel("beta").checkRequest!.id;
+  const report = {
+    type: "check" as const,
+    latestVersion: "2.24.0-beta",
+    updateAvailable: true,
+    checkedAt: new Date().toISOString(),
+    error: null,
+  };
+  service.report({ ...report, channel: "beta", checkRequestId: current });
+  const expected = service.snapshot();
+  service.report({ ...report, latestVersion: "2.23.0", channel: "stable", checkRequestId: old });
+  service.report({ ...report, latestVersion: "2.23.0", channel: "stable" });
+  service.report({ ...report, latestVersion: "2.23.0", checkRequestId: old });
+  expect(service.snapshot()).toEqual(expected);
 });

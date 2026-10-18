@@ -10,6 +10,7 @@ import type {
 } from "@orkestrator/protocol/host-maintenance";
 
 import * as backend from "@/lib/backend";
+import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 import { UpdatesSettings, describeRestartImpact } from "./UpdatesSettings";
 
 function snapshot(overrides: Partial<HostMaintenanceSnapshot> = {}): HostMaintenanceSnapshot {
@@ -172,4 +173,28 @@ test("restart confirmation identifies running agents with unknown activity", () 
       measuredAt: "2026-10-16T12:00:00Z",
     }),
   ).toContain("1 agent with unknown activity");
+});
+
+test("switches the host's update channel", async () => {
+  spyOn(backend, "getHostMaintenance").mockResolvedValue(snapshot());
+  const change = spyOn(backend, "setHostUpdateChannel").mockResolvedValue(
+    snapshot({
+      revision: 2,
+      updateChannel: "beta",
+      checkRequest: { id: "c1", requestedAt: "2026-10-16T12:00:01Z" },
+    }),
+  );
+  render(<UpdatesSettings />);
+  fireEvent.click(await screen.findByRole("combobox", { name: "Update channel" }));
+  fireEvent.click(await screen.findByRole("option", { name: "Beta" }));
+  await waitFor(() => expect(change).toHaveBeenCalledWith("beta"));
+  expect(await screen.findByText(/Previews of the next release/)).toBeTruthy();
+});
+
+test("hides the channel for a backend that does not report one", async () => {
+  const { updateChannel: _, ...older } = snapshot();
+  spyOn(backend, "getHostMaintenance").mockResolvedValue(older as HostMaintenanceSnapshot);
+  render(<UpdatesSettings />);
+  expect(await screen.findByText("2.21.1")).toBeTruthy();
+  expectDomAbsent(screen.queryByRole("combobox", { name: "Update channel" }), "channel picker");
 });

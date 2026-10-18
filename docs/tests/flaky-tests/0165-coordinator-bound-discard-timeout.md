@@ -483,6 +483,52 @@ owned test servers; no isolated application profile was created.
 - **Evidence:** `orkestrator-test-run.iFuHsy/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. Backend reported 9025 passed, 41 skipped and 17 failed across 9083 tests, with 12 errors between tests.
 - **Assessment:** confirmed intermittent recurrence; no implementation, assertion, timeout or skip in these owners changed. Shared-host contention remains a hypothesis.
 
+## Recurrence on 2026-10-18
+
+`mise run test:logged -- --name full-test -- mise run test` on branch `qualify-coordinator-live-six-platforms-fb2b4a53344d`, on a host at load average 36–69 with several live
+suites running in other environments. Failed at 5260.49 ms. Workspace and root
+artifacts:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.UQLOD6/`.
+The unchanged owning file passed alone (52 pass, 19.6 s, after one more loaded failure).
+
+
+## Live coordinator review-fix validation — 2026-10-18
+
+- **Aggregate:** `mise run test:logged -- --name coordinator-full-suite -- mise run test`
+  on `qualify-coordinator-live-six-platforms-fb2b4a53344d`, macOS arm64, Bun 1.4.3.
+  Backend used two isolated workers alongside the other aggregate groups and
+  another worktree's validation. The workspace group exited 1 after 363.7 s;
+  backend reported 9045 passed, 41 skipped, two failed and one between-tests
+  error. Every other workspace package, root/support, bridges and protocol
+  lockfile validation passed.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.MUMuwG/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Failure:** the bound-discard case exceeded its 5000 ms deadline at
+  5218.78 ms. Late fixture work then expected the nested-repository refusal
+  but received "The configured local checkout is not a Git repository" after
+  cleanup removed the checkout.
+- **Owning-file rerun:** `mise run test:logged -- --name coordinator-discard-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`
+  passed unchanged, exit 0, in 10.6 s.
+- **Assessment:** confirmed intermittent recurrence. No owning implementation,
+  assertion, timeout or skip changed. The review fixes change live-suite
+  harnesses and add a separate server-reconciliation regression test.
+
+## Transcript-paging review fixes — 2026-10-18
+
+`mise run test:logged -- --name full-tests -- mise run test` repeated both
+coordinator timeouts (bound discard: 5169.70 ms; remote fetch: 5197.15 ms).
+The backend reported 9,040 passed and two failed; every other workspace package,
+the root/support group, bridges, and protocol check passed. The complete run
+took 445.2 seconds alongside browser and live-provider validation.
+
+The unchanged owning file then passed, exit 0, in 11.7 seconds:
+
+```bash
+mise run test:logged -- --name coordinator-alone -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures
+```
+
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.g5ONdt/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+No coordinator code, test, timeout, or assertion changed.
+
 ## CLI matrices main merge recurrence — 2026-10-18
 
 - **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, macOS arm64 and Bun 1.4.3; workspace/root/bridges/protocol used 4/1/2/1 worker slots alongside component browser validation.
@@ -512,6 +558,18 @@ Backend reported 9084 passed, 41 skipped and three failed across 9128 tests in 4
 
 Evidence: `orkestrator-test-run.tMXC4x/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. Confirmed intermittent recurrence; shared-host contention remains a hypothesis. No source, assertion, timeout or skip changed.
 
+## Transcript-paging main merge — 2026-10-18
+
+The testing guide's GNU-tool PATH prefix followed by `mise run test:logged -- --name merge-tests -- mise run test` repeated the bound-discard 5000 ms deadline at 5141.58 ms. Workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated workers alongside browser validation and other worktrees.
+
+The same PATH prefix with `mise run test:logged -- --name merge-coordinator-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` still failed the unchanged owner (bound discard at 5095.04 ms, followed by a late `SQLITE_IOERR_VNODE` after the test deadline; 51 passed, one failed, one error, 26.9 s logged).
+
+Evidence: `orkestrator-test-run.Yk2l1H/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `orkestrator-test-run.Mlh3Vn/merge-coordinator-owner.log.gz` below the host temporary directory. At this point the isolated failure did not independently establish an aggregate-only flake. No source, assertion, timeout or skip changed; the post-aggregate result is recorded below.
+
+Final aggregate counts: backend 9085 passed, 41 skipped and two failed across 9128 tests in 483 files (502.39 s). The aggregate exited 1 after 1473.5 s including queue time. The other backend failure is recorded in 0211; bridges and protocol passed.
+
+After all aggregate groups and browser runs ended, the same GNU-tool PATH with `mise run test:logged -- --name merge-coordinator-post-aggregate -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` passed the unchanged owning file (52 tests, exit 0, 11.7 s). This confirms intermittence for this occurrence; shared-host contention remains a hypothesis.
+
 ## Design live-cycle second main merge observation — 2026-10-18
 
 The GNU-tool PATH run of `mise run test:logged -- --name merge-full -- mise run test` (workspace/root/bridges/protocol reservations 4/1/2/1, alongside browser validation) timed out four coordinator cases: dirty branch switching (5549.68 ms), bound discard confirmations (5385.47 ms), configured remote/submodule fetching (5289.15 ms), and force/fast-forward/remote/divergence handling (5317.17 ms).
@@ -533,3 +591,33 @@ Evidence: aggregate `orkestrator-test-run.yluX61/workspace-web-backend-desktop-w
 Aggregate result: `merge2-tests` exited 1 after 1132.1 seconds logged. Backend reported 9081 passed, 41 skipped and 11 failed across 9133 tests in 485 files (1118.57 seconds). Every other workspace package passed; root/support passed 3084 tests with one skip, and protocol regeneration passed. Evidence: `orkestrator-test-run.0J1rem/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
 
 After the full aggregate ended, `mise run test:logged -- --name merge2-after-aggregate-owners -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts ./tests/recurring-baseline.test.ts --parallel=1 --only-failures` reported 56 passed, one failed and one between-test error across 57 tests (56.0 seconds logged). All five unchanged recurring-baseline tests passed; coordinator bound-discard still timed out (5279.64 ms), with late `SQLITE_IOERR_VNODE`. Evidence: `orkestrator-test-run.zR2pum/merge2-after-aggregate-owners.log.gz` below the host temporary directory. This confirms intermittence for the baseline case while leaving the coordinator observation unresolved.
+
+## Further main merge at f51c7252 — 2026-10-18
+
+- **Original command:** the testing guide's GNU-tool PATH prefix, then `mise run test:logged -- --name refresh-main-tests -- mise run test`, merging `f51c7252` into `17c19221`.
+- **Workers:** workspace/root/bridges/protocol reservations 4/1/2/1; backend used two isolated Bun workers alongside targeted browser and CLI validation on the shared host.
+- **Failure:** `project coordinator > bound discard confirmations refuse stale, sequencer, nested, and failed switches` exceeded its 5000 ms deadline at 5150.12 ms. The coordinator timeouts also produced late fixture errors after their deadlines.
+- **Suite counts:** backend 9088 passed, 41 skipped and four failed across 9133 tests in 485 files (385.41 s); every other workspace package, root/support, bridges and protocol passed. Aggregate exited 1 after 445.1 s.
+- **Owning-file rerun:** after the aggregate, the same GNU-tool PATH with `mise run test:logged -- --name refresh-main-owner-coordinator -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` passed the unchanged file, exit 0, in 11.2 s. The three owning files ran sequentially.
+- **Evidence:** `orkestrator-test-run.AP1Ws9/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory; outer log `orkestrator-test-run.TVK3dv/refresh-main-tests.log.gz`.
+- **Assessment:** confirmed intermittent recurrence; shared-host contention remains a hypothesis. No implementation, assertion, timeout or skip changed.
+
+## README regression-test main merge recurrence — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, merging `origin/main` at `f51c7252` into `bdaee060`; Bun 1.4.3 on macOS arm64. Workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated workers, alongside browser validation and other host work.
+- **Aggregate result:** exit 1 after 376.6 seconds logged. Backend reported 9089 passed, 41 skipped, three failed and one between-test error across 9133 tests in 485 files. All other workspace packages, root/support, bridges and protocol regeneration passed.
+- **Failure:** `project coordinator > bound discard confirmations refuse stale, sequencer, nested, and failed switches` exceeded 5000 ms at 5134.06 ms. Its late nested-repository assertion then received `disk I/O error` after fixture cleanup.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-coordinator-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` passed the unchanged owning file, exit 0, in 13.9 seconds logged.
+- **Evidence:** `orkestrator-test-run.wmdv2p/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
+- **Assessment:** the unchanged owning-file pass confirms an intermittent recurrence. Shared-host contention remains a hypothesis; no implementation, assertion, timeout or skip changed.
+- **Warm full-suite validation:** `mise run test:logged -- --name merge-tests-warm -- mise run test` passed all four groups, exit 0, in 339.7 seconds logged.
+
+
+## Upgrade-channel second main merge warm run — 2026-10-18
+
+- **Original command:** the testing guide's macOS GNU-tool PATH with `mise run test:logged -- --name merge2-full-warm -- mise run test`, merging `origin/main` at `62c5c696` into `129e3887`. Workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated workers alongside Electron validation on the shared host.
+- **Failure:** `project coordinator > bound discard confirmations refuse stale, sequencer, nested, and failed switches` in `apps/backend/src/core/coordinator-service.test.ts` exceeded 5000 ms at 5126.92 ms.
+- **Suite counts:** backend 9109 passed, 41 skipped and six failed across 9156 tests in 486 files (579.33 seconds). Every other workspace package, root/support, bridges and protocol regeneration passed; aggregate exit 1 after 596.4 seconds.
+- **Isolated rerun:** `mise run test:logged -- --name merge2-coordinator-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`, with the same GNU-tool PATH, passed the unchanged owning file (exit 0, 31.8 seconds).
+- **Evidence:** `orkestrator-test-run.4BSigl/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.EJfRvy/merge2-full-warm.log.gz`, below the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence. Shared-host contention remains a hypothesis; no implementation, assertion, deadline or skip changed.

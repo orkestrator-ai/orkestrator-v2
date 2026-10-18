@@ -24,10 +24,10 @@ afterEach(async () => {
   await rm(dataDir, { recursive: true, force: true });
 });
 
-function registry(latest: string): typeof fetch {
+function registry(tags: Record<string, string>): typeof fetch {
   return mock(async () =>
-    Response.json({ name: "orkestrator", "dist-tags": { latest } }),
-  ) as unknown as typeof fetch;
+    Response.json({ name: "orkestrator", "dist-tags": tags }),
+  ) as unknown as unknown as typeof fetch;
 }
 
 /** `bun install`, `--version` and `toolchain install` for fake releases. */
@@ -59,7 +59,14 @@ function runner(engines = ">=1.4.3"): { run: CommandRunner; calls: string[][] } 
   return { run, calls };
 }
 
-async function setup(options: { engines?: string; latest?: string } = {}) {
+async function setup(
+  options: {
+    engines?: string;
+    latest?: string;
+    tags?: Record<string, string>;
+    fetchImpl?: typeof fetch;
+  } = {},
+) {
   const layout = standaloneLayout(dataDir);
   await writeServiceConfig(layout, {
     version: 1,
@@ -85,7 +92,8 @@ async function setup(options: { engines?: string; latest?: string } = {}) {
     dataDir,
     currentVersion: "2.21.1",
     shutdown,
-    fetchImpl: registry(options.latest ?? "2.22.0"),
+    fetchImpl:
+      options.fetchImpl ?? registry(options.tags ?? { latest: options.latest ?? "2.22.0" }),
     run,
     restartDelayMs: 30,
     idlePollMs: 5,
@@ -108,6 +116,33 @@ async function until(predicate: () => boolean, timeoutMs = 3_000): Promise<void>
 }
 
 describe("createStandaloneUpdater", () => {
+  test("checks the dist-tags of the host's update channel and every more stable one", async () => {
+    const { service, updater } = await setup({
+      tags: { latest: "2.22.0", beta: "2.23.0-beta", alpha: "2.24.0-alpha" },
+    });
+    const newest = async () => {
+      await updater.check();
+      return service.snapshot().updater.latestVersion;
+    };
+    expect(await newest()).toBe("2.22.0");
+    service.setUpdateChannel("beta");
+    expect(await newest()).toBe("2.23.0-beta");
+    service.setUpdateChannel("unstable");
+    expect(await newest()).toBe("2.24.0-alpha");
+  });
+
+  test("a stable release newer than the last beta reaches the Beta channel", async () => {
+    const { service, updater } = await setup({
+      tags: { latest: "2.23.0", beta: "2.23.0-beta" },
+    });
+    service.setUpdateChannel("beta");
+    await updater.check();
+    expect(service.snapshot().updater).toMatchObject({
+      latestVersion: "2.23.0",
+      updateAvailable: true,
+    });
+  });
+
   test("installs, pre-installs the toolchain, counts down, switches current and restarts", async () => {
     const { layout, service, shutdown, calls } = await setup();
     const job = service.requestUpdate({ requestedVersion: null });
@@ -206,4 +241,60 @@ test("startup settlement precedes executor startup so interrupted requests are n
   expect(service.job(job.id)?.state).toBe("failed");
   expect(calls).toEqual([]);
   expect(shutdown).not.toHaveBeenCalled();
+});
+
+for (const outcome of ["success", "failure"] as const) {
+  test(`obsolete standalone ${outcome} cannot overwrite the current channel`, async () => {
+    const requests: Array<{ resolve(value: Response): void; reject(error: Error): void }> = [];
+    const fetchImpl = (() =>
+      new Promise<Response>((resolve, reject) =>
+        requests.push({ resolve, reject }),
+      )) as unknown as typeof fetch;
+    const { service, updater } = await setup({ fetchImpl });
+    service.setUpdateChannel("unstable");
+    const old = updater.check();
+    service.setUpdateChannel("stable");
+    const current = updater.check();
+    const response = () =>
+      Response.json({ "dist-tags": { latest: "2.23.0", alpha: "2.24.0-alpha" } });
+    requests.at(-1)!.resolve(response());
+    requests[2]!.resolve(response()); // the switch-triggered Stable check
+    await current;
+    await until(() => service.snapshot().checkRequest === null);
+    const expected = service.snapshot().updater;
+    for (const request of requests.slice(0, 2)) {
+      if (outcome === "success") request.resolve(response());
+      else request.reject(new Error("obsolete registry failure"));
+    }
+    await old;
+    expect(service.snapshot().updateChannel).toBe("stable");
+    expect(service.snapshot().updater).toEqual(expected);
+    expect(service.snapshot().updater.latestVersion).toBe("2.23.0");
+  });
+}
+
+test("standalone refuses an explicitly requested release outside the current channel", async () => {
+  const { service, calls, shutdown } = await setup();
+  const job = service.requestUpdate({ requestedVersion: "2.24.0-alpha" });
+  await until(() => service.job(job.id)?.state === "failed");
+  expect(service.job(job.id)?.error).toContain("not available on the stable channel");
+  expect(calls).toEqual([]);
+  expect(shutdown).not.toHaveBeenCalled();
+});
+
+test("returning to the same channel does not revive an obsolete check generation", async () => {
+  const requests: Array<(value: Response) => void> = [];
+  const fetchImpl = (() =>
+    new Promise<Response>((resolve) => requests.push(resolve))) as unknown as typeof fetch;
+  const { service } = await setup({ fetchImpl });
+  service.setUpdateChannel("unstable");
+  service.setUpdateChannel("stable");
+  service.setUpdateChannel("unstable");
+  requests[2]!(Response.json({ "dist-tags": { latest: "2.23.0", alpha: "2.25.0-alpha" } }));
+  await until(() => service.snapshot().checkRequest === null);
+  const expected = service.snapshot();
+  requests[0]!(Response.json({ "dist-tags": { latest: "2.23.0", alpha: "2.99.0-alpha" } }));
+  requests[1]!(Response.json({ "dist-tags": { latest: "2.23.0" } }));
+  await Bun.sleep(10);
+  expect(service.snapshot()).toEqual(expected);
 });

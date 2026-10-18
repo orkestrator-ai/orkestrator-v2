@@ -36,6 +36,48 @@ export type HostUpdaterKind = "desktop" | "standalone" | "none";
 /** When an update may restart the host: right away, or once nothing is running. */
 export type HostUpdateDrain = "now" | "when-idle";
 
+/**
+ * Which releases a host updates to, most stable first. A channel also receives
+ * every more stable channel's releases: Beta gets betas and stable releases,
+ * Unstable gets all three. Switching to a more stable channel never
+ * downgrades; the host stays on its version until that channel overtakes it.
+ */
+export const HOST_UPDATE_CHANNELS = ["stable", "beta", "unstable"] as const;
+export type HostUpdateChannel = (typeof HOST_UPDATE_CHANNELS)[number];
+
+/**
+ * Each channel's release name: the version suffix (`2.23.0`, `2.23.0-beta`,
+ * `2.23.0-alpha`), the electron-updater channel and the npm dist-tag.
+ */
+export const HOST_UPDATE_CHANNEL_TAGS: Readonly<
+  Record<HostUpdateChannel, "latest" | "beta" | "alpha">
+> = Object.freeze({ stable: "latest", beta: "beta", unstable: "alpha" });
+
+export function isHostUpdateChannel(value: unknown): value is HostUpdateChannel {
+  return HOST_UPDATE_CHANNELS.includes(value as HostUpdateChannel);
+}
+
+/**
+ * The channel a release belongs to, from its version: no suffix is Stable,
+ * `-beta[.N]` is Beta and `-alpha[.N]` is Unstable. Null for anything else,
+ * which no channel ships.
+ */
+export function hostUpdateChannelOfVersion(version: string): HostUpdateChannel | null {
+  const match = /^v?\d+\.\d+\.\d+(?:-([0-9A-Za-z-]+)(?:\.\d+)?)?$/.exec(version);
+  if (!match) return null;
+  if (match[1] === undefined) return "stable";
+  if (match[1] === HOST_UPDATE_CHANNEL_TAGS.beta) return "beta";
+  if (match[1] === HOST_UPDATE_CHANNEL_TAGS.unstable) return "unstable";
+  return null;
+}
+
+/** The channels whose releases a host on `channel` installs, most stable first. */
+export function hostUpdateChannelsReceived(
+  channel: HostUpdateChannel,
+): readonly HostUpdateChannel[] {
+  return HOST_UPDATE_CHANNELS.slice(0, HOST_UPDATE_CHANNELS.indexOf(channel) + 1);
+}
+
 export const HOST_UPDATE_JOB_STATES = [
   "requested",
   "downloading",
@@ -201,6 +243,8 @@ export interface HostMaintenanceSnapshot {
   nextRelease: HostReleasePins | null;
   /** Whether `gh` follows its pin or upstream releases. */
   ghChannel: "pinned" | "latest";
+  /** Which Orkestrator releases this host updates to. */
+  updateChannel: HostUpdateChannel;
   /**
    * Live readings, present only in a detailed read (`host.status`,
    * `get_host_maintenance { detail: true }`), never in events.

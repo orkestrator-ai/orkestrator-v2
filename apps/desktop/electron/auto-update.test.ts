@@ -46,12 +46,23 @@ describe("isAutoUpdateSupported", () => {
 function createHarness(
   checkResult: UpdateCheckResult | Error | null = {},
   prepareForInstall?: () => Promise<void>,
+  currentVersion = "2.19.9",
 ) {
   const listeners = new Map<string, (arg: never) => void>();
+  let channel: string | null = null;
   const updater: UpdaterLike = {
     autoDownload: false,
     autoInstallOnAppQuit: false,
     allowPrerelease: true,
+    allowDowngrade: false,
+    // Like electron-updater, setting a channel allows downgrades.
+    get channel() {
+      return channel;
+    },
+    set channel(value) {
+      channel = value;
+      updater.allowDowngrade = true;
+    },
     on: ((event: string, listener: (arg: never) => void) => {
       listeners.set(event, listener);
     }) as UpdaterLike["on"],
@@ -70,7 +81,7 @@ function createHarness(
   const controller = createAutoUpdateController({
     updater,
     productName: "Orkestrator AI",
-    currentVersion: "2.19.9",
+    currentVersion,
     getWindow: () => null,
     showMessageBox,
     log,
@@ -87,6 +98,41 @@ describe("createAutoUpdateController", () => {
     expect(updater.autoDownload).toBe(true);
     expect(updater.autoInstallOnAppQuit).toBe(true);
     expect(updater.allowPrerelease).toBe(false);
+    expect(updater.channel).toBe("latest");
+    expect(updater.allowDowngrade).toBe(false);
+  });
+
+  test("starts on the channel of the running release", () => {
+    expect(createHarness({}, undefined, "2.23.0-beta").updater).toMatchObject({
+      channel: "beta",
+      allowPrerelease: true,
+    });
+    expect(createHarness({}, undefined, "2.24.0-alpha.2").updater).toMatchObject({
+      channel: "alpha",
+      allowPrerelease: true,
+    });
+  });
+
+  test("follows a channel change without ever allowing a downgrade", () => {
+    const { updater, controller } = createHarness();
+    controller.setChannel("unstable");
+    expect(updater).toMatchObject({
+      channel: "alpha",
+      allowPrerelease: true,
+      allowDowngrade: false,
+    });
+    controller.setChannel("beta");
+    expect(updater).toMatchObject({
+      channel: "beta",
+      allowPrerelease: true,
+      allowDowngrade: false,
+    });
+    controller.setChannel("stable");
+    expect(updater).toMatchObject({
+      channel: "latest",
+      allowPrerelease: false,
+      allowDowngrade: false,
+    });
   });
 
   test("restarts only when the user chooses Restart Now", async () => {

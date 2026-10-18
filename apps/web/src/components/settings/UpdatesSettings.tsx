@@ -3,8 +3,11 @@ import { Download, Loader2, RefreshCw, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   CANCELLABLE_HOST_UPDATE_JOB_STATES,
+  HOST_UPDATE_CHANNELS,
   isActiveHostUpdateJob,
+  isHostUpdateChannel,
   type HostRestartImpact,
+  type HostUpdateChannel,
   type HostUpdateJob,
 } from "@orkestrator/protocol/host-maintenance";
 import {
@@ -120,6 +123,18 @@ function JobStatus({ job, onCancel }: { job: HostUpdateJob; onCancel: () => void
   );
 }
 
+const UPDATE_CHANNELS: Record<HostUpdateChannel, { label: string; description: string }> = {
+  stable: { label: "Stable", description: "Tested releases." },
+  beta: {
+    label: "Beta",
+    description: "Previews of the next release, and every stable release.",
+  },
+  unstable: {
+    label: "Unstable",
+    description: "Early builds that may break, and every beta and stable release.",
+  },
+};
+
 const IDLE_WAITS = [
   { seconds: 1_800, label: "30 minutes" },
   { seconds: 3_600, label: "1 hour" },
@@ -138,6 +153,7 @@ export function UpdatesSettings() {
   const [checking, setChecking] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [installing, setInstalling] = useState(false);
+  const [switchingChannel, setSwitchingChannel] = useState(false);
   const [whenIdle, setWhenIdle] = useState(false);
   const [maxWait, setMaxWait] = useState<number>(3_600);
   const [impact, setImpact] = useState<HostRestartImpact | null>(null);
@@ -180,6 +196,17 @@ export function UpdatesSettings() {
     }
   };
 
+  const changeChannel = async (channel: HostUpdateChannel) => {
+    setSwitchingChannel(true);
+    try {
+      accept(await backend.setHostUpdateChannel(channel));
+    } catch (failure) {
+      toast.error(`Could not change the update channel: ${errorText(failure)}`);
+    } finally {
+      setSwitchingChannel(false);
+    }
+  };
+
   const cancel = async () => {
     try {
       accept((await backend.cancelHostUpdate(snapshot?.job?.id)).snapshot);
@@ -201,6 +228,8 @@ export function UpdatesSettings() {
   const { updater, job } = snapshot;
   const jobActive = isActiveHostUpdateJob(job);
   const checkPending = snapshot.checkRequest !== null;
+  // Backends before update channels do not report one.
+  const channel = isHostUpdateChannel(snapshot.updateChannel) ? snapshot.updateChannel : null;
   const canInstall =
     updater.available &&
     !jobActive &&
@@ -221,6 +250,33 @@ export function UpdatesSettings() {
         <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
           <dt className="text-muted-foreground">Running</dt>
           <dd className="font-mono">{snapshot.version}</dd>
+          {channel && updater.kind !== "none" && (
+            <>
+              <dt className="self-center text-muted-foreground">Channel</dt>
+              <dd>
+                <Select
+                  value={channel}
+                  onValueChange={(value) => void changeChannel(value as HostUpdateChannel)}
+                  disabled={switchingChannel || jobActive}
+                >
+                  <SelectTrigger className="h-8 w-36" aria-label="Update channel">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className={Z_FULLSCREEN_DIALOG_POPOVER}>
+                    {HOST_UPDATE_CHANNELS.map((option) => (
+                      <SelectItem key={option} value={option}>
+                        {UPDATE_CHANNELS[option].label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  {UPDATE_CHANNELS[channel].description} A more stable channel keeps this version
+                  until it has a newer one.
+                </span>
+              </dd>
+            </>
+          )}
           <dt className="text-muted-foreground">Newest release</dt>
           <dd>
             {updater.checkError ? (

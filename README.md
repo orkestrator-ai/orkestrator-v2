@@ -132,12 +132,8 @@ image while keeping its files and agent session files.
 
 The `Publish container image` GitHub Actions workflow runs when a semantic
 version tag is pushed. The tag must match the version in the root
-`package.json`:
-
-```bash
-git tag v2.15.4
-git push origin v2.15.4
-```
+`package.json`; `mise run release:desktop` creates and pushes it (see
+[releasing.md](docs/development/releasing.md)).
 
 Stable releases receive full, major/minor, major, `latest`, and commit-SHA
 tags. Pre-release versions receive version and commit-SHA tags but do not move

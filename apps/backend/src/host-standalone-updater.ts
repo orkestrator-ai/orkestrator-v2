@@ -1,5 +1,7 @@
 import {
+  HOST_UPDATE_CHANNEL_TAGS,
   HOST_UPDATE_RESTART_DELAY_MS,
+  hostUpdateChannelsReceived,
   isHostIdle,
   isHostVersion,
   type HostMaintenanceSnapshot,
@@ -27,13 +29,15 @@ import type { HostMaintenanceService } from "./core/host-maintenance.js";
  * The executor of a standalone backend installed with `orkestrator service
  * install`: it updates itself.
  *
- * A check asks the npm registry for the `latest` dist-tag. An update installs
- * that release beside the running one (Bun verifies the registry integrity),
- * smoke-runs it, installs its pinned toolchain before any downtime, waits for
- * the host to be idle when asked, counts down, then switches `current`, marks
- * the restart and shuts this backend down. The launcher starts the new
- * release; if it never becomes ready the launcher rolls back, and the restored
- * backend reports the job failed from the launcher's evidence.
+ * A check asks the npm registry for the dist-tags of the host's update channel
+ * and every more stable one (`latest`, `beta`, `alpha`), and takes the newest
+ * of them. An update installs that release beside the running one (Bun
+ * verifies the registry integrity), smoke-runs it, installs its pinned
+ * toolchain before any downtime, waits for the host to be idle when asked,
+ * counts down, then switches `current`, marks the restart and shuts this
+ * backend down. The launcher starts the new release; if it never becomes ready
+ * the launcher rolls back, and the restored backend reports the job failed
+ * from the launcher's evidence.
  */
 
 type JobReport = Extract<HostUpdaterReport, { type: "job" }>;
@@ -92,15 +96,24 @@ export function createStandaloneUpdater(options: StandaloneUpdaterOptions) {
   let unsubscribe: (() => void) | null = null;
 
   async function latestVersion(): Promise<string> {
+    const channel = service.updateChannel();
     const response = await fetchImpl(`${registry}/${STANDALONE_PACKAGE}`, {
       headers: { accept: "application/vnd.npm.install-v1+json" },
       signal: AbortSignal.timeout(30_000),
     });
     if (!response.ok) throw new Error(`The npm registry answered HTTP ${response.status}`);
-    const metadata = (await response.json()) as { "dist-tags"?: { latest?: unknown } };
-    const latest = metadata["dist-tags"]?.latest;
-    if (!isHostVersion(latest)) throw new Error("The npm registry reported no latest release");
-    return latest;
+    const metadata = (await response.json()) as { "dist-tags"?: Record<string, unknown> };
+    // A tag is only moved by its own channel's releases, so a stable release
+    // newer than the last beta is found under `latest`, not `beta`.
+    const newest = hostUpdateChannelsReceived(channel)
+      .map((received) => metadata["dist-tags"]?.[HOST_UPDATE_CHANNEL_TAGS[received]])
+      .filter(isHostVersion)
+      .reduce<string | null>(
+        (best, version) => (best === null || isNewerVersion(version, best) ? version : best),
+        null,
+      );
+    if (!newest) throw new Error(`The npm registry reported no ${channel} release`);
+    return newest;
   }
 
   async function check(checkRequestId?: string): Promise<void> {

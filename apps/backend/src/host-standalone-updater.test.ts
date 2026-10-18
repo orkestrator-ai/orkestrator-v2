@@ -24,9 +24,9 @@ afterEach(async () => {
   await rm(dataDir, { recursive: true, force: true });
 });
 
-function registry(latest: string): typeof fetch {
+function registry(tags: Record<string, string>): typeof fetch {
   return mock(async () =>
-    Response.json({ name: "orkestrator", "dist-tags": { latest } }),
+    Response.json({ name: "orkestrator", "dist-tags": tags }),
   ) as unknown as typeof fetch;
 }
 
@@ -59,7 +59,9 @@ function runner(engines = ">=1.4.3"): { run: CommandRunner; calls: string[][] } 
   return { run, calls };
 }
 
-async function setup(options: { engines?: string; latest?: string } = {}) {
+async function setup(
+  options: { engines?: string; latest?: string; tags?: Record<string, string> } = {},
+) {
   const layout = standaloneLayout(dataDir);
   await writeServiceConfig(layout, {
     version: 1,
@@ -85,7 +87,7 @@ async function setup(options: { engines?: string; latest?: string } = {}) {
     dataDir,
     currentVersion: "2.21.1",
     shutdown,
-    fetchImpl: registry(options.latest ?? "2.22.0"),
+    fetchImpl: registry(options.tags ?? { latest: options.latest ?? "2.22.0" }),
     run,
     restartDelayMs: 30,
     idlePollMs: 5,
@@ -108,6 +110,33 @@ async function until(predicate: () => boolean, timeoutMs = 3_000): Promise<void>
 }
 
 describe("createStandaloneUpdater", () => {
+  test("checks the dist-tags of the host's update channel and every more stable one", async () => {
+    const { service, updater } = await setup({
+      tags: { latest: "2.22.0", beta: "2.23.0-beta", alpha: "2.24.0-alpha" },
+    });
+    const newest = async () => {
+      await updater.check();
+      return service.snapshot().updater.latestVersion;
+    };
+    expect(await newest()).toBe("2.22.0");
+    service.setUpdateChannel("beta");
+    expect(await newest()).toBe("2.23.0-beta");
+    service.setUpdateChannel("unstable");
+    expect(await newest()).toBe("2.24.0-alpha");
+  });
+
+  test("a stable release newer than the last beta reaches the Beta channel", async () => {
+    const { service, updater } = await setup({
+      tags: { latest: "2.23.0", beta: "2.23.0-beta" },
+    });
+    service.setUpdateChannel("beta");
+    await updater.check();
+    expect(service.snapshot().updater).toMatchObject({
+      latestVersion: "2.23.0",
+      updateAvailable: true,
+    });
+  });
+
   test("installs, pre-installs the toolchain, counts down, switches current and restarts", async () => {
     const { layout, service, shutdown, calls } = await setup();
     const job = service.requestUpdate({ requestedVersion: null });

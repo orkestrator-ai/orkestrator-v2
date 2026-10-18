@@ -1,5 +1,10 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import {
+  HOST_UPDATE_CHANNEL_TAGS,
+  hostUpdateChannelOfVersion,
+  type HostUpdateChannel,
+} from "@orkestrator/protocol/host-maintenance";
 import type { BrowserWindow, MessageBoxOptions, MessageBoxReturnValue } from "electron";
 
 /** First check shortly after launch, so it never competes with startup work. */
@@ -37,6 +42,8 @@ export type UpdaterLike = {
   autoDownload: boolean;
   autoInstallOnAppQuit: boolean;
   allowPrerelease: boolean;
+  allowDowngrade: boolean;
+  channel: string | null;
   on(event: "update-downloaded", listener: (info: { version: string }) => void): unknown;
   on(event: "download-progress", listener: (info: { percent: number }) => void): unknown;
   on(event: "error", listener: (error: Error) => void): unknown;
@@ -88,6 +95,11 @@ export type AutoUpdateController = {
   installStaged(version: string): Promise<boolean>;
   /** Release the staged version after a remote job ends. */
   releaseRemoteStage(): void;
+  /**
+   * Follows `channel` from the next check. An update already downloaded from
+   * the previous channel still installs on quit.
+   */
+  setChannel(channel: HostUpdateChannel): void;
   stop(): void;
 };
 
@@ -131,7 +143,25 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
 
   updater.autoDownload = true;
   updater.autoInstallOnAppQuit = true;
-  updater.allowPrerelease = false;
+  let channel: HostUpdateChannel | null = null;
+
+  /**
+   * electron-updater's GitHub provider reads `/releases/latest` unless
+   * prereleases are allowed; with them, the `beta` channel takes the newest
+   * stable or beta release and `alpha` the newest of any. Stable names
+   * `latest` because a channel, once set, cannot be cleared.
+   */
+  function applyChannel(next: HostUpdateChannel): void {
+    if (channel === next) return;
+    channel = next;
+    updater.channel = HOST_UPDATE_CHANNEL_TAGS[next];
+    updater.allowPrerelease = next !== "stable";
+    // Setting a channel allows downgrades. Moving to a more stable channel
+    // must wait for that channel to overtake this version instead.
+    updater.allowDowngrade = false;
+  }
+  // The Local backend's record replaces this once its executor reads it.
+  applyChannel(hostUpdateChannelOfVersion(currentVersion) ?? "stable");
 
   async function promptToRestart(version: string): Promise<void> {
     if (promptedVersion === version) return;
@@ -268,6 +298,10 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
     },
     releaseRemoteStage(): void {
       remoteReserved = false;
+    },
+    setChannel(next: HostUpdateChannel): void {
+      if (channel !== next) log.info(`[Updater] Following the ${next} channel`);
+      applyChannel(next);
     },
     async installStaged(version: string): Promise<boolean> {
       if (downloadedVersion !== version || checkInFlight) return false;

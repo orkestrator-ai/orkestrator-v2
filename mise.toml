@@ -183,8 +183,8 @@ description = "Smoke-test the packed CLI"
 run = "bun run --cwd packages/cli smoke:pack"
 
 [tasks."publish:cli"]
-description = "Smoke-test and publish the CLI"
-run = ["mise run smoke:cli", "bun publish --cwd packages/cli --access public"]
+description = "Smoke-test and publish the CLI under its update channel's npm dist-tag"
+run = ["mise run smoke:cli", "bun scripts/publish-cli.ts"]
 
 [tasks.preview]
 description = "Preview the production renderer"

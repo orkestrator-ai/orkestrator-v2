@@ -342,6 +342,53 @@ describe("HostMaintenanceService", () => {
     expect(seen).toHaveLength(1);
   });
 
+  test("a host that never chose a channel keeps the one its first release came from", () => {
+    const beta = create({ version: "2.23.0-beta" }).service;
+    expect(beta.updateChannel()).toBe("beta");
+    beta.close();
+    // The beta install has since updated to a stable release.
+    expect(create({ version: "2.23.0" }).service.updateChannel()).toBe("beta");
+  });
+
+  test("an existing stable install defaults to Stable", () => {
+    expect(create().service.snapshot().updateChannel).toBe("stable");
+  });
+
+  test("switching the update channel drops the last check and asks for a new one", () => {
+    const { service, events } = create();
+    service.report({
+      type: "check",
+      latestVersion: "2.22.0",
+      updateAvailable: true,
+      checkedAt: "2026-10-16T12:30:00.000Z",
+      error: null,
+    });
+    service.setNextRelease({ version: "2.22.0", tools: { claude: "2.1.310" } });
+    const snapshot = service.setUpdateChannel("beta");
+    expect(snapshot.updateChannel).toBe("beta");
+    expect(snapshot.updater.latestVersion).toBeNull();
+    expect(snapshot.nextRelease).toBeNull();
+    expect(snapshot.checkRequest).not.toBeNull();
+    const revision = events.length;
+    service.setUpdateChannel("beta");
+    expect(events).toHaveLength(revision);
+  });
+
+  test("a host without an updater records the channel without requesting a check", () => {
+    const { service } = create({ updater: "none", ready: false });
+    expect(service.setUpdateChannel("unstable")).toMatchObject({
+      updateChannel: "unstable",
+      checkRequest: null,
+    });
+  });
+
+  test("refuses to change the update channel during an update", () => {
+    const { service } = create();
+    service.requestUpdate({ requestedVersion: null });
+    expect(() => service.setUpdateChannel("beta")).toThrow("update in progress");
+    expect(service.updateChannel()).toBe("stable");
+  });
+
   test("a detailed snapshot adds live readings and survives a failing reader", async () => {
     const { service } = create();
     service.setReaders({

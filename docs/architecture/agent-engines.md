@@ -910,13 +910,32 @@ session, under a fresh request id and result slot
   (`resultReminderSent`). It says the work is done and only the submission is
   missing.
 - **Restart continuation.** A turn the provider itself cut short is not failed.
-  The Codex bridge reports that on `/session/:id/status` as
-  `interruption: "restart"` beside `phase: "failed"`, and
-  `readProviderStatus` carries it. A result accepted before the restart still
-  counts. Otherwise the turn gets one `workflowRestartContinuationPrompt`
-  (`restartContinuationSent`), which asks the model to continue rather than
-  resubmit, and a second interruption fails it. No other bridge reports
-  interruptions yet, so their cut-short turns fail as before.
+  The bridge reports `interruption: "restart"` beside a failed status on its
+  session snapshot, and `readProviderStatus` carries it. A result accepted
+  before the restart still counts. Otherwise the turn gets one
+  `workflowRestartContinuationPrompt` (`restartContinuationSent`), which asks
+  the model to continue rather than resubmit, and a second interruption fails
+  it. Two bridges report one:
+  - **Codex**, on `/session/:id/status` beside `phase: "failed"`, when an
+    app-server restart stopped the turn.
+  - **Claude**, on `GET /session/:id`, in two cases
+    (`session-manager-turn-interruption.ts`). The bridge keeps a
+    content-free `turnInFlight` mark in the session's preferences file while
+    a turn runs (or owes a background continuation), and clears it when the
+    turn settles, is stopped or its tab closes. A later bridge process that
+    restores the session with the mark still there, written by a process
+    that is gone, reports the turn failed. The mark carries a per-process
+    instance id and pid, so a turn another live bridge sharing the Claude home
+    is running is left alone. The second case is a Claude Code process killed
+    by a signal under the turn while the bridge stayed up: the SDK classifies
+    that error (`errorClass: "process_killed_by_signal"`, pinned in
+    `sdk-compatibility.test.ts`). A non-zero exit is not a restart, because it
+    is as likely a launch or sign-in fault.
+
+  The other bridges report none yet, so their cut-short turns fail as before.
+  A step or reviewer whose bridge is unreachable keeps its state and
+  reconnects on the next pass, so a bridge that died and came back is read
+  for its own outcome rather than failing the step first.
 
 Both flags are persisted, so a backend restart cannot reset either budget.
 

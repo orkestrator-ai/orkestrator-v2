@@ -198,3 +198,11 @@ cache-invalidation hypothesis remains unconfirmed.
 The final `mise run test:logged -- --name final-full-tests -- mise run test`
 passed all four groups (exit 0, 841.2 seconds including queue waits), with
 the owning test unchanged.
+
+## Usage-cache validation recurrence — 2026-10-18
+
+- **Command:** `mise run test:logged -- --name usage-all-tests -- mise run test`, with aggregate workspace/root/bridges/protocol reservations of 4/1/2/1 workers; backend used two isolated workers.
+- **Failure:** the tracked-edit cache-hit assertion expected 1 and received 0 at line 139 (140.96 ms). Backend reported 9038 passed, 41 skipped and four failures across 481 files; the remaining failures concern shell fixtures outside the usage-cache change.
+- **Isolated rerun:** `mise run test:logged -- --name baseline-worktree-git -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 0.6 s.
+- **Evidence:** `orkestrator-test-run.BopZMS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Disposition:** Confirmed recurrence; no watcher implementation, assertion, timeout or skip changed.

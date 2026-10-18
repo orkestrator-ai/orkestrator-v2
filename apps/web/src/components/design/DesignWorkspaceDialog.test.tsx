@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test, type Mock } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { DesignCanvas } from "@orkestrator/protocol/design-canvas";
+import { toast } from "sonner";
+import { resetCapabilities } from "@/lib/design-client";
 import { invoke } from "@/lib/native/backend";
 import { useHostPathPickerStore } from "@/lib/host-path-picker";
 import { createSessionKey } from "@/lib/utils";
@@ -621,6 +623,64 @@ describe("DesignWorkspaceDialog", () => {
     });
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
+
+  // The readiness probe waits on the renderer, so Create can be pressed while it
+  // is still loading. Found by the live design cycle: the agent was never linked.
+  for (const backend of ["v2", "v1"] as const) {
+    test(`links the design agent on a ${backend} backend only, even before readiness loads`, async () => {
+      resetCapabilities();
+      const warning = spyOn(toast, "warning");
+      invokeMock.mockImplementation(async (command: string, args?: unknown) => {
+        if (command === "design_capabilities") {
+          if (backend === "v1") throw new Error("Unknown backend command: design_capabilities");
+          return { ok: true, value: { protocolVersion: 2, sessions: true } };
+        }
+        if (command === "design_session_link")
+          return {
+            ok: true,
+            value: { id: "link-1", createdAt: "now", ...(args as { link: object }).link },
+          };
+        if ((args as { action?: string }).action === "create_canvas") return canvas;
+        throw new Error(`Unexpected command: ${command}`);
+      });
+      const createTab = mock((_type: CreatableTabType, options?: CreateTabOptions) => {
+        usePaneLayoutStore
+          .getState()
+          .addTab("pane-1", { id: options!.tabId!, type: "plain" }, "env-1");
+        return true;
+      });
+      try {
+        render(
+          <DesignWorkspaceDialog
+            open
+            onOpenChange={() => {}}
+            environmentId="env-1"
+            createTab={createTab}
+            loadReadiness={() => new Promise<DesignReadinessView>(() => {})}
+          />,
+        );
+        await flush();
+        fireEvent.click(screen.getByRole("button", { name: "Create design workspace" }));
+        await flush();
+        const agentTab = createTab.mock.calls.find(([type]) => type === "claude")?.[1]?.tabId;
+        expect(agentTab).toBeTruthy();
+        const links = invokeMock.mock.calls.filter(
+          ([command]) => command === "design_session_link",
+        );
+        if (backend === "v2") {
+          expect(links.map(([, args]) => (args as { link: unknown }).link)).toEqual([
+            { tabId: agentTab, platform: "claude", role: "design" },
+          ]);
+        } else {
+          expect(links).toHaveLength(0);
+        }
+        expect(warning).not.toHaveBeenCalled();
+      } finally {
+        warning.mockRestore();
+        resetCapabilities();
+      }
+    });
+  }
 
   test("a blank name is rejected before anything is created", async () => {
     const createTab = mock(() => true);

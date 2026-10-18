@@ -50,6 +50,11 @@ function sameWindows(
 export type PlanUsageCache = {
   /** The cached snapshot, if it has not aged out. */
   peek: (platform: PlanUsagePlatform) => PlanUsageSnapshot | undefined;
+  /**
+   * The last successful reading for the active account, however old. Served,
+   * marked stale, when a fresh read fails.
+   */
+  lastOk: (platform: PlanUsagePlatform) => PlanUsageSnapshot | undefined;
   store: (platform: PlanUsagePlatform, snapshot: PlanUsageSnapshot, ttlMs: number) => void;
   /**
    * Fold account windows a running session just reported into the cache.
@@ -85,13 +90,18 @@ function mergeSessionWindows(
 
 export function createPlanUsageCache(now: () => number = Date.now): PlanUsageCache {
   const entries = new Map<PlanUsagePlatform, { expiresAt: number; snapshot: PlanUsageSnapshot }>();
+  const lastOk = new Map<PlanUsagePlatform, PlanUsageSnapshot>();
   return {
     peek(platform) {
       const entry = entries.get(platform);
       return entry && entry.expiresAt > now() ? entry.snapshot : undefined;
     },
+    lastOk(platform) {
+      return lastOk.get(platform);
+    },
     store(platform, snapshot, ttlMs) {
       entries.set(platform, { expiresAt: now() + ttlMs, snapshot });
+      if (snapshot.status === "ok" && !snapshot.stale) lastOk.set(platform, snapshot);
     },
     recordSessionWindows(platform, windows) {
       if (!isPlanUsagePlatform(platform) || windows.length === 0) return;
@@ -114,16 +124,22 @@ export function createPlanUsageCache(now: () => number = Date.now): PlanUsageCac
         return;
       }
       const at = now();
-      entries.set(platform, {
-        expiresAt: at + CACHE_TTL_MS,
-        snapshot: okSnapshot(platform, merged, new Date(at).toISOString(), cached?.snapshot.plan),
-      });
+      const snapshot = okSnapshot(
+        platform,
+        merged,
+        new Date(at).toISOString(),
+        cached?.snapshot.plan,
+      );
+      entries.set(platform, { expiresAt: at + CACHE_TTL_MS, snapshot });
+      lastOk.set(platform, snapshot);
     },
     invalidate(platform) {
       entries.delete(platform);
+      lastOk.delete(platform);
     },
     clear() {
       entries.clear();
+      lastOk.clear();
     },
   };
 }

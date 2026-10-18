@@ -46,7 +46,13 @@ import {
   type AgentAccountLoginHandle,
   type SpawnLike,
 } from "./agent-accounts-login.js";
-import { setActivePlanUsageAccount } from "./plan-usage-cache.js";
+import { setActivePlanUsageAccount, sharedPlanUsageCache } from "./plan-usage-cache.js";
+import {
+  forgetAgentAccountUsage,
+  rememberAgentAccountUsage,
+  resetAgentAccountLastUsageForTests,
+  withLastKnownUsage,
+} from "./agent-accounts-last-usage.js";
 import { readAgentAccountPlanUsage, readPlanUsage, type PlanUsageReader } from "./plan-usage.js";
 import { promoteClaudeLogin, removeTemporaryClaudeLogin } from "./agent-accounts-promotion.js";
 import { terminalAccountHomes } from "./terminal-account-usage.js";
@@ -179,8 +185,8 @@ export async function setActiveAgentAccount(
   accountId: string,
 ): Promise<AgentAccountsSnapshot> {
   assertKnownAccountId(accountId);
-  await withAccountMutation(() =>
-    context.storage.mutateAgentAccounts((store) => {
+  const previous = await withAccountMutation(() =>
+    context.storage.mutateAgentAccounts<string | undefined>((store) => {
       const current = store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID;
       if (current === accountId) return { store, result: undefined };
       const active = { ...store.active };
@@ -192,9 +198,15 @@ export async function setActiveAgentAccount(
         }
         active[platform] = accountId;
       }
-      return { store: { ...store, active }, result: undefined };
+      return { store: { ...store, active }, result: current };
     }),
   );
+  // The shared reading describes the account being left. Keep it as that
+  // account's last known usage before the switch discards it.
+  const outgoing = previous && sharedPlanUsageCache.lastOk(platform);
+  if (previous && outgoing) {
+    await rememberAgentAccountUsage(accountsRoot(context), platform, previous, outgoing);
+  }
   readPlanUsage.invalidate(platform);
   setActivePlanUsageAccount(platform, accountId);
   return listAgentAccounts(context);
@@ -281,6 +293,7 @@ export async function removeAgentAccount(
       return { store: { ...store, accounts }, result: undefined };
     });
     usageCache.delete(`${platform}:${accountId}`);
+    await forgetAgentAccountUsage(accountsRoot(context), platform, accountId);
     return listAgentAccounts(context);
   });
 }
@@ -631,12 +644,16 @@ export function cancelAgentAccountLogin(operationId?: string): AgentAccountLogin
 export function resetAgentAccountLoginForTests(): void {
   activeLogin = undefined;
   usageCache.clear();
+  resetAgentAccountLastUsageForTests();
 }
 
 // ---------------------------------------------------------------------------
 // Usage
 
-const usageCache = new Map<string, { expiresAt: number; snapshot: PlanUsageSnapshot }>();
+const usageCache = new Map<
+  string,
+  { expiresAt: number; rateLimited?: boolean; snapshot: PlanUsageSnapshot }
+>();
 
 /**
  * Plan usage for any listed account.
@@ -645,7 +662,8 @@ const usageCache = new Map<string, { expiresAt: number; snapshot: PlanUsageSnaps
  * platform's usage card and running sessions keep current. Any other account
  * is read from its own directory. Orkestrator never refreshes a token itself,
  * so an inactive Claude account's short-lived access token lapses until that
- * account is used again.
+ * account is used again. Until then, as after any failed read, the account's
+ * last known usage is shown, marked stale.
  */
 export async function readAgentAccountUsage(
   context: CommandContext,
@@ -655,19 +673,25 @@ export async function readAgentAccountUsage(
 ): Promise<PlanUsageSnapshot> {
   assertKnownAccountId(accountId);
   const store = await context.storage.loadAgentAccounts();
+  const now = options.now ?? Date.now;
+  const root = accountsRoot(context);
   if ((store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID) === accountId) {
-    return options.reader(context, platform, { force: options.force === true });
+    const snapshot = await options.reader(context, platform, { force: options.force === true });
+    return withLastKnownUsage(root, platform, accountId, snapshot, now());
   }
   const stored = store.accounts.find((a) => a.id === accountId && a.platform === platform);
   if (accountId !== DEFAULT_AGENT_ACCOUNT_ID && !stored) throw new Error("Unknown agent account");
 
-  const now = options.now ?? Date.now;
   const key = `${platform}:${accountId}`;
   const cached = usageCache.get(key);
-  if (!options.force && cached && cached.expiresAt > now()) return cached.snapshot;
+  // A forced refresh still waits out a 429: each retry spends the allowance.
+  if (cached && cached.expiresAt > now() && (!options.force || cached.rateLimited)) {
+    return cached.snapshot;
+  }
 
   const home = stored ? homeFor(context, platform, stored.id) : undefined;
   let snapshot: PlanUsageSnapshot;
+  let retryAfterMs: number | undefined;
   if (platform === "claude") {
     const { global } = await context.storage.loadConfig();
     const credentials =
@@ -675,27 +699,35 @@ export async function readAgentAccountUsage(
         ? await readClaudeCredentialsFor(context, home)
         : undefined;
     const token = getClaudeOAuthAccessToken(credentials, now());
-    snapshot =
-      !token && claudeAccountLoginState(credentials, undefined, now()).signedIn
-        ? {
-            platform,
-            status: "unavailable",
-            windows: [],
-            message:
-              "This account's sign-in is refreshed while it is in use. Switch to it to see current usage.",
-            fetchedAt: new Date(now()).toISOString(),
-          }
-        : await readAgentAccountPlanUsage(context, "claude", token, { now });
+    if (!token && claudeAccountLoginState(credentials, undefined, now()).signedIn) {
+      snapshot = {
+        platform,
+        status: "unavailable",
+        windows: [],
+        message:
+          "This account's sign-in is refreshed while it is in use. Switch to it to see current usage.",
+        fetchedAt: new Date(now()).toISOString(),
+      };
+    } else {
+      ({ snapshot, retryAfterMs } = await readAgentAccountPlanUsage(context, "claude", token, {
+        now,
+      }));
+    }
   } else {
-    snapshot = await readAgentAccountPlanUsage(
+    ({ snapshot, retryAfterMs } = await readAgentAccountPlanUsage(
       context,
       "codex",
       await readCodexAuthFor(context, home),
       { now },
-    );
+    ));
   }
+  snapshot = await withLastKnownUsage(root, platform, accountId, snapshot, now());
   usageCache.set(key, {
-    expiresAt: now() + (snapshot.status === "ok" ? USAGE_TTL_MS : USAGE_ERROR_TTL_MS),
+    expiresAt:
+      now() +
+      (retryAfterMs ??
+        (snapshot.status === "ok" && !snapshot.stale ? USAGE_TTL_MS : USAGE_ERROR_TTL_MS)),
+    ...(retryAfterMs !== undefined ? { rateLimited: true } : {}),
     snapshot,
   });
   return snapshot;

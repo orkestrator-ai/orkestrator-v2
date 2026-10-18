@@ -26,6 +26,7 @@ import type { SpawnLike } from "./agent-accounts-login.js";
 import { localServerProcesses } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
 import type { PlanUsageReader } from "./plan-usage.js";
+import { sharedPlanUsageCache } from "./plan-usage-cache.js";
 import { StorageService } from "./storage.js";
 import { terminalAccountHomes } from "./terminal-account-usage.js";
 
@@ -154,6 +155,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  sharedPlanUsageCache.clear();
   cancelAgentAccountLogin();
   resetAgentAccountLoginForTests();
   terminalAccountHomes.clear();
@@ -799,5 +801,35 @@ describe("agent accounts", () => {
     expect(inactive.status).toBe("unavailable");
     expect(inactive.message).toContain("expired");
     expect(calls).toHaveLength(1);
+  });
+
+  test("an account left behind shows its last known usage until removed", async () => {
+    const { accountId } = await addCodexAccount("second@example.com", "acct-2");
+    const reading = (usedPercent: number): PlanUsageSnapshot => ({
+      platform: "codex",
+      status: "ok",
+      windows: [{ window: "primary", usedPercent }],
+      fetchedAt: new Date().toISOString(),
+    });
+    const reader = (async () => {
+      throw new Error("the active account is not read here");
+    }) as unknown as PlanUsageReader;
+
+    sharedPlanUsageCache.store("codex", reading(12), 60_000);
+    await setActiveAgentAccount(context, "codex", accountId!);
+    const host = await readAgentAccountUsage(context, "codex", "default", { reader });
+    expect(host).toMatchObject({ status: "ok", stale: true, windows: [{ usedPercent: 12 }] });
+    expect(host.message).toContain("Sign in to Codex");
+
+    sharedPlanUsageCache.store("codex", reading(34), 60_000);
+    await setActiveAgentAccount(context, "codex", "default");
+    const added = await readAgentAccountUsage(context, "codex", accountId!, { reader });
+    expect(added).toMatchObject({ stale: true, windows: [{ usedPercent: 34 }] });
+
+    await removeAgentAccount(context, "codex", accountId!);
+    const saved = JSON.parse(
+      await fs.readFile(path.join(root, "data", "agent-accounts", "last-usage.json"), "utf8"),
+    ) as Record<string, unknown>;
+    expect(Object.keys(saved)).toEqual(["codex:default"]);
   });
 });

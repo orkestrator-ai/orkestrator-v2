@@ -29,9 +29,17 @@ Each suffix also names the release's updater feed (`latest-mac.yml`,
 
 ## Cutting a release
 
-1. Bump the version in every manifest listed in `AGENTS.md`, regenerate the
-   lockfiles, and merge the change through a pull request. The suffix picks the
-   channel (see above).
+1. Set the version, then merge the change through a pull request. The suffix
+   picks the channel (see above):
+
+   ```bash
+   mise run release:version -- 2.23.0-beta
+   ```
+
+   It writes every manifest listed in `AGENTS.md`, regenerates and verifies
+   both lockfiles with the pinned Bun, and runs the version drift test. It
+   refuses a suffix no channel ships and a version that is not newer than the
+   current one.
 2. **On the Mac** (Apple Silicon), check out `main` at the merge commit:
 
    ```bash

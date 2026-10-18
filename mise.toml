@@ -365,6 +365,11 @@ run = [
   "bun scripts/install-packaged-app-mac.ts",
 ]
 
+[tasks."release:version"]
+description = "Set the Orkestrator version in every manifest and regenerate the lockfiles"
+raw_args = true
+run = "bun scripts/set-version.ts"
+
 [tasks."release:desktop"]
 description = "Build this platform's desktop release and upload it to the draft GitHub release"
 raw_args = true

@@ -688,3 +688,12 @@ correcting the two tmux consumer cases, the final root/support rerun
 reported 3096 passed, one skipped and only the Pi staging timeout (30001.81 ms),
 in 106.4 seconds. Evidence: `orkestrator-test-run.Tq9Hli/root-tests-final.log.gz`.
 All picker-related failures cleared; Pi staging remains unresolved.
+
+## Keep-open picker coverage follow-up — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name picker-full -- mise run test`, alongside component-browser validation on macOS.
+- **Workers:** workspace/root/bridges/protocol reservations of 4/1/2/1 workers.
+- **Failure:** the staged SDK case exceeded 30000 ms (30000.58 ms). Root/support reported 3096 passed, one skipped and one failed across 3098 tests in 146 files (266.47 seconds). All picker consumer tests passed.
+- **Owning-file rerun:** `mise run test:logged -- --name picker-pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed unchanged after the aggregate finished (17.7 seconds logged).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.4ekCm8/root-and-agent-support-tests.log.gz`.
+- **Assessment:** confirmed intermittent recurrence. The aggregate passed its workspace, bridge and protocol groups and finished in 456.5 seconds. No Pi implementation, assertion, timeout or skip changed.

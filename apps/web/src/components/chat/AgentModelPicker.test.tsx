@@ -1920,10 +1920,10 @@ describe("AgentModelPicker", () => {
     expect(onReorderFavorites).not.toHaveBeenCalled();
   });
 
-  test("persists the new order after a mobile long press", async () => {
+  test("reorders favorites without selecting a model after a mobile long press", async () => {
     setMobileViewport(true);
     const onReorderFavorites = mock(() => {});
-    renderPicker({
+    const { onModelChange } = renderPicker({
       models: models.slice(0, 2),
       enabledPlatforms: ["codex"],
       selectedPlatform: "codex",
@@ -1965,6 +1965,7 @@ describe("AgentModelPicker", () => {
       isPrimary: true,
       pointerId: 2,
     });
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Model 2/ }));
 
     await waitFor(() =>
       expect(onReorderFavorites).toHaveBeenCalledWith([
@@ -1972,6 +1973,8 @@ describe("AgentModelPicker", () => {
         { platform: "codex", modelId: "model-1" },
       ]),
     );
+    expect(onModelChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("menu")).toBeTruthy();
   });
 
   test("uses a long-press drag on mobile favourite rows", () => {

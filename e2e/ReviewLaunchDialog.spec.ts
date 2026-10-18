@@ -193,7 +193,9 @@ test("chooses a provider, a model and an effort with the keyboard alone", async 
   await page.keyboard.press("Enter");
   await expect(codexModel).toBeChecked();
   await expect(codexModel).toBeFocused();
+  await expect(page.locator("[data-native-model-picker]")).toBeVisible();
   await page.keyboard.press("Escape");
+  await expect(trigger).toBeFocused();
   await expect(trigger).toContainText("Codex Review");
 
   // Closing and reopening the picker restores the currently selected provider.
@@ -215,7 +217,9 @@ test("chooses a provider, a model and an effort with the keyboard alone", async 
   await page.keyboard.press("Space");
   await expect(reasoning.getByRole("menuitemradio", { name: "High" })).toBeFocused();
   await expect(page.getByRole("menuitemradio", { name: "High" })).toBeChecked();
+  await expect(page.locator("[data-native-model-picker]")).toBeVisible();
   await page.keyboard.press("Escape");
+  await expect(trigger).toBeFocused();
   await expect(trigger).toContainText("Codex Review");
   await expect(trigger).toContainText("High");
 

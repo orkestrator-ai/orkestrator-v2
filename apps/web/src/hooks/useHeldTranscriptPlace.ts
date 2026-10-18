@@ -44,17 +44,22 @@ export class HeldTranscriptPlace {
     this.anchor = undefined;
     if (!scroller) return;
     const top = scroller.getBoundingClientRect().top;
+    const tool = Array.from(
+      scroller.querySelectorAll<HTMLElement>("[data-transcript-part-id]"),
+    ).find((element) => {
+      const rect = element.getBoundingClientRect();
+      return rect.bottom > top && rect.top < top + scroller.clientHeight;
+    });
     const rows = Array.from(scroller.querySelectorAll<HTMLElement>("[data-chat-message-index]"));
-    const row = rows.find((element) => element.getBoundingClientRect().bottom > top);
+    // Earlier context can remove the head prose row's author header. Holding
+    // that row's outer box would then shift the visible tool below it, even
+    // with a perfect index jump. Prefer the source tool anywhere in view.
+    const row =
+      tool?.closest<HTMLElement>("[data-chat-message-index]") ??
+      rows.find((element) => element.getBoundingClientRect().bottom > top);
     const message = row && this.messages[Number(row.dataset.chatMessageIndex)];
     if (!row || !message) return;
     this.held = identityOf(message);
-    const tool = Array.from(row.querySelectorAll<HTMLElement>("[data-transcript-part-id]")).find(
-      (element) => {
-        const rect = element.getBoundingClientRect();
-        return rect.bottom > top && rect.top < top + scroller.clientHeight;
-      },
-    );
     this.anchor = {
       partId: tool?.dataset.transcriptPartId,
       offset: (tool ?? row).getBoundingClientRect().top - top,
@@ -73,14 +78,15 @@ export class HeldTranscriptPlace {
     this.messages = messages;
     this.first = messages[0] ? identityOf(messages[0]) : null;
     if (!held) return undefined;
-    const index = messages.findIndex((message) => {
-      const identity = identityOf(message);
-      return (
-        identity.id === held.id ||
-        identity.lastSourceId === held.lastSourceId ||
-        (this.anchor?.partId !== undefined && containsTool(message.parts, this.anchor.partId))
+    const partId = this.anchor?.partId;
+    // A response split into prose/tool display rows shares one boundary id.
+    // Find the exact source tool before falling back to those broader ids.
+    let index = partId ? messages.findIndex((message) => containsTool(message.parts, partId)) : -1;
+    if (index < 0) index = messages.findIndex((message) => message.id === held.id);
+    if (index < 0)
+      index = messages.findIndex(
+        (message) => identityOf(message).lastSourceId === held.lastSourceId,
       );
-    });
     // An unchanged head is still waiting. A renamed head matched through a
     // source id has received history even if its display index stays zero.
     if (index >= 0 && messages[0]?.id === this.heldHeadId) return undefined;

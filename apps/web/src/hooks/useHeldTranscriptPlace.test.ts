@@ -137,6 +137,24 @@ describe("useRestoreHeldPlace", () => {
     expect(scrollToIndex).toHaveBeenCalledWith(0, { partId: "call53", offset: -10 });
   });
 
+  test("holds a visible source tool below prose whose author header can change", () => {
+    const tool = { ...read("r52", "2026-10-18T01:33:20.000Z"), id: "intro:text-block:1" };
+    const { hook, scrollToIndex } = setup([text("intro"), tool]);
+    const scroller = document.createElement("div");
+    scroller.innerHTML =
+      '<div data-chat-message-index="0"></div><div data-chat-message-index="1"><div data-transcript-part-id="call52"></div></div>';
+    const rect = (top: number, bottom: number) => ({ top, bottom }) as DOMRect;
+    scroller.getBoundingClientRect = () => rect(100, 600);
+    Object.defineProperty(scroller, "clientHeight", { value: 500 });
+    (scroller.children[0] as HTMLElement).getBoundingClientRect = () => rect(70, 150);
+    (scroller.children[1] as HTMLElement).getBoundingClientRect = () => rect(150, 250);
+    (scroller.children[1]!.firstElementChild as HTMLElement).getBoundingClientRect = () =>
+      rect(180, 230);
+    hook.result.current.hold(scroller);
+    hook.rerender({ messages: [text("earlier"), text("intro"), tool] });
+    expect(scrollToIndex).toHaveBeenCalledWith(2, { partId: "call52", offset: 80 });
+  });
+
   test("finds a head block that a same-minute page merged into and renamed", () => {
     // The live tail starts mid-minute: its head block coalesces two reads.
     const tail = [

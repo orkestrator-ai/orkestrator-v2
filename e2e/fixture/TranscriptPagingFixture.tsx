@@ -16,12 +16,14 @@ const identity: NativeAgentViewIdentity = {
   providerSessionId: "paging-session",
   sourceGeneration: "generation-1",
 };
+const mixed = new URLSearchParams(window.location.search).has("mixed");
 const tools = Array.from({ length: 60 }, (_, index) => ({
   id: `row-${index}`,
   role: "assistant" as const,
   content: "",
   createdAt: "2026-10-18T01:33:20.000Z",
   parts: [
+    ...(mixed ? [{ type: "text" as const, content: `Reached stop ${index}.` }] : []),
     {
       type: "tool-invocation" as const,
       content: "Read",

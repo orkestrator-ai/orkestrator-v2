@@ -200,7 +200,7 @@ describe("useVirtuosoScrollState scrollToIndex", () => {
     el.scrollTop = 500;
     // Even a stale at-bottom boolean cannot override the final geometry.
     await waitFor(() => expect(handle.scrollToIndex).toHaveBeenCalledTimes(4));
-    await new Promise((resolve) => setTimeout(resolve, 160));
+    await new Promise((resolve) => setTimeout(resolve, 240));
     expect(result.current.scrollProps.followOutput(true)).toBe(false);
   });
 
@@ -218,6 +218,24 @@ describe("useVirtuosoScrollState scrollToIndex", () => {
     el.scrollTop = 1500;
     await new Promise((resolve) => setTimeout(resolve, 550));
     expect(handle.scrollToIndex).toHaveBeenCalledTimes(2);
+    expect(result.current.scrollProps.followOutput(true)).toBe(false);
+  });
+
+  test("settles a held tool from actual geometry after cached header estimates change", async () => {
+    const { result } = renderHook(() => useVirtuosoScrollState({ isActive: true }));
+    const el = mountScroller(result);
+    el.innerHTML =
+      '<div data-chat-message-index="0"><div data-transcript-part-id="call52"></div></div>';
+    el.getBoundingClientRect = () => ({ top: 100 }) as DOMRect;
+    const row = el.firstElementChild as HTMLElement;
+    const tool = row.firstElementChild as HTMLElement;
+    row.getBoundingClientRect = () => ({ top: 600 - el.scrollTop }) as DOMRect;
+    tool.getBoundingClientRect = () => ({ top: 676 - el.scrollTop }) as DOMRect;
+    const handle = fakeHandle();
+    result.current.virtuosoRef.current = handle as never;
+    result.current.scrollToIndex(0, { partId: "call52", offset: 20 });
+    await waitFor(() => expect(el.scrollTop).toBe(556));
+    expect(tool.getBoundingClientRect().top - el.getBoundingClientRect().top).toBe(20);
     expect(result.current.scrollProps.followOutput(true)).toBe(false);
   });
 

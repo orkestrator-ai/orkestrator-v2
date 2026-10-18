@@ -11,41 +11,59 @@ async function toolPosition(list: Locator, id: string) {
   }, id);
 }
 for (const view of ["native", "reviewer"]) {
-  test(`${view}: a same-minute page grows row zero and holds the original tool position`, async ({
-    page,
-  }) => {
-    await page.goto(`/transcript-paging${view === "reviewer" ? "?reviewer" : ""}`);
-    const list = page.locator("[data-virtuoso-scroller]");
-    const load = page.getByRole("button", { name: "Load earlier messages", exact: true });
-    const check = async () => {
+  for (const mixed of [false, true]) {
+    test(`${view}: ${mixed ? "paging before prose" : "a same-minute page growing row zero"} holds the original tool position`, async ({
+      page,
+    }) => {
+      const query = new URLSearchParams();
+      if (view === "reviewer") query.set("reviewer", "1");
+      if (mixed) query.set("mixed", "1");
+      await page.goto(`/transcript-paging?${query}`);
+      const list = page.locator("[data-virtuoso-scroller]");
+      const load = page.getByRole("button", { name: "Load earlier messages", exact: true });
+      const check = async () => {
+        await expect(list).toBeVisible();
+        await list.hover();
+        await expect
+          .poll(async () => {
+            await page.mouse.wheel(0, -4000);
+            const [button, viewport, top] = await Promise.all([
+              load.boundingBox(),
+              list.boundingBox(),
+              list.evaluate((el) => el.scrollTop),
+            ]);
+            return (
+              top <= 1 &&
+              button !== null &&
+              viewport !== null &&
+              button.y >= viewport.y &&
+              button.y + button.height <= viewport.y + viewport.height
+            );
+          })
+          .toBe(true);
+        await expect.poll(() => toolPosition(list, "call-40")).not.toBeNull();
+        const before = (await toolPosition(list, "call-40"))!;
+        expect(before.index).toBe(mixed ? "1" : "0");
+        await load.click();
+        await expect(load).toHaveCount(0);
+        await expect(page.getByRole("button", { name: "Loading…", exact: true })).toHaveCount(0);
+        await expect
+          .poll(async () => {
+            const after = await toolPosition(list, "call-40");
+            return after ? Math.abs(after.offset - before.offset) : Infinity;
+          })
+          .toBeLessThan(3);
+        const after = (await toolPosition(list, "call-40"))!;
+        if (mixed) expect(Number(after.index)).toBeGreaterThan(Number(before.index));
+        else expect(after.index).toBe("0");
+        await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(500);
+      };
+      await check();
+      await page.getByRole("button", { name: "Switch environment" }).click();
+      await page.getByRole("button", { name: "Return to transcript" }).click();
       await expect(list).toBeVisible();
-      await list.hover();
-      await expect
-        .poll(async () => {
-          await page.mouse.wheel(0, -4000);
-          return load.isVisible();
-        })
-        .toBe(true);
-      await expect.poll(() => toolPosition(list, "call-40")).not.toBeNull();
-      const before = (await toolPosition(list, "call-40"))!;
-      expect(before.index).toBe("0");
-      await load.click();
-      await expect(load).toHaveCount(0);
-      await expect
-        .poll(async () => {
-          const after = await toolPosition(list, "call-40");
-          return after ? Math.abs(after.offset - before.offset) : Infinity;
-        })
-        .toBeLessThan(3);
-      // Forty tools were inserted inside the same display row, above call-40.
-      expect((await toolPosition(list, "call-40"))!.index).toBe("0");
-      await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(500);
-    };
-    await check();
-    await page.getByRole("button", { name: "Switch environment" }).click();
-    await page.getByRole("button", { name: "Return to transcript" }).click();
-    await expect(list).toBeVisible();
-    await page.reload();
-    await check();
-  });
+      await page.reload();
+      await check();
+    });
+  }
 }

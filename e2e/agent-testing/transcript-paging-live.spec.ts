@@ -408,7 +408,15 @@ async function loadEarlierOnce(page: Page, list: Locator, trail: Trail, label: s
   await expect(page.getByRole("button", { name: "Loading…", exact: true })).toHaveCount(0, {
     timeout: 60_000,
   });
-  await page.waitForTimeout(500);
+  await expect
+    .poll(
+      async () => {
+        const anchor = await rowPosition(list, trail, anchorStop!);
+        return anchor ? Math.abs(anchor.offset - before!.offset) : Infinity;
+      },
+      { timeout: 5_000, intervals: [100] },
+    )
+    .toBeLessThanOrEqual(8);
   const after = await firstVisibleRow(list);
   const anchor = anchorStop === undefined ? null : await rowPosition(list, trail, anchorStop);
   const measurement = {

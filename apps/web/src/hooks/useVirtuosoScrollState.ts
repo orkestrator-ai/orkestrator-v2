@@ -44,6 +44,9 @@ const POST_SCROLL_WATCH_MS = 400;
  */
 const SCROLL_TO_INDEX_CORRECTIONS = 3;
 const SCROLL_TO_INDEX_CORRECTION_INTERVAL_MS = 120;
+// Virtuoso retries an auto scroll after its 150ms measurement refresh window.
+// Finish beyond that retry, then correct from the source element's real box.
+const SCROLL_TO_INDEX_SETTLE_MS = 200;
 
 interface PersistedEntry {
   snapshot: StateSnapshot;
@@ -879,10 +882,27 @@ export function useVirtuosoScrollState(
             if (indexJumpOperationRef.current !== operation) return;
             indexJumpOperationRef.current = null;
             const el = scrollerElRef.current;
+            if (anchor && el) {
+              const row = el.querySelector<HTMLElement>(`[data-chat-message-index="${index}"]`);
+              const target = anchor.partId
+                ? Array.from(
+                    row?.querySelectorAll<HTMLElement>("[data-transcript-part-id]") ?? [],
+                  ).find((element) => element.dataset.transcriptPartId === anchor.partId)
+                : row;
+              if (target) {
+                // Index offsets use cached row/header sizes. Context added by
+                // paging can change an author header after those estimates;
+                // settle against the held source's actual viewport position.
+                el.scrollTop +=
+                  target.getBoundingClientRect().top -
+                  el.getBoundingClientRect().top -
+                  anchor.offset;
+              }
+            }
             wantsStickRef.current = el
               ? el.scrollHeight - el.clientHeight - el.scrollTop <= AT_BOTTOM_THRESHOLD
               : isAtBottomRef.current;
-          }, SCROLL_TO_INDEX_CORRECTION_INTERVAL_MS);
+          }, SCROLL_TO_INDEX_SETTLE_MS);
         }
       };
       setTimeout(correct, SCROLL_TO_INDEX_CORRECTION_INTERVAL_MS);

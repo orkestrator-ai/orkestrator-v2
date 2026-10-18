@@ -428,3 +428,13 @@ Aggregate command, worker configuration, counts and evidence are recorded in [02
 - **Failure:** `project coordinator > bound discard confirmations refuse stale, sequencer, nested, and failed switches` exceeded its 5000 ms deadline at 5129.20 ms, with a late `SQLITE_IOERR_VNODE` during asynchronous persistence after fixture cleanup.
 - **Owning-file rerun:** `mise run test:logged -- --name merge-coordinator-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 11.6 seconds).
 - **Assessment:** the unchanged isolated pass confirms intermittence; shared-host contention remains a hypothesis. No owning implementation, assertion, timeout or skip changed.
+
+
+## Claude restart-interruption validation — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name full-test -- mise run test` on branch `claude-restart-interruption-c2ab4c63b888` (base `a5d338c1`, Bun 1.4.2, macOS arm64), with other worktrees' live test environments on the host (load average 15–24).
+- **Aggregate:** root and agent-support, bridges and codex protocol lockfile groups passed; the workspace group failed on this case alone. Test groups finished in 472.5 seconds.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.mphv6t/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Failure:** `project coordinator > fetch covers every configured remote and a dirty submodule needs enhanced confirmation` exceeded its 5000 ms deadline at 6556.73 ms; the submodule `git` child was ended by `SIGTERM` after its temporary checkout was removed.
+- **Owning-file rerun:** `mise run test:logged -- --name coordinator-service-alone -- sh -c 'cd apps/backend && bun test --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts'` passed unchanged (exit 0, 18.6 seconds).
+- **Assessment:** the branch changes no coordinator code; the unchanged isolated pass confirms intermittence. No owning implementation, assertion, timeout or skip changed.

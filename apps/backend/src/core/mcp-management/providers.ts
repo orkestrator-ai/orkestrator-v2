@@ -5,8 +5,9 @@
  * Paths mirror the launchers, bridges and the pinned provider binaries, not
  * the vendors' documentation in general: the Claude bridge reads
  * `homedir()/.claude.json` regardless of `CLAUDE_CONFIG_DIR`, so that is the
- * file edited here; host Cursor and Pi sessions never load project settings,
- * so those sources are shown as excluded. Read-only layers the provider loads
+ * file edited here; host Cursor and Pi sessions load project settings only
+ * when the environment's execution policy turns project resources on, so
+ * otherwise those sources are shown as excluded. Read-only layers the provider loads
  * (system and managed files, inline environment configuration, another
  * provider's file) are shown so an effective entry is never a surprise. See
  * docs/architecture/mcp-management.md for the evidence table.
@@ -611,6 +612,26 @@ async function grokSources(
   }
 }
 
+/**
+ * Trust of a host Cursor or Pi project MCP file. Both bridges load it only
+ * when the session's execution policy turns project resources on, which an
+ * environment can do for its host sessions; otherwise it is excluded.
+ */
+function hostProjectTrust(
+  context: TargetContextInfo,
+  trustReason: string,
+  excludedReason: string,
+): Pick<SourceSpec, "trust" | "trustReason" | "excludedReason"> {
+  if (context.projectResources === true) {
+    return {
+      trust: "allowed",
+      trustReason:
+        "This environment's execution policy turns project resources on, so its sessions load this file.",
+    };
+  }
+  return { trust: "excluded", trustReason, excludedReason };
+}
+
 export async function providerSources(
   provider: AgentPlatform,
   input: SourceContext,
@@ -735,11 +756,11 @@ export async function providerSources(
             precedence: 20,
             maxBytes: 1024 * 1024,
             sharedWith: ["grok"],
-            trust: "excluded",
-            trustReason:
+            ...hostProjectTrust(
+              context,
               "Host Cursor sessions do not load project settings, so cloning a repository cannot run its servers on this computer.",
-            excludedReason:
               "Excluded on this computer: host Cursor sessions do not load project settings.",
+            ),
           }),
         );
       }
@@ -766,11 +787,11 @@ export async function providerSources(
             bareMapFallback: true,
             precedence: 20,
             maxBytes: 1024 * 1024,
-            trust: "excluded",
-            trustReason:
+            ...hostProjectTrust(
+              context,
               "Host Pi sessions do not load project resources; a Pi project server is arbitrary code.",
-            excludedReason:
               "Excluded on this computer: host Pi sessions do not load project resources.",
+            ),
           }),
         );
       }

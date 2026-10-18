@@ -62,13 +62,13 @@ described below. Higher precedence wins for a same-name entry.
 | OpenCode | Inline | `OPENCODE_CONFIG_CONTENT` | JSONC `mcp` | 40 | never | — |
 | OpenCode | Managed | `/etc/opencode/` (when present) | JSON/JSONC `mcp` | 50+ | never | — |
 | Cursor | Backend user | `~/.cursor/mcp.json` | JSON `mcpServers` | 10 | yes | — |
-| Cursor | Project | `<worktree>/.cursor/mcp.json` | JSON `mcpServers` | 20 | yes | **excluded** on host |
+| Cursor | Project | `<worktree>/.cursor/mcp.json` | JSON `mcpServers` | 20 | yes | **excluded** on host, unless the environment's execution policy turns project resources on |
 | Grok | Managed | `/etc/grok/managed_config.toml`, `$GROK_HOME/managed_config.toml` | TOML `[mcp_servers.*]` | 6–7 | never | — |
 | Grok | Backend user | `$GROK_HOME/config.toml` (default `~/.grok`) | TOML `[mcp_servers.*]` | 10 | yes | — |
 | Grok | Project | `<worktree>/.grok/config.toml` | TOML | 20 | yes | from `$GROK_HOME/trusted_folders.toml` (a trusted parent covers the worktree; `GROK_FOLDER_TRUST=0` or `[folder_trust] enabled = false` turns the gate off); `unknown` when undecided. A session whose policy turns project resources on runs Grok with the gate off, which this column does not yet reflect |
 | Grok | Compatibility | Claude `~/.claude.json` (user and private local) > Cursor `~/.cursor/mcp.json` and project `.cursor/mcp.json` > project `.mcp.json` | JSON | 1–5 | never | Claude/Cursor imports honour `GROK_*_MCPS_ENABLED`, then `requirements.toml`, user `config.toml`, `managed_config.toml` `[compat.*] mcps`; the project config is never read for it |
 | Pi | Backend user | `$PI_CODING_AGENT_DIR` or `~/.pi/agent`, `mcp.json` | JSON `mcpServers`, or a bare map (bridge only; labelled) | 10 | yes | — |
-| Pi | Project | `<worktree>/.pi/mcp.json` | same | 20 | yes | **excluded** on host |
+| Pi | Project | `<worktree>/.pi/mcp.json` | same | 20 | yes | **excluded** on host, unless the environment's execution policy turns project resources on |
 | all | Orkestrator | injected at launch | runtime | 1000 | never | — |
 
 Injected names (`orkestrator`, `orkestrator-design`,
@@ -352,8 +352,9 @@ A runtime becomes `applied` when all of these hold:
    CLI could not unload (in practice an SSE entry the CLI loaded from a file
    itself). The bridge refuses their tools with a PreToolUse hook, and the
    runtime is `restart-required` until a query on a new CLI reports the name
-   gone; the CLI ends once its background work does, or when the session is
-   stopped.
+   gone. The CLI stays open between messages for its idle window (10 minutes
+   by default) and while background work runs; it ends after that window, or
+   when the session is stopped.
 
 A failed or timed-out read, `absent` / `excluded`, or a read that predates the
 save all leave the planned state untouched and are not errors; a bridge older
@@ -511,13 +512,20 @@ worktrees; nothing reads or writes the operator's configuration):
 | Container reader | Manual smoke against a throwaway container: ok, absent, oversized, offline, shell-metacharacter path |
 | Real browser | 2026-09-24, `dev:test` profile `agent-mcp-settings-qa` with the fixture project, Playwright at 1440×900 and 390×844: section and pickers for all six platforms, Control MCP kept separate, add → edit → rename → remove of a Claude project-scope server in a fixture worktree (previews named the worktree path and the execution warning; the file ended `{"mcpServers": {}}`), keyboard open/Escape with focus return, reload rehydration, discard prompt on a dirty target switch, platform-settings deep link. Found that every MCP dialog rendered behind the fullscreen settings layer (default `z-50` under `z-[60]`); fixed with the fullscreen dialog layers and pinned by `McpEditorFlows.test.tsx`; the fix was confirmed in that browser session by raising the layer, not by a second full pass. The agent-panel link was not exercised (no live session in the fixture). Operator MCP files were hashed before and after and were unchanged. |
 
-Not yet verified (plan steps 01 and 14): live probes against the pinned vendor
-binaries — that Codex's reload changes an existing thread's tools at its next
-turn, OpenCode/Grok pick changes up on restart, Cursor's SDK re-reads
-`~/.cursor/mcp.json` on resume, and that removed servers' tools are gone after
-apply — plus real-browser, inactive-environment and container QA. Until those
-are recorded, treat `pending-next-turn` / `restart-required` as the backend's
-plan; `applied` is observed adoption per the evidence rule above.
+Live providers (2026-10-18, `e2e/agent-testing/mcp-apply-live.spec.ts`, record
+in [the todo file](../todo/mcp-management.md#live-apply-record-2026-10-18)):
+for Claude, Codex, OpenCode and Cursor, every writable scope was taken through
+add, edit, rename and remove with two sessions, a busy session and a bridge
+restart, and a call to a removed tool was proven to fail from the probe
+server's own log. Codex's reload reaches existing threads at their next turn;
+OpenCode needs the restart its outcome asks for; Cursor re-reads its files
+when the session reattaches; Claude's stale-server hook refused a removed SSE
+server on a warm CLI. Grok and Pi were skipped for want of credentials.
+
+Not yet verified: the Grok and Pi live probes, and real-browser,
+inactive-environment and container QA. For those, treat `pending-next-turn` /
+`restart-required` as the backend's plan; `applied` is observed adoption per
+the evidence rule above.
 
 ## Rollback
 

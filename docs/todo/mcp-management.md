@@ -1,6 +1,7 @@
 # MCP management
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `2459b05c` (2026-10-15); live apply record added
+against `140a50e8` (2026-10-18).
 
 The MCP server editor ([`mcp-management.md`](../architecture/mcp-management.md))
 reads and writes each agent platform's own MCP files and reports saved state,
@@ -22,7 +23,9 @@ collects the live evidence the shipped behaviour has never had.
   `pending-next-turn`, then `applied` on bridge evidence. Codex queues one
   environment reload, then stays `pending-next-turn` (never `applied`).
   OpenCode is `restart-required`. Grok is `restart-required`, then `applied`
-  once the bridge process is replaced.
+  once the bridge process is replaced. The live record below confirms the
+  Claude, Codex, OpenCode and Cursor strategies on real providers; Grok and
+  Pi are not yet live-qualified.
 - Apply-path guards (see "Runtime application" in
   [`mcp-management.md`](../architecture/mcp-management.md)): every outcome
   names the runtime generation (bridge pid plus provider session) it was
@@ -57,8 +60,17 @@ collects the live evidence the shipped behaviour has never had.
   `mise run verify:claude:mcp-live` proves this on the real CLI without
   credentials.
 - Current pins: Claude Agent SDK 0.3.296 / CLI 2.1.296, Codex 0.162.1,
-  OpenCode 1.19.0, Cursor SDK 1.0.37, Grok 1.0.52, Pi 1.2.0. The one recorded
-  live probe used Claude 0.3.280 / 2.1.280.
+  OpenCode 1.19.0, Cursor SDK 1.0.37, Grok 1.0.52, Pi 1.2.0. The live record
+  below used exactly these.
+- Live probe spec: `e2e/agent-testing/mcp-apply-live.spec.ts` (opt-in,
+  `ORKESTRATOR_AGENT_TEST_LIVE_MCP=1`) with the dependency-free probe server
+  `e2e/agent-testing/mcp-probe-server.mjs`; the verdict rules have unit tests
+  in `mcp-apply-live-support.test.ts`. How to run it is under "Live apply
+  record" below.
+- Host Cursor and Pi project files follow the environment's execution
+  policy: with project resources on they are `allowed` and apply plans them
+  like any other source (`hostProjectTrust` in `providers.ts`; the target
+  carries the resolved policy from `targets.ts`).
 
 ## Outstanding work
 
@@ -78,8 +90,10 @@ collects the live evidence the shipped behaviour has never had.
    `applied`. Trace how OAuth completes after `mcp.auth.start`
    (`apps/backend/src/core/opencode-capabilities.ts`); nothing calls
    `mcp.auth.callback`. Until then show external-authentication guidance.
-3. **Codex.** Prove that a reload reaches an existing thread at its next
-   turn, then add thread-level `applied` evidence. `listMcpServers` in
+3. **Codex.** A reload reaches existing threads at their next turn (live,
+   2026-10-18: add, edit, rename and remove each reached two idle threads
+   with no restart). Still missing: thread-level `applied` evidence, so the
+   outcome stops at `pending-next-turn`, and `listMcpServers` in
    `bridges/codex-bridge/src/engine/app-server-engine.ts` reads one page
    (`limit: 100`) of `mcpServerStatus/list` and never follows `nextCursor`.
 4. **Grok.** Per-session ACP application is not implemented: user servers are
@@ -104,22 +118,14 @@ collects the live evidence the shipped behaviour has never had.
    OpenCode remote or organisation configuration and Codex profiles are
    visible only in the live panel. Model one only where a passive reader
    exists.
-8. **Host Pi project files under a project-resources override.** An
-   environment's execution policy can turn `projectResources` on for a host
-   environment (`native-agent-execution-policy.ts`), and the host Pi bridge
-   then loads `<worktree>/.pi/mcp.json`. The catalogue still marks that source
-   excluded on every host (the `pi` case of `providerSources` in
-   `providers.ts`) and apply reports it `blocked-policy` (`planRuntimes` in
-   `apply.ts`). Derive the host project trust from the environment's resolved
-   policy instead; check whether Cursor's project source has the same gap.
-9. **Replaced Claude server processes linger (blocked upstream).** On CLI
+8. **Replaced Claude server processes linger (blocked upstream).** On CLI
    2.1.296, a `setMcpServers` call that changes a server's configuration
    connects the new one but leaves the old process running, with its old
    environment, until the CLI exits; a server loaded from a settings file and
    then replaced the same way does too. Neither is offered to the model.
    Report it to Anthropic, then add the old process's exit to
    `session-manager-prompt-mcp-sync.live-probe.ts` once fixed.
-10. **Grok project trust verdict.** `grokFolderTrust` (`native-policy.ts`)
+9. **Grok project trust verdict.** `grokFolderTrust` (`native-policy.ts`)
     disagrees with Grok 1.0.52 in three ways, checked with `grok inspect`:
     - A grant on a non-git parent does not cover a repository below it, yet the
       verdict says it does.
@@ -140,20 +146,11 @@ Use temporary homes and harmless fixture servers; never the operator's files.
 
 - **Re-derive provider rules at current pins.** The OpenCode and Grok source
   and precedence tables came from older binaries' embedded docs.
-- **Live probes.** A Codex reload changes an existing thread's tools at its
-  next turn; OpenCode and Grok pick up edits on restart; the Cursor SDK
-  re-reads `~/.cursor/mcp.json` on resume; Grok saved `enabled` and SSE. For
-  Claude, `verify:claude:mcp-live` already proves the in-place unload on the
-  real CLI (status, the model's tool registry and the server process); what
-  still needs a credentialed run is a model turn on a CLI kept alive by
-  background work, where a call to a removed server that could not be
-  unloaded (an SSE entry) is refused by the hook. For every provider, after a
-  removal a harmless call to the removed tool must fail; a vanished status row
-  is not proof.
-- **Provider completion matrix.** For each provider and each advertised
-  writable scope record: durable add, edit, rename and remove; actual tools
-  after apply; two sessions or a busy session; restart and restore; the auth
-  limitation. An unsupported cell gets an explicit reason, not a pass.
+- **Grok and Pi live probes.** Run `mcp-apply-live.spec.ts` for Grok (user
+  and project scopes, saved `enabled`, SSE) and Pi (user and project scopes)
+  once the host has a current Grok login and a Pi provider sign-in; both were
+  skipped on 2026-10-18 (see the record). Claude, Codex, OpenCode and Cursor
+  are done.
 - **Inactive environment.** Keep environment A's provider busy and save and
   apply an edit; work continues. Switch to B, return after the safe boundary,
   then check revision, apply outcome, actual tools and controls. Repeat after
@@ -173,6 +170,175 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   browser showing correct backend paths and operation recovery.
 - **Release decision.** Keep or narrow the all-on rollout default once the
   matrix is filled.
+
+## Live apply record (2026-10-18)
+
+Live MCP apply probes and the provider completion matrix, run on macOS 27.0
+(Apple Silicon), Bun 1.4.2, at the pins above, in the disposable profile
+`mcpq2-0fcd`. Every edit went through the editor's own commands
+(`mutate_mcp_definition` with "save and apply", then `get_mcp_operation`),
+never a direct file write, except the Claude SSE case below.
+
+### Method
+
+- **Isolation.** An agent-test profile points `CODEX_HOME` and the XDG
+  directories at the host's real provider homes when it authorizes the Codex
+  or OpenCode credential source, so an editor write there would change the
+  host's own files. The profile was therefore started with
+  `--credential-source claude --credential-source cursor --credential-source
+  grok --agent-platforms claude,codex,opencode,cursor,grok,pi`, which keeps
+  both homes inside the profile, and two credentials were seeded into it by
+  hand, owner-only: Codex got the access and id tokens with a dummy refresh
+  token and a fresh `last_refresh` (so it never refreshed and could not
+  rotate the host's login; `auth.json` was unchanged at the end), OpenCode
+  got its one API-key provider entry. Claude, Cursor and Grok use the
+  profile's own snapshots. The spec also refuses to write any source outside
+  the environment's worktree or the profile's data directory, and grants
+  Codex project trust only in that isolated `CODEX_HOME`.
+- **Proof of a call.** `mcp-probe-server.mjs` logs every process start,
+  `probe` call (with a fresh nonce) and exit. A call counts as reached only
+  when the server logged that nonce, and a successful probe also needs the
+  exact result line in the reply. The prompt is the same whether the call
+  should work or not. A failing probe records the tool rows the turn
+  produced (names and states only), which tells a model calling a different
+  server's tool apart from a removed server still answering.
+- **Steps per writable scope.** Add (tag `v1`), probe tab A; edit to `v2`,
+  probe tabs A and B (two sessions; on the first scope tab A runs a shell
+  `sleep 25` while the edit is saved and applied, and that turn must finish
+  normally); rename, probe the new name (must answer) and the old one (must
+  fail); on the first scope, restart the provider's bridge and probe the
+  restored tab; remove, probe both tabs (must fail). A runtime left
+  `restart-required` is restarted before probing, as the outcome asks; for a
+  removal one probe is made first and recorded, not judged.
+- **Command** (one provider per run; parallel runs against one profile are
+  possible but see flake 0420):
+
+  ```bash
+  ORKESTRATOR_AGENT_TEST_PROFILE=<profile> ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 \
+    ORKESTRATOR_AGENT_TEST_MCP_PROVIDERS=<provider> \
+    ORKESTRATOR_AGENT_TEST_MCP_MODELS=opencode=opencode-go/deepseek-v4.1-flash \
+    bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts \
+    e2e/agent-testing/mcp-apply-live.spec.ts
+  ```
+
+  `ORKESTRATOR_AGENT_TEST_MCP_SCOPES` narrows the scopes. Each provider writes
+  `output/agent-testing/<run>/mcp-apply-live/<provider>.json`.
+
+### Runs
+
+| Provider | Code | Result | Time |
+| --- | --- | --- | --- |
+| Claude | `25a1c56f` (spec) | 1 passed: user, private local, project, SSE stale server | 10.3 min |
+| Codex | `2b8fc965` | 1 passed: user, project | 11.9 min |
+| OpenCode (`opencode-go/deepseek-v4.1-flash`) | `ddc2074c` | 1 passed: user, project | 3.6 min |
+| Cursor | `ddc2074c`, project scope again at `140a50e8` | 1 passed each | 6.3 min, 4.2 min |
+| Grok | `2b8fc965` | **Skipped**: session creation 401, "Grok Build isn't signed in" | — |
+| Pi | `2b8fc965` | **Skipped**: "Pi has no signed-in model provider" | — |
+
+Earlier attempts that failed for harness reasons, all fixed in the spec
+before the runs above: a background-task reply read as the probe's answer
+(replies are now taken only after the turn's own prompt row), leftovers from
+an interrupted run (cleared at start), the rename label (a renamed entry's
+process keeps its `--label`), and Codex's code-mode models answering
+"unavailable" without looking when the prompt offered that way out (the
+prompt now asks every provider to search its full tool registry first;
+reproduced with `codex exec`). A Claude re-run on the final code twice ended
+its first turn on "Claude ended the turn on an API error" within seconds with
+the host still signed in, so the Claude row is from the earlier pass; the
+changed Claude wording is covered by unit tests.
+
+### Completion matrix
+
+These are historical observations from the original harness, not complete
+qualification under the corrected checks. Negative results need a successfully
+settled turn with an explicit unavailable reply; provider errors, silence and
+substituted tools do not prove removal. The original busy check established only
+an active turn, not a running shell command, so every Busy cell below is
+unverified. The corrected harness waits for a unique shell marker and its
+pending foreground tool row before saving. The Claude SSE removal must be
+rerun without restarting the bridge; the original helper restarted first.
+A run of the corrected SSE case in the disposable `mcp-review-fixes` profile
+failed during warm-up on "Claude ended the turn on an API error", before any
+probe ran (`output/agent-testing/mcp-review-fixes-sse/`). It is a failed
+qualification, not renewed evidence for the SSE cell.
+
+| Provider · scope | Add | Edit (A, B) | Rename (new / old) | Remove (A, B) | Busy | Restart and restore | Apply outcome |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Claude · user `~/.claude.json` | reached | reached v2 both | answers / fails | fails both | unverified | reached after bridge restart | `pending-next-turn` → `applied` per tab after its turn |
+| Claude · private local `projects[<worktree>]` | reached | reached v2 both | answers / fails | fails both | — | — | same |
+| Claude · project `.mcp.json` | reached | reached v2 both | answers / fails | fails both | — | — | same |
+| Claude · SSE in `.mcp.json` (written outside the editor) | reached after a bridge restart (the CLI loads its own files only at launch) | — | — | unverified: probe ran after restart, so an empty server log did not qualify the warm hook | — | — | `restart-required` with the still-loaded reason on the warm tab, `pending-next-turn` on the idle one |
+| Codex · user `config.toml` | reached | reached v2 both | answers / fails | fails both | unverified | reached after app-server restart | `queued` → reload → `pending-next-turn` (never `applied`, by design) |
+| Codex · project `.codex/config.toml` (trusted) | reached | reached v2 both | answers / fails | fails both | — | — | same |
+| OpenCode · user `opencode.jsonc` | reached after restart | reached v2 both after restart | answers / unverified (model substituted the new name's tool) | still callable before the restart; fails both after it | unverified | reached | `restart-required` throughout, truthfully; nothing reaches a session without a restart |
+| OpenCode · project `opencode.json` | same | same | same | same | — | — | same |
+| Cursor · user `~/.cursor/mcp.json` | reached | reached v2 both | answers / fails | fails both | unverified | reached after bridge restart | `pending-next-turn` → `applied` per tab after its turn |
+| Cursor · project `.cursor/mcp.json`, project resources on | reached | reached v2 both | answers / fails | fails both | unverified | reached | before the fix: `excluded` and `blocked-policy` although the session ran the server; after it: `pending-next-turn` → `applied` |
+| Grok · user and project | skipped: no current Grok login (below) | | | | | | |
+| Pi · user and project | skipped: no Pi provider sign-in (below) | | | | | | |
+
+Not writable on these targets, so not probed: Codex system and managed
+files, OpenCode inline, managed and `OPENCODE_CONFIG` layers (none present),
+injected `orkestrator` servers, and every container target (read-only by
+design). Cursor's project scope without the policy override stays excluded
+and was not probed.
+
+Auth limitation per provider, from the target capabilities: Claude has no
+in-app MCP sign-in beyond its existing reconnect and elicitation; Codex has
+its existing OAuth action; OpenCode uses `mcp.auth.start`, whose completion
+is still unverified (code item 2); Cursor, Grok and Pi have none (Cursor
+servers sign in through Cursor, Pi terminals through `/mcp login`). The
+probe servers need no authentication, so no sign-in flow was exercised.
+
+### Findings
+
+- **Fixed: host Cursor and Pi project files under a project-resources
+  policy** (was code item 8). The Cursor run showed the session loading and
+  calling servers from `<worktree>/.cursor/mcp.json` while the catalogue
+  showed the file `excluded` and apply reported `blocked-policy`. Environment
+  targets now carry the resolved policy, both sources are `allowed` when it
+  turns project resources on, and a session whose own policy is off stays
+  `blocked-policy`. Re-run live for Cursor; Pi is covered by
+  `service-apply-scope.test.ts`, host-on catalogue/bridge parity fixtures in
+  `pi-mcp-parity.test.ts`, and the Pi bridge's own policy check
+  (`mcp.ts`), since Pi could not run.
+- **Fixed: the Claude still-loaded wording.** The `restart-required` reason
+  and the stale-server hook said the CLI was "still running background
+  work". Since #1055 a CLI also stays open between messages for its idle
+  window (10 minutes by default). The original SSE removal result did not
+  establish hook enforcement because the harness restarted before probing.
+  Both now say the process is still open and closes after an idle period or
+  when the session is stopped.
+- **Codex reload reaches existing threads.** Both idle threads saw every
+  change at their next turn without a restart (code item 3 is narrowed to
+  evidence and paging).
+- **OpenCode needs the restart its outcome asks for.** Before it, a removed
+  tool still answered; after it, the call failed.
+- **Codex code-mode models do not see MCP tools up front.** They reach them
+  only from a code cell (`ALL_TOOLS`, `tools.*`). This is provider behaviour,
+  not an apply defect, but a user asking a Codex tab about a new server may
+  get "not available" until the model looks.
+- **Profile isolation gap** (follow-up in
+  [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md)):
+  an agent-test profile that authorizes Codex or OpenCode credentials edits
+  the host's real `config.toml` / `opencode.json(c)` from the MCP editor.
+
+### Skips
+
+- **Grok:** the host's `~/.grok/auth.json` expired on 2026-10-16, so the
+  profile received no snapshot and session creation answered 401. Renewing it
+  would rewrite the host's Grok home, and using its refresh token from a copy
+  would rotate the host's login, so neither was done.
+- **Pi:** the host's `~/.pi/agent/auth.json` is empty and no provider key is
+  set, so Pi creates no agent session.
+
+### Cleanup
+
+Every run deleted its environments (worktrees included) and removed its
+probe entries; an interrupted run's leftovers were cleared by the next run.
+The profile was stopped and reset afterwards. No host provider file was
+written; the seeded credential copies lived only in the profile's data
+directory and were deleted with it.
 
 ## Constraints and rationale
 

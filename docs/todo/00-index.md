@@ -57,10 +57,10 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 23 |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 22 |
 | Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 253 |
 | Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 275 |
-| **Total** | | **552** |
+| **Total** | | **551** |
 
 ## Very high
 
@@ -125,8 +125,8 @@ it reaches. Some rules of thumb:
 ### MCP (high)
 
 - [x] Close MCP apply-path gaps: runtime generations, bridge versions, external edits and the 64-runtime cap ([mcp-management.md](mcp-management.md))
-- [ ] Run live MCP apply probes for every provider, proving a call to a removed tool actually fails ([mcp-management.md](mcp-management.md), qualification)
-- [ ] Fill the MCP provider completion matrix for every writable scope and lifecycle case ([mcp-management.md](mcp-management.md), qualification)
+- [x] Run live MCP apply probes for every provider, proving a call to a removed tool actually fails ([mcp-management.md](mcp-management.md), qualification)
+- [x] Fill the MCP provider completion matrix for every writable scope and lifecycle case ([mcp-management.md](mcp-management.md), qualification)
 - [ ] Qualify MCP apply for inactive environments across reload, dropped streams and bridge generation changes ([mcp-management.md](mcp-management.md), qualification)
 
 ### Agent engines and provider SDKs (high)
@@ -189,6 +189,7 @@ it reaches. Some rules of thumb:
 - [x] Fix flake 0166 (OpenCode probe deadline), which recurred on 2026-10-15 ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [x] Keep split panes mounted across the mobile breakpoint through stable per-pane hosts ([mobile-layout-gaps.md](mobile-layout-gaps.md))
 - [x] Move the environment settings dialog out of the drawer row so it is usable on mobile ([mobile-layout-gaps.md](mobile-layout-gaps.md))
+- [ ] Keep MCP editor writes in an agent-test profile out of the host's Codex and OpenCode homes when those credential sources are authorized ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
 
 ## Medium
 
@@ -311,17 +312,18 @@ it reaches. Some rules of thumb:
 
 - [x] Update Pi terminal MCP and sign-in capabilities for Pi 1.2.0's built-in CLI MCP extension ([mcp-management.md](mcp-management.md))
 - [ ] Implement OpenCode MCP application with `applied` evidence and trace how its OAuth completes ([mcp-management.md](mcp-management.md))
-- [ ] Prove Codex reload reaches existing threads, add thread-level evidence, and page `mcpServerStatus/list` ([mcp-management.md](mcp-management.md))
+- [ ] Add thread-level Codex MCP apply evidence and page `mcpServerStatus/list`; reload reaching existing threads is proven live ([mcp-management.md](mcp-management.md))
 - [ ] Join saved MCP entries to live rows by native name plus target and runtime identity ([mcp-management.md](mcp-management.md))
 - [ ] Make the Grok project-trust verdict match Grok: worktrees of trusted repositories, no cover across a git root, and sessions that run with the gate off ([mcp-management.md](mcp-management.md))
 - [ ] Redact runtime MCP `error` strings in `normalizeMcp`, not just bound their length ([mcp-management.md](mcp-management.md))
+- [ ] Run the live MCP apply probe for Grok and Pi once the host has a current Grok login and a Pi provider sign-in ([mcp-management.md](mcp-management.md), qualification)
 - [ ] Re-derive OpenCode and Grok MCP source and precedence rules from the current pinned binaries ([mcp-management.md](mcp-management.md), qualification)
 - [ ] Run a real-browser MCP editor pass after the dialog-layer fix and consider an agent-testing MCP spec ([mcp-management.md](mcp-management.md), qualification)
 - [ ] Qualify the read-only container MCP catalogue and remote-browser paths on the Docker real stack ([mcp-management.md](mcp-management.md), qualification)
 - [ ] Decide whether to keep or narrow the all-on MCP management rollout once the matrix is filled ([mcp-management.md](mcp-management.md), qualification)
 - [ ] Verify when running Claude account sessions see editor writes; warn that account-home servers are overwritten ([mcp-management.md](mcp-management.md), verify)
 - [x] Decide which Pi disable spelling the editor writes and whether to migrate `disabled: true` entries ([mcp-management.md](mcp-management.md), decision)
-- [ ] Treat a host Pi project `mcp.json` as loaded when the environment's execution policy turns project resources on ([mcp-management.md](mcp-management.md))
+- [x] Treat a host Pi project `mcp.json` as loaded when the environment's execution policy turns project resources on ([mcp-management.md](mcp-management.md))
 - [ ] Build a durable per-environment MCP overlay and enable container MCP writes ([mcp-environment-delivery.md](mcp-environment-delivery.md))
 - [ ] Stage `~/.cursor/mcp.json` into containers and retire Cursor's `blocked-policy` delivery branch ([mcp-environment-delivery.md](mcp-environment-delivery.md))
 - [ ] Show MCP execution location and allowlist warnings; gate container or remote sign-in on callback reachability ([mcp-environment-delivery.md](mcp-environment-delivery.md))
@@ -886,7 +888,7 @@ it reaches. Some rules of thumb:
 | [design-operation-recovery-edges.md](design-operation-recovery-edges.md) |  |  | 1 | 2 | 3 |
 | [design-agent-conversation-links.md](design-agent-conversation-links.md) |  |  | 5 | 3 | 8 |
 | **MCP** | | | | | |
-| [mcp-management.md](mcp-management.md) |  | 3 | 11 | 7 | 21 |
+| [mcp-management.md](mcp-management.md) |  | 1 | 11 | 7 | 19 |
 | [mcp-environment-delivery.md](mcp-environment-delivery.md) |  |  | 4 | 10 | 14 |
 | [control-mcp-voice-surface.md](control-mcp-voice-surface.md) |  |  | 9 |  | 9 |
 | **Agent engines and provider SDKs** | | | | | |
@@ -919,7 +921,7 @@ it reaches. Some rules of thumb:
 | [backend-core-domain-folders.md](backend-core-domain-folders.md) |  |  | 4 | 3 | 7 |
 | [backend-runtime-state-ownership.md](backend-runtime-state-ownership.md) |  |  | 4 | 3 | 7 |
 | **Cross-cutting** | | | | | |
-| [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md) |  |  | 10 | 5 | 15 |
+| [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md) |  | 1 | 10 | 5 | 16 |
 | [mixed-version-compatibility.md](mixed-version-compatibility.md) |  |  | 2 | 3 | 5 |
 | [test-suite-and-ci-health.md](test-suite-and-ci-health.md) | 1 |  | 4 | 13 | 18 |
 | [mobile-layout-gaps.md](mobile-layout-gaps.md) |  |  | 1 | 4 | 5 |

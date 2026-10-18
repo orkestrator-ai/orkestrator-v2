@@ -129,3 +129,15 @@ The nine-worker component suite failed this owner, and its one-worker rerun stil
 ## CLI matrices second main merge — 2026-10-18
 
 The aggregate desktop breakpoint-switching case failed to find `.monaco-diff-editor`; the one-worker owning-file rerun passed that case but failed the mobile editor check. This observation remains unresolved because the whole unchanged owner did not pass. Full commands, 339-pass/80-skip/13-failure aggregate and 96-pass/15-skip/three-failure focused counts, and evidence paths are in [0382](0382-component-browser-parallel-load.md). No implementation, assertion, timeout or skip changed.
+
+## Async question prefix review recurrence — 2026-10-18
+
+`ORKESTRATOR_E2E_PORT=18471 ORKESTRATOR_PUBLIC_E2E_PORT=18472 mise run test:logged -- --name browser-suite-isolated-ports -- mise run test:browser`
+reported 357 passed, 80 skipped and three failed with nine workers alongside
+repository and real-stack validation. The mobile header case found no Monaco
+diff editor at its five-second startup deadline. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Yj5dRp/browser-suite-isolated-ports.log.gz`.
+
+`ORKESTRATOR_E2E_PORT=18473 mise run test:logged -- --name browser-failed-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/DiffViewerMobile.spec.ts e2e/PaneBreakpoint.spec.ts --workers=1`
+passed both unchanged owning files sequentially (35.4 seconds logged). This
+confirms intermittence; no assertion, timeout or skip changed.

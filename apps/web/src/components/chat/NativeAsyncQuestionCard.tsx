@@ -30,15 +30,53 @@ export function serializeAsyncQuestionAnswers(
   ].join("\n");
 }
 
+const normalizeWhitespace = (text: string) => text.trim().replace(/\s+/g, " ");
+
+/**
+ * Codex fills the message text with a plain-text fallback of its structured
+ * questions (`title\n- option\n- option`). Returns true when the text holds
+ * nothing beyond that restatement, so the card can rely on its own controls.
+ */
+export function asyncQuestionContentRepeatsQuestions(
+  content: string,
+  questions: NativeAsyncQuestionPart["asyncQuestion"]["questions"],
+): boolean {
+  let remaining = normalizeWhitespace(content);
+  // Prefer full titles/options over shorter candidates sharing a word prefix.
+  const candidates = questions
+    .map((question) => ({
+      title: normalizeWhitespace(question.title),
+      options: question.options.map(normalizeWhitespace).sort((a, b) => b.length - a.length),
+    }))
+    .sort((a, b) => b.title.length - a.title.length);
+  const consume = (token: string) => {
+    if (!token || !remaining.startsWith(token)) return false;
+    const rest = remaining.slice(token.length);
+    if (rest && !rest.startsWith(" ")) return false;
+    remaining = rest.trimStart();
+    return true;
+  };
+  while (remaining) {
+    const question = candidates.find((candidate) => consume(candidate.title));
+    if (!question) return false;
+    let consumedOption = true;
+    while (consumedOption) {
+      consumedOption = question.options.some((option) =>
+        ["-", "*", "•"].some((bullet) => consume(`${bullet} ${option}`)),
+      );
+    }
+  }
+  return true;
+}
+
 export function NativeAsyncQuestionCard({ part }: { part: NativeAsyncQuestionPart }) {
   const { responses, respond, draftScope } = useContext(AsyncQuestionResponseContext);
   const questions = part.asyncQuestion.questions;
-  // Codex can repeat a question title in the accompanying message. Keep the
-  // fieldset legend as its accessible label and show only distinct context above it.
-  const normalizedContent = part.content.trim().replace(/\s+/g, " ");
+  // Keep the fieldset legend as the question's accessible label and show only
+  // context the agent added beyond restating the questions and options.
   const showContent =
-    normalizedContent.length > 0 &&
-    !questions.some((question) => question.title.trim().replace(/\s+/g, " ") === normalizedContent);
+    part.content.trim().length > 0 &&
+    !asyncQuestionContentRepeatsQuestions(part.content, questions);
   const draftKey = draftScope
     ? nativeAsyncQuestionDraftKey(draftScope, part.asyncQuestion.itemId)
     : undefined;

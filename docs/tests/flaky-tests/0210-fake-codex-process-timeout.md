@@ -76,3 +76,11 @@ macOS temporary directory.
 - **Assessment:** the equivalent isolated pass confirms intermittence. Shared-host contention remains a hypothesis; no implementation, assertion, timeout or skip changed.
 
 Aggregate result: exit 1 after 664.7 seconds logged. Codex bridge reported 2230 passed, 34 skipped and this one failure across 2265 tests; all other bridge packages passed.
+
+## Async question prefix review recurrence — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name complete-suite -- mise run test`, with workspace/root/bridges/protocol reservations of 4/1/2/1 worker slots; browser validation also ran on the shared host.
+- **Failure:** the version/invocation case exceeded its 5000 ms deadline (5017.17 ms). The other four bridge packages passed.
+- **Owning-file rerun:** `mise run test:logged -- --name codex-fake-process-node-recheck -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` passed unchanged (0.2 seconds logged).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.LC3ZRI/bridges.log.gz` (compressed when the aggregate completes).
+- **Assessment:** confirmed recurrence; no implementation, assertion, timeout or skip changed.

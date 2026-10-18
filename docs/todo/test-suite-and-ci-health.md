@@ -12,7 +12,7 @@ reliably green on `main`, and nothing requires it to be.
 
 ## Current state
 
-- **CI.** `.github/workflows/lint.yml` runs on pushes to `main` and on pull
+- **CI.** `.github/workflows/ci.yml` runs on pushes to `main` and on pull
   requests, with three jobs: "oxfmt and oxlint", "Typecheck", and "Unit and
   integration tests". `validate-bun-runtime.yml` builds the bundled Bun per
   platform and runs the container smoke. A failing group prints its output
@@ -160,7 +160,7 @@ reliably green on `main`, and nothing requires it to be.
 
 1. **Confirm `main` stays green, then apply the approved ruleset.** Every
    failure the completed CI runs have shown so far is fixed, registered or
-   mitigated (see Current state). Once `main` passes three `lint.yml` runs in a
+   mitigated (see Current state). Once `main` passes three `CI` runs in a
    row, create the ruleset below with
    `gh api -X POST repos/orkestrator-ai/orkestrator-v2/rulesets --input <file>`,
    then check it with `gh api repos/{owner}/{repo}/rulesets`. If a run fails
@@ -195,12 +195,12 @@ reliably green on `main`, and nothing requires it to be.
    }
    ```
 
-   - The three contexts are the `lint.yml` job names, reported by
+   - The three contexts are the `ci.yml` job names, reported by
      `github-actions` (app 15368), as checked on `7ccb193e`. `actor_id` 5 is
      the repository Admin role.
    - Strict up-to-date checks stay off at first: about 226 pull requests a
      month and a 12-minute test job would serialise merges. Revisit with a
-     merge queue, which needs a `merge_group:` trigger in `lint.yml`.
+     merge queue, which needs a `merge_group:` trigger in `ci.yml`.
    - Repository admins may bypass, because version bumps are pushed to `main`
      directly (44 such pushes since 2026-09-15). Moving them to pull requests
      would allow pull-request-only bypass.

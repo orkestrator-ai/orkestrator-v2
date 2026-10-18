@@ -10,11 +10,14 @@ on:
       - "apps/backend/**"
       - "apps/desktop/**"
       - "docker/**"
-      - "packages/protocol/**"
-      - "packages/toolchain/**"
+      - "packages/**"
+      - "patches/**"
+      - ".dockerignore"
       - "bun.lock"
+      - "bunfig.toml"
       - "mise.toml"
       - "package.json"
+      - "turbo.json"
       - "scripts/download-bun.sh"
       - "scripts/install-packaged-app-linux.ts"
       - "scripts/verify-packaged-backend.ts"
@@ -25,11 +28,14 @@ on:
       - "apps/backend/**"
       - "apps/desktop/**"
       - "docker/**"
-      - "packages/protocol/**"
-      - "packages/toolchain/**"
+      - "packages/**"
+      - "patches/**"
+      - ".dockerignore"
       - "bun.lock"
+      - "bunfig.toml"
       - "mise.toml"
       - "package.json"
+      - "turbo.json"
       - "scripts/download-bun.sh"
       - "scripts/install-packaged-app-linux.ts"
       - "scripts/verify-packaged-backend.ts"
@@ -37,7 +43,7 @@ on:
 
 concurrency:
   group: validate-bun-runtime-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   bundled-bun:

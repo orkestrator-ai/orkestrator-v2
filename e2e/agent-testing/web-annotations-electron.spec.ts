@@ -684,8 +684,15 @@ test("Home native preview hides beneath board panels and returns without losing 
     await projectRow.click();
     await s().window.getByRole("tab", { name: "Home", exact: true }).click();
     await expect(s().window.getByRole("textbox", { name: "Browser address" })).toBeVisible();
-    const visiblePreview = () =>
-      s().app.evaluate(({ BrowserWindow }, origin) => {
+    // A startup dialog can reopen after the renderer reload below, and it
+    // correctly hides the view. Its handler (`dismissStartupDialogs`) runs
+    // only before a locator action or assertion, never during this
+    // main-process poll, so give it one on every read (flake 0272).
+    const visiblePreview = async () => {
+      await expect(s().window.getByRole("dialog"))
+        .toHaveCount(0, { timeout: 1_000 })
+        .catch(() => undefined);
+      return s().app.evaluate(({ BrowserWindow }, origin) => {
         const host = BrowserWindow.getAllWindows()[0];
         return (
           host?.contentView.children.some((view) => {
@@ -697,6 +704,7 @@ test("Home native preview hides beneath board panels and returns without losing 
           }) ?? false
         );
       }, s().fixture.url);
+    };
     await expect.poll(visiblePreview, { timeout: 30_000 }).toBe(true);
     for (const board of ["Kanban", "Coordinator"]) {
       await s().window.getByRole("tab", { name: board, exact: true }).click();

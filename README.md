@@ -188,7 +188,19 @@ mise run package:linux    # Unpacked Linux app under XDG_DATA_HOME
 
 Published desktop releases and the in-app updater are described in [`docs/development/releasing.md`](docs/development/releasing.md). Container images are published to `ghcr.io/orkestrator-ai/orkestrator-v2`.
 
-Remote browser access (Tailscale, `mise run start:web`, `mise run start:web-public`) is documented in [`docs/architecture/remote-gateway.md`](docs/architecture/remote-gateway.md). The gateway binds Tailscale addresses by default and requires a token.
+### Hosted web client
+
+[`orkestrator.dev`](https://www.orkestrator.dev) is a static web client. The browser connects directly to your backend over Tailscale; commands, terminal traffic and agent sessions are not relayed through the website. Both devices must be on the same tailnet, and the backend needs a tailnet-only HTTPS address (a plain `http://100.x.y.z:34121` URL is blocked as mixed content).
+
+From the desktop app, enable **Settings → Web client → Allow web access**, then enter the HTTPS address and gateway token shown there. Without the desktop app or a clone, install Bun if needed and run the published backend:
+
+```bash
+curl -fsSL https://orkestrator.dev/install.sh | \
+  bash -s -- --tailscale-serve \
+  --allowed-origins https://orkestrator.dev,https://www.orkestrator.dev
+```
+
+Remote browser access (`mise run start:web`, `mise run start:web-public`, tokens, Tailscale Serve) is documented in [`docs/architecture/remote-gateway.md`](docs/architecture/remote-gateway.md); the published CLI in [`packages/cli/README.md`](packages/cli/README.md). The gateway binds Tailscale addresses by default and requires a token.
 
 ## Further reading
 

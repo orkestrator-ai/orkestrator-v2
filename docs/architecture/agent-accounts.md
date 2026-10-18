@@ -258,6 +258,20 @@ Orkestrator never refreshes a token itself. Claude access tokens last hours,
 so an inactive Claude account reports "refreshed while it is in use" once its
 token lapses, until it is used again. Codex tokens last days.
 
+Each account's last successful reading is kept in
+`<agent-accounts>/last-usage.json` (`agent-accounts-last-usage.ts`). The active
+account's reading is saved when it is read and when the user switches away from
+it. Whenever a fresh read fails, including the lapsed-token case above, the last
+reading is served instead with `stale: true`, its original `fetchedAt` and the
+failure as `message`. Any window whose reset time has passed is shown empty.
+Removing an account deletes its entry.
+
+A 429 from a usage endpoint is not retried until its `Retry-After` has passed
+(clamped to 1–30 minutes; 5 minutes if absent), even by a forced refresh. The
+endpoint's allowance is shared with the account's running Claude Code sessions.
+Switching accounts clears the wait. Meanwhile the shared reader serves the
+active account's last good reading as stale.
+
 Session-reported usage windows are folded into the platform's card only when
 the reporting bridge was launched on the active account
 (`contextUsageWithPlanUsage` in `plan-usage-cache.ts`).

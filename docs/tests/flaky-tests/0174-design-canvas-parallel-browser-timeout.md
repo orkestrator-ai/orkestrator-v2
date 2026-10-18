@@ -121,3 +121,13 @@ All 21 failing owners, including this unchanged file, passed with one worker in 
 ## CLI matrices second main merge — 2026-10-18
 
 The desktop canvas case timed out at 30 seconds in the aggregate, and both mobile and desktop canvas cases timed out in the unchanged one-worker owner. This observation remains unresolved. Full commands, 339-pass/80-skip/13-failure aggregate and 96-pass/15-skip/three-failure focused counts, and evidence paths are in [0382](0382-component-browser-parallel-load.md). No implementation, assertion, timeout or skip changed.
+
+## Keep-open picker verification recurrence — 2026-10-18
+
+- **Original observation:** verification of the keep-open model picker branch ran the full component browser suite: 351 passed, 80 skipped, and this case timed out at 30 seconds. A single detached `origin/main` run passed it, so the timeout was not yet reproduced on the target branch.
+- **Target-branch reproduction:** `CI=1 ORKESTRATOR_E2E_PORT=<port> bunx playwright test --config e2e/playwright.config.ts` was run concurrently on detached `origin/main` (`62c5c696`, port 1531) and on the branch (port 1532), nine workers each, on an 18-core host.
+  - `origin/main`: 359 passed, 80 skipped, one failed (4.5m). `[mobile-chromium]` exceeded 30000 ms, waiting on `expect.poll(...).toBe(8)` at `e2e/DesignCanvas.spec.ts:244`.
+  - Branch: 350 passed, 80 skipped, two failed (4.4m). Both viewport cases exceeded 30000 ms at the same line 244 poll.
+- **Uncontended runs:** `origin/main` alone passed the full browser suite (360 passed, 80 skipped, 2.4m), and passed the owning file with `--repeat-each=12 --workers=12` (24 passed, 46.9 s). The branch owning file passed alone (two passed, 12.4 s).
+- **Evidence:** `/tmp/ork-main-repro.X5W2/ab-main.log.gz` and `/tmp/ork-main-repro.X5W2/ab-branch.log.gz`.
+- **Disposition:** the timeout reproduces on unchanged `origin/main` under the same contention. The branch changes only the agent model picker, which this fixture does not render. No canvas source, assertion, timeout, or skip changed.

@@ -348,7 +348,7 @@ export async function seedAgentTestProfileState(
   const warn = dependencies.warn ?? ((message: string) => console.warn(message));
   const [, , toolchains] = await Promise.all([
     (dependencies.seedModelCatalogCaches ?? seedInstalledModelCatalogCaches)(profile),
-    (dependencies.seedProviderCredentials ?? seedAgentTestProviderCredentials)(profile),
+    (dependencies.seedProviderCredentials ?? seedAgentTestProviderCredentials)(profile, { warn }),
     (dependencies.seedAgentToolchains ?? seedInstalledAgentToolchains)(profile),
   ]);
   if (toolchains.seeded.length > 0) {

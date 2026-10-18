@@ -922,6 +922,22 @@ describe("transcript and turn", () => {
     expect(isSignInError("401 Unauthorized")).toBe(true);
     expect(isSignInError("Invalid API key provided")).toBe(true);
     expect(isSignInError("model overloaded")).toBe(false);
+    // The bridges' own signed-out messages (claude-sign-in.ts, acp-credentials.ts,
+    // and the cursor-bridge and pi-bridge credentials.ts).
+    expect(isSignInError("Claude isn't signed in. Sign in to Claude to keep working.")).toBe(true);
+    expect(
+      isSignInError("Grok Build isn't signed in. Run grok login in a terminal to keep working."),
+    ).toBe(true);
+    expect(
+      isSignInError(
+        "Cursor is not signed in. Sign in from Settings › Cursor, or set a Cursor API key.",
+      ),
+    ).toBe(true);
+    expect(
+      isSignInError(
+        "Pi has no signed-in model provider. Sign in with /login in a Pi terminal tab, or set the provider's API key.",
+      ),
+    ).toBe(true);
     expect([isSignedOut("needs-auth"), isSignedOut("signed-in"), isSignedOut(undefined)]).toEqual([
       true,
       false,

@@ -58,9 +58,9 @@ it reaches. Some rules of thumb:
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
 | High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 22 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 257 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 258 |
 | Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 278 |
-| **Total** | | **558** |
+| **Total** | | **559** |
 
 ## Very high
 
@@ -93,7 +93,7 @@ it reaches. Some rules of thumb:
 - [ ] Run the real Electron window service-preview qualification with the tunnel enabled in an isolated profile ([service-preview-rollout.md](service-preview-rollout.md), qualification)
 - [ ] Write a two-machine tailnet runbook and run decoy, latency, throttling, reconnect and publication checks ([service-preview-rollout.md](service-preview-rollout.md), qualification)
 - [x] Re-run the annotation Electron and isolated browser suites on current main and record a sign-off ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
-- [ ] Run the live annotation implement test once per provider and record skips explicitly ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
+- [x] Run the live annotation implement test once per provider and record skips explicitly ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
 - [x] Qualify the annotation native window: Notes column bounds, focus, keyboard, narrow switch, zoom and DPR ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
 - [x] Decide whether annotations stay enabled by default or hold dispatch for providers without a live run ([web-annotation-qualification.md](web-annotation-qualification.md), decision)
 
@@ -115,6 +115,7 @@ it reaches. Some rules of thumb:
 - [x] Replace the 1 s Claude state `docker exec` poll with a pushed change signal and a slow safety read ([container-state-observation.md](container-state-observation.md))
 - [x] Record a non-skipped run of the deletion-during-setup real-stack spec on current `main` ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), qualification)
 - [x] Run a seeded real-stack pass of the pre-ledger startup sweeps in an isolated dev profile ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), qualification)
+- [ ] Stop Docker containers spending the host's single-use Grok refresh token, which signs the host out ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
 
 ### Design canvas (high)
 
@@ -216,6 +217,7 @@ it reaches. Some rules of thumb:
 - [ ] Add a Docker annotation spec titled `Docker fixture` asserting materialization, cleanup and file checks ([web-annotation-qualification.md](web-annotation-qualification.md))
 - [ ] Assert on the real stack that a sent request writes the annotation PNG into the local worktree ([web-annotation-qualification.md](web-annotation-qualification.md))
 - [ ] Add live Discuss and needs-input annotation cases beside the live implement case ([web-annotation-qualification.md](web-annotation-qualification.md))
+- [ ] Re-run the live annotation implement test for Grok and Pi once each host login is usable ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
 - [x] Fix annotation-related flakes 0204 and 0225 (0204 by #1042, 0225 on 2026-10-17) ([web-annotation-qualification.md](web-annotation-qualification.md))
 - [ ] Keep a keychain access prompt from silently holding `dev:test` and desktop startup without a window ([web-annotation-qualification.md](web-annotation-qualification.md))
 - [ ] Qualify annotation preview OS focus, Window-menu focus and keyboard resolve where the app can be frontmost ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
@@ -878,7 +880,7 @@ it reaches. Some rules of thumb:
 | [service-preview-rollout.md](service-preview-rollout.md) |  | 2 | 11 | 8 | 21 |
 | [embedded-service-previews.md](embedded-service-previews.md) |  |  |  | 13 | 13 |
 | [preview-service-discovery.md](preview-service-discovery.md) |  |  | 1 | 5 | 6 |
-| [web-annotation-qualification.md](web-annotation-qualification.md) |  | 1 | 14 | 4 | 19 |
+| [web-annotation-qualification.md](web-annotation-qualification.md) |  |  | 15 | 4 | 19 |
 | [web-annotation-known-limitations.md](web-annotation-known-limitations.md) |  |  | 7 | 3 | 10 |
 | [web-annotation-extensions.md](web-annotation-extensions.md) |  |  |  | 11 | 11 |
 | **CLI and slash commands** | | | | | |
@@ -889,7 +891,7 @@ it reaches. Some rules of thumb:
 | **Containers and environments** | | | | | |
 | [container-platform-qualification.md](container-platform-qualification.md) |  |  | 12 | 2 | 14 |
 | [container-rebuild-state-preservation.md](container-rebuild-state-preservation.md) |  |  | 2 | 2 | 4 |
-| [container-network-and-credential-isolation.md](container-network-and-credential-isolation.md) |  |  | 2 | 1 | 3 |
+| [container-network-and-credential-isolation.md](container-network-and-credential-isolation.md) |  | 1 | 2 | 1 | 4 |
 | [container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md) |  |  | 3 | 6 | 9 |
 | [container-state-observation.md](container-state-observation.md) |  |  | 5 | 6 | 11 |
 | [environment-and-disk-cleanup.md](environment-and-disk-cleanup.md) |  |  |  | 6 | 6 |

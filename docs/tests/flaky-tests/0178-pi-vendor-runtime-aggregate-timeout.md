@@ -600,6 +600,23 @@ Final aggregate: exit 1 after 1252.7 seconds logged. Backend passed 8964 tests w
 
 Final aggregate exited 1 after 477.8 seconds. Backend reported 8978 passed, 41 skipped and one failed across 9020 tests in 478 files (423.04 seconds). Root/support reported the Pi timeout above; all other workspace packages, bridges and the Codex protocol check passed. Both failing owning files passed unchanged alone. Formatting, lint, typechecking and the full component browser suite also passed. Additional real-stack, Electron, Docker and iOS scenario suites were omitted because the branch changes a component-browser test and documentation, and conflict resolution changes documentation only.
 
+## Recurrence on 2026-10-18
+
+`mise run test:logged -- --name full-suite -- mise run test` on branch
+`qualify-annotation-live-implement-0330a0bacc01` (`50c26708`, a dev:test
+harness, e2e and docs change) on a heavily loaded macOS host. Evidence is in
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Zq7Cut/`. Thirty-second timeout (30,006 ms) in the root group. The unchanged
+owning file passed alone (`bun test tests/unit/pi-bridge-vendor.test.ts`,
+4 passed, 20.5 s).
+
+## Main merge validation — 2026-10-18
+
+- **Command:** `mise run test:logged -- --name merge-full-suite -- mise run test`, aggregate reservations 4/1/2/1; one worker for the owning package/group.
+- **Observation:** 30,083.20 ms timeout; owning file passed unchanged in 26.5 s.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-root-rerun-pi-bridge-vendor -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` (exit 0).
+- **Evidence:** `orkestrator-test-run.LitzDV/root-and-agent-support-tests.log.gz`; root group had 3051 passed, 1 skipped and 4 failed, including the separate README installer-link regression; Codex group had 2227 passed and 4 failed.
+- **Assessment:** Confirmed recurrence; no implementation, assertion, skip or timeout changed.
+
 **Recurrence (2026-10-18, qualify-design-live-cycle):** `mise run test:logged -- --name full-test-merged -- mise run test` on the design branch merged with `origin/main` at `68dc1c8d` hit the same 30,000 ms timeout while other workers loaded the host. `mise run test:logged -- --name pi-vendor -- bun test tests/unit/pi-bridge-vendor.test.ts` then passed unchanged (exit 0, 14.1 seconds). Nothing in the owning file or its implementation changed.
 
 - **Design live-cycle review recurrence (2026-10-18):** the aggregate
@@ -617,7 +634,6 @@ Final aggregate exited 1 after 477.8 seconds. Backend reported 8978 passed, 41 s
 - **Owning-file rerun:** `mise run test:logged -- --name merge-pi-vendor-alone -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`, with the same GNU-tool PATH, also timed out at 30001.41 ms (three passed, one failed; exit 1, 30.8 seconds logged).
 - **Evidence:** `orkestrator-test-run.IqZNat/root-and-agent-support-tests.log.gz`; isolated `orkestrator-test-run.Ys2WeB/merge-pi-vendor-alone.log.gz`, below the platform temporary directory.
 - **Assessment:** this occurrence does not independently establish a flake. Runtime staging remains an unresolved validation limitation; no implementation, assertion, timeout or skip changed.
-
 
 ## Public landing-page review validation — 2026-10-18
 

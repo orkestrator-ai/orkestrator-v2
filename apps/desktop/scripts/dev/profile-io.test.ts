@@ -5,6 +5,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   rename,
   rm,
   stat,
@@ -14,6 +15,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import * as fs from "node:fs/promises";
 
 import {
   parseRuntimeStatusManifest,
@@ -29,6 +31,7 @@ import {
   readAndValidateSentinel,
   removeProfileState,
   reserveLoopbackPorts,
+  restrictGrokAuthSnapshot,
   agentTestCursorSnapshotPath,
   seedAgentTestProviderCredentials,
   seedInstalledAgentToolchains,
@@ -333,29 +336,178 @@ describe("development profile lifecycle primitives", () => {
       ".grok",
       "auth.json",
     );
-    await writeFile(source, "host-auth-v1");
+    const nowMs = Date.parse("2026-10-18T00:00:00Z");
+    const login = (key: string) =>
+      JSON.stringify({
+        "https://auth.x.ai::account": {
+          key,
+          auth_mode: "oidc",
+          refresh_token: `refresh-${key}`,
+          expires_at: "2026-10-18T06:00:00Z",
+        },
+      });
+    await writeFile(source, login("host-auth-v1"));
 
-    await expect(seedAgentTestProviderCredentials(profile, { roots })).resolves.toEqual([]);
+    await expect(seedAgentTestProviderCredentials(profile, { roots, nowMs })).resolves.toEqual([]);
     await expect(readFile(destination)).rejects.toThrow();
 
     const enabled = { ...profile, credentialSources: ["grok" as const] };
-    await expect(seedAgentTestProviderCredentials(enabled, { roots })).resolves.toEqual([
+    await expect(seedAgentTestProviderCredentials(enabled, { roots, nowMs })).resolves.toEqual([
       "grok/auth.json",
     ]);
-    expect(await readFile(destination, "utf8")).toBe("host-auth-v1");
+    const seeded = JSON.parse(await readFile(destination, "utf8"));
+    expect(seeded["https://auth.x.ai::account"]).toMatchObject({
+      key: "host-auth-v1",
+      refresh_token: "",
+    });
     expect((await stat(destination)).mode & 0o777).toBe(0o600);
+    expect(await readdir(path.dirname(destination))).toEqual(["auth.json"]);
 
-    await writeFile(source, "host-auth-v2");
-    await expect(seedAgentTestProviderCredentials(enabled, { roots })).resolves.toEqual([
+    await writeFile(source, login("host-auth-v2"));
+    await expect(seedAgentTestProviderCredentials(enabled, { roots, nowMs })).resolves.toEqual([
       "grok/auth.json",
     ]);
-    expect(await readFile(destination, "utf8")).toBe("host-auth-v2");
-    await seedAgentTestProviderCredentials(profile, { roots });
+    expect(await readFile(destination, "utf8")).toContain("host-auth-v2");
+    await seedAgentTestProviderCredentials(profile, { roots, nowMs });
     await expect(access(destination)).rejects.toThrow();
-    await seedAgentTestProviderCredentials(enabled, { roots });
+    await seedAgentTestProviderCredentials(enabled, { roots, nowMs });
     await rm(source);
-    await seedAgentTestProviderCredentials(enabled, { roots });
+    await seedAgentTestProviderCredentials(enabled, { roots, nowMs });
     await expect(access(destination)).rejects.toThrow();
+  });
+
+  test.each(["write", "rename", "read-back", "temporary cleanup"] as const)(
+    "a Grok %s failure revokes the previous snapshot without blocking startup",
+    async (failure) => {
+      const { roots, profile } = await modelCacheFixture();
+      const enabled = { ...profile, credentialSources: ["grok" as const] };
+      const source = path.join(roots.homeDir, ".grok", "auth.json");
+      const destination = path.join(
+        profile.dataDir,
+        "agent-credentials",
+        "home",
+        ".grok",
+        "auth.json",
+      );
+      const hostText = JSON.stringify({ live: { key: "host-key", refresh_token: "host-refresh" } });
+      await writeFile(source, hostText);
+      await seedAgentTestProviderCredentials(enabled, { roots });
+      const warnings: string[] = [];
+      const originalRename = fs.rename;
+      const injectedError = new Error("filesystem error containing host-refresh");
+      const fault =
+        failure === "read-back"
+          ? spyOn(fs, "readFile").mockRejectedValueOnce(injectedError)
+          : failure === "rename"
+            ? spyOn(fs, "rename").mockImplementation(async (from, to) => {
+                if (to === destination) throw injectedError;
+                return originalRename(from, to);
+              })
+            : spyOn(fs, "writeFile").mockRejectedValueOnce(injectedError);
+      const cleanupFault =
+        failure === "temporary cleanup"
+          ? spyOn(fs, "rm").mockRejectedValueOnce(injectedError)
+          : undefined;
+      try {
+        await expect(
+          seedAgentTestProviderCredentials(enabled, {
+            roots,
+            warn: (message) => warnings.push(message),
+          }),
+        ).resolves.toEqual([]);
+      } finally {
+        fault.mockRestore();
+        cleanupFault?.mockRestore();
+      }
+      await expect(access(destination)).rejects.toThrow();
+      expect(await readdir(path.dirname(destination))).toEqual([]);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain(
+        failure === "read-back" ? "could not be read back" : "could not be published",
+      );
+      expect(warnings[0]).not.toContain("host-refresh");
+      expect(await readFile(source, "utf8")).toBe(hostText);
+    },
+  );
+
+  test("never hands a profile the host's Grok refresh token or an expired login", async () => {
+    const { roots, profile } = await modelCacheFixture();
+    const enabled = { ...profile, credentialSources: ["grok" as const] };
+    const source = path.join(roots.homeDir, ".grok", "auth.json");
+    const destination = path.join(
+      profile.dataDir,
+      "agent-credentials",
+      "home",
+      ".grok",
+      "auth.json",
+    );
+    const nowMs = Date.parse("2026-10-18T00:00:00Z");
+    const warnings: string[] = [];
+    const warn = (message: string) => warnings.push(message);
+    await writeFile(
+      source,
+      JSON.stringify({
+        live: {
+          key: "live-key",
+          refresh_token: "live-refresh",
+          expires_at: "2026-10-18T01:00:00Z",
+        },
+        expired: {
+          key: "old-key",
+          refresh_token: "old-refresh",
+          expires_at: "2026-10-16T12:00:00Z",
+        },
+        expiring: {
+          key: "soon",
+          refresh_token: "soon-refresh",
+          expires_at: "2026-10-18T00:00:30Z",
+        },
+      }),
+    );
+    await expect(
+      seedAgentTestProviderCredentials(enabled, { roots, nowMs, warn }),
+    ).resolves.toEqual(["grok/auth.json"]);
+    const text = await readFile(destination, "utf8");
+    expect(JSON.parse(text)).toEqual({
+      live: { key: "live-key", refresh_token: "", expires_at: "2026-10-18T01:00:00Z" },
+    });
+    expect(text).not.toContain('refresh"');
+    expect(warnings).toEqual([]);
+
+    // Only an expired login on the host: the previous snapshot is revoked.
+    await writeFile(
+      source,
+      JSON.stringify({
+        expired: { key: "k", refresh_token: "r", expires_at: "2026-10-16T12:00:00Z" },
+      }),
+    );
+    await expect(
+      seedAgentTestProviderCredentials(enabled, { roots, nowMs, warn }),
+    ).resolves.toEqual([]);
+    await expect(access(destination)).rejects.toThrow();
+    expect(warnings).toEqual([expect.stringContaining("the host Grok login has expired")]);
+    expect(warnings[0]).not.toContain('"k"');
+
+    for (const unreadable of ["not json", "[]", JSON.stringify({ a: { expires_at: "soon" } })]) {
+      warnings.length = 0;
+      await writeFile(source, unreadable);
+      await expect(
+        seedAgentTestProviderCredentials(enabled, { roots, nowMs, warn }),
+      ).resolves.toEqual([]);
+      await expect(access(destination)).rejects.toThrow();
+      expect(warnings).toHaveLength(1);
+      expect(await readdir(path.dirname(destination))).toEqual([]);
+    }
+  });
+
+  test("restrictGrokAuthSnapshot keeps logins without an expiry but still blanks refresh", () => {
+    expect(
+      restrictGrokAuthSnapshot(JSON.stringify({ apiKey: { key: "k", refresh_token: "r" } })),
+    ).toEqual({ text: JSON.stringify({ apiKey: { key: "k", refresh_token: "" } }) });
+    expect(restrictGrokAuthSnapshot(JSON.stringify({ apiKey: { key: "k" } }))).toEqual({
+      text: JSON.stringify({ apiKey: { key: "k" } }),
+    });
+    expect(restrictGrokAuthSnapshot("{}")).toHaveProperty("withheld");
   });
 
   test("snapshots only the host's effective Cursor key and revokes it on opt-out", async () => {
@@ -676,12 +828,18 @@ describe("development profile lifecycle primitives", () => {
     const logs: string[] = [];
     const warnings: string[] = [];
 
+    const warn = (message: string) => warnings.push(message);
     await seedAgentTestProfileState(profile, "agent-test", {
       seedModelCatalogCaches: async () => [],
-      seedProviderCredentials: async () => [],
+      seedProviderCredentials: async (receivedProfile, options) => {
+        expect(receivedProfile).toBe(profile);
+        expect(options?.warn).toBe(warn);
+        options?.warn?.("provider snapshot withheld");
+        return [];
+      },
       seedAgentToolchains: async () => ({ seeded: ["pi@0.84.3"], failed: ["grok@1.0.3"] }),
       log: (message) => logs.push(message),
-      warn: (message) => warnings.push(message),
+      warn,
     });
 
     expect(logs).toEqual([
@@ -689,7 +847,10 @@ describe("development profile lifecycle primitives", () => {
       // Attributes a slow or hung startup before Electron is even launched.
       "Electron will download managed toolchains for: grok",
     ]);
-    expect(warnings).toEqual(["Could not seed from the host install: grok@1.0.3"]);
+    expect(warnings).toEqual([
+      "provider snapshot withheld",
+      "Could not seed from the host install: grok@1.0.3",
+    ]);
   });
 
   test("seeds nothing for an ordinary development profile", async () => {

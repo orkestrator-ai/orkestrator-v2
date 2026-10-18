@@ -429,6 +429,13 @@ Aggregate command, worker configuration, counts and evidence are recorded in [02
 - **Owning-file rerun:** `mise run test:logged -- --name merge-coordinator-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 11.6 seconds).
 - **Assessment:** the unchanged isolated pass confirms intermittence; shared-host contention remains a hypothesis. No owning implementation, assertion, timeout or skip changed.
 
+## Recurrence on 2026-10-18
+
+`mise run test:logged -- --name full-suite -- mise run test` on branch
+`qualify-annotation-live-implement-0330a0bacc01` (`50c26708`, a dev:test
+harness, e2e and docs change) on a heavily loaded macOS host. Evidence is in
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Zq7Cut/`. Timed out at 5120.62 ms beside new flake 0461 in the same file. The
+unchanged owning file passed alone (`iso-coordinator`, 28.4 s).
 
 ## Claude restart-interruption validation — 2026-10-18
 

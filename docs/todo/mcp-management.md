@@ -162,11 +162,12 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   writable scope record: durable add, edit, rename and remove; actual tools
   after apply; two sessions or a busy session; restart and restore; the auth
   limitation. An unsupported cell gets an explicit reason, not a pass.
-- **Inactive environment.** Done for Claude on 2026-10-18 (see
+- **Inactive environment.** Claude's apply evidence and recovery checks passed
+  on 2026-10-18 (see
   [the record](#qualification-record-inactive-environment-2026-10-18)): busy
   save, a cut event stream, reload, a bridge restart (newer generation), a
-  removal, a pre-marker bridge and a shared user file all passed on the real
-  stack. Two parts remain:
+  removal, a pre-marker bridge and a shared user file. Full model-facing
+  qualification remains open. Two parts remain:
   - Rerun the spec in full mode (without `ORKESTRATOR_AGENT_TEST_MCP_APPLY_ONLY`)
     once the seeded Claude login is not rate limited. That proves the model's
     tool calls after the edit, the removal, the older bridge and the shared
@@ -175,12 +176,14 @@ Use temporary homes and harmless fixture servers; never the operator's files.
     needs a profile whose Codex home is disposable: with the Codex credential
     source an agent-test profile uses the host's `CODEX_HOME`, so a user-scope
     save there would write the operator's own `config.toml`.
-- **Real browser.** The live-panel link from a running session; a full pass
-  after the dialog-layer fix (2026-09-24 confirmed it only by raising the
-  layer); conflict recovery and secret replacement at desktop and narrow
-  widths; a Claude fixture with one healthy and one failing server, reconnect
-  from the panel, reload, and confirm the status came from the snapshot. No
-  MCP spec exists under `e2e/agent-testing/`; consider adding one.
+- **Real browser.** `e2e/agent-testing/mcp-apply-inactive.spec.ts`, registered
+  in `playwright.browser.config.ts`, covers the live-panel link to the correct
+  environment, settings dialogs, inactive apply, offline recovery and reload
+  on the real stack at desktop width. Full mode also checks transcript tool
+  results and post-reload live inventory (see the qualification record below).
+  Remaining UI matrix: conflict recovery and secret replacement at desktop
+  and narrow widths; a Claude fixture with one healthy and one failing server,
+  reconnect from the panel, reload, and confirm status comes from the snapshot.
 - **Containers and remote.** The read-only container catalogue (ok, absent,
   oversized, offline) through `mise run test:agent:docker`, and a remote
   browser showing correct backend paths and operation recovery.
@@ -270,6 +273,32 @@ the older bridge's server answering, both environments calling the shared
 server, and the live panel listing the server after the reload. Rerun the
 command above without `ORKESTRATOR_AGENT_TEST_MCP_APPLY_ONLY` once that login
 is no longer limited.
+
+### Review follow-up: full-mode retry (2026-10-18)
+
+Retried from `7a4a50c9` plus the review fixes in a fresh disposable profile,
+`qa-mcp-review-1018`, with only Claude credentials and platforms enabled. The
+pre-marker bridge was rebuilt from `65077337` in a temporary directory and
+supplied through `ORKESTRATOR_AGENT_TEST_MCP_OLDER_CLAUDE_BRIDGE`. The run
+explicitly removed `ORKESTRATOR_AGENT_TEST_MCP_APPLY_ONLY` from its environment:
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-mcp-review-1018 ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 \
+  ORKESTRATOR_AGENT_TEST_MCP_OLDER_CLAUDE_BRIDGE=<historical-bridge-dist> \
+  mise run test:logged -- --name mcp-full-live -- mise run test:agent:browser -- \
+  e2e/agent-testing/mcp-apply-inactive.spec.ts
+```
+
+The first busy turn started and the save stayed `pending-next-turn`, but
+Claude rejected that turn with HTTP 429 (account rate limit). This is a failed
+full-mode qualification, not an apply-only pass or a flake. It supplies no new
+proof for the five outstanding model-facing checks listed above; all remain
+open until the same full-mode command can run with a usable provider login.
+Result: 0 passed, 0 skipped, 1 failed in 258.9 s (exit 1). Evidence:
+`output/agent-testing/qa-mcp-review-1018/browser/results.json` and
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Jr9kqq/mcp-full-live.log.gz`.
+The profile was stopped and reset after the run; browser evidence is retained
+under `output/`, outside the disposable profile state.
 
 ## Constraints and rationale
 

@@ -26,6 +26,7 @@ import {
   claudePlanWindowFromKind,
   isPlanUsagePlatform,
   PLAN_USAGE_PLATFORMS,
+  stalePlanUsageSnapshot,
   type PlanUsagePlatform,
   type PlanUsageSnapshot,
 } from "@orkestrator/protocol/plan-usage";
@@ -68,6 +69,43 @@ export { CURSOR_API_BASE };
 const CLAUDE_OAUTH_BETA = "oauth-2025-04-20";
 
 const REQUEST_TIMEOUT_MS = 15_000;
+
+/**
+ * How long to stop asking after a 429 that names no wait. Retrying sooner
+ * spends the same allowance the account's running sessions draw on.
+ */
+export const RATE_LIMIT_BACKOFF_MS = 5 * 60_000;
+const MIN_RATE_LIMIT_BACKOFF_MS = 60_000;
+/** A provider's Retry-After is honoured up to this, so one bad header cannot hide usage for hours. */
+const MAX_RATE_LIMIT_BACKOFF_MS = 30 * 60_000;
+
+/** A usage read the provider refused with HTTP 429. */
+export class PlanUsageRateLimitedError extends Error {
+  constructor(readonly retryAfterMs: number) {
+    const minutes = Math.max(1, Math.round(retryAfterMs / 60_000));
+    super(
+      `Usage requests are being rate limited (HTTP 429). Retrying in ${minutes} minute${minutes === 1 ? "" : "s"}.`,
+    );
+  }
+}
+
+function rateLimitBackoffMs(retryAfter: string | null | undefined, now: number): number {
+  const value = retryAfter?.trim();
+  let delay: number | undefined;
+  if (value && /^\d+$/.test(value)) delay = Number(value) * 1_000;
+  else if (value) {
+    const at = Date.parse(value);
+    if (Number.isFinite(at)) delay = at - now;
+  }
+  if (delay === undefined || !Number.isFinite(delay)) return RATE_LIMIT_BACKOFF_MS;
+  return Math.min(MAX_RATE_LIMIT_BACKOFF_MS, Math.max(MIN_RATE_LIMIT_BACKOFF_MS, delay));
+}
+
+function usageRequestFailed(result: HttpResult, now: number): Error {
+  return result.status === 429
+    ? new PlanUsageRateLimitedError(rateLimitBackoffMs(result.retryAfter, now))
+    : new Error(`Usage request failed with HTTP ${result.status}`);
+}
 
 /**
  * ECMAScript `Date` only represents ±8.64e15 ms around the epoch. A provider
@@ -423,7 +461,7 @@ function unavailableSnapshot(
   return { platform, status: "unavailable", windows: [], message, fetchedAt };
 }
 
-type HttpResult = { status: number; body: unknown };
+type HttpResult = { status: number; body: unknown; retryAfter?: string | null };
 
 async function requestJson(
   fetchImpl: FetchLike,
@@ -432,7 +470,13 @@ async function requestJson(
   timeoutMs = REQUEST_TIMEOUT_MS,
 ): Promise<HttpResult> {
   const response = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
-  if (!response.ok) return { status: response.status, body: undefined };
+  if (!response.ok) {
+    return {
+      status: response.status,
+      body: undefined,
+      retryAfter: response.headers.get("retry-after"),
+    };
+  }
   return { status: response.status, body: await response.json() };
 }
 
@@ -620,9 +664,10 @@ async function readOpenCodePlanUsage(
       nowIso,
     );
   }
-  const { status, body } = await requestJson(runtime.fetchImpl, OPENCODE_USAGE_URL, {
+  const response = await requestJson(runtime.fetchImpl, OPENCODE_USAGE_URL, {
     headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
   });
+  const { status, body } = response;
   if (status === 401 || status === 403) {
     return unavailableSnapshot(
       "opencode",
@@ -630,9 +675,7 @@ async function readOpenCodePlanUsage(
       nowIso,
     );
   }
-  if (status < 200 || status >= 300) {
-    throw new Error(`Usage request failed with HTTP ${status}`);
-  }
+  if (status < 200 || status >= 300) throw usageRequestFailed(response, runtime.now());
   // An authoritative read with no windows means the plan is unmetered, which is
   // a fact worth stating rather than a failure.
   return okSnapshot("opencode", openCodePlanWindows(body), new Date(runtime.now()).toISOString());
@@ -668,13 +711,14 @@ async function readClaudePlanUsage(
       nowIso,
     );
   }
-  const { status, body } = await requestJson(runtime.fetchImpl, CLAUDE_USAGE_URL, {
+  const response = await requestJson(runtime.fetchImpl, CLAUDE_USAGE_URL, {
     headers: {
       Authorization: `Bearer ${token}`,
       "anthropic-beta": CLAUDE_OAUTH_BETA,
       Accept: "application/json",
     },
   });
+  const { status, body } = response;
   if (status === 401 || status === 403) {
     return unavailableSnapshot(
       "claude",
@@ -682,9 +726,7 @@ async function readClaudePlanUsage(
       nowIso,
     );
   }
-  if (status < 200 || status >= 300) {
-    throw new Error(`Usage request failed with HTTP ${status}`);
-  }
+  if (status < 200 || status >= 300) throw usageRequestFailed(response, runtime.now());
   const windows = claudePlanWindows(body);
   const readIso = new Date(runtime.now()).toISOString();
   // A payload this read cannot recognise is not evidence of an unmetered plan.
@@ -719,13 +761,14 @@ async function readCodexPlanUsage(
     );
   }
   const accountId = chatGptAccountId(tokens);
-  const { status, body } = await requestJson(runtime.fetchImpl, CODEX_USAGE_URL, {
+  const response = await requestJson(runtime.fetchImpl, CODEX_USAGE_URL, {
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: "application/json",
       ...(accountId ? { "ChatGPT-Account-Id": accountId } : {}),
     },
   });
+  const { status, body } = response;
   if (status === 401 || status === 403) {
     return unavailableSnapshot(
       "codex",
@@ -733,9 +776,7 @@ async function readCodexPlanUsage(
       nowIso,
     );
   }
-  if (status < 200 || status >= 300) {
-    throw new Error(`Usage request failed with HTTP ${status}`);
-  }
+  if (status < 200 || status >= 300) throw usageRequestFailed(response, runtime.now());
   const readIso = new Date(runtime.now()).toISOString();
   const { windows, plan } = codexPlanWindows(body, runtime.now());
   return windows.length > 0
@@ -799,7 +840,7 @@ async function readCursorPlanUsage(
       nowIso,
     );
   }
-  const { status, body } = await requestJson(
+  const response = await requestJson(
     runtime.fetchImpl,
     `${CURSOR_API_BASE}${cursorDashboardPath("GetCurrentPeriodUsage")}`,
     {
@@ -812,6 +853,7 @@ async function readCursorPlanUsage(
       body: "{}",
     },
   );
+  const { status, body } = response;
   if (status === 401 || status === 403) {
     // The exchanged token, not the key, is what the dashboard rejected: drop it
     // so the next read mints a fresh one instead of repeating the rejection.
@@ -822,9 +864,7 @@ async function readCursorPlanUsage(
       nowIso,
     );
   }
-  if (status < 200 || status >= 300) {
-    throw new Error(`Usage request failed with HTTP ${status}`);
-  }
+  if (status < 200 || status >= 300) throw usageRequestFailed(response, runtime.now());
   const readIso = new Date(runtime.now()).toISOString();
   const windows = accountWindowsFromPlanUsage(body);
   return windows.length > 0
@@ -854,6 +894,7 @@ export function createPlanUsageReader(
   const cache = overrides.cache ?? createPlanUsageCache(now);
   const flights = new Map<PlanUsagePlatform, Promise<PlanUsageSnapshot>>();
   const readGenerations = new Map<PlanUsagePlatform, number>();
+  const rateLimits = new Map<PlanUsagePlatform, { until: number; snapshot: PlanUsageSnapshot }>();
   const runtime: ReaderRuntime = {
     fetchImpl: overrides.fetchImpl ?? fetch,
     now,
@@ -876,6 +917,12 @@ export function createPlanUsageReader(
           new Date(now()).toISOString(),
         ),
       );
+    }
+    // A provider that answered 429 is not asked again before its wait is
+    // over, even by a forced refresh. Each retry spends the same allowance.
+    const rateLimit = rateLimits.get(platform);
+    if (rateLimit && rateLimit.until > now()) {
+      return Promise.resolve(cache.peek(platform) ?? rateLimit.snapshot);
     }
     const forced = options?.force === true;
     // Only an unforced caller may be served by, or join, an existing read. A
@@ -910,15 +957,25 @@ export function createPlanUsageReader(
         }
         return snapshot;
       } catch (error) {
-        const snapshot: PlanUsageSnapshot = {
-          platform,
-          status: "error",
-          windows: [],
-          message: error instanceof Error ? error.message : "Plan usage is unavailable",
-          fetchedAt: new Date(now()).toISOString(),
-        };
+        const message = error instanceof Error ? error.message : "Plan usage is unavailable";
+        // The last good reading, marked stale, says more than the failure.
+        const last = cache.lastOk(platform);
+        const snapshot: PlanUsageSnapshot = last
+          ? stalePlanUsageSnapshot(last, now(), message)
+          : {
+              platform,
+              status: "error",
+              windows: [],
+              message,
+              fetchedAt: new Date(now()).toISOString(),
+            };
         if (readGenerations.get(platform) === generation) {
-          cache.store(platform, snapshot, ERROR_CACHE_TTL_MS);
+          const ttl =
+            error instanceof PlanUsageRateLimitedError ? error.retryAfterMs : ERROR_CACHE_TTL_MS;
+          if (error instanceof PlanUsageRateLimitedError) {
+            rateLimits.set(platform, { until: now() + ttl, snapshot });
+          }
+          cache.store(platform, snapshot, ttl);
         }
         return snapshot;
       }
@@ -933,6 +990,7 @@ export function createPlanUsageReader(
   reader.invalidate = (platform) => {
     readGenerations.set(platform, (readGenerations.get(platform) ?? 0) + 1);
     flights.delete(platform);
+    rateLimits.delete(platform);
     cache.invalidate(platform);
   };
 
@@ -944,14 +1002,15 @@ export const readPlanUsage = createPlanUsageReader({ cache: sharedPlanUsageCache
 /**
  * One account's plan windows read with an explicit credential: an access token
  * for Claude, the raw `auth.json` for Codex. Bypasses the shared cache, which
- * describes the active account only.
+ * describes the active account only. `retryAfterMs` is set when the provider
+ * answered 429, for the caller to hold off that long.
  */
 export async function readAgentAccountPlanUsage(
   context: CommandContext,
   platform: "claude" | "codex",
   credential: string | undefined,
   overrides: { fetchImpl?: FetchLike; now?: () => number } = {},
-): Promise<PlanUsageSnapshot> {
+): Promise<{ snapshot: PlanUsageSnapshot; retryAfterMs?: number }> {
   const now = overrides.now ?? Date.now;
   const runtime: ReaderRuntime = {
     fetchImpl: overrides.fetchImpl ?? fetch,
@@ -963,16 +1022,22 @@ export async function readAgentAccountPlanUsage(
     claudeUsesAddedAccount: async () => true,
   };
   try {
-    return platform === "claude"
-      ? await readClaudePlanUsage(context, runtime)
-      : await readCodexPlanUsage(context, runtime);
+    return {
+      snapshot:
+        platform === "claude"
+          ? await readClaudePlanUsage(context, runtime)
+          : await readCodexPlanUsage(context, runtime),
+    };
   } catch (error) {
     return {
-      platform,
-      status: "error",
-      windows: [],
-      message: error instanceof Error ? error.message : "Plan usage is unavailable",
-      fetchedAt: new Date(now()).toISOString(),
+      snapshot: {
+        platform,
+        status: "error",
+        windows: [],
+        message: error instanceof Error ? error.message : "Plan usage is unavailable",
+        fetchedAt: new Date(now()).toISOString(),
+      },
+      ...(error instanceof PlanUsageRateLimitedError ? { retryAfterMs: error.retryAfterMs } : {}),
     };
   }
 }

@@ -208,3 +208,11 @@ harness, e2e and docs change) on a heavily loaded macOS host. Evidence is in
 backend package, and again in one of three runs of the owning file alone
 (`bun test src/core/worktree-snapshots-git.test.ts` from `apps/backend`:
 4 passed, 3/1, 4 passed).
+
+## Usage-cache validation recurrence — 2026-10-18
+
+- **Command:** `mise run test:logged -- --name usage-all-tests -- mise run test`, with aggregate workspace/root/bridges/protocol reservations of 4/1/2/1 workers; backend used two isolated workers.
+- **Failure:** the tracked-edit cache-hit assertion expected 1 and received 0 at line 139 (140.96 ms). Backend reported 9038 passed, 41 skipped and four failures across 481 files; the remaining failures concern shell fixtures outside the usage-cache change.
+- **Isolated rerun:** `mise run test:logged -- --name baseline-worktree-git -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 0.6 s.
+- **Evidence:** `orkestrator-test-run.BopZMS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Disposition:** Confirmed recurrence; no watcher implementation, assertion, timeout or skip changed.

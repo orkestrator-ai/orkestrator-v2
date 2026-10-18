@@ -53,3 +53,11 @@ files; the other four bridge packages passed. `bun test ./src/testing/fake-codex
 in `bridges/codex-bridge` passed the unchanged owning file alone (2 pass,
 0 fail, 82 ms). Evidence: `orkestrator-test-run.mVA1hD/bridges.log.gz` in the
 macOS temporary directory.
+
+## Main merge validation — 2026-10-18
+
+- **Command:** `mise run test:logged -- --name merge-full-suite -- mise run test`, aggregate reservations 4/1/2/1; one worker for the owning package/group.
+- **Observation:** 5,000 ms timeout; owning file passed unchanged in 0.1 s.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-rerun-fake-codex-app-server -- bun test --cwd bridges/codex-bridge ./src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` (exit 0).
+- **Evidence:** `orkestrator-test-run.LitzDV/bridges.log.gz`; root group had 3051 passed, 1 skipped and 4 failed, including the separate README installer-link regression; Codex group had 2227 passed and 4 failed.
+- **Assessment:** Confirmed recurrence; no implementation, assertion, skip or timeout changed.

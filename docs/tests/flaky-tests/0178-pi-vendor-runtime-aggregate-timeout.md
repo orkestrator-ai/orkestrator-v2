@@ -608,3 +608,11 @@ harness, e2e and docs change) on a heavily loaded macOS host. Evidence is in
 `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Zq7Cut/`. Thirty-second timeout (30,006 ms) in the root group. The unchanged
 owning file passed alone (`bun test tests/unit/pi-bridge-vendor.test.ts`,
 4 passed, 20.5 s).
+
+## Main merge validation — 2026-10-18
+
+- **Command:** `mise run test:logged -- --name merge-full-suite -- mise run test`, aggregate reservations 4/1/2/1; one worker for the owning package/group.
+- **Observation:** 30,083.20 ms timeout; owning file passed unchanged in 26.5 s.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-root-rerun-pi-bridge-vendor -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` (exit 0).
+- **Evidence:** `orkestrator-test-run.LitzDV/root-and-agent-support-tests.log.gz`; root group had 3051 passed, 1 skipped and 4 failed, including the separate README installer-link regression; Codex group had 2227 passed and 4 failed.
+- **Assessment:** Confirmed recurrence; no implementation, assertion, skip or timeout changed.

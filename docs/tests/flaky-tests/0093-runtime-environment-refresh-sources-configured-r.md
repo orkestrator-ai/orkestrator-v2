@@ -22,3 +22,19 @@ alone (9 passed, 98 ms; and
 Reopened: the earlier resolution recorded no cause, and the larger timeout
 did not hold.
 
+## Recurrence — 2026-10-18
+
+- **Command:** `mise run test:logged -- --name usage-all-tests -- mise run test`
+- **Worker configuration:** Aggregate bridge group: two package tasks, one Bun worker per package, alongside workspace and root groups.
+- **Failure:** The same helper-spawn case timed out at its current 15,000 ms deadline (15,000.41 ms). No bridge implementation changed in this usage-cache fix.
+- **Evidence:** `orkestrator-test-run.BopZMS/bridges.log.gz` (Codex bridge runtime environment case).
+- **Isolated rerun:** `mise run test:logged -- --name codex-runtime-env-rerun -- bun test ./bridges/codex-bridge/src/runtime-env.test.ts --preload ./tests/setup-node.ts --parallel=1 --only-failures` passed unchanged in 0.3 s.
+- **Disposition:** Reopened. No timeout or assertion was relaxed; aggregate process-start latency remains the working hypothesis.
+
+## Main merge validation — 2026-10-18
+
+- **Command:** `mise run test:logged -- --name merge-full-suite -- mise run test`, aggregate reservations 4/1/2/1; one worker for the owning package/group.
+- **Observation:** 15,023.64 ms timeout; owning file passed unchanged in 0.1 s.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-rerun-runtime-env -- bun test --cwd bridges/codex-bridge ./src/runtime-env.test.ts --parallel=1 --only-failures` (exit 0).
+- **Evidence:** `orkestrator-test-run.LitzDV/bridges.log.gz`; root group had 3051 passed, 1 skipped and 4 failed, including the separate README installer-link regression; Codex group had 2227 passed and 4 failed.
+- **Assessment:** Confirmed recurrence; no implementation, assertion, skip or timeout changed.

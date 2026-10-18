@@ -24,6 +24,8 @@ export default defineConfig({
     "close-retention-live.spec.ts",
     "slash-command-inactive.spec.ts",
     "multi-review-live.spec.ts",
+    "mcp-apply-live.spec.ts",
+    "mcp-live-apply.spec.ts",
   ],
   fullyParallel: false,
   workers: 1,

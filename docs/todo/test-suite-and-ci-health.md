@@ -395,3 +395,18 @@ reliably green on `main`, and nothing requires it to be.
 - `docs/reviews/2026-09-15-fable-review.md` (residuals: branch protection and
   red CI, desktop test gaps, and pointers for `NET_ADMIN` and the renderer
   sandbox)
+
+## CLI matrices second main merge validation (2026-10-18)
+
+Merged `origin/main` at `c85ab60a` into branch baseline `9467f965`. Formatting, lint, typechecking, backend and renderer build tasks, all local Markdown link targets, and eight production public-site browser cases passed. The full non-iOS suite exited 1 after 1132.1 seconds: root/support passed 3084 tests with one skip; every workspace package except backend passed; backend reported 9081 passed, 41 skipped and 11 failed across 9133 tests. Claude's one bridge fixture race passed its unchanged owner; all other bridges and protocol regeneration passed.
+
+Focused backend reruns passed the orphan-age, terminal-history, skill-scan, capability-version, environment-status, retaining-close, startup-readiness and observation-baseline owners. Coordinator bound-discard still timed out after the aggregate with late SQLite fixture errors (56 passed, one failed across its file and the baseline owner). Details are in flaky-test cases 0151, 0165, 0177, 0212, 0213, 0385, 0441 and 0442. No test skip, assertion, timeout or implementation was changed for this validation.
+
+`mise run test:browser` reported 339 passed, 80 skipped and 13 failed. The nine unchanged owners rerun with one worker reported 96 passed, 15 skipped and three failed: both canvas viewports timed out, and mobile diff-viewer Monaco was absent. The seven other owners passed. Commands and bounded failure evidence are in cases 0173, 0174, 0254 and 0382. The public-site task ran separately after the component command short-circuited and passed all eight cases.
+
+The isolated browser run selected 61 cases and reported 27 passed, 32 skipped and two failed. The gateway-only rerun on a fresh credential-free profile selected 20 cases and reported 13 passed, five skipped and two failed. The first run's narrow host-picker failure passed in the rerun, but these gateway assertions remain unresolved:
+
+- `persisted diff baselines keep Files, the badge and diff tabs aligned after background changes and reload` (`browser-gateway.spec.ts:2182`): the `vs <tip>` header was absent at its five-second deadline in both runs.
+- `signed-out Codex recovery and account reads survive reload and environment switches` (`browser-gateway.spec.ts:880`): the exact `Sign in to Codex` button was absent at its 60-second deadline in the owning-file rerun. It passed in the aggregate, but the whole owner did not pass; no new flake classification is made here.
+
+Exact isolated/gateway commands, profile names and evidence paths are in case 0224. Both disposable profiles were stopped and reset. Docker lifecycle, Electron main/preload and iOS code were unchanged, so those scenario suites were omitted. Credentialed live-provider suites retain their explicit opt-ins and were not enabled; the credential-free inactive/reload paths were exercised.

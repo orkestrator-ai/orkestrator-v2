@@ -729,6 +729,11 @@ test.describe("live transcript paging", () => {
       const firstStopInTail = Math.min(...whole.tail.flatMap((row) => trail.stopsRead(row)));
       expect(firstStopInTail, "the tail alone cannot show the start").toBeGreaterThan(1);
 
+      // A tab mounted through the whole turn may have retained every row as
+      // the live window advanced. Start from a fresh bounded snapshot so the
+      // click actually prepends history instead of just retiring its cursor.
+      await page.reload();
+      await openApp(page, status, fixture, environment.name);
       // Browser: Load earlier messages brings the start back and keeps the reader's place.
       const list = scroller(page);
       await expect(list).toBeVisible({ timeout: 30_000 });

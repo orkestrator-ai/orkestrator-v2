@@ -372,7 +372,21 @@ async function scrollToTop(page: Page, list: Locator, control: Locator): Promise
       async () => {
         await wheelUp(page, list);
         await page.waitForTimeout(150);
-        return control.isVisible();
+        // isVisible() tests CSS visibility, even when a mounted header is
+        // outside the viewport. Otherwise click() scrolls it into view after
+        // we measured the anchor, and the assertion compares two places.
+        const [button, viewport, scrollTop] = await Promise.all([
+          control.boundingBox(),
+          list.boundingBox(),
+          list.evaluate((element) => element.scrollTop),
+        ]);
+        return (
+          button !== null &&
+          viewport !== null &&
+          scrollTop <= 1 &&
+          button.y >= viewport.y &&
+          button.y + button.height <= viewport.y + viewport.height
+        );
       },
       { timeout: 30_000, intervals: [250] },
     )

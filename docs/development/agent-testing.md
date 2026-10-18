@@ -357,6 +357,20 @@ removes its pipeline and environments during cleanup. The spec never presses
 **Share…**, which would publish the conversation. Without the opt-in, every
 case is skipped and no profile is needed.
 
+The live MCP apply probe (`e2e/agent-testing/mcp-apply-live.spec.ts`) has
+its own opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_MCP=1`. For each provider in
+`ORKESTRATOR_AGENT_TEST_MCP_PROVIDERS` it saves and applies a harmless stdio
+server (`mcp-probe-server.mjs`) through the MCP editor's own commands in every
+writable scope, then edits, renames and removes it, and reads from the
+server's log whether each model call really reached it. It refuses to write a
+source outside the test worktree or the profile's data directory. Authorizing
+the Codex or OpenCode credential source points those providers at the host's
+own homes, so their user scopes are then skipped; the
+[live record](../todo/mcp-management.md#live-apply-record-2026-10-18) shows
+how those scopes were covered with an access-only credential seeded into the
+profile. Run one provider at a time (flake 0420). Each provider writes
+`output/agent-testing/<run>/mcp-apply-live/<provider>.json`.
+
 The live Multi Review cycle (`e2e/agent-testing/multi-review-live.spec.ts`)
 has its own opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW=1`, and uses the
 host's Claude and Codex credentials. Each case runs a real two-reviewer review

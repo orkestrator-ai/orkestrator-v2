@@ -116,8 +116,7 @@ export function judgeProbe(input: {
   const replyHasResult =
     call !== undefined && input.reply.includes(probeResult(call.label, call.tag, input.nonce));
   const named = probeServersInToolRows(input.toolRows ?? []);
-  const substitutedBy =
-    named.length > 0 && !named.includes(input.server) ? named[0] : undefined;
+  const substitutedBy = named.length > 0 && !named.includes(input.server) ? named[0] : undefined;
   if (!input.expect.reach) {
     // A call the model made through another server's tool does not show the
     // removed name was still offered; the tool rows say which tool ran.
@@ -166,6 +165,12 @@ export const PROBE_SERVER_NAME = /^mq[ulpxs]\d*_[a-z]+$/;
 /** A short server-name prefix per writable scope, so scopes never collide. */
 export function scopePrefix(scope: string, index: number): string {
   const short =
-    scope === "backend-user" ? "u" : scope === "claude-local" ? "l" : scope === "project" ? "p" : "x";
+    scope === "backend-user"
+      ? "u"
+      : scope === "claude-local"
+        ? "l"
+        : scope === "project"
+          ? "p"
+          : "x";
   return `mq${short}${index}`;
 }

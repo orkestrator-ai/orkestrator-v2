@@ -279,7 +279,19 @@ interface PlatformSummary {
   reason?: string;
   model?: string;
   capabilities?: unknown;
-  sources?: Array<Pick<Source, "scope" | "label" | "displayPath" | "writable" | "readOnlyReason" | "trust" | "trustReason" | "state">>;
+  sources?: Array<
+    Pick<
+      Source,
+      | "scope"
+      | "label"
+      | "displayPath"
+      | "writable"
+      | "readOnlyReason"
+      | "trust"
+      | "trustReason"
+      | "state"
+    >
+  >;
   scopes: ScopeRecord[];
   failures: string[];
 }
@@ -422,7 +434,11 @@ test.describe("live MCP apply", () => {
             targetId: target!.targetId,
           });
           const user = snapshot.sources.find((source) => source.scope === "backend-user");
-          if (user && !user.displayPath.startsWith("~") && !writeRefusal(user, dataDir, status.flavor)) {
+          if (
+            user &&
+            !user.displayPath.startsWith("~") &&
+            !writeRefusal(user, dataDir, status.flavor)
+          ) {
             const file = user.displayPath;
             mkdirSync(path.dirname(file), { recursive: true });
             const previous = existsSync(file) ? readFileSync(file, "utf8") : "";
@@ -515,7 +531,12 @@ test.describe("live MCP apply", () => {
                 (message) => message.role === "assistant" && textOf(message).trim().length > 0,
               );
               if (phase === "error") {
-                return { reply: "", error: current?.turn.error ?? "turn error", fresh, interactions };
+                return {
+                  reply: "",
+                  error: current?.turn.error ?? "turn error",
+                  fresh,
+                  interactions,
+                };
               }
               if (dispatch.outcome === "rejected") {
                 return { reply: "", error: dispatchNote, fresh, interactions };
@@ -654,7 +675,16 @@ test.describe("live MCP apply", () => {
         const first = await snapshot();
         summary.capabilities = first.target.capabilities;
         summary.sources = first.sources.map(
-          ({ scope, label: name, displayPath, writable, readOnlyReason, trust, trustReason, state }) => ({
+          ({
+            scope,
+            label: name,
+            displayPath,
+            writable,
+            readOnlyReason,
+            trust,
+            trustReason,
+            state,
+          }) => ({
             scope,
             label: name,
             displayPath,
@@ -738,7 +768,9 @@ test.describe("live MCP apply", () => {
           record.operation = {
             phase: result.operation.phase,
             ...(result.operation.errorCode ? { errorCode: result.operation.errorCode } : {}),
-            ...(result.operation.message ? { message: result.operation.message.slice(0, 300) } : {}),
+            ...(result.operation.message
+              ? { message: result.operation.message.slice(0, 300) }
+              : {}),
             immediate: operationRuntimes(result.operation),
             ...(result.operation.apply.terminalGuidance
               ? { terminalGuidance: result.operation.apply.terminalGuidance.slice(0, 300) }
@@ -940,7 +972,18 @@ test.describe("live MCP apply", () => {
           sseServers.push(
             spawn(
               process.execPath,
-              [PROBE_SERVER, "--sse", "--port-file", portFile, "--label", server, "--tag", "v1", "--log", logFile],
+              [
+                PROBE_SERVER,
+                "--sse",
+                "--port-file",
+                portFile,
+                "--label",
+                server,
+                "--tag",
+                "v1",
+                "--log",
+                logFile,
+              ],
               { stdio: "ignore" },
             ),
           );
@@ -959,7 +1002,7 @@ test.describe("live MCP apply", () => {
               {
                 ...current,
                 mcpServers: {
-                  ...(current.mcpServers ?? {}),
+                  ...current.mcpServers,
                   [server]: { type: "sse", url: `http://127.0.0.1:${port}/sse` },
                 },
               },

@@ -28,10 +28,22 @@ describe("mcp apply live support", () => {
     const events = parseProbeLog(log);
     const reply = probeResult("mqu0_alpha", "v1", "N1");
     expect(
-      judgeProbe({ events, server: "mqu0_alpha", nonce: "N1", reply, expect: { reach: true, tag: "v1" } }),
+      judgeProbe({
+        events,
+        server: "mqu0_alpha",
+        nonce: "N1",
+        reply,
+        expect: { reach: true, tag: "v1" },
+      }),
     ).toMatchObject({ reached: true, replyHasResult: true, passed: true });
     expect(
-      judgeProbe({ events, server: "mqu0_alpha", nonce: "N1", reply, expect: { reach: true, tag: "v2" } }),
+      judgeProbe({
+        events,
+        server: "mqu0_alpha",
+        nonce: "N1",
+        reply,
+        expect: { reach: true, tag: "v2" },
+      }),
     ).toMatchObject({ passed: false, reason: "the server ran configuration v1, not v2" });
     expect(
       judgeProbe({
@@ -41,7 +53,10 @@ describe("mcp apply live support", () => {
         reply: "done",
         expect: { reach: true, tag: "v1" },
       }),
-    ).toMatchObject({ passed: false, reason: "the server ran the call but the reply lacks its result" });
+    ).toMatchObject({
+      passed: false,
+      reason: "the server ran the call but the reply lacks its result",
+    });
   });
 
   test("a renamed entry answers with the label it was started with", () => {
@@ -63,7 +78,10 @@ describe("mcp apply live support", () => {
         reply: probeResult("mqu0_alpha", "v1", "N1"),
         expect: { reach: true, tag: "v1" },
       }),
-    ).toMatchObject({ passed: false, reason: 'server "mqu0_alpha" answered instead of "mqu0_beta"' });
+    ).toMatchObject({
+      passed: false,
+      reason: 'server "mqu0_alpha" answered instead of "mqu0_beta"',
+    });
   });
 
   test("a call through the renamed server's tool is a substitution, not the removed one", () => {
@@ -75,10 +93,18 @@ describe("mcp apply live support", () => {
       reply: probeResult("mqu0_alpha", "v1", "N1"),
     };
     expect(
-      judgeProbe({ ...input, expect: { reach: false }, toolRows: ["tool-invocation:mqu0_beta_probe:?"] }),
+      judgeProbe({
+        ...input,
+        expect: { reach: false },
+        toolRows: ["tool-invocation:mqu0_beta_probe:?"],
+      }),
     ).toMatchObject({ reached: true, substitutedBy: "mqu0_beta", passed: true });
     expect(
-      judgeProbe({ ...input, expect: { reach: false }, toolRows: ["tool:mcp__mqu0_alpha__probe:done"] }),
+      judgeProbe({
+        ...input,
+        expect: { reach: false },
+        toolRows: ["tool:mcp__mqu0_alpha__probe:done"],
+      }),
     ).toMatchObject({ reached: true, passed: false });
     // With no tool rows (a code-mode cell) the log alone decides.
     expect(judgeProbe({ ...input, expect: { reach: false } })).toMatchObject({ passed: false });
@@ -125,7 +151,13 @@ describe("mcp apply live support", () => {
       }),
     ).toMatchObject({ reached: false, replyUnavailable: true, passed: true });
     expect(
-      judgeProbe({ events, server: "mqu0_alpha", nonce: "N1", reply: "", expect: { reach: false } }),
+      judgeProbe({
+        events,
+        server: "mqu0_alpha",
+        nonce: "N1",
+        reply: "",
+        expect: { reach: false },
+      }),
     ).toMatchObject({ reached: true, passed: false });
   });
 
@@ -137,6 +169,12 @@ describe("mcp apply live support", () => {
   });
 
   test("scope prefixes differ per scope and index", () => {
-    expect(new Set([scopePrefix("backend-user", 0), scopePrefix("project", 0), scopePrefix("claude-local", 1)]).size).toBe(3);
+    expect(
+      new Set([
+        scopePrefix("backend-user", 0),
+        scopePrefix("project", 0),
+        scopePrefix("claude-local", 1),
+      ]).size,
+    ).toBe(3);
   });
 });

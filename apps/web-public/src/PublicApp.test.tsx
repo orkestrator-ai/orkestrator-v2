@@ -41,6 +41,12 @@ afterEach(() => {
 });
 
 describe("PublicApp connection form", () => {
+  test("links the connection screen brand back to the landing page", () => {
+    render(<PublicApp />);
+
+    expect(screen.getByRole("link", { name: "Orkestrator home" }).getAttribute("href")).toBe("/");
+  });
+
   test("submits credentials and restores the form after a rejected token", async () => {
     globalThis.fetch = mock(
       async () => new Response("{}", { status: 401 }),

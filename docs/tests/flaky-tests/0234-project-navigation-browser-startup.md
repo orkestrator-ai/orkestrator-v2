@@ -39,3 +39,12 @@ failure is separate from the original navigation visibility timeout.
 - **Hypothesis:** the unchanged isolated pass is consistent with the existing fixture-startup timing hypothesis under aggregate load; the cause remains unproven. No test or product behavior was changed.
 
 The complete follow-up `CI=1 mise run test:logged -- --name merge-browser-final -- mise run test:browser -- --workers=2` passed, exit 0, in 149.8 seconds.
+
+## Transcript-paging validation — 2026-10-18
+
+- **Command:** `mise run test:logged -- --name browser-suite -- mise run test:browser`.
+- **Observed variant:** desktop `project navigation matches the search row and contains Kanban notes` and `project tabs retain keyboard focus rings in bar presentation` both encountered two matching navigation elements. The log also reported repeated `createRoot()` calls during HMR; source edits were still arriving during this run, so this does not establish a product regression or the original startup-timeout cause.
+- **Counts:** 354 passed, 80 skipped, two failed (135.2 seconds logged). All transcript-paging browser cases passed.
+- **Unchanged owner rerun:** `mise run test:logged -- --name workspace-browser-alone -- bunx playwright test --config e2e/playwright.config.ts e2e/WorkspaceBarHeight.spec.ts --workers=1` passed both viewport projects in 9.6 seconds, exit 0. No navigation test, timeout, or assertion changed.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.dqfrtR/browser-suite.log.gz`.
+- **Follow-up:** the complete browser suite passed with source edits paused (`browser-stable`, exit 0, 138.1 seconds). The new heavyweight paging fixture was then moved behind a lazy import, matching the existing native fixture.

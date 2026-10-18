@@ -5,6 +5,7 @@ import { terminateProcessTree } from "./process-tree.js";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { ClientEnvironment, Environment } from "./models.js";
 import type { PtyProcess } from "./pty.js";
+import type { AgentToolConnection } from "./agent-tools.js";
 
 export type TerminalSessionConfig = (
   | {
@@ -82,6 +83,13 @@ export type OpenCodeAgentToolsConfiguration = {
   controller: AbortController;
   task: Promise<void>;
 };
+/**
+ * The Orkestrator MCP connection each live local OpenCode server was started
+ * with, by `local:<environmentId>`. Later reconciliation re-verifies exactly
+ * this one: a coordinator's server carries its scoped Control MCP credential,
+ * which a tab's Agent Tools connection must never replace.
+ */
+export const openCodeLaunchAgentToolConnections = new Map<string, AgentToolConnection>();
 /** Backend-owned reconciliation; native tabs must not be its lifecycle owner. */
 export const openCodeAgentToolsConfigurations = new Map<string, OpenCodeAgentToolsConfiguration>();
 /**

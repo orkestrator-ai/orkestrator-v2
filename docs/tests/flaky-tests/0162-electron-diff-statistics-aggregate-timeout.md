@@ -305,3 +305,43 @@ other workspace package passed; aggregate exit 1 after 852.0 seconds.
 - **Failure:** `computes counts for a tracked local environment and announces them` (5749.61 ms). Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.vJOfiZ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Owning-file rerun:** `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1` passed unchanged (55 passed).
 - **Assessment:** an intermittent recurrence. No implementation, assertion, timeout or skip changed.
+
+
+## Landing-page main merge recurrence — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test` with the testing guide's GNU-tool PATH prefix; workspace/root/bridges/protocol groups used 4/1/2/1 slots and backend used two isolated workers. Other worktrees and browser suites were active.
+- **Owning-file failures:**
+
+- Electron backend command registry > backend-owned diff statistics > enables git's scan caches on a newly created worktree [5800.37ms]
+- Electron backend command registry > backend-owned diff statistics > deleting an environment drops its counts from the snapshot [6439.62ms]
+- Electron backend command registry > persists safe cleanup failure details and permits a backend deletion retry [5037.44ms]
+
+- **Owning-file rerun:** `mise run test:logged -- --name merge-15f6cd-backend-owners -- bun test --cwd apps/backend ./src/core/review-validation-worker.test.ts ./src/core/environment-move.test.ts ./src/core/coordinator-service.test.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed all four unchanged files with one worker, exit 0, in 121.2 seconds.
+- **Evidence:** `orkestrator-test-run.iFuHsy/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. Backend reported 9025 passed, 41 skipped and 17 failed across 9083 tests, with 12 errors between tests.
+- **Assessment:** confirmed intermittent recurrence; no implementation, assertion, timeout or skip in these owners changed. Shared-host contention remains a hypothesis.
+
+## Design live-cycle second main merge — 2026-10-18
+
+`mise run test:logged -- --name merge-full -- mise run test` (GNU-tool PATH; workspace/root/bridges/protocol reservations 4/1/2/1, alongside browser validation) reproduced diff-statistics timeouts in `apps/backend/tests/commands-integration.test.ts`, including computes counts (6468.80 ms), explicit refresh (7237.01 ms), failed retarget (8525.66 ms), stale reconciliation (6554.09 ms), ordinary worktree counts (6864.97 ms), and scan-cache setup (9255.05 ms). Cleanup retry (0211), server deletion (0220), and a subsequent merge-guard assertion also failed in the same file. The guard assertion saw backend shutdown after earlier fixture timeouts.
+
+The unchanged owning file passed: `mise run test:logged -- --name merge-unit-owner-commands-integration -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`, exit 0, 30.4 seconds logged. Evidence is `orkestrator-test-run.yluX61/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. Confirmed intermittent recurrence; no implementation, assertion, timeout or skip changed.
+
+## README regression-test main merge recurrence — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, merging `origin/main` at `f51c7252` into `bdaee060`; Bun 1.4.3 on macOS arm64. Workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated workers, alongside browser validation and other host work.
+- **Aggregate result:** exit 1 after 376.6 seconds logged. Backend reported 9089 passed, 41 skipped, three failed and one between-test error across 9133 tests in 485 files. All other workspace packages, root/support, bridges and protocol regeneration passed.
+- **Failure:** `Electron backend command registry > backend-owned diff statistics > enables git's scan caches on a newly created worktree` exceeded 5000 ms at 5144.81 ms.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-commands-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed the unchanged owning file, exit 0, in 14.3 seconds logged.
+- **Evidence:** `orkestrator-test-run.wmdv2p/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
+- **Assessment:** the unchanged owning-file pass confirms an intermittent recurrence. Shared-host contention remains a hypothesis; no implementation, assertion, timeout or skip changed.
+- **Warm full-suite validation:** `mise run test:logged -- --name merge-tests-warm -- mise run test` passed all four groups, exit 0, in 339.7 seconds logged.
+
+
+## Upgrade-channel second main merge warm run — 2026-10-18
+
+- **Original command:** the testing guide's macOS GNU-tool PATH with `mise run test:logged -- --name merge2-full-warm -- mise run test`, merging `origin/main` at `62c5c696` into `129e3887`. Workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated workers alongside Electron validation on the shared host.
+- **Failure:** The three `Electron backend command registry > backend-owned diff statistics` cases `does not resurrect deleted tracking from a stale reconciliation`, `enables git's scan caches on a newly created worktree`, and `deleting an environment drops its counts from the snapshot` exceeded 5000 ms at 5087.71, 5031.52 and 5163.33 ms.
+- **Suite counts:** backend 9109 passed, 41 skipped and six failed across 9156 tests in 486 files (579.33 seconds). Every other workspace package, root/support, bridges and protocol regeneration passed; aggregate exit 1 after 596.4 seconds.
+- **Isolated rerun:** `mise run test:logged -- --name merge2-integration-warm-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures`, with the same GNU-tool PATH, passed the unchanged owning file (exit 0, 24.4 seconds).
+- **Evidence:** `orkestrator-test-run.4BSigl/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.EJfRvy/merge2-full-warm.log.gz`, below the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence. Shared-host contention remains a hypothesis; no implementation, assertion, deadline or skip changed.

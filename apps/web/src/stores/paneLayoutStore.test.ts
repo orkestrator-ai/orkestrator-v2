@@ -237,6 +237,45 @@ describe("paneLayoutStore tab cleanup", () => {
     });
   });
 
+  test("URL writes get distinct identities while history and panel changes preserve them", () => {
+    seedSingleTabEnvironment("env-browser", null, {
+      id: "browser-tab",
+      type: "browser",
+      browserData: { url: "http://localhost:3000/" },
+    });
+    const store = usePaneLayoutStore.getState();
+    const data = () => usePaneLayoutStore.getState().getAllTabs("env-browser")[0]!.browserData!;
+    store.updateTabBrowserUrl("browser-tab", "http://localhost:3000/a", "env-browser");
+    const firstId = data().navigationRequestId;
+    expect(firstId).toBeString();
+    store.updateTabBrowserUrl("browser-tab", "http://localhost:3000/b", "env-browser");
+    expect(data().navigationRequestId).not.toBe(firstId);
+    store.updateTabBrowserUrl("browser-tab", "http://localhost:3000/a", "env-browser");
+    const revisitedId = data().navigationRequestId;
+    expect(revisitedId).not.toBe(firstId);
+    store.updateTabBrowserUrl("browser-tab", "http://localhost:3000/a", "env-browser", [], -1);
+    store.updateTabBrowserAnnotationPanel("browser-tab", { open: true }, "env-browser");
+    expect(data().navigationRequestId).toBe(revisitedId);
+    store.updateTabBrowserUrl(
+      "browser-tab",
+      "http://localhost:3000/c",
+      "env-browser",
+      [],
+      -1,
+      "local:write",
+    );
+    expect(data().navigationRequestId).toBe("local:write");
+    store.updateTabBrowserUrl(
+      "browser-tab",
+      "http://localhost:3000/c",
+      "env-browser",
+      undefined,
+      undefined,
+      "local:repeat",
+    );
+    expect(data().navigationRequestId).toBe("local:repeat");
+  });
+
   test("closing a browser tab destroys its main-process preview", () => {
     const destroy = mock(async () => {});
     window.orkestrator = {
@@ -1797,6 +1836,7 @@ describe("paneLayoutStore environment scoping", () => {
 
     expect(usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.browserData).toEqual({
       url: "https://example.com/new?view=full",
+      navigationRequestId: expect.any(String),
       history: ["https://example.com/old"],
       historyIndex: 0,
     });
@@ -1871,11 +1911,13 @@ describe("paneLayoutStore environment scoping", () => {
     store.updateTabBrowserUrl("browser-a", "a", "env-a", undefined, 3);
     expect(usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.browserData).toEqual({
       url: "a",
+      navigationRequestId: expect.any(String),
     });
 
     store.updateTabBrowserUrl("browser-a", "b", "env-a", ["a", "b"]);
     expect(usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.browserData).toEqual({
       url: "b",
+      navigationRequestId: expect.any(String),
       history: ["a", "b"],
     });
   });

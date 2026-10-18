@@ -1544,6 +1544,12 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         agent,
         logicalSessionKey,
         model,
+        // A model the launch named is pinned. One read from the settings tiers
+        // is an inherited default, which the runtime may replace when this
+        // login cannot serve it (the shipped Codex `gpt-5.4` on a ChatGPT
+        // login): otherwise every worker a coordinator launches with default
+        // settings fails its first turn.
+        modelSource: environment.initialAgentModel ? "explicit" : "default",
         reasoningEffort,
         ...(conversationMode ? { mode: conversationMode } : {}),
         ...(typeof fastMode === "boolean" ? { fastMode } : {}),

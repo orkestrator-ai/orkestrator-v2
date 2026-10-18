@@ -11,3 +11,12 @@
 - **Owning-file rerun:** `bun test --preload ../../tests/setup-node.ts ./tests/backend-lifecycle.test.ts` from `apps/desktop` passed unchanged (5 pass, 0 fail, 135 ms).
 - **Evidence:** `/tmp/pi-login-fix-379e/test-all.log` (local, not retained).
 - **Assessment:** isolated pass confirms intermittence. The likely cause is the fixed 5 ms wait between `exited.resolve()` and the assertion, which a loaded host can exceed before the quit continuation runs. Root cause is unconfirmed. No implementation, assertion, timeout or skip changed.
+
+## Related shutdown-deadline recurrence — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name merge-full-tests -- mise run test`, with the testing guide's GNU-tool PATH prefix, merging `origin/main` into `f2971d54`; workspace/root/bridges/protocol reserved 4/1/2/1 slots, with two isolated workers for desktop and other worktrees sharing the host.
+- **Test:** `desktop backend lifecycle > quits anyway when the backend outlives its exit deadline`, `apps/desktop/tests/backend-lifecycle.test.ts:122`.
+- **Failure:** after a 10 ms shutdown deadline and `Bun.sleep(60)`, `state.quits` was still 0 instead of 1 (103.08 ms).
+- **Owning-file rerun:** `mise run test:logged -- --name merge-desktop-lifecycle-owner -- bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./tests/backend-lifecycle.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 0.1 seconds.
+- **Evidence:** `orkestrator-test-run.B1tmFx/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
+- **Assessment:** confirmed intermittent observation in the same shutdown owner. Shared-host scheduling beyond fixed sleeps remains a hypothesis; no source, assertion, timeout or skip changed.

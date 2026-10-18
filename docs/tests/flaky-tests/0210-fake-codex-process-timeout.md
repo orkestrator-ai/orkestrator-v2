@@ -53,3 +53,26 @@ files; the other four bridge packages passed. `bun test ./src/testing/fake-codex
 in `bridges/codex-bridge` passed the unchanged owning file alone (2 pass,
 0 fail, 82 ms). Evidence: `orkestrator-test-run.mVA1hD/bridges.log.gz` in the
 macOS temporary directory.
+
+## Electron preview main merge — 2026-10-18
+
+`mise run test:logged -- --name merge-tests -- mise run test` repeated the version/invocation timeout at 5074.82 ms. The unchanged owning file passed with `mise run test:logged -- --name merge-codexfake-owner -- bun test ./bridges/codex-bridge/src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` (exit 0, 1.1 seconds). Aggregate evidence: `orkestrator-test-run.ItrRrn/bridges.log.gz` below the host temporary directory. No implementation, assertion, timeout or skip changed.
+
+## Main merge validation — 2026-10-18
+
+- **Command:** `mise run test:logged -- --name merge-full-suite -- mise run test`, aggregate reservations 4/1/2/1; one worker for the owning package/group.
+- **Observation:** 5,000 ms timeout; owning file passed unchanged in 0.1 s.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-rerun-fake-codex-app-server -- bun test --cwd bridges/codex-bridge ./src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` (exit 0).
+- **Evidence:** `orkestrator-test-run.LitzDV/bridges.log.gz`; root group had 3051 passed, 1 skipped and 4 failed, including the separate README installer-link regression; Codex group had 2227 passed and 4 failed.
+- **Assessment:** Confirmed recurrence; no implementation, assertion, skip or timeout changed.
+
+## CLI matrices main merge recurrence — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, macOS arm64 and Bun 1.4.3; workspace/root/bridges/protocol used 4/1/2/1 worker slots alongside the component browser suite.
+- **Failure:** `fake Codex app-server process > reports its version and rejects unsupported invocations` exceeded its 5000 ms deadline (5001.20 ms). The other four bridge packages passed.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-codex-owner-node -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` passed unchanged (2 passed, 0 failed, 0.2 seconds logged).
+- **Diagnostic caveat:** an earlier root-directory invocation without the bridge's Node preload repeated the timeout (1 passed, 1 failed; 5.8 seconds), so it was not an equivalent isolated bridge check.
+- **Evidence:** `orkestrator-test-run.qE7Fuy/bridges.log.gz` and `orkestrator-test-run.SqUuYH/merge-fake-codex-owner.log.gz` below the host temporary directory.
+- **Assessment:** the equivalent isolated pass confirms intermittence. Shared-host contention remains a hypothesis; no implementation, assertion, timeout or skip changed.
+
+Aggregate result: exit 1 after 664.7 seconds logged. Codex bridge reported 2230 passed, 34 skipped and this one failure across 2265 tests; all other bridge packages passed.

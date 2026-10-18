@@ -57,10 +57,10 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 25 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 252 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 275 |
-| **Total** | | **553** |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 18 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 261 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 279 |
+| **Total** | | **559** |
 
 ## Very high
 
@@ -90,16 +90,17 @@ it reaches. Some rules of thumb:
 ### Service previews and web annotations (high)
 
 - [x] Re-baseline the opt-in preview suites and all preview unit files on current main after #966, #967 and #969 ([service-preview-rollout.md](service-preview-rollout.md), qualification)
-- [ ] Run the real Electron window service-preview qualification with the tunnel enabled in an isolated profile ([service-preview-rollout.md](service-preview-rollout.md), qualification)
+- [x] Run the real Electron window service-preview qualification with the tunnel enabled in an isolated profile ([service-preview-rollout.md](service-preview-rollout.md), qualification)
+- [ ] Cover the remaining real-Electron service-preview cases: windows on different backends, a connection switch, clipboard, overlays, HMR reattach, keyboard and narrow viewport ([service-preview-rollout.md](service-preview-rollout.md), qualification)
 - [ ] Write a two-machine tailnet runbook and run decoy, latency, throttling, reconnect and publication checks ([service-preview-rollout.md](service-preview-rollout.md), qualification)
 - [x] Re-run the annotation Electron and isolated browser suites on current main and record a sign-off ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
-- [ ] Run the live annotation implement test once per provider and record skips explicitly ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
+- [x] Run the live annotation implement test once per provider and record skips explicitly ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
 - [x] Qualify the annotation native window: Notes column bounds, focus, keyboard, narrow switch, zoom and DPR ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
 - [x] Decide whether annotations stay enabled by default or hold dispatch for providers without a live run ([web-annotation-qualification.md](web-annotation-qualification.md), decision)
 
 ### CLI and slash commands (high)
 
-- [ ] Re-run CLI credential-free, container and live Claude, Codex and OpenCode matrices at current main ([cli-qualification.md](cli-qualification.md), qualification)
+- [x] Re-run CLI credential-free, container and live Claude, Codex and OpenCode matrices at current main ([cli-qualification.md](cli-qualification.md), qualification)
 - [x] Verify whether a new Claude tab shows legacy `BUILTIN_COMMANDS` rows in the picker before its first query ([slash-command-catalogue.md](slash-command-catalogue.md), verify)
 - [x] Run live slash-command probes for every provider at current pins in a disposable isolated profile ([slash-command-qualification.md](slash-command-qualification.md), qualification)
 - [x] Run the inactive-environment slash-command browser scenario, including restarts at dispatch boundaries ([slash-command-qualification.md](slash-command-qualification.md), qualification)
@@ -115,19 +116,21 @@ it reaches. Some rules of thumb:
 - [x] Replace the 1 s Claude state `docker exec` poll with a pushed change signal and a slow safety read ([container-state-observation.md](container-state-observation.md))
 - [x] Record a non-skipped run of the deletion-during-setup real-stack spec on current `main` ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), qualification)
 - [x] Run a seeded real-stack pass of the pre-ledger startup sweeps in an isolated dev profile ([environment-and-disk-cleanup.md](environment-and-disk-cleanup.md), qualification)
+- [ ] Stop Docker containers spending the host's single-use Grok refresh token, which signs the host out ([container-network-and-credential-isolation.md](container-network-and-credential-isolation.md))
 
 ### Design canvas (high)
 
-- [ ] Run a live Claude and Codex design-tool cycle, including Ask agent, handoff and an environment switch ([design-canvas-qualification.md](design-canvas-qualification.md), qualification)
+- [x] Run a live Claude and Codex design-tool cycle, including Ask agent, handoff and an environment switch ([design-canvas-qualification.md](design-canvas-qualification.md), qualification)
+- [ ] Rerun the live Claude design cycle's Ask agent, approval and handoff steps on an account that is not rate-limited ([design-canvas-qualification.md](design-canvas-qualification.md), qualification)
 - [x] Verify whether the open design flakes, especially the extra event in 0215, reflect ordering bugs ([design-canvas-qualification.md](design-canvas-qualification.md), verify)
 - [x] Reject a reused design `correlationId` with different input on settled receipts in `submit` and `findCreate` ([design-operation-recovery-edges.md](design-operation-recovery-edges.md))
 
 ### MCP (high)
 
 - [x] Close MCP apply-path gaps: runtime generations, bridge versions, external edits and the 64-runtime cap ([mcp-management.md](mcp-management.md))
-- [ ] Run live MCP apply probes for every provider, proving a call to a removed tool actually fails ([mcp-management.md](mcp-management.md), qualification)
-- [ ] Fill the MCP provider completion matrix for every writable scope and lifecycle case ([mcp-management.md](mcp-management.md), qualification)
-- [ ] Qualify MCP apply for inactive environments across reload, dropped streams and bridge generation changes ([mcp-management.md](mcp-management.md), qualification)
+- [ ] Re-qualify live MCP apply probes for every provider, proving a call to a removed tool actually fails ([mcp-management.md](mcp-management.md), qualification)
+- [ ] Complete the MCP provider matrix under the corrected checks for every writable scope and lifecycle case ([mcp-management.md](mcp-management.md), qualification)
+- [x] Qualify MCP apply for inactive environments across reload, dropped streams and bridge generation changes ([mcp-management.md](mcp-management.md), qualification)
 
 ### Agent engines and provider SDKs (high)
 
@@ -143,8 +146,8 @@ it reaches. Some rules of thumb:
 
 ### Transcripts, observation and bandwidth (high)
 
-- [ ] Qualify live history paging and reviewer Load earlier messages beyond the 100-message live window ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
-- [ ] Run a live multi-review: progress probes, reviewer windows, detail expansion, pages and scroll anchoring ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
+- [x] Qualify live history paging and reviewer Load earlier messages beyond the 100-message live window ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
+- [x] Run a live multi-review: progress probes, reviewer windows, detail expansion, pages and scroll anchoring ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [ ] Qualify Claude inactive-tab and background-task runs against content-revision tokens ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [ ] Qualify cold restart: display tails and pipeline histories reconcile, including a mid-dispatch restart ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [ ] Qualify idle observation live per provider: missed final event, approvals, sub-agents, reconnect, hidden ([native-agent-idle-observation.md](native-agent-idle-observation.md), qualification)
@@ -161,15 +164,15 @@ it reaches. Some rules of thumb:
 - [x] Run the real-stack Multi Review inactive-environment cycle with restart, reload and bridge interruption ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), qualification)
 - [x] Run the Multi Review browser and agent-browser suites for the #833 launcher and reviewer tab ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), qualification)
 - [x] Continue a Multi Review reviewer whose turn a backend restart cut short, instead of failing it ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
-- [ ] Report a Claude turn a restart cut short as `interruption: "restart"`, so Multi Review continues it instead of failing ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
+- [x] Report a Claude turn a restart cut short as `interruption: "restart"`, so Multi Review continues it instead of failing ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
 - [ ] Compare full and compact consolidation on real providers over the corpus for recall and provenance ([multi-review-panel-value.md](multi-review-panel-value.md), qualification)
 
 ### Coordinator and agent mail (high)
 
 - [x] Add an opt-in live coordinator suite that assigns each qualified platform on the fixture project ([coordinator-live-conformance.md](coordinator-live-conformance.md))
 - [x] Add the live read-only scenario: hash the tree, attempt each mutation, assert unchanged and discovery works ([coordinator-live-conformance.md](coordinator-live-conformance.md))
-- [ ] Run the live read-only and async coordinator scenarios on all six platforms ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
-- [ ] Run the worker-mail family scenario once per qualified platform with default messaging settings ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
+- [x] Run the live read-only and async coordinator scenarios on all six platforms ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
+- [x] Run the worker-mail family scenario once per qualified platform with default messaging settings ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
 - [ ] Run the status-wake scenario live per platform: review ready, fix done and completed, build completed, worker waiting, seven reviews in one wake ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
 - [ ] Check mail tiles render from each platform's echoed carrier, single and batched, in a real coordinator transcript ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
 - [x] Stop a Codex coordinator reaching the network through hosted `web_search`, or record why the `network` deny allows it ([coordinator-live-conformance.md](coordinator-live-conformance.md))
@@ -182,19 +185,20 @@ it reaches. Some rules of thumb:
 
 ### Cross-cutting (high)
 
-- [ ] Fix `removes a newly created worktree and its branch when persisting them fails`, which has failed alone on a clean `main` on some runs ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
+- [x] Fix `removes a newly created worktree and its branch when persisting them fails`, which has failed alone on a clean `main` on some runs ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [x] Make the desktop app wait (bounded) for the backend to exit before `quitAndInstall` and on every quit ([remote-host-upgrades.md](remote-host-upgrades.md))
 - [x] Qualify Codex sub-agent cards on a fixture profile: one card per child, recovery after reload and restart ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
 - [x] Decide and implement a renderer-backend skew guard for raw OpenCode envelopes from older backends ([mixed-version-compatibility.md](mixed-version-compatibility.md))
 - [x] Fix flake 0166 (OpenCode probe deadline), which recurred on 2026-10-15 ([test-suite-and-ci-health.md](test-suite-and-ci-health.md))
 - [x] Keep split panes mounted across the mobile breakpoint through stable per-pane hosts ([mobile-layout-gaps.md](mobile-layout-gaps.md))
 - [x] Move the environment settings dialog out of the drawer row so it is usable on mobile ([mobile-layout-gaps.md](mobile-layout-gaps.md))
+- [ ] Keep MCP editor writes in an agent-test profile out of the host's Codex and OpenCode homes when those credential sources are authorized ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
 
 ## Medium
 
 ### Service previews and web annotations (medium)
 
-- [ ] Add a real-Electron service-preview spec under `e2e/agent-testing/` and add it to the Electron `testMatch` ([service-preview-rollout.md](service-preview-rollout.md))
+- [x] Add a real-Electron service-preview spec under `e2e/agent-testing/` and add it to the Electron `testMatch` ([service-preview-rollout.md](service-preview-rollout.md))
 - [ ] Add a hostile service-worker route to the preview-app fixture that intercepts `/__orkestrator_preview/session` ([service-preview-rollout.md](service-preview-rollout.md))
 - [x] Diagnose or fix preview flakes 0184, 0195 and 0221 ([service-preview-rollout.md](service-preview-rollout.md))
 - [x] Pause the preview tunnel upstream before one 512 KiB read can close a slow but live reader ([service-preview-rollout.md](service-preview-rollout.md))
@@ -209,11 +213,14 @@ it reaches. Some rules of thumb:
 - [x] Verify the Electron agent-test task starts cleanly on the run host ([service-preview-rollout.md](service-preview-rollout.md), verify)
 - [ ] Decide the observation window, error and resource thresholds, and sign-off owner per preview cohort ([service-preview-rollout.md](service-preview-rollout.md), decision)
 - [ ] Decide whether the Chromium preview spec or the Docker preview suites join a regular gated run ([service-preview-rollout.md](service-preview-rollout.md), decision)
+- [ ] Verify whether a legacy URL tab's re-attach with a stale URL undoes a link, redirect or Back, as service tabs did before 2026-10-18 ([service-preview-rollout.md](service-preview-rollout.md), verify)
+- [ ] Verify why the pane-layout store re-applies an older saved browser URL of a tab after a newer local save ([service-preview-rollout.md](service-preview-rollout.md), verify)
 - [ ] Seed local worktree preview services safely from `entryPort`, never from a port scan ([preview-service-discovery.md](preview-service-discovery.md))
 - [x] Extend the annotation Electron spec with the real Notes column and capture alignment at several zooms and DPRs ([web-annotation-qualification.md](web-annotation-qualification.md))
 - [ ] Add a Docker annotation spec titled `Docker fixture` asserting materialization, cleanup and file checks ([web-annotation-qualification.md](web-annotation-qualification.md))
 - [ ] Assert on the real stack that a sent request writes the annotation PNG into the local worktree ([web-annotation-qualification.md](web-annotation-qualification.md))
 - [ ] Add live Discuss and needs-input annotation cases beside the live implement case ([web-annotation-qualification.md](web-annotation-qualification.md))
+- [ ] Re-run the live annotation implement test for Grok and Pi once each host login is usable ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
 - [x] Fix annotation-related flakes 0204 and 0225 (0204 by #1042, 0225 on 2026-10-17) ([web-annotation-qualification.md](web-annotation-qualification.md))
 - [ ] Keep a keychain access prompt from silently holding `dev:test` and desktop startup without a window ([web-annotation-qualification.md](web-annotation-qualification.md))
 - [ ] Qualify annotation preview OS focus, Window-menu focus and keyboard resolve where the app can be frontmost ([web-annotation-qualification.md](web-annotation-qualification.md), qualification)
@@ -243,11 +250,13 @@ it reaches. Some rules of thumb:
 - [ ] Verify CLI `run retry` of a typed-command prompt replays with the same intent ([cli-command-surface.md](cli-command-surface.md), verify)
 - [ ] Decide whether CLI prompt text defaults to literal instead of typed slash-command intent ([cli-command-surface.md](cli-command-surface.md), decision)
 - [ ] Make Pi, Cursor and Grok CLI-qualifiable by targeting a running profile or bundling their bridges ([cli-qualification.md](cli-qualification.md))
+- [ ] Settle a local CLI exec as failed when its launcher exited before the worker existed, instead of pending until the wait expires ([cli-qualification.md](cli-qualification.md))
+- [ ] Keep `session start --wait` waiting by request key when admission outlasts the CLI's 60 s request timeout ([cli-qualification.md](cli-qualification.md))
 - [ ] Run the live CLI `live-session` scenario for Pi, Cursor and Grok, local and container ([cli-qualification.md](cli-qualification.md), qualification)
-- [ ] Qualify the CLI on macOS: packed install, config directory, profile discovery and Docker Desktop matrix ([cli-qualification.md](cli-qualification.md), qualification)
+- [ ] Qualify the CLI on macOS: packed install, config directory and profile discovery ([cli-qualification.md](cli-qualification.md), qualification)
 - [ ] Check CLI-started question and approval cards in the browser for providers other than Claude ([cli-qualification.md](cli-qualification.md), qualification)
 - [ ] Add a CLI scenario with a foreign-owner Docker decoy and assert no fallback or mutation ([cli-qualification.md](cli-qualification.md), qualification)
-- [ ] Verify the CLI credential-free scenario matrix still passes at `2459b05c` ([cli-qualification.md](cli-qualification.md), verify)
+- [x] Verify the CLI credential-free scenario matrix still passes at `2459b05c` ([cli-qualification.md](cli-qualification.md), verify)
 - [ ] Retire the legacy slash catalogue routes and stop the old-bridge 404 fallback showing guessed rows ([slash-command-catalogue.md](slash-command-catalogue.md))
 - [ ] Label UI-dependent Pi extension commands unavailable or return a bounded unsupported-interaction result ([slash-command-catalogue.md](slash-command-catalogue.md))
 - [ ] Check slash picker source groups, keyboard order and catalogue refresh on Claude, Pi and Grok in a browser ([slash-command-catalogue.md](slash-command-catalogue.md), qualification)
@@ -300,6 +309,7 @@ it reaches. Some rules of thumb:
 - [ ] Measure design client performance and leaks at 1, 16 and 64 frames, and library open up to 256 canvases ([design-canvas-qualification.md](design-canvas-qualification.md), qualification)
 - [ ] Run design mixed-version and migration checks on real old and new binaries ([design-canvas-qualification.md](design-canvas-qualification.md), qualification)
 - [ ] Reproduce design browser flakes 0174 and 0208 under a fixed worker count and synthetic load, then fix the wait or the product ([design-canvas-qualification.md](design-canvas-qualification.md))
+- [ ] Dispatch a new tab's opening prompt from the backend, so leaving before the tab mounts no longer defers a design launch's first turn ([design-canvas-qualification.md](design-canvas-qualification.md))
 - [ ] Prove with a fault test whether a hung renderer `browser.close()` leaks Chromium, and fix it if so ([design-operation-recovery-edges.md](design-operation-recovery-edges.md))
 - [ ] Persist the native session id on design session links through `design_session_link` ([design-agent-conversation-links.md](design-agent-conversation-links.md))
 - [ ] Offer Resume conversation for closed design links whose native session can be resumed ([design-agent-conversation-links.md](design-agent-conversation-links.md))
@@ -311,17 +321,20 @@ it reaches. Some rules of thumb:
 
 - [x] Update Pi terminal MCP and sign-in capabilities for Pi 1.2.0's built-in CLI MCP extension ([mcp-management.md](mcp-management.md))
 - [ ] Implement OpenCode MCP application with `applied` evidence and trace how its OAuth completes ([mcp-management.md](mcp-management.md))
-- [ ] Prove Codex reload reaches existing threads, add thread-level evidence, and page `mcpServerStatus/list` ([mcp-management.md](mcp-management.md))
+- [ ] Rerun the inactive-environment MCP spec in full mode to prove tool calls after an edit, a removal, an older bridge and a shared save ([mcp-management.md](mcp-management.md), qualification)
+- [ ] Qualify the process-wide inactive MCP apply variant across two Codex or two OpenCode sessions, in a profile with a disposable `CODEX_HOME` ([mcp-management.md](mcp-management.md), qualification)
+- [ ] Add thread-level Codex MCP apply evidence and page `mcpServerStatus/list`; reload reaching existing threads is proven live ([mcp-management.md](mcp-management.md))
 - [ ] Join saved MCP entries to live rows by native name plus target and runtime identity ([mcp-management.md](mcp-management.md))
 - [ ] Make the Grok project-trust verdict match Grok: worktrees of trusted repositories, no cover across a git root, and sessions that run with the gate off ([mcp-management.md](mcp-management.md))
 - [ ] Redact runtime MCP `error` strings in `normalizeMcp`, not just bound their length ([mcp-management.md](mcp-management.md))
+- [ ] Run the live MCP apply probe for Grok and Pi once the host has a current Grok login and a Pi provider sign-in ([mcp-management.md](mcp-management.md), qualification)
 - [ ] Re-derive OpenCode and Grok MCP source and precedence rules from the current pinned binaries ([mcp-management.md](mcp-management.md), qualification)
 - [ ] Run a real-browser MCP editor pass after the dialog-layer fix and consider an agent-testing MCP spec ([mcp-management.md](mcp-management.md), qualification)
 - [ ] Qualify the read-only container MCP catalogue and remote-browser paths on the Docker real stack ([mcp-management.md](mcp-management.md), qualification)
 - [ ] Decide whether to keep or narrow the all-on MCP management rollout once the matrix is filled ([mcp-management.md](mcp-management.md), qualification)
 - [ ] Verify when running Claude account sessions see editor writes; warn that account-home servers are overwritten ([mcp-management.md](mcp-management.md), verify)
 - [x] Decide which Pi disable spelling the editor writes and whether to migrate `disabled: true` entries ([mcp-management.md](mcp-management.md), decision)
-- [ ] Treat a host Pi project `mcp.json` as loaded when the environment's execution policy turns project resources on ([mcp-management.md](mcp-management.md))
+- [x] Treat a host Pi project `mcp.json` as loaded when the environment's execution policy turns project resources on ([mcp-management.md](mcp-management.md))
 - [ ] Build a durable per-environment MCP overlay and enable container MCP writes ([mcp-environment-delivery.md](mcp-environment-delivery.md))
 - [ ] Stage `~/.cursor/mcp.json` into containers and retire Cursor's `blocked-policy` delivery branch ([mcp-environment-delivery.md](mcp-environment-delivery.md))
 - [ ] Show MCP execution location and allowlist warnings; gate container or remote sign-in on callback reachability ([mcp-environment-delivery.md](mcp-environment-delivery.md))
@@ -395,6 +408,8 @@ it reaches. Some rules of thumb:
 - [ ] Add harness workloads for activity sweep, file-tree cache, reviewer/progress probes and checkpoints ([transcript-history-efficiency.md](transcript-history-efficiency.md))
 - [ ] Add heap/RSS and event-loop-lag reporting to the efficiency harness ([transcript-history-efficiency.md](transcript-history-efficiency.md))
 - [ ] Decide whether to keep, cache or remove the joined sync-v1 history fallback and pre-`/transcript` reads ([transcript-history-efficiency.md](transcript-history-efficiency.md))
+- [ ] Give Codex a per-response row boundary; tool-only responses share one row (130 reads in 16 rows live) ([transcript-history-efficiency.md](transcript-history-efficiency.md))
+- [ ] Re-run the Claude native live paging case with the held-place fixes (tall coalesced blocks; blocked by a 429 on 2026-10-18) ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [ ] Qualify a live Grok/ACP session through the v2 transcript summary, detail and page routes ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [ ] Run Cursor past producer trim thresholds while inactive; check window, sub-agents and controls ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [ ] Qualify transcript efficiency in Electron and Docker environments with real providers ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
@@ -435,6 +450,7 @@ it reaches. Some rules of thumb:
 - [ ] Run a mixed real-provider Multi Review panel at 8 to 32 reviewers, recording caps, latency and RSS ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), qualification)
 - [x] Give Multi Review preparation and consolidation the one result-reminder turn reviewers get ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
 - [ ] Give Build Pipeline's consolidation and stage turns the restart continuation and result reminder ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md))
+- [ ] Qualify live that a Multi Review reviewer whose Claude Code process is killed (bridge up) completes after the restart continuation ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), qualification)
 - [x] Count Multi Review fence checks per pass at 8 to 32 reviewers, before and after the per-row fix ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), verify)
 - [x] Decide whether Multi Review fence reads need the cross-process mutation lease at all ([multi-review-scale-and-cost.md](multi-review-scale-and-cost.md), decision)
 - [ ] Add a content-free reviewer overlap metric from `reviewSourceIds` per run and reviewer position ([multi-review-panel-value.md](multi-review-panel-value.md))
@@ -449,7 +465,7 @@ it reaches. Some rules of thumb:
 - [ ] Decide whether `provider-configured` is an acceptable final coordinator tier for OpenCode and Cursor ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md), decision)
 - [ ] Verify whether Grok 1.0.52 can disable web fetch alone, so Grok coordinators can search ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md), qualification)
 - [ ] Load coordinator research MCP servers on OpenCode, Cursor and Pi ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md))
-- [ ] Add the live async scenario: async launch, queue before mail, one carrier, one silent-worker notice ([coordinator-live-conformance.md](coordinator-live-conformance.md))
+- [x] Add the live async scenario: async launch, queue before mail, one carrier, one silent-worker notice ([coordinator-live-conformance.md](coordinator-live-conformance.md))
 - [ ] Require every `enforced` coordinator platform to appear on the live suite's platform list in tests ([coordinator-live-conformance.md](coordinator-live-conformance.md))
 - [ ] Run the ten-message peer scenario between two environments with Wake peers on ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
 - [ ] Confirm Grok Orkestrator mail tools auto-allow under both naming forms on the pinned Grok build ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
@@ -458,7 +474,9 @@ it reaches. Some rules of thumb:
 - [x] Find out why a Grok coordinator's turn ends at its first denied tool in the live read-only run ([coordinator-live-conformance.md](coordinator-live-conformance.md), verify)
 - [ ] Qualify live that the Grok read-only agent profile stops shell commands Grok never asks about (`touch` ran unasked on 1.0.52) ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
 - [x] Let agent-test profiles authorize Pi's host login so the live coordinator suite can qualify Pi ([coordinator-live-conformance.md](coordinator-live-conformance.md))
-- [ ] Find out why a Cursor coordinator reports `network` denied without attempting the fetch in the live read-only run ([coordinator-live-conformance.md](coordinator-live-conformance.md), verify)
+- [x] Find out why a Cursor coordinator reports `network` denied without attempting the fetch in the live read-only run ([coordinator-live-conformance.md](coordinator-live-conformance.md), verify)
+- [ ] Re-run the live coordinator suite on Claude once its account rate limit resets, on Pi and Grok once the host has their logins, and on Claude on Linux ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
+- [ ] Decide whether to re-prompt Cursor's live read-only run, which labels steps it has no tool for `denied` in about half its runs ([coordinator-live-conformance.md](coordinator-live-conformance.md), decision)
 - [x] Get Codex to attempt create, edit and shell in the live read-only run, or decide a known read-only sandbox counts as exercised ([coordinator-live-conformance.md](coordinator-live-conformance.md))
 - [x] Show Codex calls its sandbox refused in the live transcript; app-server 0.162.1 emits no item for them ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md))
 - [ ] Auto-close an unassigned, empty-draft coordinator conversation when a new one is created ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md))
@@ -514,6 +532,7 @@ it reaches. Some rules of thumb:
 - [x] Verify whether the managed host `claude` updates itself without `DISABLE_AUTOUPDATER` ([remote-host-upgrades.md](remote-host-upgrades.md), verify)
 - [ ] Decide and align agent-test binary resolution: document the `PATH` fallback or refuse it ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
 - [ ] Refresh the live OpenCode spec for the no-default-model and fork-keeps-model fixes ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
+- [x] Stop pressing Escape in three live specs' environment navigation, which can stop their own running turn ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
 - [ ] Re-run the Electron terminal input resume spec and confirm Resume keeps the same PTY process ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
 - [ ] Run the refreshed live OpenCode spec and check whether 1.19 `session.fork` fills `Session.model` ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
 - [ ] Drive compaction, image and long-tool parts through an inactive environment; confirm they render after reload ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
@@ -547,6 +566,7 @@ it reaches. Some rules of thumb:
 - [ ] Measure disk used by `orkestrator-preview-svc-*` partitions on a long-lived profile ([service-preview-rollout.md](service-preview-rollout.md), verify)
 - [ ] Decide whether annotations on legacy URL tabs may keep depending on the legacy route ([service-preview-rollout.md](service-preview-rollout.md), decision)
 - [ ] Decide whether preview tunnel liveness should outlast a reader paused by backpressure, whose ping waits behind queued data ([service-preview-rollout.md](service-preview-rollout.md), decision)
+- [ ] Name service tabs after their service in the tab strip instead of "Browser N" ([service-preview-rollout.md](service-preview-rollout.md))
 - [ ] Build the web iframe preview surface: minimal sandbox, honoured framing, top-level fallback, safe postMessage ([embedded-service-previews.md](embedded-service-previews.md))
 - [ ] Investigate partitioned (CHIPS) cookies for the `__Host-orkestrator-preview` transport cookie only ([embedded-service-previews.md](embedded-service-previews.md))
 - [ ] Build an optional iOS in-app preview in a dedicated `WKWebView` with its own data store ([embedded-service-previews.md](embedded-service-previews.md))
@@ -587,6 +607,7 @@ it reaches. Some rules of thumb:
 ### CLI and slash commands (low)
 
 - [ ] Answer Claude's dispatch probe for a request id an earlier bridge process claimed, so a lost command resolves its card without a Retry ([slash-command-qualification.md](slash-command-qualification.md))
+- [ ] Make the inactive slash-command scenario's outage drop the event stream, not just fail new requests ([slash-command-qualification.md](slash-command-qualification.md))
 - [ ] Add tracked cascade removal to CLI `project remove` that deletes child environments ([cli-command-surface.md](cli-command-surface.md))
 - [ ] Add a local-only project initialiser (git init, no remote) for the CLI ([cli-command-surface.md](cli-command-surface.md))
 - [ ] Add optional JSONL event-stream following over the gateway SSE for CLI transcripts ([cli-command-surface.md](cli-command-surface.md))
@@ -595,6 +616,7 @@ it reaches. Some rules of thumb:
 - [ ] Add opt-in CLI backend auto-start with process ownership and data-directory exclusivity ([cli-command-surface.md](cli-command-surface.md))
 - [ ] Replace manual gateway invoke setup in `browser-gateway.spec.ts` with CLI commands where shorter ([cli-command-surface.md](cli-command-surface.md))
 - [ ] Measure CLI scenario start-up time, failure latency, flake rate, cleanup failures and token cost ([cli-qualification.md](cli-qualification.md), qualification)
+- [ ] Record the resolved provider model of each live CLI scenario run in its manifest ([cli-qualification.md](cli-qualification.md))
 - [ ] Support Claude session-changing commands by adopting the new conversation, or keep them unavailable ([slash-command-catalogue.md](slash-command-catalogue.md))
 - [ ] Build a policy-reviewed executor for Codex inline-shell templates, or keep them unavailable ([slash-command-catalogue.md](slash-command-catalogue.md))
 - [ ] Add further Orkestrator slash shortcuts beyond `/steer` and `/compact` with qualified semantics ([slash-command-catalogue.md](slash-command-catalogue.md))
@@ -649,6 +671,7 @@ it reaches. Some rules of thumb:
 ### MCP (low)
 
 - [ ] Implement per-session Grok ACP MCP application and document its collision rules ([mcp-management.md](mcp-management.md))
+- [ ] Stop telling a #838-era Claude bridge's runtime that the change "cannot be confirmed until the environment restarts" when its first query confirms it ([mcp-management.md](mcp-management.md))
 - [ ] Re-check external MCP edits for OpenCode, container and post-reload Codex runtimes, which no pass polls ([mcp-management.md](mcp-management.md))
 - [ ] Stop Claude's no-control MCP fallback collapsing server status to connected or failed ([mcp-management.md](mcp-management.md))
 - [ ] Replace the count-only MCP metric tiles for Claude and OpenCode in `AgentInfoButton` ([mcp-management.md](mcp-management.md))
@@ -862,30 +885,30 @@ it reaches. Some rules of thumb:
 | File | Very high | High | Medium | Low | Total |
 | --- | --- | --- | --- | --- | --- |
 | **Service previews and web annotations** | | | | | |
-| [service-preview-rollout.md](service-preview-rollout.md) |  | 2 | 11 | 8 | 21 |
+| [service-preview-rollout.md](service-preview-rollout.md) |  | 2 | 12 | 9 | 23 |
 | [embedded-service-previews.md](embedded-service-previews.md) |  |  |  | 13 | 13 |
 | [preview-service-discovery.md](preview-service-discovery.md) |  |  | 1 | 5 | 6 |
-| [web-annotation-qualification.md](web-annotation-qualification.md) |  | 1 | 14 | 4 | 19 |
+| [web-annotation-qualification.md](web-annotation-qualification.md) |  |  | 15 | 4 | 19 |
 | [web-annotation-known-limitations.md](web-annotation-known-limitations.md) |  |  | 7 | 3 | 10 |
 | [web-annotation-extensions.md](web-annotation-extensions.md) |  |  |  | 11 | 11 |
 | **CLI and slash commands** | | | | | |
 | [cli-command-surface.md](cli-command-surface.md) |  |  | 6 | 7 | 13 |
-| [cli-qualification.md](cli-qualification.md) |  | 1 | 6 | 1 | 8 |
+| [cli-qualification.md](cli-qualification.md) |  |  | 7 | 2 | 9 |
 | [slash-command-catalogue.md](slash-command-catalogue.md) |  |  | 5 | 6 | 11 |
-| [slash-command-qualification.md](slash-command-qualification.md) |  |  | 4 | 3 | 7 |
+| [slash-command-qualification.md](slash-command-qualification.md) |  |  | 4 | 4 | 8 |
 | **Containers and environments** | | | | | |
 | [container-platform-qualification.md](container-platform-qualification.md) |  |  | 12 | 2 | 14 |
 | [container-rebuild-state-preservation.md](container-rebuild-state-preservation.md) |  |  | 2 | 2 | 4 |
-| [container-network-and-credential-isolation.md](container-network-and-credential-isolation.md) |  |  | 2 | 1 | 3 |
+| [container-network-and-credential-isolation.md](container-network-and-credential-isolation.md) |  | 1 | 2 | 1 | 4 |
 | [container-resource-budgets-and-performance.md](container-resource-budgets-and-performance.md) |  |  | 3 | 6 | 9 |
 | [container-state-observation.md](container-state-observation.md) |  |  | 5 | 6 | 11 |
 | [environment-and-disk-cleanup.md](environment-and-disk-cleanup.md) |  |  |  | 6 | 6 |
 | **Design canvas** | | | | | |
-| [design-canvas-qualification.md](design-canvas-qualification.md) |  | 1 | 6 | 6 | 13 |
+| [design-canvas-qualification.md](design-canvas-qualification.md) |  | 1 | 7 | 6 | 14 |
 | [design-operation-recovery-edges.md](design-operation-recovery-edges.md) |  |  | 1 | 2 | 3 |
 | [design-agent-conversation-links.md](design-agent-conversation-links.md) |  |  | 5 | 3 | 8 |
 | **MCP** | | | | | |
-| [mcp-management.md](mcp-management.md) |  | 3 | 11 | 7 | 21 |
+| [mcp-management.md](mcp-management.md) |  | 2 | 13 | 8 | 23 |
 | [mcp-environment-delivery.md](mcp-environment-delivery.md) |  |  | 4 | 10 | 14 |
 | [control-mcp-voice-surface.md](control-mcp-voice-surface.md) |  |  | 9 |  | 9 |
 | **Agent engines and provider SDKs** | | | | | |
@@ -898,18 +921,18 @@ it reaches. Some rules of thumb:
 | [provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md) |  |  | 2 | 15 | 17 |
 | [session-lifecycle-consistency.md](session-lifecycle-consistency.md) |  |  | 7 | 7 | 14 |
 | **Transcripts, observation and bandwidth** | | | | | |
-| [transcript-history-efficiency.md](transcript-history-efficiency.md) |  | 4 | 11 | 5 | 20 |
+| [transcript-history-efficiency.md](transcript-history-efficiency.md) |  | 2 | 13 | 5 | 20 |
 | [remote-client-bandwidth.md](remote-client-bandwidth.md) |  |  | 4 | 9 | 13 |
 | [native-agent-idle-observation.md](native-agent-idle-observation.md) |  | 1 | 3 | 2 | 6 |
 | [client-reconnect-and-freshness.md](client-reconnect-and-freshness.md) |  |  | 6 | 2 | 8 |
 | [recurring-work-qualification.md](recurring-work-qualification.md) |  | 4 | 9 | 19 | 32 |
 | **Multi Review** | | | | | |
-| [multi-review-scale-and-cost.md](multi-review-scale-and-cost.md) |  | 1 | 6 | 8 | 15 |
+| [multi-review-scale-and-cost.md](multi-review-scale-and-cost.md) |  |  | 7 | 8 | 15 |
 | [multi-review-panel-value.md](multi-review-panel-value.md) |  | 1 | 4 | 5 | 10 |
 | [multi-review-flow-graph.md](multi-review-flow-graph.md) |  |  |  |  | 0 |
 | **Coordinator and agent mail** | | | | | |
 | [coordinator-read-only-adapters.md](coordinator-read-only-adapters.md) |  |  | 5 | 5 | 10 |
-| [coordinator-live-conformance.md](coordinator-live-conformance.md) |  | 4 | 8 | 1 | 13 |
+| [coordinator-live-conformance.md](coordinator-live-conformance.md) |  | 2 | 8 | 1 | 11 |
 | [coordinator-consistency-gaps.md](coordinator-consistency-gaps.md) |  |  | 1 | 10 | 11 |
 | **Backend structure** | | | | | |
 | [storage-service-repositories.md](storage-service-repositories.md) |  |  | 4 | 2 | 6 |
@@ -918,9 +941,9 @@ it reaches. Some rules of thumb:
 | [backend-core-domain-folders.md](backend-core-domain-folders.md) |  |  | 4 | 3 | 7 |
 | [backend-runtime-state-ownership.md](backend-runtime-state-ownership.md) |  |  | 4 | 3 | 7 |
 | **Cross-cutting** | | | | | |
-| [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md) |  |  | 10 | 5 | 15 |
+| [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md) |  | 1 | 10 | 5 | 16 |
 | [mixed-version-compatibility.md](mixed-version-compatibility.md) |  |  | 2 | 3 | 5 |
-| [test-suite-and-ci-health.md](test-suite-and-ci-health.md) | 1 | 1 | 4 | 13 | 19 |
+| [test-suite-and-ci-health.md](test-suite-and-ci-health.md) | 1 |  | 4 | 13 | 18 |
 | [mobile-layout-gaps.md](mobile-layout-gaps.md) |  |  | 1 | 4 | 5 |
 | [dependency-upgrades.md](dependency-upgrades.md) |  |  | 3 | 7 | 10 |
 | [remote-host-upgrades.md](remote-host-upgrades.md) |  |  | 3 | 2 | 5 |

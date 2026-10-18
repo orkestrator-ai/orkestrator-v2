@@ -45,6 +45,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import path from "node:path";
 import type { NativeAgentDispatchOutcome } from "@orkestrator/protocol/native-agent";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import { dismissSidebarTooltip } from "./sidebar-tooltip";
 
 type Status = {
   status: string;
@@ -163,9 +164,8 @@ function sidebarNavigator(page: Page, projectName: string) {
     if (await expand.isVisible()) await expand.click();
     if (!mobile) {
       // A sidebar tooltip from the previous hover can sit over the entry.
-      // Escape would also close the mobile drawer, so only on desktop.
-      await page.mouse.move(0, 0);
-      await page.keyboard.press("Escape");
+      // Escape is Stop unless focus is safely in the sidebar.
+      await dismissSidebarTooltip(page, projectName);
     }
     await entry.click();
     const closeDrawer = page.getByRole("button", { name: "Close projects and environments" });

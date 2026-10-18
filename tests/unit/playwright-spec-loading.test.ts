@@ -21,6 +21,7 @@ const { JEST_WORKER_ID: _jest, BUN_TEST_WORKER_ID: _worker, ...childEnv } = proc
 describe("Playwright suites", () => {
   test.each([
     "e2e/playwright.config.ts",
+    "e2e/public-site/playwright.config.ts",
     "e2e/agent-testing/playwright.browser.config.ts",
     "e2e/agent-testing/playwright.claude-warm.config.ts",
     "e2e/agent-testing/playwright.electron.config.ts",

@@ -78,3 +78,54 @@ Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run
 - **Owning-file rerun:** `mise run test:logged -- --name resolve-browser-owner-rerun -- bunx playwright test --config e2e/playwright.config.ts e2e/DiffViewerMobile.spec.ts e2e/PaneBreakpoint.spec.ts --workers=1` passed both unchanged files (exit 0, 42.1 seconds).
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.NgqDST/resolve-browser.log.gz`.
 - **Assessment:** Matches the existing startup symptom. Host contention and overlapping Vite updates remain possible contributors; no diff-viewer code or test changed.
+
+## Preview path provenance validation — 2026-10-18
+
+`mise run test:logged -- --name browser -- mise run test:browser` ran 432
+cases with nine workers: 348 passed, 80 skipped and four failed in 329.2 s.
+`the diff header fits a phone and the editor uses the full width` could not find `.monaco-diff-editor` within five seconds.
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.kKsMFU/browser.log.gz`.
+
+The unchanged owning files passed sequentially with one worker:
+`mise run test:logged -- --name browser-rerun -- bunx playwright test --config e2e/playwright.config.ts e2e/DiffViewerMobile.spec.ts e2e/PaneBreakpoint.spec.ts e2e/CloseRetention.spec.ts --workers=1`
+(exit 0, 96.6 s logged). Other worktrees and real-stack checks were active on
+the host. Startup contention remains an unconfirmed hypothesis; no assertion
+or timeout changed.
+
+## Public landing-page review observation — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name browser -- mise run test:browser` on macOS arm64, while the full unit suite and other worktrees were also validating.
+- **Failure:** the mobile `the diff header fits a phone and the editor uses the full width` case could not find `.monaco-diff-editor` within 5000 ms.
+- **Owning-file rerun:** `ORKESTRATOR_E2E_PORT=1443 mise run test:logged -- --name diff-viewer-rerun -- bunx playwright test --config e2e/playwright.config.ts e2e/DiffViewerMobile.spec.ts --workers=1` repeated the same failure (four passed, five skipped, one failed; 49.6 seconds logged).
+- **Evidence:** aggregate `orkestrator-test-run.OwH8yL/browser.log.gz` and isolated `orkestrator-test-run.StTZ0J/diff-viewer-rerun.log.gz` under the host temporary directory.
+- **Assessment:** this occurrence does not independently establish a flake because the unchanged owning file also failed alone. Monaco initialization remains an unresolved validation limitation; no diff-viewer source, assertion, timeout, or skip changed. All eight production public-site smoke checks passed separately.
+
+
+## Landing-page main merge recurrence — 2026-10-18
+
+`ORKESTRATOR_E2E_PORT=49295 ORKESTRATOR_PUBLIC_E2E_PORT=49296 mise run test:logged -- --name merge-browser-isolated-ports -- mise run test:browser` reported 303 passed, 80 skipped and 49 failed with nine workers alongside other host validation. This owner failed in:
+
+- `the diff header fits a phone and the editor uses the full width`
+- `the new file state renders accessibly on a phone`
+- `the deleted file state renders accessibly on a phone`
+- `the mounted diff switches exactly at the mobile breakpoint`
+- `the desktop diff keeps its mode controls and full-ref tooltip`
+
+All 21 failing owners, including this unchanged file, passed with one worker in 428.8 seconds (exit 0). The complete rerun command, individual failure messages and evidence paths are in [0382](0382-component-browser-parallel-load.md). No timeout, assertion, skip or owning source changed.
+
+## Electron preview main merge observation — 2026-10-18
+
+The nine-worker component suite failed this owner, and its one-worker rerun still could not find `.monaco-diff-editor` for the mobile header case. The unchanged owner therefore remains an unresolved validation limitation for this occurrence. Counts, commands and artifacts are in [0382](0382-component-browser-parallel-load.md). No implementation, assertion, timeout or skip changed.
+
+## CLI matrices main merge observation — 2026-10-18
+
+- **Original command:** `ORKESTRATOR_E2E_PORT=49371 ORKESTRATOR_PUBLIC_E2E_PORT=49372 mise run test:logged -- --name merge-browser -- mise run test:browser`, nine workers alongside the full non-iOS suite.
+- **Result:** 351 passed, 80 skipped and one failed across 432 component cases (258.5 seconds logged). The failure was mobile `the diff header fits a phone and the editor uses the full width`: `.monaco-diff-editor` was absent at the 5000 ms deadline.
+- **Owning-file rerun:** `ORKESTRATOR_E2E_PORT=49371 mise run test:logged -- --name merge-diff-owner -- bunx playwright test --config e2e/playwright.config.ts e2e/DiffViewerMobile.spec.ts --workers=1` repeated the same failure (4 passed, 5 skipped, 1 failed; 40.3 seconds logged).
+- **Evidence:** `orkestrator-test-run.lReU9r/merge-browser.log.gz` and `orkestrator-test-run.WoFi5z/merge-diff-owner.log.gz` under the host temporary directory.
+- **Assessment:** unresolved validation limitation, matching the earlier public landing-page review observation; this occurrence does not establish intermittence. No diff-viewer implementation, assertion, timeout or skip changed.
+- **Public-site validation:** the component failure short-circuited the combined task, so `ORKESTRATOR_PUBLIC_E2E_PORT=49372 mise run test:logged -- --name merge-public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts` ran separately and passed all eight production smoke cases (28.9 seconds logged), including desktop/mobile login, reload, lazy loading and clipboard feedback. Playwright stopped its owned servers; no application profile was created.
+
+## CLI matrices second main merge — 2026-10-18
+
+The aggregate desktop breakpoint-switching case failed to find `.monaco-diff-editor`; the one-worker owning-file rerun passed that case but failed the mobile editor check. This observation remains unresolved because the whole unchanged owner did not pass. Full commands, 339-pass/80-skip/13-failure aggregate and 96-pass/15-skip/three-failure focused counts, and evidence paths are in [0382](0382-component-browser-parallel-load.md). No implementation, assertion, timeout or skip changed.

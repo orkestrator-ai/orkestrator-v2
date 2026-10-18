@@ -318,7 +318,9 @@ describe("monorepo orchestration scripts", () => {
     // stack through their own configs and whose tests need Bun types the shared
     // project deliberately does not load.
     const playwright = read("e2e/playwright.config.ts");
-    expect(playwright).toContain('testIgnore: ["agent-testing/**", "preview/**"]');
+    expect(playwright).toContain(
+      'testIgnore: ["agent-testing/**", "preview/**", "public-site/**"]',
+    );
 
     const shared = JSON.parse(read("e2e/tsconfig.json")) as { exclude?: string[] };
     expect(shared.exclude).toContain("agent-testing");

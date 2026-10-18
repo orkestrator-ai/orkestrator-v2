@@ -468,6 +468,8 @@ describe("Electron backend process supervisor", () => {
         ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK: "all",
         ORKESTRATOR_NATIVE_OBSERVATION_SHARING: "0",
         ORKESTRATOR_RECURRING_METRICS: "1",
+        ORKESTRATOR_PREVIEW_TRANSPORT: "1",
+        ORKESTRATOR_PREVIEW_RELAY: "0",
       },
       "2.8.2",
       {
@@ -495,6 +497,10 @@ describe("Electron backend process supervisor", () => {
     expect(isolated.ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK).toBe("all");
     expect(isolated.ORKESTRATOR_NATIVE_OBSERVATION_SHARING).toBe("0");
     expect(isolated.ORKESTRATOR_RECURRING_METRICS).toBe("1");
+    // So do the service-preview transport overrides, so a profile can
+    // qualify the desktop tunnel and relay.
+    expect(isolated.ORKESTRATOR_PREVIEW_TRANSPORT).toBe("1");
+    expect(isolated.ORKESTRATOR_PREVIEW_RELAY).toBe("0");
     expect(isolated.HOME).toBe("/profiles/qa/credentials/home");
     expect(isolated.ORKESTRATOR_AGENT_TEST_HOST_HOME).toBe("/Users/tester");
     expect(isolated.CODEX_HOME).toBe("/profiles/qa/credentials/codex");

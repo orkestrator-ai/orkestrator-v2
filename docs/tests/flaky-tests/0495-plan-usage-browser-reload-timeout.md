@@ -1,6 +1,6 @@
 # Plan usage browser reload timeout
 
-- **ID:** 0381
+- **ID:** 0495
 - **Status:** open
 - **Date observed:** 2026-10-18
 - **Owning file:** `e2e/PlanUsage.spec.ts:3`

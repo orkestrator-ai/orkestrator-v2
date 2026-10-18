@@ -23,6 +23,7 @@ import {
   type WebAnnotationDestination,
   type WebAnnotationRequest,
 } from "@orkestrator/protocol/web-annotations";
+import { waitForLiveAnnotationRequest } from "./web-annotations-live";
 import { reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
 import {
   EXPECTED_SOURCE_CHANGE,
@@ -525,24 +526,17 @@ test("live agent implements the fixture's expected source change", async ({
       requestId: `req-live-${Date.now()}`,
       bodyHash: preparation.bodyHash,
     });
-    let state = sent.request.state;
-    await expect
-      .poll(
-        async () => {
-          state = (await getRequest(setup.invoke, setup, sent.request.id)).state;
-          return [
-            "awaiting-review",
-            "completed",
-            "failed",
-            "cancelled",
-            "unconfirmed",
-            "needs-input",
-          ].includes(state);
-        },
-        { timeout: 840_000, intervals: [5_000] },
-      )
-      .toBe(true);
-    testInfo.annotations.push({ type: "live-request-state", description: state });
+    const startedAt = Date.now();
+    const state = await waitForLiveAnnotationRequest({
+      readRequest: () => getRequest(setup.invoke, setup, sent.request.id),
+      agent: LIVE_AGENT,
+      profile,
+      testInfo,
+    });
+    testInfo.annotations.push({
+      type: "live-request-state",
+      description: `${state} after ${Math.round((Date.now() - startedAt) / 1_000)} s`,
+    });
     expect(state).toBe("awaiting-review");
 
     // The repository change, not a DOM mutation: source + rendered page.

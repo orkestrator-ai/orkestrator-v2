@@ -29,10 +29,19 @@ export function describeMcpError(error: unknown): string {
  * Re-read authoritative state whenever the backend says something changed or
  * the event stream reconnects. Events carry no definitions; a missed one only
  * delays a refresh until the next event, reconnect or remount.
+ *
+ * Also when the browser comes back online: an event can arrive on a stream
+ * that survived the outage while the re-read it triggers fails, and nothing
+ * else would ever repeat that read.
  */
 function useBackendInvalidation(refresh: () => void): void {
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
+  useEffect(() => {
+    const online = () => refreshRef.current();
+    window.addEventListener("online", online);
+    return () => window.removeEventListener("online", online);
+  }, []);
   useEffect(() => {
     let disposed = false;
     const unlisteners: Array<() => void> = [];

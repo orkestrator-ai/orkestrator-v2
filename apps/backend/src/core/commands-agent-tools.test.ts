@@ -158,15 +158,15 @@ describe("OpenCode agent-tool configuration", () => {
       };
     });
 
-    expect(
-      __testing.scheduleOpenCodeAgentToolsConfiguration(
-        "test",
-        server.port,
-        "o".repeat(43),
-        connection,
-        "/workspace",
-      ),
-    ).toBeUndefined();
+    // Returns at once with the outcome to come: an ordinary chat never waits
+    // on it, and only a coordinator's startup awaits it.
+    const outcome = __testing.scheduleOpenCodeAgentToolsConfiguration(
+      "test",
+      server.port,
+      "o".repeat(43),
+      connection,
+      "/workspace",
+    );
     expect(__testing.openCodeAgentToolsConfigurationCount()).toBe(1);
     expect(__testing.configuredOpenCodeAgentToolsCount()).toBe(0);
 
@@ -174,6 +174,7 @@ describe("OpenCode agent-tool configuration", () => {
     expect(__testing.openCodeAgentToolsConfigurationCount()).toBe(0);
     expect(__testing.configuredOpenCodeAgentToolsCount()).toBe(1);
     expect(server.requests).toHaveLength(1);
+    expect(await outcome).toBe("connected");
 
     __testing.scheduleOpenCodeAgentToolsConfiguration(
       "test",

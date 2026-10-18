@@ -244,7 +244,10 @@ file. This makes model pickers representative even in a deliberately
 credential-free run. Existing profile caches are preserved across restarts, and
 the seeding does not copy projects, sessions, prompts, settings, or additional
 credentials. Grok's explicitly authorized local login is the sole exception: a
-bounded owner-only `auth.json` snapshot is refreshed into the isolated home.
+bounded owner-only `auth.json` snapshot is refreshed into the isolated home,
+holding access tokens only. Its refresh tokens are blanked, so an expired host
+login leaves Grok signed out in the profile (see
+[credentials-and-models.md](credentials-and-models.md#agent-test-credential-policy)).
 
 To create and start fixture environments during seeding:
 
@@ -357,6 +360,20 @@ removes its pipeline and environments during cleanup. The spec never presses
 **Share…**, which would publish the conversation. Without the opt-in, every
 case is skipped and no profile is needed.
 
+The live MCP apply probe (`e2e/agent-testing/mcp-apply-live.spec.ts`) has
+its own opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_MCP=1`. For each provider in
+`ORKESTRATOR_AGENT_TEST_MCP_PROVIDERS` it saves and applies a harmless stdio
+server (`mcp-probe-server.mjs`) through the MCP editor's own commands in every
+writable scope, then edits, renames and removes it, and reads from the
+server's log whether each model call really reached it. It refuses to write a
+source outside the test worktree or the profile's data directory. Authorizing
+the Codex or OpenCode credential source points those providers at the host's
+own homes, so their user scopes are then skipped; the
+[live record](../todo/mcp-management.md#live-apply-record-2026-10-18) shows
+how those scopes were covered with an access-only credential seeded into the
+profile. Run one provider at a time (flake 0420). Each provider writes
+`output/agent-testing/<run>/mcp-apply-live/<provider>.json`.
+
 The live Multi Review cycle (`e2e/agent-testing/multi-review-live.spec.ts`)
 has its own opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW=1`, and uses the
 host's Claude and Codex credentials. Each case runs a real two-reviewer review
@@ -397,18 +414,110 @@ tab, on return and again after a reload: the graph's node states, the
 inspector's transcript tail, the controls and the reviewer's read-only tab.
 The reviewer transcript read must not be the compatibility fallback, and a
 repeated read with its source token must answer `unchanged`. After a restart
-the Codex reviewer must complete, because the runner continues a Codex turn the
-restart cut short. The Claude reviewer, after a restart or a killed bridge, may
-either complete or fail with a stated reason, since Claude reports no
-interruption yet. The case records each reviewer's outcome as a Playwright
-annotation in `results.json`. After a killed bridge the Codex peer must
-complete. If preparation fails before any
+both reviewers must complete, because both bridges report a turn the restart
+cut short and the runner continues it once. After a killed Claude bridge the
+Claude reviewer must complete the same way, and the Codex peer must complete.
+The case records each reviewer's outcome as a Playwright annotation in
+`results.json`. If preparation fails before any
 reviewer starts, the case restarts that step once and records it. Each case
 cancels its review and deletes its environments in cleanup. The restart case
 leaves the profile running under a detached launcher, so stop it with
 `dev:stop` as usual. It restarts without `--fixture`, so `dev:status` no
 longer reports `testProject` afterwards; the spec falls back to the profile's
 seeded copy.
+
+### Live transcript paging
+
+`e2e/agent-testing/transcript-paging-live.spec.ts` drives transcripts past the
+100-message live window with real providers and checks history paging end to
+end. It has its own opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_TRANSCRIPT_PAGING=1`,
+and uses the host's Claude and Codex credentials:
+
+```bash
+mise run dev:test --profile qa-paging --fixture --credential-source claude --credential-source codex --agent-platforms claude,codex
+# In a second terminal, one case at a time or both:
+ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=900000 \
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-paging ORKESTRATOR_AGENT_TEST_LIVE_TRANSCRIPT_PAGING=1 \
+  mise run test:logged -- --name transcript-paging-live -- mise run test:agent:browser -- \
+  e2e/agent-testing/transcript-paging-live.spec.ts
+mise run dev:stop --profile qa-paging
+mise run dev:reset --profile qa-paging
+```
+
+The silence-watchdog override applies only to this deliberate long-running
+qualification: a real provider can keep advancing through the trail for more
+than five minutes before Playwright reports a result. It leaves the runner's
+normal configuration unchanged.
+
+Each case lays a trail of files in a fresh environment; every file names the
+next under a random name, so the agent has to read them one at a time. The
+stop each tool call read places every row, so the spec checks pages and the
+live tail for gaps, duplicates and order without reading model prose.
+
+- **Native conversation** (Claude Haiku, 150 stops by default; set
+  `ORKESTRATOR_AGENT_TEST_PAGING_NATIVE_PLATFORM=codex` for GPT-6-Luna). Claude
+  reads with its Read tool, and its tool-only rows coalesce into tall
+  per-minute blocks, the harder case for holding a place. Codex notes each
+  stop in a sentence so that every step gets a row. The backend
+  window must be truncated with a cursor, and following the cursor in
+  40-message pages must reach the first prompt with every stop in order. In
+  the browser, **Load earlier messages** must bring the prompt back, keep the
+  reader's row on screen (moving the list off the top when rows land above
+  it), and expand a tool row from the loaded page. Then the same after a reload.
+- **Multi Review** (a Claude Haiku and a Codex GPT-6-Luna reviewer, 130 stops).
+  The trail protocol is in an `AGENTS.md` that is part of the change. Codex
+  loads it as instructions; a Claude reviewer runs read-only without project
+  instructions and in practice reviews without walking it, so the long
+  reviewer is the Codex one. Codex opens a row only where reasoning or a
+  message follows a tool call, so the protocol asks for one sentence per stop.
+  While reviewers run, no stall may be reported, and a reviewer running past
+  2.5 progress-probe intervals must show its progress clock advance. Probes run
+  once a minute, so a short reviewer shows only its baseline. Afterwards, each
+  reviewer longer than the window must have a bounded summary, an `unchanged`
+  repeat read, pages back to its prompt, and a reviewer tab whose **Load
+  earlier messages** keeps the reader's place. When Claude is unavailable,
+  `ORKESTRATOR_AGENT_TEST_PAGING_FIRST_REVIEWER=codex` makes the first
+  reviewer a medium-effort Codex one.
+
+Scroll upward with the mouse wheel when you drive these views by hand or from
+a spec. A programmatic `scrollTo` is not user intent to the transcript list: it
+stays pinned to the tail and snaps back. Measurements land as annotations in
+`results.json`. Override models and trail lengths with the variables named in
+the spec's header.
+
+### Live MCP apply in an inactive environment
+
+`e2e/agent-testing/mcp-apply-inactive.spec.ts` saves and applies MCP server
+changes for a Claude session while its environment is busy or inactive, then
+checks the apply outcome, the tool the model can actually call, the settings
+view and the agent panel. It covers a dropped event stream, a hard reload, a
+bridge restart (a new runtime generation), a removal, and a backend-user file
+shared by two environments. It needs the live-MCP opt-in and Claude credentials:
+
+```bash
+mise run dev:test --profile qa-mcp-inactive --fixture --credential-source claude --agent-platforms claude
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-mcp-inactive ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 \
+  mise run test:logged -- --name mcp-inactive -- mise run test:agent:browser -- \
+  e2e/agent-testing/mcp-apply-inactive.spec.ts
+```
+
+It writes only the disposable environment's `.mcp.json` and the profile's
+isolated `~/.claude.json`, and its fixture server lives under
+`output/agent-testing/<profile>/`. Do not add Codex to this scenario's
+credential sources for a user-scope edit: with the Codex credential source a
+profile uses the host's `CODEX_HOME`, so a Codex user-scope save would write
+the operator's own `config.toml`. Set
+`ORKESTRATOR_AGENT_TEST_MCP_OLDER_CLAUDE_BRIDGE` to the `dist` folder of a
+Claude bridge built before the `mcpConfigReporting` marker to add the
+older-bridge step. That step swaps the build in only while it starts the
+environment's bridge, then restores the current one.
+`ORKESTRATOR_AGENT_TEST_MODEL` pins both tabs' Claude model.
+`ORKESTRATOR_AGENT_TEST_MCP_APPLY_ONLY=1` keeps every apply, generation and UI
+check but drops the ones that need the model to answer: Claude's bridge
+records the MCP files a query was built from when the query starts, so the
+apply half still runs when the provider refuses requests (a rate limit, say).
+A full-mode pass is still needed for the tool-call checks.
 
 ### Live close retention
 
@@ -449,14 +558,61 @@ engines (`bridges/cursor-bridge/src/testing/fake-engine-server.ts`,
 `e2e/fixtures/close-retention-opencode.ts`). Its assertions read each engine's
 own store, so a duplicated or lost prompt fails there.
 
+### Live design-tool cycle
+
+`e2e/agent-testing/design-live.spec.ts` runs the design canvas with a real
+Claude and Codex through the `orkestrator-design` MCP server. It has its own
+opt-in and uses the profile's host credentials:
+
+```bash
+mise run dev:test --profile qa-design-live --fixture --credential-source claude --credential-source codex --agent-platforms claude,codex
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-design-live ORKESTRATOR_AGENT_TEST_LIVE_DESIGN=1 \
+  mise run test:logged -- --name design-live -- mise run test:agent:browser -- \
+  e2e/agent-testing/design-live.spec.ts
+mise run dev:stop --profile qa-design-live
+mise run dev:reset --profile qa-design-live
+```
+
+`ORKESTRATOR_AGENT_TEST_DESIGN_PROVIDERS` (default `claude,codex`) picks the
+providers, `ORKESTRATOR_AGENT_TEST_DESIGN_TURN_TIMEOUT_MS` (default 420000)
+bounds each turn, and `ORKESTRATOR_AGENT_TEST_DESIGN_MODELS` takes
+`<platform>=<model id>` pairs (for example `claude=claude-haiku-4-5`) that are
+set on the test environment before launch. Each provider gets two fresh environments. The case launches
+**New design workspace** with the provider and a fixture-scoped brief:
+create a frame, `inspect_element`, `replace_element_html`, `capture_frame` and
+`save_canvas` to a nonce path. It checks that the launch linked the
+conversation to the canvas, then switches environment once the opening prompt
+is accepted, and checks the canvas, the saved `.orkdes` and the idle controls
+on return after a renderer reload. Successful `inspect_element` and `capture_frame`
+calls are required in the launch transcript. **Ask agent** then captures the
+selection while another client edits the frame: the stale-context notice appears, the agent re-reads, and
+both edits survive. Next the approval mode is set to Ask (Claude) or Untrusted
+(Codex). The agent is asked for one shell command before a style edit, and the
+test switches away while the approval is pending. On return the request must
+still be pending after a renderer reload, the turn `blocked` and the canvas
+unchanged; after approval the edit lands. Finally **Implement** starts a new conversation holding an
+unsent handoff draft that survives a switch and renderer reload, and the canvas
+links both conversations. The design MCP call count, failed calls and response bytes are
+attached as `design-mcp-usage`. A content-free heartbeat runs every minute for
+the whole case, including approval waits and cleanup, and is cleared in `finally`.
+
+Never press Escape to clear a sidebar tooltip in a live spec: with nothing
+focused, Escape stops the active tab's running turn (`useEscapeToStop`). A
+Claude CLI rate limit (429) ends the turn on an API error; rerun later rather
+than treating it as a product failure.
+
 ### Live coordinator suite
 
 The live coordinator suite checks that a real provider keeps the coordinator's
-read-only boundary. It runs as one command and owns its profiles:
+read-only boundary (`read-only`), that delegation never waits inside a turn
+(`async`), and that worker mail flows with nobody's help (`family`). It runs as
+one command and owns its profiles:
 
 ```bash
-mise run test:agent:coordinator                              # every platform on the list
+mise run test:agent:coordinator                              # every platform and scenario
 mise run test:agent:coordinator --credential-source codex    # one platform; repeatable
+mise run test:agent:coordinator --scenario async             # one scenario; repeatable
 ```
 
 For each platform in turn (Claude, Codex, Pi, OpenCode, Cursor, Grok), the
@@ -551,8 +707,11 @@ will not start, a platform the coordinator does not offer, and a turn that does
 not finish within `ORKESTRATOR_AGENT_TEST_COORDINATOR_TURN_TIMEOUT_MS` (default
 600000).
 
-Each platform writes `output/agent-testing/<profile>/coordinator/<platform>.json`
-with the verdict, the reason, the tier, both digests and any changed paths, the
+Each platform writes one summary per scenario,
+`output/agent-testing/<profile>/coordinator/<platform>-<scenario>.json`, and the
+platform's verdict combines them: failed when any scenario failed or wrote no
+summary, passed when every scenario passed, skipped otherwise. The read-only
+summary has the verdict, the reason, the tier, both digests and any changed paths, the
 reported outcomes, the tool names and normalized states, and the kinds of any
 interactions that escaped the policy. The run writes `output/agent-testing/qa-coordinator-<time>/summary.json`.
 Neither contains prompts, file contents or tool output; Playwright traces kept
@@ -566,8 +725,72 @@ mise run test:logged -- --name coordinator-live -- \
   mise run test:agent:coordinator --credential-source claude
 ```
 
+The `async` case launches two real workers on the fixture project through the
+coordinator and watches the coordinator's turns, its delegations
+(`get_project_coordinator`), every family mailbox and the coordinator's prompt
+queue every two seconds. It answers nothing: an approval or question from the
+coordinator or a worker is denied (or cancelled) and fails the case.
+
+1. One turn asks the coordinator to launch a *reporter* and a *silent* worker
+   and end. The turn must be seen running, then idle; both `launch_environment`
+   results must carry `delivery: "async"`; the turn must make no `sleep`,
+   `read_messages`, `get_message_status` or `list_environments` call; and the
+   reporter's delegation must still be running when it ends.
+2. The silent worker finishes without mail and must produce exactly one
+   workflow notice. The reporter sends one progress message and then waits in
+   a shell loop for a gate file the harness owns. Its progress message must be
+   seen `inject-held` (`delegation-running`) and never delivered while its
+   delegation runs.
+3. The harness opens the report gate and waits for both reporter messages to
+   be held, then sends a *busy* turn (three Orkestrator reads), queues a prompt
+   behind it (`enqueue_prompt_queue_message`, as the composer does), and opens
+   the finish gate. The reporter ends, so the report is pending while the
+   coordinator is busy and a user prompt is queued. The case requires
+   an observation of exactly that state, and the queued prompt must run before
+   the reporter's carrier (by transcript row, or by the queue draining before
+   the report's `injectedAt` where a bridge does not echo the carrier).
+4. Both reporter messages must arrive in one echoed transcript carrier row,
+   identified by the message ids it contains, with no notice about the reporter;
+   each delegation wakes the coordinator once. Without complete carrier rows the
+   count stays unverified and the check fails. Neither per-message
+   `injectRequestId` nor nearby `injectedAt` timestamps prove a shared carrier.
+5. A last turn calls `read_messages` five times with identical arguments; the
+   fourth or fifth structured result must carry `repeatedRead: true`. The tool
+   call evidence must show five successful reads with identical arguments.
+
+The `family` case sends one prompt and then only watches, for up to 35 minutes
+(`ORKESTRATOR_AGENT_TEST_COORDINATOR_FAMILY_TIMEOUT_MS`). The coordinator
+launches two workers and, in the same turn, follows the second one up by
+environment id while it is still on its first request; both report; the
+coordinator then pings the first worker by environment id until six pings have
+been answered (two messages, then ten more alternating). It passes when
+messaging is at its defaults, both reports arrived, the busy follow-up joined
+the open delegation (one delegation, one carrier carrying the report and the
+reply), each ping has a distinct delivered request and reply, ordered by
+persisted creation timestamps with each reply before the next request, no family
+message is `stored` or `inject_failed`, and nothing reached the harness.
+
+Each scenario step waits at most
+`ORKESTRATOR_AGENT_TEST_COORDINATOR_STEP_TIMEOUT_MS` (default 600000). Workers
+the coordinator launched are stopped and deleted when the case ends. The
+summary records each named check with a bounded, content-free detail (counts,
+placements, phases) and the observed counts: messages, notices and carriers
+to the coordinator (a carrier count of -1 means unverified), and its `sleep`,
+`list_environments`, `read_messages` and `get_message_status` calls across the run.
+Playwright timeouts cover the sum of each scenario's wait budgets plus four
+minutes for setup and cleanup. The profile runner uses those same timeouts and
+adds two minutes per selected scenario for process overhead. Both honor the
+step, turn and family timeout environment overrides.
+
+Credential-free tests in `coordinator-live-observer.test.ts` exercise the same
+observer and gate/queue orchestration as the live spec, including completion
+and mail injection between reads, queue overlap, poll output collection and
+cleanup after a worker deletion fails. Evaluator and runner tests cover
+negative evidence and deadline relationships.
+
 To run the spec against a profile you started yourself, set the opt-in and
-optionally narrow the platforms. Each case closes the main conversation an
+optionally narrow the platforms and scenarios
+(`ORKESTRATOR_AGENT_TEST_COORDINATOR_SCENARIOS=async,family`). Each case closes the main conversation an
 earlier case assigned and leaves the project home environment in place:
 
 ```bash
@@ -668,6 +891,19 @@ Reload once more after returning and verify the same result again. Do not accept
 a result that works only while the initiating component stays mounted: live
 SSE/IPC events are incremental hints, and the check must prove a missed event
 can be recovered.
+
+Two traps when scripting this path:
+
+- **Escape is Stop.** While a turn runs, Escape stops it if the chat tab's
+  composer has focus or nothing has (`useEscapeToStop`). A test that presses
+  Escape to close a tooltip right after Send stops its own turn, and Claude
+  reports that as an SDK `ede_diagnostic` result. Use
+  `dismissSidebarTooltip` (`e2e/agent-testing/sidebar-tooltip.ts`).
+- **Offline is not a dropped stream.** `context.setOffline(true)` fails new
+  requests but leaves the open event stream connected, so events still arrive
+  and nothing reconnects. To drop the stream, also call `window.stop()` in the
+  page while offline; the gateway client then reconnects and replays from its
+  cursor once back online.
 
 For each failure record profile and commit, automated commands, route used,
 reproduction steps, expected and actual results, severity, and evidence paths.

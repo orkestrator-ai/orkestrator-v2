@@ -10,6 +10,18 @@
 - **Isolated rerun:** `bun test ./bridges/codex-bridge/src/runtime-env.test.ts` -> 10 passed, 0 failed with 30 assertions in 102 ms; the affected test passed in 6.06 ms.
 - **Hypothesis:** The helper-spawn test is sensitive to aggregate bridge-suite scheduling or process-start latency. It completed far below the timeout in isolation, but this single observation does not identify a narrower production or test defect.
 
+## Recurrence on 2026-10-18 (reopened)
+
+`mise run test:logged -- --name full-suite -- mise run test` on branch
+`qualify-annotation-live-implement-0330a0bacc01` (`50c26708`, which does not
+touch the Codex bridge) timed out in this case at 15,052.48 ms against its
+15,000 ms timeout, in the bridges group (408.8 s) on a heavily loaded macOS
+host. Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Zq7Cut/bridges.log.gz`. The unchanged owning file passed
+alone (9 passed, 98 ms; and
+`mise run test:logged -- --name iso-codex-runtime-env -- bun test --cwd bridges/codex-bridge ./src/runtime-env.test.ts --parallel=1 --only-failures`).
+Reopened: the earlier resolution recorded no cause, and the larger timeout
+did not hold.
+
 ## Recurrence — 2026-10-18
 
 - **Command:** `mise run test:logged -- --name usage-all-tests -- mise run test`
@@ -18,3 +30,11 @@
 - **Evidence:** `orkestrator-test-run.BopZMS/bridges.log.gz` (Codex bridge runtime environment case).
 - **Isolated rerun:** `mise run test:logged -- --name codex-runtime-env-rerun -- bun test ./bridges/codex-bridge/src/runtime-env.test.ts --preload ./tests/setup-node.ts --parallel=1 --only-failures` passed unchanged in 0.3 s.
 - **Disposition:** Reopened. No timeout or assertion was relaxed; aggregate process-start latency remains the working hypothesis.
+
+## Main merge validation — 2026-10-18
+
+- **Command:** `mise run test:logged -- --name merge-full-suite -- mise run test`, aggregate reservations 4/1/2/1; one worker for the owning package/group.
+- **Observation:** 15,023.64 ms timeout; owning file passed unchanged in 0.1 s.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-rerun-runtime-env -- bun test --cwd bridges/codex-bridge ./src/runtime-env.test.ts --parallel=1 --only-failures` (exit 0).
+- **Evidence:** `orkestrator-test-run.LitzDV/bridges.log.gz`; root group had 3051 passed, 1 skipped and 4 failed, including the separate README installer-link regression; Codex group had 2227 passed and 4 failed.
+- **Assessment:** Confirmed recurrence; no implementation, assertion, skip or timeout changed.

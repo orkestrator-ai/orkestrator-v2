@@ -409,6 +409,36 @@ describe("Claude steer journal and transcript", () => {
     await turn.finish(["surviving-steer"]);
   });
 
+  // The frame CLI 2.1.296 sends when Stop (or Escape) lands before any text
+  // streamed. Found by the live design cycle: it surfaced as a turn failure.
+  const stoppedBeforeText = {
+    subtype: "error_during_execution",
+    is_error: true,
+    errors: ["[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null"],
+    terminal_reason: "aborted_streaming",
+  };
+
+  test("a user stop before any text settles the turn as stopped, not failed", async () => {
+    queryControlOverrides.interrupt = async () => ({ still_queued: [] });
+    const turn = await startSteerTurn("Stop before text");
+    expect(await gracefulInterruptClaudeSession(turn.session.id)).toEqual({
+      interrupted: true,
+      stillQueued: [],
+    });
+    const messages = await turn.finish([turn.promptUuid], 0, stoppedBeforeText);
+    expect(turn.session.error).toBeUndefined();
+    expect(turn.session.interruptRequestedGeneration).toBeUndefined();
+    expect(messages.map((message) => message.content)).toEqual(["Write the plan"]);
+  });
+
+  test("an aborted result nobody asked to stop is still a failure", async () => {
+    const turn = await startSteerTurn("Unrequested abort");
+    turn.result([turn.promptUuid], 0, stoppedBeforeText);
+    await expect(turn.prompt).rejects.toThrow("[ede_diagnostic]");
+    expect(turn.session.status).toBe("error");
+    turn.call.finish();
+  });
+
   test("aborting with an unanswered steer closes input and publishes terminal state", async () => {
     const { events, stop } = captureEvents();
     try {

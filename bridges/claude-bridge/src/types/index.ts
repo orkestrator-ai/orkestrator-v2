@@ -201,6 +201,7 @@ export interface SdkResultMessage extends SdkMessageBase {
   ttft_ms?: number;
   errors?: string[];
   startup_failure_reason?: import("@anthropic-ai/claude-agent-sdk").SDKStartupFailureReason;
+  terminal_reason?: import("@anthropic-ai/claude-agent-sdk").TerminalReason;
   usage?: Record<string, unknown>;
   modelUsage?: Record<
     string,
@@ -784,6 +785,13 @@ export interface SessionState {
    * away from the turn the user is actually waiting on.
    */
   latestTurnGeneration?: number;
+  /**
+   * The turn generation a user stop (`POST /session/:id/abort`) asked to
+   * interrupt. The CLI reports a stop that lands before any text streamed as
+   * an aborted `error_during_execution` result; for this turn that result is
+   * the stop the user asked for, not a failure.
+   */
+  interruptRequestedGeneration?: number;
   /**
    * At-most-once journal for `/steer`. Survives a bridge restart via session
    * preferences so a retried request id cannot be pushed twice.

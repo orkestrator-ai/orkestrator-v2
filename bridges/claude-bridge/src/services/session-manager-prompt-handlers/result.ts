@@ -68,6 +68,12 @@ export function claudeStartupFailureMessage(reason: SDKStartupFailureReason): st
   }
 }
 
+/** How the CLI ends a turn that a graceful interrupt stopped. */
+const STOPPED_TERMINAL_REASONS: ReadonlySet<string> = new Set([
+  "aborted_streaming",
+  "aborted_tools",
+]);
+
 /** `result`: the end of a model turn, or of a continuation the turn was retained for. */
 export async function handleResultMessage(turn: TurnState, message: SDKMessage): Promise<void> {
   const { session, sessionId, stream } = turn;
@@ -260,6 +266,17 @@ export async function handleResultMessage(turn: TurnState, message: SDKMessage):
       );
     }
     debugLog("[session-manager] Query completed successfully", { sessionId });
+    finishTurnInputIfSettled(turn);
+  } else if (
+    !turn.options?.outputSchema &&
+    STOPPED_TERMINAL_REASONS.has(resultMsg.terminal_reason ?? "") &&
+    session.interruptRequestedGeneration === turn.turnGeneration
+  ) {
+    // The user stopped the turn before any text streamed. The CLI reports
+    // that as an aborted error result, which is the stop that was asked for:
+    // settle as a stop does once text has streamed, never as a failure.
+    session.interruptRequestedGeneration = undefined;
+    debugLog("[session-manager] Query stopped by the user", { sessionId });
     finishTurnInputIfSettled(turn);
   } else {
     console.error("[session-manager] Query error:", resultMsg.subtype, {

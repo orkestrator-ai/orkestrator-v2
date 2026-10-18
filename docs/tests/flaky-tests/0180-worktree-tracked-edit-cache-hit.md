@@ -198,3 +198,11 @@ cache-invalidation hypothesis remains unconfirmed.
 The final `mise run test:logged -- --name final-full-tests -- mise run test`
 passed all four groups (exit 0, 841.2 seconds including queue waits), with
 the owning test unchanged.
+
+## Live transcript paging qualification recurrence — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name full-test -- mise run test` on `qualify-transcript-paging-live-mr-c2fa28c0ecdd` (web transcript views and an opt-in e2e spec only), shared macOS arm64 host.
+- **Failure:** the unchanged case failed at line 139 in 185.23 ms: cache hits expected 1, received 0. Backend reported 9,016 passed, 41 skipped and two failed across 480 files (414.4 seconds); the other was the new coordinator timeout [0480](0480-coordinator-fetch-remotes-submodule-timeout.md).
+- **Isolated rerun:** `mise run test:logged -- --name git-cache-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures` passed, exit 0 (0.8 seconds logged).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.9ChzHs/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- No watcher implementation, assertion, timeout or skip changed.

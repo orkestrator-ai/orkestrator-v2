@@ -57,8 +57,8 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 25 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 252 |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 23 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 254 |
 | Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 275 |
 | **Total** | | **553** |
 
@@ -143,8 +143,8 @@ it reaches. Some rules of thumb:
 
 ### Transcripts, observation and bandwidth (high)
 
-- [ ] Qualify live history paging and reviewer Load earlier messages beyond the 100-message live window ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
-- [ ] Run a live multi-review: progress probes, reviewer windows, detail expansion, pages and scroll anchoring ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
+- [x] Qualify live history paging and reviewer Load earlier messages beyond the 100-message live window ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
+- [x] Run a live multi-review: progress probes, reviewer windows, detail expansion, pages and scroll anchoring ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [ ] Qualify Claude inactive-tab and background-task runs against content-revision tokens ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [ ] Qualify cold restart: display tails and pipeline histories reconcile, including a mid-dispatch restart ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [ ] Qualify idle observation live per provider: missed final event, approvals, sub-agents, reconnect, hidden ([native-agent-idle-observation.md](native-agent-idle-observation.md), qualification)
@@ -395,6 +395,8 @@ it reaches. Some rules of thumb:
 - [ ] Add harness workloads for activity sweep, file-tree cache, reviewer/progress probes and checkpoints ([transcript-history-efficiency.md](transcript-history-efficiency.md))
 - [ ] Add heap/RSS and event-loop-lag reporting to the efficiency harness ([transcript-history-efficiency.md](transcript-history-efficiency.md))
 - [ ] Decide whether to keep, cache or remove the joined sync-v1 history fallback and pre-`/transcript` reads ([transcript-history-efficiency.md](transcript-history-efficiency.md))
+- [ ] Give Codex a per-response row boundary; tool-only responses share one row (130 reads in 16 rows live) ([transcript-history-efficiency.md](transcript-history-efficiency.md))
+- [ ] Re-run the Claude native live paging case with the held-place fixes (tall coalesced blocks; blocked by a 429 on 2026-10-18) ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [ ] Qualify a live Grok/ACP session through the v2 transcript summary, detail and page routes ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [ ] Run Cursor past producer trim thresholds while inactive; check window, sub-agents and controls ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
 - [ ] Qualify transcript efficiency in Electron and Docker environments with real providers ([transcript-history-efficiency.md](transcript-history-efficiency.md), qualification)
@@ -898,7 +900,7 @@ it reaches. Some rules of thumb:
 | [provider-sdk-adoption-backlog.md](provider-sdk-adoption-backlog.md) |  |  | 2 | 15 | 17 |
 | [session-lifecycle-consistency.md](session-lifecycle-consistency.md) |  |  | 7 | 7 | 14 |
 | **Transcripts, observation and bandwidth** | | | | | |
-| [transcript-history-efficiency.md](transcript-history-efficiency.md) |  | 4 | 11 | 5 | 20 |
+| [transcript-history-efficiency.md](transcript-history-efficiency.md) |  | 2 | 13 | 5 | 20 |
 | [remote-client-bandwidth.md](remote-client-bandwidth.md) |  |  | 4 | 9 | 13 |
 | [native-agent-idle-observation.md](native-agent-idle-observation.md) |  | 1 | 3 | 2 | 6 |
 | [client-reconnect-and-freshness.md](client-reconnect-and-freshness.md) |  |  | 6 | 2 | 8 |

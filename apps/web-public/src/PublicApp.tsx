@@ -1,7 +1,7 @@
 import { type FormEvent, lazy, Suspense, useEffect, useRef, useState } from "react";
 import { ArrowRight, Eye, EyeOff, Loader2, LockKeyhole, Network, RadioTower } from "lucide-react";
 import { installBrowserGatewayApi } from "@/lib/native/web-gateway";
-import orkLogo from "../../../logos/ork-logo.png";
+import orkLogo from "../../../logos/ork-logo2.png";
 import {
   checkBackendConnection,
   forgetConnection,
@@ -148,12 +148,14 @@ export function PublicApp() {
   return (
     <main className="connect-page">
       <section className="connect-story" aria-labelledby="connect-title">
-        <header className="connect-brand">
-          <img src={orkLogo} alt="" />
-          <div>
-            <strong>Orkestrator</strong>
-            <span>Public client</span>
-          </div>
+        <header>
+          <a className="connect-brand" href="/" aria-label="Orkestrator home">
+            <img src={orkLogo} alt="" />
+            <div>
+              <strong>Orkestrator</strong>
+              <span>Public client</span>
+            </div>
+          </a>
         </header>
 
         <div className="connect-copy">

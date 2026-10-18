@@ -188,15 +188,15 @@ mise run package:linux    # Unpacked Linux app under XDG_DATA_HOME
 
 Published desktop releases and the in-app updater are described in [`docs/development/releasing.md`](docs/development/releasing.md). Container images are published to `ghcr.io/orkestrator-ai/orkestrator-v2`.
 
-To install Bun when needed and start a standalone backend without cloning the repository:
+Open [`orkestrator.dev`](https://www.orkestrator.dev) and select **Log in**, or connect directly at [`orkestrator.dev/connect`](https://www.orkestrator.dev/connect).
+
+To install Bun if needed and start the published backend without cloning the repository:
 
 ```bash
 curl -fsSL https://orkestrator.dev/install.sh | \
   bash -s -- --tailscale-serve \
   --allowed-origins https://orkestrator.dev,https://www.orkestrator.dev
 ```
-
-The hosted [`orkestrator.dev`](https://www.orkestrator.dev) client connects directly to your backend.
 
 Remote browser access (Tailscale, `mise run start:web`, `mise run start:web-public`) is documented in [`docs/architecture/remote-gateway.md`](docs/architecture/remote-gateway.md). The gateway binds Tailscale addresses by default and requires a token.
 

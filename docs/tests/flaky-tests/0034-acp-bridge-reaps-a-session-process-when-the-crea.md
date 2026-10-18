@@ -1,7 +1,7 @@
 # `ACP bridge > reaps a session process when the creating HTTP client disconnects` (`bridges/acp-bridge/src/acp-http.test.ts`)
 
 - **ID:** 0034
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-08-25
 - **Original command:** `bun run test` (complete concurrent cross-platform
   suite).
@@ -55,3 +55,13 @@
   wait that expired is the one for the fake agent's `start:` line, which comes
   *before* the client disconnects, so the disconnect-detection change is not
   on the failing path.
+
+
+## Main merge recurrence — 2026-10-18
+
+- **Command:** `mise run test:logged -- --name merge-15f6cd-acp-rerun -- bun run --cwd bridges/acp-bridge test:bridge` after the full suite's ACP package stalled. Package used one isolated Bun worker.
+- **Failure:** `Timed out waiting for ACP state: ""` after 6208.18 ms. ACP reported 622 passed, 3 skipped and 2 failed across 627 tests in 328.01 seconds.
+- **Other failure:** the generalization hook timeout recorded in 0219.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-15f6cd-acp-owners -- bun test --cwd bridges/acp-bridge ./src/acp-http.test.ts ./src/acp-generalization.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 6.6 seconds.
+- **Evidence:** `orkestrator-test-run.KPQz1y/merge-15f6cd-acp-rerun.log.gz` below the host temporary directory.
+- **Disposition:** reopened as an intermittent recurrence; no source, assertion, timeout or skip changed. The older Happy DOM diagnosis is retained as history, not asserted for this observation.

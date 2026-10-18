@@ -818,6 +818,8 @@ export function buildConcurrentGroups(
         "./e2e/agent-testing/artifact-sanitizer.test.ts",
         "./e2e/agent-testing/design-live-usage.test.ts",
         "./e2e/agent-testing/design-live-heartbeat.test.ts",
+        "./e2e/agent-testing/mcp-apply-live-support.test.ts",
+        "./e2e/agent-testing/mcp-apply-live-safety.test.ts",
         "./scripts/opencode-live-compatibility-probe.test.ts",
         "./test-fixtures/agent-project/server.test.ts",
         "--only-failures",

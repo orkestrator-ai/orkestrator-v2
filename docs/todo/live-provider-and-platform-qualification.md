@@ -92,17 +92,22 @@ evidence. This file only points at it.
    button and intercepts browser-spec clicks; `slash-command-inactive.spec.ts`
    dismisses it with a locator handler. Pass the workspace package version in
    development, or skip the reminder for agent-test profiles.
-4. **Stop pressing Escape in live specs' environment navigation.** With
-   nothing focused, Escape stops the active tab's running turn
-   (`useEscapeToStop`). That was flake
-   [0273](../tests/flaky-tests/0273-claude-live-slash-provider-result.md), found
-   by the live design cycle on 2026-10-18; `slash-command-inactive.spec.ts` and
-   `design-live.spec.ts` are fixed. `opencode-live.spec.ts`,
-   `close-retention-live.spec.ts` and `container-approval-stop.spec.ts` still
-   press Escape in their `openEnvironment` helpers. OpenCode's native-tab case
-   switches environment while its turn runs, so it can stop its own turn and
-   report a provider failure. Move the pointer away instead, as the fixed specs
-   do.
+
+4. **MCP editor writes reach host provider homes from an agent-test
+   profile.** Authorizing the Codex or OpenCode credential source points the
+   backend's `CODEX_HOME` and XDG directories at the host's real ones
+   (`createBackendProcessEnvironment` in
+   `apps/desktop/electron/backend-process.ts`), so a backend-user MCP save in
+   such a profile edits the host's own `~/.codex/config.toml` or
+   `~/.config/opencode/opencode.json(c)`, and a Codex project-trust grant
+   would too. The live MCP apply record
+   ([mcp-management.md](mcp-management.md#live-apply-record-2026-10-18))
+   avoided it by leaving both sources unauthorized and seeding an access-only
+   Codex token and the OpenCode API key into the profile by hand. Give
+   those providers an isolated home with a credential snapshot (as Grok and
+   Cursor already have), or make the MCP editor refuse host-home sources in
+   an agent-test profile. A Codex snapshot must not carry a refresh token the
+   copy could rotate.
 
 ### Qualification: checks with no other home
 

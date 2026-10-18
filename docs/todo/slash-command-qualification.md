@@ -170,7 +170,7 @@ The spec checks the following:
 - A selected command sent just before switching to another environment
   completes while inactive and runs once. That happens through an inventory
   change (one command added, one removed), a 10 s browser outage
-  (`context.setOffline`) that forces stream reconciliation, and a catalogue
+  (`context.setOffline`), and a catalogue
   refresh.
 - On return: the reply, the new and removed rows in the picker, and the
   composer controls (no Stop).
@@ -196,6 +196,11 @@ on OpenCode, Grok or Pi (the spec supports Codex and Claude). Whether a refresh
 keeps an idle session attached was checked by hand only: Claude (no CLI left
 under the bridge, list stays `missing` until a refresh) and Grok (list stays
 `stale`, so no `session/load`).
+
+Correction (2026-10-18): `context.setOffline` does not drop an open event
+stream (found while qualifying MCP apply, see
+[mcp-management.md](mcp-management.md)), so this outage never forced stream
+reconciliation; it only failed the requests made during it. Follow-up 2 below.
 
 ### Review follow-up (2026-10-17)
 
@@ -396,6 +401,10 @@ passed.
    can only report the lost outcome. Answer that case from
    `restoredDispatchedRequestIds` so the backend can resolve the card and
    show the message on its own.
+2. **Make the inactive scenario's outage drop the stream.** Cut the event
+   stream as `mcp-apply-inactive.spec.ts` does (`window.stop()` while
+   offline) so the reconnect and replay path is actually exercised, and
+   assert that the page reconnected.
 
 ## Constraints and rationale
 

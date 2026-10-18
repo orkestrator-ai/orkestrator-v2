@@ -59,3 +59,12 @@
 - **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.MTrBXO/bridges.log.gz`.
 - **Disposition:** confirms an intermittent recurrence; the existing fixture
   contention hypothesis remains unconfirmed. No assertion, timeout or skip changed.
+
+
+## Main merge recurrence — 2026-10-18
+
+- **Command:** `mise run test:logged -- --name merge-15f6cd-acp-rerun -- bun run --cwd bridges/acp-bridge test:bridge`, one isolated Bun worker.
+- **Failure:** the same hook exceeded 60004.23 ms; ACP reported 622 passed, 3 skipped and 2 failed across 627 tests.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-15f6cd-acp-owners -- bun test --cwd bridges/acp-bridge ./src/acp-http.test.ts ./src/acp-generalization.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 6.6 seconds.
+- **Evidence:** `orkestrator-test-run.KPQz1y/merge-15f6cd-acp-rerun.log.gz` below the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence; no timeout, assertion or skip changed.

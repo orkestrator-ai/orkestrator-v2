@@ -37,3 +37,7 @@ code was unchanged.
 - **Hypothesis:** consistent with the existing concurrent-load timeout; the
   isolated pass does not identify which operation consumed the budget. No
   timeout, assertion or skip changed.
+
+## Design live-cycle second main merge — 2026-10-18
+
+The GNU-tool PATH `mise run test:logged -- --name merge-full -- mise run test` (workspace/root/bridges/protocol reservations 4/1/2/1, alongside browser validation) timed out `driven native observation baseline (step 07) > is deterministic, content-free, and sharing drops reads without losing edges` at 5056.63 ms. The unchanged owning file passed `mise run test:logged -- --name merge-unit-owner-recurring-baseline -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/recurring-baseline.test.ts --parallel=1 --only-failures`, exit 0, in 14.6 seconds logged. Aggregate evidence: `orkestrator-test-run.yluX61/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. Confirmed intermittent recurrence; no implementation, assertion, timeout or skip changed.

@@ -148,6 +148,23 @@ describe("AgentAccountsSection", () => {
     view.rerender(<AgentAccountsSection platform="claude" reloadToken={1} />);
     expect(calls.filter((call) => call.command === "get_agent_account_usage")).toHaveLength(2);
   });
+  test("both active and inactive rows retain stale quotas with their timestamp and failure", async () => {
+    usageResult = {
+      ...usage,
+      stale: true,
+      fetchedAt: new Date(Date.now() - 3_600_000).toISOString(),
+      message: "Sign-in expired. Switch to this account to refresh usage.",
+    };
+    await mount();
+    for (const name of ["Host login", "second@example.com"]) {
+      const row = await screen.findByRole("listitem", { name });
+      expect(await within(row).findByText("40% used")).toBeTruthy();
+      expect(
+        within(row).getByText(/Last known usage, as of 1h ago\. Sign-in expired/),
+      ).toBeTruthy();
+    }
+  });
+
   test("lists only this platform's accounts with their identity and usage", async () => {
     await mount();
     const host = await screen.findByRole("listitem", { name: "Host login" });

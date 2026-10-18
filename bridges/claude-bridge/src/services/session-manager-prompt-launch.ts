@@ -24,6 +24,11 @@ import {
   recordMcpConfigRevision,
 } from "./session-manager-prompt-query.js";
 import { createClaudeRuntimeTurn } from "./session-manager-prompt-runtime-turn.js";
+import {
+  claudeProcessKilledMessage,
+  killedClaudeProcessSignal,
+  syncTurnInFlightMark,
+} from "./session-manager-turn-interruption.js";
 import type { PromptTestHooks, TurnState } from "./session-manager-prompt-turn.js";
 import {
   disarmClaudeRuntimeIdleDetach,
@@ -104,6 +109,10 @@ function endClaudeRuntime(
   // Nothing reads the held prompt any more; release it.
   runtime.input.close();
   const { session, control } = runtime;
+  const killedBy =
+    session.claudeRuntime === runtime && !runtime.abortController.signal.aborted
+      ? killedClaudeProcessSignal(failure?.error)
+      : undefined;
   if (session.claudeRuntime === runtime) session.claudeRuntime = undefined;
   // The latest turn's prompt can have settled already and the turn still hold
   // the foreground: the CLI resumed its root loop on its own. Nothing else is
@@ -112,6 +121,28 @@ function endClaudeRuntime(
     !runtime.waitingTurns.has(runtime.latestTurn) &&
     session.queryControl === control &&
     session.status === "running";
+  // Released turns and spontaneous root loops no longer have a sendPrompt
+  // catch that owns the foreground. Classify their death before task cleanup
+  // and runtimeEnded remove the evidence that a continuation was owed.
+  const interruptedOutsidePrompt =
+    killedBy &&
+    (orphanedForeground || session.abortController === undefined) &&
+    (session.status === "running" ||
+      (session.retainedContinuationRequestIds?.size ?? 0) > 0 ||
+      claudeRuntimeOwesWork(runtime));
+  if (interruptedOutsidePrompt) {
+    session.status = "error";
+    session.error = claudeProcessKilledMessage(killedBy);
+    session.interruption = "restart";
+    session.turnStartedAt = undefined;
+    session.abortController = undefined;
+    session.completionBlockedByBackgroundTasks = false;
+    eventEmitter.emit({
+      type: "session.error",
+      sessionId: session.id,
+      data: { error: session.error },
+    });
+  }
   removeBackgroundTaskCandidatesOwnedBy(session, control);
   // The handle is dead, so no edge can still arrive to claim these.
   forgetSettlingBackgroundTasksOwnedBy(session, control);
@@ -136,7 +167,10 @@ function endClaudeRuntime(
   for (const turn of turns) {
     turn.runtimeEnded(turn === failedTurn && failure ? { error: failure.error } : undefined);
   }
-  if (orphanedForeground) releaseOrphanedForeground(runtime, failure?.error);
+  if (orphanedForeground && !interruptedOutsidePrompt)
+    releaseOrphanedForeground(runtime, failure?.error);
+  // Nothing this process ran can still be owed once it has ended.
+  syncTurnInFlightMark(session);
 }
 
 /** Hand back a foreground no waiting prompt can settle; see `endClaudeRuntime`. */
@@ -317,6 +351,8 @@ function markQueryStarted(turn: TurnState, testHooks: PromptTestHooks | undefine
   );
   session.finishTurnInputIfSettled = turn.finishTurnInputForThisTurn;
   turn.queryStarted = true;
+  // From here a restart cuts the turn short rather than losing it unsent.
+  syncTurnInFlightMark(session, { started: true });
   testHooks?.onQueryStarted?.();
   // One control read per turn, off the message path, so the inventory a
   // selected command is validated against is the session's own.

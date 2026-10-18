@@ -2,7 +2,11 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { NativeAsyncQuestionPart } from "@/lib/chat/native-message-types";
 import { AsyncQuestionResponseContext } from "./NativeMessage.shared";
-import { NativeAsyncQuestionCard, serializeAsyncQuestionAnswers } from "./NativeAsyncQuestionCard";
+import {
+  asyncQuestionContentRepeatsQuestions,
+  NativeAsyncQuestionCard,
+  serializeAsyncQuestionAnswers,
+} from "./NativeAsyncQuestionCard";
 import { usePromptDraftStore } from "@/stores/promptDraftStore";
 
 afterEach(() => {
@@ -55,14 +59,42 @@ describe("NativeAsyncQuestionCard", () => {
     expect(screen.getByRole("group", { name: "Any constraints?" })).toBeTruthy();
   });
 
-  test("renders accompanying text that combines multiple question titles", () => {
+  test("suppresses Codex's plain-text fallback of the question and its options", () => {
+    render(
+      <AsyncQuestionResponseContext.Provider value={{ responses: [] }}>
+        <NativeAsyncQuestionCard
+          part={{ ...part, content: "Which target?\n- Staging\n- Production\n\nAny constraints?" }}
+        />
+      </AsyncQuestionResponseContext.Provider>,
+    );
+
+    expect(screen.getAllByText("Which target?")).toHaveLength(1);
+    expect(screen.getAllByText("Staging")).toHaveLength(1);
+    expect(screen.getAllByText("Any constraints?")).toHaveLength(1);
+  });
+
+  test("suppresses accompanying text that only combines question titles", () => {
     render(
       <AsyncQuestionResponseContext.Provider value={{ responses: [] }}>
         <NativeAsyncQuestionCard part={{ ...part, content: "Which target? Any constraints?" }} />
       </AsyncQuestionResponseContext.Provider>,
     );
 
-    expect(screen.getByText("Which target? Any constraints?")).toBeTruthy();
+    expect(screen.queryByText("Which target? Any constraints?") === null).toBe(true);
+  });
+
+  test("renders a restated question that adds context after its options", () => {
+    const content = "Which target?\n- Staging\n- Production\n\nStaging is currently broken.";
+    expect(asyncQuestionContentRepeatsQuestions(content, part.asyncQuestion.questions)).toBe(false);
+  });
+
+  test("does not treat a partial option match as a restatement", () => {
+    expect(
+      asyncQuestionContentRepeatsQuestions(
+        "Which target?\n- Staging2",
+        part.asyncQuestion.questions,
+      ),
+    ).toBe(false);
   });
 
   test("renders accompanying text that starts with a question title and adds context", () => {

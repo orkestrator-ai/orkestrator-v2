@@ -398,11 +398,23 @@ credentialed `live-session` scenario (`ORKESTRATOR_SCENARIO_MODEL` pins a
 model). Fixture origins sit at `<scenario root>/fixtures/origin.git`, the one
 remote the agent-test runtime mounts into containers. Container live runs for
 providers other than Claude use `--network full`, because the default
-restricted allowlist reaches only Anthropic's API. Codex in a container also
-needs the explicit `CODEX_HOME` credential opt-in (for example
-`CODEX_HOME=$HOME/.codex`): the agent-test runtime stages a Codex home into
-containers only from that variable. Live runs use host credentials
-(`--credential-source`) and cost real tokens; keep them opt-in. The published
+restricted allowlist reaches only Anthropic's API. Every isolated backend
+gets disposable provider homes under its scenario root (`CLAUDE_CONFIG_DIR`,
+`CODEX_HOME` and the three `XDG_*` homes; `isolateProviderHomes` in
+`packages/cli/scenarios/harness.ts`), so agents never write sessions, history
+or settings into the operator's own `~/.claude`, `~/.codex` or OpenCode
+directories. A live run copies in only its provider's one credential file
+(Codex `auth.json`, OpenCode `opencode/auth.json`, mode 0600); Claude's login
+is read from the host Keychain or `~/.claude/.credentials.json` through
+`ORKESTRATOR_AGENT_TEST_HOST_HOME` and handed to the bridge as a token. The
+same disposable `CODEX_HOME` is what the agent-test runtime stages into a
+container, so Codex in a container needs no extra opt-in. A backend never
+passes on an agent tool connection it inherited (`ORKESTRATOR_AGENT_MCP_URL`
+and `_TOKEN`, dropped at startup by `dropInheritedAgentToolConnection`): one
+started from inside an agent session would otherwise let its own agents act
+as the parent tab. The harness starts every backend with a decoy connection
+and the `exec` scenario checks a command cannot see it. Live runs use host
+credentials (`--credential-source`) and cost real tokens; keep them opt-in. The published
 package ships only the Claude and Codex bridges (OpenCode runs its own server),
 and the runner cannot target an existing profile, so Pi, Cursor and Grok cannot
 run `live-session` yet (see [cli-qualification.md](../todo/cli-qualification.md)).

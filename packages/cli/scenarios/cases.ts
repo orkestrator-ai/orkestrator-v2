@@ -485,6 +485,24 @@ export const SCENARIOS: ScenarioDefinition[] = [
       const operationId = receiptOf(passthrough).operationId;
       const out = await context.cli.ok<{ text: string }>(["run", "output", operationId], "output");
       expectThat(out.result.text === "a b;$(x)", "argv was not preserved");
+      // The harness starts the backend with a decoy parent agent connection
+      // (`INHERITED_AGENT_TOOL_ENV`); a command it runs must never see it.
+      const inherited = await context.cli.run(
+        [
+          "--json",
+          "environment",
+          "exec",
+          environment.id,
+          "--wait",
+          "--exit-code",
+          "--",
+          "sh",
+          "-c",
+          'test -z "${ORKESTRATOR_AGENT_MCP_URL+x}${ORKESTRATOR_AGENT_MCP_TOKEN+x}"',
+        ],
+        { stage: "exec inherited agent connection" },
+      );
+      expectThat(inherited.code === 0, "a command inherited the parent agent tool connection");
       const sleeper = await context.cli.ok(
         ["environment", "exec", environment.id, "--", "sleep", "60"],
         "exec sleep",

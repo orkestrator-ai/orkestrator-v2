@@ -82,15 +82,114 @@ export interface IsolatedBackend {
   stop(): Promise<number | null>;
 }
 
+/**
+ * The single host file each live provider needs, relative to its home. Claude
+ * needs none: the backend reads its login from the host Keychain or
+ * `~/.claude/.credentials.json` (via `ORKESTRATOR_AGENT_TEST_HOST_HOME`) and
+ * hands the bridge only the access token.
+ */
+const PROVIDER_CREDENTIAL_FILES: Record<
+  string,
+  {
+    home: "codex" | "xdg-data";
+    relative: string;
+    hostPath(env: NodeJS.ProcessEnv, home: string): string;
+  }
+> = {
+  codex: {
+    home: "codex",
+    relative: "auth.json",
+    hostPath: (env, home) =>
+      path.join(env.CODEX_HOME?.trim() || path.join(home, ".codex"), "auth.json"),
+  },
+  opencode: {
+    home: "xdg-data",
+    relative: path.join("opencode", "auth.json"),
+    hostPath: (env, home) =>
+      path.join(
+        env.XDG_DATA_HOME?.trim() || path.join(home, ".local", "share"),
+        "opencode",
+        "auth.json",
+      ),
+  },
+};
+
+/**
+ * Give an isolated backend disposable provider homes, so agents it runs never
+ * write sessions, history, logs or settings into the host's `~/.claude`,
+ * `~/.codex` or OpenCode directories. For a live run, copy in only the one
+ * credential file `credentialSource` needs (mode 0600); nothing else from the
+ * host home is exposed. `HOME` itself is left alone: Docker, Git and the
+ * toolchain still resolve as they do for the operator.
+ */
+export async function isolateProviderHomes(options: {
+  root: string;
+  credentialSource?: string;
+  hostEnv?: NodeJS.ProcessEnv;
+  hostHome?: string;
+}): Promise<Record<string, string>> {
+  const hostEnv = options.hostEnv ?? process.env;
+  const hostHome = options.hostHome ?? os.homedir();
+  const base = path.join(options.root, "provider-homes");
+  const homes = {
+    claude: path.join(base, "claude"),
+    codex: path.join(base, "codex"),
+    "xdg-config": path.join(base, "xdg-config"),
+    "xdg-data": path.join(base, "xdg-data"),
+    "xdg-state": path.join(base, "xdg-state"),
+  };
+  for (const directory of Object.values(homes)) {
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+  }
+  const credential = options.credentialSource
+    ? PROVIDER_CREDENTIAL_FILES[options.credentialSource]
+    : undefined;
+  if (credential) {
+    const target = path.join(homes[credential.home], credential.relative);
+    await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+    // A missing host login is left for the live run to report truthfully.
+    const contents = await readFile(credential.hostPath(hostEnv, hostHome)).catch(() => undefined);
+    if (contents) await writeFile(target, contents, { mode: 0o600 });
+  }
+  return {
+    CLAUDE_CONFIG_DIR: homes.claude,
+    CODEX_HOME: homes.codex,
+    XDG_CONFIG_HOME: homes["xdg-config"],
+    XDG_DATA_HOME: homes["xdg-data"],
+    XDG_STATE_HOME: homes["xdg-state"],
+    ORKESTRATOR_AGENT_TEST_HOST_HOME: hostHome,
+  };
+}
+
+/**
+ * A parent agent's tool connection, as a backend started from inside an agent
+ * session inherits it. Every isolated backend gets this decoy (replacing any
+ * real one), and the `exec` scenario checks that nothing it runs can see it.
+ */
+export const INHERITED_AGENT_TOOL_ENV = {
+  ORKESTRATOR_AGENT_MCP_URL: "http://127.0.0.1:9/mcp",
+  ORKESTRATOR_AGENT_MCP_TOKEN: "scenario-inherited-decoy",
+} as const;
+
 /** Start an isolated backend through the packaged launcher (`serve`). */
 export async function startIsolatedBackend(options: {
   root: string;
   env?: Record<string, string>;
   extraArgs?: string[];
+  /** The live provider whose host login is copied in (see `isolateProviderHomes`). */
+  credentialSource?: string;
 }): Promise<IsolatedBackend> {
   const dataDir = path.join(options.root, "data");
   const worktreeDir = path.join(options.root, "worktrees");
   await mkdir(dataDir, { recursive: true, mode: 0o700 });
+  const providerHomes = await isolateProviderHomes({
+    root: options.root,
+    ...(options.credentialSource ? { credentialSource: options.credentialSource } : {}),
+  });
+  const inherited = { ...process.env };
+  // A host override would point the Claude bridge back at the host's
+  // `~/.claude`; the disposable `CLAUDE_CONFIG_DIR` above replaces it.
+  delete inherited.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR;
   const logFile = path.join(options.root, "backend.log");
   const child = Bun.spawn(
     [
@@ -115,7 +214,9 @@ export async function startIsolatedBackend(options: {
       stdout: "pipe",
       stderr: Bun.file(logFile),
       env: {
-        ...process.env,
+        ...inherited,
+        ...providerHomes,
+        ...INHERITED_AGENT_TOOL_ENV,
         // The control MCP listens on a fixed default port shared with any
         // desktop on this machine; an isolated backend never needs it.
         ORKESTRATOR_CONTROL_MCP_DISABLED: "1",

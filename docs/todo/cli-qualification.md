@@ -1,13 +1,14 @@
 # CLI qualification
 
-Checked against `main` at `2459b05c` (2026-10-15).
+Checked against `main` at `a5d338c1` (2026-10-18).
 
 Most shipped CLI behaviour has evidence at every layer: unit and contract
 tests, real-backend tests, packaged scenarios on Linux (local and container),
 live Claude, Codex and OpenCode runs, and a real browser. What is missing is
-request-specific completion for Pi, Cursor and Grok, every macOS and Docker
-Desktop run, and a re-run since the storage, provider and SDK changes of
-October. Until Pi, Cursor and Grok are qualified, scripts on those providers
+request-specific completion for Pi, Cursor and Grok, the macOS packaging and
+profile checks, and other-provider browser cards. The credential-free,
+container and live Claude, Codex and OpenCode matrices were re-run at
+`a5d338c1` on macOS with Docker Desktop and passed (see "Evidence log"). Until Pi, Cursor and Grok are qualified, scripts on those providers
 cannot use `run wait` as a success signal.
 
 ## Current state
@@ -35,10 +36,21 @@ cannot use `run wait` as a success signal.
 - `e2e/agent-testing/cli-ui.spec.ts` checks CLI-made changes in an open and a
   reloaded renderer. Its live question test is gated on
   `ORKESTRATOR_AGENT_TEST_LIVE_CLI=1` and a Claude profile.
-- The only recorded run is the Linux run of 2026-09-26 (see "Evidence log").
-  Since then the following have landed: SQLite storage (#969), native-agent
-  provider and transcript unification (#970, #971), the Claude bridge
-  `sendPrompt` split (#984), and agent SDK upgrades (#935, #964).
+- Recorded runs: Linux on 2026-09-26 and macOS with Docker Desktop on
+  2026-10-18, the second after SQLite storage (#969), native-agent provider and
+  transcript unification (#970, #971), the Claude bridge `sendPrompt` split
+  (#984) and agent SDK upgrades (#935, #964). See "Evidence log".
+- Every isolated scenario backend runs with disposable provider homes
+  (`isolateProviderHomes` in `packages/cli/scenarios/harness.ts`). Before
+  2026-10-18 the harness inherited the operator's `HOME` and provider
+  variables, so live runs wrote sessions into the host's `~/.claude`,
+  `~/.codex` and OpenCode directories. It covers Claude, Codex and OpenCode
+  only; Pi, Cursor and Grok need the same when they become runnable.
+- Each isolated backend also starts with a decoy parent agent tool connection
+  (`INHERITED_AGENT_TOOL_ENV`), and the `exec` scenario asserts a command
+  cannot see it. The backend drops any inherited `ORKESTRATOR_AGENT_MCP_URL`
+  and `ORKESTRATOR_AGENT_MCP_TOKEN` at startup
+  (`dropInheritedAgentToolConnection`, `apps/backend/src/main.ts`).
 
 ## Outstanding work
 
@@ -48,7 +60,31 @@ cannot use `run wait` as a success signal.
    and the harness target an already running full `dev:test` profile for
    `live-session`, or bundle the Pi, ACP and Cursor bridges into the package.
    When a provider passes, flip its `PROVIDER_COMPLETION` entry and update the
-   matrix in `public-cli.md`.
+   matrix in `public-cli.md`. Extend `isolateProviderHomes` with each
+   provider's one credential file (Pi `auth.json`, Grok, Cursor) so their live
+   runs stay out of the host homes too.
+2. **Record the resolved model per live run.** The run manifest holds IDs,
+   stages and exit codes only. An unpinned OpenCode run therefore leaves no
+   record of the model it used (2026-10-18), so the evidence log cannot pin
+   it. Add the session's resolved provider model to the manifest entry for
+   `session start`.
+3. **Settle a local exec whose launcher failed before the worker existed.**
+   On 2026-10-18 the exec control's `bun` failed to start (a mise shim, now
+   avoided by `resolveBunBinary`) and the operation stayed `running` with
+   `execution.state: pending` and the launcher's error as its reason, with no
+   `exec-runs/<operation>` directory. `environment exec --wait` then waited out
+   the caller's whole budget (10 minutes in the scenario). The control's "never
+   start a second worker" rule is right, but a missing run directory after the
+   control exited is evidence the worker never started; settle that as
+   failed rather than pending.
+4. **Do not let `session start --wait` fail on a slow admission.** Under
+   load (three live container runs at once, load average about 38) a container
+   OpenCode `session.start` was not answered within the CLI's 60 s
+   `DEFAULT_REQUEST_TIMEOUT_MS`, and `--wait` exited 4 `transport-uncertain`
+   (flake [0440](../tests/flaky-tests/0440-cli-live-opencode-container-start-transport-timeout.md)).
+   That is truthful, but a waiting command already holds the request key: it
+   could reconcile with `run get --request-id` and keep waiting, or admission
+   could answer before the provider server is ready.
 
 ### Qualification
 
@@ -56,23 +92,18 @@ cannot use `run wait` as a success signal.
    run needs the file assertion plus a follow-up turn. Look specifically for
    OpenCode-style false success: an idle status after a failed turn, or idle
    just after the prompt is accepted and before any answer exists.
-2. **macOS.**
+2. **macOS.** The credential-free matrix and the container matrix on Docker
+   Desktop (including the `exec` scenario) passed on 2026-10-18. Still open:
    - Packed install: `mise run smoke:cli`.
    - The config directory `~/Library/Application Support/orkestrator-cli` and
      its permission checks.
    - `--profile` discovery against a `dev:test` profile.
-   - The credential-free matrix.
-   - The container matrix on Docker Desktop (`--environment-type container`),
-     including exec descendant cleanup.
 3. **Browser.** Question and approval cards for a CLI-started run on providers
    other than Claude. `cli-ui.spec.ts` checks only Claude live.
 4. **Foreign-owner Docker decoy through the CLI.** Add a scenario (or extend
    `wrong-profile`) where a container labelled for another profile exists, and
    assert the command neither falls back nor mutates it.
-5. **Re-run at current `main` and current pins.** Credential-free and container
-   matrices, plus live Claude, Codex and OpenCode, local and container. Record
-   the results in "Evidence log".
-6. **Optional measurement.** Scenario start-up time, time to failure evidence,
+5. **Optional measurement.** Scenario start-up time, time to failure evidence,
    flake rate, cleanup failures and token cost, before claiming the CLI makes
    testing faster. It does not shorten `mise run test`.
 
@@ -87,15 +118,25 @@ credential setup is in
   restricted allowlist reaches only Anthropic's API. The `live-session` case
   adds it itself for non-Claude providers; any new live container scenario
   must do the same.
-- Codex in a container also needs the explicit `CODEX_HOME` credential opt-in
-  (for example `CODEX_HOME=$HOME/.codex`). In an agent-test runtime,
-  `portableInputSpec` (`apps/backend/src/core/portable-inputs.ts`) stages a
-  Codex home into containers only from `CODEX_HOME`. On 2026-09-26, runs
-  without it or without `--network full` stayed running to their deadline or
-  failed with 401, and both were reported truthfully.
+- Codex needs no `CODEX_HOME` opt-in any more: the harness gives every
+  backend a disposable `CODEX_HOME` holding a copy of the host `auth.json`, and
+  `portableInputSpec` (`apps/backend/src/core/portable-inputs.ts`) stages that
+  into containers. The copy is a fork of a ChatGPT OAuth login: if Codex
+  refreshes it during a run (it does so eight days after `last_refresh`, or on
+  a 401), the host's refresh token may be rotated away and the host CLI asked
+  to sign in again. Run Codex while the host login is fresh. On 2026-09-26,
+  container runs without credentials or without `--network full` stayed
+  running to their deadline or failed with 401, and both were reported
+  truthfully.
 - Pin the model with `ORKESTRATOR_SCENARIO_MODEL`. Codex's default model was
-  unsupported on the test account. The case validates the pinned model against
-  a refreshed catalogue (`agent options --refresh`) before using it.
+  unsupported on the test account, and the disposable Codex home carries no
+  `config.toml`, so the host's configured model is not inherited. The case
+  validates the pinned model against a refreshed catalogue (`agent options
+  --refresh`) before using it.
+- The packaged `serve` has no managed toolchain, so local live runs resolve
+  `claude`, `codex` and `opencode` from `PATH`. If `opencode` is not on it,
+  prefix the pinned managed copy for the run (on macOS,
+  `PATH="$HOME/Library/Application Support/orkestrator-v2/toolchains/bin/current:$PATH"`).
 - Live runs use host credentials (`--credential-source`) and cost real tokens.
 
 ### Evidence log
@@ -104,6 +145,60 @@ Record each run with its date, commit, platform and versions, provider pins,
 command, result and limitations. Run artifacts are
 `output/cli-scenarios/<run>/manifest.json` (git-ignored; IDs, stages and exit
 codes only).
+
+- **2026-10-18, macOS.** `main` at `a5d338c1` plus this branch's fixes.
+  macOS 27.0 (Darwin 27.0.0, arm64), Bun 1.4.3, Docker Desktop with Engine
+  29.8.1, image `orkestrator-v2:dev-e15f47e54b3f` (`mise run
+  docker:build:dev`). Pins: `@anthropic-ai/claude-agent-sdk` 0.3.296, Claude
+  CLI 2.1.296 (image), Codex 0.162.1 (`config/codex-version.json`), OpenCode
+  1.19.0 (`@opencode-ai/sdk`, image and managed binary). Load average 9 to 14
+  for the first pass; the host then rebooted and the final pass ran at 12 to
+  38.
+  - Final pass, with every fix on this branch:
+    - Credential-free, local (`mise run test:cli:scenarios`): 7/7 pass, no
+      cleanup errors.
+    - Credential-free, container (`--environment-type container --docker-image
+      orkestrator-v2:dev-e15f47e54b3f`): 5/5 pass (`read-only`,
+      `local-lifecycle`, `retry-and-retention`, `exec`, `wrong-profile`), no
+      containers left.
+    - Live `live-session`, local: Claude pass (31.5 s, default model), Codex
+      pass (45.7 s, `ORKESTRATOR_SCENARIO_MODEL=gpt-6-sol`), OpenCode pass
+      (43.7 s, default model, not recorded; see Code item 2; managed
+      `opencode` prefixed on `PATH`, see the prerequisites).
+    - Live `live-session`, container: Claude pass (60.0 s, restricted
+      allowlist), Codex pass (80.5 s, `gpt-6-sol`, `--network full`, no
+      `CODEX_HOME` opt-in), OpenCode pass alone (98.5 s, `--network full`).
+      Run concurrently with the other two, OpenCode failed once with
+      `transport-uncertain` (flake 0440, Code item 4). No containers left.
+  - First pass, before the reboot, with only the provider-home fix: the same
+    matrices all passed (credential-free 7/7 and 5/5; live local 20.6 to
+    25.1 s; live container 37.4 to 70.5 s).
+  - Every live run did the file assertion, a non-empty transcript and the
+    follow-up turn. Host homes checked after both passes: no `ork-cli-*`
+    project in `~/.claude/projects`, no Codex session naming a scenario root,
+    no OpenCode session or project row for one, and the host Codex
+    `last_refresh` unchanged.
+  - Found and fixed during the run:
+    - The harness inherited the operator's `HOME` and provider variables, so
+      live runs wrote into host provider homes, and Codex in a container
+      needed `CODEX_HOME` pointed at the host's own `~/.codex` (which also
+      staged its `config.toml`, hooks and skills). Now `isolateProviderHomes`;
+      covered by `packages/cli/tests/scenario-provider-homes.test.ts`.
+    - A backend started from inside an agent session inherited that session's
+      agent tool URL and token, and spread them into every bridge, exec worker
+      and probe, so its agents could act as the parent tab. Now
+      `dropInheritedAgentToolConnection`; covered by `agent-tools.test.ts` and
+      the `exec` scenario's decoy check.
+    - After the reboot, local `exec` hung for its whole 10-minute budget: with
+      no bundled Bun, `resolveBunBinary` fell back to `bun` on `PATH`, here a
+      mise shim that cannot resolve from `/`, where exec control runs. It now
+      falls back to the Bun running the backend; covered by
+      `commands-agent-support.test.ts`. The stuck-pending receipt is Code
+      item 3.
+  - Not run: Pi, Cursor, Grok (bridges not packaged); `mise run smoke:cli`,
+    the macOS config directory and `--profile` discovery (macOS item);
+    `cli-ui.spec.ts` and other-provider cards (Browser item); Linux (the host
+    is macOS; the 2026-09-26 run is the latest Linux evidence).
 
 - **2026-09-26, Linux.** Pre-merge tree based on `a9337716`, shipped as #854.
   Bun 1.4.2, Docker 29.7.2, image `orkestrator-v2:dev-7e8f587df147`.
@@ -149,11 +244,6 @@ codes only).
   lists `test:cli:scenarios` only for bundled native dependencies. The shared
   question is in
   [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md).
-
-## Needs verification
-
-- Whether the credential-free matrix still passes at `2459b05c`. It was not
-  run for this file.
 
 ## Related
 

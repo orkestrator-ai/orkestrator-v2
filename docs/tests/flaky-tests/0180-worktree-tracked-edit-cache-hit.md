@@ -206,3 +206,11 @@ the owning test unchanged.
 - **Isolated rerun:** `mise run test:logged -- --name baseline-worktree-git -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 0.6 s.
 - **Evidence:** `orkestrator-test-run.BopZMS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Disposition:** Confirmed recurrence; no watcher implementation, assertion, timeout or skip changed.
+
+## Recurrence on 2026-10-18
+
+`mise run test:logged -- --name full-test -- mise run test` on branch `qualify-coordinator-live-six-platforms-fb2b4a53344d`, on a host at load average 36–69 with several live
+suites running in other environments. Failed at 231.49 ms, an assertion rather than a timeout. Workspace and root
+artifacts:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.UQLOD6/`.
+The unchanged owning file passed alone (4 pass, 1.4 s).

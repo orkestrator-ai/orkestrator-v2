@@ -599,3 +599,11 @@ Final aggregate: exit 1 after 1252.7 seconds logged. Backend passed 8964 tests w
 - **Assessment:** the isolated pass confirms intermittence. Shared-host contention remains an unconfirmed hypothesis; no owning implementation, assertion, timeout or skip changed.
 
 Final aggregate exited 1 after 477.8 seconds. Backend reported 8978 passed, 41 skipped and one failed across 9020 tests in 478 files (423.04 seconds). Root/support reported the Pi timeout above; all other workspace packages, bridges and the Codex protocol check passed. Both failing owning files passed unchanged alone. Formatting, lint, typechecking and the full component browser suite also passed. Additional real-stack, Electron, Docker and iOS scenario suites were omitted because the branch changes a component-browser test and documentation, and conflict resolution changes documentation only.
+
+## Recurrence on 2026-10-18
+
+`mise run test:logged -- --name full-test -- mise run test` on branch `qualify-coordinator-live-six-platforms-fb2b4a53344d`, on a host at load average 36–69 with several live
+suites running in other environments. Failed at 30000.24 ms. Workspace and root
+artifacts:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.UQLOD6/`.
+The unchanged owning file passed alone (4 pass, 10.5 s, after one more loaded failure).

@@ -428,3 +428,11 @@ Aggregate command, worker configuration, counts and evidence are recorded in [02
 - **Failure:** `project coordinator > bound discard confirmations refuse stale, sequencer, nested, and failed switches` exceeded its 5000 ms deadline at 5129.20 ms, with a late `SQLITE_IOERR_VNODE` during asynchronous persistence after fixture cleanup.
 - **Owning-file rerun:** `mise run test:logged -- --name merge-coordinator-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 11.6 seconds).
 - **Assessment:** the unchanged isolated pass confirms intermittence; shared-host contention remains a hypothesis. No owning implementation, assertion, timeout or skip changed.
+
+## Recurrence on 2026-10-18
+
+`mise run test:logged -- --name full-test -- mise run test` on branch `qualify-coordinator-live-six-platforms-fb2b4a53344d`, on a host at load average 36–69 with several live
+suites running in other environments. Failed at 5260.49 ms. Workspace and root
+artifacts:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.UQLOD6/`.
+The unchanged owning file passed alone (52 pass, 19.6 s, after one more loaded failure).

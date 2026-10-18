@@ -2668,8 +2668,10 @@ export function SharedNativeAgentController({
                 size="sm"
                 variant="outline"
                 disabled={loadingEarlier}
-                onClick={() => {
-                  loadEarlierPlace.hold();
+                onClick={(event) => {
+                  loadEarlierPlace.hold(
+                    event.currentTarget.closest<HTMLElement>("[data-virtuoso-scroller]"),
+                  );
                   setLoadingEarlier(true);
                   void loadEarlierMessages()
                     .catch((error) =>

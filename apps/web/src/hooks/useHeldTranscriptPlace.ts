@@ -1,6 +1,7 @@
 import { useLayoutEffect, useState } from "react";
 import { getNativeMessageBoundarySourceId } from "@/lib/chat/native-message-adapters";
-import type { NativeMessage } from "@/lib/chat/native-message-types";
+import type { TranscriptScrollAnchor } from "./useVirtuosoScrollState";
+import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
 
 /** A display row as it can be found again: its own id and its last source row. */
 interface RowIdentity {
@@ -12,52 +13,79 @@ function identityOf(row: NativeMessage): RowIdentity {
   return { id: row.id, lastSourceId: getNativeMessageBoundarySourceId(row) };
 }
 
-/**
- * The reader's place in a transcript, held while earlier history loads above it.
- *
- * The transcript list keeps its scroll offset when rows are prepended, so a
- * loaded page pushes the row the reader was on down by the page's height; with
- * tall rows it leaves the viewport and the reader has to find their place
- * again. `hold` records the first rendered row when a load starts, and the
- * first render that shows that row below the top scrolls back to it
- * ({@link useRestoreHeldPlace}).
- *
- * The row is found by its id or by its last source row. Display rows coalesce
- * same-minute tool calls into one block named after its first row, so a page
- * that ends in the same minute merges into the head block and renames it; the
- * block still ends with the row it ended with.
- *
- * A held place waits while its row is still first (the page is in flight, or
- * it brought nothing new) and is dropped when the row leaves the transcript (a
- * reset replaced the history). Nothing else prepends rows, so a place left
- * waiting after an empty load is either replaced by the next load or unused.
- */
+function containsTool(parts: readonly NativeMessagePart[], id: string): boolean {
+  return parts.some((part) => {
+    if (part.type === "tool-invocation" && (part.toolUseId ?? part.sourcePartId) === id)
+      return true;
+    if (part.type === "tool-group" || part.type === "agent-group")
+      return containsTool(part.parts, id);
+    if (part.type === "task-group") return containsTool([part.task, ...part.childTools], id);
+    return false;
+  });
+}
+
+/** Holds a source tool and its viewport offset across history prepends, including
+ * pages that grow the first coalesced block without adding a display row. */
 export class HeldTranscriptPlace {
   private held: RowIdentity | null = null;
   private first: RowIdentity | null = null;
+  private heldHeadId: string | undefined;
+  private messages: readonly NativeMessage[] = [];
+  private anchor: TranscriptScrollAnchor | undefined;
+
+  get scrollAnchor(): TranscriptScrollAnchor | undefined {
+    return this.anchor;
+  }
 
   /** Remember the row now first on screen. */
-  hold(): void {
+  hold(scroller?: HTMLElement | null): void {
     this.held = this.first;
+    this.heldHeadId = this.first?.id;
+    this.anchor = undefined;
+    if (!scroller) return;
+    const top = scroller.getBoundingClientRect().top;
+    const rows = Array.from(scroller.querySelectorAll<HTMLElement>("[data-chat-message-index]"));
+    const row = rows.find((element) => element.getBoundingClientRect().bottom > top);
+    const message = row && this.messages[Number(row.dataset.chatMessageIndex)];
+    if (!row || !message) return;
+    this.held = identityOf(message);
+    const tool = Array.from(row.querySelectorAll<HTMLElement>("[data-transcript-part-id]")).find(
+      (element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.bottom > top && rect.top < top + scroller.clientHeight;
+      },
+    );
+    this.anchor = {
+      partId: tool?.dataset.transcriptPartId,
+      offset: (tool ?? row).getBoundingClientRect().top - top,
+    };
   }
 
   /** Forget a held place, e.g. when the history it belongs to is dropped. */
   release(): void {
     this.held = null;
+    this.anchor = undefined;
   }
 
   /** Records this render's first row; answers where to scroll if the held row moved down. */
   resolve(messages: readonly NativeMessage[]): number | undefined {
     const held = this.held;
+    this.messages = messages;
     this.first = messages[0] ? identityOf(messages[0]) : null;
     if (!held) return undefined;
     const index = messages.findIndex((message) => {
       const identity = identityOf(message);
-      return identity.id === held.id || identity.lastSourceId === held.lastSourceId;
+      return (
+        identity.id === held.id ||
+        identity.lastSourceId === held.lastSourceId ||
+        (this.anchor?.partId !== undefined && containsTool(message.parts, this.anchor.partId))
+      );
     });
-    if (index === 0) return undefined;
+    // An unchanged head is still waiting. A renamed head matched through a
+    // source id has received history even if its display index stays zero.
+    if (index >= 0 && messages[0]?.id === this.heldHeadId) return undefined;
     this.held = null;
-    return index > 0 ? index : undefined;
+    return index >= 0 ? index : undefined;
   }
 }
 
@@ -70,10 +98,13 @@ export function useHeldTranscriptPlace(): HeldTranscriptPlace {
 export function useRestoreHeldPlace(
   place: HeldTranscriptPlace,
   messages: readonly NativeMessage[],
-  scrollToIndex: (index: number) => unknown,
+  scrollToIndex: (index: number, anchor?: TranscriptScrollAnchor) => unknown,
 ): void {
   useLayoutEffect(() => {
     const index = place.resolve(messages);
-    if (index !== undefined) scrollToIndex(index);
+    if (index !== undefined) {
+      if (place.scrollAnchor) scrollToIndex(index, place.scrollAnchor);
+      else scrollToIndex(index);
+    }
   }, [messages, place, scrollToIndex]);
 }

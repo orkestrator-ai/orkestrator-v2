@@ -23,7 +23,15 @@ const read = (id: string, createdAt: string): NativeMessage => ({
   role: "assistant",
   content: "",
   createdAt,
-  parts: [{ type: "tool-invocation", content: "Read", toolName: "Read", createdAt }],
+  parts: [
+    {
+      type: "tool-invocation",
+      content: "Read",
+      toolName: "Read",
+      toolUseId: `call${id.slice(1)}`,
+      createdAt,
+    },
+  ],
 });
 
 function setup(initial: NativeMessage[]) {
@@ -88,6 +96,45 @@ describe("useRestoreHeldPlace", () => {
     hook.result.current.hold();
     hook.rerender({ messages: [text("m1"), text("m2")] });
     expect(scrollToIndex).not.toHaveBeenCalled();
+  });
+
+  test("restores index zero when the whole page merges into the head block", () => {
+    const reads = Array.from({ length: 40 }, (_, index) =>
+      read(`r${index}`, "2026-10-18T01:33:20.000Z"),
+    );
+    const { hook, scrollToIndex } = setup(coalesceAdjacentToolMessages(reads.slice(30)));
+    hook.result.current.hold();
+    hook.rerender({ messages: coalesceAdjacentToolMessages(reads) });
+    expect(scrollToIndex.mock.calls).toEqual([[0]]);
+  });
+
+  test("captures a visible tool inside a tall row and preserves its viewport offset", () => {
+    const reads = [
+      read("r52", "2026-10-18T01:33:20.000Z"),
+      read("r53", "2026-10-18T01:33:30.000Z"),
+    ];
+    const { hook, scrollToIndex } = setup(coalesceAdjacentToolMessages(reads));
+    const scroller = document.createElement("div");
+    scroller.innerHTML =
+      '<div data-chat-message-index="0"><div data-transcript-part-id="call52"></div><div data-transcript-part-id="call53"></div></div>';
+    const rect = (top: number, bottom: number) => ({ top, bottom }) as DOMRect;
+    scroller.getBoundingClientRect = () => rect(100, 600);
+    Object.defineProperty(scroller, "clientHeight", { value: 500 });
+    const row = scroller.firstElementChild as HTMLElement;
+    row.getBoundingClientRect = () => rect(-300, 700);
+    (row.children[0] as HTMLElement).getBoundingClientRect = () => rect(-200, 90);
+    (row.children[1] as HTMLElement).getBoundingClientRect = () => rect(90, 700);
+    hook.result.current.hold(scroller);
+    hook.rerender({
+      // Live output advances the block's last source id while history renames
+      // its first id. Only the captured source tool can identify this block.
+      messages: coalesceAdjacentToolMessages([
+        read("r51", "2026-10-18T01:33:05.000Z"),
+        ...reads,
+        read("r54", "2026-10-18T01:33:40.000Z"),
+      ]),
+    });
+    expect(scrollToIndex).toHaveBeenCalledWith(0, { partId: "call53", offset: -10 });
   });
 
   test("finds a head block that a same-minute page merged into and renamed", () => {

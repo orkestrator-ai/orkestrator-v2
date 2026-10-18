@@ -199,7 +199,10 @@ class Trail {
         const body = next
           ? `Trail stop ${index + 1} of ${this.stops}. Next stop: ${this.dir}/${next}\n`
           : `Trail stop ${index + 1} of ${this.stops}. This is the end of the trail. The closing word is ${this.closingWord}.\n`;
-        return fs.writeFile(path.join(root, this.dir, file), body);
+        // 12 KiB stays within file-reading defaults but exceeds both bridge
+        // and backend inline thresholds. Stop 2 must be in paged history.
+        const detailBody = index === 1 ? `${"Audit detail padding. ".repeat(600)}\n` : "";
+        return fs.writeFile(path.join(root, this.dir, file), body + detailBody);
       }),
     );
   }
@@ -272,20 +275,33 @@ function rowText(row: Row): string {
     .join("");
 }
 
-/** The first tool part in `rows` carrying a deferred body, with the stop it read. */
+/** A deferred body for the oversized fixture stop, from that tool's own arguments. */
 function findDeferredTool(
   trail: Trail,
   rows: Row[],
+  requiredStop: number,
 ): { detailRef: string; stop: number } | undefined {
   for (const row of rows) {
-    const stops = trail.stopsRead(row);
-    if (stops.length === 0) continue;
     const stack = Array.isArray(row.parts) ? [...row.parts] : [];
     while (stack.length > 0) {
-      const part = stack.shift() as { detailRef?: unknown; parts?: unknown } | null;
+      const part = stack.shift() as {
+        type?: unknown;
+        detailRef?: unknown;
+        parts?: unknown;
+        childTools?: unknown;
+      } | null;
       if (!part || typeof part !== "object") continue;
-      if (typeof part.detailRef === "string") return { detailRef: part.detailRef, stop: stops[0]! };
+      // A row can carry more than one tool. Its first filename does not
+      // identify the tool whose deferred body we are about to fetch.
+      if (
+        part.type === "tool-invocation" &&
+        typeof part.detailRef === "string" &&
+        trail.stopsRead({ parts: [part] }).includes(requiredStop)
+      ) {
+        return { detailRef: part.detailRef, stop: requiredStop };
+      }
       if (Array.isArray(part.parts)) stack.push(...part.parts);
+      if (Array.isArray(part.childTools)) stack.push(...part.childTools);
     }
   }
   return undefined;
@@ -296,16 +312,18 @@ function scroller(page: Page): Locator {
   return page.locator("[data-virtuoso-scroller]").filter({ visible: true }).first();
 }
 
-/** First row at least partly inside the scroller's viewport, and its offset from the top. */
+/** First visible source tool, rather than the top of a possibly huge coalesced row. */
 async function firstVisibleRow(list: Locator) {
   return list.evaluate((element) => {
     const top = element.getBoundingClientRect().top;
-    for (const row of element.querySelectorAll<HTMLElement>("[data-chat-message-index]")) {
-      const rect = row.getBoundingClientRect();
-      if (rect.bottom > top + 1) {
+    for (const tool of element.querySelectorAll<HTMLElement>("[data-transcript-part-id]")) {
+      const rect = tool.getBoundingClientRect();
+      if (rect.bottom > top + 1 && rect.top < top + element.clientHeight) {
         return {
-          text: row.textContent ?? "",
-          index: Number(row.dataset.chatMessageIndex),
+          text: tool.textContent ?? "",
+          index: Number(
+            tool.closest<HTMLElement>("[data-chat-message-index]")?.dataset.chatMessageIndex,
+          ),
           offset: Math.round(rect.top - top),
           scrollTop: Math.round(element.scrollTop),
         };
@@ -315,17 +333,19 @@ async function firstVisibleRow(list: Locator) {
   });
 }
 
-/** Where the row naming `stop` sits relative to the viewport, if rendered. */
+/** Where the tool naming `stop` sits relative to the viewport, if rendered. */
 async function rowPosition(list: Locator, trail: Trail, stop: number) {
   const pattern = trail.files[stop - 1]!.replace(".txt", "");
   return list.evaluate((element, needle) => {
     const top = element.getBoundingClientRect().top;
     const height = element.clientHeight;
-    for (const row of element.querySelectorAll<HTMLElement>("[data-chat-message-index]")) {
-      if (!(row.textContent ?? "").includes(needle)) continue;
-      const rect = row.getBoundingClientRect();
+    for (const tool of element.querySelectorAll<HTMLElement>("[data-transcript-part-id]")) {
+      if (!(tool.textContent ?? "").includes(needle)) continue;
+      const rect = tool.getBoundingClientRect();
       return {
-        index: Number(row.dataset.chatMessageIndex),
+        index: Number(
+          tool.closest<HTMLElement>("[data-chat-message-index]")?.dataset.chatMessageIndex,
+        ),
         offset: Math.round(rect.top - top),
         visible: rect.bottom > top && rect.top < top + height,
       };
@@ -368,6 +388,7 @@ async function loadEarlierOnce(page: Page, list: Locator, trail: Trail, label: s
   await scrollToTop(page, list, control);
   const before = await firstVisibleRow(list);
   const anchorStop = before ? trail.stopInText(before.text) : undefined;
+  expect(anchorStop, `${label}: the first visible row must name a trail stop`).toBeDefined();
   await control.click();
   // The click either retires the control (history complete) or offers it again.
   await expect(page.getByRole("button", { name: "Loading…", exact: true })).toHaveCount(0, {
@@ -396,8 +417,12 @@ async function loadEarlierOnce(page: Page, list: Locator, trail: Trail, label: s
  * row down by the page's height, which short rows alone can keep on screen.
  */
 function expectPlaceHeld(measured: Awaited<ReturnType<typeof loadEarlierOnce>>, label: string) {
-  if (measured.anchorStop === undefined) return;
+  expect(measured.anchorStop, `${label}: no observable trail tool to anchor`).toBeDefined();
   expect(measured.anchorAfter?.visible, `${label}: lost the reader's place`).toBe(true);
+  expect(
+    Math.abs(measured.anchorAfter!.offset - measured.anchorOffsetBefore!),
+    `${label}: the original tool moved within the viewport`,
+  ).toBeLessThanOrEqual(8);
   const landedAbove =
     measured.anchorAfter !== null &&
     measured.anchorIndexBefore !== undefined &&
@@ -674,6 +699,19 @@ test.describe("live transcript paging", () => {
       expect(whole.pages.length, "the cursor was followed more than once").toBeGreaterThan(1);
       expect(whole.complete, "paging reached the start of the conversation").toBe(true);
       expect(rowText(whole.rows[0]!)).toContain(trail.start);
+      const deferred = findDeferredTool(trail, whole.pages.flat(), 2);
+      expect(deferred, "paged native history must contain a deferred trail body").toBeDefined();
+      expect(deferred!.stop, "the oversized stop 2 body must be deferred").toBe(2);
+      const details = await invoke<{ toolOutput?: string; toolError?: string }>(
+        "get_native_agent_tool_details",
+        {
+          ...identity,
+          detailRef: deferred!.detailRef,
+        },
+      );
+      expect(details.toolOutput ?? details.toolError ?? "").toContain(
+        `Trail stop ${deferred!.stop} of`,
+      );
       const firstStopInTail = Math.min(...whole.tail.flatMap((row) => trail.stopsRead(row)));
       expect(firstStopInTail, "the tail alone cannot show the start").toBeGreaterThan(1);
 
@@ -916,23 +954,27 @@ test.describe("live transcript paging", () => {
           ).toBeGreaterThan(1);
         }
         if (rows.length <= LIVE_WINDOW) continue;
+        expect(order.highest, `reviewer ${index + 1} never reached the final trail stop`).toBe(
+          trail.stops,
+        );
         expect(transcript.historyCursor, "a long reviewer offers a cursor").toBeTruthy();
         expect(complete, "reviewer paging reached the first prompt").toBe(true);
         expect(rows[0]!.role, "the oldest reviewer row is its prompt").toBe("user");
         // A deferred tool body from paged history resolves on expansion.
-        const deferred = findDeferredTool(trail, pages.flat());
-        if (deferred) {
-          const details = await invoke<{ toolOutput?: string; toolError?: string }>(
-            "get_multi_review_reviewer_tool_details",
-            { workflowId, reviewerId: reviewer.id, detailRef: deferred.detailRef },
-          );
-          expect(details.toolOutput ?? details.toolError ?? "").toContain(
-            `Trail stop ${deferred.stop} of`,
-          );
-          note(`reviewer-${index + 1}-detail`, { stop: deferred.stop, resolved: true });
-        } else {
-          note(`reviewer-${index + 1}-detail`, "no deferred tool body in paged history");
-        }
+        const deferred = findDeferredTool(trail, pages.flat(), 2);
+        expect(
+          deferred,
+          `reviewer ${index + 1}: paged history must contain a deferred trail body`,
+        ).toBeDefined();
+        expect(deferred!.stop, "the oversized stop 2 body must be deferred").toBe(2);
+        const details = await invoke<{ toolOutput?: string; toolError?: string }>(
+          "get_multi_review_reviewer_tool_details",
+          { workflowId, reviewerId: reviewer.id, detailRef: deferred!.detailRef },
+        );
+        expect(details.toolOutput ?? details.toolError ?? "").toContain(
+          `Trail stop ${deferred!.stop} of`,
+        );
+        note(`reviewer-${index + 1}-detail`, { stop: deferred!.stop, resolved: true });
         longReviewers.push({ index, reviewerId: reviewer.id, agent: reviewer.agent });
       }
       expect(
@@ -969,6 +1011,7 @@ test.describe("live transcript paging", () => {
           if (click > 0 && !(await control.isVisible())) break;
           clicks.push(await loadEarlierOnce(page, list, trail, `${label}-${click + 1}`));
         }
+        expect(clicks.length, `${label}: reviewer paging must run`).toBeGreaterThan(0);
         for (const measured of clicks) {
           expectPlaceHeld(measured, label);
         }

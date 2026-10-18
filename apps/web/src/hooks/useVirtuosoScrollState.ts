@@ -129,6 +129,12 @@ interface UseVirtuosoScrollStateOptions {
   environmentId?: string;
 }
 
+/** A source tool (or row start) held at its previous viewport offset. */
+export interface TranscriptScrollAnchor {
+  partId?: string;
+  offset: number;
+}
+
 interface UseVirtuosoScrollStateReturn {
   /** Whether the user is currently at the bottom of the scroll area */
   isAtBottom: boolean;
@@ -141,7 +147,7 @@ interface UseVirtuosoScrollStateReturn {
    * neither a pending activation jump nor streaming follow snaps the reader
    * back to the bottom. False when the list has not mounted yet.
    */
-  scrollToIndex: (index: number) => boolean;
+  scrollToIndex: (index: number, anchor?: TranscriptScrollAnchor) => boolean;
   /** Ref to attach to the Virtuoso component */
   virtuosoRef: React.RefObject<VirtuosoHandle | null>;
   /** Props to spread onto the Virtuoso component */
@@ -724,40 +730,43 @@ export function useVirtuosoScrollState(
     }
   }, []);
 
-  const schedulePendingActivationScroll = useCallback(() => {
-    if (activationScrollRafRef.current !== null) return;
-    activationScrollRafRef.current = requestAnimationFrame(() => {
-      activationScrollRafRef.current = null;
-      if (!mountedRef.current || !isActiveRef.current || !pendingActivationScrollRef.current) {
-        return;
-      }
+  const schedulePendingActivationScroll = useCallback(
+    function schedulePendingActivationScroll() {
+      if (activationScrollRafRef.current !== null) return;
+      activationScrollRafRef.current = requestAnimationFrame(() => {
+        activationScrollRafRef.current = null;
+        if (!mountedRef.current || !isActiveRef.current || !pendingActivationScrollRef.current) {
+          return;
+        }
 
-      const started = performScrollToBottom("auto");
-      if (started) {
-        pendingActivationScrollRef.current = false;
-        activationScrollReadyAttemptsRef.current = 0;
-        return;
-      }
-
-      // If the scroller exists but the Virtuoso handle is not ready yet,
-      // retry briefly. If the scroller is absent (e.g. the native tab is
-      // still connecting), keep the pending flag and wait for scrollerRef to
-      // fire, which triggers the effect below.
-      if (scrollerElRef.current) {
-        if (activationScrollReadyAttemptsRef.current < ACTIVATION_SCROLL_READY_MAX_ATTEMPTS) {
-          activationScrollReadyAttemptsRef.current += 1;
-          schedulePendingActivationScroll();
-        } else {
-          // The scroller mounted but the handle never became ready within the
-          // retry budget. Give up and clear the pending flag so a later
-          // scroller remount can't re-fire this stale activation scroll and
-          // yank a user who has since scrolled up back to the bottom.
+        const started = performScrollToBottom("auto");
+        if (started) {
           pendingActivationScrollRef.current = false;
           activationScrollReadyAttemptsRef.current = 0;
+          return;
         }
-      }
-    });
-  }, [performScrollToBottom]);
+
+        // If the scroller exists but the Virtuoso handle is not ready yet,
+        // retry briefly. If the scroller is absent (e.g. the native tab is
+        // still connecting), keep the pending flag and wait for scrollerRef to
+        // fire, which triggers the effect below.
+        if (scrollerElRef.current) {
+          if (activationScrollReadyAttemptsRef.current < ACTIVATION_SCROLL_READY_MAX_ATTEMPTS) {
+            activationScrollReadyAttemptsRef.current += 1;
+            schedulePendingActivationScroll();
+          } else {
+            // The scroller mounted but the handle never became ready within the
+            // retry budget. Give up and clear the pending flag so a later
+            // scroller remount can't re-fire this stale activation scroll and
+            // yank a user who has since scrolled up back to the bottom.
+            pendingActivationScrollRef.current = false;
+            activationScrollReadyAttemptsRef.current = 0;
+          }
+        }
+      });
+    },
+    [performScrollToBottom],
+  );
 
   // Tab re-activation: jump to the new bottom on return when the user was
   // sticky when they left, when the selected environment changed while the
@@ -817,7 +826,7 @@ export function useVirtuosoScrollState(
   }, [isActive, scrollerEl, schedulePendingActivationScroll, cancelActivationScrollFrame]);
 
   const scrollToIndex = useCallback(
-    (index: number): boolean => {
+    (index: number, anchor?: TranscriptScrollAnchor): boolean => {
       const handle = virtuosoRef.current;
       if (!handle || typeof handle.scrollToIndex !== "function") return false;
       if (!Number.isInteger(index) || index < 0) return false;
@@ -831,17 +840,49 @@ export function useVirtuosoScrollState(
       const operation = ++scrollOperationRef.current;
       scrollInFlightRef.current = false;
       indexJumpOperationRef.current = operation;
-      handle.scrollToIndex({ index, align: "center", behavior: "auto" });
+      const jump = () => {
+        const row = scrollerElRef.current?.querySelector<HTMLElement>(
+          `[data-chat-message-index="${index}"]`,
+        );
+        const part =
+          anchor?.partId && row
+            ? Array.from(row.querySelectorAll<HTMLElement>("[data-transcript-part-id]")).find(
+                (element) => element.dataset.transcriptPartId === anchor.partId,
+              )
+            : undefined;
+        const offset = anchor
+          ? (part && row ? part.getBoundingClientRect().top - row.getBoundingClientRect().top : 0) -
+            anchor.offset
+          : undefined;
+        virtuosoRef.current?.scrollToIndex({
+          index,
+          align: anchor ? "start" : "center",
+          behavior: "auto",
+          ...(offset !== undefined ? { offset } : {}),
+        });
+      };
+      jump();
       let corrections = 0;
       const correct = () => {
         // A user scroll bumps the operation, so a correction never fights them.
         if (!mountedRef.current || scrollOperationRef.current !== operation) return;
-        virtuosoRef.current?.scrollToIndex({ index, align: "center", behavior: "auto" });
+        jump();
         corrections += 1;
         if (corrections < SCROLL_TO_INDEX_CORRECTIONS) {
           setTimeout(correct, SCROLL_TO_INDEX_CORRECTION_INTERVAL_MS);
         } else if (indexJumpOperationRef.current === operation) {
-          indexJumpOperationRef.current = null;
+          // Let the last positioning write and its layout settle. Virtuoso
+          // emits only boolean transitions, so a bottom callback suppressed
+          // during this operation may be the only one we ever receive.
+          setTimeout(() => {
+            if (!mountedRef.current || scrollOperationRef.current !== operation) return;
+            if (indexJumpOperationRef.current !== operation) return;
+            indexJumpOperationRef.current = null;
+            const el = scrollerElRef.current;
+            wantsStickRef.current = el
+              ? el.scrollHeight - el.clientHeight - el.scrollTop <= AT_BOTTOM_THRESHOLD
+              : isAtBottomRef.current;
+          }, SCROLL_TO_INDEX_CORRECTION_INTERVAL_MS);
         }
       };
       setTimeout(correct, SCROLL_TO_INDEX_CORRECTION_INTERVAL_MS);

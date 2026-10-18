@@ -1,0 +1,213 @@
+import { useState } from "react";
+import {
+  nativeAgentCapabilities,
+  type NativeAgentViewIdentity,
+} from "@orkestrator/protocol/native-agent";
+import type { MultiReviewReviewerTranscript } from "@orkestrator/protocol/multi-review";
+import { AgentNativeTab } from "../../apps/web/src/components/native-agent/AgentNativeTab";
+import { MultiReviewReviewerTab } from "../../apps/web/src/components/review/MultiReviewReviewerTab";
+import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
+
+const identity: NativeAgentViewIdentity = {
+  backendInstanceId: "paging-fixture",
+  environmentId: "paging-environment",
+  platform: "claude",
+  logicalSessionKey: "env-paging-environment:paging-tab",
+  providerSessionId: "paging-session",
+  sourceGeneration: "generation-1",
+};
+const tools = Array.from({ length: 60 }, (_, index) => ({
+  id: `row-${index}`,
+  role: "assistant" as const,
+  content: "",
+  createdAt: "2026-10-18T01:33:20.000Z",
+  parts: [
+    {
+      type: "tool-invocation" as const,
+      content: "Read",
+      toolName: "Read",
+      toolUseId: `call-${index}`,
+      toolArgs: { file_path: `trail/stop-${index}.txt` },
+      toolState: "success" as const,
+      toolOutput: `Body at stop ${index}`,
+    },
+  ],
+}));
+const tail = [
+  ...tools.slice(40),
+  {
+    id: "answer",
+    role: "assistant" as const,
+    content: "Trail complete",
+    createdAt: "2026-10-18T01:34:00.000Z",
+    parts: [{ type: "text" as const, content: "Trail complete" }],
+  },
+];
+const reviewer: MultiReviewReviewerTranscript = {
+  workflowId: "paging-review",
+  reviewerId: "reviewer",
+  workflowPhase: "ready",
+  agent: "claude",
+  model: "fixture",
+  status: "completed",
+  messages: tail,
+  transcript: "snapshot",
+  historyEpoch: "epoch-1",
+  historyCursor: "before-40",
+  truncated: true,
+};
+const pause = () => new Promise((resolve) => setTimeout(resolve, 150));
+const loadTranscript = async () => reviewer;
+const loadHistoryPage = async () => {
+  await pause();
+  return {
+    status: "page" as const,
+    messages: tools.slice(0, 40),
+    historyEpoch: "epoch-1",
+    complete: true,
+    truncated: false,
+  };
+};
+function installBackend() {
+  useEnvironmentStore.setState({
+    environments: [
+      {
+        id: identity.environmentId,
+        projectId: "paging-project",
+        name: "Paging fixture",
+        order: 0,
+        setupPhase: "ready",
+      } as never,
+    ],
+  });
+  window.orkestrator = {
+    ...window.orkestrator!,
+    listen: () => () => {},
+    invoke: async <T,>(command: string) => {
+      let result: unknown;
+      switch (command) {
+        case "get_native_agent_sync_capabilities":
+          result = {
+            projectionSyncVersions: [1],
+            historyPagingVersions: [1],
+            progressiveViewVersions: [1],
+          };
+          break;
+        case "adopt_native_agent_session":
+          result = {};
+          break;
+        case "get_native_agent_session_state_update":
+          result = {
+            viewVersion: 1,
+            status: "snapshot",
+            token: "state-1",
+            value: {
+              identity,
+              connection: "connected",
+              turn: { phase: "idle" },
+              interactions: [],
+              composerControls: [],
+              capabilities: nativeAgentCapabilities("claude"),
+              notices: [],
+            },
+          };
+          break;
+        case "get_native_agent_transcript_update":
+          result = {
+            viewVersion: 1,
+            status: "snapshot",
+            token: "transcript-1",
+            value: {
+              identity,
+              freshness: "current",
+              messages: tail,
+              historyEpoch: "epoch-1",
+              historyCursor: "before-40",
+              historyPaging: "direct",
+              historyComplete: false,
+              messageWindow: { limit: 100, truncated: true, canLoadEarlier: true },
+            },
+          };
+          break;
+        case "get_native_agent_message_page":
+          await pause();
+          result = {
+            syncVersion: 1,
+            messages: tools.slice(0, 40),
+            historyEpoch: "epoch-1",
+            complete: true,
+            truncated: false,
+          };
+          break;
+        case "get_native_agent_discovery_update":
+          result = {
+            viewVersion: 1,
+            status: "snapshot",
+            token: "discovery-1",
+            value: { identity, sections: {} },
+          };
+          break;
+        case "get_compose_draft":
+        case "delete_compose_draft":
+          result = null;
+          break;
+        case "get_native_agent_model_catalog":
+        case "get_file_tree":
+        case "get_local_file_tree":
+          result = [];
+          break;
+        case "get_native_agent_auth_status":
+          result = { state: "ready" };
+          break;
+        default:
+          throw new Error(`Unexpected paging fixture command: ${command}`);
+      }
+      return result as T;
+    },
+  };
+}
+export function TranscriptPagingFixture() {
+  const [installed] = useState(() => {
+    installBackend();
+    return true;
+  });
+  const [away, setAway] = useState(false);
+  const review = new URLSearchParams(window.location.search).has("reviewer");
+  return (
+    <main
+      className="flex h-screen flex-col bg-background text-foreground"
+      data-installed={installed}
+    >
+      <button onClick={() => setAway(!away)}>
+        {away ? "Return to transcript" : "Switch environment"}
+      </button>
+      <section className="min-h-0 flex-1" style={{ display: away ? "none" : undefined }}>
+        {review ? (
+          <MultiReviewReviewerTab
+            data={{
+              environmentId: identity.environmentId,
+              workflowId: "paging-review",
+              reviewerId: "reviewer",
+              isLocal: true,
+            }}
+            isActive={!away}
+            loadTranscript={loadTranscript}
+            loadHistoryPage={loadHistoryPage}
+          />
+        ) : (
+          <AgentNativeTab
+            tabId="paging-tab"
+            data={{
+              platform: "claude",
+              environmentId: identity.environmentId,
+              sessionId: identity.providerSessionId,
+              isLocal: true,
+            }}
+            isActive={!away}
+          />
+        )}
+      </section>
+      {away ? <p>Another environment</p> : null}
+    </main>
+  );
+}

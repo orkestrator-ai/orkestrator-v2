@@ -466,3 +466,20 @@ owned test servers; no isolated application profile was created.
 - **Owning-file rerun:** `mise run test:logged -- --name merge-15f6cd-backend-owners -- bun test --cwd apps/backend ./src/core/review-validation-worker.test.ts ./src/core/environment-move.test.ts ./src/core/coordinator-service.test.ts ./tests/commands-integration.test.ts --parallel=1 --only-failures` passed all four unchanged files with one worker, exit 0, in 121.2 seconds.
 - **Evidence:** `orkestrator-test-run.iFuHsy/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. Backend reported 9025 passed, 41 skipped and 17 failed across 9083 tests, with 12 errors between tests.
 - **Assessment:** confirmed intermittent recurrence; no implementation, assertion, timeout or skip in these owners changed. Shared-host contention remains a hypothesis.
+
+## Transcript-paging review fixes — 2026-10-18
+
+`mise run test:logged -- --name full-tests -- mise run test` repeated both
+coordinator timeouts (bound discard: 5169.70 ms; remote fetch: 5197.15 ms).
+The backend reported 9,040 passed and two failed; every other workspace package,
+the root/support group, bridges, and protocol check passed. The complete run
+took 445.2 seconds alongside browser and live-provider validation.
+
+The unchanged owning file then passed, exit 0, in 11.7 seconds:
+
+```bash
+mise run test:logged -- --name coordinator-alone -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures
+```
+
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.g5ONdt/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+No coordinator code, test, timeout, or assertion changed.

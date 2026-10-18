@@ -307,6 +307,25 @@ function findDeferredTool(
   return undefined;
 }
 
+/** Verify the oversized body itself, without ever printing fixture contents. */
+function expectDeferredTrailBody(
+  trail: Trail,
+  stop: number,
+  details: { toolOutput?: string; toolError?: string },
+): number {
+  const body = details.toolOutput ?? details.toolError ?? "";
+  expect(
+    body.includes(`Trail stop ${stop} of ${trail.stops}.`),
+    "the requested trail body resolved",
+  ).toBe(true);
+  expect(body.includes("Audit detail padding."), "the oversized fixture body resolved").toBe(true);
+  const bytes = new TextEncoder().encode(body).byteLength;
+  expect(bytes, "the deferred body exceeds the 4 KiB bridge inline threshold").toBeGreaterThan(
+    4 * 1024,
+  );
+  return bytes;
+}
+
 /** The visible transcript scroller in the active tab. */
 function scroller(page: Page): Locator {
   return page.locator("[data-virtuoso-scroller]").filter({ visible: true }).first();
@@ -731,9 +750,11 @@ test.describe("live transcript paging", () => {
           detailRef: deferred!.detailRef,
         },
       );
-      expect(details.toolOutput ?? details.toolError ?? "").toContain(
-        `Trail stop ${deferred!.stop} of`,
-      );
+      note("native-detail", {
+        stop: deferred!.stop,
+        bytes: expectDeferredTrailBody(trail, deferred!.stop, details),
+        resolved: true,
+      });
       const firstStopInTail = Math.min(...whole.tail.flatMap((row) => trail.stopsRead(row)));
       expect(firstStopInTail, "the tail alone cannot show the start").toBeGreaterThan(1);
 
@@ -998,10 +1019,11 @@ test.describe("live transcript paging", () => {
           "get_multi_review_reviewer_tool_details",
           { workflowId, reviewerId: reviewer.id, detailRef: deferred!.detailRef },
         );
-        expect(details.toolOutput ?? details.toolError ?? "").toContain(
-          `Trail stop ${deferred!.stop} of`,
-        );
-        note(`reviewer-${index + 1}-detail`, { stop: deferred!.stop, resolved: true });
+        note(`reviewer-${index + 1}-detail`, {
+          stop: deferred!.stop,
+          bytes: expectDeferredTrailBody(trail, deferred!.stop, details),
+          resolved: true,
+        });
         longReviewers.push({ index, reviewerId: reviewer.id, agent: reviewer.agent });
       }
       expect(

@@ -91,3 +91,28 @@ The unchanged owning files passed sequentially with one worker:
 (exit 0, 96.6 s logged). Other worktrees and real-stack checks were active on
 the host. Startup contention remains an unconfirmed hypothesis; no assertion
 or timeout changed.
+
+## Public landing-page review observation — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name browser -- mise run test:browser` on macOS arm64, while the full unit suite and other worktrees were also validating.
+- **Failure:** the mobile `the diff header fits a phone and the editor uses the full width` case could not find `.monaco-diff-editor` within 5000 ms.
+- **Owning-file rerun:** `ORKESTRATOR_E2E_PORT=1443 mise run test:logged -- --name diff-viewer-rerun -- bunx playwright test --config e2e/playwright.config.ts e2e/DiffViewerMobile.spec.ts --workers=1` repeated the same failure (four passed, five skipped, one failed; 49.6 seconds logged).
+- **Evidence:** aggregate `orkestrator-test-run.OwH8yL/browser.log.gz` and isolated `orkestrator-test-run.StTZ0J/diff-viewer-rerun.log.gz` under the host temporary directory.
+- **Assessment:** this occurrence does not independently establish a flake because the unchanged owning file also failed alone. Monaco initialization remains an unresolved validation limitation; no diff-viewer source, assertion, timeout, or skip changed. All eight production public-site smoke checks passed separately.
+
+
+## Landing-page main merge recurrence — 2026-10-18
+
+`ORKESTRATOR_E2E_PORT=49295 ORKESTRATOR_PUBLIC_E2E_PORT=49296 mise run test:logged -- --name merge-browser-isolated-ports -- mise run test:browser` reported 303 passed, 80 skipped and 49 failed with nine workers alongside other host validation. This owner failed in:
+
+- `the diff header fits a phone and the editor uses the full width`
+- `the new file state renders accessibly on a phone`
+- `the deleted file state renders accessibly on a phone`
+- `the mounted diff switches exactly at the mobile breakpoint`
+- `the desktop diff keeps its mode controls and full-ref tooltip`
+
+All 21 failing owners, including this unchanged file, passed with one worker in 428.8 seconds (exit 0). The complete rerun command, individual failure messages and evidence paths are in [0382](0382-component-browser-parallel-load.md). No timeout, assertion, skip or owning source changed.
+
+## Electron preview main merge observation — 2026-10-18
+
+The nine-worker component suite failed this owner, and its one-worker rerun still could not find `.monaco-diff-editor` for the mobile header case. The unchanged owner therefore remains an unresolved validation limitation for this occurrence. Counts, commands and artifacts are in [0382](0382-component-browser-parallel-load.md). No implementation, assertion, timeout or skip changed.

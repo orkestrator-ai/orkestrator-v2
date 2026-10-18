@@ -53,3 +53,7 @@ files; the other four bridge packages passed. `bun test ./src/testing/fake-codex
 in `bridges/codex-bridge` passed the unchanged owning file alone (2 pass,
 0 fail, 82 ms). Evidence: `orkestrator-test-run.mVA1hD/bridges.log.gz` in the
 macOS temporary directory.
+
+## Electron preview main merge — 2026-10-18
+
+`mise run test:logged -- --name merge-tests -- mise run test` repeated the version/invocation timeout at 5074.82 ms. The unchanged owning file passed with `mise run test:logged -- --name merge-codexfake-owner -- bun test ./bridges/codex-bridge/src/testing/fake-codex-app-server.test.ts --parallel=1 --only-failures` (exit 0, 1.1 seconds). Aggregate evidence: `orkestrator-test-run.ItrRrn/bridges.log.gz` below the host temporary directory. No implementation, assertion, timeout or skip changed.

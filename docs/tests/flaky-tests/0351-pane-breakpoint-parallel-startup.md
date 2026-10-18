@@ -32,3 +32,13 @@ The unchanged owning files passed sequentially with one worker:
 (exit 0, 96.6 s logged). Other worktrees and real-stack checks were active on
 the host. Startup contention remains an unconfirmed hypothesis; no assertion
 or timeout changed.
+
+## Landing-page main merge recurrence — 2026-10-18
+
+`ORKESTRATOR_E2E_PORT=49295 ORKESTRATOR_PUBLIC_E2E_PORT=49296 mise run test:logged -- --name merge-browser-isolated-ports -- mise run test:browser` reported 303 passed, 80 skipped and 49 failed with nine workers alongside other host validation. This owner failed in:
+
+- `split panes keep terminal output, scroll positions and the draft across the breakpoint (pane tree, appendChild fallback)`
+- `split panes keep terminal output, scroll positions and the draft across the breakpoint (pane tree, moveBefore)`
+- `split panes keep terminal output, scroll positions and the draft across the breakpoint (in the app shell, moveBefore)`
+
+All 21 failing owners, including this unchanged file, passed with one worker in 428.8 seconds (exit 0). The complete rerun command, individual failure messages and evidence paths are in [0382](0382-component-browser-parallel-load.md). No timeout, assertion, skip or owning source changed.

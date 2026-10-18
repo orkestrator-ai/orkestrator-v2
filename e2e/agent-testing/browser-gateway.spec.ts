@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createServer } from "node:net";
+import { dismissSidebarTooltip } from "./sidebar-tooltip";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { environmentStateDirectories } from "../../apps/backend/src/core/environment-state-paths";
@@ -905,6 +906,170 @@ test("signed-out Codex recovery and account reads survive reload and environment
     await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
     await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
     await invoke("delete_environment", { environmentId: other.id }).catch(() => undefined);
+  }
+});
+
+test("queued native steering survives a lost gateway response, inactive environment and reload", async ({
+  page,
+}) => {
+  test.skip(process.env.ORKESTRATOR_AGENT_TEST_REVIEW !== "1", "opt-in isolated Codex turn");
+  test.setTimeout(240_000);
+  page.setDefaultTimeout(20_000);
+  const status = await profileStatus();
+  expect(status.flavor).toBe("agent-test");
+  const invoke = await authenticatedInvoke(page, status);
+  const fixture = (await invoke<Project[]>("get_projects")).find(
+    (project) => project.localPath === status.testProject,
+  )!;
+  const environments: Environment[] = [];
+  let sessionIdentity:
+    | { environmentId: string; agent: string; logicalSessionKey: string }
+    | undefined;
+  try {
+    for (const name of ["queued-steer", "queued-other"])
+      environments.push(
+        await invoke<Environment>("create_environment", {
+          projectId: fixture.id,
+          name: `${name}-${Date.now()}`,
+          environmentType: "local",
+        }),
+      );
+    const [target, other] = environments;
+    await invoke("start_environment", { environmentId: target!.id });
+    const hydrated = await invoke<Environment>("get_environment", { environmentId: target!.id });
+    const tabId = "queued-steer-tab";
+    sessionIdentity = {
+      environmentId: target!.id,
+      agent: "codex",
+      logicalSessionKey: `env-${target!.id}:${tabId}`,
+    };
+    const layout = await invoke<{ revision: number } | null>("get_pane_layout", {
+      environmentId: target!.id,
+    });
+    await invoke("save_pane_layout", {
+      environmentId: target!.id,
+      expectedRevision: layout?.revision ?? 0,
+      layout: {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "queue-pane",
+        root: {
+          kind: "leaf",
+          id: "queue-pane",
+          tabs: [
+            {
+              id: tabId,
+              type: "agent-native",
+              nativeAgentData: { environmentId: target!.id, platform: "codex" },
+            },
+          ],
+          activeTabId: tabId,
+        },
+      },
+    });
+    const readyFile = path.join(hydrated.worktreePath!, ".qa-queued-ready");
+    const receivedFile = path.join(hydrated.worktreePath!, ".qa-queued-received");
+    const marker = `queued-steer-${Date.now()}`;
+    const dispatch = await invoke<{ outcome: string }>("dispatch_native_agent_intent", {
+      ...sessionIdentity,
+      model: process.env.ORKESTRATOR_AGENT_TEST_MODEL ?? "gpt-6.1-sol",
+      reasoningEffort: "low",
+      mode: "build",
+      requestId: `ready-${marker}`,
+      prompt:
+        "This is a bounded QA task in a disposable fixture. Create .qa-queued-ready containing ready, then run sleep 45 repeatedly until steered or cancelled. Do not change other files, finish, or commit.",
+    });
+    expect(dispatch.outcome).toBe("accepted");
+    await expect
+      .poll(() => fs.readFile(readyFile, "utf8").catch(() => ""), { timeout: 120_000 })
+      .toContain("ready");
+    const queueKey = `codex\0${sessionIdentity.logicalSessionKey}`;
+    const queued = {
+      id: `source-${marker}`,
+      text: `Append exactly ${marker} once to .qa-queued-received. Then run sleep 120 and wait for cancellation. Do not change other files or finish.`,
+      model: "gpt-6.1-sol",
+      mode: "build",
+    };
+    const tail = { id: `tail-${marker}`, text: "Wait for further instructions." };
+    for (const message of [queued, tail])
+      await invoke("enqueue_prompt_queue_message", {
+        queueKey,
+        environmentId: target!.id,
+        message,
+      });
+    const openEnvironment = async (name: string) => {
+      const expand = page.getByRole("button", { name: `Expand project ${fixture.name}` });
+      const entry = page.getByText(name, { exact: true }).first();
+      await expect(expand.or(entry)).toBeVisible({ timeout: 30_000 });
+      for (const label of ["Continue Without Docker", "Continue Without GitHub CLI"]) {
+        const button = page.getByRole("button", { name: label, exact: true });
+        if (await button.isVisible()) await button.click();
+      }
+      if (await expand.isVisible()) await expand.click();
+      const versionNotice = page.getByText("Orkestrator has been updated", { exact: true });
+      if (await versionNotice.isVisible()) {
+        await versionNotice.click({ timeout: 2_000 }).catch(() => undefined);
+        await expect(versionNotice).toBeHidden();
+      }
+      await dismissSidebarTooltip(page, fixture.name);
+      await entry.click();
+    };
+    await page.goto(status.browserUrl!);
+    await openEnvironment(target!.name);
+    const versionNotice = page.getByText("Orkestrator has been updated", { exact: true });
+    if (await versionNotice.isVisible()) {
+      await versionNotice.click({ timeout: 2_000 }).catch(() => undefined);
+      await expect(versionNotice).toBeHidden();
+    }
+    await page.getByTitle("View queued prompts").click();
+    const dialog = page.getByRole("dialog", { name: "Queued Prompts" });
+    await expect(dialog.getByRole("button", { name: "Steer", exact: true })).toHaveCount(2);
+    let dropped = false;
+    await page.route("**/__orkestrator/invoke", async (route) => {
+      if (route.request().postDataJSON()?.command !== "steer_native_agent_queued_prompt")
+        return route.continue();
+      const response = await route.fetch();
+      expect(response.ok()).toBe(true);
+      dropped = true;
+      await route.abort("failed"); // execution succeeded; only the renderer's acknowledgement is lost
+    });
+    await dialog.getByRole("button", { name: "Steer", exact: true }).first().click();
+    await expect.poll(() => dropped).toBe(true);
+    await expect(dialog.getByRole("alert")).toBeVisible();
+    await dialog.getByRole("button", { name: "Close", exact: true }).click();
+    await openEnvironment(other!.name);
+    await expect
+      .poll(
+        () =>
+          fs
+            .readFile(receivedFile, "utf8")
+            .then((text) => text.trim())
+            .catch(() => ""),
+        { timeout: 120_000 },
+      )
+      .toBe(marker);
+    const readQueue = () =>
+      invoke<{ messages: unknown[]; inFlight?: unknown }>("get_prompt_queue", { queueKey });
+    expect((await readQueue()).messages).toEqual([tail]);
+    expect((await readQueue()).inFlight).toBeUndefined();
+    await openEnvironment(target!.name);
+    await page.getByTitle("View queued prompts").click();
+    await expect(dialog.getByRole("button", { name: tail.text, exact: true })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: queued.text, exact: true })).toHaveCount(0);
+    await dialog.getByRole("button", { name: "Close", exact: true }).click();
+    await page.reload();
+    await openEnvironment(target!.name);
+    await page.getByTitle("View queued prompts").click();
+    await expect(dialog.getByRole("button", { name: tail.text, exact: true })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: queued.text, exact: true })).toHaveCount(0);
+    expect((await readQueue()).messages).toEqual([tail]);
+  } finally {
+    if (sessionIdentity)
+      await invoke("stop_native_agent_session", sessionIdentity).catch(() => undefined);
+    for (const environment of environments) {
+      await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
+      await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
+    }
   }
 });
 

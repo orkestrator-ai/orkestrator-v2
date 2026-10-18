@@ -300,6 +300,7 @@ export abstract class StoragePrompts extends StorageNative {
         throw new Error("Prompt queue belongs to another environment");
       }
       if (
+        (isRecord(previous?.inFlight?.message) && previous.inFlight.message.id === message.id) ||
         (isRecord(previous?.outstandingClaim?.message) &&
           previous.outstandingClaim.message.id === message.id) ||
         previous?.messages.some((candidate) => isRecord(candidate) && candidate.id === message.id)

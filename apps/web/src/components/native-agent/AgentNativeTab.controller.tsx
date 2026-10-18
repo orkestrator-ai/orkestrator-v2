@@ -7,6 +7,7 @@ import {
   normalizePendingSignIn,
   NATIVE_AGENT_PENDING_SIGN_IN_TTL_MS,
   nativeAsyncQuestionRequestId,
+  nativeAsyncQuestionItemId,
   withResolvedNativeComposerModel,
   resolveReasoningId,
   withoutSuppressedComposerControls,
@@ -3247,8 +3248,10 @@ export function SharedNativeAgentController({
                         }
                         throw new PromptQueueActionError(
                           outcome.outcome === "rejected"
-                            ? `${label} can't take more steering in this turn, so the prompt is back at the front of the queue.`
-                            : `${label} finished the turn before the prompt arrived, so it is back at the front of the queue.`,
+                            ? `${nativeAgentSteerRejectionMessage(outcome)} The prompt was returned to the queue.`
+                            : outcome.outcome === "mismatch"
+                              ? "The turn moved on before the steering text was delivered. The prompt was returned to the queue."
+                              : `${label} finished the turn before the prompt arrived, so the prompt is still queued.`,
                         );
                       }
                     : undefined
@@ -3259,7 +3262,12 @@ export function SharedNativeAgentController({
                   const queued = message as Record<string, unknown>;
                   return (
                     !(Array.isArray(queued.attachments) && queued.attachments.length > 0) &&
-                    queued.command === undefined
+                    queued.command === undefined &&
+                    !nativeAsyncQuestionItemId(message.id) &&
+                    !(
+                      typeof queued.requestId === "string" &&
+                      nativeAsyncQuestionItemId(queued.requestId)
+                    )
                   );
                 }}
                 renderMeta={(message) => {

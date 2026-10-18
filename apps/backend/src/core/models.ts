@@ -658,6 +658,9 @@ export interface PersistedNativeAgentPendingSteer {
   inputDigest: string;
   expectedRunId: string;
   state: "prepared" | "unknown";
+  /** Source reservation survives until delivery or definitive non-delivery. */
+  sourceQueue?: true;
+  queueSettlement?: "applied" | "restore" | "discard";
   createdAt: string;
 }
 
@@ -762,6 +765,8 @@ export interface PersistedPromptQueue {
     message: unknown;
     requestId: string;
     reservedAt: string;
+    /** Manual steering reservations must never drain as ordinary prompts. */
+    steer?: true;
     /** Persisted immediately before crossing the irreversible tmux boundary. */
     submittingAt?: string;
     /** Persisted after tmux accepted the prompt, before queue acknowledgement. */

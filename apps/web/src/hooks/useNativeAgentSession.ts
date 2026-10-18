@@ -53,7 +53,7 @@ import {
   refreshNativeAgentCommands,
   refreshNativeAgentModels,
   removePromptQueueMessage,
-  requeuePromptQueueMessage,
+  steerNativeAgentQueuedPrompt,
   resolveNativeAgentInteraction,
   holdNativeAgentInteraction,
   resumeNativeAgentSession,
@@ -3071,44 +3071,17 @@ export function useNativeAgentSession<TMessage = unknown>({
     },
     [environmentId, queueKey, refresh],
   );
-  /**
-   * Send a queued prompt into the running turn instead of after it.
-   *
-   * Removing it first is the claim: once it is out of the queue the drain can
-   * no longer send it as the next turn, so it runs at most once. A steer that
-   * was definitively not delivered puts it back at the front of the queue. An
-   * unconfirmed one stays out, because the recovery card owns it now. Returns
-   * `null` when the prompt had already left the queue and nothing was sent.
-   */
+  // Ownership and recovery live in the backend; a lost renderer response must
+  // never restore a possibly delivered prompt or abandon its durable source.
   const steerQueued = useCallback(
     async (messageId: string): Promise<NativeAgentSessionActionOutcome | null> => {
-      const { removed } = await removePromptQueueMessage<Record<string, unknown>>(
-        queueKey,
-        environmentId,
-        messageId,
-      );
-      if (!removed || typeof removed.text !== "string") {
-        await refresh();
-        return null;
-      }
-      let outcome: NativeAgentSessionActionOutcome;
       try {
-        outcome = await performNativeAgentSessionAction({
-          ...identity,
-          action: { kind: "steer", text: removed.text },
-        });
-      } catch (error) {
-        await requeuePromptQueueMessage(queueKey, environmentId, removed);
+        return await steerNativeAgentQueuedPrompt({ ...identity, messageId });
+      } finally {
         await refresh();
-        throw error;
       }
-      if (outcome.outcome !== "applied" && outcome.outcome !== "unknown") {
-        await requeuePromptQueueMessage(queueKey, environmentId, removed);
-      }
-      await refresh();
-      return outcome;
     },
-    [environmentId, identity, queueKey, refresh],
+    [identity, refresh],
   );
   const moveQueued = useCallback(
     async (messageId: string, direction: "up" | "down") => {

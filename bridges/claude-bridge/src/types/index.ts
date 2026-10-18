@@ -201,6 +201,7 @@ export interface SdkResultMessage extends SdkMessageBase {
   ttft_ms?: number;
   errors?: string[];
   startup_failure_reason?: import("@anthropic-ai/claude-agent-sdk").SDKStartupFailureReason;
+  terminal_reason?: import("@anthropic-ai/claude-agent-sdk").TerminalReason;
   usage?: Record<string, unknown>;
   modelUsage?: Record<
     string,
@@ -471,6 +472,19 @@ export interface SessionState {
   createdAt: Date;
   lastActivity: Date;
   error?: string;
+  /**
+   * Set beside `status: "error"` when a bridge restart cut the last turn short:
+   * the rollout is intact and a new prompt continues it. Cleared when the next
+   * turn starts. See `session-manager-turn-interruption.ts`.
+   */
+  interruption?: "restart";
+  /**
+   * Whether this process believes the preferences file holds a turn-in-flight
+   * mark for the session, so the mark is written and cleared once per edge.
+   */
+  turnInFlightMarked?: boolean;
+  /** Presence alone does not mean a restored mark belongs to this bridge. */
+  turnInFlightMarkOwned?: boolean;
   /** SDK session ID returned from Claude Agent SDK - used for resume */
   sdkSessionId?: string;
   /** Session initialization data (MCP servers, plugins, etc.) */
@@ -784,6 +798,13 @@ export interface SessionState {
    * away from the turn the user is actually waiting on.
    */
   latestTurnGeneration?: number;
+  /**
+   * The turn generation a user stop (`POST /session/:id/abort`) asked to
+   * interrupt. The CLI reports a stop that lands before any text streamed as
+   * an aborted `error_during_execution` result; for this turn that result is
+   * the stop the user asked for, not a failure.
+   */
+  interruptRequestedGeneration?: number;
   /**
    * At-most-once journal for `/steer`. Survives a bridge restart via session
    * preferences so a retried request id cannot be pushed twice.

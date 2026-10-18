@@ -6,14 +6,16 @@ real-stack inactive-environment cycle were run against `31d0fb06` on
 The restart continuation and step reminders were added on `9da80451`
 (2026-10-17); see
 [Restart continuation and step reminders](#restart-continuation-and-step-reminders-2026-10-17).
+The Claude bridge reports restart interruptions since 2026-10-18; see
+[Claude restart interruption](#claude-restart-interruption-2026-10-18).
 
 Multi Review's control plane covers reviewer admission, observation,
 persistence, evidence verification and consolidation input. Its cost must stay
 bounded, and independent of retained review history, as a panel grows towards
 the 32-reviewer maximum. The mechanisms shipped in #833, and #852 made the keyed
 supervisor the default driver. What remains is rollback gates that outlived
-their one-release window, a Claude restart gap and the Build Pipeline steps'
-share of the two recovery gaps the real-stack cycle found, and scale evidence
+their one-release window, the Build Pipeline steps' share of the two recovery
+gaps the real-stack cycle found, and scale evidence
 that was never collected.
 
 ## Current state
@@ -80,8 +82,10 @@ that was never collected.
   `MultiReviewService.prepareStepFollowUp`. The second is the restart
   continuation (`workflowRestartContinuationPrompt`). A turn the provider
   reports as `interruption: "restart"` is continued once instead of failed,
-  unless a result was already accepted. Today only the Codex bridge reports
-  that, from its `restartFailure` notice on `/session/:id/status`. The spent
+  unless a result was already accepted. The Codex bridge reports that from its
+  `restartFailure` notice on `/session/:id/status`, and the Claude bridge from
+  a durable turn-in-flight mark on `GET /session/:id`
+  (`session-manager-turn-interruption.ts`). The spent
   flags `resultReminderSent` and `restartContinuationSent` are persisted on the
   reviewer and on `activeRequest`, and the second miss or second restart fails
   closed. Build Pipeline review stages get the reviewer half through the shared
@@ -131,28 +135,17 @@ that was never collected.
    lower down, in `readHttpBridgeTranscriptSnapshot`
    (`http-bridge-progressive.ts`), and never sets `fallback: true` (see
    [mixed-version-compatibility.md](mixed-version-compatibility.md)).
-3. **Continue a Claude reviewer whose turn a restart cut short.** The Codex
-   half shipped (see
-   [Restart continuation and step reminders](#restart-continuation-and-step-reminders-2026-10-17)).
-   The Claude bridge reports no interruption: a resumed Claude session just
-   goes idle without a report, so the runner sends the result reminder, which
-   says the analysis is done. After a killed bridge the model refused that
-   reminder because it had never seen the diff (2 of 2 runs on 2026-10-17).
-   The fix is for the Claude bridge to record that a turn was in flight when
-   it died and report `interruption: "restart"` beside a failed status. The
-   runner and steps need no change, because they already continue on that
-   field.
-4. **Give Build Pipeline's own steps the restart continuation and result
+3. **Give Build Pipeline's own steps the restart continuation and result
    reminder.** Its review stages share the runner and already have both. Its
    consolidation (`build-pipeline-review-fanout.ts`, the `status === "error"`
    branch) and other stage turns (`build-pipeline-service-supervisor.ts`) still
    fail on a cut-short turn or a missing result. Reuse
    `workflowRestartContinuationPrompt` and `workflowResultReminderPrompt`, with
    the same once-only, persisted spent flags.
-5. **Add seeded, CI-sized randomised interleaving tests** across concurrent
+4. **Add seeded, CI-sized randomised interleaving tests** across concurrent
    reviewers. They should interleave commit resolution, provider completion,
    cancellation, fence loss and restart. They were planned but never written.
-6. **Close the measurement gaps.**
+5. **Close the measurement gaps.**
    - Verification counts only the package's declared size. Referenced artifact
      bytes are not reported.
    - There is no opt-in large-evidence case (hundreds of MiB, real hashing).
@@ -167,6 +160,12 @@ that was never collected.
   2026-10-17, see [Qualification results](#qualification-results-2026-10-17).
   Re-run `multi-review-live.spec.ts` after any change to the fan-out, the
   reviewer tab or bridge session recovery.
+- **A killed Claude Code process, live.** Add a disruption to
+  `multi-review-live.spec.ts` that signals only the Claude reviewer's CLI
+  child (confirmed a descendant of this profile's bridge, as the bridge-kill
+  case does) while the bridge stays up. The reviewer should complete after
+  the restart continuation. Only the SDK contract and unit tests cover this
+  today (see [Claude restart interruption](#claude-restart-interruption-2026-10-18)).
 - **Scale.** Run a mixed real-provider panel at 8 to 32 reviewers. Record that
   the caps hold under real rate limits, plus tail latency and peak RSS. This
   needs several providers' credentials; batch it with the runs in
@@ -212,7 +211,7 @@ Codex GPT-6-Luna (low) prepared and consolidated.
 | Live cycle: unmount | `multi-review-live.spec.ts` "settles while unmounted…" | Pass (2 full runs; an earlier run passed every snapshot check and failed on a spec selector). Settled to `ready` while unmounted. No cancellation, one prompt per reviewer, same sessions, `unchanged` conditional reads, no fallback. The graph, inspector, Fix control and the reviewer's read-only tab are right on return and after reloads. |
 | Live cycle: renderer reload | "survives a renderer reload while reviewers run" | Pass (2 runs; one earlier attempt failed in preparation before the reload; the step reminder now covers it, see [Restart continuation and step reminders](#restart-continuation-and-step-reminders-2026-10-17)). |
 | Live cycle: backend restart | "converges after a backend restart while reviewers run" | Pass under the fail-closed contract (2 runs). The Claude reviewer completed after its result reminder. The Codex reviewer failed with the restart message, and the review consolidated from Claude's report. Two earlier runs failed the stricter spec that required both reviewers to complete. One had the same split; in the other, both reviewers were cut short and the whole review failed. Fixed for Codex since; see [Restart continuation and step reminders](#restart-continuation-and-step-reminders-2026-10-17). |
-| Live cycle: killed reviewer bridge | "isolates an interrupted reviewer bridge to that reviewer" | Before the fix the Claude reviewer failed at once with "claude bridge is not reachable" (the outcome of one of the two pre-fix runs was not recorded). After the fix (3 runs) the bridge was restarted and the reviewer continued in its session, then failed closed after the reminder (Code item 3). The Codex peer completed every time. |
+| Live cycle: killed reviewer bridge | "isolates an interrupted reviewer bridge to that reviewer" | Before the fix the Claude reviewer failed at once with "claude bridge is not reachable" (the outcome of one of the two pre-fix runs was not recorded). After the fix (3 runs) the bridge was restarted and the reviewer continued in its session, then failed closed after the reminder (fixed since, see [Claude restart interruption](#claude-restart-interruption-2026-10-18)). The Codex peer completed every time. |
 
 After the Multi Review Fix (`a1e36236`) and the `origin/main` merge
 (`182a8ee0`), the whole live file ran again on a fresh profile: 4 of 4 passed
@@ -348,7 +347,8 @@ restart while reviewers run". It now requires the Codex reviewer to complete.
 After the rollout fix it passed (157.5 s): Claude "completed after the result
 reminder", Codex "completed after the restart continuation". The whole file
 then passed 4 of 4 in 654.7 s. The restart case had the same outcomes. After
-the killed bridge, Claude failed closed after its reminder (Code item 3) and
+the killed bridge, Claude failed closed after its reminder (fixed since, see
+[Claude restart interruption](#claude-restart-interruption-2026-10-18)) and
 Codex completed. The profile was stopped and reset. The spec's prompt-count
 failure message now labels each user turn (prompt, restart, reminder, commit
 nudge, or a `<tag>`) without printing its text.
@@ -358,6 +358,127 @@ rare (1 of 15 preparations on 2026-10-17) and cannot be forced on a real
 provider, so only the deterministic tests cover it. No live restart landed
 while preparation or consolidation was mid-turn, so the step continuation is
 covered by tests only.
+
+## Claude restart interruption (2026-10-18)
+
+Built on `a5d338c1` on macOS arm64, with other live test environments on the
+host.
+
+Fixed:
+
+- **A restart that cut a Claude turn short read as a finished turn.** The
+  Claude bridge keeps session state in memory, so a new bridge process
+  restored the session idle. The runner then sent the result reminder ("your
+  work is done"), which a model that had never seen the diff refused. The
+  bridge now writes a content-free `turnInFlight` mark (instance id, pid,
+  start time) into the session's preferences file at the edges where a turn
+  starts, owes a background continuation, settles, is stopped or its tab
+  closes (`session-manager-turn-interruption.ts`). A process that restores the
+  session with a mark from a process that is gone reports `status: "error"`,
+  `error` and `interruption: "restart"` on `GET /session/:id`. The runner and
+  steps continue the turn once, unchanged since #1070.
+- **A Claude Code process killed under a turn failed it.** With the bridge
+  still up, a CLI killed by a signal (the OOM killer, `pkill`, a container
+  under memory pressure) is reported the same way, from the SDK's own
+  classification (`errorClass: "process_killed_by_signal"`). The mark stays
+  until a turn settles, so a bridge restart before the continuation still
+  reports it.
+- **A step whose bridge was unreachable failed the review at once.** The
+  reviewer half was fixed on 2026-10-17; the step runner
+  (`MultiReviewService.advanceFixModel`, which runs preparation,
+  consolidation and Fix) still threw `claude bridge is not reachable`. It now
+  keeps the request, drops the cached connection so the next pass reconnects,
+  and fails only after the idle-poll bound ("…provider stayed unreachable").
+  The Claude restart test found this: a killed bridge is unreachable on the
+  pass before its replacement can report the interruption, so the step never
+  saw it. The Codex test could not hit it, because there only the app-server
+  child restarts and the bridge's HTTP server stays up.
+
+Decisions:
+
+- *Where the mark lives.* The per-session preferences file already holds the
+  durable prompt journal, is written under a per-file lock and atomically
+  renamed, and is deleted with the session. A separate file per turn would
+  add a second store to clean up. The prompt journal alone could not carry
+  it: structured-output turns (`outputSchema`) skip `claimPromptDispatch`.
+- *Edge-synced, fire-and-forget.* The mark follows the session's own state
+  (`running`, an owed continuation, or an unresumed interruption), written
+  once per change, from synchronous turn code, without adding an await to
+  the turn path. A bridge killed in the few milliseconds before the write
+  lands reports idle, as before. A mark that was never cleared costs one
+  continuation that a workflow would accept the earlier result on anyway.
+- *Whose turn it was.* Several environments' bridges can share one Claude
+  home. A mark from a live process other than this one is left alone; a mark
+  carrying this process's pid under another instance id is a dead
+  predecessor (pids repeat across container restarts). A reused pid can only
+  make a restart read as idle, never invent an interruption.
+- *A user stop and a tab close are not restarts.* Both clear the mark; a
+  durable delete removes the whole file.
+- *Only a signal counts for a killed CLI.* A non-zero exit is as likely a
+  launch or sign-in fault, where continuing fails the same way. The bridge's
+  own stops never reach this branch: they abort the turn first, or end it
+  through `Query.close()`, which fails with its own "closed" error. The
+  notice names the signal but drops the SDK's stderr tail.
+- *Same message shape as Codex.* "Claude restarted before this turn
+  finished, so its work stopped partway. Send a message to continue." It is
+  shown to a user who opens the session, and the second-restart failure
+  carries it.
+
+Tests:
+
+- `session-manager-turn-interruption.test.ts` (12 tests): the mark is written
+  while a turn runs and cleared on completion, a user stop, a tab close and
+  an ordinary failure; a restored mark from a dead process (or a dead
+  predecessor with this pid) reports the interruption, also after a second
+  restart, and the next turn clears it; a live peer's or this process's own
+  mark is left alone; a malformed mark is ignored without failing the file
+  closed to plan mode; a CLI killed by `SIGKILL` or `SIGTERM` is an
+  interruption, for structured turns too; only the SDK's signal class counts.
+  The two killed-CLI cases fail without the settle change.
+- `sdk-compatibility.test.ts` pins the SDK fields against a fake CLI that
+  kills itself mid-turn (0.3.296): `errorClass: "process_killed_by_signal"`
+  and the signal name, for both signals.
+- `apps/backend/tests/multi-review-claude-bridge-restart.test.ts`: a real
+  Claude bridge process with a fake CLI whose turns never finish is
+  `SIGKILL`ed mid-turn and a new one started on the same Claude home, for a
+  reviewer and for a step. Through `HttpBridgeProvider` the runner reads
+  `interruption: "restart"`, continues once in the same session (the new
+  bridge resumes the rollout), and fails closed on a second restart. Both
+  cases fail without the bridge change; the step case also fails without the
+  step unreachable fix.
+- `multi-review-service.test.ts`: a step whose bridge became unreachable
+  keeps its request and continues once the reconnected bridge reports the
+  interruption; one whose bridge never comes back fails after the bound. Both
+  fail without the fix.
+- `http-bridge-provider.test.ts` and the route test cover the field on the
+  Claude snapshot route.
+
+Live, on disposable profile `claude-restart-c2ab` (`dev:test --fixture
+--credential-source claude --credential-source codex --agent-platforms
+claude,codex`, Claude 2.1.296 with Agent SDK 0.3.296, Codex 0.162.1, Haiku 4.5
+and GPT-6-Luna at low effort, bridges rebuilt first):
+
+- `multi-review-live.spec.ts`, whole file under the old "Claude may complete
+  or fail closed" contract: 4 of 4 passed in 560.1 s. After the backend
+  restart, both reviewers "completed after the restart continuation". After
+  the killed Claude bridge, Claude "completed after the restart continuation"
+  and Codex completed. Before this change Claude failed closed after its
+  reminder in both cases (2 of 2 runs on 2026-10-17). In the unmounted case,
+  preparation restarted once ("Repository HEAD changed after discovery"),
+  which the spec allows and records, as before.
+- The restart and killed-bridge cases now require the Claude reviewer to
+  complete (`agent-testing.md` updated). Re-run with
+  `-g "backend restart|interrupted reviewer bridge"`: 2 of 2 passed in
+  287.7 s, with the same outcomes.
+- The profile was stopped and reset.
+
+Not qualified live: a Claude Code process killed by a signal while the bridge
+stays up. The live spec kills the whole bridge, and signalling only its CLI
+child needs a new disruption in the spec; the SDK contract test and the unit
+tests cover it. A restart during preparation or consolidation was again not
+landed live, so the step continuation and the step reconnect are covered by
+the deterministic tests (`multi-review-claude-bridge-restart.test.ts` uses a
+real bridge process and a fake CLI).
 
 ## Constraints and rationale
 
@@ -434,7 +555,7 @@ covered by tests only.
   | Retryable provider create or prepare error | Reviewer | Stay pending or retrying; peers continue |
   | Ambiguous prompt send | Reviewer | Park the same request ID; peers continue |
   | Transient status or transcript read error, including an unreachable bridge | Reviewer observation | Keep prior state; reconnect and retry when due; fail after the idle-poll bound |
-  | Turn cut short by a provider restart (`interruption: "restart"`) | Reviewer or step | Accept a result already submitted; otherwise continue once in the same session; fail on a second restart. A Claude turn reports no interruption yet (Code item 3) |
+  | Turn cut short by a provider restart (`interruption: "restart"`) | Reviewer or step | Accept a result already submitted; otherwise continue once in the same session; fail on a second restart. Codex and Claude report one |
   | Structured result still invalid after repair | Reviewer | Fail that reviewer; keep the other reports |
   | Controller fence lost | Whole runner | Reject commits, stop new I/O; the new owner reconciles |
   | User cancellation | Whole owner | Drop queued work; decline or abort live sessions safely |
@@ -475,9 +596,11 @@ covered by tests only.
   - *The rollout-filter fix ships here.* It is a one-line Codex bridge change
     found by this work's live check. Leaving it out would leave the
     strengthened restart case failing on every run.
-  - *Claude and Build Pipeline steps are follow-ups* (Code items 3 and 4).
-    Claude needs bridge work to report an interruption. Build Pipeline's own
-    steps have a separate runner, and #1056 had just changed those files.
+  - *Claude and Build Pipeline steps were follow-ups.* Claude needed bridge
+    work to report an interruption; it shipped on 2026-10-18 (see
+    [Claude restart interruption](#claude-restart-interruption-2026-10-18)).
+    Build Pipeline's own steps have a separate runner, and #1056 had just
+    changed those files (Code item 3).
 - Budget values and why they were chosen (640 KiB consolidation, 1 MiB per
   report, caps of 4/8/4/16, the 3 s running cadence), with the benchmark
   reproduce command, are in

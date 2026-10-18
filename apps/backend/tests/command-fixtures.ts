@@ -23,6 +23,8 @@ import {
 
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 
+import { canonicalWorktreePath } from "@orkestrator/protocol/node/worktree-paths";
+
 import {
   isLoopedReviewWorkflow,
   isReviewPackageReference,
@@ -912,12 +914,15 @@ export async function createCommandFixtures() {
     };
   }
 
+  // The start path records the canonical root (`validateWorktreeLocation`), so
+  // a root under a symlink such as macOS `/tmp` or `/var/folders` appears in
+  // storage under its real path.
   function expectedManagedWorktreePath(
     context: CommandContext,
     projectName: string,
     branch: string,
   ): string {
-    return path.join(context.worktreeDir!, `${projectName}-${branch}`);
+    return path.join(canonicalWorktreePath(context.worktreeDir!), `${projectName}-${branch}`);
   }
 
   async function expectLocalWorktreeRolledBack(

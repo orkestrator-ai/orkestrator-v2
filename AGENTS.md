@@ -616,10 +616,10 @@ When touching the Pi bridge:
   `/close` keeps the session registered until its removal is published (503
   pending otherwise).
 - Project-local `.pi/` resources are opt-in through
-  `PI_BRIDGE_PROJECT_RESOURCES`, and only the container launcher opts in. A Pi
-  extension is arbitrary TypeScript this process would execute, so cloning a
-  repository must not be enough to run its code — the same boundary
-  `ACP_APPROVE_PROJECT_MCPS` draws for the ACP bridge.
+  `PI_BRIDGE_PROJECT_RESOURCES`, set from the resolved environment execution
+  policy on both host and container runs. Host project resources are off by
+  default. Enabling them permits repository MCP processes and Pi extensions
+  (arbitrary TypeScript) to run on the host.
 - Pi's SDK sessions load no MCP client (only its CLI loads the built-in `mcp`
   extension) and have no plan/build mode. The bridge owns an MCP client (`src/mcp.ts`) and registers tools through the inline
   `orkestrator-mcp` extension: Orkestrator from env / per-tab `agentMcp`,
@@ -662,12 +662,15 @@ When touching the SDK bridge:
   with native helpers, and a login needs no environment and no session.
 - The credential lives in Orkestrator's data directory, not the SDK's default
   `~/.cursor/sdk/auth.json`, so a container can be handed exactly one file.
-- Project settings (`.cursor/`) are read inside containers and not on the host,
-  so cloning a repository is not enough to run its code on the user's machine.
+- Project settings (`.cursor/`) load only when the resolved environment
+  execution policy enables project resources, on both host and container runs.
+  Host project resources are off by default; enabling them permits repository
+  configuration to start MCP processes on the host.
 - The Orkestrator Agent MCP server is injected from a per-tab `agentMcp`
   body or, as fallback, `ORKESTRATOR_AGENT_MCP_URL` /
   `ORKESTRATOR_AGENT_MCP_TOKEN` as `AgentOptions.mcpServers.orkestrator`
-  (`src/mcp.ts`). Host runs still do not load a repo's `.cursor/mcp.json`.
+  (`src/mcp.ts`). A repo's `.cursor/mcp.json` loads on the host only when
+  the resolved environment policy enables project resources.
   Native Cursor mail is on (`{canPull,canSend,canInject}=true`). A rotated
   tab token detaches and re-attaches the SDK agent; the bearer is never
   persisted.

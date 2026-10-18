@@ -20,6 +20,7 @@ import {
 import { mcpFailure, type McpTargetContext } from "@orkestrator/protocol/mcp-management";
 
 import type { Environment, Project } from "../models.js";
+import { resolveEnvironmentExecutionPolicy } from "../native-agent-execution-policy.js";
 import type { TargetContextInfo } from "./types.js";
 
 export interface TargetStorage {
@@ -97,6 +98,12 @@ async function environmentTarget(
     worktreePath: local ? environment.worktreePath : undefined,
     containerId: local ? undefined : (environment.containerId ?? undefined),
     environmentStatus: environment.status,
+    ...(local
+      ? {
+          projectResources: resolveEnvironmentExecutionPolicy(environment, "interactive-native")
+            .projectResources,
+        }
+      : {}),
   };
   let readOnlyReason: string | undefined;
   if (!local) readOnlyReason = CONTAINER_READ_ONLY_REASON;

@@ -792,18 +792,16 @@ test.describe("live Multi Review inactive-environment cycle", () => {
       await cycle.reconnect(restarted);
       const resumed = await cycle.read();
       expect(resumed.phase).not.toBe("cancelled");
-      // The Codex bridge reports a turn the restart cut short, and the runner
-      // continues it once in the same session, so the Codex reviewer must
-      // finish. Claude reports no interruption yet
-      // (docs/todo/multi-review-scale-and-cost.md), so it may complete or fail
-      // closed, and is recorded. Everything else is held: no cancellation, no
-      // prompt beyond the designed follow-ups, no fresh session, a stated
-      // reason, and a tab that agrees with the snapshot.
+      // Both bridges report a turn the restart cut short, and the runner
+      // continues it once in the same session, so both reviewers must finish.
+      // Outcomes are still recorded. Everything else is held: no cancellation,
+      // no prompt beyond the designed follow-ups, no fresh session, and a tab
+      // that agrees with the snapshot.
       const settledAfterRestart = await cycle.waitForSettled();
       const failed = cycle.recordOutcomes(settledAfterRestart, "restart");
-      expect(settledAfterRestart.reviewers[1]!.status, describeWorkflow(settledAfterRestart)).toBe(
-        "completed",
-      );
+      for (const reviewer of settledAfterRestart.reviewers) {
+        expect(reviewer.status, describeWorkflow(settledAfterRestart)).toBe("completed");
+      }
       const settled = await cycle.verifySnapshot(before, { failedReviewers: failed });
       await cycle.gotoApp();
       await cycle.openEnvironment(0);
@@ -831,9 +829,10 @@ test.describe("live Multi Review inactive-environment cycle", () => {
       const after = await cycle.waitForReady();
       // The Codex peer must finish on its own report whatever happened to Claude.
       expect(after.reviewers[1]!.status, describeWorkflow(after)).toBe("completed");
-      // The Claude reviewer either recovered in its own session or failed closed.
+      // The restarted bridge reports the Claude turn cut short, so the reviewer
+      // continues in its own session and finishes.
       const failed = cycle.recordOutcomes(after, "bridge-kill");
-      expect(failed.every((index) => index === 0)).toBe(true);
+      expect(after.reviewers[0]!.status, describeWorkflow(after)).toBe("completed");
       const settled = await cycle.verifySnapshot(before, { failedReviewers: failed });
       await cycle.openEnvironment(0);
       await cycle.verifyTab(settled);

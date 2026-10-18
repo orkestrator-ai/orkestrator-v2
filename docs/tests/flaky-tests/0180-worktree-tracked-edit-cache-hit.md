@@ -199,6 +199,34 @@ The final `mise run test:logged -- --name final-full-tests -- mise run test`
 passed all four groups (exit 0, 841.2 seconds including queue waits), with
 the owning test unchanged.
 
+## Recurrence on 2026-10-18
+
+`mise run test:logged -- --name full-suite -- mise run test` on branch
+`qualify-annotation-live-implement-0330a0bacc01` (`50c26708`, a dev:test
+harness, e2e and docs change) on a heavily loaded macOS host. Evidence is in
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Zq7Cut/`. The cache-hit assertion (expected 1, received 0) failed in the
+backend package, and again in one of three runs of the owning file alone
+(`bun test src/core/worktree-snapshots-git.test.ts` from `apps/backend`:
+4 passed, 3/1, 4 passed).
+
+## Backend preload contract validation recurrence — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test`
+  on `28915027` plus the backend preload contract assertion. Workspace/root/
+  bridge/protocol used 4/1/2/1 worker slots, with two isolated Bun workers per
+  workspace package.
+- **Failure:** `real Git through the shared owner > a tracked edit that never touches the index is detected`
+  failed at line 139 in 148.97 ms: cache hits expected 1, received 0. Backend:
+  9,017 passed, 41 skipped, one failed across 480 files (577.47 seconds). The
+  aggregate exited 1 after 593.6 seconds; every other workspace package and
+  the root, bridge and protocol groups passed.
+- **Isolated rerun:** `mise run test:logged -- --name worktree-snapshot-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures`
+  passed the unchanged owning file (four tests, exit 0, 0.8 seconds logged).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.XESA6C/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
+  outer artifacts are in `orkestrator-test-run.di5BQw`.
+- No watcher implementation, assertion, timeout or skip changed. The existing
+  cache-invalidation hypothesis remains unconfirmed.
+
 ## Usage-cache validation recurrence — 2026-10-18
 
 - **Command:** `mise run test:logged -- --name usage-all-tests -- mise run test`, with aggregate workspace/root/bridges/protocol reservations of 4/1/2/1 workers; backend used two isolated workers.

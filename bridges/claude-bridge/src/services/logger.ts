@@ -44,6 +44,7 @@ const DEBUG_EVENTS = new Set([
   "[session-manager] Prompt completed",
   "[session-manager] Query completed successfully",
   "[session-manager] Query result",
+  "[session-manager] Query stopped by the user",
   "[session-manager] Question not found for requestId:",
   "[session-manager] Re-prompting after approved-plan ExitPlanMode failure",
   "[session-manager] Re-prompting with plan rejection feedback",

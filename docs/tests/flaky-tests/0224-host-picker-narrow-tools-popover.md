@@ -243,3 +243,31 @@ an additional flaky classification or resolve the existing issue.
 Evidence: `orkestrator-test-run.SROwT8/login-isolated-browser.log.gz` in the
 host temporary directory and
 `output/agent-testing/qa-browser-bdfd649e-0a6/browser/`.
+
+
+## Landing-page main merge observation — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name merge-real-stack -- mise run test:agent:browser:isolated`, credential-free Codex fixture `qa-browser-e5113038-5d8`, one Playwright worker. The narrow host-picker case found a disabled selector at its five-second deadline. The overall runner reached its 900-second test deadline while later attachment cases were running, then stopped and reset the profile.
+- **Owning-file rerun:** on a fresh `dev:test --profile merge-15f6cd-gateway --fixture --no-agent-credentials --agent-platforms codex` profile, `ORKESTRATOR_AGENT_TEST_PROFILE=merge-15f6cd-gateway ORKESTRATOR_AGENT_TEST_RUN_ID=merge-15f6cd-gateway-rerun mise run test:logged -- --name merge-15f6cd-gateway-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1` reported 13 passed, 6 skipped and 1 failed in 177.6 seconds.
+- **Rerun failure:** the same narrow case could not click `Repository settings` after `Open tools`: the button was unstable, then hidden, until the 15000 ms deadline (`browser-gateway.spec.ts:238`).
+- **Evidence:** `orkestrator-test-run.ZDtnJp/merge-real-stack.log.gz` and `orkestrator-test-run.ru93zY/merge-15f6cd-gateway-owner.log.gz` below the host temporary directory; Playwright evidence under `output/agent-testing/merge-15f6cd-gateway-rerun/browser/`.
+- **Disposition:** reproduced in the owning file, so this observation does not independently establish a flake. The narrow tools-popover path remains an unresolved validation limitation. No gateway source, assertion, timeout or skip changed. Both disposable profiles were stopped and reset.
+
+
+## Inactive MCP qualification main merge — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name merge-agent-browser -- mise run test:agent:browser:isolated`, credential-free Codex fixture `qa-browser-be78767f-df2`, one Playwright worker alongside the full non-iOS suite.
+- **Failure:** the narrow host-picker case could not click `Repository settings` after `Open tools`; the button became unstable, then hidden, until the 15000 ms deadline at `browser-gateway.spec.ts:238`.
+- **Owning-file rerun:** fresh `dev:test --profile merge-mcp-gateway-1018 --fixture --no-agent-credentials --agent-platforms codex`; `ORKESTRATOR_AGENT_TEST_PROFILE=merge-mcp-gateway-1018 ORKESTRATOR_AGENT_TEST_RUN_ID=merge-mcp-gateway-1018-rerun mise run test:logged -- --name merge-gateway-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1` reproduced the same failure (13 passed, six skipped, one failed; exit 1 in 124.6 seconds).
+- **Full browser result:** 28 passed, 32 opt-in skips and one failed, exit 1 in 401.0 seconds including startup and cleanup. The runner stopped and reset `qa-browser-be78767f-df2`.
+- **Evidence:** `orkestrator-test-run.9diLAg/merge-agent-browser.log.gz` and `orkestrator-test-run.zvqJO1/merge-gateway-owner.log.gz` below the host temporary directory; browser artifacts under `output/agent-testing/qa-browser-be78767f-df2/browser/` and `output/agent-testing/merge-mcp-gateway-1018-rerun/browser/`.
+- **Disposition:** this occurrence fails in isolation too and does not establish a new flake classification or resolve issue 0224. No picker implementation, assertion, timeout or skip changed. The owning-file profile was stopped and reset.
+
+## CLI matrices second main merge observation — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name merge2-isolated-browser -- mise run test:agent:browser:isolated`, credential-free profile `qa-browser-57ff09b9-afe`, one worker.
+- **Failure:** narrow `Repository settings` click timed out after 15000 ms at `browser-gateway.spec.ts:238`: the target was unstable, intercepted, then hidden. The full 61-case browser run reported 27 passed, 32 skipped and two failed (900.4 seconds logged); the other failure was the persisted diff-baseline header assertion.
+- **Owning-file rerun:** fresh credential-free profile `qa-browser-925150d4-008`, through the existing `runIsolatedBrowser` helper with a temporary ignored config importing the normal browser config and restricting `testMatch` to `browser-gateway.spec.ts`. Command: `mise run test:logged -- --name merge2-gateway-owner -- bun -e 'import { runIsolatedBrowser } from "./apps/desktop/scripts/dev/isolated-browser.ts"; process.exitCode = await runIsolatedBrowser({ suite: { label: "gateway owner", config: "output/agent-testing/merge2-gateway-owner.config.ts" } });'`.
+- **Result:** the narrow picker case passed unchanged, but the whole owner reported 13 passed, five skipped and two failed (407.2 seconds logged): signed-out Codex lacked the `Sign in to Codex` button at 60000 ms, and the persisted diff-baseline `vs <tip>` header was absent at 5000 ms. Those remain validation limitations, not newly confirmed flakes.
+- **Evidence:** `orkestrator-test-run.eQ9vnb/merge2-isolated-browser.log.gz` and `orkestrator-test-run.iQOZTp/merge2-gateway-owner.log.gz` below the host temporary directory; artifacts under `output/agent-testing/<profile>/browser/` for the two profiles named above.
+- **Cleanup:** both profiles were stopped and reset by their owning runners; no live launcher or retained profile state. No implementation, assertion, timeout or skip changed.

@@ -42,6 +42,13 @@ export function asyncQuestionContentRepeatsQuestions(
   questions: NativeAsyncQuestionPart["asyncQuestion"]["questions"],
 ): boolean {
   let remaining = normalizeWhitespace(content);
+  // Prefer full titles/options over shorter candidates sharing a word prefix.
+  const candidates = questions
+    .map((question) => ({
+      title: normalizeWhitespace(question.title),
+      options: question.options.map(normalizeWhitespace).sort((a, b) => b.length - a.length),
+    }))
+    .sort((a, b) => b.title.length - a.title.length);
   const consume = (token: string) => {
     if (!token || !remaining.startsWith(token)) return false;
     const rest = remaining.slice(token.length);
@@ -50,12 +57,11 @@ export function asyncQuestionContentRepeatsQuestions(
     return true;
   };
   while (remaining) {
-    const question = questions.find((candidate) => consume(normalizeWhitespace(candidate.title)));
+    const question = candidates.find((candidate) => consume(candidate.title));
     if (!question) return false;
-    const options = question.options.map(normalizeWhitespace);
     let consumedOption = true;
     while (consumedOption) {
-      consumedOption = options.some((option) =>
+      consumedOption = question.options.some((option) =>
         ["-", "*", "•"].some((bullet) => consume(`${bullet} ${option}`)),
       );
     }

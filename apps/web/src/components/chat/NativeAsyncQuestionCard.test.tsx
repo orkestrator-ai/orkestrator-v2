@@ -59,11 +59,14 @@ describe("NativeAsyncQuestionCard", () => {
     expect(screen.getByRole("group", { name: "Any constraints?" })).toBeTruthy();
   });
 
-  test("suppresses Codex's plain-text fallback of the question and its options", () => {
+  test.each(["-", "*", "•"])("suppresses Codex's plain-text fallback with %s bullets", (bullet) => {
     render(
       <AsyncQuestionResponseContext.Provider value={{ responses: [] }}>
         <NativeAsyncQuestionCard
-          part={{ ...part, content: "Which target?\n- Staging\n- Production\n\nAny constraints?" }}
+          part={{
+            ...part,
+            content: `Which target?\n${bullet} Staging\n${bullet} Production\n\nAny constraints?`,
+          }}
         />
       </AsyncQuestionResponseContext.Provider>,
     );
@@ -71,6 +74,52 @@ describe("NativeAsyncQuestionCard", () => {
     expect(screen.getAllByText("Which target?")).toHaveLength(1);
     expect(screen.getAllByText("Staging")).toHaveLength(1);
     expect(screen.getAllByText("Any constraints?")).toHaveLength(1);
+  });
+
+  const prefixFallbacks = [
+    "Which target? Any constraints?",
+    "Which target?\n- Staging\n- Staging EU\n\nWhich target? Any constraints?\n- Europe",
+  ];
+
+  test.each(prefixFallbacks)("suppresses prefix-sharing titles and options in %s", (content) => {
+    const questions = [
+      { id: "item-1:0", title: "Which target?", options: ["Staging", "Staging EU"] },
+      { id: "item-1:1", title: "Which target? Any constraints?", options: ["Europe"] },
+    ];
+    expect(asyncQuestionContentRepeatsQuestions(content, questions)).toBe(true);
+    render(
+      <AsyncQuestionResponseContext.Provider value={{ responses: [] }}>
+        <NativeAsyncQuestionCard
+          part={{ ...part, content, asyncQuestion: { ...part.asyncQuestion, questions } }}
+        />
+      </AsyncQuestionResponseContext.Provider>,
+    );
+
+    for (const title of ["Which target?", "Which target? Any constraints?"]) {
+      expect(screen.getAllByText(title)).toHaveLength(1);
+      expect(screen.getByRole("group", { name: title })).toBeTruthy();
+    }
+    expect(screen.getAllByText("Staging EU")).toHaveLength(1);
+    expect(screen.getAllByText("Europe")).toHaveLength(1);
+  });
+
+  test.each(prefixFallbacks)("keeps added context after prefix-sharing fallback %s", (fallback) => {
+    const content = `${fallback}\n\nStaging is currently broken.`;
+    const questions = [
+      { id: "item-1:0", title: "Which target?", options: ["Staging", "Staging EU"] },
+      { id: "item-1:1", title: "Which target? Any constraints?", options: ["Europe"] },
+    ];
+    expect(asyncQuestionContentRepeatsQuestions(content, questions)).toBe(false);
+    render(
+      <AsyncQuestionResponseContext.Provider value={{ responses: [] }}>
+        <NativeAsyncQuestionCard
+          part={{ ...part, content, asyncQuestion: { ...part.asyncQuestion, questions } }}
+        />
+      </AsyncQuestionResponseContext.Provider>,
+    );
+
+    expect(screen.getByText("Staging is currently broken.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Staging EU" })).toBeTruthy();
   });
 
   test("suppresses accompanying text that only combines question titles", () => {
@@ -86,6 +135,14 @@ describe("NativeAsyncQuestionCard", () => {
   test("renders a restated question that adds context after its options", () => {
     const content = "Which target?\n- Staging\n- Production\n\nStaging is currently broken.";
     expect(asyncQuestionContentRepeatsQuestions(content, part.asyncQuestion.questions)).toBe(false);
+    render(
+      <AsyncQuestionResponseContext.Provider value={{ responses: [] }}>
+        <NativeAsyncQuestionCard part={{ ...part, content }} />
+      </AsyncQuestionResponseContext.Provider>,
+    );
+
+    expect(screen.getByText("Staging is currently broken.")).toBeTruthy();
+    expect(screen.getByRole("group", { name: "Which target?" })).toBeTruthy();
   });
 
   test("does not treat a partial option match as a restatement", () => {

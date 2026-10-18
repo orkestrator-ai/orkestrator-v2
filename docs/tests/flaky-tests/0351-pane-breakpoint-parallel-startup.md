@@ -42,3 +42,13 @@ or timeout changed.
 - `split panes keep terminal output, scroll positions and the draft across the breakpoint (in the app shell, moveBefore)`
 
 All 21 failing owners, including this unchanged file, passed with one worker in 428.8 seconds (exit 0). The complete rerun command, individual failure messages and evidence paths are in [0382](0382-component-browser-parallel-load.md). No timeout, assertion, skip or owning source changed.
+
+## Async question prefix review recurrence — 2026-10-18
+
+The nine-worker component suite again found zero terminal elements at the
+five-second startup deadline in both mobile pane-tree variants. The suite
+reported 357 passed, 80 skipped and three failed (283.1 seconds logged).
+Both unchanged owning files passed sequentially with one worker in 35.4 seconds.
+Commands and the aggregate evidence path are recorded in
+[0173](0173-diff-viewer-parallel-monaco-startup.md#async-question-prefix-review-recurrence--2026-10-18).
+No assertion, timeout or skip changed.

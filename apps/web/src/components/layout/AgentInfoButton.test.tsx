@@ -1613,12 +1613,13 @@ describe("AgentInfoButton usage panel", () => {
     expect(screen.queryByText("Context") === null).toBe(true);
   });
 
-  test("renders context, token split, cache, reasoning, elapsed and denial rows", () => {
+  test("renders context, token split, cache read/write, reasoning, elapsed and denial rows", () => {
     seedUsage(
       usage({
         inputTokens: 20_000,
         outputTokens: 5_000,
         cacheReadTokens: 12_000,
+        cacheWriteTokens: 3_000,
         reasoningTokens: 900,
         sessionTokens: 30_000,
         costUsd: 1.25,
@@ -1659,6 +1660,7 @@ describe("AgentInfoButton usage panel", () => {
     expect(metricValue("Input")).toBe("20k");
     expect(metricValue("Output")).toBe("5.0k");
     expect(metricValue("Cache read")).toBe("12k");
+    expect(metricValue("Cache write")).toBe("3.0k");
     expect(metricValue("Reasoning")).toBe("900");
     expect(metricValue("Session")).toBe("30k");
     expect(metricValue("Cost")).toBe("$1.25");
@@ -1837,6 +1839,7 @@ describe("AgentInfoButton usage panel", () => {
       "Input",
       "Output",
       "Cache read",
+      "Cache write",
       "Reasoning",
       "Cost",
       "Elapsed",

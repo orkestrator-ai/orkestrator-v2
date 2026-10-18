@@ -894,7 +894,7 @@ export function createPlanUsageReader(
   const cache = overrides.cache ?? createPlanUsageCache(now);
   const flights = new Map<PlanUsagePlatform, Promise<PlanUsageSnapshot>>();
   const readGenerations = new Map<PlanUsagePlatform, number>();
-  const rateLimitedUntil = new Map<PlanUsagePlatform, number>();
+  const rateLimits = new Map<PlanUsagePlatform, { until: number; snapshot: PlanUsageSnapshot }>();
   const runtime: ReaderRuntime = {
     fetchImpl: overrides.fetchImpl ?? fetch,
     now,
@@ -920,9 +920,9 @@ export function createPlanUsageReader(
     }
     // A provider that answered 429 is not asked again before its wait is
     // over, even by a forced refresh. Each retry spends the same allowance.
-    if ((rateLimitedUntil.get(platform) ?? 0) > now()) {
-      const held = cache.peek(platform);
-      if (held) return Promise.resolve(held);
+    const rateLimit = rateLimits.get(platform);
+    if (rateLimit && rateLimit.until > now()) {
+      return Promise.resolve(cache.peek(platform) ?? rateLimit.snapshot);
     }
     const forced = options?.force === true;
     // Only an unforced caller may be served by, or join, an existing read. A
@@ -973,7 +973,7 @@ export function createPlanUsageReader(
           const ttl =
             error instanceof PlanUsageRateLimitedError ? error.retryAfterMs : ERROR_CACHE_TTL_MS;
           if (error instanceof PlanUsageRateLimitedError) {
-            rateLimitedUntil.set(platform, now() + ttl);
+            rateLimits.set(platform, { until: now() + ttl, snapshot });
           }
           cache.store(platform, snapshot, ttl);
         }
@@ -990,7 +990,7 @@ export function createPlanUsageReader(
   reader.invalidate = (platform) => {
     readGenerations.set(platform, (readGenerations.get(platform) ?? 0) + 1);
     flights.delete(platform);
-    rateLimitedUntil.delete(platform);
+    rateLimits.delete(platform);
     cache.invalidate(platform);
   };
 

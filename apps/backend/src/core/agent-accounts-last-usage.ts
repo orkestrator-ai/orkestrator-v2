@@ -24,6 +24,7 @@ type LastUsageStore = Record<string, PlanUsageSnapshot>;
 
 const loaded = new Map<string, Promise<LastUsageStore>>();
 const writes = new Map<string, Promise<void>>();
+const dirty = new Set<string>();
 
 function storeKey(platform: AgentAccountPlatform, accountId: string): string {
   return `${platform}:${accountId}`;
@@ -44,7 +45,8 @@ async function loadStore(accountsRoot: string): Promise<LastUsageStore> {
         const result: LastUsageStore = {};
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
           for (const [key, value] of Object.entries(parsed)) {
-            if (isPlanUsageSnapshot(value) && value.status === "ok") result[key] = value;
+            if (isPlanUsageSnapshot(value) && value.status === "ok" && !value.stale)
+              result[key] = value;
           }
         }
         return result;
@@ -64,7 +66,9 @@ function persist(accountsRoot: string, store: LastUsageStore): Promise<void> {
       await fs.mkdir(path.dirname(file), { recursive: true });
       await fs.writeFile(temporary, JSON.stringify(store), { mode: 0o600 });
       await fs.rename(temporary, file);
+      dirty.delete(file);
     } catch {
+      dirty.add(file);
       console.warn("[agent-accounts] Could not save the last plan usage reading");
     } finally {
       await fs.rm(temporary, { force: true }).catch(() => undefined);
@@ -87,7 +91,10 @@ export async function rememberAgentAccountUsage(
   const previous = store[key];
   // The active account is served from a shared cache, so the same reading
   // arrives on every settings read until it is replaced.
-  if (previous && Date.parse(previous.fetchedAt) >= Date.parse(snapshot.fetchedAt)) return;
+  if (previous && Date.parse(previous.fetchedAt) >= Date.parse(snapshot.fetchedAt)) {
+    if (dirty.has(storeFile(accountsRoot))) await persist(accountsRoot, store);
+    return;
+  }
   store[key] = snapshot;
   await persist(accountsRoot, store);
 }
@@ -99,7 +106,7 @@ export async function forgetAgentAccountUsage(
 ): Promise<void> {
   const store = await loadStore(accountsRoot);
   const key = storeKey(platform, accountId);
-  if (!(key in store)) return;
+  if (!(key in store) && !dirty.has(storeFile(accountsRoot))) return;
   delete store[key];
   await persist(accountsRoot, store);
 }
@@ -129,4 +136,5 @@ export async function withLastKnownUsage(
 export function resetAgentAccountLastUsageForTests(): void {
   loaded.clear();
   writes.clear();
+  dirty.clear();
 }

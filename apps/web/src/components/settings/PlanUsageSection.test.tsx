@@ -35,6 +35,22 @@ afterAll(() => {
 });
 
 describe("PlanUsageSection", () => {
+  test("keeps stale quotas and explains the original reading time and failure", async () => {
+    getPlanUsage.mockResolvedValue(
+      snapshot({
+        stale: true,
+        fetchedAt: new Date(Date.now() - 3_600_000).toISOString(),
+        message: "HTTP 429. Retrying in 5 minutes.",
+        windows: [{ window: "weekly", label: "Weekly", usedPercent: 42 }],
+      }),
+    );
+    render(<PlanUsageSection platform="opencode" />);
+    expect(await screen.findByText("42% used")).toBeTruthy();
+    expect(screen.getByText(/Last known usage, as of 1h ago\. HTTP 429/)).toBeTruthy();
+    expect(screen.queryByText(/^Updated /) === null).toBe(true);
+    expect(screen.getByLabelText("Refresh plan usage").hasAttribute("disabled")).toBe(false);
+  });
+
   test("renders a row per reported quota window", async () => {
     getPlanUsage.mockResolvedValue(
       snapshot({

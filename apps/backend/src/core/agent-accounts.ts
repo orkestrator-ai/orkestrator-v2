@@ -185,8 +185,9 @@ export async function setActiveAgentAccount(
   accountId: string,
 ): Promise<AgentAccountsSnapshot> {
   assertKnownAccountId(accountId);
-  const previous = await withAccountMutation(() =>
-    context.storage.mutateAgentAccounts<string | undefined>((store) => {
+  await withAccountMutation(async () => {
+    const outgoing = sharedPlanUsageCache.lastOk(platform);
+    const previous = await context.storage.mutateAgentAccounts<string | undefined>((store) => {
       const current = store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID;
       if (current === accountId) return { store, result: undefined };
       const active = { ...store.active };
@@ -199,16 +200,18 @@ export async function setActiveAgentAccount(
         active[platform] = accountId;
       }
       return { store: { ...store, active }, result: current };
-    }),
-  );
-  // The shared reading describes the account being left. Keep it as that
-  // account's last known usage before the switch discards it.
-  const outgoing = previous && sharedPlanUsageCache.lastOk(platform);
-  if (previous && outgoing) {
-    await rememberAgentAccountUsage(accountsRoot(context), platform, previous, outgoing);
-  }
-  readPlanUsage.invalidate(platform);
-  setActivePlanUsageAccount(platform, accountId);
+    });
+    // Readers take this same lock before selecting an account and before
+    // publishing a result. No reader can observe a half-completed switch.
+    bumpUsageGeneration(context, platform);
+    readPlanUsage.invalidate(platform);
+    setActivePlanUsageAccount(platform, accountId);
+    usageCache.delete(usageKey(context, platform, accountId));
+    if (previous) usageCache.delete(usageKey(context, platform, previous));
+    if (previous && outgoing) {
+      await rememberAgentAccountUsage(accountsRoot(context), platform, previous, outgoing);
+    }
+  });
   return listAgentAccounts(context);
 }
 
@@ -292,7 +295,8 @@ export async function removeAgentAccount(
       if (accounts.length === store.accounts.length) throw new Error("Unknown agent account");
       return { store: { ...store, accounts }, result: undefined };
     });
-    usageCache.delete(`${platform}:${accountId}`);
+    bumpUsageGeneration(context, platform);
+    usageCache.delete(usageKey(context, platform, accountId));
     await forgetAgentAccountUsage(accountsRoot(context), platform, accountId);
     return listAgentAccounts(context);
   });
@@ -388,6 +392,11 @@ async function finishReauthentication(context: CommandContext, entry: ActiveLogi
     if (!state.identityKey) throw new Error("The sign-in finished without an account identity.");
     const added = accountId !== DEFAULT_AGENT_ACCOUNT_ID;
     const host = added ? await readLoginState(context, platform, undefined) : undefined;
+    const previousIdentity = await readLoginState(
+      context,
+      platform,
+      added ? homeFor(context, platform, accountId) : undefined,
+    );
     const destination = added ? homeFor(context, platform, accountId) : hostClaudeConfigDir();
     const jsonPath = added ? path.join(destination, ".claude.json") : hostClaudeJsonPath();
     // Credentials and metadata are committed under the same account and storage
@@ -437,12 +446,18 @@ async function finishReauthentication(context: CommandContext, entry: ActiveLogi
         });
       },
     );
+    bumpUsageGeneration(context, platform);
+    usageCache.delete(usageKey(context, platform, accountId));
+    readPlanUsage.invalidate(platform);
+    // A local slot can be renewed as a different provider identity. Its old
+    // quota must not survive that replacement, including across a restart.
+    if (previousIdentity.identityKey !== state.identityKey) {
+      await forgetAgentAccountUsage(accountsRoot(context), platform, accountId);
+    }
     await discardNewAccount(context, entry).catch(() =>
       console.warn("[agent-accounts] Temporary login cleanup failed"),
     );
   });
-  usageCache.delete(`${platform}:${accountId}`);
-  readPlanUsage.invalidate(platform);
   markLocalBridgesForLoginRefresh(platform);
   if (platform === "claude")
     await markContainersForClaudeLoginRefresh(context, true).catch(() =>
@@ -644,6 +659,7 @@ export function cancelAgentAccountLogin(operationId?: string): AgentAccountLogin
 export function resetAgentAccountLoginForTests(): void {
   activeLogin = undefined;
   usageCache.clear();
+  usageGenerations.clear();
   resetAgentAccountLastUsageForTests();
 }
 
@@ -654,6 +670,26 @@ const usageCache = new Map<
   string,
   { expiresAt: number; rateLimited?: boolean; snapshot: PlanUsageSnapshot }
 >();
+
+// Generation changes fence network work that outlives a switch, renewal or
+// removal. The mutation lock also covers persistence so deletion cannot race
+// a completed read's check-and-write.
+const usageGenerations = new Map<string, number>();
+
+function usageKey(context: CommandContext, platform: AgentAccountPlatform, id: string): string {
+  return `${accountsRoot(context)}:${platform}:${id}`;
+}
+
+function usageGeneration(context: CommandContext, platform: AgentAccountPlatform): number {
+  return usageGenerations.get(usageKey(context, platform, "generation")) ?? 0;
+}
+
+function bumpUsageGeneration(context: CommandContext, platform: AgentAccountPlatform): void {
+  usageGenerations.set(
+    usageKey(context, platform, "generation"),
+    usageGeneration(context, platform) + 1,
+  );
+}
 
 /**
  * Plan usage for any listed account.
@@ -672,21 +708,42 @@ export async function readAgentAccountUsage(
   options: { force?: boolean; reader: PlanUsageReader; now?: () => number },
 ): Promise<PlanUsageSnapshot> {
   assertKnownAccountId(accountId);
-  const store = await context.storage.loadAgentAccounts();
+  const { store, generation } = await withAccountMutation(async () => ({
+    store: await context.storage.loadAgentAccounts(),
+    generation: usageGeneration(context, platform),
+  }));
   const now = options.now ?? Date.now;
   const root = accountsRoot(context);
+  const publish = (snapshot: PlanUsageSnapshot, retryAfterMs?: number, cache = false) =>
+    withAccountMutation(async () => {
+      if (usageGeneration(context, platform) !== generation) {
+        throw new Error("The account changed while reading plan usage. Try again.");
+      }
+      const result = await withLastKnownUsage(root, platform, accountId, snapshot, now());
+      if (cache) {
+        usageCache.set(usageKey(context, platform, accountId), {
+          expiresAt:
+            now() +
+            (retryAfterMs ??
+              (result.status === "ok" && !result.stale ? USAGE_TTL_MS : USAGE_ERROR_TTL_MS)),
+          ...(retryAfterMs !== undefined ? { rateLimited: true } : {}),
+          snapshot: result,
+        });
+      }
+      return result;
+    });
   if ((store.active[platform] ?? DEFAULT_AGENT_ACCOUNT_ID) === accountId) {
     const snapshot = await options.reader(context, platform, { force: options.force === true });
-    return withLastKnownUsage(root, platform, accountId, snapshot, now());
+    return publish(snapshot);
   }
   const stored = store.accounts.find((a) => a.id === accountId && a.platform === platform);
   if (accountId !== DEFAULT_AGENT_ACCOUNT_ID && !stored) throw new Error("Unknown agent account");
 
-  const key = `${platform}:${accountId}`;
+  const key = usageKey(context, platform, accountId);
   const cached = usageCache.get(key);
   // A forced refresh still waits out a 429: each retry spends the allowance.
   if (cached && cached.expiresAt > now() && (!options.force || cached.rateLimited)) {
-    return cached.snapshot;
+    return publish(cached.snapshot);
   }
 
   const home = stored ? homeFor(context, platform, stored.id) : undefined;
@@ -721,14 +778,5 @@ export async function readAgentAccountUsage(
       { now },
     ));
   }
-  snapshot = await withLastKnownUsage(root, platform, accountId, snapshot, now());
-  usageCache.set(key, {
-    expiresAt:
-      now() +
-      (retryAfterMs ??
-        (snapshot.status === "ok" && !snapshot.stale ? USAGE_TTL_MS : USAGE_ERROR_TTL_MS)),
-    ...(retryAfterMs !== undefined ? { rateLimited: true } : {}),
-    snapshot,
-  });
-  return snapshot;
+  return publish(snapshot, retryAfterMs, true);
 }

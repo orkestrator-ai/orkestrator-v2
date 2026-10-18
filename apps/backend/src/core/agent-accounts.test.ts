@@ -26,7 +26,11 @@ import type { SpawnLike } from "./agent-accounts-login.js";
 import { localServerProcesses } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
 import type { PlanUsageReader } from "./plan-usage.js";
-import { sharedPlanUsageCache } from "./plan-usage-cache.js";
+import {
+  rememberAgentAccountUsage,
+  resetAgentAccountLastUsageForTests,
+} from "./agent-accounts-last-usage.js";
+import { contextUsageWithPlanUsage, sharedPlanUsageCache } from "./plan-usage-cache.js";
 import { StorageService } from "./storage.js";
 import { terminalAccountHomes } from "./terminal-account-usage.js";
 
@@ -133,6 +137,24 @@ async function addCodexAccount(email: string, accountId: string) {
     executable: "codex",
   });
   return settledLogin();
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+function usageReading(platform: "claude" | "codex", usedPercent = 42): PlanUsageSnapshot {
+  return {
+    platform,
+    status: "ok",
+    plan: "pro",
+    windows: [{ window: "primary", usedPercent }],
+    fetchedAt: new Date().toISOString(),
+  };
 }
 
 beforeEach(async () => {
@@ -387,6 +409,65 @@ describe("agent accounts", () => {
       expect(claude).toHaveLength(2);
       expect(claude.some((a) => a.id === accountId && a.isActive)).toBe(true);
       expect(staleLoginLocalBridges.has("claude:env-1")).toBe(true);
+    });
+
+    test.each(["original", "replacement"])(
+      "renewal as %s keeps fallback only for the same identity after reload",
+      async (identity) => {
+        const id = await addActiveClaudeAccount("original");
+        const reading = usageReading("claude");
+        await rememberAgentAccountUsage(
+          context.storage.agentAccountsDirectory(),
+          "claude",
+          id,
+          reading,
+        );
+        await startAgentAccountLogin(context, "claude", {
+          reauthenticate: true,
+          executable: "claude",
+          spawnImpl: fakeClaudeLogin(identity),
+        });
+        expect((await settledLogin()).state).toBe("succeeded");
+        resetAgentAccountLoginForTests();
+        const failure: PlanUsageSnapshot = {
+          platform: "claude",
+          status: "error",
+          windows: [],
+          message: "usage failed",
+          fetchedAt: new Date().toISOString(),
+        };
+        const reader = (async () => failure) as unknown as PlanUsageReader;
+        const result = await readAgentAccountUsage(context, "claude", id, { reader });
+        if (identity === "original")
+          expect(result).toMatchObject({ stale: true, windows: reading.windows, plan: "pro" });
+        else expect(result).toBe(failure);
+      },
+    );
+
+    test("renewal rejects a late usage reading from the replaced identity", async () => {
+      const id = await addActiveClaudeAccount("original");
+      const started = deferred<void>();
+      const response = deferred<PlanUsageSnapshot>();
+      const reader = (async () => {
+        started.resolve();
+        return response.promise;
+      }) as unknown as PlanUsageReader;
+      const pending = readAgentAccountUsage(context, "claude", id, { reader });
+      const rejected = pending.catch((error: unknown) => error);
+      await started.promise;
+      await startAgentAccountLogin(context, "claude", {
+        reauthenticate: true,
+        executable: "claude",
+        spawnImpl: fakeClaudeLogin("replacement"),
+      });
+      expect((await settledLogin()).state).toBe("succeeded");
+      response.resolve(usageReading("claude"));
+      expect(await rejected).toEqual(
+        expect.objectContaining({ message: expect.stringContaining("account changed") }),
+      );
+      await expect(
+        fs.stat(path.join(context.storage.agentAccountsDirectory(), "last-usage.json")),
+      ).rejects.toThrow();
     });
 
     test("a failed sign-in keeps the account it was renewing", async () => {
@@ -831,5 +912,218 @@ describe("agent accounts", () => {
       await fs.readFile(path.join(root, "data", "agent-accounts", "last-usage.json"), "utf8"),
     ) as Record<string, unknown>;
     expect(Object.keys(saved)).toEqual(["codex:default"]);
+  });
+  test("switches stay serialized while the outgoing usage write is paused", async () => {
+    const b = (await addCodexAccount("b@example.com", "b")).accountId!;
+    const c = (await addCodexAccount("c@example.com", "c")).accountId!;
+    sharedPlanUsageCache.store("codex", usageReading("codex", 91), 60_000);
+    const writing = deferred<void>();
+    const release = deferred<void>();
+    const original = fs.writeFile.bind(fs);
+    const write = spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
+      if (String(file).includes("last-usage.json.")) {
+        writing.resolve();
+        await release.promise;
+      }
+      return original(file, data, options);
+    });
+    const reader = (async () =>
+      sharedPlanUsageCache.peek("codex") ?? {
+        platform: "codex",
+        status: "unavailable",
+        windows: [],
+        fetchedAt: new Date().toISOString(),
+      }) as unknown as PlanUsageReader;
+    try {
+      const first = setActiveAgentAccount(context, "codex", b);
+      await writing.promise;
+      expect(sharedPlanUsageCache.lastOk("codex")).toBeUndefined();
+      contextUsageWithPlanUsage(
+        "codex",
+        { usedTokens: 1, account: [{ window: "primary", usedPercent: 92 }] },
+        "default",
+      );
+      expect(sharedPlanUsageCache.peek("codex")).toBeUndefined();
+      const read = readAgentAccountUsage(context, "codex", b, { reader }).catch(
+        (error: unknown) => {
+          expect(error).toMatchObject({ message: expect.stringContaining("account changed") });
+          return undefined;
+        },
+      );
+      const second = setActiveAgentAccount(context, "codex", c);
+      release.resolve();
+      await Promise.all([first, second]);
+      expect((await read)?.windows ?? []).toEqual([]);
+      expect((await context.storage.loadAgentAccounts()).active.codex).toBe(c);
+      expect((await readAgentAccountUsage(context, "codex", c, { reader })).windows).toEqual([]);
+      contextUsageWithPlanUsage(
+        "codex",
+        { usedTokens: 1, account: [{ window: "primary", usedPercent: 93 }] },
+        b,
+      );
+      expect(sharedPlanUsageCache.peek("codex")).toBeUndefined();
+      contextUsageWithPlanUsage(
+        "codex",
+        { usedTokens: 1, account: [{ window: "primary", usedPercent: 3 }] },
+        c,
+      );
+      expect(sharedPlanUsageCache.peek("codex")?.windows[0]?.usedPercent).toBe(3);
+      const saved = JSON.parse(
+        await fs.readFile(
+          path.join(context.storage.agentAccountsDirectory(), "last-usage.json"),
+          "utf8",
+        ),
+      );
+      expect(Object.keys(saved)).toEqual(["codex:default"]);
+      expect(saved["codex:default"].windows[0].usedPercent).toBe(91);
+    } finally {
+      release.resolve();
+      write.mockRestore();
+    }
+  });
+
+  test("an active usage result cannot be attributed after a switch", async () => {
+    const id = (await addCodexAccount("new@example.com", "new")).accountId!;
+    const started = deferred<void>();
+    const response = deferred<PlanUsageSnapshot>();
+    const reader = (async () => {
+      started.resolve();
+      return response.promise;
+    }) as unknown as PlanUsageReader;
+    const pending = readAgentAccountUsage(context, "codex", "default", { reader });
+    const rejected = pending.catch((error: unknown) => error);
+    await started.promise;
+    await setActiveAgentAccount(context, "codex", id);
+    response.resolve(usageReading("codex", 99));
+    expect(await rejected).toEqual(
+      expect.objectContaining({ message: expect.stringContaining("account changed") }),
+    );
+    await expect(
+      fs.stat(path.join(context.storage.agentAccountsDirectory(), "last-usage.json")),
+    ).rejects.toThrow();
+  });
+
+  async function usableInactiveAccount() {
+    const id = (await addCodexAccount("inactive@example.com", "inactive")).accountId!;
+    const auth = JSON.parse(codexAuth("inactive@example.com", "inactive"));
+    auth.tokens.access_token = jwt({ exp: 3_000_000_000 });
+    await fs.writeFile(
+      path.join(context.storage.agentAccountsDirectory(), "codex", id, "auth.json"),
+      JSON.stringify(auth),
+    );
+    return id;
+  }
+
+  test("a late inactive usage response cannot restore a removed account", async () => {
+    const id = await usableInactiveAccount();
+    const response = deferred<Response>();
+    const started = deferred<void>();
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async () => {
+      started.resolve();
+      return response.promise;
+    }) as unknown as typeof fetch);
+    const reader = (async () => {
+      throw new Error("inactive reads must use their own credentials");
+    }) as unknown as PlanUsageReader;
+    try {
+      const pending = readAgentAccountUsage(context, "codex", id, { reader });
+      const rejected = pending.catch((error: unknown) => error);
+      await started.promise;
+      await removeAgentAccount(context, "codex", id);
+      response.resolve(
+        Response.json({
+          rate_limit: { primary_window: { used_percent: 68, limit_window_seconds: 18000 } },
+        }),
+      );
+      expect(await rejected).toEqual(
+        expect.objectContaining({ message: expect.stringContaining("account changed") }),
+      );
+      await expect(readAgentAccountUsage(context, "codex", id, { reader })).rejects.toThrow(
+        "Unknown agent account",
+      );
+      await expect(
+        fs.stat(path.join(context.storage.agentAccountsDirectory(), "last-usage.json")),
+      ).rejects.toThrow();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  test("removal waits for an admitted usage write, then deletes its disk and cache entries", async () => {
+    const id = await usableInactiveAccount();
+    const writing = deferred<void>();
+    const release = deferred<void>();
+    const original = fs.writeFile.bind(fs);
+    const write = spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
+      if (String(file).includes("last-usage.json.")) {
+        writing.resolve();
+        await release.promise;
+      }
+      return original(file, data, options);
+    });
+    const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        rate_limit: { primary_window: { used_percent: 68, limit_window_seconds: 18000 } },
+      }),
+    );
+    const reader = (async () => usageReading("codex")) as unknown as PlanUsageReader;
+    try {
+      const pending = readAgentAccountUsage(context, "codex", id, { reader });
+      await writing.promise;
+      const removal = removeAgentAccount(context, "codex", id);
+      release.resolve();
+      await Promise.all([pending, removal]);
+      const file = path.join(context.storage.agentAccountsDirectory(), "last-usage.json");
+      expect(JSON.parse(await fs.readFile(file, "utf8"))).toEqual({});
+      await expect(readAgentAccountUsage(context, "codex", id, { reader })).rejects.toThrow(
+        "Unknown agent account",
+      );
+    } finally {
+      release.resolve();
+      write.mockRestore();
+      fetchSpy.mockRestore();
+    }
+  });
+
+  test("inactive account backoff survives ordinary TTL and forced reads, using disk fallback", async () => {
+    const id = await usableInactiveAccount();
+    let clock = 1_800_000_000_000;
+    const reading = {
+      ...usageReading("codex", 54),
+      fetchedAt: new Date(clock - 60_000).toISOString(),
+    };
+    await rememberAgentAccountUsage(context.storage.agentAccountsDirectory(), "codex", id, reading);
+    resetAgentAccountLastUsageForTests();
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+      (async () =>
+        new Response(null, {
+          status: 429,
+          headers: { "retry-after": "300" },
+        })) as unknown as typeof fetch,
+    );
+    const reader = (async () => {
+      throw new Error("inactive read");
+    }) as unknown as PlanUsageReader;
+    const options = { reader, now: () => clock };
+    try {
+      const result = await readAgentAccountUsage(context, "codex", id, options);
+      expect(result).toMatchObject({
+        stale: true,
+        windows: reading.windows,
+        fetchedAt: reading.fetchedAt,
+      });
+      expect(result.message).toContain("HTTP 429");
+      clock += 121_000;
+      expect(await readAgentAccountUsage(context, "codex", id, options)).toEqual(result);
+      expect(
+        await readAgentAccountUsage(context, "codex", id, { ...options, force: true }),
+      ).toEqual(result);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      clock += 179_001;
+      await readAgentAccountUsage(context, "codex", id, options);
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 });

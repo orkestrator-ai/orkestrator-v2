@@ -951,6 +951,31 @@ describe("createPlanUsageReader refresh and cache lifetime", () => {
 });
 
 describe("createPlanUsageReader rate limits", () => {
+  test("session cache expiry cannot bypass a five-minute 429 deadline", async () => {
+    let clock = 1_700_000_000_000;
+    let calls = 0;
+    const reader = createPlanUsageReader({
+      now: () => clock,
+      credentials: { claude: async () => "oauth-token" },
+      fetchImpl: (async () => {
+        calls += 1;
+        return new Response(null, { status: 429, headers: { "retry-after": "300" } });
+      }) as unknown as typeof fetch,
+    });
+    const context = contextWithGlobal();
+    const limited = await reader(context, "claude");
+    clock += 1_000;
+    reader.recordSessionWindows("claude", [{ window: "five_hour", usedPercent: 22 }]);
+    expect((await reader(context, "claude")).windows[0]?.usedPercent).toBe(22);
+    clock += 121_000;
+    expect(await reader(context, "claude")).toBe(limited);
+    expect(await reader(context, "claude", { force: true })).toBe(limited);
+    expect(calls).toBe(1);
+    clock += 178_001;
+    await reader(context, "claude");
+    expect(calls).toBe(2);
+  });
+
   test("waits out a 429, even when forced, and shows the last good reading meanwhile", async () => {
     let clock = 1_700_000_000_000;
     let limited = false;

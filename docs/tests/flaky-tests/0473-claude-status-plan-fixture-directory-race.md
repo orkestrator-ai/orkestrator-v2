@@ -13,3 +13,9 @@
 - **Assessment:** confirmed intermittent fixture failure. The producer of the racing directory was not established. No implementation, assertion, timeout or skip changed.
 
 The warm aggregate exited 1 in 307.7 seconds; workspace, root/support and protocol groups passed. This fixture failure was its only failing test. The cold aggregate had passed every bridge; its separate Pi staging timeout passed in an owning-file rerun (see [0178](0178-pi-vendor-runtime-aggregate-timeout.md)).
+
+## README follow-up merge recurrence — 2026-10-18
+
+`mise run test:logged -- --name merge3-final-tests -- mise run test`, merging `origin/main` at `a2b36d1d` into `84e228d7`, repeated the same EISDIR fixture setup failure (1.26 ms). The bridge implementation and owning file were unchanged by this follow-up. `mise run test:logged -- --name merge3-claude-system-owner -- bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/services/session-manager-system-events.test.ts --parallel=1 --only-failures` passed unchanged. Evidence: `orkestrator-test-run.QGIBq2/bridges.log.gz` below the host temporary directory. No implementation, assertion, timeout or skip changed.
+
+The follow-up aggregate completed in 297.4 seconds (exit 1). Workspace, root/support and protocol groups passed; this fixture was its sole failure. The unchanged owner rerun passed in 0.2 seconds. Formatting, lint, typechecking, the production build, Markdown round-trip tests and the final index contract also passed.

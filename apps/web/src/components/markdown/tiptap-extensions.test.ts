@@ -68,19 +68,28 @@ describe("Markdown Tiptap extensions", () => {
   });
 
   test("accepts the repository Markdown files that previously failed", () => {
-    const expectedMarkdown = new Map([
-      ["AGENTS.md", "**Always use v2 of the `@opencode-ai/sdk` package.**"],
-      ["README.md", "[`orkestrator.dev`](https://www.orkestrator.dev)"],
+    // Each file failed on inline code nested in another mark: bold in AGENTS.md,
+    // link text in README.md. The README is rewritten often, so match the
+    // construct rather than one sentence; every occurrence must survive.
+    const nestedCodePatterns = new Map([
+      ["AGENTS.md", /\*\*Always use v2 of the `@opencode-ai\/sdk` package\.\*\*/g],
+      ["README.md", /\[`[^`\n]+`\]\([^)\s]+\)/g],
     ]);
 
-    for (const [fileName, expected] of expectedMarkdown) {
+    for (const [fileName, pattern] of nestedCodePatterns) {
       const markdown = readFileSync(resolve(REPOSITORY_ROOT, fileName), "utf8");
+      const occurrences = markdown.match(pattern) ?? [];
 
+      expect({ fileName, hasNestedCode: occurrences.length > 0 }).toEqual({
+        fileName,
+        hasNestedCode: true,
+      });
       expect(assessMarkdownForRichEditing(markdown)).toEqual({
         safe: true,
         reason: null,
       });
-      expect(roundTrip(markdown)).toContain(expected);
+      const result = roundTrip(markdown);
+      for (const occurrence of occurrences) expect(result).toContain(occurrence);
       editor?.destroy();
       editor = null;
     }

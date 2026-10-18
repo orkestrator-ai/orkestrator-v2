@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
+import { StrictMode, Suspense } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import {
@@ -561,6 +562,51 @@ describe("ProviderMcpSettings", () => {
     await waitFor(() => expect(snapshots).toContain("mcp1~pi~env~e1~x"));
   });
 
+  test("a deep link survives a first render that React discards", async () => {
+    // The settings page is lazy, so the mount that renders this section can
+    // suspend and be thrown away before it commits. The retry must still open
+    // the linked environment, not fall back to the backend user.
+    const snapshots: string[] = [];
+    install({
+      list_mcp_management_targets: (args) => ({
+        protocolVersion: 1,
+        backendId: "b1",
+        targets: args.environmentId ? [target, environmentTarget("e1")] : [target],
+      }),
+      get_mcp_management_snapshot: (args) => {
+        snapshots.push(String(args.targetId));
+        return snapshot({ target: environmentTarget("e1") });
+      },
+    });
+    const gate = deferred<void>();
+    let ready = false;
+    function SuspendOnce() {
+      if (!ready)
+        throw gate.promise.then(() => {
+          ready = true;
+        });
+      return null;
+    }
+    requestMcpServerSettings({ provider: "pi", environmentId: "e1" });
+    render(
+      <StrictMode>
+        <Suspense fallback={null}>
+          <ProviderMcpSettings />
+          <SuspendOnce />
+        </Suspense>
+      </StrictMode>,
+    );
+    await act(async () => gate.resolve());
+    await waitFor(() => expect(snapshots).toContain("mcp1~pi~env~e1~x"));
+    expect(snapshots).not.toContain(target.targetId);
+
+    // Taken once mounted: a later plain open starts from the backend user.
+    cleanup();
+    snapshots.length = 0;
+    render(<ProviderMcpSettings />);
+    await waitFor(() => expect(snapshots).toContain(target.targetId));
+  });
+
   test("switching environment never shows or acts on the previous environment's servers", async () => {
     const snapshots: string[] = [];
     const pendingE2 = deferred<unknown>();
@@ -727,6 +773,34 @@ describe("ProviderMcpSettings", () => {
     await emitMcpChanged();
     expect(await screen.findByText("The backend is restarting.")).toBeTruthy();
     expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("files");
+  });
+
+  test("a refresh that failed while offline is repeated when the browser is back online", async () => {
+    let offline = false;
+    let reads = 0;
+    install({
+      ...baseHandlers,
+      get_mcp_management_snapshot: () => {
+        reads += 1;
+        if (offline) throw new Error("Failed to fetch");
+        return snapshot({
+          definitions: [{ ...snapshot().definitions[0]!, name: reads > 2 ? "docs-new" : "docs" }],
+        });
+      },
+    });
+    render(<ProviderMcpSettings />);
+    expect(await screen.findByText("docs")).toBeTruthy();
+
+    // The change event arrives on a stream that survived; its re-read fails.
+    offline = true;
+    await emitMcpChanged();
+    expect(await screen.findByText("Failed to fetch")).toBeTruthy();
+    expectDomAbsent(screen.queryByText("docs-new"), "refreshed row before reconnecting");
+
+    offline = false;
+    await act(async () => window.dispatchEvent(new Event("online")));
+    expect(await screen.findByText("docs-new")).toBeTruthy();
+    expectDomAbsent(screen.queryByText("Failed to fetch"), "stale refresh error");
   });
 
   test("advanced list and number fields keep what is typed and send parsed values", async () => {

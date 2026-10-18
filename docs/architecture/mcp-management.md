@@ -490,9 +490,14 @@ After a save `targetIds` names the saving target and every target that reads the
 file (other providers sharing it, and every environment for a user file); past
 256 ids it is `[]`, meaning all. The live agent info panel re-reads its
 projection on this event while it is open.
-The settings section re-reads its snapshot on mount, on that event and on event
-stream reconnect, and drops responses for a target the user has switched away
-from. Drafts live only in the open dialog and are never persisted.
+The settings section re-reads its snapshot on mount, on that event, on event
+stream reconnect and when the browser comes back online (an event can arrive
+on a stream that survived an outage while its re-read fails), and drops
+responses for a target the user has switched away from. A link from an agent's
+info panel names the provider and environment; the section reads that intent
+during render and clears it only after it mounts, so a render React discards
+(the settings page is lazy) cannot lose it. Drafts live only in the open
+dialog and are never persisted.
 
 ## Verification status
 
@@ -510,22 +515,26 @@ worktrees; nothing reads or writes the operator's configuration):
 | Bridges | Pi `mcp.test.ts`, `mcp-config.test.ts`, `mcp-config-upstream.test.ts`, `mcp-lifecycle.test.ts`, `agent-session.test.ts`, `http.test.ts`; Cursor `agent-session.test.ts`, `agent-session-mcp-reattach.test.ts`, `http.test.ts`, `persistence.test.ts`; Claude `mcp-config-scope.test.ts`, `session-manager-prompt-mcp.test.ts`, `runtime-health-body.test.ts`; ACP `acp-mcp-inventory.test.ts`; Codex `mcp-reload-route.test.ts`, `process-supervisor.test.ts` |
 | UI | `mcp-draft.test.ts`, `mcp-local-validation.test.ts`, `ProviderMcpSettings.test.tsx`, `McpEditorFlows.test.tsx`, `McpEntryFlows.test.tsx`, `McpStatusAndStates.test.tsx`, `AgentInfoMcpSection.test.tsx`, `FullscreenSettingsLayout.test.tsx`, `ActionBar.test.tsx` — focus return, keyboard-only flows, conflict reload, discard prompt, rollout gate, empty/offline/partial states |
 | Container reader | Manual smoke against a throwaway container: ok, absent, oversized, offline, shell-metacharacter path |
+| Inactive environment (live) | 2026-10-18, `e2e/agent-testing/mcp-apply-inactive.spec.ts` with real Claude sessions (CLI 2.1.296): save and apply during a running turn (turn uninterrupted, `pending-next-turn` held after it), the next turn while inactive with the page's event stream cut, a hard reload, a bridge restart (`applied` names the newer generation), a removal while a refresh fails offline, a pre-marker bridge, and a user file shared by two environments. The apply half passed in full; the model's tool calls were proven for the first add only, because the provider rate limited the seeded login. Record and remaining reruns in the todo file. |
 | Real browser | 2026-09-24, `dev:test` profile `agent-mcp-settings-qa` with the fixture project, Playwright at 1440×900 and 390×844: section and pickers for all six platforms, Control MCP kept separate, add → edit → rename → remove of a Claude project-scope server in a fixture worktree (previews named the worktree path and the execution warning; the file ended `{"mcpServers": {}}`), keyboard open/Escape with focus return, reload rehydration, discard prompt on a dirty target switch, platform-settings deep link. Found that every MCP dialog rendered behind the fullscreen settings layer (default `z-50` under `z-[60]`); fixed with the fullscreen dialog layers and pinned by `McpEditorFlows.test.tsx`; the fix was confirmed in that browser session by raising the layer, not by a second full pass. The agent-panel link was not exercised (no live session in the fixture). Operator MCP files were hashed before and after and were unchanged. |
 
 Live providers (2026-10-18, `e2e/agent-testing/mcp-apply-live.spec.ts`, record
 in [the todo file](../todo/mcp-management.md#live-apply-record-2026-10-18)):
-for Claude, Codex, OpenCode and Cursor, every writable scope was taken through
-add, edit, rename and remove with two sessions, a busy session and a bridge
-restart, and a call to a removed tool was proven to fail from the probe
-server's own log. Codex's reload reaches existing threads at their next turn;
-OpenCode needs the restart its outcome asks for; Cursor re-reads its files
-when the session reattaches; Claude's stale-server hook refused a removed SSE
-server on a warm CLI. Grok and Pi were skipped for want of credentials.
+Claude, Codex, OpenCode and Cursor have historical add, edit, rename, remove
+and restart observations across their writable scopes. Codex's reload reaches
+existing threads at their next turn; OpenCode needs the restart its outcome
+asks for; Cursor re-reads its files when the session reattaches. The corrected
+harness still needs to re-qualify busy turns, negative tool-call results and
+Claude's warm SSE stale-server hook; the original matrix records its limits.
+Grok and Pi were skipped for want of credentials.
 
-Not yet verified: the Grok and Pi live probes, and real-browser,
-inactive-environment and container QA. For those, treat `pending-next-turn` /
-`restart-required` as the backend's plan; `applied` is observed adoption per
-the evidence rule above.
+Inactive-environment apply evidence and recovery passed for Claude, including
+a cut stream, reload, bridge generation changes and a shared user file (see
+the live row above). Not yet verified: the remaining full-mode tool calls in
+that spec, the process-wide inactive variant for Codex or OpenCode, Grok and
+Pi live probes, the remaining real-browser matrix, and container QA. For
+those, treat `pending-next-turn` / `restart-required` as the backend's plan;
+`applied` is observed adoption per the evidence rule above.
 
 ## Rollback
 

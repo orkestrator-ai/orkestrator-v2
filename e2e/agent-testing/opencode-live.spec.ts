@@ -22,6 +22,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import { dismissSidebarTooltip } from "./sidebar-tooltip";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
@@ -178,8 +179,7 @@ function sidebarNavigator(page: Page, projectName: string) {
     });
     if (await expand.isVisible()) await expand.click();
     // A sidebar tooltip from the previous hover can sit over the entry.
-    await page.mouse.move(0, 0);
-    await page.keyboard.press("Escape");
+    await dismissSidebarTooltip(page, projectName);
     await entry.click();
   };
 }

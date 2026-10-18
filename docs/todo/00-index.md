@@ -57,10 +57,10 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 22 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 253 |
-| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 275 |
-| **Total** | | **551** |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 23 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 255 |
+| Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 277 |
+| **Total** | | **556** |
 
 ## Very high
 
@@ -125,9 +125,9 @@ it reaches. Some rules of thumb:
 ### MCP (high)
 
 - [x] Close MCP apply-path gaps: runtime generations, bridge versions, external edits and the 64-runtime cap ([mcp-management.md](mcp-management.md))
-- [x] Run live MCP apply probes for every provider, proving a call to a removed tool actually fails ([mcp-management.md](mcp-management.md), qualification)
-- [x] Fill the MCP provider completion matrix for every writable scope and lifecycle case ([mcp-management.md](mcp-management.md), qualification)
-- [ ] Qualify MCP apply for inactive environments across reload, dropped streams and bridge generation changes ([mcp-management.md](mcp-management.md), qualification)
+- [ ] Re-qualify live MCP apply probes for every provider, proving a call to a removed tool actually fails ([mcp-management.md](mcp-management.md), qualification)
+- [ ] Complete the MCP provider matrix under the corrected checks for every writable scope and lifecycle case ([mcp-management.md](mcp-management.md), qualification)
+- [x] Qualify MCP apply for inactive environments across reload, dropped streams and bridge generation changes ([mcp-management.md](mcp-management.md), qualification)
 
 ### Agent engines and provider SDKs (high)
 
@@ -312,6 +312,8 @@ it reaches. Some rules of thumb:
 
 - [x] Update Pi terminal MCP and sign-in capabilities for Pi 1.2.0's built-in CLI MCP extension ([mcp-management.md](mcp-management.md))
 - [ ] Implement OpenCode MCP application with `applied` evidence and trace how its OAuth completes ([mcp-management.md](mcp-management.md))
+- [ ] Rerun the inactive-environment MCP spec in full mode to prove tool calls after an edit, a removal, an older bridge and a shared save ([mcp-management.md](mcp-management.md), qualification)
+- [ ] Qualify the process-wide inactive MCP apply variant across two Codex or two OpenCode sessions, in a profile with a disposable `CODEX_HOME` ([mcp-management.md](mcp-management.md), qualification)
 - [ ] Add thread-level Codex MCP apply evidence and page `mcpServerStatus/list`; reload reaching existing threads is proven live ([mcp-management.md](mcp-management.md))
 - [ ] Join saved MCP entries to live rows by native name plus target and runtime identity ([mcp-management.md](mcp-management.md))
 - [ ] Make the Grok project-trust verdict match Grok: worktrees of trusted repositories, no cover across a git root, and sessions that run with the gate off ([mcp-management.md](mcp-management.md))
@@ -590,6 +592,7 @@ it reaches. Some rules of thumb:
 ### CLI and slash commands (low)
 
 - [ ] Answer Claude's dispatch probe for a request id an earlier bridge process claimed, so a lost command resolves its card without a Retry ([slash-command-qualification.md](slash-command-qualification.md))
+- [ ] Make the inactive slash-command scenario's outage drop the event stream, not just fail new requests ([slash-command-qualification.md](slash-command-qualification.md))
 - [ ] Add tracked cascade removal to CLI `project remove` that deletes child environments ([cli-command-surface.md](cli-command-surface.md))
 - [ ] Add a local-only project initialiser (git init, no remote) for the CLI ([cli-command-surface.md](cli-command-surface.md))
 - [ ] Add optional JSONL event-stream following over the gateway SSE for CLI transcripts ([cli-command-surface.md](cli-command-surface.md))
@@ -652,6 +655,7 @@ it reaches. Some rules of thumb:
 ### MCP (low)
 
 - [ ] Implement per-session Grok ACP MCP application and document its collision rules ([mcp-management.md](mcp-management.md))
+- [ ] Stop telling a #838-era Claude bridge's runtime that the change "cannot be confirmed until the environment restarts" when its first query confirms it ([mcp-management.md](mcp-management.md))
 - [ ] Re-check external MCP edits for OpenCode, container and post-reload Codex runtimes, which no pass polls ([mcp-management.md](mcp-management.md))
 - [ ] Stop Claude's no-control MCP fallback collapsing server status to connected or failed ([mcp-management.md](mcp-management.md))
 - [ ] Replace the count-only MCP metric tiles for Claude and OpenCode in `AgentInfoButton` ([mcp-management.md](mcp-management.md))
@@ -875,7 +879,7 @@ it reaches. Some rules of thumb:
 | [cli-command-surface.md](cli-command-surface.md) |  |  | 6 | 7 | 13 |
 | [cli-qualification.md](cli-qualification.md) |  | 1 | 6 | 1 | 8 |
 | [slash-command-catalogue.md](slash-command-catalogue.md) |  |  | 5 | 6 | 11 |
-| [slash-command-qualification.md](slash-command-qualification.md) |  |  | 4 | 3 | 7 |
+| [slash-command-qualification.md](slash-command-qualification.md) |  |  | 4 | 4 | 8 |
 | **Containers and environments** | | | | | |
 | [container-platform-qualification.md](container-platform-qualification.md) |  |  | 12 | 2 | 14 |
 | [container-rebuild-state-preservation.md](container-rebuild-state-preservation.md) |  |  | 2 | 2 | 4 |
@@ -888,7 +892,7 @@ it reaches. Some rules of thumb:
 | [design-operation-recovery-edges.md](design-operation-recovery-edges.md) |  |  | 1 | 2 | 3 |
 | [design-agent-conversation-links.md](design-agent-conversation-links.md) |  |  | 5 | 3 | 8 |
 | **MCP** | | | | | |
-| [mcp-management.md](mcp-management.md) |  | 1 | 11 | 7 | 19 |
+| [mcp-management.md](mcp-management.md) |  | 2 | 13 | 8 | 23 |
 | [mcp-environment-delivery.md](mcp-environment-delivery.md) |  |  | 4 | 10 | 14 |
 | [control-mcp-voice-surface.md](control-mcp-voice-surface.md) |  |  | 9 |  | 9 |
 | **Agent engines and provider SDKs** | | | | | |

@@ -81,6 +81,8 @@ export interface DelegationObservation {
   coordinatorPhase: string;
   /** Prompts waiting in the coordinator's queue. */
   queueLength: number;
+  /** Each launched worker's turn phase, by environment id. */
+  workerPhases?: Record<string, string>;
   delegations: DelegationRecord[];
   mail: DelegationMailMessage[];
 }
@@ -94,12 +96,14 @@ export interface DelegationProbe {
   /** Random hex; every worker name and message body carries it. */
   token: string;
   /**
-   * Absolute path of a file the harness creates when the async reporter may
-   * send its report. Holding the reporter there lets the harness keep the
-   * coordinator busy while that report is pending, which is the only order in
-   * which "queued prompt before mail" is actually exercised.
+   * Absolute paths of files the harness creates to let a worker go on. A
+   * worker parked on a gate is still in its turn, so the harness decides
+   * what is true when that worker's mail moves: the async reporter sends its
+   * report at `gatePath` and ends its turn at `finishGatePath`, and the second
+   * family worker reports only after the follow-up reached it mid-turn.
    */
   gatePath: string;
+  finishGatePath: string;
 }
 
 export const ASYNC_REPORT_MARKER = "COORDINATOR_ASYNC_POLL";
@@ -156,7 +160,8 @@ export function asyncScenarioPrompt(probe: DelegationProbe): string {
         `1. Call the Orkestrator send_message tool with toEnvironmentId "coordinator" and body "${bodies.progress}".`,
         `2. Run this shell command, which waits for the test harness: ${gateCommand(probe.gatePath)} If it prints nothing, run it again until it prints gate-open.`,
         `3. Call the Orkestrator send_message tool with toEnvironmentId "coordinator" and body "${bodies.report}".`,
-        "4. End your turn.",
+        `4. Run this shell command the same way: ${gateCommand(probe.finishGatePath)}`,
+        "5. End your turn.",
       ].join(" "),
     )}.`,
     `3. Then ${launchStep(
@@ -228,7 +233,7 @@ export function familyScenarioPrompt(probe: DelegationProbe): string {
     `3. Then ${launchStep(
       probe,
       names.two,
-      `Call the Orkestrator send_message tool once with toEnvironmentId "coordinator" and body "${bodies.twoReport}", then end your turn. ${answerRule}`,
+      `First run this shell command, which waits for the test harness: ${gateCommand(probe.gatePath)} If it prints nothing, run it again until it prints gate-open. Then call the Orkestrator send_message tool once with toEnvironmentId "coordinator" and body "${bodies.twoReport}", then end your turn. ${answerRule}`,
     )}.`,
     `4. Straight after step 3, in this same turn, call the Orkestrator send_message tool once with toEnvironmentId set to the environment id launch_environment returned for ${names.two} (no toTabId) and body "Reply with ${bodies.twoFollowUp}".`,
     "5. Then finish this turn at once with a one-line summary. Do not wait, sleep, read messages or check message status.",
@@ -755,15 +760,41 @@ export function evaluateFamilyScenario(input: FamilyScenarioInput): CoordinatorL
         .map((delegation) => delegation.requestedAt),
     ),
   );
+  // Busy means mid-turn: the follow-up waiting, undelivered, while the
+  // worker's turn ran. An open delegation alone is not enough, because a
+  // follow-up that lands before the worker's first turn starts is simply
+  // delivered first.
+  const followUpId = followUps[0]?.id;
   const busyAtFollowUp =
-    followUps[0] !== undefined &&
-    input.observations.some(
-      (observation) =>
-        observation.mail.some((message) => message.id === followUps[0]!.id) &&
+    followUpId !== undefined &&
+    input.observations.some((observation) => {
+      const phase = observation.workerPhases?.[two];
+      return (
+        phase !== undefined &&
+        phase !== "idle" &&
+        phase !== "error" &&
+        observation.mail.some(
+          (message) => message.id === followUpId && message.placement !== "injected",
+        ) &&
         observation.delegations.some(
           (delegation) => delegation.environmentId === two && delegation.state === "running",
+        )
+      );
+    });
+  const followUpTrail = followUpId
+    ? [
+        ...new Set(
+          input.observations.flatMap((observation) =>
+            observation.mail
+              .filter((message) => message.id === followUpId)
+              .map(
+                (message) =>
+                  `${message.placement}${message.placementReason ? ` (${message.placementReason})` : ""} while ${observation.workerPhases?.[two] ?? "unknown"}`,
+              ),
+          ),
         ),
-    );
+      ].join(" → ")
+    : "none";
   checks.push(
     check(
       "busy-follow-up-joins-delegation",
@@ -772,7 +803,7 @@ export function evaluateFamilyScenario(input: FamilyScenarioInput): CoordinatorL
         twoReplied &&
         twoRequests.size === 1 &&
         twoCarriers === 1,
-      `${followUps.length} follow-ups, worker running when it arrived ${busyAtFollowUp}, replied ${twoReplied}, ${twoRequests.size} delegations, ${twoCarriers} carriers to the coordinator`,
+      `${followUps.length} follow-ups, held mid-turn ${busyAtFollowUp} (${followUpTrail}), replied ${twoReplied}, ${twoRequests.size} delegations, ${twoCarriers} carriers to the coordinator`,
     ),
   );
 

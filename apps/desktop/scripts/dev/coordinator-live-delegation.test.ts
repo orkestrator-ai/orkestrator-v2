@@ -39,6 +39,7 @@ const probe: DelegationProbe = {
   platform: "codex",
   token: "0123456789ab",
   gatePath: "/tmp/coordinator-live-gate-x/report.go",
+  finishGatePath: "/tmp/coordinator-live-gate-x/finish.go",
 };
 const COORDINATOR = "coordinator:ws:conversation";
 const REPORTER = "env-reporter";
@@ -62,6 +63,8 @@ describe("delegation prompts", () => {
     // The reporter waits for the harness between its progress and its report.
     expect(prompt.indexOf(bodies.progress)).toBeLessThan(prompt.indexOf(probe.gatePath));
     expect(prompt.indexOf(probe.gatePath)).toBeLessThan(prompt.indexOf(bodies.report));
+    // ...and again after its report, so the harness decides when its turn ends.
+    expect(prompt.indexOf(bodies.report)).toBeLessThan(prompt.indexOf(probe.finishGatePath));
     expect(prompt).toContain("Do not wait, sleep, read messages or check message status");
     expect(asyncQueuedPrompt(probe)).toContain(bodies.queued);
     expect(asyncBusyPrompt(probe, "project-1")).toContain(bodies.busy);
@@ -83,6 +86,8 @@ describe("delegation prompts", () => {
     expect(prompt).toContain(`name "${names.one}"`);
     expect(prompt).toContain(`name "${names.two}"`);
     expect(prompt).toContain(bodies.twoFollowUp);
+    // The second worker reports only once the harness opens its gate.
+    expect(prompt.indexOf(probe.gatePath)).toBeLessThan(prompt.indexOf(bodies.twoReport));
     expect(prompt).toContain(bodies.ping(1));
     expect(prompt).toContain(bodies.ping(FAMILY_PING_COUNT));
     expect(prompt).toContain(FAMILY_DONE_MARKER);
@@ -568,6 +573,7 @@ function passingFamily(): FamilyScenarioInput {
         at: 1,
         coordinatorPhase: "idle",
         queueLength: 0,
+        workerPhases: { [ONE]: "idle", [TWO]: "running" },
         delegations: [running(ONE), running(TWO)],
         mail: [{ ...followUp, placement: "pending-inject" }],
       },
@@ -635,6 +641,19 @@ describe("family scenario", () => {
     expect(failedChecks(evaluateFamilyScenario({ ...input, observations }))).toEqual([
       "busy-follow-up-joins-delegation",
     ]);
+  });
+
+  test("a follow-up delivered before the worker's turn ran is not the busy case", () => {
+    const input = passingFamily();
+    const observations = input.observations.map((observation) => ({
+      ...observation,
+      workerPhases: { [ONE]: "idle", [TWO]: "idle" },
+    }));
+    const checks = evaluateFamilyScenario({ ...input, observations });
+    expect(failedChecks(checks)).toEqual(["busy-follow-up-joins-delegation"]);
+    expect(
+      checks.find((item) => item.name === "busy-follow-up-joins-delegation")?.detail,
+    ).toContain("pending-inject while idle");
   });
 
   test("a short exchange, a tab-addressed follow-up or a second prompt fail", () => {

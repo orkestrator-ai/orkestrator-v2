@@ -945,6 +945,12 @@ describe("transcript and turn", () => {
 
     expect(isSignInError("401 Unauthorized")).toBe(true);
     expect(isSignInError("Invalid API key provided")).toBe(true);
+    // Grok 1.0.52's wording for a signed-out CLI.
+    expect(
+      isSignInError(
+        "grok session creation failed (HTTP 401): Grok Build isn't signed in. Run grok login in a terminal to keep working.",
+      ),
+    ).toBe(true);
     expect(isSignInError("model overloaded")).toBe(false);
     expect([isSignedOut("needs-auth"), isSignedOut("signed-in"), isSignedOut(undefined)]).toEqual([
       true,

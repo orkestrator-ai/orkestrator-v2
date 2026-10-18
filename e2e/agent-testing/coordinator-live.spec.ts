@@ -612,14 +612,21 @@ function createDelegationWatch(
     escaped: () => coordinatorTurn.escapedInteractions(),
     workerEscaped: () => [...workerTurns.values()].flatMap((turn) => turn.escapedInteractions()),
     async observe(): Promise<DelegationObservation> {
-      projection = await invoke<Projection | null>("get_native_agent_projection", {
-        ...identity,
-        messageLimit: 200,
-      });
+      // Independent reads run together: on a loaded host one pass is several
+      // seconds, and a short window (a report pending while the coordinator is
+      // busy) must not fall between two passes.
+      const [nextProjection, snapshot, queue] = await Promise.all([
+        invoke<Projection | null>("get_native_agent_projection", {
+          ...identity,
+          messageLimit: 200,
+        }),
+        invoke<CoordinatorSnapshot>("get_project_coordinator", { projectId }),
+        invoke<{ messages?: unknown[] } | null>("get_prompt_queue", { queueKey }).catch(() => null),
+      ]);
+      projection = nextProjection;
       const { answers } = coordinatorTurn.observe(projection);
       await answer(identity, answers);
 
-      const snapshot = await invoke<CoordinatorSnapshot>("get_project_coordinator", { projectId });
       const associations = snapshot.workflows.filter(
         (workflow) =>
           workflow.kind === "environment" && workflow.conversationId === conversation.id,
@@ -641,16 +648,27 @@ function createDelegationWatch(
           : [],
       );
 
-      const mail = [...(await mailbox(coordinatorMailbox.environmentId, coordinatorMailbox.tabId))];
-      for (const worker of watch.workers) {
-        mail.push(...(await mailbox(worker, "startup-agent")));
-        const target = workerIdentity(worker);
-        const workerProjection = await invoke<Projection | null>("get_native_agent_projection", {
-          ...target,
-          messageLimit: 20,
-        }).catch(() => null);
+      const [coordinatorMail, ...workerReads] = await Promise.all([
+        mailbox(coordinatorMailbox.environmentId, coordinatorMailbox.tabId),
+        ...watch.workers.map(async (worker) => {
+          const target = workerIdentity(worker);
+          const [workerMail, workerProjection] = await Promise.all([
+            mailbox(worker, "startup-agent"),
+            invoke<Projection | null>("get_native_agent_projection", {
+              ...target,
+              messageLimit: 20,
+            }).catch(() => null),
+          ]);
+          return { worker, target, workerMail, workerProjection };
+        }),
+      ]);
+      const mail = [...coordinatorMail];
+      const phases: Record<string, string> = {};
+      for (const { worker, target, workerMail, workerProjection } of workerReads) {
+        mail.push(...workerMail);
         if (workerProjection) {
           workerPhases.set(worker, workerProjection.turn.phase);
+          phases[worker] = workerProjection.turn.phase;
           if (workerProjection.turn.phase === "error") {
             workerErrors.set(
               worker,
@@ -662,13 +680,11 @@ function createDelegationWatch(
         workerTurns.set(worker, turn);
         await answer(target, turn.observe(workerProjection).answers);
       }
-      const queue = await invoke<{ messages?: unknown[] } | null>("get_prompt_queue", {
-        queueKey,
-      }).catch(() => null);
       const observation: DelegationObservation = {
         at: Date.now(),
         coordinatorPhase: projection?.turn.phase ?? "idle",
         queueLength: queue?.messages?.length ?? 0,
+        workerPhases: phases,
         delegations,
         mail: mail.map(({ body: _body, ...summaryOnly }) => summaryOnly),
       };
@@ -876,6 +892,7 @@ async function asyncCase(input: {
     platform,
     token: randomBytes(6).toString("hex"),
     gatePath: path.join(gateDirectory, "report.go"),
+    finishGatePath: path.join(gateDirectory, "finish.go"),
   };
   const names = asyncWorkerNames(probe);
   const watch = createDelegationWatch(invoke, coordinator, summary);
@@ -923,7 +940,14 @@ async function asyncCase(input: {
       },
     );
 
-    // 3. Busy coordinator, queued prompt, pending report.
+    // 3. Busy coordinator, queued prompt, pending report. The reporter sends
+    // its report first and parks again, so once the finish gate opens it has
+    // only to end its turn while the busy turn runs.
+    await writeFile(probe.gatePath, "open\n", { mode: 0o600 });
+    await watch.until("the reporter's held report", (observation) => {
+      const reports = observation.mail.filter(fromReporter);
+      return reports.length >= 2 && reports.every((message) => message.placement === "inject-held");
+    });
     const rowsBefore = watch.projection()?.messages.length ?? 0;
     await invoke("dispatch_native_agent_intent", {
       ...identity,
@@ -943,7 +967,7 @@ async function asyncCase(input: {
       message: { id: randomUUID(), text: asyncQueuedPrompt(probe), mode: "build" },
     });
     queuedAccepted = true;
-    await writeFile(probe.gatePath, "open\n", { mode: 0o600 });
+    await writeFile(probe.finishGatePath, "open\n", { mode: 0o600 });
 
     // 4. The report: held until the reporter's turn ends, then one carrier.
     let settledReads = 0;
@@ -1029,10 +1053,13 @@ async function familyCase(input: {
   const { invoke, identity, projectId } = coordinator;
   const platform = identity.agent;
   await removeLaunchedEnvironments(invoke, projectId, cleanup);
+  const gateDirectory = await mkdtemp(path.join(tmpdir(), "coordinator-live-gate-"));
+  cleanup.push(() => rm(gateDirectory, { recursive: true, force: true }));
   const probe: DelegationProbe = {
     platform,
     token: randomBytes(6).toString("hex"),
-    gatePath: "",
+    gatePath: path.join(gateDirectory, "report.go"),
+    finishGatePath: path.join(gateDirectory, "unused.go"),
   };
   const names = familyWorkerNames(probe);
   const watch = createDelegationWatch(invoke, coordinator, summary);
@@ -1048,6 +1075,27 @@ async function familyCase(input: {
   let finished: string | undefined;
   try {
     await coordinatorTurn(watch, coordinator, "the delegating turn", familyScenarioPrompt(probe));
+    // The second worker is parked on its gate inside its first turn. Its
+    // report waits until the coordinator's follow-up is seen held for it
+    // there, so the follow-up is the busy case rather than an early prompt.
+    const two = () => watch.workers.find((id) => watch.workerName(id) === names.two);
+    await watch
+      .until("the follow-up to reach the busy second worker", (observation) => {
+        const id = two();
+        const phase = id ? observation.workerPhases?.[id] : undefined;
+        return (
+          id !== undefined &&
+          phase !== undefined &&
+          phase !== "idle" &&
+          observation.mail.some(
+            (message) =>
+              message.toEnvironmentId === id &&
+              message.from.kind === "coordinator" &&
+              message.placement !== "injected",
+          )
+        );
+      })
+      .finally(() => writeFile(probe.gatePath, "open\n", { mode: 0o600 }));
     let quietReads = 0;
     await watch.until(
       "the family exchange to finish",

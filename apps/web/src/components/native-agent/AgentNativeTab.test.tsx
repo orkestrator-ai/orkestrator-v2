@@ -202,6 +202,7 @@ const performNativeAgentSessionActionMock = mock(
 );
 const enqueuePromptQueueMessageMock = mock(async () => {});
 const removePromptQueueMessageMock = mock(async () => {});
+const requeuePromptQueueMessageMock = mock(async (..._args: unknown[]) => {});
 const movePromptQueueMessageMock = mock(async () => {});
 const dismissNativeAgentSuggestedPromptMock = mock(async () =>
   getNativeAgentProjectionMock({ agent: "claude", environmentId: "env-1" }),
@@ -401,6 +402,7 @@ mock.module("@/lib/backend", () => ({
   performNativeAgentSessionAction: performNativeAgentSessionActionMock,
   enqueuePromptQueueMessage: enqueuePromptQueueMessageMock,
   removePromptQueueMessage: removePromptQueueMessageMock,
+  requeuePromptQueueMessage: requeuePromptQueueMessageMock,
   movePromptQueueMessage: movePromptQueueMessageMock,
   dismissNativeAgentSuggestedPrompt: dismissNativeAgentSuggestedPromptMock,
   updateNativeAgentControls: updateNativeAgentControlsMock,
@@ -491,6 +493,7 @@ afterEach(() => {
   performNativeAgentSessionActionMock.mockClear();
   enqueuePromptQueueMessageMock.mockClear();
   removePromptQueueMessageMock.mockClear();
+  requeuePromptQueueMessageMock.mockClear();
   movePromptQueueMessageMock.mockClear();
   dismissNativeAgentSuggestedPromptMock.mockClear();
   updateNativeAgentControlsMock.mockClear();
@@ -9365,6 +9368,103 @@ describe("AgentNativeTab", () => {
       // The steering text must not also be queued as a follow-up prompt.
       expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
       expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+    });
+
+    test("steers a queued prompt into the running turn", async () => {
+      const queued = { id: "queued-1", text: "also update the README", mode: "build" };
+      seedProjection({ phase: "running", actions: { steer: true }, queue: { items: [queued] } });
+      removePromptQueueMessageMock.mockImplementationOnce((async () => ({
+        removed: queued,
+        queue: null,
+      })) as never);
+      render(<AgentNativeTab tabId="tab-queue-steer" data={identity("codex")} isActive />);
+
+      fireEvent.click(await screen.findByTitle("View queued prompts"));
+      fireEvent.click(await screen.findByRole("button", { name: "Steer" }));
+
+      await waitFor(() => expect(performNativeAgentSessionActionMock).toHaveBeenCalledTimes(1));
+      // Claimed from the queue before it is sent, so the drain cannot also run it.
+      expect(removePromptQueueMessageMock.mock.calls[0] as unknown[]).toContain("queued-1");
+      expect(performNativeAgentSessionActionMock.mock.calls[0]?.[0]).toMatchObject({
+        agent: "codex",
+        action: { kind: "steer", text: "also update the README" },
+      });
+      expect(requeuePromptQueueMessageMock).not.toHaveBeenCalled();
+      expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+    });
+
+    test("puts a queued prompt back at the front when the turn ends before the steer", async () => {
+      const queued = { id: "queued-1", text: "also update the README" };
+      seedProjection({ phase: "running", actions: { steer: true }, queue: { items: [queued] } });
+      removePromptQueueMessageMock.mockImplementationOnce((async () => ({
+        removed: queued,
+        queue: null,
+      })) as never);
+      performNativeAgentSessionActionMock.mockImplementationOnce((async () => ({
+        outcome: "idle",
+      })) as never);
+      render(<AgentNativeTab tabId="tab-queue-steer-idle" data={identity("codex")} isActive />);
+
+      fireEvent.click(await screen.findByTitle("View queued prompts"));
+      fireEvent.click(await screen.findByRole("button", { name: "Steer" }));
+
+      await waitFor(() => expect(requeuePromptQueueMessageMock).toHaveBeenCalledTimes(1));
+      expect(requeuePromptQueueMessageMock.mock.calls[0]).toContainEqual(queued);
+      expect(await screen.findByText(/finished the turn before the prompt arrived/)).toBeTruthy();
+    });
+
+    test("does not steer a queued prompt that already left the queue", async () => {
+      seedProjection({
+        phase: "running",
+        actions: { steer: true },
+        queue: { items: [{ id: "queued-1", text: "also update the README" }] },
+      });
+      removePromptQueueMessageMock.mockImplementationOnce((async () => ({
+        removed: null,
+        queue: null,
+      })) as never);
+      render(<AgentNativeTab tabId="tab-queue-steer-gone" data={identity("codex")} isActive />);
+
+      fireEvent.click(await screen.findByTitle("View queued prompts"));
+      fireEvent.click(await screen.findByRole("button", { name: "Steer" }));
+
+      expect(await screen.findByText(/already left the queue/)).toBeTruthy();
+      expect(performNativeAgentSessionActionMock).not.toHaveBeenCalled();
+    });
+
+    test("offers steer only for text prompts while a steerable turn runs", async () => {
+      seedProjection({
+        phase: "running",
+        actions: { steer: true },
+        queue: {
+          items: [
+            {
+              id: "queued-1",
+              text: "look at this",
+              attachments: [{ id: "a", type: "image", path: "/tmp/shot.png" }],
+            },
+          ],
+        },
+      });
+      const view = render(
+        <AgentNativeTab tabId="tab-queue-steer-gate" data={identity("codex")} isActive />,
+      );
+      fireEvent.click(await screen.findByTitle("View queued prompts"));
+      await screen.findByTitle("Click to edit this message");
+      expect(screen.queryByRole("button", { name: "Steer" })).toBeNull();
+      view.unmount();
+
+      seedProjection({
+        phase: "idle",
+        actions: { steer: true },
+        queue: { items: [{ id: "queued-2", text: "plain text" }] },
+      });
+      render(
+        <AgentNativeTab tabId="tab-queue-steer-idle-gate" data={identity("codex")} isActive />,
+      );
+      fireEvent.click(await screen.findByTitle("View queued prompts"));
+      await screen.findByTitle("Click to edit this message");
+      expect(screen.queryByRole("button", { name: "Steer" })).toBeNull();
     });
 
     test("queues an async-question answer with stable identity and composer settings", async () => {

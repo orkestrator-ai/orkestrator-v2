@@ -106,6 +106,7 @@ import {
 import { composeDraftKey, discardComposeDraft } from "@/lib/compose-draft-persistence";
 import {
   composerOccupiedError,
+  PromptQueueActionError,
   webAnnotationQueueItemFrozenError,
 } from "@/lib/prompt-queue-errors";
 import { modelSupportsSpeed } from "@/lib/agent-launch";
@@ -418,6 +419,7 @@ export function SharedNativeAgentController({
     holdInteraction,
     enqueue,
     removeQueued,
+    steerQueued,
     moveQueued,
     retryQueue,
     retryRecoverableDispatch,
@@ -3212,6 +3214,53 @@ export function SharedNativeAgentController({
                 }}
                 onRemove={async (messageId) => {
                   await removeQueued(messageId);
+                }}
+                onSteer={
+                  // The same gate the composer applies to a typed `/steer`.
+                  isRunning && !recoverableDispatch && projection.capabilities?.actions?.steer
+                    ? async (message) => {
+                        let outcome;
+                        try {
+                          outcome = await steerQueued(message.id);
+                        } catch (error) {
+                          throw new PromptQueueActionError(
+                            `Could not steer the running turn: ${
+                              error instanceof Error ? error.message : String(error)
+                            }`,
+                            { cause: error },
+                          );
+                        }
+                        if (!outcome) {
+                          throw new PromptQueueActionError(
+                            "This prompt already left the queue, so it was not used to steer.",
+                          );
+                        }
+                        if (outcome.outcome === "applied") {
+                          toast.success(`Sent to the active ${label} turn`);
+                          return;
+                        }
+                        // Delivery is unconfirmed: the recovery card under the
+                        // transcript owns the prompt now, so show it.
+                        if (outcome.outcome === "unknown") {
+                          setQueueDialogOpen(false);
+                          return;
+                        }
+                        throw new PromptQueueActionError(
+                          outcome.outcome === "rejected"
+                            ? `${label} can't take more steering in this turn, so the prompt is back at the front of the queue.`
+                            : `${label} finished the turn before the prompt arrived, so it is back at the front of the queue.`,
+                        );
+                      }
+                    : undefined
+                }
+                canSteer={(message) => {
+                  // Steering carries text only, and a queued command must be
+                  // revalidated as a command, not typed into the turn.
+                  const queued = message as Record<string, unknown>;
+                  return (
+                    !(Array.isArray(queued.attachments) && queued.attachments.length > 0) &&
+                    queued.command === undefined
+                  );
                 }}
                 renderMeta={(message) => {
                   const queued = message as Record<string, unknown>;

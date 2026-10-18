@@ -153,6 +153,26 @@ export function registerAgentMailCommands(register: CommandRegistrar): void {
       required(tabId, "tabId"),
     );
   });
+  register("list_agent_mail_conversations", async ({ participant }, { storage }) => {
+    await requireMessagingEnabled(storage);
+    return storage.listAgentMailConversations(
+      typeof participant === "string" && participant ? { participant } : {},
+    );
+  });
+  register("get_agent_mail_conversation", async ({ a, b, limit }, { storage }) => {
+    await requireMessagingEnabled(storage);
+    return storage.getAgentMailConversation(
+      required(a, "a"),
+      required(b, "b"),
+      typeof limit === "number" ? { limit } : {},
+    );
+  });
+  register("mark_agent_mail_conversation_seen", async ({ a, b }, { storage }) => {
+    await requireMessagingEnabled(storage);
+    return {
+      marked: await storage.markAgentMailConversationSeen(required(a, "a"), required(b, "b")),
+    };
+  });
   register(
     "send_agent_mail",
     ({ requestId, toEnvironmentId, toTabId, subject, body, replyToMessageId }, { storage }) =>

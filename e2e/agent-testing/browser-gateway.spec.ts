@@ -1309,9 +1309,7 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
     await expect(page.getByText("1 message in inbox · pull only")).toBeVisible({
       timeout: 15_000,
     });
-    await expect(
-      page.getByRole("button", { name: "Agent inbox, 1 unseen", exact: true }),
-    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Agent messages", exact: true })).toBeVisible();
 
     await page.reload();
     const expandAfterReload = page.getByRole("button", {
@@ -1323,9 +1321,7 @@ test("agent mail rehydrates after an inactive recipient is opened and the page r
     await expect(page.getByText("1 message in inbox · pull only")).toBeVisible({
       timeout: 15_000,
     });
-    await expect(
-      page.getByRole("button", { name: "Agent inbox, 1 unseen", exact: true }),
-    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Agent messages", exact: true })).toBeVisible();
     await page.setViewportSize({ width: 390, height: 844 });
     const deliverNow = page.getByRole("button", { name: "Deliver now", exact: true });
     await expect(deliverNow).toBeVisible();

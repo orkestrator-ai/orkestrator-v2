@@ -20,6 +20,7 @@ import { parseLocalFilePathFromUrl } from "./file-url";
 import type { AcpMessage } from "@/lib/acp-client";
 import { stripInitialPromptAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
 import { parsePromptTranscriptReferences } from "./transcript-annotations";
+import { agentMailToolCall } from "./agent-mail-tool-call";
 
 interface AttachmentTag {
   type: string;
@@ -153,6 +154,14 @@ export function isTaskTool(toolName?: string): boolean {
 
 function isToolActivity(part: NativeMessagePart): boolean {
   return part.type === "thinking" || part.type === "tool-invocation";
+}
+
+/**
+ * A mail call is a message, not tool activity: it stays out of the collapsed
+ * tool group so what an agent sent or read is visible in the transcript.
+ */
+function isAgentMailActivity(part: NativeMessagePart): boolean {
+  return part.type === "tool-invocation" && !part.toolDenied && agentMailToolCall(part) !== null;
 }
 
 function isAgentActivity(part: NativeMessagePart): part is NativeAgentActivityPart {
@@ -347,6 +356,12 @@ export function groupNativeToolActivity(parts: NativeMessagePart[]): NativeMessa
 
   for (const part of parts) {
     if (isAgentActivity(part)) {
+      flushToolGroup();
+      rendered.push(part);
+      continue;
+    }
+
+    if (isAgentMailActivity(part)) {
       flushToolGroup();
       rendered.push(part);
       continue;

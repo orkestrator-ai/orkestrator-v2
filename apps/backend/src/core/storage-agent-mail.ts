@@ -15,6 +15,7 @@ import {
   AGENT_MAIL_MAX_THREAD_HOPS,
   AgentMailError,
   agentMailCapabilities,
+  agentMailNeedsAttention,
   agentMailRouteWakes,
   agentMailboxId,
   isAgentMailBudgetHeld,
@@ -22,6 +23,8 @@ import {
   normalizeAgentMailNotice,
   normalizeAgentMessagingSettings,
   resolveTabDisplayName,
+  type AgentMailConversation,
+  type AgentMailConversationList,
   type AgentMailMailboxSnapshot,
   type AgentMailMailboxBatchSnapshot,
   type AgentMailInboxSnapshot,
@@ -37,6 +40,12 @@ import {
   type MailboxKind,
 } from "@orkestrator/protocol/agent-mail";
 import { isAgentPlatform, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import {
+  agentMailConversationBetween,
+  isAgentMailConversationMessage,
+  listAgentMailConversations,
+  type ConversationMailbox,
+} from "./agent-mail-conversations.ts";
 import { StorageDrafts } from "./storage-drafts.ts";
 import { paneLayoutLeaves } from "./storage-shared.js";
 import {
@@ -1020,6 +1029,10 @@ export class StorageAgentMail extends StorageDrafts {
             message.toIncarnationId === mailbox.incarnationId &&
             message.placement === "inject_failed",
         ).length,
+        attentionCount: mailbox.messages.filter(
+          (message) =>
+            message.toIncarnationId === mailbox.incarnationId && agentMailNeedsAttention(message),
+        ).length,
         revision: mailbox.revision,
       })),
     };
@@ -1139,6 +1152,11 @@ export class StorageAgentMail extends StorageDrafts {
             (message) =>
               message.toIncarnationId === descriptor.incarnationId &&
               message.placement === "inject_failed",
+          ).length,
+          attentionCount: messages.filter(
+            (message) =>
+              message.toIncarnationId === descriptor.incarnationId &&
+              agentMailNeedsAttention(message),
           ).length,
           revision,
         })),
@@ -2591,6 +2609,76 @@ export class StorageAgentMail extends StorageDrafts {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .slice(0, AGENT_MAIL_MAX_MESSAGES_PER_MAILBOX)
       .map(metadataMessage);
+  }
+
+  private async conversationMailboxes(): Promise<{
+    revision: number;
+    cutoff: number;
+    mailboxes: ConversationMailbox[];
+  }> {
+    const [store, config] = await Promise.all([this.loadAgentMailStore(), this.loadConfig()]);
+    const settings = normalizeAgentMessagingSettings(config.global.agentMessaging);
+    return {
+      revision: store.revision,
+      cutoff: Date.now() - settings.retentionDays * 86_400_000,
+      mailboxes: Object.values(store.mailboxes).map((mailbox) => ({
+        descriptor: this.descriptor(mailbox, settings.defaultInjectPolicy),
+        messages: mailbox.messages,
+      })),
+    };
+  }
+
+  /** Every pair that has exchanged mail, or only `participant`'s; see `agent-mail-conversations.ts`. */
+  async listAgentMailConversations(
+    options: { participant?: string } = {},
+  ): Promise<AgentMailConversationList> {
+    const { revision, cutoff, mailboxes } = await this.conversationMailboxes();
+    return {
+      revision,
+      conversations: listAgentMailConversations(mailboxes, { cutoff, ...options }),
+    };
+  }
+
+  async getAgentMailConversation(
+    a: string,
+    b: string,
+    options: { limit?: number } = {},
+  ): Promise<AgentMailConversation> {
+    const { revision, cutoff, mailboxes } = await this.conversationMailboxes();
+    return agentMailConversationBetween(mailboxes, a, b, { cutoff, revision, ...options });
+  }
+
+  /** The person read a conversation: stamp every message in it they had not seen. */
+  async markAgentMailConversationSeen(a: string, b: string): Promise<number> {
+    return this.enqueueAgentMailMutation(async () => {
+      const store = await this.loadAgentMailStore();
+      const seenAt = new Date().toISOString();
+      const changed: PersistedMailbox[] = [];
+      let marked = 0;
+      for (const key of new Set([a, b])) {
+        const mailbox = store.mailboxes[key];
+        if (!mailbox) continue;
+        let mailboxMarked = false;
+        for (const message of mailbox.messages) {
+          if (message.userSeenAt || !isAgentMailConversationMessage(key, message, a, b)) continue;
+          message.userSeenAt = seenAt;
+          message.revision += 1;
+          mailboxMarked = true;
+          marked += 1;
+        }
+        if (mailboxMarked) {
+          mailbox.revision += 1;
+          changed.push(mailbox);
+        }
+      }
+      if (marked === 0) return 0;
+      store.revision += 1;
+      await this.saveAgentMailStore(store);
+      for (const mailbox of changed)
+        this.announce("agent-mail", mailbox.mailboxId, mailbox.projectId);
+      this.announce("agent-mail-summary", "all");
+      return marked;
+    });
   }
 
   /** One durable startup attempt per queued item, only for a local family worker. */

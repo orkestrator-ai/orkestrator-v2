@@ -403,4 +403,10 @@ export interface PeerMailPresentation {
   body: string;
   /** Workflow notices only: what the notice is about and how to weigh it. */
   notice?: AgentMailNotice;
+  /** Sender and recipient participant keys, when known: the tile opens their conversation. */
+  participants?: [string, string];
+  /** `out` for mail this transcript's agent sent; absent for mail it received. */
+  direction?: "in" | "out";
+  /** Delivery state, for mail this agent sent. */
+  status?: { label: string; tone: "muted" | "progress" | "warning" | "error" };
 }

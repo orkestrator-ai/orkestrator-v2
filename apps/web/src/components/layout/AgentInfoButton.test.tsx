@@ -491,7 +491,7 @@ afterEach(() => {
 });
 
 describe("AgentInfoButton popover lifecycle", () => {
-  test("shows tab messaging actions only while agent messaging is enabled", () => {
+  test("shows the tab messages action only while agent messaging is enabled", () => {
     const original = structuredClone(useConfigStore.getState().config);
     const disabled = structuredClone(original);
     disabled.global.agentMessaging = { ...disabled.global.agentMessaging!, enabled: false };
@@ -499,14 +499,12 @@ describe("AgentInfoButton popover lifecycle", () => {
     try {
       render(<AgentInfoButton activeTab={claudeTab()} />);
       open();
-      expect(screen.queryByRole("button", { name: "Message this tab…" }) === null).toBe(true);
-      expect(screen.queryByRole("button", { name: "Inbox settings…" }) === null).toBe(true);
+      expect(screen.queryByRole("button", { name: "Messages…" }) === null).toBe(true);
 
       const enabled = structuredClone(disabled);
       enabled.global.agentMessaging = { ...enabled.global.agentMessaging!, enabled: true };
       act(() => useConfigStore.setState({ config: enabled }));
-      expect(screen.getByRole("button", { name: "Message this tab…" })).toBeTruthy();
-      expect(screen.getByRole("button", { name: "Inbox settings…" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Messages…" })).toBeTruthy();
     } finally {
       act(() => useConfigStore.setState({ config: original }));
     }
@@ -798,7 +796,7 @@ describe("AgentInfoButton provider resolution", () => {
         refreshUsage: true,
       }),
     );
-    expect(screen.queryByRole("button", { name: "Message this tab…" }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Messages…" }) === null).toBe(true);
   });
 
   test("falls back to the current agent session while Tests is selected", async () => {

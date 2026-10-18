@@ -8,6 +8,10 @@ import {
   classifyAgentMailRoute,
   agentMailCapabilities,
   agentMailboxId,
+  agentMailConversationKey,
+  agentMailNeedsAttention,
+  agentMailParticipantKey,
+  agentMailTranscriptTool,
   renderAgentMailCarrier,
   resolveTabDisplayName,
   splitAgentMailboxId,
@@ -329,5 +333,70 @@ describe("agent mail protocol", () => {
     expect(agentMailRouteWakes("peer", "inherit", { wakePeers: false })).toBe(false);
     expect(agentMailRouteWakes("isolated", "idle", { wakePeers: true })).toBe(false);
     expect(agentMailRouteWakes(undefined, "inherit", { wakePeers: true })).toBe(false);
+  });
+
+  test("participant keys name a mailbox, the person, external clients and a project's workflows", () => {
+    const tab = {
+      kind: "tab" as const,
+      projectId: "project",
+      environmentId: "env",
+      tabId: "tab",
+      incarnationId: "first",
+      agent: "claude" as const,
+      title: null,
+    };
+    expect(agentMailParticipantKey(tab)).toBe(agentMailboxId("env", "tab"));
+    // A replaced session is still the same participant.
+    expect(agentMailParticipantKey({ ...tab, incarnationId: "second" })).toBe(
+      agentMailboxId("env", "tab"),
+    );
+    expect(agentMailParticipantKey({ kind: "user" })).toBe("user");
+    expect(agentMailParticipantKey({ kind: "external" })).toBe("external");
+    expect(
+      agentMailParticipantKey({
+        kind: "system",
+        projectId: "project",
+        source: "workflow",
+        resourceId: "review",
+      }),
+    ).toBe("system:project");
+    expect(agentMailConversationKey("b", "a")).toBe(agentMailConversationKey("a", "b"));
+  });
+
+  test("only failed, budget-held and unseen untrusted mail needs the person", () => {
+    const base = { placement: "stored" as const, trust: "same-project" as const };
+    expect(agentMailNeedsAttention(base)).toBe(false);
+    expect(agentMailNeedsAttention({ ...base, placement: "inject_failed" })).toBe(true);
+    expect(
+      agentMailNeedsAttention({
+        ...base,
+        placement: "inject-held",
+        placementReason: "loop-budget-exhausted",
+      }),
+    ).toBe(true);
+    expect(
+      agentMailNeedsAttention({ ...base, placement: "inject-held", placementReason: "submitting" }),
+    ).toBe(false);
+    expect(agentMailNeedsAttention({ ...base, trust: "external" })).toBe(true);
+    expect(agentMailNeedsAttention({ ...base, trust: "external", userSeenAt: "now" })).toBe(false);
+    expect(
+      agentMailNeedsAttention({ ...base, placement: "inject_failed", discardedAt: "now" }),
+    ).toBe(false);
+  });
+
+  test("recognises Orkestrator's mail tools however a provider spells them", () => {
+    expect(agentMailTranscriptTool("mcp__orkestrator__send_message")).toBe("send_message");
+    expect(agentMailTranscriptTool("orkestrator__reply_message")).toBe("reply_message");
+    expect(agentMailTranscriptTool("orkestrator_read_message")).toBe("read_message");
+    expect(agentMailTranscriptTool("send_message", "orkestrator:send_message")).toBe(
+      "send_message",
+    );
+    expect(agentMailTranscriptTool("send_message", "Send an agent message")).toBe("send_message");
+    expect(agentMailTranscriptTool("get_message")).toBe("get_message");
+    // Another server's tool of the same name is not mail.
+    expect(agentMailTranscriptTool("send_message", "slack:send_message")).toBe(null);
+    expect(agentMailTranscriptTool("mcp__slack__send_message")).toBe(null);
+    expect(agentMailTranscriptTool("mcp__orkestrator__check_inbox")).toBe(null);
+    expect(agentMailTranscriptTool(undefined)).toBe(null);
   });
 });

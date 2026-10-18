@@ -3,6 +3,8 @@ import { isEditTool } from "@/lib/tool-names";
 import { imageReadFromToolPart, type ImageRead } from "@/lib/chat/image-read";
 import { isPlanTool } from "@/lib/plan-tool";
 import { isTodoTool } from "@/lib/todo-tool";
+import { agentMailToolCall } from "@/lib/chat/agent-mail-tool-call";
+import { MailToolPart } from "./MailToolPart";
 import { TodoToolPart } from "@/components/todo/TodoToolPart";
 import { PlanToolPart } from "./PlanToolPart";
 import { type NativeMessagePart } from "@/lib/chat/native-message-types";
@@ -59,7 +61,8 @@ export function DeferredToolMessagePart({
   const expansionScope = useContext(MessageExpansionScopeContext);
   const expansionKey = `native-tool:${expansionScope}:${getToolExpansionKey(part, partKey)}`;
   const [isOpen] = useMessagePartExpansion(expansionKey);
-  const eagerDetails = isPlanTool(part.toolName);
+  // A mail call is drawn as its message, and a read's message is in the result.
+  const eagerDetails = isPlanTool(part.toolName) || agentMailToolCall(part) !== null;
   const detailRef = part.detailRef!;
   const [details, setDetails] = useState<NativeAgentToolDetails | undefined>(() =>
     cachedToolDetails(detailRef),
@@ -254,7 +257,9 @@ export function MessagePart({
       return <TranscriptReferencePart part={part} />;
     case "async-question":
       return <NativeAsyncQuestionCard part={part} />;
-    case "tool-invocation":
+    case "tool-invocation": {
+      const mailCall = part.toolDenied ? null : agentMailToolCall(part);
+      if (mailCall) return <MailToolPart call={mailCall} expansionKey={toolExpansionKey} />;
       // ACP identifies file mutations through diff content as well as tool kind.
       // Render any part carrying an actual diff with the edit treatment, while a
       // location-only hint on read/search tools remains a generic tool row.
@@ -330,6 +335,7 @@ export function MessagePart({
           {toolCard}
         </ImageReadPreview>
       );
+    }
     case "tool-result":
       // Tool results are typically shown inline with tool invocations
       return null;

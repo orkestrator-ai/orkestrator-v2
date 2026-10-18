@@ -13,8 +13,21 @@ import {
   getAgentMailSummary,
 } from "@/lib/backend";
 
+/**
+ * What the messages panel shows. Absent `conversation` is the list: every
+ * pair, or only `focus`'s. A conversation is its two participant keys
+ * (`agentMailParticipantKey`).
+ */
+export interface AgentMailPanelState {
+  focus?: string;
+  conversation?: [string, string];
+}
+
 interface AgentMailState {
   revision: number;
+  panel: AgentMailPanelState | null;
+  openPanel: (panel: AgentMailPanelState) => void;
+  closePanel: () => void;
   summary: Map<string, AgentMailSummaryEntry>;
   mailboxes: Map<string, AgentMailMailboxSnapshot>;
   bodies: Map<string, AgentMailMessage>;
@@ -99,6 +112,9 @@ async function refreshTrackedSentMailboxes(): Promise<void> {
 
 export const useAgentMailStore = create<AgentMailState>()((set) => ({
   revision: 0,
+  panel: null,
+  openPanel: (panel) => set({ panel }),
+  closePanel: () => set({ panel: null }),
   summary: new Map(),
   mailboxes: new Map(),
   bodies: new Map(),
@@ -143,7 +159,8 @@ export const useAgentMailStore = create<AgentMailState>()((set) => ({
       for (const message of mailbox.messages) bodies.delete(message.id);
       return { mailboxes, bodies };
     }),
-  clear: () =>
+  clear: () => {
+    requestedMailboxes.clear();
     set({
       revision: 0,
       summary: new Map(),
@@ -151,7 +168,8 @@ export const useAgentMailStore = create<AgentMailState>()((set) => ({
       bodies: new Map(),
       sent: new Map(),
       failedSent: new Map(),
-    }),
+    });
+  },
   trackSent: (message) =>
     set((state) => {
       const sent = new Map(state.sent);
@@ -186,3 +204,33 @@ export const useAgentMailStore = create<AgentMailState>()((set) => ({
     return snapshot;
   },
 }));
+
+const requestedMailboxes = new Set<string>();
+const pendingMailboxes = new Map<string, { environmentId: string; tabId: string }>();
+
+/**
+ * Load a mailbox a transcript names, so its tile can show the recipient's name
+ * and the message's live delivery state. Each mailbox is asked for once, and
+ * every request made in the same tick goes out as one batch; resource events
+ * keep loaded mailboxes current after that.
+ */
+export function requestAgentMailMailbox(environmentId: string, tabId: string): void {
+  const mailboxId = `${environmentId}\0${tabId}`;
+  if (requestedMailboxes.has(mailboxId) || useAgentMailStore.getState().mailboxes.has(mailboxId))
+    return;
+  requestedMailboxes.add(mailboxId);
+  pendingMailboxes.set(mailboxId, { environmentId, tabId });
+  if (pendingMailboxes.size > 1) return;
+  queueMicrotask(() => {
+    const batch = Array.from(pendingMailboxes.values());
+    pendingMailboxes.clear();
+    if (batch.length === 0) return;
+    void useAgentMailStore
+      .getState()
+      .refreshMailboxes(batch)
+      .catch(() => {
+        for (const address of batch)
+          requestedMailboxes.delete(`${address.environmentId}\0${address.tabId}`);
+      });
+  });
+}

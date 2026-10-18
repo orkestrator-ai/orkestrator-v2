@@ -624,3 +624,14 @@ adding the public smoke suite; both were corrected and passed together with the
 Playwright spec-loading checks in the focused `review-contracts` rerun (17.0 s).
 The public-client package passed all 41 tests, and its production browser smoke
 passed all eight cases. Bridge and protocol-lockfile groups passed.
+
+
+## Claude restart-interruption main merge — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, with the testing guide's GNU-tool PATH prefix, macOS arm64 and Bun 1.4.3.
+- **Workers:** workspace/root/bridges/protocol reservations of 4/1/2/1 workers, alongside the component/public-site browser suite and other worktrees.
+- **Failure:** `Pi bridge runtime vendoring > loads Pi's supported SDK from the staged runtime closure` exceeded its 30000 ms deadline at 30000.36 ms.
+- **Root group:** 3053 passed, one skipped and two failed across 3056 tests in 140 files (280.77 seconds). The other failure was duplicate index rows for 0381 and 0382 inherited from `main`; the duplicates were removed and the index contract passed separately.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 13.1 seconds.
+- **Evidence:** `orkestrator-test-run.aFRCPt/root-and-agent-support-tests.log.gz` below the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence. Shared-host contention remains a hypothesis; no Pi implementation, assertion, timeout or skip changed.

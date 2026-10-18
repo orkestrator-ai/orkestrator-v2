@@ -57,6 +57,7 @@ import {
   REVIEW_VALIDATION_PLAN_SCHEMA,
 } from "./review-validation-prompts.js";
 import { validationPreparation } from "./review-validation-service.js";
+import { workflowRestartContinuationPrompt } from "./workflow-result-missing.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import {
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
@@ -491,6 +492,7 @@ export class BuildPipelineSupervisor {
       turnSettled,
       backgroundWorkLive,
       retainedContinuationRequestIds,
+      interruption,
     } = await readProviderStatus(provider, session.sdkSessionId, session.structuredRequestId);
     // Only the harness that was recorded as unreachable can clear its own
     // reconnect attempt. A stage transition resolves the *next* step's provider
@@ -514,7 +516,34 @@ export class BuildPipelineSupervisor {
     if (status === "missing") {
       throw new Error(`The ${session.label.toLowerCase()} is no longer available`);
     }
-    if (status === "error") {
+    if (status === "error" && interruption === "restart") {
+      // A submitted result survives the process that produced it. Otherwise
+      // continue this stage once, under a new durable dispatch/result key.
+      const result = session.structuredRequestId
+        ? await this.ctx.readWorkflowResult<unknown>(provider, session, session.structuredRequestId)
+        : null;
+      if (result?.ok !== true) {
+        if (
+          pipeline.pendingPromptAttempt?.sessionId === session.sdkSessionId &&
+          session.restartContinuationSent
+        ) {
+          await this.dispatchPending(pipeline, provider);
+          return;
+        }
+        if (!session.restartContinuationSent) {
+          await this.continueInterruptedStage(pipeline, provider, session);
+          return;
+        }
+        throw new Error(
+          `The ${session.label.toLowerCase()} failed: ${statusDetail ?? "interrupted again"}`,
+        );
+      }
+      // The result proves this dispatch ran, including an attempt whose HTTP
+      // acceptance was lost before the restart.
+      if (pipeline.pendingPromptAttempt?.sessionId === session.sdkSessionId) {
+        delete pipeline.pendingPromptAttempt;
+      }
+    } else if (status === "error") {
       throw new Error(
         statusDetail
           ? `The ${session.label.toLowerCase()} failed: ${statusDetail}`
@@ -1514,6 +1543,61 @@ export class BuildPipelineSupervisor {
       }
       throw error;
     }
+  }
+
+  private async continueInterruptedStage(
+    pipeline: BuildPipeline,
+    provider: BuildPipelineProvider,
+    session: PipelineSession,
+  ): Promise<void> {
+    const phase = resumablePhase(pipeline.phase);
+    if (!phase) throw new Error("Interrupted stage is not resumable");
+    const previousRequestId = session.structuredRequestId;
+    const requestId = randomUUID();
+    const startedAt = new Date().toISOString();
+    const validationPlan = pipeline.activePromptContext?.validationPlan === true;
+    const resultKind = previousRequestId
+      ? this.ctx.workflowResultKind(phase, validationPlan)
+      : undefined;
+    session.restartContinuationSent = true;
+    session.turnStartedAt = startedAt;
+    delete session.structuredWaitStartedAt;
+    if (previousRequestId) {
+      session.structuredRequestId = requestId;
+      session.structuredResultStatus = "pending";
+      if (session.resultTransport === "tool-v1") session.resultSubmission = "preparing";
+      if (phase === "reviewing") pipeline.structuredReviewRequestId = requestId;
+    }
+    pipeline.pendingPromptAttempt = {
+      id: randomUUID(),
+      sessionId: session.sdkSessionId,
+      requestId,
+      phase,
+      prompt: withUnattendedPolicy(
+        workflowRestartContinuationPrompt({
+          workLabel: session.label.toLowerCase(),
+          resultLabel: resultKind ?? "completed work",
+          ...(session.resultTransport === "tool-v1" && resultKind
+            ? { toolName: workflowResultToolName(resultKind) }
+            : {}),
+        }),
+      ),
+      useTaskImages: false,
+      structuredReview: previousRequestId !== undefined,
+      validationPlan,
+      resultTransport: session.resultTransport,
+      startedAt,
+    };
+    pipeline.activePromptContext = {
+      ...pipeline.pendingPromptAttempt,
+      kind: "prompt-dispatch",
+    };
+    delete pipeline.stallWarning;
+    await this.ctx.save(pipeline, pipeline.backendRevision);
+    if (session.resultTransport === "tool-v1" && previousRequestId) {
+      await this.ctx.options.workflowResults?.close(previousRequestId, "superseded");
+    }
+    await this.dispatchPending(pipeline, provider);
   }
 
   async dispatchPending(pipeline: BuildPipeline, provider: BuildPipelineProvider): Promise<void> {

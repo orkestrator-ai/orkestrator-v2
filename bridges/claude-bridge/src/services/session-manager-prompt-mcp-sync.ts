@@ -225,7 +225,7 @@ export function createStaleMcpServerHook(mcp: ClaudeRuntimeMcp): HookCallback {
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
-        permissionDecisionReason: `The MCP server "${server}" was removed from this session's configuration, so ${input.tool_name} is not available. Claude is still running background work in this session; the server unloads when that work finishes or the session is stopped.`,
+        permissionDecisionReason: `The MCP server "${server}" was removed from this session's configuration, so ${input.tool_name} is not available. This Claude process loaded it at launch and cannot unload it; it is gone once the process closes after an idle period, or when the session is stopped.`,
       },
     };
   };

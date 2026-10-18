@@ -2091,6 +2091,28 @@ describe("HTTP bridge provider", () => {
     });
   });
 
+  test("carries a restart interruption from the claude session route", async () => {
+    const { provider, requests } = httpProvider(() =>
+      Response.json({
+        id: "session-1",
+        status: "error",
+        error: "Claude restarted before this turn finished.",
+        interruption: "restart",
+        retainedContinuationRequestIds: [],
+      }),
+    );
+
+    await expect(readProviderStatus(provider, "session-1")).resolves.toEqual({
+      status: "error",
+      error: "Claude restarted before this turn finished.",
+      interruption: "restart",
+    });
+    // Claude's snapshot is the session resource itself, not a `/status` route.
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      "/session/session-1",
+    ]);
+  });
+
   test("ignores an interruption the backend does not know, or one without a failure", async () => {
     const body = { current: {} as Record<string, unknown> };
     const { provider } = httpProvider(() => Response.json(body.current), codexConnection);

@@ -632,3 +632,23 @@ suites running in other environments. Failed at 30000.24 ms. Workspace and root
 artifacts:
 `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.UQLOD6/`.
 The unchanged owning file passed alone (4 pass, 10.5 s, after one more loaded failure).
+
+## Claude restart-interruption main merge — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name merge-tests -- mise run test`, with the testing guide's GNU-tool PATH prefix, macOS arm64 and Bun 1.4.3.
+- **Workers:** workspace/root/bridges/protocol reservations of 4/1/2/1 workers, alongside the component/public-site browser suite and other worktrees.
+- **Failure:** `Pi bridge runtime vendoring > loads Pi's supported SDK from the staged runtime closure` exceeded its 30000 ms deadline at 30000.36 ms.
+- **Root group:** 3053 passed, one skipped and two failed across 3056 tests in 140 files (280.77 seconds). The other failure was duplicate index rows for 0381 and 0382 inherited from `main`; the duplicates were removed and the index contract passed separately.
+- **Owning-file rerun:** `mise run test:logged -- --name merge-pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 13.1 seconds.
+- **Evidence:** `orkestrator-test-run.aFRCPt/root-and-agent-support-tests.log.gz` below the host temporary directory.
+- **Assessment:** confirmed intermittent recurrence. Shared-host contention remains a hypothesis; no Pi implementation, assertion, timeout or skip changed.
+
+## Live coordinator main merge — 2026-10-18
+
+`mise run test:logged -- --name merge-full-tests -- mise run test`, with the testing guide's GNU-tool PATH prefix and workspace/root/bridges/protocol reservations of 4/1/2/1 slots, timed out the staged runtime closure case at 30043.73 ms. The shared host was also running browser checks and other worktrees. Root reported 3083 passed, one skipped and one failed across 3085 tests in 142 files (959.75 seconds).
+
+`mise run test:logged -- --name merge-pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` also timed out the unchanged case at 30000.30 ms (three passed, one failed, 31.7 seconds logged). This occurrence does not independently establish a flake; runtime staging remains an unresolved validation limitation.
+
+Evidence: `orkestrator-test-run.B1tmFx/root-and-agent-support-tests.log.gz` after aggregate completion and `orkestrator-test-run.vAb0aU/merge-pi-vendor-owner.log.gz` below the host temporary directory. No Pi implementation, assertion, timeout or skip changed.
+
+The subsequent warm command, `mise run test:logged -- --name merge-full-tests-warm -- mise run test`, passed the unchanged root/support group, including this case, in 152.0 seconds, with all four groups admitted immediately and the browser profiles stopped. This does not explain the preceding isolated timeout or resolve the underlying staging intermittence.

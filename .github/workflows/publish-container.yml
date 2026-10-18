@@ -194,7 +194,9 @@ jobs:
             --metadata-file "${RUNNER_TEMP}/manifest-metadata.json" \
             "${tag_args[@]}" \
             "${digest_refs[@]}"
-          manifest_digest="$(jq -er '."containerimage.digest"' "${RUNNER_TEMP}/manifest-metadata.json")"
+          # imagetools create records only the descriptor; there is no
+          # top-level containerimage.digest key as build-push-action writes.
+          manifest_digest="$(jq -er '."containerimage.descriptor".digest' "${RUNNER_TEMP}/manifest-metadata.json")"
           echo "digest=$manifest_digest" >> "$GITHUB_OUTPUT"
           platforms="$(docker buildx imagetools inspect "${tags[0]}" --raw | \
             jq -r '.manifests[].platform | "\(.os)/\(.architecture)"' | sort)"

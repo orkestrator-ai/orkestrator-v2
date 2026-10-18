@@ -357,6 +357,20 @@ removes its pipeline and environments during cleanup. The spec never presses
 **Share…**, which would publish the conversation. Without the opt-in, every
 case is skipped and no profile is needed.
 
+The live MCP apply probe (`e2e/agent-testing/mcp-apply-live.spec.ts`) has
+its own opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_MCP=1`. For each provider in
+`ORKESTRATOR_AGENT_TEST_MCP_PROVIDERS` it saves and applies a harmless stdio
+server (`mcp-probe-server.mjs`) through the MCP editor's own commands in every
+writable scope, then edits, renames and removes it, and reads from the
+server's log whether each model call really reached it. It refuses to write a
+source outside the test worktree or the profile's data directory. Authorizing
+the Codex or OpenCode credential source points those providers at the host's
+own homes, so their user scopes are then skipped; the
+[live record](../todo/mcp-management.md#live-apply-record-2026-10-18) shows
+how those scopes were covered with an access-only credential seeded into the
+profile. Run one provider at a time (flake 0420). Each provider writes
+`output/agent-testing/<run>/mcp-apply-live/<provider>.json`.
+
 The live Multi Review cycle (`e2e/agent-testing/multi-review-live.spec.ts`)
 has its own opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW=1`, and uses the
 host's Claude and Codex credentials. Each case runs a real two-reviewer review
@@ -397,18 +411,51 @@ tab, on return and again after a reload: the graph's node states, the
 inspector's transcript tail, the controls and the reviewer's read-only tab.
 The reviewer transcript read must not be the compatibility fallback, and a
 repeated read with its source token must answer `unchanged`. After a restart
-the Codex reviewer must complete, because the runner continues a Codex turn the
-restart cut short. The Claude reviewer, after a restart or a killed bridge, may
-either complete or fail with a stated reason, since Claude reports no
-interruption yet. The case records each reviewer's outcome as a Playwright
-annotation in `results.json`. After a killed bridge the Codex peer must
-complete. If preparation fails before any
+both reviewers must complete, because both bridges report a turn the restart
+cut short and the runner continues it once. After a killed Claude bridge the
+Claude reviewer must complete the same way, and the Codex peer must complete.
+The case records each reviewer's outcome as a Playwright annotation in
+`results.json`. If preparation fails before any
 reviewer starts, the case restarts that step once and records it. Each case
 cancels its review and deletes its environments in cleanup. The restart case
 leaves the profile running under a detached launcher, so stop it with
 `dev:stop` as usual. It restarts without `--fixture`, so `dev:status` no
 longer reports `testProject` afterwards; the spec falls back to the profile's
 seeded copy.
+
+### Live MCP apply in an inactive environment
+
+`e2e/agent-testing/mcp-apply-inactive.spec.ts` saves and applies MCP server
+changes for a Claude session while its environment is busy or inactive, then
+checks the apply outcome, the tool the model can actually call, the settings
+view and the agent panel. It covers a dropped event stream, a hard reload, a
+bridge restart (a new runtime generation), a removal, and a backend-user file
+shared by two environments. It needs the live-MCP opt-in and Claude credentials:
+
+```bash
+mise run dev:test --profile qa-mcp-inactive --fixture --credential-source claude --agent-platforms claude
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-mcp-inactive ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 \
+  mise run test:logged -- --name mcp-inactive -- mise run test:agent:browser -- \
+  e2e/agent-testing/mcp-apply-inactive.spec.ts
+```
+
+It writes only the disposable environment's `.mcp.json` and the profile's
+isolated `~/.claude.json`, and its fixture server lives under
+`output/agent-testing/<profile>/`. Do not add Codex to this scenario's
+credential sources for a user-scope edit: with the Codex credential source a
+profile uses the host's `CODEX_HOME`, so a Codex user-scope save would write
+the operator's own `config.toml`. Set
+`ORKESTRATOR_AGENT_TEST_MCP_OLDER_CLAUDE_BRIDGE` to the `dist` folder of a
+Claude bridge built before the `mcpConfigReporting` marker to add the
+older-bridge step. That step swaps the build in only while it starts the
+environment's bridge, then restores the current one.
+`ORKESTRATOR_AGENT_TEST_MODEL` pins both tabs' Claude model.
+`ORKESTRATOR_AGENT_TEST_MCP_APPLY_ONLY=1` keeps every apply, generation and UI
+check but drops the ones that need the model to answer: Claude's bridge
+records the MCP files a query was built from when the query starts, so the
+apply half still runs when the provider refuses requests (a rate limit, say).
+A full-mode pass is still needed for the tool-call checks.
 
 ### Live close retention
 
@@ -738,6 +785,19 @@ Reload once more after returning and verify the same result again. Do not accept
 a result that works only while the initiating component stays mounted: live
 SSE/IPC events are incremental hints, and the check must prove a missed event
 can be recovered.
+
+Two traps when scripting this path:
+
+- **Escape is Stop.** While a turn runs, Escape stops it if the chat tab's
+  composer has focus or nothing has (`useEscapeToStop`). A test that presses
+  Escape to close a tooltip right after Send stops its own turn, and Claude
+  reports that as an SDK `ede_diagnostic` result. Use
+  `dismissSidebarTooltip` (`e2e/agent-testing/sidebar-tooltip.ts`).
+- **Offline is not a dropped stream.** `context.setOffline(true)` fails new
+  requests but leaves the open event stream connected, so events still arrive
+  and nothing reconnects. To drop the stream, also call `window.stop()` in the
+  page while offline; the gateway client then reconnects and replays from its
+  cursor once back online.
 
 For each failure record profile and commit, automated commands, route used,
 reproduction steps, expected and actual results, severity, and evidence paths.

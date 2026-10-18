@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2, Plus, RefreshCw } from "lucide-react";
 
 import {
@@ -16,7 +16,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  consumeMcpSettingsIntent,
+  peekMcpSettingsIntent,
+  settleMcpSettingsIntent,
   onMcpSettingsIntent,
   type McpSettingsIntent,
 } from "@/lib/mcp-settings-navigation";
@@ -39,7 +40,11 @@ const BACKEND_CONTEXT = "backend";
  * from Control MCP (inbound access to Orkestrator itself).
  */
 export function ProviderMcpSettings() {
-  const initialIntent = useMemo<McpSettingsIntent>(() => consumeMcpSettingsIntent() ?? {}, []);
+  // Read during render, taken after commit: a discarded first render must not
+  // lose the link that opened this section.
+  const [pendingIntent] = useState(peekMcpSettingsIntent);
+  const initialIntent: McpSettingsIntent = pendingIntent ?? {};
+  useEffect(() => settleMcpSettingsIntent(pendingIntent), [pendingIntent]);
   const [provider, setProvider] = useState<AgentPlatform>(initialIntent.provider ?? "claude");
   const [contextId, setContextId] = useState<string>(
     initialIntent.environmentId ?? BACKEND_CONTEXT,

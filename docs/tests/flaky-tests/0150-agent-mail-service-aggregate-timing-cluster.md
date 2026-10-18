@@ -58,3 +58,5 @@ The owning file passed unchanged, exit 0, in 4.7 seconds with the same PATH:
 Evidence: `/tmp/orkestrator-test-run.TrudTm/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 The fixed-wait convergence failure matches this existing aggregate timing case.
 No test was skipped or loosened.
+
+Recurrence 2026-10-18: `AgentMailService > upgrade reconciles legacy refused mail (verifying, canonical session=false)` hit the 5000 ms deadline at 5013.63 ms in `mise run test:logged -- --name mcpq-full -- mise run test` on branch `qualify-mcp-inactive-apply-9ec53f801117` (no Agent Mail changes; heavily loaded host). The owning file passed unchanged alone (`bun test src/core/agent-mail-service.test.ts` from `apps/backend`: 39 pass, 0 fail, 2.7 s). Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.O8FSrv/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.

@@ -1,0 +1,13 @@
+# Gateway picker, persisted-diff and fixture visibility intermittence
+
+- **ID:** 0494
+- **Status:** open
+- **Date observed:** 2026-10-18
+- **File:** `e2e/agent-testing/browser-gateway.spec.ts`.
+- **Original command:** `mise run test:logged -- --name merge-agent-browser -- mise run test:agent:browser:isolated`, merging `origin/main` into pre-merge HEAD `f2971d54`, with the credential-free Codex fixture `qa-browser-882fc4e4-937`, one Playwright worker alongside the non-iOS suite, component browser suite and other worktrees.
+- **Failures:** the narrow host-picker case at line 147 left `Select file` disabled at line 302; the persisted diff-baseline case at line 2091 failed a visibility assertion. The overall isolated runner reached its fifteen-minute browser deadline after starting 55 of 61 cases (932.4 seconds including startup and cleanup); it stopped and reset its profile. This was an incomplete suite, not a full pass.
+- **First owning-file rerun:** fresh fixture `merge-main-gateway-f2971d`, started with `mise run dev:test --profile merge-main-gateway-f2971d --fixture --no-agent-credentials --agent-platforms codex`; `ORKESTRATOR_AGENT_TEST_PROFILE=merge-main-gateway-f2971d ORKESTRATOR_AGENT_TEST_RUN_ID=merge-main-gateway-f2971d mise run test:logged -- --name merge-gateway-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1` passed both original failed cases but failed `real browser gateway exercises an authoritative local environment` at line 505 because the fixture name `origin` never became visible (13 passed, six skipped, one failed; 186.1 seconds logged).
+- **Repeated owning-file rerun:** the same command, with run ID `merge-main-gateway-f2971d-repeat` and log name `merge-gateway-owner-repeat`, passed the unchanged whole file (14 passed, six skipped, exit 0; 114.5 seconds logged).
+- **Evidence:** `orkestrator-test-run.lTRsMP/merge-agent-browser.log.gz`, `orkestrator-test-run.vBQtie/merge-gateway-owner.log.gz` and `orkestrator-test-run.bxN7uz/merge-gateway-owner-repeat.log.gz` below the host temporary directory; browser traces under `output/agent-testing/<run-id>/browser/`.
+- **Cleanup:** the isolated runner stopped/reset its own profile; the owning-file profile was stopped and reset with `dev:stop` and `dev:reset` after the final rerun.
+- **Assessment:** the unchanged whole-file pass establishes intermittence for these observations. Host contention and delayed UI reconciliation remain hypotheses. The earlier tools-popover symptom in 0224 is distinct and remains unresolved. No source, assertion, timeout or skip changed.

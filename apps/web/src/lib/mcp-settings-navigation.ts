@@ -29,11 +29,19 @@ export function requestMcpServerSettings(intent: McpSettingsIntent = {}): void {
   requestGlobalSettings("mcp-servers");
 }
 
-/** Take the intent recorded before the section mounted, once. */
-export function consumeMcpSettingsIntent(): McpSettingsIntent | null {
-  const intent = pending;
-  pending = null;
-  return intent;
+/**
+ * The intent recorded before the section mounted, left in place. Reading it is
+ * safe during render: a render React discards and retries (the settings page
+ * is lazy, so its first mount can suspend) reads the same intent again. The
+ * section takes it with {@link settleMcpSettingsIntent} once it has mounted.
+ */
+export function peekMcpSettingsIntent(): McpSettingsIntent | null {
+  return pending;
+}
+
+/** Drop `intent` after a mounted section applied it; a newer request is kept. */
+export function settleMcpSettingsIntent(intent: McpSettingsIntent | null): void {
+  if (intent && pending === intent) pending = null;
 }
 
 export function onMcpSettingsIntent(listener: (intent: McpSettingsIntent) => void): () => void {

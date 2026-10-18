@@ -39,6 +39,8 @@ export interface DesignToolUsage {
   byTool: Record<string, number>;
   /** Names of the calls the transcript marks as failed, in call order. */
   failed: string[];
+  /** Names of calls with an explicit successful terminal state. */
+  succeeded: string[];
 }
 
 const CLAUDE_PREFIX = "mcp__orkestrator-design__";
@@ -71,6 +73,7 @@ export function summarizeDesignToolCalls(
     detailRefs: [],
     byTool: {},
     failed: [],
+    succeeded: [],
   };
   let users = 0;
   for (const message of messages) {
@@ -90,6 +93,7 @@ export function summarizeDesignToolCalls(
       if (part.toolOutput === undefined && typeof part.detailRef === "string")
         usage.detailRefs.push(part.detailRef);
       if (part.toolState === "failure") usage.failed.push(name);
+      if (part.toolState === "success") usage.succeeded.push(name);
     }
   }
   return usage;

@@ -46,6 +46,40 @@ describe("summarizeDesignToolCalls", () => {
     expect(usage.responseBytes).toBe(3 + 15 + 2);
   });
 
+  test("requires explicit success for inspection and capture", () => {
+    const usage = summarizeDesignToolCalls([
+      { role: "user" },
+      {
+        role: "assistant",
+        parts: [
+          tool("mcp__orkestrator-design__inspect_element", undefined, { toolState: "failure" }),
+          tool("mcp__orkestrator-design__capture_frame", undefined, { toolState: "running" }),
+          tool("mcp__orkestrator-design__inspect_element"),
+          tool("capture_frame", "image", {
+            toolTitle: "other:capture_frame",
+            toolState: "success",
+          }),
+        ],
+      },
+    ]);
+    expect(usage.succeeded).toEqual([]);
+    const completed = summarizeDesignToolCalls([
+      { role: "user" },
+      {
+        role: "assistant",
+        parts: [
+          tool("mcp__orkestrator-design__inspect_element", "{}", { toolState: "success" }),
+          tool("capture_frame", undefined, {
+            toolTitle: "orkestrator-design:capture_frame",
+            toolState: "success",
+            detailRef: "image",
+          }),
+        ],
+      },
+    ]);
+    expect(completed.succeeded).toEqual(["inspect_element", "capture_frame"]);
+  });
+
   test("afterUserMessage keeps only the calls after that many user messages", () => {
     const messages = [
       { role: "user" },
@@ -59,6 +93,7 @@ describe("summarizeDesignToolCalls", () => {
       detailRefs: [],
       byTool: { get_frame: 1 },
       failed: [],
+      succeeded: [],
     });
     expect(summarizeDesignToolCalls(messages).calls).toHaveLength(2);
   });
@@ -75,6 +110,7 @@ describe("summarizeDesignToolCalls", () => {
       detailRefs: [],
       byTool: { undo: 1 },
       failed: [],
+      succeeded: [],
     });
   });
 

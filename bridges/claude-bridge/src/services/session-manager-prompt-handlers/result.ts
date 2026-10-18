@@ -146,6 +146,10 @@ export async function handleResultMessage(turn: TurnState, message: SDKMessage):
   turn.diagnostics?.terminalSettled("resolved");
   turn.receivedResult = true;
   turn.receivedPromptResult = true;
+  const interruptRequested = session.interruptRequestedGeneration === turn.turnGeneration;
+  // Consume only this generation's request on every terminal result, including
+  // normal completion after partial output and structured-output failures.
+  if (interruptRequested) session.interruptRequestedGeneration = undefined;
   debugLog("[session-manager] Query result", {
     sessionId,
     subtype: resultMsg.subtype,
@@ -270,12 +274,11 @@ export async function handleResultMessage(turn: TurnState, message: SDKMessage):
   } else if (
     !turn.options?.outputSchema &&
     STOPPED_TERMINAL_REASONS.has(resultMsg.terminal_reason ?? "") &&
-    session.interruptRequestedGeneration === turn.turnGeneration
+    interruptRequested
   ) {
     // The user stopped the turn before any text streamed. The CLI reports
     // that as an aborted error result, which is the stop that was asked for:
     // settle as a stop does once text has streamed, never as a failure.
-    session.interruptRequestedGeneration = undefined;
     debugLog("[session-manager] Query stopped by the user", { sessionId });
     finishTurnInputIfSettled(turn);
   } else {

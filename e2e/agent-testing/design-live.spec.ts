@@ -12,19 +12,19 @@
  *    `orkestrator-design` MCP server. The launch must link the conversation
  *    to the canvas. The test switches environment as soon as the opening
  *    prompt is accepted, so the rest of the turn runs while the canvas is
- *    inactive.
+ *    inactive. A renderer reload on return must restore the canvas and session link.
  * 2. **Ask agent, stale.** The toolbar's Ask agent dialog captures the
  *    selection, then another client edits the frame before the context is
  *    added to the design conversation's draft. The agent must re-read: the
  *    other client's edit survives and the requested edit lands on top.
  * 3. **Approval.** The composer's approval mode is set to the provider's Ask
  *    mode and the agent is asked to run one shell command before an edit. The
- *    test switches environment while the approval is pending, returns, checks
+ *    test switches environment and reloads while the approval is pending, returns, checks
  *    that the request is still pending and the canvas untouched, approves, and
  *    waits for the edit.
  * 4. **Handoff.** Ask agent with the Implement scope starts a new
  *    conversation whose draft holds the handoff. Nothing may be sent, and the
- *    draft survives an environment switch.
+ *    draft survives an environment switch and renderer reload.
  *
  * Nonces exist only in the prompts, so finding one in the canvas proves the
  * agent wrote it. The MCP call count and response bytes for the cycle are
@@ -35,10 +35,11 @@
  * asked for. Nothing at module scope spawns `mise`, so the file stays inert in
  * profile-free runs.
  */
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { withDesignLiveHeartbeat } from "./design-live-heartbeat";
 import { detailBytes, summarizeDesignToolCalls, type TranscriptMessage } from "./design-live-usage";
 
 type Status = {
@@ -216,7 +217,9 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
 
     test(`${spec.label} creates, refines and saves a design; Ask agent, approval and handoff survive environment switches`, async ({
       page,
-    }, testInfo) => {
+    }, testInfo) => withDesignLiveHeartbeat(provider, () => runCycle(page, testInfo)));
+
+    async function runCycle(page: Page, testInfo: TestInfo) {
       test.setTimeout(TURN_TIMEOUT_MS * 3 + 300_000);
       page.setDefaultTimeout(15_000);
       await page.setViewportSize({ width: 1600, height: 1000 });
@@ -414,6 +417,9 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
             `[design-live] ${provider} launch: calls=${launchUsage.calls.join(",")} ` +
               `failed=${launchUsage.failed.join(",")} export=${exportPath ?? "none"}`,
           );
+          for (const tool of ["inspect_element", "capture_frame"]) {
+            expect(launchUsage.succeeded, `launch must complete ${tool}`).toContain(tool);
+          }
           card = (await frameByName("Card"))!;
           expect(card, "the agent never created the Card frame").toBeTruthy();
           expect(card.html).toContain(marker);
@@ -431,12 +437,19 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
         });
 
         const embedded = page.frameLocator('iframe[title="Card"]');
-        await test.step("returning shows the canvas, the transcript and idle controls", async () => {
+        await test.step("reloading after launch restores the canvas, session link, transcript and idle controls", async () => {
+          await page.reload({ waitUntil: "domcontentloaded" });
           await openEnvironment(target.name);
+          expect((await layoutAgentTab()).canvasId).toBe(canvasId);
+          expect((await layoutAgentTab()).agentTabs).toEqual(launched.agentTabs);
+          expect(await sessionLinks()).toEqual([
+            expect.objectContaining({ tabId: designTabId, platform: provider, role: "design" }),
+          ]);
           await expect(embedded.locator("#title")).toHaveText(marker, { timeout: 30_000 });
           await expect(embedded.locator("#tagline")).toHaveText("Refined tagline");
           await expect(stop).toBeHidden();
           await expect(input).toBeVisible();
+          await expect(page.getByText(marker, { exact: false }).first()).toBeVisible();
           // The provider-only guidance never reaches the transcript.
           await expect(
             page.getByText("Use the orkestrator-design MCP server", { exact: false }),
@@ -508,7 +521,7 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
           await page.screenshot({ path: testInfo.outputPath(`${provider}-2-ask-agent.png`) });
         });
 
-        await test.step("a pending approval survives an environment switch, then completes", async () => {
+        await test.step("a pending approval survives an environment switch and reload, then completes", async () => {
           const before = await userMessages();
           const approvalMarker = `.design-approval-${nonce("A")}`;
           const color = "rgb(200, 30, 60)";
@@ -549,7 +562,12 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
           expect((await pending()).map((item) => item.id)).toContain(waiting.id);
           expect(existsSync(path.join(worktree, approvalMarker))).toBe(false);
 
+          await page.reload({ waitUntil: "domcontentloaded" });
           await openEnvironment(target.name);
+          expect((await pending()).map((item) => item.id)).toContain(waiting.id);
+          expect(existsSync(path.join(worktree, approvalMarker))).toBe(false);
+          await expect(embedded.locator("#title")).toBeVisible();
+          expect((await layoutAgentTab()).canvasId).toBe(canvasId);
           const approve = page.getByRole("button", {
             name: confirmLabel(waiting),
             exact: true,
@@ -595,7 +613,7 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
           expect(card.html.replaceAll(" ", "")).toContain(`color:${color.replaceAll(" ", "")}`);
         });
 
-        await test.step("handoff prepares an unsent implementation draft that survives a switch", async () => {
+        await test.step("handoff prepares an unsent implementation draft that survives a switch and reload", async () => {
           await page.getByRole("button", { name: "Ask agent about the selection" }).click();
           const dialog = page.getByRole("dialog");
           // Scope and Agent are segmented buttons (aria-pressed), not radios.
@@ -636,6 +654,12 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
           // The handoff tab was focused when the test left; the layout restores it.
           await openEnvironment(target.name);
           await draftIsReady();
+          await page.reload({ waitUntil: "domcontentloaded" });
+          await openEnvironment(target.name);
+          await draftIsReady();
+          expect((await layoutAgentTab()).agentTabs.map((tab) => tab.id).sort()).toEqual(
+            [designTabId, handoffTab.id].sort(),
+          );
           const handoff = await projection(handoffTab.id).catch(() => null);
           expect(
             (handoff?.messages ?? []).filter((message) => message.role === "user"),
@@ -677,6 +701,6 @@ for (const provider of LIVE_OPT_IN ? selectedProviders() : (["claude"] as Provid
           );
         }
       }
-    });
+    }
   });
 }

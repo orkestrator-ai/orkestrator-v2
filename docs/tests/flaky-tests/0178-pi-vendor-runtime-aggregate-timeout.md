@@ -601,3 +601,11 @@ Final aggregate: exit 1 after 1252.7 seconds logged. Backend passed 8964 tests w
 Final aggregate exited 1 after 477.8 seconds. Backend reported 8978 passed, 41 skipped and one failed across 9020 tests in 478 files (423.04 seconds). Root/support reported the Pi timeout above; all other workspace packages, bridges and the Codex protocol check passed. Both failing owning files passed unchanged alone. Formatting, lint, typechecking and the full component browser suite also passed. Additional real-stack, Electron, Docker and iOS scenario suites were omitted because the branch changes a component-browser test and documentation, and conflict resolution changes documentation only.
 
 **Recurrence (2026-10-18, qualify-design-live-cycle):** `mise run test:logged -- --name full-test-merged -- mise run test` on the design branch merged with `origin/main` at `68dc1c8d` hit the same 30,000 ms timeout while other workers loaded the host. `mise run test:logged -- --name pi-vendor -- bun test tests/unit/pi-bridge-vendor.test.ts` then passed unchanged (exit 0, 14.1 seconds). Nothing in the owning file or its implementation changed.
+
+- **Design live-cycle review recurrence (2026-10-18):** the aggregate
+  `mise run test:logged -- --name review-full -- mise run test` timed out
+  the unchanged staging case at 30 seconds on the shared host.
+  `mise run test:logged -- --name review-pi-vendor-rerun -- bun test
+  ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed
+  the owning file unchanged in 20.7 seconds. No timeout, skip, or assertion
+  was changed.

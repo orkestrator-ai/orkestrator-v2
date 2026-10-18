@@ -475,16 +475,18 @@ create a frame, `inspect_element`, `replace_element_html`, `capture_frame` and
 `save_canvas` to a nonce path. It checks that the launch linked the
 conversation to the canvas, then switches environment once the opening prompt
 is accepted, and checks the canvas, the saved `.orkdes` and the idle controls
-on return. **Ask agent** then captures the selection while another client
-edits the frame: the stale-context notice appears, the agent re-reads, and
+on return after a renderer reload. Successful `inspect_element` and `capture_frame`
+calls are required in the launch transcript. **Ask agent** then captures the
+selection while another client edits the frame: the stale-context notice appears, the agent re-reads, and
 both edits survive. Next the approval mode is set to Ask (Claude) or Untrusted
 (Codex). The agent is asked for one shell command before a style edit, and the
 test switches away while the approval is pending. On return the request must
-still be pending, the turn `blocked` and the canvas unchanged; after approval
-the edit lands. Finally **Implement** starts a new conversation holding an
-unsent handoff draft that survives a switch, and the canvas links both
-conversations. The design MCP call count, failed calls and response bytes are
-attached as `design-mcp-usage`.
+still be pending after a renderer reload, the turn `blocked` and the canvas
+unchanged; after approval the edit lands. Finally **Implement** starts a new conversation holding an
+unsent handoff draft that survives a switch and renderer reload, and the canvas
+links both conversations. The design MCP call count, failed calls and response bytes are
+attached as `design-mcp-usage`. A content-free heartbeat runs every minute for
+the whole case, including approval waits and cleanup, and is cleared in `finally`.
 
 Never press Escape to clear a sidebar tooltip in a live spec: with nothing
 focused, Escape stops the active tab's running turn (`useEscapeToStop`). A

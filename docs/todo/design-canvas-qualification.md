@@ -220,6 +220,53 @@ ORKESTRATOR_AGENT_TEST_PROFILE=qa-design-live-c2 ORKESTRATOR_AGENT_TEST_LIVE_DES
   case stands in for it), containers (local environments only), and the
   Electron window (browser client only).
 
+### Review follow-up: heartbeat and renderer reloads
+
+Profile `qa-review-design-live-fd9df34`, using the same pinned providers and
+`mise run test:logged -- --name review-design-live-rerun -- mise run
+test:agent:browser -- e2e/agent-testing/design-live.spec.ts`, with
+`ORKESTRATOR_AGENT_TEST_LIVE_DESIGN=1` and
+`ORKESTRATOR_AGENT_TEST_DESIGN_MODELS=claude=claude-haiku-4-5`:
+
+- **Codex passed the complete cycle.** The launch transcript explicitly
+  completed `inspect_element` and `capture_frame`. Renderer reloads restored
+  the canvas and design-session link after launch, the still-pending approval
+  before its command ran, and the unsent implementation draft and both links
+  after handoff. Whole cycle: 13 design MCP calls, 0 failed, 30,279 response
+  bytes. The minute heartbeat appeared during the case.
+- **Claude remained unqualified for the remainder.** Both the default-model
+  attempt and the Haiku retry ended at launch with the provider API error;
+  no assertion was weakened or skipped. The combined retry reported one pass
+  (Codex) and one failure (Claude), in 170.3 seconds. Evidence:
+  `output/agent-testing/qa-review-design-live-fd9df34/browser/` and the logged
+  failure artifact `orkestrator-test-run.DvvwEf/review-design-live-rerun.log.gz`.
+- **Deterministic regression checks passed.** An eight-minute virtual wait
+  keeps emitting without projection changes, on success and timeout; a scaled
+  real `run-logged.ts` subprocess survives beyond its silence deadline.
+  Dialog tests cover delayed/rejected capabilities, disabled session support,
+  and environment/backend changes during the read. Claude tests cover both
+  abort reasons, streamed output, generation isolation, structured-output
+  exclusion, and marker cleanup after normal completion or transport loss.
+  The design-launch browser file passed both viewport projects.
+- **Isolated design validation did not pass.** Two fresh profiles each passed
+  the private-canvas case but failed the other unchanged test: first on the
+  persisted hidden-file tab (the assertion tracked by case 0380), then on
+  the initial brief's visibility. The second run also exceeded the trace
+  sanitization bound. No new flake classification is claimed. Evidence is
+  under `output/agent-testing/qa-browser-175d0fde-8ef/` and
+  `output/agent-testing/qa-browser-6f765d62-da0/`. All profiles were stopped
+  and reset.
+
+- **Repository validation:** format, lint and typecheck passed. The full
+  non-iOS suite exited 1 after 692.0 seconds: the root diagnostics rule caught
+  two newly added DOM absence assertions (corrected, then the complete root
+  and live-support rerun passed in 187.8 seconds), plus the existing Pi staging
+  timeout (0178) and backend activity-batch failure (0247). Both unchanged
+  flaky owning files passed alone, in 20.7 and 0.5 seconds respectively; their
+  records were updated. Every other workspace package, bridges, and protocol
+  verification passed. Electron, Docker and iOS suites were omitted because
+  the change concerns local browser qualification and internal interrupt cleanup.
+
 ## Constraints and rationale
 
 - Runs use a unique isolated profile and only its fixture repository, with

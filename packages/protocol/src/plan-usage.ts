@@ -33,8 +33,13 @@ export interface PlanUsageSnapshot {
   windows: NativeAgentAccountUsageWindow[];
   /** The account's plan name, when the provider reports one. */
   plan?: string;
-  /** User-facing explanation for `unavailable` or `error`. */
+  /** User-facing explanation for `unavailable` or `error`, or why a reading is stale. */
   message?: string;
+  /**
+   * The windows are the last successful reading, served because a fresh one
+   * could not be made. `fetchedAt` is when that reading was taken.
+   */
+  stale?: boolean;
   fetchedAt: string;
 }
 
@@ -52,7 +57,38 @@ export function isPlanUsageSnapshot(value: unknown): value is PlanUsageSnapshot 
   if (!Array.isArray(candidate.windows)) return false;
   if (candidate.plan !== undefined && typeof candidate.plan !== "string") return false;
   if (candidate.message !== undefined && typeof candidate.message !== "string") return false;
+  if (candidate.stale !== undefined && typeof candidate.stale !== "boolean") return false;
   return typeof candidate.fetchedAt === "string";
+}
+
+/**
+ * An earlier successful reading, marked stale and brought forward to `now`.
+ *
+ * A window whose reset time has passed since the reading has started over, so
+ * it is shown empty rather than at its old level. Its next reset is unknown.
+ */
+export function stalePlanUsageSnapshot(
+  snapshot: PlanUsageSnapshot,
+  now: number,
+  message?: string,
+): PlanUsageSnapshot {
+  const windows = snapshot.windows.map((window) => {
+    const resetsAt = window.resetsAt ? Date.parse(window.resetsAt) : Number.NaN;
+    if (!Number.isFinite(resetsAt) || resetsAt > now) return window;
+    const restarted = { ...window };
+    delete restarted.resetsAt;
+    if (restarted.usedPercent !== undefined) restarted.usedPercent = 0;
+    return restarted;
+  });
+  return {
+    platform: snapshot.platform,
+    status: "ok",
+    windows,
+    ...(snapshot.plan ? { plan: snapshot.plan } : {}),
+    ...(message ? { message } : {}),
+    stale: true,
+    fetchedAt: snapshot.fetchedAt,
+  };
 }
 
 const WEEK_MINUTES = 7 * 24 * 60;

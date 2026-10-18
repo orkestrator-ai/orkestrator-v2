@@ -228,7 +228,7 @@ never a direct file write, except the Claude SSE case below.
 
 | Provider | Code | Result | Time |
 | --- | --- | --- | --- |
-| Claude | `25a1c56f` (spec) | 1 passed: user, private local, project, SSE stale server | 10.2 min |
+| Claude | `25a1c56f` (spec) | 1 passed: user, private local, project, SSE stale server | 10.3 min |
 | Codex | `2b8fc965` | 1 passed: user, project | 11.9 min |
 | OpenCode (`opencode-go/deepseek-v4.1-flash`) | `ddc2074c` | 1 passed: user, project | 3.6 min |
 | Cursor | `ddc2074c`, project scope again at `140a50e8` | 1 passed each | 6.3 min, 4.2 min |

@@ -101,6 +101,10 @@ No assertion, deadline or skip was changed.
   and fixture teardown after timeout remain hypotheses; no lifecycle source,
   assertion, timeout or skip changed.
 
+## Design live-cycle second main merge — 2026-10-18
+
+The GNU-tool PATH `mise run test:logged -- --name merge-full -- mise run test` (workspace/root/bridges/protocol reservations 4/1/2/1, alongside browser validation) timed out `strict lifecycle commands still repair an environment whose container is already gone` at 5680.10 ms. The unchanged owning file passed `mise run test:logged -- --name merge-unit-owner-commands-registry-environments-status -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments-status.test.ts --parallel=1 --only-failures`, exit 0, in 7.3 seconds logged. Aggregate evidence: `orkestrator-test-run.yluX61/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. Confirmed intermittent recurrence; no implementation, assertion, timeout or skip changed.
+
 ## CLI matrices second main merge — 2026-10-18
 
 Original command: `mise run test:logged -- --name merge2-tests -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1 alongside component and isolated browser validation. The strict lifecycle case timed out at 9187.64 ms with its companion isolated-profile mounts failure (385.84 ms). The unchanged owning file passed in the four-file one-worker `merge2-late-backend-owners` rerun (exact command and overall result in 0442).

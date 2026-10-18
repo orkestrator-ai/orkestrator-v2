@@ -116,3 +116,13 @@ at 5061.30 ms (`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-tes
 Backend reported 9084 passed, 41 skipped and three failed across 9128 tests in 483 files. Every other workspace package, root/support, bridges and protocol regeneration passed. The other failures are recorded in 0165.
 
 Evidence: `orkestrator-test-run.tMXC4x/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. Confirmed intermittent recurrence; shared-host contention remains a hypothesis. No source, assertion, timeout or skip changed.
+
+## Design live-cycle second main merge observation — 2026-10-18
+
+The GNU-tool PATH run of `mise run test:logged -- --name merge-full -- mise run test` (workspace/root/bridges/protocol reservations 4/1/2/1, alongside browser validation) timed out nested submodule moves on the same disk (5490.85 ms), copied moves (5259.61 ms), and restart re-linking (5271.68 ms).
+
+`mise run test:logged -- --name merge-unit-owner-environment-move -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` also timed out restart re-linking (5083.24 ms), followed by a submodule configuration error after the Git child was terminated. It reported 36 passed, one failed and one error across 37 tests (57.3 seconds logged).
+
+Evidence: aggregate `orkestrator-test-run.yluX61/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; isolated `orkestrator-test-run.GobX0g/merge-unit-owner-environment-move.log.gz`, below the host temporary directory. This observation does not independently establish a flake; submodule move validation remains unresolved. No implementation, assertion, timeout or skip changed.
+
+**Post-aggregate owning-file rerun (same merge, 2026-10-18):** after the full suite finished, `mise run test:logged -- --name merge-post-suite-environment-move -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 28.0 seconds logged. Together with the aggregate failure this confirms an intermittent recurrence; the earlier isolated failure is retained above. No implementation, assertion, timeout or skip changed.

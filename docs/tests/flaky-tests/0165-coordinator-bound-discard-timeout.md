@@ -505,6 +505,16 @@ Backend reported 9084 passed, 41 skipped and three failed across 9128 tests in 4
 
 Evidence: `orkestrator-test-run.tMXC4x/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. Confirmed intermittent recurrence; shared-host contention remains a hypothesis. No source, assertion, timeout or skip changed.
 
+## Design live-cycle second main merge observation — 2026-10-18
+
+The GNU-tool PATH run of `mise run test:logged -- --name merge-full -- mise run test` (workspace/root/bridges/protocol reservations 4/1/2/1, alongside browser validation) timed out four coordinator cases: dirty branch switching (5549.68 ms), bound discard confirmations (5385.47 ms), configured remote/submodule fetching (5289.15 ms), and force/fast-forward/remote/divergence handling (5317.17 ms).
+
+`mise run test:logged -- --name merge-unit-owner-coordinator-service -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` also timed out bound discard confirmations (5141.49 ms), followed by a `SQLITE_IOERR_VNODE` error between tests. It reported 51 passed, one failed and one error across 52 tests (37.8 seconds logged).
+
+Evidence: aggregate `orkestrator-test-run.yluX61/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`; isolated `orkestrator-test-run.lye2h4/merge-unit-owner-coordinator-service.log.gz`, below the host temporary directory. This observation does not independently establish a flake; coordinator validation remains unresolved. No implementation, assertion, timeout or skip changed.
+
+**Post-aggregate owning-file rerun (same merge, 2026-10-18):** after the full suite finished, `mise run test:logged -- --name merge-post-suite-coordinator-service -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 24.2 seconds logged. Together with the aggregate failure this confirms an intermittent recurrence; the earlier isolated failure is retained above. No implementation, assertion, timeout or skip changed.
+
 ## CLI matrices second main merge observation — 2026-10-18
 
 - **Original command:** `mise run test:logged -- --name merge2-tests -- mise run test`, merging `origin/main` at `c85ab60a` into `9467f965`; macOS arm64 and Bun 1.4.3; workspace/root/bridges/protocol reservations 4/1/2/1 alongside component and isolated browser validation.

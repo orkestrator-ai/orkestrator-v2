@@ -57,10 +57,10 @@ it reaches. Some rules of thumb:
 | Score | Meaning | Items |
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
-| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 20 |
+| High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 18 |
 | Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 261 |
 | Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 279 |
-| **Total** | | **561** |
+| **Total** | | **559** |
 
 ## Very high
 
@@ -171,8 +171,8 @@ it reaches. Some rules of thumb:
 
 - [x] Add an opt-in live coordinator suite that assigns each qualified platform on the fixture project ([coordinator-live-conformance.md](coordinator-live-conformance.md))
 - [x] Add the live read-only scenario: hash the tree, attempt each mutation, assert unchanged and discovery works ([coordinator-live-conformance.md](coordinator-live-conformance.md))
-- [ ] Run the live read-only and async coordinator scenarios on all six platforms ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
-- [ ] Run the worker-mail family scenario once per qualified platform with default messaging settings ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
+- [x] Run the live read-only and async coordinator scenarios on all six platforms ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
+- [x] Run the worker-mail family scenario once per qualified platform with default messaging settings ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
 - [ ] Run the status-wake scenario live per platform: review ready, fix done and completed, build completed, worker waiting, seven reviews in one wake ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
 - [ ] Check mail tiles render from each platform's echoed carrier, single and batched, in a real coordinator transcript ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
 - [x] Stop a Codex coordinator reaching the network through hosted `web_search`, or record why the `network` deny allows it ([coordinator-live-conformance.md](coordinator-live-conformance.md))
@@ -465,7 +465,7 @@ it reaches. Some rules of thumb:
 - [ ] Decide whether `provider-configured` is an acceptable final coordinator tier for OpenCode and Cursor ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md), decision)
 - [ ] Verify whether Grok 1.0.52 can disable web fetch alone, so Grok coordinators can search ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md), qualification)
 - [ ] Load coordinator research MCP servers on OpenCode, Cursor and Pi ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md))
-- [ ] Add the live async scenario: async launch, queue before mail, one carrier, one silent-worker notice ([coordinator-live-conformance.md](coordinator-live-conformance.md))
+- [x] Add the live async scenario: async launch, queue before mail, one carrier, one silent-worker notice ([coordinator-live-conformance.md](coordinator-live-conformance.md))
 - [ ] Require every `enforced` coordinator platform to appear on the live suite's platform list in tests ([coordinator-live-conformance.md](coordinator-live-conformance.md))
 - [ ] Run the ten-message peer scenario between two environments with Wake peers on ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
 - [ ] Confirm Grok Orkestrator mail tools auto-allow under both naming forms on the pinned Grok build ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
@@ -474,7 +474,9 @@ it reaches. Some rules of thumb:
 - [x] Find out why a Grok coordinator's turn ends at its first denied tool in the live read-only run ([coordinator-live-conformance.md](coordinator-live-conformance.md), verify)
 - [ ] Qualify live that the Grok read-only agent profile stops shell commands Grok never asks about (`touch` ran unasked on 1.0.52) ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
 - [x] Let agent-test profiles authorize Pi's host login so the live coordinator suite can qualify Pi ([coordinator-live-conformance.md](coordinator-live-conformance.md))
-- [ ] Find out why a Cursor coordinator reports `network` denied without attempting the fetch in the live read-only run ([coordinator-live-conformance.md](coordinator-live-conformance.md), verify)
+- [x] Find out why a Cursor coordinator reports `network` denied without attempting the fetch in the live read-only run ([coordinator-live-conformance.md](coordinator-live-conformance.md), verify)
+- [ ] Re-run the live coordinator suite on Claude once its account rate limit resets, on Pi and Grok once the host has their logins, and on Claude on Linux ([coordinator-live-conformance.md](coordinator-live-conformance.md), qualification)
+- [ ] Decide whether to re-prompt Cursor's live read-only run, which labels steps it has no tool for `denied` in about half its runs ([coordinator-live-conformance.md](coordinator-live-conformance.md), decision)
 - [x] Get Codex to attempt create, edit and shell in the live read-only run, or decide a known read-only sandbox counts as exercised ([coordinator-live-conformance.md](coordinator-live-conformance.md))
 - [x] Show Codex calls its sandbox refused in the live transcript; app-server 0.162.1 emits no item for them ([coordinator-read-only-adapters.md](coordinator-read-only-adapters.md))
 - [ ] Auto-close an unassigned, empty-draft coordinator conversation when a new one is created ([coordinator-consistency-gaps.md](coordinator-consistency-gaps.md))
@@ -930,7 +932,7 @@ it reaches. Some rules of thumb:
 | [multi-review-flow-graph.md](multi-review-flow-graph.md) |  |  |  |  | 0 |
 | **Coordinator and agent mail** | | | | | |
 | [coordinator-read-only-adapters.md](coordinator-read-only-adapters.md) |  |  | 5 | 5 | 10 |
-| [coordinator-live-conformance.md](coordinator-live-conformance.md) |  | 4 | 8 | 1 | 13 |
+| [coordinator-live-conformance.md](coordinator-live-conformance.md) |  | 2 | 8 | 1 | 11 |
 | [coordinator-consistency-gaps.md](coordinator-consistency-gaps.md) |  |  | 1 | 10 | 11 |
 | **Backend structure** | | | | | |
 | [storage-service-repositories.md](storage-service-repositories.md) |  |  | 4 | 2 | 6 |

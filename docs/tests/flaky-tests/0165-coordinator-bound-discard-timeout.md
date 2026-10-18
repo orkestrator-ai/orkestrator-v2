@@ -483,6 +483,35 @@ owned test servers; no isolated application profile was created.
 - **Evidence:** `orkestrator-test-run.iFuHsy/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory. Backend reported 9025 passed, 41 skipped and 17 failed across 9083 tests, with 12 errors between tests.
 - **Assessment:** confirmed intermittent recurrence; no implementation, assertion, timeout or skip in these owners changed. Shared-host contention remains a hypothesis.
 
+## Recurrence on 2026-10-18
+
+`mise run test:logged -- --name full-test -- mise run test` on branch `qualify-coordinator-live-six-platforms-fb2b4a53344d`, on a host at load average 36–69 with several live
+suites running in other environments. Failed at 5260.49 ms. Workspace and root
+artifacts:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.UQLOD6/`.
+The unchanged owning file passed alone (52 pass, 19.6 s, after one more loaded failure).
+
+
+## Live coordinator review-fix validation — 2026-10-18
+
+- **Aggregate:** `mise run test:logged -- --name coordinator-full-suite -- mise run test`
+  on `qualify-coordinator-live-six-platforms-fb2b4a53344d`, macOS arm64, Bun 1.4.3.
+  Backend used two isolated workers alongside the other aggregate groups and
+  another worktree's validation. The workspace group exited 1 after 363.7 s;
+  backend reported 9045 passed, 41 skipped, two failed and one between-tests
+  error. Every other workspace package, root/support, bridges and protocol
+  lockfile validation passed.
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.MUMuwG/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Failure:** the bound-discard case exceeded its 5000 ms deadline at
+  5218.78 ms. Late fixture work then expected the nested-repository refusal
+  but received "The configured local checkout is not a Git repository" after
+  cleanup removed the checkout.
+- **Owning-file rerun:** `mise run test:logged -- --name coordinator-discard-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`
+  passed unchanged, exit 0, in 10.6 s.
+- **Assessment:** confirmed intermittent recurrence. No owning implementation,
+  assertion, timeout or skip changed. The review fixes change live-suite
+  harnesses and add a separate server-reconciliation regression test.
+
 ## Transcript-paging review fixes — 2026-10-18
 
 `mise run test:logged -- --name full-tests -- mise run test` repeated both

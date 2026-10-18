@@ -777,13 +777,20 @@ guarantee, not by one end-to-end scenario replayed per platform:
 - per-bridge activity and policy tests already cover whether a bridge reports
   `idle` at turn end and how it translates `capabilityPolicy`
 
-- the read-only boundary against real providers: `mise run
-  test:agent:coordinator` runs one live coordinator turn per platform in a
-  disposable profile. Each turn attempts every class of mutation, then the
-  suite checks that the checkout digest is unchanged and that read and
-  discovery tools still answer. It is opt-in and never runs in `mise run test`
-  or CI. See "Live coordinator suite" in
+- the same contracts against real providers: `mise run
+  test:agent:coordinator` runs three scenarios per platform in a disposable
+  profile. `read-only` attempts every class of mutation and checks that the
+  checkout digest is unchanged and that read and discovery tools still answer.
+  `async` launches real workers and checks the async launch result, that a
+  queued prompt runs before pending worker mail, one carrier per delegation, one
+  notice for a silent worker and the poll guard. `family` runs a two-worker
+  exchange of sixteen messages, including a follow-up to a busy worker, with
+  nobody answering anything. It is opt-in and never runs in `mise run test` or
+  CI. See "Live coordinator suite" in
   [`agent-testing.md`](../development/agent-testing.md).
+- an OpenCode coordinator keeps its scoped Control MCP credential on its server
+  through every later reconcile, and does not start until it is connected:
+  `commands-servers-coordinator-opencode.test.ts`
 
-The live async and mail scenarios, and the runs that qualify each platform, are
-in [coordinator-live-conformance.md](../todo/coordinator-live-conformance.md).
+The runs that qualify each platform, and the scenarios still to add, are in
+[coordinator-live-conformance.md](../todo/coordinator-live-conformance.md).

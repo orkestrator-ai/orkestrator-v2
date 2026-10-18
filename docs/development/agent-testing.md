@@ -449,6 +449,48 @@ engines (`bridges/cursor-bridge/src/testing/fake-engine-server.ts`,
 `e2e/fixtures/close-retention-opencode.ts`). Its assertions read each engine's
 own store, so a duplicated or lost prompt fails there.
 
+### Live design-tool cycle
+
+`e2e/agent-testing/design-live.spec.ts` runs the design canvas with a real
+Claude and Codex through the `orkestrator-design` MCP server. It has its own
+opt-in and uses the profile's host credentials:
+
+```bash
+mise run dev:test --profile qa-design-live --fixture --credential-source claude --credential-source codex --agent-platforms claude,codex
+# In a second terminal:
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-design-live ORKESTRATOR_AGENT_TEST_LIVE_DESIGN=1 \
+  mise run test:logged -- --name design-live -- mise run test:agent:browser -- \
+  e2e/agent-testing/design-live.spec.ts
+mise run dev:stop --profile qa-design-live
+mise run dev:reset --profile qa-design-live
+```
+
+`ORKESTRATOR_AGENT_TEST_DESIGN_PROVIDERS` (default `claude,codex`) picks the
+providers, `ORKESTRATOR_AGENT_TEST_DESIGN_TURN_TIMEOUT_MS` (default 420000)
+bounds each turn, and `ORKESTRATOR_AGENT_TEST_DESIGN_MODELS` takes
+`<platform>=<model id>` pairs (for example `claude=claude-haiku-4-5`) that are
+set on the test environment before launch. Each provider gets two fresh environments. The case launches
+**New design workspace** with the provider and a fixture-scoped brief:
+create a frame, `inspect_element`, `replace_element_html`, `capture_frame` and
+`save_canvas` to a nonce path. It checks that the launch linked the
+conversation to the canvas, then switches environment once the opening prompt
+is accepted, and checks the canvas, the saved `.orkdes` and the idle controls
+on return. **Ask agent** then captures the selection while another client
+edits the frame: the stale-context notice appears, the agent re-reads, and
+both edits survive. Next the approval mode is set to Ask (Claude) or Untrusted
+(Codex). The agent is asked for one shell command before a style edit, and the
+test switches away while the approval is pending. On return the request must
+still be pending, the turn `blocked` and the canvas unchanged; after approval
+the edit lands. Finally **Implement** starts a new conversation holding an
+unsent handoff draft that survives a switch, and the canvas links both
+conversations. The design MCP call count, failed calls and response bytes are
+attached as `design-mcp-usage`.
+
+Never press Escape to clear a sidebar tooltip in a live spec: with nothing
+focused, Escape stops the active tab's running turn (`useEscapeToStop`). A
+Claude CLI rate limit (429) ends the turn on an API error; rerun later rather
+than treating it as a product failure.
+
 ### Live coordinator suite
 
 The live coordinator suite checks that a real provider keeps the coordinator's

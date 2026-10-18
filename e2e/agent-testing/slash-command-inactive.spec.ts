@@ -163,9 +163,9 @@ function sidebarNavigator(page: Page, projectName: string) {
     if (await expand.isVisible()) await expand.click();
     if (!mobile) {
       // A sidebar tooltip from the previous hover can sit over the entry.
-      // Escape would also close the mobile drawer, so only on desktop.
+      // Never press Escape to clear it: with nothing focused, Escape stops the
+      // active tab's running turn (useEscapeToStop), which was flake 0273.
       await page.mouse.move(0, 0);
-      await page.keyboard.press("Escape");
     }
     await entry.click();
     const closeDrawer = page.getByRole("button", { name: "Close projects and environments" });

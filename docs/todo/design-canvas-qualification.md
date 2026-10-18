@@ -1,7 +1,8 @@
 # Design canvas qualification
 
 Checked against `main` at `2459b05c` (2026-10-15); the flake review against
-`9906db30` (2026-10-16).
+`9906db30` (2026-10-16); the live agent cycle against `a5d338c1`
+(2026-10-18).
 
 The design canvas ([`design-canvas.md`](../architecture/design-canvas.md)) is
 complete in code: recoverable operations, safe export, history, incremental
@@ -25,6 +26,14 @@ nobody builds them speculatively.
   that had blocked it was fixed by #840. On 2026-10-15, after the `AppShell`
   breakpoint fix that resolved flake 0209, both tests passed on a fresh profile
   and again inside a full `mise run test:agent:browser:isolated` run.
+- Live agents: `e2e/agent-testing/design-live.spec.ts` (opt-in,
+  `ORKESTRATOR_AGENT_TEST_LIVE_DESIGN=1`; see
+  [`agent-testing.md`](../development/agent-testing.md#live-design-tool-cycle))
+  runs one fixture-scoped cycle per provider through the real app: launch with
+  create, inspect, refine, capture and `save_canvas`; **Ask agent** against a
+  stale selection; an approval pending across an environment switch; and an
+  unsent implementation handoff. Codex passed it on 2026-10-18; Claude passed
+  the launch cycle only (see [Live cycle evidence](#live-cycle-evidence-2026-10-18)).
 - Component browser spec `e2e/DesignCanvas.spec.ts` runs the real runtime at
   desktop and phone widths. Because `DesignService` loads `bun:sqlite` since
   #969, the spec drives it in a Bun child process (`e2e/design-service-host.ts`,
@@ -48,14 +57,24 @@ nobody builds them speculatively.
 Live-agent and platform runs share prerequisites and batching with other todo
 files; see [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md).
 
-- **Live agents.** One fixture-scoped design-tool cycle each with Claude and
-  Codex through the `orkestrator-design` MCP server: create, inspect, refine,
-  capture, `save_canvas`. Include an **Ask agent** round trip against a stale
-  selection (the agent re-reads, and its edit is still revision-checked), a
-  handoff to a reviewable unsent implementation draft, and an environment
-  switch while the agent runs and while it waits on a question or approval;
-  on return the canvas, transcript and pending controls must be correct.
-  Record the MCP call count and response bytes for the cycle.
+- **Live agents: Claude remainder.** Codex passed the whole cycle and Claude
+  the launch cycle on 2026-10-18. Claude's **Ask agent**, approval and handoff
+  steps could not run: the account the profile used returned
+  `429 rate_limit` on six consecutive runs over half an hour, on the default
+  model and on Haiku alike
+  (flake [0450](../tests/flaky-tests/0450-claude-live-design-account-rate-limit.md)).
+  Rerun `design-live.spec.ts` with `ORKESTRATOR_AGENT_TEST_DESIGN_PROVIDERS=claude`
+  on an account with headroom and record the result below.
+- **Opening prompt of a new design tab needs the tab mounted.** The agent tab
+  of **New design workspace** sends its brief from the mounted tab
+  (`AgentNativeTab.controller.tsx`, `initialPrompt`) once its projection loads.
+  Switching environment before that defers the first turn until the user
+  returns; nothing is lost, but the agent sits idle. Only the environment's
+  `startup-agent` tab has a backend-owned startup prompt. Give tabs created
+  with an initial prompt a backend-owned dispatch (the same request id
+  `initial-prompt:<environment>:<tab>` keeps it at most once), with an
+  inactive-environment test. This applies to every tab created with an
+  initial prompt, not only design.
 - **Real-container export.** Export locally and from a running container.
   Interrupt before the write, during it, after the rename and before the
   association commit; also stop or restart the container mid-export, remove
@@ -141,6 +160,65 @@ did not justify a storage redesign. In order:
    and receipt atomicity, crash recovery, history and v1 export. Since #969
    cross-process leases already use the backend database
    (`core/design/coordination.ts`); records stay files.
+
+## Live cycle evidence (2026-10-18)
+
+Profile `qa-design-live-c2`: `mise run dev:test --profile qa-design-live-c2
+--fixture --credential-source claude --credential-source codex
+--agent-platforms claude,codex`, bridges rebuilt first, on branch
+`qualify-design-live-cycle-fd9df34bd9d5` from `a5d338c1`. Pins: Claude Code
+2.1.296 (Agent SDK 0.3.296), Codex 0.162.1 (model GPT-6.1-Sol, High). Command
+per provider:
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=qa-design-live-c2 ORKESTRATOR_AGENT_TEST_LIVE_DESIGN=1 \
+  ORKESTRATOR_AGENT_TEST_DESIGN_PROVIDERS=codex ORKESTRATOR_AGENT_TEST_DESIGN_TURN_TIMEOUT_MS=360000 \
+  bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts \
+  e2e/agent-testing/design-live.spec.ts --workers=1
+```
+
+- **Codex: passed twice** (2.1 min each). Launch: 7 design calls
+  (`get_canvas_summary`, `create_frame`, `get_frame`, `inspect_element`,
+  `replace_element_html`, `capture_frame`, `save_canvas`), the export landed at
+  the nonce path, and the turn finished while the canvas was inactive. Ask
+  agent: the dialog showed the stale-revision notice, Codex re-read
+  (`get_canvas_summary`, `get_frame`), and both its edit and the other
+  client's survived. Approval (Untrusted): the shell command and then the
+  `set_element_styles` call each parked (`command-approval`, then `mcp-form`);
+  the turn was `blocked`, survived a 15 s environment switch with the canvas
+  unchanged, and completed after approval. Handoff: the new conversation held
+  the unsent draft across a switch, nothing was sent, and the canvas linked
+  both conversations. Whole cycle: 11 design MCP calls, 0 failed, 28,411
+  response bytes (tool outputs fetched through `get_native_agent_tool_details`).
+- **Claude: launch cycle passed, rest not run.** Before the fixes below, one
+  run completed the launch cycle (create, inspect, replace, capture,
+  `save_canvas`, recovering by itself from a revision conflict on its first
+  `create_frame`) and then failed at Ask agent on the missing link. Four
+  launch-only probes passed the same brief with an environment switch, a
+  reload and the link poll. Every later run hit `429 rate_limit`.
+- **Defects found and fixed** (each with a test):
+  1. A design launched before the dialog's readiness probe finished (the probe
+     waits on the renderer) was never linked to its agent conversation, so
+     Ask agent could not target it. `DesignWorkspaceDialog.tsx` now reads the
+     session capability directly when readiness is still loading.
+  2. A user stop (Stop or Escape) that reached Claude before any text streamed
+     ended the turn as an error showing
+     `[ede_diagnostic] result_type=user …`. The Claude bridge now records the
+     generation a stop was requested for and settles that turn's aborted
+     result (`terminal_reason` `aborted_streaming` or `aborted_tools`) as a
+     stop. An aborted result nobody asked for is still an error. This is
+     also the root cause of flake
+     [0273](../tests/flaky-tests/0273-claude-live-slash-provider-result.md).
+- **Test findings.** Pressing Escape to clear a sidebar tooltip stops the
+  active tab's running turn; `design-live.spec.ts` and
+  `slash-command-inactive.spec.ts` no longer do. A turn waiting on an approval
+  is `blocked` and its composer shows no Stop button (the card is the
+  control). Codex asks an `mcp-form` before each MCP tool call outside
+  auto-approve. A conversation nothing was sent to shows the unassigned
+  composer (`unassigned-native-compose-bar`).
+- **Not covered here:** a pending *question* across a switch (the approval
+  case stands in for it), containers (local environments only), and the
+  Electron window (browser client only).
 
 ## Constraints and rationale
 

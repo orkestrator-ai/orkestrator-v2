@@ -92,6 +92,17 @@ evidence. This file only points at it.
    button and intercepts browser-spec clicks; `slash-command-inactive.spec.ts`
    dismisses it with a locator handler. Pass the workspace package version in
    development, or skip the reminder for agent-test profiles.
+4. **Stop pressing Escape in live specs' environment navigation.** With
+   nothing focused, Escape stops the active tab's running turn
+   (`useEscapeToStop`). That was flake
+   [0273](../tests/flaky-tests/0273-claude-live-slash-provider-result.md), found
+   by the live design cycle on 2026-10-18; `slash-command-inactive.spec.ts` and
+   `design-live.spec.ts` are fixed. `opencode-live.spec.ts`,
+   `close-retention-live.spec.ts` and `container-approval-stop.spec.ts` still
+   press Escape in their `openEnvironment` helpers. OpenCode's native-tab case
+   switches environment while its turn runs, so it can stop its own turn and
+   report a provider failure. Move the pointer away instead, as the fixed specs
+   do.
 
 ### Qualification: checks with no other home
 

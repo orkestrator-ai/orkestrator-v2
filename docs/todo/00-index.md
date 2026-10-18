@@ -58,9 +58,9 @@ it reaches. Some rules of thumb:
 | --- | --- | --- |
 | Very high | A live correctness, data-loss or security defect, a regression in shipped behaviour that affects most users or every run, or an unguarded release pipeline. | 1 |
 | High | Significant performance or cost regressions, features on by default but never qualified on the real stack, gates for enabling shipped capabilities, user-visible bugs with a workaround, security hardening with real exposure. | 25 |
-| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 252 |
+| Medium | Functional gaps and provider parity, secondary-provider or platform qualification, risk-reducing refactors, retiring compatibility paths, measurement gaps. | 254 |
 | Low | Optional or deferred features, measure-first optimisations, extensions, cosmetic fixes, comment and doc hygiene, work blocked upstream. | 275 |
-| **Total** | | **553** |
+| **Total** | | **555** |
 
 ## Very high
 
@@ -118,7 +118,8 @@ it reaches. Some rules of thumb:
 
 ### Design canvas (high)
 
-- [ ] Run a live Claude and Codex design-tool cycle, including Ask agent, handoff and an environment switch ([design-canvas-qualification.md](design-canvas-qualification.md), qualification)
+- [x] Run a live Claude and Codex design-tool cycle, including Ask agent, handoff and an environment switch ([design-canvas-qualification.md](design-canvas-qualification.md), qualification)
+- [ ] Rerun the live Claude design cycle's Ask agent, approval and handoff steps on an account that is not rate-limited ([design-canvas-qualification.md](design-canvas-qualification.md), qualification)
 - [x] Verify whether the open design flakes, especially the extra event in 0215, reflect ordering bugs ([design-canvas-qualification.md](design-canvas-qualification.md), verify)
 - [x] Reject a reused design `correlationId` with different input on settled receipts in `submit` and `findCreate` ([design-operation-recovery-edges.md](design-operation-recovery-edges.md))
 
@@ -300,6 +301,7 @@ it reaches. Some rules of thumb:
 - [ ] Measure design client performance and leaks at 1, 16 and 64 frames, and library open up to 256 canvases ([design-canvas-qualification.md](design-canvas-qualification.md), qualification)
 - [ ] Run design mixed-version and migration checks on real old and new binaries ([design-canvas-qualification.md](design-canvas-qualification.md), qualification)
 - [ ] Reproduce design browser flakes 0174 and 0208 under a fixed worker count and synthetic load, then fix the wait or the product ([design-canvas-qualification.md](design-canvas-qualification.md))
+- [ ] Dispatch a new tab's opening prompt from the backend, so leaving before the tab mounts no longer defers a design launch's first turn ([design-canvas-qualification.md](design-canvas-qualification.md))
 - [ ] Prove with a fault test whether a hung renderer `browser.close()` leaks Chromium, and fix it if so ([design-operation-recovery-edges.md](design-operation-recovery-edges.md))
 - [ ] Persist the native session id on design session links through `design_session_link` ([design-agent-conversation-links.md](design-agent-conversation-links.md))
 - [ ] Offer Resume conversation for closed design links whose native session can be resumed ([design-agent-conversation-links.md](design-agent-conversation-links.md))
@@ -514,6 +516,7 @@ it reaches. Some rules of thumb:
 - [x] Verify whether the managed host `claude` updates itself without `DISABLE_AUTOUPDATER` ([remote-host-upgrades.md](remote-host-upgrades.md), verify)
 - [ ] Decide and align agent-test binary resolution: document the `PATH` fallback or refuse it ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
 - [ ] Refresh the live OpenCode spec for the no-default-model and fork-keeps-model fixes ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
+- [ ] Stop pressing Escape in three live specs' environment navigation, which can stop their own running turn ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md))
 - [ ] Re-run the Electron terminal input resume spec and confirm Resume keeps the same PTY process ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
 - [ ] Run the refreshed live OpenCode spec and check whether 1.19 `session.fork` fills `Session.model` ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
 - [ ] Drive compaction, image and long-tool parts through an inactive environment; confirm they render after reload ([live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md), qualification)
@@ -881,7 +884,7 @@ it reaches. Some rules of thumb:
 | [container-state-observation.md](container-state-observation.md) |  |  | 5 | 6 | 11 |
 | [environment-and-disk-cleanup.md](environment-and-disk-cleanup.md) |  |  |  | 6 | 6 |
 | **Design canvas** | | | | | |
-| [design-canvas-qualification.md](design-canvas-qualification.md) |  | 1 | 6 | 6 | 13 |
+| [design-canvas-qualification.md](design-canvas-qualification.md) |  | 1 | 7 | 6 | 14 |
 | [design-operation-recovery-edges.md](design-operation-recovery-edges.md) |  |  | 1 | 2 | 3 |
 | [design-agent-conversation-links.md](design-agent-conversation-links.md) |  |  | 5 | 3 | 8 |
 | **MCP** | | | | | |
@@ -918,7 +921,7 @@ it reaches. Some rules of thumb:
 | [backend-core-domain-folders.md](backend-core-domain-folders.md) |  |  | 4 | 3 | 7 |
 | [backend-runtime-state-ownership.md](backend-runtime-state-ownership.md) |  |  | 4 | 3 | 7 |
 | **Cross-cutting** | | | | | |
-| [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md) |  |  | 10 | 5 | 15 |
+| [live-provider-and-platform-qualification.md](live-provider-and-platform-qualification.md) |  |  | 11 | 5 | 16 |
 | [mixed-version-compatibility.md](mixed-version-compatibility.md) |  |  | 2 | 3 | 5 |
 | [test-suite-and-ci-health.md](test-suite-and-ci-health.md) | 1 | 1 | 4 | 13 | 19 |
 | [mobile-layout-gaps.md](mobile-layout-gaps.md) |  |  | 1 | 4 | 5 |

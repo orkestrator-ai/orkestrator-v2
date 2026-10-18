@@ -35,3 +35,23 @@
 - **Evidence:** `output/agent-testing/svc-preview-c6ca-suite/electron/results.json`
   (failing suite), `output/agent-testing/svc-preview-c6ca-alone`,
   `svc-preview-c6ca-base` and `svc-preview-c6ca-branch` (alone runs).
+
+## Preview path provenance validation — 2026-10-18
+
+`mise run test:logged -- --name agent-electron -- mise run test:agent:electron`
+(one worker) reported 18 passed, one skipped and three failed in 265.1 s.
+Both main-window cases and the terminal-resume case received `Orkestrator AI`
+at the five-second profile-title deadline. All seven service-preview cases
+passed, including inactive-tab reattach and renderer reload. Failure artifacts:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.T1XMVW/`.
+
+The unchanged main-process owning file still failed alone:
+`ORKESTRATOR_AGENT_TEST_RUN_ID=preview-provenance-electron-rerun mise run test:logged -- --name electron-main-rerun -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts e2e/agent-testing/electron-main.spec.ts --workers=1`
+reported one passed, one skipped and two failed in 45.2 s at the same title
+assertion. This does not establish a new flaky classification for those cases.
+
+The terminal owning file passed alone:
+`ORKESTRATOR_AGENT_TEST_RUN_ID=preview-provenance-terminal-rerun mise run test:logged -- --name terminal-resume-rerun -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts e2e/agent-testing/terminal-input-resume-electron.spec.ts --workers=1`
+(exit 0, one passed, 15.5 s logged). Host load was about 47 while other
+worktrees validated. Startup under contention remains an unconfirmed hypothesis;
+no assertion or timeout changed.

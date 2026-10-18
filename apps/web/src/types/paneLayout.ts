@@ -116,6 +116,8 @@ export interface MultiReviewTabData {
 export interface BrowserTabData {
   /** User-facing backend-local URL. An empty string opens the browser start screen. */
   url: string;
+  /** Identity of the URL write, retained through layout acknowledgements. */
+  navigationRequestId?: string;
   /**
    * Durable navigation history for the iframe preview. A native (Electron)
    * preview keeps its history in Chromium, so `BrowserTab` neither maintains

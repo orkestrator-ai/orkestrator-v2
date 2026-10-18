@@ -243,3 +243,21 @@ an additional flaky classification or resolve the existing issue.
 Evidence: `orkestrator-test-run.SROwT8/login-isolated-browser.log.gz` in the
 host temporary directory and
 `output/agent-testing/qa-browser-bdfd649e-0a6/browser/`.
+
+## Preview path provenance validation — 2026-10-18
+
+`mise run test:logged -- --name isolated-browser -- mise run test:agent:browser:isolated`
+(profile `qa-browser-41627cc5-72a`, one worker) reported 26 passed, 25 skipped
+and three failed in 649.4 s logged. The narrow host picker again timed out
+clicking `Repository settings` after 15000 ms. The other failures were local
+move cleanup at the 120-second test deadline and the 390px host-maintenance
+fixture's project-drawer click. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.YMsYVb/isolated-browser.log.gz`.
+
+The unchanged owning file on fresh profile `preview-path-layout-recheck`:
+`ORKESTRATOR_AGENT_TEST_PROFILE=preview-path-layout-recheck ORKESTRATOR_AGENT_TEST_RUN_ID=preview-path-layout-recheck mise run test:logged -- --name gateway-rerun -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1`
+reported 13 passed, six skipped and one failed in 144.7 s. Only the same narrow
+host-picker click failed; both other cases passed. This owning-file result
+does not establish new flaky classifications. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.ULvAuU/gateway-rerun.log.gz`.
+Both disposable profiles were stopped and reset. No assertion or timeout changed.

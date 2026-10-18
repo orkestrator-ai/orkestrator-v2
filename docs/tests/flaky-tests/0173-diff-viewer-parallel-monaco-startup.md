@@ -78,3 +78,16 @@ Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run
 - **Owning-file rerun:** `mise run test:logged -- --name resolve-browser-owner-rerun -- bunx playwright test --config e2e/playwright.config.ts e2e/DiffViewerMobile.spec.ts e2e/PaneBreakpoint.spec.ts --workers=1` passed both unchanged files (exit 0, 42.1 seconds).
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.NgqDST/resolve-browser.log.gz`.
 - **Assessment:** Matches the existing startup symptom. Host contention and overlapping Vite updates remain possible contributors; no diff-viewer code or test changed.
+
+## Preview path provenance validation — 2026-10-18
+
+`mise run test:logged -- --name browser -- mise run test:browser` ran 432
+cases with nine workers: 348 passed, 80 skipped and four failed in 329.2 s.
+`the diff header fits a phone and the editor uses the full width` could not find `.monaco-diff-editor` within five seconds.
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.kKsMFU/browser.log.gz`.
+
+The unchanged owning files passed sequentially with one worker:
+`mise run test:logged -- --name browser-rerun -- bunx playwright test --config e2e/playwright.config.ts e2e/DiffViewerMobile.spec.ts e2e/PaneBreakpoint.spec.ts e2e/CloseRetention.spec.ts --workers=1`
+(exit 0, 96.6 s logged). Other worktrees and real-stack checks were active on
+the host. Startup contention remains an unconfirmed hypothesis; no assertion
+or timeout changed.

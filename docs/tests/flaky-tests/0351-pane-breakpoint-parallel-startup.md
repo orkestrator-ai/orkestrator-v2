@@ -19,3 +19,16 @@
 
 The isolated pass establishes intermittence. Host contention is a hypothesis,
 not a confirmed cause. No assertion, timeout, or skip changed.
+
+## Preview path provenance validation — 2026-10-18
+
+`mise run test:logged -- --name browser -- mise run test:browser` ran 432
+cases with nine workers: 348 passed, 80 skipped and four failed in 329.2 s.
+Both pane-tree variants (`moveBefore` and `appendChild fallback`) found zero `.xterm` elements at the five-second startup assertion.
+Evidence: `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.kKsMFU/browser.log.gz`.
+
+The unchanged owning files passed sequentially with one worker:
+`mise run test:logged -- --name browser-rerun -- bunx playwright test --config e2e/playwright.config.ts e2e/DiffViewerMobile.spec.ts e2e/PaneBreakpoint.spec.ts e2e/CloseRetention.spec.ts --workers=1`
+(exit 0, 96.6 s logged). Other worktrees and real-stack checks were active on
+the host. Startup contention remains an unconfirmed hypothesis; no assertion
+or timeout changed.

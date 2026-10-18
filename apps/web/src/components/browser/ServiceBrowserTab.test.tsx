@@ -24,6 +24,8 @@ import { resetWebAnnotationSyncForTests } from "@/lib/web-annotations/sync";
 import { FakeWebAnnotationBackend } from "@/test/web-annotation-fakes";
 import type { BrowserTabData } from "@/types/paneLayout";
 import { BrowserTab } from "./BrowserTab";
+import { createPersistedPaneLayoutInput } from "@/lib/pane-layout-persistence";
+import { reconcilePersistedLayout } from "@/lib/pane-layout-restore";
 
 const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
 const originalOrkestrator = window.orkestrator;
@@ -40,6 +42,7 @@ function tabUrl(): string {
 function seedTab(url: string) {
   usePaneLayoutStore.setState({
     activeEnvironmentId: FIXTURE_ENVIRONMENT_ID,
+    hydration: new Map([[FIXTURE_ENVIRONMENT_ID, "done"]]),
     environments: new Map([
       [
         FIXTURE_ENVIRONMENT_ID,
@@ -120,13 +123,14 @@ function installBackend(backend: Backend, native = true) {
       async (input: {
         tabId: string;
         url?: string;
+        navigationBasis?: number;
         service?: {
           backendInstanceId?: string;
           environmentId?: string;
           serviceId: string;
           path: string;
         };
-      }) => ({
+      }): Promise<BrowserPreviewState> => ({
         tabId: input.tabId,
         url: input.url ?? `http://127.0.0.1:41000${input.service?.path ?? "/"}`,
         loading: false,
@@ -291,7 +295,41 @@ describe("service browser tabs", () => {
     );
   });
 
-  test("a late echo of the tab's own earlier save keeps that save's basis", async () => {
+  function savedLayout() {
+    return createPersistedPaneLayoutInput(
+      usePaneLayoutStore.getState().environments.get(FIXTURE_ENVIRONMENT_ID)!,
+    );
+  }
+
+  function applyLayout(input: ReturnType<typeof savedLayout>, revision: number) {
+    // Exercise the save/restore boundary: request identity must survive it.
+    const restored = reconcilePersistedLayout(
+      { ...input, environmentId: FIXTURE_ENVIRONMENT_ID, revision, updatedAt: "2026-10-18" },
+      { environmentId: FIXTURE_ENVIRONMENT_ID, containerId: "container-1", isLocal: false },
+    )!;
+    act(() =>
+      usePaneLayoutStore.getState().applyAuthoritativeLayout(FIXTURE_ENVIRONMENT_ID, restored),
+    );
+  }
+
+  function viewState(path: string, navigation?: number): BrowserPreviewState {
+    return {
+      tabId: "browser-1",
+      url: `http://127.0.0.1:41000${path}`,
+      loading: false,
+      canGoBack: true,
+      canGoForward: false,
+      error: null,
+      service: {
+        serviceId: FIXTURE_SERVICE_ID,
+        path,
+        displayUrl: `http://localhost:3000${path}`,
+        ...(navigation === undefined ? {} : { navigation }),
+      },
+    };
+  }
+
+  test("a newer cross-client request for an earlier path wins while its old acknowledgement stays stale", async () => {
     const { browserPreview, emitState } = installBackend({
       capabilities: fixturePreviewCapabilities(),
       services: [fixturePreviewService()],
@@ -299,37 +337,100 @@ describe("service browser tabs", () => {
     seedTab(serviceUri("/start"));
     renderTab();
     await waitFor(() => expect(browserPreview.attach).toHaveBeenCalled());
-    const viewAt = (path: string, navigation: number) =>
-      emitState({
-        tabId: "browser-1",
-        url: `http://127.0.0.1:41000${path}`,
-        loading: false,
-        canGoBack: true,
-        canGoForward: false,
-        error: null,
-        service: {
-          serviceId: FIXTURE_SERVICE_ID,
-          path,
-          displayUrl: `http://localhost:3000${path}`,
-          navigation,
-        },
-      });
-    // A link, then Back, each persisted by the tab.
-    viewAt("/next", 3);
-    viewAt("/start", 4);
-    await waitFor(() => expect(tabUrl()).toBe(serviceUri("/start")));
-    // The layout store re-applies the older save.
-    act(() =>
-      usePaneLayoutStore
-        .getState()
-        .updateTabBrowserUrl("browser-1", serviceUri("/next"), FIXTURE_ENVIRONMENT_ID, [], -1),
-    );
-    // It is attached against the navigation it was saved at, so main treats
-    // it as stale instead of undoing Back.
+    let currentPath = "/a";
+    let navigation = 3;
+    browserPreview.attach.mockImplementation(async (input) => {
+      if ((input.navigationBasis ?? 0) >= navigation) currentPath = input.service!.path;
+      return viewState(currentPath, navigation);
+    });
+    emitState(viewState("/a", 3));
+    await waitFor(() => expect(tabUrl()).toBe(serviceUri("/a")));
+    const oldAcknowledgement = savedLayout();
+    currentPath = "/b";
+    navigation = 4;
+    emitState(viewState("/b", 4));
+    await waitFor(() => expect(tabUrl()).toBe(serviceUri("/b")));
+
+    applyLayout(oldAcknowledgement, 1);
     await waitFor(() =>
       expect(browserPreview.attach.mock.calls.at(-1)![0]).toMatchObject({
-        service: { path: "/next" },
-        navigationBasis: 3,
+        service: { path: "/b" },
+        navigationBasis: 4,
+      }),
+    );
+    expect(
+      browserPreview.attach.mock.calls.some(
+        ([input]) => input.service?.path === "/a" && input.navigationBasis === 3,
+      ),
+    ).toBe(true);
+    expect(currentPath).toBe("/b");
+    expect(tabUrl()).toBe(serviceUri("/b"));
+
+    const remote = savedLayout();
+    if (remote.root.kind !== "leaf") throw new Error("Expected a leaf");
+    remote.root.tabs[0]!.browserData = {
+      url: serviceUri("/a"),
+      navigationRequestId: "another-client-request",
+    };
+    applyLayout(remote, 2);
+    await waitFor(() => expect(currentPath).toBe("/a"));
+    expect(browserPreview.attach.mock.calls.at(-1)![0]).toMatchObject({
+      service: { path: "/a" },
+      navigationBasis: 4,
+    });
+    expect(tabUrl()).toBe(serviceUri("/a"));
+    currentPath = "/c";
+    navigation = 5;
+    emitState(viewState("/c", 5));
+    await waitFor(() => expect(tabUrl()).toBe(serviceUri("/c")));
+    applyLayout(oldAcknowledgement, 3);
+    await waitFor(() => expect(tabUrl()).toBe(serviceUri("/c")));
+    expect(currentPath).toBe("/c");
+  });
+
+  test("an evicted local write remains stale after more than 32 persisted navigations", async () => {
+    const { browserPreview, emitState } = installBackend({
+      capabilities: fixturePreviewCapabilities(),
+      services: [fixturePreviewService()],
+    });
+    seedTab(serviceUri("/start"));
+    renderTab();
+    await waitFor(() => expect(browserPreview.attach).toHaveBeenCalled());
+    emitState(viewState("/first", 1));
+    const oldest = savedLayout();
+    for (let navigation = 2; navigation <= 34; navigation++) {
+      emitState(viewState(`/page-${navigation}`, navigation));
+    }
+    await waitFor(() => expect(tabUrl()).toBe(serviceUri("/page-34")));
+    applyLayout(oldest, 1);
+    await waitFor(() =>
+      expect(browserPreview.attach.mock.calls.at(-1)![0]).toMatchObject({
+        service: { path: "/first" },
+        navigationBasis: 0,
+      }),
+    );
+  });
+
+  test("a local write made before any navigation event falls back to basis zero on acknowledgement", async () => {
+    const { browserPreview, emitState } = installBackend({
+      capabilities: fixturePreviewCapabilities(),
+      services: [fixturePreviewService()],
+    });
+    seedTab(serviceUri("/start"));
+    renderTab();
+    await waitFor(() => expect(browserPreview.attach).toHaveBeenCalled());
+    const address = screen.getByLabelText("Browser address");
+    fireEvent.change(address, { target: { value: "/early" } });
+    fireEvent.submit(address.closest("form")!);
+    await waitFor(() => expect(tabUrl()).toBe(serviceUri("/early")));
+    const early = savedLayout();
+    emitState(viewState("/later", 5));
+    await waitFor(() => expect(tabUrl()).toBe(serviceUri("/later")));
+    applyLayout(early, 1);
+    await waitFor(() =>
+      expect(browserPreview.attach.mock.calls.at(-1)![0]).toMatchObject({
+        service: { path: "/early" },
+        navigationBasis: 0,
       }),
     );
   });

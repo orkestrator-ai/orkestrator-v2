@@ -610,3 +610,18 @@ Final aggregate exited 1 after 477.8 seconds. Backend reported 8978 passed, 41 s
   fixed).
 - **Isolated rerun:** `mise run test:logged -- --name pi-vendor-alone -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1`
   passed in 6.9 s. The test and the Pi bridge were unchanged on the branch.
+
+## Preview path provenance validation — 2026-10-18
+
+`mise run test:logged -- --name full-tests -- mise run test` ran the root
+suite with one isolated Bun worker alongside other worktrees and browser QA.
+`loads Pi's supported SDK from the staged runtime closure` again timed out at
+30000.05 ms. Root results: 3052 passed, one skipped, two failed in 403.44 s;
+the other failure is the existing README/install-URL mismatch.
+
+The unchanged owning file passed alone with
+`mise run test:logged -- --name pi-vendor-rerun -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+(exit 0, 21.1 s logged). Aggregate evidence is in
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.xNIy4g/`.
+Host load was about 47 with other validation active. Resource contention remains
+an unconfirmed hypothesis; no timeout or assertion changed.

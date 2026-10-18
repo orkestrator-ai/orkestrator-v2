@@ -81,10 +81,14 @@ function turnInFlight(session: SessionState): boolean {
  */
 export function syncTurnInFlightMark(
   session: SessionState,
-  options: { stopped?: boolean } = {},
+  options: { stopped?: boolean; started?: boolean } = {},
 ): void {
   if (session.deleting) return;
-  writeTurnInFlightMark(session, options.stopped !== true && turnInFlight(session));
+  writeTurnInFlightMark(
+    session,
+    options.stopped !== true && turnInFlight(session),
+    options.started,
+  );
 }
 
 /**
@@ -97,11 +101,16 @@ export function clearTurnInFlightMarkForClose(session: SessionState): void {
   writeTurnInFlightMark(session, false);
 }
 
-function writeTurnInFlightMark(session: SessionState, wanted: boolean): void {
-  if (wanted === (session.turnInFlightMarked === true)) return;
+function writeTurnInFlightMark(session: SessionState, wanted: boolean, claim = false): void {
+  if (
+    wanted === (session.turnInFlightMarked === true) &&
+    !(wanted && claim && !session.turnInFlightMarkOwned)
+  )
+    return;
   const sdkSessionId = session.sdkSessionId ?? sdkSessionIdFromBridgeId(session.id);
   if (!sdkSessionId) return;
   session.turnInFlightMarked = wanted;
+  session.turnInFlightMarkOwned = wanted;
   const update: SessionPreferences = {
     turnInFlight: wanted
       ? { bridgeInstanceId: BRIDGE_INSTANCE_ID, pid: process.pid, startedAt: Date.now() }
@@ -126,13 +135,16 @@ function writeTurnInFlightMark(session: SessionState, wanted: boolean): void {
  */
 export function restoredTurnInterruption(
   preferences: SessionPreferences | undefined,
-): Pick<SessionState, "status" | "error" | "interruption" | "turnInFlightMarked"> {
+): Pick<
+  SessionState,
+  "status" | "error" | "interruption" | "turnInFlightMarked" | "turnInFlightMarkOwned"
+> {
   const mark = preferences?.turnInFlight;
   if (!mark) return { status: "idle" };
   if (mark.bridgeInstanceId === BRIDGE_INSTANCE_ID) {
     // Restored by the process that wrote it, after the session left memory.
     // Nothing was cut short; the next settle clears it.
-    return { status: "idle", turnInFlightMarked: true };
+    return { status: "idle", turnInFlightMarked: true, turnInFlightMarkOwned: true };
   }
   if (mark.pid !== process.pid && processIsAlive(mark.pid)) return { status: "idle" };
   return {

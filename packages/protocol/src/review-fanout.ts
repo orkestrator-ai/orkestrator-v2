@@ -184,6 +184,9 @@ export interface ReviewWorktreeSnapshotRecord {
  * session to reuse, so it records one here.
  */
 export interface ReviewConsolidationSession {
+  /** One durable continuation after a provider restart cut the turn short. */
+  restartContinuationSent?: boolean;
+  continuationPrompt?: string;
   sessionKey: string;
   providerSessionId: string;
   requestId: string;
@@ -470,6 +473,8 @@ export function isReviewConsolidationSession(value: unknown): value is ReviewCon
   return (
     record(value) &&
     hasOnlyKeys(value, [
+      "restartContinuationSent",
+      "continuationPrompt",
       "sessionKey",
       "providerSessionId",
       "requestId",
@@ -489,6 +494,9 @@ export function isReviewConsolidationSession(value: unknown): value is ReviewCon
       "progressDigest",
       "stalledSince",
     ]) &&
+    (value.restartContinuationSent === undefined ||
+      typeof value.restartContinuationSent === "boolean") &&
+    optionalString(value.continuationPrompt, 100_000) &&
     nonBlank(value.sessionKey) &&
     nonBlank(value.providerSessionId) &&
     nonBlank(value.requestId) &&

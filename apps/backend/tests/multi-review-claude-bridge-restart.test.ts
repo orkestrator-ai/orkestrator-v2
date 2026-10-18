@@ -75,9 +75,14 @@ async function waitForTurnUnderWay(home: string, turns: number): Promise<void> {
 // turn runs, and a new one is started on the same Claude home, which is what
 // quitting and reopening the app does. The new bridge has only the rollout and
 // the session's preferences file to go on.
-test.each(["reviewer", "step"] as const)(
-  "a killed Claude bridge reaches the %s runner as a restart interruption",
-  async (owner) => {
+test.each([
+  { owner: "reviewer", death: "bridge" },
+  { owner: "step", death: "bridge" },
+  { owner: "reviewer", death: "cli" },
+  { owner: "step", death: "cli" },
+] as const)(
+  "a killed Claude $death reaches the $owner runner as a restart interruption",
+  async ({ owner, death }) => {
     const root = await mkdtemp(path.join(tmpdir(), "ork-claude-review-restart-"));
     const workspace = path.join(root, "workspace");
     const home = path.join(root, "home");
@@ -206,8 +211,20 @@ test.each(["reviewer", "step"] as const)(
         expect(done(await read())).toBe(true);
       };
       const restart = async () => {
-        await killBridge();
-        provider = await startBridge();
+        if (death === "bridge") {
+          await killBridge();
+          provider = await startBridge();
+        } else {
+          // Kill only the CLI this fixture recorded after accepting the turn;
+          // the bridge and its HTTP connection remain alive throughout.
+          const pid = Number(await readFile(path.join(home, "claude-test-turn.pid"), "utf8"));
+          process.kill(pid, "SIGKILL");
+          const deadline = Date.now() + 15_000;
+          while ((await readProviderStatus(provider, sessionId)).status !== "error") {
+            if (Date.now() > deadline) throw new Error("CLI death was not observed");
+            await Bun.sleep(20);
+          }
+        }
       };
       await waitForTurnUnderWay(home, 1);
       await restart();
@@ -238,7 +255,9 @@ test.each(["reviewer", "step"] as const)(
       const failed = await read();
       expect(owner === "step" ? failed.phase : failed.reviewers[0]!.status).toBe("failed");
       expect(owner === "step" ? failed.error : failed.reviewers[0]!.error).toContain(
-        "restarted before this turn finished",
+        death === "bridge"
+          ? "restarted before this turn finished"
+          : "stopped (SIGKILL) before this turn finished",
       );
       expect(requests.filter((request) => request.endsWith("/prompt"))).toHaveLength(2);
       // The Claude snapshot route carries the interruption, not `/status`.

@@ -3693,7 +3693,34 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       : workflow.phase === "consolidating"
         ? consolidationModel(workflow)
         : workflow.fixModel;
-    const provider = await this.provider(workflow, selection);
+    let provider: BuildPipelineProvider;
+    try {
+      provider = await this.provider(workflow, selection);
+    } catch (error) {
+      const request = workflow.activeRequest;
+      const session = coordinating ? reviewSession(workflow) : workflow.fixSession;
+      if (
+        session &&
+        request &&
+        (request.state === "sent" || request.state === "dispatching") &&
+        (error instanceof ProviderUnreachableError ||
+          (typeof error === "object" &&
+            error !== null &&
+            "retryable" in error &&
+            error.retryable === true))
+      ) {
+        await this.recordUnavailableStep(
+          workflow,
+          token,
+          request,
+          stepModelLabel(request.kind),
+          selection.agent,
+          error,
+        );
+        return;
+      }
+      throw error;
+    }
     await this.assertFence(workflow.id, token);
     let session = coordinating ? reviewSession(workflow) : workflow.fixSession;
     // Consolidation only merges the reviewer reports, so it gains nothing from
@@ -3985,19 +4012,14 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       // interruption included. The idle-poll bound still ends a bridge that
       // never comes back.
       await this.evictUnreachableProvider(workflow, selection, provider);
-      const scope = `${request.requestId}\0idle`;
-      if (!this.countPoll(workflow.id, scope)) return;
-      request.idleResultPolls = Math.min((request.idleResultPolls ?? 0) + 1, MAX_IDLE_RESULT_POLLS);
-      await this.save(workflow, token);
-      if (
-        request.idleResultPolls >= MAX_IDLE_RESULT_POLLS ||
-        this.pollsExhausted(workflow.id, scope, request.idleResultPolls, MAX_IDLE_RESULT_POLLS)
-      ) {
-        throw new Error(
-          `The ${modelLabel} model's ${selection.agent} provider stayed unreachable: ${error.message}`,
-          { cause: error },
-        );
-      }
+      await this.recordUnavailableStep(
+        workflow,
+        token,
+        request,
+        modelLabel,
+        selection.agent,
+        error,
+      );
       return;
     }
     const { status, error: statusDetail } = observation;
@@ -4400,6 +4422,30 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       await this.options.workflowResults?.close(previousRequestId, "superseded");
     }
     await this.save(workflow, token);
+  }
+
+  /** Startup backoff and failed status reads spend the same persisted budget. */
+  private async recordUnavailableStep(
+    workflow: MultiReviewWorkflow,
+    token: string,
+    request: NonNullable<MultiReviewWorkflow["activeRequest"]>,
+    modelLabel: string,
+    agent: string,
+    error: unknown,
+  ): Promise<void> {
+    const scope = `${request.requestId}\0idle`;
+    if (!this.countPoll(workflow.id, scope)) return;
+    request.idleResultPolls = Math.min((request.idleResultPolls ?? 0) + 1, MAX_IDLE_RESULT_POLLS);
+    await this.save(workflow, token);
+    if (
+      request.idleResultPolls >= MAX_IDLE_RESULT_POLLS ||
+      this.pollsExhausted(workflow.id, scope, request.idleResultPolls, MAX_IDLE_RESULT_POLLS)
+    ) {
+      throw new Error(
+        `The ${modelLabel} model's ${agent} provider stayed unreachable: ${errorMessage(error)}`,
+        { cause: error },
+      );
+    }
   }
 
   /**

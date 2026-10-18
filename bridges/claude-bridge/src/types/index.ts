@@ -482,6 +482,8 @@ export interface SessionState {
    * mark for the session, so the mark is written and cleared once per edge.
    */
   turnInFlightMarked?: boolean;
+  /** Presence alone does not mean a restored mark belongs to this bridge. */
+  turnInFlightMarkOwned?: boolean;
   /** SDK session ID returned from Claude Agent SDK - used for resume */
   sdkSessionId?: string;
   /** Session initialization data (MCP servers, plugins, etc.) */

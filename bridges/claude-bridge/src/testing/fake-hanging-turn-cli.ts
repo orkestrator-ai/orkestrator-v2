@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { appendFileSync, mkdirSync, realpathSync } from "node:fs";
+import { appendFileSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -56,6 +56,7 @@ lines.on("line", (line) => {
     return;
   }
   if (message.type !== "user") return;
+  writeFileSync(join(homedir(), "claude-test-turn.pid"), String(process.pid));
   mkdirSync(projectDir, { recursive: true });
   appendFileSync(
     join(projectDir, `${sessionId}.jsonl`),

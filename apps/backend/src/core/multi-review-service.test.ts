@@ -4737,6 +4737,7 @@ test("MultiReviewService reconnects a step whose bridge became unreachable", asy
   const environmentId = "env-step-unreachable";
   const scope = { environmentId, projectId: "project-1" };
   let creations = 0;
+  let startupFailures = 0;
   await withService(
     environmentId,
     provider,
@@ -4769,6 +4770,17 @@ test("MultiReviewService reconnects a step whose bridge became unreachable", asy
       expect(reconnecting.activeRequest?.idleResultPolls).toBeGreaterThanOrEqual(1);
       expect(provider.aborted).toEqual([]);
 
+      startupFailures = 2;
+      for (let pass = 0; pass < 2; pass++) {
+        await service.advanceNow(started.id);
+        const waiting = (await snapshot(started.id))!;
+        expect(waiting.phase).toBe("consolidating");
+        expect(waiting.activeRequest).toMatchObject({ requestId: firstRequestId, state: "sent" });
+        expect(waiting.activeRequest!.idleResultPolls).toBeGreaterThan(
+          reconnecting.activeRequest!.idleResultPolls!,
+        );
+      }
+      expect(startupFailures).toBe(0);
       // The restarted bridge reports the turn cut short; the step continues it.
       const creationsBeforeReconnect = creations;
       provider.down = false;
@@ -4788,54 +4800,74 @@ test("MultiReviewService reconnects a step whose bridge became unreachable", asy
       toolMode: true,
       createProvider: async () => {
         creations += 1;
+        if (startupFailures > 0) {
+          startupFailures -= 1;
+          throw Object.assign(new Error("bridge startup backoff"), { retryable: true });
+        }
         return provider;
       },
     },
   );
 });
 
-test("MultiReviewService fails a step whose bridge never comes back", async () => {
-  class DeadBridgeProvider extends Provider {
-    down = false;
-    override async status(sessionId: string): Promise<ProviderStatus> {
-      if (this.down) throw new ProviderUnreachableError("claude bridge is not reachable");
-      return super.status(sessionId);
+test.each(["status", "startup"] as const)(
+  "MultiReviewService bounds unreachable step %s failures",
+  async (failureAt) => {
+    class DeadBridgeProvider extends Provider {
+      down = false;
+      override async status(sessionId: string): Promise<ProviderStatus> {
+        if (this.down) throw new ProviderUnreachableError("claude bridge is not reachable");
+        return super.status(sessionId);
+      }
     }
-  }
-  const provider = new DeadBridgeProvider(false);
-  const environmentId = "env-step-unreachable-bound";
-  await withService(
-    environmentId,
-    provider,
-    async ({ service, start, snapshot, workflowResults }) => {
-      const started = await start();
-      const reviewing = await advanceUntil(service, snapshot, started.id, (workflow) =>
-        Boolean(workflow.reviewers[0]?.requestId),
-      );
-      await workflowResults!.submit(
-        { environmentId, projectId: "project-1" },
-        reviewing.reviewers[0]!.requestId!,
-        cleanReport,
-      );
-      await advanceUntil(
-        service,
-        snapshot,
-        started.id,
-        (workflow) =>
-          workflow.activeRequest?.kind === "consolidate" && workflow.activeRequest.state === "sent",
-      );
-      provider.down = true;
-      const failed = await advanceUntil(
-        service,
-        snapshot,
-        started.id,
-        (workflow) => workflow.phase === "failed",
-      );
-      expect(failed.error).toContain("provider stayed unreachable: claude bridge is not reachable");
-    },
-    { toolMode: true },
-  );
-});
+    const provider = new DeadBridgeProvider(false);
+    const environmentId = "env-step-unreachable-bound";
+    await withService(
+      environmentId,
+      provider,
+      async ({ service, start, snapshot, workflowResults }) => {
+        const started = await start();
+        const reviewing = await advanceUntil(service, snapshot, started.id, (workflow) =>
+          Boolean(workflow.reviewers[0]?.requestId),
+        );
+        await workflowResults!.submit(
+          { environmentId, projectId: "project-1" },
+          reviewing.reviewers[0]!.requestId!,
+          cleanReport,
+        );
+        await advanceUntil(
+          service,
+          snapshot,
+          started.id,
+          (workflow) =>
+            workflow.activeRequest?.kind === "consolidate" &&
+            workflow.activeRequest.state === "sent",
+        );
+        provider.down = true;
+        const failed = await advanceUntil(
+          service,
+          snapshot,
+          started.id,
+          (workflow) => workflow.phase === "failed",
+        );
+        expect(failed.error).toContain(
+          failureAt === "startup"
+            ? "provider stayed unreachable: bridge startup backoff"
+            : "provider stayed unreachable: claude bridge is not reachable",
+        );
+        expect(failed.activeRequest?.idleResultPolls).toBeGreaterThan(1);
+      },
+      {
+        toolMode: true,
+        createProvider: async () => {
+          if (provider.down && failureAt === "startup")
+            throw Object.assign(new Error("bridge startup backoff"), { retryable: true });
+          return provider;
+        },
+      },
+    );
+  },
+);
 
 // Start the two step runners directly: Fix here exercises the persisted legacy
 // structured-step path, rather than the newer interactive addressing handoff.

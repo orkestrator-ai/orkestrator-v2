@@ -1,4 +1,7 @@
-import type { HostMaintenanceSnapshot } from "@orkestrator/protocol/host-maintenance";
+import {
+  isHostUpdateChannel,
+  type HostMaintenanceSnapshot,
+} from "@orkestrator/protocol/host-maintenance";
 import type { PublicReceipt } from "@orkestrator/protocol/public-api";
 import { CliError } from "../errors.js";
 import type { ClientSession } from "../session.js";
@@ -31,7 +34,7 @@ const WAIT_OPTION: OptionSpec = {
 
 function hostLines(host: HostMaintenanceSnapshot): string[] {
   const updater = host.updater;
-  const lines = [`Version: ${host.version}`];
+  const lines = [`Version: ${host.version}`, `Update channel: ${host.updateChannel}`];
   lines.push(
     updater.available
       ? `Updater: ${updater.kind}`
@@ -234,6 +237,28 @@ export const hostCommands: CommandSpec[] = [
         result: host,
         connection: session.identity,
         human: hostLines(host),
+      };
+    },
+  },
+  {
+    path: ["host", "update", "channel"],
+    summary: "Choose the host's update channel: stable, beta or unstable.",
+    positionals: [{ name: "channel", required: true, description: "stable, beta or unstable" }],
+    options: [REQUEST_ID_OPTION],
+    async run(context, parsed) {
+      const channel = parsed.positionals.channel;
+      if (!isHostUpdateChannel(channel))
+        throw new CliError("invalid-input", "channel must be stable, beta or unstable");
+      const { session, result, receipt, warnings } = await submit<{
+        host: HostMaintenanceSnapshot;
+      }>(context, "host.update.channel", { channel }, parsed.options);
+      return {
+        action: "host.update.channel",
+        result,
+        receipt,
+        warnings,
+        connection: session.identity,
+        human: hostLines(result.host),
       };
     },
   },

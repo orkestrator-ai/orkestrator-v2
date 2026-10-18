@@ -600,6 +600,21 @@ Final aggregate: exit 1 after 1252.7 seconds logged. Backend passed 8964 tests w
 
 Final aggregate exited 1 after 477.8 seconds. Backend reported 8978 passed, 41 skipped and one failed across 9020 tests in 478 files (423.04 seconds). Root/support reported the Pi timeout above; all other workspace packages, bridges and the Codex protocol check passed. Both failing owning files passed unchanged alone. Formatting, lint, typechecking and the full component browser suite also passed. Additional real-stack, Electron, Docker and iOS scenario suites were omitted because the branch changes a component-browser test and documentation, and conflict resolution changes documentation only.
 
+
+## Update-channel review recurrence — 2026-10-18
+
+`mise run test:logged -- --name complete-suite -- mise run test` hit the
+unchanged staged-runtime test's 30-second timeout (30000.01 ms). The root
+group used one worker on a shared 18-slot host and finished with 3103 passed,
+one skipped and one failed. The workspace and bridge groups waited for host
+capacity. Evidence is in
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.gDgVB5/root-and-agent-support-tests.log.gz`.
+
+The unchanged owning file passed with
+`mise run test:logged -- --name pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures`
+(exit 0, 22.8 seconds). No assertion or timeout changed. This confirms another
+aggregate-only occurrence; host contention remains an unconfirmed cause.
+
 ## Recurrence during real-Electron service-preview qualification (2026-10-18)
 
 - **Command:** `mise run test:logged -- --name full-tests -- mise run test` on

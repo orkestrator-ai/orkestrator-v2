@@ -72,6 +72,20 @@ async function fixture(
       if (reads === 2) return Response.json({ error: "Backend is shutting down" }, { status: 500 });
       return envelope(publicSuccessEnvelope("run.get", null, final));
     }
+    if (action === "host.update.channel") {
+      return envelope(
+        publicSuccessEnvelope(
+          action,
+          {
+            host: {
+              ...host("2.22.0"),
+              updateChannel: (request.body.args.input as { channel: string }).channel,
+            },
+          },
+          receipt({ action, state: "succeeded", stage: "completed" }),
+        ),
+      );
+    }
     if (action === "host.status") {
       return envelope(publicSuccessEnvelope("host.status", host("2.22.0")));
     }
@@ -243,4 +257,33 @@ describe("orkestrator host maintenance commands", () => {
     const request = gateway.requests.find((entry) => entry.body.args.action === "host.gh.update");
     expect(request?.body.args.input).toEqual({ channel: "latest" });
   });
+});
+
+test.each(["stable", "beta", "unstable"])(
+  "host update channel %s uses the public mutation",
+  async (channel) => {
+    const { box, gateway } = await fixture(receipt({ state: "succeeded" }));
+    const result = await box.run([
+      "host",
+      "update",
+      "channel",
+      channel,
+      "--request-id",
+      "channel-change",
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.out).toContain(`Update channel: ${channel}`);
+    expect(
+      gateway.requests.find((request) => request.body.args.action === "host.update.channel")?.body
+        .args.input,
+    ).toEqual({ channel });
+  },
+);
+
+test("host status prints its channel and an invalid channel sends nothing", async () => {
+  const { box, gateway } = await fixture(receipt({ state: "succeeded" }));
+  expect((await box.run(["host", "status"])).out).toContain("Update channel: stable");
+  const result = await box.run(["host", "update", "channel", "canary"]);
+  expect(result.code).toBe(2);
+  expect(actions(gateway)).not.toContain("host.update.channel");
 });

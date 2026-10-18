@@ -55,3 +55,14 @@ The terminal owning file passed alone:
 (exit 0, one passed, 15.5 s logged). Host load was about 47 while other
 worktrees validated. Startup under contention remains an unconfirmed hypothesis;
 no assertion or timeout changed.
+
+## Upgrade-channel second main merge — 2026-10-18
+
+`ORKESTRATOR_AGENT_TEST_RUN_ID=merge2-electron-129e3887 mise run test:logged -- --name merge2-electron -- mise run test:agent:electron` reported 18 passed, one skipped and three failed (one worker, 4.0 minutes). Both main-window cases and terminal resume received `Orkestrator AI` at the five-second profile-title deadline. All seven service-preview and all ten annotation cases passed. Evidence: `output/agent-testing/merge2-electron-129e3887/electron/results.json` and `orkestrator-test-run.4oprtX/merge2-electron.log.gz` below the host temporary directory.
+
+The unchanged owning-file reruns also failed:
+
+- `ORKESTRATOR_AGENT_TEST_RUN_ID=merge2-electron-main-owner mise run test:logged -- --name merge2-electron-main-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts electron-main.spec.ts --workers=1`: one passed, one skipped, two failed, exit 1 after 268.4 seconds. The independent-windows case reached its 120000 ms test deadline and worker teardown also timed out; the nickname case still failed the five-second title check. The test-deadline failure is retained separately from the initial title symptom; its cause is unclassified.
+- `ORKESTRATOR_AGENT_TEST_RUN_ID=merge2-electron-terminal-owner mise run test:logged -- --name merge2-electron-terminal-owner -- bunx playwright test --config e2e/agent-testing/playwright.electron.config.ts terminal-input-resume-electron.spec.ts --workers=1`: one failed at the same title check, exit 1 after 17.3 seconds.
+
+These observations do not independently establish a flake. Host load rose above 40 during validation, but the cause remains unconfirmed. Electron main-window and terminal validation remain unresolved; no implementation, assertion, deadline or skip changed. Owning-file evidence is under `output/agent-testing/merge2-electron-main-owner` and `output/agent-testing/merge2-electron-terminal-owner`, and temporary log directories `orkestrator-test-run.rP7QNe` and `orkestrator-test-run.QSO8si`.

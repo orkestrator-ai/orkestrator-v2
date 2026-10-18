@@ -4,6 +4,7 @@ import {
   HOST_UPDATE_RESTART_DELAY_MS,
   isHostIdle,
   isHostMaintenanceSnapshot,
+  isHostUpdateChannel,
   type HostMaintenanceSnapshot,
   type HostUpdateJob,
   type HostUpdaterReport,
@@ -21,7 +22,7 @@ export type HostUpdateEngine = Pick<
   AutoUpdateController,
   "checkSilently" | "stageForRemote" | "installStaged"
 > &
-  Partial<Pick<AutoUpdateController, "releaseRemoteStage">>;
+  Partial<Pick<AutoUpdateController, "releaseRemoteStage" | "setChannel">>;
 
 export type RestartDecision = "restart" | "postpone" | "cancelled";
 
@@ -60,7 +61,8 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 /**
  * Applies remote update requests on this computer.
  *
- * The backend owns the job record; this reads it (on start, on every
+ * The backend owns the job record and the host's update channel; this reads
+ * them (on start, on every
  * reconnect, and from each `host-maintenance-updated` event), runs the work
  * through the app's updater, and reports each step back. A job is handled at
  * most once per process, and stops at its next step once the backend records
@@ -93,6 +95,7 @@ export function createHostUpdateExecutor(options: {
   let handledCheckId: string | null = null;
   let pendingCheckId: string | null = null;
   let lastCheck: UpdateCheckReport | null = null;
+  let updateChannel: HostMaintenanceSnapshot["updateChannel"] | null = null;
   let handledJobId: string | null = null;
   let revision = -1;
   let ready = false;
@@ -137,6 +140,7 @@ export function createHostUpdateExecutor(options: {
     pendingCheckId = null;
     void send({
       type: "check",
+      ...(report.channel ? { channel: report.channel } : {}),
       latestVersion: report.latestVersion,
       updateAvailable: report.updateAvailable,
       checkedAt: report.checkedAt,
@@ -266,6 +270,12 @@ export function createHostUpdateExecutor(options: {
   function reconcile(snapshot: HostMaintenanceSnapshot): void {
     if (!started || !ready || snapshot.revision < revision) return;
     revision = snapshot.revision;
+    // Before the check request: switching channels asks for a check on the new one.
+    if (isHostUpdateChannel(snapshot.updateChannel)) {
+      if (updateChannel !== snapshot.updateChannel) lastCheck = null;
+      updateChannel = snapshot.updateChannel;
+      engine.setChannel?.(snapshot.updateChannel);
+    }
     const request = snapshot.checkRequest;
     if (request && request.id !== handledCheckId) {
       handledCheckId = request.id;

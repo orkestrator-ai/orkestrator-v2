@@ -168,7 +168,8 @@ describe("monorepo orchestration scripts", () => {
 
     expect(tasks["smoke:cli"]?.run).toBe("bun run --cwd packages/cli smoke:pack");
     expect(tasks["publish:cli"]?.run).toContain("mise run smoke:cli");
-    expect(tasks["publish:cli"]?.run).toContain("bun publish --cwd packages/cli --access public");
+    // The publish script picks the dist-tag from the version's update channel.
+    expect(tasks["publish:cli"]?.run).toContain("bun scripts/publish-cli.ts");
     // The smoke script must verify the runtime dependencies actually resolve
     // from the installed layout, not just that the backend boots.
     expect(read("packages/cli/scripts/smoke-packed.ts")).toContain(

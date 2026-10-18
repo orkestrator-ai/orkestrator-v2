@@ -228,6 +228,18 @@ describe("Electron packaging configuration", () => {
     });
   });
 
+  test("each release writes its own update channel's feed", async () => {
+    const { releasePublish } = await import("../../../electron-builder.release.config");
+    const { createLinuxReleaseConfig } =
+      await import("../../../electron-builder.release.linux.config");
+    const channelOf = (publish: unknown) => (publish as Array<{ channel?: string }>)[0]?.channel;
+    expect(channelOf(releasePublish("2.23.0"))).toBe("latest");
+    expect(channelOf(releasePublish("2.23.0-beta"))).toBe("beta");
+    expect(channelOf(releasePublish("2.24.0-alpha.2"))).toBe("alpha");
+    expect(channelOf(createLinuxReleaseConfig("2.23.0-beta").publish)).toBe("beta");
+    expect(() => releasePublish("2.23.0-rc.1")).toThrow("no update channel ships");
+  });
+
   test("configures complete Linux release targets, package metadata, draft publication, and distinct artifact names", async () => {
     const { createLinuxReleaseConfig } =
       await import("../../../electron-builder.release.linux.config");

@@ -300,8 +300,10 @@ reformatted. Rationale and exclusions are in
 
 ## Application Version Bumps
 
-When bumping the Orkestrator version, keep the top-level `version` field in all
-of these package manifests synchronized:
+Bump the Orkestrator version with `mise run release:version -- <version>`
+(`scripts/set-version.ts`). It sets the top-level `version` field in all of
+these package manifests, then regenerates and verifies the lockfiles as
+described in **Updating Bun and lockfiles**:
 
 - `package.json`
 - `apps/backend/package.json`
@@ -317,15 +319,16 @@ of these package manifests synchronized:
 - `packages/protocol/package.json`
 - `packages/toolchain/package.json`
 
-After a bump, run the following to verify every package manifest was included
-and has the intended version:
+A new versioned manifest must be added to this list and to
+`VERSIONED_MANIFESTS` in that script; `tests/unit/release/set-version.test.ts`
+fails until both name it. To check a bump by hand:
 
 ```bash
 rg -n '"version"\s*:' --glob 'package.json' --glob '!node_modules/**'
 ```
 
-Then follow **Updating Bun and lockfiles** above. A version-only bump still
-changes the workspace metadata in the root `bun.lock`; leaving the old values
+A bump made by hand must then follow **Updating Bun and lockfiles** above. A
+version-only bump still changes the workspace metadata in the root `bun.lock`; leaving the old values
 there causes a later non-frozen `bun install` to dirty an otherwise clean build
 worktree.
 

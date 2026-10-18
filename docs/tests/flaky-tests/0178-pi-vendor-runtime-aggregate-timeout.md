@@ -688,6 +688,16 @@ passed all eight cases. Bridge and protocol-lockfile groups passed.
 - **Evidence:** `orkestrator-test-run.aFRCPt/root-and-agent-support-tests.log.gz` below the host temporary directory.
 - **Assessment:** confirmed intermittent recurrence. Shared-host contention remains a hypothesis; no Pi implementation, assertion, timeout or skip changed.
 
+## Transcript-paging main merge — 2026-10-18
+
+`mise run test:logged -- --name merge-tests -- mise run test` (GNU-tool PATH prefix; workspace/root/bridges/protocol reservations 4/1/2/1, one root worker alongside browser validation and other worktrees) repeated the 30000 ms runtime-closure timeout at 30000.17 ms. Root reported 3082 passed, one skipped and two failed across 3085 tests in 142 files (959.23 s); the other failure is 0482.
+
+Two unchanged owning-file reruns still failed: `mise run test:logged -- --name merge-pi-vendor-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` (three passed, one failed; 32.0 s), and the same command named `merge-pi-vendor-after-bridges` after the bridge group finished (three passed, one failed; 32.2 s). Evidence: `orkestrator-test-run.Yk2l1H/root-and-agent-support-tests.log.gz`, `orkestrator-test-run.1g14RC/merge-pi-vendor-owner.log.gz`, and `orkestrator-test-run.8K3P1J/merge-pi-vendor-after-bridges.log.gz` below the host temporary directory.
+
+At this point the isolated failures did not establish another aggregate-only flake. No Pi implementation, assertion, timeout or skip changed; the post-aggregate result is recorded below.
+
+After every aggregate group and the browser runs ended, `mise run test:logged -- --name merge-pi-vendor-post-aggregate -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed the unchanged owner (exit 0, 10.8 s). This later pass confirms intermittence for this occurrence; the two earlier isolated failures remain recorded above. Shared-host contention remains a hypothesis.
+
 ## Electron preview main merge observation — 2026-10-18
 
 `mise run test:logged -- --name merge-tests -- mise run test` timed out staging the SDK at 30013.72 ms (root: 3083 passed, one skipped, one failed). The unchanged owning file also timed out at 30000.24 ms with `mise run test:logged -- --name merge-pi-owner -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` (three passed, one failed, exit 1 in 33.1 seconds). Evidence: `orkestrator-test-run.ItrRrn/root-and-agent-support-tests.log.gz` and `orkestrator-test-run.ancRNi/merge-pi-owner.log.gz` below the host temporary directory. This occurrence does not independently establish a flake; runtime staging remains unresolved. No implementation, assertion, timeout or skip changed.

@@ -280,6 +280,12 @@ Both disposable profiles were stopped and reset. No assertion or timeout changed
 - **Evidence:** `orkestrator-test-run.9diLAg/merge-agent-browser.log.gz` and `orkestrator-test-run.zvqJO1/merge-gateway-owner.log.gz` below the host temporary directory; browser artifacts under `output/agent-testing/qa-browser-be78767f-df2/browser/` and `output/agent-testing/merge-mcp-gateway-1018-rerun/browser/`.
 - **Disposition:** this occurrence fails in isolation too and does not establish a new flake classification or resolve issue 0224. No picker implementation, assertion, timeout or skip changed. The owning-file profile was stopped and reset.
 
+## Transcript-paging main merge — 2026-10-18
+
+`mise run test:logged -- --name merge-agent-browser -- mise run test:agent:browser:isolated` reproduced the disabled SSH socket selection at `browser-gateway.spec.ts:302` in the narrow case (5000 ms). The one-worker credential-free Codex suite ran alongside component tests, the non-iOS aggregate and other worktrees. It later reached its test deadline before completing (933.4 s including startup/cleanup); the other reported failures are recorded in 0484.
+
+The complete unchanged owning file passed against fresh credential-free profile `merge-paging-gateway-owner-1018`: `ORKESTRATOR_AGENT_TEST_PROFILE=merge-paging-gateway-owner-1018 ORKESTRATOR_AGENT_TEST_RUN_ID=merge-paging-gateway-owner-1018 mise run test:logged -- --name merge-gateway-owner -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1` (14 passed, six skipped; exit 0 in 199.5 s logged). Both profiles were stopped and reset. Evidence: `orkestrator-test-run.h4wMTk/merge-agent-browser.log.gz` below the host temporary directory; Playwright statistics under `output/agent-testing/merge-paging-gateway-owner-1018/browser/results.json`. No implementation, assertion, timeout or skip changed.
+
 ## CLI matrices second main merge observation — 2026-10-18
 
 - **Original command:** `mise run test:logged -- --name merge2-isolated-browser -- mise run test:agent:browser:isolated`, credential-free profile `qa-browser-57ff09b9-afe`, one worker.

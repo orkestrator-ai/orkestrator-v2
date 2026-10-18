@@ -672,3 +672,19 @@ passed all eight cases. Bridge and protocol-lockfile groups passed.
 - **Assessment:** this observation does not independently establish a flake. Pi runtime staging remains an unresolved validation limitation; no implementation, assertion, timeout or skip changed.
 
 **Post-aggregate owning-file rerun (same merge, 2026-10-18):** after the full suite finished, `mise run test:logged -- --name merge-post-suite-pi-bridge-vendor -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 27.9 seconds logged. Together with the aggregate failure this confirms an intermittent recurrence; the earlier isolated failure is retained above. No implementation, assertion, timeout or skip changed.
+
+
+## Keep-open model picker review fixes — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name all-tests -- mise run test`, with workspace/root/bridges/protocol reservations of 4/1/2/1 workers.
+- **Failure:** the unchanged staged SDK test exceeded 30000 ms (30000.02 ms). Root/support reported 3094 passed, one skipped and three failed across 3098 tests; the other two were stale picker-dismissal assumptions in `ClaudeTmuxChatTab.test.tsx`, corrected in this change and passing in the owning-file rerun.
+- **Owning-file rerun:** `mise run test:logged -- --name pi-vendor-alone -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` also timed out at 30000.69 ms (three passed, one failed; 31.4 seconds logged).
+- **Evidence:** `orkestrator-test-run.7ZSgrV/root-and-agent-support-tests.log.gz` and `orkestrator-test-run.uEiHkR/pi-vendor-alone.log.gz` below the host temporary directory.
+- **Assessment:** this observation does not independently establish a flake because the unchanged owning file also failed alone. Runtime staging remains an unresolved validation limitation. No Pi implementation, assertion, timeout or skip changed.
+
+The completed aggregate passed its workspace, bridge and protocol groups. After
+correcting the two tmux consumer cases, the final root/support rerun
+(`mise run test:logged -- --name root-tests-final -- bun test ./tests ./e2e/agent-testing/artifact-sanitizer.test.ts ./e2e/agent-testing/design-live-usage.test.ts ./e2e/agent-testing/design-live-heartbeat.test.ts ./e2e/agent-testing/mcp-apply-live-support.test.ts ./e2e/agent-testing/mcp-apply-live-safety.test.ts ./scripts/opencode-live-compatibility-probe.test.ts ./test-fixtures/agent-project/server.test.ts --parallel=2 --only-failures`)
+reported 3096 passed, one skipped and only the Pi staging timeout (30001.81 ms),
+in 106.4 seconds. Evidence: `orkestrator-test-run.Tq9Hli/root-tests-final.log.gz`.
+All picker-related failures cleared; Pi staging remains unresolved.

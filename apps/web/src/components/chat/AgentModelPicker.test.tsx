@@ -1859,10 +1859,10 @@ describe("AgentModelPicker", () => {
     expect(screen.getByRole("menuitemradio", { name: /Model 1/ })).toBeTruthy();
   });
 
-  test("persists the new order after a desktop pointer drag", async () => {
+  test("reorders favorites without selecting a model on pointer release", async () => {
     setMobileViewport(false);
     const onReorderFavorites = mock(() => {});
-    renderPicker({
+    const { onModelChange } = renderPicker({
       models: models.slice(0, 2),
       enabledPlatforms: ["codex"],
       selectedPlatform: "codex",
@@ -1875,6 +1875,7 @@ describe("AgentModelPicker", () => {
     openPicker();
 
     await dragFavoriteRow("codex:model-1", "codex:model-2");
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Model 2/ }));
 
     await waitFor(() =>
       expect(onReorderFavorites).toHaveBeenCalledWith([
@@ -1882,6 +1883,8 @@ describe("AgentModelPicker", () => {
         { platform: "codex", modelId: "model-1" },
       ]),
     );
+    expect(onModelChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("menu")).toBeTruthy();
   });
 
   test("supports keyboard drag activation and movement for favorite rows", async () => {

@@ -1,4 +1,5 @@
 import { invoke } from "@/lib/native/backend";
+import { AGENT_MAIL_MAX_MESSAGES_PER_MAILBOX } from "@orkestrator/protocol/agent-mail";
 import type { AgentRegistrySnapshot } from "@orkestrator/protocol/agent-registry";
 import type {
   AgentMailConversation,
@@ -44,7 +45,12 @@ export function getAgentMailMailbox(
   tabId: string,
   unreadOnly = false,
 ): Promise<AgentMailMailboxSnapshot> {
-  return invoke("get_agent_mail_mailbox", { environmentId, tabId, unreadOnly });
+  return invoke("get_agent_mail_mailbox", {
+    environmentId,
+    tabId,
+    unreadOnly,
+    limit: AGENT_MAIL_MAX_MESSAGES_PER_MAILBOX,
+  });
 }
 
 export function getAgentMailMessage(
@@ -71,8 +77,12 @@ export function getAgentMailConversation(
   return invoke("get_agent_mail_conversation", { a, b, ...(limit ? { limit } : {}) });
 }
 
-export function markAgentMailConversationSeen(a: string, b: string): Promise<{ marked: number }> {
-  return invoke("mark_agent_mail_conversation_seen", { a, b });
+export function markAgentMailConversationSeen(
+  a: string,
+  b: string,
+  messageIds: string[],
+): Promise<{ marked: number }> {
+  return invoke("mark_agent_mail_conversation_seen", { a, b, messageIds });
 }
 
 export function sendAgentMail(input: {

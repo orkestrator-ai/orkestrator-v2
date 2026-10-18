@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ArrowLeft, Inbox, Loader2, Send } from "lucide-react";
 import {
   AGENT_MAIL_USER_PARTICIPANT,
+  AGENT_MAIL_MAX_MAILBOXES,
   type AgentMailConversationSummary,
   type MailboxDescriptor,
 } from "@orkestrator/protocol/agent-mail";
@@ -74,6 +75,8 @@ function AgentMailConversationList({ focus }: { focus?: string }) {
   const [conversations, setConversations] = useState<AgentMailConversationSummary[] | null>(null);
   const [error, setError] = useState<string>();
   const [picking, setPicking] = useState(false);
+  const [mailboxError, setMailboxError] = useState<string>();
+  const [mailboxReload, setMailboxReload] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -94,8 +97,19 @@ function AgentMailConversationList({ focus }: { focus?: string }) {
 
   useEffect(() => {
     const address = splitMailbox(focus);
-    if (address) void refreshMailbox(address.environmentId, address.tabId).catch(() => undefined);
-  }, [focus, refreshMailbox]);
+    let cancelled = false;
+    if (address)
+      void refreshMailbox(address.environmentId, address.tabId)
+        .then(() => {
+          if (!cancelled) setMailboxError(undefined);
+        })
+        .catch((cause) => {
+          if (!cancelled) setMailboxError(errorMessage(cause));
+        });
+    return () => {
+      cancelled = true;
+    };
+  }, [focus, refreshMailbox, mailboxReload]);
 
   if (picking) {
     return (
@@ -159,6 +173,14 @@ function AgentMailConversationList({ focus }: { focus?: string }) {
           <MailboxDeliverySettings mailbox={focusedMailbox} />
         )}
       </div>
+      {mailboxError && (
+        <div role="alert" className="border-b border-red-400/20 px-3 py-2 text-xs text-red-300">
+          Could not load this agent: {mailboxError}
+          <Button size="sm" variant="ghost" onClick={() => setMailboxReload((value) => value + 1)}>
+            Retry mailbox
+          </Button>
+        </div>
+      )}
       {error && (
         <div
           role="alert"
@@ -263,19 +285,25 @@ function RecipientPicker({
 
   useEffect(() => {
     let cancelled = false;
-    backend
-      .listAgentMailboxes({ limit: 200 })
-      .then((page) => {
-        if (!cancelled)
-          setMailboxes(
-            page.mailboxes.filter(
-              (mailbox) => !mailbox.tombstonedAt && mailbox.capabilities.canPull,
-            ),
-          );
-      })
-      .catch((cause) => {
-        if (!cancelled) setError(errorMessage(cause));
-      });
+    // The directory is bounded by the backend's mailbox cap. Page before
+    // filtering eligibility: a whole page may contain only closed agents.
+    const load = async () => {
+      const all: MailboxDescriptor[] = [];
+      let offset = 0;
+      while (offset < AGENT_MAIL_MAX_MAILBOXES && !cancelled) {
+        const page = await backend.listAgentMailboxes({ offset, limit: 200 });
+        all.push(...page.mailboxes);
+        offset += page.limit;
+        if (offset >= page.total || page.limit <= 0) break;
+      }
+      if (!cancelled)
+        setMailboxes(
+          all.filter((mailbox) => !mailbox.tombstonedAt && mailbox.capabilities.canPull),
+        );
+    };
+    void load().catch((cause) => {
+      if (!cancelled) setError(errorMessage(cause));
+    });
     return () => {
       cancelled = true;
     };

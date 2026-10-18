@@ -1,6 +1,12 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { AgentMailMailboxSnapshot, AgentMailMessage } from "@orkestrator/protocol/agent-mail";
-import { useAgentMailStore } from "./agentMailStore";
+import { invoke } from "@/lib/native/backend";
+import { waitFor } from "@testing-library/react";
+import {
+  requestAgentMailMailbox,
+  refreshObservedAgentMailMailboxes,
+  useAgentMailStore,
+} from "./agentMailStore";
 
 function message(revision = 1): AgentMailMessage {
   return {
@@ -147,4 +153,93 @@ describe("agentMailStore authoritative adoption", () => {
       placementReason: "rejected",
     });
   });
+});
+
+describe("transcript mailbox requests", () => {
+  test("clear fences an in-flight mailbox response", async () => {
+    let finish!: (snapshot: AgentMailMailboxSnapshot) => void;
+    const invokeMock = invoke as ReturnType<typeof mock>;
+    invokeMock.mockImplementationOnce(
+      () =>
+        new Promise<AgentMailMailboxSnapshot>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const read = useAgentMailStore.getState().refreshMailbox("env-1", "tab-1");
+    useAgentMailStore.getState().clear();
+    finish(mailbox(1));
+    await read;
+    expect(useAgentMailStore.getState().mailboxes.size).toBe(0);
+  });
+
+  beforeEach(() => {
+    useAgentMailStore.setState(useAgentMailStore.getInitialState());
+    useAgentMailStore.getState().clear();
+  });
+  test("batches same-tick requests and skips loaded or already requested mailboxes", async () => {
+    const refreshMailboxes = mock(
+      async (_addresses: Array<{ environmentId: string; tabId: string }>) => undefined,
+    );
+    useAgentMailStore.setState({ refreshMailboxes });
+    requestAgentMailMailbox("env-1", "tab-1");
+    requestAgentMailMailbox("env-2", "tab-2");
+    requestAgentMailMailbox("env-1", "tab-1");
+    await waitFor(() => expect(refreshMailboxes).toHaveBeenCalledTimes(1));
+    expect(refreshMailboxes).toHaveBeenCalledWith([
+      { environmentId: "env-1", tabId: "tab-1" },
+      { environmentId: "env-2", tabId: "tab-2" },
+    ]);
+    requestAgentMailMailbox("env-1", "tab-1");
+    useAgentMailStore.getState().setMailbox(mailbox(1));
+    requestAgentMailMailbox("env-1", "tab-1");
+    await Promise.resolve();
+    expect(refreshMailboxes).toHaveBeenCalledTimes(1);
+  });
+  test("failed requests can be retried", async () => {
+    const refreshMailboxes = mock(async () => undefined);
+    refreshMailboxes.mockImplementationOnce(async () => {
+      throw new Error("offline");
+    });
+    useAgentMailStore.setState({ refreshMailboxes });
+    requestAgentMailMailbox("env-1", "tab-1");
+    await waitFor(() => expect(refreshMailboxes).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    requestAgentMailMailbox("env-1", "tab-1");
+    await waitFor(() => expect(refreshMailboxes).toHaveBeenCalledTimes(2));
+  });
+  test("clear cancels pending requests and resets loaded/requested state", async () => {
+    const refreshMailboxes = mock(async () => undefined);
+    useAgentMailStore.setState({ refreshMailboxes });
+    requestAgentMailMailbox("env-1", "tab-1");
+    useAgentMailStore.getState().clear();
+    await Promise.resolve();
+    expect(refreshMailboxes).not.toHaveBeenCalled();
+    requestAgentMailMailbox("env-1", "tab-1");
+    await waitFor(() => expect(refreshMailboxes).toHaveBeenCalledTimes(1));
+    useAgentMailStore.getState().setMailbox(mailbox(1));
+    useAgentMailStore.getState().updateDraft("pair", { body: "draft" });
+    useAgentMailStore.getState().clear();
+    expect(useAgentMailStore.getState().drafts.size).toBe(0);
+    expect(useAgentMailStore.getState().mailboxes.size).toBe(0);
+    requestAgentMailMailbox("env-1", "tab-1");
+    await waitFor(() => expect(refreshMailboxes).toHaveBeenCalledTimes(2));
+  });
+  test("summary reconciliation refreshes cached transcript destinations without local sent tracking", async () => {
+    const refreshMailboxes = mock(async () => undefined);
+    useAgentMailStore.setState({ refreshMailboxes });
+    useAgentMailStore.getState().setMailbox(mailbox(1));
+    const entry = { ...mailbox(1).descriptor, revision: 2 };
+    useAgentMailStore.getState().setSummary({ revision: 2, mailboxes: [entry] });
+    await refreshObservedAgentMailMailboxes();
+    expect(refreshMailboxes).toHaveBeenCalledWith([{ environmentId: "env-1", tabId: "tab-1" }]);
+    useAgentMailStore.getState().setMailbox(mailbox(2));
+    refreshMailboxes.mockClear();
+    await refreshObservedAgentMailMailboxes();
+    expect(refreshMailboxes).not.toHaveBeenCalled();
+  });
+});
+
+afterEach(() => {
+  useAgentMailStore.getState().clear();
+  useAgentMailStore.setState(useAgentMailStore.getInitialState());
 });

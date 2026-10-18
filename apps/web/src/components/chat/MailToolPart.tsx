@@ -51,7 +51,7 @@ export function MailToolPart({
   const recipientName =
     mailbox?.descriptor.displayName ??
     (call.to?.environmentId === "coordinator" ? "Project coordinator" : "another agent");
-  const state = live ?? (call.placement ? { placement: call.placement } : undefined);
+  const state = live;
 
   const mail: PeerMailPresentation = sent
     ? {

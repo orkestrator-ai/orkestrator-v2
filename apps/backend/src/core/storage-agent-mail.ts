@@ -2648,8 +2648,9 @@ export class StorageAgentMail extends StorageDrafts {
     return agentMailConversationBetween(mailboxes, a, b, { cutoff, revision, ...options });
   }
 
-  /** The person read a conversation: stamp every message in it they had not seen. */
-  async markAgentMailConversationSeen(a: string, b: string): Promise<number> {
+  /** Stamp only messages present in the conversation snapshot the person displayed. */
+  async markAgentMailConversationSeen(a: string, b: string, messageIds: string[]): Promise<number> {
+    const displayed = new Set(messageIds);
     return this.enqueueAgentMailMutation(async () => {
       const store = await this.loadAgentMailStore();
       const seenAt = new Date().toISOString();
@@ -2660,7 +2661,12 @@ export class StorageAgentMail extends StorageDrafts {
         if (!mailbox) continue;
         let mailboxMarked = false;
         for (const message of mailbox.messages) {
-          if (message.userSeenAt || !isAgentMailConversationMessage(key, message, a, b)) continue;
+          if (
+            !displayed.has(message.id) ||
+            message.userSeenAt ||
+            !isAgentMailConversationMessage(key, message, a, b)
+          )
+            continue;
           message.userSeenAt = seenAt;
           message.revision += 1;
           mailboxMarked = true;

@@ -256,6 +256,105 @@ describe("AgentMailButton", () => {
 });
 
 describe("AgentMailPanel", () => {
+  test("seen receipts cover an expanded history window even at the same revision", async () => {
+    const older = mail("stored", { id: "older", body: "Earlier history" });
+    const latest = mail("stored", { id: "latest", body: "Latest history" });
+    getAgentMailConversation.mockImplementation(async (_a, _b, limit) => ({
+      ...conversation([agent1, user], limit === 50 ? [latest] : [older, latest]),
+      total: 2,
+    }));
+    render(<AgentMailPanel />);
+    act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
+    await waitFor(() =>
+      expect(markAgentMailConversationSeen).toHaveBeenCalledWith(AGENT_1, "user", ["latest"]),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Show earlier messages" }));
+    await waitFor(() =>
+      expect(markAgentMailConversationSeen).toHaveBeenCalledWith(AGENT_1, "user", [
+        "older",
+        "latest",
+      ]),
+    );
+  });
+
+  test("retains a pair's subject and body across back navigation and closing", async () => {
+    render(<AgentMailPanel />);
+    act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
+    fireEvent.change(await screen.findByPlaceholderText("Message Claude 1"), {
+      target: { value: "Draft body" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Subject (optional)"), {
+      target: { value: "Draft subject" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Back to conversations" }));
+    act(() => useAgentMailStore.getState().closePanel());
+    act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
+    expect(
+      ((await screen.findByPlaceholderText("Message Claude 1")) as HTMLTextAreaElement).value,
+    ).toBe("Draft body");
+    expect((screen.getByPlaceholderText("Subject (optional)") as HTMLInputElement).value).toBe(
+      "Draft subject",
+    );
+  });
+
+  test("focused mailbox errors are visible and retry restores compose and settings", async () => {
+    const refresh = mock(async () => {
+      useAgentMailStore.getState().setMailbox({
+        descriptor: descriptor(),
+        messages: [],
+        total: 0,
+        offset: 0,
+        limit: 200,
+        revision: 1,
+      });
+    });
+    refresh.mockImplementationOnce(async () => {
+      throw new Error("Mailbox offline");
+    });
+    useAgentMailStore.setState({ refreshMailbox: refresh });
+    render(<AgentMailPanel />);
+    act(() => openAgentMailForTab("env-1", "tab-1"));
+    expect((await screen.findByRole("alert")).textContent).toContain("Mailbox offline");
+    fireEvent.click(screen.getByRole("button", { name: "Retry mailbox" }));
+    expect(await screen.findByRole("button", { name: "Message" })).toBeTruthy();
+    expect(screen.getByLabelText("Automatic delivery policy")).toBeTruthy();
+    expect(screen.queryByRole("alert") === null).toBe(true);
+  });
+
+  test.each([false, true])(
+    "recipient search reaches later pages even if the first has no eligible recipients (%s)",
+    async (ineligible) => {
+      const firstPage = Array.from({ length: 200 }, (_, index) =>
+        descriptor({
+          mailboxId: `env-${index}\0tab`,
+          displayName: `First agent ${index}`,
+          ...(ineligible
+            ? { capabilities: { canPull: false, canSend: false, canInject: false } }
+            : {}),
+        }),
+      );
+      listAgentMailboxes.mockImplementationOnce(async () => ({
+        mailboxes: firstPage,
+        total: 201,
+        offset: 0,
+        limit: 200,
+      }));
+      listAgentMailboxes.mockImplementationOnce(async () => ({
+        mailboxes: [descriptor({ mailboxId: AGENT_2, displayName: "Last agent" })],
+        total: 201,
+        offset: 200,
+        limit: 200,
+      }));
+      render(<AgentMailPanel />);
+      act(() => useAgentMailStore.getState().openPanel({}));
+      fireEvent.click(await screen.findByRole("button", { name: "New" }));
+      fireEvent.change(screen.getByLabelText("Filter agents"), { target: { value: "Last agent" } });
+      fireEvent.click(await screen.findByText("Last agent"));
+      expect(listAgentMailboxes).toHaveBeenCalledWith({ offset: 200, limit: 200 });
+      expect(useAgentMailStore.getState().panel?.conversation).toEqual([AGENT_2, "user"]);
+    },
+  );
+
   test("lists conversations and opens one as a thread in both directions", async () => {
     listAgentMailConversations.mockImplementation(async () => ({
       revision: 1,
@@ -322,7 +421,9 @@ describe("AgentMailPanel", () => {
     act(() => openAgentMailForTab("env-1", "tab-1", "compose"));
     expect(await screen.findByText("unseen")).toBeTruthy();
     await waitFor(() =>
-      expect(markAgentMailConversationSeen).toHaveBeenCalledWith(AGENT_1, "user"),
+      expect(markAgentMailConversationSeen).toHaveBeenCalledWith(AGENT_1, "user", [
+        "message-stored",
+      ]),
     );
     expect(markAgentMailConversationSeen).toHaveBeenCalledTimes(1);
   });
@@ -342,6 +443,10 @@ describe("AgentMailPanel", () => {
     await waitFor(() => expect(sendAgentMail).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(toastError).toHaveBeenCalled());
     expect((body as HTMLTextAreaElement).value).toBe("hello");
+    act(() => useAgentMailStore.getState().closePanel());
+    act(() => useAgentMailStore.getState().openPanel({ conversation: ["user", AGENT_1] }));
+    const restored = await screen.findByPlaceholderText("Message Claude 1");
+    expect((restored as HTMLTextAreaElement).value).toBe("hello");
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(sendAgentMail).toHaveBeenCalledTimes(2));
     expect(sendAgentMail.mock.calls[0]?.[0]).toMatchObject({
@@ -352,7 +457,7 @@ describe("AgentMailPanel", () => {
     expect(sendAgentMail.mock.calls[0]?.[0].requestId).toBe(
       sendAgentMail.mock.calls[1]?.[0].requestId,
     );
-    await waitFor(() => expect((body as HTMLTextAreaElement).value).toBe(""));
+    await waitFor(() => expect((restored as HTMLTextAreaElement).value).toBe(""));
   });
 
   test("keeps the draft and reports a refused message", async () => {

@@ -1,5 +1,6 @@
 import {
   AGENT_MAIL_MAX_MAILBOXES,
+  AGENT_MAIL_MAX_LIST_LIMIT,
   AgentMailError,
   normalizeAgentMessagingSettings,
 } from "@orkestrator/protocol/agent-mail";
@@ -167,10 +168,15 @@ export function registerAgentMailCommands(register: CommandRegistrar): void {
       typeof limit === "number" ? { limit } : {},
     );
   });
-  register("mark_agent_mail_conversation_seen", async ({ a, b }, { storage }) => {
+  register("mark_agent_mail_conversation_seen", async ({ a, b, messageIds }, { storage }) => {
     await requireMessagingEnabled(storage);
+    const first = required(a, "a");
+    const second = required(b, "b");
+    if (!Array.isArray(messageIds) || messageIds.length > AGENT_MAIL_MAX_LIST_LIMIT)
+      throw new Error(`messageIds must be an array of at most ${AGENT_MAIL_MAX_LIST_LIMIT} items`);
+    const displayed = messageIds.map((id, index) => required(id, `messageIds[${index}]`));
     return {
-      marked: await storage.markAgentMailConversationSeen(required(a, "a"), required(b, "b")),
+      marked: await storage.markAgentMailConversationSeen(first, second, displayed),
     };
   });
   register(

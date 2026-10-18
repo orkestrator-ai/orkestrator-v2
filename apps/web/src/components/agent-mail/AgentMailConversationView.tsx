@@ -6,6 +6,7 @@ import {
   AGENT_MAIL_MAX_LIST_LIMIT,
   AGENT_MAIL_USER_PARTICIPANT,
   agentMailParticipantKey,
+  agentMailConversationKey,
   isAgentMailBudgetHeld,
   type AgentMailConversation,
   type AgentMailMessage,
@@ -22,7 +23,7 @@ import { SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import * as backend from "@/lib/backend";
 import { cn } from "@/lib/utils";
-import { useAgentMailStore } from "@/stores/agentMailStore";
+import { EMPTY_AGENT_MAIL_DRAFT, useAgentMailStore } from "@/stores/agentMailStore";
 import {
   AGENT_MAIL_STATUS_TONE_CLASS,
   agentMailStatus,
@@ -74,11 +75,11 @@ export function AgentMailConversationView({
   const [reload, setReload] = useState(0);
   const [conversation, setConversation] = useState<AgentMailConversation | null>(null);
   const [error, setError] = useState<string>();
-  const [subject, setSubject] = useState("");
-  const [body, setBody] = useState("");
-  const [sending, setSending] = useState(false);
-  const sendAttempt = useRef<{ fingerprint: string; requestId: string } | null>(null);
-  const markedRevision = useRef<number | null>(null);
+  const draftKey = agentMailConversationKey(a, b);
+  const draft = useAgentMailStore((state) => state.drafts.get(draftKey) ?? EMPTY_AGENT_MAIL_DRAFT);
+  const updateDraft = useAgentMailStore((state) => state.updateDraft);
+  const { subject, body, sending } = draft;
+  const markedSnapshot = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastMessageId = useRef<string | undefined>(undefined);
 
@@ -99,13 +100,23 @@ export function AgentMailConversationView({
     };
   }, [a, b, limit, revision, reload]);
 
-  // Reading the thread is seeing it. One write per conversation revision, so a
-  // failed mark is not retried in a loop.
+  // Reading the thread is seeing it. One write per displayed window and revision,
+  // so earlier history is covered without retrying a failed mark in a loop.
   useEffect(() => {
-    if (!conversation || markedRevision.current === conversation.revision) return;
-    if (!conversation.messages.some((message) => !message.userSeenAt)) return;
-    markedRevision.current = conversation.revision;
-    void backend.markAgentMailConversationSeen(a, b).catch(() => undefined);
+    if (!conversation || !conversation.messages.some((message) => !message.userSeenAt)) return;
+    const snapshotKey = JSON.stringify([
+      conversation.revision,
+      conversation.messages.map(({ id }) => id),
+    ]);
+    if (markedSnapshot.current === snapshotKey) return;
+    markedSnapshot.current = snapshotKey;
+    void backend
+      .markAgentMailConversationSeen(
+        a,
+        b,
+        conversation.messages.map(({ id }) => id),
+      )
+      .catch(() => undefined);
   }, [a, b, conversation]);
 
   // Follow the newest message; loading earlier history keeps the reader's place.
@@ -140,7 +151,13 @@ export function AgentMailConversationView({
   };
 
   const send = async () => {
-    if (!recipient?.environmentId || !recipient.tabId || !body.trim()) return;
+    if (
+      !recipient?.environmentId ||
+      !recipient.tabId ||
+      !body.trim() ||
+      useAgentMailStore.getState().drafts.get(draftKey)?.sending
+    )
+      return;
     const payload = {
       toEnvironmentId: recipient.environmentId,
       toTabId: recipient.tabId,
@@ -148,15 +165,20 @@ export function AgentMailConversationView({
       body: body.trim(),
     };
     const fingerprint = JSON.stringify(payload);
-    if (sendAttempt.current?.fingerprint !== fingerprint)
-      sendAttempt.current = { fingerprint, requestId: crypto.randomUUID() };
-    setSending(true);
+    const attempts = { ...draft.attempts };
+    const requestId = attempts[fingerprint] ?? crypto.randomUUID();
+    attempts[fingerprint] = requestId;
+    updateDraft(draftKey, { sending: true, attempts });
     try {
       const message = await backend.sendAgentMail({
-        requestId: sendAttempt.current.requestId,
+        requestId,
         ...payload,
       });
-      sendAttempt.current = null;
+      const current = useAgentMailStore.getState().drafts.get(draftKey);
+      if (current?.attempts[fingerprint] !== requestId) return;
+      const remaining = { ...current.attempts };
+      delete remaining[fingerprint];
+      updateDraft(draftKey, { attempts: remaining });
       trackSent(message);
       if (message.placement === "bounced" || message.placement === "undeliverable") {
         toast.error("Message was not delivered", {
@@ -164,13 +186,13 @@ export function AgentMailConversationView({
         });
         return;
       }
-      setSubject("");
-      setBody("");
+      updateDraft(draftKey, { subject: "", body: "" });
       setReload((value) => value + 1);
     } catch (cause) {
       toast.error("Message was not sent", { description: errorMessage(cause) });
     } finally {
-      setSending(false);
+      if (useAgentMailStore.getState().drafts.has(draftKey))
+        updateDraft(draftKey, { sending: false });
     }
   };
 
@@ -348,14 +370,16 @@ export function AgentMailConversationView({
           >
             <Input
               value={subject}
-              onChange={(event) => setSubject(event.target.value)}
+              disabled={sending}
+              onChange={(event) => updateDraft(draftKey, { subject: event.target.value })}
               maxLength={200}
               placeholder="Subject (optional)"
               className="h-8 text-xs"
             />
             <Textarea
               value={body}
-              onChange={(event) => setBody(event.target.value)}
+              disabled={sending}
+              onChange={(event) => updateDraft(draftKey, { body: event.target.value })}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
                   event.preventDefault();

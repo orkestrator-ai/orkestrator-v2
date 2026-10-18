@@ -72,6 +72,49 @@ function tab(environmentId: string) {
 }
 
 describe("StorageService agent mail conversations", () => {
+  test("seen receipts exclude earlier history and messages arriving after the displayed snapshot", async () => {
+    const { storage, dataDir } = await fixture();
+    try {
+      for (let index = 0; index < 51; index++) {
+        await storage.sendAgentMail(
+          { kind: "external" },
+          {
+            requestId: `external-${index}`,
+            toEnvironmentId: "e2",
+            toTabId: "agent",
+            body: "Outside",
+          },
+        );
+      }
+      const loaded = await storage.getAgentMailConversation("external", E2);
+      expect(loaded.total).toBe(51);
+      expect(loaded.messages).toHaveLength(50);
+      const late = await storage.sendAgentMail(
+        { kind: "external" },
+        {
+          requestId: "late",
+          toEnvironmentId: "e2",
+          toTabId: "agent",
+          body: "Late",
+        },
+      );
+      expect(
+        await storage.markAgentMailConversationSeen(
+          "external",
+          E2,
+          loaded.messages.map(({ id }) => id),
+        ),
+      ).toBe(50);
+      expect(
+        (await storage.getAgentMailMessage("e2", "agent", late.id)).userSeenAt,
+      ).toBeUndefined();
+      const all = await storage.getAgentMailConversation("external", E2, { limit: 200 });
+      expect(all.messages.filter(({ userSeenAt }) => !userSeenAt)).toHaveLength(2);
+    } finally {
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   test("joins both directions of a pair, oldest first, and lists each pair once", async () => {
     const { storage, dataDir } = await fixture();
     try {
@@ -150,7 +193,7 @@ describe("StorageService agent mail conversations", () => {
         toTabId: "agent",
         body: "One",
       });
-      await storage.sendAgentMail(tab("e2"), {
+      const second = await storage.sendAgentMail(tab("e2"), {
         requestId: "two",
         toEnvironmentId: "e1",
         toTabId: "agent",
@@ -170,14 +213,18 @@ describe("StorageService agent mail conversations", () => {
       expect(listed.conversations[0]!.key).toBe(agentMailConversationKey("external", E2));
       expect(listed.conversations[0]!.attentionCount).toBe(1);
 
-      expect(await storage.markAgentMailConversationSeen(E1, E2)).toBe(2);
-      expect(await storage.markAgentMailConversationSeen(E1, E2)).toBe(0);
+      expect(
+        await storage.markAgentMailConversationSeen(E1, E2, [first.id, second.id, external.id]),
+      ).toBe(2);
+      expect(
+        await storage.markAgentMailConversationSeen(E1, E2, [first.id, second.id, external.id]),
+      ).toBe(0);
       expect((await storage.getAgentMailMessage("e2", "agent", first.id)).userSeenAt).toBeString();
       expect(
         (await storage.getAgentMailMessage("e2", "agent", external.id)).userSeenAt,
       ).toBeUndefined();
 
-      expect(await storage.markAgentMailConversationSeen("external", E2)).toBe(1);
+      expect(await storage.markAgentMailConversationSeen("external", E2, [external.id])).toBe(1);
       const after = await storage.getAgentMailSummary();
       expect(after.mailboxes.find(({ mailboxId }) => mailboxId === E2)!.attentionCount).toBe(0);
     } finally {

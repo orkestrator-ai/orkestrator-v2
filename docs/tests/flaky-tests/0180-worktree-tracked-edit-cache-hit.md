@@ -242,3 +242,13 @@ backend package, and again in one of three runs of the owning file alone
 - **Isolated rerun:** `mise run test:logged -- --name git-cache-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures` passed, exit 0 (0.8 seconds logged).
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.9ChzHs/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - No watcher implementation, assertion, timeout or skip changed.
+
+## Recurrence after merging main into the real-Electron preview branch (2026-10-18)
+
+- **Command:** `mise run test:logged -- --name full-tests-merged -- mise run test`
+  on branch `qualify-preview-electron-tunnel-c6ca4deaffee` after merging
+  `origin/main` at `68dc1c8d`, on a macOS arm64 host shared with other
+  live-test worktrees.
+- **Failure:** the same test failed in the backend workspace group (135.8 ms).
+- **Isolated rerun:** `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1`
+  passed 4/4. The owning file was unchanged on the branch.

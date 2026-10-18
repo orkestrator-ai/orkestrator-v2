@@ -244,6 +244,23 @@ Evidence: `orkestrator-test-run.SROwT8/login-isolated-browser.log.gz` in the
 host temporary directory and
 `output/agent-testing/qa-browser-bdfd649e-0a6/browser/`.
 
+## Preview path provenance validation — 2026-10-18
+
+`mise run test:logged -- --name isolated-browser -- mise run test:agent:browser:isolated`
+(profile `qa-browser-41627cc5-72a`, one worker) reported 26 passed, 25 skipped
+and three failed in 649.4 s logged. The narrow host picker again timed out
+clicking `Repository settings` after 15000 ms. The other failures were local
+move cleanup at the 120-second test deadline and the 390px host-maintenance
+fixture's project-drawer click. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.YMsYVb/isolated-browser.log.gz`.
+
+The unchanged owning file on fresh profile `preview-path-layout-recheck`:
+`ORKESTRATOR_AGENT_TEST_PROFILE=preview-path-layout-recheck ORKESTRATOR_AGENT_TEST_RUN_ID=preview-path-layout-recheck mise run test:logged -- --name gateway-rerun -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/browser-gateway.spec.ts --workers=1`
+reported 13 passed, six skipped and one failed in 144.7 s. Only the same narrow
+host-picker click failed; both other cases passed. This owning-file result
+does not establish new flaky classifications. Evidence:
+`/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.ULvAuU/gateway-rerun.log.gz`.
+Both disposable profiles were stopped and reset. No assertion or timeout changed.
 
 ## Landing-page main merge observation — 2026-10-18
 
@@ -277,3 +294,9 @@ The complete unchanged owning file passed against fresh credential-free profile 
 - **Result:** the narrow picker case passed unchanged, but the whole owner reported 13 passed, five skipped and two failed (407.2 seconds logged): signed-out Codex lacked the `Sign in to Codex` button at 60000 ms, and the persisted diff-baseline `vs <tip>` header was absent at 5000 ms. Those remain validation limitations, not newly confirmed flakes.
 - **Evidence:** `orkestrator-test-run.eQ9vnb/merge2-isolated-browser.log.gz` and `orkestrator-test-run.iQOZTp/merge2-gateway-owner.log.gz` below the host temporary directory; artifacts under `output/agent-testing/<profile>/browser/` for the two profiles named above.
 - **Cleanup:** both profiles were stopped and reset by their owning runners; no live launcher or retained profile state. No implementation, assertion, timeout or skip changed.
+
+## Electron preview second main merge — 2026-10-18
+
+`mise run test:logged -- --name merge2-isolated-browser -- mise run test:agent:browser:isolated` used credential-free profile `qa-browser-42db909f-bde`, one worker. It reported 28 passed, 33 opt-in skips and one failed (exit 1, 484.6 seconds including setup and cleanup). The narrow picker again could not click `Repository settings` after `Open tools`: the button was unstable, then hidden, until the 15000 ms deadline at `browser-gateway.spec.ts:238`. Evidence: `orkestrator-test-run.DoYcml/merge2-isolated-browser.log.gz` below the host temporary directory. The supervisor stopped and reset the profile. The owner was not rerun for this occurrence, so this does not independently establish a new flake classification. No picker implementation, assertion, timeout or skip changed.
+
+The component/public-site browser task passed separately (`merge2-browser`, exit 0, 135.0 seconds), as did credential-free CLI scenarios (`merge2-cli-scenarios`, exit 0, 23.6 seconds). Credentialed provider and separate Electron, Docker and iOS scenario suites were omitted; the incoming product changes were covered by the ordinary full suite, component browser and isolated browser flows.

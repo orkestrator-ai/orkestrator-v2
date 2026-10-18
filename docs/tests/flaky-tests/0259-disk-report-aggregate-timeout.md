@@ -42,3 +42,11 @@
 - **Evidence:** `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.CYmzDD/root-and-agent-support-tests.log.gz`.
 - **Assessment:** another confirmed intermittent recurrence. Shared-host
   contention remains unconfirmed; no assertion, timeout or skip changed.
+
+## Recurrence — 2026-10-18 (usage-cache validation)
+
+- **Original command:** `mise run test:logged -- --name usage-all-tests -- mise run test`, with aggregate workspace/root/bridges/protocol reservations of 4/1/2/1 workers.
+- **Failure:** the five-second deadline expired at 5018.63 ms; `report.status` was null rather than 0, also producing an error between tests.
+- **Isolated rerun:** `mise run test:logged -- --name disk-report-rerun -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 2.1 s).
+- **Evidence:** `orkestrator-test-run.BopZMS/root-and-agent-support-tests.log.gz`.
+- **Disposition:** Confirmed recurrence; no assertion, timeout or skip changed.

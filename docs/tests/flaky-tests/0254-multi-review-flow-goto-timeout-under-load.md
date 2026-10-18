@@ -29,3 +29,20 @@
 - **Isolated rerun:** `ORKESTRATOR_E2E_PORT=61393 CI=1 mise run test:logged -- --name merge-multi-review-isolated -- bunx playwright test --config e2e/playwright.config.ts e2e/MultiReviewFlow.spec.ts --workers=1` passed the unchanged owning file in 33.5 s.
 - **Evidence:** `/tmp/orkestrator-test-run.9yFAR6/merge-browser-owned.log.gz`.
 - **Changes:** recorded the recurrence only; no assertions, timeouts or skips changed.
+
+
+## Landing-page main merge recurrence — 2026-10-18
+
+`ORKESTRATOR_E2E_PORT=49295 ORKESTRATOR_PUBLIC_E2E_PORT=49296 mise run test:logged -- --name merge-browser-isolated-ports -- mise run test:browser` reported 303 passed, 80 skipped and 49 failed with nine workers alongside other host validation. This owner failed in:
+
+- `a retained clean-review PR notice reflects the current ready snapshot after reload`
+- `a retained clean-review PR notice reflects the current interactive snapshot after reload`
+- `a retained clean-review PR notice reflects the current reviewing snapshot after reload`
+- `a retained clean-review PR notice reflects the current consolidating snapshot after reload`
+- `fits the 32-reviewer maximum and zooms within bounds`
+- `a retained clean-review PR notice reflects the current ready snapshot after reload`
+- `a retained clean-review PR notice reflects the current interactive snapshot after reload`
+- `a retained clean-review PR notice reflects the current reviewing snapshot after reload`
+- `a retained clean-review PR notice reflects the current consolidating snapshot after reload`
+
+All 21 failing owners, including this unchanged file, passed with one worker in 428.8 seconds (exit 0). The complete rerun command, individual failure messages and evidence paths are in [0382](0382-component-browser-parallel-load.md). No timeout, assertion, skip or owning source changed.

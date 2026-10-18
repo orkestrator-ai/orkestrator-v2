@@ -198,3 +198,29 @@ cache-invalidation hypothesis remains unconfirmed.
 The final `mise run test:logged -- --name final-full-tests -- mise run test`
 passed all four groups (exit 0, 841.2 seconds including queue waits), with
 the owning test unchanged.
+
+## Backend preload contract validation recurrence — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name full-suite -- mise run test`
+  on `28915027` plus the backend preload contract assertion. Workspace/root/
+  bridge/protocol used 4/1/2/1 worker slots, with two isolated Bun workers per
+  workspace package.
+- **Failure:** `real Git through the shared owner > a tracked edit that never touches the index is detected`
+  failed at line 139 in 148.97 ms: cache hits expected 1, received 0. Backend:
+  9,017 passed, 41 skipped, one failed across 480 files (577.47 seconds). The
+  aggregate exited 1 after 593.6 seconds; every other workspace package and
+  the root, bridge and protocol groups passed.
+- **Isolated rerun:** `mise run test:logged -- --name worktree-snapshot-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures`
+  passed the unchanged owning file (four tests, exit 0, 0.8 seconds logged).
+- **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.XESA6C/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`;
+  outer artifacts are in `orkestrator-test-run.di5BQw`.
+- No watcher implementation, assertion, timeout or skip changed. The existing
+  cache-invalidation hypothesis remains unconfirmed.
+
+## Usage-cache validation recurrence — 2026-10-18
+
+- **Command:** `mise run test:logged -- --name usage-all-tests -- mise run test`, with aggregate workspace/root/bridges/protocol reservations of 4/1/2/1 workers; backend used two isolated workers.
+- **Failure:** the tracked-edit cache-hit assertion expected 1 and received 0 at line 139 (140.96 ms). Backend reported 9038 passed, 41 skipped and four failures across 481 files; the remaining failures concern shell fixtures outside the usage-cache change.
+- **Isolated rerun:** `mise run test:logged -- --name baseline-worktree-git -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/worktree-snapshots-git.test.ts --parallel=1 --only-failures` passed unchanged, exit 0, in 0.6 s.
+- **Evidence:** `orkestrator-test-run.BopZMS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Disposition:** Confirmed recurrence; no watcher implementation, assertion, timeout or skip changed.

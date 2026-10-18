@@ -78,6 +78,49 @@ reliably green on `main`, and nothing requires it to be.
   agent tab and coordinator with live state and counts` compared two
   snapshots whose `generatedAt` stamps could differ by a millisecond (23 of
   300 reruns failed). It now ignores only the stamp.
+- **Worktree persist-failure test (fixed 2026-10-18).** `Electron backend
+  environment lifecycle commands > removes a newly created worktree and its
+  branch when persisting them fails`
+  (`apps/backend/tests/commands-registry-environments.test.ts`) failed with
+  "Received promise that resolved" on some runs, never on a commit boundary.
+  The cause was the test, not the product. Since #955 (2026-10-13) the start
+  path stores the canonical worktree root (`validateWorktreeLocation`, then
+  `realpath`), but the storage mock failed only an update whose `worktreePath`
+  equalled `path.join(context.worktreeDir, …)` spelled as given. The fixture
+  root is `ORKESTRATOR_WORKTREE_DIR`, else `os.tmpdir()`. The
+  `tests/setup-node.ts` preload makes the first canonical. A bare
+  `bun test <file>` from `apps/backend` loaded no preload, so the root was the
+  shell's `ORKESTRATOR_WORKTREE_DIR` or a temp directory under a symlink
+  (macOS `/tmp`, `/var/folders/…`). The mock then never fired, the start
+  succeeded, and the outcome depended on the shell. The product compensation
+  was correct throughout: it removes the worktree and branch it created, by
+  the path it created.
+  - **Fix.** The mock fails the first update that persists any worktree path,
+    and the test asserts that path equals the expected one, so a mismatch
+    reads as a path diff. `expectedManagedWorktreePath`
+    (`apps/backend/tests/command-fixtures.ts`) canonicalizes the root as
+    production does. `apps/backend/bunfig.toml` now preloads
+    `tests/setup-node.ts`, so a bare run gets the suite's isolated worktree
+    root and Git config instead of writing under a shell-exported root.
+  - **Evidence** (Bun 1.4.3, macOS, branch from `a5d338c1`). Before: the
+    bare single-test run failed deterministically (root `/tmp/…`, worktree
+    created under `/private/tmp/…`); the same run with
+    `--preload ../../tests/setup-node.ts` passed. After, with only the test
+    change: 3 of 3 bare runs passed. After the full change: 20 of 20
+    sequential bare runs, 8 of 8 concurrent bare runs, 3 of 3 with
+    `TMPDIR=$(getconf DARWIN_USER_TEMP_DIR)`, and the whole owning file 3 of
+    3 (`bun test --preload ../../tests/setup-node.ts
+    tests/commands-registry-environments.test.ts --parallel=1
+    --only-failures`, 68 of 68, 31–41 s). A probe confirmed a bare run
+    overrides an inherited `ORKESTRATOR_WORKTREE_DIR`, and that a preload
+    named in both `bunfig.toml` and `--preload` is evaluated once.
+    `mise run check` passed, and one full `mise run test` passed every
+    group (workspace 406.4 s, root 220.3 s, bridges 115.2 s, exit 0).
+  - **Not reproduced.** The 2026-10-17 report also saw it fail in the
+    Grok-trust build's full `mise run test`, where the preload makes the
+    root canonical. That run's command and environment were not recorded,
+    and no in-tree path with the preload produces a different spelling. A
+    recurrence now fails on the path assertion, which names both paths.
 - **Ownership guard.** `tests/unit/test-suite-ownership.test.ts` derives owners
   from `buildConcurrentGroups` (`scripts/test-all.ts`) and the package test
   selectors. It also rejects root tests that import backend or desktop
@@ -226,22 +269,6 @@ reliably green on `main`, and nothing requires it to be.
    [service-preview-rollout.md](service-preview-rollout.md) evidence log). Stop
    the group from a fixture teardown or a worker-exit hook as well, and bound
    the `close()` wait.
-10. **A backend environment test fails on `main` on some runs.**
-    `Electron backend environment lifecycle commands > removes a newly created
-    worktree and its branch when persisting them fails`
-    (`apps/backend/tests/commands-registry-environments.test.ts:1409`; first
-    reported as line 1451) expects `start_environment` to reject with "storage
-    unavailable", but the promise resolves. On 2026-10-17 it failed alone on a
-    clean `origin/main` at `9da80451`, and in the Grok-trust build's full
-    `mise run test`. Later the same day it passed, run alone from
-    `apps/backend` with `bun test tests/commands-registry-environments.test.ts
-    -t "removes a newly created worktree and its branch"`, on clean detached
-    checkouts of `9da80451` (one run) and `origin/main` at `607d12e2` (three
-    runs), and on that branch merged with `607d12e2`, both alone and in the
-    full suite. So it depends on something outside the tree (host tools on
-    `PATH`, or Git or filesystem state), not on a commit. Find what makes the
-    start path stop surfacing the persistence failure, then fix the code or the
-    test.
 
 ### Qualification
 

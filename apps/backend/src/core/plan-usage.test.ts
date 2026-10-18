@@ -18,6 +18,7 @@ import {
   normalizeAccountWindows,
   OPENCODE_USAGE_URL,
   openCodePlanWindows,
+  RATE_LIMIT_BACKOFF_MS,
   readPlanUsage,
 } from "./plan-usage.js";
 
@@ -946,6 +947,110 @@ describe("createPlanUsageReader refresh and cache lifetime", () => {
     const second = await reader(contextWithGlobal(), "claude");
     expect(second.status).toBe("ok");
     expect(calls).toBe(1);
+  });
+});
+
+describe("createPlanUsageReader rate limits", () => {
+  test("session cache expiry cannot bypass a five-minute 429 deadline", async () => {
+    let clock = 1_700_000_000_000;
+    let calls = 0;
+    const reader = createPlanUsageReader({
+      now: () => clock,
+      credentials: { claude: async () => "oauth-token" },
+      fetchImpl: (async () => {
+        calls += 1;
+        return new Response(null, { status: 429, headers: { "retry-after": "300" } });
+      }) as unknown as typeof fetch,
+    });
+    const context = contextWithGlobal();
+    const limited = await reader(context, "claude");
+    clock += 1_000;
+    reader.recordSessionWindows("claude", [{ window: "five_hour", usedPercent: 22 }]);
+    expect((await reader(context, "claude")).windows[0]?.usedPercent).toBe(22);
+    clock += 121_000;
+    expect(await reader(context, "claude")).toBe(limited);
+    expect(await reader(context, "claude", { force: true })).toBe(limited);
+    expect(calls).toBe(1);
+    clock += 178_001;
+    await reader(context, "claude");
+    expect(calls).toBe(2);
+  });
+
+  test("waits out a 429, even when forced, and shows the last good reading meanwhile", async () => {
+    let clock = 1_700_000_000_000;
+    let limited = false;
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      return limited
+        ? new Response(null, { status: 429, headers: { "retry-after": "120" } })
+        : jsonResponse({ five_hour: { utilization: 37 } });
+    }) as unknown as typeof fetch;
+    const reader = createPlanUsageReader({
+      fetchImpl,
+      now: () => clock,
+      credentials: { claude: async () => "oauth-token" },
+    });
+    const context = contextWithGlobal();
+    const fresh = await reader(context, "claude");
+    expect(fresh.status).toBe("ok");
+
+    limited = true;
+    const stale = await reader(context, "claude", { force: true });
+    expect(stale).toMatchObject({ status: "ok", stale: true, fetchedAt: fresh.fetchedAt });
+    expect(stale.windows[0]?.usedPercent).toBe(37);
+    expect(stale.message).toContain("HTTP 429");
+    expect(calls).toBe(2);
+
+    clock += 60_000;
+    expect(await reader(context, "claude", { force: true })).toBe(stale);
+    expect(calls).toBe(2);
+
+    limited = false;
+    clock += 60_001;
+    expect((await reader(context, "claude")).stale).toBeUndefined();
+    expect(calls).toBe(3);
+  });
+
+  test("backs off five minutes when a 429 names no wait", async () => {
+    let clock = 1_700_000_000_000;
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      return new Response(null, { status: 429 });
+    }) as unknown as typeof fetch;
+    const reader = createPlanUsageReader({
+      fetchImpl,
+      now: () => clock,
+      credentials: { claude: async () => "oauth-token" },
+    });
+    const context = contextWithGlobal();
+    const first = await reader(context, "claude");
+    expect(first.status).toBe("error");
+    expect(first.message).toContain("Retrying in 5 minutes");
+    clock += RATE_LIMIT_BACKOFF_MS - 1;
+    await reader(context, "claude", { force: true });
+    expect(calls).toBe(1);
+    clock += 2;
+    await reader(context, "claude");
+    expect(calls).toBe(2);
+  });
+
+  test("an account switch clears the wait", async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      return new Response(null, { status: 429 });
+    }) as unknown as typeof fetch;
+    const reader = createPlanUsageReader({
+      fetchImpl,
+      now: () => 1_700_000_000_000,
+      credentials: { claude: async () => "oauth-token" },
+    });
+    await reader(contextWithGlobal(), "claude");
+    reader.invalidate("claude");
+    await reader(contextWithGlobal(), "claude");
+    expect(calls).toBe(2);
   });
 });
 

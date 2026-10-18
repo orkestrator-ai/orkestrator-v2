@@ -336,5 +336,8 @@ with `renderer.block`. Web: controller, drafts, viewport,
 canvas tab, inspector, layer tree, history/export, entry and agent
 context tests. Browser: `e2e/DesignCanvas.spec.ts` runs the real runtime and
 command registry at desktop and phone widths;
-`e2e/agent-testing/design-canvas.spec.ts` runs against the isolated stack.
+`e2e/agent-testing/design-canvas.spec.ts` runs against the isolated stack, and
+`e2e/agent-testing/design-live.spec.ts` (opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_DESIGN=1`)
+runs the full tool cycle, Ask agent, an approval and the handoff with real
+Claude and Codex.
 `scripts/benchmark-design.ts` measures transfer, commit and latency fixtures.

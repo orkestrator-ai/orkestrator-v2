@@ -109,10 +109,8 @@ async function runOne(
   try {
     const backend = await startIsolatedBackend({
       root,
-      extraArgs: [
-        ...(options.provider && definition.live ? ["--credential-source", options.provider] : []),
-        ...(options.dockerImage ? ["--docker-image", options.dockerImage] : []),
-      ],
+      ...(options.provider && definition.live ? { credentialSource: options.provider } : {}),
+      extraArgs: options.dockerImage ? ["--docker-image", options.dockerImage] : [],
     });
     context = {
       name: definition.name,

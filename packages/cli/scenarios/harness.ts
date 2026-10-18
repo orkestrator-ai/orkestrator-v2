@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { prepareIsolatedBackendEnvironment } from "./provider-homes.js";
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -82,15 +83,27 @@ export interface IsolatedBackend {
   stop(): Promise<number | null>;
 }
 
+export { isolateProviderHomes } from "./provider-homes.js";
+
 /** Start an isolated backend through the packaged launcher (`serve`). */
 export async function startIsolatedBackend(options: {
   root: string;
   env?: Record<string, string>;
   extraArgs?: string[];
+  /** The explicitly authorized live provider (see `isolateProviderHomes`). */
+  credentialSource?: string;
 }): Promise<IsolatedBackend> {
+  if (
+    options.extraArgs?.some(
+      (arg) => arg === "--credential-source" || arg.startsWith("--credential-source="),
+    )
+  ) {
+    throw new Error("Select live credentials through credentialSource, not extraArgs");
+  }
   const dataDir = path.join(options.root, "data");
   const worktreeDir = path.join(options.root, "worktrees");
   await mkdir(dataDir, { recursive: true, mode: 0o700 });
+  const env = await prepareIsolatedBackendEnvironment(options);
   const logFile = path.join(options.root, "backend.log");
   const child = Bun.spawn(
     [
@@ -109,18 +122,13 @@ export async function startIsolatedBackend(options: {
       "--runtime-flavor",
       "agent-test",
       ...(options.extraArgs ?? []),
+      ...(options.credentialSource ? ["--credential-source", options.credentialSource] : []),
     ],
     {
       cwd: options.root,
       stdout: "pipe",
       stderr: Bun.file(logFile),
-      env: {
-        ...process.env,
-        // The control MCP listens on a fixed default port shared with any
-        // desktop on this machine; an isolated backend never needs it.
-        ORKESTRATOR_CONTROL_MCP_DISABLED: "1",
-        ...options.env,
-      },
+      env,
     },
   );
   const expiry = setTimeout(() => child.kill("SIGTERM"), READY_TIMEOUT_MS);

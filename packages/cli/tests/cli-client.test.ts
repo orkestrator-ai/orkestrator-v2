@@ -206,3 +206,64 @@ describe("packaged client against a real backend", () => {
     });
   }
 });
+
+test("packaged scenario backend receives the sanitized isolated environment", async () => {
+  const root = await scratch();
+  const shell = path.join(root, "fixture-shell");
+  const capture = path.join(root, "startup-env.json");
+  // The login shell is the first child. Write only fixture paths and presence
+  // bits, never inherited credential contents.
+  await Bun.write(
+    shell,
+    `#!/bin/sh
+exec "$ORKESTRATOR_SCENARIO_BUN" -e '
+  await Bun.write(process.env.ORKESTRATOR_SCENARIO_CAPTURE, JSON.stringify({
+    credentialSource: Object.hasOwn(process.env, "ORKESTRATOR_CREDENTIAL_SOURCE"),
+    hostHome: Object.hasOwn(process.env, "ORKESTRATOR_AGENT_TEST_HOST_HOME"),
+    hostClaude: Object.hasOwn(process.env, "ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR"),
+    hostPi: Object.hasOwn(process.env, "ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR"),
+    claude: process.env.CLAUDE_CONFIG_DIR,
+    codex: process.env.CODEX_HOME,
+    xdg: process.env.XDG_DATA_HOME,
+    mcpUrl: Object.hasOwn(process.env, "ORKESTRATOR_AGENT_MCP_URL"),
+    mcpToken: Object.hasOwn(process.env, "ORKESTRATOR_AGENT_MCP_TOKEN"),
+  }));
+  process.stdout.write(process.env.PATH);
+'
+`,
+  );
+  const { chmod } = await import("node:fs/promises");
+  await chmod(shell, 0o700);
+  const backend = await startIsolatedBackend({
+    root,
+    env: {
+      SHELL: shell,
+      ORKESTRATOR_SCENARIO_BUN: process.execPath,
+      ORKESTRATOR_SCENARIO_CAPTURE: capture,
+      ORKESTRATOR_CREDENTIAL_SOURCE: "claude",
+      ORKESTRATOR_AGENT_TEST_HOST_HOME: "host-home-must-not-survive",
+      ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR: "host-claude-must-not-survive",
+      ORKESTRATOR_AGENT_TEST_HOST_PI_AGENT_DIR: "host-pi-must-not-survive",
+      CLAUDE_CONFIG_DIR: "host-claude",
+      CODEX_HOME: "host-codex",
+      XDG_DATA_HOME: "host-data",
+      ORKESTRATOR_AGENT_MCP_URL: "parent-url",
+      ORKESTRATOR_AGENT_MCP_TOKEN: "parent-token",
+    },
+  });
+  try {
+    expect(JSON.parse(await readFile(capture, "utf8"))).toEqual({
+      credentialSource: false,
+      hostHome: false,
+      hostClaude: false,
+      hostPi: false,
+      claude: path.join(root, "provider-homes", "claude"),
+      codex: path.join(root, "provider-homes", "codex"),
+      xdg: path.join(root, "provider-homes", "xdg-data"),
+      mcpUrl: false,
+      mcpToken: false,
+    });
+  } finally {
+    expect(await backend.stop()).toBe(0);
+  }
+});

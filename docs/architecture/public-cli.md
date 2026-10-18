@@ -401,21 +401,32 @@ providers other than Claude use `--network full`, because the default
 restricted allowlist reaches only Anthropic's API. Every isolated backend
 gets disposable provider homes under its scenario root (`CLAUDE_CONFIG_DIR`,
 `CODEX_HOME` and the three `XDG_*` homes; `isolateProviderHomes` in
-`packages/cli/scenarios/harness.ts`), so agents never write sessions, history
+`packages/cli/scenarios/provider-homes.ts`), so agents never write sessions, history
 or settings into the operator's own `~/.claude`, `~/.codex` or OpenCode
-directories. A live run copies in only its provider's one credential file
-(Codex `auth.json`, OpenCode `opencode/auth.json`, mode 0600); Claude's login
-is read from the host Keychain or `~/.claude/.credentials.json` through
-`ORKESTRATOR_AGENT_TEST_HOST_HOME` and handed to the bridge as a token. The
-same disposable `CODEX_HOME` is what the agent-test runtime stages into a
-container, so Codex in a container needs no extra opt-in. A backend never
-passes on an agent tool connection it inherited (`ORKESTRATOR_AGENT_MCP_URL`
-and `_TOKEN`, dropped at startup by `dropInheritedAgentToolConnection`): one
+directories. A live run stages only API-key credentials for Codex or OpenCode
+(mode 0600); OAuth `auth.json` files are refused, even when fresh, because a
+refresh (including one triggered by a 401) could rotate the host's login and
+leave its replacement in a disposable home. For Codex, supply a test API key
+through `CODEX_API_KEY` or `OPENAI_API_KEY`, or an API-key-only `auth.json` in
+`CODEX_HOME`. OpenCode requires API-key-only entries in its `auth.json`.
+Claude's original custom config directory or host Keychain is read before
+isolation, and only its access token is staged in the disposable Claude home;
+its refresh token is never copied. Inherited credential-source and agent-test
+host-directory controls are cleared; only the runner's explicit live provider
+selection authorizes credentials. Git (including both global config files),
+gh and mise retain their host settings through explicit tool-specific overrides
+while provider XDG homes remain disposable. The same disposable provider homes
+are staged into containers.
+
+A backend never passes on an agent tool connection it inherited
+(`ORKESTRATOR_AGENT_MCP_URL` and `_TOKEN`, dropped by
+`dropInheritedAgentToolConnection` before login-shell PATH discovery): one
 started from inside an agent session would otherwise let its own agents act
-as the parent tab. The harness starts every backend with a decoy connection
-and the `exec` scenario checks a command cannot see it. Live runs use host
-credentials (`--credential-source`) and cost real tokens; keep them opt-in. The published
-package ships only the Claude and Codex bridges (OpenCode runs its own server),
+as the parent tab. The harness starts every backend with a decoy connection.
+`inherited-agent-connection.test.ts` executes startup with a stub login shell
+and a real catalogue probe to check this boundary; the `exec` scenario checks
+exec's separate environment filter. Live runs cost real tokens; keep them
+opt-in. The published package ships only the Claude and Codex bridges (OpenCode runs its own server),
 and the runner cannot target an existing profile, so Pi, Cursor and Grok cannot
 run `live-session` yet (see [cli-qualification.md](../todo/cli-qualification.md)).
 Which test proves each scenario class is listed in
@@ -427,8 +438,12 @@ Which test proves each scenario class is listed in
   prompt attachments, selected slash commands, durable enqueue, declarative
   apply, shell completion, worker-scoped credentials. `capabilities.features`
   reports these as unavailable.
-- Container lifecycle and exec are qualified on Linux Docker with a
-  worktree-owned image; macOS Docker Desktop has not been run.
+- Container lifecycle and exec are qualified on Linux Docker and macOS Docker
+  Desktop with worktree-owned images. The 2026-10-18 macOS evidence also records
+  live Claude, Codex and OpenCode container passes. Remaining gaps include Pi,
+  Cursor and Grok live runs, macOS packed install/config permissions/profile
+  discovery, and a foreign-owner Docker decoy through the CLI; see the
+  [qualification evidence and remaining work](../todo/cli-qualification.md).
 - Browser-checked in `e2e/agent-testing/cli-ui.spec.ts`: CLI-made project,
   environment and settings changes reach an open and a reloaded renderer;
   with a live Claude profile, a CLI-started question rehydrates in an

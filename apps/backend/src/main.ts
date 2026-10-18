@@ -31,8 +31,9 @@ assertSupportedPlatform();
 // coming up would otherwise be fatal too, and this process is what the desktop
 // supervisor treats as the app itself.
 installFatalRejectionGuard({ label: "[Backend]" });
-fixPath();
+// Login-shell profiles are child processes too; sanitize before discovering PATH.
 dropInheritedAgentToolConnection();
+fixPath();
 // Capture this before startup awaits. If Electron dies while the backend is
 // initializing, reading process.ppid later would see init and lose the only
 // identity that lets the orphan watchdog recognize the transition.

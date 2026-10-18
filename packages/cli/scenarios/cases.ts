@@ -485,8 +485,8 @@ export const SCENARIOS: ScenarioDefinition[] = [
       const operationId = receiptOf(passthrough).operationId;
       const out = await context.cli.ok<{ text: string }>(["run", "output", operationId], "output");
       expectThat(out.result.text === "a b;$(x)", "argv was not preserved");
-      // The harness starts the backend with a decoy parent agent connection
-      // (`INHERITED_AGENT_TOOL_ENV`); a command it runs must never see it.
+      // Exec has its own ORKESTRATOR_* filter. This checks that filter; the
+      // backend startup regression is covered by inherited-agent-connection.test.ts.
       const inherited = await context.cli.run(
         [
           "--json",

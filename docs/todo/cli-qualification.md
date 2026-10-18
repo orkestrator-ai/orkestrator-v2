@@ -41,14 +41,14 @@ cannot use `run wait` as a success signal.
   transcript unification (#970, #971), the Claude bridge `sendPrompt` split
   (#984) and agent SDK upgrades (#935, #964). See "Evidence log".
 - Every isolated scenario backend runs with disposable provider homes
-  (`isolateProviderHomes` in `packages/cli/scenarios/harness.ts`). Before
+  (`isolateProviderHomes` in `packages/cli/scenarios/provider-homes.ts`). Before
   2026-10-18 the harness inherited the operator's `HOME` and provider
   variables, so live runs wrote sessions into the host's `~/.claude`,
   `~/.codex` and OpenCode directories. It covers Claude, Codex and OpenCode
   only; Pi, Cursor and Grok need the same when they become runnable.
 - Each isolated backend also starts with a decoy parent agent tool connection
-  (`INHERITED_AGENT_TOOL_ENV`), and the `exec` scenario asserts a command
-  cannot see it. The backend drops any inherited `ORKESTRATOR_AGENT_MCP_URL`
+  (`INHERITED_AGENT_TOOL_ENV`). The startup regression checks both the login
+  shell and a catalogue probe cannot see it. The backend drops any inherited `ORKESTRATOR_AGENT_MCP_URL`
   and `ORKESTRATOR_AGENT_MCP_TOKEN` at startup
   (`dropInheritedAgentToolConnection`, `apps/backend/src/main.ts`).
 
@@ -118,16 +118,19 @@ credential setup is in
   restricted allowlist reaches only Anthropic's API. The `live-session` case
   adds it itself for non-Claude providers; any new live container scenario
   must do the same.
-- Codex needs no `CODEX_HOME` opt-in any more: the harness gives every
-  backend a disposable `CODEX_HOME` holding a copy of the host `auth.json`, and
-  `portableInputSpec` (`apps/backend/src/core/portable-inputs.ts`) stages that
-  into containers. The copy is a fork of a ChatGPT OAuth login: if Codex
-  refreshes it during a run (it does so eight days after `last_refresh`, or on
-  a 401), the host's refresh token may be rotated away and the host CLI asked
-  to sign in again. Run Codex while the host login is fresh. On 2026-09-26,
-  container runs without credentials or without `--network full` stayed
-  running to their deadline or failed with 401, and both were reported
-  truthfully.
+- Codex and OpenCode live scenarios now require API-key credentials. The
+  harness refuses OAuth `auth.json` files before starting a backend: a 401 can
+  trigger refresh even for a fresh login, and cleanup must never discard the
+  only valid rotated refresh token. Codex accepts `CODEX_API_KEY`,
+  `OPENAI_API_KEY`, or an API-key-only `auth.json` from the original `CODEX_HOME`;
+  OpenCode accepts only `type: "api"` entries from the original XDG data home.
+  Writable provider homes and container inputs stay disposable. Earlier
+  evidence below used copied OAuth credentials; those passes remain historical
+  evidence, not qualification of the new API-key-only setup. Claude resolves
+  custom host config directories before isolation and stages only its access
+  token. Credential-free runs clear inherited credential-source and host-home
+  controls. Regression coverage includes fresh/stale OAuth refusal and host
+  credential survival after scenario cleanup.
 - Pin the model with `ORKESTRATOR_SCENARIO_MODEL`. Codex's default model was
   unsupported on the test account, and the disposable Codex home carries no
   `config.toml`, so the host's configured model is not inherited. The case
@@ -187,8 +190,8 @@ codes only).
     - A backend started from inside an agent session inherited that session's
       agent tool URL and token, and spread them into every bridge, exec worker
       and probe, so its agents could act as the parent tab. Now
-      `dropInheritedAgentToolConnection`; covered by `agent-tools.test.ts` and
-      the `exec` scenario's decoy check.
+      `dropInheritedAgentToolConnection`; the startup/login-shell/catalogue
+      regression now covers this separately from exec's own environment filter.
     - After the reboot, local `exec` hung for its whole 10-minute budget: with
       no bundled Bun, `resolveBunBinary` fell back to `bun` on `PATH`, here a
       mise shim that cannot resolve from `/`, where exec control runs. It now

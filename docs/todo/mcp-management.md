@@ -132,6 +132,13 @@ collects the live evidence the shipped behaviour has never had.
 
     Resolve the worktree's main checkout, stop walking past the git root, and
     take the session's policy into account.
+11. **Older-bridge wording.** A Claude bridge from #838 until the
+    `mcpConfigReporting` marker reports nothing before its first query, so the
+    runtime shows "…cannot be confirmed until the environment restarts" — and
+    is then confirmed by that first query, with no restart (seen live on
+    2026-10-18). Say instead that it is confirmed once the bridge reports a
+    query, or a restart if it never does (`olderBridgeOutcome` in
+    `evidence.ts`).
 
 ### Qualification
 
@@ -155,14 +162,19 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   writable scope record: durable add, edit, rename and remove; actual tools
   after apply; two sessions or a busy session; restart and restore; the auth
   limitation. An unsupported cell gets an explicit reason, not a pass.
-- **Inactive environment.** Claude ran on 2026-10-18 with the live spec
-  `e2e/agent-testing/mcp-apply-inactive.spec.ts`; see
-  [the record](#qualification-record-inactive-environment-2026-10-18) for what
-  passed and what the provider's rate limit left unrun. Still open: the
-  process-wide variant across two Codex or two OpenCode sessions. It needs a
-  profile whose Codex home is disposable: with the Codex credential source an
-  agent-test profile uses the host's `CODEX_HOME`, so a user-scope save there
-  would write the operator's own `config.toml`.
+- **Inactive environment.** Done for Claude on 2026-10-18 (see
+  [the record](#qualification-record-inactive-environment-2026-10-18)): busy
+  save, a cut event stream, reload, a bridge restart (newer generation), a
+  removal, a pre-marker bridge and a shared user file all passed on the real
+  stack. Two parts remain:
+  - Rerun the spec in full mode (without `ORKESTRATOR_AGENT_TEST_MCP_APPLY_ONLY`)
+    once the seeded Claude login is not rate limited. That proves the model's
+    tool calls after the edit, the removal, the older bridge and the shared
+    save; only the first add's call is proven today.
+  - The process-wide variant across two Codex or two OpenCode sessions. It
+    needs a profile whose Codex home is disposable: with the Codex credential
+    source an agent-test profile uses the host's `CODEX_HOME`, so a user-scope
+    save there would write the operator's own `config.toml`.
 - **Real browser.** The live-panel link from a running session; a full pass
   after the dialog-layer fix (2026-09-24 confirmed it only by raising the
   layer); conflict recovery and secret replacement at desktop and narrow
@@ -177,49 +189,49 @@ Use temporary homes and harmless fixture servers; never the operator's files.
 
 ## Qualification record: inactive environment (2026-10-18)
 
-Run on branch `qualify-mcp-inactive-apply-9ec53f801117` (from `a5d338c1`),
-Claude CLI 2.1.296 / Agent SDK 0.3.296, in the disposable profile
-`qa-mcp-inactive-0430`:
+Run on branch `qualify-mcp-inactive-apply-9ec53f801117` (from `a5d338c1`,
+later merged with `main` at `66b7a51a`), Claude CLI 2.1.296 / Agent SDK
+0.3.296, in the disposable profile `qa-mcp-inactive-0430`, with the live spec
+`e2e/agent-testing/mcp-apply-inactive.spec.ts`:
 
 ```bash
-mise run dev:test --profile qa-mcp-inactive-0430 --fixture \
-  --credential-source claude --credential-source codex --agent-platforms claude,codex
+mise run dev:test --profile qa-mcp-inactive-0430 --fixture --credential-source claude --agent-platforms claude
 ORKESTRATOR_AGENT_TEST_PROFILE=qa-mcp-inactive-0430 ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 \
-  ORKESTRATOR_AGENT_TEST_MCP_OLDER_CLAUDE_BRIDGE=<pre-marker claude-bridge dist> \
+  ORKESTRATOR_AGENT_TEST_MCP_OLDER_CLAUDE_BRIDGE=/tmp/mcpq-old/repo/bridges/claude-bridge/dist \
+  [ORKESTRATOR_AGENT_TEST_MCP_APPLY_ONLY=1] \
   mise run test:agent:browser -- e2e/agent-testing/mcp-apply-inactive.spec.ts
 ```
 
-The spec creates two local environments (A and B, project resources on,
-approvals auto) with one Claude tab each. Every edit goes to A's worktree
-`.mcp.json` or the profile's isolated `~/.claude.json`; the fixture MCP server
+The spec creates two local environments, A and B (project resources on,
+approvals auto), each with one Claude tab. Every edit goes to A's worktree
+`.mcp.json` or the profile's isolated `~/.claude.json`. The fixture MCP server
 is a script under `output/agent-testing/<profile>/` whose one tool answers
-with a nonce that exists only in its arguments, and a marker file counts
-every call. Codex credentials were seeded only for host onboarding; no Codex
-turn ran and no Codex file was written. The pre-marker bridge was built from
-`65077337` (the commit before #1025) in a temporary worktree.
+with a nonce that exists only in its arguments; a marker file counts every
+call. The pre-marker bridge was built from `65077337` (the commit before
+#1025) in a temporary worktree and swapped in only while A's bridge started.
+Early runs also seeded Codex credentials for host onboarding; no Codex turn
+ran and no Codex file was written, and the final runs used Claude alone.
 
-### What passed on the real stack
+### Result
 
-- **Busy save and apply** (runs 3, 4 and 5). With A's turn running, save and
-  apply of a new project server answered `pending-next-turn` with a 16-character
-  generation, planned only A's runtime, and the turn kept running through the
-  save and a switch to B and finished with its reply. 25 s after it ended the
-  runtime was still `pending-next-turn`: a query that started before the save
-  is not taken as evidence.
-- **Next turn while inactive, with the event stream cut** (run 5). With the
-  settings view open on A, the browser went offline and `window.stop()` cut
-  the event stream (the page logged the drop and retried every 3 s). A turn
-  sent to A meanwhile made the runtime `applied` with "The session's latest
-  message started with the saved configuration." against the planned
-  generation; the model called the tool exactly once and replied with the
-  nonce. Back online the page reconnected and, with no Refresh click, the
-  card read "Saved and loaded".
-- **Hard reload, backend half** (run 5). After a reload the card still read
-  "Saved and loaded", the source revision equalled the operation's saved
-  revision, the server was effective, and the file held the saved arguments.
-  The run then stopped on a test bug (the agent panel's backdrop covered the
-  sidebar; `closeSettings` now closes it too), before the transcript, composer
-  and live-panel checks.
+The whole scenario passed once in apply-only mode (run 12: 1 passed, 0
+skipped, 170 s), while Claude's API refused every request from the profile with
+`429 · This request would exceed your account's rate limit` (see below). The
+bridge records the MCP files a query was built from when the query starts,
+before any API call, so a refused turn still proves what the runtime loaded.
+Apply-only keeps every apply, generation and UI assertion; it drops only the
+replies, tool calls, transcript text and the live panel's inventory.
+Earlier full-mode runs (3 to 5) proved the model-facing half up to the reload.
+
+| Step | Outcome on the real stack |
+| --- | --- |
+| Save and apply while A's turn runs | `pending-next-turn` with a 16-character generation, only A's runtime planned; the turn kept running through the save and a switch to B (full mode: finished with its reply). 25 s after it ended the runtime was still `pending-next-turn`: a query that started before the save is not evidence. |
+| Next turn while A is inactive and the page's event stream is cut | Settings view open on A, browser offline and `window.stop()` (the page logged the drop and retried every 3 s). The turn made the runtime `applied`, "The session's latest message started with the saved configuration.", on the planned generation. Full mode: the model called the tool once and replied with the nonce. Back online the page reconnected and, with no Refresh, the card read "Saved and loaded". |
+| Hard reload | Card still "Saved and loaded"; source revision equal to the operation's saved revision; the server effective; the file holding the saved arguments; no Stop control and an editable composer in A; the panel's "Manage saved MCP servers…" opened A's own context. The live panel's server list was checked only in full mode, which did not reach this point. |
+| Bridge restart between save and next turn | Still `pending-next-turn` 25 s after the restart (the new bridge had run no query); after a turn, `applied` with "A newer run of this session, started after apply was planned, loaded the saved configuration." on a new generation (planned `BRwuHt7c9o6nug3K`, applied `GSmRe8sCpfVhelCK`); the settings card showed the same. |
+| Removal while the stream survives an outage | Offline only (the stream stays connected): the change event arrived, the re-read failed, and the runtime became `applied`; back online the card read "Saved and loaded" without a Refresh. |
+| Pre-marker bridge | Before a query: `pending-next-turn`, "This Claude bridge is older than this backend and does not report what it loads…". After a turn: `applied` (newer run), because bridges since #838 report what they loaded once something has. |
+| Backend-user file shared by A and B | Both runtimes planned `pending-next-turn` with different generations; after a turn in B (on screen) and in A (inactive) both `applied`; the server effective in B's own target. |
 
 ### Defects found and fixed
 
@@ -242,29 +254,22 @@ turn ran and no Codex file was written. The pre-marker bridge was built from
   event still arrived, but the re-read it triggered failed and nothing retried
   it: the view kept "not loaded until the session's next message" after the
   backend said `applied`. The MCP settings hooks now also re-read when the
-  browser reports it is back `online` (regression test).
+  browser reports it is back `online` (regression test; the removal step
+  above proves it live).
 
-### Not run: the provider's rate limit
+### Not proven: model output after an edit, a removal and a shared save
 
-From run 6 on, every Claude request from the profile was refused with
-`API Error: Request rejected (429) · This request would exceed your account's
-rate limit`, including a one-line prompt sent through the `orkestrator` CLI.
-The same machine's other Claude login answered normally, so the limit is on
-the host login the profile seeds (shared with the other environments of this
-batch). Seven retries between 17:50 and 19:40 all hit it, so these steps of the
-spec have not passed live yet:
-
-- after the reload: A's transcript and composer controls, the live panel
-  listing the server, and the deep link from A's own panel;
-- a bridge restart between the save and the next turn (`applied` must name a
-  newer generation with "A newer run of this session…");
-- a removal while the stream survives an outage (the `online` re-read);
-- the pre-marker bridge (`pending-next-turn` with the older-bridge reason
-  before a query, then `applied` after one);
-- the backend-user file shared by A and B (both runtimes `applied`, each with
-  its own generation).
-
-Rerun the command above once the login is no longer limited.
+From run 6 on, every Claude request from the profile was refused with the
+429 above, including a one-line prompt sent through the `orkestrator` CLI,
+in every one of ten runs from 16:24 to 19:20, also on a pinned Sonnet model; the
+same machine's other Claude login answered normally. The limit is on the host
+login that profiles seed, which the other environments of this batch were
+also using. So, in full mode, these have not run yet: the edited server's
+version answering after a bridge restart, the removed tool not being called,
+the older bridge's server answering, both environments calling the shared
+server, and the live panel listing the server after the reload. Rerun the
+command above without `ORKESTRATOR_AGENT_TEST_MCP_APPLY_ONLY` once that login
+is no longer limited.
 
 ## Constraints and rationale
 

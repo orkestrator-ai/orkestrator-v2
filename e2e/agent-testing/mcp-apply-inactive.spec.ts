@@ -76,6 +76,15 @@ const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
 const LIVE_OPT_IN = process.env.ORKESTRATOR_AGENT_TEST_LIVE_MCP === "1";
 const DESKTOP_VIEWPORT = { width: 1440, height: 1200 };
+/**
+ * `ORKESTRATOR_AGENT_TEST_MCP_APPLY_ONLY=1` keeps every apply, generation and
+ * UI check but drops the ones that need the model to answer (replies, tool
+ * calls, transcript text, the live panel's inventory). Claude's bridge records
+ * the MCP files a query was built from when the query starts, before any API
+ * call, so a turn the provider refuses (a rate limit, say) still proves what
+ * the runtime loaded.
+ */
+const MODEL_CHECKS = process.env.ORKESTRATOR_AGENT_TEST_MCP_APPLY_ONLY !== "1";
 /** Optional Claude model for both tabs; the profile's default otherwise. */
 const LAUNCH_MODEL = process.env.ORKESTRATOR_AGENT_TEST_MODEL?.trim() || undefined;
 
@@ -489,6 +498,17 @@ test.describe("live MCP apply in an inactive environment (claude)", () => {
         }
       };
 
+      /** The reply when the model is checked, otherwise only a settled turn. */
+      const replied = async (identity: Record<string, string>, needle: string) => {
+        if (MODEL_CHECKS) return waitForReply(identity, needle);
+        await expect
+          .poll(() => settled(identity), { timeout: 240_000, intervals: [3_000] })
+          .toBe(true);
+        record("apply-only-turn", `${needle.split("-")[0]}: ${await turnState(identity)}`);
+      };
+      const expectCalls = (line: string, count: number, message?: string) => {
+        if (MODEL_CHECKS) expect(markerLines(line), message).toBe(count);
+      };
       const settingsCard = (kind: string, name: string) =>
         page
           .getByRole("region", { name: "Recent changes" })
@@ -513,7 +533,10 @@ test.describe("live MCP apply in an inactive environment (claude)", () => {
       /** Close settings and the agent panel that opened them, which overlays the sidebar. */
       const closeSettings = async () => {
         await page.getByRole("button", { name: "Close settings" }).click();
-        const closePanel = page.getByRole("button", { name: "Close agent information" }).first();
+        // The panel's own close button; its trigger and a full-page backdrop
+        // share the label, and the backdrop covers the trigger.
+        const panel = page.getByRole("dialog", { name: "Agent information" });
+        const closePanel = panel.getByRole("button", { name: "Close agent information" });
         if (await closePanel.isVisible()) await closePanel.click();
       };
 
@@ -566,17 +589,19 @@ test.describe("live MCP apply in an inactive environment (claude)", () => {
         plannedGeneration = planned!.generation;
         // A project file reaches only A's sessions.
         expect(runtimeIn(saved.operation, envB.id)).toBeUndefined();
-        expect((await projection(identityA))?.turn.phase, "apply interrupted the turn").toBe(
-          "running",
-        );
+        if (MODEL_CHECKS) {
+          expect((await projection(identityA))?.turn.phase, "apply interrupted the turn").toBe(
+            "running",
+          );
+        }
         await page.waitForTimeout(5_000);
         await trace("5 s after the save", identityA);
         await openEnvironment(envB.name);
         await page.waitForTimeout(5_000);
         await trace("5 s after switching to B", identityA);
-        await waitForReply(identityA, busyToken);
+        await replied(identityA, busyToken);
         await trace("busy turn finished", identityA);
-        expect((await projection(identityA))?.turn.error).toBeFalsy();
+        if (MODEL_CHECKS) expect((await projection(identityA))?.turn.error).toBeFalsy();
         // That query started before the save, so it proves nothing.
         await page.waitForTimeout(EVIDENCE_SETTLE_MS);
         const after = runtimeIn(await operation(addOperationId), envA.id);
@@ -615,8 +640,8 @@ test.describe("live MCP apply in an inactive environment (claude)", () => {
         expect(applied.generation, "same bridge and conversation: same generation").toBe(
           plannedGeneration,
         );
-        await waitForReply(identityA, tokenV1);
-        expect(markerLines("call mcpqa 1")).toBe(1);
+        await replied(identityA, tokenV1);
+        expectCalls("call mcpqa 1", 1);
         // Keep the outage long enough for the page to lose its event stream.
         await page.waitForTimeout(Math.max(0, 15_000 - (Date.now() - offlineAt)));
         await context.setOffline(false);
@@ -645,9 +670,11 @@ test.describe("live MCP apply in an inactive environment (claude)", () => {
         };
         expect(saved.mcpServers?.mcpqa?.args?.[2]).toBe("1");
         await openEnvironment(envA.name);
-        await expect(page.getByText(`pong mcpqa v1 ${tokenV1}`).first()).toBeVisible({
-          timeout: 60_000,
-        });
+        if (MODEL_CHECKS) {
+          await expect(page.getByText(`pong mcpqa v1 ${tokenV1}`).first()).toBeVisible({
+            timeout: 60_000,
+          });
+        }
         await expect(composeBar.getByTitle("Stop current query")).toBeHidden();
         await expect(input).toBeEditable();
         await page.getByRole("button", { name: "Open agent information" }).first().click();
@@ -656,7 +683,7 @@ test.describe("live MCP apply in an inactive environment (claude)", () => {
         await expect(panel).toBeVisible({ timeout: 60_000 });
         const toggle = panel.getByRole("button").first();
         if ((await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
-        await expect(panel).toContainText("mcpqa", { timeout: 30_000 });
+        if (MODEL_CHECKS) await expect(panel).toContainText("mcpqa", { timeout: 30_000 });
         // The panel's link opens this environment's saved servers.
         await page.getByRole("button", { name: "Manage saved MCP servers…" }).click();
         await expect(page.getByRole("combobox", { name: "Configuration for" })).toHaveText(
@@ -712,18 +739,20 @@ test.describe("live MCP apply in an inactive environment (claude)", () => {
           planned.generation,
         );
         expect(applied.reason).toBe(NEWER_RUN_REASON);
-        await waitForReply(identityA, tokenV2);
-        expect(markerLines("call mcpqa 2")).toBe(1);
-        expect(markerLines("call mcpqa 1"), "the replaced server answered").toBe(1);
+        await replied(identityA, tokenV2);
+        expectCalls("call mcpqa 2", 1);
+        expectCalls("call mcpqa 1", 1, "the replaced server answered");
         await openSettingsForA();
         const card = settingsCard("Edited", "mcpqa");
         await expect(card).toContainText("Saved and loaded");
         await expect(card).toContainText(NEWER_RUN_REASON);
         await closeSettings();
         await openEnvironment(envA.name);
-        await expect(page.getByText(`pong mcpqa v2 ${tokenV2}`).first()).toBeVisible({
-          timeout: 60_000,
-        });
+        if (MODEL_CHECKS) {
+          await expect(page.getByText(`pong mcpqa v2 ${tokenV2}`).first()).toBeVisible({
+            timeout: 60_000,
+          });
+        }
       });
 
       await test.step("a removal while A is inactive: applied, and the tool is gone", async () => {
@@ -755,8 +784,8 @@ test.describe("live MCP apply in an inactive environment (claude)", () => {
           "the removal was never proven",
         );
         expect(applied.reason).toBe(APPLIED_REASON);
-        await waitForReply(identityA, absentToken);
-        expect(markerLines("call mcpqa 2"), "the removed server was called").toBe(1);
+        await replied(identityA, absentToken);
+        expectCalls("call mcpqa 2", 1, "the removed server was called");
         await page.waitForTimeout(EVIDENCE_SETTLE_MS);
         await context.setOffline(false);
         await trace("online");
@@ -817,8 +846,8 @@ test.describe("live MCP apply in an inactive environment (claude)", () => {
           expect(waiting.state).toBe("pending-next-turn");
           expect(waiting.reason).toContain("older than this backend");
           await dispatchWhileAway(identityA, toolPrompt("mcpqo"));
-          await waitForReply(identityA, tokenOld);
-          expect(markerLines("call mcpqo 1"), "the older bridge did not load the save").toBe(1);
+          await replied(identityA, tokenOld);
+          expectCalls("call mcpqo 1", 1, "the older bridge did not load the save");
           // Bridges since #838 report what they loaded once something has, so
           // the first query is expected to prove it.
           const after = await waitForRuntime(
@@ -895,12 +924,14 @@ test.describe("live MCP apply in an inactive environment (claude)", () => {
           );
           expect(applied.reason).toBe(APPLIED_REASON);
         }
-        await waitForReply(identityA, tokenU);
-        await waitForReply(identityB, tokenU);
-        expect(markerLines("call mcpqu 1")).toBe(2);
-        await expect(page.getByText(`pong mcpqu v1 ${tokenU}`).first()).toBeVisible({
-          timeout: 60_000,
-        });
+        await replied(identityA, tokenU);
+        await replied(identityB, tokenU);
+        expectCalls("call mcpqu 1", 2);
+        if (MODEL_CHECKS) {
+          await expect(page.getByText(`pong mcpqu v1 ${tokenU}`).first()).toBeVisible({
+            timeout: 60_000,
+          });
+        }
         const targetB = await claudeTarget(envB.id);
         expect((await snapshot(targetB.targetId)).effective.mcpqu).toBeTruthy();
       });

@@ -437,6 +437,12 @@ the operator's own `config.toml`. Set
 Claude bridge built before the `mcpConfigReporting` marker to add the
 older-bridge step. That step swaps the build in only while it starts the
 environment's bridge, then restores the current one.
+`ORKESTRATOR_AGENT_TEST_MODEL` pins both tabs' Claude model.
+`ORKESTRATOR_AGENT_TEST_MCP_APPLY_ONLY=1` keeps every apply, generation and UI
+check but drops the ones that need the model to answer: Claude's bridge
+records the MCP files a query was built from when the query starts, so the
+apply half still runs when the provider refuses requests (a rate limit, say).
+A full-mode pass is still needed for the tool-call checks.
 
 ### Live close retention
 

@@ -505,7 +505,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
   test("Bun: CI validates every supported host download and container architecture", () => {
     const workflow = read(".github/workflows/validate-bun-runtime.yml");
     const publishWorkflow = read(".github/workflows/publish-container.yml");
-    const lintWorkflow = read(".github/workflows/lint.yml");
+    const ciWorkflow = read(".github/workflows/ci.yml");
     const configuredRunners = workflow
       .split("\n")
       .map((line) => line.trim())
@@ -515,7 +515,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(Array.from(new Set(configuredRunners)).sort()).toEqual(
       ["ubuntu-24.04", "ubuntu-24.04-arm", "macos-15-intel", "macos-15"].sort(),
     );
-    for (const source of [workflow, lintWorkflow]) {
+    for (const source of [workflow, ciWorkflow]) {
       expect(source).toContain("uses: jdx/mise-action@");
       expect(source).not.toContain("oven-sh/setup-bun@");
       expect(source).toContain('run: test "$(bun --version)" = "$(mise current bun)"');

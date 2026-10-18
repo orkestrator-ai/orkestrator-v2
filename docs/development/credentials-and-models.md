@@ -303,7 +303,7 @@ production data directory rather than a provider home:
 | Claude | Host `CLAUDE_CONFIG_DIR`/`~/.claude`, process-scoped OAuth access token, and `ANTHROPIC_API_KEY` when inherited |
 | Codex | Host `CODEX_HOME`/`~/.codex` and `OPENAI_API_KEY` when inherited |
 | Cursor | Owner-only snapshot of the host's effective Orkestrator Cursor key (`CURSOR_API_KEY` when inherited still wins) |
-| Grok | Owner-only snapshot of host `~/.grok/auth.json` for local runs; bounded read-only host imports for containers |
+| Grok | Owner-only snapshot of host `~/.grok/auth.json` for local runs, with each refresh token blanked and expired logins dropped; bounded read-only host imports for containers |
 | OpenCode | Host XDG config/data/state directories and `OPENCODE_API_KEY` when inherited |
 | Pi | Host `~/.pi/agent/auth.json` (or `PI_CODING_AGENT_DIR`), shared in place; nothing else from the host Pi directory. Tilde overrides expand against the host home and relative overrides resolve before HOME changes. |
 
@@ -311,6 +311,14 @@ Cursor and Grok snapshots refresh on every profile start. Opting out or losing
 the host credential removes the previous snapshot. A failed refresh also removes
 the old snapshot; a removal failure stops startup. Cursor snapshots preserve a
 minted key's expiry, and the backend stops resolving the key when it expires.
+A Grok snapshot carries access tokens only (`restrictGrokAuthSnapshot` in
+`apps/desktop/scripts/dev/profile-io.ts`). xAI refresh tokens are single-use:
+on 2026-10-18 a profile that refreshed with a copy of the host's token spent
+it, the next copy failed its refresh, and Grok cleared that login. So a
+profile may use the host's current access token until it expires, but it can
+never refresh, and the launcher warns and seeds nothing when the host access
+token has already expired. Run `grok` on the host to refresh it (or
+`grok login` if the host is signed out), then restart the profile.
 Settings identifies this source separately from an environment key. To remove
 it, narrow the profile's credential sources or clear the host Cursor credential,
 then restart the profile.

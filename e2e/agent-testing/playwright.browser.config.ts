@@ -12,6 +12,7 @@ export default defineConfig({
     "browser-gateway.spec.ts",
     "agent-accounts.spec.ts",
     "design-canvas.spec.ts",
+    "design-live.spec.ts",
     "native-draft-attachments.spec.ts",
     "web-annotations-gateway.spec.ts",
     "cli-ui.spec.ts",
@@ -31,7 +32,11 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   timeout: 120_000,
-  reporter: [["line"], ["json", { outputFile: path.join(outputRoot, "results.json") }]],
+  reporter: [
+    ["line"],
+    ["json", { outputFile: path.join(outputRoot, "results.json") }],
+    [path.join(import.meta.dirname, "artifact-sanitizing-reporter.ts"), { suite: "browser" }],
+  ],
   outputDir: path.join(outputRoot, "artifacts"),
   globalTeardown: path.join(import.meta.dirname, "global-teardown.ts"),
   use: {

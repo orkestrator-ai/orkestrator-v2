@@ -164,7 +164,7 @@ function sidebarNavigator(page: Page, projectName: string) {
     if (await expand.isVisible()) await expand.click();
     if (!mobile) {
       // A sidebar tooltip from the previous hover can sit over the entry.
-      // Escape would also close the mobile drawer, so only on desktop.
+      // Escape is Stop unless focus is safely in the sidebar.
       await dismissSidebarTooltip(page, projectName);
     }
     await entry.click();

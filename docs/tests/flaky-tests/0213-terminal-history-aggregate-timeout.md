@@ -59,3 +59,10 @@ neither changed nor skipped. The branch under test
   passed unchanged, exit 0, 12.9 seconds.
 - Shared-host I/O contention remains a hypothesis. No owning code, assertion,
   timeout or skip changed.
+
+## CLI matrices second main merge — 2026-10-18
+
+Original command: `mise run test:logged -- --name merge2-tests -- mise run test`, workspace/root/bridges/protocol reservations 4/1/2/1 alongside component and isolated browser validation. Both paging and normalization timed out (5011.21 and 5004.04 ms); normalization timed out again in the three-file rerun with a late null `recent.previousCursor` access. `mise run test:logged -- --name merge2-terminal-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/terminal-history.test.ts --parallel=1 --only-failures` then passed the unchanged owner alone in 13.2 seconds.
+Aggregate result: `merge2-tests` exited 1 after 1132.1 seconds logged. Backend reported 9081 passed, 41 skipped and 11 failed across 9133 tests in 485 files (1118.57 seconds). Every other workspace package passed; root/support passed 3084 tests with one skip, and protocol regeneration passed. Evidence: `orkestrator-test-run.0J1rem/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
+
+The unchanged owner pass confirms intermittence. No implementation, assertion, timeout or skip changed.

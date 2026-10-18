@@ -72,3 +72,83 @@ The default-port browser run refused another checkout's fixture server. The retr
 `ORKESTRATOR_E2E_PORT=50649 mise run test:logged -- --name merge-component-browser-two-workers -- bunx playwright test --config e2e/playwright.config.ts --workers=2` completed: 357 passed, 80 skipped and three failed across 440 cases (957.8 s). DesignCanvas and DiffViewerMobile recurred; the new transcript-paging observation is recorded in 0483. Evidence: `orkestrator-test-run.5S9NY7/merge-component-browser-two-workers.log.gz`.
 
 Each original failing owner was then run individually, unchanged, using `ORKESTRATOR_E2E_PORT=50649 mise run test:logged -- --name merge-browser-owner-<name> -- bunx playwright test --config e2e/playwright.config.ts e2e/<name>.spec.ts --workers=1 --output output/playwright/merge-browser-owners/<name>`. All passed: AddProjectDialog (29.9 s), AgentModelPicker (26.0 s), AgentUsage (107.7 s), BackgroundTaskOutcome (183.3 s), ClaudeInteractions (42.0 s), DesignCanvas (62.1 s), DiffViewerMobile (38.6 s), EnvironmentSettingsDrawer (8.4 s), FullscreenSettingsLayout (14.8 s), and GitHubCliSetup (28.0 s). Public-site production smoke passed separately. No implementation, assertion, timeout or skip changed; shared-host contention remains a hypothesis.
+
+## Design live-cycle second main merge — 2026-10-18
+
+- **Original command:** `mise run test:logged -- --name merge-browser -- mise run test:browser`, merging `origin/main` at `c85ab60a` into pre-merge HEAD `0ee3569b`.
+- **Workers:** nine Playwright workers alongside full non-iOS validation, isolated real-stack browser validation, and other worktrees on the shared macOS host.
+- **Aggregate result:** 326 passed, 80 skipped and 26 failed across 432 cases; exit 1, 726.6 seconds logged. The failures were missing/hidden UI, unmet counts or accessible names, and navigation/test deadlines. No component implementation changed in conflict resolution.
+- **Evidence:** `orkestrator-test-run.IQUMgq/merge-browser.log.gz` below the host temporary directory. The failed assertions and their traces are retained there and under `output/playwright/`.
+- **Owning-file commands:** each file below was run in its own separate invocation: `ORKESTRATOR_E2E_PORT=<unused-loopback-port> mise run test:logged -- --name merge-owner-<owner> -- bunx playwright test --config e2e/playwright.config.ts <file> --workers=1`. The two final reruns used names `merge-post-suite-diffviewermobile` and `merge-post-suite-designcanvas` after the aggregate finished.
+- **Assessment:** every unchanged owning file eventually passed alone. The first DiffViewer rerun failed one case (77.4 seconds logged), and the first DesignCanvas rerun failed both viewport cases (87.6 seconds logged, with an EPIPE diagnostic). Those first reruns do not independently establish a flake; the later unchanged post-aggregate passes below do. Shared-host contention remains a hypothesis. No implementation, assertion, timeout or skip was changed.
+
+### Owning-file results
+
+All final results below exited 0; times include wrapper overhead.
+
+| Owning file | Final seconds | Initial rerun |
+| --- | --- | --- |
+| `e2e/DiffViewerMobile.spec.ts` | 16.6 | failed; post-aggregate rerun passed |
+| `e2e/DesignCanvas.spec.ts` | 18.4 | failed; post-aggregate rerun passed |
+| `e2e/PaneBreakpoint.spec.ts` | 95.4 | passed |
+| `e2e/TerminalCornerToolbar.spec.ts` | 53.3 | passed |
+| `e2e/AgentUsage.spec.ts` | 71.2 | passed |
+| `e2e/CloseRetention.spec.ts` | 118.0 | passed |
+| `e2e/DesignHistoryLayout.spec.ts` | 21.8 | passed |
+| `e2e/GlobalSettings.spec.ts` | 21.5 | passed |
+| `e2e/GlobalStyles.spec.ts` | 27.3 | passed |
+| `e2e/MultiReviewFlow.spec.ts` | 131.9 | passed |
+| `e2e/NativeHeldSend.spec.ts` | 16.7 | passed |
+| `e2e/OpenCodePipelineTranscript.spec.ts` | 8.2 | passed |
+| `e2e/PlanUsage.spec.ts` | 6.4 | passed |
+| `e2e/TerminalLinks.spec.ts` | 14.9 | passed |
+
+### Failures in the aggregate
+
+| Project | File | Test |
+| --- | --- | --- |
+| mobile-chromium | `e2e/DiffViewerMobile.spec.ts:38:1` | the diff header fits a phone and the editor uses the full width |
+| mobile-chromium | `e2e/DesignCanvas.spec.ts:9:1` | canvas edits, script isolation, missed events, conflict and reload |
+| mobile-chromium | `e2e/PaneBreakpoint.spec.ts:98:5` | split panes keep terminal output, scroll positions and the draft across the breakpoint (pane tree, moveBefore) |
+| mobile-chromium | `e2e/PaneBreakpoint.spec.ts:98:5` | split panes keep terminal output, scroll positions and the draft across the breakpoint (pane tree, appendChild fallback) |
+| mobile-chromium | `e2e/PaneBreakpoint.spec.ts:98:5` | split panes keep terminal output, scroll positions and the draft across the breakpoint (in the app shell, moveBefore) |
+| mobile-chromium | `e2e/PaneBreakpoint.spec.ts:98:5` | split panes keep terminal output, scroll positions and the draft across the breakpoint (in the app shell, appendChild fallback) |
+| mobile-chromium | `e2e/TerminalCornerToolbar.spec.ts:72:1` | touch history is visible and opens on tap at phone and tablet widths |
+| desktop-chromium | `e2e/AgentUsage.spec.ts:38:3` | subagent compact usage fits alongside the header and remains accessible after reload |
+| desktop-chromium | `e2e/AgentUsage.spec.ts:38:3` | task-group compact usage fits alongside the header and remains accessible after reload |
+| desktop-chromium | `e2e/CloseRetention.spec.ts:264:3` | closing a Cursor tab keeps the conversation; resume restores it and the next prompt continues it |
+| desktop-chromium | `e2e/DesignHistoryLayout.spec.ts:7:1` | unbroken undo and redo labels wrap within the history pane |
+| desktop-chromium | `e2e/DiffViewerMobile.spec.ts:126:1` | the mounted diff switches exactly at the mobile breakpoint |
+| desktop-chromium | `e2e/DesignCanvas.spec.ts:9:1` | canvas edits, script isolation, missed events, conflict and reload |
+| desktop-chromium | `e2e/DiffViewerMobile.spec.ts:154:1` | the desktop diff keeps its mode controls and full-ref tooltip |
+| desktop-chromium | `e2e/GlobalSettings.spec.ts:3:1` | Claude background limit persists across reload and clears when reset to default |
+| desktop-chromium | `e2e/GlobalStyles.spec.ts:136:1` | message actions use viewport and input capability instead of width alone |
+| desktop-chromium | `e2e/MultiReviewFlow.spec.ts:477:3` | a retained clean-review PR notice reflects the current ready snapshot after reload |
+| desktop-chromium | `e2e/MultiReviewFlow.spec.ts:477:3` | a retained clean-review PR notice reflects the current interactive snapshot after reload |
+| desktop-chromium | `e2e/MultiReviewFlow.spec.ts:477:3` | a retained clean-review PR notice reflects the current reviewing snapshot after reload |
+| desktop-chromium | `e2e/MultiReviewFlow.spec.ts:477:3` | a retained clean-review PR notice reflects the current consolidating snapshot after reload |
+| desktop-chromium | `e2e/NativeHeldSend.spec.ts:23:1` | a held send survives switching environments, dispatches once on return and stays settled after reload |
+| desktop-chromium | `e2e/OpenCodePipelineTranscript.spec.ts:34:1` | OpenCode pipeline/reviewer envelopes render as thinking and timed tool rows after backend normalization |
+| desktop-chromium | `e2e/NativeHeldSend.spec.ts:3:1` | a device code survives browser-open failure, environment switching and renderer reload without another login |
+| desktop-chromium | `e2e/PlanUsage.spec.ts:3:1` | stale platform and account quotas retain their timestamp and explanation after reload |
+| desktop-chromium | `e2e/TerminalLinks.spec.ts:4:3` | OSC 8 primary Control clicks route through the persistent terminal handler |
+| desktop-chromium | `e2e/TerminalLinks.spec.ts:4:3` | OSC 8 primary Meta clicks route through the persistent terminal handler |
+
+### Other validation for this merge
+
+Formatting, lint, all typechecks, the production desktop build, and the separate public-site production browser smoke suite passed. The full non-iOS aggregate exited 1 after 1443.9 seconds logged: web reported 7965 passed, 10 skipped and one failed; backend reported 9065 passed, 41 skipped and 22 failed; root/support reported 3091 passed, one skipped and one failed. The failing owning unit files all subsequently passed unchanged. See 0451 (resource sync), 0178 (Pi staging), 0162 (command integration), 0194 (environment lifecycle), 0248 (submodule moves), 0165 (coordinator), 0151 (environment status), and 0177 (recurring baseline). The bridge and protocol groups and the other workspace packages passed.
+
+The credential-free isolated browser command `mise run test:logged -- --name merge-isolated-browser -- mise run test:agent:browser:isolated` was incomplete: profile `qa-browser-22d46b7c-460` hit the fifteen-minute suite deadline (923.2 seconds including startup/cleanup), after reporting a narrow host-picker failure in `browser-gateway.spec.ts:147` (the SSH socket picker `Select file` button stayed disabled at its five-second deadline). The run reached case 53 of 62 before termination. This is an unresolved validation limitation, not a passing suite or a newly confirmed flake. Evidence is `orkestrator-test-run.Lw9GgH/merge-isolated-browser.log.gz`. The runner stopped and reset the profile; `dev:status --profile qa-browser-22d46b7c-460 --json` then returned `status: "missing"` and an empty `live` object.
+
+Credentialed provider scenarios, dedicated Electron, Docker, CLI scenario and iOS suites were omitted: this merge changes no Electron main/preload, container lifecycle, published CLI or iOS implementation, and live-provider suites remain opt-in. Component and isolated browser validation were run as described above.
+
+## CLI matrices second main merge — 2026-10-18
+
+- **Original command:** `ORKESTRATOR_E2E_PORT=49381 ORKESTRATOR_PUBLIC_E2E_PORT=49382 mise run test:logged -- --name merge2-browser -- mise run test:browser`, nine Playwright workers alongside the full non-iOS suite and isolated browser validation.
+- **Aggregate result:** 339 passed, 80 skipped and 13 failed across 432 cases (8.2 minutes).
+- **Owning-file rerun:** `ORKESTRATOR_E2E_PORT=49381 mise run test:logged -- --name merge2-browser-owners -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvas.spec.ts e2e/DiffViewerMobile.spec.ts e2e/GlobalSettings.spec.ts e2e/GlobalStyles.spec.ts e2e/MonacoRuntime.spec.ts e2e/MultiReviewFlow.spec.ts e2e/NativeHeldSend.spec.ts e2e/OpenCodePipelineTranscript.spec.ts e2e/TerminalLinks.spec.ts --workers=1`.
+- **Rerun result:** 96 passed, 15 skipped and three failed across 114 cases (588.0 seconds logged). Seven unchanged owners passed completely: GlobalSettings, GlobalStyles, MonacoRuntime, MultiReviewFlow, NativeHeldSend, OpenCodePipelineTranscript and TerminalLinks. Their original failures were reload/startup/interaction deadlines; MultiReviewFlow had four retained-PR snapshot failures and NativeHeldSend had two cases.
+- **Unresolved owners:** DesignCanvas timed out at 30 seconds in both viewport cases; DiffViewerMobile failed the mobile `.monaco-diff-editor` visibility check at five seconds. The aggregate failed desktop canvas and desktop breakpoint switching; these two owning files did not pass alone, so this observation does not establish a flake for them. See 0173 and 0174.
+- **Evidence:** `orkestrator-test-run.FHlHZX/merge2-browser.log.gz` and `orkestrator-test-run.W1VIZy/merge2-browser-owners.log.gz` below the host temporary directory.
+- **Public-site suite:** the component failure short-circuited the combined task; the separate `ORKESTRATOR_PUBLIC_E2E_PORT=49382 mise run test:logged -- --name merge2-public-browser -- bunx playwright test --config e2e/public-site/playwright.config.ts` passed all eight production smoke cases (57.2 seconds logged).
+- **Assessment:** the seven completely passing owners establish intermittent aggregate failures. The canvas and diff-viewer observations remain unresolved. No implementation, assertion, timeout or skip changed. Playwright stopped its owned fixture and preview servers.

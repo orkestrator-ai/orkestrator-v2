@@ -1,3 +1,5 @@
+import { getHostClaudeCredentials as readHostClaudeCredentials } from "./claude-host-credentials.js";
+export { getClaudeOAuthAccessToken } from "./claude-host-credentials.js";
 import { gitHubCli } from "./github-cli-binary.js";
 import { runRemoteGit } from "./git-noninteractive-env.js";
 import { reconcileProjectHomeEnvironment } from "./project-home-environment.js";
@@ -31,7 +33,6 @@ import {
   CONTAINER_CLAUDE_CREDENTIAL_FILE,
   CONTAINER_CURSOR_API_KEY_FILE,
   CONTAINER_CURSOR_CREDENTIAL_DIR,
-  HOST_CLAUDE_KEYCHAIN_SERVICE,
   CONTAINER_UNTRACKED_STATS_SCANNER,
 } from "./commands-runtime-state.js";
 import type { GitFetchScheduler } from "./git-fetch-scheduler.js";
@@ -2153,156 +2154,18 @@ export function buildSyncContainerClaudeCredentialCommand(
 
 export const SYNC_CONTAINER_CLAUDE_CREDENTIAL_COMMAND = buildSyncContainerClaudeCredentialCommand();
 
-const MAX_HOST_AGENT_CREDENTIAL_BYTES = 1024 * 1024;
-
-/**
- * Reads one named Keychain record, preferring an explicit login-Keychain path.
- *
- * The explicit path is what makes an isolated agent-test profile deterministic:
- * its HOME holds no Keychain preferences, so an unqualified lookup would resolve
- * against whatever the launching session happens to default to. A host that is
- * not isolated has no such requirement and may legitimately keep the record in a
- * keychain other than `login.keychain-db`, so it retries the default search list
- * — which is what an unqualified lookup did before the path was pinned — rather
- * than reporting a logged-in user as signed out.
- */
-async function readMacKeychainPassword(
-  service: string,
-  homeDir: string,
-  account?: string,
-  allowDefaultSearchList = false,
-): Promise<string | undefined> {
-  const args = ["find-generic-password"];
-  if (account) args.push("-a", account);
-  args.push("-s", service, "-w");
-  const attempts = [[...args, path.join(homeDir, "Library", "Keychains", "login.keychain-db")]];
-  if (allowDefaultSearchList) attempts.push(args);
-  for (const attempt of attempts) {
-    try {
-      const { stdout } = await runCommand("security", attempt, { timeoutMs: 10_000 });
-      const value = stdout.trim();
-      // An empty or oversized payload is not a reason to stop looking; a second
-      // keychain may still hold the real record.
-      if (!value || Buffer.byteLength(value) > MAX_HOST_AGENT_CREDENTIAL_BYTES) continue;
-      return value;
-    } catch {
-      // A missing item and a declined access prompt look identical from here.
-    }
-  }
-  return undefined;
-}
-
-/**
- * Reads the host's Claude Code credential, preferring the macOS Keychain.
- *
- * Returns the raw credential JSON, or undefined when the host has no usable
- * credential. A non-JSON or empty Keychain payload is discarded rather than
- * forwarded, so a corrupt entry cannot overwrite a working in-container login.
- *
- * `keychainService` and `configDirOnly` read one added account's login: its
- * Keychain entry is named after its directory, and falling back to
- * `~/.claude` would report the host login as that account's.
- */
+// Keep the backend's command runner for its cancellation and test seams; the
+// read-only lookup is also used by the CLI harness before replacing homes.
 export async function getHostClaudeCredentials(
   platform: NodeJS.Platform = process.platform,
   homeDir: string = os.homedir(),
   configDir?: string,
-  options: {
-    allowDefaultKeychainSearchList?: boolean;
-    keychainService?: string;
-    configDirOnly?: boolean;
-  } = {},
+  options: Parameters<typeof readHostClaudeCredentials>[3] = {},
 ): Promise<string | undefined> {
-  const isUsable = (value: string | undefined): string | undefined => {
-    const trimmed = value?.trim();
-    if (!trimmed || trimmed === "{}") return undefined;
-    try {
-      const parsed: unknown = JSON.parse(trimmed);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        return undefined;
-      }
-      return Object.keys(parsed as Record<string, unknown>).length > 0 ? trimmed : undefined;
-    } catch {
-      return undefined;
-    }
-  };
-
-  if (platform === "darwin") {
-    const fromKeychain = isUsable(
-      await readMacKeychainPassword(
-        options.keychainService ?? HOST_CLAUDE_KEYCHAIN_SERVICE,
-        homeDir,
-        undefined,
-        options.allowDefaultKeychainSearchList === true,
-      ),
-    );
-    if (fromKeychain) return fromKeychain;
-  }
-
-  // `CLAUDE_CONFIG_DIR` first, because that is where Claude Code itself keeps
-  // the on-disk credential when it is set. An agent-test profile runs with an
-  // isolated HOME but is pointed at the host configuration, so reading only
-  // `homeDir` would look inside the empty isolated home and report no login.
-  const directories = options.configDirOnly
-    ? [configDir]
-    : [configDir, path.join(homeDir, ".claude")];
-  for (const directory of directories) {
-    if (!directory) continue;
-    try {
-      const found = isUsable(await fs.readFile(path.join(directory, ".credentials.json"), "utf-8"));
-      if (found) return found;
-    } catch {
-      // Try the next location; a missing file is not an error here.
-    }
-  }
-  return undefined;
-}
-
-/**
- * Grace period applied to a recorded OAuth expiry.
- *
- * The token is read once, at bridge start, and never refreshed. One that lapses
- * during startup would be indistinguishable from a broken login, so treat the
- * final moments of its life as already expired.
- */
-const CLAUDE_OAUTH_EXPIRY_SKEW_MS = 30_000;
-
-/**
- * Extracts the single OAuth access token that may be handed to one bridge.
- *
- * An expired token is treated as no token at all. It is a non-empty bearer
- * credential that the CLI prefers over every other source, so forwarding a
- * lapsed one turns a stale host login into opaque authentication failures
- * instead of the signed-out state the agent reports clearly. A credential that
- * records no expiry is not evidence of expiry, so only a real timestamp that has
- * already passed rejects.
- */
-export function getClaudeOAuthAccessToken(
-  credentials: string | undefined,
-  now: number = Date.now(),
-): string | undefined {
-  if (!credentials) return undefined;
-  try {
-    const parsed = JSON.parse(credentials) as {
-      claudeAiOauth?: { accessToken?: unknown; expiresAt?: unknown };
-    };
-    const accessToken = parsed.claudeAiOauth?.accessToken;
-    if (typeof accessToken !== "string") return undefined;
-    const expiresAt = parsed.claudeAiOauth?.expiresAt;
-    if (
-      typeof expiresAt === "number" &&
-      Number.isFinite(expiresAt) &&
-      expiresAt <= now + CLAUDE_OAUTH_EXPIRY_SKEW_MS
-    ) {
-      return undefined;
-    }
-    const trimmed = accessToken.trim();
-    return trimmed && Buffer.byteLength(trimmed) <= MAX_HOST_AGENT_CREDENTIAL_BYTES
-      ? trimmed
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  return readHostClaudeCredentials(platform, homeDir, configDir, options, async (args) => {
+    const { stdout } = await runCommand("security", args, { timeoutMs: 10_000 });
+    return stdout;
+  });
 }
 
 export async function syncContainerClaudeCredential(

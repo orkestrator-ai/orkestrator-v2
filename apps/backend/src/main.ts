@@ -4,6 +4,7 @@ import process from "node:process";
 import { OrkestratorBackend } from "./core/index.js";
 import { APP_VERSION } from "./core/constants.js";
 import { fixPath } from "./core/fix-path.js";
+import { dropInheritedAgentToolConnection } from "./core/agent-tools.js";
 import { PreviewPublicationManager } from "./preview-publication.js";
 import { OrkestratorGateway } from "./gateway.js";
 import { createManagedWebClient } from "./managed-web-client.js";
@@ -30,6 +31,8 @@ assertSupportedPlatform();
 // coming up would otherwise be fatal too, and this process is what the desktop
 // supervisor treats as the app itself.
 installFatalRejectionGuard({ label: "[Backend]" });
+// Login-shell profiles are child processes too; sanitize before discovering PATH.
+dropInheritedAgentToolConnection();
 fixPath();
 // Capture this before startup awaits. If Electron dies while the backend is
 // initializing, reading process.ppid later would see init and lose the only
